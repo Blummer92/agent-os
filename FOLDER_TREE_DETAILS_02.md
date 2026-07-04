@@ -1,0 +1,38 @@
+# Folder Tree Details 2
+
+```text
+      README.md
+      folder-structure.md
+      sample-env-example.md
+      sample-pyproject.md
+      sample-readme.md
+    reports/
+      bug-report-template.md
+      final-report-template.md
+      qa-test-report-template.md
+      release-checklist-template.md
+  04_Registry/
+    README.md
+    agent-inheritance-registry.md
+    alias-and-deprecation-map.md
+    module-version-map.md
+    ownership-matrix.md
+    responsibility-matrix.md
+  05_Examples/
+    README.md
+    compliant-agent-response-example.md
+    compliant-python-tool-example.md
+    registry-compliance-test-example.md
+  06_Archive/
+    README.md
+    retired-aliases.md
+    superseded-documents.md
+  ADOPTION_REVIEW_PACKET.md
+  CHANGELOG.md
+  FILE_MANIFEST.md
+  FOLDER_TREE.md
+  README.md
+  README_FOR_GOVERNANCE_REVIEW.md
+  VALIDATION_REPORT.md
+  VERSION.md
+```
