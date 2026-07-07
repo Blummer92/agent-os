@@ -27,9 +27,22 @@
     README.md
     retired-aliases.md
     superseded-documents.md
+  07_Agent_Tests/
+    README.md
+    common-test-checklist.md
+    validate-repo-structure.sh
+    apps-script-sync-test-overlay.tests.md
+    dashboard-builder-overlay.tests.md
+    google-workspace-automation-engineer.tests.md
+    integration-manager.tests.md
+    modeling-dashboard-governance-agent.tests.md
+    python-development-overlay.tests.md
+    qa-test-agent.tests.md
+    workspace-implementation-overlay.tests.md
   ADOPTION_REVIEW_PACKET.md
   CHANGELOG.md
   FILE_MANIFEST.md
+  FILE_MANIFEST_DETAILS_01.md
   FOLDER_TREE.md
   README.md
   README_FOR_GOVERNANCE_REVIEW.md

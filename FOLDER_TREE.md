@@ -20,4 +20,5 @@ Agent OS/
   04_Registry/
   05_Examples/
   06_Archive/
+  07_Agent_Tests/
 ```

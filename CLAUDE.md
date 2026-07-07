@@ -111,6 +111,24 @@ Retired, superseded, or historical documents.
 
 **Convention:** Archive is read-only reference. Do not restore archived documents without governance approval.
 
+### `07_Agent_Tests/`
+Test prompts and automated structural checks that prove the knowledge
+base is working — both that agents follow their overlays and that the
+files themselves stay internally consistent.
+
+**Contents:**
+- `common-test-checklist.md` — Shared pass/fail checklist for every agent
+  compliance test (mirrors `_common-overlay-rules.md`).
+- `<overlay-name>.tests.md` — One file per overlay in `02_Agent_Overlays/`,
+  each with 4 copy-paste prompts (in-scope request, blocked-write-surface
+  request, ambiguous-target request, final-report request).
+- `validate-repo-structure.sh` — Runnable script checking line limits, no
+  reintroduced duplication, and registry/overlay/test consistency. Run
+  with `bash 07_Agent_Tests/validate-repo-structure.sh`.
+
+**Convention:** Every new overlay needs a matching `.tests.md` file, or
+`validate-repo-structure.sh` fails its coverage check.
+
 ---
 
 ## Key Conventions
@@ -301,26 +319,24 @@ Before committing:
 
 ### Validation Scripts
 
-The repository includes validation files (not enforced but useful for review):
-
-- `VALIDATION_REPORT.md` — Line count and format validation results
+- `07_Agent_Tests/validate-repo-structure.sh` — **Run this before every
+  commit.** Automated, enforced by nothing but your own discipline, but
+  it actually executes and returns a pass/fail exit code:
+  ```bash
+  bash 07_Agent_Tests/validate-repo-structure.sh
+  ```
+  Checks: line limits, no reintroduced overlay duplication, no filename
+  collisions between governance and registry, and full overlay/test
+  coverage in both directions.
+- `VALIDATION_REPORT.md` — Line count and format validation results (manual snapshot)
 - `FILE_MANIFEST.md` — Complete file listing with descriptions
 - `GITHUB_PACKAGE_VALIDATION.md` — GitHub upload validation checklist
 
-### Running Validation Locally
+### Agent Compliance Testing
 
-```bash
-# Check Markdown file line counts (should be <100 except CLAUDE.md and detail files)
-find . -name "*.md" -type f | while read f; do
-  lines=$(wc -l < "$f")
-  if [ "$lines" -gt 100 ]; then
-    echo "$f: $lines lines"
-  fi
-done
-
-# Check for duplicate governance text
-grep -r "Default external systems to read-only" --include="*.md" | grep -v "read-only-default-policy.md"
-```
+`07_Agent_Tests/*.tests.md` holds copy-paste prompts per overlay to verify
+an agent actually follows its standards (not just that the files are
+well-formed). See `07_Agent_Tests/README.md` for how to run and score them.
 
 ---
 

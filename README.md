@@ -11,3 +11,4 @@ Agent OS is a modular knowledge base for engineering-agent standards, governance
 - `04_Registry/`
 - `05_Examples/`
 - `06_Archive/`
+- `07_Agent_Tests/`

@@ -1,5 +1,8 @@
 # File Manifest
 
+Split across two files to preserve the under-100-line Markdown rule.
+Continued in `FILE_MANIFEST_DETAILS_01.md` (`05_Examples/` onward).
+
 | File path | Purpose | Line count | Source document used |
 |---|---|---:|---|
 | `00_Governance/README.md` | Agent OS knowledge base file. | 4 | Governance plan and Engineering Standards Framework |
@@ -75,20 +78,3 @@
 | `04_Registry/module-version-map.md` | Agent OS knowledge base file. | 11 | Agent Inheritance Registry |
 | `04_Registry/ownership-matrix.md` | Agent OS knowledge base file. | 8 | Agent Inheritance Registry |
 | `04_Registry/responsibility-matrix.md` | Agent OS knowledge base file. | 8 | Agent Inheritance Registry |
-| `05_Examples/README.md` | Agent OS knowledge base file. | 6 | Compliance examples |
-| `05_Examples/compliant-agent-response-example.md` | Agent OS knowledge base file. | 6 | Compliance examples |
-| `05_Examples/compliant-python-tool-example.md` | Agent OS knowledge base file. | 6 | Compliance examples |
-| `05_Examples/registry-compliance-test-example.md` | Agent OS knowledge base file. | 6 | Compliance examples |
-| `06_Archive/README.md` | Agent OS knowledge base file. | 3 | Engineering Agent Consolidation Review |
-| `06_Archive/retired-aliases.md` | Agent OS knowledge base file. | 5 | Engineering Agent Consolidation Review |
-| `06_Archive/superseded-documents.md` | Agent OS knowledge base file. | 5 | Engineering Agent Consolidation Review |
-| `ADOPTION_REVIEW_PACKET.md` | Governance review handoff packet. | 36 | Review-access packaging task |
-| `CHANGELOG.md` | Agent OS knowledge base file. | 8 | Agent OS source package |
-| `FILE_MANIFEST.md` | Review inventory of Markdown files. | 91 | Review-access packaging task |
-| `FOLDER_TREE.md` | Short folder tree index for governance inspection. | 23 | Review-access packaging task |
-| `FOLDER_TREE_DETAILS_01.md` | Split folder tree detail file. | 74 | Review-access packaging task |
-| `FOLDER_TREE_DETAILS_02.md` | Split folder tree detail file. | 38 | Review-access packaging task |
-| `README.md` | Agent OS knowledge base file. | 17 | Agent OS source package |
-| `README_FOR_GOVERNANCE_REVIEW.md` | Inspection instructions for Governance Agent. | 27 | Review-access packaging task |
-| `VALIDATION_REPORT.md` | Review-access validation results. | 20 | Review-access packaging task |
-| `VERSION.md` | Agent OS knowledge base file. | 6 | Agent OS source package |
