@@ -44,15 +44,16 @@
 | `01_Shared_Standards/qa-test/acceptance-testing.md` | Agent OS knowledge base file. | 6 | Shared standards from framework and edited Python policy |
 | `01_Shared_Standards/qa-test/regression-testing.md` | Agent OS knowledge base file. | 6 | Shared standards from framework and edited Python policy |
 | `01_Shared_Standards/qa-test/release-evidence.md` | Agent OS knowledge base file. | 6 | Shared standards from framework and edited Python policy |
-| `02_Agent_Overlays/README.md` | Agent OS knowledge base file. | 4 | Agent Inheritance Registry |
-| `02_Agent_Overlays/apps-script-sync-test-overlay.md` | Agent OS knowledge base file. | 37 | Agent Inheritance Registry |
-| `02_Agent_Overlays/dashboard-builder-overlay.md` | Agent OS knowledge base file. | 37 | Agent Inheritance Registry |
-| `02_Agent_Overlays/google-workspace-automation-engineer.md` | Agent OS knowledge base file. | 37 | Agent Inheritance Registry |
-| `02_Agent_Overlays/integration-manager.md` | Agent OS knowledge base file. | 37 | Agent Inheritance Registry |
-| `02_Agent_Overlays/modeling-dashboard-governance-agent.md` | Agent OS knowledge base file. | 37 | Agent Inheritance Registry |
-| `02_Agent_Overlays/python-development-overlay.md` | Agent OS knowledge base file. | 37 | Agent Inheritance Registry |
-| `02_Agent_Overlays/qa-test-agent.md` | Agent OS knowledge base file. | 37 | Agent Inheritance Registry |
-| `02_Agent_Overlays/workspace-implementation-overlay.md` | Agent OS knowledge base file. | 37 | Agent Inheritance Registry |
+| `02_Agent_Overlays/README.md` | Agent OS knowledge base file. | 6 | Agent Inheritance Registry |
+| `02_Agent_Overlays/_common-overlay-rules.md` | Shared approval points, report format, and stop conditions for all overlays. | 30 | Agent Inheritance Registry |
+| `02_Agent_Overlays/apps-script-sync-test-overlay.md` | Agent OS knowledge base file. | 19 | Agent Inheritance Registry |
+| `02_Agent_Overlays/dashboard-builder-overlay.md` | Agent OS knowledge base file. | 19 | Agent Inheritance Registry |
+| `02_Agent_Overlays/google-workspace-automation-engineer.md` | Agent OS knowledge base file. | 19 | Agent Inheritance Registry |
+| `02_Agent_Overlays/integration-manager.md` | Agent OS knowledge base file. | 19 | Agent Inheritance Registry |
+| `02_Agent_Overlays/modeling-dashboard-governance-agent.md` | Agent OS knowledge base file. | 19 | Agent Inheritance Registry |
+| `02_Agent_Overlays/python-development-overlay.md` | Agent OS knowledge base file. | 19 | Agent Inheritance Registry |
+| `02_Agent_Overlays/qa-test-agent.md` | Agent OS knowledge base file. | 19 | Agent Inheritance Registry |
+| `02_Agent_Overlays/workspace-implementation-overlay.md` | Agent OS knowledge base file. | 19 | Agent Inheritance Registry |
 | `03_Templates/README.md` | Agent OS knowledge base file. | 3 | Engineering Standards Framework templates |
 | `03_Templates/prompts/bug-learning-review.md` | Agent OS knowledge base file. | 10 | Engineering Standards Framework templates |
 | `03_Templates/prompts/package-python-project.md` | Agent OS knowledge base file. | 10 | Engineering Standards Framework templates |

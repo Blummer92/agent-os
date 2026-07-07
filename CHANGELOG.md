@@ -2,6 +2,7 @@
 
 ## 0.1.1-draft
 
+- Extracted `02_Agent_Overlays/_common-overlay-rules.md` from the four blocks (Inherited Standards, Required Human Approval Points, Required Final Report Format, Stop Conditions) that were duplicated verbatim across all 8 overlay files; overlays now reference this file instead of repeating it, cutting each overlay from 37 to 19 lines.
 - Renamed `00_Governance/agent-inheritance-registry.md` to `agent-creation-policy.md` and removed its duplicate agent list, which conflicted with `04_Registry/agent-inheritance-registry.md`; the registry file is now the sole source for the agent list and inheritance mapping.
 - Clarified dashboard sync routing and prevented duplicate standalone Dashboard Sync Agent ownership.
 - Retired Apps Script Sync Test Agent as a standalone canonical agent name.

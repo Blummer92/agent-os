@@ -49,6 +49,12 @@ Domain-specific standards inherited by all agents working in that domain.
 ### `02_Agent_Overlays/`
 Agent-specific execution behavior, scope limits, stop conditions, and handoff rules.
 
+**`_common-overlay-rules.md`** holds the blocks shared by every overlay — baseline
+inherited standards, required human approval points, final report format, and
+stop conditions. Individual overlays reference this file rather than repeating
+it; they contain only Mission, Canonical Role, Owned Systems, Allowed/Blocked
+Write Surfaces, and Required Handoff Targets.
+
 **Overlays provided:**
 - `python-development-overlay.md` — Python coding agent specifics
 - `google-workspace-automation-engineer.md` — Workspace API automation rules
@@ -58,6 +64,9 @@ Agent-specific execution behavior, scope limits, stop conditions, and handoff ru
 - `modeling-dashboard-governance-agent.md` — Dashboard governance oversight
 - `workspace-implementation-overlay.md` — Scoped implementation behaviors
 - `integration-manager.md` — Integration routing and handoff rules
+
+**Convention:** When adding a new overlay, reference `_common-overlay-rules.md`
+for the shared sections instead of copying them in.
 
 **Convention:** Overlays inherit from shared standards. They contain only agent-specific scope, exceptions, stop conditions, and routing rules.
 

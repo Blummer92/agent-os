@@ -54,6 +54,7 @@
       release-evidence.md
   02_Agent_Overlays/
     README.md
+    _common-overlay-rules.md
     apps-script-sync-test-overlay.md
     dashboard-builder-overlay.md
     google-workspace-automation-engineer.md
