@@ -1,0 +1,20 @@
+# Development & Testing Dependencies
+
+# Testing Framework
+pytest>=7.0.0
+pytest-cov>=4.0.0
+pytest-mock>=3.10.0
+pytest-asyncio>=0.21.0
+pytest-xdist>=3.0.0
+
+# Code Quality
+black>=22.0.0
+flake8>=4.0.0
+mypy>=0.990
+isort>=5.12.0
+
+# Documentation
+markdown>=3.4.0
+
+# Coverage
+coverage[toml]>=6.0.0
