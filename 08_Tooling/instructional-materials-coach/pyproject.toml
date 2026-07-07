@@ -1,0 +1,27 @@
+[project]
+name = "instructional-materials-coach"
+version = "0.1.0"
+description = "Builds Google Slides decks and Docs worksheets from an approved template and lesson content, without editing template masters."
+requires-python = ">=3.10"
+dependencies = [
+    "google-api-python-client>=2.100",
+    "google-auth>=2.23",
+    "google-auth-oauthlib>=1.1",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[project.scripts]
+imc-build = "instructional_materials_coach.cli:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

@@ -8,7 +8,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`. Rep
 | Read-Only Default | 0.1.0 |
 | Source-of-Truth Checks | 0.1.0 |
 | Python Standards | 0.1.0 |
-| Google Workspace Standards | 0.1.0 |
+| Google Workspace Standards | 0.1.1 |
 | Apps Script Standards | 0.1.0 |
 | Notion Standards | 0.1.0 |
 | QA/Test Standards | 0.1.0 |

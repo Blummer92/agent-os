@@ -14,11 +14,14 @@ service-account*.json
 # Python and local caches
 __pycache__/
 *.py[cod]
+*.egg-info/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .venv/
 venv/
+build/
+dist/
 
 # OS and editor files
 .DS_Store

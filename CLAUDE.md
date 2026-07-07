@@ -17,7 +17,7 @@ This repository is a **draft canonical source** for engineering-agent standards.
 
 ## Repository Structure
 
-Agent OS is organized into seven main directories, each with a specific purpose:
+Agent OS is organized into eight main directories, each with a specific purpose:
 
 ### `00_Governance/`
 Foundation-level rules that apply to all agents before any role-specific overlay.
@@ -64,6 +64,7 @@ Write Surfaces, and Required Handoff Targets.
 - `modeling-dashboard-governance-agent.md` — Dashboard governance oversight
 - `workspace-implementation-overlay.md` — Scoped implementation behaviors
 - `integration-manager.md` — Integration routing and handoff rules
+- `instructional-materials-coach.md` — Slide deck and worksheet build rules
 
 **Convention:** When adding a new overlay, reference `_common-overlay-rules.md`
 for the shared sections instead of copying them in.
@@ -128,6 +129,27 @@ files themselves stay internally consistent.
 
 **Convention:** Every new overlay needs a matching `.tests.md` file, or
 `validate-repo-structure.sh` fails its coverage check.
+
+### `08_Tooling/`
+Runnable reference implementations that back a specific agent overlay —
+the one place in this repo with actual executable code, not just
+standards documentation.
+
+**Contents:**
+- `instructional-materials-coach/` — Python package backing the
+  Instructional Materials Coach overlay. Duplicates an approved Slides/Doc
+  template into a confirmed target Drive folder and replaces placeholder
+  tokens with lesson content, instead of building decks and worksheets by
+  hand. Follows `03_Templates/python-project-template/` conventions
+  (`src/`, `tests/`, `docs/`, `samples/` layout). Unit tests run with no
+  live Google credentials (pure functions plus mocked API clients); live
+  Drive/Slides/Docs calls need the operator's own OAuth credentials and
+  template files, set up outside this repo.
+
+**Convention:** Code here backs one specific overlay and must not
+duplicate rules already stated in that overlay or in
+`01_Shared_Standards/`. Safety boundaries (what it's allowed to write)
+live in the overlay, not in the code's README.
 
 ---
 
@@ -434,6 +456,7 @@ Check your agent's overlay first, then inherited shared standards:
 - Workspace Automation → `02_Agent_Overlays/google-workspace-automation-engineer.md`
 - Dashboard Builder → `02_Agent_Overlays/dashboard-builder-overlay.md`
 - QA Engineer → `02_Agent_Overlays/qa-test-agent.md`
+- Instructional Materials Coach → `02_Agent_Overlays/instructional-materials-coach.md` (runnable code: `08_Tooling/instructional-materials-coach/`)
 
 ---
 

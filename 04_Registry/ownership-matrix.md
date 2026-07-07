@@ -10,3 +10,4 @@
 | Dashboard sync governance | Modeling & Dashboard Governance Agent |
 | Dashboard sync implementation | Google Workspace Automation Engineer |
 | Dashboard sync validation evidence | QA / Test Agent |
+| Instructional materials generation | Instructional Materials Coach |
