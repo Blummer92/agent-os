@@ -172,7 +172,7 @@ Examples of write-restricted systems:
 
 ### 4. Documentation Under 100 Lines
 
-All Markdown files must stay under 100 lines to ensure clarity and readiness for future tool integration. Split large docs into detail files (see `FOLDER_TREE_DETAILS_01.md` and `02.md` pattern).
+All Markdown files must stay under 100 lines to ensure clarity and readiness for future tool integration. Split large docs into detail files (see `FOLDER_TREE_DETAILS_01.md` and `FOLDER_TREE_DETAILS_02.md` pattern).
 
 **Exception:** This CLAUDE.md file is exempt due to its role as comprehensive codebase guidance.
 
@@ -393,14 +393,14 @@ Example:
 
 **Solution:** Remove the duplicate and replace with a reference:
 - Change: "Default external systems to read-only. Writes require explicit target..."
-- To: "See `00_Governance/read-only-default-policy.md` for write authorization rules."
+- To: "See `01_Shared_Standards/global-engineering/read-only-default-policy.md` for write authorization rules."
 
 ### Issue: File Exceeds 100 Lines
 
 **Solution:** Split into a main file and detail files:
 - Main: `topic.md` (~90 lines, overview + links to details)
 - Details: `topic-details-01.md`, `topic-details-02.md` (specific sections)
-- Example: `FOLDER_TREE.md` (main) + `FOLDER_TREE_DETAILS_01.md`, `02.md` (details)
+- Example: `FOLDER_TREE.md` (main) + `FOLDER_TREE_DETAILS_01.md`, `FOLDER_TREE_DETAILS_02.md` (details)
 
 ### Issue: Authorization Unclear
 

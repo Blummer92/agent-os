@@ -2,6 +2,7 @@
 # Structural regression tests for the Agent OS knowledge base.
 # Run from anywhere: bash 07_Agent_Tests/validate-repo-structure.sh
 set -uo pipefail
+shopt -s nullglob
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 
@@ -31,7 +32,12 @@ check "All Markdown files (except CLAUDE.md) are under 100 lines" "$([ -z "$over
 # 2. Every overlay must reference _common-overlay-rules.md instead of
 #    repeating the shared blocks (regression guard for overlay dedup).
 missing_ref=0
-for f in 02_Agent_Overlays/*.md; do
+overlay_files=(02_Agent_Overlays/*.md)
+if [ "${#overlay_files[@]}" -eq 0 ]; then
+  echo "No overlay files found in 02_Agent_Overlays/"
+  missing_ref=1
+fi
+for f in "${overlay_files[@]}"; do
   base=$(basename "$f")
   [ "$base" = "_common-overlay-rules.md" ] && continue
   [ "$base" = "README.md" ] && continue
@@ -51,17 +57,35 @@ fi
 check "No filename collisions between 00_Governance and 04_Registry" "$([ -z "$collisions" ] && echo 0 || echo 1)"
 
 # 4. Every agent listed in the inheritance registry has a matching overlay file.
+# Only reads the "Agent | Inherits | Overlay" table above the
+# "## Routed Combinations" heading, so a lowercase-hyphenated value added to
+# the routing table later can't be mistaken for an overlay slug.
 registry_missing=0
-if [ -f 04_Registry/agent-inheritance-registry.md ]; then
+registry_file=04_Registry/agent-inheritance-registry.md
+if [ ! -f "$registry_file" ]; then
+  echo "Registry file missing: $registry_file"
+  registry_missing=1
+else
+  overlay_refs=$(sed '/^## Routed Combinations/,$d' "$registry_file" | grep -oE '\| [a-z-]+ \|$' | tr -d '| ')
+  if [ -z "$overlay_refs" ]; then
+    echo "No agent rows found in: $registry_file"
+    registry_missing=1
+  fi
   while IFS= read -r overlay_ref; do
+    [ -z "$overlay_ref" ] && continue
     [ -f "02_Agent_Overlays/${overlay_ref}.md" ] || { echo "No overlay file for: $overlay_ref"; registry_missing=1; }
-  done < <(grep -oE '\| [a-z-]+ \|$' 04_Registry/agent-inheritance-registry.md | tr -d '| ')
+  done <<< "$overlay_refs"
 fi
 check "Every registered agent has a matching overlay file" "$registry_missing"
 
 # 5. Every .tests.md file in 07_Agent_Tests has a matching overlay file.
 test_orphans=0
-for f in 07_Agent_Tests/*.tests.md; do
+test_files=(07_Agent_Tests/*.tests.md)
+if [ "${#test_files[@]}" -eq 0 ]; then
+  echo "No test files found in 07_Agent_Tests/"
+  test_orphans=1
+fi
+for f in "${test_files[@]}"; do
   base=$(basename "$f" .tests.md)
   [ -f "02_Agent_Overlays/${base}.md" ] || { echo "Test file has no matching overlay: $f"; test_orphans=1; }
 done
@@ -69,7 +93,11 @@ check "Every agent test file has a matching overlay" "$test_orphans"
 
 # 6. Every overlay file has a matching test file (coverage check).
 overlay_untested=0
-for f in 02_Agent_Overlays/*.md; do
+if [ "${#overlay_files[@]}" -eq 0 ]; then
+  echo "No overlay files found in 02_Agent_Overlays/"
+  overlay_untested=1
+fi
+for f in "${overlay_files[@]}"; do
   base=$(basename "$f" .md)
   [ "$base" = "_common-overlay-rules" ] && continue
   [ "$base" = "README" ] && continue
