@@ -3,7 +3,7 @@
 ```text
   00_Governance/
     README.md
-    agent-inheritance-registry.md
+    agent-creation-policy.md
     engineering-agent-consolidation-review.md
     engineering-standards-framework.md
     memory-rules.md

@@ -3,7 +3,7 @@
 | File path | Purpose | Line count | Source document used |
 |---|---|---:|---|
 | `00_Governance/README.md` | Agent OS knowledge base file. | 4 | Governance plan and Engineering Standards Framework |
-| `00_Governance/agent-inheritance-registry.md` | Agent OS knowledge base file. | 12 | Governance plan and Engineering Standards Framework |
+| `00_Governance/agent-creation-policy.md` | Agent OS knowledge base file. | 8 | Governance plan and Engineering Standards Framework |
 | `00_Governance/engineering-agent-consolidation-review.md` | Agent OS knowledge base file. | 10 | Governance plan and Engineering Standards Framework |
 | `00_Governance/engineering-standards-framework.md` | Agent OS knowledge base file. | 12 | Governance plan and Engineering Standards Framework |
 | `00_Governance/memory-rules.md` | Agent OS knowledge base file. | 8 | Governance plan and Engineering Standards Framework |

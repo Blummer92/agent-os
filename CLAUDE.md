@@ -28,7 +28,7 @@ Foundation-level rules that apply to all agents before any role-specific overlay
 - `engineering-standards-framework.md` — Core coding principles: modular design, testing, reporting.
 - `memory-rules.md` — What agents should memorize vs. reference from files.
 - `standards-change-control.md` — How to update standards safely.
-- `agent-inheritance-registry.md` — Maps agent names to their overlays.
+- `agent-creation-policy.md` — Rule against redundant agents; points to `04_Registry/agent-inheritance-registry.md` for the canonical agent list.
 
 **Convention:** Governance rules are inherited by all other modules. They are not repeated elsewhere.
 
