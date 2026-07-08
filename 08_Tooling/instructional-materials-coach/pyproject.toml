@@ -1,6 +1,6 @@
 [project]
 name = "instructional-materials-coach"
-version = "0.1.0"
+version = "0.2.0"
 description = "Builds Google Slides decks and Docs worksheets from an approved template and lesson content, without editing template masters."
 requires-python = ">=3.10"
 dependencies = [

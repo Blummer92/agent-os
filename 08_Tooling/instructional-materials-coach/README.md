@@ -32,7 +32,7 @@ with lesson content, instead of building both by hand.
 
 ## Usage
 
-    ALLOW_WRITE=true python -m instructional_materials_coach.cli \
+    ALLOW_WRITE=true python -m instructional_materials_coach.cli build \
       --content samples/sample_lesson.yaml \
       --slides-template <slides_template_id> \
       --doc-template <doc_template_id> \
@@ -40,15 +40,40 @@ with lesson content, instead of building both by hand.
 
 Prints the generated Slides and Doc links on success.
 
+## Learning Loop (Notion Lessons Learned)
+
+This tool never writes to Notion — no agent in this repo has documented
+Notion write authority, and Notion defaults to read-only everywhere (see
+`01_Shared_Standards/notion/`). Instead, it produces a local,
+structured **lesson-candidate record** that a human reviews and applies
+to the real "Lessons Learned" Notion database themselves.
+
+**On a failed build**, a YAML record is written automatically to
+`reports/lessons/` (override with `--lessons-dir`) and the path is
+printed to stderr.
+
+**To log a lesson manually** (e.g. QA feedback found after the fact,
+which the tool couldn't have caught itself):
+
+    python -m instructional_materials_coach.cli log-lesson \
+      --title "Template had a stale placeholder" \
+      --what-happened "QA caught {{objective_2}} left unreplaced in a delivered deck." \
+      --what-to-do-next-time "Validate all tokens are replaced before sharing the link." \
+      --severity Medium \
+      --learning-type "QA feedback"
+
+See `docs/notion-field-mapping.md` for the field-by-field mapping used to
+apply a local record to the real Notion database.
+
 ## Tests
 
     pytest tests/
 
-All tests run without live Google credentials — the pure functions
-(`content_spec.py`, `slides_requests.py`, `docs_requests.py`) are tested
-directly, and the thin API wrappers (`drive_client.py`,
-`workspace_clients.py`, `cli.py`) are tested against a mocked Google
-client.
+All tests run without live Google or Notion credentials — the pure
+functions (`content_spec.py`, `slides_requests.py`, `docs_requests.py`,
+`lesson_record.py`) are tested directly, and the thin API wrappers
+(`drive_client.py`, `workspace_clients.py`, `cli.py`) are tested against
+a mocked Google client.
 
 ## Limitations
 
