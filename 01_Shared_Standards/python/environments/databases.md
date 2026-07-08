@@ -1,152 +1,84 @@
-# Database Testing Setup
+# Database Configuration
 
-## In-Memory SQLite (Recommended)
+## Choose Your Database
 
-Fastest for tests, no setup required:
+**For tests:** Use [sqlite-testing.md](sqlite-testing.md) (recommended, fastest)
 
-```python
-# conftest.py
-import pytest
-from sqlalchemy import create_engine
+**For real database:** Use PostgreSQL below
 
-@pytest.fixture
-def test_db():
-    """In-memory database."""
-    engine = create_engine('sqlite:///:memory:')
-    Base.metadata.create_all(engine)
-    
-    Session = sessionmaker(bind=engine)
-    session = Session()
-    
-    yield session
-    session.close()
-```
+## PostgreSQL Setup
 
-## PostgreSQL (Local)
-
-For integration tests needing real database:
+### Local Installation
 
 ```bash
-# Install PostgreSQL
-brew install postgresql  # macOS
-sudo apt-get install postgresql  # Ubuntu
+# macOS
+brew install postgresql
+brew services start postgresql
+createdb testdb
 
-# Start server
-brew services start postgresql  # macOS
-
-# Create test database
+# Ubuntu
+sudo apt-get install postgresql
+sudo service postgresql start
 createdb testdb
 ```
 
-Configuration:
-
-```python
-# conftest.py
-import pytest
-from sqlalchemy import create_engine
-
-@pytest.fixture
-def test_db():
-    """PostgreSQL test database."""
-    engine = create_engine(
-        'postgresql://postgres:password@localhost/testdb'
-    )
-    Base.metadata.create_all(engine)
-    
-    Session = sessionmaker(bind=engine)
-    session = Session()
-    
-    yield session
-    
-    session.close()
-    Base.metadata.drop_all(engine)  # Clean up
-```
-
-## PostgreSQL (Docker)
+### Docker Setup
 
 ```bash
-# Start PostgreSQL container
 docker run --name testdb \
   -e POSTGRES_PASSWORD=testpass \
   -e POSTGRES_DB=testdb \
   -p 5432:5432 \
   -d postgres:15-alpine
+```
 
-# Connection string
+Connection string:
+```
 postgresql://postgres:testpass@localhost:5432/testdb
-
-# Stop container
-docker stop testdb
-docker rm testdb
 ```
 
-## Environment Variables
-
-Create `.env.test`:
-
-```env
-DATABASE_URL=postgresql://postgres:testpass@localhost/testdb
-```
-
-Load in tests:
+## Configuration
 
 ```python
+# conftest.py
 import os
 from dotenv import load_dotenv
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 load_dotenv('.env.test')
 DATABASE_URL = os.getenv('DATABASE_URL')
-```
 
-## Database Migrations
-
-For projects with Alembic:
-
-```python
-@pytest.fixture(scope='session')
-def db_migrations():
-    """Run migrations once per session."""
-    from alembic.config import Config
-    from alembic import command
-    
-    config = Config('alembic.ini')
-    command.upgrade(config, 'head')
-    return True
-
-@pytest.fixture
-def test_db(db_migrations):
-    """Test database after migrations."""
-    # ...
-```
-
-## Cleanup Strategies
-
-### Option 1: Recreate Each Test
-```python
 @pytest.fixture
 def test_db():
-    # Fresh database per test
-    engine = create_engine('sqlite:///:memory:')
+    engine = create_engine(DATABASE_URL)
     Base.metadata.create_all(engine)
-    # ...
+    
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    yield session
+    session.close()
 ```
 
-### Option 2: Rollback Transactions
+## Cleanup Options
+
 ```python
+# Option 1: Fresh per test
 @pytest.fixture
 def test_db():
-    # Rollback changes after test
+    # Creates fresh database each test
+
+# Option 2: Rollback after test
+@pytest.fixture
+def test_db():
     session.begin()
     yield session
     session.rollback()
-```
 
-### Option 3: Truncate Tables
-```python
+# Option 3: Truncate tables
 @pytest.fixture
 def test_db():
     yield session
-    # Clear data
     for table in Base.metadata.tables.values():
         session.execute(table.delete())
     session.commit()

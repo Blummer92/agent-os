@@ -1,126 +1,89 @@
-# Code Quality Checks
+# Type Checking with mypy
 
-## Tools Required
-
-```bash
-pip install flake8 black mypy isort
-```
-
-## Linting with flake8
-
-Detects style violations and bugs:
+## Installation
 
 ```bash
-# Check all Python files
-flake8 src tests
-
-# Show statistics
-flake8 --statistics src
-
-# Only show certain violations
-flake8 --select=E501,W503 src
+pip install mypy
 ```
 
-In CI/CD:
-
-```yaml
-- name: Lint with flake8
-  run: |
-    flake8 src tests --count --select=E,W,F --show-source
-```
-
-## Code Formatting with black
-
-Auto-format code consistently:
+## Type Checking
 
 ```bash
-# Check formatting
-black --check src tests
-
-# Auto-format
-black src tests
+mypy src                            # Check types
+mypy src --ignore-missing-imports   # Allow missing stubs
+mypy src --strict                   # Strict mode
 ```
 
-In CI/CD:
+## Configuration
 
-```yaml
-- name: Format with black
-  run: black --check src tests
-```
-
-## Import Sorting with isort
-
-Organize imports:
-
-```bash
-# Check import order
-isort --check-only src tests
-
-# Auto-sort
-isort src tests
-```
-
-## Type Checking with mypy
-
-Check type hints:
-
-```bash
-# Check types
-mypy src
-
-# Ignore missing imports
-mypy src --ignore-missing-imports
-```
-
-In CI/CD:
-
-```yaml
-- name: Type check with mypy
-  run: mypy src
-```
-
-## Combined Quality Check
-
-Full CI/CD job:
-
-```yaml
-- name: Code quality
-  run: |
-    flake8 src tests
-    black --check src tests
-    mypy src
-    isort --check-only src tests
-```
-
-## Configuration Files
-
-### .flake8
-
-```ini
-[flake8]
-max-line-length = 88
-extend-ignore = E203, W503
-exclude = .git,__pycache__,venv
-```
-
-### pyproject.toml (for black)
-
-```toml
-[tool.black]
-line-length = 88
-target-version = ['py39']
-
-[tool.isort]
-profile = "black"
-line_length = 88
-```
-
-### mypy.ini
+Create `mypy.ini`:
 
 ```ini
 [mypy]
 python_version = 3.9
 warn_return_any = True
-strict = False
 ignore_missing_imports = True
+```
+
+Or in `pyproject.toml`:
+
+```toml
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+ignore_missing_imports = true
+```
+
+## In CI/CD
+
+```yaml
+- name: Type check
+  run: mypy src
+```
+
+## Type Hints
+
+```python
+# Annotate function parameters and return type
+def greet(name: str) -> str:
+    """Greet someone."""
+    return f"Hello, {name}!"
+
+# Annotate variables
+count: int = 0
+users: list[str] = []
+config: dict[str, Any] = {}
+```
+
+## Common Issues
+
+```python
+# Missing return type
+def calculate():  # ✗ Add return type
+    pass
+
+# Fixed
+def calculate() -> int:  # ✓ Type specified
+    return 42
+
+# Missing parameter types
+def add(a, b):  # ✗ Missing types
+    return a + b
+
+# Fixed
+def add(a: int, b: int) -> int:  # ✓ All typed
+    return a + b
+```
+
+## Integration with Linting
+
+See [linting-formatting.md](linting-formatting.md) for flake8, black, and isort.
+
+Run all checks:
+
+```bash
+flake8 src tests && \
+black --check src tests && \
+mypy src && \
+isort --check-only src tests
 ```
