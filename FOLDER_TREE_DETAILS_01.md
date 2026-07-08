@@ -3,7 +3,7 @@
 ```text
   00_Governance/
     README.md
-    agent-inheritance-registry.md
+    agent-creation-policy.md
     engineering-agent-consolidation-review.md
     engineering-standards-framework.md
     memory-rules.md
@@ -54,6 +54,7 @@
       release-evidence.md
   02_Agent_Overlays/
     README.md
+    _common-overlay-rules.md
     apps-script-sync-test-overlay.md
     dashboard-builder-overlay.md
     google-workspace-automation-engineer.md

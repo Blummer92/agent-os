@@ -1,0 +1,13 @@
+# Fill in these fields, then run:
+#   ALLOW_WRITE=true python -m instructional_materials_coach.cli \
+#     --content lesson.yaml \
+#     --slides-template <slides_template_id> \
+#     --doc-template <doc_template_id> \
+#     --target-folder <target_drive_folder_id>
+
+lesson_title: ""
+objectives: []
+slides_template_id: ""
+doc_template_id: ""
+target_drive_folder_id: ""
+content_source: ""

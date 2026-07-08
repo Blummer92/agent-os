@@ -3,4 +3,4 @@
 - Apply Drive, Docs, and Sheets safety rules before integration work.
 
 ## Version
-0.1.0
+0.1.1

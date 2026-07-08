@@ -6,6 +6,7 @@
 | Modeling & Dashboard Governance Agent | Global, Dashboard Governance, Notion | modeling-dashboard-governance-agent |
 | Integration Manager | Global, Workspace, Notion | integration-manager |
 | QA / Test Agent | Global, QA/Test | qa-test-agent |
+| Instructional Materials Coach | Global, Workspace, Python | instructional-materials-coach |
 
 ## Routed Combinations
 
