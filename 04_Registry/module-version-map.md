@@ -10,6 +10,6 @@ Module versions are governed by `00_Governance/standards-change-control.md`. Rep
 | Python Standards | 0.1.0 |
 | Google Workspace Standards | 0.1.1 |
 | Apps Script Standards | 0.1.0 |
-| Notion Standards | 0.1.0 |
+| Notion Standards | 0.1.1 |
 | QA/Test Standards | 0.1.0 |
 | Dashboard Governance | 0.1.0 |
