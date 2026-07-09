@@ -6,6 +6,9 @@
 - **[naming-conventions.md](naming-conventions.md)** - Test naming
 - **[assertions.md](assertions.md)** - Assertion best practices
 - **[parametrization.md](parametrization.md)** - Parameterized tests
+- **[docstrings.md](docstrings.md)** - Docstring requirements
+- **[anti-patterns.md](anti-patterns.md)** - Patterns to avoid
+- **[checklist.md](checklist.md)** - Pre-merge test quality checklist
 
 ## What Are Unit Tests?
 
