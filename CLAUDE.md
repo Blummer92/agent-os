@@ -7,6 +7,18 @@
 
 ---
 
+## Current Operating Mode
+
+Agent OS is in Advisory Mode during pilot review.
+
+Use `00_Governance/agent-os-advisory-mode.md` as the default behavior for day-to-day work.
+
+Agent OS should not block read-only, local-only, planning, drafting, QA notes, summaries, code review, local specs, or local documentation tasks.
+
+Strict approval gates still apply to external writes, production data, governed fields, source-of-truth records, sharing/permissions, sensitive student/private data, and irreversible actions.
+
+---
+
 ## Overview
 
 **Agent OS** is a modular, standards-first knowledge base for engineering agents. It defines governance rules, shared standards, agent-specific overlays, registry maps, reusable templates, and examples—all organized to provide clear source-of-truth documentation for AI assistants working on coding and automation tasks.
@@ -25,6 +37,7 @@ Foundation-level rules that apply to all agents before any role-specific overlay
 **Key files:**
 - `ownership-and-source-of-truth.md` — Where policy lives; no duplication across modules.
 - `write-authorization-policy.md` — Write defaults to read-only; explicit approval required.
+- `agent-os-advisory-mode.md` — Pilot-review mode for low-risk day-to-day work.
 - `engineering-standards-framework.md` — Core coding principles: modular design, testing, reporting.
 - `memory-rules.md` — What agents should memorize vs. reference from files.
 - `standards-change-control.md` — How to update standards safely.
@@ -439,6 +452,7 @@ Example:
 
 - `00_Governance/ownership-and-source-of-truth.md` — Foundational principle
 - `00_Governance/write-authorization-policy.md` — Default behavior
+- `00_Governance/agent-os-advisory-mode.md` — Pilot-review default for low-risk day-to-day work
 - `01_Shared_Standards/global-engineering/README.md` — Universal standards
 - `04_Registry/ownership-matrix.md` — Responsibility routing
 
