@@ -4,6 +4,9 @@ Use these shortcuts for common low-friction agent work. They operate under
 `00_Governance/agent-os-advisory-mode.md` during pilot review and do not override
 `00_Governance/write-authorization-policy.md`; they clarify safe daily lanes.
 
+If a live agent still pauses on low-risk work, paste
+`03_Templates/prompts/live-agent-advisory-override.md` at the top of the task.
+
 ## Daily Mode Rule
 
 For read-only, local-only, planning, QA notes, routing, draft specs, and local
