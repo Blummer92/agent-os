@@ -40,17 +40,8 @@ jobs:
       uses: codecov/codecov-action@v3
 ```
 
-## Testing Multiple Python Versions
-
-The `matrix` strategy runs tests on multiple versions:
-
-```yaml
-strategy:
-  matrix:
-    python-version: ['3.9', '3.10', '3.11', '3.12']
-```
-
-Each combination creates separate job.
+The `strategy.matrix` block above runs tests on each listed Python
+version as a separate job.
 
 ## Service Dependencies
 
@@ -97,19 +88,6 @@ Save test results:
 
 ## Manual Trigger
 
-Allow manual workflow run:
-
-```yaml
-on:
-  workflow_dispatch:
-```
-
-Then use GitHub UI to trigger manually.
-
-## Status Badge
-
-Add to README:
-
-```markdown
-![Tests](https://github.com/owner/repo/actions/workflows/tests.yml/badge.svg)
-```
+Add `workflow_dispatch:` under `on:` to allow triggering from the GitHub
+UI, and add a status badge to your README with
+`![Tests](.../workflows/tests.yml/badge.svg)`.

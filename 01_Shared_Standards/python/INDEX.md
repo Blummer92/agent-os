@@ -76,3 +76,6 @@ testing standards.
 
 When adding new documentation: keep files under 100 lines, place in the
 appropriate folder, add/update that folder's README.md, and link it here.
+
+## Version
+0.2.0

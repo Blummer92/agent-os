@@ -94,20 +94,5 @@ def test_json_response_structure(client):
 
 ## Mock External APIs
 
-```python
-@pytest.mark.integration
-def test_user_signup_calls_email_service(client, mocker):
-    """Test signup calls external email service."""
-    # Mock external service
-    mock_email = mocker.patch('email_service.send')
-    
-    # Call API
-    response = client.post('/users/signup', json={
-        'name': 'New User',
-        'email': 'new@example.com'
-    })
-    
-    # Verify external service was called
-    assert response.status_code == 201
-    mock_email.assert_called_once()
-```
+Use `mocker.patch(...)` on the external call before hitting the endpoint,
+then assert the mock was called -- see `../frameworks/mocking-setup.md`.

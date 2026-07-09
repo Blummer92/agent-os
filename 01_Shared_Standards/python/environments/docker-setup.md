@@ -92,12 +92,4 @@ REDIS_URL=redis://redis:6379/0
 DEBUG=true
 ```
 
-Reference in tests:
-
-```python
-import os
-from dotenv import load_dotenv
-
-load_dotenv('.env.test')
-db_url = os.getenv('DATABASE_URL')
-```
+Reference in tests via `os.getenv()` after `load_dotenv('.env.test')`.

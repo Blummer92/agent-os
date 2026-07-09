@@ -87,15 +87,5 @@ def test_import_users_command(cli_runner, test_db, tmp_path):
 
 ## Test Interactive Prompts
 
-```python
-def test_interactive_user_create(cli_runner, test_db):
-    """Test interactive user creation."""
-    result = cli_runner.invoke(main_cli, ['user', 'create', '--interactive'], [
-        'Jane\n',                    # name
-        'jane@example.com\n',        # email
-    ])
-    
-    assert result.exit_code == 0
-    user = test_db.query(User).filter_by(email='jane@example.com').first()
-    assert user.name == 'Jane'
-```
+Pass stdin input as a list of lines to `cli_runner.invoke()` for prompts
+(e.g. `['Jane\n', 'jane@example.com\n']` for name then email prompts).
