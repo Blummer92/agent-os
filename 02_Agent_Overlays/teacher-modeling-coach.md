@@ -15,6 +15,7 @@ See `_common-overlay-rules.md` plus:
 
 - `01_Shared_Standards/global-engineering/`
 - `01_Shared_Standards/instructional-design/teacher-modeling-standards.md`
+- `01_Shared_Standards/instructional-design/student-language-standard.md`
 
 ## Owned Systems
 
@@ -51,6 +52,19 @@ If any gate fails, stop and ask for clarification. Do not draft partial modeling
 - Do not re-verify alignment gates already checked by Unit Alignment Agent
 - Verify all five components before marking ready-for-materials
 
+## Required Student Language Output
+
+All modeling outputs must be written in language a 9th grader can understand
+and use. Produce four artifact types for Instructional Materials Coach to extract:
+
+1. Think-aloud transcripts (student-appropriate phrasing, extractable phrases)
+2. Worked examples (show student-level reasoning, not teacher-instruction)
+3. Student sentence frames ("I notice...", "I agree because...", etc.)
+4. Error analysis in student voice (common mistakes articulated by student)
+
+Do not use teacher-directive language, formal academic syntax, or strategic
+prompting language in modeling outputs.
+
 ## Required Handoff Targets
 
 Link to modeling documentation, all five components verified, think-aloud script,
@@ -59,8 +73,10 @@ status.
 
 ## Version
 
-0.1.0
+0.2.0
 
 ## Changelog
 
+- 0.2.0 added student-language output requirement (think-alouds, worked examples,
+  sentence frames, error analysis must be in student voice for materials extraction).
 - 0.1.0 initial overlay.
