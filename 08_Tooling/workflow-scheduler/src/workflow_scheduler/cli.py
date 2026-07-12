@@ -36,6 +36,47 @@ class WorkflowSchedulerCLI:
         )
         self.queue = JobQueue()
 
+    def _format_response(
+        self,
+        status: str,
+        blockers: Optional[list[str]] = None,
+        checks_passed: Optional[list[str]] = None,
+        checks_failed: Optional[list[str]] = None,
+        next_owner: str = "system",
+        handoff_artifacts: Optional[list[str]] = None,
+        files_changed: Optional[list[str]] = None,
+        tests_run: str = "N/A",
+        **extra_fields,
+    ) -> Dict[str, Any]:
+        """Format CLI response using Part A output schema.
+
+        Args:
+            status: "pass" | "fail" | "blocked"
+            blockers: List of blockers
+            checks_passed: Passed checks
+            checks_failed: Failed checks
+            next_owner: Next responsible party
+            handoff_artifacts: Artifacts to pass forward
+            files_changed: Changed files
+            tests_run: Test summary
+            **extra_fields: Additional fields to include
+
+        Returns:
+            Dict with schema-compliant response
+        """
+        response = {
+            "status": status,
+            "blockers": blockers or [],
+            "checks_passed": checks_passed or [],
+            "checks_failed": checks_failed or [],
+            "next_owner": next_owner,
+            "handoff_artifacts": handoff_artifacts or [],
+            "files_changed": files_changed or [],
+            "tests_run": tests_run,
+        }
+        response.update(extra_fields)
+        return response
+
     def create_workflow(self, yaml_path: str) -> Dict[str, Any]:
         """Create workflow from YAML file.
 
@@ -49,9 +90,19 @@ class WorkflowSchedulerCLI:
             with open(yaml_path) as f:
                 workflow_data = yaml.safe_load(f)
         except FileNotFoundError:
-            return {"success": False, "error": f"File not found: {yaml_path}"}
+            return self._format_response(
+                status="fail",
+                checks_failed=["file_not_found"],
+                next_owner="user",
+                error=f"File not found: {yaml_path}",
+            )
         except yaml.YAMLError as e:
-            return {"success": False, "error": f"Invalid YAML: {e}"}
+            return self._format_response(
+                status="fail",
+                checks_failed=["yaml_parse"],
+                next_owner="user",
+                error=f"Invalid YAML: {e}",
+            )
 
         workflow_id = workflow_data.get("workflow_id", f"workflow-{uuid.uuid4().hex[:8]}")
         title = workflow_data.get("title", "Untitled Workflow")
@@ -61,7 +112,12 @@ class WorkflowSchedulerCLI:
         try:
             mode = WorkflowMode[mode_str.upper()]
         except KeyError:
-            return {"success": False, "error": f"Invalid mode: {mode_str}"}
+            return self._format_response(
+                status="fail",
+                checks_failed=["invalid_mode"],
+                next_owner="user",
+                error=f"Invalid mode: {mode_str}",
+            )
 
         workflow = WorkflowPlan(
             workflow_id=workflow_id,
@@ -96,12 +152,14 @@ class WorkflowSchedulerCLI:
         self.repository.create_workflow(workflow)
         self.audit_logger.log_workflow_created(workflow)
 
-        return {
-            "success": True,
-            "workflow_id": workflow_id,
-            "title": title,
-            "task_count": len(tasks_data),
-        }
+        return self._format_response(
+            status="pass",
+            checks_passed=["workflow_created", "tasks_created"],
+            next_owner="user",
+            workflow_id=workflow_id,
+            title=title,
+            task_count=len(tasks_data),
+        )
 
     def list_workflows(self) -> Dict[str, Any]:
         """List all workflows.
@@ -110,7 +168,12 @@ class WorkflowSchedulerCLI:
             Dict with workflows list
         """
         # Note: Repository doesn't have list_workflows yet; would need to add
-        return {"success": True, "workflows": []}
+        return self._format_response(
+            status="pass",
+            checks_passed=["workflows_listed"],
+            next_owner="user",
+            workflows=[],
+        )
 
     def get_workflow_status(self, workflow_id: str) -> Dict[str, Any]:
         """Get workflow status.
@@ -123,24 +186,31 @@ class WorkflowSchedulerCLI:
         """
         workflow = self.repository.get_workflow(workflow_id)
         if not workflow:
-            return {"success": False, "error": f"Workflow not found: {workflow_id}"}
+            return self._format_response(
+                status="fail",
+                checks_failed=["workflow_not_found"],
+                next_owner="user",
+                error=f"Workflow not found: {workflow_id}",
+            )
 
         tasks = self.repository.list_workflow_tasks(workflow_id)
         task_statuses = {t.id: t.status.value for t in tasks}
 
         mode_value = workflow.mode.value if hasattr(workflow.mode, "value") else workflow.mode
 
-        return {
-            "success": True,
-            "workflow_id": workflow_id,
-            "title": workflow.title,
-            "status": workflow.status.value,
-            "mode": mode_value,
-            "task_count": len(tasks),
-            "task_statuses": task_statuses,
-            "created_at": workflow.created_at.isoformat(),
-            "updated_at": workflow.updated_at.isoformat(),
-        }
+        return self._format_response(
+            status="pass",
+            checks_passed=["workflow_status_retrieved"],
+            next_owner="user",
+            workflow_id=workflow_id,
+            title=workflow.title,
+            workflow_status=workflow.status.value,
+            mode=mode_value,
+            task_count=len(tasks),
+            task_statuses=task_statuses,
+            created_at=workflow.created_at.isoformat(),
+            updated_at=workflow.updated_at.isoformat(),
+        )
 
     def run_workflow(self, workflow_id: str) -> Dict[str, Any]:
         """Execute workflow.
@@ -153,10 +223,21 @@ class WorkflowSchedulerCLI:
         """
         workflow = self.repository.get_workflow(workflow_id)
         if not workflow:
-            return {"success": False, "error": f"Workflow not found: {workflow_id}"}
+            return self._format_response(
+                status="fail",
+                checks_failed=["workflow_not_found"],
+                next_owner="user",
+                error=f"Workflow not found: {workflow_id}",
+            )
 
         if workflow.is_terminal():
-            return {"success": False, "error": f"Workflow is in terminal state: {workflow.status.value}"}
+            return self._format_response(
+                status="blocked",
+                blockers=["workflow_terminal"],
+                checks_failed=["workflow_not_in_runnable_state"],
+                next_owner="user",
+                error=f"Workflow is in terminal state: {workflow.status.value}",
+            )
 
         workflow.mark_running()
         self.audit_logger.log_workflow_started(workflow)
@@ -170,10 +251,12 @@ class WorkflowSchedulerCLI:
         if has_cycle:
             workflow.mark_failed(reason=f"Circular dependency detected: {' -> '.join(cycle_path)}")
             self.repository.update_workflow(workflow)
-            return {
-                "success": False,
-                "error": f"Circular dependency detected: {' -> '.join(cycle_path)}",
-            }
+            return self._format_response(
+                status="fail",
+                checks_failed=["cycle_detected"],
+                next_owner="user",
+                error=f"Circular dependency detected: {' -> '.join(cycle_path)}",
+            )
 
         # Execute in dependency order
         completed: set[str] = set()
@@ -204,20 +287,28 @@ class WorkflowSchedulerCLI:
 
         if failed or blocked:
             workflow.mark_failed(reason=f"Tasks failed: {len(failed)}, blocked: {len(blocked)}")
+            status = "fail"
+            checks_failed = ["tasks_failed" if failed else [], "tasks_blocked" if blocked else []]
+            checks_failed = [c for c in checks_failed if c]
         else:
             workflow.mark_completed()
+            status = "pass"
+            checks_failed = []
 
         self.audit_logger.log_workflow_completed(workflow)
         self.repository.update_workflow(workflow)
 
-        return {
-            "success": len(failed) == 0 and len(blocked) == 0,
-            "workflow_id": workflow_id,
-            "completed": len(completed),
-            "failed": len(failed),
-            "blocked": len(blocked),
-            "final_status": workflow.status.value,
-        }
+        return self._format_response(
+            status=status,
+            checks_passed=["workflow_executed"],
+            checks_failed=checks_failed,
+            next_owner="user",
+            workflow_id=workflow_id,
+            completed=len(completed),
+            failed=len(failed),
+            blocked=len(blocked),
+            final_status=workflow.status.value,
+        )
 
     def show_audit_log(self, workflow_id: Optional[str] = None, task_id: Optional[str] = None) -> Dict[str, Any]:
         """Show audit log.
@@ -231,11 +322,13 @@ class WorkflowSchedulerCLI:
         """
         events = self.audit_logger.get_events(task_id=task_id, workflow_id=workflow_id)
 
-        return {
-            "success": True,
-            "event_count": len(events),
-            "events": [e.to_dict() for e in events],
-        }
+        return self._format_response(
+            status="pass",
+            checks_passed=["audit_log_retrieved"],
+            next_owner="user",
+            event_count=len(events),
+            events=[e.to_dict() for e in events],
+        )
 
 
 def main() -> None:

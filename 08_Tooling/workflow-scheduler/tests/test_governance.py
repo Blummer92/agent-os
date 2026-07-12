@@ -9,8 +9,8 @@ from workflow_scheduler.models import Task, TaskMode
 class TestStopConditions:
     """Tests for stop condition enforcement."""
 
-    def test_approval_engine_deferred_production(self):
-        """Test that production tasks are blocked with approval_engine_deferred."""
+    def test_approval_engine_deferred_production_ready(self):
+        """Test that production_ready tasks are blocked with approval_engine_deferred."""
         task = Task(
             id="task-1",
             workflow_id="workflow-1",
@@ -19,6 +19,23 @@ class TestStopConditions:
             action="write:database",
             idempotency_key="key-1",
             production_ready=True,
+        )
+
+        result = StopConditionChecker.check_all_stop_conditions(task)
+
+        assert result.is_blocked is True
+        assert "approval_engine_deferred" in result.blockers
+
+    def test_approval_engine_deferred_production_mode(self):
+        """Test that Production-mode tasks are blocked with approval_engine_deferred."""
+        task = Task(
+            id="task-1",
+            workflow_id="workflow-1",
+            type="test",
+            owner="system",
+            action="write:database",
+            idempotency_key="key-1",
+            mode=TaskMode.PRODUCTION,
         )
 
         result = StopConditionChecker.check_all_stop_conditions(task)
@@ -170,6 +187,40 @@ class TestStopConditions:
 
         result2 = StopConditionChecker.check_production_mode(task2)
         assert result2.is_blocked is False
+
+    def test_governed_field_risk_blocks(self):
+        """Test that governed field risk blocks execution."""
+        task = Task(
+            id="task-1",
+            workflow_id="workflow-1",
+            type="test",
+            owner="system",
+            action="write:audit_log",
+            idempotency_key="key-1",
+            payload={"governed_field_risk": True},
+        )
+
+        result = StopConditionChecker.check_all_stop_conditions(task)
+
+        assert result.is_blocked is True
+        assert "governed_field_risk" in result.blockers
+
+    def test_governed_field_risk_via_writes_governed_field(self):
+        """Test governed field risk check via writes_governed_field flag."""
+        task = Task(
+            id="task-1",
+            workflow_id="workflow-1",
+            type="test",
+            owner="system",
+            action="update:record",
+            idempotency_key="key-1",
+            payload={"writes_governed_field": True},
+        )
+
+        result = StopConditionChecker.check_all_stop_conditions(task)
+
+        assert result.is_blocked is True
+        assert "governed_field_risk" in result.blockers
 
     def test_multiple_blockers(self):
         """Test that multiple blockers are collected."""

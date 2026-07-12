@@ -57,7 +57,7 @@ class TestCLI:
         cli = WorkflowSchedulerCLI(db_path=temp_db)
         result = cli.create_workflow(temp_yaml)
 
-        assert result["success"] is True
+        assert result["status"] == "pass"
         assert result["workflow_id"] == "test-workflow"
         assert result["task_count"] == 2
 
@@ -66,7 +66,7 @@ class TestCLI:
         cli = WorkflowSchedulerCLI(db_path=temp_db)
         result = cli.create_workflow("/nonexistent/path/workflow.yaml")
 
-        assert result["success"] is False
+        assert result["status"] == "fail"
         assert "File not found" in result["error"]
 
     def test_create_workflow_invalid_yaml(self, temp_db):
@@ -78,7 +78,7 @@ class TestCLI:
         cli = WorkflowSchedulerCLI(db_path=temp_db)
         result = cli.create_workflow(temp_invalid)
 
-        assert result["success"] is False
+        assert result["status"] == "fail"
         assert "Invalid YAML" in result["error"]
 
     def test_get_workflow_status(self, temp_db, temp_yaml):
@@ -88,7 +88,7 @@ class TestCLI:
 
         result = cli.get_workflow_status("test-workflow")
 
-        assert result["success"] is True
+        assert result["status"] == "pass"
         assert result["workflow_id"] == "test-workflow"
         assert result["title"] == "Test Workflow"
         assert result["task_count"] == 2
@@ -98,7 +98,7 @@ class TestCLI:
         cli = WorkflowSchedulerCLI(db_path=temp_db)
         result = cli.get_workflow_status("nonexistent")
 
-        assert result["success"] is False
+        assert result["status"] == "fail"
         assert "not found" in result["error"]
 
     def test_list_workflows(self, temp_db, temp_yaml):
@@ -108,7 +108,7 @@ class TestCLI:
 
         result = cli.list_workflows()
 
-        assert result["success"] is True
+        assert result["status"] == "pass"
         assert "workflows" in result
 
     def test_run_workflow_success(self, temp_db, temp_yaml):
@@ -118,7 +118,7 @@ class TestCLI:
 
         result = cli.run_workflow("test-workflow")
 
-        assert result["success"] is True
+        assert result["status"] == "pass"
         assert result["workflow_id"] == "test-workflow"
         assert result["completed"] > 0
 
@@ -127,7 +127,7 @@ class TestCLI:
         cli = WorkflowSchedulerCLI(db_path=temp_db)
         result = cli.run_workflow("nonexistent")
 
-        assert result["success"] is False
+        assert result["status"] == "fail"
         assert "not found" in result["error"]
 
     def test_run_workflow_already_terminal(self, temp_db, temp_yaml):
@@ -141,7 +141,7 @@ class TestCLI:
         # Try to run again (should fail - already terminal)
         result = cli.run_workflow("test-workflow")
 
-        assert result["success"] is False
+        assert result["status"] == "blocked"
         assert "terminal state" in result["error"]
 
     def test_show_audit_log_all(self, temp_db, temp_yaml):
@@ -151,7 +151,7 @@ class TestCLI:
 
         result = cli.show_audit_log()
 
-        assert result["success"] is True
+        assert result["status"] == "pass"
         assert result["event_count"] > 0
 
     def test_show_audit_log_by_workflow(self, temp_db, temp_yaml):
@@ -161,7 +161,7 @@ class TestCLI:
 
         result = cli.show_audit_log(workflow_id="test-workflow")
 
-        assert result["success"] is True
+        assert result["status"] == "pass"
         assert result["event_count"] > 0
         assert all(e["workflow_id"] == "test-workflow" for e in result["events"])
 
@@ -172,7 +172,7 @@ class TestCLI:
 
         result = cli.show_audit_log(task_id="task-1")
 
-        assert result["success"] is True
+        assert result["status"] == "pass"
 
     def test_workflow_with_cycle_detection(self, temp_db):
         """Test that workflow with cycles is rejected."""
@@ -209,5 +209,5 @@ class TestCLI:
 
         result = cli.run_workflow("cycle-workflow")
 
-        assert result["success"] is False
+        assert result["status"] == "fail"
         assert "Circular dependency" in result["error"]

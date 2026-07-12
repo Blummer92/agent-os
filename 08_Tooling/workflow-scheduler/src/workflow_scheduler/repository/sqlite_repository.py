@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from workflow_scheduler.models import Task, TaskStatus, WorkflowPlan, WorkflowStatus
+from workflow_scheduler.models import Task, TaskMode, TaskStatus, WorkflowPlan, WorkflowMode, WorkflowStatus
 
 
 class SQLiteRepository:
@@ -137,7 +137,7 @@ class SQLiteRepository:
             workflow_id=row["workflow_id"],
             title=row["title"],
             created_by=row["created_by"],
-            mode=row["mode"],
+            mode=WorkflowMode(row["mode"]),
             status=WorkflowStatus(row["status"]),
             tasks=json.loads(row["tasks"]),
             dependencies=json.loads(row["dependencies"]),
@@ -220,7 +220,7 @@ class SQLiteRepository:
             action=row["action"],
             idempotency_key=row["idempotency_key"],
             status=TaskStatus(row["status"]),
-            mode=row["mode"],
+            mode=TaskMode(row["mode"]),
             priority=row["priority"],
             approval_required=bool(row["approval_required"]),
             depends_on=json.loads(row["depends_on"]),
@@ -271,7 +271,7 @@ class SQLiteRepository:
                     action=row["action"],
                     idempotency_key=row["idempotency_key"],
                     status=TaskStatus(row["status"]),
-                    mode=row["mode"],
+                    mode=TaskMode(row["mode"]),
                     priority=row["priority"],
                     approval_required=bool(row["approval_required"]),
                     depends_on=json.loads(row["depends_on"]),

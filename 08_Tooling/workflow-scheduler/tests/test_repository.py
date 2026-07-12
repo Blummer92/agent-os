@@ -163,3 +163,121 @@ class TestSQLiteRepository:
         # Retrieving should still work (creates new connection, but in-memory DB is lost)
         # So we just verify close doesn't raise an error
         repository.close()  # Should not raise
+
+    def test_workflow_mode_enum_hydration_draft(self, repository):
+        """Test that workflow Draft mode is properly hydrated as enum."""
+        workflow = WorkflowPlan(
+            workflow_id="workflow-1",
+            title="Test",
+            created_by="user",
+            mode=WorkflowMode.DRAFT,
+        )
+
+        repository.create_workflow(workflow)
+        retrieved = repository.get_workflow("workflow-1")
+
+        assert isinstance(retrieved.mode, WorkflowMode)
+        assert retrieved.mode == WorkflowMode.DRAFT
+
+    def test_workflow_mode_enum_hydration_gate(self, repository):
+        """Test that workflow Gate mode is properly hydrated as enum."""
+        workflow = WorkflowPlan(
+            workflow_id="workflow-1",
+            title="Test",
+            created_by="user",
+            mode=WorkflowMode.GATE,
+        )
+
+        repository.create_workflow(workflow)
+        retrieved = repository.get_workflow("workflow-1")
+
+        assert isinstance(retrieved.mode, WorkflowMode)
+        assert retrieved.mode == WorkflowMode.GATE
+
+    def test_workflow_mode_enum_hydration_production(self, repository):
+        """Test that workflow Production mode is properly hydrated as enum."""
+        workflow = WorkflowPlan(
+            workflow_id="workflow-1",
+            title="Test",
+            created_by="user",
+            mode=WorkflowMode.PRODUCTION,
+        )
+
+        repository.create_workflow(workflow)
+        retrieved = repository.get_workflow("workflow-1")
+
+        assert isinstance(retrieved.mode, WorkflowMode)
+        assert retrieved.mode == WorkflowMode.PRODUCTION
+
+    def test_task_mode_enum_hydration_draft(self, repository):
+        """Test that task Draft mode is properly hydrated as enum."""
+        task = Task(
+            id="task-1",
+            workflow_id="workflow-1",
+            type="test",
+            owner="system",
+            action="test",
+            idempotency_key="key-1",
+            mode=TaskMode.DRAFT,
+        )
+
+        repository.create_task(task)
+        retrieved = repository.get_task("task-1")
+
+        assert isinstance(retrieved.mode, TaskMode)
+        assert retrieved.mode == TaskMode.DRAFT
+
+    def test_task_mode_enum_hydration_gate(self, repository):
+        """Test that task Gate mode is properly hydrated as enum."""
+        task = Task(
+            id="task-1",
+            workflow_id="workflow-1",
+            type="test",
+            owner="system",
+            action="test",
+            idempotency_key="key-1",
+            mode=TaskMode.GATE,
+        )
+
+        repository.create_task(task)
+        retrieved = repository.get_task("task-1")
+
+        assert isinstance(retrieved.mode, TaskMode)
+        assert retrieved.mode == TaskMode.GATE
+
+    def test_task_mode_enum_hydration_production(self, repository):
+        """Test that task Production mode is properly hydrated as enum."""
+        task = Task(
+            id="task-1",
+            workflow_id="workflow-1",
+            type="test",
+            owner="system",
+            action="test",
+            idempotency_key="key-1",
+            mode=TaskMode.PRODUCTION,
+        )
+
+        repository.create_task(task)
+        retrieved = repository.get_task("task-1")
+
+        assert isinstance(retrieved.mode, TaskMode)
+        assert retrieved.mode == TaskMode.PRODUCTION
+
+    def test_list_workflow_tasks_mode_hydration(self, repository):
+        """Test that mode is properly hydrated in list_workflow_tasks."""
+        task = Task(
+            id="task-1",
+            workflow_id="workflow-1",
+            type="test",
+            owner="system",
+            action="test",
+            idempotency_key="key-1",
+            mode=TaskMode.GATE,
+        )
+
+        repository.create_task(task)
+        tasks = repository.list_workflow_tasks("workflow-1")
+
+        assert len(tasks) == 1
+        assert isinstance(tasks[0].mode, TaskMode)
+        assert tasks[0].mode == TaskMode.GATE

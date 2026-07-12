@@ -52,8 +52,10 @@ class StopConditionChecker:
         blockers: List[str] = []
 
         # Stop Condition 1: Approval Engine Deferred
-        # Block Production or approval_required tasks in Phase 1
-        if task.production_ready or task.approval_required:
+        # Block Production-mode tasks, production_ready flag, or approval_required in Phase 1
+        from workflow_scheduler.models import TaskMode
+
+        if task.mode == TaskMode.PRODUCTION or task.production_ready or task.approval_required:
             blockers.append(StopConditionChecker.APPROVAL_ENGINE_DEFERRED)
 
         # Stop Condition 2: Ambiguous Target
@@ -73,6 +75,11 @@ class StopConditionChecker:
         if source_of_truth_db:
             if hasattr(source_of_truth_db, "has_conflict") and source_of_truth_db.has_conflict(task.id):
                 blockers.append(StopConditionChecker.CONFLICTING_SOURCE_OF_TRUTH)
+
+        # Stop Condition 5: Governed Field Risk
+        # Block if task payload indicates writing to governed fields without approval
+        if task.payload.get("governed_field_risk") or task.payload.get("writes_governed_field"):
+            blockers.append(StopConditionChecker.GOVERNED_FIELD_RISK)
 
         if blockers:
             return StopConditionResult(
