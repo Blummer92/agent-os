@@ -10,6 +10,9 @@ Load and follow:
 - `02_Agent_Overlays/unit-alignment-agent.md`
 - `01_Shared_Standards/instructional-design/unit-alignment-rules.md`
 
+Follow `01_Shared_Standards/instructional-design/production-gates-and-compute.md`
+for smallest-context, reuse, skip, and anti-duplication behavior.
+
 Use only the approved fields for the current unit:
 - standards
 - learning objectives
@@ -38,4 +41,4 @@ Next owner on pass: Teacher Modeling Coach.
 
 ## Version
 
-0.1.0
+0.1.1

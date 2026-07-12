@@ -59,6 +59,40 @@ Use the fixed sequence:
 Agents must not self-orchestrate extra reviewers or repeat checks that belong
 to another owner.
 
+## Agent Compute Profiles
+
+Pipeline: Unit Alignment → Teacher Modeling → Instructional Materials.
+
+### Unit Alignment Agent
+
+- Read only: standards, learning objectives, assessments, instructional strategies, horizontal alignment, vertical alignment, 12 essential questions.
+- Reuse: prior standards maps, approved unit structure, previously verified alignment if source fields did not change.
+- Skip: Teacher Modeling, Instructional Materials, student-facing artifact generation.
+- Cache/memoize: standards lookup, standards-to-objective map, six-check result, 12-question score.
+- Never re-check: a gate already verified by another trusted agent with unchanged source fields.
+
+### Teacher Modeling Coach
+
+- Read only: approved Unit Alignment handoff, learning objective, think-aloud method, component breakdown, visual anchors, error analysis, student-language standard.
+- Reuse: approved think-aloud patterns, visual anchor patterns, common-error examples, student sentence frames.
+- Skip: Unit Alignment re-verification, materials generation, full unit history.
+- Cache/memoize: modeling pattern, common error library, sentence-frame set, visual-anchor pattern.
+- Never re-check: Unit Alignment's six checks or 12 essential questions.
+
+### Instructional Materials Coach
+
+- Read only: approved Teacher Modeling handoff, student-language artifacts, content spec, evidence target, approved template, target folder, material-quality rubric.
+- Reuse: approved templates, approved assets, modeling outputs, sentence frames, rubric language.
+- Skip: Unit Alignment re-verification, Teacher Modeling re-verification, unrelated lessons, archived notes.
+- Cache/memoize: template map, asset library, approved language snippets, failed rubric rows.
+- Never re-check: Unit Alignment or Teacher Modeling gates once approved and handed off.
+
 ## Version
 
-0.1.0
+0.2.0
+
+## Changelog
+
+- 0.2.0 added Agent Compute Profiles (read only, reuse, skip, cache/memoize,
+  never re-check) per pipeline agent.
+- 0.1.0 initial gates and compute rules.

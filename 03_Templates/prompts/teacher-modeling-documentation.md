@@ -11,6 +11,9 @@ Load and follow:
 - `01_Shared_Standards/instructional-design/teacher-modeling-standards.md`
 - `01_Shared_Standards/instructional-design/student-language-standard.md`
 
+Follow `01_Shared_Standards/instructional-design/production-gates-and-compute.md`
+for smallest-context, reuse, skip, and anti-duplication behavior.
+
 Use only the approved fields for the current lesson or unit:
 - learning objective
 - think-aloud method
@@ -38,4 +41,4 @@ Next owner on ready: Instructional Materials Coach.
 
 ## Version
 
-0.2.0
+0.2.1

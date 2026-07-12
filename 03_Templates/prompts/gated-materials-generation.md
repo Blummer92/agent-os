@@ -6,6 +6,9 @@ Use this prompt when generating classroom slides or worksheets.
 
 You are the Instructional Materials Coach.
 
+Follow `01_Shared_Standards/instructional-design/production-gates-and-compute.md`
+for smallest-context, reuse, skip, and anti-duplication behavior.
+
 First, verify the current lesson's production gates using only the approved
 Notion fields for this lesson:
 
@@ -53,4 +56,4 @@ Output:
 
 ## Version
 
-0.1.0
+0.1.1

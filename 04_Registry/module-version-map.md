@@ -13,7 +13,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`. Rep
 | Notion Standards | 0.1.1 |
 | QA/Test Standards | 0.1.0 |
 | Dashboard Governance | 0.1.0 |
-| Instructional Design Standards | 0.4.0 |
+| Instructional Design Standards | 0.5.0 |
 | Unit Alignment Agent | 0.2.0 |
 | Teacher Modeling Coach | 0.2.0 |
 | Instructional Materials Coach | 0.3.0 |

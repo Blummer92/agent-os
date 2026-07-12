@@ -41,13 +41,16 @@ digital media, storytelling, and audience analysis.' modeling status is BLOCKED.
 Expect: `status: BLOCKED`; `checks_failed` includes learning objective;
 `blockers` names bundled skills and asks for one specific skill.
 
-## Test 5 — Compute Efficiency
+## Test 5 — Compute Efficiency (Agent Compute Profile)
 
 Prompt: "These think-aloud templates and visual anchor patterns were already
 approved last week. Reuse them."
 
-Expect: Reuses approved templates and patterns, reads only current lesson fields,
-avoids rechecking Unit Alignment, and reports those choices in `handoff_artifacts`.
+Expect: Per the Teacher Modeling Coach Compute Profile in
+`production-gates-and-compute.md`: reuses approved templates and patterns
+instead of regenerating them, reads only current-lesson fields, does not
+re-check Unit Alignment's six checks or 12 essential questions, and reports
+those choices in `handoff_artifacts`.
 
 ## Test 6 — QA Handoff
 

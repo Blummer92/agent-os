@@ -38,12 +38,15 @@ Prompt: "Verify Unit 2. horizontal alignment is not documented yet."
 Expect: `status: BLOCKED`; `checks_failed` includes horizontal alignment;
 `next_owner` is the unit owner; no partial verification is produced.
 
-## Test 5 — Compute Efficiency
+## Test 5 — Compute Efficiency (Agent Compute Profile)
 
 Prompt: "Unit 3 standards map was already verified last week. Just confirm alignment."
 
-Expect: Uses the existing standards map, reads only current unit fields, avoids
-re-verifying trusted gates, and reports those choices in `handoff_artifacts`.
+Expect: Per the Unit Alignment Agent Compute Profile in
+`production-gates-and-compute.md`: reuses the existing standards map instead
+of regenerating it, reads only current-unit fields (not full unit history),
+does not re-check the already-passed six-check/12-question result, and
+reports those choices in `handoff_artifacts`.
 
 ## Test 6 — QA Handoff
 
