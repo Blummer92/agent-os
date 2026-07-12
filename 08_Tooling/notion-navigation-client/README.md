@@ -1,0 +1,62 @@
+# Notion Navigation Client
+
+Read-only client for the Notion navigation-index Google Sheet: a cache of
+Notion dashboard/database ownership, schema, routing, and duplicate-risk
+data, refreshed on demand by a separate Apps Script that scans live Notion.
+Agents call this client for fast owner/routing/duplicate-risk lookups
+instead of a live Notion call or re-deriving the same answer each time.
+
+## Safety
+
+- Read-only end to end: `sheets_client.py` exposes only one call
+  (`fetch_tab_values`, scope `spreadsheets.readonly`) — no write method
+  exists anywhere in this package.
+- A lookup result is never authorization to write to Notion.
+- See `docs/safety.md` and
+  `01_Shared_Standards/notion/notion-navigation-index-standard.md`.
+
+## Installation
+
+    pip install -e .
+
+## Setup
+
+1. Create a Google Cloud project and OAuth client credentials (Desktop app
+   type), download the client secret JSON.
+2. Copy `.env.example` to `.env` and fill in
+   `GOOGLE_OAUTH_CLIENT_SECRET_PATH`, `GOOGLE_OAUTH_TOKEN_PATH`, and
+   `NOTION_NAV_SHEET_ID` (defaults to the sheet this tool was built
+   against).
+
+## Usage
+
+    python -m notion_navigation_client.cli lookup dashboard "Curriculum Source Control"
+    python -m notion_navigation_client.cli lookup field "DM Units" --field "Generation Gate"
+    python -m notion_navigation_client.cli lookup duplicate-risk "Readiness"
+
+Prints the matching record(s) as JSON, including the sheet's own
+`navigation_warning` and `Human Review Needed?` fields — never drop these
+when relaying a result to a human or another agent.
+
+## Tests
+
+    pytest tests/
+
+All tests run without live Google credentials: `records.py` and `index.py`
+are tested directly (`index.py` against fixture rows in
+`samples/sample_tabs.json`, transcribed from the real sheet's tabs), and
+`sheets_client.py`/`cli.py` are tested against a mocked Google client.
+
+## Limitations
+
+- **Not tested against a live Sheets account in this session** — no Google
+  credentials were available. All 25 unit tests pass against fixture data
+  and mocked clients; the operator must supply their own OAuth credentials
+  and validate the live path (real `fetch_tab_values` call against the
+  real sheet) themselves.
+- Tab and column names are matched literally against the sheet's current
+  headers; if a tab is renamed or a column is added/removed in Notion's
+  live schema (via the Apps Script refresh), the corresponding lookup
+  method's key fields may need updating.
+- `check_duplicate_risk` does simple exact/substring matching, not fuzzy
+  matching — near-miss names won't surface automatically.

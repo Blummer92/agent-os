@@ -1,0 +1,35 @@
+{
+  "Dashboard Registry": [
+    ["Dashboard Name", "Notion URL", "Notion ID", "Dashboard Type", "Owner / Source of Truth?", "Summary-Only?", "Primary Purpose", "Safe Agent Actions", "Unsafe Agent Actions", "Related Dashboards", "Related Databases", "Human Review Needed?"],
+    ["Curriculum Source Control", "https://app.notion.com/p/3717ac78313181ad4feac41a412fbc", "3717ac78-3131-81d1-ad4f-eac41a412fbc", "Source of Truth", "Yes - curriculum/source authority", "No", "Canonical curriculum/source-control state and source-control boundary.", "Read, summarize, verify source-control state, route to owner.", "Do not overwrite downstream status from summary dashboards.", "Digital Media Source Control Dashboard", "DM Source Library; DM Units; DM Curriculum Elements", "No"],
+    ["Unit Alignment & Readiness Dashboard", "", "", "Source of Truth", "Yes - unit readiness and final generation approval per owner map", "No", "Owns unit readiness and final generation approval.", "Verify readiness and generation approval.", "Do not let downstream summaries override unit approval.", "Daily Generation Packet Dashboard", "Needs live schema refresh", "Yes"]
+  ],
+  "Database Registry": [
+    ["Database Name", "Database ID", "Notion URL", "Primary Purpose", "Source-of-Truth Role", "Owner Dashboard", "Related Dashboards", "Related Databases", "Main Agent Users", "Safe Agent Actions", "Unsafe Agent Actions", "Readiness-Relevant?", "Last Edited Time", "Notes"],
+    ["DM Units", "ddbed54e-8043-4096-9698-ebd22f9c888e", "https://app.notion.com/p/ddbed54e804340969698ebd22f9c888e", "Unit-level Digital Media source/control and readiness map.", "Operational source/control; readiness-relevant", "Digital Media Source Control Dashboard", "Curriculum Source Control", "DM Source Library; DM Curriculum Elements", "Curriculum Agent; PM Agent; Governance Agent", "Read, summarize, verify readiness and source state.", "Do not update readiness without owner confirmation.", "Yes", "2026-07-01T13:51:00Z", "Live schema pulled for starter row from search result"],
+    ["DM Curriculum Elements", "9d68bed5-6060-465e-8be8-043cf32bf27e", "https://app.notion.com/p/9d68bed56060465e8be8043cf32bf27e", "Curriculum elements, lesson/day items, materials readiness, student evidence, modeling fields.", "Operational curriculum/materials source", "Digital Media Source Control Dashboard", "Curriculum Source Control", "DM Units; DM Source Library", "Curriculum Agent; Dashboard Agent; Governance Agent", "Read, summarize, inspect generation inputs.", "Do not infer readiness from one field when multiple readiness fields exist.", "Yes", "2026-07-01T12:29:00Z", "Live schema pulled for starter row from search result"]
+  ],
+  "Property Dictionary": [
+    ["Database Name", "Field Name", "Field Type", "Options", "Canonical Meaning", "Similar / Duplicate Fields", "Recommended Owner", "Used By", "Safe Agent Guidance", "Unsafe Agent Guidance", "Human Review Needed?"],
+    ["DM Units", "Readiness", "select", "Ready; Use with caution; Blocked by missing information; Blocked by unresolved curriculum decision; Duplicate / conflicting", "Unit/source-control readiness state; verify owner before using as final approval.", "DM Curriculum Elements Readiness; Materials Production Readiness", "Digital Media Source Control Dashboard", "Curriculum Agent; PM Agent; Governance Agent", "Read and verify in Notion.", "Do not change based on spreadsheet copy.", "No"],
+    ["DM Units", "Generation Gate", "select", "Generate; Revise Only; Prepare Source Packet; Needs Inputs; Do Not Generate", "Generation permission/gate; final owner must be confirmed for high-stakes generation.", "DM Curriculum Elements Generation Gate", "Needs owner confirmation", "Curriculum Agent; Generation/Packet Agent", "Use as a gate signal only after live verification.", "Do not generate from stale value.", "Yes"]
+  ],
+  "Source of Truth Matrix": [
+    ["Information Type", "Source-of-Truth Database", "Source-of-Truth Dashboard", "Summary Dashboards", "Agents Allowed to Edit", "Agents Allowed to Read Only", "Verification Step Before Edit"],
+    ["Curriculum readiness", "DM Units / DM Curriculum Elements", "Curriculum Source Control / Digital Media Source Control Dashboard", "PM summaries; reporting dashboards", "Owner-confirmed curriculum/governance agents only", "Reporting Agent; PM Agent unless owner-approved", "Open live Notion record; confirm owner dashboard; check related readiness fields."],
+    ["Course status", "Needs live schema refresh", "Needs human review", "PM summaries", "Needs human review", "All non-owner agents", "Locate course source-of-truth in Notion."]
+  ],
+  "Workflow Map": [
+    ["Workflow Name", "Trigger", "Starting Database/Dashboard", "Step 1", "Step 2", "Step 3", "Final Output", "Source of Truth", "Agents Involved", "Risk Points", "Human Review Needed?"],
+    ["Unit planning", "New or revised unit", "DM Units", "Open unit record", "Check Related Sources and Readiness", "Check Unit Alignment owner if final approval needed", "Unit planning status and blockers", "DM Units / Unit Alignment & Readiness Dashboard", "Curriculum Agent; Governance Agent", "Unit vs element readiness conflict", "Yes"]
+  ],
+  "Agent Prompt Library": [
+    ["Prompt Name", "Agent Type", "Use Case", "Required Context", "Prompt Text", "Safe Output Format", "Notion Edit Permission?", "Human Review Required?", "Notes"],
+    ["Curriculum readiness check", "Curriculum Agent", "Check whether a unit/lesson is safe to work on", "Target Notion record URL; owner dashboard; related readiness fields", "Use the AI Navigation Layer only to find the likely source of truth. Open the live Notion record, verify owner dashboard, check all readiness/status fields listed for that database, and return: Decision, Evidence, Blockers, Safe next action. Do not edit unless explicitly authorized.", "Decision / Evidence / Blockers / Safe next action", "No by default", "Yes if owner unclear", "Starter prompt."]
+  ],
+  "Duplicate / Drift Watchlist": [
+    ["Suspect Field, Database, or Dashboard", "Similar To", "Risk Type", "Evidence", "Impact on Agents", "Recommended Action", "Human Review Needed?", "Status", "Notes"],
+    ["Readiness", "Materials Production Readiness; Worksheet Readiness; Agent Use Status", "Conflicting status meaning", "Similar readiness-like fields found across DM Units, DM Source Library, and DM Curriculum Elements.", "Agents may treat one readiness field as global truth.", "Confirm owner and canonical meaning by decision type.", "Yes", "Open", "Do not merge automatically."],
+    ["Generation Gate", "Generation Gate in DM Units and DM Curriculum Elements", "Duplicate field", "Same field name exists in multiple databases.", "Generation agents may use wrong gate level.", "Clarify unit-level vs element-level gate ownership.", "Yes", "Open", "Keep separate if they govern different levels."]
+  ]
+}
