@@ -12,7 +12,7 @@ Required input fields:
 - visual anchors
 - error analysis
 - modeling status
-- route to
+- next_owner
 
 Required checks:
 - learning objective
@@ -21,17 +21,19 @@ Required checks:
 - visual anchors
 - error analysis
 
-Allowed outputs:
-- modeling documentation
+Allowed output keys:
 - status: `READY` or `BLOCKED`
 - blockers
-- next owner
-- handoff artifacts
-- revision suggestions
+- checks_passed
+- checks_failed
+- next_owner
+- handoff_artifacts
+- files_changed
+- tests_run
 
 Blocker behavior: if any required input is missing, incomplete, or blocked, stop
-immediately, name the blocker, and route to the owner in `route to`. Do not draft
-partial modeling or advance to Instructional Materials.
+immediately, name the blocker, set `status: BLOCKED`, and route to `next_owner`.
+Do not draft partial modeling or advance to Instructional Materials.
 
 Handoff target: Instructional Materials Coach when all five modeling checks pass.
 
@@ -69,7 +71,7 @@ self-correction, and explain how to avoid the mistake in future work.
 - Reuse approved think-aloud templates and visual anchor patterns before creating
   new ones.
 - Do not re-check Unit Alignment gates already verified by Unit Alignment Agent.
-- Do not advance to Instructional Materials until all five modeling checks pass.
+- Do not advance to Instructional Materials until all five checks pass.
 
 ## Version
 

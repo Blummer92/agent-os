@@ -1,6 +1,8 @@
 # Module Version Map
 
-Module versions are governed by `00_Governance/standards-change-control.md`. Repository releases and module versions are versioned independently, so module versions change only when the module's standards or contract changes.
+Module versions are governed by `00_Governance/standards-change-control.md`.
+Repository releases and module versions are versioned independently, so module
+versions change only when the module's standards or contract changes.
 
 | Module | Version |
 |---|---|
@@ -14,6 +16,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`. Rep
 | QA/Test Standards | 0.1.0 |
 | Dashboard Governance | 0.1.0 |
 | Instructional Design Standards | 0.5.0 |
+| Agent Orchestrator | 0.1.0 |
 | Unit Alignment Agent | 0.3.0 |
 | Teacher Modeling Coach | 0.2.0 |
 | Instructional Materials Coach | 0.3.0 |

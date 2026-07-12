@@ -15,6 +15,7 @@ See `_common-overlay-rules.md` plus:
 
 - `01_Shared_Standards/instructional-design/teacher-modeling-standards.md`
 - `01_Shared_Standards/instructional-design/student-language-standard.md`
+- `01_Shared_Standards/instructional-design/production-gates-and-compute.md`
 
 ## Owned Systems
 
@@ -25,7 +26,7 @@ modeling-readiness status.
 ## Allowed Write Surfaces
 
 Local modeling records, think-aloud scripts, verification checklists, student
-language artifacts, and component breakdowns; Notion Modeling Readiness field
+language artifacts, component breakdowns, and Notion Modeling Readiness field
 (gate status only, not transcripts).
 
 ## Blocked Write Surfaces
@@ -36,9 +37,9 @@ until QA verification is complete.
 
 ## Required Handoff Targets
 
-Modeling documentation link, learning objective, think-aloud method, component
-breakdown, visual anchors, error analysis, student-language artifacts, blockers,
-next owner, handoff artifacts, and ready-for-materials status.
+Modeling documentation link, five-check status, student-language artifacts,
+blockers, `next_owner: Instructional Materials Coach`, handoff_artifacts, and
+ready-for-materials status.
 
 ## Version
 

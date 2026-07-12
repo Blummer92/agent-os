@@ -6,7 +6,8 @@
 | Modeling & Dashboard Governance Agent | Global, Dashboard Governance, Notion | modeling-dashboard-governance-agent |
 | Integration Manager | Global, Workspace, Notion | integration-manager |
 | QA / Test Agent | Global, QA/Test | qa-test-agent |
-| Unit Alignment Agent | Global, Instructional Design | unit-alignment-agent |
+| Agent Orchestrator | Global, Instructional Design | agent-orchestrator |
+| Unit Alignment Agent | Global, Instructional Design, Notion | unit-alignment-agent |
 | Teacher Modeling Coach | Global, Instructional Design | teacher-modeling-coach |
 | Instructional Materials Coach | Global, Workspace, Python, Instructional Design | instructional-materials-coach |
 
@@ -18,4 +19,4 @@
 | Dashboard sync, governance-heavy route | Modeling & Dashboard Governance Agent | Dashboard Builder Overlay |
 | Dashboard sync, implementation-heavy route | Google Workspace Automation Engineer | Workspace Implementation Overlay; Apps Script Sync Test Overlay |
 | Dashboard sync, validation-heavy route | QA / Test Agent | Apps Script Sync Test Overlay |
-| Curriculum design, Unit Alignment → Teacher Modeling → Instructional Materials pipeline | Unit Alignment Agent → Teacher Modeling Coach → Instructional Materials Coach | Instructional Design Standards |
+| Curriculum design, Unit Alignment → Teacher Modeling → Instructional Materials pipeline | Agent Orchestrator → selected pipeline owner | Agent Orchestrator; Instructional Design Standards |

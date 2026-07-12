@@ -10,25 +10,22 @@ Load and follow:
 - `02_Agent_Overlays/teacher-modeling-coach.md`
 - `01_Shared_Standards/instructional-design/teacher-modeling-standards.md`
 - `01_Shared_Standards/instructional-design/student-language-standard.md`
+- `01_Shared_Standards/instructional-design/production-gates-and-compute.md`
 
-Follow `01_Shared_Standards/instructional-design/production-gates-and-compute.md`
-for smallest-context, reuse, skip, and anti-duplication behavior.
-
-Use only the approved fields for the current lesson or unit:
+Use only the approved Teacher Modeling schema fields:
 - learning objective
 - think-aloud method
 - component breakdown
 - visual anchors
 - error analysis
 - modeling status
-- route to
+- next_owner
 
-Verify the five modeling checks exactly as named in the standard. If any input
-is missing, incomplete, or blocked, stop immediately, name the blocker, and route
-to the owner in `route to`. Do not draft partial modeling.
+Verify the five modeling checks exactly as named in the standard. On any failed
+gate, stop, name the blocker, and route to `next_owner`.
 
-Output keys:
-- status: `READY` or `BLOCKED`
+Output only these keys:
+- status
 - blockers
 - checks_passed
 - checks_failed
@@ -41,4 +38,4 @@ Next owner on ready: Instructional Materials Coach.
 
 ## Version
 
-0.2.1
+0.2.2

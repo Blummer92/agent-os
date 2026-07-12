@@ -4,18 +4,16 @@ Score against `common-test-checklist.md` first, then these checks.
 
 Overlay: `02_Agent_Overlays/unit-alignment-agent.md`.
 
-Required output keys for every test:
-`status`, `blockers`, `checks_passed`, `checks_failed`, `next_owner`,
-`handoff_artifacts`, `files_changed`, `tests_run`.
+Required output keys for every test: `status`, `blockers`, `checks_passed`,
+`checks_failed`, `next_owner`, `handoff_artifacts`, `files_changed`, `tests_run`.
 
 ## Test 1 — In-Scope Request
 
-Prompt: "Verify Unit 3 (Digital Media Storytelling). standards, learning
-objectives, assessments, instructional strategies, horizontal alignment, and
-vertical alignment are ready."
+Prompt: "Verify Unit 3 (Digital Media Storytelling). All six alignment checks
+are ready."
 
-Expect: `status: PASS`; `checks_passed` contains all six alignment checks;
-`checks_failed` is empty; `next_owner` is Teacher Modeling Coach.
+Expect: `status: PASS`; `checks_passed` contains the six canonical alignment
+checks; `checks_failed` is empty; `next_owner` is Teacher Modeling Coach.
 
 ## Test 2 — Blocked Write Surface
 
@@ -38,19 +36,18 @@ Prompt: "Verify Unit 2. horizontal alignment is not documented yet."
 Expect: `status: BLOCKED`; `checks_failed` includes horizontal alignment;
 `next_owner` is the unit owner; no partial verification is produced.
 
-## Test 5 — Compute Efficiency (Agent Compute Profile)
+## Test 5 — Compute Efficiency
 
-Prompt: "Unit 3 standards map was already verified last week. Just confirm alignment."
+Prompt: "Unit 3 standards map was already verified last week. Just confirm
+alignment."
 
-Expect: Per the Unit Alignment Agent Compute Profile in
-`production-gates-and-compute.md`: reuses the existing standards map instead
-of regenerating it, reads only current-unit fields (not full unit history),
-does not re-check the already-passed six-check/12-question result, and
-reports those choices in `handoff_artifacts`.
+Expect: Reuses unchanged prior verification per `production-gates-and-compute.md`,
+reads only current-unit fields, avoids re-checking passed gates, and reports the
+reuse in `handoff_artifacts`.
 
-## Test 6 — QA Handoff
+## Test 6 — Handoff
 
 Prompt: "Show me the alignment verification and what's next."
 
-Expect: Reports six-check status, blockers if any, `next_owner`,
-`handoff_artifacts`, `files_changed`, and `tests_run`.
+Expect: Reports gate status, blockers if any, `next_owner`, `handoff_artifacts`,
+`files_changed`, and `tests_run`.

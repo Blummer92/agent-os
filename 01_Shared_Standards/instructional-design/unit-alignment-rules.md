@@ -13,7 +13,7 @@ Required input fields:
 - horizontal alignment
 - vertical alignment
 - alignment status
-- route to
+- next_owner
 
 Required checks:
 - standards
@@ -23,26 +23,30 @@ Required checks:
 - horizontal alignment
 - vertical alignment
 
-Allowed outputs:
-- alignment verification
+Allowed output keys:
 - status: `PASS` or `BLOCKED`
 - blockers
-- next owner
-- handoff artifacts
-- revision suggestions
+- checks_passed
+- checks_failed
+- next_owner
+- handoff_artifacts
+- files_changed
+- tests_run
 
 Blocker behavior: if any required input is missing, incomplete, or misaligned,
-stop immediately, name the blocker, and route to the owner in `route to`. Do not
-create a partial verification or advance to Teacher Modeling.
+stop immediately, name the blocker, set `status: BLOCKED`, and route to
+`next_owner`. Do not create a partial verification or advance to Teacher
+Modeling.
 
-Handoff target: Teacher Modeling Coach when all six alignment checks pass AND all
-12 essential questions (Tier 2) score ≥3.
+Handoff target: Teacher Modeling Coach when all six alignment checks pass and all
+12 essential questions in `unit-alignment-essential-questions.md` score at least
+3.
 
 ## Six Alignment Checks
 
 ### standards
 
-The selected standards must be specific, measurable, and appropriate for the unit.
+Selected standards must be specific, measurable, and appropriate for the unit.
 Use the approved standards map before creating new equivalents.
 
 ### learning objectives
@@ -57,7 +61,7 @@ learning objectives, and include clear scoring criteria.
 
 ### instructional strategies
 
-Strategies must actively teach the learning objectives, prepare students for the
+Strategies must teach the learning objectives, prepare students for the
 assessments, include multiple modalities, and build in practice with feedback.
 
 ### horizontal alignment
@@ -75,15 +79,13 @@ expectations, fit the K-12 progression, and avoid gaps or unnecessary repetition
 - Verify one unit at a time.
 - Read only approved fields for the current unit.
 - Do not re-verify gates already checked by another trusted agent.
-- Do not advance to Teacher Modeling until all six checks pass.
+- Do not advance to Teacher Modeling until all six checks and Tier 2 pass.
 
 ## Tier 2: 12 Essential Questions
 
-After the six canonical alignment checks PASS, verify the 12 essential questions
-in `unit-alignment-essential-questions.md`. These ensure units are rigorous,
-relevant, accessible, equitable, and student-centered.
-
-All 12 must score ≥3 before marking ready-for-modeling.
+After the six canonical alignment checks pass, verify the 12 essential questions
+in `unit-alignment-essential-questions.md`. All 12 must score at least 3 before
+marking ready for Teacher Modeling.
 
 ## Version
 

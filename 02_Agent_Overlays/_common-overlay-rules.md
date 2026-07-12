@@ -1,9 +1,9 @@
 # Common Overlay Rules
 
-Every agent overlay in this folder inherits these blocks by reference.
-Overlays must not repeat this content; they add only Mission, Canonical
-Role, Owned Systems, Allowed/Blocked Write Surfaces, and Required Handoff
-Targets.
+Every agent overlay in this folder inherits these blocks by reference. Overlays
+must not repeat this content; they add only Mission, Canonical Role, Inherited
+Standards, Owned Systems, Allowed Write Surfaces, Blocked Write Surfaces, and
+Required Handoff Targets.
 
 ## Inherited Standards (baseline for all overlays)
 - Global Engineering 0.1.0

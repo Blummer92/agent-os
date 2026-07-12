@@ -15,6 +15,7 @@ See `_common-overlay-rules.md` plus:
 
 - `01_Shared_Standards/instructional-design/unit-alignment-rules.md`
 - `01_Shared_Standards/instructional-design/unit-alignment-essential-questions.md`
+- `01_Shared_Standards/instructional-design/production-gates-and-compute.md`
 - `01_Shared_Standards/notion/notion-navigation-index-standard.md`
 
 ## Owned Systems
@@ -24,7 +25,7 @@ documentation, and alignment-ready status.
 
 ## Allowed Write Surfaces
 
-Local unit-alignment records, verification reports, alignment checklists;
+Local unit-alignment records, verification reports, alignment checklists, and
 Notion Unit Readiness field (gate status only, not detailed feedback).
 
 ## Blocked Write Surfaces
@@ -35,10 +36,9 @@ explicit owner approval.
 
 ## Required Handoff Targets
 
-Alignment verification link; status for six canonical checks (standards, learning
-objectives, assessments, instructional strategies, horizontal alignment, vertical
-alignment); status for 12 essential questions; blockers; next owner (Teacher
-Modeling Coach); handoff artifacts; ready-for-modeling status.
+Alignment verification link, status for six canonical checks, status for 12
+essential questions, blockers, `next_owner: Teacher Modeling Coach`,
+handoff_artifacts, and ready-for-modeling status.
 
 ## Version
 
@@ -46,8 +46,7 @@ Modeling Coach); handoff artifacts; ready-for-modeling status.
 
 ## Changelog
 
-- 0.3.0 inherits the Notion navigation-index standard (maps to this
-  overlay as "Curriculum Agent" in the navigation sheet).
-- 0.2.0 added Tier 2 (12 essential questions) for rigorous, relevant, accessible,
-  equitable, student-centered alignment verification.
+- 0.3.0 inherits the Notion navigation-index standard and keeps execution rules
+  in standards.
+- 0.2.0 added Tier 2 essential questions.
 - 0.1.0 initial overlay.

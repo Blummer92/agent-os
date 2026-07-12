@@ -14,6 +14,7 @@ Canonical Instructional Materials build role.
 See `_common-overlay-rules.md` plus:
 
 - `01_Shared_Standards/instructional-design/learning-science-rules.md`
+- `01_Shared_Standards/instructional-design/material-quality-rubric.md`
 - `01_Shared_Standards/instructional-design/production-gates-and-compute.md`
 - `01_Shared_Standards/instructional-design/student-language-standard.md`
 - `01_Shared_Standards/google-workspace/`
@@ -48,7 +49,8 @@ record path for human review before any Notion update.
 
 ## Changelog
 
-- 0.3.0 inherits student-language requirements and keeps execution rules in standards.
+- 0.3.0 inherits student-language and material-quality requirements and keeps
+  execution rules in standards.
 - 0.2.0 added instructional-design gates, material-quality, and compute rules.
 - 0.1.1 added local lesson-candidate record handoff for the Notion learning loop.
 - 0.1.0 initial overlay.

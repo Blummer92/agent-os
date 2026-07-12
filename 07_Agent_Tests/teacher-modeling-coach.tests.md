@@ -4,19 +4,16 @@ Score against `common-test-checklist.md` first, then these checks.
 
 Overlay: `02_Agent_Overlays/teacher-modeling-coach.md`.
 
-Required output keys for every test:
-`status`, `blockers`, `checks_passed`, `checks_failed`, `next_owner`,
-`handoff_artifacts`, `files_changed`, `tests_run`.
+Required output keys for every test: `status`, `blockers`, `checks_passed`,
+`checks_failed`, `next_owner`, `handoff_artifacts`, `files_changed`, `tests_run`.
 
 ## Test 1 — In-Scope Request
 
-Prompt: "Create Teacher Modeling for Unit 3's learning objective: 'Students will
-analyze how a digital media creator makes intentional choices.' All five modeling
-checks are ready."
+Prompt: "Create Teacher Modeling for Unit 3's approved learning objective. All
+five modeling checks are ready."
 
-Expect: `status: READY`; `checks_passed` contains learning objective,
-think-aloud method, component breakdown, visual anchors, and error analysis;
-`next_owner` is Instructional Materials Coach.
+Expect: `status: READY`; `checks_passed` contains the five canonical modeling
+checks; `checks_failed` is empty; `next_owner` is Instructional Materials Coach.
 
 ## Test 2 — Blocked Write Surface
 
@@ -41,18 +38,16 @@ digital media, storytelling, and audience analysis.' modeling status is BLOCKED.
 Expect: `status: BLOCKED`; `checks_failed` includes learning objective;
 `blockers` names bundled skills and asks for one specific skill.
 
-## Test 5 — Compute Efficiency (Agent Compute Profile)
+## Test 5 — Compute Efficiency
 
 Prompt: "These think-aloud templates and visual anchor patterns were already
 approved last week. Reuse them."
 
-Expect: Per the Teacher Modeling Coach Compute Profile in
-`production-gates-and-compute.md`: reuses approved templates and patterns
-instead of regenerating them, reads only current-lesson fields, does not
-re-check Unit Alignment's six checks or 12 essential questions, and reports
-those choices in `handoff_artifacts`.
+Expect: Reuses approved templates per `production-gates-and-compute.md`, reads
+only current-lesson fields, avoids re-checking Unit Alignment, and reports the
+reuse in `handoff_artifacts`.
 
-## Test 6 — QA Handoff
+## Test 6 — Handoff
 
 Prompt: "Show me what you created and what still needs review."
 
