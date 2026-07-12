@@ -12,6 +12,7 @@ from workflow_scheduler.adapters import NoopAdapter
 from workflow_scheduler.audit import AuditLogger
 from workflow_scheduler.dependencies import DependencyResolver
 from workflow_scheduler.execution import Executor
+from workflow_scheduler.governance import StopConditionChecker
 from workflow_scheduler.models import (
     ApprovalDecision,
     ApprovalRequest,
@@ -23,8 +24,6 @@ from workflow_scheduler.models import (
 )
 from workflow_scheduler.queue import JobQueue
 from workflow_scheduler.repository import SQLiteRepository
-
-_TERMINAL_TASK_STATUSES = (TaskStatus.COMPLETED, TaskStatus.CANCELLED, TaskStatus.FAILED)
 
 
 class WorkflowSchedulerCLI:
@@ -268,13 +267,20 @@ class WorkflowSchedulerCLI:
                 error=f"Circular dependency detected: {' -> '.join(cycle_path)}",
             )
 
-        # Execute in dependency order
-        completed: set[str] = set()
+        # Execute in dependency order. Seed `completed` from tasks already
+        # COMPLETED in a prior run so a rerun (e.g. after approval) does not
+        # re-execute work that already finished.
+        completed: set[str] = {t.id for t in tasks if t.status == TaskStatus.COMPLETED}
         failed: set[str] = set()
         blocked: set[str] = set()
+        approval_pending: set[str] = set()
 
-        while len(completed) + len(failed) + len(blocked) < len(tasks):
-            ready = resolver.get_ready_tasks(completed)
+        while len(completed) + len(failed) + len(blocked) + len(approval_pending) < len(tasks):
+            ready = [
+                task_id
+                for task_id in resolver.get_ready_tasks(completed)
+                if task_id not in failed and task_id not in blocked and task_id not in approval_pending
+            ]
             if not ready:
                 break
 
@@ -290,10 +296,34 @@ class WorkflowSchedulerCLI:
 
                 if result.success:
                     completed.add(task_id)
+                elif result.status == "blocked" and StopConditionChecker.APPROVAL_ENGINE_DEFERRED in result.blockers and len(result.blockers) == 1:
+                    approval_pending.add(task_id)
                 elif result.status == "blocked":
                     blocked.add(task_id)
                 else:
                     failed.add(task_id)
+
+        if approval_pending and not failed and not blocked:
+            # Waiting on an explicit human decision — this is a resumable
+            # state, not a terminal failure. Leave the workflow RUNNING so a
+            # later `run` (after approve/reject) can pick back up.
+            workflow.metadata["tasks_awaiting_approval"] = sorted(approval_pending)
+            self.repository.update_workflow(workflow)
+
+            return self._format_response(
+                status="blocked",
+                blockers=["tasks_awaiting_approval"],
+                checks_passed=["workflow_executed"],
+                checks_failed=["tasks_awaiting_approval"],
+                next_owner="user",
+                workflow_id=workflow_id,
+                completed=len(completed),
+                failed=len(failed),
+                blocked=len(blocked),
+                approval_pending=len(approval_pending),
+                approval_pending_task_ids=sorted(approval_pending),
+                final_status=workflow.status.value,
+            )
 
         if failed or blocked:
             workflow.mark_failed(reason=f"Tasks failed: {len(failed)}, blocked: {len(blocked)}")
@@ -320,36 +350,48 @@ class WorkflowSchedulerCLI:
             final_status=workflow.status.value,
         )
 
-    def approve(self, task_id: str, approver: str) -> Dict[str, Any]:
-        """Explicitly approve a task blocked by approval_engine_deferred.
+    def _get_pending_approval_or_block(self, task_id: str, approver: str) -> tuple:
+        """Look up a task and its approval request, enforcing that the task is
+        actually awaiting approval before allowing a decision to be recorded.
 
-        Args:
-            task_id: Task ID to approve
-            approver: Name/identifier of the human approver
+        A task may only be approved or rejected if:
+          - it exists
+          - its status is APPROVAL_PENDING (it went through the executor's
+            approval-pending path; it was never proactively approvable from
+            Draft/Pending/Queued/Running/etc.)
+          - its approval request (created by the executor) is still PENDING
+
+        If the task is APPROVAL_PENDING but its approval request is missing
+        (a recovery case — e.g. the record was lost), one is created here so
+        the decision can still be recorded.
 
         Returns:
-            Dict with approval result
+            Tuple of (task, approval, error_response). Exactly one of
+            (task/approval) or error_response is populated.
         """
         task = self.repository.get_task(task_id)
         if not task:
-            return self._format_response(
+            return None, None, self._format_response(
                 status="fail",
                 checks_failed=["task_not_found"],
                 next_owner="user",
                 error=f"Task not found: {task_id}",
             )
 
-        if task.status in _TERMINAL_TASK_STATUSES:
-            return self._format_response(
+        if task.status != TaskStatus.APPROVAL_PENDING:
+            return None, None, self._format_response(
                 status="blocked",
-                blockers=["task_terminal"],
-                checks_failed=["task_not_in_approvable_state"],
+                blockers=["task_not_awaiting_approval"],
+                checks_failed=["task_not_awaiting_approval"],
                 next_owner="user",
-                error=f"Task is in terminal state: {task.status.value}",
+                error=f"Task is not awaiting approval (status: {task.status.value})",
             )
 
         approval = self.repository.get_approval_request(task_id)
         if approval is None:
+            # Recovery case: task is APPROVAL_PENDING but has no approval
+            # record on file (should not normally happen; the executor
+            # always creates one when it moves a task into this state).
             approval = ApprovalRequest(
                 id=str(uuid.uuid4()),
                 task_id=task_id,
@@ -358,13 +400,29 @@ class WorkflowSchedulerCLI:
             )
             self.repository.create_approval_request(approval)
         elif approval.decision != ApprovalDecision.PENDING:
-            return self._format_response(
+            return None, None, self._format_response(
                 status="blocked",
                 blockers=["approval_already_decided"],
                 checks_failed=["approval_already_decided"],
                 next_owner="user",
                 error=f"Approval already decided: {approval.decision.value}",
             )
+
+        return task, approval, None
+
+    def approve(self, task_id: str, approver: str) -> Dict[str, Any]:
+        """Explicitly approve a task currently awaiting approval.
+
+        Args:
+            task_id: Task ID to approve
+            approver: Name/identifier of the human approver
+
+        Returns:
+            Dict with approval result
+        """
+        task, _approval, error_response = self._get_pending_approval_or_block(task_id, approver)
+        if error_response is not None:
+            return error_response
 
         self.repository.update_approval_decision(
             task_id=task_id,
@@ -386,7 +444,7 @@ class WorkflowSchedulerCLI:
         )
 
     def reject(self, task_id: str, approver: str, reason: str) -> Dict[str, Any]:
-        """Explicitly reject a task blocked by approval_engine_deferred.
+        """Explicitly reject a task currently awaiting approval.
 
         Args:
             task_id: Task ID to reject
@@ -396,41 +454,9 @@ class WorkflowSchedulerCLI:
         Returns:
             Dict with rejection result
         """
-        task = self.repository.get_task(task_id)
-        if not task:
-            return self._format_response(
-                status="fail",
-                checks_failed=["task_not_found"],
-                next_owner="user",
-                error=f"Task not found: {task_id}",
-            )
-
-        if task.status in _TERMINAL_TASK_STATUSES:
-            return self._format_response(
-                status="blocked",
-                blockers=["task_terminal"],
-                checks_failed=["task_not_in_approvable_state"],
-                next_owner="user",
-                error=f"Task is in terminal state: {task.status.value}",
-            )
-
-        approval = self.repository.get_approval_request(task_id)
-        if approval is None:
-            approval = ApprovalRequest(
-                id=str(uuid.uuid4()),
-                task_id=task_id,
-                requested_by=approver,
-                decision=ApprovalDecision.PENDING,
-            )
-            self.repository.create_approval_request(approval)
-        elif approval.decision != ApprovalDecision.PENDING:
-            return self._format_response(
-                status="blocked",
-                blockers=["approval_already_decided"],
-                checks_failed=["approval_already_decided"],
-                next_owner="user",
-                error=f"Approval already decided: {approval.decision.value}",
-            )
+        task, _approval, error_response = self._get_pending_approval_or_block(task_id, approver)
+        if error_response is not None:
+            return error_response
 
         self.repository.update_approval_decision(
             task_id=task_id,
@@ -544,13 +570,13 @@ def main() -> None:
                 task_id=getattr(args, "task_id", None),
             )
         else:
-            result = {"success": False, "error": f"Unknown command: {args.command}"}
+            result = {"status": "fail", "error": f"Unknown command: {args.command}"}
 
         print(json.dumps(result, indent=2, default=str))
-        sys.exit(0 if result.get("success", False) else 1)
+        sys.exit(0 if result.get("status") == "pass" else 1)
 
     except Exception as e:
-        print(json.dumps({"success": False, "error": str(e)}, indent=2))
+        print(json.dumps({"status": "fail", "error": str(e)}, indent=2))
         sys.exit(1)
 
 

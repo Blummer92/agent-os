@@ -1,10 +1,14 @@
 """Tests for the Phase 2A approval engine."""
 
+import sys
+import tempfile
+
 import pytest
+import yaml
 
 from workflow_scheduler.adapters import NoopAdapter
 from workflow_scheduler.audit import AuditLogger
-from workflow_scheduler.cli import WorkflowSchedulerCLI
+from workflow_scheduler.cli import WorkflowSchedulerCLI, main
 from workflow_scheduler.execution import Executor
 from workflow_scheduler.governance import StopConditionChecker
 from workflow_scheduler.models import ApprovalDecision, ApprovalRequest, Task, TaskStatus
@@ -329,59 +333,108 @@ class TestCLIApproveReject:
         assert approval.decision == ApprovalDecision.REJECTED
         assert approval.reason == "not ready"
 
-    def test_approve_creates_request_if_missing(self, tmp_path):
-        """Proactive approval before the task has ever been executed."""
+    def test_approve_draft_task_is_blocked(self, tmp_path):
+        """A task that never entered APPROVAL_PENDING (still Draft) cannot be approved."""
         cli = WorkflowSchedulerCLI(db_path=str(tmp_path / "test.db"))
         task = make_task()
         cli.repository.create_task(task)
 
-        result = cli.approve(task.id, approver="alice")
-
-        assert result["status"] == "pass"
-        approval = cli.repository.get_approval_request(task.id)
-        assert approval is not None
-        assert approval.decision == ApprovalDecision.APPROVED
-
-    def test_approve_already_decided_is_blocked(self, tmp_path):
-        cli = WorkflowSchedulerCLI(db_path=str(tmp_path / "test.db"))
-        task = make_task()
-        cli.repository.create_task(task)
-
-        cli.approve(task.id, approver="alice")
         result = cli.approve(task.id, approver="alice")
 
         assert result["status"] == "blocked"
-        assert "approval_already_decided" in result["blockers"]
+        assert "task_not_awaiting_approval" in result["blockers"]
+        assert cli.repository.get_task(task.id).status == TaskStatus.DRAFT
+        assert cli.repository.get_approval_request(task.id) is None
 
-    def test_reject_already_decided_is_blocked(self, tmp_path):
-        """Rejecting terminalizes the task to CANCELLED, so a second reject is
-        caught by the terminal-state guard (a stronger, correct block)."""
+    def test_reject_draft_task_is_blocked(self, tmp_path):
+        """A task that never entered APPROVAL_PENDING (still Draft) cannot be rejected."""
         cli = WorkflowSchedulerCLI(db_path=str(tmp_path / "test.db"))
         task = make_task()
         cli.repository.create_task(task)
 
+        result = cli.reject(task.id, approver="bob", reason="no")
+
+        assert result["status"] == "blocked"
+        assert "task_not_awaiting_approval" in result["blockers"]
+        assert cli.repository.get_task(task.id).status == TaskStatus.DRAFT
+
+    def test_approve_pending_status_task_is_blocked(self, tmp_path):
+        """A task sitting in PENDING (not APPROVAL_PENDING) cannot be approved directly."""
+        cli = WorkflowSchedulerCLI(db_path=str(tmp_path / "test.db"))
+        task = make_task(status=TaskStatus.PENDING)
+        cli.repository.create_task(task)
+
+        result = cli.approve(task.id, approver="alice")
+
+        assert result["status"] == "blocked"
+        assert "task_not_awaiting_approval" in result["blockers"]
+
+    def test_approve_running_task_is_blocked(self, tmp_path):
+        """A task actively RUNNING cannot be approved out from under itself."""
+        cli = WorkflowSchedulerCLI(db_path=str(tmp_path / "test.db"))
+        task = make_task(status=TaskStatus.RUNNING)
+        cli.repository.create_task(task)
+
+        result = cli.approve(task.id, approver="alice")
+
+        assert result["status"] == "blocked"
+        assert "task_not_awaiting_approval" in result["blockers"]
+
+    def test_reject_running_task_is_blocked(self, tmp_path):
+        """A task actively RUNNING cannot be rejected out from under itself."""
+        cli = WorkflowSchedulerCLI(db_path=str(tmp_path / "test.db"))
+        task = make_task(status=TaskStatus.RUNNING)
+        cli.repository.create_task(task)
+
+        result = cli.reject(task.id, approver="bob", reason="no")
+
+        assert result["status"] == "blocked"
+        assert "task_not_awaiting_approval" in result["blockers"]
+
+    def test_approve_already_decided_is_blocked(self, tmp_path):
+        """A second approve on an already-APPROVED task is blocked by the
+        approval_already_decided guard (the task is still APPROVED, not yet
+        terminal, so this exercises the decision-lock check specifically)."""
+        cli = WorkflowSchedulerCLI(db_path=str(tmp_path / "test.db"))
+        task = make_task()
+        cli.repository.create_task(task)
+
+        cli.executor.execute(task)  # -> APPROVAL_PENDING
+        cli.approve(task.id, approver="alice")  # -> APPROVED
+
+        result = cli.approve(task.id, approver="alice")
+
+        assert result["status"] == "blocked"
+        assert "task_not_awaiting_approval" in result["blockers"]
+
+    def test_reject_already_decided_is_blocked(self, tmp_path):
+        """Rejecting terminalizes the task to CANCELLED; a second reject is
+        caught by the task-not-awaiting-approval guard."""
+        cli = WorkflowSchedulerCLI(db_path=str(tmp_path / "test.db"))
+        task = make_task()
+        cli.repository.create_task(task)
+
+        cli.executor.execute(task)  # -> APPROVAL_PENDING
         cli.reject(task.id, approver="bob", reason="no")
         result = cli.reject(task.id, approver="bob", reason="still no")
 
         assert result["status"] == "blocked"
-        assert "task_terminal" in result["blockers"]
+        assert "task_not_awaiting_approval" in result["blockers"]
 
-    def test_approve_already_approved_task_is_blocked_by_terminal_state(self, tmp_path):
-        """The approval_already_decided guard fires directly when the underlying
-        task is not yet terminal but the approval decision itself is locked."""
+    def test_approve_already_decided_guard_fires_while_still_pending_status(self, tmp_path):
+        """If a task is APPROVAL_PENDING but its approval record was already
+        decided (an inconsistent recovery scenario), the decision-lock guard
+        fires instead of silently re-deciding it."""
         cli = WorkflowSchedulerCLI(db_path=str(tmp_path / "test.db"))
         task = make_task()
         cli.repository.create_task(task)
 
-        cli.repository.create_approval_request(
-            ApprovalRequest(
-                id="approval-manual",
-                task_id=task.id,
-                requested_by="system",
-                decision=ApprovalDecision.APPROVED,
-                approver="alice",
-            )
+        cli.executor.execute(task)  # -> APPROVAL_PENDING, creates PENDING request
+        cli.repository.update_approval_decision(
+            task_id=task.id, decision=ApprovalDecision.APPROVED, approver="alice"
         )
+        # Task status manually left at APPROVAL_PENDING to simulate the
+        # inconsistency (normally cli.approve() would also advance the task).
 
         result = cli.approve(task.id, approver="alice")
 
@@ -397,7 +450,7 @@ class TestCLIApproveReject:
         result = cli.approve(task.id, approver="alice")
 
         assert result["status"] == "blocked"
-        assert "task_terminal" in result["blockers"]
+        assert "task_not_awaiting_approval" in result["blockers"]
 
     def test_approve_end_to_end_unblocks_execution(self, tmp_path):
         """Full loop: block -> approve -> re-execute -> success."""
@@ -431,3 +484,176 @@ class TestCLIApproveReject:
         result = cli.executor.execute(rejected_task)
         assert result.success is False
         assert cli.repository.get_task(task.id).status != TaskStatus.COMPLETED
+
+
+class TestWorkflowRerunAfterApproval:
+    """End-to-end: a workflow blocked on approval must be resumable, not terminal."""
+
+    def _write_workflow_yaml(self, tmp_path, approval_required=True, second_task=False):
+        tasks = [
+            {
+                "id": "task-1",
+                "type": "test",
+                "owner": "system",
+                "action": "write:governed_system",
+                "idempotency_key": "key-1",
+                "approval_required": approval_required,
+                "priority": 1,
+            }
+        ]
+        if second_task:
+            tasks.append(
+                {
+                    "id": "task-2",
+                    "type": "test",
+                    "owner": "system",
+                    "action": "test_action",
+                    "idempotency_key": "key-2",
+                    "depends_on": ["task-1"],
+                    "priority": 0,
+                }
+            )
+
+        workflow_data = {
+            "workflow_id": "approval-workflow",
+            "title": "Approval Workflow",
+            "created_by": "test",
+            "mode": "Draft",
+            "tasks": tasks,
+        }
+
+        yaml_path = tmp_path / "workflow.yaml"
+        with open(yaml_path, "w") as f:
+            yaml.dump(workflow_data, f)
+        return str(yaml_path)
+
+    def test_run_blocks_then_approve_then_rerun_completes(self, tmp_path):
+        cli = WorkflowSchedulerCLI(db_path=str(tmp_path / "test.db"))
+        yaml_path = self._write_workflow_yaml(tmp_path)
+        cli.create_workflow(yaml_path)
+
+        # First run blocks on approval; workflow must not become terminal.
+        first_run = cli.run_workflow("approval-workflow")
+        assert first_run["status"] == "blocked"
+        assert "tasks_awaiting_approval" in first_run["blockers"]
+
+        workflow_after_first_run = cli.repository.get_workflow("approval-workflow")
+        assert not workflow_after_first_run.is_terminal()
+
+        task = cli.repository.get_task("task-1")
+        assert task.status == TaskStatus.APPROVAL_PENDING
+
+        # Approve.
+        approve_result = cli.approve("task-1", approver="alice")
+        assert approve_result["status"] == "pass"
+
+        # Second run must not be refused as "workflow_terminal".
+        second_run = cli.run_workflow("approval-workflow")
+        assert second_run["status"] == "pass"
+        assert second_run["completed"] == 1
+
+        final_task = cli.repository.get_task("task-1")
+        assert final_task.status == TaskStatus.COMPLETED
+
+        final_workflow = cli.repository.get_workflow("approval-workflow")
+        assert final_workflow.status.value == "completed"
+
+    def test_run_blocks_then_approve_then_rerun_does_not_redo_completed_tasks(self, tmp_path):
+        """A downstream task's dependency should not be re-executed on rerun."""
+        cli = WorkflowSchedulerCLI(db_path=str(tmp_path / "test.db"))
+        yaml_path = self._write_workflow_yaml(tmp_path, second_task=True)
+        cli.create_workflow(yaml_path)
+
+        cli.run_workflow("approval-workflow")
+        cli.approve("task-1", approver="alice")
+
+        second_run = cli.run_workflow("approval-workflow")
+
+        assert second_run["status"] == "pass"
+        assert second_run["completed"] == 2
+        assert cli.repository.get_task("task-1").status == TaskStatus.COMPLETED
+        assert cli.repository.get_task("task-2").status == TaskStatus.COMPLETED
+
+    def test_run_blocks_then_reject_then_rerun_stays_blocked(self, tmp_path):
+        cli = WorkflowSchedulerCLI(db_path=str(tmp_path / "test.db"))
+        yaml_path = self._write_workflow_yaml(tmp_path)
+        cli.create_workflow(yaml_path)
+
+        cli.run_workflow("approval-workflow")
+        cli.reject("task-1", approver="bob", reason="denied")
+
+        second_run = cli.run_workflow("approval-workflow")
+
+        assert second_run["status"] != "pass"
+        assert cli.repository.get_task("task-1").status == TaskStatus.GOVERNANCE_BLOCKED
+
+
+class TestCLIExitCodes:
+    """Tests that main() exits 0 on pass and nonzero on fail/blocked."""
+
+    def _run_main(self, monkeypatch, argv):
+        monkeypatch.setattr(sys, "argv", ["workflow-scheduler"] + argv)
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        return exc_info.value.code
+
+    def test_exit_code_zero_on_approve_success(self, tmp_path, monkeypatch):
+        db_path = str(tmp_path / "test.db")
+        cli = WorkflowSchedulerCLI(db_path=db_path)
+        task = make_task()
+        cli.repository.create_task(task)
+        cli.executor.execute(task)  # -> APPROVAL_PENDING
+
+        code = self._run_main(
+            monkeypatch, ["approve", task.id, "--approver", "alice", "--db", db_path]
+        )
+
+        assert code == 0
+
+    def test_exit_code_nonzero_on_approve_blocked(self, tmp_path, monkeypatch):
+        db_path = str(tmp_path / "test.db")
+        cli = WorkflowSchedulerCLI(db_path=db_path)
+        task = make_task()
+        cli.repository.create_task(task)  # still Draft, never entered APPROVAL_PENDING
+
+        code = self._run_main(
+            monkeypatch, ["approve", task.id, "--approver", "alice", "--db", db_path]
+        )
+
+        assert code != 0
+
+    def test_exit_code_nonzero_on_approve_task_not_found(self, tmp_path, monkeypatch):
+        db_path = str(tmp_path / "test.db")
+
+        code = self._run_main(
+            monkeypatch, ["approve", "nonexistent", "--approver", "alice", "--db", db_path]
+        )
+
+        assert code != 0
+
+    def test_exit_code_zero_on_reject_success(self, tmp_path, monkeypatch):
+        db_path = str(tmp_path / "test.db")
+        cli = WorkflowSchedulerCLI(db_path=db_path)
+        task = make_task()
+        cli.repository.create_task(task)
+        cli.executor.execute(task)  # -> APPROVAL_PENDING
+
+        code = self._run_main(
+            monkeypatch,
+            ["reject", task.id, "--approver", "bob", "--reason", "no", "--db", db_path],
+        )
+
+        assert code == 0
+
+    def test_exit_code_nonzero_on_reject_blocked(self, tmp_path, monkeypatch):
+        db_path = str(tmp_path / "test.db")
+        cli = WorkflowSchedulerCLI(db_path=db_path)
+        task = make_task()
+        cli.repository.create_task(task)  # still Draft
+
+        code = self._run_main(
+            monkeypatch,
+            ["reject", task.id, "--approver", "bob", "--reason", "no", "--db", db_path],
+        )
+
+        assert code != 0

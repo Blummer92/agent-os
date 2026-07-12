@@ -16,7 +16,7 @@ class StopConditionResult:
 
 
 class StopConditionChecker:
-    """Enforces four governance stop conditions before task execution."""
+    """Enforces five governance stop conditions before task execution."""
 
     # Stop condition: Production/approval_required tasks deferred to Phase 2
     APPROVAL_ENGINE_DEFERRED = "approval_engine_deferred"
