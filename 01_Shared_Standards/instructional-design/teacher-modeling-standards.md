@@ -1,52 +1,75 @@
 # Teacher Modeling Standards
 
-Create and verify teacher modeling demonstrations that show students exactly how
-to complete a task or skill.
+Canonical rules for creating Teacher Modeling after Unit Alignment passes and
+before Instructional Materials work begins.
 
-## Clear Learning Objective
+## Canonical Schema
 
-The modeling must:
-- Target exactly one specific skill or standard
-- Be measurable and observable
-- Match the unit's learning objective
-- Avoid bundling multiple skills into one modeling session
+Required input fields:
+- learning objective
+- think-aloud method
+- component breakdown
+- visual anchors
+- error analysis
+- modeling status
+- route to
 
-## Think-Alouds
+Required checks:
+- learning objective
+- think-aloud method
+- component breakdown
+- visual anchors
+- error analysis
 
-Teacher narration must:
-- Make invisible thinking visible and audible
-- Explain WHY you make each choice, not just WHAT you do
-- Name strategies and decision points aloud
-- Use accessible language that students can follow
+Allowed outputs:
+- modeling documentation
+- status: `READY` or `BLOCKED`
+- blockers
+- next owner
+- handoff artifacts
+- revision suggestions
 
-## Component Breakdown
+Blocker behavior: if any required input is missing, incomplete, or blocked, stop
+immediately, name the blocker, and route to the owner in `route to`. Do not draft
+partial modeling or advance to Instructional Materials.
 
-Complex skills must be:
-- Split into small, manageable sequential steps
-- Ordered from simplest to most complex
-- Taught in the same order students will practice
-- Labeled so students can reference them later
+Handoff target: Instructional Materials Coach when all five modeling checks pass.
 
-## Visual Anchors
+## Five Modeling Checks
 
-Support visual understanding with:
-- Graphic organizers or anchor charts
-- Physical props or manipulatives when useful
-- Visual hierarchy (what's most important?)
-- Consistent symbols and color coding
+### learning objective
 
-## Error Analysis
+The modeling must target exactly one specific skill or standard, be measurable
+and observable, match the approved unit objective, and avoid bundled skills.
 
-Intentional mistake-handling must:
-- Model a common error students make
-- Show how to recognize the error
-- Demonstrate self-correction strategies
-- Explain how to avoid the mistake in the future
+### think-aloud method
 
-## Gate: All Five Components
+Teacher narration must make invisible thinking visible, explain why choices are
+made, name strategies and decision points, and use student-accessible language.
 
-Do not finalize modeling until all five components are ready and verified.
-If any component is missing, ask for clarification before proceeding to materials.
+### component breakdown
+
+Complex skills must be split into small sequential steps, ordered from simplest
+to most complex, taught in practice order, and labeled for student reference.
+
+### visual anchors
+
+Modeling must identify charts, organizers, props, tools, symbols, or visual
+hierarchy that support student understanding.
+
+### error analysis
+
+Modeling must include a common mistake, show how to recognize it, demonstrate
+self-correction, and explain how to avoid the mistake in future work.
+
+## Execution Rules
+
+- Create one modeling session per learning objective.
+- Read only approved fields for the current lesson or unit.
+- Reuse approved think-aloud templates and visual anchor patterns before creating
+  new ones.
+- Do not re-check Unit Alignment gates already verified by Unit Alignment Agent.
+- Do not advance to Instructional Materials until all five modeling checks pass.
 
 ## Version
 
