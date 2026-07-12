@@ -1,52 +1,81 @@
 # Unit Alignment Rules
 
-Verify that units align learning objectives, assessments, instructional strategies,
-and horizontal/vertical alignment to academic standards.
+Canonical rules for verifying Unit Alignment before Teacher Modeling and
+Instructional Materials work begins.
 
-## Clear Learning Objectives
+## Canonical Schema
 
-Objectives must be:
-- Measurable (students know when they've achieved them)
-- Student-centered (what students will know/do, not what teacher will teach)
-- Standards-derived (mapped to state or national standards)
-- Specific (one skill or concept per objective, not bundled)
+Required input fields:
+- standards
+- learning objectives
+- assessments
+- instructional strategies
+- horizontal alignment
+- vertical alignment
+- alignment status
+- route to
 
-## Aligned Assessments
+Required checks:
+- standards
+- learning objectives
+- assessments
+- instructional strategies
+- horizontal alignment
+- vertical alignment
 
-Assessments must be:
-- Formative (ongoing checks during instruction)
-- Summative (final evidence of learning)
-- Direct measures of the learning objective (not a proxy)
-- Linked to the objective with clear scoring criteria
+Allowed outputs:
+- alignment verification
+- status: `PASS` or `BLOCKED`
+- blockers
+- next owner
+- handoff artifacts
+- revision suggestions
 
-## Instructional Strategies
+Blocker behavior: if any required input is missing, incomplete, or misaligned,
+stop immediately, name the blocker, and route to the owner in `route to`. Do not
+create a partial verification or advance to Teacher Modeling.
 
-Strategies must:
-- Actively teach the objective (not assume students know it)
-- Prepare students to succeed on the unit's assessments
-- Include multiple modalities and representations
-- Build in opportunities for practice and feedback
+Handoff target: Teacher Modeling Coach when all six alignment checks pass.
 
-## Horizontal Alignment
+## Six Alignment Checks
 
-Coordinate subject matter so:
-- Related subjects complement each other (e.g., research in science, writing in ELA)
-- Same grade level uses consistent academic vocabulary
-- Concepts reinforce each other across disciplines
-- No conflicting approaches to the same skill
+### standards
 
-## Vertical Alignment
+The selected standards must be specific, measurable, and appropriate for the unit.
+Use the approved standards map before creating new equivalents.
 
-Ensure the unit:
-- Builds on prior knowledge from previous grades
-- Prepares students for future-grade expectations
-- Fits logically into a K-12 learning progression
-- Does not leave gaps or unnecessary repetition
+### learning objectives
 
-## Gate: All Five Components
+Objectives must be measurable, student-centered, standards-derived, and specific
+to one skill or concept.
 
-Do not advance a unit to modeling or materials creation until all five components
-are verified and ready. If any component fails, name the blocker and route for revision.
+### assessments
+
+Assessments must include formative and summative evidence, directly measure the
+learning objectives, and include clear scoring criteria.
+
+### instructional strategies
+
+Strategies must actively teach the learning objectives, prepare students for the
+assessments, include multiple modalities, and build in practice with feedback.
+
+### horizontal alignment
+
+Same-grade or related-subject work must use consistent academic vocabulary,
+reinforce connected concepts, and avoid conflicting approaches to the same skill.
+
+### vertical alignment
+
+The unit must build on prior knowledge, prepare students for future-grade
+expectations, fit the K-12 progression, and avoid gaps or unnecessary repetition.
+
+## Execution Rules
+
+- Verify one unit at a time.
+- Read only approved fields for the current unit.
+- Do not re-verify gates already checked by another trusted agent.
+- Do not advance to Teacher Modeling or Instructional Materials until all six
+  alignment checks pass.
 
 ## Version
 
