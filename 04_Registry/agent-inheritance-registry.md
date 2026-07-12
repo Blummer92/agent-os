@@ -18,4 +18,4 @@
 | Dashboard sync, governance-heavy route | Modeling & Dashboard Governance Agent | Dashboard Builder Overlay |
 | Dashboard sync, implementation-heavy route | Google Workspace Automation Engineer | Workspace Implementation Overlay; Apps Script Sync Test Overlay |
 | Dashboard sync, validation-heavy route | QA / Test Agent | Apps Script Sync Test Overlay |
-| Curriculum design, alignment-to-materials pipeline | Unit Alignment Agent → Teacher Modeling Coach → Instructional Materials Coach | Instructional Design Standards |
+| Curriculum design, Unit Alignment → Teacher Modeling → Instructional Materials pipeline | Unit Alignment Agent → Teacher Modeling Coach → Instructional Materials Coach | Instructional Design Standards |
