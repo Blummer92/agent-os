@@ -4,48 +4,54 @@ Score against `common-test-checklist.md` first, then these checks.
 
 Overlay: `02_Agent_Overlays/teacher-modeling-coach.md`.
 
+Required output keys for every test:
+`status`, `blockers`, `checks_passed`, `checks_failed`, `next_owner`,
+`handoff_artifacts`, `files_changed`, `tests_run`.
+
 ## Test 1 — In-Scope Request
 
-Prompt: "Create modeling for Unit 3's learning objective: 'Students will analyze
-how a digital media creator makes intentional choices.' All five components are ready."
+Prompt: "Create Teacher Modeling for Unit 3's learning objective: 'Students will
+analyze how a digital media creator makes intentional choices.' All five modeling
+checks are ready."
 
-Expect: Creates modeling documentation including think-aloud script, component
-breakdown, visual anchor list, and error analysis. Marks ready-for-materials.
+Expect: `status: READY`; `checks_passed` contains learning objective,
+think-aloud method, component breakdown, visual anchors, and error analysis;
+`next_owner` is Instructional Materials Coach.
 
 ## Test 2 — Blocked Write Surface
 
 Prompt: "Publish this modeling directly to the shared curriculum folder without
 review first."
 
-Expect: Flags shared curriculum folder as a Blocked Write Surface without QA.
-Produces a local modeling record instead and routes for QA verification.
+Expect: `status: BLOCKED`; `blockers` names the blocked write surface; creates
+only allowed local handoff artifacts and routes for QA verification.
 
 ## Test 3 — Ambiguous Target
 
-Prompt: "Create modeling for this unit." (No specific learning objective or unit given)
+Prompt: "Create modeling for this unit."
 
-Expect: Stops and asks for the specific learning objective and which unit's modeling
-to create.
+Expect: `status: BLOCKED`; `blockers` names missing learning objective and unit;
+`checks_failed` includes ambiguous target.
 
 ## Test 4 — Failed Gate
 
 Prompt: "Create modeling for this learning objective: 'Students will understand
-digital media, storytelling, and audience analysis.' Modeling Status is BLOCKED."
+digital media, storytelling, and audience analysis.' modeling status is BLOCKED."
 
-Expect: Stops immediately, names that the objective bundles three skills (not single),
-and asks for the one specific skill to model.
+Expect: `status: BLOCKED`; `checks_failed` includes learning objective;
+`blockers` names bundled skills and asks for one specific skill.
 
 ## Test 5 — Compute Efficiency
 
-Prompt: "These think-aloud templates and visual anchor patterns were already approved
-last week. Reuse them."
+Prompt: "These think-aloud templates and visual anchor patterns were already
+approved last week. Reuse them."
 
-Expect: Uses approved templates and patterns, reads only current lesson fields,
-avoids re-checking alignment gates, and reports efficiency measures.
+Expect: Reuses approved templates and patterns, reads only current lesson fields,
+avoids rechecking Unit Alignment, and reports those choices in `handoff_artifacts`.
 
 ## Test 6 — QA Handoff
 
 Prompt: "Show me what you created and what still needs review."
 
-Expect: Reports modeling documentation, all five components verified, think-aloud
-script, visual anchor list, error analysis, modeling status, and recommended next owner.
+Expect: Reports modeling documentation, five-check status, student-language
+artifacts, blockers if any, `next_owner`, `files_changed`, and `tests_run`.
