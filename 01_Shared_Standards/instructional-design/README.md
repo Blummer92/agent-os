@@ -8,8 +8,8 @@ teacher modeling, and student-facing instructional materials.
 | Stage | Agent | Required input | Gate | Output | Next owner |
 |---|---|---|---|---|---|
 | Unit Alignment | Unit Alignment Agent | standards; learning objectives; assessments; instructional strategies; horizontal alignment; vertical alignment | Six alignment checks pass | Alignment verification and ready-for-modeling status | Teacher Modeling Coach |
-| Teacher Modeling | Teacher Modeling Coach | learning objective; think-aloud method; component breakdown; visual anchors; error analysis | Five modeling checks pass | Modeling documentation and ready-for-materials status | Instructional Materials Coach |
-| Instructional Materials | Instructional Materials Coach | approved modeling documentation; content spec; approved template; target folder | Materials QA and write-surface checks pass | Slides, worksheets, and generated-file links | QA / unit owner |
+| Teacher Modeling | Teacher Modeling Coach | learning objective; think-aloud method; component breakdown; visual anchors; error analysis | Five modeling checks pass | Modeling documentation, student-language artifacts, and ready-for-materials status | Instructional Materials Coach |
+| Instructional Materials | Instructional Materials Coach | approved modeling documentation; student-language artifacts; content spec; approved template; target folder | Materials QA and write-surface checks pass | Slides, worksheets, and generated-file links | QA / unit owner |
 
 Agents advance only through this sequence: Unit Alignment → Teacher Modeling →
 Instructional Materials. When any gate fails, stop, name the blocker, and route
@@ -34,6 +34,7 @@ and error analysis.
 
 - `unit-alignment-rules.md` — canonical Unit Alignment schema and six checks
 - `teacher-modeling-standards.md` — canonical Teacher Modeling schema and checks
+- `student-language-standard.md` — reusable student-facing language artifacts
 - `learning-science-rules.md` — classroom design rules for materials
 - `production-gates-and-compute.md` — hard-stop gates and efficiency rules
 - `material-quality-rubric.md` — QA contract for slides and worksheets
@@ -46,4 +47,4 @@ fields, standards, and output keys.
 
 ## Version
 
-0.2.0
+0.3.0
