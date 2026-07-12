@@ -57,6 +57,11 @@ class Task:
         self.status = TaskStatus.APPROVED
         self.updated_at = datetime.utcnow()
 
+    def mark_approval_pending(self) -> None:
+        """Mark task as awaiting explicit approval decision."""
+        self.status = TaskStatus.APPROVAL_PENDING
+        self.updated_at = datetime.utcnow()
+
     def mark_completed(self, result: Optional[Dict[str, Any]] = None) -> None:
         """Mark task as completed."""
         self.status = TaskStatus.COMPLETED

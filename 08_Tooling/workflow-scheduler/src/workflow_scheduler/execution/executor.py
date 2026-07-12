@@ -1,5 +1,6 @@
 """Task executor with lease lock management."""
 
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -7,7 +8,7 @@ from typing import Any, Dict, Optional
 from workflow_scheduler.adapters import TaskAdapter
 from workflow_scheduler.audit import AuditLogger
 from workflow_scheduler.governance import StopConditionChecker
-from workflow_scheduler.models import Task, TaskStatus
+from workflow_scheduler.models import ApprovalDecision, ApprovalRequest, Task, TaskStatus
 from workflow_scheduler.repository import SQLiteRepository
 
 
@@ -69,6 +70,56 @@ class Executor:
         )
 
         if stop_result.is_blocked:
+            # A task blocked solely by approval_engine_deferred awaits an explicit
+            # human decision rather than being hard-blocked. Any other blocker
+            # (alone or alongside approval_engine_deferred) is still a hard block.
+            if stop_result.blockers == [StopConditionChecker.APPROVAL_ENGINE_DEFERRED]:
+                approval = self.repository.get_approval_request(task.id)
+
+                if approval is not None and approval.decision == ApprovalDecision.REJECTED:
+                    # Already decided against; a rejected task is a hard block,
+                    # not a pending one — do not overwrite its cancelled state.
+                    self.audit_logger.log_governance_blocked(
+                        task=task,
+                        blockers=stop_result.blockers,
+                        reason="Task was rejected by approver",
+                    )
+                    task.status = TaskStatus.GOVERNANCE_BLOCKED
+                    self.repository.update_task(task)
+
+                    return ExecutionResult(
+                        success=False,
+                        error="Task was rejected by approver",
+                        output=None,
+                        is_transient=False,
+                        status="blocked",
+                        blockers=stop_result.blockers,
+                        checks_failed=stop_result.blockers,
+                    )
+
+                if approval is None:
+                    approval = ApprovalRequest(
+                        id=str(uuid.uuid4()),
+                        task_id=task.id,
+                        requested_by=task.owner,
+                        decision=ApprovalDecision.PENDING,
+                    )
+                    self.repository.create_approval_request(approval)
+                    self.audit_logger.log_approval_requested(task)
+
+                task.mark_approval_pending()
+                self.repository.update_task(task)
+
+                return ExecutionResult(
+                    success=False,
+                    error="Task requires explicit approval before execution",
+                    output=None,
+                    is_transient=False,
+                    status="blocked",
+                    blockers=stop_result.blockers,
+                    checks_failed=stop_result.blockers,
+                )
+
             self.audit_logger.log_governance_blocked(
                 task=task,
                 blockers=stop_result.blockers,

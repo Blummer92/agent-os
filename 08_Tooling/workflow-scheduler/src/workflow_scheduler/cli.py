@@ -12,9 +12,19 @@ from workflow_scheduler.adapters import NoopAdapter
 from workflow_scheduler.audit import AuditLogger
 from workflow_scheduler.dependencies import DependencyResolver
 from workflow_scheduler.execution import Executor
-from workflow_scheduler.models import Task, TaskMode, TaskStatus, WorkflowPlan, WorkflowMode
+from workflow_scheduler.models import (
+    ApprovalDecision,
+    ApprovalRequest,
+    Task,
+    TaskMode,
+    TaskStatus,
+    WorkflowPlan,
+    WorkflowMode,
+)
 from workflow_scheduler.queue import JobQueue
 from workflow_scheduler.repository import SQLiteRepository
+
+_TERMINAL_TASK_STATUSES = (TaskStatus.COMPLETED, TaskStatus.CANCELLED, TaskStatus.FAILED)
 
 
 class WorkflowSchedulerCLI:
@@ -310,6 +320,139 @@ class WorkflowSchedulerCLI:
             final_status=workflow.status.value,
         )
 
+    def approve(self, task_id: str, approver: str) -> Dict[str, Any]:
+        """Explicitly approve a task blocked by approval_engine_deferred.
+
+        Args:
+            task_id: Task ID to approve
+            approver: Name/identifier of the human approver
+
+        Returns:
+            Dict with approval result
+        """
+        task = self.repository.get_task(task_id)
+        if not task:
+            return self._format_response(
+                status="fail",
+                checks_failed=["task_not_found"],
+                next_owner="user",
+                error=f"Task not found: {task_id}",
+            )
+
+        if task.status in _TERMINAL_TASK_STATUSES:
+            return self._format_response(
+                status="blocked",
+                blockers=["task_terminal"],
+                checks_failed=["task_not_in_approvable_state"],
+                next_owner="user",
+                error=f"Task is in terminal state: {task.status.value}",
+            )
+
+        approval = self.repository.get_approval_request(task_id)
+        if approval is None:
+            approval = ApprovalRequest(
+                id=str(uuid.uuid4()),
+                task_id=task_id,
+                requested_by=approver,
+                decision=ApprovalDecision.PENDING,
+            )
+            self.repository.create_approval_request(approval)
+        elif approval.decision != ApprovalDecision.PENDING:
+            return self._format_response(
+                status="blocked",
+                blockers=["approval_already_decided"],
+                checks_failed=["approval_already_decided"],
+                next_owner="user",
+                error=f"Approval already decided: {approval.decision.value}",
+            )
+
+        self.repository.update_approval_decision(
+            task_id=task_id,
+            decision=ApprovalDecision.APPROVED,
+            approver=approver,
+        )
+
+        task.mark_approved()
+        self.repository.update_task(task)
+        self.audit_logger.log_task_approved(task, approved_by=approver)
+
+        return self._format_response(
+            status="pass",
+            checks_passed=["approval_granted"],
+            next_owner="system",
+            task_id=task_id,
+            decision="approved",
+            approver=approver,
+        )
+
+    def reject(self, task_id: str, approver: str, reason: str) -> Dict[str, Any]:
+        """Explicitly reject a task blocked by approval_engine_deferred.
+
+        Args:
+            task_id: Task ID to reject
+            approver: Name/identifier of the human approver
+            reason: Rejection reason
+
+        Returns:
+            Dict with rejection result
+        """
+        task = self.repository.get_task(task_id)
+        if not task:
+            return self._format_response(
+                status="fail",
+                checks_failed=["task_not_found"],
+                next_owner="user",
+                error=f"Task not found: {task_id}",
+            )
+
+        if task.status in _TERMINAL_TASK_STATUSES:
+            return self._format_response(
+                status="blocked",
+                blockers=["task_terminal"],
+                checks_failed=["task_not_in_approvable_state"],
+                next_owner="user",
+                error=f"Task is in terminal state: {task.status.value}",
+            )
+
+        approval = self.repository.get_approval_request(task_id)
+        if approval is None:
+            approval = ApprovalRequest(
+                id=str(uuid.uuid4()),
+                task_id=task_id,
+                requested_by=approver,
+                decision=ApprovalDecision.PENDING,
+            )
+            self.repository.create_approval_request(approval)
+        elif approval.decision != ApprovalDecision.PENDING:
+            return self._format_response(
+                status="blocked",
+                blockers=["approval_already_decided"],
+                checks_failed=["approval_already_decided"],
+                next_owner="user",
+                error=f"Approval already decided: {approval.decision.value}",
+            )
+
+        self.repository.update_approval_decision(
+            task_id=task_id,
+            decision=ApprovalDecision.REJECTED,
+            approver=approver,
+            reason=reason,
+        )
+
+        task.mark_cancelled(reason=reason)
+        self.repository.update_task(task)
+        self.audit_logger.log_task_cancelled(task, reason=reason)
+
+        return self._format_response(
+            status="pass",
+            checks_passed=["approval_rejected"],
+            next_owner="user",
+            task_id=task_id,
+            decision="rejected",
+            approver=approver,
+            reason=reason,
+        )
+
     def show_audit_log(self, workflow_id: Optional[str] = None, task_id: Optional[str] = None) -> Dict[str, Any]:
         """Show audit log.
 
@@ -355,6 +498,19 @@ def main() -> None:
     run_parser.add_argument("workflow_id", help="Workflow ID")
     run_parser.add_argument("--db", default="workflow_scheduler.db", help="Database path")
 
+    # approve command
+    approve_parser = subparsers.add_parser("approve", help="Approve a task pending explicit approval")
+    approve_parser.add_argument("task_id", help="Task ID")
+    approve_parser.add_argument("--approver", required=True, help="Name of the approving human")
+    approve_parser.add_argument("--db", default="workflow_scheduler.db", help="Database path")
+
+    # reject command
+    reject_parser = subparsers.add_parser("reject", help="Reject a task pending explicit approval")
+    reject_parser.add_argument("task_id", help="Task ID")
+    reject_parser.add_argument("--approver", required=True, help="Name of the rejecting human")
+    reject_parser.add_argument("--reason", required=True, help="Reason for rejection")
+    reject_parser.add_argument("--db", default="workflow_scheduler.db", help="Database path")
+
     # audit command
     audit_parser = subparsers.add_parser("audit", help="View audit log")
     audit_parser.add_argument("--workflow-id", help="Filter by workflow ID")
@@ -378,6 +534,10 @@ def main() -> None:
             result = cli.get_workflow_status(args.workflow_id)
         elif args.command == "run":
             result = cli.run_workflow(args.workflow_id)
+        elif args.command == "approve":
+            result = cli.approve(args.task_id, args.approver)
+        elif args.command == "reject":
+            result = cli.reject(args.task_id, args.approver, args.reason)
         elif args.command == "audit":
             result = cli.show_audit_log(
                 workflow_id=getattr(args, "workflow_id", None),

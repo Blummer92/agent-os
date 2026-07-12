@@ -48,7 +48,7 @@ class TestExecutor:
         assert result.status == "pass"
 
     def test_execute_blocked_production_task(self, executor_setup):
-        """Test that production tasks are blocked."""
+        """Test that production tasks are blocked pending explicit approval."""
         executor, repository, _ = executor_setup
 
         task = Task(
@@ -68,9 +68,8 @@ class TestExecutor:
         assert result.status == "blocked"
         assert "approval_engine_deferred" in result.blockers
 
-        # Task should be marked as governance_blocked
         updated_task = repository.get_task("task-1")
-        assert updated_task.status == TaskStatus.GOVERNANCE_BLOCKED
+        assert updated_task.status == TaskStatus.APPROVAL_PENDING
 
     def test_execute_blocked_approval_required_task(self, executor_setup):
         """Test that approval_required tasks are blocked."""
@@ -204,7 +203,26 @@ class TestExecutor:
         assert updated_task.status == TaskStatus.COMPLETED
 
     def test_blocked_task_status_updated(self, executor_setup):
-        """Test that blocked task status is updated."""
+        """Test that a task blocked by an unrelated stop condition is governance_blocked."""
+        executor, repository, _ = executor_setup
+
+        task = Task(
+            id="task-1",
+            workflow_id="workflow-1",
+            type="test",
+            owner="system",
+            action="",  # ambiguous target — not an approval-only block
+            idempotency_key="key-1",
+        )
+        repository.create_task(task)
+
+        executor.execute(task)
+
+        updated_task = repository.get_task("task-1")
+        assert updated_task.status == TaskStatus.GOVERNANCE_BLOCKED
+
+    def test_approval_pending_task_status_updated(self, executor_setup):
+        """Test that a task blocked solely by approval_engine_deferred is approval_pending, not governance_blocked."""
         executor, repository, _ = executor_setup
 
         task = Task(
@@ -221,4 +239,4 @@ class TestExecutor:
         executor.execute(task)
 
         updated_task = repository.get_task("task-1")
-        assert updated_task.status == TaskStatus.GOVERNANCE_BLOCKED
+        assert updated_task.status == TaskStatus.APPROVAL_PENDING
