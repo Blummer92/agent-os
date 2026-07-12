@@ -15,6 +15,7 @@ See `_common-overlay-rules.md` plus:
 
 - `01_Shared_Standards/instructional-design/unit-alignment-rules.md`
 - `01_Shared_Standards/instructional-design/unit-alignment-essential-questions.md`
+- `01_Shared_Standards/notion/notion-navigation-index-standard.md`
 
 ## Owned Systems
 
@@ -41,10 +42,12 @@ Modeling Coach); handoff artifacts; ready-for-modeling status.
 
 ## Version
 
-0.2.0
+0.3.0
 
 ## Changelog
 
+- 0.3.0 inherits the Notion navigation-index standard (maps to this
+  overlay as "Curriculum Agent" in the navigation sheet).
 - 0.2.0 added Tier 2 (12 essential questions) for rigorous, relevant, accessible,
   equitable, student-centered alignment verification.
 - 0.1.0 initial overlay.

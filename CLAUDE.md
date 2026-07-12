@@ -158,9 +158,17 @@ standards documentation.
   live Google credentials (pure functions plus mocked API clients); live
   Drive/Slides/Docs calls need the operator's own OAuth credentials and
   template files, set up outside this repo.
+- `notion-navigation-client/` — Python package implementing the read side
+  of the Notion navigation-index standard. Looks up dashboard/database
+  ownership, field meaning, source-of-truth routing, and duplicate-risk
+  data from a cached Google Sheet (refreshed separately by an Apps Script
+  that scans live Notion) instead of a live Notion call per question.
+  Read-only end to end -- no write method exists in the package. Same
+  layout and test posture as `instructional-materials-coach/`.
 
-**Convention:** Code here backs one specific overlay and must not
-duplicate rules already stated in that overlay or in
+**Convention:** Code here backs one specific overlay, or -- for tools like
+`notion-navigation-client/` that several overlays share -- a specific
+shared standard, and must not duplicate rules already stated there or in
 `01_Shared_Standards/`. Safety boundaries (what it's allowed to write)
 live in the overlay, not in the code's README.
 

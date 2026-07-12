@@ -10,11 +10,11 @@ Module versions are governed by `00_Governance/standards-change-control.md`. Rep
 | Python Standards | 0.1.0 |
 | Google Workspace Standards | 0.1.1 |
 | Apps Script Standards | 0.1.0 |
-| Notion Standards | 0.1.1 |
+| Notion Standards | 0.2.0 |
 | QA/Test Standards | 0.1.0 |
 | Dashboard Governance | 0.1.0 |
 | Instructional Design Standards | 0.5.0 |
-| Unit Alignment Agent | 0.2.0 |
+| Unit Alignment Agent | 0.3.0 |
 | Teacher Modeling Coach | 0.2.0 |
 | Instructional Materials Coach | 0.3.0 |
 | Student Language Standard | 0.1.0 |

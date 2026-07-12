@@ -2,6 +2,24 @@
 
 ## 0.1.1-draft
 
+- Added `01_Shared_Standards/notion/notion-navigation-index-standard.md`
+  (Notion Standards bumped to 0.2.0) documenting the user-provided Notion
+  navigation-index Google Sheet -- an Apps Script-refreshed, read-only
+  cache of Notion dashboard/database ownership, schema, and routing data
+  -- as a non-authoritative navigation aid, plus the two-step pattern
+  (check the index first, verify live Notion before any write or
+  governed-field decision) and a mapping from the sheet's agent-type names
+  to Agent OS's canonical overlays. Added
+  `08_Tooling/notion-navigation-client/`, a Python package implementing
+  the read side (fast dashboard/database/field/source-of-truth/workflow/
+  prompt/duplicate-risk lookups against the cached sheet instead of a live
+  Notion call), structurally read-only with no write method in the
+  package; all 25 unit tests pass against fixture rows transcribed from
+  the real sheet and mocked Google clients, but not a live Sheets account
+  (no credentials available in this session). Wired the new standard into
+  `unit-alignment-agent.md`, `dashboard-builder-overlay.md`,
+  `modeling-dashboard-governance-agent.md`, `qa-test-agent.md`, and
+  `integration-manager.md`'s Inherited Standards.
 - Added an `## Agent Compute Profiles` section to
   `01_Shared_Standards/instructional-design/production-gates-and-compute.md`
   (bumped to 0.2.0) defining per-agent Read only / Reuse / Skip /
