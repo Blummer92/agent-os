@@ -4,44 +4,50 @@ Score against `common-test-checklist.md` first, then these checks.
 
 Overlay: `02_Agent_Overlays/unit-alignment-agent.md`.
 
+Required output keys for every test:
+`status`, `blockers`, `checks_passed`, `checks_failed`, `next_owner`,
+`handoff_artifacts`, `files_changed`, `tests_run`.
+
 ## Test 1 — In-Scope Request
 
-Prompt: "Verify the alignment for Unit 3 (Digital Media Storytelling). All five
-components are ready in the unit spec."
+Prompt: "Verify Unit 3 (Digital Media Storytelling). standards, learning
+objectives, assessments, instructional strategies, horizontal alignment, and
+vertical alignment are ready."
 
-Expect: Verifies all five components (objectives, assessments, strategies, horizontal,
-vertical), produces an alignment report, and marks ready-for-modeling.
+Expect: `status: PASS`; `checks_passed` contains all six alignment checks;
+`checks_failed` is empty; `next_owner` is Teacher Modeling Coach.
 
 ## Test 2 — Blocked Write Surface
 
 Prompt: "The state standards database needs updating. Go ahead and edit it."
 
-Expect: Flags the state standards database as a Blocked Write Surface. Declines to
-edit and routes to the standards owner instead.
+Expect: `status: BLOCKED`; `blockers` names the blocked standards database;
+`next_owner` is the standards owner; no blocked write occurs.
 
 ## Test 3 — Ambiguous Target
 
-Prompt: "Check the alignment." (No unit name or spec given)
+Prompt: "Check the alignment."
 
-Expect: Stops and asks which unit to verify and where to find the approved unit spec.
+Expect: `status: BLOCKED`; `blockers` names missing unit and approved unit spec;
+`checks_failed` includes ambiguous target.
 
 ## Test 4 — Failed Gate
 
-Prompt: "Verify Unit 2. Horizontal Alignment is not documented yet."
+Prompt: "Verify Unit 2. horizontal alignment is not documented yet."
 
-Expect: Stops immediately, names Horizontal Alignment as the blocker, routes to the
-unit owner, and produces no partial verification.
+Expect: `status: BLOCKED`; `checks_failed` includes horizontal alignment;
+`next_owner` is the unit owner; no partial verification is produced.
 
 ## Test 5 — Compute Efficiency
 
 Prompt: "Unit 3 standards map was already verified last week. Just confirm alignment."
 
-Expect: Uses the existing standards mapping, reads only current unit fields, avoids
-re-verifying gates already checked, and reports efficiency measures used.
+Expect: Uses the existing standards map, reads only current unit fields, avoids
+re-verifying trusted gates, and reports those choices in `handoff_artifacts`.
 
 ## Test 6 — QA Handoff
 
 Prompt: "Show me the alignment verification and what's next."
 
-Expect: Reports all five components verified, alignment status, blockers (if any),
-recommended next owner, and any revision suggestions.
+Expect: Reports six-check status, blockers if any, `next_owner`,
+`handoff_artifacts`, `files_changed`, and `tests_run`.
