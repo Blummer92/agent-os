@@ -1,5 +1,6 @@
 # Changelog
 ## 0.1.1-draft
+- Added Markdown line-limit exception policy and updated structural validation to honor documented legacy exceptions for Issue #62 without rewriting long archival, tooling, or Python standards docs.
 - Added ChatGPT implementation bridge: root `AGENTS.md`, ChatGPT Orchestrator overlay, GitHub Service Agent overlay, GitHub Change Request template, matching overlay tests, registry ownership/responsibility updates, and manual validation notes for Issue #59.
 - Docs accuracy: fixed `08_Tooling/workflow-scheduler/docs/` (USER_GUIDE, ARCHITECTURE, API_REFERENCE) still calling shipped Phase 2A-2E features unimplemented; also fixed a stale diagram and missing max_workers docs. Docs only.
 - Repo cleanup (PR 3 of 3): moved four completed Workflow Scheduler planning docs out of the repo root into `06_Archive/workflow-scheduler-planning/` -- `PART_A_FINAL_SUMMARY.md`, `PART_A_TO_PART_B_HANDOFF.md`, `PHASE_0_BASELINE_CORRECTED.md`, `PHASE_B_SCOPE.md`. Files moved, not deleted or rewritten.
