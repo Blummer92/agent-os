@@ -16,6 +16,7 @@ See `_common-overlay-rules.md` plus:
 - `01_Shared_Standards/instructional-design/instructional-materials-workflows.md`
 - `01_Shared_Standards/instructional-design/instructional-materials-sources.md`
 - `01_Shared_Standards/instructional-design/design-variant-patterns.md`
+- `01_Shared_Standards/instructional-design/slide-deck-defaults.md`
 - `01_Shared_Standards/instructional-design/learning-science-rules.md`
 - `01_Shared_Standards/instructional-design/material-quality-rubric.md`
 - `01_Shared_Standards/instructional-design/production-gates-and-compute.md`
@@ -54,10 +55,11 @@ record path for human review before any Notion update.
 
 ## Version
 
-0.4.1
+0.4.2
 
 ## Changelog
 
+- 0.4.2 added inherited slide deck defaults standard.
 - 0.4.1 added inherited design-variant pattern standard.
 - 0.4.0 migrated practical Custom GPT behavior into inherited standards.
 - 0.3.1 clarified Notion, Drive, and GitHub destination defaults.
