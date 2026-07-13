@@ -395,9 +395,8 @@ class WorkflowSchedulerCLI:
             )
 
         if failed or blocked or cancelled:
-            workflow.mark_failed(
-                reason=f"Tasks failed: {len(failed)}, blocked: {len(blocked)}, cancelled: {len(cancelled)}"
-            )
+            reason = f"Tasks failed: {len(failed)}, blocked: {len(blocked)}, cancelled: {len(cancelled)}"
+            workflow.mark_failed(reason=reason)
             status = "fail"
             checks_failed = [
                 c
@@ -408,12 +407,13 @@ class WorkflowSchedulerCLI:
                 )
                 if c
             ]
+            self.audit_logger.log_workflow_failed(workflow, reason=reason)
         else:
             workflow.mark_completed()
             status = "pass"
             checks_failed = []
+            self.audit_logger.log_workflow_completed(workflow)
 
-        self.audit_logger.log_workflow_completed(workflow)
         self.repository.update_workflow(workflow)
 
         return self._format_response(
@@ -709,7 +709,16 @@ class WorkflowSchedulerCLI:
         )
 
     def pause_workflow(self, workflow_id: str) -> Dict[str, Any]:
-        """Pause a running workflow so `run` refuses to proceed until resumed.
+        """Pause a workflow so `run` refuses to proceed until resumed.
+
+        Allowed from any non-terminal, non-PAUSED status (DRAFT, PENDING,
+        or RUNNING) — not just RUNNING. A not-yet-started workflow can be
+        paused up front so a later `run` refuses to start it at all;
+        `run_workflow` itself calls mark_running() unconditionally as its
+        first step regardless of whether it was DRAFT or already RUNNING,
+        so there is no meaningful distinction between "pause before it
+        started" and "pause while it's running" from run_workflow's
+        perspective.
 
         Args:
             workflow_id: Workflow ID to pause
@@ -726,18 +735,28 @@ class WorkflowSchedulerCLI:
                 error=f"Workflow not found: {workflow_id}",
             )
 
-        if workflow.status != WorkflowStatus.RUNNING:
+        if workflow.is_terminal():
             return self._format_response(
                 status="blocked",
-                blockers=["workflow_not_running"],
-                checks_failed=["workflow_not_running"],
+                blockers=["workflow_terminal"],
+                checks_failed=["workflow_terminal"],
                 next_owner="user",
-                error=f"Workflow cannot be paused from status: {workflow.status.value}",
+                error=f"Workflow cannot be paused from terminal status: {workflow.status.value}",
             )
 
+        if workflow.status == WorkflowStatus.PAUSED:
+            return self._format_response(
+                status="blocked",
+                blockers=["workflow_already_paused"],
+                checks_failed=["workflow_already_paused"],
+                next_owner="user",
+                error="Workflow is already paused",
+            )
+
+        previous_status = workflow.status.value
         workflow.mark_paused()
         self.repository.update_workflow(workflow)
-        self.audit_logger.log_workflow_paused(workflow)
+        self.audit_logger.log_workflow_paused(workflow, previous_status=previous_status)
 
         return self._format_response(
             status="pass",

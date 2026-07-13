@@ -270,12 +270,23 @@ class AuditLogger:
             details={"reason": reason},
         )
 
-    def log_workflow_paused(self, workflow: WorkflowPlan, reason: str = "") -> None:
-        """Log workflow pause (only reachable from RUNNING)."""
+    def log_workflow_paused(self, workflow: WorkflowPlan, previous_status: Optional[str] = None, reason: str = "") -> None:
+        """Log workflow pause.
+
+        Args:
+            workflow: The paused workflow (status already mutated to PAUSED)
+            previous_status: The workflow's status immediately before
+                pausing. Pause is reachable from any non-terminal,
+                non-PAUSED status (DRAFT, PENDING, RUNNING), so callers
+                should capture this before mutation. Falls back to
+                RUNNING.value (only correct for the RUNNING case) when
+                omitted, for backward compatibility.
+            reason: Pause reason
+        """
         self._log(
             "workflow_paused",
             workflow=workflow,
-            status_before=WorkflowStatus.RUNNING.value,
+            status_before=previous_status if previous_status is not None else WorkflowStatus.RUNNING.value,
             status_after=WorkflowStatus.PAUSED.value,
             details={"reason": reason},
         )

@@ -400,17 +400,29 @@ class TestCLIWorkflowPauseResume:
 
         assert result["status"] == "fail"
 
-    def test_pause_workflow_refused_when_not_running(self, tmp_path):
+    def test_pause_workflow_allowed_from_draft(self, tmp_path):
+        """A not-yet-started workflow can be paused up front so a later
+        `run` refuses to start it at all."""
         cli = WorkflowSchedulerCLI(db_path=str(tmp_path / "test.db"))
         workflow = make_workflow(status=WorkflowStatus.DRAFT)
         cli.repository.create_workflow(workflow)
 
         result = cli.pause_workflow(workflow.workflow_id)
 
-        assert result["status"] == "blocked"
-        assert "workflow_not_running" in result["blockers"]
+        assert result["status"] == "pass"
+        assert cli.repository.get_workflow(workflow.workflow_id).status == WorkflowStatus.PAUSED
 
-    def test_pause_workflow_success(self, tmp_path):
+    def test_pause_workflow_allowed_from_pending(self, tmp_path):
+        cli = WorkflowSchedulerCLI(db_path=str(tmp_path / "test.db"))
+        workflow = make_workflow(status=WorkflowStatus.PENDING)
+        cli.repository.create_workflow(workflow)
+
+        result = cli.pause_workflow(workflow.workflow_id)
+
+        assert result["status"] == "pass"
+        assert cli.repository.get_workflow(workflow.workflow_id).status == WorkflowStatus.PAUSED
+
+    def test_pause_workflow_success_from_running(self, tmp_path):
         cli = WorkflowSchedulerCLI(db_path=str(tmp_path / "test.db"))
         workflow = make_workflow(status=WorkflowStatus.RUNNING)
         cli.repository.create_workflow(workflow)
@@ -420,6 +432,41 @@ class TestCLIWorkflowPauseResume:
         assert result["status"] == "pass"
         stored = cli.repository.get_workflow(workflow.workflow_id)
         assert stored.status == WorkflowStatus.PAUSED
+
+    def test_pause_workflow_refused_when_terminal(self, tmp_path):
+        cli = WorkflowSchedulerCLI(db_path=str(tmp_path / "test.db"))
+        workflow = make_workflow(status=WorkflowStatus.COMPLETED)
+        cli.repository.create_workflow(workflow)
+
+        result = cli.pause_workflow(workflow.workflow_id)
+
+        assert result["status"] == "blocked"
+        assert "workflow_terminal" in result["blockers"]
+
+    def test_pause_workflow_refused_when_already_paused(self, tmp_path):
+        cli = WorkflowSchedulerCLI(db_path=str(tmp_path / "test.db"))
+        workflow = make_workflow(status=WorkflowStatus.RUNNING)
+        cli.repository.create_workflow(workflow)
+        cli.pause_workflow(workflow.workflow_id)
+
+        result = cli.pause_workflow(workflow.workflow_id)
+
+        assert result["status"] == "blocked"
+        assert "workflow_already_paused" in result["blockers"]
+
+    def test_pause_workflow_from_draft_then_run_is_blocked(self, tmp_path):
+        """The whole point of pausing before it starts: `run` must refuse."""
+        cli = WorkflowSchedulerCLI(db_path=str(tmp_path / "test.db"))
+        workflow = make_workflow(status=WorkflowStatus.DRAFT)
+        workflow.add_task("task-1")
+        cli.repository.create_workflow(workflow)
+        cli.repository.create_task(make_task(status=TaskStatus.DRAFT))
+
+        cli.pause_workflow(workflow.workflow_id)
+        result = cli.run_workflow(workflow.workflow_id)
+
+        assert result["status"] == "blocked"
+        assert "workflow_paused" in result["blockers"]
 
     def test_resume_workflow_refused_when_not_paused(self, tmp_path):
         cli = WorkflowSchedulerCLI(db_path=str(tmp_path / "test.db"))
@@ -694,3 +741,134 @@ class TestInteractionWithApprovalsAndRetries:
         assert resumed.status == TaskStatus.RETRY_SCHEDULED
         assert resumed.retry_count == 2
         assert resumed.next_retry_at is not None
+
+
+class TestRunWorkflowAuditEventCorrectness:
+    """Regression: run_workflow must emit the audit event matching the
+    actual outcome — workflow_completed only on a real pass, workflow_failed
+    on fail/blocked/cancelled — never workflow_completed regardless of
+    outcome."""
+
+    def test_completed_run_emits_workflow_completed_not_failed(self, tmp_path):
+        cli = WorkflowSchedulerCLI(db_path=str(tmp_path / "test.db"))
+        workflow_data = {
+            "workflow_id": "passing-workflow",
+            "title": "Passing Workflow",
+            "created_by": "test",
+            "mode": "Draft",
+            "tasks": [
+                {
+                    "id": "task-1",
+                    "type": "test",
+                    "owner": "system",
+                    "action": "test_action",
+                    "idempotency_key": "key-1",
+                }
+            ],
+        }
+        yaml_path = tmp_path / "passing.yaml"
+        with open(yaml_path, "w") as f:
+            yaml.dump(workflow_data, f)
+        cli.create_workflow(str(yaml_path))
+
+        result = cli.run_workflow("passing-workflow")
+
+        assert result["status"] == "pass"
+        event_types = [e.event_type for e in cli.audit_logger.get_events(workflow_id="passing-workflow")]
+        assert "workflow_completed" in event_types
+        assert "workflow_failed" not in event_types
+
+    def test_governance_blocked_task_run_emits_workflow_failed_not_completed(self, tmp_path):
+        cli = WorkflowSchedulerCLI(db_path=str(tmp_path / "test.db"))
+        workflow_data = {
+            "workflow_id": "failing-workflow",
+            "title": "Failing Workflow",
+            "created_by": "test",
+            "mode": "Draft",
+            "tasks": [
+                {
+                    "id": "task-1",
+                    "type": "test",
+                    "owner": "system",
+                    "action": "",  # ambiguous_target -> hard governance block
+                    "idempotency_key": "key-1",
+                }
+            ],
+        }
+        yaml_path = tmp_path / "failing.yaml"
+        with open(yaml_path, "w") as f:
+            yaml.dump(workflow_data, f)
+        cli.create_workflow(str(yaml_path))
+
+        result = cli.run_workflow("failing-workflow")
+
+        assert result["status"] == "fail"
+        event_types = [e.event_type for e in cli.audit_logger.get_events(workflow_id="failing-workflow")]
+        assert "workflow_failed" in event_types
+        assert "workflow_completed" not in event_types
+
+    def test_cancelled_task_run_emits_workflow_failed_not_completed(self, tmp_path):
+        cli = WorkflowSchedulerCLI(db_path=str(tmp_path / "test.db"))
+        workflow_data = {
+            "workflow_id": "cancelled-task-workflow",
+            "title": "Cancelled Task Workflow",
+            "created_by": "test",
+            "mode": "Draft",
+            "tasks": [
+                {
+                    "id": "task-1",
+                    "type": "test",
+                    "owner": "system",
+                    "action": "test_action",
+                    "idempotency_key": "key-1",
+                }
+            ],
+        }
+        yaml_path = tmp_path / "cancelled_task.yaml"
+        with open(yaml_path, "w") as f:
+            yaml.dump(workflow_data, f)
+        cli.create_workflow(str(yaml_path))
+
+        cli.cancel_task("task-1", reason="not needed")
+        workflow = cli.repository.get_workflow("cancelled-task-workflow")
+        workflow.mark_running()
+        cli.repository.update_workflow(workflow)
+
+        result = cli.run_workflow("cancelled-task-workflow")
+
+        assert result["status"] == "fail"
+        event_types = [e.event_type for e in cli.audit_logger.get_events(workflow_id="cancelled-task-workflow")]
+        assert "workflow_failed" in event_types
+        assert "workflow_completed" not in event_types
+
+    def test_resumable_blocked_run_emits_neither_completed_nor_failed(self, tmp_path):
+        """The approval/retry/paused resumable-blocked branch returns before
+        reaching the completed/failed audit call at all."""
+        cli = WorkflowSchedulerCLI(db_path=str(tmp_path / "test.db"))
+        workflow_data = {
+            "workflow_id": "paused-task-workflow",
+            "title": "Paused Task Workflow",
+            "created_by": "test",
+            "mode": "Draft",
+            "tasks": [
+                {
+                    "id": "task-1",
+                    "type": "test",
+                    "owner": "system",
+                    "action": "test_action",
+                    "idempotency_key": "key-1",
+                }
+            ],
+        }
+        yaml_path = tmp_path / "paused_task.yaml"
+        with open(yaml_path, "w") as f:
+            yaml.dump(workflow_data, f)
+        cli.create_workflow(str(yaml_path))
+
+        cli.pause_task("task-1")
+        result = cli.run_workflow("paused-task-workflow")
+
+        assert result["status"] == "blocked"
+        event_types = [e.event_type for e in cli.audit_logger.get_events(workflow_id="paused-task-workflow")]
+        assert "workflow_completed" not in event_types
+        assert "workflow_failed" not in event_types
