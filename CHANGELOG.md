@@ -1,5 +1,6 @@
 # Changelog
 ## 0.1.1-draft
+- Clarified classroom artifact routing so teacher planning and lesson candidates default to Notion handoffs, student-facing materials default to Drive, and GitHub lesson storage requires explicit approval and a GitHub Change Request.
 - Added Markdown line-limit exception policy and updated structural validation to honor documented legacy exceptions for Issue #62 without rewriting long archival, tooling, or Python standards docs.
 - Added ChatGPT implementation bridge: root `AGENTS.md`, ChatGPT Orchestrator overlay, GitHub Service Agent overlay, GitHub Change Request template, matching overlay tests, registry ownership/responsibility updates, and manual validation notes for Issue #59.
 - Docs accuracy: fixed `08_Tooling/workflow-scheduler/docs/` (USER_GUIDE, ARCHITECTURE, API_REFERENCE) still calling shipped Phase 2A-2E features unimplemented; also fixed a stale diagram and missing max_workers docs. Docs only.
