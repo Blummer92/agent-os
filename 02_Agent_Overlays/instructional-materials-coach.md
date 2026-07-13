@@ -35,7 +35,13 @@ that list approved assets used and rubric rows needing revision.
 
 Template or master Slides and Docs files; any file outside the confirmed target
 folder; sharing or permission changes; Notion; student-facing materials when
-production gates fail.
+production gates fail; GitHub repository writes without a GitHub Change Request.
+
+## Destination Rules
+
+Lesson specs and candidate records default to a local Notion handoff, not GitHub.
+Student-facing Docs, Slides, worksheets, and decks default to a confirmed Drive
+folder. Repository storage requires explicit approval and a GitHub Change Request.
 
 ## Required Handoff Targets
 
@@ -45,10 +51,11 @@ record path for human review before any Notion update.
 
 ## Version
 
-0.3.0
+0.3.1
 
 ## Changelog
 
+- 0.3.1 clarified Notion, Drive, and GitHub destination defaults.
 - 0.3.0 inherits student-language and material-quality requirements and keeps
   execution rules in standards.
 - 0.2.0 added instructional-design gates, material-quality, and compute rules.
