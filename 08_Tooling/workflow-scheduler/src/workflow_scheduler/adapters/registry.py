@@ -1,5 +1,5 @@
 """Small resolver/registry for local (noop + fake) adapters, plus the
-Phase 3A GitHub read-only adapter -- the first real external adapter.
+real external read-only adapters (GitHub, Phase 3A; Notion, Phase 3B).
 
 See docs/ADAPTER_CONTRACT_FUTURE.md for the (still not implemented)
 formal JSON-Schema request/result contract a future phase might add.
@@ -20,6 +20,7 @@ from workflow_scheduler.adapters.fake_adapters import (
 )
 from workflow_scheduler.adapters.github_readonly_adapter import GitHubReadOnlyAdapter
 from workflow_scheduler.adapters.noop_adapter import NoopAdapter
+from workflow_scheduler.adapters.notion_readonly_adapter import NotionReadOnlyAdapter
 
 _REGISTRY: Dict[str, Callable[[], TaskAdapter]] = {
     "noop": NoopAdapter,
@@ -31,6 +32,7 @@ _REGISTRY: Dict[str, Callable[[], TaskAdapter]] = {
     "fake-malformed": FakeMalformedReturnAdapter,
     "fake-raising": FakeRaisingAdapter,
     "github_readonly": GitHubReadOnlyAdapter,
+    "notion_readonly": NotionReadOnlyAdapter,
 }
 
 
