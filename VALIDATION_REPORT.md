@@ -3,32 +3,30 @@
 ## Current PR
 
 - Review root: `Blummer92/agent-os`
-- Branch: `rebuild-instructional-materials-coach`
-- Scope: Issue #71 Instructional Materials Coach migration
-- Source: uploaded Custom GPT prompt packet, summarized memory defaults, design variant patterns, slide deck defaults, material design defaults, and instructional materials design system
-- Overlay updated: `02_Agent_Overlays/instructional-materials-coach.md`
-- Workflow standard updated: `instructional-materials-workflows.md`
-- Source standard updated: `instructional-materials-sources.md`
-- Design system standard added: `instructional-materials-design-system.md`
-- Material design standard added: `material-design-defaults.md`
-- Design variant standard added: `design-variant-patterns.md`
-- Slide deck default standard added: `slide-deck-defaults.md`
-- Learning science standard updated: `learning-science-rules.md`
-- Material quality rubric updated: `material-quality-rubric.md`
-- Tests updated: `instructional-materials-coach.tests.md`
+- Branch: `implement-teacher-modeling-coach`
+- Scope: Issue #76 Teacher Modeling Coach migration
+- Source: uploaded Teacher Modeling Coach prompt packet
+- Overlay updated: `02_Agent_Overlays/teacher-modeling-coach.md`
+- Workflow standard added: `teacher-modeling-workflows.md`
+- Memory and source standard added: `teacher-modeling-memory-and-sources.md`
+- Modeling standard updated: `teacher-modeling-standards.md`
+- Responsibility matrix updated: yes
+- Tests updated: `teacher-modeling-coach.tests.md`
 - Durable rules migrated instead of pasting full raw prompts or memory logs: yes
 - New agents added: no
 - Video production agent added: no
 - Direct Notion, Drive, or GitHub lesson writes implemented: no
+- Notion synchronization kept explicit and gated: yes
+- Read-only Notion audit support documented: yes
 - Destination defaults preserved: yes
 - Connector static review: pass
-- Local validation command: `bash 07_Agent_Tests/validate-repo-structure.sh`
-- Local validation result: 6 passed, 0 failed
-- Final status: PASS - local validation completed successfully
+- Script execution in connector: unavailable
+- Required local command: `bash 07_Agent_Tests/validate-repo-structure.sh`
+- Expected local result after this PR: 6 passed, 0 failed
+- Final status: DRAFT PASS - local or CI execution required before ready for review
 
 ## Main Baseline Preserved
 
-- Previous merged scope: Issue #68 first three Agent OS pilot workflows
-- Runbook added: `05_Examples/agent-os-pilot-workflows.md`
-- Prompt pack added: `03_Templates/prompts/agent-os-pilot-prompts.md`
-- Previous validation status: DRAFT PASS - local or CI execution required before ready for review
+- Previous merged scope: Issue #71 Instructional Materials Coach migration
+- Instructional Materials Coach migration remains merged in `main`
+- Pilot workflow files remain preserved
