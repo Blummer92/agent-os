@@ -10,6 +10,10 @@ from workflow_scheduler.adapters.fake_adapters import (
     FakeSlowAdapter,
     FakeSuccessAdapter,
 )
+from workflow_scheduler.adapters.github_pr_comment_adapter import (
+    GitHubPRCommentAdapter,
+    GitHubPRCommentAdapterError,
+)
 from workflow_scheduler.adapters.github_readonly_adapter import (
     GitHubReadOnlyAdapter,
     GitHubReadOnlyAdapterError,
@@ -35,6 +39,8 @@ __all__ = [
     "GitHubReadOnlyAdapterError",
     "NotionReadOnlyAdapter",
     "NotionReadOnlyAdapterError",
+    "GitHubPRCommentAdapter",
+    "GitHubPRCommentAdapterError",
     "resolve_adapter",
     "available_adapters",
 ]
