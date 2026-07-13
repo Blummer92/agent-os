@@ -1,0 +1,44 @@
+name: Workflow Scheduler Validation
+
+on:
+  pull_request:
+    paths:
+      - "08_Tooling/workflow-scheduler/**"
+      - ".github/workflows/**"
+  push:
+    branches:
+      - main
+    paths:
+      - "08_Tooling/workflow-scheduler/**"
+      - ".github/workflows/**"
+
+permissions:
+  contents: read
+
+jobs:
+  validate-workflow-scheduler:
+    name: Validate Workflow Scheduler
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Workflow Scheduler test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r 08_Tooling/workflow-scheduler/requirements.txt
+
+      - name: Run Workflow Scheduler test suite
+        run: |
+          cd 08_Tooling/workflow-scheduler
+          PYTHONPATH=src python3 -m pytest tests/ -v --cov=src/workflow_scheduler
+
+      - name: Run repository structure validation
+        run: |
+          bash 07_Agent_Tests/validate-repo-structure.sh
