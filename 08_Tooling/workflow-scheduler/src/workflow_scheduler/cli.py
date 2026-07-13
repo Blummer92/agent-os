@@ -21,9 +21,17 @@ from workflow_scheduler.models import (
     TaskStatus,
     WorkflowPlan,
     WorkflowMode,
+    WorkflowStatus,
 )
 from workflow_scheduler.queue import JobQueue
 from workflow_scheduler.repository import SQLiteRepository
+
+_TERMINAL_TASK_STATUSES = (
+    TaskStatus.COMPLETED,
+    TaskStatus.FAILED,
+    TaskStatus.CANCELLED,
+    TaskStatus.GOVERNANCE_BLOCKED,
+)
 
 
 class WorkflowSchedulerCLI:
@@ -258,6 +266,15 @@ class WorkflowSchedulerCLI:
                 error=f"Workflow is in terminal state: {workflow.status.value}",
             )
 
+        if workflow.status == WorkflowStatus.PAUSED:
+            return self._format_response(
+                status="blocked",
+                blockers=["workflow_paused"],
+                checks_failed=["workflow_not_in_runnable_state"],
+                next_owner="user",
+                error="Workflow is paused; resume it with resume-workflow before running.",
+            )
+
         workflow.mark_running()
         self.audit_logger.log_workflow_started(workflow)
         self.repository.update_workflow(workflow)
@@ -279,18 +296,28 @@ class WorkflowSchedulerCLI:
 
         # Execute in dependency order. Seed `completed` from tasks already
         # COMPLETED in a prior run so a rerun (e.g. after approval or a
-        # retry) does not re-execute work that already finished.
+        # retry) does not re-execute work that already finished. Likewise
+        # seed `cancelled` and `paused` from tasks already in those statuses
+        # so a rerun never force-queues and re-invokes the adapter for a
+        # task a human explicitly cancelled or paused.
         completed: set[str] = {t.id for t in tasks if t.status == TaskStatus.COMPLETED}
+        cancelled: set[str] = {t.id for t in tasks if t.status == TaskStatus.CANCELLED}
+        paused: set[str] = {t.id for t in tasks if t.status == TaskStatus.PAUSED}
         failed: set[str] = set()
         blocked: set[str] = set()
         approval_pending: set[str] = set()
         retry_pending: set[str] = set()
 
-        while len(completed) + len(failed) + len(blocked) + len(approval_pending) + len(retry_pending) < len(tasks):
+        while (
+            len(completed) + len(cancelled) + len(paused) + len(failed)
+            + len(blocked) + len(approval_pending) + len(retry_pending)
+        ) < len(tasks):
             ready = [
                 task_id
                 for task_id in resolver.get_ready_tasks(completed)
-                if task_id not in failed
+                if task_id not in cancelled
+                and task_id not in paused
+                and task_id not in failed
                 and task_id not in blocked
                 and task_id not in approval_pending
                 and task_id not in retry_pending
@@ -325,12 +352,14 @@ class WorkflowSchedulerCLI:
                 else:
                     failed.add(task_id)
 
-        if (approval_pending or retry_pending) and not failed and not blocked:
-            # Waiting on an explicit human decision and/or a retry backoff
-            # window — both are resumable states, not terminal failures.
-            # Leave the workflow RUNNING so a later `run` can pick back up.
+        if (approval_pending or retry_pending or paused) and not failed and not blocked and not cancelled:
+            # Waiting on an explicit human decision, a retry backoff window,
+            # and/or an explicit pause — all resumable states, not terminal
+            # failures. Leave the workflow RUNNING so a later `run` can pick
+            # back up.
             workflow.metadata["tasks_awaiting_approval"] = sorted(approval_pending)
             workflow.metadata["tasks_awaiting_retry"] = sorted(retry_pending)
+            workflow.metadata["tasks_paused"] = sorted(paused)
             self.repository.update_workflow(workflow)
 
             blockers = []
@@ -341,35 +370,50 @@ class WorkflowSchedulerCLI:
             if retry_pending:
                 blockers.append("tasks_awaiting_retry")
                 checks_failed.append("tasks_awaiting_retry")
+            if paused:
+                blockers.append("tasks_paused")
+                checks_failed.append("tasks_paused")
 
             return self._format_response(
                 status="blocked",
                 blockers=blockers,
                 checks_passed=["workflow_executed"],
                 checks_failed=checks_failed,
-                next_owner="user" if approval_pending else "system",
+                next_owner="user" if (approval_pending or paused) else "system",
                 workflow_id=workflow_id,
                 completed=len(completed),
                 failed=len(failed),
                 blocked=len(blocked),
+                cancelled=len(cancelled),
                 approval_pending=len(approval_pending),
                 approval_pending_task_ids=sorted(approval_pending),
                 retry_pending=len(retry_pending),
                 retry_pending_task_ids=sorted(retry_pending),
+                paused=len(paused),
+                paused_task_ids=sorted(paused),
                 final_status=workflow.status.value,
             )
 
-        if failed or blocked:
-            workflow.mark_failed(reason=f"Tasks failed: {len(failed)}, blocked: {len(blocked)}")
+        if failed or blocked or cancelled:
+            reason = f"Tasks failed: {len(failed)}, blocked: {len(blocked)}, cancelled: {len(cancelled)}"
+            workflow.mark_failed(reason=reason)
             status = "fail"
-            checks_failed = ["tasks_failed" if failed else [], "tasks_blocked" if blocked else []]
-            checks_failed = [c for c in checks_failed if c]
+            checks_failed = [
+                c
+                for c in (
+                    "tasks_failed" if failed else None,
+                    "tasks_blocked" if blocked else None,
+                    "tasks_cancelled" if cancelled else None,
+                )
+                if c
+            ]
+            self.audit_logger.log_workflow_failed(workflow, reason=reason)
         else:
             workflow.mark_completed()
             status = "pass"
             checks_failed = []
+            self.audit_logger.log_workflow_completed(workflow)
 
-        self.audit_logger.log_workflow_completed(workflow)
         self.repository.update_workflow(workflow)
 
         return self._format_response(
@@ -381,6 +425,7 @@ class WorkflowSchedulerCLI:
             completed=len(completed),
             failed=len(failed),
             blocked=len(blocked),
+            cancelled=len(cancelled),
             final_status=workflow.status.value,
         )
 
@@ -499,9 +544,10 @@ class WorkflowSchedulerCLI:
             reason=reason,
         )
 
+        previous_status = task.status.value
         task.mark_cancelled(reason=reason)
         self.repository.update_task(task)
-        self.audit_logger.log_task_cancelled(task, reason=reason)
+        self.audit_logger.log_task_cancelled(task, previous_status=previous_status, reason=reason)
 
         return self._format_response(
             status="pass",
@@ -511,6 +557,309 @@ class WorkflowSchedulerCLI:
             decision="rejected",
             approver=approver,
             reason=reason,
+        )
+
+    def pause_task(self, task_id: str) -> Dict[str, Any]:
+        """Pause a task, remembering its exact prior status for resume.
+
+        Args:
+            task_id: Task ID to pause
+
+        Returns:
+            Dict with pause result
+        """
+        task = self.repository.get_task(task_id)
+        if not task:
+            return self._format_response(
+                status="fail",
+                checks_failed=["task_not_found"],
+                next_owner="user",
+                error=f"Task not found: {task_id}",
+            )
+
+        if task.status in _TERMINAL_TASK_STATUSES or task.status == TaskStatus.PAUSED:
+            return self._format_response(
+                status="blocked",
+                blockers=["task_not_pausable"],
+                checks_failed=["task_not_pausable"],
+                next_owner="user",
+                error=f"Task cannot be paused from status: {task.status.value}",
+            )
+
+        if task.has_active_lease(timeout_seconds=self.executor.lease_timeout_seconds):
+            return self._format_response(
+                status="blocked",
+                blockers=["task_lease_active"],
+                checks_failed=["task_lease_active"],
+                next_owner="user",
+                error="Task has an active execution lease; cannot pause in-flight work. Wait for the lease to expire or complete.",
+            )
+
+        previous_status = task.status.value
+        task.mark_paused()
+        self.repository.update_task(task)
+        self.audit_logger.log_task_paused(task, previous_status=previous_status)
+
+        return self._format_response(
+            status="pass",
+            checks_passed=["task_paused"],
+            next_owner="user",
+            task_id=task_id,
+            paused_from_status=previous_status,
+        )
+
+    def resume_task(self, task_id: str) -> Dict[str, Any]:
+        """Resume a paused task to its exact prior status.
+
+        Args:
+            task_id: Task ID to resume
+
+        Returns:
+            Dict with resume result
+        """
+        task = self.repository.get_task(task_id)
+        if not task:
+            return self._format_response(
+                status="fail",
+                checks_failed=["task_not_found"],
+                next_owner="user",
+                error=f"Task not found: {task_id}",
+            )
+
+        if task.status != TaskStatus.PAUSED:
+            return self._format_response(
+                status="blocked",
+                blockers=["task_not_paused"],
+                checks_failed=["task_not_paused"],
+                next_owner="user",
+                error=f"Task is not paused (status: {task.status.value})",
+            )
+
+        try:
+            task.resume()
+        except ValueError as e:
+            return self._format_response(
+                status="blocked",
+                blockers=["task_resume_invalid"],
+                checks_failed=["task_resume_invalid"],
+                next_owner="user",
+                error=str(e),
+            )
+
+        restored_status = task.status.value
+        self.repository.update_task(task)
+        self.audit_logger.log_task_resumed(task, restored_status=restored_status)
+
+        return self._format_response(
+            status="pass",
+            checks_passed=["task_resumed"],
+            next_owner="system",
+            task_id=task_id,
+            restored_status=restored_status,
+        )
+
+    def cancel_task(self, task_id: str, reason: str) -> Dict[str, Any]:
+        """Cancel a task.
+
+        Args:
+            task_id: Task ID to cancel
+            reason: Cancellation reason
+
+        Returns:
+            Dict with cancellation result
+        """
+        task = self.repository.get_task(task_id)
+        if not task:
+            return self._format_response(
+                status="fail",
+                checks_failed=["task_not_found"],
+                next_owner="user",
+                error=f"Task not found: {task_id}",
+            )
+
+        if task.status in _TERMINAL_TASK_STATUSES:
+            return self._format_response(
+                status="blocked",
+                blockers=["task_not_cancellable"],
+                checks_failed=["task_not_cancellable"],
+                next_owner="user",
+                error=f"Task cannot be cancelled from terminal status: {task.status.value}",
+            )
+
+        if task.has_active_lease(timeout_seconds=self.executor.lease_timeout_seconds):
+            return self._format_response(
+                status="blocked",
+                blockers=["task_lease_active"],
+                checks_failed=["task_lease_active"],
+                next_owner="user",
+                error="Task has an active execution lease; cannot cancel in-flight work. Wait for the lease to expire or complete.",
+            )
+
+        previous_status = task.status.value
+        task.mark_cancelled(reason=reason)
+        self.repository.update_task(task)
+        self.audit_logger.log_task_cancelled(task, previous_status=previous_status, reason=reason)
+
+        return self._format_response(
+            status="pass",
+            checks_passed=["task_cancelled"],
+            next_owner="user",
+            task_id=task_id,
+            reason=reason,
+        )
+
+    def pause_workflow(self, workflow_id: str) -> Dict[str, Any]:
+        """Pause a workflow so `run` refuses to proceed until resumed.
+
+        Allowed from any non-terminal, non-PAUSED status (DRAFT, PENDING,
+        or RUNNING) — not just RUNNING. A not-yet-started workflow can be
+        paused up front so a later `run` refuses to start it at all;
+        `run_workflow` itself calls mark_running() unconditionally as its
+        first step regardless of whether it was DRAFT or already RUNNING,
+        so there is no meaningful distinction between "pause before it
+        started" and "pause while it's running" from run_workflow's
+        perspective.
+
+        Args:
+            workflow_id: Workflow ID to pause
+
+        Returns:
+            Dict with pause result
+        """
+        workflow = self.repository.get_workflow(workflow_id)
+        if not workflow:
+            return self._format_response(
+                status="fail",
+                checks_failed=["workflow_not_found"],
+                next_owner="user",
+                error=f"Workflow not found: {workflow_id}",
+            )
+
+        if workflow.is_terminal():
+            return self._format_response(
+                status="blocked",
+                blockers=["workflow_terminal"],
+                checks_failed=["workflow_terminal"],
+                next_owner="user",
+                error=f"Workflow cannot be paused from terminal status: {workflow.status.value}",
+            )
+
+        if workflow.status == WorkflowStatus.PAUSED:
+            return self._format_response(
+                status="blocked",
+                blockers=["workflow_already_paused"],
+                checks_failed=["workflow_already_paused"],
+                next_owner="user",
+                error="Workflow is already paused",
+            )
+
+        previous_status = workflow.status.value
+        workflow.mark_paused()
+        self.repository.update_workflow(workflow)
+        self.audit_logger.log_workflow_paused(workflow, previous_status=previous_status)
+
+        return self._format_response(
+            status="pass",
+            checks_passed=["workflow_paused"],
+            next_owner="user",
+            workflow_id=workflow_id,
+        )
+
+    def resume_workflow(self, workflow_id: str) -> Dict[str, Any]:
+        """Resume a paused workflow back to RUNNING.
+
+        Args:
+            workflow_id: Workflow ID to resume
+
+        Returns:
+            Dict with resume result
+        """
+        workflow = self.repository.get_workflow(workflow_id)
+        if not workflow:
+            return self._format_response(
+                status="fail",
+                checks_failed=["workflow_not_found"],
+                next_owner="user",
+                error=f"Workflow not found: {workflow_id}",
+            )
+
+        if workflow.status != WorkflowStatus.PAUSED:
+            return self._format_response(
+                status="blocked",
+                blockers=["workflow_not_paused"],
+                checks_failed=["workflow_not_paused"],
+                next_owner="user",
+                error=f"Workflow is not paused (status: {workflow.status.value})",
+            )
+
+        workflow.resume()
+        self.repository.update_workflow(workflow)
+        self.audit_logger.log_workflow_resumed(workflow)
+
+        return self._format_response(
+            status="pass",
+            checks_passed=["workflow_resumed"],
+            next_owner="system",
+            workflow_id=workflow_id,
+        )
+
+    def cancel_workflow(self, workflow_id: str, reason: str) -> Dict[str, Any]:
+        """Cancel a workflow and cascade-cancel every non-terminal task.
+
+        Args:
+            workflow_id: Workflow ID to cancel
+            reason: Cancellation reason
+
+        Returns:
+            Dict with cancellation result
+        """
+        workflow = self.repository.get_workflow(workflow_id)
+        if not workflow:
+            return self._format_response(
+                status="fail",
+                checks_failed=["workflow_not_found"],
+                next_owner="user",
+                error=f"Workflow not found: {workflow_id}",
+            )
+
+        if workflow.is_terminal():
+            return self._format_response(
+                status="blocked",
+                blockers=["workflow_terminal"],
+                checks_failed=["workflow_terminal"],
+                next_owner="user",
+                error=f"Workflow is already in terminal state: {workflow.status.value}",
+            )
+
+        previous_status = workflow.status.value
+        workflow.mark_cancelled(reason=reason)
+        self.repository.update_workflow(workflow)
+        self.audit_logger.log_workflow_cancelled(workflow, previous_status=previous_status, reason=reason)
+
+        # Cascade: cancel every non-terminal task, sequentially. Tasks
+        # already COMPLETED, FAILED, CANCELLED, or GOVERNANCE_BLOCKED are
+        # left untouched.
+        cancelled_task_ids = []
+        for task in self.repository.list_workflow_tasks(workflow_id):
+            if task.status in _TERMINAL_TASK_STATUSES:
+                continue
+
+            task_previous_status = task.status.value
+            task.mark_cancelled(reason=f"{reason} (cascaded from workflow cancellation)")
+            self.repository.update_task(task)
+            self.audit_logger.log_task_cancelled(
+                task, previous_status=task_previous_status, reason=f"{reason} (cascaded from workflow cancellation)"
+            )
+            cancelled_task_ids.append(task.id)
+
+        return self._format_response(
+            status="pass",
+            checks_passed=["workflow_cancelled"],
+            next_owner="user",
+            workflow_id=workflow_id,
+            reason=reason,
+            cancelled_task_count=len(cancelled_task_ids),
+            cancelled_task_ids=cancelled_task_ids,
         )
 
     def show_audit_log(self, workflow_id: Optional[str] = None, task_id: Optional[str] = None) -> Dict[str, Any]:
@@ -571,6 +920,38 @@ def main() -> None:
     reject_parser.add_argument("--reason", required=True, help="Reason for rejection")
     reject_parser.add_argument("--db", default="workflow_scheduler.db", help="Database path")
 
+    # pause-task command
+    pause_task_parser = subparsers.add_parser("pause-task", help="Pause a task")
+    pause_task_parser.add_argument("task_id", help="Task ID")
+    pause_task_parser.add_argument("--db", default="workflow_scheduler.db", help="Database path")
+
+    # resume-task command
+    resume_task_parser = subparsers.add_parser("resume-task", help="Resume a paused task")
+    resume_task_parser.add_argument("task_id", help="Task ID")
+    resume_task_parser.add_argument("--db", default="workflow_scheduler.db", help="Database path")
+
+    # cancel-task command
+    cancel_task_parser = subparsers.add_parser("cancel-task", help="Cancel a task")
+    cancel_task_parser.add_argument("task_id", help="Task ID")
+    cancel_task_parser.add_argument("--reason", required=True, help="Reason for cancellation")
+    cancel_task_parser.add_argument("--db", default="workflow_scheduler.db", help="Database path")
+
+    # pause-workflow command
+    pause_workflow_parser = subparsers.add_parser("pause-workflow", help="Pause a running workflow")
+    pause_workflow_parser.add_argument("workflow_id", help="Workflow ID")
+    pause_workflow_parser.add_argument("--db", default="workflow_scheduler.db", help="Database path")
+
+    # resume-workflow command
+    resume_workflow_parser = subparsers.add_parser("resume-workflow", help="Resume a paused workflow")
+    resume_workflow_parser.add_argument("workflow_id", help="Workflow ID")
+    resume_workflow_parser.add_argument("--db", default="workflow_scheduler.db", help="Database path")
+
+    # cancel-workflow command
+    cancel_workflow_parser = subparsers.add_parser("cancel-workflow", help="Cancel a workflow and cascade-cancel its tasks")
+    cancel_workflow_parser.add_argument("workflow_id", help="Workflow ID")
+    cancel_workflow_parser.add_argument("--reason", required=True, help="Reason for cancellation")
+    cancel_workflow_parser.add_argument("--db", default="workflow_scheduler.db", help="Database path")
+
     # audit command
     audit_parser = subparsers.add_parser("audit", help="View audit log")
     audit_parser.add_argument("--workflow-id", help="Filter by workflow ID")
@@ -598,6 +979,18 @@ def main() -> None:
             result = cli.approve(args.task_id, args.approver)
         elif args.command == "reject":
             result = cli.reject(args.task_id, args.approver, args.reason)
+        elif args.command == "pause-task":
+            result = cli.pause_task(args.task_id)
+        elif args.command == "resume-task":
+            result = cli.resume_task(args.task_id)
+        elif args.command == "cancel-task":
+            result = cli.cancel_task(args.task_id, args.reason)
+        elif args.command == "pause-workflow":
+            result = cli.pause_workflow(args.workflow_id)
+        elif args.command == "resume-workflow":
+            result = cli.resume_workflow(args.workflow_id)
+        elif args.command == "cancel-workflow":
+            result = cli.cancel_workflow(args.workflow_id, args.reason)
         elif args.command == "audit":
             result = cli.show_audit_log(
                 workflow_id=getattr(args, "workflow_id", None),

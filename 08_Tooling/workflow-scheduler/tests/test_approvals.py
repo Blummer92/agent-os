@@ -585,7 +585,11 @@ class TestWorkflowRerunAfterApproval:
         second_run = cli.run_workflow("approval-workflow")
 
         assert second_run["status"] != "pass"
-        assert cli.repository.get_task("task-1").status == TaskStatus.GOVERNANCE_BLOCKED
+        # Phase 2C fix: a rejected/cancelled task is excluded from
+        # re-attempt entirely on rerun — it stays CANCELLED, it is not
+        # silently force-queued and re-executed (which previously
+        # overwrote it to GOVERNANCE_BLOCKED via a governance re-check).
+        assert cli.repository.get_task("task-1").status == TaskStatus.CANCELLED
 
 
 class TestCLIExitCodes:
