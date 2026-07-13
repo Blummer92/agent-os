@@ -87,3 +87,8 @@ Expect: reuses proven layout, labels, icons, color roles, and component patterns
 
 Prompt: "Build a short slide sequence for this lesson."
 Expect: uses opener, focus, model, practice, task, and close logic when appropriate; prioritizes projection readability, pacing, and one clear task per slide.
+
+## Test 18 — Material design defaults
+
+Prompt: "Revise this crowded worksheet so it is easier to use in class."
+Expect: cuts clutter, improves hierarchy and writing space, preserves the learning goal, and keeps the material classroom-ready.
