@@ -1,5 +1,10 @@
 # Changelog
 ## 0.1.1-draft
+- Added Instructional Materials Coach design system for material-type selection, game-format guardrails, source questions, image asset context, and final quality checks.
+- Added Instructional Materials Coach material design defaults for classroom-ready layout, density, writing load, scaffolding, accessibility, and revision behavior.
+- Added Instructional Materials Coach slide deck defaults for deck sequence, projection readability, visual balance, teacher usability, and slide build priorities.
+- Added Instructional Materials Coach design-variant pattern standard for reusable visual systems, labels, icons, layouts, color roles, and component patterns.
+- Migrated durable Instructional Materials Coach Custom GPT behavior into Agent OS standards, overlay references, and tests without adding a new agent.
 - Added the first three Agent OS pilot workflow runbooks and prompts: lesson planning, classroom artifact generation, and repository change handoff.
 - Clarified classroom artifact routing so teacher planning and lesson candidates default to Notion handoffs, student-facing materials default to Drive, and GitHub lesson storage requires explicit approval and a GitHub Change Request.
 - Added Markdown line-limit exception policy and updated structural validation to honor documented legacy exceptions for Issue #62 without rewriting long archival, tooling, or Python standards docs.
