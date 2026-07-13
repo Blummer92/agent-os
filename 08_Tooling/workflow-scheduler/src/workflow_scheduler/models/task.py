@@ -55,6 +55,7 @@ class Task:
     next_retry_at: Optional[datetime] = None
     max_retries: int = 3
     paused_from_status: Optional[str] = None
+    batch_id: Optional[str] = None
 
     def mark_approved(self) -> None:
         """Mark task as approved."""

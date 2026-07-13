@@ -74,6 +74,7 @@ class SQLiteRepository:
                 next_retry_at TEXT,
                 max_retries INTEGER NOT NULL DEFAULT 3,
                 paused_from_status TEXT,
+                batch_id TEXT,
                 FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id)
             )
             """
@@ -116,9 +117,10 @@ class SQLiteRepository:
 
     def _migrate_tasks_table(self, cursor: sqlite3.Cursor) -> None:
         """Add columns to a pre-existing tasks table that predate them
-        (Phase 2B retry columns, Phase 2C paused_from_status). CREATE TABLE
-        IF NOT EXISTS only applies new columns to brand-new databases;
-        existing local DBs need this explicit migration.
+        (Phase 2B retry columns, Phase 2C paused_from_status, Phase 2D
+        batch_id). CREATE TABLE IF NOT EXISTS only applies new columns to
+        brand-new databases; existing local DBs need this explicit
+        migration.
         """
         cursor.execute("PRAGMA table_info(tasks)")
         existing_columns = {row[1] for row in cursor.fetchall()}
@@ -131,6 +133,8 @@ class SQLiteRepository:
             cursor.execute("ALTER TABLE tasks ADD COLUMN max_retries INTEGER NOT NULL DEFAULT 3")
         if "paused_from_status" not in existing_columns:
             cursor.execute("ALTER TABLE tasks ADD COLUMN paused_from_status TEXT")
+        if "batch_id" not in existing_columns:
+            cursor.execute("ALTER TABLE tasks ADD COLUMN batch_id TEXT")
 
     def _get_connection(self) -> sqlite3.Connection:
         """Get or create database connection."""
@@ -227,8 +231,8 @@ class SQLiteRepository:
             INSERT INTO tasks
             (id, workflow_id, type, owner, action, idempotency_key, status, mode, priority,
              approval_required, depends_on, payload, lease_lock, production_ready, created_at, updated_at,
-             retry_count, next_retry_at, max_retries, paused_from_status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             retry_count, next_retry_at, max_retries, paused_from_status, batch_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 task.id,
@@ -251,6 +255,7 @@ class SQLiteRepository:
                 task.next_retry_at.isoformat() if task.next_retry_at else None,
                 task.max_retries,
                 task.paused_from_status,
+                task.batch_id,
             ),
         )
         conn.commit()
@@ -287,6 +292,7 @@ class SQLiteRepository:
             next_retry_at=datetime.fromisoformat(row["next_retry_at"]) if row["next_retry_at"] else None,
             max_retries=row["max_retries"],
             paused_from_status=row["paused_from_status"],
+            batch_id=row["batch_id"],
         )
 
     def update_task(self, task: Task) -> None:
@@ -298,7 +304,7 @@ class SQLiteRepository:
             """
             UPDATE tasks
             SET status = ?, payload = ?, lease_lock = ?, updated_at = ?,
-                retry_count = ?, next_retry_at = ?, max_retries = ?, paused_from_status = ?
+                retry_count = ?, next_retry_at = ?, max_retries = ?, paused_from_status = ?, batch_id = ?
             WHERE id = ?
             """,
             (
@@ -310,6 +316,7 @@ class SQLiteRepository:
                 task.next_retry_at.isoformat() if task.next_retry_at else None,
                 task.max_retries,
                 task.paused_from_status,
+                task.batch_id,
                 task.id,
             ),
         )
@@ -347,6 +354,7 @@ class SQLiteRepository:
                     next_retry_at=datetime.fromisoformat(row["next_retry_at"]) if row["next_retry_at"] else None,
                     max_retries=row["max_retries"],
                     paused_from_status=row["paused_from_status"],
+                    batch_id=row["batch_id"],
                 )
             )
         return tasks

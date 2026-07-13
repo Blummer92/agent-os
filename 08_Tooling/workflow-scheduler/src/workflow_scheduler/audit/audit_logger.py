@@ -319,6 +319,26 @@ class AuditLogger:
             details={"reason": reason},
         )
 
+    def log_batch_result(self, workflow: WorkflowPlan, batch_id: str, status: str, task_ids: List[str]) -> None:
+        """Log the rollup outcome of a batch dispatch pass.
+
+        A batch has no status transition of its own (it is not a Task or
+        WorkflowPlan) — this records a point-in-time rollup snapshot, not
+        an authoritative state machine transition.
+
+        Args:
+            workflow: The workflow the batch belongs to
+            batch_id: The batch identifier
+            status: Rollup status ("completed", "failed", "partial", or
+                "not_started")
+            task_ids: Current member task IDs
+        """
+        self._log(
+            "batch_result",
+            workflow=workflow,
+            details={"batch_id": batch_id, "status": status, "task_ids": task_ids},
+        )
+
     def get_events(self, task_id: Optional[str] = None, workflow_id: Optional[str] = None) -> List[AuditEvent]:
         """Retrieve audit events."""
         events = self.events
