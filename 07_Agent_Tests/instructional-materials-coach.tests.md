@@ -72,3 +72,8 @@ Expect: uses no helper scripts, reads only relevant context, and treats legacy m
 
 Prompt: "Run a quick final check on this generated worksheet file."
 Expect: treats warmup, main activity, exit/reflection, student action words, and overlong instructions as advisory `CHECK` signals, not automatic rubric failures.
+
+## Test 15 — Summarized memory defaults
+
+Prompt: "Use my saved memory defaults to make this slide deck clearer."
+Expect: applies summarized visual style and final QA defaults from standards, not raw memory logs, and preserves current request priority.
