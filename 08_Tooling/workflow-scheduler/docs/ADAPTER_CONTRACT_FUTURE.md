@@ -1,160 +1,74 @@
 # TaskAdapter Contract (Future Reference — Not Yet Implemented)
 
-**Status:** Draft reference document for a future phase. This is not the
-current `TaskAdapter` interface and nothing in the codebase enforces it
-yet. Phase 2F ("Adapter Readiness MVP") intentionally implements a much
-smaller, non-breaking safety net instead — see
-`08_Tooling/workflow-scheduler/docs/ARCHITECTURE.md` and
-`API_REFERENCE.md` for what actually exists today. This document is
-preserved as the target shape a later phase (tentatively Phase 2G) could
-formalize toward, once real external adapters are closer to landing
-(tentatively Phase 2H).
+**Status:** Draft summary for a future phase (tentatively Phase 2G). Not
+the current `TaskAdapter` interface; nothing in the codebase enforces
+this. Phase 2F ("Adapter Readiness MVP") implements a much smaller,
+non-breaking safety net instead — see `ARCHITECTURE.md`/`API_REFERENCE.md`
+for what actually exists today, and `executor.py`'s
+`_validate_adapter_result()` for the minimal validation Phase 2F added.
 
-Do not implement this document's JSON Schemas, immutable request object,
-or `additionalProperties: false` result validation without a dedicated,
-explicitly-scoped phase — Phase 2F deliberately did not.
-
----
+The full JSON-Schema request/result contract (immutable execution
+request, `additionalProperties: false` result validation, five-state
+`status` enum) is intentionally deferred to Phase 2G, once real external
+adapters are closer to landing (tentatively Phase 2H). Do not implement
+it without a dedicated, explicitly-scoped phase.
 
 ## Purpose
 
-TaskAdapter is the execution boundary between the scheduler and a task implementation. It receives an immutable task request, performs only the work allowed by the scheduler, and returns a structured result for scheduler classification.
+TaskAdapter is the execution boundary between the scheduler and a task
+implementation. A future, formalized version would receive an immutable
+task request, perform only the work the scheduler allows, and return one
+structured result for scheduler classification.
 
-## Required inputs
+## Required inputs (future)
 
-A TaskAdapter must be invoked with a complete, immutable execution request that validates against the following JSON Schema:
+An execution request would require: `task_id`, `owner`, `payload`, and an
+`execution_context` object (`run_id`, `attempt_number`, plus optional
+`batch_id`, `batch_metadata`, `retry_policy`, `approval_state`,
+`pause_state`, `cancel_state`, `audit_context`). Either `task_name` or
+`adapter_name` would also be required. The adapter would treat all of
+this as read-only.
 
-```json
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.com/schemas/task-adapter-execution-request.json",
-  "title": "TaskAdapterExecutionRequest",
-  "type": "object",
-  "required": ["task_id", "owner", "payload", "execution_context"],
-  "anyOf": [
-    { "required": ["task_name"] },
-    { "required": ["adapter_name"] }
-  ],
-  "properties": {
-    "task_id": { "type": "string", "minLength": 1 },
-    "task_name": { "type": "string", "minLength": 1 },
-    "adapter_name": { "type": "string", "minLength": 1 },
-    "owner": { "type": "string", "minLength": 1 },
-    "payload": {},
-    "execution_context": {
-      "type": "object",
-      "required": ["run_id", "attempt_number"],
-      "properties": {
-        "run_id": { "type": "string", "minLength": 1 },
-        "attempt_number": { "type": "integer", "minimum": 1 },
-        "batch_id": { "type": "string" },
-        "batch_metadata": { "type": "object" },
-        "retry_policy": { "type": "object" },
-        "approval_state": { "type": "object" },
-        "pause_state": { "type": "object" },
-        "cancel_state": { "type": "object" },
-        "audit_context": { "type": "object" }
-      },
-      "additionalProperties": true
-    }
-  },
-  "additionalProperties": true
-}
-```
+## Required outputs (future)
 
-The adapter may read these inputs, but it must treat them as read-only. If additional adapter-specific fields are needed, they must be passed through the request object without changing scheduler-owned state.
+A result would require `status` and `message`, with optional `output`,
+`metadata`, `error`, `retry_after`, `blocked_reason`, and
+`approval_reason`. `status` would be the only classification signal,
+one of: `success`, `failure`, `retryable` (requires `retry_after`),
+`blocked` (requires `blocked_reason`), or `approval-required` (requires
+`approval_reason`).
 
-## Required outputs
+## Validation and classification rules (future)
 
-A TaskAdapter must return exactly one structured result object that validates against the following JSON Schema:
+The scheduler would validate every result before classification;
+malformed/incomplete/unsupported results would be rejected through a
+controlled failure path, never crash the scheduler loop, and always be
+audit-logged. (Phase 2F already does a smaller version of this today —
+see `_validate_adapter_result()`.)
 
-```json
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.com/schemas/task-adapter-result.json",
-  "title": "TaskAdapterResult",
-  "type": "object",
-  "required": ["status", "message"],
-  "properties": {
-    "status": {
-      "type": "string",
-      "enum": ["success", "failure", "retryable", "blocked", "approval-required"]
-    },
-    "message": { "type": "string", "minLength": 1 },
-    "output": {},
-    "metadata": { "type": "object", "additionalProperties": true },
-    "error": { "type": "object", "additionalProperties": true },
-    "retry_after": {
-      "anyOf": [
-        { "type": "string", "minLength": 1 },
-        { "type": "integer", "minimum": 0 },
-        {
-          "type": "object",
-          "properties": {
-            "delay_seconds": { "type": "integer", "minimum": 0 },
-            "retry_at": { "type": "string", "format": "date-time" },
-            "reason": { "type": "string" }
-          },
-          "additionalProperties": true
-        }
-      ]
-    },
-    "blocked_reason": { "type": "string", "minLength": 1 },
-    "approval_reason": { "type": "string", "minLength": 1 }
-  },
-  "additionalProperties": false,
-  "allOf": [
-    {
-      "if": { "required": ["status"], "properties": { "status": { "const": "retryable" } } },
-      "then": { "required": ["retry_after"] }
-    },
-    {
-      "if": { "required": ["status"], "properties": { "status": { "const": "blocked" } } },
-      "then": { "required": ["blocked_reason"] }
-    },
-    {
-      "if": { "required": ["status"], "properties": { "status": { "const": "approval-required" } } },
-      "then": { "required": ["approval_reason"] }
-    }
-  ]
-}
-```
+## Governance (future, and already true today)
 
-## Result states
+The scheduler owns lifecycle state, approval routing, retry policy,
+pause/resume/cancel, batching/dispatch, audit logging, and result
+classification. The adapter owns only permitted task execution and
+returning a valid result — it must never mutate scheduler state, write
+task/retry/approval/pause/cancel/queue records, bypass or self-authorize
+approval, mark a task approved/completed/retried/paused/resumed/cancelled
+on its own, or perform side effects outside its allowed boundary. An
+approval-required task must resolve to `approval-required` and stop, not
+be converted to success by the adapter.
 
-The `status` field is the only supported classification signal and must be one of:
+## Implementation guidance (future)
 
-- `success`: the task completed successfully within the allowed execution boundary.
-- `failure`: the task reached a terminal error condition.
-- `retryable`: the task encountered a transient condition and may be retried later.
-- `blocked`: the task cannot proceed because of a governance, dependency, or environmental stop.
-- `approval-required`: the task cannot proceed until an approval gate is satisfied.
+Adapters should be deterministic where possible, keep side effects
+isolated, and return structured results rather than raising for expected
+outcomes. Fake adapters (Phase 2F: `adapters/fake_adapters.py`) can cover
+success/failure/retryable/blocked/approval-required/slow paths without a
+formal schema. Real external adapters should be addable later without
+changing scheduler core logic, once this contract is formalized.
 
-## Validation and classification rules
+## Contract enforcement (future)
 
-- The scheduler must validate every adapter result before classification.
-- Malformed, incomplete, or unsupported results must be rejected through a controlled failure path.
-- Validation failures must not crash the scheduler loop.
-- Validation failures must be audit-logged.
-
-## Governance
-
-- The scheduler owns task lifecycle state, approval routing, retry policy enforcement, pause/resume/cancel handling, batching and dispatch decisions, audit logging of adapter outcomes, and final classification of adapter results.
-- The adapter owns only the execution of the task logic permitted by the scheduler and the return of a valid result.
-- The adapter must not mutate scheduler state directly or write to task records, retry counters, approval records, pause/resume state, cancel state, or queue state.
-- The adapter must not bypass approval gates, self-authorize execution, skip approval checks, or convert an approval-required task into success without scheduler approval.
-- The adapter must not perform approval-gated writes before approval is granted, mark a task approved, completed, retried, paused, resumed, or canceled on its own, perform external side effects outside the allowed execution boundary, return unsupported or ambiguous result states, rely on hidden side effects instead of returning a valid structured result, or override scheduler retry, approval, pause, resume, cancel, or governance decisions.
-- If a task requires approval, the adapter must return `approval-required` and stop execution.
-- The scheduler must ignore any adapter attempt to encode unsupported states or hidden transitions.
-
-## Implementation guidance
-
-- Adapters should be deterministic where possible.
-- Adapters should keep side effects isolated and limited to the allowed execution boundary.
-- Adapters should return structured results rather than raising uncaught exceptions for expected outcomes.
-- Fake adapters may be used for testing success, failure, retryable, blocked, approval-required, and slow execution paths.
-- Real external adapters may be added later without changing scheduler core logic, provided they conform to this contract.
-
-## Contract enforcement
-
-Any adapter that violates this contract must be treated as invalid by the scheduler. Invalid adapter behavior must be handled safely, logged for audit purposes, and prevented from mutating scheduler state or bypassing approval gates.
+Any adapter violating this contract would be treated as invalid: handled
+safely, audit-logged, and prevented from mutating scheduler state or
+bypassing approval gates.
