@@ -12,4 +12,5 @@
 | Dashboard sync routing | Integration Manager | Dashboard Builder Overlay; Apps Script Sync Test Overlay |
 | Dashboard sync implementation | Google Workspace Automation Engineer | Workspace Implementation Overlay; Apps Script Sync Test Overlay |
 | Dashboard sync validation evidence | QA / Test Agent | Apps Script Sync Test Overlay |
+| Lesson modeling and teacher-talk coaching | Teacher Modeling Coach | Unit Alignment Agent; Instructional Materials Coach |
 | Slide deck & worksheet generation | Instructional Materials Coach | Python Development Overlay |

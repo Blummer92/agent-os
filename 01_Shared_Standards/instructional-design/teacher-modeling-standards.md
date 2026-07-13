@@ -6,7 +6,10 @@ before Instructional Materials work begins.
 ## Canonical Schema
 
 Required input fields:
+
 - learning objective
+- student task or expected product
+- key modeling moment
 - think-aloud method
 - component breakdown
 - visual anchors
@@ -15,64 +18,77 @@ Required input fields:
 - next_owner
 
 Required checks:
+
 - learning objective
+- student task alignment
 - think-aloud method
 - component breakdown
 - visual anchors
 - error analysis
 
 Allowed output keys:
+
 - status: `READY` or `BLOCKED`
 - blockers
 - checks_passed
 - checks_failed
 - next_owner
 - handoff_artifacts
+- teacher_says
+- teacher_does
+- students_do
+- likely_confusion
+- support_move
 - files_changed
 - tests_run
 
-Blocker behavior: if any required input is missing, incomplete, or blocked, stop
-immediately, name the blocker, set `status: BLOCKED`, and route to `next_owner`.
-Do not draft partial modeling or advance to Instructional Materials.
+Blocker behavior: if any required input is missing, incomplete, or blocked, stop,
+name the blocker, set `status: BLOCKED`, and route to `next_owner`. Do not draft
+partial modeling or advance to Instructional Materials.
 
-Handoff target: Instructional Materials Coach when all five modeling checks pass.
+Handoff target: Instructional Materials Coach when modeling checks pass.
 
-## Five Modeling Checks
+## Six Modeling Checks
 
 ### learning objective
 
-The modeling must target exactly one specific skill or standard, be measurable
-and observable, match the approved unit objective, and avoid bundled skills.
+The model targets one specific measurable skill, matches the approved objective,
+and avoids bundled skills.
+
+### student task alignment
+
+Teacher modeling must directly prepare students for the next visible student task
+or product.
 
 ### think-aloud method
 
-Teacher narration must make invisible thinking visible, explain why choices are
-made, name strategies and decision points, and use student-accessible language.
+Teacher narration makes invisible thinking visible, explains why choices are
+made, names strategies and decision points, and uses student-accessible language.
 
 ### component breakdown
 
-Complex skills must be split into small sequential steps, ordered from simplest
-to most complex, taught in practice order, and labeled for student reference.
+Complex skills are split into small sequential steps, ordered in practice order,
+and labeled for student reference.
 
 ### visual anchors
 
-Modeling must identify charts, organizers, props, tools, symbols, or visual
-hierarchy that support student understanding.
+Modeling identifies charts, organizers, tools, symbols, examples, or visual
+hierarchy that support understanding.
 
 ### error analysis
 
-Modeling must include a common mistake, show how to recognize it, demonstrate
-self-correction, and explain how to avoid the mistake in future work.
+Modeling includes a common mistake, how to recognize it, how to self-correct,
+and how to avoid it in future work.
 
 ## Execution Rules
 
 - Create one modeling session per learning objective.
 - Read only approved fields for the current lesson or unit.
-- Reuse approved think-aloud templates and visual anchor patterns before creating
-  new ones.
+- Reuse approved think-aloud templates and visual anchor patterns before creating new ones.
 - Do not re-check Unit Alignment gates already verified by Unit Alignment Agent.
-- Do not advance to Instructional Materials until all five checks pass.
+- Do not advance to Instructional Materials until modeling checks pass.
+- Give the most usable teacher move or language first when coaching in chat.
 
 ## Version
 
-0.1.0
+0.2.0
