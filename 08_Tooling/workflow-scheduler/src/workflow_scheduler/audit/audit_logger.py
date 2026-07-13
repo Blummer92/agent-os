@@ -135,6 +135,30 @@ class AuditLogger:
             details={"error": error, "is_transient": is_transient},
         )
 
+    def log_retry_scheduled(self, task: Task, delay_seconds: float) -> None:
+        """Log that a transient failure was scheduled for retry."""
+        self._log(
+            "retry_scheduled",
+            task=task,
+            status_before=TaskStatus.RUNNING.value,
+            status_after=TaskStatus.RETRY_SCHEDULED.value,
+            details={
+                "retry_count": task.retry_count,
+                "next_retry_at": task.next_retry_at.isoformat() if task.next_retry_at else None,
+                "delay_seconds": delay_seconds,
+            },
+        )
+
+    def log_retry_exhausted(self, task: Task, attempts: int) -> None:
+        """Log that a task exhausted its retry budget and will be marked failed."""
+        self._log(
+            "retry_exhausted",
+            task=task,
+            status_before=TaskStatus.RETRY_SCHEDULED.value,
+            status_after=TaskStatus.FAILED.value,
+            details={"attempts": attempts, "max_retries": task.max_retries},
+        )
+
     def log_task_paused(self, task: Task) -> None:
         """Log task pause."""
         self._log(
