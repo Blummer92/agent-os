@@ -1,0 +1,40 @@
+# GitHub Approved PR Comment Adapter Smoke Test
+#
+# Illustrates how the first write-capable adapter task is represented
+# for the `github_pr_comment` adapter (Phase 3C). Not run in CI or the
+# test suite -- it targets a real PR and requires a GITHUB_TOKEN with
+# write scope to actually post.
+#
+# Unlike the read-only smoke tests, this task sets `approval_required:
+# true`. Running this workflow will NOT post a comment by itself: the
+# task enters approval_pending and the scheduler's Executor never calls
+# the adapter until an explicit approval decision is recorded (see
+# governance/stop_conditions.py's APPROVAL_ENGINE_DEFERRED handling and
+# execution/executor.py's approval branch). A human must run:
+#
+#   workflow-scheduler approve <task_id> <approver-name>
+#
+# before a subsequent run of the workflow will actually call the
+# adapter and post the comment. A `reject` instead leaves the task
+# permanently governance_blocked -- the adapter is never called either
+# way without an explicit APPROVED decision.
+
+workflow_id: "github-pr-comment-approved-smoke-test-v1"
+title: "GitHub Approved PR Comment Smoke Test"
+created_by: "workflow-scheduler"
+mode: "Draft"
+
+tasks:
+  - id: "post-pr-comment"
+    type: "write"
+    owner: "github-pr-comment-adapter"
+    action: "comment_on_pr"
+    idempotency_key: "post-pr-comment-20260713"
+    priority: 0
+    approval_required: true
+    payload:
+      action: "post_pr_comment"
+      repository_full_name: "Blummer92/agent-os"
+      pr_number: 29
+      body: "Automated status comment from the workflow scheduler smoke test."
+    depends_on: []
