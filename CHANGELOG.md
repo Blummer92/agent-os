@@ -1,5 +1,6 @@
 # Changelog
 ## 0.1.1-draft
+- Migrated durable Instructional Materials Coach Custom GPT behavior into Agent OS standards, overlay references, and tests without adding a new agent.
 - Clarified classroom artifact routing so teacher planning and lesson candidates default to Notion handoffs, student-facing materials default to Drive, and GitHub lesson storage requires explicit approval and a GitHub Change Request.
 - Added Markdown line-limit exception policy and updated structural validation to honor documented legacy exceptions for Issue #62 without rewriting long archival, tooling, or Python standards docs.
 - Added ChatGPT implementation bridge: root `AGENTS.md`, ChatGPT Orchestrator overlay, GitHub Service Agent overlay, GitHub Change Request template, matching overlay tests, registry ownership/responsibility updates, and manual validation notes for Issue #59.
