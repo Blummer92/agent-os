@@ -119,3 +119,46 @@ class FakeRaisingAdapter(TaskAdapter):
 
     def execute(self, task: Task) -> Dict[str, Any]:
         raise self.exception
+
+
+class FakeContractAdapter(TaskAdapter):
+    """Reference example of an adapter opting into the Phase 3D
+    five-state result contract (status/message, from
+    docs/ADAPTER_CONTRACT_FUTURE.md) instead of the original success/
+    error/is_transient shape every other adapter in this file uses.
+    Not registered in the adapter registry -- this class exists purely
+    to document and test the shape, not as a selectable local adapter.
+
+    Configure `status` to one of success/failure/retryable/blocked/
+    approval-required; the conditional field each status requires
+    (retry_after/blocked_reason/approval_reason) defaults to a fake
+    value but can be overridden.
+    """
+
+    def __init__(
+        self,
+        status: str = "success",
+        message: str = "fake contract result",
+        output: Optional[Dict[str, Any]] = None,
+        retry_after: float = 5.0,
+        blocked_reason: str = "fake adapter-originated block",
+        approval_reason: str = "fake adapter-originated approval requirement",
+    ):
+        self.status = status
+        self.message = message
+        self.output = output
+        self.retry_after = retry_after
+        self.blocked_reason = blocked_reason
+        self.approval_reason = approval_reason
+
+    def execute(self, task: Task) -> Dict[str, Any]:
+        result: Dict[str, Any] = {"status": self.status, "message": self.message}
+        if self.status == "success":
+            result["output"] = self.output or {"task_id": task.id}
+        elif self.status == "retryable":
+            result["retry_after"] = self.retry_after
+        elif self.status == "blocked":
+            result["blocked_reason"] = self.blocked_reason
+        elif self.status == "approval-required":
+            result["approval_reason"] = self.approval_reason
+        return result
