@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Workflow Scheduler is a simple, governance-first task execution engine. Phase 1 shipped the core engine; Phase 2A-2E added approvals, retries, pause/resume/cancel, batching, and opt-in parallel dispatch on top of it. It prioritizes:
+The Workflow Scheduler is a simple, governance-first task execution engine. Phase 1 shipped the core engine; Phase 2A-2E added approvals, retries, pause/resume/cancel, batching, and opt-in parallel dispatch on top of it. Phase 3A-3F added real external adapters with structured result contracts: Phase 3A (GitHub read-only), 3B (Notion read-only), 3C (GitHub approved comment writer), 3D (five-state result contract), 3E (GitHub approved label writer), 3F (adapter contract migration). It prioritizes:
 1. **Governance enforcement** - Stop conditions checked before execution
 2. **Audit compliance** - All state transitions logged
 3. **Lease locks** - Prevent concurrent execution of the same task
@@ -56,7 +56,8 @@ The Workflow Scheduler is a simple, governance-first task execution engine. Phas
 
 ### Adapters (`src/workflow_scheduler/adapters/`)
 - **TaskAdapter**: Interface for task execution
-- **NoopAdapter**: Test stub (always succeeds)
+- **Real adapters** (Phase 3A-3F): GitHub read-only (get PR, list files, etc), Notion read-only (page, database, query), GitHub write (post PR comments, add labels) — all with approval gating and structured five-state result contracts
+- **NoopAdapter, FakeAdapters**: Test stubs (always succeed, legacy result shape)
 
 ### Executor (`src/workflow_scheduler/execution/`)
 - **Executor**: Orchestrates execution with governance checks
@@ -143,17 +144,22 @@ Every state transition logged:
 - workflow_started
 - workflow_completed
 
+## Result Contract (Phase 3D)
+
+All real adapters (Phase 3A-3E) now return a five-state contract with `status`, `message`, and conditional `output`, `retry_after`, `blocked_reason`, or `approval_reason`. Legacy fake/noop adapters still use the original `success`/`error`/`is_transient` shape for backward compatibility. Executor validates and classifies results before retry/retry-scheduling/failure decisions.
+
 ## Design Constraints
 
 ✅ **Simple**: No ORM, no Redis, no cloud workers  
-✅ **Governance-first**: Stop conditions before execution  
+✅ **Governance-first**: Stop conditions checked before execution  
 ✅ **Idempotent**: Adapter responsible for deduplication  
+✅ **Structured results**: Real adapters use five-state contract; legacy shapes supported for tests
 ✅ **Audited**: All transitions logged  
-✅ **Tested**: 291 tests, 97% coverage  
-✅ **Shipped (Phase 2A-2E)**: Approval engine, retry manager, pause/resume/cancel, task batching, opt-in parallel dispatch (`--max-workers`, same-process threading only)
+✅ **Tested**: 612 tests, 96% coverage  
+✅ **Shipped (Phase 1-3F)**: Core engine, approval, retries, pause/resume/cancel, batching, parallel dispatch, real external adapters (GitHub read/write, Notion read), five-state result contract
 
-❌ **Still out of scope**: Real external adapters (only `NoopAdapter`), REST API, web dashboard UI, background/daemon mode, cross-process concurrency
+❌ **Still out of scope**: Request-side adapter contract, REST API, web dashboard UI, background/daemon mode, cross-process concurrency, production deployment runbook
 
 ## Future Phases
 
-**Phase 3**: Real adapters, REST API, dashboard UI
+**Phase 4+**: REST API, web dashboard UI, request-side adapter contract, production readiness
