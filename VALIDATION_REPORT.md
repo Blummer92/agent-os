@@ -5,12 +5,13 @@
 - Review root: `Blummer92/agent-os`
 - Branch: `implement-teacher-modeling-coach`
 - Scope: Issue #76 Teacher Modeling Coach migration
-- Source: uploaded Teacher Modeling Coach prompt packet plus teacher-talk rehearsal skill
+- Source: uploaded Teacher Modeling Coach prompt packet plus teacher-talk and model-sequence skills
 - Overlay updated: `02_Agent_Overlays/teacher-modeling-coach.md`
 - Workflow standard added: `teacher-modeling-workflows.md`
 - Memory and source standard added: `teacher-modeling-memory-and-sources.md`
 - Modeling standard updated: `teacher-modeling-standards.md`
 - Teacher-talk template added: `03_Templates/prompts/teacher-talk-rehearsal.md`
+- Model-sequence template added: `03_Templates/prompts/model-sequence-builder.md`
 - Responsibility matrix updated: yes
 - Tests updated: `teacher-modeling-coach.tests.md`
 - Durable rules migrated instead of pasting full raw prompts or memory logs: yes
