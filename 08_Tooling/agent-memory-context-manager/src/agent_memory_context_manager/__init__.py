@@ -1,5 +1,9 @@
 """Agent Memory & Context Budget Manager."""
 
+from .cache_key import (
+    DEFAULT_CACHE_KEY_VERSION,
+    build_handoff_packet_cache_key,
+)
 from .handoff_packet import (
     DEFAULT_COMPUTE_LIMITS,
     REQUIRED_PACKET_FIELDS,
@@ -23,12 +27,14 @@ from .summary_cache import (
 )
 
 __all__ = [
+    "DEFAULT_CACHE_KEY_VERSION",
     "DEFAULT_COMPUTE_LIMITS",
     "DEFAULT_SUMMARY_CACHE_VERSION",
     "DEFAULT_SUMMARY_LIST_LIMIT",
     "REQUIRED_PACKET_FIELDS",
     "assert_valid_handoff_packet",
     "build_handoff_packet",
+    "build_handoff_packet_cache_key",
     "build_summary_cache_entry",
     "is_valid_handoff_packet",
     "read_summary_cache_entry",
