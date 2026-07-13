@@ -52,6 +52,14 @@ Video production, photography, typography, color theory, graphic design, and AI
 learning are content domains unless a governed change promotes one into a real
 repeatable agent role.
 
+Legacy agent names, old Notion agent-property values, and superseded workflow
+labels are acceptable user input only when they resolve through
+`04_Registry/legacy-agent-alias-registry.md`.
+
+Legacy aliases do not create executable agents. They resolve to canonical agents
+listed in `04_Registry/agent-inheritance-registry.md`, and only those canonical
+agents execute.
+
 ## Access Rules
 
 Default to read-only when authorization, target, or source of truth is unclear.
@@ -67,11 +75,15 @@ truth records, or irreversible artifacts without explicit approval.
 ## ChatGPT Workflow
 
 1. Identify the task owner.
-2. Read the owner overlay and referenced standards.
-3. Confirm allowed and blocked write surfaces.
-4. Use the smallest useful context packet.
-5. Stop if authorization or source of truth is unclear.
-6. Produce a handoff when another agent or GitHub write is needed.
+2. Resolve any legacy agent aliases through `04_Registry/legacy-agent-alias-registry.md`.
+3. Read the owner overlay and referenced standards.
+4. Confirm allowed and blocked write surfaces.
+5. Use the smallest useful context packet.
+6. Stop if authorization or source of truth is unclear.
+7. Produce a handoff when another agent or GitHub write is needed.
+
+If a legacy alias maps to a canonical agent, continue normal routing and report the
+alias resolution. If no alias exists, stop and recommend a registry update.
 
 ## Required Final Report
 
