@@ -1,13 +1,14 @@
 # Validation Report
 
-- Review root: `/workspace/output/Agent_OS_Review_Access/Agent OS/`
-- Duplicate root: `/workspace/user_files/Agent_OS_Review_Access/Agent OS/`
-- Total Markdown files: 89
-- Files under 100 lines: 89
-- Files at or over 100 lines: 0
-- Required folders missing: none
-- Unauthorized top-level items: none
-- Required files missing: none
+- Review root: `Blummer92/agent-os`
+- Branch: `chatgpt-agent-os-implementation`
+- Scope: Issue #59 ChatGPT implementation bridge
+- Total Markdown files expected after this PR: 95
+- New Markdown files added: 6
+- New files under 100 lines: yes
+- Files at or over 100 lines in this change: 0
+- Required folders missing: none changed
+- Unauthorized top-level items: none for this PR; `AGENTS.md` is intentional
 - Manifest exists: yes
 - Validation report exists: yes
 - Registry folder exists: yes
@@ -15,4 +16,10 @@
 - Shared standards folder exists: yes
 - Governance folder exists: yes
 - Archive folder exists: yes
-- Final status: PASS
+- New overlays reference `_common-overlay-rules.md`: yes
+- New overlays have matching test files: yes
+- Registry maps new overlays: yes
+- Shared rules remain referenced, not duplicated: yes
+- Script execution: pending local or CI run of `bash 07_Agent_Tests/validate-repo-structure.sh`
+- Static review status: PASS
+- Final status: PASS with script execution pending
