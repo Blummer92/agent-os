@@ -25,6 +25,22 @@ support, accessibility, student-language authenticity, or digital media throughl
 | Teacher revision burden | Requires only minor teacher edits. |
 | Compute efficiency | Passed gates first and reused approved assets. |
 
+## Quick QA Heuristics
+
+Legacy `agent_tools/material_qa.py` checks are advisory heuristics, not a full rubric.
+Use them only for quick final checks of generated material files.
+
+A quick check should flag whether the material has:
+
+- a warmup, entry task, do-now, or equivalent launch
+- a main activity, practice task, creation task, or build task
+- an exit ticket, reflection, wrap-up, or transfer prompt
+- student action words such as write, choose, explain, create, compare, or build
+- no instruction line longer than about 35 words
+
+Failing a heuristic means `CHECK`, not automatic rejection. Use the rubric rows
+above for final decisions.
+
 ## QA Feedback Rule
 
 QA feedback must name the rubric row, the exact issue, and the requested change.
@@ -37,4 +53,4 @@ or a gate violation is discovered.
 
 ## Version
 
-0.1.0
+0.1.1
