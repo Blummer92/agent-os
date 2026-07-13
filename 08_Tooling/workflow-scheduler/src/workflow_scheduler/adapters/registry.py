@@ -1,8 +1,8 @@
-"""Small resolver/registry for local (noop + fake) adapters.
+"""Small resolver/registry for local (noop + fake) adapters, plus the
+Phase 3A GitHub read-only adapter -- the first real external adapter.
 
-Local-only, on purpose: no real external adapter belongs here yet. See
-docs/ADAPTER_CONTRACT_FUTURE.md for how a future external-adapter
-registry might be formalized (Phase 2H+).
+See docs/ADAPTER_CONTRACT_FUTURE.md for the (still not implemented)
+formal JSON-Schema request/result contract a future phase might add.
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from workflow_scheduler.adapters.fake_adapters import (
     FakeSlowAdapter,
     FakeSuccessAdapter,
 )
+from workflow_scheduler.adapters.github_readonly_adapter import GitHubReadOnlyAdapter
 from workflow_scheduler.adapters.noop_adapter import NoopAdapter
 
 _REGISTRY: Dict[str, Callable[[], TaskAdapter]] = {
@@ -29,6 +30,7 @@ _REGISTRY: Dict[str, Callable[[], TaskAdapter]] = {
     "fake-slow": FakeSlowAdapter,
     "fake-malformed": FakeMalformedReturnAdapter,
     "fake-raising": FakeRaisingAdapter,
+    "github_readonly": GitHubReadOnlyAdapter,
 }
 
 
