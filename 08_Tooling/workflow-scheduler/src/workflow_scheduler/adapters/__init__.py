@@ -10,6 +10,10 @@ from workflow_scheduler.adapters.fake_adapters import (
     FakeSlowAdapter,
     FakeSuccessAdapter,
 )
+from workflow_scheduler.adapters.github_readonly_adapter import (
+    GitHubReadOnlyAdapter,
+    GitHubReadOnlyAdapterError,
+)
 from workflow_scheduler.adapters.noop_adapter import NoopAdapter
 from workflow_scheduler.adapters.registry import available_adapters, resolve_adapter
 
@@ -23,6 +27,8 @@ __all__ = [
     "FakeSlowAdapter",
     "FakeMalformedReturnAdapter",
     "FakeRaisingAdapter",
+    "GitHubReadOnlyAdapter",
+    "GitHubReadOnlyAdapterError",
     "resolve_adapter",
     "available_adapters",
 ]

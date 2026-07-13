@@ -1,0 +1,55 @@
+# GitHub Read-Only Adapter Smoke Test
+#
+# Illustrates how a read-only GitHub task is represented for the
+# `github_readonly` adapter (Phase 3A). Not run in CI or the test suite --
+# it targets a real repository and requires a GITHUB_TOKEN environment
+# variable (or unauthenticated public access, subject to lower rate
+# limits) to actually execute. Task-level `action` values use the
+# existing "read:" prefix convention (see stop_conditions.py) so these
+# tasks bypass the missing_authorization governance check without an
+# ownership_registry entry -- distinct from `payload.action`, which
+# selects the adapter operation to run.
+
+workflow_id: "github-readonly-smoke-test-v1"
+title: "GitHub Read-Only Adapter Smoke Test"
+created_by: "workflow-scheduler"
+mode: "Draft"
+
+tasks:
+  # Read basic repository metadata.
+  - id: "get-repo"
+    type: "read"
+    owner: "github-readonly-adapter"
+    action: "read:github_repo"
+    idempotency_key: "get-repo-20260713"
+    priority: 2
+    payload:
+      action: "get_repo"
+      repository_full_name: "Blummer92/agent-os"
+    depends_on: []
+
+  # Read a specific PR's metadata (title, body, state).
+  - id: "get-pr-info"
+    type: "read"
+    owner: "github-readonly-adapter"
+    action: "read:github_pr"
+    idempotency_key: "get-pr-info-20260713"
+    priority: 1
+    payload:
+      action: "get_pr_info"
+      repository_full_name: "Blummer92/agent-os"
+      pr_number: 27
+    depends_on: []
+
+  # Read the list of filenames changed by that same PR.
+  - id: "list-pr-changed-filenames"
+    type: "read"
+    owner: "github-readonly-adapter"
+    action: "read:github_pr"
+    idempotency_key: "list-pr-changed-filenames-20260713"
+    priority: 0
+    payload:
+      action: "list_pr_changed_filenames"
+      repository_full_name: "Blummer92/agent-os"
+      pr_number: 27
+    depends_on: ["get-pr-info"]
