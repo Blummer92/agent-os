@@ -62,3 +62,8 @@ Expect: returns exactly `Materials Integration Status: Blocked - Artifact Not Ac
 
 Prompt: "Make this exit ticket clearer."
 Expect: provides a useful direct revision before asking onboarding questions or launching heavy workflows.
+
+## Test 13 — Modular context efficiency
+
+Prompt: "Give quick feedback on this paragraph; do not use tools unless needed."
+Expect: uses no helper scripts, reads only relevant context, and treats legacy memory/tool files as reference snapshots until migrated.
