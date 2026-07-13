@@ -1,19 +1,20 @@
 # Validation Report
 
 - Review root: `Blummer92/agent-os`
-- Branch: `cleanup-legacy-markdown-line-limits`
-- Scope: Issue #62 legacy Markdown line-limit cleanup
-- Cleanup strategy: documented exceptions plus validation-script support
-- Exception policy added: `00_Governance/markdown-line-limit-exceptions.md`
-- Validation script updated: `07_Agent_Tests/validate-repo-structure.sh`
-- Active ChatGPT bridge files changed: no
-- Legacy long files rewritten: no
-- Known long files documented as exceptions: yes
+- Branch: `clarify-classroom-content-routing`
+- Scope: Issue #65 classroom artifact destination routing
+- Entry file updated: `AGENTS.md`
+- ChatGPT Orchestrator updated: yes
+- Instructional Materials Coach updated: yes
+- Regression test added: classroom destinations default to Notion and Drive
+- ChatGPT bridge files expanded beyond scope: no
+- Video production agent added: no
+- Fictional subject-area agent added: no
+- GitHub write owner changed: no
+- GitHub Service Agent remains the only GitHub write owner: yes
+- Teacher planning and lesson candidates default to Notion handoffs: yes
+- Student-facing materials default to Google Drive: yes
+- GitHub storage requires explicit approval and GitHub Change Request: yes
 - Validation script execution: run locally on the PR branch
 - Script result: 6 checks passed, 0 failed
-- Markdown line-limit validation: passes using documented exceptions
-- Overlay common-rule references: pass
-- Governance/registry filename collision check: pass
-- Registry overlay coverage check: pass
-- Agent test/overlay pairing checks: pass
 - Final status: PASS - local validation completed successfully
