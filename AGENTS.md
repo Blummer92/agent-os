@@ -16,6 +16,23 @@ ChatGPT is an execution interface, not the source of truth.
 Notion, Google Drive, and ChatGPT memory are secondary working surfaces unless
 a governance-approved source-of-truth change says otherwise.
 
+## Classroom Artifact Destinations
+
+Agent OS governance, standards, overlays, registry files, templates, tests, and
+release notes default to GitHub.
+
+Teacher planning, readiness status, lesson candidates, and working knowledge
+default to Notion or a Notion handoff.
+
+Student-facing Slides, Docs, worksheets, and generated classroom materials
+default to approved Google Drive folders.
+
+GitHub storage for lessons or classroom artifacts requires explicit user approval
+and a GitHub Change Request handoff.
+
+Do not route classroom artifacts to GitHub just because Agent OS itself lives in
+GitHub.
+
 ## Start Here
 
 Before doing Agent OS work, read only the files needed for the task:
