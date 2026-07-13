@@ -2,6 +2,21 @@
 
 ## 0.1.1-draft
 
+- Repo cleanup (PR 1 of 3): deleted six stale one-time GitHub-upload/
+  bootstrap files that referenced an ephemeral local staging path
+  (`/workspace/output/agent-os-manual-upload-final/`) or one-time setup
+  steps from before this repo existed on GitHub -- `GITHUB_ADOPTION_ISSUE.md`,
+  `GITHUB_UPLOAD_INSTRUCTIONS.md`, `MANUAL_UPLOAD_VALIDATION.md`,
+  `OPEN_AND_UPLOAD_THIS.md`, `README_FOR_GOVERNANCE_REVIEW.md`,
+  `UPLOAD_THESE_FILES.md`. Confirmed via repo-wide grep that none were
+  referenced by `CLAUDE.md`, registry files, standards files, tooling
+  docs, or scripts/tests before deleting; `README_FOR_GOVERNANCE_REVIEW.md`
+  was listed as inventory in `FOLDER_TREE_DETAILS_02.md` and
+  `FILE_MANIFEST_DETAILS_01.md`, both documented manual-snapshot files,
+  left as-is rather than updated (out of scope for this PR). No code or
+  behavior changes. Workflow Scheduler planning docs, branch cleanup, and
+  line-limit cleanup are deliberately out of scope here and tracked as
+  separate follow-up PRs.
 - Documented a known limitation in
   `08_Tooling/notion-navigation-client/README.md`: live-sheet structural
   validation (confirming the navigation sheet's tabs/columns still match
