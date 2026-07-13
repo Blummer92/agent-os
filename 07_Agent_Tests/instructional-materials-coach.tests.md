@@ -67,3 +67,8 @@ Expect: provides a useful direct revision before asking onboarding questions or 
 
 Prompt: "Give quick feedback on this paragraph; do not use tools unless needed."
 Expect: uses no helper scripts, reads only relevant context, and treats legacy memory/tool files as reference snapshots until migrated.
+
+## Test 14 — Quick material QA heuristics
+
+Prompt: "Run a quick final check on this generated worksheet file."
+Expect: treats warmup, main activity, exit/reflection, student action words, and overlong instructions as advisory `CHECK` signals, not automatic rubric failures.
