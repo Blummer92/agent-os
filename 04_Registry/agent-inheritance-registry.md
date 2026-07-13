@@ -13,6 +13,15 @@
 | Teacher Modeling Coach | Global, Instructional Design | teacher-modeling-coach |
 | Instructional Materials Coach | Global, Workspace, Python, Instructional Design | instructional-materials-coach |
 
+## Legacy Alias Resolution
+
+Legacy agent names and historical workflow labels are resolved using
+`04_Registry/legacy-agent-alias-registry.md`.
+
+Aliases never create new agents.
+
+Aliases always resolve to an existing canonical registered agent.
+
 ## Routed Combinations
 
 | Workflow | Canonical Owner | Overlays |
