@@ -3,11 +3,12 @@
 - Review root: `Blummer92/agent-os`
 - Branch: `implement-instructional-materials-coach`
 - Scope: Issue #71 Instructional Materials Coach migration
-- Source: uploaded Custom GPT prompt packet, summarized memory defaults, and design variant patterns
+- Source: uploaded Custom GPT prompt packet, summarized memory defaults, design variant patterns, and slide deck defaults
 - Overlay updated: `02_Agent_Overlays/instructional-materials-coach.md`
 - Workflow standard updated: `instructional-materials-workflows.md`
 - Source standard updated: `instructional-materials-sources.md`
 - Design variant standard added: `design-variant-patterns.md`
+- Slide deck default standard added: `slide-deck-defaults.md`
 - Learning science standard updated: `learning-science-rules.md`
 - Material quality rubric updated: `material-quality-rubric.md`
 - Tests updated: `instructional-materials-coach.tests.md`
