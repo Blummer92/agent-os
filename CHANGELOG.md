@@ -1,5 +1,6 @@
 # Changelog
 ## 0.1.1-draft
+- Added Teacher Modeling Misunderstanding Audit template for formal lesson/model audits grounded in task, supports, gaps, teacher moves, and priority revisions.
 - Added Misunderstanding Response Designer prompt template for student confusion, causes, visible evidence, teacher moves, prevention revisions, and checks for understanding.
 - Added Model Sequence Builder prompt template for tight teacher modeling sequences aligned to the student task.
 - Added Teacher Talk Rehearsal prompt template for replacement language, talk tracks, and rehearsal coaching.
