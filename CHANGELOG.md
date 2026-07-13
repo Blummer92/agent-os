@@ -1,5 +1,6 @@
 # Changelog
 ## 0.1.1-draft
+- Migrated durable Teacher Modeling Coach behavior for lesson-modeling coaching, teacher-talk rehearsal, read-only audit support, Notion sync boundaries, source freshness, and memory limits.
 - Added Instructional Materials Coach design system for material-type selection, game-format guardrails, source questions, image asset context, and final quality checks.
 - Added Instructional Materials Coach material design defaults for classroom-ready layout, density, writing load, scaffolding, accessibility, and revision behavior.
 - Added Instructional Materials Coach slide deck defaults for deck sequence, projection readability, visual balance, teacher usability, and slide build priorities.
