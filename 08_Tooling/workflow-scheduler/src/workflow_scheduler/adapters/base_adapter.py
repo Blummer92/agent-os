@@ -17,6 +17,11 @@ class TaskAdapter(ABC):
             task: Task to execute
 
         Returns:
-            Dict with execution result (success, output, error)
+            Dict with execution result: {"success": bool, "output": dict,
+            "error": str}. On failure, adapters may also set
+            "is_transient": bool (default False) to signal whether the
+            failure is retryable — e.g. a network timeout is transient,
+            a validation error is not. Only transient failures are
+            eligible for the executor's retry path.
         """
         pass

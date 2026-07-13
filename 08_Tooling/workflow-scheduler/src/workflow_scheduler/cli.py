@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional
 from workflow_scheduler.adapters import NoopAdapter
 from workflow_scheduler.audit import AuditLogger
 from workflow_scheduler.dependencies import DependencyResolver
-from workflow_scheduler.execution import Executor
+from workflow_scheduler.execution import Executor, RetryManager
 from workflow_scheduler.governance import StopConditionChecker
 from workflow_scheduler.models import (
     ApprovalDecision,
@@ -204,6 +204,15 @@ class WorkflowSchedulerCLI:
 
         tasks = self.repository.list_workflow_tasks(workflow_id)
         task_statuses = {t.id: t.status.value for t in tasks}
+        task_retry_info = {
+            t.id: {
+                "retry_count": t.retry_count,
+                "next_retry_at": t.next_retry_at.isoformat() if t.next_retry_at else None,
+                "max_retries": t.max_retries,
+            }
+            for t in tasks
+            if t.status == TaskStatus.RETRY_SCHEDULED
+        }
 
         mode_value = workflow.mode.value if hasattr(workflow.mode, "value") else workflow.mode
 
@@ -217,6 +226,7 @@ class WorkflowSchedulerCLI:
             mode=mode_value,
             task_count=len(tasks),
             task_statuses=task_statuses,
+            task_retry_info=task_retry_info,
             created_at=workflow.created_at.isoformat(),
             updated_at=workflow.updated_at.isoformat(),
         )
@@ -268,18 +278,22 @@ class WorkflowSchedulerCLI:
             )
 
         # Execute in dependency order. Seed `completed` from tasks already
-        # COMPLETED in a prior run so a rerun (e.g. after approval) does not
-        # re-execute work that already finished.
+        # COMPLETED in a prior run so a rerun (e.g. after approval or a
+        # retry) does not re-execute work that already finished.
         completed: set[str] = {t.id for t in tasks if t.status == TaskStatus.COMPLETED}
         failed: set[str] = set()
         blocked: set[str] = set()
         approval_pending: set[str] = set()
+        retry_pending: set[str] = set()
 
-        while len(completed) + len(failed) + len(blocked) + len(approval_pending) < len(tasks):
+        while len(completed) + len(failed) + len(blocked) + len(approval_pending) + len(retry_pending) < len(tasks):
             ready = [
                 task_id
                 for task_id in resolver.get_ready_tasks(completed)
-                if task_id not in failed and task_id not in blocked and task_id not in approval_pending
+                if task_id not in failed
+                and task_id not in blocked
+                and task_id not in approval_pending
+                and task_id not in retry_pending
             ]
             if not ready:
                 break
@@ -289,6 +303,12 @@ class WorkflowSchedulerCLI:
                 if not task:
                     continue
 
+                if task.status == TaskStatus.RETRY_SCHEDULED and not RetryManager.is_due(task):
+                    # Backoff window hasn't elapsed yet — do not re-attempt
+                    # this task in this run; it stays resumable.
+                    retry_pending.add(task_id)
+                    continue
+
                 task.status = TaskStatus.QUEUED
                 self.repository.update_task(task)
 
@@ -296,6 +316,8 @@ class WorkflowSchedulerCLI:
 
                 if result.success:
                     completed.add(task_id)
+                elif result.status == "retry_scheduled":
+                    retry_pending.add(task_id)
                 elif result.status == "blocked" and StopConditionChecker.APPROVAL_ENGINE_DEFERRED in result.blockers and len(result.blockers) == 1:
                     approval_pending.add(task_id)
                 elif result.status == "blocked":
@@ -303,25 +325,37 @@ class WorkflowSchedulerCLI:
                 else:
                     failed.add(task_id)
 
-        if approval_pending and not failed and not blocked:
-            # Waiting on an explicit human decision — this is a resumable
-            # state, not a terminal failure. Leave the workflow RUNNING so a
-            # later `run` (after approve/reject) can pick back up.
+        if (approval_pending or retry_pending) and not failed and not blocked:
+            # Waiting on an explicit human decision and/or a retry backoff
+            # window — both are resumable states, not terminal failures.
+            # Leave the workflow RUNNING so a later `run` can pick back up.
             workflow.metadata["tasks_awaiting_approval"] = sorted(approval_pending)
+            workflow.metadata["tasks_awaiting_retry"] = sorted(retry_pending)
             self.repository.update_workflow(workflow)
+
+            blockers = []
+            checks_failed = []
+            if approval_pending:
+                blockers.append("tasks_awaiting_approval")
+                checks_failed.append("tasks_awaiting_approval")
+            if retry_pending:
+                blockers.append("tasks_awaiting_retry")
+                checks_failed.append("tasks_awaiting_retry")
 
             return self._format_response(
                 status="blocked",
-                blockers=["tasks_awaiting_approval"],
+                blockers=blockers,
                 checks_passed=["workflow_executed"],
-                checks_failed=["tasks_awaiting_approval"],
-                next_owner="user",
+                checks_failed=checks_failed,
+                next_owner="user" if approval_pending else "system",
                 workflow_id=workflow_id,
                 completed=len(completed),
                 failed=len(failed),
                 blocked=len(blocked),
                 approval_pending=len(approval_pending),
                 approval_pending_task_ids=sorted(approval_pending),
+                retry_pending=len(retry_pending),
+                retry_pending_task_ids=sorted(retry_pending),
                 final_status=workflow.status.value,
             )
 

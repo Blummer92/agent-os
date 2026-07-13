@@ -1,7 +1,7 @@
 """Task model for Workflow Scheduler."""
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -51,6 +51,9 @@ class Task:
     updated_at: datetime = field(default_factory=datetime.utcnow)
     lease_lock: Optional[datetime] = None
     production_ready: bool = False
+    retry_count: int = 0
+    next_retry_at: Optional[datetime] = None
+    max_retries: int = 3
 
     def mark_approved(self) -> None:
         """Mark task as approved."""
@@ -77,6 +80,13 @@ class Task:
             self.status = TaskStatus.FAILED
         self.updated_at = datetime.utcnow()
         self.payload["error"] = error
+
+    def schedule_retry(self, delay_seconds: float) -> None:
+        """Schedule task for retry after a transient failure."""
+        self.retry_count += 1
+        self.next_retry_at = datetime.utcnow() + timedelta(seconds=delay_seconds)
+        self.status = TaskStatus.RETRY_SCHEDULED
+        self.updated_at = datetime.utcnow()
 
     def mark_paused(self) -> None:
         """Mark task as paused."""

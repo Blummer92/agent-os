@@ -70,10 +70,14 @@ class SQLiteRepository:
                 production_ready BOOLEAN NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                next_retry_at TEXT,
+                max_retries INTEGER NOT NULL DEFAULT 3,
                 FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id)
             )
             """
         )
+        self._migrate_tasks_table(cursor)
 
         # Approval requests table
         cursor.execute(
@@ -108,6 +112,22 @@ class SQLiteRepository:
         )
 
         conn.commit()
+
+    def _migrate_tasks_table(self, cursor: sqlite3.Cursor) -> None:
+        """Add retry columns to a pre-existing tasks table (created before
+        Phase 2B) that predates them. CREATE TABLE IF NOT EXISTS only
+        applies the new columns to brand-new databases; existing local DBs
+        need this explicit migration.
+        """
+        cursor.execute("PRAGMA table_info(tasks)")
+        existing_columns = {row[1] for row in cursor.fetchall()}
+
+        if "retry_count" not in existing_columns:
+            cursor.execute("ALTER TABLE tasks ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0")
+        if "next_retry_at" not in existing_columns:
+            cursor.execute("ALTER TABLE tasks ADD COLUMN next_retry_at TEXT")
+        if "max_retries" not in existing_columns:
+            cursor.execute("ALTER TABLE tasks ADD COLUMN max_retries INTEGER NOT NULL DEFAULT 3")
 
     def _get_connection(self) -> sqlite3.Connection:
         """Get or create database connection."""
@@ -203,8 +223,9 @@ class SQLiteRepository:
             """
             INSERT INTO tasks
             (id, workflow_id, type, owner, action, idempotency_key, status, mode, priority,
-             approval_required, depends_on, payload, lease_lock, production_ready, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             approval_required, depends_on, payload, lease_lock, production_ready, created_at, updated_at,
+             retry_count, next_retry_at, max_retries)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 task.id,
@@ -223,6 +244,9 @@ class SQLiteRepository:
                 task.production_ready,
                 task.created_at.isoformat(),
                 task.updated_at.isoformat(),
+                task.retry_count,
+                task.next_retry_at.isoformat() if task.next_retry_at else None,
+                task.max_retries,
             ),
         )
         conn.commit()
@@ -255,6 +279,9 @@ class SQLiteRepository:
             production_ready=bool(row["production_ready"]),
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
+            retry_count=row["retry_count"],
+            next_retry_at=datetime.fromisoformat(row["next_retry_at"]) if row["next_retry_at"] else None,
+            max_retries=row["max_retries"],
         )
 
     def update_task(self, task: Task) -> None:
@@ -265,7 +292,8 @@ class SQLiteRepository:
         cursor.execute(
             """
             UPDATE tasks
-            SET status = ?, payload = ?, lease_lock = ?, updated_at = ?
+            SET status = ?, payload = ?, lease_lock = ?, updated_at = ?,
+                retry_count = ?, next_retry_at = ?, max_retries = ?
             WHERE id = ?
             """,
             (
@@ -273,6 +301,9 @@ class SQLiteRepository:
                 json.dumps(task.payload),
                 task.lease_lock.isoformat() if task.lease_lock else None,
                 task.updated_at.isoformat(),
+                task.retry_count,
+                task.next_retry_at.isoformat() if task.next_retry_at else None,
+                task.max_retries,
                 task.id,
             ),
         )
@@ -306,6 +337,9 @@ class SQLiteRepository:
                     production_ready=bool(row["production_ready"]),
                     created_at=datetime.fromisoformat(row["created_at"]),
                     updated_at=datetime.fromisoformat(row["updated_at"]),
+                    retry_count=row["retry_count"],
+                    next_retry_at=datetime.fromisoformat(row["next_retry_at"]) if row["next_retry_at"] else None,
+                    max_retries=row["max_retries"],
                 )
             )
         return tasks
