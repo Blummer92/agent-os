@@ -9,10 +9,12 @@
 - Regression test added: classroom destinations default to Notion and Drive
 - ChatGPT bridge files expanded beyond scope: no
 - Video production agent added: no
+- Fictional subject-area agent added: no
 - GitHub write owner changed: no
-- Notion/Drive destination rules clarified: yes
-- Connector static review: pass
-- Script execution in connector: unavailable
-- Required local command: `bash 07_Agent_Tests/validate-repo-structure.sh`
-- Expected local result after this PR: 6 passed, 0 failed
-- Final status: DRAFT PASS - local or CI execution required before ready for review
+- GitHub Service Agent remains the only GitHub write owner: yes
+- Teacher planning and lesson candidates default to Notion handoffs: yes
+- Student-facing materials default to Google Drive: yes
+- GitHub storage requires explicit approval and GitHub Change Request: yes
+- Validation script execution: run locally on the PR branch
+- Script result: 6 checks passed, 0 failed
+- Final status: PASS - local validation completed successfully
