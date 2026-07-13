@@ -1,0 +1,45 @@
+# GitHub Approved PR Label Adapter Smoke Test
+#
+# Illustrates how the second write-capable adapter task is represented
+# for the `github_pr_label` adapter (Phase 3E). Not run in CI or the
+# test suite -- it targets a real PR and requires a GITHUB_TOKEN with
+# write scope to actually add the label.
+#
+# Like the Phase 3C PR comment task, this task sets `approval_required:
+# true`. Running this workflow will NOT add a label by itself: the task
+# enters approval_pending and the scheduler's Executor never calls the
+# adapter until an explicit approval decision is recorded (see
+# governance/stop_conditions.py's APPROVAL_ENGINE_DEFERRED handling and
+# execution/executor.py's approval branch). A human must run:
+#
+#   workflow-scheduler approve <task_id> <approver-name>
+#
+# before a subsequent run of the workflow will actually call the
+# adapter and add the label. A `reject` instead leaves the task
+# permanently governance_blocked -- the adapter is never called either
+# way without an explicit APPROVED decision.
+#
+# This adapter is also the first real adapter to return the Phase 3D
+# five-state result contract (status/message) instead of the original
+# success/error/is_transient shape -- see
+# docs/ADAPTER_CONTRACT_FUTURE.md and github_pr_label_adapter.py.
+
+workflow_id: "github-pr-label-approved-smoke-test-v1"
+title: "GitHub Approved PR Label Smoke Test"
+created_by: "workflow-scheduler"
+mode: "Draft"
+
+tasks:
+  - id: "add-pr-label"
+    type: "write"
+    owner: "github-pr-label-adapter"
+    action: "label_pr"
+    idempotency_key: "add-pr-label-20260713"
+    priority: 0
+    approval_required: true
+    payload:
+      action: "add_pr_label"
+      repository_full_name: "Blummer92/agent-os"
+      pr_number: 31
+      label: "automated-status"
+    depends_on: []

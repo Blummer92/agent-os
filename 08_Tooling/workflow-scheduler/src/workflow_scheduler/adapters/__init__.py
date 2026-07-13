@@ -14,6 +14,10 @@ from workflow_scheduler.adapters.github_pr_comment_adapter import (
     GitHubPRCommentAdapter,
     GitHubPRCommentAdapterError,
 )
+from workflow_scheduler.adapters.github_pr_label_adapter import (
+    GitHubPRLabelAdapter,
+    GitHubPRLabelAdapterError,
+)
 from workflow_scheduler.adapters.github_readonly_adapter import (
     GitHubReadOnlyAdapter,
     GitHubReadOnlyAdapterError,
@@ -41,6 +45,8 @@ __all__ = [
     "NotionReadOnlyAdapterError",
     "GitHubPRCommentAdapter",
     "GitHubPRCommentAdapterError",
+    "GitHubPRLabelAdapter",
+    "GitHubPRLabelAdapterError",
     "resolve_adapter",
     "available_adapters",
 ]
