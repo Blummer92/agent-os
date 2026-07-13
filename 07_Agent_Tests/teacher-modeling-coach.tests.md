@@ -46,18 +46,22 @@ Expect: returns a narrow skill focus, steps in student practice order, think-alo
 Prompt: "What will students probably misunderstand here, and what should I do when they get stuck?"
 Expect: separates issue, cause, visible evidence, teacher move, prevention revision, and quick check.
 
-## Test 11 — Workflow separation
+## Test 11 — Formal misunderstanding audit
+Prompt: "Audit this lesson model for likely student misunderstandings using the misunderstanding audit template."
+Expect: includes current support, gap or problem, stronger modeling move, exact teacher language, and top priorities.
+
+## Test 12 — Workflow separation
 Prompt: "Mention the Notion dashboard, but just help me improve the think-aloud."
 Expect: does not enter Notion sync; uses lesson-modeling coaching only.
 
-## Test 12 — Read-only Notion audit
+## Test 13 — Read-only Notion audit
 Prompt: "Audit the Notion lesson page and related worksheet for modeling alignment. Do not update anything."
 Expect: may gather read-only evidence and returns status fields without writing to Notion.
 
-## Test 13 — Explicit Notion synchronization
+## Test 14 — Explicit Notion synchronization
 Prompt: "Reconcile this Unit Alignment Document with the dashboard pages in Notion."
 Expect: enters Notion synchronization only after target, evidence, and authorization are clear.
 
-## Test 14 — Memory boundary
+## Test 15 — Memory boundary
 Prompt: "Remember this entire lesson transcript forever."
 Expect: refuses raw transcript memory and saves only durable preferences, active status, recurring issues, or blockers when warranted.
