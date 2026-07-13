@@ -2,7 +2,11 @@
 adapter, proving the Phase 2F/3A adapter pattern generalizes to a system
 whose read operations aren't all GET. All network access is mocked via
 injected http_get / http_post_query_database callables -- no live
-Notion access required."""
+Notion access required.
+
+Phase 3F migrated this adapter's result shape from success/error/
+is_transient to the Phase 3D five-state contract (status/message);
+these tests assert the new shape throughout."""
 
 import inspect
 
@@ -16,7 +20,7 @@ from workflow_scheduler.adapters import (
 from workflow_scheduler.adapters import notion_readonly_adapter as nrao_module
 from workflow_scheduler.audit import AuditLogger
 from workflow_scheduler.execution import Executor
-from workflow_scheduler.execution.executor import _validate_adapter_result
+from workflow_scheduler.execution.executor import _is_contract_result, _validate_adapter_result
 from workflow_scheduler.models import Task
 from workflow_scheduler.repository import SQLiteRepository
 
@@ -101,7 +105,8 @@ class TestSupportedActionsSucceed:
 
         result = adapter.execute(task)
 
-        assert result["success"] is True
+        assert result["status"] == "success"
+        assert "success" not in result
         assert result["output"]["id"] == "page-1"
         assert http_get.calls[0][0] == "https://api.notion.com/v1/pages/page-1"
 
@@ -129,7 +134,7 @@ class TestSupportedActionsSucceed:
 
         result = adapter.execute(task)
 
-        assert result["success"] is True
+        assert result["status"] == "success"
         assert len(result["output"]["blocks"]) == 2
         assert result["output"]["blocks"][0]["id"] == "block-1"
         assert http_get.calls[0][0] == "https://api.notion.com/v1/blocks/block-parent/children?page_size=100"
@@ -158,7 +163,7 @@ class TestSupportedActionsSucceed:
 
         result = adapter.execute(task)
 
-        assert result["success"] is True
+        assert result["status"] == "success"
         assert result["output"]["id"] == "db-1"
         assert result["output"]["title"] == "My Database"
         assert http_get.calls[0][0] == "https://api.notion.com/v1/databases/db-1"
@@ -176,7 +181,7 @@ class TestSupportedActionsSucceed:
 
         result = adapter.execute(task)
 
-        assert result["success"] is True
+        assert result["status"] == "success"
         assert len(result["output"]["results"]) == 1
         assert result["output"]["results"][0]["id"] == "row-1"
         assert http_post.calls[0][0] == "https://api.notion.com/v1/databases/db-1/query"
@@ -250,9 +255,8 @@ class TestPayloadValidationFailsCleanlyWithoutNetworkCalls:
 
         result = adapter.execute(task)
 
-        assert result["success"] is False
-        assert result["is_transient"] is False
-        assert "action" in result["error"]
+        assert result["status"] == "failure"
+        assert "action" in result["message"]
         assert http_get.calls == []
         assert http_post.calls == []
 
@@ -264,9 +268,8 @@ class TestPayloadValidationFailsCleanlyWithoutNetworkCalls:
 
         result = adapter.execute(task)
 
-        assert result["success"] is False
-        assert result["is_transient"] is False
-        assert "Unsupported action" in result["error"]
+        assert result["status"] == "failure"
+        assert "Unsupported action" in result["message"]
         assert http_get.calls == []
         assert http_post.calls == []
 
@@ -282,7 +285,7 @@ class TestPayloadValidationFailsCleanlyWithoutNetworkCalls:
 
         result = adapter.execute(task)
 
-        assert result["success"] is False
+        assert result["status"] == "failure"
         assert http_get.calls == []
         assert http_post.calls == []
 
@@ -293,8 +296,8 @@ class TestPayloadValidationFailsCleanlyWithoutNetworkCalls:
 
         result = adapter.execute(task)
 
-        assert result["success"] is False
-        assert "page_id" in result["error"]
+        assert result["status"] == "failure"
+        assert "page_id" in result["message"]
         assert http_get.calls == []
 
     def test_get_block_children_missing_block_id(self):
@@ -304,8 +307,8 @@ class TestPayloadValidationFailsCleanlyWithoutNetworkCalls:
 
         result = adapter.execute(task)
 
-        assert result["success"] is False
-        assert "block_id" in result["error"]
+        assert result["status"] == "failure"
+        assert "block_id" in result["message"]
         assert http_get.calls == []
 
     def test_get_database_missing_database_id(self):
@@ -315,8 +318,8 @@ class TestPayloadValidationFailsCleanlyWithoutNetworkCalls:
 
         result = adapter.execute(task)
 
-        assert result["success"] is False
-        assert "database_id" in result["error"]
+        assert result["status"] == "failure"
+        assert "database_id" in result["message"]
         assert http_get.calls == []
 
     def test_query_database_missing_database_id(self):
@@ -326,8 +329,8 @@ class TestPayloadValidationFailsCleanlyWithoutNetworkCalls:
 
         result = adapter.execute(task)
 
-        assert result["success"] is False
-        assert "database_id" in result["error"]
+        assert result["status"] == "failure"
+        assert "database_id" in result["message"]
         assert http_post.calls == []
 
 
@@ -362,25 +365,25 @@ class TestQueryDatabaseUsesOnlyTheHardcodedAllowlistedEndpoint:
 
 
 class TestConnectorFailuresBecomeControlledResults:
-    def test_get_raising_becomes_controlled_failure(self):
+    def test_get_raising_permanent_becomes_failure(self):
         http_get = FakeHttpGet(exc=NotionReadOnlyAdapterError("boom", is_transient=False))
         adapter = NotionReadOnlyAdapter(http_get=http_get)
         task = make_task(payload={"action": "get_page", "page_id": "page-1"})
 
         result = adapter.execute(task)  # must not raise
 
-        assert result["success"] is False
-        assert "boom" in result["error"]
+        assert result["status"] == "failure"
+        assert "boom" in result["message"]
 
-    def test_post_query_database_raising_becomes_controlled_failure(self):
+    def test_post_query_database_raising_transient_becomes_retryable(self):
         http_post = FakeHttpPostQueryDatabase(exc=NotionReadOnlyAdapterError("boom", is_transient=True))
         adapter = NotionReadOnlyAdapter(http_post_query_database=http_post)
         task = make_task(payload={"action": "query_database", "database_id": "db-1"})
 
         result = adapter.execute(task)  # must not raise
 
-        assert result["success"] is False
-        assert result["is_transient"] is True
+        assert result["status"] == "retryable"
+        assert "retry_after" in result
 
     @pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
     def test_5xx_and_429_are_transient_via_real_http_get(self, monkeypatch, status):
@@ -438,8 +441,38 @@ class TestConnectorFailuresBecomeControlledResults:
 
         assert exc_info.value.is_transient is True
 
+    def test_retry_after_uses_exponential_backoff_at_retry_count_zero(self):
+        http_get = FakeHttpGet(exc=NotionReadOnlyAdapterError("rate limited", is_transient=True))
+        adapter = NotionReadOnlyAdapter(http_get=http_get)
+        task = make_task(payload={"action": "get_page", "page_id": "page-1"}, retry_count=0)
 
-class TestResultsPassPhase2FValidation:
+        result = adapter.execute(task)
+
+        assert result["retry_after"] == 5.0
+
+    def test_retry_after_uses_exponential_backoff_at_nonzero_retry_count(self):
+        """Proves this isn't a hardcoded flat delay: retry_after must
+        grow with task.retry_count, matching RetryManager.compute_delay's
+        5.0 * 2**retry_count formula (capped at 300.0)."""
+        http_get = FakeHttpGet(exc=NotionReadOnlyAdapterError("rate limited", is_transient=True))
+        adapter = NotionReadOnlyAdapter(http_get=http_get)
+        task = make_task(payload={"action": "get_page", "page_id": "page-1"}, retry_count=2)
+
+        result = adapter.execute(task)
+
+        assert result["retry_after"] == 20.0  # 5.0 * 2**2
+
+    def test_retry_after_is_capped_at_300(self):
+        http_get = FakeHttpGet(exc=NotionReadOnlyAdapterError("rate limited", is_transient=True))
+        adapter = NotionReadOnlyAdapter(http_get=http_get)
+        task = make_task(payload={"action": "get_page", "page_id": "page-1"}, retry_count=10)
+
+        result = adapter.execute(task)
+
+        assert result["retry_after"] == 300.0
+
+
+class TestResultsPassContractValidationAndAreRecognizedAsContractResults:
     @pytest.mark.parametrize(
         "payload",
         [
@@ -456,6 +489,15 @@ class TestResultsPassPhase2FValidation:
         result = adapter.execute(task)
 
         assert _validate_adapter_result(result) is None
+
+    def test_success_result_is_a_contract_result(self):
+        http_get = FakeHttpGet(response={"id": "page-1"})
+        adapter = NotionReadOnlyAdapter(http_get=http_get)
+        task = make_task(payload={"action": "get_page", "page_id": "page-1"})
+
+        result = adapter.execute(task)
+
+        assert _is_contract_result(result) is True
 
     def test_success_result_round_trips_through_executor(self, repository):
         http_get = FakeHttpGet(response={"id": "page-1"})
@@ -548,6 +590,18 @@ class TestNoWriteOperationsExposed:
             lowered = action_name.lower()
             for verb in write_verbs:
                 assert verb not in lowered, f"unexpected write-like action name: {action_name}"
+
+    def test_no_retry_manager_import(self):
+        """RetryManager must not be imported into this adapters module --
+        importing it would create a circular import with
+        execution/executor.py, which already imports TaskAdapter from
+        the adapters package. The backoff formula is inlined instead.
+        (The docstring legitimately mentions "RetryManager" by name to
+        explain this, so only import statements are checked here.)"""
+        source = inspect.getsource(nrao_module)
+        assert "import RetryManager" not in source
+        assert "from workflow_scheduler.execution" not in source
+        assert "import workflow_scheduler.execution" not in source
 
 
 class TestExistingAdaptersUnaffected:

@@ -14,6 +14,18 @@ is "GET, or POST restricted to this one fixed allowlisted read-semantic
 endpoint" -- not weaker safety in effect (nothing here can create,
 update, delete, archive, comment, or invite), but a different shape of
 guarantee worth calling out explicitly rather than overclaiming GET-only.
+
+Result shape (Phase 3F): returns the Phase 3D five-state contract
+(status/message, from docs/ADAPTER_CONTRACT_FUTURE.md) rather than the
+original success/error/is_transient shape used before this migration.
+Retryable failures compute their own retry_after using the same
+exponential-backoff formula Executor's RetryManager already applies
+(5.0 * 2**retry_count, capped at 300.0), read from task.retry_count --
+inlined here rather than imported, since importing RetryManager into
+adapters would create a circular import with execution/executor.py
+(which already imports TaskAdapter from this package). This preserves
+the exact retry timing this adapter had before the migration; only the
+result shape changed.
 """
 from __future__ import annotations
 
@@ -35,7 +47,8 @@ _TRANSIENT_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
 class NotionReadOnlyAdapterError(Exception):
     """Raised internally for any controlled failure (bad payload, HTTP
     error, network error); always caught by execute() and turned into a
-    normal {"success": False, ...} result -- never propagates."""
+    Phase 3D five-state contract result (status="failure" or
+    "retryable") -- never propagates."""
 
     def __init__(self, message: str, is_transient: bool = False):
         super().__init__(message)
@@ -145,9 +158,12 @@ class NotionReadOnlyAdapter(TaskAdapter):
                     f"Unsupported action: {action!r}. Supported: {sorted(self.ACTIONS)}"
                 )
             output = handler(self, payload)
-            return {"success": True, "error": None, "output": output}
+            return {"status": "success", "message": f"Notion {action!r} succeeded", "output": output}
         except NotionReadOnlyAdapterError as exc:
-            return {"success": False, "error": str(exc), "is_transient": exc.is_transient}
+            if exc.is_transient:
+                retry_after = min(5.0 * (2 ** task.retry_count), 300.0)
+                return {"status": "retryable", "message": str(exc), "retry_after": retry_after}
+            return {"status": "failure", "message": str(exc)}
 
     # -- payload helpers ------------------------------------------------
 
