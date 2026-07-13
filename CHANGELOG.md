@@ -1,5 +1,6 @@
 # Changelog
 ## 0.1.1-draft
+- Added Teacher Talk Rehearsal prompt template for replacement language, talk tracks, and rehearsal coaching.
 - Migrated durable Teacher Modeling Coach behavior for lesson-modeling coaching, teacher-talk rehearsal, read-only audit support, Notion sync boundaries, source freshness, and memory limits.
 - Added Instructional Materials Coach design system for material-type selection, game-format guardrails, source questions, image asset context, and final quality checks.
 - Added Instructional Materials Coach material design defaults for classroom-ready layout, density, writing load, scaffolding, accessibility, and revision behavior.
