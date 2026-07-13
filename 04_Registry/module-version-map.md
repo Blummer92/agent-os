@@ -21,3 +21,12 @@ versions change only when the module's standards or contract changes.
 | Teacher Modeling Coach | 0.2.0 |
 | Instructional Materials Coach | 0.3.0 |
 | Student Language Standard | 0.1.0 |
+| Workflow Scheduler | 0.6.0 |
+
+**Workflow Scheduler** (`08_Tooling/workflow-scheduler/`) version reflects
+six shipped milestones: Phase 1 (MVP), 2A (approval engine), 2B (retry
+manager), 2C (pause/resume/cancel lifecycle), 2D (task batching), 2E
+(opt-in parallel ready-list dispatch). Current validation: 291 tests
+passing, 97% coverage overall. See
+`08_Tooling/workflow-scheduler/docs/ARCHITECTURE.md` for implementation
+details.
