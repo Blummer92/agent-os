@@ -9,13 +9,11 @@
 - Active ChatGPT bridge files changed: no
 - Legacy long files rewritten: no
 - Known long files documented as exceptions: yes
-- Non-exempt Markdown line-limit rule remains enforced: yes
-- Overlay common-rule check remains enforced: yes
-- Governance/registry filename collision check remains enforced: yes
-- Registry overlay coverage check remains enforced: yes
-- Agent test coverage checks remain enforced: yes
-- Connector static review: pass
-- Script execution in connector: unavailable
-- Required local command: `bash 07_Agent_Tests/validate-repo-structure.sh`
-- Expected local result after this PR: 6 passed, 0 failed
-- Final status: DRAFT PASS - local or CI execution required before ready for review
+- Validation script execution: run locally on the PR branch
+- Script result: 6 checks passed, 0 failed
+- Markdown line-limit validation: passes using documented exceptions
+- Overlay common-rule references: pass
+- Governance/registry filename collision check: pass
+- Registry overlay coverage check: pass
+- Agent test/overlay pairing checks: pass
+- Final status: PASS - local validation completed successfully
