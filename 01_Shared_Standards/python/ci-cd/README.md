@@ -3,8 +3,10 @@
 ## Quick Links
 
 - **[github-actions.md](github-actions.md)** - GitHub Actions workflows
+- **[gitlab-ci.md](gitlab-ci.md)** - GitLab CI pipelines
 - **[code-quality.md](code-quality.md)** - Linting and formatting
 - **[coverage-reporting.md](coverage-reporting.md)** - Coverage metrics
+- **[required-checks.md](required-checks.md)** - What must pass before merge
 
 ## Overview
 

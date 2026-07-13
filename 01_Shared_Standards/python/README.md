@@ -4,7 +4,7 @@ Quick references for Python development in Agent OS.
 
 ## Testing Standards (Modular)
 
-The testing standards are now organized into **37 small, focused documents** organized by topic:
+The testing standards are organized into small, focused documents by topic (see `INDEX.md` for the full list):
 
 ### Get Started
 - **[environments/local-development.md](environments/local-development.md)** - Set up testing locally in 5 minutes

@@ -80,38 +80,11 @@ def test_handle_missing_external_service(client, mocker):
 
 ## Test Timeout Handling
 
-```python
-def test_timeout_on_slow_operation(client, mocker):
-    """Test timeout on slow external calls."""
-    # Mock slow operation
-    def slow_operation():
-        import time
-        time.sleep(10)
-        return 'done'
-    
-    mocker.patch('external.slow_operation', side_effect=slow_operation)
-    
-    with pytest.raises(TimeoutError):
-        response = client.get('/slow-endpoint', timeout=1)
-```
+Mock a slow operation (e.g. `time.sleep`) and assert a `TimeoutError` is
+raised when the call exceeds a short configured `timeout`.
 
 ## Test Recovery from Errors
 
-```python
-def test_retry_after_transient_failure(mocker):
-    """Test retry logic on transient failures."""
-    call_count = 0
-    
-    def failing_function():
-        nonlocal call_count
-        call_count += 1
-        if call_count < 3:
-            raise ConnectionError('Temporary failure')
-        return 'success'
-    
-    mocker.patch('api.call', side_effect=failing_function)
-    
-    result = retry_with_backoff(failing_function, max_attempts=3)
-    assert result == 'success'
-    assert call_count == 3
-```
+Simulate a function that fails N times then succeeds (raise on early
+calls, return normally after), then assert your retry wrapper reaches
+the success path within its configured `max_attempts`.

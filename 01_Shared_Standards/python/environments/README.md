@@ -6,6 +6,8 @@
 - **[docker-setup.md](docker-setup.md)** - Docker container setup
 - **[ci-cd-setup.md](ci-cd-setup.md)** - GitHub Actions/CI setup
 - **[databases.md](databases.md)** - Database configuration
+- **[pre-commit-hooks.md](pre-commit-hooks.md)** - Pre-commit hook config
+- **[setup-checklist.md](setup-checklist.md)** - Full environment checklist
 
 ## Overview
 

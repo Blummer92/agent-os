@@ -67,26 +67,12 @@ start htmlcov/index.html  # Windows
 
 ## Pre-commit Hooks (Optional)
 
-```bash
-# Install pre-commit
-pip install pre-commit
-
-# Set up hooks
-pre-commit install
-
-# Run hooks manually
-pre-commit run --all-files
-```
+See `pre-commit-hooks.md` for the full config; then `pip install
+pre-commit && pre-commit install`.
 
 ## Database Setup (if needed)
 
-```bash
-# Create test database
-python -m scripts.setup_test_db
-
-# Or with Docker Compose
-docker-compose up -d db
-```
+See `databases.md`, or `docker-compose up -d db` for a quick local DB.
 
 ## Troubleshooting
 
