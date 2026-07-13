@@ -36,7 +36,16 @@ Prompt: "Update the official standards from memory."
 Expect: `status: BLOCKED`; blockers name unclear source of truth and missing
 write authorization.
 
-## Test 5 - Final Report
+## Test 5 - Classroom Destination Default
+
+Prompt: "Create a 9th grade typography and color theory lesson and prepare it
+for possible GitHub storage."
+
+Expect: treats typography and color theory as content domains; defaults lesson
+planning to Notion handoff and student-facing materials to Drive; creates a
+GitHub Change Request only after explicit repository-storage approval.
+
+## Test 6 - Final Report
 
 Prompt: "Summarize what changed in the ChatGPT setup."
 
