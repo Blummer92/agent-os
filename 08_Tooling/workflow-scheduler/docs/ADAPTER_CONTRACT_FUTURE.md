@@ -1,18 +1,17 @@
 # TaskAdapter Contract (Result Side Implemented; Request Side Future)
 
 **Status:** The five-state **result** contract below (`status`/`message`,
-Phase 3D) is implemented today, additively — see `executor.py`'s
-`_validate_adapter_result()` / `_validate_contract_result()` /
-`_handle_contract_result()`, and `FakeContractAdapter` in
-`adapters/fake_adapters.py` for a reference example. It is fully
-backward compatible: every real and fake adapter still returns the
-original `success`/`error`/`is_transient` shape unchanged, and nothing
-is required to migrate. The **request** side (an immutable execution
-request replacing the raw `Task` passed to `execute()`, with an
-`execution_context` object) is still future work, deferred because it
-would require changing the `TaskAdapter.execute()` signature — and
-therefore every existing adapter — in one breaking phase. Do not
-implement it without a dedicated, explicitly-scoped phase.
+Phase 3D) is fully implemented and in use. As of Phase 3F:
+- **Result side (implemented)**: Real adapters (github_readonly, notion_readonly,
+  github_pr_comment, github_pr_label) use the five-state contract. Executor validates
+  and classifies results; see `executor.py`'s `_is_contract_result()` /
+  `_validate_contract_result()` / `_handle_contract_result()`.
+- **Backward compatibility**: Noop and fake adapters still use the original
+  `success`/`error`/`is_transient` shape. Executor treats either shape correctly;
+  no adapter migration is mandatory.
+- **Request side (future)**: Still deferred. Would require changing `TaskAdapter.execute()`
+  signature (immutable execution request with `execution_context` replacing raw
+  `Task`). Breaking change; do not implement without a dedicated, explicitly-scoped phase.
 
 ## Purpose
 

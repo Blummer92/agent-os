@@ -24,9 +24,12 @@ versions change only when the module's standards or contract changes.
 | Workflow Scheduler | 0.6.0 |
 
 **Workflow Scheduler** (`08_Tooling/workflow-scheduler/`) version reflects
-six shipped milestones: Phase 1 (MVP), 2A (approval engine), 2B (retry
+thirteen shipped milestones: Phase 1 (MVP), 2A (approval engine), 2B (retry
 manager), 2C (pause/resume/cancel lifecycle), 2D (task batching), 2E
-(opt-in parallel ready-list dispatch). Current validation: 291 tests
-passing, 97% coverage overall. See
-`08_Tooling/workflow-scheduler/docs/ARCHITECTURE.md` for implementation
-details.
+(opt-in parallel ready-list dispatch), 3A (GitHub read-only adapter), 3B
+(Notion read-only adapter), 3C (GitHub approved comment adapter), 3D
+(five-state result contract), 3E (GitHub approved label adapter), 3F
+(adapter contract migration). Current validation: 612 tests passing, 96%
+coverage overall. Real adapters use five-state contract; noop/fakes still
+cover legacy shape. See `08_Tooling/workflow-scheduler/docs/ARCHITECTURE.md`
+for implementation details.
