@@ -2,6 +2,16 @@
 
 ## 0.1.1-draft
 
+- Repo cleanup (PR 3 of 3): moved four completed Workflow Scheduler
+  planning docs out of the repo root into
+  `06_Archive/workflow-scheduler-planning/` -- `PART_A_FINAL_SUMMARY.md`,
+  `PART_A_TO_PART_B_HANDOFF.md`, `PHASE_0_BASELINE_CORRECTED.md`,
+  `PHASE_B_SCOPE.md`. Confirmed via repo-wide grep that the only
+  references to these filenames were mutual mentions among the four
+  themselves (plain-text, no path-based links); no updates needed since
+  all four moved together. Added a short README to the new archive
+  subfolder. Files moved, not deleted or rewritten; content and line
+  counts unchanged.
 - Repo cleanup (PR 2 of 3): documented `08_Tooling/workflow-scheduler/` in
   `CLAUDE.md`'s `08_Tooling/` Contents list -- it existed as real code
   (with its own `docs/`) but wasn't mentioned there. Short, factual entry
