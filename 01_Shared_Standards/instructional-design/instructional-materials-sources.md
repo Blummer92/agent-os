@@ -12,14 +12,24 @@ Use this order when sources overlap:
 If sources conflict, prefer the designated live source and write back confirmed
 newer reality only when the task requires it and write access is approved.
 
+## Source System Defaults
+
+- Notion primary hub: `Curriculum Operations Hub`.
+- Digital Media source-of-truth workspace: `Digital Media Source Control`.
+- Drive unit folder pattern: `Instructional Materials/Unit <number>`.
+
+These names guide retrieval. They do not authorize writes without a confirmed
+target page, database, folder, or file.
+
 ## Retrieval Rules
 
 Retrieve only when a source must be found before work can continue.
 
 - Use Drive for lesson plans, worksheets, slides, unit guides, and instructional files.
 - Use Notion for lesson notes, pacing docs, planning pages, and related records.
+- Prefer current unit guides and lesson plans over templates or archives.
 - Search narrowly first using lesson, unit, course, or material name.
-- If multiple matches matter, ask one short disambiguation question.
+- If two current sources are equally plausible, ask one short disambiguation question.
 
 ## Drive Unit Folder Rules
 
@@ -33,6 +43,9 @@ Default folders:
 - slide images: `02_Slides/slide-images`
 - slide icons: `02_Slides/slide-icons`
 - reusable assets: `03_Shared-Assets`
+- update history: `04_Update-History`
+
+Use update history only for release notes or version logs.
 
 Naming:
 
@@ -62,4 +75,4 @@ match exists, append a complete row. Do not invent unknown required values.
 
 ## Version
 
-0.1.0
+0.1.1
