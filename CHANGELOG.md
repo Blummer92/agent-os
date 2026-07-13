@@ -1,5 +1,9 @@
 # Changelog
 ## 0.1.1-draft
+- Added Agent OS Governance v1.0 baseline as the canonical source of truth for dashboard ownership, readiness vocabulary, production routing, production authorization, historical aliases, production safety rules, and governance change policy.
+- Updated dashboard governance standards to document the canonical ownership model, official production pipeline, standard dashboard structure, and Governance v1.0 readiness vocabulary.
+- Clarified that Instructional Materials Coach owns material quality only, Production Control is the only production authorization owner, and Assessment Agent / Student Evidence Coach are one canonical owner.
+- Recorded the Notion Sprint 1 implementation as operational documentation: governance alias notes, Instructional Materials Coach routing links, Production Control standardization, Daily Generation Packet standardization, Teacher Modeling Coach standardization, and Assessment Agent / Student Evidence Coach standardization.
 - Added Teacher Modeling Misunderstanding Audit template for formal lesson/model audits grounded in task, supports, gaps, teacher moves, and priority revisions.
 - Added Misunderstanding Response Designer prompt template for student confusion, causes, visible evidence, teacher moves, prevention revisions, and checks for understanding.
 - Added Model Sequence Builder prompt template for tight teacher modeling sequences aligned to the student task.
