@@ -30,6 +30,7 @@ from .summary_cache_lookup import (
     build_summary_cache_path,
     lookup_summary_cache_entry,
 )
+from .summary_cache_writer import write_summary_cache_for_packet
 
 __all__ = [
     "DEFAULT_CACHE_KEY_VERSION",
@@ -50,4 +51,5 @@ __all__ = [
     "summary_cache_entry_exists",
     "validate_handoff_packet",
     "write_summary_cache_entry",
+    "write_summary_cache_for_packet",
 ]
