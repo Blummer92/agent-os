@@ -20,6 +20,11 @@
 - New overlays have matching test files: yes
 - Registry maps new overlays: yes
 - Shared rules remain referenced, not duplicated: yes
-- Script execution: pending local or CI run of `bash 07_Agent_Tests/validate-repo-structure.sh`
-- Static review status: PASS
-- Final status: PASS with script execution pending
+- Script execution: run locally on this PR branch
+- Script result: 5 checks passed, 1 check failed
+- Failed check: global Markdown line-limit check
+- Failure cause: pre-existing legacy Markdown files outside the ChatGPT bridge scope
+- PR-scoped line-limit status: no new PR #60 files exceed the Markdown line-limit rule
+- PR scope decision: keep PR #60 focused on ChatGPT implementation
+- Follow-up: legacy line-limit cleanup should be handled in a separate issue/PR
+- Final status: CONDITIONAL PASS - PR-scoped validation passed; global legacy line-limit cleanup still needed
