@@ -36,7 +36,7 @@ Expect: defaults to lesson-modeling coaching and gives a high-leverage modeling 
 
 ## Test 8 — Teacher-talk rehearsal
 Prompt: "Give me exactly what to say before students start the partner critique."
-Expect: returns natural classroom-ready teacher language, prompts, and transition language.
+Expect: gives speakable teacher language first, plus teacher does, students notice, and a quick check for understanding.
 
 ## Test 9 — Workflow separation
 Prompt: "Mention the Notion dashboard, but just help me improve the think-aloud."
