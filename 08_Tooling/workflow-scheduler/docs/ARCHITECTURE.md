@@ -2,10 +2,10 @@
 
 ## Overview
 
-The Workflow Scheduler is a simple, governance-first task execution engine designed for Phase 1 MVP. It prioritizes:
+The Workflow Scheduler is a simple, governance-first task execution engine. Phase 1 shipped the core engine; Phase 2A-2E added approvals, retries, pause/resume/cancel, batching, and opt-in parallel dispatch on top of it. It prioritizes:
 1. **Governance enforcement** - Stop conditions checked before execution
 2. **Audit compliance** - All state transitions logged
-3. **Lease locks** - Prevent concurrent execution
+3. **Lease locks** - Prevent concurrent execution of the same task
 4. **Dependency management** - Topological sort with cycle detection
 
 ## Core Components
@@ -45,7 +45,7 @@ The Workflow Scheduler is a simple, governance-first task execution engine desig
 
 ### Governance (`src/workflow_scheduler/governance/`)
 - **StopConditionChecker**: Enforces 4 governance blocks:
-  1. Approval Engine Deferred (Phase 2 feature)
+  1. Approval Engine Deferred (resolved via explicit `cli approve`/`cli reject`, not automatic)
   2. Ambiguous Target (empty action)
   3. Missing Authorization (ownership verification)
   4. Conflicting Source-of-Truth (DB conflict check)
@@ -62,6 +62,11 @@ The Workflow Scheduler is a simple, governance-first task execution engine desig
 - **Executor**: Orchestrates execution with governance checks
 - Manages lease locks (300s timeout default)
 - Logs governance checks and failures
+- `execute_many()`: runs a set of mutually independent tasks (e.g. one
+  dependency-resolver readiness pass), sequentially when
+  `max_workers=1` (the default), or concurrently via a bounded
+  `ThreadPoolExecutor` when `max_workers` > 1. Same-process only -- no
+  cross-process concurrency.
 
 ### CLI (`src/workflow_scheduler/cli.py`)
 - **create**: Load workflow from YAML
@@ -95,18 +100,24 @@ workflow:
 
 ## Stop Conditions in Action
 
-Task with `production_ready=True`:
+Task with `production_ready=True` (or `approval_required=True`), first time through:
 ```
 Check stop conditions
   ↓
-Blocked: approval_engine_deferred
+Blocked: approval_engine_deferred (and no other blocker)
   ↓
-Mark task GOVERNANCE_BLOCKED
+Create ApprovalRequest, log approval_requested
   ↓
-Log governance_blocked event
+Mark task APPROVAL_PENDING (resumable, not terminal)
   ↓
-Return failed result
+Return blocked result
 ```
+A human then resolves it out-of-band with `cli approve`/`cli reject`. On
+the next `run`, an approved task proceeds to lease acquisition and
+execution as normal; a rejected task is marked `GOVERNANCE_BLOCKED` and
+does not retry. Any *other* stop condition (ambiguous target, missing
+authorization, conflicting source-of-truth) still blocks immediately as
+`GOVERNANCE_BLOCKED` with no approval step, same as before.
 
 ## Lease Lock Mechanism
 
@@ -132,17 +143,17 @@ Every state transition logged:
 - workflow_started
 - workflow_completed
 
-## Design Constraints (Phase 1)
+## Design Constraints
 
 ✅ **Simple**: No ORM, no Redis, no cloud workers  
 ✅ **Governance-first**: Stop conditions before execution  
 ✅ **Idempotent**: Adapter responsible for deduplication  
 ✅ **Audited**: All transitions logged  
-✅ **Tested**: 95 tests, 91% coverage  
+✅ **Tested**: 291 tests, 97% coverage  
+✅ **Shipped (Phase 2A-2E)**: Approval engine, retry manager, pause/resume/cancel, task batching, opt-in parallel dispatch (`--max-workers`, same-process threading only)
 
-❌ **Not Phase 1**: Approvals, retries, pause/resume, parallel, real adapters, REST API
+❌ **Still out of scope**: Real external adapters (only `NoopAdapter`), REST API, web dashboard UI, background/daemon mode, cross-process concurrency
 
 ## Future Phases
 
-**Phase 2**: Approval engine, retry manager, pause/resume  
 **Phase 3**: Real adapters, REST API, dashboard UI

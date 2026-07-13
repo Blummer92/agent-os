@@ -193,7 +193,7 @@ result = StopConditionChecker.check_production_mode(task)
 ```
 
 **Blockers**:
-- `approval_engine_deferred`: Approval not implemented (Phase 2)
+- `approval_engine_deferred`: Task requires an explicit human decision (`approval_required`, `production_ready`, or `TaskMode.PRODUCTION`); resolve via `cli approve` or `cli reject`, or `repository.update_approval_decision(...)` directly
 - `ambiguous_target`: Task action is empty
 - `missing_authorization`: Owner doesn't own target
 - `conflicting_source_of_truth`: DB conflict detected
@@ -280,6 +280,7 @@ executor = Executor(
     repository=repo,
     audit_logger=logger,
     lease_timeout_seconds=300,
+    max_workers=1,  # >= 1; default 1 = fully sequential
 )
 
 result = executor.execute(
@@ -292,6 +293,14 @@ if result.success:
 else:
     print(f"Error: {result.error}")
     print(f"Blockers: {result.blockers}")
+
+# Run several mutually independent tasks (e.g. one dependency-resolver
+# readiness pass) sequentially when max_workers=1, or concurrently
+# (ThreadPoolExecutor, bounded by max_workers) otherwise. Same-process
+# only. Caller is responsible for the tasks being independent -- this
+# does not check dependencies.
+results = executor.execute_many(tasks=[task1, task2], ownership_registry=registry)
+# -> Dict[str, ExecutionResult], one entry per input task
 ```
 
 **ExecutionResult**:
@@ -313,14 +322,16 @@ Command-line interface.
 ```python
 from workflow_scheduler.cli import WorkflowSchedulerCLI
 
-cli = WorkflowSchedulerCLI(db_path="workflow.db")
+cli = WorkflowSchedulerCLI(db_path="workflow.db", max_workers=1)  # max_workers threads through to Executor
 
 # Workflow management
 result = cli.create_workflow("path/to/workflow.yaml")
 result = cli.get_workflow_status("workflow-1")
 result = cli.list_workflows()
 
-# Execution
+# Execution -- ready tasks within one dependency-resolver pass run
+# concurrently when max_workers > 1; dependency ordering across passes is
+# unaffected either way
 result = cli.run_workflow("workflow-1")
 
 # Audit
