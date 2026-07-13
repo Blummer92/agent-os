@@ -1,10 +1,11 @@
 """Small resolver/registry for local (noop + fake) adapters, plus the
 real external adapters: GitHub read-only (Phase 3A), Notion read-only
-(Phase 3B), and GitHub PR comment -- the first write-capable adapter,
-gated entirely by the scheduler's existing approval flow (Phase 3C).
+(Phase 3B), GitHub PR comment (Phase 3C), and GitHub PR label (Phase
+3E) -- the latter two write-capable, gated entirely by the scheduler's
+existing approval flow.
 
-See docs/ADAPTER_CONTRACT_FUTURE.md for the (still not implemented)
-formal JSON-Schema request/result contract a future phase might add.
+See docs/ADAPTER_CONTRACT_FUTURE.md for the five-state result contract
+(implemented, Phase 3D) and the still-future request-side contract.
 """
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ from workflow_scheduler.adapters.fake_adapters import (
     FakeSuccessAdapter,
 )
 from workflow_scheduler.adapters.github_pr_comment_adapter import GitHubPRCommentAdapter
+from workflow_scheduler.adapters.github_pr_label_adapter import GitHubPRLabelAdapter
 from workflow_scheduler.adapters.github_readonly_adapter import GitHubReadOnlyAdapter
 from workflow_scheduler.adapters.noop_adapter import NoopAdapter
 from workflow_scheduler.adapters.notion_readonly_adapter import NotionReadOnlyAdapter
@@ -37,6 +39,7 @@ _REGISTRY: Dict[str, Callable[[], TaskAdapter]] = {
     "github_readonly": GitHubReadOnlyAdapter,
     "notion_readonly": NotionReadOnlyAdapter,
     "github_pr_comment": GitHubPRCommentAdapter,
+    "github_pr_label": GitHubPRLabelAdapter,
 }
 
 
