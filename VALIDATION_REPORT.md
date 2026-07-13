@@ -1,5 +1,7 @@
 # Validation Report
 
+## Current PR
+
 - Review root: `Blummer92/agent-os`
 - Branch: `implement-instructional-materials-coach`
 - Scope: Issue #71 Instructional Materials Coach migration
@@ -24,3 +26,10 @@
 - Required local command: `bash 07_Agent_Tests/validate-repo-structure.sh`
 - Expected local result after this PR: 6 passed, 0 failed
 - Final status: DRAFT PASS - local or CI execution required before ready for review
+
+## Main Baseline Preserved
+
+- Previous merged scope: Issue #68 first three Agent OS pilot workflows
+- Runbook added: `05_Examples/agent-os-pilot-workflows.md`
+- Prompt pack added: `03_Templates/prompts/agent-os-pilot-prompts.md`
+- Previous validation status: DRAFT PASS - local or CI execution required before ready for review
