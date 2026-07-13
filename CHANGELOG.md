@@ -5,6 +5,7 @@
 - Added Instructional Materials Coach slide deck defaults for deck sequence, projection readability, visual balance, teacher usability, and slide build priorities.
 - Added Instructional Materials Coach design-variant pattern standard for reusable visual systems, labels, icons, layouts, color roles, and component patterns.
 - Migrated durable Instructional Materials Coach Custom GPT behavior into Agent OS standards, overlay references, and tests without adding a new agent.
+- Added the first three Agent OS pilot workflow runbooks and prompts: lesson planning, classroom artifact generation, and repository change handoff.
 - Clarified classroom artifact routing so teacher planning and lesson candidates default to Notion handoffs, student-facing materials default to Drive, and GitHub lesson storage requires explicit approval and a GitHub Change Request.
 - Added Markdown line-limit exception policy and updated structural validation to honor documented legacy exceptions for Issue #62 without rewriting long archival, tooling, or Python standards docs.
 - Added ChatGPT implementation bridge: root `AGENTS.md`, ChatGPT Orchestrator overlay, GitHub Service Agent overlay, GitHub Change Request template, matching overlay tests, registry ownership/responsibility updates, and manual validation notes for Issue #59.
