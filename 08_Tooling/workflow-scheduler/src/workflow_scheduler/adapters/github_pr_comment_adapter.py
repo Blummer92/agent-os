@@ -24,6 +24,18 @@ has decision=APPROVED; a rejected request hard-blocks the task
 that gate has already passed -- the same architecture already proven by
 the fake-never-called adapter tests in Phase 2F, applied here to a real
 write for the first time.
+
+Result shape (Phase 3F): returns the Phase 3D five-state contract
+(status/message, from docs/ADAPTER_CONTRACT_FUTURE.md) rather than the
+original success/error/is_transient shape used before this migration.
+Retryable failures compute their own retry_after using the same
+exponential-backoff formula Executor's RetryManager already applies
+(5.0 * 2**retry_count, capped at 300.0), read from task.retry_count --
+inlined here rather than imported, since importing RetryManager into
+adapters would create a circular import with execution/executor.py
+(which already imports TaskAdapter from this package). This preserves
+the exact retry timing this adapter had before the migration; only the
+result shape changed.
 """
 from __future__ import annotations
 
@@ -44,7 +56,8 @@ _TRANSIENT_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
 class GitHubPRCommentAdapterError(Exception):
     """Raised internally for any controlled failure (bad payload, HTTP
     error, network error); always caught by execute() and turned into a
-    normal {"success": False, ...} result -- never propagates."""
+    Phase 3D five-state contract result (status="failure" or
+    "retryable") -- never propagates."""
 
     def __init__(self, message: str, is_transient: bool = False):
         super().__init__(message)
@@ -117,10 +130,12 @@ class GitHubPRCommentAdapter(TaskAdapter):
                 raise GitHubPRCommentAdapterError(
                     f"Unsupported action: {action!r}. Supported: {sorted(self.ACTIONS)}"
                 )
-            output = handler(self, payload)
-            return {"success": True, "error": None, "output": output}
+            return handler(self, payload)
         except GitHubPRCommentAdapterError as exc:
-            return {"success": False, "error": str(exc), "is_transient": exc.is_transient}
+            if exc.is_transient:
+                retry_after = min(5.0 * (2 ** task.retry_count), 300.0)
+                return {"status": "retryable", "message": str(exc), "retry_after": retry_after}
+            return {"status": "failure", "message": str(exc)}
 
     # -- payload helpers ------------------------------------------------
 
@@ -160,9 +175,13 @@ class GitHubPRCommentAdapter(TaskAdapter):
         body = self._require_body(payload)
         data = self._post_comment(repository_full_name, pr_number, body)
         return {
-            "id": data.get("id"),
-            "html_url": data.get("html_url"),
-            "created_at": data.get("created_at"),
+            "status": "success",
+            "message": f"Posted comment on {repository_full_name}#{pr_number}",
+            "output": {
+                "id": data.get("id"),
+                "html_url": data.get("html_url"),
+                "created_at": data.get("created_at"),
+            },
         }
 
     ACTIONS: Dict[str, Callable[["GitHubPRCommentAdapter", Dict[str, Any]], Dict[str, Any]]] = {

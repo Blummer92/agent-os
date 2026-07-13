@@ -1,6 +1,10 @@
 """Tests for Phase 3A: GitHubReadOnlyAdapter, the first real (but
 read-only) external adapter. All network access is mocked via an
-injected `http_get` callable -- no live GitHub access required."""
+injected `http_get` callable -- no live GitHub access required.
+
+Phase 3F migrated this adapter's result shape from success/error/
+is_transient to the Phase 3D five-state contract (status/message);
+these tests assert the new shape throughout."""
 
 import inspect
 
@@ -14,7 +18,7 @@ from workflow_scheduler.adapters import (
 from workflow_scheduler.adapters import github_readonly_adapter as grao_module
 from workflow_scheduler.audit import AuditLogger
 from workflow_scheduler.execution import Executor
-from workflow_scheduler.execution.executor import _validate_adapter_result
+from workflow_scheduler.execution.executor import _is_contract_result, _validate_adapter_result
 from workflow_scheduler.models import Task
 from workflow_scheduler.repository import SQLiteRepository
 
@@ -87,7 +91,9 @@ class TestSupportedActionsSucceed:
 
         result = adapter.execute(task)
 
-        assert result["success"] is True
+        assert result["status"] == "success"
+        assert "message" in result
+        assert "success" not in result
         assert result["output"]["full_name"] == "Blummer92/agent-os"
         assert http_get.calls[0][0] == "https://api.github.com/repos/Blummer92/agent-os"
 
@@ -111,7 +117,7 @@ class TestSupportedActionsSucceed:
 
         result = adapter.execute(task)
 
-        assert result["success"] is True
+        assert result["status"] == "success"
         assert result["output"]["number"] == 27
         assert result["output"]["user"] == "someone"
         assert http_get.calls[0][0] == "https://api.github.com/repos/Blummer92/agent-os/pulls/27"
@@ -130,7 +136,7 @@ class TestSupportedActionsSucceed:
 
         result = adapter.execute(task)
 
-        assert result["success"] is True
+        assert result["status"] == "success"
         assert result["output"]["filenames"] == ["a.py", "b.py"]
         assert http_get.calls[0][0] == "https://api.github.com/repos/Blummer92/agent-os/pulls/27/files"
 
@@ -144,7 +150,7 @@ class TestSupportedActionsSucceed:
 
         result = adapter.execute(task)
 
-        assert result["success"] is True
+        assert result["status"] == "success"
         assert len(result["output"]["pull_requests"]) == 2
         assert "state=all" in http_get.calls[0][0]
         assert "per_page=10" in http_get.calls[0][0]
@@ -178,7 +184,7 @@ class TestSupportedActionsSucceed:
 
         result = adapter.execute(task)
 
-        assert result["success"] is True
+        assert result["status"] == "success"
         assert result["output"]["sha"] == "abc123"
         assert result["output"]["message"] == "fix bug"
         assert http_get.calls[0][0] == "https://api.github.com/repos/Blummer92/agent-os/commits/abc123"
@@ -213,9 +219,8 @@ class TestPayloadValidationFailsCleanlyWithoutNetworkCalls:
 
         result = adapter.execute(task)
 
-        assert result["success"] is False
-        assert result["is_transient"] is False
-        assert "action" in result["error"]
+        assert result["status"] == "failure"
+        assert "action" in result["message"]
         assert http_get.calls == []
 
     def test_unsupported_action(self):
@@ -225,9 +230,8 @@ class TestPayloadValidationFailsCleanlyWithoutNetworkCalls:
 
         result = adapter.execute(task)
 
-        assert result["success"] is False
-        assert result["is_transient"] is False
-        assert "Unsupported action" in result["error"]
+        assert result["status"] == "failure"
+        assert "Unsupported action" in result["message"]
         assert http_get.calls == []
 
     def test_missing_required_field(self):
@@ -237,9 +241,8 @@ class TestPayloadValidationFailsCleanlyWithoutNetworkCalls:
 
         result = adapter.execute(task)
 
-        assert result["success"] is False
-        assert result["is_transient"] is False
-        assert "repository_full_name" in result["error"]
+        assert result["status"] == "failure"
+        assert "repository_full_name" in result["message"]
         assert http_get.calls == []
 
     def test_invalid_pr_number(self):
@@ -253,9 +256,8 @@ class TestPayloadValidationFailsCleanlyWithoutNetworkCalls:
 
         result = adapter.execute(task)
 
-        assert result["success"] is False
-        assert result["is_transient"] is False
-        assert "pr_number" in result["error"]
+        assert result["status"] == "failure"
+        assert "pr_number" in result["message"]
         assert http_get.calls == []
 
     def test_missing_pr_number(self):
@@ -265,20 +267,20 @@ class TestPayloadValidationFailsCleanlyWithoutNetworkCalls:
 
         result = adapter.execute(task)
 
-        assert result["success"] is False
+        assert result["status"] == "failure"
         assert http_get.calls == []
 
 
 class TestConnectorFailuresBecomeControlledResults:
-    def test_http_get_raising_becomes_controlled_failure(self):
+    def test_http_get_raising_permanent_becomes_failure(self):
         http_get = FakeHttpGet(exc=GitHubReadOnlyAdapterError("boom", is_transient=False))
         adapter = GitHubReadOnlyAdapter(http_get=http_get)
         task = make_task(payload={"action": "get_repo", "repository_full_name": "x/y"})
 
         result = adapter.execute(task)  # must not raise
 
-        assert result["success"] is False
-        assert "boom" in result["error"]
+        assert result["status"] == "failure"
+        assert "boom" in result["message"]
 
     @pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
     def test_5xx_and_429_are_transient_via_real_http_get(self, monkeypatch, status):
@@ -321,18 +323,48 @@ class TestConnectorFailuresBecomeControlledResults:
 
         assert exc_info.value.is_transient is True
 
-    def test_adapter_result_is_transient_flows_through_execute(self):
+    def test_transient_failure_returns_retryable_with_retry_after(self):
         http_get = FakeHttpGet(exc=GitHubReadOnlyAdapterError("rate limited", is_transient=True))
         adapter = GitHubReadOnlyAdapter(http_get=http_get)
         task = make_task(payload={"action": "get_repo", "repository_full_name": "x/y"})
 
         result = adapter.execute(task)
 
-        assert result["success"] is False
-        assert result["is_transient"] is True
+        assert result["status"] == "retryable"
+        assert "retry_after" in result
+
+    def test_retry_after_uses_exponential_backoff_at_retry_count_zero(self):
+        http_get = FakeHttpGet(exc=GitHubReadOnlyAdapterError("rate limited", is_transient=True))
+        adapter = GitHubReadOnlyAdapter(http_get=http_get)
+        task = make_task(payload={"action": "get_repo", "repository_full_name": "x/y"}, retry_count=0)
+
+        result = adapter.execute(task)
+
+        assert result["retry_after"] == 5.0
+
+    def test_retry_after_uses_exponential_backoff_at_nonzero_retry_count(self):
+        """Proves this isn't a hardcoded flat delay: retry_after must
+        grow with task.retry_count, matching RetryManager.compute_delay's
+        5.0 * 2**retry_count formula (capped at 300.0)."""
+        http_get = FakeHttpGet(exc=GitHubReadOnlyAdapterError("rate limited", is_transient=True))
+        adapter = GitHubReadOnlyAdapter(http_get=http_get)
+        task = make_task(payload={"action": "get_repo", "repository_full_name": "x/y"}, retry_count=3)
+
+        result = adapter.execute(task)
+
+        assert result["retry_after"] == 40.0  # 5.0 * 2**3
+
+    def test_retry_after_is_capped_at_300(self):
+        http_get = FakeHttpGet(exc=GitHubReadOnlyAdapterError("rate limited", is_transient=True))
+        adapter = GitHubReadOnlyAdapter(http_get=http_get)
+        task = make_task(payload={"action": "get_repo", "repository_full_name": "x/y"}, retry_count=10)
+
+        result = adapter.execute(task)
+
+        assert result["retry_after"] == 300.0
 
 
-class TestResultsPassPhase2FValidation:
+class TestResultsPassContractValidationAndAreRecognizedAsContractResults:
     @pytest.mark.parametrize(
         "payload",
         [
@@ -349,6 +381,15 @@ class TestResultsPassPhase2FValidation:
         result = adapter.execute(task)
 
         assert _validate_adapter_result(result) is None
+
+    def test_success_result_is_a_contract_result(self):
+        http_get = FakeHttpGet(response={"full_name": "x/y"})
+        adapter = GitHubReadOnlyAdapter(http_get=http_get)
+        task = make_task(payload={"action": "get_repo", "repository_full_name": "x/y"})
+
+        result = adapter.execute(task)
+
+        assert _is_contract_result(result) is True
 
     def test_success_result_round_trips_through_executor(self, repository):
         http_get = FakeHttpGet(response={"full_name": "x/y"})
@@ -412,10 +453,23 @@ class TestNoWriteOperationsExposed:
             for verb in write_verbs:
                 assert verb not in lowered, f"unexpected write-like method name: {name}"
 
+    def test_no_retry_manager_import(self):
+        """RetryManager must not be imported into this adapters module --
+        importing it would create a circular import with
+        execution/executor.py, which already imports TaskAdapter from
+        the adapters package. The backoff formula is inlined instead.
+        (The docstring legitimately mentions "RetryManager" by name to
+        explain this, so only import statements are checked here.)"""
+        source = inspect.getsource(grao_module)
+        assert "import RetryManager" not in source
+        assert "from workflow_scheduler.execution" not in source
+        assert "import workflow_scheduler.execution" not in source
+
 
 class TestFakeAndNoopAdaptersStillWork:
     """Full existing scheduler suite is run separately; this is a light
-    smoke check that the registry wiring didn't break existing entries."""
+    smoke check that the registry wiring didn't break existing entries,
+    and that noop/fakes still exercise the original (non-contract) shape."""
 
     def test_fake_success_still_resolves_and_runs(self, repository):
         adapter = resolve_adapter("fake-success")
@@ -426,3 +480,11 @@ class TestFakeAndNoopAdaptersStillWork:
         result = executor.execute(task)
 
         assert result.success is True
+
+    def test_fake_success_still_uses_legacy_shape(self):
+        from workflow_scheduler.adapters import FakeSuccessAdapter
+
+        result = FakeSuccessAdapter().execute(make_task())
+
+        assert "success" in result
+        assert _is_contract_result(result) is False
