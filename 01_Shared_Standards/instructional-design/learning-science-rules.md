@@ -4,6 +4,14 @@ Use these rules for slides, worksheets, and student-facing lesson materials.
 They combine multimedia learning, cognitive load, UDL, visual design,
 adolescent literacy, and scaffolding into one instructional-design standard.
 
+## Visual Style Defaults
+
+- Prioritize clarity, hierarchy, accessibility, and low clutter.
+- Prefer the smallest useful visual structure that supports the task.
+- Remove decorative elements that do not help students read, scan, or act.
+- Keep icon families, color roles, and border logic consistent within a deck.
+- Avoid dense text blocks, cramped layouts, tiny response boxes, mixed icon styles without a reason, and decorative visuals that add cognitive load.
+
 ## Slide Rules
 
 1. Each slide has exactly one instructional purpose.
@@ -13,6 +21,7 @@ adolescent literacy, and scaffolding into one instructional-design standard.
 5. Use key terms and visuals; do not copy the teacher script onto the slide.
 6. Pair each key concept with one relevant, non-decorative visual when useful.
 7. Chunk complex content across slides instead of crowding one slide.
+8. Use large readable titles and minimal body text.
 
 ## Worksheet Rules
 
@@ -23,6 +32,9 @@ adolescent literacy, and scaffolding into one instructional-design standard.
 4. Keep grade-level substance and scaffold access instead of lowering rigor.
 5. Include a student self-check or reflection when the task is complex.
 6. Include one prompt asking why a creator made a specific media choice.
+7. Keep directions short and scannable.
+8. Favor visible writing space over squeezing in extra prompts.
+9. Use chunking, whitespace, and simple scaffolds when helpful.
 
 ## Scaffolding Rules
 
@@ -38,4 +50,4 @@ Digital media creators make intentional choices that shape audience interpretati
 
 ## Version
 
-0.1.0
+0.1.1
