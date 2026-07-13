@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from workflow_scheduler.models import Task, TaskStatus
+from workflow_scheduler.models import ApprovalDecision, Task, TaskStatus
 
 
 @dataclass
@@ -16,7 +16,7 @@ class StopConditionResult:
 
 
 class StopConditionChecker:
-    """Enforces four governance stop conditions before task execution."""
+    """Enforces five governance stop conditions before task execution."""
 
     # Stop condition: Production/approval_required tasks deferred to Phase 2
     APPROVAL_ENGINE_DEFERRED = "approval_engine_deferred"
@@ -52,11 +52,17 @@ class StopConditionChecker:
         blockers: List[str] = []
 
         # Stop Condition 1: Approval Engine Deferred
-        # Block Production-mode tasks, production_ready flag, or approval_required in Phase 1
+        # Block Production-mode tasks, production_ready flag, or approval_required
+        # unless an explicit ApprovalRequest for this task has been APPROVED.
         from workflow_scheduler.models import TaskMode
 
         if task.mode == TaskMode.PRODUCTION or task.production_ready or task.approval_required:
-            blockers.append(StopConditionChecker.APPROVAL_ENGINE_DEFERRED)
+            approval = None
+            if source_of_truth_db is not None and hasattr(source_of_truth_db, "get_approval_request"):
+                approval = source_of_truth_db.get_approval_request(task.id)
+
+            if approval is None or approval.decision != ApprovalDecision.APPROVED:
+                blockers.append(StopConditionChecker.APPROVAL_ENGINE_DEFERRED)
 
         # Stop Condition 2: Ambiguous Target
         # If task.action is not clearly defined, block it

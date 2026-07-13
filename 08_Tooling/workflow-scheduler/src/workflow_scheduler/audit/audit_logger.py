@@ -74,6 +74,16 @@ class AuditLogger:
             details={"action": task.action, "owner": task.owner, "priority": task.priority},
         )
 
+    def log_approval_requested(self, task: Task) -> None:
+        """Log creation of a pending approval request for a governed task."""
+        self._log(
+            "approval_requested",
+            task=task,
+            status_before=task.status.value,
+            status_after=TaskStatus.APPROVAL_PENDING.value,
+            details={},
+        )
+
     def log_task_approved(self, task: Task, approved_by: str = "system") -> None:
         """Log task approval."""
         self._log(

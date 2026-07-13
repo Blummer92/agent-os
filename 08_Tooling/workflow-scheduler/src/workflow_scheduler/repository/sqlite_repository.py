@@ -6,7 +6,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from workflow_scheduler.models import Task, TaskMode, TaskStatus, WorkflowPlan, WorkflowMode, WorkflowStatus
+from workflow_scheduler.models import (
+    ApprovalDecision,
+    ApprovalRequest,
+    Task,
+    TaskMode,
+    TaskStatus,
+    WorkflowPlan,
+    WorkflowMode,
+    WorkflowStatus,
+)
 
 
 class SQLiteRepository:
@@ -62,6 +71,23 @@ class SQLiteRepository:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY (workflow_id) REFERENCES workflows(workflow_id)
+            )
+            """
+        )
+
+        # Approval requests table
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS approval_requests (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                requested_by TEXT NOT NULL,
+                approver TEXT,
+                decision TEXT NOT NULL,
+                reason TEXT,
+                created_at TEXT NOT NULL,
+                decided_at TEXT,
+                FOREIGN KEY (task_id) REFERENCES tasks(id)
             )
             """
         )
@@ -283,6 +309,78 @@ class SQLiteRepository:
                 )
             )
         return tasks
+
+    def create_approval_request(self, approval: ApprovalRequest) -> None:
+        """Store approval request in database."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            INSERT INTO approval_requests
+            (id, task_id, requested_by, approver, decision, reason, created_at, decided_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                approval.id,
+                approval.task_id,
+                approval.requested_by,
+                approval.approver,
+                approval.decision.value,
+                approval.reason,
+                approval.created_at.isoformat(),
+                approval.decided_at.isoformat() if approval.decided_at else None,
+            ),
+        )
+        conn.commit()
+
+    def get_approval_request(self, task_id: str) -> Optional[ApprovalRequest]:
+        """Retrieve the most recent approval request for a task."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            "SELECT * FROM approval_requests WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+            (task_id,),
+        )
+        row = cursor.fetchone()
+
+        if not row:
+            return None
+
+        return ApprovalRequest(
+            id=row["id"],
+            task_id=row["task_id"],
+            requested_by=row["requested_by"],
+            approver=row["approver"],
+            decision=ApprovalDecision(row["decision"]),
+            reason=row["reason"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            decided_at=datetime.fromisoformat(row["decided_at"]) if row["decided_at"] else None,
+        )
+
+    def update_approval_decision(
+        self,
+        task_id: str,
+        decision: ApprovalDecision,
+        approver: str,
+        reason: Optional[str] = None,
+    ) -> Optional[ApprovalRequest]:
+        """Update the decision on a task's approval request."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        now = datetime.utcnow().isoformat()
+        cursor.execute(
+            """
+            UPDATE approval_requests
+            SET decision = ?, approver = ?, reason = ?, decided_at = ?
+            WHERE task_id = ?
+            """,
+            (decision.value, approver, reason, now, task_id),
+        )
+        conn.commit()
+        return self.get_approval_request(task_id)
 
     def log_event(self, event_type: str, task_id: Optional[str] = None, workflow_id: Optional[str] = None, details: Optional[Dict[str, Any]] = None) -> None:
         """Log audit event."""
