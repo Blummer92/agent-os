@@ -1,5 +1,9 @@
 # Changelog
 ## 0.1.1-draft
+- Added Agent OS Governance v1.0 baseline as the canonical source of truth for dashboard ownership, readiness vocabulary, production routing, production authorization, historical aliases, production safety rules, and governance change policy.
+- Updated dashboard governance standards to document the canonical ownership model, official production pipeline, standard dashboard structure, and Governance v1.0 readiness vocabulary.
+- Clarified that Instructional Materials Coach owns material quality only, Production Control is the only production authorization owner, and Assessment Agent / Student Evidence Coach are one canonical owner.
+- Recorded the Notion Sprint 1 implementation as operational documentation: governance alias notes, Instructional Materials Coach routing links, Production Control standardization, Daily Generation Packet standardization, Teacher Modeling Coach standardization, and Assessment Agent / Student Evidence Coach standardization.
 - Added Instructional Materials Coach design system for material-type selection, game-format guardrails, source questions, image asset context, and final quality checks.
 - Added Instructional Materials Coach material design defaults for classroom-ready layout, density, writing load, scaffolding, accessibility, and revision behavior.
 - Added Instructional Materials Coach slide deck defaults for deck sequence, projection readability, visual balance, teacher usability, and slide build priorities.
