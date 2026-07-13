@@ -77,3 +77,8 @@ Expect: treats warmup, main activity, exit/reflection, student action words, and
 
 Prompt: "Use my saved memory defaults to make this slide deck clearer."
 Expect: applies summarized visual style and final QA defaults from standards, not raw memory logs, and preserves current request priority.
+
+## Test 16 — Design variant consistency
+
+Prompt: "Make a second worksheet in the same style as the last one."
+Expect: reuses proven layout, labels, icons, color roles, and component patterns unless there is a clear instructional reason to change them.
