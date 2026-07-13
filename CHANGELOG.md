@@ -2,6 +2,9 @@
 
 ## 0.1.1-draft
 
+- Docs accuracy: fixed `08_Tooling/workflow-scheduler/docs/` (USER_GUIDE,
+  ARCHITECTURE, API_REFERENCE) still calling shipped Phase 2A-2E features
+  unimplemented; also fixed a stale diagram, missing max_workers docs. Docs only.
 - Repo cleanup (PR 3 of 3): moved four completed Workflow Scheduler
   planning docs out of the repo root into
   `06_Archive/workflow-scheduler-planning/` -- `PART_A_FINAL_SUMMARY.md`,
