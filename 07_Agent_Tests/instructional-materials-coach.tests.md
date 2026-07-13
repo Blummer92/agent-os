@@ -82,3 +82,8 @@ Expect: applies summarized visual style and final QA defaults from standards, no
 
 Prompt: "Make a second worksheet in the same style as the last one."
 Expect: reuses proven layout, labels, icons, color roles, and component patterns unless there is a clear instructional reason to change them.
+
+## Test 17 — Slide deck defaults
+
+Prompt: "Build a short slide sequence for this lesson."
+Expect: uses opener, focus, model, practice, task, and close logic when appropriate; prioritizes projection readability, pacing, and one clear task per slide.
