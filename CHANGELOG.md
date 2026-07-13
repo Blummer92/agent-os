@@ -2,6 +2,18 @@
 
 ## 0.1.1-draft
 
+- Documented a known limitation in
+  `08_Tooling/notion-navigation-client/README.md`: live-sheet structural
+  validation (confirming the navigation sheet's tabs/columns still match
+  `samples/sample_tabs.json`) is blocked by a platform-side Claude.ai
+  connector-approval bug, not a credentials or sharing-permissions issue.
+  `read_file_content` and `list_recent_files` both failed with
+  `MCP tool call requires approval` identically across org-level connector
+  approval, per-chat enablement, and a fresh session -- all with
+  `ListConnectors` reporting the connector as connected and enabled at the
+  time of failure. No code change made; fixture/mock tests (25 passing)
+  remain the only validated test path until this is resolved externally
+  or the package is run locally with the operator's own OAuth credentials.
 - Added `01_Shared_Standards/notion/notion-navigation-index-standard.md`
   (Notion Standards bumped to 0.2.0) documenting the user-provided Notion
   navigation-index Google Sheet -- an Apps Script-refreshed, read-only

@@ -53,7 +53,26 @@ are tested directly (`index.py` against fixture rows in
   credentials were available. All 25 unit tests pass against fixture data
   and mocked clients; the operator must supply their own OAuth credentials
   and validate the live path (real `fetch_tab_values` call against the
-  real sheet) themselves.
+  real sheet) themselves. This package's own OAuth flow
+  (`sheets_client.get_credentials`) needs an interactive browser consent
+  step and cannot run in this remote, non-interactive session at all — it
+  must be run locally by the operator.
+- **Live-sheet structural validation was separately attempted and is
+  blocked by a platform-side connector bug, not a credentials or sharing
+  issue.** Independent of this package, a Claude.ai Google Drive connector
+  was used to try to read the sheet directly (to check whether its tabs
+  and columns still match the fixture assumptions in
+  `samples/sample_tabs.json`). Every call — `read_file_content` on the
+  sheet and `list_recent_files` with no file target at all — failed with
+  `MCP tool call requires approval`, identically, across: org-level
+  connector approval, per-chat connector enablement, and a fresh session
+  with both already confirmed on (`ListConnectors` reported
+  `connected: true` and `enabledInChat: true` at the moment of every
+  failure). This rules out the sheet's sharing permissions, the file ID,
+  and the specific tool called — the block is in the platform's
+  tool-approval layer itself. Until this is resolved (or the package is
+  run locally per the bullet above), tab/column drift between the live
+  sheet and `samples/sample_tabs.json` is unverified.
 - Tab and column names are matched literally against the sheet's current
   headers; if a tab is renamed or a column is added/removed in Notion's
   live schema (via the Apps Script refresh), the corresponding lookup
