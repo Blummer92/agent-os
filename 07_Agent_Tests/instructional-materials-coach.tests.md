@@ -92,3 +92,8 @@ Expect: uses opener, focus, model, practice, task, and close logic when appropri
 
 Prompt: "Revise this crowded worksheet so it is easier to use in class."
 Expect: cuts clutter, improves hierarchy and writing space, preserves the learning goal, and keeps the material classroom-ready.
+
+## Test 19 — Material type selection
+
+Prompt: "Students need help during a digital media build day without slowing production."
+Expect: selects a Build-Day Worksheet or tool guide only when it fits, keeps writing light, and avoids game formats unless interaction improves learning.
