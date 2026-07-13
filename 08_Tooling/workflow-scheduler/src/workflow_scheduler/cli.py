@@ -6,7 +6,7 @@ import sys
 import uuid
 import yaml
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from workflow_scheduler.adapters import NoopAdapter
 from workflow_scheduler.audit import AuditLogger
@@ -32,6 +32,35 @@ _TERMINAL_TASK_STATUSES = (
     TaskStatus.CANCELLED,
     TaskStatus.GOVERNANCE_BLOCKED,
 )
+
+_BATCH_BAD_STATUSES = (TaskStatus.FAILED, TaskStatus.GOVERNANCE_BLOCKED, TaskStatus.CANCELLED)
+_BATCH_RESUMABLE_STATUSES = (TaskStatus.APPROVAL_PENDING, TaskStatus.RETRY_SCHEDULED, TaskStatus.PAUSED)
+_BATCH_NOT_ATTEMPTED_STATUSES = (TaskStatus.DRAFT, TaskStatus.PENDING, TaskStatus.APPROVED, TaskStatus.QUEUED, TaskStatus.RUNNING)
+
+
+def _compute_batch_rollup(member_statuses: List[TaskStatus]) -> str:
+    """Compute a batch's rollup status from its current member statuses.
+
+    Rules (checked in order):
+      - "failed": any member is FAILED, GOVERNANCE_BLOCKED, or CANCELLED
+      - "completed": every member is COMPLETED
+      - "not_started": every member is still un-attempted (DRAFT/PENDING/
+        APPROVED/QUEUED/RUNNING) — nothing has happened to this batch yet
+      - "partial": anything else (a mix of completed, resumable-blocked,
+        and/or not-yet-attempted members, with nothing failed)
+
+    This is a pure, stateless computation over current task statuses — it
+    is not read from any persisted "batch status" field. There is no
+    stored source of truth for "current" batch status other than the
+    member tasks themselves.
+    """
+    if any(s in _BATCH_BAD_STATUSES for s in member_statuses):
+        return "failed"
+    if all(s == TaskStatus.COMPLETED for s in member_statuses):
+        return "completed"
+    if all(s in _BATCH_NOT_ATTEMPTED_STATUSES for s in member_statuses):
+        return "not_started"
+    return "partial"
 
 
 class WorkflowSchedulerCLI:
@@ -136,15 +165,13 @@ class WorkflowSchedulerCLI:
                 error=f"Invalid mode: {mode_str}",
             )
 
-        workflow = WorkflowPlan(
-            workflow_id=workflow_id,
-            title=title,
-            created_by=created_by,
-            mode=mode,
-        )
-
-        # Create tasks from workflow definition
+        # Build all Task objects and the dependency map in memory first.
+        # No repository writes happen until batch validation has passed —
+        # a workflow must never end up with partially-written tasks, a
+        # workflow row, or a batch left behind by a validation failure.
         tasks_data = workflow_data.get("tasks", [])
+        built_tasks: List[Task] = []
+        dependencies: Dict[str, List[str]] = {}
         for task_data in tasks_data:
             task_id = task_data.get("id", f"task-{uuid.uuid4().hex[:8]}")
             task = Task(
@@ -161,12 +188,28 @@ class WorkflowSchedulerCLI:
                 depends_on=task_data.get("depends_on", []),
                 payload=task_data.get("payload", {}),
                 production_ready=task_data.get("production_ready", False),
+                batch_id=task_data.get("batch_id"),
             )
-            workflow.add_task(task_id)
-            workflow.set_dependencies(task_id, task.depends_on)
-            self.repository.create_task(task)
+            built_tasks.append(task)
+            dependencies[task_id] = task.depends_on
+
+        batch_error = self._validate_batches(built_tasks, dependencies)
+        if batch_error is not None:
+            return batch_error
+
+        workflow = WorkflowPlan(
+            workflow_id=workflow_id,
+            title=title,
+            created_by=created_by,
+            mode=mode,
+        )
+        for task in built_tasks:
+            workflow.add_task(task.id)
+            workflow.set_dependencies(task.id, task.depends_on)
 
         self.repository.create_workflow(workflow)
+        for task in built_tasks:
+            self.repository.create_task(task)
         self.audit_logger.log_workflow_created(workflow)
 
         return self._format_response(
@@ -177,6 +220,50 @@ class WorkflowSchedulerCLI:
             title=title,
             task_count=len(tasks_data),
         )
+
+    def _validate_batches(self, tasks: List[Task], dependencies: Dict[str, List[str]]) -> Optional[Dict[str, Any]]:
+        """Validate that no batch spans a direct or transitive dependency edge.
+
+        A batch is invalid if any two of its members have a dependency
+        relationship between them — they could never be simultaneously
+        ready, so grouping them is a contradiction. Uses
+        DependencyResolver.get_all_dependencies() (transitive) so indirect
+        chains are caught, not just direct depends_on edges.
+
+        Args:
+            tasks: Task objects built in memory (not yet persisted)
+            dependencies: Map of task_id -> depends_on, matching `tasks`
+
+        Returns:
+            An error response dict if validation fails, else None.
+        """
+        batches: Dict[str, List[str]] = {}
+        for task in tasks:
+            if task.batch_id:
+                batches.setdefault(task.batch_id, []).append(task.id)
+
+        if not batches:
+            return None
+
+        resolver = DependencyResolver(tasks, dependencies)
+
+        for batch_id, member_ids in batches.items():
+            member_set = set(member_ids)
+            for task_id in member_ids:
+                transitive_deps = resolver.get_all_dependencies(task_id)
+                conflict = transitive_deps & (member_set - {task_id})
+                if conflict:
+                    return self._format_response(
+                        status="fail",
+                        checks_failed=["batch_spans_dependency"],
+                        next_owner="user",
+                        error=(
+                            f"Batch '{batch_id}' is invalid: task '{task_id}' has a "
+                            f"dependency relationship with batch member(s) {sorted(conflict)}"
+                        ),
+                    )
+
+        return None
 
     def list_workflows(self) -> Dict[str, Any]:
         """List all workflows.
@@ -222,6 +309,20 @@ class WorkflowSchedulerCLI:
             if t.status == TaskStatus.RETRY_SCHEDULED
         }
 
+        # Batch rollup is always computed live from current member task
+        # statuses — there is no persisted "batch status" to read.
+        batch_members: Dict[str, List[Task]] = {}
+        for t in tasks:
+            if t.batch_id:
+                batch_members.setdefault(t.batch_id, []).append(t)
+        batch_statuses = {
+            batch_id: {
+                "status": _compute_batch_rollup([m.status for m in members]),
+                "task_ids": [m.id for m in members],
+            }
+            for batch_id, members in batch_members.items()
+        }
+
         mode_value = workflow.mode.value if hasattr(workflow.mode, "value") else workflow.mode
 
         return self._format_response(
@@ -235,6 +336,7 @@ class WorkflowSchedulerCLI:
             task_count=len(tasks),
             task_statuses=task_statuses,
             task_retry_info=task_retry_info,
+            batch_statuses=batch_statuses,
             created_at=workflow.created_at.isoformat(),
             updated_at=workflow.updated_at.isoformat(),
         )
@@ -280,6 +382,7 @@ class WorkflowSchedulerCLI:
         self.repository.update_workflow(workflow)
 
         tasks = self.repository.list_workflow_tasks(workflow_id)
+        tasks_by_id = {t.id: t for t in tasks}
         resolver = DependencyResolver(tasks, workflow.dependencies)
 
         # Check for cycles
@@ -312,7 +415,7 @@ class WorkflowSchedulerCLI:
             len(completed) + len(cancelled) + len(paused) + len(failed)
             + len(blocked) + len(approval_pending) + len(retry_pending)
         ) < len(tasks):
-            ready = [
+            raw_ready = [
                 task_id
                 for task_id in resolver.get_ready_tasks(completed)
                 if task_id not in cancelled
@@ -322,13 +425,23 @@ class WorkflowSchedulerCLI:
                 and task_id not in approval_pending
                 and task_id not in retry_pending
             ]
-            if not ready:
+            if not raw_ready:
                 break
+
+            # Group batch members contiguously (first-seen order preserved
+            # for both batch groups and ungrouped tasks); this only
+            # reorders dispatch within this pass — no adapter/executor
+            # logic below is changed, and no concurrency is introduced.
+            ready = self._group_ready_by_batch(raw_ready, tasks_by_id)
+            touched_batch_ids: set[str] = set()
 
             for task_id in ready:
                 task = self.repository.get_task(task_id)
                 if not task:
                     continue
+
+                if task.batch_id:
+                    touched_batch_ids.add(task.batch_id)
 
                 if task.status == TaskStatus.RETRY_SCHEDULED and not RetryManager.is_due(task):
                     # Backoff window hasn't elapsed yet — do not re-attempt
@@ -351,6 +464,15 @@ class WorkflowSchedulerCLI:
                     blocked.add(task_id)
                 else:
                     failed.add(task_id)
+
+            if touched_batch_ids:
+                current_tasks = self.repository.list_workflow_tasks(workflow_id)
+                for batch_id in touched_batch_ids:
+                    members = [t for t in current_tasks if t.batch_id == batch_id]
+                    rollup = _compute_batch_rollup([m.status for m in members])
+                    self.audit_logger.log_batch_result(
+                        workflow, batch_id=batch_id, status=rollup, task_ids=[m.id for m in members]
+                    )
 
         if (approval_pending or retry_pending or paused) and not failed and not blocked and not cancelled:
             # Waiting on an explicit human decision, a retry backoff window,
@@ -428,6 +550,40 @@ class WorkflowSchedulerCLI:
             cancelled=len(cancelled),
             final_status=workflow.status.value,
         )
+
+    def _group_ready_by_batch(self, ready: List[str], tasks_by_id: Dict[str, Task]) -> List[str]:
+        """Reorder a ready-task list so batch members dispatch contiguously,
+        preserving first-seen order for both batch groups and ungrouped
+        tasks. Pure reordering only — every element of `ready` appears
+        exactly once in the result; nothing is added, removed, or
+        dispatched differently. Ungrouped (batch_id=None) workflows are
+        unaffected: this returns `ready` unchanged in that case.
+
+        Args:
+            ready: Ready task IDs in their original (priority-ordered) order
+            tasks_by_id: Task lookup for batch_id membership
+
+        Returns:
+            Reordered list of the same task IDs
+        """
+        grouped: List[str] = []
+        seen_batches: set[str] = set()
+
+        for task_id in ready:
+            task = tasks_by_id.get(task_id)
+            batch_id = task.batch_id if task else None
+
+            if not batch_id:
+                grouped.append(task_id)
+                continue
+
+            if batch_id in seen_batches:
+                continue  # already appended as part of an earlier group
+
+            seen_batches.add(batch_id)
+            grouped.extend(tid for tid in ready if tasks_by_id.get(tid) and tasks_by_id[tid].batch_id == batch_id)
+
+        return grouped
 
     def _get_pending_approval_or_block(self, task_id: str, approver: str) -> tuple:
         """Look up a task and its approval request, enforcing that the task is
