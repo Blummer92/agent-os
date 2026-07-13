@@ -1,9 +1,10 @@
 """Task executor with lease lock management."""
 
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from workflow_scheduler.adapters import TaskAdapter
 from workflow_scheduler.audit import AuditLogger
@@ -37,9 +38,24 @@ class ExecutionResult:
 
 
 class Executor:
-    """Executes tasks with lease locks and governance checks."""
+    """Executes tasks with lease locks and governance checks.
 
-    def __init__(self, adapter: TaskAdapter, repository: SQLiteRepository, audit_logger: AuditLogger, lease_timeout_seconds: int = 300):
+    Safe to dispatch multiple independent tasks concurrently via
+    execute_many() when max_workers > 1: the repository is thread-safe
+    (SQLiteRepository serializes all access through its own lock),
+    StopConditionChecker is stateless, and the bundled NoopAdapter/
+    AuditLogger only ever append to plain lists, which CPython's GIL
+    makes safe against structural corruption from concurrent appends.
+    """
+
+    def __init__(
+        self,
+        adapter: TaskAdapter,
+        repository: SQLiteRepository,
+        audit_logger: AuditLogger,
+        lease_timeout_seconds: int = 300,
+        max_workers: int = 1,
+    ):
         """Initialize executor.
 
         Args:
@@ -47,11 +63,18 @@ class Executor:
             repository: SQLiteRepository for persistence
             audit_logger: AuditLogger for compliance tracking
             lease_timeout_seconds: Lease lock timeout in seconds
+            max_workers: Maximum tasks to run concurrently in execute_many().
+                Defaults to 1 (fully sequential, same behavior as before
+                execute_many existed). Must be >= 1.
         """
+        if max_workers < 1:
+            raise ValueError(f"max_workers must be >= 1, got {max_workers}")
+
         self.adapter = adapter
         self.repository = repository
         self.audit_logger = audit_logger
         self.lease_timeout_seconds = lease_timeout_seconds
+        self.max_workers = max_workers
 
     def execute(self, task: Task, ownership_registry: Optional[Dict[str, Any]] = None) -> ExecutionResult:
         """Execute a task with governance checks and lease locking.
@@ -210,6 +233,42 @@ class Executor:
         finally:
             # Release lease lock
             self._release_lease(task)
+
+    def execute_many(
+        self,
+        tasks: List[Task],
+        ownership_registry: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, ExecutionResult]:
+        """Execute a set of mutually independent tasks, one call to execute()
+        per task, sequentially or concurrently depending on max_workers.
+
+        Callers are responsible for ensuring the given tasks have no
+        dependencies on each other (e.g. one readiness pass of
+        DependencyResolver.get_ready_tasks) -- this method does not check
+        or enforce dependency ordering; it only controls how many of the
+        given tasks run at once.
+
+        Args:
+            tasks: Independent tasks to execute.
+            ownership_registry: Registry for ownership verification, passed
+                through unchanged to every execute() call.
+
+        Returns:
+            Dict mapping task.id -> ExecutionResult, one entry per input
+            task, regardless of max_workers.
+        """
+        if self.max_workers == 1:
+            return {task.id: self.execute(task, ownership_registry) for task in tasks}
+
+        results: Dict[str, ExecutionResult] = {}
+        with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
+            future_to_task_id = {
+                pool.submit(self.execute, task, ownership_registry): task.id for task in tasks
+            }
+            for future in as_completed(future_to_task_id):
+                task_id = future_to_task_id[future]
+                results[task_id] = future.result()
+        return results
 
     def _acquire_lease(self, task: Task) -> bool:
         """Acquire execution lease lock for a task.

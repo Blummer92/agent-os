@@ -66,11 +66,15 @@ def _compute_batch_rollup(member_statuses: List[TaskStatus]) -> str:
 class WorkflowSchedulerCLI:
     """Command-line interface for Workflow Scheduler."""
 
-    def __init__(self, db_path: str = "workflow_scheduler.db"):
+    def __init__(self, db_path: str = "workflow_scheduler.db", max_workers: int = 1):
         """Initialize CLI with database backend.
 
         Args:
             db_path: Path to SQLite database file
+            max_workers: Max tasks the executor runs concurrently per
+                dependency-ready pass in run_workflow (default 1 = fully
+                sequential; only the "run" command's --max-workers flag
+                sets this above 1). Must be >= 1.
         """
         self.repository = SQLiteRepository(db_path)
         self.audit_logger = AuditLogger(repository=self.repository)
@@ -79,6 +83,7 @@ class WorkflowSchedulerCLI:
             adapter=self.adapter,
             repository=self.repository,
             audit_logger=self.audit_logger,
+            max_workers=max_workers,
         )
         self.queue = JobQueue()
 
@@ -430,11 +435,19 @@ class WorkflowSchedulerCLI:
 
             # Group batch members contiguously (first-seen order preserved
             # for both batch groups and ungrouped tasks); this only
-            # reorders dispatch within this pass — no adapter/executor
-            # logic below is changed, and no concurrency is introduced.
+            # affects bookkeeping/rollup order, not dependency ordering --
+            # every task in `ready` is, by construction, independent of
+            # every other task in `ready` for this pass.
             ready = self._group_ready_by_batch(raw_ready, tasks_by_id)
             touched_batch_ids: set[str] = set()
 
+            # Phase 1 (sequential, cheap): resolve which of this pass's
+            # ready tasks are actually dispatchable now, mark them QUEUED,
+            # and skip any still inside a retry backoff window. This stays
+            # sequential regardless of max_workers -- it's bookkeeping, not
+            # task execution, and preserves `ready`'s deterministic order
+            # for the classification pass below.
+            dispatchable: list[Task] = []
             for task_id in ready:
                 task = self.repository.get_task(task_id)
                 if not task:
@@ -451,19 +464,31 @@ class WorkflowSchedulerCLI:
 
                 task.status = TaskStatus.QUEUED
                 self.repository.update_task(task)
+                dispatchable.append(task)
 
-                result = self.executor.execute(task)
+            # Phase 2: run every dispatchable task in this pass, one
+            # execute() call per task. Sequential when max_workers == 1
+            # (identical behavior to before execute_many existed);
+            # concurrent, bounded by max_workers, otherwise. Every task in
+            # `dispatchable` is independent by construction (see above),
+            # so dispatch order/interleaving cannot change the outcome.
+            results = self.executor.execute_many(dispatchable)
+
+            # Phase 3 (sequential, cheap): classify each result in
+            # `dispatchable`'s deterministic order, same rules as before.
+            for task in dispatchable:
+                result = results[task.id]
 
                 if result.success:
-                    completed.add(task_id)
+                    completed.add(task.id)
                 elif result.status == "retry_scheduled":
-                    retry_pending.add(task_id)
+                    retry_pending.add(task.id)
                 elif result.status == "blocked" and StopConditionChecker.APPROVAL_ENGINE_DEFERRED in result.blockers and len(result.blockers) == 1:
-                    approval_pending.add(task_id)
+                    approval_pending.add(task.id)
                 elif result.status == "blocked":
-                    blocked.add(task_id)
+                    blocked.add(task.id)
                 else:
-                    failed.add(task_id)
+                    failed.add(task.id)
 
             if touched_batch_ids:
                 current_tasks = self.repository.list_workflow_tasks(workflow_id)
@@ -1062,6 +1087,12 @@ def main() -> None:
     run_parser = subparsers.add_parser("run", help="Execute workflow")
     run_parser.add_argument("workflow_id", help="Workflow ID")
     run_parser.add_argument("--db", default="workflow_scheduler.db", help="Database path")
+    run_parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=1,
+        help="Max tasks to run concurrently per dependency-ready pass (default: 1, sequential)",
+    )
 
     # approve command
     approve_parser = subparsers.add_parser("approve", help="Approve a task pending explicit approval")
@@ -1120,9 +1151,12 @@ def main() -> None:
         parser.print_help()
         sys.exit(1)
 
-    cli = WorkflowSchedulerCLI(db_path=getattr(args, "db", "workflow_scheduler.db"))
-
     try:
+        cli = WorkflowSchedulerCLI(
+            db_path=getattr(args, "db", "workflow_scheduler.db"),
+            max_workers=getattr(args, "max_workers", 1),
+        )
+
         if args.command == "create":
             result = cli.create_workflow(args.yaml_path)
         elif args.command == "list":
