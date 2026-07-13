@@ -14,6 +14,28 @@ from workflow_scheduler.models import ApprovalDecision, ApprovalRequest, Task, T
 from workflow_scheduler.repository import SQLiteRepository
 
 
+def _validate_adapter_result(raw: Any) -> Optional[str]:
+    """Return None if `raw` is an acceptable TaskAdapter.execute() return
+    value, otherwise a short human-readable reason it was rejected.
+
+    Deliberately minimal -- checks only what the executor itself reads
+    (`success`, and `error`/`is_transient` when present), not a full
+    schema. See docs/ADAPTER_CONTRACT_FUTURE.md for the fuller contract
+    this may grow into in a later phase.
+    """
+    if not isinstance(raw, dict):
+        return f"adapter result must be a dict, got {type(raw).__name__}"
+    if "success" not in raw:
+        return "adapter result missing required 'success' key"
+    if not isinstance(raw["success"], bool):
+        return f"adapter result 'success' must be a bool, got {type(raw['success']).__name__}"
+    if "error" in raw and raw["error"] is not None and not isinstance(raw["error"], str):
+        return f"adapter result 'error' must be a string or None, got {type(raw['error']).__name__}"
+    if "is_transient" in raw and not isinstance(raw["is_transient"], bool):
+        return f"adapter result 'is_transient' must be a bool, got {type(raw['is_transient']).__name__}"
+    return None
+
+
 @dataclass
 class ExecutionResult:
     """Result of task execution."""
@@ -177,8 +199,30 @@ class Executor:
             )
 
         try:
-            # Execute task via adapter
-            adapter_result = self.adapter.execute(task)
+            # Execute task via adapter. A raised exception is treated the
+            # same as a malformed return value -- both are adapter contract
+            # violations, not scheduler bugs, and must not propagate.
+            try:
+                adapter_result = self.adapter.execute(task)
+            except Exception as exc:  # noqa: BLE001 - any adapter exception is a contract violation
+                invalid_reason = f"adapter raised {type(exc).__name__}: {exc}"
+                adapter_result = None
+            else:
+                invalid_reason = _validate_adapter_result(adapter_result)
+
+            if invalid_reason is not None:
+                self.audit_logger.log_adapter_result_invalid(task, reason=invalid_reason)
+                task.mark_failed(error=f"Invalid adapter result: {invalid_reason}", is_transient=False)
+                self.repository.update_task(task)
+
+                return ExecutionResult(
+                    success=False,
+                    error=f"Invalid adapter result: {invalid_reason}",
+                    output=None,
+                    is_transient=False,
+                    status="fail",
+                    checks_failed=["adapter_result_invalid"],
+                )
 
             if adapter_result.get("success"):
                 task.mark_completed(result=adapter_result.get("output"))

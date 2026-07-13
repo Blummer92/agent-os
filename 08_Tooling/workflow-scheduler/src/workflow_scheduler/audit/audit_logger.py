@@ -135,6 +135,19 @@ class AuditLogger:
             details={"error": error, "is_transient": is_transient},
         )
 
+    def log_adapter_result_invalid(self, task: Task, reason: str) -> None:
+        """Log that an adapter returned a malformed/unusable result (or
+        raised instead of returning). The task is marked FAILED, not
+        retried -- an adapter that can't produce a valid result is a
+        contract violation, not a transient condition."""
+        self._log(
+            "adapter_result_invalid",
+            task=task,
+            status_before=TaskStatus.RUNNING.value,
+            status_after=TaskStatus.FAILED.value,
+            details={"reason": reason},
+        )
+
     def log_retry_scheduled(self, task: Task, delay_seconds: float) -> None:
         """Log that a transient failure was scheduled for retry."""
         self._log(
