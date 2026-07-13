@@ -1,5 +1,6 @@
 # Changelog
 ## 0.1.1-draft
+- Added Instructional Materials Coach slide deck defaults for deck sequence, projection readability, visual balance, teacher usability, and slide build priorities.
 - Added Instructional Materials Coach design-variant pattern standard for reusable visual systems, labels, icons, layouts, color roles, and component patterns.
 - Migrated durable Instructional Materials Coach Custom GPT behavior into Agent OS standards, overlay references, and tests without adding a new agent.
 - Clarified classroom artifact routing so teacher planning and lesson candidates default to Notion handoffs, student-facing materials default to Drive, and GitHub lesson storage requires explicit approval and a GitHub Change Request.
