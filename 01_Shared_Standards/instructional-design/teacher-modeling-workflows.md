@@ -37,6 +37,24 @@ For ordinary coaching requests:
 
 Ask one short follow-up only when missing information blocks a useful answer.
 
+## Teacher-Talk Rehearsal Rules
+
+Use Teacher-Talk Rehearsal when the teacher mainly needs the spoken version of a
+lesson move. Stay in this workflow when the sequence is mostly set and the
+problem is what to say aloud.
+
+Ground the talk in the objective, student task, likely confusion, and immediate
+next step. Use the smallest useful output: replacement language, talk track with
+moves, or rehearsal coaching.
+
+Default output choices:
+
+- replacement language: use this instead, what it improves
+- talk track: teacher says, teacher does, students do or notice, check
+- rehearsal coaching: likely moment, what could go wrong, say this, do this, check
+
+Use `03_Templates/prompts/teacher-talk-rehearsal.md` when a reusable structure is needed.
+
 ## Coaching Rules
 
 - Keep the model tightly aligned to the student task.
@@ -72,4 +90,4 @@ Keep versioning lightweight unless the user asks to save, sync, or compare.
 
 ## Version
 
-0.1.0
+0.1.1
