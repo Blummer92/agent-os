@@ -14,19 +14,65 @@ from workflow_scheduler.models import ApprovalDecision, ApprovalRequest, Task, T
 from workflow_scheduler.repository import SQLiteRepository
 
 
+_CONTRACT_RESULT_STATUSES = {"success", "failure", "retryable", "blocked", "approval-required"}
+
+
+def _is_contract_result(raw: Any) -> bool:
+    """True if `raw` is using the Phase 3D five-state result contract
+    (status/message) rather than the original success/error/is_transient
+    shape. "success" always takes priority when both keys are present,
+    so no adapter returning the original shape is ever reinterpreted as
+    a contract result -- this keeps every existing adapter's behavior
+    byte-for-byte unchanged."""
+    return isinstance(raw, dict) and "success" not in raw and "status" in raw
+
+
+def _validate_contract_result(raw: Dict[str, Any]) -> Optional[str]:
+    """Validate the Phase 3D five-state result contract described in
+    docs/ADAPTER_CONTRACT_FUTURE.md: `status` (one of success/failure/
+    retryable/blocked/approval-required) and `message` are always
+    required; retryable/blocked/approval-required each require one
+    additional conditional field. Only called once `_is_contract_result`
+    has already confirmed `raw` is a dict using this shape."""
+    status = raw.get("status")
+    if status not in _CONTRACT_RESULT_STATUSES:
+        return f"adapter contract result 'status' must be one of {sorted(_CONTRACT_RESULT_STATUSES)}, got {status!r}"
+    if "message" not in raw or not isinstance(raw["message"], str):
+        return "adapter contract result missing required string field 'message'"
+    if status == "retryable":
+        retry_after = raw.get("retry_after")
+        if isinstance(retry_after, bool) or not isinstance(retry_after, (int, float)) or retry_after < 0:
+            return "adapter contract result with status='retryable' requires a non-negative numeric 'retry_after'"
+    if status == "blocked":
+        if not isinstance(raw.get("blocked_reason"), str) or not raw["blocked_reason"].strip():
+            return "adapter contract result with status='blocked' requires a non-empty string 'blocked_reason'"
+    if status == "approval-required":
+        if not isinstance(raw.get("approval_reason"), str) or not raw["approval_reason"].strip():
+            return "adapter contract result with status='approval-required' requires a non-empty string 'approval_reason'"
+    if "error" in raw and raw["error"] is not None and not isinstance(raw["error"], str):
+        return f"adapter contract result 'error' must be a string or None, got {type(raw['error']).__name__}"
+    return None
+
+
 def _validate_adapter_result(raw: Any) -> Optional[str]:
     """Return None if `raw` is an acceptable TaskAdapter.execute() return
     value, otherwise a short human-readable reason it was rejected.
 
-    Deliberately minimal -- checks only what the executor itself reads
-    (`success`, and `error`/`is_transient` when present), not a full
-    schema. See docs/ADAPTER_CONTRACT_FUTURE.md for the fuller contract
-    this may grow into in a later phase.
+    Accepts two shapes: the original minimal success/error/is_transient
+    shape (still the default for every adapter in this repo), and the
+    Phase 3D five-state status/message contract from
+    docs/ADAPTER_CONTRACT_FUTURE.md for adapters that opt into it. Which
+    shape is expected is decided by `_is_contract_result` -- "success"
+    always wins when present, so this stays fully backward compatible.
     """
     if not isinstance(raw, dict):
         return f"adapter result must be a dict, got {type(raw).__name__}"
+
+    if _is_contract_result(raw):
+        return _validate_contract_result(raw)
+
     if "success" not in raw:
-        return "adapter result missing required 'success' key"
+        return "adapter result missing required 'success' or 'status' key"
     if not isinstance(raw["success"], bool):
         return f"adapter result 'success' must be a bool, got {type(raw['success']).__name__}"
     if "error" in raw and raw["error"] is not None and not isinstance(raw["error"], str):
@@ -224,6 +270,9 @@ class Executor:
                     checks_failed=["adapter_result_invalid"],
                 )
 
+            if _is_contract_result(adapter_result):
+                return self._handle_contract_result(task, adapter_result)
+
             if adapter_result.get("success"):
                 task.mark_completed(result=adapter_result.get("output"))
                 self.audit_logger.log_task_completed(task, result=adapter_result.get("output"))
@@ -313,6 +362,136 @@ class Executor:
                 task_id = future_to_task_id[future]
                 results[task_id] = future.result()
         return results
+
+    def _handle_contract_result(self, task: Task, result: Dict[str, Any]) -> ExecutionResult:
+        """Classify a Phase 3D five-state contract result (already
+        validated by _validate_adapter_result/_validate_contract_result
+        before this is ever called) and apply the same task/audit/
+        repository side effects the equivalent legacy-shape outcome
+        would -- reusing the exact Task/AuditLogger/ApprovalRequest
+        primitives the legacy success/failure/retry path and the
+        pre-execution governance/approval path already use. This is a
+        second entry point into the same lifecycle transitions, not a
+        new state machine. Only called from within execute()'s lease-
+        holding try block, so the caller's `finally: self._release_lease`
+        still runs for every branch here.
+        """
+        status = result["status"]
+        message = result["message"]
+
+        if status == "success":
+            task.mark_completed(result=result.get("output"))
+            self.audit_logger.log_task_completed(task, result=result.get("output"))
+            self.repository.update_task(task)
+
+            return ExecutionResult(
+                success=True,
+                error=None,
+                output=result.get("output"),
+                is_transient=False,
+                status="pass",
+                checks_passed=["execution"],
+            )
+
+        if status == "retryable":
+            retry_after = result["retry_after"]
+
+            if RetryManager.should_retry(task):
+                task.payload["error"] = message
+                task.schedule_retry(retry_after)
+                self.audit_logger.log_retry_scheduled(task, delay_seconds=retry_after)
+                self.repository.update_task(task)
+
+                return ExecutionResult(
+                    success=False,
+                    error=message,
+                    output=None,
+                    is_transient=True,
+                    status="retry_scheduled",
+                    checks_failed=["execution"],
+                )
+
+            # Retry budget exhausted; this transient failure is now terminal.
+            self.audit_logger.log_retry_exhausted(task, attempts=task.retry_count)
+            task.mark_failed(error=message, is_transient=False)
+            self.audit_logger.log_task_failed(task, error=message, is_transient=False)
+            self.repository.update_task(task)
+
+            return ExecutionResult(
+                success=False,
+                error=message,
+                output=None,
+                is_transient=False,
+                status="fail",
+                checks_failed=["execution"],
+            )
+
+        if status == "blocked":
+            blocked_reason = result["blocked_reason"]
+            task.status = TaskStatus.GOVERNANCE_BLOCKED
+            self.audit_logger.log_governance_blocked(
+                task=task, blockers=["adapter_blocked"], reason=blocked_reason
+            )
+            self.repository.update_task(task)
+
+            return ExecutionResult(
+                success=False,
+                error=blocked_reason,
+                output=None,
+                is_transient=False,
+                status="blocked",
+                blockers=["adapter_blocked"],
+                checks_failed=["adapter_blocked"],
+            )
+
+        if status == "approval-required":
+            approval_reason = result["approval_reason"]
+
+            # Set approval_required so a future execute() call is gated
+            # by StopConditionChecker on the approval decision just like
+            # any pre-declared approval_required task -- without this,
+            # a rerun would call the adapter again instead of respecting
+            # whatever decision gets recorded against this approval.
+            task.approval_required = True
+
+            approval = self.repository.get_approval_request(task.id)
+            if approval is None:
+                approval = ApprovalRequest(
+                    id=str(uuid.uuid4()),
+                    task_id=task.id,
+                    requested_by=task.owner,
+                    decision=ApprovalDecision.PENDING,
+                    reason=approval_reason,
+                )
+                self.repository.create_approval_request(approval)
+                self.audit_logger.log_approval_requested(task)
+
+            task.mark_approval_pending()
+            self.repository.update_task(task)
+
+            return ExecutionResult(
+                success=False,
+                error=approval_reason,
+                output=None,
+                is_transient=False,
+                status="blocked",
+                blockers=["adapter_approval_required"],
+                checks_failed=["adapter_approval_required"],
+            )
+
+        # status == "failure" -- the remaining, simplest case.
+        task.mark_failed(error=message, is_transient=False)
+        self.audit_logger.log_task_failed(task, error=message, is_transient=False)
+        self.repository.update_task(task)
+
+        return ExecutionResult(
+            success=False,
+            error=message,
+            output=None,
+            is_transient=False,
+            status="fail",
+            checks_failed=["execution"],
+        )
 
     def _acquire_lease(self, task: Task) -> bool:
         """Acquire execution lease lock for a task.
