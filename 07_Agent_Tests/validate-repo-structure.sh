@@ -21,13 +21,31 @@ check() {
   fi
 }
 
-# 1. Every Markdown file except CLAUDE.md must stay under 100 lines.
-over_limit=$(find . -name "*.md" -not -path "./.git/*" -not -name "CLAUDE.md" \
-  -exec sh -c 'lines=$(wc -l < "$1"); [ "$lines" -ge 100 ] && echo "$1: $lines lines"' _ {} \;)
+is_line_limit_exception() {
+  local path="$1"
+  local exceptions_file="00_Governance/markdown-line-limit-exceptions.md"
+  [ -f "$exceptions_file" ] || return 1
+  grep -Fxq "$path" "$exceptions_file"
+}
+
+# 1. Every Markdown file except CLAUDE.md and documented exceptions must stay
+#    under 100 lines.
+over_limit=""
+while IFS= read -r f; do
+  rel="${f#./}"
+  if is_line_limit_exception "$rel"; then
+    continue
+  fi
+  lines=$(wc -l < "$f")
+  if [ "$lines" -ge 100 ]; then
+    over_limit="${over_limit}${f}: ${lines} lines
+"
+  fi
+done < <(find . -name "*.md" -not -path "./.git/*" -not -name "CLAUDE.md" | sort)
 if [ -n "$over_limit" ]; then
-  echo "$over_limit"
+  printf "%b" "$over_limit"
 fi
-check "All Markdown files (except CLAUDE.md) are under 100 lines" "$([ -z "$over_limit" ] && echo 0 || echo 1)"
+check "All non-exempt Markdown files (except CLAUDE.md) are under 100 lines" "$([ -z "$over_limit" ] && echo 0 || echo 1)"
 
 # 2. Every overlay must reference _common-overlay-rules.md instead of
 #    repeating the shared blocks (regression guard for overlay dedup).
