@@ -1,13 +1,14 @@
 # Validation Report
 
-- Review root: `/workspace/output/Agent_OS_Review_Access/Agent OS/`
-- Duplicate root: `/workspace/user_files/Agent_OS_Review_Access/Agent OS/`
-- Total Markdown files: 89
-- Files under 100 lines: 89
-- Files at or over 100 lines: 0
-- Required folders missing: none
-- Unauthorized top-level items: none
-- Required files missing: none
+- Review root: `Blummer92/agent-os`
+- Branch: `chatgpt-agent-os-implementation`
+- Scope: Issue #59 ChatGPT implementation bridge
+- Total Markdown files expected after this PR: 95
+- New Markdown files added: 6
+- New files under 100 lines: yes
+- Files at or over 100 lines in this change: 0
+- Required folders missing: none changed
+- Unauthorized top-level items: none for this PR; `AGENTS.md` is intentional
 - Manifest exists: yes
 - Validation report exists: yes
 - Registry folder exists: yes
@@ -15,4 +16,15 @@
 - Shared standards folder exists: yes
 - Governance folder exists: yes
 - Archive folder exists: yes
-- Final status: PASS
+- New overlays reference `_common-overlay-rules.md`: yes
+- New overlays have matching test files: yes
+- Registry maps new overlays: yes
+- Shared rules remain referenced, not duplicated: yes
+- Script execution: run locally on this PR branch
+- Script result: 5 checks passed, 1 check failed
+- Failed check: global Markdown line-limit check
+- Failure cause: pre-existing legacy Markdown files outside the ChatGPT bridge scope
+- PR-scoped line-limit status: no new PR #60 files exceed the Markdown line-limit rule
+- PR scope decision: keep PR #60 focused on ChatGPT implementation
+- Follow-up: legacy line-limit cleanup should be handled in a separate issue/PR
+- Final status: CONDITIONAL PASS - PR-scoped validation passed; global legacy line-limit cleanup still needed

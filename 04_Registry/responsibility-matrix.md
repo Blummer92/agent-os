@@ -2,6 +2,9 @@
 
 | Responsibility | Primary | Support |
 |---|---|---|
+| ChatGPT request triage | ChatGPT Orchestrator | Agent Orchestrator; Integration Manager |
+| GitHub repository writes | GitHub Service Agent | QA / Test Agent |
+| GitHub change handoffs | GitHub Service Agent | ChatGPT Orchestrator |
 | Python tooling | Google Workspace Automation Engineer | Python Development Overlay |
 | Sync validation | Integration Manager | Apps Script Sync Test Overlay |
 | Dashboard build governance | Modeling & Dashboard Governance Agent | Dashboard Builder Overlay |
