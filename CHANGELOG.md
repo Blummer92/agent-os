@@ -2,6 +2,11 @@
 
 ## 0.1.1-draft
 
+- Repo cleanup (PR 2 of 3): documented `08_Tooling/workflow-scheduler/` in
+  `CLAUDE.md`'s `08_Tooling/` Contents list -- it existed as real code
+  (with its own `docs/`) but wasn't mentioned there. Short, factual entry
+  only; no scheduler docs rewritten, no scheduler code touched, no
+  line-limit fixes.
 - Repo cleanup (PR 1 of 3): deleted six stale one-time GitHub-upload/
   bootstrap files that referenced an ephemeral local staging path
   (`/workspace/output/agent-os-manual-upload-final/`) or one-time setup

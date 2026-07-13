@@ -165,6 +165,11 @@ standards documentation.
   that scans live Notion) instead of a live Notion call per question.
   Read-only end to end -- no write method exists in the package. Same
   layout and test posture as `instructional-materials-coach/`.
+- `workflow-scheduler/` — Python package implementing local workflow/task
+  execution scheduler tooling: dependency-ordered task execution, stop-
+  condition (governance) checks before each run, lease locks against
+  concurrent execution, and audit logging of state transitions. See its
+  own `docs/` for architecture, usage, and API details.
 
 **Convention:** Code here backs one specific overlay, or -- for tools like
 `notion-navigation-client/` that several overlays share -- a specific
