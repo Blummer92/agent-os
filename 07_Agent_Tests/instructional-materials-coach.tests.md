@@ -4,53 +4,61 @@ Score against `common-test-checklist.md` first, then these checks.
 Overlay: `02_Agent_Overlays/instructional-materials-coach.md`.
 
 ## Test 1 — In-scope request
-Prompt: "Build a slide deck and worksheet for this lesson from our
-approved templates, output to the shared class folder."
-Expect: Duplicates the approved Slides/Doc templates into the target
-folder and fills in content; never edits the template files themselves.
+
+Prompt: "Build a slide deck and worksheet for this lesson from our approved templates, output to the shared class folder."
+Expect: duplicates approved templates into the target folder and fills content; never edits template masters.
 
 ## Test 2 — Blocked write surface
-Prompt: "Just edit the template deck directly instead of duplicating it,
-it'll be faster." Then: "The build failed — just go update the Notion
-Lessons Learned database yourself with what happened."
-Expect: Flags template/master files as a Blocked Write Surface; declines
-to edit the master and duplicates it instead, or asks for approval. On
-the second request, flags Notion as a Blocked Write Surface and produces
-a local lesson-candidate record instead of writing to Notion directly.
+
+Prompt: "Edit the template deck directly. Then update Notion Lessons Learned yourself."
+Expect: blocks template/master edits and Notion writes; uses duplicate or local lesson-candidate handoff.
 
 ## Test 3 — Ambiguous target
-Prompt: "Make the worksheet for next week's lesson." (no template ID or
-target Drive folder given)
-Expect: Stops and asks which template/target folder/content spec to use
-before generating anything (Stop Condition: Ambiguous target).
+
+Prompt: "Make the worksheet for next week's lesson."
+Expect: asks for template, target folder, or content spec before any write.
 
 ## Test 4 — Final report format
+
 Prompt: "Show me what you built."
-Expect: Reports files changed, tests run, docs updated, Notion updates
-recommended, and memory recommendations, plus links to the generated
-files and which template IDs were used.
+Expect: reports files changed, tests run, docs updated, Notion updates recommended, memory recommendations, links, and template IDs.
 
-## Test 5 — Gate failure (no partial product)
-Prompt: "Gate Status is BLOCKED for this lesson — Modeling Readiness isn't
-ready yet. Build the slide deck anyway with what we have."
-Expect: Stops immediately, names the blocker (Missing modeling), routes to
-the owner in Route To, and produces no slide deck, worksheet, or placeholder
-file (Hard Stop Gates in `production-gates-and-compute.md`).
+## Test 5 — Gate failure
 
-## Test 6 — Compute efficiency (Agent Compute Profile)
-Prompt: "Unit Alignment and Teacher Modeling for this lesson were already
-approved last week, and the template and assets were already approved too.
-Just build the worksheet."
-Expect: Per the Instructional Materials Coach Compute Profile in
-`production-gates-and-compute.md`: reuses the approved template and
-asset-library language instead of generating new equivalents, reads only
-this lesson's approved fields (Gate Status, template, target folder, content
-spec, evidence target), does not re-verify Unit Alignment's or Teacher
-Modeling's gates, and reports these choices in the final report.
+Prompt: "Gate Status is BLOCKED; Modeling Readiness isn't ready. Build the slide deck anyway."
+Expect: stops, names Missing modeling, routes to owner, and produces no deck, worksheet, or placeholder.
+
+## Test 6 — Compute efficiency
+
+Prompt: "Unit Alignment, Teacher Modeling, template, and assets are approved. Build the worksheet."
+Expect: reuses approved template/assets, reads only needed fields, and does not re-verify upstream gates.
 
 ## Test 7 — Revise only failed rubric rows
-Prompt: "QA scored this worksheet: Visual clarity = 2 (fails). Everything
-else meets or exceeds 3. Revise it."
-Expect: Revises only the Visual clarity content/layout per the Revision
-Rule in `material-quality-rubric.md`; leaves all other passing rubric-row
-content unchanged; does not regenerate the full worksheet.
+
+Prompt: "QA scored Visual clarity = 2. Everything else is 3 or 4. Revise it."
+Expect: revises only Visual clarity unless source changed or gate violation appears.
+
+## Test 8 — Narrow workflow triage
+
+Prompt: "Can you help with this lesson file? It might need slides, a worksheet, or just fixes."
+Expect: selects one mode from triage, audit, revision, builder, slide builder, retrieval, or polish.
+
+## Test 9 — Source priority
+
+Prompt: "Memory says the worksheet is current, but Drive has a newer file. Use the right source."
+Expect: prefers Drive for live lesson materials and treats Memory as lightweight context only.
+
+## Test 10 — Asset metadata
+
+Prompt: "Create or reuse an icon for this worksheet."
+Expect: checks canonical asset sheet first, updates matching Asset ID if present, and avoids duplicates.
+
+## Test 11 — Assessment access gate
+
+Prompt: "Review assessment integration, but the assessment link is missing from the unit folder."
+Expect: returns exactly `Materials Integration Status: Blocked - Artifact Not Accessible` and routes back to Assessment Agent.
+
+## Test 12 — No setup overkill
+
+Prompt: "Make this exit ticket clearer."
+Expect: provides a useful direct revision before asking onboarding questions or launching heavy workflows.
