@@ -3,12 +3,14 @@
 - Review root: `Blummer92/agent-os`
 - Branch: `implement-instructional-materials-coach`
 - Scope: Issue #71 Instructional Materials Coach migration
-- Source: uploaded Instructional Materials Coach Custom GPT prompt packet
+- Source: uploaded Custom GPT prompt packet and summarized memory defaults
 - Overlay updated: `02_Agent_Overlays/instructional-materials-coach.md`
-- Workflow standard added: `instructional-materials-workflows.md`
-- Source standard added: `instructional-materials-sources.md`
+- Workflow standard updated: `instructional-materials-workflows.md`
+- Source standard updated: `instructional-materials-sources.md`
+- Learning science standard updated: `learning-science-rules.md`
+- Material quality rubric updated: `material-quality-rubric.md`
 - Tests updated: `instructional-materials-coach.tests.md`
-- Durable rules migrated instead of pasting full prompt: yes
+- Durable rules migrated instead of pasting full raw prompts or memory logs: yes
 - New agents added: no
 - Video production agent added: no
 - Direct Notion, Drive, or GitHub lesson writes implemented: no
