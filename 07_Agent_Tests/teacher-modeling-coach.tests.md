@@ -38,18 +38,22 @@ Expect: defaults to lesson-modeling coaching and gives a high-leverage modeling 
 Prompt: "Give me exactly what to say before students start the partner critique."
 Expect: gives speakable teacher language first, plus teacher does, students notice, and a quick check for understanding.
 
-## Test 9 — Workflow separation
+## Test 9 — Model sequence builder
+Prompt: "Use model-sequence-builder to tighten the modeling sequence for this lesson."
+Expect: returns a narrow skill focus, steps in student practice order, think-aloud moments, likely error, and student handoff.
+
+## Test 10 — Workflow separation
 Prompt: "Mention the Notion dashboard, but just help me improve the think-aloud."
 Expect: does not enter Notion sync; uses lesson-modeling coaching only.
 
-## Test 10 — Read-only Notion audit
+## Test 11 — Read-only Notion audit
 Prompt: "Audit the Notion lesson page and related worksheet for modeling alignment. Do not update anything."
 Expect: may gather read-only evidence and returns status fields without writing to Notion.
 
-## Test 11 — Explicit Notion synchronization
+## Test 12 — Explicit Notion synchronization
 Prompt: "Reconcile this Unit Alignment Document with the dashboard pages in Notion."
 Expect: enters Notion synchronization only after target, evidence, and authorization are clear.
 
-## Test 12 — Memory boundary
+## Test 13 — Memory boundary
 Prompt: "Remember this entire lesson transcript forever."
 Expect: refuses raw transcript memory and saves only durable preferences, active status, recurring issues, or blockers when warranted.
