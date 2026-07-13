@@ -159,22 +159,56 @@ class AuditLogger:
             details={"attempts": attempts, "max_retries": task.max_retries},
         )
 
-    def log_task_paused(self, task: Task) -> None:
-        """Log task pause."""
+    def log_task_paused(self, task: Task, previous_status: Optional[str] = None) -> None:
+        """Log task pause.
+
+        Args:
+            task: The paused task (status already mutated to PAUSED)
+            previous_status: The task's status immediately before pausing.
+                Callers should capture this before mutating the task, since
+                pause is reachable from many different prior statuses.
+                Falls back to task.status.value (only correct if called
+                before mutation) when omitted, for backward compatibility.
+        """
         self._log(
             "task_paused",
             task=task,
-            status_before=task.status.value,
+            status_before=previous_status if previous_status is not None else task.status.value,
             status_after=TaskStatus.PAUSED.value,
             details={},
         )
 
-    def log_task_cancelled(self, task: Task, reason: str = "") -> None:
-        """Log task cancellation."""
+    def log_task_resumed(self, task: Task, restored_status: str) -> None:
+        """Log task resume from pause.
+
+        Args:
+            task: The resumed task
+            restored_status: The status the task was restored to
+        """
+        self._log(
+            "task_resumed",
+            task=task,
+            status_before=TaskStatus.PAUSED.value,
+            status_after=restored_status,
+            details={},
+        )
+
+    def log_task_cancelled(self, task: Task, previous_status: Optional[str] = None, reason: str = "") -> None:
+        """Log task cancellation.
+
+        Args:
+            task: The cancelled task (status already mutated to CANCELLED)
+            previous_status: The task's status immediately before cancelling.
+                Callers should capture this before mutating the task, since
+                cancel is reachable from many different prior statuses.
+                Falls back to task.status.value (only correct if called
+                before mutation) when omitted, for backward compatibility.
+            reason: Cancellation reason
+        """
         self._log(
             "task_cancelled",
             task=task,
-            status_before=task.status.value,
+            status_before=previous_status if previous_status is not None else task.status.value,
             status_after=TaskStatus.CANCELLED.value,
             details={"reason": reason},
         )
@@ -233,6 +267,44 @@ class AuditLogger:
             workflow=workflow,
             status_before=WorkflowStatus.RUNNING.value,
             status_after=WorkflowStatus.FAILED.value,
+            details={"reason": reason},
+        )
+
+    def log_workflow_paused(self, workflow: WorkflowPlan, reason: str = "") -> None:
+        """Log workflow pause (only reachable from RUNNING)."""
+        self._log(
+            "workflow_paused",
+            workflow=workflow,
+            status_before=WorkflowStatus.RUNNING.value,
+            status_after=WorkflowStatus.PAUSED.value,
+            details={"reason": reason},
+        )
+
+    def log_workflow_resumed(self, workflow: WorkflowPlan) -> None:
+        """Log workflow resume from pause."""
+        self._log(
+            "workflow_resumed",
+            workflow=workflow,
+            status_before=WorkflowStatus.PAUSED.value,
+            status_after=WorkflowStatus.RUNNING.value,
+            details={},
+        )
+
+    def log_workflow_cancelled(self, workflow: WorkflowPlan, previous_status: Optional[str] = None, reason: str = "") -> None:
+        """Log workflow cancellation.
+
+        Args:
+            workflow: The cancelled workflow (status already mutated to CANCELLED)
+            previous_status: The workflow's status immediately before
+                cancelling. Cancel is reachable from multiple prior
+                statuses, so callers should capture this before mutation.
+            reason: Cancellation reason
+        """
+        self._log(
+            "workflow_cancelled",
+            workflow=workflow,
+            status_before=previous_status if previous_status is not None else workflow.status.value,
+            status_after=WorkflowStatus.CANCELLED.value,
             details={"reason": reason},
         )
 

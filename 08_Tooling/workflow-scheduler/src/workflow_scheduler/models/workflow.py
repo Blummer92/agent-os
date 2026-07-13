@@ -12,6 +12,7 @@ class WorkflowStatus(str, Enum):
     DRAFT = "draft"
     PENDING = "pending"
     RUNNING = "running"
+    PAUSED = "paused"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -68,6 +69,18 @@ class WorkflowPlan:
         self.updated_at = datetime.utcnow()
         if reason:
             self.metadata["failure_reason"] = reason
+
+    def mark_paused(self, reason: str = "") -> None:
+        """Mark workflow as paused (must be RUNNING)."""
+        self.status = WorkflowStatus.PAUSED
+        self.updated_at = datetime.utcnow()
+        if reason:
+            self.metadata["pause_reason"] = reason
+
+    def resume(self) -> None:
+        """Resume a paused workflow back to RUNNING."""
+        self.status = WorkflowStatus.RUNNING
+        self.updated_at = datetime.utcnow()
 
     def mark_cancelled(self, reason: str = "") -> None:
         """Mark workflow as cancelled."""

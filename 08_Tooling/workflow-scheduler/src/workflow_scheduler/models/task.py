@@ -54,6 +54,7 @@ class Task:
     retry_count: int = 0
     next_retry_at: Optional[datetime] = None
     max_retries: int = 3
+    paused_from_status: Optional[str] = None
 
     def mark_approved(self) -> None:
         """Mark task as approved."""
@@ -89,8 +90,29 @@ class Task:
         self.updated_at = datetime.utcnow()
 
     def mark_paused(self) -> None:
-        """Mark task as paused."""
+        """Mark task as paused, remembering its exact prior status for resume."""
+        self.paused_from_status = self.status.value
         self.status = TaskStatus.PAUSED
+        self.updated_at = datetime.utcnow()
+
+    def resume(self) -> None:
+        """Restore a paused task to its exact prior status.
+
+        Raises:
+            ValueError: If the task is not PAUSED, or has no valid recorded
+                prior status to restore.
+        """
+        if self.status != TaskStatus.PAUSED:
+            raise ValueError(f"Cannot resume task not in PAUSED status (current: {self.status.value})")
+        if not self.paused_from_status:
+            raise ValueError("Cannot resume task with no recorded prior status")
+        try:
+            restored_status = TaskStatus(self.paused_from_status)
+        except ValueError:
+            raise ValueError(f"Cannot resume task: invalid prior status recorded: {self.paused_from_status}")
+
+        self.status = restored_status
+        self.paused_from_status = None
         self.updated_at = datetime.utcnow()
 
     def mark_cancelled(self, reason: str = "") -> None:
