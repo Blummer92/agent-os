@@ -1,0 +1,58 @@
+# Notion Read-Only Adapter Smoke Test
+#
+# Illustrates how a read-only Notion task is represented for the
+# `notion_readonly` adapter (Phase 3B). Not run in CI or the test suite --
+# it targets real Notion object IDs and requires a NOTION_TOKEN
+# environment variable (a Notion integration token) to actually execute.
+# Task-level `action` values use the existing "read:" prefix convention
+# (see stop_conditions.py) so these tasks bypass the missing_authorization
+# governance check without an ownership_registry entry -- distinct from
+# `payload.action`, which selects the adapter operation to run.
+#
+# query_database is the one action that issues an HTTP POST rather than a
+# GET (Notion's own API design -- see notion_readonly_adapter.py's module
+# docstring for why that single, hardcoded endpoint is still considered
+# read-only).
+
+workflow_id: "notion-readonly-smoke-test-v1"
+title: "Notion Read-Only Adapter Smoke Test"
+created_by: "workflow-scheduler"
+mode: "Draft"
+
+tasks:
+  # Read a database's schema (property definitions, title).
+  - id: "get-database"
+    type: "read"
+    owner: "notion-readonly-adapter"
+    action: "read:notion_database"
+    idempotency_key: "get-database-20260713"
+    priority: 2
+    payload:
+      action: "get_database"
+      database_id: "REPLACE_WITH_REAL_DATABASE_ID"
+    depends_on: []
+
+  # Read the rows/entries in that database.
+  - id: "query-database"
+    type: "read"
+    owner: "notion-readonly-adapter"
+    action: "read:notion_database"
+    idempotency_key: "query-database-20260713"
+    priority: 1
+    payload:
+      action: "query_database"
+      database_id: "REPLACE_WITH_REAL_DATABASE_ID"
+      page_size: 10
+    depends_on: ["get-database"]
+
+  # Read a specific page's properties.
+  - id: "get-page"
+    type: "read"
+    owner: "notion-readonly-adapter"
+    action: "read:notion_page"
+    idempotency_key: "get-page-20260713"
+    priority: 0
+    payload:
+      action: "get_page"
+      page_id: "REPLACE_WITH_REAL_PAGE_ID"
+    depends_on: []

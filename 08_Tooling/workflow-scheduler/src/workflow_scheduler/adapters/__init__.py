@@ -15,6 +15,10 @@ from workflow_scheduler.adapters.github_readonly_adapter import (
     GitHubReadOnlyAdapterError,
 )
 from workflow_scheduler.adapters.noop_adapter import NoopAdapter
+from workflow_scheduler.adapters.notion_readonly_adapter import (
+    NotionReadOnlyAdapter,
+    NotionReadOnlyAdapterError,
+)
 from workflow_scheduler.adapters.registry import available_adapters, resolve_adapter
 
 __all__ = [
@@ -29,6 +33,8 @@ __all__ = [
     "FakeRaisingAdapter",
     "GitHubReadOnlyAdapter",
     "GitHubReadOnlyAdapterError",
+    "NotionReadOnlyAdapter",
+    "NotionReadOnlyAdapterError",
     "resolve_adapter",
     "available_adapters",
 ]
