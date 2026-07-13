@@ -25,10 +25,16 @@ from .summary_cache import (
     summary_cache_entry_exists,
     write_summary_cache_entry,
 )
+from .summary_cache_lookup import (
+    DEFAULT_SUMMARY_CACHE_FILENAME,
+    build_summary_cache_path,
+    lookup_summary_cache_entry,
+)
 
 __all__ = [
     "DEFAULT_CACHE_KEY_VERSION",
     "DEFAULT_COMPUTE_LIMITS",
+    "DEFAULT_SUMMARY_CACHE_FILENAME",
     "DEFAULT_SUMMARY_CACHE_VERSION",
     "DEFAULT_SUMMARY_LIST_LIMIT",
     "REQUIRED_PACKET_FIELDS",
@@ -36,7 +42,9 @@ __all__ = [
     "build_handoff_packet",
     "build_handoff_packet_cache_key",
     "build_summary_cache_entry",
+    "build_summary_cache_path",
     "is_valid_handoff_packet",
+    "lookup_summary_cache_entry",
     "read_summary_cache_entry",
     "summarize_handoff_packet",
     "summary_cache_entry_exists",
