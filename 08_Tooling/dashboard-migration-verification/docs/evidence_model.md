@@ -8,9 +8,12 @@ structure every run.
 
 ## File Inventory
 
-### `config/dashboards.example.yaml`
+### `config/dashboards.yaml`
 
-Sanitized registry example for known dashboard surfaces. Each dashboard entry supports:
+Sanitized combined registry for known dashboard surfaces. The current scripts read this
+file by default.
+
+Each dashboard entry supports:
 
 - `name`
 - `notion_id`
@@ -21,7 +24,23 @@ Sanitized registry example for known dashboard surfaces. Each dashboard entry su
 - `human_approval_required`
 - `notes`
 
-Do not store live private identifiers in committed example files.
+Do not store live private identifiers in committed registry files.
+
+### `config/dashboard_registry/*.yaml`
+
+Split registry source files used for review and maintenance. These files group dashboard
+surfaces by operating area while preserving the same dashboard-entry shape as
+`config/dashboards.yaml`.
+
+The split registry currently includes:
+
+- `core_dashboards.yaml`
+- `operations_dashboards.yaml`
+- `coach_and_governance_dashboards.yaml`
+
+### `config/dashboards.example.yaml`
+
+Minimal sanitized registry fixture for tests, examples, or new workspace setup.
 
 ### `config/proposed_changes.schema.json`
 
@@ -42,6 +61,12 @@ Required fields for each change:
 - `owner`
 - `approval_required`
 - `notes`
+
+### `config/schema/*.json`
+
+Split schema components for modular schema review and maintenance. The main schema is
+still `config/proposed_changes.schema.json` unless tooling is explicitly switched to the
+split-schema entry point.
 
 ### `proposed_changes/*.yaml`
 
