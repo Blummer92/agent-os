@@ -1,0 +1,15 @@
+version: 1
+changes:
+  - action: archive_database
+    item_type: database
+    source_database: Example Legacy Dashboard
+    source_item: Example Legacy Dashboard
+    canonical_database: Example Canonical Dashboard
+    canonical_item: Example Canonical Dashboard
+    current_name: Example Legacy Dashboard
+    proposed_name: Example Canonical Dashboard
+    migration_method: Verify records, dependencies, permissions, and automations before retirement.
+    rollback_method: Keep legacy dashboard untouched until verified retirement approval exists.
+    owner: Modeling & Dashboard Governance Agent
+    approval_required: true
+    notes: Sanitized example. Missing evidence must block destructive approval.
