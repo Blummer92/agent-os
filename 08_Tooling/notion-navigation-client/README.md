@@ -6,13 +6,29 @@ data, refreshed on demand by a separate Apps Script that scans live Notion.
 Agents call this client for fast owner/routing/duplicate-risk lookups
 instead of a live Notion call or re-deriving the same answer each time.
 
+This package is the Notion-specific read client / adapter for the cached
+Notion navigation index. It is not the full cross-system Navigation Registry.
+Cross-system Navigation Registry governance lives in
+`01_Shared_Standards/navigation/navigation-registry-standard.md` and is owned
+by the Integration Manager. The Notion-specific cache standard lives in
+`01_Shared_Standards/notion/notion-navigation-index-standard.md`.
+
 ## Safety
 
 - Read-only end to end: `sheets_client.py` exposes only one call
   (`fetch_tab_values`, scope `spreadsheets.readonly`) — no write method
   exists anywhere in this package.
-- A lookup result is never authorization to write to Notion.
-- See `docs/safety.md` and
+- This client reads cached Notion navigation-index tabs only. It does not read
+  or verify live Notion state by itself.
+- A lookup result is never authorization to write to Notion, change readiness
+  or status, change ownership, make source-of-truth decisions, change source
+  authority, authorize production, change sharing, or edit governed fields.
+- Agents must verify live Notion before any write, readiness/status change,
+  ownership change, source-of-truth decision, or governed-field decision.
+- Preserve returned `navigation_warning` values and any human-review flags
+  when relaying a lookup result to a human or another agent.
+- See `docs/safety.md`, `docs/registry-fit.md`,
+  `01_Shared_Standards/navigation/navigation-registry-standard.md`, and
   `01_Shared_Standards/notion/notion-navigation-index-standard.md`.
 
 ## Installation
