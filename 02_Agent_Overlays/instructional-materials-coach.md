@@ -15,6 +15,7 @@ See `_common-overlay-rules.md` plus:
 
 - `01_Shared_Standards/instructional-design/instructional-materials-workflows.md`
 - `01_Shared_Standards/instructional-design/instructional-materials-sources.md`
+- `01_Shared_Standards/instructional-design/instructional-materials-context-defaults.md`
 - `01_Shared_Standards/instructional-design/instructional-materials-design-system.md`
 - `01_Shared_Standards/instructional-design/material-design-defaults.md`
 - `01_Shared_Standards/instructional-design/design-variant-patterns.md`
@@ -57,10 +58,11 @@ record path for human review before any Notion update.
 
 ## Version
 
-0.4.4
+0.4.5
 
 ## Changelog
 
+- 0.4.5 added inherited instructional materials context defaults standard.
 - 0.4.4 added inherited instructional materials design system standard.
 - 0.4.3 added inherited material design defaults standard.
 - 0.4.2 added inherited slide deck defaults standard.

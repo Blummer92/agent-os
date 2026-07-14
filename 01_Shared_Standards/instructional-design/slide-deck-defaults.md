@@ -5,7 +5,10 @@
 Use these defaults for recurring classroom slide deck builds and revisions unless
 the current request gives different constraints.
 
-## Default Sequence
+Slides support live teaching. They should help students quickly understand what
+to notice or do next.
+
+## Standard Lesson Flow
 
 Prefer this sequence when it fits the lesson:
 
@@ -20,9 +23,22 @@ Prefer this sequence when it fits the lesson:
 For shorter lessons, keep the same logic but compress the slide count. Add a
 visible transition or checkpoint when pacing or task switching may be difficult.
 
-## Layout Habits
+## Modeling First
+
+When a deck introduces a new concept, process, or creative judgment, place the
+model or worked example before independent directions.
+
+Use slide sequences that support:
+
+1. teacher model
+2. guided noticing or guided practice
+3. student attempt
+4. check, critique, or reflection
+
+## Slide Design Rules
 
 - Keep one main teaching move or task per slide.
+- Make the focal idea obvious within two to three seconds.
 - Use consistent title placement, body placement, and margins across the deck.
 - Keep repeated slide types in the same layout pattern.
 - Prefer clean left-to-right or top-to-bottom layouts over scattered elements.
@@ -60,9 +76,25 @@ visible transition or checkpoint when pacing or task switching may be difficult.
 - Prefer three or fewer bullets on most student-facing slides.
 - Avoid paragraph blocks on projected slides.
 - Split crowded directions across slides instead of shrinking text.
-- Make the focal idea obvious within two to three seconds.
-- Put worked examples before independent directions when both are needed.
+- Keep projected text readable from the back of a classroom.
 - Put extra explanation in teacher notes or separate guidance, not slide bodies.
+- Surface checks for understanding as separate moments when useful.
+- Make transitions explicit when they affect pacing or task switching.
+
+## Common Slide Types
+
+- bell ringer or do-now
+- lesson focus or learning target
+- agenda or sequence preview
+- teacher model
+- worked example
+- discussion prompt
+- partner task
+- guided practice
+- checklist
+- independent work directions
+- reflection
+- exit ticket
 
 ## Build Priorities
 
@@ -74,6 +106,15 @@ When tradeoffs appear, prefer:
 4. one clear task at a time
 5. visual polish
 
+## Avoid
+
+- paragraph-heavy slides
+- dense tables unless the table is the instructional object
+- tiny text
+- decorative visuals that add cognitive load
+- multiple competing tasks on one slide
+- mixed icon families or inconsistent image treatment across connected slides
+
 ## Override Conditions
 
 Override these defaults when the current lesson, grade band, content area, deck
@@ -81,4 +122,4 @@ purpose, or user request clearly requires a different structure or density.
 
 ## Version
 
-0.1.0
+0.1.1

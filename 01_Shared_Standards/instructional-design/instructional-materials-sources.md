@@ -1,63 +1,84 @@
 # Instructional Materials Sources
 
+## Purpose
+
+Use this standard to choose, retrieve, and reconcile source context for classroom
+material generation.
+
+This file defines retrieval behavior. It does not serve as a Navigation Registry,
+workspace map, dashboard catalog, or archive index.
+
+## Source System Roles
+
+- Notion: planning records, lesson notes, pacing context, readiness context, and
+  source-of-truth records when designated by the current workflow.
+- Google Drive: live lesson materials, worksheets, slides, handouts, unit guides,
+  and shared working files.
+- Google Sheets: canonical visual asset metadata when asset tracking is required.
+- GitHub: Agent OS governance, standards, overlays, templates, registry files,
+  tests, and release notes.
+- Attached files and memory: reference snapshots unless the user explicitly asks
+  to promote or refresh them.
+
 ## Source Priority
 
-Use this order when sources overlap:
+Use this order when instructional sources overlap:
 
-1. Google Drive and Notion for live lesson materials, shared working files, and formal records.
-2. Canonical Google Sheet for visual asset metadata.
-3. Attached agent files as reference snapshots unless refresh is explicitly requested.
-4. Memory for lightweight preferences and short working summaries.
+1. canonical unit or approved unit guide
+2. current lesson plan, lesson brief, or teacher-authored current material
+3. approved generation packet or teacher model
+4. current working artifact being revised
+5. templates and reusable support resources
+6. archived or legacy material
+7. attached files and memory snapshots
 
-If sources conflict, prefer the designated live source and write back confirmed
-newer reality only when the task requires it and write access is approved.
+If sources conflict, prefer the designated live source. Do not write back a newer
+reality unless the task requires it and write access is approved.
 
-## Source System Defaults
+## Notion Retrieval Standard
 
-- Notion primary hub: `Curriculum Operations Hub`.
-- Digital Media source-of-truth workspace: `Digital Media Source Control`.
-- Drive unit folder pattern: `Instructional Materials/Unit <number>`.
+When Notion is involved:
 
-These names guide retrieval. They do not authorize writes without a confirmed
-target page, database, folder, or file.
+- Use dashboards and hubs for routing, not as the primary instructional source.
+- Follow linked pages and database relations before performing additional broad
+  searches.
+- Use the underlying unit, lesson, packet, or source page for content decisions.
+- Prefer current and canonical records over templates, planning fragments, or
+  archives.
+- If two current sources are equally plausible and choosing wrong would change
+  the work, ask one short clarification question.
 
-## Retrieval Rules
+## Conflict Resolution
 
-Retrieve only when a source must be found before work can continue.
+When sources disagree:
 
-- Use Drive for lesson plans, worksheets, slides, unit guides, and instructional files.
-- Use Notion for lesson notes, pacing docs, planning pages, and related records.
-- Prefer current unit guides and lesson plans over templates or archives.
-- Search narrowly first using lesson, unit, course, or material name.
-- If two current sources are equally plausible, ask one short disambiguation question.
+- canonical unit guidance overrides lower-level generated artifacts
+- current lesson guidance overrides slides, worksheets, and handouts
+- teacher-authored current material overrides generated drafts
+- current semester material overrides archived material
+- explicit user direction in the current request overrides saved defaults
 
-## Drive Unit Folder Rules
+## Navigation Registry Boundary
 
-Use the live unit-folder root only when the task needs a shared-file outcome.
+Do not hard-code dashboard names, database names, archive locations, or one-off
+retrieval paths in this standard. Those belong in a governed Navigation Registry
+or in the current task context.
 
-Default folders:
+If a user names a specific page, folder, dashboard, database, or path, use that
+named source as the retrieval target unless doing so conflicts with governance or
+write authorization.
 
-- worksheets: `01_Worksheet/worksheet-content`
-- worksheet icons: `01_Worksheet/worksheet-icons`
-- slides: `02_Slides/slide-content`
-- slide images: `02_Slides/slide-images`
-- slide icons: `02_Slides/slide-icons`
-- reusable assets: `03_Shared-Assets`
-- update history: `04_Update-History`
+## Google Drive Retrieval Rules
 
-Use update history only for release notes or version logs.
+Use Drive when the task needs existing slide decks, worksheets, Docs, unit guides,
+or shared classroom files.
 
-Naming:
-
-- worksheet: `Unit-XX_Worksheet_<topic-or-lesson>_vYYYY-MM-DD`
-- slides: `Unit-XX_Slides_<topic-or-lesson>_vYYYY-MM-DD`
-- image: `Unit-XX_Image_<asset-name>`
-- icon: `Unit-XX_Icon_<asset-name>`
-- visual request: `Unit-XX_Visual-Request_<topic-or-lesson>_vYYYY-MM-DD`
-
-Update an existing canonical working file by default when revising the same
-material. Create a separate copy only when requested, protected, outside the unit
-folder, or preservation materially matters.
+- Prefer current working files over copied or archived versions.
+- Update an existing canonical working file by default when revising the same
+  material.
+- Create a separate copy only when requested, when the file is protected, when it
+  sits outside the confirmed target workspace, or when preserving the original
+  materially matters.
 
 ## Asset Metadata Rules
 
@@ -67,12 +88,14 @@ Required record groups:
 
 - identifiers: Asset ID, Asset Name, Drive Link
 - classification: Folder, Asset Type, Best-Fit Unit, Lesson / Use Case
-- status: Student-Facing?, Teacher-Facing?, Quality / Readiness, Source / Permission Status, Duplicate Status, Keep Decision
-- tracking: Notes for Future Agents, Source Authority, Approval Status, Last Updated, Next Action, Migration Notes
+- status: Student-Facing?, Teacher-Facing?, Quality / Readiness, Source /
+  Permission Status, Duplicate Status, Keep Decision
+- tracking: Notes for Future Agents, Source Authority, Approval Status, Last
+  Updated, Next Action, Migration Notes
 
 Search by Asset ID first. Update matching rows instead of duplicating. If no
 match exists, append a complete row. Do not invent unknown required values.
 
 ## Version
 
-0.1.1
+0.1.2
