@@ -1,0 +1,19 @@
+{
+  "schema_version": "sync-handoff.v1",
+  "sheet_id": "sheet_fixture_workspace_assets",
+  "row_scope": {
+    "first_data_row": 2,
+    "start_row": 2,
+    "end_row": 11,
+    "batch_size": 10,
+    "next_cursor": null
+  },
+  "target": "staging",
+  "target_database_id": "db_fixture_staging",
+  "field_mapping": {
+    "file_id": "file_id",
+    "Name": "title"
+  },
+  "approval_key_required": "SYNC_APPROVED_STAGING",
+  "skipped_records": []
+}
