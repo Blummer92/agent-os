@@ -49,11 +49,23 @@
       docs/
         drive-ops-sync-collaboration-guide.md
         sync-safety-validation-checklist.md
+      fixtures/
+        dry-run-receipt.invalid-count-mismatch.json
+        dry-run-receipt.invalid-target-mismatch.json
+        dry-run-receipt.valid.json
+        sync-handoff.invalid-missing-range.json
+        sync-handoff.invalid-missing-target.json
+        sync-handoff.valid.json
       samples/
         unit-alignment-handoff/
           HandoffService.gs
           HandoffServiceTest.gs
           handoff.json
+      schemas/
+        sync-dry-run-receipt.v1.schema.json
+        sync-handoff.v1.schema.json
+      tests/
+        validate-fixtures.test.js
   ADOPTION_REVIEW_PACKET.md
   CHANGELOG.md
   FILE_MANIFEST.md

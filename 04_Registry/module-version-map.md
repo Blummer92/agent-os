@@ -23,7 +23,7 @@ versions change only when the module's standards or contract changes.
 | Instructional Materials Coach | 0.3.0 |
 | Student Language Standard | 0.1.0 |
 | Workflow Scheduler | 0.6.0 |
-| Workspace Automation Builder Tooling | 0.1.0 |
+| Workspace Automation Builder Tooling | 0.1.1 |
 | Agent Memory & Context Budget Manager | 0.0.0 |
 
 **Dashboard Migration Verification**
@@ -34,10 +34,10 @@ never authorizes live Notion, Workspace, trigger, sharing, source-of-truth, or
 production dashboard writes.
 
 **Workspace Automation Builder Tooling**
-(`08_Tooling/workspace-automation-builder/`) starts as an Apps Script safety
-bridge, offline test suite, sync safety docs, and sanitized sample handoff
-fixture. It does not authorize live Workspace, Notion, trigger, sharing, or
-production writes.
+(`08_Tooling/workspace-automation-builder/`) includes an Apps Script safety
+bridge, offline test suite, sync safety docs, sanitized sample handoff fixture,
+JSON schemas, validation fixtures, and a local-only fixture validator. It does
+not authorize live Workspace, Notion, trigger, sharing, or production writes.
 
 **Workflow Scheduler** (`08_Tooling/workflow-scheduler/`) version reflects
 thirteen shipped milestones: Phase 1 (MVP), 2A (approval engine), 2B (retry
