@@ -1,0 +1,12 @@
+{
+  "permission_denied": {
+    "error": "PermissionDenied",
+    "severity": "critical",
+    "retryable": false,
+    "message": "Fixture simulates revoked or missing read permission."
+  },
+  "incomplete_metadata": {
+    "object": "page",
+    "id": "notion-page-incomplete"
+  }
+}
