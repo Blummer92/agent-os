@@ -4,42 +4,50 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_DIR = ROOT / "scripts"
-SCRIPT = SCRIPT_DIR / "build_dependency_graph.py"
 sys.path.insert(0, str(SCRIPT_DIR))
-
-spec = importlib.util.spec_from_file_location("build_dependency_graph", SCRIPT)
+spec = importlib.util.spec_from_file_location(
+    "build_dependency_graph", SCRIPT_DIR / "build_dependency_graph.py"
+)
 module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 
 
-def test_placeholder_snapshot_marks_dependencies_missing(tmp_path):
-    changes = tmp_path / "changes.yaml"
-    changes.write_text(
-        """
-version: 1
-changes:
-  - action: archive_database
-    item_type: database
-    source_database: Legacy
-    source_item: Legacy
-    canonical_database: Canonical
-    canonical_item: Canonical
-    current_name: Legacy
-    proposed_name: Canonical
-    migration_method: Verify first.
-    rollback_method: Keep source unchanged.
-    owner: Modeling & Dashboard Governance Agent
-    approval_required: true
-    notes: Test only.
-""".strip()
-        + "\n",
-        encoding="utf-8",
-    )
-    snapshot = tmp_path / "latest.json"
-    snapshot.write_text('{"placeholder": true, "dashboards": {}}\n', encoding="utf-8")
+def test_placeholder_snapshot_marks_unknown_inventory_missing():
+    snapshot = {
+        "generated_at": "2026-01-01T00:00:00+00:00",
+        "dashboards": {
+            "legacy": {
+                "name": "Legacy Dashboard",
+                "schema": {"properties": {}},
+            }
+        },
+    }
 
-    graph = module.build_graph(changes, snapshot)
+    nodes = module.extract_snapshot_nodes(snapshot)
 
-    assert graph["placeholder_snapshot"] is True
-    assert any(node["evidence_status"] == "missing" for node in graph["nodes"])
-    assert any(edge["type"] == "unknown_dependency" for edge in graph["edges"])
+    assert any(node.evidence_status == "missing" for node in nodes.values())
+    assert any(node.name == "Unknown field inventory" for node in nodes.values())
+
+
+def test_proposed_change_without_related_nodes_is_high_risk():
+    snapshot = {"dashboards": {"legacy": {"name": "Legacy Dashboard"}}}
+    nodes = module.extract_snapshot_nodes(snapshot)
+    changes = {
+        "changes": [
+            {
+                "action": "archive_database",
+                "item_type": "database",
+                "source_database": "Missing Dashboard",
+                "canonical_database": "Canonical",
+                "source_item": "Legacy",
+            }
+        ]
+    }
+
+    module.add_change_nodes(nodes, snapshot, changes)
+    proposed = [node for node in nodes.values() if node.type == "proposed_change"]
+
+    assert proposed
+    assert proposed[0].risk_level == "high"
+    assert proposed[0].evidence_status == "missing"
