@@ -1,5 +1,6 @@
 # Changelog
 ## 0.1.1-draft
+- Added Dashboard Migration Verification standard and reusable tooling scaffold under `08_Tooling/dashboard-migration-verification/` with sanitized examples, placeholder snapshot generation, dependency graph validation, conservative report output, and tests.
 - Added Unit Alignment handoff service and test samples to the Workspace Automation Builder tooling sample fixture.
 - Added Workspace Automation Builder Apps Script tooling scaffold, dedicated sync safety bridge tests, and sanitized Unit Alignment handoff fixture.
 - Added Workspace Automation Builder as a Google Workspace shared standard and prompt template; wired it into the Google Workspace Automation Engineer overlay without creating a new agent.
