@@ -31,6 +31,16 @@ by the Integration Manager. The Notion-specific cache standard lives in
   `01_Shared_Standards/navigation/navigation-registry-standard.md`, and
   `01_Shared_Standards/notion/notion-navigation-index-standard.md`.
 
+## Live sheet compatibility
+
+The client supports tabs where row 1 is the standard navigation warning banner
+and row 2 is the header row. It also remains compatible with older fixture-style
+tabs where row 1 is already the header row.
+
+`Property Dictionary` lookups accept both live sheet terminology
+(`Property Name`) and older fixture/docs terminology (`Field Name`) while keeping
+the public lookup shape as `lookup field <database> --field <name>`.
+
 ## Installation
 
     pip install -e .
