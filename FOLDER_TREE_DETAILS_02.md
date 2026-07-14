@@ -15,6 +15,7 @@
     README.md
     agent-inheritance-registry.md
     alias-and-deprecation-map.md
+    legacy-agent-alias-registry.md
     module-version-map.md
     ownership-matrix.md
     responsibility-matrix.md
@@ -39,6 +40,18 @@
     python-development-overlay.tests.md
     qa-test-agent.tests.md
     workspace-implementation-overlay.tests.md
+  08_Tooling/
+    workspace-automation-builder/
+      README.md
+      apps-script/
+        AppsScriptSyncSafetyBridge.gs
+        AppsScriptSyncSafetyBridgeTest.gs
+      docs/
+        drive-ops-sync-collaboration-guide.md
+        sync-safety-validation-checklist.md
+      samples/
+        unit-alignment-handoff/
+          handoff.json
   ADOPTION_REVIEW_PACKET.md
   CHANGELOG.md
   FILE_MANIFEST.md

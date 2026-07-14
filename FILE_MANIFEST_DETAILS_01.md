@@ -22,13 +22,19 @@ Continuation of `FILE_MANIFEST.md` (`05_Examples/` onward).
 | `07_Agent_Tests/python-development-overlay.tests.md` | Compliance test prompts for the Python Development Overlay. | 24 | Agent test suite addition |
 | `07_Agent_Tests/qa-test-agent.tests.md` | Compliance test prompts for the QA / Test Agent. | 24 | Agent test suite addition |
 | `07_Agent_Tests/workspace-implementation-overlay.tests.md` | Compliance test prompts for the Workspace Implementation Overlay. | 26 | Agent test suite addition |
+| `08_Tooling/workspace-automation-builder/README.md` | Workspace Automation Builder tooling overview. | 45 | Sync safety bridge test implementation |
+| `08_Tooling/workspace-automation-builder/apps-script/AppsScriptSyncSafetyBridge.gs` | Apps Script sync safety helper module. | 138 | Sync safety bridge test implementation |
+| `08_Tooling/workspace-automation-builder/apps-script/AppsScriptSyncSafetyBridgeTest.gs` | Offline safety bridge tests. | 180 | Sync safety bridge test implementation |
+| `08_Tooling/workspace-automation-builder/docs/drive-ops-sync-collaboration-guide.md` | Sync collaboration guide summary. | 51 | Drive ops sync collaboration guide |
+| `08_Tooling/workspace-automation-builder/docs/sync-safety-validation-checklist.md` | Sync safety checklist summary. | 47 | Sync safety validation checklist |
+| `08_Tooling/workspace-automation-builder/samples/unit-alignment-handoff/handoff.json` | Sanitized Unit Alignment handoff fixture. | 65 | Uploaded handoff fixture |
 | `ADOPTION_REVIEW_PACKET.md` | Governance review handoff packet. | 36 | Review-access packaging task |
-| `CHANGELOG.md` | Agent OS changelog. | 48 | Workspace automation builder implementation |
+| `CHANGELOG.md` | Agent OS changelog. | 49 | Sync safety bridge test implementation |
 | `FILE_MANIFEST.md` | Review inventory of Markdown files (00_Governance-04_Registry). | 85 | Workspace automation builder implementation |
-| `FILE_MANIFEST_DETAILS_01.md` | Split file manifest detail file (05_Examples onward). | 37 | Review-access packaging task |
+| `FILE_MANIFEST_DETAILS_01.md` | Split file manifest detail file (05_Examples onward). | 43 | Sync safety bridge test implementation |
 | `FOLDER_TREE.md` | Short folder tree index for governance inspection. | 24 | Review-access packaging task |
 | `FOLDER_TREE_DETAILS_01.md` | Split folder tree detail file. | 75 | Review-access packaging task |
-| `FOLDER_TREE_DETAILS_02.md` | Split folder tree detail file. | 50 | Review-access packaging task |
+| `FOLDER_TREE_DETAILS_02.md` | Split folder tree detail file. | 60 | Sync safety bridge test implementation |
 | `README.md` | Agent OS knowledge base file. | 18 | Agent OS source package |
 | `README_FOR_GOVERNANCE_REVIEW.md` | Inspection instructions for Governance Agent. | 27 | Review-access packaging task |
 | `VALIDATION_REPORT.md` | Review-access validation results. | 20 | Review-access packaging task |
