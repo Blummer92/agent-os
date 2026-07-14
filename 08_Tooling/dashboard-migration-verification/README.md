@@ -42,6 +42,10 @@ the governing standard.
   config/
     dashboards.yaml
     dashboards.example.yaml
+    dashboard_registry/
+      coach_and_governance_dashboards.yaml
+      core_dashboards.yaml
+      operations_dashboards.yaml
     proposed_changes.schema.json
     schema/
       proposed_change.definition.json
@@ -80,7 +84,8 @@ python -m pytest tests
 
 ## Inputs
 
-- `config/dashboards.yaml`: sanitized registry for known dashboard surfaces
+- `config/dashboards.yaml`: sanitized combined registry used by the current scripts
+- `config/dashboard_registry/*.yaml`: split registry source files for review and maintenance
 - `config/dashboards.example.yaml`: minimal example registry fixture
 - `config/proposed_changes.schema.json`: schema contract for proposed-change manifests
 - `config/schema/*.json`: split schema components for modular schema validation
