@@ -1,6 +1,7 @@
 # Changelog
 ## 0.1.1-draft
 - Added Workspace Automation Builder as a Google Workspace shared standard and prompt template; wired it into the Google Workspace Automation Engineer overlay without creating a new agent.
+- Folded durable Workspace Automation Developer behavior into Workspace Automation Builder route selection, tests, prompt template, and legacy alias registry.
 - Added Agent OS Governance v1.0 baseline as the canonical source of truth for dashboard ownership, readiness vocabulary, production routing, production authorization, historical aliases, production safety rules, and governance change policy.
 - Updated dashboard governance standards to document the canonical ownership model, official production pipeline, standard dashboard structure, and Governance v1.0 readiness vocabulary.
 - Clarified that Instructional Materials Coach owns material quality only, Production Control is the only production authorization owner, and Assessment Agent / Student Evidence Coach are one canonical owner.
