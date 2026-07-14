@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-os.local/schemas/workspace-automation-builder/sync-dry-run-receipt.v1.schema.json",
+  "title": "Workspace Automation Builder Sync Dry Run Receipt v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "manifest",
+    "batch_window",
+    "dry_run_passed",
+    "sync_candidate_count",
+    "verified_count",
+    "synced_count",
+    "skipped_count",
+    "skipped_records",
+    "payload_sample"
+  ],
+  "properties": {
+    "schema_version": { "const": "sync-dry-run-receipt.v1" },
+    "manifest": { "$ref": "./sync-handoff.v1.schema.json" },
+    "batch_window": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["start_row", "end_row", "batch_size", "next_cursor"],
+      "properties": {
+        "start_row": { "type": "integer", "minimum": 1 },
+        "end_row": { "type": "integer", "minimum": 1 },
+        "batch_size": { "type": "integer", "minimum": 1, "maximum": 50 },
+        "next_cursor": { "type": ["integer", "null"], "minimum": 1 }
+      }
+    },
+    "dry_run_passed": { "type": "boolean" },
+    "sync_candidate_count": { "type": "integer", "minimum": 0 },
+    "verified_count": { "type": "integer", "minimum": 0 },
+    "synced_count": { "type": "integer", "minimum": 0 },
+    "skipped_count": { "type": "integer", "minimum": 0 },
+    "skipped_records": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["source_row", "reason"],
+        "properties": {
+          "source_row": { "type": "integer", "minimum": 1 },
+          "reason": { "type": "string", "minLength": 1 },
+          "file_id": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "payload_sample": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["file_id", "properties"],
+        "properties": {
+          "file_id": { "type": "string", "minLength": 1 },
+          "properties": { "type": "object" }
+        }
+      }
+    }
+  }
+}
