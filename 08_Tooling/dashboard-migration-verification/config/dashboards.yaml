@@ -1,0 +1,110 @@
+dashboards:
+  teacher_request_routing_dashboard:
+    name: "Teacher Request Routing Dashboard"
+    notion_id: "unknown"
+    data_source_id: "unknown"
+    owner: "Teacher Request Operations"
+    source_of_truth_role: "canonical routing dashboard"
+    retirement_allowed: false
+    human_approval_required: true
+    notes: "Primary routing surface. Do not treat similarly named dashboards as equivalent without current evidence."
+
+  review_before_use_teacher_request_routing_dashboard:
+    name: "REVIEW BEFORE USE - Teacher Request Routing Dashboard"
+    notion_id: "unknown"
+    data_source_id: "unknown"
+    owner: "Teacher Request Operations"
+    source_of_truth_role: "candidate retirement surface"
+    retirement_allowed: true
+    human_approval_required: true
+    notes: "Retirement requires verified record parity, dependency parity, and human approval."
+
+  unit_readiness_action_heatmap:
+    name: "Unit Readiness Action Heatmap"
+    notion_id: "unknown"
+    data_source_id: "unknown"
+    owner: "Curriculum Operations"
+    source_of_truth_role: "analytics and readiness surface"
+    retirement_allowed: false
+    human_approval_required: true
+    notes: "Treat formula, rollup, and linked-view dependencies as material."
+
+  generated_asset_review:
+    name: "Generated Asset Review"
+    notion_id: "unknown"
+    data_source_id: "unknown"
+    owner: "Generated Asset Review Ops"
+    source_of_truth_role: "review operations dashboard"
+    retirement_allowed: true
+    human_approval_required: true
+    notes: "Buttons, templates, and workflow dependencies must be verified before any retirement recommendation."
+
+  unit_alignment_and_readiness_dashboard:
+    name: "Unit Alignment & Readiness Dashboard"
+    notion_id: "unknown"
+    data_source_id: "unknown"
+    owner: "Curriculum Operations"
+    source_of_truth_role: "alignment and readiness source"
+    retirement_allowed: false
+    human_approval_required: true
+    notes: "Status normalization requires explicit evidence that formulas, views, and workflows still align."
+
+  daily_generation_packet_dashboard:
+    name: "Daily Generation Packet Dashboard"
+    notion_id: "unknown"
+    data_source_id: "unknown"
+    owner: "Generation Operations"
+    source_of_truth_role: "daily generation operations dashboard"
+    retirement_allowed: false
+    human_approval_required: true
+    notes: "Assume operational risk if automations or synced references are not fully inventoried."
+
+  teacher_modeling_coach_action_dashboard:
+    name: "Teacher Modeling Coach Action Dashboard"
+    notion_id: "unknown"
+    data_source_id: "unknown"
+    owner: "Coaching Operations"
+    source_of_truth_role: "coach action dashboard"
+    retirement_allowed: false
+    human_approval_required: true
+    notes: "Do not infer equivalence from overlapping coach action labels alone."
+
+  student_evidence_coach_action_dashboard:
+    name: "Student Evidence Coach Action Dashboard"
+    notion_id: "unknown"
+    data_source_id: "unknown"
+    owner: "Coaching Operations"
+    source_of_truth_role: "student evidence coaching dashboard"
+    retirement_allowed: false
+    human_approval_required: true
+    notes: "Linked evidence flows and documentation references must be verified before migration recommendations."
+
+  transfer_alignment_and_source_evidence_dashboard:
+    name: "Transfer Alignment & Source Evidence Dashboard"
+    notion_id: "unknown"
+    data_source_id: "unknown"
+    owner: "Curriculum Governance"
+    source_of_truth_role: "transfer evidence dashboard"
+    retirement_allowed: false
+    human_approval_required: true
+    notes: "Treat relations, rollups, and synced databases as high-risk dependencies."
+
+  dashboard_admin_and_change_log:
+    name: "Dashboard Admin & Change Log"
+    notion_id: "unknown"
+    data_source_id: "unknown"
+    owner: "Dashboard Governance"
+    source_of_truth_role: "administrative audit trail"
+    retirement_allowed: false
+    human_approval_required: true
+    notes: "Administrative history should remain unless a verified replacement preserves audit coverage."
+
+  dashboard_governance_ownership_map:
+    name: "Dashboard Governance Ownership Map"
+    notion_id: "unknown"
+    data_source_id: "unknown"
+    owner: "Dashboard Governance"
+    source_of_truth_role: "ownership and governance map"
+    retirement_allowed: false
+    human_approval_required: true
+    notes: "Use as a review surface for owner and approval routing, not as proof of migration readiness by itself."
