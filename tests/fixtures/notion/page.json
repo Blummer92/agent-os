@@ -1,0 +1,15 @@
+{
+  "object": "page",
+  "id": "notion-page-001",
+  "title": "Navigation Registry Pilot Page",
+  "parent": {
+    "database_id": "notion-database-001"
+  },
+  "owner": "Integration Manager",
+  "url": "https://notion.example.invalid/navigation-registry-pilot-page",
+  "created_time": "2026-07-14T00:00:00.000Z",
+  "last_edited_time": "2026-07-14T00:15:00.000Z",
+  "archived": false,
+  "properties_schema_visible": false,
+  "human_review_required": false
+}

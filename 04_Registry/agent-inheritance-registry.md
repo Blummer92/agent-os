@@ -6,7 +6,7 @@
 | GitHub Service Agent | Global, Source-of-Truth, Read-Only Default, Testing/Release | github-service-agent |
 | Google Workspace Automation Engineer | Global, Python, Workspace, Notion | google-workspace-automation-engineer |
 | Modeling & Dashboard Governance Agent | Global, Dashboard Governance, Notion | modeling-dashboard-governance-agent |
-| Integration Manager | Global, Workspace, Notion | integration-manager |
+| Integration Manager | Global, Workspace, Notion, Navigation Registry | integration-manager |
 | QA / Test Agent | Global, QA/Test | qa-test-agent |
 | Agent Orchestrator | Global, Instructional Design | agent-orchestrator |
 | Unit Alignment Agent | Global, Instructional Design, Notion | unit-alignment-agent |
@@ -28,6 +28,7 @@ Aliases always resolve to an existing canonical registered agent.
 |---|---|---|
 | ChatGPT request triage | ChatGPT Orchestrator | ChatGPT Orchestrator; selected registered owner |
 | GitHub repository write | GitHub Service Agent | GitHub Service Agent; GitHub Change Request |
+| Navigation Registry governance and lookup routing | Integration Manager | Integration Manager; Navigation Registry Standard |
 | Dashboard sync, default cross-system route | Integration Manager | Dashboard Builder Overlay; Apps Script Sync Test Overlay |
 | Dashboard sync, governance-heavy route | Modeling & Dashboard Governance Agent | Dashboard Builder Overlay |
 | Dashboard sync, implementation-heavy route | Google Workspace Automation Engineer | Workspace Implementation Overlay; Apps Script Sync Test Overlay |
