@@ -22,9 +22,10 @@ Continuation of `FILE_MANIFEST.md` (`05_Examples/` onward).
 | `07_Agent_Tests/python-development-overlay.tests.md` | Compliance test prompts for the Python Development Overlay. | 24 | Agent test suite addition |
 | `07_Agent_Tests/qa-test-agent.tests.md` | Compliance test prompts for the QA / Test Agent. | 24 | Agent test suite addition |
 | `07_Agent_Tests/workspace-implementation-overlay.tests.md` | Compliance test prompts for the Workspace Implementation Overlay. | 26 | Agent test suite addition |
-| `08_Tooling/workspace-automation-builder/README.md` | Workspace Automation Builder tooling overview. | 60 | Handoff schema fixture implementation |
+| `08_Tooling/workspace-automation-builder/README.md` | Workspace Automation Builder tooling overview. | 82 | Handoff validator CLI implementation |
 | `08_Tooling/workspace-automation-builder/apps-script/AppsScriptSyncSafetyBridge.gs` | Apps Script sync safety helper module. | 138 | Sync safety bridge test implementation |
 | `08_Tooling/workspace-automation-builder/apps-script/AppsScriptSyncSafetyBridgeTest.gs` | Offline safety bridge tests. | 180 | Sync safety bridge test implementation |
+| `08_Tooling/workspace-automation-builder/bin/validate-handoff.js` | Local CLI for validating handoff and dry-run receipt JSON files. | 23 | Handoff validator CLI implementation |
 | `08_Tooling/workspace-automation-builder/docs/drive-ops-sync-collaboration-guide.md` | Sync collaboration guide summary. | 51 | Drive ops sync collaboration guide |
 | `08_Tooling/workspace-automation-builder/docs/sync-safety-validation-checklist.md` | Sync safety checklist summary. | 47 | Sync safety validation checklist |
 | `08_Tooling/workspace-automation-builder/fixtures/dry-run-receipt.invalid-count-mismatch.json` | Invalid dry-run receipt fixture for count mismatch. | 52 | Handoff schema fixture implementation |
@@ -33,19 +34,21 @@ Continuation of `FILE_MANIFEST.md` (`05_Examples/` onward).
 | `08_Tooling/workspace-automation-builder/fixtures/sync-handoff.invalid-missing-range.json` | Invalid sync handoff fixture missing range. | 20 | Handoff schema fixture implementation |
 | `08_Tooling/workspace-automation-builder/fixtures/sync-handoff.invalid-missing-target.json` | Invalid sync handoff fixture missing target. | 20 | Handoff schema fixture implementation |
 | `08_Tooling/workspace-automation-builder/fixtures/sync-handoff.valid.json` | Valid sync handoff fixture. | 27 | Handoff schema fixture implementation |
+| `08_Tooling/workspace-automation-builder/lib/validate-handoff.js` | Shared local validation helpers for sync handoff and dry-run receipt contracts. | 192 | Handoff validator CLI implementation |
 | `08_Tooling/workspace-automation-builder/schemas/sync-dry-run-receipt.v1.schema.json` | JSON schema for dry-run receipts. | 70 | Handoff schema fixture implementation |
 | `08_Tooling/workspace-automation-builder/schemas/sync-handoff.v1.schema.json` | JSON schema for sync handoff packets. | 64 | Handoff schema fixture implementation |
 | `08_Tooling/workspace-automation-builder/samples/unit-alignment-handoff/handoff.json` | Sanitized Unit Alignment handoff fixture. | 65 | Uploaded handoff fixture |
 | `08_Tooling/workspace-automation-builder/samples/unit-alignment-handoff/HandoffService.gs` | Unit Alignment handoff preview sample service. | 198 | Uploaded handoff service sample |
 | `08_Tooling/workspace-automation-builder/samples/unit-alignment-handoff/HandoffServiceTest.gs` | Unit Alignment handoff preview sample tests. | 90 | Uploaded handoff service test sample |
-| `08_Tooling/workspace-automation-builder/tests/validate-fixtures.test.js` | Local-only validation test for handoff and dry-run fixtures. | 119 | Handoff schema fixture implementation |
+| `08_Tooling/workspace-automation-builder/tests/validate-fixtures.test.js` | Local-only validation test for handoff and dry-run fixtures. | 52 | Handoff validator CLI implementation |
+| `08_Tooling/workspace-automation-builder/tests/validate-handoff-cli.test.js` | Local CLI regression tests for valid and invalid handoff fixtures. | 35 | Handoff validator CLI implementation |
 | `ADOPTION_REVIEW_PACKET.md` | Governance review handoff packet. | 36 | Review-access packaging task |
-| `CHANGELOG.md` | Agent OS changelog. | 51 | Handoff schema fixture implementation |
+| `CHANGELOG.md` | Agent OS changelog. | 53 | Handoff validator CLI implementation |
 | `FILE_MANIFEST.md` | Review inventory of Markdown files (00_Governance-04_Registry). | 85 | Workspace automation builder implementation |
-| `FILE_MANIFEST_DETAILS_01.md` | Split file manifest detail file (05_Examples onward). | 54 | Handoff schema fixture implementation |
+| `FILE_MANIFEST_DETAILS_01.md` | Split file manifest detail file (05_Examples onward). | 57 | Handoff validator CLI implementation |
 | `FOLDER_TREE.md` | Short folder tree index for governance inspection. | 24 | Review-access packaging task |
 | `FOLDER_TREE_DETAILS_01.md` | Split folder tree detail file. | 75 | Review-access packaging task |
-| `FOLDER_TREE_DETAILS_02.md` | Split folder tree detail file. | 77 | Handoff schema fixture implementation |
+| `FOLDER_TREE_DETAILS_02.md` | Split folder tree detail file. | 81 | Handoff validator CLI implementation |
 | `README.md` | Agent OS knowledge base file. | 18 | Agent OS source package |
 | `README_FOR_GOVERNANCE_REVIEW.md` | Inspection instructions for Governance Agent. | 27 | Review-access packaging task |
 | `VALIDATION_REPORT.md` | Review-access validation results. | 20 | Review-access packaging task |
