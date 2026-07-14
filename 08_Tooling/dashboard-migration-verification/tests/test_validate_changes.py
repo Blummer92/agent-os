@@ -1,8 +1,11 @@
 from pathlib import Path
 import importlib.util
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "scripts" / "validate_changes.py"
+SCRIPT_DIR = ROOT / "scripts"
+SCRIPT = SCRIPT_DIR / "validate_changes.py"
+sys.path.insert(0, str(SCRIPT_DIR))
 
 spec = importlib.util.spec_from_file_location("validate_changes", SCRIPT)
 module = importlib.util.module_from_spec(spec)
