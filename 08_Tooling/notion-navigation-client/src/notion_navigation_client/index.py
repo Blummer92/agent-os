@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from .records import index_by, rows_to_records, with_warning
+from .records import index_by, rows_to_records, split_header_and_data, with_warning
 
 TAB_DASHBOARD_REGISTRY = "Dashboard Registry"
 TAB_DATABASE_REGISTRY = "Database Registry"
@@ -17,11 +17,16 @@ TAB_WORKFLOW_MAP = "Workflow Map"
 TAB_AGENT_PROMPT_LIBRARY = "Agent Prompt Library"
 TAB_DUPLICATE_DRIFT_WATCHLIST = "Duplicate / Drift Watchlist"
 
-_PROPERTY_KEY_FIELDS = ("Database Name", "Field Name")
+_PROPERTY_DATABASE_FIELD = "Database Name"
+_PROPERTY_NAME_FIELDS = ("Field Name", "Property Name")
 
 
-def _property_key(database: str, field: str) -> str:
-    return f"{database}::{field}"
+def _property_name(record: dict) -> str:
+    """Return the field/property display name from supported header variants."""
+    for key in _PROPERTY_NAME_FIELDS:
+        if record.get(key):
+            return record[key]
+    return ""
 
 
 class NavigationIndex:
@@ -38,7 +43,7 @@ class NavigationIndex:
     def _records(self, tab_name: str) -> list[dict]:
         if tab_name not in self._tab_cache:
             rows = self._fetch_tab(tab_name)
-            header, data = (rows[0], rows[1:]) if rows else ([], [])
+            header, data = split_header_and_data(rows)
             self._tab_cache[tab_name] = rows_to_records(header, data)
         return self._tab_cache[tab_name]
 
@@ -53,7 +58,7 @@ class NavigationIndex:
     def get_field(self, database: str, field: str) -> dict | None:
         records = self._records(TAB_PROPERTY_DICTIONARY)
         for record in records:
-            if record.get(_PROPERTY_KEY_FIELDS[0]) == database and record.get(_PROPERTY_KEY_FIELDS[1]) == field:
+            if record.get(_PROPERTY_DATABASE_FIELD) == database and _property_name(record) == field:
                 return with_warning(record)
         return None
 
