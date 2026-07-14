@@ -14,8 +14,3 @@ test = ["pytest>=8"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.pytest.ini_options]
-pythonpath = ["src"]
-testpaths = ["tests/navigation_registry"]
-addopts = "-q"
