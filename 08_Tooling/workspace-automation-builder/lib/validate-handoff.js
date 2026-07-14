@@ -92,6 +92,16 @@ function assertNoUnsafeMarkers(value, label = 'document') {
   assert(!/collection:\/\/[0-9a-f-]{36}/i.test(text), `${label} must not contain live collection IDs`);
 }
 
+function validateTargetDatabaseConsistency(packet) {
+  const databaseId = String(packet.target_database_id || '').toLowerCase();
+  if (packet.target === 'staging') {
+    assert(!databaseId.includes('visual_asset_library'), 'target_database_id appears to belong to visual_asset_library, not staging');
+  }
+  if (packet.target === 'visual_asset_library') {
+    assert(!databaseId.includes('staging'), 'target_database_id appears to belong to staging, not visual_asset_library');
+  }
+}
+
 function validateHandoff(packet) {
   assertRequired(packet, [
     'schema_version',
@@ -109,6 +119,7 @@ function validateHandoff(packet) {
   assert(typeof packet.range_a1 === 'string' && packet.range_a1.length > 0, 'range_a1 is required');
   assert(TARGETS.includes(packet.target), 'handoff target must be staging or visual_asset_library');
   assert(typeof packet.target_database_id === 'string' && packet.target_database_id.length > 0, 'target_database_id is required');
+  validateTargetDatabaseConsistency(packet);
   assertPlainObject(packet.field_mapping, 'field_mapping');
   assert(Object.keys(packet.field_mapping).length > 0, 'field_mapping must not be empty');
   assert(typeof packet.approval_key_required === 'string' && packet.approval_key_required.length > 0, 'approval_key_required is required');
