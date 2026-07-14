@@ -76,7 +76,7 @@ are tested directly (`index.py` against fixture rows in
 ## Limitations
 
 - **Not tested against a live Sheets account in this session** — no Google
-  credentials were available. All 25 unit tests pass against fixture data
+  credentials were available. The unit test suite runs against fixture data
   and mocked clients; the operator must supply their own OAuth credentials
   and validate the live path (real `fetch_tab_values` call against the
   real sheet) themselves. This package's own OAuth flow
