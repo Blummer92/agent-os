@@ -19,6 +19,31 @@ directions, and elements that do not support the instructional purpose.
 - Use chunking and whitespace to break content into clear sections.
 - Keep related text, visuals, and actions close together.
 - Make every element deliberate and easy to justify.
+- Keep sequencing, task flow, and completion criteria visible.
+
+## Modeling First
+
+When a task introduces a new process, asks students to explain reasoning, or
+requires creative judgment, include modeling support.
+
+Prefer:
+
+- worked examples
+- annotated examples
+- non-examples or common mistakes
+- short teacher cues
+- guided practice before independent work
+
+## Evidence First
+
+Every material should make the expected student evidence obvious.
+
+Students should be able to tell:
+
+- what they are making or completing
+- how much is expected
+- how they know they are finished
+- what success looks like
 
 ## Token Baseline
 
@@ -39,6 +64,7 @@ directions, and elements that do not support the instructional purpose.
 - Use repeatable section patterns when they improve student scanning.
 - Keep directions, examples, practice, and reflection predictable.
 - Favor visible writing space over squeezing in extra prompts.
+- Keep repeated components in consistent locations when materials are connected.
 
 ## Length and Writing Load
 
@@ -56,8 +82,32 @@ teacher cues, short headings, sentence frames when needed, checkboxes, progress
 markers, and close pairing of related text and visuals.
 
 Prefer embedded supports over separate differentiated versions unless requested.
-Add modeling support when the task introduces a new process or asks students to
-explain reasoning.
+Fade scaffolds when students have enough practice.
+
+## Reusable Components
+
+Reuse proven classroom components when appropriate:
+
+- learning targets
+- success criteria
+- checklist boxes
+- worked example cards
+- vocabulary callouts
+- reflection boxes
+- critique stems
+- task cards
+- comparison frames
+
+Use a component only when it improves clarity, pacing, or evidence collection.
+
+## Discussion Support
+
+Include discussion support when it helps students process design choices,
+explain thinking, compare options, or engage in partner critique.
+
+Use sentence stems when they improve participation or explanation quality. Keep
+discussion support lighter when the task is mostly individual, procedural, or
+quick-turn practice.
 
 ## Accessibility and Cognitive Load
 
@@ -66,6 +116,7 @@ explain reasoning.
 - Segment content into short, user-paced parts.
 - Use labels, arrows, highlights, or emphasis cues to direct attention.
 - Use near-black and near-white instead of pure black and pure white when it improves comfort.
+- Avoid dense text blocks, cramped layouts, tiny response boxes, and decorative visuals.
 
 ## Teacher Usability
 
@@ -89,4 +140,4 @@ requires extended writing or a different format.
 
 ## Version
 
-0.1.0
+0.1.1
