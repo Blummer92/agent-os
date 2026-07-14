@@ -28,13 +28,15 @@ Continuation of `FILE_MANIFEST.md` (`05_Examples/` onward).
 | `08_Tooling/workspace-automation-builder/docs/drive-ops-sync-collaboration-guide.md` | Sync collaboration guide summary. | 51 | Drive ops sync collaboration guide |
 | `08_Tooling/workspace-automation-builder/docs/sync-safety-validation-checklist.md` | Sync safety checklist summary. | 47 | Sync safety validation checklist |
 | `08_Tooling/workspace-automation-builder/samples/unit-alignment-handoff/handoff.json` | Sanitized Unit Alignment handoff fixture. | 65 | Uploaded handoff fixture |
+| `08_Tooling/workspace-automation-builder/samples/unit-alignment-handoff/HandoffService.gs` | Unit Alignment handoff preview sample service. | 198 | Uploaded handoff service sample |
+| `08_Tooling/workspace-automation-builder/samples/unit-alignment-handoff/HandoffServiceTest.gs` | Unit Alignment handoff preview sample tests. | 90 | Uploaded handoff service test sample |
 | `ADOPTION_REVIEW_PACKET.md` | Governance review handoff packet. | 36 | Review-access packaging task |
-| `CHANGELOG.md` | Agent OS changelog. | 49 | Sync safety bridge test implementation |
+| `CHANGELOG.md` | Agent OS changelog. | 50 | Unit Alignment handoff sample implementation |
 | `FILE_MANIFEST.md` | Review inventory of Markdown files (00_Governance-04_Registry). | 85 | Workspace automation builder implementation |
-| `FILE_MANIFEST_DETAILS_01.md` | Split file manifest detail file (05_Examples onward). | 43 | Sync safety bridge test implementation |
+| `FILE_MANIFEST_DETAILS_01.md` | Split file manifest detail file (05_Examples onward). | 45 | Unit Alignment handoff sample implementation |
 | `FOLDER_TREE.md` | Short folder tree index for governance inspection. | 24 | Review-access packaging task |
 | `FOLDER_TREE_DETAILS_01.md` | Split folder tree detail file. | 75 | Review-access packaging task |
-| `FOLDER_TREE_DETAILS_02.md` | Split folder tree detail file. | 60 | Sync safety bridge test implementation |
+| `FOLDER_TREE_DETAILS_02.md` | Split folder tree detail file. | 62 | Unit Alignment handoff sample implementation |
 | `README.md` | Agent OS knowledge base file. | 18 | Agent OS source package |
 | `README_FOR_GOVERNANCE_REVIEW.md` | Inspection instructions for Governance Agent. | 27 | Review-access packaging task |
 | `VALIDATION_REPORT.md` | Review-access validation results. | 20 | Review-access packaging task |

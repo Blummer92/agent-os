@@ -51,6 +51,8 @@
         sync-safety-validation-checklist.md
       samples/
         unit-alignment-handoff/
+          HandoffService.gs
+          HandoffServiceTest.gs
           handoff.json
   ADOPTION_REVIEW_PACKET.md
   CHANGELOG.md
