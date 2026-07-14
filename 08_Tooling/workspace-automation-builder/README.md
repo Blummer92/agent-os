@@ -3,8 +3,8 @@
 ## Purpose
 
 This package contains reusable Workspace automation safety tooling, validation
-schemas, fixtures, and sample handoff files for review before any live Workspace
-write.
+schemas, fixtures, sample handoff files, and local validation commands for review
+before any live Workspace write.
 
 ## Ownership
 
@@ -16,9 +16,11 @@ shared Workspace Automation Builder standard.
 ## Structure
 
 - `apps-script/`: reusable Apps Script helper code and offline tests.
+- `bin/`: local command-line validation entry points.
+- `lib/`: shared local validation helpers.
 - `schemas/`: JSON schemas for generic sync handoff packets and dry-run receipts.
 - `fixtures/`: sanitized valid and invalid handoff/receipt examples.
-- `tests/`: local-only fixture validation tests.
+- `tests/`: local-only fixture and CLI validation tests.
 - `docs/`: Markdown summaries of sync safety and collaboration requirements.
 - `samples/`: non-generic fixtures that show guarded handoff patterns.
 
@@ -28,6 +30,7 @@ shared Workspace Automation Builder standard.
   sharing, permission, or production write is authorized by this package.
 - Tests use local fixtures and mocks only.
 - Sample and fixture IDs are sanitized values.
+- Local validators read JSON files and print validation results only.
 
 ## Schemas
 
@@ -35,8 +38,8 @@ shared Workspace Automation Builder standard.
 - `schemas/sync-dry-run-receipt.v1.schema.json`
 
 Use these schemas and fixtures to validate handoff packets and dry-run receipts
-before any write path is considered. Passing fixture validation does not approve a
-live write.
+before any write path is considered. Passing validation does not approve a live
+write.
 
 ## How To Validate
 
@@ -53,6 +56,24 @@ Run local fixture validation with Node:
 node 08_Tooling/workspace-automation-builder/tests/validate-fixtures.test.js
 ```
 
+Validate a handoff packet or dry-run receipt file with the reusable local command:
+
+```bash
+node 08_Tooling/workspace-automation-builder/bin/validate-handoff.js \
+  08_Tooling/workspace-automation-builder/fixtures/sync-handoff.valid.json
+```
+
+```bash
+node 08_Tooling/workspace-automation-builder/bin/validate-handoff.js \
+  08_Tooling/workspace-automation-builder/fixtures/dry-run-receipt.valid.json
+```
+
+Run local CLI validation tests:
+
+```bash
+node 08_Tooling/workspace-automation-builder/tests/validate-handoff-cli.test.js
+```
+
 Optional sample validation:
 
 1. load `samples/unit-alignment-handoff/HandoffService.gs`
@@ -61,4 +82,4 @@ Optional sample validation:
 
 ## Version
 
-0.1.1
+0.1.2
