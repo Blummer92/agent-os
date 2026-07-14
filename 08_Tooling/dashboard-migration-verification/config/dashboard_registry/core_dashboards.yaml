@@ -1,0 +1,30 @@
+dashboards:
+  teacher_request_routing_dashboard:
+    name: "Teacher Request Routing Dashboard"
+    notion_id: "unknown"
+    data_source_id: "unknown"
+    owner: "Dashboard Governance"
+    source_of_truth_role: "canonical_operational_dashboard"
+    retirement_allowed: false
+    human_approval_required: true
+    notes: "Primary routing surface. Populate verified Notion IDs before any retirement analysis."
+
+  review_before_use_teacher_request_routing_dashboard:
+    name: "REVIEW BEFORE USE - Teacher Request Routing Dashboard"
+    notion_id: "unknown"
+    data_source_id: "unknown"
+    owner: "Dashboard Governance"
+    source_of_truth_role: "candidate_retirement_surface"
+    retirement_allowed: true
+    human_approval_required: true
+    notes: "Likely overlap with the canonical routing dashboard must be proven through snapshot and dependency evidence."
+
+  unit_readiness_action_heatmap:
+    name: "Unit Readiness Action Heatmap"
+    notion_id: "unknown"
+    data_source_id: "unknown"
+    owner: "Unit Readiness Ops"
+    source_of_truth_role: "derived_monitoring_surface"
+    retirement_allowed: false
+    human_approval_required: true
+    notes: "Retire only after confirming all heatmap-specific formulas, views, and filters are represented elsewhere."
