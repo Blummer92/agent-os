@@ -138,7 +138,7 @@ def test_is_execution_request_recognizes_request_contract_only():
 def test_executor_still_passes_raw_task_to_adapter():
     adapter = RecordingAdapter()
     repository = SQLiteRepository(":memory:")
-    task = make_task()
+    task = make_task(approval_required=False, production_ready=False)
     repository.create_task(task)
 
     executor = Executor(
