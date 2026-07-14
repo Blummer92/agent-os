@@ -46,6 +46,8 @@
       apps-script/
         AppsScriptSyncSafetyBridge.gs
         AppsScriptSyncSafetyBridgeTest.gs
+      bin/
+        validate-handoff.js
       docs/
         drive-ops-sync-collaboration-guide.md
         sync-safety-validation-checklist.md
@@ -56,6 +58,8 @@
         sync-handoff.invalid-missing-range.json
         sync-handoff.invalid-missing-target.json
         sync-handoff.valid.json
+      lib/
+        validate-handoff.js
       samples/
         unit-alignment-handoff/
           HandoffService.gs
@@ -66,6 +70,7 @@
         sync-handoff.v1.schema.json
       tests/
         validate-fixtures.test.js
+        validate-handoff-cli.test.js
   ADOPTION_REVIEW_PACKET.md
   CHANGELOG.md
   FILE_MANIFEST.md
