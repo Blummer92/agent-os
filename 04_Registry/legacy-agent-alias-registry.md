@@ -31,6 +31,7 @@ This file owns legacy alias resolution only.
 | Slide Builder | Instructional Materials Coach | `instructional-materials-coach` | active alias | Use for classroom slide deck generation and revision. |
 | Worksheet Builder | Instructional Materials Coach | `instructional-materials-coach` | active alias | Use for worksheets, packets, and printable/student-facing documents. |
 | Dashboard Builder | Modeling & Dashboard Governance Agent | `modeling-dashboard-governance-agent` | provisional | Use for dashboard schema, governed field, readiness, source-of-truth, and duplicate-prevention concerns. |
+| Workspace Automation Developer | Google Workspace Automation Engineer | `google-workspace-automation-engineer` | active alias | Use for Workspace automation design, patch, debug, scaffold, and implementation approach work. |
 | Sync Builder | Google Workspace Automation Engineer | `google-workspace-automation-engineer` | provisional | Use for workspace automation and implementation-heavy sync work. |
 | QA Agent | QA / Test Agent | `qa-test-agent` | active alias | Use for validation, regression checks, acceptance evidence, and release review. |
 | Test Agent | QA / Test Agent | `qa-test-agent` | active alias | Use for validation, regression checks, acceptance evidence, and release review. |
@@ -48,8 +49,9 @@ Some older names may map to different canonical owners depending on the request.
 
 ## Version
 
-0.1.0
+0.1.1
 
 ## Changelog
 
+- 0.1.1 added Workspace Automation Developer as a legacy alias.
 - 0.1.0 initial legacy alias registry.
