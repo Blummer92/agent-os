@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-os.local/schemas/workspace-automation-builder/sync-handoff.v1.schema.json",
+  "title": "Workspace Automation Builder Sync Handoff v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version",
+    "sheet_id",
+    "range_a1",
+    "row_scope",
+    "target",
+    "target_database_id",
+    "field_mapping",
+    "approval_key_required",
+    "skipped_records"
+  ],
+  "properties": {
+    "schema_version": { "const": "sync-handoff.v1" },
+    "sheet_id": { "type": "string", "minLength": 1 },
+    "range_a1": { "type": "string", "minLength": 1 },
+    "row_scope": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "first_data_row",
+        "start_row",
+        "end_row",
+        "batch_size",
+        "next_cursor"
+      ],
+      "properties": {
+        "first_data_row": { "type": "integer", "minimum": 1 },
+        "start_row": { "type": "integer", "minimum": 1 },
+        "end_row": { "type": "integer", "minimum": 1 },
+        "batch_size": { "type": "integer", "minimum": 1, "maximum": 50 },
+        "next_cursor": { "type": ["integer", "null"], "minimum": 1 }
+      }
+    },
+    "target": { "enum": ["staging", "visual_asset_library"] },
+    "target_database_id": { "type": "string", "minLength": 1 },
+    "field_mapping": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
+    "approval_key_required": { "type": "string", "minLength": 1 },
+    "skipped_records": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["source_row", "reason"],
+        "properties": {
+          "source_row": { "type": "integer", "minimum": 1 },
+          "reason": { "type": "string", "minLength": 1 },
+          "file_id": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}
