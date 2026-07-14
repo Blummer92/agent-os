@@ -26,6 +26,24 @@ Automation request
 
 [Describe the workflow to automate.]
 
+Route selection
+
+Choose one:
+
+- Patch existing code
+- Build a new project
+- Debug or optimize
+- Evaluate implementation approach
+
+Before building, identify:
+
+1. project goal
+2. source of truth
+3. safe write location
+4. owner or approval path
+5. smallest working version
+6. stop condition
+
 Known targets
 
 - Drive folder/file IDs:
@@ -36,27 +54,36 @@ Known targets
 - Apps Script project ID:
 - Notion page/database IDs, if involved:
 
+Attached working set
+
+If these files apply, inspect them before implementation:
+
+- OVERVIEW.md
+- CHANGE_RULES.md
+- SAFETY_RULES.md
+
 Boundaries
 
 - Do not write to live Workspace systems unless explicitly approved.
 - Do not create triggers, change sharing, or deploy Apps Script without approval.
 - Prefer read-only discovery, dry-run design, mocks, and local tests first.
 - Preserve source-of-truth and ownership boundaries.
+- Do not store secrets in code, docs, samples, memory, Notion, or logs.
 
 Required output
 
-1. automation spec
-2. target inventory
-3. data-flow map
-4. read/write operation list
-5. implementation plan or local code changes
-6. validation plan and tests run
-7. deployment approval checklist
-8. rollback or disable plan
-9. unresolved blockers
-10. remaining risks
+1. selected route
+2. automation spec
+3. target inventory
+4. data-flow map
+5. read/write operation list
+6. implementation plan or local code changes
+7. validation plan and tests run
+8. deployment approval checklist
+9. rollback or disable plan
+10. unresolved blockers and remaining risks
 ```
 
 ## Version
 
-0.1.0
+0.1.1
