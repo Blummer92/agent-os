@@ -1,33 +1,25 @@
-# Dashboard Migration Validation Report
+# Validation Report
 
 ## 1. Executive Summary
-
-{{ executive_summary }}
+{{executive_summary}}
 
 ## 2. Migration Readiness Table
-
-{{ migration_readiness_table }}
+{{migration_readiness_table}}
 
 ## 3. Data Integrity Review
-
-{{ data_integrity_review }}
+{{data_integrity_review}}
 
 ## 4. Dependency Review
-
-{{ dependency_review }}
+{{dependency_review}}
 
 ## 5. Migration Tasks
-
-{{ migration_tasks }}
+{{migration_tasks}}
 
 ## 6. Retirement Order
-
-{{ retirement_order }}
+{{retirement_order}}
 
 ## 7. Items That Must Not Be Retired
-
-{{ must_not_retire }}
+{{items_that_must_not_be_retired}}
 
 ## 8. Final Decision
-
-{{ final_decision }}
+{{final_decision}}
