@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/dashboard_migration/proposed_changes.meta.json",
+  "title": "Dashboard Migration Proposed Changes Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "changes"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "changes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "proposed_change.definition.json"
+      }
+    }
+  }
+}
