@@ -15,6 +15,7 @@ versions change only when the module's standards or contract changes.
 | Notion Standards | 0.2.0 |
 | QA/Test Standards | 0.1.0 |
 | Dashboard Governance | 0.1.0 |
+| Dashboard Migration Verification | 0.1.0 |
 | Instructional Design Standards | 0.5.0 |
 | Agent Orchestrator | 0.1.0 |
 | Unit Alignment Agent | 0.3.0 |
@@ -24,6 +25,13 @@ versions change only when the module's standards or contract changes.
 | Workflow Scheduler | 0.6.0 |
 | Workspace Automation Builder Tooling | 0.1.1 |
 | Agent Memory & Context Budget Manager | 0.0.0 |
+
+**Dashboard Migration Verification**
+(`08_Tooling/dashboard-migration-verification/`) starts as a verification-only
+migration evidence toolkit for dashboard registry examples, placeholder snapshots,
+dependency graphs, conservative validation results, and human-readable reports. It
+never authorizes live Notion, Workspace, trigger, sharing, source-of-truth, or
+production dashboard writes.
 
 **Workspace Automation Builder Tooling**
 (`08_Tooling/workspace-automation-builder/`) includes an Apps Script safety
