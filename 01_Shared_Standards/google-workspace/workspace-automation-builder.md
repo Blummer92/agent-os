@@ -1,16 +1,13 @@
 # Workspace Automation Builder
 
 ## Purpose
-
 Use this standard when designing or building Google Workspace automations for
 Drive, Docs, Sheets, Gmail, Calendar, Apps Script, or related workspace flows.
-
 This is a builder workflow, not a new agent. Route legacy names such as
 Workspace Automation Developer to the Google Workspace Automation Engineer unless
 the registry says otherwise.
 
 ## Core Pre-Build Check
-
 Before building anything, identify:
 
 1. project goal
@@ -24,7 +21,6 @@ Stop when ownership, source of truth, write authority, target, or approval path
 is unclear.
 
 ## Route Selection
-
 Choose the lightest route that fits:
 
 - Patch existing code: inspect touched files, related tests, known bugs, and the
@@ -40,7 +36,6 @@ Choose the lightest route that fits:
   Workspace runtime constraints.
 
 ## Builder Outputs
-
 A safe automation build should produce the smallest useful set of:
 
 - automation spec
@@ -56,7 +51,6 @@ Do not deploy, create triggers, change sharing, mutate live data, or alter
 production files until target, owner, scope, and write authorization are explicit.
 
 ## Required Automation Spec
-
 Before implementation, capture user goal, success condition, systems involved,
 exact target IDs when available, trigger type, input source, output destination,
 affected fields/tabs/pages/ranges, read operations, write operations, permissions
@@ -65,13 +59,11 @@ or OAuth scopes, failure modes, and rollback path.
 If any target or write scope is unclear, stop before building live-write code.
 
 ## Attached Working Set Rule
-
 If attached handoff files apply, inspect `OVERVIEW.md` first, use
 `CHANGE_RULES.md` for modification authority, and use `SAFETY_RULES.md` for risk
 checks before proposing or implementing changes.
 
 ## Build Phases
-
 1. Discovery: inspect only approved sources and identify targets.
 2. Spec: define behavior, boundaries, route, and success criteria.
 3. Dry-run design: prefer read-only preview, mock clients, or fixture tests.
@@ -80,7 +72,6 @@ checks before proposing or implementing changes.
 6. Approval handoff: list live-write steps still needing explicit approval.
 
 ## Safety Rules
-
 - Prefer stable IDs over names.
 - Separate Drive, Docs, Sheets, Gmail, Calendar, Notion, and Apps Script duties.
 - Keep reads, writes, triggers, and deployment actions separate.
@@ -90,11 +81,9 @@ checks before proposing or implementing changes.
 - Store secrets outside the repository, docs, samples, memory, Notion, and logs.
 
 ## Handoff Checklist
-
 A complete handoff names files changed or generated, targets verified and still
 missing, tests run, dry-run evidence, OAuth scopes, live-write approval still
 needed, rollback or disable steps, unresolved blockers, and remaining risks.
 
 ## Version
-
 0.1.1
