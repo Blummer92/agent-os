@@ -29,9 +29,10 @@ Continued in `FILE_MANIFEST_DETAILS_01.md` (`05_Examples/` onward).
 | `01_Shared_Standards/global-engineering/secrets-and-production-safety.md` | Agent OS knowledge base file. | 7 | Shared standards from framework and edited Python policy |
 | `01_Shared_Standards/global-engineering/source-of-truth-checks.md` | Agent OS knowledge base file. | 7 | Shared standards from framework and edited Python policy |
 | `01_Shared_Standards/global-engineering/testing-and-release.md` | Agent OS knowledge base file. | 7 | Shared standards from framework and edited Python policy |
-| `01_Shared_Standards/google-workspace/README.md` | Agent OS knowledge base file. | 6 | Shared standards from framework and edited Python policy |
+| `01_Shared_Standards/google-workspace/README.md` | Google Workspace shared standards index. | 9 | Workspace automation builder implementation |
 | `01_Shared_Standards/google-workspace/drive-docs-sheets-safety.md` | Agent OS knowledge base file. | 7 | Shared standards from framework and edited Python policy |
 | `01_Shared_Standards/google-workspace/workspace-api-boundaries.md` | Agent OS knowledge base file. | 6 | Shared standards from framework and edited Python policy |
+| `01_Shared_Standards/google-workspace/workspace-automation-builder.md` | Safe Workspace automation builder workflow. | 91 | Workspace automation builder implementation |
 | `01_Shared_Standards/google-workspace/workspace-write-authorization.md` | Agent OS knowledge base file. | 6 | Shared standards from framework and edited Python policy |
 | `01_Shared_Standards/notion/README.md` | Agent OS knowledge base file. | 7 | Shared standards from framework and edited Python policy |
 | `01_Shared_Standards/notion/notion-knowledge-policy.md` | Agent OS knowledge base file. | 6 | Shared standards from framework and edited Python policy |
@@ -51,7 +52,7 @@ Continued in `FILE_MANIFEST_DETAILS_01.md` (`05_Examples/` onward).
 | `02_Agent_Overlays/_common-overlay-rules.md` | Shared approval points, report format, and stop conditions for all overlays. | 30 | Agent Inheritance Registry |
 | `02_Agent_Overlays/apps-script-sync-test-overlay.md` | Agent OS knowledge base file. | 19 | Agent Inheritance Registry |
 | `02_Agent_Overlays/dashboard-builder-overlay.md` | Agent OS knowledge base file. | 19 | Agent Inheritance Registry |
-| `02_Agent_Overlays/google-workspace-automation-engineer.md` | Agent OS knowledge base file. | 19 | Agent Inheritance Registry |
+| `02_Agent_Overlays/google-workspace-automation-engineer.md` | Workspace automation design/build overlay. | 47 | Workspace automation builder implementation |
 | `02_Agent_Overlays/integration-manager.md` | Agent OS knowledge base file. | 19 | Agent Inheritance Registry |
 | `02_Agent_Overlays/modeling-dashboard-governance-agent.md` | Agent OS knowledge base file. | 19 | Agent Inheritance Registry |
 | `02_Agent_Overlays/python-development-overlay.md` | Agent OS knowledge base file. | 19 | Agent Inheritance Registry |
@@ -63,6 +64,7 @@ Continued in `FILE_MANIFEST_DETAILS_01.md` (`05_Examples/` onward).
 | `03_Templates/prompts/release-readiness-review.md` | Agent OS knowledge base file. | 10 | Engineering Standards Framework templates |
 | `03_Templates/prompts/run-compliance-test.md` | Agent OS knowledge base file. | 10 | Engineering Standards Framework templates |
 | `03_Templates/prompts/update-agent-overlay.md` | Agent OS knowledge base file. | 10 | Engineering Standards Framework templates |
+| `03_Templates/prompts/workspace-automation-builder.md` | Prompt template for safe Workspace automation builds. | 91 | Workspace automation builder implementation |
 | `03_Templates/python-project-template/README.md` | Agent OS knowledge base file. | 10 | Engineering Standards Framework templates |
 | `03_Templates/python-project-template/folder-structure.md` | Agent OS knowledge base file. | 10 | Engineering Standards Framework templates |
 | `03_Templates/python-project-template/sample-env-example.md` | Agent OS knowledge base file. | 10 | Engineering Standards Framework templates |
@@ -75,6 +77,7 @@ Continued in `FILE_MANIFEST_DETAILS_01.md` (`05_Examples/` onward).
 | `04_Registry/README.md` | Agent OS knowledge base file. | 3 | Agent Inheritance Registry |
 | `04_Registry/agent-inheritance-registry.md` | Agent OS knowledge base file. | 8 | Agent Inheritance Registry |
 | `04_Registry/alias-and-deprecation-map.md` | Agent OS knowledge base file. | 6 | Agent Inheritance Registry |
-| `04_Registry/module-version-map.md` | Agent OS knowledge base file. | 11 | Agent Inheritance Registry |
+| `04_Registry/legacy-agent-alias-registry.md` | Legacy alias routing to canonical agents. | 59 | Workspace automation builder implementation |
+| `04_Registry/module-version-map.md` | Agent OS knowledge base file. | 49 | Agent Inheritance Registry |
 | `04_Registry/ownership-matrix.md` | Agent OS knowledge base file. | 8 | Agent Inheritance Registry |
 | `04_Registry/responsibility-matrix.md` | Agent OS knowledge base file. | 8 | Agent Inheritance Registry |

@@ -10,7 +10,7 @@ versions change only when the module's standards or contract changes.
 | Read-Only Default | 0.1.0 |
 | Source-of-Truth Checks | 0.1.0 |
 | Python Standards | 0.1.0 |
-| Google Workspace Standards | 0.1.1 |
+| Google Workspace Standards | 0.1.2 |
 | Apps Script Standards | 0.1.0 |
 | Notion Standards | 0.2.0 |
 | QA/Test Standards | 0.1.0 |
