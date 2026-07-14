@@ -40,8 +40,13 @@ the governing standard.
     workspace_commands.md
     workspace_io.md
   config/
+    dashboards.yaml
     dashboards.example.yaml
     proposed_changes.schema.json
+    schema/
+      proposed_change.definition.json
+      proposed_change.enums.json
+      proposed_changes.meta.json
   proposed_changes/
     proposed_changes.example.yaml
   snapshots/
@@ -75,8 +80,10 @@ python -m pytest tests
 
 ## Inputs
 
-- `config/dashboards.example.yaml`: sanitized registry example for known dashboard surfaces
+- `config/dashboards.yaml`: sanitized registry for known dashboard surfaces
+- `config/dashboards.example.yaml`: minimal example registry fixture
 - `config/proposed_changes.schema.json`: schema contract for proposed-change manifests
+- `config/schema/*.json`: split schema components for modular schema validation
 - `proposed_changes/*.yaml`: proposed migration manifests
 - `snapshots/latest.json`: latest local dashboard evidence snapshot
 - `graph/dependency_graph.json`: generated dependency graph
