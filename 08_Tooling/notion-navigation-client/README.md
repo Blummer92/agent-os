@@ -31,6 +31,16 @@ by the Integration Manager. The Notion-specific cache standard lives in
   `01_Shared_Standards/navigation/navigation-registry-standard.md`, and
   `01_Shared_Standards/notion/notion-navigation-index-standard.md`.
 
+## Live sheet compatibility
+
+The client supports tabs where row 1 is the standard navigation warning banner
+and row 2 is the header row. It also remains compatible with older fixture-style
+tabs where row 1 is already the header row.
+
+`Property Dictionary` lookups accept both live sheet terminology
+(`Property Name`) and older fixture/docs terminology (`Field Name`) while keeping
+the public lookup shape as `lookup field <database> --field <name>`.
+
 ## Installation
 
     pip install -e .
@@ -66,7 +76,7 @@ are tested directly (`index.py` against fixture rows in
 ## Limitations
 
 - **Not tested against a live Sheets account in this session** — no Google
-  credentials were available. All 25 unit tests pass against fixture data
+  credentials were available. The unit test suite runs against fixture data
   and mocked clients; the operator must supply their own OAuth credentials
   and validate the live path (real `fetch_tab_values` call against the
   real sheet) themselves. This package's own OAuth flow

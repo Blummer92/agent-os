@@ -1,4 +1,11 @@
-from notion_navigation_client.records import NAVIGATION_WARNING, index_by, rows_to_records, with_warning
+from notion_navigation_client.records import (
+    NAVIGATION_WARNING,
+    index_by,
+    is_navigation_warning_row,
+    rows_to_records,
+    split_header_and_data,
+    with_warning,
+)
 
 
 def test_rows_to_records_zips_header_and_rows():
@@ -11,6 +18,28 @@ def test_rows_to_records_pads_short_rows():
     header = ["Name", "Owner", "Notes"]
     rows = [["DM Units"]]
     assert rows_to_records(header, rows) == [{"Name": "DM Units", "Owner": "", "Notes": ""}]
+
+
+def test_is_navigation_warning_row_matches_standard_banner():
+    assert is_navigation_warning_row([NAVIGATION_WARNING]) is True
+
+
+def test_is_navigation_warning_row_rejects_header_row():
+    assert is_navigation_warning_row(["Dashboard Name", "Owner"]) is False
+
+
+def test_split_header_and_data_skips_banner_row():
+    rows = [[NAVIGATION_WARNING], ["Name", "Owner"], ["DM Units", "Source Control"]]
+    header, data = split_header_and_data(rows)
+    assert header == ["Name", "Owner"]
+    assert data == [["DM Units", "Source Control"]]
+
+
+def test_split_header_and_data_accepts_direct_header_rows():
+    rows = [["Name", "Owner"], ["DM Units", "Source Control"]]
+    header, data = split_header_and_data(rows)
+    assert header == ["Name", "Owner"]
+    assert data == [["DM Units", "Source Control"]]
 
 
 def test_index_by_keys_on_field():
