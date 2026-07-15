@@ -27,6 +27,10 @@ This proposal exists because the DMSC repository contains both root Apps Script 
 5. Stop and report drift if the live repo differs from this entry.
 6. Treat this entry as navigation only, not write authorization.
 
+## Related Function Map
+
+See `dmsc-function-connection-map.md` for a companion navigation map of likely DMSC dashboard, source approval, read-only Notion packet, and existing Visual Asset Library sync flows.
+
 ## Governance Placement
 
 - Registry type: GitHub Path Registry / external repository navigation map
