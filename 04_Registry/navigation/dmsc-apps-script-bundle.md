@@ -10,12 +10,22 @@
 | Authority | Navigation aid only |
 | External repo | `Blummer92/dmsc_apps_script_bundle` |
 | External branch | `main` |
+| Last reviewed | PR #96 during DMSC navigation registry setup |
 
 ## Purpose
 
 Help Agent OS agents navigate `Blummer92/dmsc_apps_script_bundle` before implementing DMSC Apps Script, dashboard, source approval, or Notion sync changes.
 
 This proposal exists because the DMSC repository contains both root Apps Script dashboard code and nested app-specific sync services. Agents must inspect existing code zones before creating new implementation paths.
+
+## How Agents Should Use This Entry
+
+1. Read this entry before implementing DMSC changes.
+2. Identify the relevant work area: Notion sync, source approval, dashboard rows/details, audit/safe writes, or tests.
+3. Inspect the listed files in the live DMSC repo on `main`.
+4. Search for listed functions before adding new code.
+5. Stop and report drift if the live repo differs from this entry.
+6. Treat this entry as navigation only, not write authorization.
 
 ## Governance Placement
 
@@ -89,6 +99,38 @@ Inspect:
 - `DMSC_BackendSmokeSuite.gs`
 
 Do not assume dashboard display behavior, detail lookup, queue definitions, or safe-write behavior without checking these files.
+
+## High-Value Function Anchors
+
+Search these function or service anchors before adding new DMSC code.
+
+### Notion / Visual Asset Library
+
+- `findNotionPagesByFileId`
+- `upsertVisualAssetPage`
+- `buildNotionPropertyPlan`
+- `validateAndWriteVisualAssetLibraryBatch`
+- `PropertyAliasService`
+
+### DMSC source approval
+
+- `approveDmscSourceForAsset`
+- `getDmscSourceApprovalPreview`
+- `getDmscSourceApprovalPreviewBatch`
+- `stageDmscSourceApprovalBatch`
+
+### Dashboard rows/details
+
+- `getDmscDashboardRows`
+- `getDmscDashboardRecord`
+- `deriveDashboardFields_`
+- `enrichRegistryRows_`
+
+### Audit / safe writes
+
+- `appendAuditEntry_`
+- `appendDmscSourceApprovalAudit_`
+- `updateDmscReviewMetadata`
 
 ## Do Not Assume
 
@@ -295,7 +337,7 @@ If this registry entry conflicts with the live DMSC repository:
 ## Proposed Acceptance Criteria
 
 - Agents can identify the DMSC root dashboard files before implementing.
-- Agents can identify existing Visual Asset Library / Notion sync services before creating new sync code.
+- Agents can identify existing Visual Asset Library / Notion sync services before creating new code.
 - Agents can identify source approval and smoke-test files before changing source approval behavior.
 - Agents can identify local/private files that should not be committed.
 - The entry clearly states that it is a navigation aid only, not write authorization.
