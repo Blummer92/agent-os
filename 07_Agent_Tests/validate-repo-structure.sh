@@ -123,6 +123,30 @@ for f in "${overlay_files[@]}"; do
 done
 check "Every overlay has a matching test file" "$overlay_untested"
 
+# 7. Every repository path listed in the Documentation Dependency Map metadata exists
+#    (operationalizes the "broken reference count" metric). Dependency-free: parses only
+#    the flat `validate_paths:` block with awk. Skips cleanly if the metadata is absent.
+#    Only repository paths are listed there; Notion/Drive targets are excluded by design.
+map_meta="00_Governance/documentation-dependency-map/metadata.yaml"
+map_refs_missing=0
+if [ -f "$map_meta" ]; then
+  while IFS= read -r p; do
+    [ -z "$p" ] && continue
+    [ -e "$p" ] || { echo "Documentation map metadata references missing path: $p"; map_refs_missing=1; }
+  done < <(awk '
+    /^validate_paths:/ { inblock=1; next }
+    inblock && /^[A-Za-z0-9_]+:/ { inblock=0 }
+    inblock && /^[[:space:]]*-[[:space:]]/ {
+      line=$0
+      sub(/^[[:space:]]*-[[:space:]]*/, "", line)
+      gsub(/"/, "", line)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+      if (line != "") print line
+    }
+  ' "$map_meta")
+fi
+check "All Documentation Dependency Map metadata paths exist" "$map_refs_missing"
+
 echo
 echo "Results: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -1,0 +1,243 @@
+# Documentation Dependency Map — machine-readable metadata
+#
+# NON-AUTHORITATIVE. This file is an index for agents, not a source of truth.
+# Canonical rules live in the referenced repository files; this file only points to them.
+# It is a MANUAL Version 1 and is intended to become a GENERATED artifact (produced from
+# repository structure and file metadata) so it cannot drift from the repo. Do not treat
+# any value here as policy. Human-readable companions live alongside this file under
+# 00_Governance/documentation-dependency-map/.
+#
+# Consumed by 07_Agent_Tests/validate-repo-structure.sh: every entry under `validate_paths`
+# is checked for existence on disk (the "broken reference count" metric). Only repository
+# paths belong in `validate_paths`; Notion and Google Drive targets are intentionally
+# excluded because this map does not own or validate those live surfaces.
+
+version: "0.2.0"
+status: manual-v1-should-become-generated
+
+related_issues:
+  - id: 97
+    title: Navigation Registry improvement plan
+    relationship: complementary-implementation-workstream
+  - id: 98
+    title: Documentation Dependency Map and Implementation Guide
+    relationship: this-documentation-index
+
+# --- Document metadata (canonical ownership + duplicate-risk) -----------------------
+documents:
+  - repo_path: "AGENTS.md"
+    owner: GitHub Service Agent
+    source_of_truth: GitHub
+    status: active
+    action: reuse
+    duplicate_risk: high
+    canonical_for: [entry-point, global-source-of-truth, access-rules]
+  - repo_path: "00_Governance/ownership-and-source-of-truth.md"
+    owner: GitHub Service Agent
+    source_of_truth: GitHub
+    status: active
+    action: reuse
+    duplicate_risk: high
+    canonical_for: [source-of-truth, inheritance-first-documentation]
+  - repo_path: "00_Governance/write-authorization-policy.md"
+    owner: GitHub Service Agent
+    source_of_truth: GitHub
+    status: active
+    action: reuse
+    duplicate_risk: high
+    canonical_for: [write-authorization, read-only-default]
+  - repo_path: "04_Registry/agent-inheritance-registry.md"
+    owner: Integration Manager
+    source_of_truth: GitHub
+    status: active
+    action: reuse
+    duplicate_risk: high
+    canonical_for: [agent-routing, agent-inheritance]
+  - repo_path: "04_Registry/responsibility-matrix.md"
+    owner: Integration Manager
+    source_of_truth: GitHub
+    status: active
+    action: reuse
+    duplicate_risk: medium
+    canonical_for: [responsibility-routing]
+  - repo_path: "02_Agent_Overlays/integration-manager.md"
+    owner: Integration Manager
+    source_of_truth: GitHub
+    status: active
+    action: extend
+    duplicate_risk: medium
+    canonical_for: [navigation-governance-scope]
+  - repo_path: "01_Shared_Standards/navigation/navigation-registry-standard.md"
+    owner: Integration Manager
+    source_of_truth: GitHub
+    status: active
+    action: reuse
+    duplicate_risk: high
+    canonical_for: [navigation-registry-purpose, write-boundary]
+  - repo_path: "01_Shared_Standards/navigation/navigation-registry-architecture.md"
+    owner: Integration Manager
+    source_of_truth: GitHub
+    status: active
+    action: extend
+    duplicate_risk: medium
+    canonical_for: [registry-schema, traversal-workflow]
+  - repo_path: "01_Shared_Standards/navigation/navigation-registry-data-model.md"
+    owner: Integration Manager
+    source_of_truth: GitHub
+    status: active
+    action: extend
+    duplicate_risk: medium
+    canonical_for: [entities, fields, relationship-types, aliases]
+  - repo_path: "01_Shared_Standards/navigation/connector-adapter-framework.md"
+    owner: Integration Manager
+    source_of_truth: GitHub
+    status: active
+    action: reuse
+    duplicate_risk: high
+    canonical_for: [connector-contract]
+  - repo_path: "01_Shared_Standards/navigation/workspace-discovery-service.md"
+    owner: Integration Manager
+    source_of_truth: GitHub
+    status: active
+    action: extend
+    duplicate_risk: medium
+    canonical_for: [discovery, drift-classification]
+  - repo_path: "01_Shared_Standards/notion/notion-navigation-index-standard.md"
+    owner: Integration Manager
+    source_of_truth: GitHub
+    status: active
+    action: reuse
+    duplicate_risk: medium
+    canonical_for: [notion-navigation-index]
+  - repo_path: "08_Tooling/notion-navigation-client/README.md"
+    owner: Google Workspace Automation Engineer / Integration Manager
+    source_of_truth: GitHub
+    status: active
+    action: extend
+    duplicate_risk: medium
+    canonical_for: [notion-readonly-client]
+  - repo_path: "03_Templates/prompts/github-change-request.md"
+    owner: GitHub Service Agent
+    source_of_truth: GitHub
+    status: active
+    action: reuse
+    duplicate_risk: medium
+    canonical_for: [github-change-handoff]
+
+# --- Concept ownership (mirrors concept-ownership.md) --------------------------------
+concepts:
+  - concept: source-of-truth
+    canonical: "00_Governance/ownership-and-source-of-truth.md"
+    owner: GitHub Service Agent
+    duplicate_risk: high
+    extend_at: governance-only
+  - concept: write-authorization
+    canonical: "00_Governance/write-authorization-policy.md"
+    owner: GitHub Service Agent
+    duplicate_risk: high
+    extend_at: governance-or-overlay-exception
+  - concept: agent-routing
+    canonical: "04_Registry/agent-inheritance-registry.md"
+    owner: Integration Manager
+    duplicate_risk: high
+    extend_at: registry-files
+  - concept: navigation-registry-purpose
+    canonical: "01_Shared_Standards/navigation/navigation-registry-standard.md"
+    owner: Integration Manager
+    duplicate_risk: high
+    extend_at: same-standard
+  - concept: connector-framework
+    canonical: "01_Shared_Standards/navigation/connector-adapter-framework.md"
+    owner: Integration Manager
+    duplicate_risk: high
+    extend_at: connector-framework-only
+  - concept: notion-navigation
+    canonical: "01_Shared_Standards/notion/notion-navigation-index-standard.md"
+    owner: Integration Manager
+    duplicate_risk: medium
+    extend_at: notion-standard-or-client-docs
+
+# --- Dependency edges (documentation + implementation; planned Notion/Drive marked) -
+dependency_edges:
+  - from: "AGENTS.md"
+    to: "00_Governance/ownership-and-source-of-truth.md"
+    type: reads_before
+  - from: "02_Agent_Overlays/integration-manager.md"
+    to: "01_Shared_Standards/navigation/navigation-registry-standard.md"
+    type: governed_by
+  - from: "01_Shared_Standards/navigation/connector-adapter-framework.md"
+    to: "08_Tooling/notion-navigation-client/README.md"
+    type: implemented_by
+  - from: "08_Tooling/notion-navigation-client/README.md"
+    to: "07_Agent_Tests/"
+    type: validated_by
+  - from: "01_Shared_Standards/navigation/navigation-registry-standard.md"
+    to: "notion:source-sections"
+    type: planned
+  - from: "01_Shared_Standards/navigation/connector-adapter-framework.md"
+    to: "google-drive:artifact-destinations"
+    type: future
+  - from: "01_Shared_Standards/navigation/connector-adapter-framework.md"
+    to: "google-drive:adapter-spec"
+    type: future
+
+# --- Machine-executable reading paths (mirrors navigation-guide.md) ------------------
+reading_paths:
+  new_contributor:
+    - "README.md"
+    - "AGENTS.md"
+    - "00_Governance/ownership-and-source-of-truth.md"
+    - "04_Registry/responsibility-matrix.md"
+  navigation_registry_implementation:
+    - "AGENTS.md"
+    - "02_Agent_Overlays/integration-manager.md"
+    - "01_Shared_Standards/navigation/README.md"
+    - "01_Shared_Standards/navigation/navigation-registry-standard.md"
+    - "01_Shared_Standards/navigation/navigation-registry-architecture.md"
+    - "01_Shared_Standards/navigation/navigation-registry-data-model.md"
+    - "01_Shared_Standards/navigation/connector-adapter-framework.md"
+    - "01_Shared_Standards/navigation/workspace-discovery-service.md"
+  notion_integration:
+    - "AGENTS.md"
+    - "01_Shared_Standards/notion/notion-navigation-index-standard.md"
+    - "08_Tooling/notion-navigation-client/README.md"
+    - "01_Shared_Standards/navigation/connector-adapter-framework.md"
+  github_integration:
+    - "AGENTS.md"
+    - "00_Governance/write-authorization-policy.md"
+    - "02_Agent_Overlays/github-service-agent.md"
+    - "03_Templates/prompts/github-change-request.md"
+
+# --- Repository paths validated by validate-repo-structure.sh ------------------------
+# Only repository files. No Notion/Drive targets. Keep in sync with `documents` until a
+# generator produces both from one source.
+validate_paths:
+  - "AGENTS.md"
+  - "README.md"
+  - "00_Governance/ownership-and-source-of-truth.md"
+  - "00_Governance/write-authorization-policy.md"
+  - "00_Governance/documentation-dependency-map.md"
+  - "00_Governance/documentation-dependency-map/inventory.md"
+  - "00_Governance/documentation-dependency-map/dependency-graph.md"
+  - "00_Governance/documentation-dependency-map/navigation-guide.md"
+  - "00_Governance/documentation-dependency-map/concept-ownership.md"
+  - "00_Governance/documentation-dependency-map/quality-metrics.md"
+  - "00_Governance/documentation-dependency-map/coverage-validation.md"
+  - "00_Governance/documentation-dependency-map/lifecycle-governance.md"
+  - "00_Governance/documentation-dependency-map/search-optimization.md"
+  - "00_Governance/documentation-dependency-map/future-growth.md"
+  - "00_Governance/documentation-dependency-map/issue-97-relationship.md"
+  - "04_Registry/agent-inheritance-registry.md"
+  - "04_Registry/responsibility-matrix.md"
+  - "02_Agent_Overlays/integration-manager.md"
+  - "02_Agent_Overlays/github-service-agent.md"
+  - "01_Shared_Standards/navigation/README.md"
+  - "01_Shared_Standards/navigation/navigation-registry-standard.md"
+  - "01_Shared_Standards/navigation/navigation-registry-architecture.md"
+  - "01_Shared_Standards/navigation/navigation-registry-data-model.md"
+  - "01_Shared_Standards/navigation/connector-adapter-framework.md"
+  - "01_Shared_Standards/navigation/workspace-discovery-service.md"
+  - "01_Shared_Standards/notion/notion-navigation-index-standard.md"
+  - "08_Tooling/notion-navigation-client/README.md"
+  - "08_Tooling/notion-navigation-client/docs/registry-fit.md"
+  - "03_Templates/prompts/github-change-request.md"
