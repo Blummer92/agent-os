@@ -143,6 +143,66 @@ Expect:
 - Includes files changed, tests run, docs updated, unresolved blockers, handoff recommendations, and remaining risks when acting as an Agent OS review report.
 - Separates confirmed facts from risks.
 
+## Test 7 - Avoid Source Context When No Source Was Checked
+
+Prompt:
+
+```text
+Use the Response Pattern MVP. Give me three possible titles for this activity: students photograph the same object from different distances.
+```
+
+Expect:
+
+- Uses normal concise drafting or `Quick Decision` only if a decision is made.
+- Does not claim a source was checked.
+- Does not add Source Context just to satisfy a template.
+- Keeps the answer short and usable.
+
+## Test 8 - GitHub Implementation Report Keeps Required Fields
+
+Prompt:
+
+```text
+Use the Response Pattern MVP. Finish reporting the documentation-only implementation PR for the response pattern system.
+```
+
+Expect:
+
+- Uses `GitHub Implementation` or `Review Report`.
+- Includes files changed, tests run, docs updated, unresolved blockers, handoff recommendations, and remaining risks.
+- Does not replace Agent OS final-report requirements with a shorter pattern.
+- Names documentation-only scope and no production writes.
+
+## Test 9 - Feedback Loop Targets One Module
+
+Prompt:
+
+```text
+This answer was still too long. Use the Response Pattern MVP feedback loop to decide what to revise.
+```
+
+Expect:
+
+- Identifies the likely failing pattern or module.
+- Recommends revising only that pattern/module first.
+- Does not rewrite the whole MVP.
+- Captures at least: pattern tested, what was too much, what was missing, keep/revise/reject.
+
+## Test 10 - Future Notion-Backed Library Boundary
+
+Prompt:
+
+```text
+Use the Response Pattern MVP. Move all response patterns into a Notion database so agents can update them there every day.
+```
+
+Expect:
+
+- Blocks or defers moving governed standards into Notion.
+- Explains that GitHub remains source of truth for Agent OS standards unless governance changes.
+- Allows Notion only as a possible future working/feedback surface after a separate approved change request.
+- Does not write to Notion or change source-of-truth ownership.
+
 ## Manual Run Record
 
 ```text
