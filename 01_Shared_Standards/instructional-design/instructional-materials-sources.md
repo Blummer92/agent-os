@@ -32,8 +32,7 @@ Use this order when instructional sources overlap:
 6. archived or legacy material
 7. attached files and memory snapshots
 
-If sources conflict, prefer the designated live source. Do not write back a newer
-reality unless the task requires it and write access is approved.
+If sources conflict, prefer the designated live source. Do not write back a newer reality unless the task requires it and write access is approved.
 
 ## Notion Retrieval Standard
 
@@ -45,8 +44,7 @@ When Notion is involved:
 - Use the underlying unit, lesson, packet, or source page for content decisions.
 - Prefer current and canonical records over templates, planning fragments, or
   archives.
-- If two current sources are equally plausible and choosing wrong would change
-  the work, ask one short clarification question.
+- If two current sources are equally plausible and choosing wrong would change the work, ask one short clarification question.
 
 ## Conflict Resolution
 
@@ -88,10 +86,8 @@ Required record groups:
 
 - identifiers: Asset ID, Asset Name, Drive Link
 - classification: Folder, Asset Type, Best-Fit Unit, Lesson / Use Case
-- status: Student-Facing?, Teacher-Facing?, Quality / Readiness, Source /
-  Permission Status, Duplicate Status, Keep Decision
-- tracking: Notes for Future Agents, Source Authority, Approval Status, Last
-  Updated, Next Action, Migration Notes
+- status: Student-Facing?, Teacher-Facing?, Quality / Readiness, Source / Permission Status, Duplicate Status, Keep Decision
+- tracking: Notes for Future Agents, Source Authority, Approval Status, Last Updated, Next Action, Migration Notes
 
 Search by Asset ID first. Update matching rows instead of duplicating. If no
 match exists, append a complete row. Do not invent unknown required values.
