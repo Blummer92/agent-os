@@ -20,12 +20,14 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - name: Verify local Python
+        shell: bash
+        run: |
+          python --version
+          python -m pip --version
 
       - name: Install validation dependencies
+        shell: bash
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
@@ -34,4 +36,7 @@ jobs:
           python -m pip install -e "./08_Tooling/notion-navigation-client[test]"
 
       - name: Run Agent OS aggregate validation
-        run: ./scripts/validate-all.sh
+        shell: bash
+        env:
+          PYTHON_BIN: python
+        run: bash ./scripts/validate-all.sh
