@@ -34,15 +34,19 @@ The MVP is useful only if agents can:
 5. Record pass/fail results in the Manual Run Record.
 6. File or update an RP issue for any failure.
 
-## Minimum MVP Acceptance
+## MVP Pre-Merge Acceptance
 
-Before merging the MVP PR, run at least these three tests manually:
+Before merging the MVP PR, run all 10 manual tests in `07_Agent_Tests/response-pattern-mvp.tests.md`.
+
+The following three are critical blockers and must pass:
 
 - Test 2 - Lesson Design With Notion-Grounded Context
 - Test 3 - Source Context Boundary
 - Test 5 - Promotion Discipline
 
-The MVP should not merge if any of those three fail.
+The remaining tests provide broader confidence across quick decisions, deep research, review reports, implementation reports, feedback revision, and future Notion-backed-library boundaries.
+
+The MVP should not merge if any critical blocker fails. Non-critical failures should either be fixed before merge or explicitly tracked in RP issues.
 
 ## Post-Merge Trial Acceptance
 
@@ -64,6 +68,8 @@ At least three should include feedback notes.
 | Cached Notion treated as live verification | Block merge or create urgent RP3 finding. |
 | Stable promotion attempted too early | RP5 - promotion decision. |
 | Required implementation report missing fields | Review Report pattern revision. |
+| Source Context added when no source was checked | RP3 - evaluate Source Context. |
+| Future Notion-backed library changes source of truth too early | RP6 - research future Notion-backed response pattern library. |
 
 ## Merge Gate
 
@@ -72,7 +78,7 @@ PR #134 may move from draft to review only after:
 - The MVP test file exists.
 - The test plan exists.
 - The PR body lists both test artifacts.
-- Manual test status is recorded or explicitly marked pending human run.
+- Manual 10-test status is recorded or explicitly marked pending human run.
 
 ## Non-Goals
 
