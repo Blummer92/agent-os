@@ -147,6 +147,32 @@ if [ -f "$map_meta" ]; then
 fi
 check "All Documentation Dependency Map metadata paths exist" "$map_refs_missing"
 
+# 8. Unit vocabulary map standard exists, defines required categories, and is inherited.
+vocab_standard="01_Shared_Standards/instructional-design/unit-vocabulary-map-standard.md"
+vocab_map_missing=0
+[ -f "$vocab_standard" ] || { echo "Missing vocabulary standard: $vocab_standard"; vocab_map_missing=1; }
+if [ -f "$vocab_standard" ]; then
+  for required in \
+    "Review Vocabulary" \
+    "Teach Vocabulary" \
+    "Introduce, Don’t Assess Yet" \
+    "Transfer Vocabulary" \
+    "Future Vocabulary" \
+    "Prior Unit Connection" \
+    "Teacher Language Use" \
+    "Student Language Use"; do
+    grep -q "$required" "$vocab_standard" || { echo "Unit vocabulary standard missing: $required"; vocab_map_missing=1; }
+  done
+fi
+for overlay in \
+  "02_Agent_Overlays/unit-alignment-agent.md" \
+  "02_Agent_Overlays/teacher-modeling-coach.md" \
+  "02_Agent_Overlays/instructional-materials-coach.md"; do
+  grep -q "$vocab_standard" "$overlay" || { echo "Overlay missing unit vocabulary standard reference: $overlay"; vocab_map_missing=1; }
+done
+[ ! -d "02_Agent_Overlays/curriculum" ] || { echo "Unexpected curriculum overlay folder exists"; vocab_map_missing=1; }
+check "Unit vocabulary map standard exists and is inherited" "$vocab_map_missing"
+
 echo
 echo "Results: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
