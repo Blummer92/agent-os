@@ -26,7 +26,7 @@ Run the aggregate local validation command from the repository root:
 ./scripts/validate-all.sh
 ```
 
-The command runs the structural repository checks in `07_Agent_Tests/validate-repo-structure.sh` and every discovered pytest suite outside template folders. It prints the commands executed, check results, failed packages, overall status, and exit code.
+The command runs the structural repository checks in `07_Agent_Tests/validate-repo-structure.sh` and every discovered Python pytest suite outside template folders. It prints the commands executed, check results, failed packages, overall status, and exit code.
 
 Exit codes:
 
@@ -34,4 +34,10 @@ Exit codes:
 - `1` means one or more structural checks or pytest suites failed.
 - `2` means the runner could not start because of invalid invocation, missing prerequisites, or an unrecoverable runner error.
 
-GitHub Actions automation is deferred to issue `#107`; this command is local validation only.
+### GitHub Actions Validation
+
+The `Agent OS Validation Gate` workflow runs the same aggregate validation command for pull requests targeting `main`.
+
+It can also be started manually with `workflow_dispatch` and runs a weekday scheduled validation check. The workflow is validation-only: it checks out the repository, installs test dependencies, and runs `./scripts/validate-all.sh`. It does not commit, push, open pull requests, write to Google Drive, or modify source-of-truth records.
+
+Issue-to-PR automation is not part of this validation workflow.
