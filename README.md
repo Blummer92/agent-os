@@ -38,6 +38,8 @@ Exit codes:
 
 The `Agent OS Validation Gate` workflow runs the same aggregate validation command for pull requests targeting `main`.
 
-It can also be started manually with `workflow_dispatch` and runs a weekday scheduled validation check. The workflow is validation-only: it checks out the repository, installs test dependencies, and runs `./scripts/validate-all.sh`. It does not commit, push, open pull requests, write to Google Drive, or modify source-of-truth records.
+The workflow runs on the self-hosted Agent OS runner labeled `agent-os`, not on GitHub-hosted runner minutes. It can also be started manually with `workflow_dispatch` and runs a weekday scheduled validation check on that same self-hosted runner.
+
+The workflow is validation-only: it checks out the repository, installs test dependencies, and runs `./scripts/validate-all.sh`. It does not commit, push, open pull requests, write to Google Drive, or modify source-of-truth records.
 
 Issue-to-PR automation is not part of this validation workflow.
