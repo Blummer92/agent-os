@@ -4,15 +4,16 @@
 
 This note defines the safe automation boundary for Agent OS before scheduled builds, CI workflows, dry-run classroom artifact workflows, or live writes are added.
 
-It is an implementation-readiness note only. It does not implement A1, create GitHub Actions, authorize live writes, change governance, or expand Agent OS scope.
+It is an implementation-readiness note only. It does not create GitHub Actions, authorize live writes, change governance, or expand Agent OS scope.
 
 ## Current Safe Automation Boundary
 
-Safe now:
+Safe now after A1 is merged:
 
 - Manual issue-by-issue implementation.
 - Read-only roadmap and issue review.
-- Preparation and planning of validation commands.
+- Local aggregate validation with `./scripts/validate-all.sh`.
+- Preparation and planning of GitHub Actions validation for issue #107.
 - Documentation-only readiness notes that clarify sequencing and safety.
 
 Not yet safe:
@@ -25,18 +26,12 @@ Not yet safe:
 
 ## Dependency Ladder
 
-1. **Current state:** Only manual issue-by-issue implementation and read-only review are safe.
-2. **After A1 (#106):** A local aggregate validation command is safe to run manually.
-3. **After A2 (#107):** GitHub Actions validation is safe on pull requests, manual dispatch, and a scheduled daily run.
-4. **After C3 (#118):** A dry-run classroom artifact workflow is safe when it produces receipts and does not write to live Google Drive.
-5. **After explicit approval and C4 (#119):** A governed live artifact run may be performed only inside the approved workflow and destination boundaries.
+1. **Current state after A1:** The local aggregate validation command `./scripts/validate-all.sh` is safe to run manually.
+2. **After A2 (#107):** GitHub Actions validation is safe on pull requests, manual dispatch, and a scheduled daily run.
+3. **After C3 (#118):** A dry-run classroom artifact workflow is safe when it produces receipts and does not write to live Google Drive.
+4. **After explicit approval and C4 (#119):** A governed live artifact run may be performed only inside the approved workflow and destination boundaries.
 
 ## Blocked Automation
-
-Blocked until A1 exists:
-
-- Any scheduled or CI automation that depends on a repo-wide aggregate validation command.
-- Any daily build claiming to validate the whole repository.
 
 Blocked until A2 exists:
 
@@ -63,9 +58,9 @@ The following require explicit approval and live-system boundary confirmation be
 
 ## Recommended Next Issue
 
-Start with **A1 — Add repo-wide aggregate test runner** (#106).
+After A1 is merged, start **A2 — CI workflow running the aggregate runner on PRs** (#107).
 
-Reason: A1 creates the local validation command that A2 and later scheduled automation depend on. Without A1, a daily build or CI workflow would not have a safe, canonical command to run.
+Reason: A1 creates the local validation command that A2 and later scheduled automation depend on. A2 should wire GitHub Actions to run the same command without adding unrelated automation.
 
 ## Stop Conditions
 
@@ -80,4 +75,4 @@ Stop before automation if:
 
 ## Status
 
-Agent OS is ready to begin issue #106. It is not yet ready for scheduled GitHub Actions, daily automated builds, dry-run classroom artifact workflows, or live classroom artifact generation.
+Agent OS is ready for local aggregate validation after A1 is merged. It is not yet ready for scheduled GitHub Actions, daily automated builds, dry-run classroom workflows, or live classroom artifact generation.
