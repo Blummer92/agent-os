@@ -14,7 +14,7 @@ permissions:
 jobs:
   validate:
     name: Run aggregate validation
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, agent-os]
 
     steps:
       - name: Check out repository
