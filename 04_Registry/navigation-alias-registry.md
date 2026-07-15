@@ -6,6 +6,16 @@ This file maps stable human-readable aliases to common Agent OS reading paths so
 
 Aliases are lookup aids only. They do not change source-of-truth ownership, grant write authority, replace live verification, or duplicate inherited policy text. Apply the referenced source files for the governing rules.
 
+## Alias Usage Rules
+
+- Aliases are human-readable shortcuts.
+- Aliases resolve to reading paths only.
+- Aliases are non-authoritative.
+- Aliases never grant write authority.
+- Agents must still follow overlay inheritance.
+- Agents must verify source-of-truth before any write.
+- Missing or invalid paths invalidate the alias until reviewed.
+
 ## Validation
 
 Every file path listed in an alias must exist in the repository. Missing paths block automatic alias use and require Navigation Alias Registry review before the alias is used.
