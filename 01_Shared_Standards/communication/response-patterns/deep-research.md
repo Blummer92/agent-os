@@ -15,16 +15,18 @@ experimental
 ## Default Modules
 
 1. Research Question
-2. Key Findings
-3. Evidence
-4. Recommendation
-5. Next Step
+2. Source Map
+3. Key Findings
+4. Evidence
+5. Recommendation
+6. Next Step
 
 ## Max Length Guidance
 
 - Target: 5 to 7 sections.
 - Put the recommendation near the top or bottom, not hidden in the middle.
 - Include citations or source references when research depends on external or repository evidence.
+- Use the Source Map to name which systems were checked, especially when Notion context informs the answer.
 - Keep examples short unless the user asks for more.
 
 ## When To Use
@@ -46,6 +48,9 @@ experimental
 **Research Question**
 How do mature GitHub projects evolve reusable response or process templates?
 
+**Source Map**
+Checked GitHub project examples and Agent OS Notion navigation standards. Notion lookup is treated as routing/evidence context, not write authorization.
+
 **Key Findings**
 - They keep templates small.
 - They track maturity with statuses.
@@ -63,6 +68,7 @@ Test the first patterns for one week and record what works or gets in the way.
 ## Feedback Notes
 
 ```text
+Did the source map make the evidence trail clear?
 Did the evidence support the recommendation?
 Was the research too long for the decision needed?
 Was the next step actionable?
