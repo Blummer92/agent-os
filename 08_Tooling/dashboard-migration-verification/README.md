@@ -28,81 +28,18 @@ as `Requires manual review` or `Blocked by missing information`.
 See `01_Shared_Standards/dashboard-governance/dashboard-migration-verification.md` for
 the governing standard.
 
-## Expected Structure
+## Directory Structure
 
-```text
-08_Tooling/dashboard-migration-verification/
-  README.md
-  .gitignore
-  docs/
-    agent_workflow.md
-    evidence_model.md
-    workspace_commands.md
-    workspace_io.md
-  config/
-    dashboards.yaml
-    dashboards.example.yaml
-    dashboard_registry/
-      coach_and_governance_dashboards.yaml
-      core_dashboards.yaml
-      operations_dashboards.yaml
-    proposed_changes.schema.json
-    schema/
-      proposed_change.definition.json
-      proposed_change.enums.json
-      proposed_changes.meta.json
-  proposed_changes/
-    proposed_changes.example.yaml
-  snapshots/
-    .gitkeep
-  graph/
-    .gitkeep
-  validation/
-    .gitkeep
-  scripts/
-    dashboard_migration_common.py
-    snapshot_notion.py
-    build_dependency_graph.py
-    validate_changes.py
-  templates/
-    validation_report.md
-  tests/
-    test_dependency_graph.py
-    test_validate_changes.py
-```
+See `docs/directory_structure.md` for the full expected layout.
 
-## Commands
+## Commands, Inputs, And Outputs
 
-Run from this directory:
+See:
 
-```bash
-python scripts/snapshot_notion.py
-python scripts/build_dependency_graph.py --changes proposed_changes/proposed_changes.example.yaml
-python scripts/validate_changes.py --changes proposed_changes/proposed_changes.example.yaml
-python -m pytest tests
-```
-
-## Inputs
-
-- `config/dashboards.yaml`: sanitized combined registry used by the current scripts
-- `config/dashboard_registry/*.yaml`: split registry source files for review and maintenance
-- `config/dashboards.example.yaml`: minimal example registry fixture
-- `config/proposed_changes.schema.json`: schema contract for proposed-change manifests
-- `config/schema/*.json`: split schema components for modular schema validation
-- `proposed_changes/*.yaml`: proposed migration manifests
-- `snapshots/latest.json`: latest local dashboard evidence snapshot
-- `graph/dependency_graph.json`: generated dependency graph
-
-## Outputs
-
-- `snapshots/snapshot_<timestamp>.json`: point-in-time local evidence snapshot
-- `snapshots/latest.json`: latest snapshot alias
-- `graph/dependency_graph.json`: generated dependency graph
-- `validation/validation_results.json`: machine-readable validation output
-- `validation/validation_report.md`: human-readable validation report
-
-Generated evidence files are intentionally ignored by Git. Commit templates, examples,
-schemas, docs, scripts, tests, and `.gitkeep` files only.
+- `docs/agent_workflow.md` for the recommended operating order and rules
+- `docs/workspace_commands.md` for the exact commands to run
+- `docs/workspace_io.md` for expected inputs, outputs, and commit rules
+- `docs/evidence_model.md` for the file-by-file evidence schema
 
 ## Recommended Run Order
 
