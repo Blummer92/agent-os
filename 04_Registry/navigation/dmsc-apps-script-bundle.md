@@ -2,7 +2,14 @@
 
 ## Status
 
-Proposed navigation registry entry. Navigation aid only.
+| Field | Value |
+|---|---|
+| Status | Proposed |
+| Review owner | Integration Manager |
+| GitHub write owner | GitHub Service Agent |
+| Authority | Navigation aid only |
+| External repo | `Blummer92/dmsc_apps_script_bundle` |
+| External branch | `main` |
 
 ## Purpose
 
@@ -44,6 +51,52 @@ Agents must verify live repository state before any implementation or write.
 | Primary source of truth | GitHub repository |
 | Primary execution surface | Google Apps Script / clasp |
 | Human owner | Zachary Blumstein |
+
+## Required Preflight Before DMSC Implementation
+
+Before implementing DMSC changes, agents must inspect the relevant existing code zones first. This preflight is required because DMSC code exists in both root Apps Script files and nested app folders.
+
+### Before Notion sync or upsert work
+
+Inspect:
+
+- `drive-metadata-dashboard/src/NotionDryRun.gs`
+- `drive-metadata-dashboard/src/NotionSyncService.gs`
+- `drive-metadata-dashboard/src/VisualAssetLibraryValidationService.gs`
+- `drive-metadata-dashboard/src/VisualAssetLibraryWriteService.gs`
+- `drive-metadata-dashboard/src/VisualAssetLibraryProductionSyncService.gs`
+- `drive-metadata-dashboard/src/VisualAssetLibraryPromptMetadataService.gs`
+- `drive-metadata-dashboard/src/PropertyAliasService.gs`
+
+Do not create new Notion writer, upsert, duplicate-page, prompt-mapping, or Visual Asset Library sync logic before this review is complete.
+
+### Before source approval work
+
+Inspect:
+
+- `DMSC_SourceApproval.gs`
+- `DMSC_BackendSmokeSuite.gs`
+- `drive-metadata-dashboard/src/GovernanceService.gs`
+
+Do not promote assets to production-ready, source-cleared, classroom-ready, or reusable without explicit human approval and evidence.
+
+### Before dashboard row/detail work
+
+Inspect:
+
+- `Code.gs`
+- `DashboardJs.html`
+- `DMSC_BackendSmokeSuite.gs`
+
+Do not assume dashboard display behavior, detail lookup, queue definitions, or safe-write behavior without checking these files.
+
+## Do Not Assume
+
+- Do not assume root Apps Script files are the only active code.
+- Do not assume nested apps are inactive.
+- Do not create new Notion writer logic before reviewing existing Visual Asset Library sync services.
+- Do not treat this registry entry as permission to write to DMSC, Notion, Sheets, Drive, or governed fields.
+- Do not treat cached navigation metadata as current if the live repository has changed.
 
 ## Known Code Zones
 
