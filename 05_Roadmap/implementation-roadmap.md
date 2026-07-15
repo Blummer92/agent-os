@@ -66,6 +66,8 @@ Implementation Phase 1 is complete when Agent OS can:
 
 **Included issue IDs:** A1, A2, A3, A4, A5, D1, D2
 
+**GitHub issues:** #106, #107, #108, #109, #110, #122, #123
+
 **Completion criteria:**
 
 - A single aggregate command runs structural checks and all package tests.
@@ -78,6 +80,8 @@ Implementation Phase 1 is complete when Agent OS can:
 **Goal:** Select and implement one governed read-only connector contract.
 
 **Included issue IDs:** B1, B2, B3, B4, B5
+
+**GitHub issues:** #111, #112, #113, #114, #115
 
 **Completion criteria:**
 
@@ -92,6 +96,8 @@ Implementation Phase 1 is complete when Agent OS can:
 
 **Included issue IDs:** C1, C2, C3, C4, C5, C6
 
+**GitHub issues:** #116, #117, #118, #119, #120, #121
+
 **Completion criteria:**
 
 - Google OAuth and approved Drive folder requirements are documented.
@@ -105,6 +111,8 @@ Implementation Phase 1 is complete when Agent OS can:
 
 **Included issue IDs:** D3, D4
 
+**GitHub issues:** #124, #125
+
 **Completion criteria:**
 
 - Redundant manifest/tree/validation docs are consolidated or pointed to canonical metadata.
@@ -112,28 +120,28 @@ Implementation Phase 1 is complete when Agent OS can:
 
 ## Backlog Issue Map
 
-| ID | Issue | Epic | Milestone | Effort | Owner |
-|---|---|---|---|---|---|
-| A1 | Add repo-wide aggregate test runner | Foundation & CI | M1 | Small | QA / Test Agent |
-| A2 | CI workflow running the aggregate runner on PRs | Foundation & CI | M1 | Small | GitHub Service Agent |
-| A3 | Reconcile module-version-map.md with disk | Foundation & CI | M1 | Small | Integration Manager |
-| A4 | Correct VERSION.md scope statement | Foundation & CI | M1 | Small | Integration Manager |
-| A5 | Refresh VALIDATION_REPORT.md to current 7 checks | Foundation & CI | M1 | Small | QA / Test Agent |
-| B1 | Connector contract ADR | Connector Consolidation | M2 | Small | Integration Manager |
-| B2 | Extract shared read-only Notion client | Connector Consolidation | M2 | Medium | Integration Manager |
-| B3 | Migrate dashboard-migration-verification/snapshot_notion.py to shared client | Connector Consolidation | M2 | Small | Google Workspace Automation Engineer |
-| B4 | Migrate Scheduler notion_readonly_adapter.py to shared contract | Connector Consolidation | M2 | Medium | Integration Manager |
-| B5 | Shim or deprecate the root offline Notion skeleton | Connector Consolidation | M2 | Small | Integration Manager |
-| C1 | OAuth setup runbook for Materials Coach | First Classroom Artifact | M3 | Small | Instructional Materials Coach |
-| C2 | Define Scheduler task spec for a deck-generation step | First Classroom Artifact | M3 | Medium | Instructional Materials Coach |
-| C3 | Scheduler to Materials Coach wiring spike, dry-run only | First Classroom Artifact | M3 | Medium | Instructional Materials Coach |
-| C4 | First governed live artifact run | First Classroom Artifact | M3 | Medium | Instructional Materials Coach |
-| C5 | Add example artifact-generation workflow YAML | First Classroom Artifact | M3 | Small | Instructional Materials Coach |
-| C6 | Document the repeatable classroom-artifact recipe | First Classroom Artifact | M3 | Small | Instructional Materials Coach |
-| D1 | Add pyproject.toml to agent-memory-context-manager | Packaging & Hygiene | M1 | Small | Google Workspace Automation Engineer |
-| D2 | Add packaging to dashboard-migration-verification | Packaging & Hygiene | M1 | Small | Google Workspace Automation Engineer |
-| D3 | Consolidate redundant meta docs | Packaging & Hygiene | M4 | Medium | QA / Test Agent |
-| D4 | Test-coverage top-up for dashboard-migration-verification | Packaging & Hygiene | M4 | Medium | QA / Test Agent |
+| ID | GitHub | Issue | Epic | Milestone | Effort | Owner |
+|---|---:|---|---|---|---|---|
+| A1 | #106 | Add repo-wide aggregate test runner | Foundation & CI | M1 | Small | QA / Test Agent |
+| A2 | #107 | CI workflow running the aggregate runner on PRs | Foundation & CI | M1 | Small | GitHub Service Agent |
+| A3 | #108 | Reconcile module-version-map.md with disk | Foundation & CI | M1 | Small | Integration Manager |
+| A4 | #109 | Correct VERSION.md scope statement | Foundation & CI | M1 | Small | Integration Manager |
+| A5 | #110 | Refresh VALIDATION_REPORT.md to current 7 checks | Foundation & CI | M1 | Small | QA / Test Agent |
+| B1 | #111 | Connector contract ADR | Connector Consolidation | M2 | Small | Integration Manager |
+| B2 | #112 | Extract shared read-only Notion client | Connector Consolidation | M2 | Medium | Integration Manager |
+| B3 | #113 | Migrate dashboard-migration-verification/snapshot_notion.py to shared client | Connector Consolidation | M2 | Small | Google Workspace Automation Engineer |
+| B4 | #114 | Migrate Scheduler notion_readonly_adapter.py to shared contract | Connector Consolidation | M2 | Medium | Integration Manager |
+| B5 | #115 | Shim or deprecate the root offline Notion skeleton | Connector Consolidation | M2 | Small | Integration Manager |
+| C1 | #116 | OAuth setup runbook for Materials Coach | First Classroom Artifact | M3 | Small | Instructional Materials Coach |
+| C2 | #117 | Define Scheduler task spec for a deck-generation step | First Classroom Artifact | M3 | Medium | Instructional Materials Coach |
+| C3 | #118 | Scheduler to Materials Coach wiring spike, dry-run only | First Classroom Artifact | M3 | Medium | Instructional Materials Coach |
+| C4 | #119 | First governed live artifact run | First Classroom Artifact | M3 | Medium | Instructional Materials Coach |
+| C5 | #120 | Add example artifact-generation workflow YAML | First Classroom Artifact | M3 | Small | Instructional Materials Coach |
+| C6 | #121 | Document the repeatable classroom-artifact recipe | First Classroom Artifact | M3 | Small | Instructional Materials Coach |
+| D1 | #122 | Add pyproject.toml to agent-memory-context-manager | Packaging & Hygiene | M1 | Small | Google Workspace Automation Engineer |
+| D2 | #123 | Add packaging to dashboard-migration-verification | Packaging & Hygiene | M1 | Small | Google Workspace Automation Engineer |
+| D3 | #124 | Consolidate redundant meta docs | Packaging & Hygiene | M4 | Medium | QA / Test Agent |
+| D4 | #125 | Test-coverage top-up for dashboard-migration-verification | Packaging & Hygiene | M4 | Medium | QA / Test Agent |
 
 ## Dependency Order
 
