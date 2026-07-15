@@ -20,6 +20,30 @@ workspace map, dashboard catalog, or archive index.
 - Attached files and memory: reference snapshots unless the user explicitly asks
   to promote or refresh them.
 
+## Classroom Curriculum Source Order
+
+For classroom curriculum, lesson, slide, worksheet, image-library, assessment,
+and instructional asset work, use this order unless the user explicitly names a
+more specific current source:
+
+1. Review Notion first for instructional intent, lesson sequence, featured
+   photographers, existing lesson planning, unit alignment, readiness context,
+   and other teacher-authored planning.
+2. Review Google Drive second for approved or pending classroom assets, live
+   slide decks, worksheets, photographs, examples, templates, and supporting
+   media.
+3. Use GitHub third for Agent OS governance, implementation, automation,
+   testing, roadmap work, and change requests.
+
+Notion is the authoritative source of instructional intent for classroom
+curriculum work. Google Drive is the authoritative source for classroom asset and
+material files. GitHub remains the authoritative source for Agent OS governance,
+tooling, automation, implementation, and testing.
+
+If Notion already contains instructional planning, extend or refine that work
+rather than creating an entirely new lesson direction. If Notion and Google Drive
+disagree, pause and document the conflict instead of guessing.
+
 ## Source Priority
 
 Use this order when instructional sources overlap:
@@ -92,6 +116,25 @@ Required record groups:
 Search by Asset ID first. Update matching rows instead of duplicating. If no
 match exists, append a complete row. Do not invent unknown required values.
 
+## Lightweight Curriculum Validation
+
+Before producing governed classroom artifacts or implementation changes, confirm:
+
+- Notion instructional planning was reviewed.
+- Google Drive assets were reviewed when assets or existing materials are needed.
+- GitHub change necessity was evaluated.
+- No new lesson direction was introduced without reconciling with Notion.
+- Any Notion, Drive, or GitHub source conflicts were documented.
+
+If any item cannot be confirmed, pause before producing final governed artifacts
+or implementation changes. This checklist is not required for casual
+brainstorming or exploratory conversations.
+
 ## Version
 
-0.1.2
+0.1.3
+
+## Changelog
+
+- 0.1.3 added Classroom Curriculum Source Order and lightweight curriculum validation.
+- 0.1.2 added asset metadata rules for canonical visual asset tracking.
