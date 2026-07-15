@@ -6,6 +6,27 @@ This file maps stable human-readable aliases to common Agent OS reading paths so
 
 Aliases are lookup aids only. They do not change source-of-truth ownership, grant write authority, replace live verification, or duplicate inherited policy text. Apply the referenced source files for the governing rules.
 
+## Registry Governance
+
+The Navigation Alias Registry is the authoritative source for alias definitions and alias behavior.
+
+Alias governance inherits existing Agent OS rules instead of creating new governance:
+
+- Ownership is defined by `04_Registry/responsibility-matrix.md` and `01_Shared_Standards/navigation/navigation-registry-standard.md`.
+- Source-of-truth boundaries are defined by `00_Governance/ownership-and-source-of-truth.md` and `01_Shared_Standards/navigation/navigation-registry-standard.md`.
+- Write authorization is defined by `00_Governance/write-authorization-policy.md`.
+
+Aliases must reference existing governed documentation paths. They do not override overlay inheritance, source-of-truth rules, or write authorization.
+
+## Alias Design Guidelines
+
+- Use concise, stable names.
+- Avoid duplicate aliases.
+- Avoid overlapping aliases.
+- Prefer references over copied policy.
+- Keep aliases task-oriented.
+- Keep reading paths deterministic.
+
 ## Validation
 
 Every file path listed in an alias must exist in the repository. Missing paths block automatic alias use and require Navigation Alias Registry review before the alias is used.
@@ -66,3 +87,7 @@ Every file path listed in an alias must exist in the repository. Missing paths b
 | Source of truth | AGENTS.md destination rules and instructional materials overlay |
 | Files to read in order | 1. `AGENTS.md`<br>2. `04_Registry/responsibility-matrix.md`<br>3. `02_Agent_Overlays/instructional-materials-coach.md`<br>4. `01_Shared_Standards/instructional-design/README.md` |
 | Stop condition | Stop after the destination is clear: Agent OS governance artifacts default to GitHub, teacher planning and working knowledge default to Notion or a Notion handoff, and student-facing materials default to approved Google Drive folders. GitHub storage for classroom artifacts requires explicit approval and a GitHub Change Request handoff. |
+
+## Version History
+
+- Phase 3: aligned alias registry governance with existing Agent OS ownership, source-of-truth, and write authorization references.
