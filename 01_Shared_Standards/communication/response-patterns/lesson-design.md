@@ -15,14 +15,16 @@ experimental
 ## Default Modules
 
 1. Decision
-2. Classroom Fit
-3. Keep / Change
-4. Next Step
+2. Source Note, only when the answer depends on Notion or repository evidence
+3. Classroom Fit
+4. Keep / Change
+5. Next Step
 
 ## Max Length Guidance
 
 - Target: 8 to 12 bullets or fewer.
 - Focus on the part of the lesson the user asked about.
+- Use a one-line source note when the answer is based on Notion, Drive, Sheets, or GitHub context.
 - Do not write a full lesson plan unless requested.
 
 ## When To Use
@@ -44,6 +46,9 @@ experimental
 **Decision**
 Keep Pete Eckert as the hook, but teach only one formal word: `intentional`.
 
+**Source Note**
+Checked the Notion-grounded unit direction; not live-verified for readiness changes.
+
 **Classroom Fit**
 This fits a 50-minute launch because students can learn the other words through looking, talking, and trying the photo task.
 
@@ -59,6 +64,7 @@ Add teacher talk that uses `light`, `blur`, `angle`, and `distance` while pointi
 ```text
 Did this stay focused on lesson design?
 Did it avoid writing more than I needed?
+Did the source note clarify where the answer came from without taking over?
 Did it help me make the next classroom decision?
 Keep / revise / reject:
 ```
