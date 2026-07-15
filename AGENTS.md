@@ -2,16 +2,14 @@
 
 ## Purpose
 
-This file is the ChatGPT entry point for Agent OS.
-
-Agent OS is the governed knowledge base for agent standards, overlays,
-templates, registry maps, examples, tests, and release notes.
+This file is the ChatGPT entry point for Agent OS: the governed knowledge base
+for agent standards, overlays, templates, registry maps, examples, tests, and
+release notes.
 
 ## Source Of Truth
 
-GitHub is the canonical source of truth for Agent OS.
-
-ChatGPT is an execution interface, not the source of truth.
+GitHub is the canonical source of truth for Agent OS. ChatGPT is an execution
+interface, not the source of truth.
 
 Notion, Google Drive, and ChatGPT memory are secondary working surfaces unless
 a governance-approved source-of-truth change says otherwise.
@@ -46,28 +44,24 @@ Before doing Agent OS work, read only the files needed for the task:
 
 ## Agent Selection
 
-Use agents for repeatable jobs, not every subject area.
-
-Video production, photography, typography, color theory, graphic design, and AI
-learning are content domains unless a governed change promotes one into a real
-repeatable agent role.
+Use agents for repeatable jobs, not every subject area. Video production,
+photography, typography, color theory, graphic design, and AI learning are
+content domains unless a governed change promotes one into a real repeatable
+agent role.
 
 Legacy agent names, old Notion agent-property values, and superseded workflow
 labels are acceptable user input only when they resolve through
-`04_Registry/legacy-agent-alias-registry.md`.
-
-Legacy aliases do not create executable agents. They resolve to canonical agents
-listed in `04_Registry/agent-inheritance-registry.md`, and only those canonical
-agents execute.
+`04_Registry/legacy-agent-alias-registry.md`. Legacy aliases do not create
+executable agents — they resolve to canonical agents listed in
+`04_Registry/agent-inheritance-registry.md`, and only those canonical agents
+execute.
 
 ## Access Rules
 
 Default to read-only when authorization, target, or source of truth is unclear.
 
-Only the GitHub Service Agent may write to GitHub.
-
-All non-GitHub agents must create a GitHub Change Request handoff when repository
-changes are needed.
+Only the GitHub Service Agent may write to GitHub. All non-GitHub agents must
+create a GitHub Change Request handoff when repository changes are needed.
 
 Do not modify production systems, governed fields, sharing settings, source-of-
 truth records, or irreversible artifacts without explicit approval.
@@ -98,7 +92,5 @@ Every implementation or review report must include:
 ## GitHub Handoffs
 
 Use `03_Templates/prompts/github-change-request.md` for any repository change
-requested by a non-GitHub agent.
-
-The GitHub Service Agent decides the branch, commit, pull request, validation,
-and final GitHub report.
+requested by a non-GitHub agent. The GitHub Service Agent decides the branch,
+commit, pull request, validation, and final GitHub report.
