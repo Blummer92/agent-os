@@ -16,11 +16,10 @@ Agents should choose the smallest response pattern that fits the current task. I
 
 When an answer depends on Notion, Google Drive, GitHub, or another connected source, the response pattern should include the smallest useful source note.
 
-Use one line when possible:
+Use the shared Source Context module when the source trail matters:
 
 ```text
-Source checked: Notion cached index / live Notion / GitHub file / Drive sheet.
-Status: cached, live-verified, or not verified.
+Source Context: Notion cached index; routing aid; live verification needed before readiness or production decisions.
 ```
 
 For Notion-grounded answers, agents should follow the existing Notion lookup path instead of inventing a source relationship here:
@@ -31,6 +30,12 @@ For Notion-grounded answers, agents should follow the existing Notion lookup pat
 4. Verify live Notion before any write, readiness/status change, ownership change, source-of-truth decision, production authorization decision, or governed-field decision.
 
 The response pattern controls how the answer is shaped. It does not decide which Notion surface is authoritative.
+
+## Response Modules
+
+| Module | File | Status | Primary Use |
+|---|---|---|---|
+| Source Context | `response-modules/source-context.md` | experimental | Compactly name source checked, verification status, authority level, and live-verification boundary. |
 
 ## Status Values
 
@@ -51,12 +56,21 @@ The response pattern controls how the answer is shaped. It does not decide which
 | Deep Research | `response-patterns/deep-research.md` | experimental | Evidence-heavy research requests. |
 | Review Report | `response-patterns/review-report.md` | experimental | Review, validation, or audit summaries. |
 
+## MVP Test Pipeline
+
+1. **Install as documentation-only MVP.** Keep all patterns and modules experimental.
+2. **Use in daily Agent OS work.** Apply Quick Decision, Lesson Design, Deep Research, Review Report, and Source Context when they fit.
+3. **Capture one feedback note per session.** Record what was too much, too thin, missing, or useful.
+4. **Revise only the module or pattern that failed.** Do not rewrite the whole system after one bad response.
+5. **Promote, revise, or deprecate after repeated use.** Move a pattern to `testing` only after it helps in several real tasks.
+
 ## Daily Iteration Loop
 
 Use this quick note after a work session when a response felt too long, too thin, or especially useful.
 
 ```text
 Response Pattern Tested:
+Source Context Used? yes/no
 Source checked:
 What worked:
 What was too much:
