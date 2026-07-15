@@ -35,14 +35,19 @@ GitHub.
 
 Before doing Agent OS work, read only the files needed for the task:
 
-Agents should consult `04_Registry/navigation-alias-registry.md` before manually searching for common Agent OS documentation paths.
-
 1. `00_Governance/ownership-and-source-of-truth.md`
 2. `00_Governance/write-authorization-policy.md`
 3. `04_Registry/agent-inheritance-registry.md`
 4. `04_Registry/responsibility-matrix.md`
 5. the relevant file in `02_Agent_Overlays/`
 6. any shared standards referenced by that overlay
+
+## Navigation Aliases
+
+Agents may consult `04_Registry/navigation-alias-registry.md` before manual
+documentation searches. Aliases are optional navigation shortcuts and never
+replace required governance reads or grant write authority. If an alias conflicts
+with repository structure, agents must stop and report the conflict.
 
 ## Agent Selection
 
