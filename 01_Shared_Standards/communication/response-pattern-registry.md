@@ -12,6 +12,26 @@ Help Agent OS agents produce shorter, modular, decision-focused responses that c
 
 Agents should choose the smallest response pattern that fits the current task. If no pattern fits, use normal judgment and keep the response focused on the user's next decision.
 
+## Source Connection Rule
+
+When an answer depends on Notion, Google Drive, GitHub, or another connected source, the response pattern should include the smallest useful source note.
+
+Use one line when possible:
+
+```text
+Source checked: Notion cached index / live Notion / GitHub file / Drive sheet.
+Status: cached, live-verified, or not verified.
+```
+
+For Notion-grounded answers, agents should follow the existing Notion lookup path instead of inventing a source relationship here:
+
+1. Use `01_Shared_Standards/notion/notion-navigation-index-standard.md` for the cached Notion lookup rule.
+2. Use `08_Tooling/notion-navigation-client/docs/registry-fit.md` for the read-only client boundary.
+3. Use `08_Tooling/notion-navigation-client/docs/source-registry.md` when the task needs Digital Media source authority or owner-surface routing.
+4. Verify live Notion before any write, readiness/status change, ownership change, source-of-truth decision, production authorization decision, or governed-field decision.
+
+The response pattern controls how the answer is shaped. It does not decide which Notion surface is authoritative.
+
 ## Status Values
 
 | Status | Meaning |
@@ -37,6 +57,7 @@ Use this quick note after a work session when a response felt too long, too thin
 
 ```text
 Response Pattern Tested:
+Source checked:
 What worked:
 What was too much:
 What was missing:
@@ -57,5 +78,6 @@ A pattern should move to `deprecated` when it produces repeated confusion, unnec
 - Do not require every response to use every module.
 - Do not add large appendices unless requested.
 - Do not replace governed final-report requirements for implementation or review work.
+- Do not duplicate Notion authority, ownership, or source-of-truth rules here.
 - Do not duplicate agent-specific overlay rules here.
 - If this becomes a governed routing or ownership registry, create a separate governance change request before moving or promoting it.
