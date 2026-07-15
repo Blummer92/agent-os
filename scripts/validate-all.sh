@@ -66,6 +66,11 @@ run_check() {
   fi
 }
 
+is_python_pytest_suite() {
+  local tests_dir="$1"
+  find "$tests_dir" -type f \( -name 'test_*.py' -o -name '*_test.py' \) 2>/dev/null | grep -q .
+}
+
 run_pytest_suite() {
   local suite_dir="$1"
   local suite_name="$2"
@@ -99,7 +104,11 @@ mapfile -t test_dirs < <(
     -not -path './venv/*' \
     -not -path './node_modules/*' \
     -not -path './03_Templates/*' \
-    | sort
+    | sort | while IFS= read -r test_dir; do
+        if is_python_pytest_suite "$test_dir"; then
+          printf '%s\n' "$test_dir"
+        fi
+      done
 )
 
 if [ "${#test_dirs[@]}" -eq 0 ]; then
