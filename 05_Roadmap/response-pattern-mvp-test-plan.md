@@ -8,11 +8,15 @@ Experimental test plan for PR #134 and the Response Pattern MVP pipeline.
 
 Provide a small, repeatable way to test whether the Response Pattern MVP improves Agent OS responses without adding heavy process or premature governance.
 
-## Test Artifact
+## Test Artifacts
 
-Primary test file:
+Primary smoke test file:
 
 - `07_Agent_Tests/response-pattern-mvp.tests.md`
+
+Broader candidate prompt bank:
+
+- `07_Agent_Tests/response-pattern-mvp-candidate-prompt-bank.md`
 
 ## What The Test Proves
 
@@ -24,8 +28,9 @@ The MVP is useful only if agents can:
 - Keep cached Notion information separate from live verification.
 - Refuse premature promotion to stable governance.
 - Produce usable implementation/review reports when required.
+- Handle curriculum planning questions about modeling, lesson names, lesson context, slide images, slide layout, and slide content density without overproducing artifacts.
 
-## How To Run
+## How To Run The 10-Test Smoke Suite
 
 1. Open `07_Agent_Tests/response-pattern-mvp.tests.md`.
 2. Run each numbered prompt in an Agent OS session.
@@ -33,6 +38,18 @@ The MVP is useful only if agents can:
 4. Score against the test-specific expectations second.
 5. Record pass/fail results in the Manual Run Record.
 6. File or update an RP issue for any failure.
+
+## How To Use The 100-Prompt Candidate Bank
+
+Use `07_Agent_Tests/response-pattern-mvp-candidate-prompt-bank.md` after the 10-test smoke suite or during the one-week trial.
+
+Suggested sample sizes:
+
+- 10 prompts for a quick trial.
+- 25 prompts for a focused QA pass.
+- 100 prompts for a full stress pass.
+
+The candidate bank should help identify which prompts deserve promotion into the formal smoke suite, which should remain trial prompts, and which should be removed.
 
 ## MVP Pre-Merge Acceptance
 
@@ -70,6 +87,8 @@ At least three should include feedback notes.
 | Required implementation report missing fields | Review Report pattern revision. |
 | Source Context added when no source was checked | RP3 - evaluate Source Context. |
 | Future Notion-backed library changes source of truth too early | RP6 - research future Notion-backed response pattern library. |
+| Lesson context invented instead of sourced or blocked | RP2 or RP4, depending on whether this appears during trial or revision. |
+| Slide-image or slide-layout recommendations overproduce a student-facing artifact | RP4 and Instructional Materials Coach review. |
 
 ## Merge Gate
 
@@ -80,9 +99,12 @@ PR #134 may move from draft to review only after:
 - The PR body lists both test artifacts.
 - Manual 10-test status is recorded or explicitly marked pending human run.
 
+The 100-prompt candidate bank is not a pre-merge gate. It is a stress-test pool for broader QA and daily iteration.
+
 ## Non-Goals
 
 - No automated testing required for the first MVP.
 - No code changes.
 - No Notion writes.
 - No global agent behavior mandate.
+- No student-facing artifact generation from candidate prompts unless separately approved and routed to the correct destination.
