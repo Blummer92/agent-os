@@ -1,0 +1,10 @@
+name: agent-os-pr-validation
+github:
+  owner: Blummer92
+  name: agent-os
+  pullRequest:
+    branch: ^main$
+    commentControl: COMMENTS_DISABLED
+filename: cloudbuild.yaml
+includeBuildLogs: INCLUDE_BUILD_LOGS_WITH_STATUS
+serviceAccount: projects/agent-os-502614/serviceAccounts/zacharyb@agent-os-502614.iam.gserviceaccount.com
