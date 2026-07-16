@@ -18,13 +18,13 @@ This file defines retrieval behavior. It is not a Navigation Registry, workspace
 
 For curriculum, lesson, slide, worksheet, image-library, assessment, and instructional asset work, use this order unless the user names a more specific current source:
 
-1. Review Notion first for instructional intent, lesson sequence, featured photographers, existing lesson planning, unit alignment, readiness context, and teacher-authored planning.
+1. Review Notion first for instructional intent, lesson sequence, featured photographers, lesson planning, unit alignment, readiness context, and teacher-authored planning.
 2. Review Google Drive second for approved or pending assets, live slide decks, worksheets, photographs, examples, templates, and media.
 3. Use GitHub third for Agent OS governance, implementation, automation, testing, roadmap work, and change requests.
 
 Notion is authoritative for instructional intent. Google Drive is authoritative for classroom asset and material files. GitHub remains authoritative for Agent OS governance, tooling, automation, implementation, and testing.
 
-If Notion already contains planning, extend or refine that work rather than creating an unrelated lesson direction. If Notion and Google Drive disagree, pause and document the conflict instead of guessing.
+If Notion already contains planning, extend or refine that work. If Notion and Google Drive disagree, pause and document the conflict instead of guessing.
 
 ## Source Priority
 
@@ -52,13 +52,7 @@ When Notion is involved:
 
 ## Conflict Resolution
 
-When sources disagree, use this precedence order:
-
-1. canonical unit guidance
-2. current lesson guidance
-3. teacher-authored current material
-4. current semester material
-5. explicit user direction in the current request
+When sources disagree, use this precedence order: canonical unit guidance, current lesson guidance, teacher-authored current material, current semester material, then explicit user direction in the current request.
 
 ## Navigation Registry Boundary
 
@@ -72,7 +66,7 @@ Use Drive when the task needs existing slide decks, worksheets, Docs, unit guide
 
 - Prefer current working files over copied or archived versions.
 - Update an existing canonical working file by default when revising the same material.
-- Create a separate copy only when requested, when the file is protected, when it sits outside the confirmed target workspace, or when preserving the original materially matters.
+- Create a separate copy only when requested, protected, outside the confirmed target workspace, or needed to preserve the original.
 
 ## Asset Metadata Rules
 
@@ -94,11 +88,10 @@ Before governed classroom artifacts or implementation changes, confirm Notion pl
 If any item cannot be confirmed, pause before producing final governed artifacts or implementation changes. This checklist is not required for casual brainstorming or exploratory conversations.
 
 ## Version
-
-0.1.4
+0.1.5
 
 ## Changelog
-
+- 0.1.5 keeps this standard under the repository line limit.
 - 0.1.4 shortened this standard without changing source-order rules so structural validation can enforce the line limit.
 - 0.1.3 added Classroom Curriculum Source Order and lightweight curriculum validation.
 - 0.1.2 added asset metadata rules for canonical visual asset tracking.
