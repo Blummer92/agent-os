@@ -57,6 +57,8 @@ Typical workflow:
 
 Use GitHub pull requests as the control surface. Use Google Cloud Build History only when deeper build logs are needed.
 
+<!-- Cloud Build visible PR check test -->
+
 ### GitHub Actions Validation
 
 The `Agent OS Validation Gate` workflow runs the same aggregate validation command for pull requests targeting `main`.
