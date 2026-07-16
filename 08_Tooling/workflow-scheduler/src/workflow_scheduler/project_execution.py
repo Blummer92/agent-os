@@ -5,9 +5,11 @@ simulation-only: no repository writes, PR creation, merges, Notion writes, or
 Google Drive writes are exposed here.
 """
 
+import json
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 
 class JobStatus(str, Enum):
@@ -23,6 +25,10 @@ class JobStatus(str, Enum):
     REVIEW_READY = "review_ready"
     COMPLETED = "completed"
     GOVERNANCE_BLOCKED = "governance_blocked"
+
+
+class FixtureValidationError(ValueError):
+    """Raised when a local project execution fixture is malformed."""
 
 
 @dataclass
@@ -72,6 +78,139 @@ class ProjectManagerBoundary:
         "write_external_system",
         "bypass_validation_gate",
     )
+
+
+class FixtureIssueQueueLoader:
+    """Loads static local issue fixtures into the dry-run project model."""
+
+    def load_jobs(self, fixture: Mapping[str, Any]) -> List[ProjectJob]:
+        """Convert validated fixture data into project jobs."""
+        return load_project_jobs_from_fixture_data(fixture)
+
+    def load_execution(self, fixture: Mapping[str, Any]) -> "ProjectExecutionMVP":
+        """Build a dry-run execution model from fixture data."""
+        return ProjectExecutionMVP(self.load_jobs(fixture))
+
+    def load_jobs_from_file(self, path: str | Path) -> List[ProjectJob]:
+        """Load project jobs from a local JSON fixture file."""
+        return load_project_jobs_from_fixture_file(path)
+
+    def load_execution_from_file(self, path: str | Path) -> "ProjectExecutionMVP":
+        """Build a dry-run execution model from a local JSON fixture file."""
+        return ProjectExecutionMVP(self.load_jobs_from_file(path))
+
+    @property
+    def external_write_count(self) -> int:
+        """Fixture loading performs no external writes."""
+        return 0
+
+
+def load_project_jobs_from_fixture_file(path: str | Path) -> List[ProjectJob]:
+    """Load project jobs from a local JSON fixture path."""
+    fixture_path = Path(path)
+    try:
+        fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise FixtureValidationError(f"Fixture is not valid JSON: {fixture_path}") from exc
+    return load_project_jobs_from_fixture_data(fixture)
+
+
+def load_project_jobs_from_fixture_data(fixture: Mapping[str, Any]) -> List[ProjectJob]:
+    """Validate fixture data and convert it into ProjectJob objects."""
+    if not isinstance(fixture, Mapping):
+        raise FixtureValidationError("Fixture must be a JSON object.")
+    jobs_data = fixture.get("jobs")
+    if not isinstance(jobs_data, list):
+        raise FixtureValidationError("Fixture must contain a jobs list.")
+
+    jobs: List[ProjectJob] = []
+    seen_ids: set[str] = set()
+    for index, raw_job in enumerate(jobs_data):
+        if not isinstance(raw_job, Mapping):
+            raise FixtureValidationError(f"jobs[{index}] must be an object.")
+        job_id = _required_string(raw_job, "id", index)
+        if job_id in seen_ids:
+            raise FixtureValidationError(f"jobs[{index}].id is duplicated: {job_id}")
+        seen_ids.add(job_id)
+        status, blocked_reason = _fixture_status(raw_job, index)
+        jobs.append(
+            ProjectJob(
+                id=job_id,
+                issue_number=_required_int(raw_job, "issue_number", index),
+                title=_required_string(raw_job, "title", index),
+                dependencies=_string_list(raw_job.get("dependencies", []), index),
+                priority=_optional_int(raw_job, "priority", index, default=0),
+                status=status,
+                blocked_reason=blocked_reason,
+            )
+        )
+    return jobs
+
+
+def _required_string(raw_job: Mapping[str, Any], key: str, index: int) -> str:
+    value = raw_job.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise FixtureValidationError(f"jobs[{index}].{key} must be a non-empty string.")
+    return value
+
+
+def _required_int(raw_job: Mapping[str, Any], key: str, index: int) -> int:
+    value = raw_job.get(key)
+    if type(value) is not int:
+        raise FixtureValidationError(f"jobs[{index}].{key} must be an integer.")
+    return value
+
+
+def _optional_int(raw_job: Mapping[str, Any], key: str, index: int, default: int) -> int:
+    value = raw_job.get(key, default)
+    if type(value) is not int:
+        raise FixtureValidationError(f"jobs[{index}].{key} must be an integer.")
+    return value
+
+
+def _string_list(value: Any, index: int) -> List[str]:
+    if not isinstance(value, list):
+        raise FixtureValidationError(f"jobs[{index}].dependencies must be a list.")
+    for dep in value:
+        if not isinstance(dep, str) or not dep.strip():
+            raise FixtureValidationError(
+                f"jobs[{index}].dependencies must contain only non-empty strings."
+            )
+    return list(value)
+
+
+def _fixture_status(raw_job: Mapping[str, Any], index: int) -> Tuple[JobStatus, Optional[str]]:
+    blocked = _optional_bool(raw_job, "blocked", index, default=False)
+    governance_blocked = _optional_bool(raw_job, "governance_blocked", index, default=False)
+    blocked_reason = raw_job.get("blocked_reason")
+    if blocked_reason is not None and not isinstance(blocked_reason, str):
+        raise FixtureValidationError(f"jobs[{index}].blocked_reason must be a string.")
+
+    status_value = raw_job.get("status")
+    if status_value is not None:
+        if not isinstance(status_value, str):
+            raise FixtureValidationError(f"jobs[{index}].status must be a string.")
+        try:
+            status = JobStatus(status_value)
+        except ValueError as exc:
+            raise FixtureValidationError(f"jobs[{index}].status is not supported: {status_value}") from exc
+    elif governance_blocked:
+        status = JobStatus.GOVERNANCE_BLOCKED
+    elif blocked or blocked_reason:
+        status = JobStatus.BLOCKED
+    else:
+        status = JobStatus.QUEUED
+
+    if status in (JobStatus.BLOCKED, JobStatus.GOVERNANCE_BLOCKED) and not blocked_reason:
+        blocked_reason = "blocked by fixture"
+    return status, blocked_reason
+
+
+def _optional_bool(raw_job: Mapping[str, Any], key: str, index: int, default: bool) -> bool:
+    value = raw_job.get(key, default)
+    if type(value) is not bool:
+        raise FixtureValidationError(f"jobs[{index}].{key} must be a boolean.")
+    return value
 
 
 class ProjectExecutionMVP:
