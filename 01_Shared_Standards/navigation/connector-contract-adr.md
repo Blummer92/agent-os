@@ -18,6 +18,16 @@ The Navigation Registry Read Contract is the stable target for Agent OS connecto
 
 All implementations of this contract must be read-only. They may expose cached lookup results, relationship traversal, alias resolution, owner/routing hints, freshness metadata, drift warnings, and human-review flags. They must not expose write methods, mutate live systems, refresh operational caches without approved ownership, or treat lookup results as authority for live-system changes.
 
+## Naming Clarification
+
+`Navigation Registry Read Contract` is the canonical governance name for the
+Agent OS read-only connector contract.
+
+`ReadOnlyConnector` may appear in implementation code, adapter classes, tests, or
+older ADR language as compatibility terminology. It does not replace the
+Navigation Registry Read Contract as the source-of-truth name for M2 connector
+planning.
+
 ## Compatibility and Rejected Alternative
 
 Rejected: making the existing Notion navigation client shape the cross-system contract.

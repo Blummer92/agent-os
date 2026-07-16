@@ -4,6 +4,22 @@
 
 Accepted for M2 planning.
 
+## Supersession Note
+
+This ADR is superseded for canonical naming by
+`01_Shared_Standards/navigation/connector-contract-adr.md`.
+
+The canonical Agent OS read-only connector contract name is
+**Navigation Registry Read Contract**.
+
+The term `ReadOnlyConnector` may remain as implementation or compatibility
+terminology for adapter classes, result boundaries, tests, or legacy references,
+but it is not the canonical governance name for M2 connector planning.
+
+Future B2, B3, B4, and B5 documentation should reference the Navigation Registry
+Read Contract as the canonical contract and should use `ReadOnlyConnector` only
+when referring to concrete code, compatibility shims, or legacy adapter naming.
+
 ## Context
 
 Agent OS has multiple Notion-facing access shapes: cached navigation index reads,
