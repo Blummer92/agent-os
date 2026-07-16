@@ -1,0 +1,95 @@
+name: Agent OS task
+description: Create a governed Agent OS issue with taxonomy metadata.
+title: "[Agent OS] "
+labels: [agent-os, status:needs-decision]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for Agent OS repository work. Labels are additive by default; do not remove or replace labels without explicit approval.
+  - type: dropdown
+    id: phase
+    attributes:
+      label: Phase
+      options: [implementation-phase-1, post-cleanup, governance-planning, not-applicable]
+    validations: {required: true}
+  - type: dropdown
+    id: epic
+    attributes:
+      label: Epic
+      options:
+        - epic:foundation
+        - epic:connectors
+        - epic:classroom-artifact
+        - epic:hygiene
+        - epic:workflow-scheduler
+        - epic:navigation-registry
+        - epic:governance
+        - epic:curriculum-language-system
+        - epic:google-cloud
+        - epic:issue-acceptance
+        - needs-decision
+    validations: {required: true}
+  - type: dropdown
+    id: owner
+    attributes:
+      label: Owner agent
+      description: Select the primary owner. Add support agents in the notes.
+      options:
+        - owner:qa-test-agent
+        - owner:github-service-agent
+        - owner:integration-manager
+        - owner:instructional-materials-coach
+        - owner:google-workspace-automation-engineer
+        - owner:teacher-modeling-coach
+        - needs-decision
+    validations: {required: true}
+  - type: dropdown
+    id: status
+    attributes:
+      label: Status
+      options: [status:ready, status:blocked, status:needs-decision]
+    validations: {required: true}
+  - type: dropdown
+    id: type
+    attributes:
+      label: Type
+      multiple: true
+      options: [type:docs, type:tooling, type:governance, type:validation, type:classroom-artifact]
+    validations: {required: true}
+  - type: dropdown
+    id: source-of-truth
+    attributes:
+      label: Source-of-truth surface
+      options: [GitHub, Notion handoff, Google Drive handoff, ChatGPT planning only, needs-decision]
+    validations: {required: true}
+  - type: dropdown
+    id: external-write
+    attributes:
+      label: External write surface
+      description: Does this task request writes outside GitHub?
+      options: [no-external-write, external-write-requested, needs-decision]
+    validations: {required: true}
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies / blockers
+      placeholder: "Parent: #180\nBlocked by: #...\nRelated: #..."
+    validations: {required: false}
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and non-goals
+      placeholder: "Scope:\n- ...\n\nNon-goals:\n- ..."
+    validations: {required: true}
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety checks
+      options:
+        - label: Labels will be applied additively only.
+          required: true
+        - label: No production, governed-field, sharing, source-of-truth, or external-system writes are requested without explicit approval.
+          required: true
+        - label: Final report will include files changed, tests run, docs updated, unresolved blockers, handoff recommendations, and remaining risks.
+          required: true
