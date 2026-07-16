@@ -7,11 +7,15 @@ from .cache_key import build_handoff_packet_cache_key
 from .summary_cache import read_summary_cache_entry, summary_cache_entry_exists
 
 DEFAULT_SUMMARY_CACHE_FILENAME = "summary-cache.json"
+INVALID_FILENAME_CHARS = set('<>:"/\\|?*')
 
 
 def build_summary_cache_path(cache_dir: str | Path, cache_key: str) -> Path:
-    """Build the filesystem path for a summary cache key."""
-    safe_cache_key = cache_key.replace("/", "_")
+    """Build a portable filesystem path for a summary cache key."""
+    safe_cache_key = "".join(
+        "_" if char in INVALID_FILENAME_CHARS else char
+        for char in cache_key
+    )
     return Path(cache_dir) / f"{safe_cache_key}.json"
 
 
