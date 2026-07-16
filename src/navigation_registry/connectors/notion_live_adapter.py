@@ -1,26 +1,14 @@
 """Metadata-only wrapper for a future live read-only Notion adapter.
 
-This module intentionally has no Notion SDK dependency, no HTTP client, no
-credentials, and no live system construction. A client-like object must be
-injected by callers so tests can prove the safety boundary before live Notion
-access is introduced.
+This adapter keeps the existing boundary checks but delegates metadata reads and
+normalization to the B2 shared Notion read-only client.
 """
 
-from typing import Any, Protocol
+from __future__ import annotations
 
 from .base import ConnectorError, ConnectorErrorCode, RegistryResource
 from .notion_live_boundary import NotionLiveReadOnlyBoundary, NotionLiveReadOnlyConfig
-from .notion_normalizer import normalize_notion_resource
-
-
-class NotionMetadataClient(Protocol):
-    """Minimal read-only metadata client shape for dependency injection."""
-
-    def retrieve_page_metadata(self, page_id: str) -> dict[str, Any]:
-        """Return page metadata without page body content."""
-
-    def retrieve_database_metadata(self, database_id: str) -> dict[str, Any]:
-        """Return database metadata."""
+from .notion_read_client import NotionMetadataReader, SharedNotionReadOnlyClient
 
 
 class NotionLiveReadOnlyAdapter:
@@ -35,27 +23,32 @@ class NotionLiveReadOnlyAdapter:
     def __init__(
         self,
         config: NotionLiveReadOnlyConfig,
-        client: NotionMetadataClient,
+        client: NotionMetadataReader,
     ) -> None:
         self._boundary = NotionLiveReadOnlyBoundary(config)
-        self._client = client
+        self._config = config
+        self._client = SharedNotionReadOnlyClient(
+            metadata_reader=client,
+            allowed_target_ids=config.allowed_target_ids,
+        )
+
+    def lookup_resource(self, resource_id: str) -> RegistryResource | ConnectorError:
+        page_result = self.lookup_page_metadata(resource_id)
+        if isinstance(page_result, RegistryResource):
+            return page_result
+        database_result = self.lookup_database_metadata(resource_id)
+        if isinstance(database_result, RegistryResource):
+            return database_result
+        return page_result
+
+    def verify_resource(self, resource_id: str) -> RegistryResource | ConnectorError:
+        return self.lookup_resource(resource_id)
 
     def lookup_page_metadata(self, page_id: str) -> RegistryResource | ConnectorError:
         error = self._preflight(page_id)
         if error is not None:
             return error
-        try:
-            payload = self._client.retrieve_page_metadata(page_id)
-        except Exception as exc:  # pragma: no cover - defensive mapping for clients
-            return ConnectorError(
-                code=ConnectorErrorCode.UNKNOWN_ERROR,
-                severity="high",
-                retryable=True,
-                message="Notion metadata client failed while retrieving page metadata.",
-                resource_id=page_id,
-                evidence={"error_type": type(exc).__name__},
-            )
-        return normalize_notion_resource(payload)
+        return self._client.lookup_page_metadata(page_id)
 
     def lookup_database_metadata(
         self, database_id: str
@@ -63,24 +56,15 @@ class NotionLiveReadOnlyAdapter:
         error = self._preflight(database_id)
         if error is not None:
             return error
-        try:
-            payload = self._client.retrieve_database_metadata(database_id)
-        except Exception as exc:  # pragma: no cover - defensive mapping for clients
-            return ConnectorError(
-                code=ConnectorErrorCode.UNKNOWN_ERROR,
-                severity="high",
-                retryable=True,
-                message="Notion metadata client failed while retrieving database metadata.",
-                resource_id=database_id,
-                evidence={"error_type": type(exc).__name__},
-            )
-        return normalize_notion_resource(payload)
+        return self._client.lookup_database_metadata(database_id)
 
     def read_page_body(self, page_id: str) -> ConnectorError:
         return self._boundary.read_page_body(page_id)
 
-    def report_health(self) -> dict[str, Any]:
+    def report_health(self) -> dict[str, object]:
+        health = self._client.report_health()
         return {
+            **health,
             "connector_id": self.connector_id,
             "connector_name": self.connector_name,
             "connector_version": self.connector_version,
@@ -94,7 +78,15 @@ class NotionLiveReadOnlyAdapter:
         live_mode_error = self._boundary.live_mode_error()
         if live_mode_error is not None:
             return live_mode_error
-        approved_probe = self._boundary.lookup_mock_resource(target_id, {})
-        if isinstance(approved_probe, ConnectorError) and approved_probe.code == ConnectorErrorCode.PERMISSION_DENIED:
-            return approved_probe
+        if target_id not in self._config.allowed_target_ids:
+            return ConnectorError(
+                code=ConnectorErrorCode.PERMISSION_DENIED,
+                severity="critical",
+                retryable=False,
+                message="Target id is not approved for live read-only Notion access.",
+                resource_id=target_id,
+            )
         return None
+
+
+NotionMetadataClient = NotionMetadataReader
