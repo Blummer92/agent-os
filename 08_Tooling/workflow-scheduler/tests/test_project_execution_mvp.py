@@ -12,6 +12,7 @@ from workflow_scheduler.project_execution import (
     ProjectJob,
     ProjectManager,
     ProjectManagerBoundary,
+    WorkerLeaseState,
 )
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "project_jobs.json"
@@ -377,3 +378,94 @@ def test_project_manager_selection_respects_dependency_blocking():
 
     assert [job.id for job in manager.select_ready_jobs()] == ["base"]
     assert [job.id for job in manager.blocked_jobs()] == ["dependent"]
+
+
+def test_worker_claim_records_visible_lease_state():
+    system = ProjectExecutionMVP([make_job("a")])
+
+    claimed = system.claim_job("a", "worker-a")
+    lease = system.lease_state("a")
+
+    assert claimed is not None
+    assert isinstance(lease, WorkerLeaseState)
+    assert lease.job_id == "a"
+    assert lease.worker_id == "worker-a"
+    assert lease.active is True
+    assert lease.status == JobStatus.RUNNING
+    assert "job_lease_acquired" in event_types(system)
+
+
+def test_blocked_job_assignment_returns_none():
+    system = ProjectExecutionMVP([make_job("blocked")])
+    system.block_job("blocked", "waiting for approval", governance=False)
+
+    assert system.claim_job("blocked", "worker-a") is None
+    assert system.lease_state("blocked").active is False
+
+
+def test_governance_blocked_job_assignment_returns_none():
+    system = ProjectExecutionMVP([make_job("blocked")])
+    system.block_job("blocked", "governance boundary unclear", governance=True)
+
+    assert system.claim_job("blocked", "worker-a") is None
+    assert system.lease_state("blocked").active is False
+
+
+def test_worker_can_release_a_lease():
+    system = ProjectExecutionMVP([make_job("a")])
+    system.claim_job("a", "worker-a")
+
+    released = system.release_lease("a", "worker-a")
+    lease = system.lease_state("a")
+
+    assert released is True
+    assert lease.active is False
+    assert lease.worker_id is None
+    assert lease.status == JobStatus.READY
+    assert "job_lease_released" in event_types(system)
+
+
+def test_released_job_can_be_reclaimed():
+    system = ProjectExecutionMVP([make_job("a")])
+    system.claim_job("a", "worker-a")
+    system.release_lease("a", "worker-a")
+
+    reclaimed = system.claim_job("a", "worker-b")
+
+    assert reclaimed is not None
+    assert reclaimed.lease_owner == "worker-b"
+    assert system.lease_state("a").worker_id == "worker-b"
+
+
+def test_non_owner_cannot_release_worker_lease():
+    system = ProjectExecutionMVP([make_job("a")])
+    system.claim_job("a", "worker-a")
+
+    assert system.release_lease("a", "worker-b") is False
+    assert system.lease_state("a").worker_id == "worker-a"
+
+
+def test_worker_assignment_rejects_blank_worker_id():
+    system = ProjectExecutionMVP([make_job("a")])
+
+    with pytest.raises(ValueError, match="Worker id must be a non-empty string"):
+        system.claim_job("a", " ")
+
+
+def test_worker_assignment_performs_zero_external_writes():
+    system = ProjectExecutionMVP([make_job("a")])
+
+    system.claim_job("a", "worker-a")
+    system.release_lease("a", "worker-a")
+
+    assert system.external_write_count == 0
+
+
+def test_project_manager_can_release_assignment_through_lease_path():
+    system = ProjectExecutionMVP([make_job("a")])
+    manager = ProjectManager(system)
+    manager.assign_next("worker-a")
+
+    assert manager.release_assignment("a", "worker-a") is True
+    assert system.lease_state("a").active is False
+    assert "project_manager_released" in event_types(system)
