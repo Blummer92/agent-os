@@ -1,0 +1,19 @@
+[project]
+name = "agent-memory-context-manager"
+version = "0.1.0"
+description = "Local helpers for Agent OS context packets, budget-aware handoffs, and summary cache lookup without runtime Scheduler integration."
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
