@@ -26,6 +26,8 @@ Run the aggregate local validation command from the repository root:
 ./scripts/validate-all.sh
 ```
 
+Cloud Build also runs repository validation from `cloudbuild.yaml` when configured on the Google Cloud trigger.
+
 The command runs the structural repository checks in `07_Agent_Tests/validate-repo-structure.sh` and every discovered Python pytest suite outside template folders. It prints the commands executed, check results, failed packages, overall status, and exit code.
 
 Exit codes:
