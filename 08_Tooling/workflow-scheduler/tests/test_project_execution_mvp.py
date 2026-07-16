@@ -2,7 +2,13 @@
 
 import pytest
 
-from workflow_scheduler.project_execution import JobStatus, ProjectExecutionMVP, ProjectJob
+from workflow_scheduler.project_execution import (
+    JobStatus,
+    ProjectExecutionMVP,
+    ProjectJob,
+    ProjectManager,
+    ProjectManagerBoundary,
+)
 
 
 def make_job(job_id, issue_number=1, dependencies=None, priority=0):
@@ -112,3 +118,71 @@ def test_audit_history_records_core_events():
     assert "validation_pending" in event_types(system)
     assert "validation_passed" in event_types(system)
     assert "review_ready" in event_types(system)
+
+
+def test_project_manager_boundary_names_responsibilities_and_forbidden_actions():
+    boundary = ProjectManagerBoundary()
+
+    assert "select_ready_jobs" in boundary.responsibilities
+    assert "job_queue" in boundary.inputs
+    assert "selected_jobs" in boundary.outputs
+    assert "selection_history" in boundary.owned_state
+    assert "merge_pull_request" in boundary.forbidden_actions
+
+
+def test_project_manager_selects_only_ready_jobs():
+    system = ProjectExecutionMVP([
+        make_job("ready", priority=2),
+        make_job("waiting", dependencies=["done"]),
+    ])
+    system.jobs["done"] = make_job("done")
+    system.mark_completed("done")
+    manager = ProjectManager(system)
+
+    selected = manager.select_ready_jobs(limit=1)
+
+    assert [job.id for job in selected] == ["ready"]
+    assert manager.selection_history == ["ready"]
+    assert "project_manager_selected" in event_types(system)
+
+
+def test_project_manager_does_not_select_blocked_jobs():
+    system = ProjectExecutionMVP([make_job("open"), make_job("blocked")])
+    system.block_job("blocked", "approval boundary unclear", governance=True)
+    manager = ProjectManager(system)
+
+    selected = manager.select_ready_jobs()
+    blocked = manager.blocked_jobs()
+
+    assert [job.id for job in selected] == ["open"]
+    assert [job.id for job in blocked] == ["blocked"]
+
+
+def test_project_manager_assigns_ready_job_through_lease_path():
+    system = ProjectExecutionMVP([make_job("a")])
+    manager = ProjectManager(system)
+
+    assigned = manager.assign_next("worker-a")
+
+    assert assigned is not None
+    assert assigned.id == "a"
+    assert assigned.lease_owner == "worker-a"
+    assert assigned.status == JobStatus.RUNNING
+    assert "project_manager_assigned" in event_types(system)
+
+
+def test_project_manager_performs_no_external_writes():
+    system = ProjectExecutionMVP([make_job("a")])
+    manager = ProjectManager(system)
+
+    manager.select_ready_jobs()
+
+    assert manager.external_write_count == 0
+    assert system.external_write_count == 0
+
+
+def test_project_manager_rejects_forbidden_actions():
+    manager = ProjectManager(ProjectExecutionMVP([make_job("a")]))
+
+    with pytest.raises(ValueError, match="Project Manager cannot perform forbidden action"):
+        manager.perform_forbidden_action("merge_pull_request")
