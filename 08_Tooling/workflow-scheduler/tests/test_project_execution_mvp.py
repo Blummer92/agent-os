@@ -1,14 +1,20 @@
 """Smoke tests for the Agent OS project execution dry-run MVP."""
 
+from pathlib import Path
+
 import pytest
 
 from workflow_scheduler.project_execution import (
+    FixtureIssueQueueLoader,
+    FixtureValidationError,
     JobStatus,
     ProjectExecutionMVP,
     ProjectJob,
     ProjectManager,
     ProjectManagerBoundary,
 )
+
+FIXTURE_PATH = Path(__file__).parent / "fixtures" / "project_jobs.json"
 
 
 def make_job(job_id, issue_number=1, dependencies=None, priority=0):
@@ -186,3 +192,89 @@ def test_project_manager_rejects_forbidden_actions():
 
     with pytest.raises(ValueError, match="Project Manager cannot perform forbidden action"):
         manager.perform_forbidden_action("merge_pull_request")
+
+
+def test_fixture_loader_loads_two_independent_jobs_as_ready():
+    loader = FixtureIssueQueueLoader()
+    system = loader.load_execution_from_file(FIXTURE_PATH)
+
+    ready = system.ready_jobs()
+
+    assert [job.id for job in ready] == ["issue-101", "issue-102"]
+
+
+def test_fixture_loader_blocks_dependent_job_until_predecessor_completion():
+    loader = FixtureIssueQueueLoader()
+    system = loader.load_execution({
+        "jobs": [
+            {"id": "base", "issue_number": 1, "title": "Base"},
+            {
+                "id": "dependent",
+                "issue_number": 2,
+                "title": "Dependent",
+                "dependencies": ["base"],
+            },
+        ]
+    })
+
+    assert [job.id for job in system.ready_jobs()] == ["base"]
+
+    system.mark_completed("base")
+
+    assert [job.id for job in system.ready_jobs()] == ["dependent"]
+
+
+def test_fixture_loader_creates_blocked_job():
+    loader = FixtureIssueQueueLoader()
+    system = loader.load_execution({
+        "jobs": [
+            {
+                "id": "blocked",
+                "issue_number": 3,
+                "title": "Blocked",
+                "blocked": True,
+                "blocked_reason": "waiting for approval",
+            }
+        ]
+    })
+
+    assert system.jobs["blocked"].status == JobStatus.BLOCKED
+    assert system.jobs["blocked"].blocked_reason == "waiting for approval"
+
+
+def test_fixture_loader_invalid_data_raises_clear_error():
+    loader = FixtureIssueQueueLoader()
+
+    with pytest.raises(FixtureValidationError, match="issue_number"):
+        loader.load_jobs({"jobs": [{"id": "bad", "title": "Missing issue number"}]})
+
+
+def test_fixture_loader_performs_no_external_writes():
+    loader = FixtureIssueQueueLoader()
+
+    loader.load_jobs_from_file(FIXTURE_PATH)
+
+    assert loader.external_write_count == 0
+
+
+def test_fixture_loaded_jobs_can_be_selected_by_project_manager():
+    loader = FixtureIssueQueueLoader()
+    system = loader.load_execution_from_file(FIXTURE_PATH)
+    manager = ProjectManager(system)
+
+    selected = manager.select_ready_jobs()
+
+    assert [job.id for job in selected] == ["issue-101", "issue-102"]
+
+
+def test_fixture_loaded_jobs_can_be_assigned_through_lease_path():
+    loader = FixtureIssueQueueLoader()
+    system = loader.load_execution_from_file(FIXTURE_PATH)
+    manager = ProjectManager(system)
+
+    assigned = manager.assign_next("worker-a")
+
+    assert assigned is not None
+    assert assigned.id == "issue-101"
+    assert assigned.lease_owner == "worker-a"
+    assert assigned.status == JobStatus.RUNNING
