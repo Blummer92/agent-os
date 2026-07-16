@@ -2,10 +2,11 @@
 
 This module intentionally is not a Notion client. It performs no network calls,
 constructs no credentials, imports no Google or Notion SDK, and writes nothing.
-It only converts evidence from existing read layers into RegistryResource or
-ConnectorError values:
+It only converts evidence from existing read/discovery layers into
+RegistryResource or ConnectorError values:
 
 - cached navigation-index records from 08_Tooling/notion-navigation-client
+- Notion search/fetch result evidence from approved Notion tooling
 - live-shaped Notion payloads from the Workflow Scheduler read-only adapter
 """
 
@@ -16,6 +17,7 @@ from typing import Any, Iterable
 from .base import ConnectorError, ConnectorErrorCode, RegistryResource
 
 CACHED_NOTION_INDEX_SOURCE = "notion-navigation-index-cache"
+NOTION_SEARCH_RESULT_SOURCE = "notion-search-result"
 LIVE_NOTION_SOURCE = "notion-live"
 
 _KIND_TO_ENTITY_TYPE = {
@@ -65,10 +67,11 @@ _NAVIGATION_WARNING = (
 
 
 class NotionContractAdapter:
-    """Normalize existing Notion read evidence into RegistryResource values.
+    """Normalize existing Notion evidence into RegistryResource values.
 
-    The adapter has no read access of its own. Callers pass evidence already
-    obtained from an approved cached lookup client or live read adapter.
+    The adapter has no read/search access of its own. Callers pass evidence
+    already obtained from an approved cached lookup client, Notion search/fetch
+    tool, or live read adapter.
     """
 
     connector_id = "notion-contract-adapter"
@@ -126,6 +129,54 @@ class NotionContractAdapter:
                 "live_verification_required": True,
                 "write_boundary": "read-only-lookup-only",
                 "raw_record": dict(record),
+            },
+        )
+
+    def from_search_result(
+        self, result: dict[str, Any], query: str | None = None
+    ) -> RegistryResource | ConnectorError:
+        """Normalize one Notion search result after discovery has already happened.
+
+        Search results make conversational references easier to pass between
+        agents, but they are not live verification and do not authorize writes.
+        Callers should fetch the page/database before governed decisions.
+        """
+
+        title = _first_present(result, ("title", "display_title", "name"))
+        url = _first_present(result, ("url", "display_url"))
+        result_id = _first_present(result, ("id", "page_id", "database_id")) or url
+        if not result_id or not title:
+            return _error(
+                ConnectorErrorCode.METADATA_INCOMPLETE,
+                "Notion search result is missing an identifier/url or title.",
+                resource_id=result_id,
+                evidence={"query": query, "result_keys": sorted(result)},
+            )
+
+        return RegistryResource(
+            system="notion",
+            entity_type=_search_entity_type(result),
+            canonical_id=result_id,
+            display_name=title,
+            parent=None,
+            owner=None,
+            source_of_truth=NOTION_SEARCH_RESULT_SOURCE,
+            verification_state="SearchResultOnly",
+            cache_status="SearchResult",
+            human_review_required=True,
+            write_allowed=False,
+            metadata={
+                "evidence_source": NOTION_SEARCH_RESULT_SOURCE,
+                "query": query,
+                "url": url,
+                "display_url": result.get("display_url"),
+                "highlight": result.get("highlight"),
+                "timestamp": result.get("timestamp"),
+                "semantic_reference": True,
+                "fetch_required": True,
+                "live_verification_required": True,
+                "write_boundary": "read-only-search-result-only",
+                "raw_result": dict(result),
             },
         )
 
@@ -216,6 +267,7 @@ class NotionContractAdapter:
             "write_capabilities": self.write_capabilities,
             "role": "contract-normalization-bridge",
             "canonical_cached_lookup": "08_Tooling/notion-navigation-client/",
+            "canonical_search_discovery": "Notion search/fetch tooling outside this adapter",
             "canonical_live_read": "08_Tooling/workflow-scheduler/src/workflow_scheduler/adapters/notion_readonly_adapter.py",
         }
 
@@ -248,6 +300,13 @@ def _parent_for_navigation_record(kind: str, record: dict[str, Any]) -> str | No
     if kind in {"field", "property"}:
         return _first_present(record, ("Database Name", "Database", "Parent Database"))
     return _first_present(record, ("Parent", "Parent Database", "Database Name"))
+
+
+def _search_entity_type(result: dict[str, Any]) -> str:
+    result_type = str(result.get("type") or result.get("object") or "").strip().lower()
+    if result_type == "database":
+        return "Database"
+    return "Page"
 
 
 def _page_title(payload: dict[str, Any]) -> str | None:
