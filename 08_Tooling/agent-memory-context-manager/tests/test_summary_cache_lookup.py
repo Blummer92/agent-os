@@ -45,6 +45,12 @@ def test_cache_path_replaces_slashes_with_underscores(tmp_path):
     assert path == tmp_path / "handoff_summary_key.json"
 
 
+def test_cache_path_replaces_windows_reserved_chars(tmp_path):
+    path = build_summary_cache_path(tmp_path, "handoff-summary:1.0:key")
+
+    assert path == tmp_path / "handoff-summary_1.0_key.json"
+
+
 def test_lookup_returns_none_when_no_cache_file_exists(tmp_path):
     assert lookup_summary_cache_entry(tmp_path, sample_packet()) is None
 
