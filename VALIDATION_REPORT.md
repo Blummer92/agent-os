@@ -1,36 +1,65 @@
 # Validation Report
 
-## Current PR
+## Current Baseline
 
 - Review root: `Blummer92/agent-os`
-- Branch: `implement-teacher-modeling-coach`
-- Scope: Issue #76 Teacher Modeling Coach migration
-- Source: uploaded Teacher Modeling Coach prompt packet plus teacher-talk, model-sequence, misunderstanding-response, and misunderstanding-audit skills
-- Overlay updated: `02_Agent_Overlays/teacher-modeling-coach.md`
-- Workflow standard added: `teacher-modeling-workflows.md`
-- Memory and source standard added: `teacher-modeling-memory-and-sources.md`
-- Modeling standard updated: `teacher-modeling-standards.md`
-- Teacher-talk template added: `03_Templates/prompts/teacher-talk-rehearsal.md`
-- Model-sequence template added: `03_Templates/prompts/model-sequence-builder.md`
-- Misunderstanding-response template added: `03_Templates/prompts/misunderstanding-response-designer.md`
-- Misunderstanding-audit template added: `03_Templates/prompts/teacher-modeling-misunderstanding-audit.md`
-- Responsibility matrix updated: yes
-- Tests updated: `teacher-modeling-coach.tests.md`
-- Durable rules migrated instead of pasting full raw prompts or memory logs: yes
-- New agents added: no
-- Video production agent added: no
-- Direct Notion, Drive, or GitHub lesson writes implemented: no
-- Notion synchronization kept explicit and gated: yes
-- Read-only Notion audit support documented: yes
-- Destination defaults preserved: yes
-- Connector static review: pass
-- Script execution in connector: unavailable
-- Required local command: `bash 07_Agent_Tests/validate-repo-structure.sh`
-- Expected local result after this PR: 6 passed, 0 failed
-- Final status: DRAFT PASS - local or CI execution required before ready for review
+- Baseline branch: `main`
+- Scope: Agent OS repository-wide validation after A2 and A3
+- Primary command: `./scripts/validate-all.sh`
+- Structural command: `bash 07_Agent_Tests/validate-repo-structure.sh`
+- CI gate: `Agent OS Validation Gate` on the self-hosted `agent-os` runner
+- Latest evidence used for this refresh: PR #144 / A3 validation passed before merge
 
-## Main Baseline Preserved
+## Structural Validation Checks
 
-- Previous merged scope: Issue #71 Instructional Materials Coach migration
-- Instructional Materials Coach migration remains merged in `main`
-- Pilot workflow files remain preserved
+`07_Agent_Tests/validate-repo-structure.sh` currently runs seven checks:
+
+1. All non-exempt Markdown files, except `CLAUDE.md`, are under 100 lines.
+2. Every overlay references `_common-overlay-rules.md`.
+3. No filename collisions exist between `00_Governance/` and `04_Registry/`, except each folder's own `README.md`.
+4. Every registered agent has a matching overlay file.
+5. Every agent test file has a matching overlay.
+6. Every overlay has a matching test file.
+7. All Documentation Dependency Map metadata paths exist.
+
+Expected structural result on a clean baseline: 7 passed, 0 failed.
+
+## Aggregate Validation Coverage
+
+`scripts/validate-all.sh` runs structural validation first, then discovers pytest
+test directories and runs each Python test suite. The runner reports commands
+executed, check results, failed packages, overall status, and exit code.
+
+Current package suites are discovered from repository `tests/` directories with
+Python test files. Suites with `src/` are run with `PYTHONPATH=src`; root tests
+run from the repository root.
+
+## Current Evidence
+
+- PR #142 / A2 passed the Agent OS Validation Gate before merge.
+- PR #144 / A3 passed the Agent OS Validation Gate before merge.
+- Navigation Registry Offline Tests passed for PR #144.
+- No failed or skipped checks are recorded for the current A3 baseline evidence.
+
+## Boundaries
+
+This report records validation evidence only. It does not authorize issue-to-PR
+automation, live Google Drive writes, Notion writes, production writes,
+readiness-field changes, sharing changes, or source-of-truth changes.
+
+## Reproducibility
+
+To reproduce the current validation baseline from a clean checkout:
+
+```bash
+./scripts/validate-all.sh
+```
+
+For pull requests, use the `Agent OS Validation Gate` and require the self-hosted
+`agent-os` runner to complete successfully before merge.
+
+## Remaining Follow-Up
+
+- A4 / #109 still needs to update `VERSION.md` so release scope matches the
+  reconciled module map and validation baseline.
+- D1 / #122 and D2 / #123 remain packaging follow-ups for M1.
