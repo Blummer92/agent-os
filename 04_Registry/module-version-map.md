@@ -13,6 +13,7 @@ versions change only when the module's standards or contract changes.
 | Google Workspace Standards | 0.1.2 |
 | Apps Script Standards | 0.1.0 |
 | Notion Standards | 0.2.0 |
+| Navigation Registry | 0.1.0 |
 | QA/Test Standards | 0.1.0 |
 | Dashboard Governance | 0.1.0 |
 | Dashboard Migration Verification | 0.1.0 |
@@ -64,6 +65,17 @@ API, dashboard, daemon, and production deployment. The planning documents remain
 part of the module: `README.md`, `HANDOFF_PACKET_TEMPLATE.md`,
 `CONTEXT_BUDGET_POLICY.md`, `SUMMARY_CACHE_FORMAT.md`, and
 `SCHEDULER_INTEGRATION_DESIGN.md`.
+
+**Navigation Registry** covers the cross-system lookup standards stack under
+`01_Shared_Standards/navigation/` (standard, architecture, data model,
+connector-adapter framework, workspace-discovery-service, read-contract ADR) and
+the offline read-only connector skeleton under `src/navigation_registry/`. Owned by
+the Integration Manager (`04_Registry/responsibility-matrix.md`). It is a
+lookup/cache aid only and authorizes no writes. The finalized planning baseline is
+`05_Roadmap/navigation-registry-improvement-plan.md` (Issue #97); implementation
+proceeds through governed, read-only phases beginning with benchmark fixtures and an
+offline metric harness. Individual navigation standard files remain at 0.1.0–0.1.1
+per their own version footers.
 
 ## Reconciliation Notes
 
