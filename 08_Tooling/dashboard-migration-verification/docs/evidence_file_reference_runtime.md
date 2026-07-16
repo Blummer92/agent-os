@@ -11,79 +11,42 @@ sanitized and must not contain live records or private identifiers.
 
 ### `snapshots/*.json`
 
-Structured point-in-time dashboard evidence. Placeholder snapshots are scaffolding only
-and do not prove readiness.
+Structured point-in-time dashboard evidence. Placeholder snapshots are scaffolding
+only and do not prove readiness.
 
-B3 adds explicit evidence-path metadata so agents can quickly distinguish local
+B3 adds explicit evidence-path metadata so agents can distinguish local
 placeholder context from cached or live verification evidence.
 
-Expected shape:
+Runtime snapshots include:
 
-```json
-{
-  "generated_at": "...",
-  "evidence_path_summary": {
-    "mode": "placeholder_only",
-    "evidence_speed_tier": "local_placeholder",
-    "dashboards_total": 1,
-    "dashboards_with_live_verification": 0,
-    "dashboards_safe_for_migration_decision": 0,
-    "dashboards_safe_for_retirement_decision": 0,
-    "requires_network": false,
-    "requires_credentials": false,
-    "live_verification_required": true
-  },
-  "dashboards": {
-    "example_dashboard": {
-      "key": "example_dashboard",
-      "name": "Example Dashboard",
-      "notion_id": "EXAMPLE_NOTION_ID",
-      "data_source_id": "EXAMPLE_DATA_SOURCE_ID",
-      "owner": "Dashboard Governance",
-      "source_of_truth_role": "example role",
-      "retirement_allowed": false,
-      "human_approval_required": true,
-      "notes": "Example notes.",
-      "evidence_path": {
-        "mode": "placeholder_only",
-        "evidence_speed_tier": "local_placeholder",
-        "requires_network": false,
-        "requires_credentials": false,
-        "cached_navigation_lookup_used": false,
-        "live_notion_used": false,
-        "contract_normalization_used": false,
-        "safe_for_fast_agent_context": true,
-        "safe_for_migration_decision": false,
-        "safe_for_retirement_decision": false,
-        "human_review_required": true,
-        "live_verification_required": true,
-        "next_required_evidence": "cached_navigation_lookup_then_optional_live_verification"
-      },
-      "schema": {},
-      "views": {},
-      "templates": {},
-      "permissions": {},
-      "automations": {},
-      "buttons": {},
-      "records_summary": {},
-      "records_sample": []
-    }
-  }
-}
-```
+- top-level `evidence_path_summary`
+- per-dashboard `evidence_path`
+- registry fields preserved in each dashboard snapshot
+- missing evidence sections for schema, views, templates, permissions,
+  automations, and buttons
 
-Agents should read `evidence_path_summary` first. Placeholder-only snapshots are safe
-for fast context but not for migration approval, retirement approval, or governed
-workspace decisions.
+Agents should read `evidence_path_summary` first. Placeholder-only snapshots are
+safe for fast context but not for migration approval, retirement approval, or
+governed workspace decisions.
+
+Placeholder-only evidence means:
+
+- no network was used
+- no credentials were used
+- no live Notion read occurred
+- cached navigation lookup was not used
+- live verification remains required for governed decisions
+
+See `evidence_path_snapshot_example.md` for the expanded JSON example.
 
 ### `graph/dependency_graph.json`
 
 Derived dependency graph built from the latest snapshot and one proposed-change
 manifest.
 
-Covered dependency types include fields, status values, formulas, relations, rollups,
-linked views, templates, buttons, automations, permissions, documentation references,
-agent references, and synced databases.
+Covered dependency types include fields, status values, formulas, relations,
+rollups, linked views, templates, buttons, automations, permissions,
+documentation references, agent references, and synced databases.
 
 ### `validation/validation_results.json`
 
