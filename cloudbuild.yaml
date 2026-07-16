@@ -1,0 +1,13 @@
+steps:
+  - name: 'python:3.12'
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        python -m pip install --upgrade pip
+        pip install -r requirements-dev.txt
+        pip install pyyaml google-auth google-api-python-client google-auth-oauthlib
+        bash scripts/validate-all.sh
+
+options:
+  logging: CLOUD_LOGGING_ONLY
