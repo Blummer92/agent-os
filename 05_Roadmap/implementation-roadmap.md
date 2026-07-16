@@ -85,9 +85,10 @@ Implementation Phase 1 is complete when Agent OS can:
 
 **Completion criteria:**
 
-- A connector ADR names the canonical contract.
-- Shared Notion reads route through one read-only client.
-- Dashboard migration, Scheduler, and root navigation skeleton call sites are migrated, shimmed, or deprecated.
+- A connector ADR names the canonical Navigation Registry Read Contract.
+- Cached navigation-index lookup and Scheduler live Notion reads remain distinct approved read paths.
+- Navigation Registry connector adapters or normalizers bridge cached, live, and placeholder evidence into the canonical contract without creating duplicate Notion clients.
+- Dashboard migration, Scheduler, and root navigation skeleton call sites are migrated, wrapped, shimmed, deprecated, or explicitly deferred.
 - Tests remain green after migration.
 
 ### M3 — First Classroom Artifact
@@ -128,10 +129,10 @@ Implementation Phase 1 is complete when Agent OS can:
 | A4 | #109 | Correct VERSION.md scope statement | Foundation & CI | M1 | Small | Integration Manager |
 | A5 | #110 | Refresh VALIDATION_REPORT.md to current 7 checks | Foundation & CI | M1 | Small | QA / Test Agent |
 | B1 | #111 | Connector contract ADR | Connector Consolidation | M2 | Small | Integration Manager |
-| B2 | #112 | Extract shared read-only Notion client | Connector Consolidation | M2 | Medium | Integration Manager |
-| B3 | #113 | Migrate dashboard-migration-verification/snapshot_notion.py to shared client | Connector Consolidation | M2 | Small | Google Workspace Automation Engineer |
-| B4 | #114 | Migrate Scheduler notion_readonly_adapter.py to shared contract | Connector Consolidation | M2 | Medium | Integration Manager |
-| B5 | #115 | Shim or deprecate the root offline Notion skeleton | Connector Consolidation | M2 | Small | Integration Manager |
+| B2 | #112 | Reconcile Notion read paths into Navigation Registry evidence bridge | Connector Consolidation | M2 | Medium | Integration Manager |
+| B3 | #113 | Define dashboard snapshot Notion evidence path | Connector Consolidation | M2 | Small | Google Workspace Automation Engineer |
+| B4 | #114 | Wrap Scheduler Notion reads with Navigation Registry evidence | Connector Consolidation | M2 | Medium | Integration Manager |
+| B5 | #115 | Clarify root Notion connector as shim/deprecated skeleton | Connector Consolidation | M2 | Small | Integration Manager |
 | C1 | #116 | OAuth setup runbook for Materials Coach | First Classroom Artifact | M3 | Small | Instructional Materials Coach |
 | C2 | #117 | Define Scheduler task spec for a deck-generation step | First Classroom Artifact | M3 | Medium | Instructional Materials Coach |
 | C3 | #118 | Scheduler to Materials Coach wiring spike, dry-run only | First Classroom Artifact | M3 | Medium | Instructional Materials Coach |
@@ -149,10 +150,11 @@ Implementation Phase 1 is complete when Agent OS can:
 2. Follow with A2 so the aggregate runner becomes a pull-request gate.
 3. Run A3, A5, and A4 to reconcile status and validation documents after the validation baseline exists.
 4. Complete D1 and D2 during M1 so all packages can participate consistently in validation.
-5. Complete B1 before any connector migration.
-6. Complete B2 before B3, B4, or B5.
-7. Complete C1 early because credentials and approved Drive folder access are external dependencies.
-8. Complete C2 before C3; complete C3 before C4; complete C4 before C5 and C6.
+5. Complete B1 so the canonical Navigation Registry Read Contract is established before connector migration.
+6. Complete B2 so the bridge/normalization layer exists before B3, B4, or B5.
+7. Complete B3, B4, and B5 after B2 while preserving cached/live/source-of-truth boundaries and avoiding duplicate Notion clients.
+8. Complete C1 early because credentials and approved Drive folder access are external dependencies.
+9. Complete C2 before C3; complete C3 before C4; complete C4 before C5 and C6.
 
 ## Pause Register
 
@@ -174,7 +176,7 @@ Implementation Phase 1 is complete when:
 - M1, M2, and M3 are complete.
 - M4 hygiene work is either complete or explicitly deferred with rationale.
 - Every pull request can run the repo-wide aggregate validation gate.
-- Notion read access has one governed contract and one shared client path.
+- Notion read evidence uses the Navigation Registry Read Contract through approved cached lookup, live read, and adapter/normalization paths without introducing duplicate Notion clients.
 - One classroom artifact has been generated through a governed Scheduler -> Materials Coach workflow.
 - Roadmap, issue bodies, and status documents agree on what is complete, paused, and deferred.
 
