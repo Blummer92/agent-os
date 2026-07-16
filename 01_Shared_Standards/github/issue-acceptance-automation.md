@@ -4,7 +4,7 @@
 
 Define the Agent OS contract for checking whether a pull request satisfies the
 GitHub issue it claims to resolve. This standard is the IA1 source of truth;
-IA2 implements checker code against it.
+IA2 implements fixture-first checker code against it.
 
 ## Boundary
 
