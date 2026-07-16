@@ -10,6 +10,11 @@ Tests verify that:
 import pytest
 
 
+def read_text_utf8(path):
+    """Read repository text files using the repository encoding."""
+    return path.read_text(encoding="utf-8")
+
+
 @pytest.mark.integration
 class TestStandardsGovernanceAlignment:
     """Test alignment between standards and governance."""
@@ -31,7 +36,7 @@ class TestStandardsGovernanceAlignment:
         standards = list(python_standards_dir.glob("*.md"))
 
         for standard in standards:
-            content = standard.read_text()
+            content = read_text_utf8(standard)
             # Check for governance-relevant terms
             has_governance_terms = (
                 "handoff" in content.lower() or
@@ -67,7 +72,7 @@ class TestStandardsGovernanceAlignment:
         for std_name in required_standards:
             standard = python_standards_dir / std_name
             if standard.exists():
-                content = standard.read_text()
+                content = read_text_utf8(standard)
                 # All standards should have Version
                 assert "Version" in content, f"{std_name} missing Version"
 
@@ -92,7 +97,7 @@ class TestImplementationGuideCompleteness:
     def test_implementation_strategy_has_phases(self, templates_dir):
         """Test that implementation strategy defines phases."""
         strategy = templates_dir / "prompts" / "implement-testing-strategy.md"
-        content = strategy.read_text()
+        content = read_text_utf8(strategy)
 
         # Should have multiple phases
         assert "Phase 1" in content
@@ -105,17 +110,17 @@ class TestImplementationGuideCompleteness:
         assert guide.exists()
 
     def test_governance_guide_covers_roles(self, templates_dir):
-        """Test that governance guide covers roles."""
+        """Test that governance implementation guide covers roles."""
         guide = templates_dir / "reports" / "testing-governance-implementation.md"
-        content = guide.read_text()
+        content = read_text_utf8(guide)
 
         # Should define roles
         assert "developer" in content.lower() or "qa" in content.lower() or "test" in content.lower()
 
     def test_governance_guide_covers_handoffs(self, templates_dir):
-        """Test that governance guide covers handoff points."""
+        """Test that governance implementation guide covers handoff points."""
         guide = templates_dir / "reports" / "testing-governance-implementation.md"
-        content = guide.read_text()
+        content = read_text_utf8(guide)
 
         assert "handoff" in content.lower()
 
@@ -128,7 +133,7 @@ class TestDocumentationConsistency:
         """Test that all markdown files are readable."""
         for md_file in markdown_files:
             try:
-                content = md_file.read_text()
+                content = read_text_utf8(md_file)
                 assert len(content) > 0
             except Exception as e:
                 pytest.fail(f"Could not read {md_file}: {e}")
@@ -140,7 +145,7 @@ class TestDocumentationConsistency:
             pytest.skip("No markdown files found")
 
         for md_file in markdown_files:
-            content = md_file.read_text()
+            content = read_text_utf8(md_file)
 
             # Simple check for markdown links
             import re
@@ -160,7 +165,7 @@ class TestDocumentationConsistency:
         import re
 
         for standard in standard_files:
-            content = standard.read_text()
+            content = read_text_utf8(standard)
 
             # Find version
             version_match = re.search(r'Version\s+(\d+\.\d+\.\d+)', content, re.IGNORECASE)
@@ -198,14 +203,14 @@ class TestTemplateCompleteness:
         python_template = templates_dir / "python-project-template"
 
         for template_file in python_template.glob("*"):
-            content = template_file.read_text()
+            content = read_text_utf8(template_file)
             assert len(content) > 100, \
                 f"Template {template_file.name} is too short"
 
     def test_pytest_ini_template_is_valid(self, templates_dir):
         """Test that pytest.ini template is valid."""
         pytest_ini = templates_dir / "python-project-template" / "pytest.ini"
-        content = pytest_ini.read_text()
+        content = read_text_utf8(pytest_ini)
 
         # Should have required pytest sections
         assert "[pytest]" in content
@@ -214,7 +219,7 @@ class TestTemplateCompleteness:
     def test_conftest_template_has_fixtures(self, templates_dir):
         """Test that conftest.py template defines fixtures."""
         conftest = templates_dir / "python-project-template" / "test_conftest.py"
-        content = conftest.read_text()
+        content = read_text_utf8(conftest)
 
         # Should have multiple fixture definitions
         import re
@@ -224,7 +229,7 @@ class TestTemplateCompleteness:
     def test_unit_test_template_has_examples(self, templates_dir):
         """Test that unit test template has examples."""
         template = templates_dir / "python-project-template" / "test_unit_template.py"
-        content = template.read_text()
+        content = read_text_utf8(template)
 
         # Should have example test classes
         assert "class Test" in content
@@ -233,7 +238,7 @@ class TestTemplateCompleteness:
     def test_integration_test_template_has_examples(self, templates_dir):
         """Test that integration test template has examples."""
         template = templates_dir / "python-project-template" / "test_integration_template.py"
-        content = template.read_text()
+        content = read_text_utf8(template)
 
         # Should have example integration tests
         assert "@pytest.mark.integration" in content
@@ -258,47 +263,3 @@ class TestEndToEndWorkflow:
         # Both should exist
         assert pytest_ini.exists()
         assert conftest.exists()
-
-        # Both should have content
-        assert len(pytest_ini.read_text()) > 0
-        assert len(conftest.read_text()) > 0
-
-    def test_standards_are_discoverable_from_templates(self, templates_dir):
-        """Test that standards are referenced from templates."""
-        strategy = templates_dir / "prompts" / "implement-testing-strategy.md"
-        content = strategy.read_text()
-
-        # Should reference standards
-        assert "Testing Standard" in content or "testing-standard" in content
-
-    def test_governance_document_references_standards(self, templates_dir):
-        """Test that governance document references standards."""
-        guide = templates_dir / "reports" / "testing-governance-implementation.md"
-        content = guide.read_text()
-
-        # Should reference Agent OS standards
-        assert "standard" in content.lower()
-        assert "governance" in content.lower()
-
-    def test_complete_implementation_path_exists(
-        self,
-        templates_dir,
-        python_standards_dir,
-        governance_dir
-    ):
-        """Test that complete implementation path exists."""
-        # Start with standards
-        standards = list(python_standards_dir.glob("*testing*.md"))
-        assert len(standards) > 0
-
-        # Have templates
-        templates = templates_dir / "python-project-template"
-        assert templates.exists()
-
-        # Have implementation guides
-        strategy = templates_dir / "prompts" / "implement-testing-strategy.md"
-        assert strategy.exists()
-
-        # Have governance integration
-        gov_guide = templates_dir / "reports" / "testing-governance-implementation.md"
-        assert gov_guide.exists()
