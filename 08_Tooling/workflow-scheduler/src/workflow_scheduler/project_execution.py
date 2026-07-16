@@ -9,7 +9,7 @@ import json
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 
 
 class JobStatus(str, Enum):
@@ -44,6 +44,7 @@ class ProjectJob:
     lease_owner: Optional[str] = None
     blocked_reason: Optional[str] = None
     validation_status: Optional[str] = None
+    dependency_blocking_reasons: List[str] = field(default_factory=list)
 
     def has_active_lease(self) -> bool:
         """Return true when a worker already owns the job lease."""
@@ -232,21 +233,105 @@ class ProjectExecutionMVP:
             raise ValueError(f"Unknown job: {job_id}") from exc
 
     def _dependencies_satisfied(self, job: ProjectJob) -> bool:
-        return all(self._job(dep).status == JobStatus.COMPLETED for dep in job.dependencies)
+        return not self.dependency_blocking_reasons(job.id)
 
-    def ready_jobs(self) -> List[ProjectJob]:
-        """Mark and return jobs that are ready for worker assignment."""
+    def detect_dependency_cycles(self) -> List[List[str]]:
+        """Detect dependency cycles using the existing resolver's DFS pattern."""
+        visited: Set[str] = set()
+        active: Set[str] = set()
+        stack: List[str] = []
+        cycles: List[List[str]] = []
+        cycle_keys: Set[Tuple[str, ...]] = set()
+
+        def visit(job_id: str) -> None:
+            if job_id in active:
+                start = stack.index(job_id)
+                cycle = stack[start:] + [job_id]
+                key = tuple(sorted(set(cycle)))
+                if key not in cycle_keys:
+                    cycles.append(cycle)
+                    cycle_keys.add(key)
+                return
+            if job_id in visited:
+                return
+            active.add(job_id)
+            stack.append(job_id)
+            for dependency_id in self.jobs[job_id].dependencies:
+                if dependency_id in self.jobs:
+                    visit(dependency_id)
+            stack.pop()
+            active.remove(job_id)
+            visited.add(job_id)
+
+        for job_id in sorted(self.jobs):
+            visit(job_id)
+        return cycles
+
+    def _cyclic_job_ids(self) -> Set[str]:
+        cyclic: Set[str] = set()
+        for cycle in self.detect_dependency_cycles():
+            cyclic.update(cycle)
+        return cyclic
+
+    def _cycle_for_job(self, job_id: str) -> Optional[List[str]]:
+        for cycle in self.detect_dependency_cycles():
+            if job_id in cycle:
+                return cycle
+        return None
+
+    def _block_cyclic_jobs(self) -> None:
+        for job_id in sorted(self._cyclic_job_ids()):
+            job = self._job(job_id)
+            cycle = self._cycle_for_job(job_id) or [job_id]
+            reason = f"dependency cycle detected: {' -> '.join(cycle)}"
+            job.dependency_blocking_reasons = [reason]
+            if job.status in (JobStatus.QUEUED, JobStatus.READY):
+                job.status = JobStatus.BLOCKED
+                job.blocked_reason = reason
+                self._record("dependency_cycle_detected", job.id, cycle=cycle)
+
+    def dependency_blocking_reasons(self, job_id: str) -> List[str]:
+        """Return visible reasons a job is dependency-blocked."""
+        job = self._job(job_id)
+        reasons: List[str] = []
+        if job_id in self._cyclic_job_ids():
+            cycle = self._cycle_for_job(job_id) or [job_id]
+            reasons.append(f"dependency cycle detected: {' -> '.join(cycle)}")
+        for dependency_id in job.dependencies:
+            dependency = self.jobs.get(dependency_id)
+            if dependency is None:
+                reasons.append(f"missing dependency: {dependency_id}")
+            elif dependency.status != JobStatus.COMPLETED:
+                reasons.append(f"waiting for dependency {dependency_id} ({dependency.status.value})")
+        job.dependency_blocking_reasons = reasons
+        return reasons
+
+    def dependency_status(self) -> Dict[str, List[str]]:
+        """Return dependency blocking reasons for every job."""
+        return {job_id: self.dependency_blocking_reasons(job_id) for job_id in sorted(self.jobs)}
+
+    def safe_parallel_batch(self) -> List[ProjectJob]:
+        """Return all jobs safe to run together in the current dry-run state."""
+        self._block_cyclic_jobs()
         ready: List[ProjectJob] = []
         for job in self.jobs.values():
             if job.status not in (JobStatus.QUEUED, JobStatus.READY):
                 continue
-            if job.has_active_lease() or not self._dependencies_satisfied(job):
+            if job.has_active_lease():
+                continue
+            reasons = self.dependency_blocking_reasons(job.id)
+            if reasons:
+                self._record("dependency_blocked", job.id, reasons=reasons)
                 continue
             if job.status == JobStatus.QUEUED:
                 job.status = JobStatus.READY
                 self._record("job_ready", job.id)
             ready.append(job)
         return sorted(ready, key=lambda item: (-item.priority, item.id))
+
+    def ready_jobs(self) -> List[ProjectJob]:
+        """Mark and return jobs that are ready for worker assignment."""
+        return self.safe_parallel_batch()
 
     def claim_job(self, job_id: str, worker_id: str) -> Optional[ProjectJob]:
         """Lease one ready job to a worker, preventing duplicate claims."""
@@ -297,6 +382,7 @@ class ProjectExecutionMVP:
         job = self._job(job_id)
         job.status = JobStatus.COMPLETED
         job.lease_owner = None
+        job.dependency_blocking_reasons = []
         self._record("job_completed", job.id)
 
     def transition_job(self, job_id: str, requested_status: str, actor: str) -> None:
@@ -326,7 +412,7 @@ class ProjectManager:
 
     def select_ready_jobs(self, limit: Optional[int] = None) -> List[ProjectJob]:
         """Select ready jobs without assigning workers or performing writes."""
-        jobs = self.execution.ready_jobs()
+        jobs = self.execution.safe_parallel_batch()
         selected = jobs[:limit] if limit is not None else jobs
         for job in selected:
             self.selection_history.append(job.id)
@@ -346,7 +432,7 @@ class ProjectManager:
         for job in self.execution.jobs.values():
             if job.status in (JobStatus.BLOCKED, JobStatus.GOVERNANCE_BLOCKED):
                 blocked.append(job)
-            elif job.status == JobStatus.QUEUED and not self.execution._dependencies_satisfied(job):
+            elif job.status == JobStatus.QUEUED and self.execution.dependency_blocking_reasons(job.id):
                 blocked.append(job)
         return sorted(blocked, key=lambda item: item.id)
 

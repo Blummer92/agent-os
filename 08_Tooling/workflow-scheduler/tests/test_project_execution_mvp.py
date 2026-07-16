@@ -278,3 +278,102 @@ def test_fixture_loaded_jobs_can_be_assigned_through_lease_path():
     assert assigned.id == "issue-101"
     assert assigned.lease_owner == "worker-a"
     assert assigned.status == JobStatus.RUNNING
+
+
+def test_dependency_graph_three_job_graph_returns_dependency_free_jobs_first():
+    system = ProjectExecutionMVP([
+        make_job("foundation", priority=2),
+        make_job("peer", priority=1),
+        make_job("dependent", dependencies=["foundation"], priority=3),
+    ])
+
+    batch = system.safe_parallel_batch()
+
+    assert [job.id for job in batch] == ["foundation", "peer"]
+    assert system.dependency_blocking_reasons("dependent") == [
+        "waiting for dependency foundation (ready)"
+    ]
+    assert "dependency_blocked" in event_types(system)
+
+
+def test_dependency_graph_completion_unblocks_dependent_job():
+    system = ProjectExecutionMVP([
+        make_job("base"),
+        make_job("dependent", dependencies=["base"]),
+    ])
+
+    assert [job.id for job in system.safe_parallel_batch()] == ["base"]
+
+    system.mark_completed("base")
+
+    assert [job.id for job in system.safe_parallel_batch()] == ["dependent"]
+    assert system.jobs["dependent"].dependency_blocking_reasons == []
+
+
+def test_dependency_graph_parallel_batch_includes_independent_jobs():
+    system = ProjectExecutionMVP([
+        make_job("a", priority=1),
+        make_job("b", priority=2),
+        make_job("c", dependencies=["a"]),
+    ])
+
+    assert [job.id for job in system.safe_parallel_batch()] == ["b", "a"]
+
+
+def test_dependency_cycle_prevents_scheduling_and_blocks_jobs():
+    system = ProjectExecutionMVP([
+        make_job("a", dependencies=["b"]),
+        make_job("b", dependencies=["a"]),
+    ])
+
+    assert system.safe_parallel_batch() == []
+    assert system.jobs["a"].status == JobStatus.BLOCKED
+    assert system.jobs["b"].status == JobStatus.BLOCKED
+    assert "dependency cycle detected" in system.jobs["a"].blocked_reason
+    assert "dependency_cycle_detected" in event_types(system)
+
+
+def test_dependency_cycle_is_visible_in_dependency_status():
+    system = ProjectExecutionMVP([
+        make_job("a", dependencies=["b"]),
+        make_job("b", dependencies=["a"]),
+    ])
+
+    status = system.dependency_status()
+
+    assert "dependency cycle detected" in status["a"][0]
+    assert any("waiting for dependency" in reason for reason in status["a"])
+
+
+def test_dependency_blocking_performs_no_external_writes():
+    system = ProjectExecutionMVP([
+        make_job("base"),
+        make_job("dependent", dependencies=["base"]),
+    ])
+
+    system.safe_parallel_batch()
+
+    assert system.external_write_count == 0
+    assert "dependency_blocked" in event_types(system)
+
+
+def test_fixture_loaded_jobs_participate_in_dependency_graph_behavior():
+    loader = FixtureIssueQueueLoader()
+    system = loader.load_execution_from_file(FIXTURE_PATH)
+
+    assert [job.id for job in system.safe_parallel_batch()] == ["issue-101", "issue-102"]
+
+    system.mark_completed("issue-101")
+
+    assert [job.id for job in system.safe_parallel_batch()] == ["issue-102", "issue-103"]
+
+
+def test_project_manager_selection_respects_dependency_blocking():
+    system = ProjectExecutionMVP([
+        make_job("base"),
+        make_job("dependent", dependencies=["base"], priority=5),
+    ])
+    manager = ProjectManager(system)
+
+    assert [job.id for job in manager.select_ready_jobs()] == ["base"]
+    assert [job.id for job in manager.blocked_jobs()] == ["dependent"]
