@@ -1,0 +1,124 @@
+version: 1
+source_issue_form: .github/ISSUE_TEMPLATE/agent-os-task.yml
+mode: declarative-only
+
+rules:
+  additive_only: true
+  remove_labels: false
+  replace_labels: false
+  apply_labels: false
+  requires_existing_labels: true
+
+base_labels:
+  - agent-os
+
+fields:
+  phase:
+    description: Optional phase label from the issue form.
+    values:
+      implementation-phase-1:
+        labels: [implementation-phase-1]
+      post-cleanup:
+        labels: []
+      governance-planning:
+        labels: []
+      not-applicable:
+        labels: []
+
+  epic:
+    description: Primary roadmap or topic label.
+    values:
+      epic:foundation:
+        labels: [epic:foundation]
+      epic:connectors:
+        labels: [epic:connectors]
+      epic:classroom-artifact:
+        labels: [epic:classroom-artifact]
+      epic:hygiene:
+        labels: [epic:hygiene]
+      epic:workflow-scheduler:
+        labels: [epic:workflow-scheduler]
+      epic:navigation-registry:
+        labels: [epic:navigation-registry]
+      epic:governance:
+        labels: [epic:governance]
+      epic:curriculum-language-system:
+        labels: [epic:curriculum-language-system]
+      epic:google-cloud:
+        labels: [epic:google-cloud]
+      epic:issue-acceptance:
+        labels: [epic:issue-acceptance]
+      needs-decision:
+        labels: [status:needs-decision]
+
+  owner:
+    description: Primary owner label from the issue form.
+    values:
+      owner:qa-test-agent:
+        labels: [owner:qa-test-agent]
+      owner:github-service-agent:
+        labels: [owner:github-service-agent]
+      owner:integration-manager:
+        labels: [owner:integration-manager]
+      owner:instructional-materials-coach:
+        labels: [owner:instructional-materials-coach]
+      owner:google-workspace-automation-engineer:
+        labels: [owner:google-workspace-automation-engineer]
+      owner:teacher-modeling-coach:
+        labels: [owner:teacher-modeling-coach]
+      needs-decision:
+        labels: [status:needs-decision]
+
+  status:
+    description: Current routing state.
+    values:
+      status:ready:
+        labels: [status:ready]
+      status:blocked:
+        labels: [status:blocked]
+      status:needs-decision:
+        labels: [status:needs-decision]
+
+  type:
+    description: One or more work-type labels.
+    multiple: true
+    values:
+      type:docs:
+        labels: [type:docs]
+      type:tooling:
+        labels: [type:tooling]
+      type:governance:
+        labels: [type:governance]
+      type:validation:
+        labels: [type:validation]
+      type:classroom-artifact:
+        labels: [type:classroom-artifact]
+
+  source-of-truth:
+    description: Source-of-truth routing evidence. No labels are applied in L2.
+    values:
+      GitHub:
+        labels: []
+      Notion handoff:
+        labels: []
+      Google Drive handoff:
+        labels: []
+      ChatGPT planning only:
+        labels: []
+      needs-decision:
+        labels: [status:needs-decision]
+
+  external-write:
+    description: External write risk evidence. No labels are applied in L2 except needs-decision.
+    values:
+      no-external-write:
+        labels: []
+      external-write-requested:
+        labels: [status:needs-decision]
+      needs-decision:
+        labels: [status:needs-decision]
+
+validation_notes:
+  - This file is configuration only and must not apply labels by itself.
+  - Future checker code should read this map and report expected labels before any automation applies them.
+  - Tests should use fixtures and must not require live GitHub credentials or network access.
