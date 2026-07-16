@@ -60,6 +60,16 @@ class ProjectExecutionEvent:
     details: Dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class WorkerLeaseState:
+    """Visible dry-run lease state for worker assignment."""
+
+    job_id: str
+    worker_id: Optional[str]
+    status: JobStatus
+    active: bool
+
+
 @dataclass
 class ProjectManagerBoundary:
     """Governed boundary for the Phase 2 Project Manager role."""
@@ -232,6 +242,10 @@ class ProjectExecutionMVP:
         except KeyError as exc:
             raise ValueError(f"Unknown job: {job_id}") from exc
 
+    def _validate_worker_id(self, worker_id: str) -> None:
+        if not isinstance(worker_id, str) or not worker_id.strip():
+            raise ValueError("Worker id must be a non-empty string.")
+
     def _dependencies_satisfied(self, job: ProjectJob) -> bool:
         return not self.dependency_blocking_reasons(job.id)
 
@@ -333,24 +347,53 @@ class ProjectExecutionMVP:
         """Mark and return jobs that are ready for worker assignment."""
         return self.safe_parallel_batch()
 
+    def lease_state(self, job_id: str) -> WorkerLeaseState:
+        """Return visible worker lease state for one job."""
+        job = self._job(job_id)
+        return WorkerLeaseState(
+            job_id=job.id,
+            worker_id=job.lease_owner,
+            status=job.status,
+            active=job.has_active_lease(),
+        )
+
+    def worker_assignments(self) -> Dict[str, WorkerLeaseState]:
+        """Return visible worker lease state for every job."""
+        return {job_id: self.lease_state(job_id) for job_id in sorted(self.jobs)}
+
     def claim_job(self, job_id: str, worker_id: str) -> Optional[ProjectJob]:
         """Lease one ready job to a worker, preventing duplicate claims."""
+        self._validate_worker_id(worker_id)
         self.ready_jobs()
         job = self._job(job_id)
         if job.status != JobStatus.READY or job.has_active_lease():
             return None
         job.lease_owner = worker_id
         job.status = JobStatus.RUNNING
+        self._record("job_lease_acquired", job.id, worker_id=worker_id)
         self._record("job_claimed", job.id, worker_id=worker_id)
         return job
 
     def claim_next(self, worker_id: str) -> Optional[ProjectJob]:
         """Lease the highest-priority ready job to a worker."""
+        self._validate_worker_id(worker_id)
         for job in self.ready_jobs():
             claimed = self.claim_job(job.id, worker_id)
             if claimed:
                 return claimed
         return None
+
+    def release_lease(self, job_id: str, worker_id: str) -> bool:
+        """Release a worker-owned dry-run lease and return running jobs to ready."""
+        self._validate_worker_id(worker_id)
+        job = self._job(job_id)
+        if job.lease_owner != worker_id:
+            return False
+        job.lease_owner = None
+        if job.status == JobStatus.RUNNING:
+            job.status = JobStatus.READY
+        self._record("job_lease_released", job.id, worker_id=worker_id)
+        return True
 
     def block_job(self, job_id: str, reason: str, governance: bool = False) -> None:
         """Block a job before assignment."""
@@ -425,6 +468,13 @@ class ProjectManager:
         if job:
             self.execution._record("project_manager_assigned", job.id, worker_id=worker_id)
         return job
+
+    def release_assignment(self, job_id: str, worker_id: str) -> bool:
+        """Release an assigned job through the existing lease path."""
+        released = self.execution.release_lease(job_id, worker_id)
+        if released:
+            self.execution._record("project_manager_released", job_id, worker_id=worker_id)
+        return released
 
     def blocked_jobs(self) -> List[ProjectJob]:
         """Return jobs blocked by status or unsatisfied dependencies."""
