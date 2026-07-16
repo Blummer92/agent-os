@@ -32,11 +32,8 @@ are split, summarized, or replaced by smaller indexed documents.
 
 ## High-Risk Governed Exceptions (Deferred)
 
-These files are active, high-risk governed documents. They are not being split
-or shortened during the current line-limit cleanup sequence because doing so
-opportunistically would risk conflicting with pending governed work. These
-exceptions are temporary and reviewable, not a permanent allowance for
-unlimited growth.
+These active governed documents are temporary, reviewable exceptions. They are
+not a permanent allowance for unlimited growth.
 
 ### Navigation stack (deferred pending Issue #97)
 
@@ -50,10 +47,18 @@ unlimited growth.
 01_Shared_Standards/navigation/workspace-discovery-service.md
 ```
 
-These 7 files are directly tied to pending Issue #97 Navigation Registry
-planning and should not be opportunistically restructured before that work
-decides the correct shape. Remove or revise this exception when Issue #97
-restructures or formally accepts the navigation standards.
+These 7 files are tied to pending Issue #97 Navigation Registry planning.
+Remove or revise this exception when Issue #97 restructures or accepts them.
+
+### DMSC navigation registry maps (deferred pending DMSC split review)
+
+```text
+04_Registry/navigation/dmsc-apps-script-bundle.md
+04_Registry/navigation/dmsc-function-connection-map.md
+```
+
+These maps restore validation while preserving navigation context. Remove or
+revise this exception when a DMSC navigation split/index PR restructures them.
 
 ### Governance v1.0 baseline (deferred pending governance review)
 
@@ -61,10 +66,8 @@ restructures or formally accepts the navigation standards.
 00_Governance/agent-os-governance-v1-baseline.md
 ```
 
-This is the canonical Governance v1.0 baseline and should only be split or
-shortened under a dedicated governance review, not as part of routine
-line-limit cleanup. Remove or revise this exception after a dedicated
-governance-baseline review.
+This canonical baseline should only be split or shortened under dedicated
+governance review.
 
 ## Review Rules
 
@@ -78,11 +81,13 @@ governance-baseline review.
 
 ## Version
 
-0.2.0
+0.2.1
 
 ## Changelog
 
+- 0.2.1 added 2 temporary DMSC navigation registry map exceptions to restore
+  validation pending a split/index cleanup.
 - 0.2.0 added 8 high-risk governed exceptions (the Issue #97 navigation stack
-  and the Governance v1.0 baseline) for PR C of the Markdown line-limit
-  cleanup sequence; each has a stated review trigger and is temporary.
+  and the Governance v1.0 baseline) for PR C of the Markdown line-limit cleanup
+  sequence; each has a stated review trigger and is temporary.
 - 0.1.0 initial exception policy for Issue #62.
