@@ -14,17 +14,9 @@ call external services, or authorize writes outside GitHub.
 
 ## Build-Ready Issue Sections
 
-Build-ready Agent OS issues should include:
-
-- objective or goal;
-- scope and non-goals;
-- likely files or allowed file areas;
-- forbidden files, paths, imports, capabilities, or systems when relevant;
-- required tests or validation commands;
-- required documentation updates;
-- dependencies and blockers;
-- acceptance criteria;
-- definition of done.
+Build-ready Agent OS issues should include objective, scope, non-goals, likely
+files or allowed areas, forbidden paths or capabilities, required tests, required
+docs, dependencies, blockers, acceptance criteria, and definition of done.
 
 When a field is not applicable, say so explicitly rather than omitting it.
 
