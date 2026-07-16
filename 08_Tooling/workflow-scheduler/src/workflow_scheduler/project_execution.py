@@ -7,7 +7,7 @@ Google Drive writes are exposed here.
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 class JobStatus(str, Enum):
@@ -51,6 +51,27 @@ class ProjectExecutionEvent:
     event_type: str
     job_id: str
     details: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ProjectManagerBoundary:
+    """Governed boundary for the Phase 2 Project Manager role."""
+
+    responsibilities: Tuple[str, ...] = (
+        "select_ready_jobs",
+        "assign_bounded_work",
+        "surface_blocked_jobs",
+        "preserve_governance_gates",
+    )
+    inputs: Tuple[str, ...] = ("job_queue", "dependency_state", "governance_state")
+    outputs: Tuple[str, ...] = ("selected_jobs", "worker_assignments", "blocked_job_report")
+    owned_state: Tuple[str, ...] = ("selection_history",)
+    forbidden_actions: Tuple[str, ...] = (
+        "merge_pull_request",
+        "create_pull_request",
+        "write_external_system",
+        "bypass_validation_gate",
+    )
 
 
 class ProjectExecutionMVP:
@@ -153,4 +174,50 @@ class ProjectExecutionMVP:
     @property
     def external_write_count(self) -> int:
         """The dry-run MVP exposes no external write actions."""
+        return 0
+
+
+class ProjectManager:
+    """Dry-run Project Manager that selects and assigns bounded work."""
+
+    def __init__(self, execution: ProjectExecutionMVP, boundary: Optional[ProjectManagerBoundary] = None):
+        self.execution = execution
+        self.boundary = boundary or ProjectManagerBoundary()
+        self.selection_history: List[str] = []
+
+    def select_ready_jobs(self, limit: Optional[int] = None) -> List[ProjectJob]:
+        """Select ready jobs without assigning workers or performing writes."""
+        jobs = self.execution.ready_jobs()
+        selected = jobs[:limit] if limit is not None else jobs
+        for job in selected:
+            self.selection_history.append(job.id)
+            self.execution._record("project_manager_selected", job.id)
+        return selected
+
+    def assign_next(self, worker_id: str) -> Optional[ProjectJob]:
+        """Assign one ready job to a worker through the existing lease path."""
+        job = self.execution.claim_next(worker_id)
+        if job:
+            self.execution._record("project_manager_assigned", job.id, worker_id=worker_id)
+        return job
+
+    def blocked_jobs(self) -> List[ProjectJob]:
+        """Return jobs blocked by status or unsatisfied dependencies."""
+        blocked = []
+        for job in self.execution.jobs.values():
+            if job.status in (JobStatus.BLOCKED, JobStatus.GOVERNANCE_BLOCKED):
+                blocked.append(job)
+            elif job.status == JobStatus.QUEUED and not self.execution._dependencies_satisfied(job):
+                blocked.append(job)
+        return sorted(blocked, key=lambda item: item.id)
+
+    def perform_forbidden_action(self, action: str) -> None:
+        """Reject actions outside the Project Manager boundary."""
+        if action in self.boundary.forbidden_actions:
+            raise ValueError(f"Project Manager cannot perform forbidden action: {action}")
+        raise ValueError(f"Unsupported Project Manager action: {action}")
+
+    @property
+    def external_write_count(self) -> int:
+        """Project Manager exposes no external write actions in the dry-run MVP."""
         return 0
