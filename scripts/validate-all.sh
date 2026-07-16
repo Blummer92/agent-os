@@ -43,6 +43,37 @@ record_failure() {
   exit_code=1
 }
 
+python_path_separator() {
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*)
+      printf ';'
+      ;;
+    *)
+      printf ':'
+      ;;
+  esac
+}
+
+python_path_entry() {
+  local path_entry="$1"
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$path_entry"
+  else
+    printf '%s' "$path_entry"
+  fi
+}
+
+python_path_with_src() {
+  local src_dir="$1"
+  local src_entry
+  src_entry="$(python_path_entry "$src_dir")"
+  if [ -n "${PYTHONPATH:-}" ]; then
+    printf '%s%s%s' "$src_entry" "$(python_path_separator)" "$PYTHONPATH"
+  else
+    printf '%s' "$src_entry"
+  fi
+}
+
 run_check() {
   local name="$1"
   local workdir="$2"
@@ -77,13 +108,17 @@ run_pytest_suite() {
 
   if [ -d "$suite_dir/src" ]; then
     local display="cd $suite_dir && PYTHONPATH=src $PYTHON_BIN -m pytest tests"
+    local src_dir
+    local pythonpath_value
+    src_dir="$(cd "$suite_dir" && pwd)/src"
+    pythonpath_value="$(python_path_with_src "$src_dir")"
     commands_executed+=("$display")
 
     echo
     echo "==> $suite_name"
     echo "    $display"
 
-    (cd "$suite_dir" && PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON_BIN" -m pytest tests)
+    (cd "$suite_dir" && PYTHONPATH="$pythonpath_value" "$PYTHON_BIN" -m pytest tests)
     local code=$?
 
     if [ "$code" -eq 0 ]; then
