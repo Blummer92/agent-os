@@ -1,7 +1,7 @@
 [project]
 name = "dashboard-migration-verification"
 version = "0.1.0"
-description = "Local verification-only toolkit for dashboard migration evidence, dependency graphs, and conservative validation reports."
+description = "Local dashboard verification toolkit."
 requires-python = ">=3.10"
 dependencies = [
     "PyYAML>=6.0",
@@ -10,25 +10,9 @@ dependencies = [
 [project.optional-dependencies]
 test = ["pytest>=7.0"]
 
-[project.scripts]
-dmv-snapshot = "snapshot_notion:main"
-dmv-build-dependency-graph = "build_dependency_graph:main"
-dmv-validate-changes = "validate_changes:main"
-
 [build-system]
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
-
-[tool.setuptools]
-py-modules = [
-    "build_dependency_graph",
-    "dashboard_migration_common",
-    "snapshot_notion",
-    "validate_changes",
-]
-
-[tool.setuptools.package-dir]
-"" = "scripts"
 
 [tool.pytest.ini_options]
 pythonpath = ["scripts"]
