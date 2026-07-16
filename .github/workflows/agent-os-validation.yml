@@ -21,13 +21,13 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Verify local Python
-        shell: powershell
+        shell: cmd
         run: |
           python --version
           python -m pip --version
 
       - name: Install validation dependencies
-        shell: powershell
+        shell: cmd
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
@@ -36,17 +36,15 @@ jobs:
           python -m pip install -e "./08_Tooling/notion-navigation-client[test]"
 
       - name: Run Agent OS aggregate validation
-        shell: powershell
+        shell: cmd
         env:
           PYTHON_BIN: python
         run: |
-          $bashCandidates = @(
-            "$env:LOCALAPPDATA\Programs\Git\bin\bash.exe",
-            "C:\Program Files\Git\bin\bash.exe",
-            "C:\Program Files (x86)\Git\bin\bash.exe"
+          if exist "%LOCALAPPDATA%\Programs\Git\bin\bash.exe" set "BASH=%LOCALAPPDATA%\Programs\Git\bin\bash.exe"
+          if not defined BASH if exist "C:\Program Files\Git\bin\bash.exe" set "BASH=C:\Program Files\Git\bin\bash.exe"
+          if not defined BASH if exist "C:\Program Files (x86)\Git\bin\bash.exe" set "BASH=C:\Program Files (x86)\Git\bin\bash.exe"
+          if not defined BASH (
+            echo Git Bash was not found in the expected Windows locations.
+            exit /b 1
           )
-          $bash = $bashCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $bash) {
-            throw "Git Bash was not found in the expected Windows locations."
-          }
-          & $bash ./scripts/validate-all.sh
+          "%BASH%" ./scripts/validate-all.sh
