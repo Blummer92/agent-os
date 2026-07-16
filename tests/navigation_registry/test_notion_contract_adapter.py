@@ -6,6 +6,7 @@ from navigation_registry.connectors.base import (
 from navigation_registry.connectors.notion_contract_adapter import (
     CACHED_NOTION_INDEX_SOURCE,
     LIVE_NOTION_SOURCE,
+    NOTION_SEARCH_RESULT_SOURCE,
     NotionContractAdapter,
 )
 
@@ -86,6 +87,44 @@ def test_cached_duplicate_risk_record_requires_human_review() -> None:
     assert result.entity_type == "DuplicateRisk"
     assert result.human_review_required is True
     assert result.metadata["live_verification_required"] is True
+
+
+def test_search_result_normalizes_to_reference_evidence() -> None:
+    adapter = NotionContractAdapter()
+    result_payload = {
+        "title": "Production Cycles",
+        "url": "https://app.notion.com/p/3797ac7831318153a36ff496c9448ca3",
+        "display_url": "https://app.notion.com/p/3797ac7831318153a36ff496c9448ca3?pvs=1",
+        "highlight": "Students practice short mini video production cycles.",
+        "timestamp": "2026-07-13T22:08:00.000Z",
+    }
+
+    result = adapter.from_search_result(result_payload, query="Production Cycles")
+
+    assert isinstance(result, RegistryResource)
+    assert result.system == "notion"
+    assert result.entity_type == "Page"
+    assert result.canonical_id == "https://app.notion.com/p/3797ac7831318153a36ff496c9448ca3"
+    assert result.display_name == "Production Cycles"
+    assert result.source_of_truth == NOTION_SEARCH_RESULT_SOURCE
+    assert result.verification_state == "SearchResultOnly"
+    assert result.cache_status == "SearchResult"
+    assert result.human_review_required is True
+    assert result.write_allowed is False
+    assert result.metadata["query"] == "Production Cycles"
+    assert result.metadata["fetch_required"] is True
+    assert result.metadata["live_verification_required"] is True
+    assert result.metadata["semantic_reference"] is True
+    assert result.metadata["raw_result"] == result_payload
+
+
+def test_search_result_without_title_returns_connector_error() -> None:
+    adapter = NotionContractAdapter()
+
+    result = adapter.from_search_result({"url": "https://app.notion.com/p/page"})
+
+    assert isinstance(result, ConnectorError)
+    assert result.code == ConnectorErrorCode.METADATA_INCOMPLETE
 
 
 def test_live_page_payload_normalizes_to_registry_resource() -> None:
@@ -181,6 +220,7 @@ def test_adapter_exposes_no_write_like_methods() -> None:
         "append_block_children",
         "query_database",
         "fetch_tab_values",
+        "search",
     }
 
     assert all(not hasattr(adapter, method) for method in write_like_methods)
@@ -198,4 +238,5 @@ def test_report_health_declares_bridge_role_and_canonical_paths() -> None:
     assert health["write_capabilities"] == "none"
     assert health["role"] == "contract-normalization-bridge"
     assert health["canonical_cached_lookup"] == "08_Tooling/notion-navigation-client/"
+    assert health["canonical_search_discovery"] == "Notion search/fetch tooling outside this adapter"
     assert "workflow-scheduler" in health["canonical_live_read"]
