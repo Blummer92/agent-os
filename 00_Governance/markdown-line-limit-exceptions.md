@@ -50,16 +50,6 @@ not a permanent allowance for unlimited growth.
 These 7 files are tied to pending Issue #97 Navigation Registry planning.
 Remove or revise this exception when Issue #97 restructures or accepts them.
 
-### DMSC navigation registry maps (deferred pending DMSC split review)
-
-```text
-04_Registry/navigation/dmsc-apps-script-bundle.md
-04_Registry/navigation/dmsc-function-connection-map.md
-```
-
-These maps restore validation while preserving navigation context. Remove or
-revise this exception when a DMSC navigation split/index PR restructures them.
-
 ### Governance v1.0 baseline (deferred pending governance review)
 
 ```text
@@ -81,10 +71,12 @@ governance review.
 
 ## Version
 
-0.2.1
+0.2.2
 
 ## Changelog
 
+- 0.2.2 removed the temporary DMSC navigation map exceptions after Issue #150
+  split the oversized maps into smaller indexed files.
 - 0.2.1 added 2 temporary DMSC navigation registry map exceptions to restore
   validation pending a split/index cleanup.
 - 0.2.0 added 8 high-risk governed exceptions (the Issue #97 navigation stack
