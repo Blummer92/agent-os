@@ -68,3 +68,5 @@ The workflow runs on the self-hosted Agent OS runner labeled `agent-os`, not on 
 The workflow is validation-only: it checks out the repository, installs test dependencies, and runs `./scripts/validate-all.sh`. It does not commit, push, open pull requests, write to Google Drive, or modify source-of-truth records.
 
 Issue-to-PR automation is not part of this validation workflow.
+
+<!-- Cloud Build visible PR check test 2 -->
