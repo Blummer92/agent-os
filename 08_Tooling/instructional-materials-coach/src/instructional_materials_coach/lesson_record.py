@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -88,6 +89,6 @@ def record_lesson(record: LessonRecord, output_dir: str | Path) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     slug = "".join(c if c.isalnum() else "-" for c in record.lesson_learned.lower())[:40].strip("-")
-    path = output_dir / f"{timestamp}-{slug or 'lesson'}.yaml"
+    path = output_dir / f"{timestamp}-{uuid.uuid4().hex[:8]}-{slug or 'lesson'}.yaml"
     path.write_text(yaml.safe_dump(record.to_dict(), sort_keys=False))
     return path
