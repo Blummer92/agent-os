@@ -3,17 +3,14 @@
 ## Purpose
 
 Define the Agent OS contract for checking whether a pull request satisfies the
-GitHub issue it claims to resolve.
-
-This standard is the IA1 source of truth for issue-level acceptance automation.
-IA2 implements checker code against this contract.
+GitHub issue it claims to resolve. This standard is the IA1 source of truth;
+IA2 implements checker code against it.
 
 ## Boundary
 
-This standard defines the data contract and report shape only.
-
-It does not implement checker code, add a GitHub Actions workflow, require live
-credentials, call external services, or authorize writes outside GitHub.
+This standard defines the data contract and report shape only. It does not
+implement checker code, add a GitHub Actions workflow, require live credentials,
+call external services, or authorize writes outside GitHub.
 
 ## Build-Ready Issue Sections
 
@@ -48,22 +45,15 @@ agent_os_issue_acceptance:
   manual_review: []
 ```
 
-The metadata block narrows automated checks. It does not replace the human issue
-body, governance rules, or reviewer judgment.
+The metadata narrows automated checks. It does not replace the issue body,
+governance rules, or reviewer judgment.
 
 ## Required PR Evidence
 
-Pull requests that resolve Agent OS issues should include:
-
-- linked issue number;
-- summary of the implemented scope;
-- files changed;
-- tests run and results;
-- docs updated;
-- unresolved blockers;
-- handoff recommendations;
-- remaining risks;
-- Issue Acceptance Report or explanation for why it is manual-only.
+Pull requests that resolve Agent OS issues should include linked issue, summary,
+files changed, tests run, docs updated, unresolved blockers, handoff
+recommendations, remaining risks, and an Issue Acceptance Report or manual-only
+explanation.
 
 ## Acceptance Report Schema
 
@@ -100,15 +90,15 @@ of-truth changes, readiness changes, approval changes, or governed-field edits.
 
 ## Ownership
 
-QA / Test Agent owns acceptance evidence and report interpretation.
-Integration Manager supports source-of-truth and cross-system boundary review.
-GitHub Service Agent executes approved repository changes and PR reporting.
+QA / Test Agent owns acceptance evidence and report interpretation. Integration
+Manager supports source-of-truth and cross-system boundary review. GitHub Service
+Agent executes approved repository changes and PR reporting.
 
 ## IA2 Implementation Notes
 
-IA2 should implement checker code with offline fixtures first, no network calls in
-unit tests, and no external credentials. Workflow integration should happen only
-after the local checker is stable and may start as non-blocking report-only mode.
+IA2 should start with offline fixtures, no network calls in unit tests, and no
+external credentials. Workflow integration should happen only after the local
+checker is stable and may start as non-blocking report-only mode.
 
 ## Version
 
