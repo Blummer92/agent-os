@@ -9,16 +9,15 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
-
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
 
-def get_credentials(client_secret_path: str, token_path: str) -> Credentials:
+def get_credentials(client_secret_path: str, token_path: str) -> Any:
     """Load a cached OAuth token, refreshing or running the consent flow as needed."""
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+    from google_auth_oauthlib.flow import InstalledAppFlow
+
     creds: Credentials | None = None
     if token_path and os.path.exists(token_path):
         creds = Credentials.from_authorized_user_file(token_path, SCOPES)
@@ -34,7 +33,9 @@ def get_credentials(client_secret_path: str, token_path: str) -> Credentials:
     return creds
 
 
-def build_drive_service(credentials: Credentials) -> Any:
+def build_drive_service(credentials: Any) -> Any:
+    from googleapiclient.discovery import build
+
     return build("drive", "v3", credentials=credentials)
 
 

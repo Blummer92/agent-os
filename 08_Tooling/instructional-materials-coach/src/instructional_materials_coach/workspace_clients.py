@@ -7,14 +7,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from googleapiclient.discovery import build
 
+def build_slides_service(credentials: Any) -> Any:
+    from googleapiclient.discovery import build
 
-def build_slides_service(credentials) -> Any:
     return build("slides", "v1", credentials=credentials)
 
 
-def build_docs_service(credentials) -> Any:
+def build_docs_service(credentials: Any) -> Any:
+    from googleapiclient.discovery import build
+
     return build("docs", "v1", credentials=credentials)
 
 
