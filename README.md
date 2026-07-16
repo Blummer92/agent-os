@@ -36,6 +36,27 @@ Exit codes:
 - `1` means one or more structural checks or pytest suites failed.
 - `2` means the runner could not start because of invalid invocation, missing prerequisites, or an unrecoverable runner error.
 
+## Safe Change Workflow
+
+Agent OS changes should use a branch-first workflow instead of direct pushes to `main`:
+
+```text
+branch -> pull request -> validation -> merge -> main
+```
+
+This keeps `main` protected as the source-of-truth branch while still allowing Cloud Build to run automatically after merges to `main`.
+
+Typical workflow:
+
+1. Create a non-main branch for the change.
+2. Commit only related files.
+3. Open a pull request into `main`.
+4. Review the change and validation results.
+5. Merge the pull request.
+6. Let Cloud Build validate the resulting `main` push automatically.
+
+Use GitHub pull requests as the control surface. Use Google Cloud Build History only when deeper build logs are needed.
+
 ### GitHub Actions Validation
 
 The `Agent OS Validation Gate` workflow runs the same aggregate validation command for pull requests targeting `main`.
