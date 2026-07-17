@@ -1,12 +1,21 @@
 from __future__ import annotations
 
-from .models import AcceptanceReport, Status
+from .models import AcceptanceReport, LinkedIssueParseStatus, Status
 
 
 def render_report(report: AcceptanceReport) -> str:
+    status = _linked_issue_status(report)
+    if status == LinkedIssueParseStatus.RESOLVED:
+        linked_issue = f"#{report.linked_issue}"
+    elif status == LinkedIssueParseStatus.MANUAL_REVIEW:
+        linked_issue = "unresolved"
+    else:
+        linked_issue = "none detected"
+
     lines = [
         "Issue Acceptance Report",
-        f"Linked issue: {('#' + str(report.linked_issue)) if report.linked_issue else 'none detected'}",
+        f"Linked issue: {linked_issue}",
+        f"Linked issue status: {status.value}",
         f"Overall result: {report.overall_status.value}",
         "Checks:",
     ]
@@ -25,6 +34,14 @@ def render_report(report: AcceptanceReport) -> str:
         *_bullets(report.remaining_risks),
     ])
     return "\n".join(lines) + "\n"
+
+
+def _linked_issue_status(report: AcceptanceReport) -> LinkedIssueParseStatus:
+    if report.linked_issue_result is not None:
+        return report.linked_issue_result.status
+    if report.linked_issue is not None:
+        return LinkedIssueParseStatus.RESOLVED
+    return LinkedIssueParseStatus.NONE
 
 
 def _bullets(values: list[str]) -> list[str]:
