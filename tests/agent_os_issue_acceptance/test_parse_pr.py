@@ -135,6 +135,26 @@ def test_non_authoritative_markdown_contexts_do_not_auto_resolve(body):
     assert result.status == LinkedIssueParseStatus.NONE
 
 
+@pytest.mark.parametrize("body", ["    Closes #223", "\tCloses #223"])
+def test_indented_markdown_code_only_does_not_auto_resolve(body):
+    result = parse_linked_issue_result(body)
+    assert result.status == LinkedIssueParseStatus.NONE
+    assert result.issue_number is None
+
+
+def test_prose_target_after_indented_example_resolves():
+    result = parse_linked_issue_result("    Closes #180\nCloses #223")
+    assert result.status == LinkedIssueParseStatus.RESOLVED
+    assert result.issue_number == 223
+
+
+def test_indented_example_plus_bare_reference_requires_manual_review():
+    result = parse_linked_issue_result("    Closes #180\nSee #223 for context.")
+    assert result.status == LinkedIssueParseStatus.MANUAL_REVIEW
+    assert result.issue_number is None
+    assert [candidate.issue_number for candidate in result.bare_references] == [223]
+
+
 def test_valid_target_outside_example_context_resolves():
     body = "```text\nCloses #180\n```\n\nCloses #223"
     result = parse_linked_issue_result(body)
