@@ -12,7 +12,22 @@ from scripts.agent_os_issue_acceptance.models import (
 from .issue_metadata import load_issue_form_fields, parse_issue_form_body
 from .label_map import expected_labels, load_label_map
 
-_REQUIRED_FIELDS = {"phase", "epic", "owner", "status", "type", "source-of-truth", "external-write"}
+_LEGACY_REQUIRED_FIELDS = {
+    "phase",
+    "epic",
+    "owner",
+    "status",
+    "type",
+    "source-of-truth",
+    "external-write",
+}
+_TIERED_REQUIRED_FIELDS = {
+    "tier",
+    "owner",
+    "status",
+    "source-of-truth",
+    "external-write",
+}
 
 
 def evaluate_issue_labels(
@@ -46,6 +61,7 @@ def evaluate_issue_labels(
         manual_review_items=manual_review,
         evidence=[
             "report model: scripts.agent_os_issue_acceptance.models.AcceptanceReport",
+            f"metadata contract: {_metadata_contract(metadata)}",
             f"expected labels: {', '.join(sorted(expected)) or 'none'}",
             f"present expected labels: {', '.join(present) or 'none'}",
             f"missing expected labels: {', '.join(missing) or 'none'}",
@@ -86,11 +102,33 @@ def _check_governance_boundary() -> CheckResult:
     )
 
 
+def _metadata_contract(metadata: dict[str, list[str]]) -> str:
+    fields = set(metadata)
+    if _TIERED_REQUIRED_FIELDS <= fields:
+        return "tiered"
+    if _LEGACY_REQUIRED_FIELDS <= fields:
+        return "legacy"
+    return "incomplete"
+
+
 def _check_metadata(metadata: dict[str, list[str]]) -> CheckResult:
-    missing = sorted(_REQUIRED_FIELDS - set(metadata))
-    if missing:
-        return CheckResult("issue metadata", Status.MANUAL_REVIEW, "required issue-form fields missing", missing)
-    return CheckResult("issue metadata", Status.PASS, "required issue-form fields are present")
+    contract = _metadata_contract(metadata)
+    if contract == "tiered":
+        return CheckResult("issue metadata", Status.PASS, "tiered issue-form fields are present")
+    if contract == "legacy":
+        return CheckResult("issue metadata", Status.PASS, "legacy issue-form fields are present")
+
+    legacy_missing = sorted(_LEGACY_REQUIRED_FIELDS - set(metadata))
+    tiered_missing = sorted(_TIERED_REQUIRED_FIELDS - set(metadata))
+    return CheckResult(
+        "issue metadata",
+        Status.MANUAL_REVIEW,
+        "neither supported issue-form contract is complete",
+        [
+            f"legacy missing: {', '.join(legacy_missing) or 'none'}",
+            f"tiered missing: {', '.join(tiered_missing) or 'none'}",
+        ],
+    )
 
 
 def _check_unknown_values(unknown_values: list[str]) -> CheckResult:
