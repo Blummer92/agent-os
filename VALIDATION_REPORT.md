@@ -39,7 +39,6 @@ bash 07_Agent_Tests/validate-repo-structure.sh
 ## Structural Validation Checks
 
 `07_Agent_Tests/validate-repo-structure.sh` runs seven checks:
-
 1. Non-exempt Markdown files, except `CLAUDE.md`, are under 100 lines.
 2. Every overlay references `_common-overlay-rules.md`.
 3. No filename collisions exist between `00_Governance/` and `04_Registry/`, except each folder's own `README.md`.
@@ -94,8 +93,3 @@ This report records validation evidence only. It does not authorize external wri
 ```
 
 For PRs, use Cloud Build from the GitHub-connected trigger and record the build ID in the PR report when available. Use `Agent OS Validation Gate` as a compatibility check, not as aggregate validation source.
-
-## Remaining Follow-Up
-
-- Decide separately whether Cloud Build should become a required branch-protection check.
-- Keep Google Cloud trigger settings aligned with `cloudbuild.yaml`.
