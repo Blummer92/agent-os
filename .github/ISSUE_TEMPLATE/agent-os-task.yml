@@ -111,4 +111,4 @@ body:
         - label: No production, governed-field, source-of-truth, sharing, or external-system write is authorized without explicit approval.
           required: true
         - label: Final implementation reporting will include files changed, tests run, docs updated, blockers, handoffs, and remaining risks.
-          required: true}
+          required: true
