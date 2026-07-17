@@ -1,5 +1,5 @@
 name: Agent OS task
-about: Canonical tiered issue form for Agent OS repository work
+description: Canonical tiered issue form for Agent OS repository work
 title: "[Agent OS] "
 labels: [agent-os, status:needs-decision]
 body:
