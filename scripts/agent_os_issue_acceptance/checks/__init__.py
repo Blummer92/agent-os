@@ -1,0 +1,1 @@
+"""Individual issue acceptance checks."""
