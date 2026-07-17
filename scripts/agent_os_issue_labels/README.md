@@ -14,6 +14,16 @@ python -m scripts.agent_os_issue_labels.cli \
   --labels tests/agent_os_issue_labels/fixtures/labels_ready.txt
 ```
 
+## Report-only workflow
+
+`.github/workflows/agent-os-issue-label-report.yml` runs this checker from issue
+events. The workflow writes the issue body and current labels from the event
+payload into local temporary files, calls the CLI, and publishes the report to
+the job summary.
+
+The workflow uses read-only permissions and does not apply, remove, or replace
+labels. Additive label application remains a later review step.
+
 ## Boundary
 
 This checker is report-only. It does not call GitHub, apply labels, remove
