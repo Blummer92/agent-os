@@ -23,9 +23,7 @@ QA / Test Agent
 ## Completion Criterion
 - Warning no longer appears.
 """
-
     result = evaluate_issue_readiness(body)
-
     assert result.outcome == ReadinessOutcome.READY
 
 
@@ -55,9 +53,7 @@ QA / Test Agent
 ## Definition Of Done
 - [ ] Tests pass.
 """
-
     result = evaluate_issue_readiness(body)
-
     assert result.outcome == ReadinessOutcome.READY
 
 
@@ -98,10 +94,10 @@ Revert the PR.
 Human approval before merge.
 ## Stop Conditions
 Stop on unclear ownership.
+## Migration Or Compatibility Planning
+Preserve old issue-form parsing during migration.
 """
-
     result = evaluate_issue_readiness(body)
-
     assert result.outcome == ReadinessOutcome.READY
     assert "does not authorize" in result.report.remaining_risks[0]
 
@@ -114,9 +110,7 @@ Add a checker.
 ## Owner
 QA / Test Agent
 """
-
     result = evaluate_issue_readiness(body)
-
     assert result.outcome == ReadinessOutcome.BLOCKED
     assert result.report.blockers
 
@@ -136,9 +130,25 @@ GitHub Service Agent
 - Text is corrected.
 Blocked by: #100
 """
-
     result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.BLOCKED
 
+
+def test_pending_validation_is_blocked_not_needs_decision():
+    body = """
+Issue Tier: 0
+## Objective
+Update documentation.
+## Owner
+GitHub Service Agent
+## Allowed Files
+- README.md
+## Validation
+- markdown check
+## Completion Criterion
+- Text is corrected.
+"""
+    result = evaluate_issue_readiness(body, validation_pending=True)
     assert result.outcome == ReadinessOutcome.BLOCKED
 
 
@@ -156,13 +166,37 @@ needs-decision
 ## Completion Criterion
 - Text is corrected.
 """
-
     result = evaluate_issue_readiness(body)
-
     assert result.outcome == ReadinessOutcome.NEEDS_DECISION
 
 
-def test_pending_validation_is_blocked_not_needs_decision():
+def test_empty_body_requires_decision_without_crashing():
+    result = evaluate_issue_readiness("")
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    assert not result.report.blockers
+
+
+def test_invalid_tier_requires_decision():
+    result = evaluate_issue_readiness("Issue Tier: 9\n\n## Objective\nDo work.")
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+
+
+def test_malformed_acceptance_yaml_requires_decision():
+    body = """
+## Objective
+Do work.
+
+```yaml
+agent_os_issue_acceptance:
+  tier: [
+```
+"""
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    assert any(check.name == "issue metadata" for check in result.report.checks)
+
+
+def test_manual_review_metadata_requires_decision():
     body = """
 Issue Tier: 0
 ## Objective
@@ -175,11 +209,17 @@ GitHub Service Agent
 - markdown check
 ## Completion Criterion
 - Text is corrected.
+
+```yaml
+agent_os_issue_acceptance:
+  tier: 0
+  manual_review:
+    - confirm ownership
+```
 """
-
-    result = evaluate_issue_readiness(body, validation_pending=True)
-
-    assert result.outcome == ReadinessOutcome.BLOCKED
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    assert "confirm ownership" in result.report.manual_review_items
 
 
 def test_legacy_ia_metadata_tier_is_supported():
@@ -203,42 +243,106 @@ agent_os_issue_acceptance:
   external_writes: none
 ```
 """
-
     result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.READY
 
+
+def test_unrelated_prose_does_not_satisfy_required_sections():
+    body = """
+Issue Tier: 1
+## Objective
+The prose mentions scope, non-goals, files, validation, documentation, dependencies,
+acceptance criteria, and definition of done, but those sections do not exist.
+## Owner
+QA / Test Agent
+"""
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.BLOCKED
+    assert len(result.report.blockers) >= 5
+
+
+def test_code_comments_and_quotes_do_not_create_fields_or_decisions():
+    body = """
+Issue Tier: 0
+## Objective
+Update documentation.
+## Owner
+GitHub Service Agent
+## Allowed Files
+- README.md
+## Validation
+- markdown check
+## Completion Criterion
+- Text is corrected.
+
+<!-- needs-decision -->
+> needs-decision
+```text
+## Authorization
+needs-decision
+Blocked by: #999
+```
+"""
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.READY
+
+
+def test_tier_two_combined_controls_require_labeled_values():
+    body = """
+Issue Tier: 2
+## Objective And Value
+Update a governed contract and reduce ambiguity.
+## Owner And Source Of Truth
+- Primary owner: Integration Manager
+- Source of truth: GitHub
+## Scope And Non-Goals
+- Scope: update the contract
+- Non-goals: no production writes
+## Allowed And Protected Areas
+- Allowed: 01_Shared_Standards/
+## Validation And Documentation
+- Tests: validate-all.sh
+- Docs: update guidance
+## Dependencies And Blockers
+- Dependencies: none
+- Blockers: none
+## Acceptance Criteria And Definition Of Done
+- Acceptance criteria: contract is explicit
+- Definition of done: tests pass
+## Tier 2 Controls, When Applicable
+- Authorization: explicit approval required
+- External write: none
+- Rollback: revert the PR
+- Approval: human approval required
+- Stop conditions: stop on unclear ownership
+- Compatibility: preserve legacy parsing
+"""
+    result = evaluate_issue_readiness(body)
     assert result.outcome == ReadinessOutcome.READY
 
 
 def test_legacy_issue_form_is_deterministic_needs_decision():
     body = (FIXTURES / "legacy_issue_form.md").read_text()
-
     result = evaluate_issue_readiness(body)
-
     assert result.outcome == ReadinessOutcome.NEEDS_DECISION
     assert any(check.name == "issue tier" for check in result.report.checks)
 
 
 def test_legacy_build_issue_headings_are_recognized_but_require_tier_decision():
     body = (FIXTURES / "legacy_build_issue.md").read_text()
-
     result = evaluate_issue_readiness(body)
-
     assert result.outcome == ReadinessOutcome.NEEDS_DECISION
     assert any(check.name == "issue tier" for check in result.report.checks)
 
 
 def test_legacy_ia1_without_tier_requires_tier_decision_not_blocked():
     body = (FIXTURES / "legacy_ia1_without_tier.md").read_text()
-
     result = evaluate_issue_readiness(body)
-
     assert result.outcome == ReadinessOutcome.NEEDS_DECISION
     assert not result.report.blockers
 
 
 def test_new_tiered_issue_fixture_is_ready():
     body = (FIXTURES / "new_tiered_issue.md").read_text()
-
     result = evaluate_issue_readiness(body)
-
     assert result.outcome == ReadinessOutcome.READY
