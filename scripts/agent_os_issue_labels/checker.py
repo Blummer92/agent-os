@@ -32,6 +32,7 @@ def evaluate_issue_labels(
     manual_review = _manual_review_items(metadata, unknown_values)
     checks = [
         _check_write_boundary(label_map.rules),
+        _check_governance_boundary(),
         _check_metadata(metadata),
         _check_unknown_values(unknown_values),
         _check_label_comparison(missing, present, extra),
@@ -44,6 +45,7 @@ def evaluate_issue_labels(
         checks=checks,
         manual_review_items=manual_review,
         evidence=[
+            "report model: scripts.agent_os_issue_acceptance.models.AcceptanceReport",
             f"expected labels: {', '.join(sorted(expected)) or 'none'}",
             f"present expected labels: {', '.join(present) or 'none'}",
             f"missing expected labels: {', '.join(missing) or 'none'}",
@@ -52,6 +54,7 @@ def evaluate_issue_labels(
         blockers=[] if overall != Status.FAIL else ["Label checker input contract is invalid."],
         remaining_risks=[
             "Report-only label findings do not apply, remove, replace, or approve labels.",
+            "Label findings do not authorize merge, readiness, approval, or source-of-truth changes.",
         ],
     )
 
@@ -69,6 +72,18 @@ def _check_write_boundary(rules: dict) -> CheckResult:
     if unsafe:
         return CheckResult("label write boundary", Status.FAIL, "unsafe label-map rules", unsafe)
     return CheckResult("label write boundary", Status.PASS, "label map is report-only and additive-safe")
+
+
+def _check_governance_boundary() -> CheckResult:
+    return CheckResult(
+        "label governance boundary",
+        Status.PASS,
+        "label findings are acceptance evidence only and do not imply approval or readiness",
+        [
+            "IA1 outcome rules still govern merge, readiness, approval, and source-of-truth decisions",
+            "L5 additive label behavior remains a separate follow-up decision",
+        ],
+    )
 
 
 def _check_metadata(metadata: dict[str, list[str]]) -> CheckResult:
