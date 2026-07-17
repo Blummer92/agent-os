@@ -1,55 +1,69 @@
 # Agent OS Build Issue Template
 
-Use this template when an Agent OS issue should be build-ready for a future PR.
+Use `.github/ISSUE_TEMPLATE/agent-os-task.yml` as the canonical entry path for
+new Agent OS repository issues. This Markdown template remains a compatibility
+and generated-issue surface during migration.
 
-## Objective
+## Issue Tier
 
-State the user-visible or system-visible outcome.
+- Tier: 0 | 1 | 2
 
-## Source Of Truth
+Tier 0 is small safe maintenance. Tier 1 is standard implementation. Tier 2 is
+governed or cross-system work.
 
-- Canonical surface: GitHub
-- Related working surfaces: none unless explicitly approved
-- External writes requested: no
+## Objective And Value
 
-## Owner Routing
+State the outcome and why it matters.
+
+## Owner And Source Of Truth
 
 - Primary owner:
-- Supporting agents:
+- Supporting agents: none
+- Canonical surface: GitHub
 - Repository write executor: GitHub Service Agent
+- External writes requested: no
 
-## Scope
+## Scope And Non-Goals
 
-- 
+### Scope
 
-## Non-Goals
+-
 
-- 
+### Non-Goals
 
-## Allowed Files Or Areas
+-
 
-- 
+## Allowed And Protected Areas
 
-## Forbidden Files Or Areas
+- Allowed files or areas:
+- Forbidden or protected files, paths, capabilities, or systems: none
 
-- 
+## Validation And Documentation
 
-## Required Tests Or Validation
-
-- 
-
-## Required Docs Updates
-
-- 
+- Required tests or validation:
+- Required docs updates: not applicable
 
 ## Dependencies And Blockers
 
-- 
+- Dependencies: none
+- Blockers: none
+
+## Tier 2 Controls
+
+Complete only for Tier 2 work.
+
+- Explicit authorization:
+- Governed fields or external surfaces:
+- Approval requirements:
+- Stop conditions:
+- Rollback:
+- Migration or compatibility plan:
 
 ## Optional Machine-Checkable Metadata
 
 ```yaml
 agent_os_issue_acceptance:
+  tier: 1
   owner_agent:
   source_of_truth: GitHub
   external_writes: none
@@ -63,16 +77,14 @@ agent_os_issue_acceptance:
 
 ## Acceptance Criteria
 
-- [ ] Scope is satisfied.
-- [ ] Non-goals are preserved.
-- [ ] Required tests or validation are reported.
-- [ ] Required docs updates are complete or explicitly not applicable.
-- [ ] No forbidden files, paths, imports, capabilities, or systems are touched.
-- [ ] No external writes or production changes are introduced.
+- [ ] Required tier fields are complete.
+- [ ] Scope is satisfied and non-goals are preserved.
+- [ ] Required validation and docs are reported.
+- [ ] No forbidden or unapproved surface is touched.
 
 ## Definition Of Done
 
-- [ ] Draft PR links this issue.
-- [ ] PR includes files changed, tests run, docs updated, unresolved blockers,
+- [ ] Readiness result is `ready`, `blocked`, or `needs-decision`.
+- [ ] A draft PR links this issue when implementation is authorized.
+- [ ] Final reporting includes files changed, tests run, docs updated, blockers,
       handoff recommendations, and remaining risks.
-- [ ] Issue Acceptance Report is included or marked manual-review.

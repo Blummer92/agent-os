@@ -1,40 +1,32 @@
 name: Agent OS task
-description: Create a governed Agent OS issue with taxonomy metadata.
+description: Canonical tiered issue form for Agent OS repository work
 title: "[Agent OS] "
 labels: [agent-os, status:needs-decision]
 body:
   - type: markdown
     attributes:
       value: |
-        Use this form for Agent OS repository work. Labels are additive by default; do not remove or replace labels without explicit approval.
+        This is the canonical Agent OS issue entry path. Choose the smallest tier that safely fits the work. Readiness is evidence only and never authorizes merge or external writes.
+
   - type: dropdown
-    id: phase
+    id: tier
     attributes:
-      label: Phase
-      options: [implementation-phase-1, post-cleanup, governance-planning, not-applicable]
+      label: Issue tier
+      description: Tier 0 is small safe maintenance, Tier 1 is standard implementation, and Tier 2 is governed or cross-system work.
+      options: [tier:0-small-maintenance, tier:1-standard-implementation, tier:2-governed-cross-system]
     validations: {required: true}
-  - type: dropdown
-    id: epic
+
+  - type: textarea
+    id: objective
     attributes:
-      label: Epic
-      options:
-        - epic:foundation
-        - epic:connectors
-        - epic:classroom-artifact
-        - epic:hygiene
-        - epic:workflow-scheduler
-        - epic:navigation-registry
-        - epic:governance
-        - epic:curriculum-language-system
-        - epic:google-cloud
-        - epic:issue-acceptance
-        - needs-decision
+      label: Objective and value
+      description: State the outcome and why it matters.
     validations: {required: true}
+
   - type: dropdown
     id: owner
     attributes:
-      label: Owner agent
-      description: Select the primary owner. Add support agents in the notes.
+      label: Primary owner
       options:
         - owner:qa-test-agent
         - owner:github-service-agent
@@ -44,52 +36,79 @@ body:
         - owner:teacher-modeling-coach
         - needs-decision
     validations: {required: true}
+
   - type: dropdown
-    id: status
+    id: readiness
     attributes:
-      label: Status
+      label: Readiness candidate
+      description: The readiness preflight makes the final evidence-based decision.
       options: [status:ready, status:blocked, status:needs-decision]
     validations: {required: true}
-  - type: dropdown
-    id: type
-    attributes:
-      label: Type
-      multiple: true
-      options: [type:docs, type:tooling, type:governance, type:validation, type:classroom-artifact]
-    validations: {required: true}
+
   - type: dropdown
     id: source-of-truth
     attributes:
-      label: Source-of-truth surface
+      label: Source of truth
       options: [GitHub, Notion handoff, Google Drive handoff, ChatGPT planning only, needs-decision]
     validations: {required: true}
+
   - type: dropdown
     id: external-write
     attributes:
-      label: External write surface
-      description: Does this task request writes outside GitHub?
+      label: External write boundary
       options: [no-external-write, external-write-requested, needs-decision]
     validations: {required: true}
-  - type: textarea
-    id: dependencies
-    attributes:
-      label: Dependencies / blockers
-      placeholder: "Parent: #180\nBlocked by: #...\nRelated: #..."
-    validations: {required: false}
+
   - type: textarea
     id: scope
     attributes:
       label: Scope and non-goals
       placeholder: "Scope:\n- ...\n\nNon-goals:\n- ..."
     validations: {required: true}
+
+  - type: textarea
+    id: files
+    attributes:
+      label: Allowed files, areas, or governed surfaces
+      placeholder: "Allowed:\n- ...\n\nForbidden or protected:\n- ..."
+    validations: {required: true}
+
+  - type: textarea
+    id: validation
+    attributes:
+      label: Required tests, validation, and documentation
+      placeholder: "Tests:\n- ...\n\nDocs:\n- not applicable"
+    validations: {required: true}
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies and blockers
+      placeholder: "Dependencies: none\nBlockers: none"
+    validations: {required: true}
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria and definition of done
+      placeholder: "Acceptance criteria:\n- [ ] ...\n\nDefinition of done:\n- [ ] ..."
+    validations: {required: true}
+
+  - type: textarea
+    id: tier2-controls
+    attributes:
+      label: Tier 2 controls, when applicable
+      description: For governed or cross-system work, include authorization, external surfaces, rollback, approval requirements, stop conditions, and migration or compatibility planning.
+    validations: {required: false}
+
   - type: checkboxes
     id: safety
     attributes:
-      label: Safety checks
+      label: Safety confirmation
       options:
-        - label: Labels will be applied additively only.
+        - label: No direct push to main, automatic merge, or autonomous issue closure is authorized.
           required: true
-        - label: No production, governed-field, sharing, source-of-truth, or external-system writes are requested without explicit approval.
+        - label: No production, governed-field, source-of-truth, sharing, or external-system write is authorized without explicit approval.
           required: true
-        - label: Final report will include files changed, tests run, docs updated, unresolved blockers, handoff recommendations, and remaining risks.
+        - label: Final implementation reporting will include files changed, tests run, docs updated, blockers, handoffs, and remaining risks.
           required: true
