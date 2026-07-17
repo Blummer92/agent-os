@@ -12,17 +12,24 @@
 
 ## Structural Validation Checks
 
-`07_Agent_Tests/validate-repo-structure.sh` currently runs seven checks:
+`07_Agent_Tests/validate-repo-structure.sh` now runs structural and registry-consistency checks:
 
 1. All non-exempt Markdown files, except `CLAUDE.md`, are under 100 lines.
 2. Every overlay references `_common-overlay-rules.md`.
 3. No filename collisions exist between `00_Governance/` and `04_Registry/`, except each folder's own `README.md`.
 4. Every registered agent has a matching overlay file.
-5. Every agent test file has a matching overlay.
-6. Every overlay has a matching test file.
-7. All Documentation Dependency Map metadata paths exist.
+5. Every registered agent has a matching test file.
+6. Every agent test file has a matching overlay.
+7. Every overlay has a matching test file.
+8. Every overlay is registered or explicitly exempted.
+9. Overlay inherited standard paths exist.
+10. Responsibility Matrix primary agents are registered.
+11. Responsibility Matrix support values resolve.
+12. Every registered agent appears in the Responsibility Matrix.
+13. Navigation Registry ownership and write boundary remain consistent.
+14. All Documentation Dependency Map metadata paths exist.
 
-Expected structural result on a clean baseline: 7 passed, 0 failed.
+Expected structural result on a clean baseline: 14 passed, 0 failed.
 
 ## Aggregate Validation Coverage
 
@@ -30,7 +37,7 @@ Expected structural result on a clean baseline: 7 passed, 0 failed.
 test directories and runs each Python test suite. The runner reports commands
 executed, check results, failed packages, overall status, and exit code.
 
-Current package suites are discovered from repository `tests/` directories with
+Current package suites are discovered from repository `tests` directories with
 Python test files. Suites with `src/` are run with `PYTHONPATH=src`; root tests
 run from the repository root.
 
