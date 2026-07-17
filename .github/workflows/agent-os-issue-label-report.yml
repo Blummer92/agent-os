@@ -1,0 +1,59 @@
+name: Agent OS Issue Label Report
+
+on:
+  issues:
+    types: [opened, edited, reopened, labeled, unlabeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  report:
+    name: Run issue label report
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Build local issue fixtures from event payload
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          event_path = os.environ["GITHUB_EVENT_PATH"]
+          event = json.loads(Path(event_path).read_text(encoding="utf-8"))
+          issue = event.get("issue") or {}
+          labels = sorted(label.get("name", "") for label in issue.get("labels", []))
+          labels = [label for label in labels if label]
+          out = Path("tmp/agent_os_issue_label_report")
+          out.mkdir(parents=True, exist_ok=True)
+          (out / "issue.md").write_text(issue.get("body") or "", encoding="utf-8")
+          (out / "labels.txt").write_text("\n".join(labels) + "\n", encoding="utf-8")
+          PY
+
+      - name: Run report-only issue label checker
+        run: |
+          python -m scripts.agent_os_issue_labels.cli \
+            --issue tmp/agent_os_issue_label_report/issue.md \
+            --labels tmp/agent_os_issue_label_report/labels.txt \
+            | tee tmp/agent_os_issue_label_report/report.txt
+
+      - name: Publish report summary
+        run: |
+          {
+            echo "## Agent OS Issue Label Report"
+            echo
+            cat tmp/agent_os_issue_label_report/report.txt
+          } >> "$GITHUB_STEP_SUMMARY"
