@@ -1,7 +1,12 @@
+from pathlib import Path
+
 from scripts.agent_os_issue_acceptance.readiness import (
     ReadinessOutcome,
     evaluate_issue_readiness,
 )
+
+
+FIXTURES = Path(__file__).parents[1] / "fixtures" / "agent_os_issue_readiness"
 
 
 def test_tier_zero_maintenance_is_ready():
@@ -198,6 +203,41 @@ agent_os_issue_acceptance:
   external_writes: none
 ```
 """
+
+    result = evaluate_issue_readiness(body)
+
+    assert result.outcome == ReadinessOutcome.READY
+
+
+def test_legacy_issue_form_is_deterministic_needs_decision():
+    body = (FIXTURES / "legacy_issue_form.md").read_text()
+
+    result = evaluate_issue_readiness(body)
+
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    assert any(check.name == "issue tier" for check in result.report.checks)
+
+
+def test_legacy_build_issue_headings_are_recognized_but_require_tier_decision():
+    body = (FIXTURES / "legacy_build_issue.md").read_text()
+
+    result = evaluate_issue_readiness(body)
+
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    assert any(check.name == "issue tier" for check in result.report.checks)
+
+
+def test_legacy_ia1_without_tier_requires_tier_decision_not_blocked():
+    body = (FIXTURES / "legacy_ia1_without_tier.md").read_text()
+
+    result = evaluate_issue_readiness(body)
+
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    assert not result.report.blockers
+
+
+def test_new_tiered_issue_fixture_is_ready():
+    body = (FIXTURES / "new_tiered_issue.md").read_text()
 
     result = evaluate_issue_readiness(body)
 
