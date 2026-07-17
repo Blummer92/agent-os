@@ -14,6 +14,17 @@ python -m scripts.agent_os_issue_labels.cli \
   --labels tests/agent_os_issue_labels/fixtures/labels_ready.txt
 ```
 
+## Acceptance report integration
+
+Label findings are represented with the existing IA2 `AcceptanceReport` model and
+rendered through the IA report shape. The checker adds label-specific checks such
+as `label write boundary`, `label governance boundary`, `expected labels`, and
+`label manual review` without creating a separate acceptance standard.
+
+Label findings are evidence only. A pass, warning, or manual-review result from
+this checker does not authorize merge, readiness changes, approval changes,
+source-of-truth changes, or future additive label behavior.
+
 ## Report-only workflow
 
 `.github/workflows/agent-os-issue-label-report.yml` runs this checker from issue
