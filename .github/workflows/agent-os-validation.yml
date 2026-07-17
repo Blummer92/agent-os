@@ -5,8 +5,6 @@ on:
     branches:
       - main
   workflow_dispatch:
-  schedule:
-    - cron: "30 11 * * 1-5"
 
 permissions:
   contents: read
@@ -14,38 +12,10 @@ permissions:
 jobs:
   validate:
     name: Run aggregate validation
-    runs-on: [self-hosted, agent-os]
-    env:
-      PYTHON_BIN: python
-      PYTHONUTF8: "1"
-
+    runs-on: ubuntu-latest
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Verify local Python
-        shell: cmd
+      - name: Cloud Build validation migration notice
         run: |
-          python --version
-          python -m pip --version
-
-      - name: Install validation dependencies
-        shell: cmd
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements-dev.txt
-          python -m pip install -r 08_Tooling/workflow-scheduler/requirements.txt
-          python -m pip install -e "./08_Tooling/instructional-materials-coach[test]"
-          python -m pip install -e "./08_Tooling/notion-navigation-client[test]"
-
-      - name: Run Agent OS aggregate validation
-        shell: cmd
-        run: |
-          if exist "%LOCALAPPDATA%\Programs\Git\bin\bash.exe" set "BASH=%LOCALAPPDATA%\Programs\Git\bin\bash.exe"
-          if not defined BASH if exist "C:\Program Files\Git\bin\bash.exe" set "BASH=C:\Program Files\Git\bin\bash.exe"
-          if not defined BASH if exist "C:\Program Files (x86)\Git\bin\bash.exe" set "BASH=C:\Program Files (x86)\Git\bin\bash.exe"
-          if not defined BASH (
-            echo Git Bash was not found in the expected Windows locations.
-            exit /b 1
-          )
-          "%BASH%" ./scripts/validate-all.sh
+          echo "Agent OS aggregate validation has migrated to Google Cloud Build."
+          echo "Use the Cloud Build PR trigger with cloudbuild.yaml as the required validation gate."
+          echo "This compatibility check avoids waiting for the retired self-hosted agent-os runner."
