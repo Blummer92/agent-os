@@ -180,6 +180,9 @@ def _mask_non_authoritative_markdown(text: str) -> str:
     fence_marker: str | None = None
 
     for line in masked.splitlines(keepends=True):
+        if line.startswith(("    ", "\t")):
+            output.append(_mask_text(line))
+            continue
         stripped = line.lstrip()
         marker = stripped[:3] if stripped.startswith(("```", "~~~")) else None
         if marker:
