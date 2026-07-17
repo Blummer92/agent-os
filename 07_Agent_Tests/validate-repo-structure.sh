@@ -68,6 +68,20 @@ is_registered_overlay() {
   registered_overlays | grep -Fxq "$candidate"
 }
 
+is_allowed_helper_overlay() {
+  case "$1" in
+    "apps-script-sync-test-overlay"|\
+    "dashboard-builder-overlay"|\
+    "python-development-overlay"|\
+    "workspace-implementation-overlay")
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 is_allowed_support_surface() {
   case "$1" in
     "Apps Script Sync Test Overlay"|\
@@ -195,7 +209,7 @@ for f in "${overlay_files[@]}"; do
   base=$(basename "$f" .md)
   [ "$base" = "_common-overlay-rules" ] && continue
   [ "$base" = "README" ] && continue
-  is_registered_overlay "$base" || { echo "Overlay is not registered and is not an allowed helper/exemption: $f"; overlay_unregistered=1; }
+  is_registered_overlay "$base" || is_allowed_helper_overlay "$base" || { echo "Overlay is not registered and is not an allowed helper/exemption: $f"; overlay_unregistered=1; }
 done
 check "Every overlay is registered or explicitly exempted" "$overlay_unregistered"
 
@@ -224,7 +238,7 @@ else
     done < <(printf '%s\n' "$primary" | sed 's/ -> /\n/g; s/;/\n/g')
   done < <(awk -F'|' '
     function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
-    NR > 2 && NF >= 4 { responsibility=trim($2); primary=trim($3); if (responsibility != "" && responsibility !~ /^---$/) print responsibility "\t" primary }
+    NR > 2 && NF >= 4 { responsibility=trim($2); primary=trim($3); if (responsibility != "" && responsibility != "Responsibility" && responsibility !~ /^---$/) print responsibility "\t" primary }
   ' "$responsibility_file")
 fi
 check "Responsibility Matrix primary agents are registered" "$unknown_primary"
@@ -243,7 +257,7 @@ else
     done < <(printf '%s\n' "$support" | sed 's/;/\n/g')
   done < <(awk -F'|' '
     function trim(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
-    NR > 2 && NF >= 4 { responsibility=trim($2); support=trim($4); if (responsibility != "" && responsibility !~ /^---$/) print responsibility "\t" support }
+    NR > 2 && NF >= 4 { responsibility=trim($2); support=trim($4); if (responsibility != "" && responsibility != "Responsibility" && responsibility !~ /^---$/) print responsibility "\t" support }
   ' "$responsibility_file")
 fi
 check "Responsibility Matrix support values resolve" "$unknown_support"
