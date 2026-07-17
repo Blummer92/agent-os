@@ -1,0 +1,91 @@
+name: Agent OS parent roadmap
+description: Coordinate a multi-issue Agent OS roadmap with explicit dependencies and roll-up evidence
+title: "[Agent OS Roadmap] "
+labels: [agent-os, status:needs-decision]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form only when work needs multiple independently tracked children, owners, pull requests, decisions, or release boundaries. Follow `01_Shared_Standards/github/issue-structure-and-dependency-contract.md`.
+  - type: input
+    id: issue-code
+    attributes: {label: Issue code, description: Unique roadmap code, placeholder: GB}
+    validations: {required: true}
+  - type: dropdown
+    id: issue-tier
+    attributes:
+      label: Issue tier
+      options: [tier:1-standard-implementation, tier:2-governed-cross-system]
+    validations: {required: true}
+  - type: dropdown
+    id: primary-owner
+    attributes:
+      label: Primary owner
+      options: [owner:qa-test-agent, owner:github-service-agent, owner:integration-manager, owner:instructional-materials-coach, owner:google-workspace-automation-engineer, owner:teacher-modeling-coach, needs-decision]
+    validations: {required: true}
+  - type: textarea
+    id: supporting-owners
+    attributes: {label: Supporting owners, placeholder: "- qa-test-agent\n- integration-manager\n- none"}
+    validations: {required: true}
+  - type: textarea
+    id: objective
+    attributes: {label: Roadmap objective and measurable final outcome}
+    validations: {required: true}
+  - type: textarea
+    id: owner-routing
+    attributes: {label: Owner routing, placeholder: "Primary responsibilities:\nSupport responsibilities:\nHandoff boundaries:"}
+    validations: {required: true}
+  - type: textarea
+    id: child-issues
+    attributes:
+      label: Child issue table
+      description: Use columns Code, Child issue, Owner, Depends on, Mode, Expected output, Status.
+      placeholder: "| Code | Child issue | Owner | Depends on | Mode | Expected output | Status |\n|---|---|---|---|---|---|---|"
+    validations: {required: true}
+  - type: textarea
+    id: dependency-graph
+    attributes: {label: Typed dependency graph and recommended sequence, placeholder: "Hard:\nDecision:\nDocumentation:\nParallel-safe:\nSequential:"}
+    validations: {required: true}
+  - type: textarea
+    id: integration-rollout
+    attributes: {label: Decision gates, integration checkpoints, and rollout stages}
+    validations: {required: true}
+  - type: textarea
+    id: scope
+    attributes: {label: Scope and non-goals, placeholder: "Scope:\n- ...\n\nNon-goals:\n- ..."}
+    validations: {required: true}
+  - type: textarea
+    id: allowed-surfaces
+    attributes: {label: Allowed surfaces}
+    validations: {required: true}
+  - type: textarea
+    id: forbidden-surfaces
+    attributes: {label: Forbidden or protected surfaces}
+    validations: {required: true}
+  - type: textarea
+    id: validation
+    attributes: {label: Parent validation and child completion evidence}
+    validations: {required: true}
+  - type: textarea
+    id: definition-of-done
+    attributes: {label: Parent definition of done and roll-up checklist}
+    validations: {required: true}
+  - type: textarea
+    id: stop-conditions
+    attributes: {label: Stop conditions and human approval points}
+    validations: {required: true}
+  - type: textarea
+    id: final-reconciliation
+    attributes: {label: Final reconciliation, closure evidence, and next handoff}
+    validations: {required: true}
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety confirmation
+      options:
+        - label: Readiness and child completion evidence do not authorize merge, external writes, or autonomous closure.
+          required: true
+        - label: The parent will not close while a hard child remains incomplete or required closure evidence is missing.
+          required: true
+        - label: Final reporting will include files changed, tests run, docs updated, blockers, handoffs, and remaining risks.
+          required: true
