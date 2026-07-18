@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import sys
+import sysconfig
 from pathlib import Path
 
 from reusable_capability_registry import RegistryReader, discover_capabilities
@@ -70,9 +71,11 @@ def test_module_exit_codes_and_no_traceback():
 
 
 def test_installed_console_command():
-    command = os.environ.get("AGENT_OS_CAPABILITIES_BIN", "agent-os-capabilities")
+    scripts_dir = Path(sysconfig.get_path("scripts"))
+    executable_name = "agent-os-capabilities.exe" if os.name == "nt" else "agent-os-capabilities"
+    command = Path(os.environ.get("AGENT_OS_CAPABILITIES_BIN", scripts_dir / executable_name))
     completed = subprocess.run(
-        [command, "--registry", str(FIXTURES / "valid_registry.yml"), "--id", "alpha-reader", "--format", "json"],
+        [str(command), "--registry", str(FIXTURES / "valid_registry.yml"), "--id", "alpha-reader", "--format", "json"],
         cwd=ROOT,
         env=ENV,
         text=True,
