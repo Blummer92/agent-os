@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from scripts.agent_os_issue_acceptance.models import AcceptanceInput, Status
+from scripts.agent_os_issue_acceptance.models import AcceptanceInput, LinkedIssueParseStatus, Status
 from scripts.agent_os_issue_acceptance.policy import evaluate_acceptance
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -18,33 +18,49 @@ def _result(report, name: str):
     return next(check for check in report.checks if check.name == name)
 
 
-def test_valid_fixture_produces_pass_report():
-    report = evaluate_acceptance(
-        AcceptanceInput(
-            issue_body=_read("issue_valid.md"),
-            pr_body=_read("pr_body_valid.md"),
-            changed_files=_changed("changed_files_valid.txt"),
-            diff_text=_read("diff_clean.patch"),
-        )
+def _input(pr_body: str) -> AcceptanceInput:
+    return AcceptanceInput(
+        issue_body=_read("issue_valid.md"),
+        pr_body=pr_body,
+        changed_files=_changed("changed_files_valid.txt"),
+        diff_text=_read("diff_clean.patch"),
     )
 
+
+def test_valid_fixture_produces_pass_report():
+    report = evaluate_acceptance(_input(_read("pr_body_valid.md")))
+
     assert report.linked_issue == 164
+    assert report.linked_issue_result.status == LinkedIssueParseStatus.RESOLVED
     assert report.overall_status == Status.PASS
     assert all(check.status == Status.PASS for check in report.checks)
 
 
-def test_missing_linked_issue_fails():
-    report = evaluate_acceptance(
-        AcceptanceInput(
-            issue_body=_read("issue_valid.md"),
-            pr_body=_read("pr_body_missing_report_fields.md"),
-            changed_files=_changed("changed_files_valid.txt"),
-            diff_text=_read("diff_clean.patch"),
-        )
-    )
+def test_missing_linked_issue_fails_and_remains_distinct_from_ambiguity():
+    report = evaluate_acceptance(_input(_read("pr_body_missing_report_fields.md")))
 
     assert _result(report, "linked issue").status == Status.FAIL
+    assert report.linked_issue_result.status == LinkedIssueParseStatus.NONE
     assert report.overall_status == Status.FAIL
+
+
+def test_ambiguous_linked_issue_requires_manual_review():
+    body = _read("pr_body_valid.md").replace("Closes #164", "Closes #223\nFixes #224")
+    report = evaluate_acceptance(_input(body))
+
+    assert report.linked_issue is None
+    assert report.linked_issue_result.status == LinkedIssueParseStatus.MANUAL_REVIEW
+    assert _result(report, "linked issue").status == Status.MANUAL_REVIEW
+    assert report.overall_status == Status.MANUAL_REVIEW
+    assert any(item.startswith("Linked issue:") for item in report.manual_review_items)
+
+
+def test_bare_only_linked_issue_requires_manual_review():
+    body = _read("pr_body_valid.md").replace("Closes #164", "Related to #164")
+    report = evaluate_acceptance(_input(body))
+
+    assert report.linked_issue_result.status == LinkedIssueParseStatus.MANUAL_REVIEW
+    assert report.overall_status == Status.MANUAL_REVIEW
 
 
 def test_required_files_missing_fails():

@@ -12,6 +12,12 @@ class Status(str, Enum):
     MANUAL_REVIEW = "manual-review"
 
 
+class LinkedIssueParseStatus(str, Enum):
+    RESOLVED = "resolved"
+    NONE = "none"
+    MANUAL_REVIEW = "manual-review"
+
+
 _STATUS_RANK = {
     Status.PASS: 0,
     Status.WARN: 1,
@@ -26,6 +32,33 @@ class CheckResult:
     status: Status
     message: str
     evidence: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class LinkedIssueCandidate:
+    issue_number: int
+    repository: str | None
+    keyword: str | None
+    source: str
+    position: int
+    raw_target: str
+    explicit: bool
+
+    @property
+    def normalized_target(self) -> str:
+        if self.repository:
+            return f"{self.repository.lower()}#{self.issue_number}"
+        return f"#{self.issue_number}"
+
+
+@dataclass(frozen=True)
+class LinkedIssueParseResult:
+    status: LinkedIssueParseStatus
+    issue_number: int | None = None
+    repository: str | None = None
+    explicit_candidates: list[LinkedIssueCandidate] = field(default_factory=list)
+    bare_references: list[LinkedIssueCandidate] = field(default_factory=list)
+    reasons: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -60,6 +93,7 @@ class AcceptanceReport:
     linked_issue: int | None
     overall_status: Status
     checks: list[CheckResult]
+    linked_issue_result: LinkedIssueParseResult | None = None
     manual_review_items: list[str] = field(default_factory=list)
     evidence: list[str] = field(default_factory=list)
     blockers: list[str] = field(default_factory=list)

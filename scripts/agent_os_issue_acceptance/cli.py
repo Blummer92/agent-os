@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from .models import AcceptanceInput
+from .models import AcceptanceInput, LinkedIssueParseStatus
 from .policy import evaluate_acceptance
 from .report import exit_code_for, render_report
 
@@ -48,8 +48,36 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _report_to_dict(report):
+    result = report.linked_issue_result
+    if result is None:
+        linked_issue_status = (
+            LinkedIssueParseStatus.RESOLVED.value
+            if report.linked_issue is not None
+            else LinkedIssueParseStatus.NONE.value
+        )
+        reasons = []
+        candidates = []
+    else:
+        linked_issue_status = result.status.value
+        reasons = result.reasons
+        candidates = [
+            {
+                "issue_number": candidate.issue_number,
+                "repository": candidate.repository,
+                "keyword": candidate.keyword,
+                "source": candidate.source,
+                "position": candidate.position,
+                "target": candidate.normalized_target,
+                "explicit": candidate.explicit,
+            }
+            for candidate in [*result.explicit_candidates, *result.bare_references]
+        ]
+
     return {
         "linked_issue": report.linked_issue,
+        "linked_issue_status": linked_issue_status,
+        "linked_issue_reasons": reasons,
+        "linked_issue_candidates": candidates,
         "overall_status": report.overall_status.value,
         "checks": [
             {
