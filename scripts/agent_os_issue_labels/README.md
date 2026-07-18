@@ -20,12 +20,14 @@ python -m scripts.agent_os_issue_labels.cli \
 The planner is side-effect free. It consumes an issue body, current labels, and
 an explicit repository-label catalog, then reports:
 
+- metadata contract and application eligibility;
 - candidate and approved additions;
 - expected labels already present;
 - findings skipped by policy;
-- owner-label conflicts;
+- primary-owner and participation-label evidence;
 - unknown values and unavailable labels;
-- reasons requiring manual review.
+- reasons requiring manual review;
+- explicit non-authorization fields.
 
 ```bash
 python -m scripts.agent_os_issue_labels.plan_cli \
@@ -37,15 +39,22 @@ python -m scripts.agent_os_issue_labels.plan_cli \
   --commit-sha local-test
 ```
 
-The initial planning policy can approve only missing `agent-os` and one
-nonconflicting `owner:*` label derived from the explicit Primary owner field.
-Every `status:*` finding remains report-only. Legacy phase, epic, and type
-findings also remain report-only unless a later governed change expands the
-policy.
+The initial application policy can approve only missing `agent-os`. The issue
+body remains authoritative for the Primary owner. Existing `owner:*` labels are
+non-exclusive participation evidence and remain report-only until a separately
+approved taxonomy change defines writable owner semantics.
 
-Malformed metadata, unknown values, unavailable labels, external-write signals,
-needs-decision values, and conflicting owner labels route to manual review. A
-manual-review plan contains no approved additions.
+Every `status:*`, phase, epic, and type finding remains report-only. Recognized
+legacy bodies remain parseable for evidence, but are not application-eligible
+and produce no approved additions. Incomplete or unknown metadata contracts
+route to manual review.
+
+Malformed metadata, unknown values, unavailable safe labels, external-write
+signals, and needs-decision values route to manual review. A manual-review plan
+contains no approved additions.
+
+Every text and JSON plan states that no mutation occurred, no write is
+authorized, L5B is not authorized, and explicit approval is still required.
 
 ## Read-only workflows
 
