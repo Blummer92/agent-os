@@ -22,6 +22,12 @@ related_issues:
   - id: 98
     title: Documentation Dependency Map and Implementation Guide
     relationship: this-documentation-index
+  - id: 241
+    title: Reusable Capability Registry and Discovery System
+    relationship: roadmap-parent
+  - id: 242
+    title: Reusable Capability Registry contract and governance routing
+    relationship: rc1-contract-workstream
 
 # --- Document metadata (canonical ownership + duplicate-risk) -----------------------
 documents:
@@ -60,13 +66,27 @@ documents:
     action: reuse
     duplicate_risk: medium
     canonical_for: [responsibility-routing]
+  - repo_path: "04_Registry/reusable-capabilities.yml"
+    owner: Integration Manager
+    source_of_truth: GitHub
+    status: active
+    action: extend
+    duplicate_risk: high
+    canonical_for: [reusable-capability-records]
   - repo_path: "02_Agent_Overlays/integration-manager.md"
     owner: Integration Manager
     source_of_truth: GitHub
     status: active
     action: extend
     duplicate_risk: medium
-    canonical_for: [navigation-governance-scope]
+    canonical_for: [navigation-governance-scope, reusable-capability-registry-lifecycle]
+  - repo_path: "01_Shared_Standards/global-engineering/reusable-capability-registry-standard.md"
+    owner: Integration Manager
+    source_of_truth: GitHub
+    status: active
+    action: reuse
+    duplicate_risk: high
+    canonical_for: [reusable-capability-registry-contract, admission, lifecycle, validation-severity]
   - repo_path: "01_Shared_Standards/navigation/navigation-registry-standard.md"
     owner: Integration Manager
     source_of_truth: GitHub
@@ -141,6 +161,11 @@ concepts:
     owner: Integration Manager
     duplicate_risk: high
     extend_at: registry-files
+  - concept: reusable-capability-registry
+    canonical: "01_Shared_Standards/global-engineering/reusable-capability-registry-standard.md"
+    owner: Integration Manager
+    duplicate_risk: high
+    extend_at: same-standard-or-registry-data
   - concept: navigation-registry-purpose
     canonical: "01_Shared_Standards/navigation/navigation-registry-standard.md"
     owner: Integration Manager
@@ -162,6 +187,15 @@ dependency_edges:
   - from: "AGENTS.md"
     to: "00_Governance/ownership-and-source-of-truth.md"
     type: reads_before
+  - from: "02_Agent_Overlays/integration-manager.md"
+    to: "01_Shared_Standards/global-engineering/reusable-capability-registry-standard.md"
+    type: governed_by
+  - from: "01_Shared_Standards/global-engineering/reusable-capability-registry-standard.md"
+    to: "04_Registry/reusable-capabilities.yml"
+    type: governs
+  - from: "04_Registry/reusable-capabilities.yml"
+    to: "07_Agent_Tests/"
+    type: validated_by
   - from: "02_Agent_Overlays/integration-manager.md"
     to: "01_Shared_Standards/navigation/navigation-registry-standard.md"
     type: governed_by
@@ -188,6 +222,13 @@ reading_paths:
     - "AGENTS.md"
     - "00_Governance/ownership-and-source-of-truth.md"
     - "04_Registry/responsibility-matrix.md"
+  reusable_capability_registry_implementation:
+    - "AGENTS.md"
+    - "00_Governance/ownership-and-source-of-truth.md"
+    - "00_Governance/write-authorization-policy.md"
+    - "02_Agent_Overlays/integration-manager.md"
+    - "01_Shared_Standards/global-engineering/reusable-capability-registry-standard.md"
+    - "04_Registry/reusable-capabilities.yml"
   navigation_registry_implementation:
     - "AGENTS.md"
     - "02_Agent_Overlays/integration-manager.md"
@@ -229,8 +270,10 @@ validate_paths:
   - "00_Governance/documentation-dependency-map/issue-97-relationship.md"
   - "04_Registry/agent-inheritance-registry.md"
   - "04_Registry/responsibility-matrix.md"
+  - "04_Registry/reusable-capabilities.yml"
   - "02_Agent_Overlays/integration-manager.md"
   - "02_Agent_Overlays/github-service-agent.md"
+  - "01_Shared_Standards/global-engineering/reusable-capability-registry-standard.md"
   - "01_Shared_Standards/navigation/README.md"
   - "01_Shared_Standards/navigation/navigation-registry-standard.md"
   - "01_Shared_Standards/navigation/navigation-registry-architecture.md"
