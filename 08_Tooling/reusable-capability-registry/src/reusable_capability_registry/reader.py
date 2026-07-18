@@ -18,7 +18,6 @@ _REQUIRED_FIELDS = frozenset(
         "canonical_paths",
         "public_interfaces",
         "owner_agent",
-        "supporting_agents",
         "known_consumers",
         "tests",
         "keywords",
@@ -29,6 +28,8 @@ _REQUIRED_FIELDS = frozenset(
 _OPTIONAL_FIELDS = frozenset(
     {
         "known_consumer_exemption",
+        "supporting_agents",
+        "deprecated_by",
         "inputs",
         "outputs",
         "extension_points",
@@ -39,6 +40,7 @@ _OPTIONAL_FIELDS = frozenset(
     }
 )
 _ALLOWED_FIELDS = _REQUIRED_FIELDS | _OPTIONAL_FIELDS
+_ALLOWED_STATUSES = frozenset({"active", "experimental", "deprecated", "replaced", "internal-only"})
 
 
 class RegistryError(ValueError):
@@ -107,19 +109,22 @@ def _parse_record(raw: Any) -> CapabilityRecord:
         raise RegistryFormatError(f"{capability_id}: missing required fields: {', '.join(missing)}")
     unknown = sorted(set(raw) - _ALLOWED_FIELDS)
     if unknown:
-        raise RegistryFormatError(
-            f"{capability_id}: unsupported fields for registry 0.1.0: {', '.join(unknown)}"
-        )
+        raise RegistryFormatError(f"{capability_id}: unsupported fields for registry 0.1.0: {', '.join(unknown)}")
     capability_id = _required_text(raw, "capability_id", capability_id)
+    status = _required_text(raw, "status", capability_id)
+    if status not in _ALLOWED_STATUSES:
+        raise RegistryFormatError(f"{capability_id}: unsupported status: {status}")
+    if status in {"deprecated", "replaced"} and not _optional_text(raw, "deprecated_by", capability_id):
+        raise RegistryFormatError(f"{capability_id}: deprecated_by is required for status {status}")
     return CapabilityRecord(
         capability_id=capability_id,
         name=_required_text(raw, "name", capability_id),
         summary=_required_text(raw, "summary", capability_id),
-        status=_required_text(raw, "status", capability_id),
+        status=status,
         canonical_paths=_text_tuple(raw, "canonical_paths", capability_id, required=True),
         public_interfaces=_text_tuple(raw, "public_interfaces", capability_id, required=True),
         owner_agent=_required_text(raw, "owner_agent", capability_id),
-        supporting_agents=_text_tuple(raw, "supporting_agents", capability_id, required=True),
+        supporting_agents=_text_tuple(raw, "supporting_agents", capability_id),
         known_consumers=_text_tuple(raw, "known_consumers", capability_id, required=True),
         known_consumer_exemption=_optional_text(raw, "known_consumer_exemption", capability_id),
         tests=_text_tuple(raw, "tests", capability_id, required=True),
@@ -133,6 +138,7 @@ def _parse_record(raw: Any) -> CapabilityRecord:
         failure_modes=_text_tuple(raw, "failure_modes", capability_id),
         compatibility=_text_tuple(raw, "compatibility", capability_id),
         documentation_handoff=_text_tuple(raw, "documentation_handoff", capability_id),
+        deprecated_by=_optional_text(raw, "deprecated_by", capability_id),
     )
 
 
