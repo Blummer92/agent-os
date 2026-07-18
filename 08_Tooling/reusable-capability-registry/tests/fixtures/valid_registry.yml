@@ -7,14 +7,14 @@ capabilities:
     canonical_paths:
       - src/alpha.py
     public_interfaces:
-      - alpha:read
+      - alpha:Read
     owner_agent: Integration Manager
     known_consumers:
       - scripts/use_alpha.py
     tests:
       - tests/test_alpha.py
     keywords:
-      - alpha
+      - Alpha
       - shared
     reuse_guidance: Reuse for alpha reads only.
     side_effects:
@@ -37,7 +37,7 @@ capabilities:
     tests:
       - tests/test_beta.py
     keywords:
-      - beta
+      - alpha
       - shared
     reuse_guidance: Reuse for local evidence only.
     side_effects:
