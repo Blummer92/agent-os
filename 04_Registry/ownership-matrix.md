@@ -8,6 +8,9 @@
 | Automation design/build | Google Workspace Automation Engineer |
 | Dashboard governance | Modeling & Dashboard Governance Agent |
 | Integration coordination | Integration Manager |
+| Reusable capability registry policy and lifecycle | Integration Manager |
+| Reusable capability registry validation evidence | QA / Test Agent |
+| Reusable capability registry Python reader | Google Workspace Automation Engineer |
 | Release evidence | QA / Test Agent |
 | Dashboard sync routing | Integration Manager |
 | Dashboard sync governance | Modeling & Dashboard Governance Agent |
