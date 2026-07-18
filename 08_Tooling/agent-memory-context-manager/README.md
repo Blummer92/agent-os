@@ -13,7 +13,7 @@ Scheduler calls Memory Manager pre-task to generate a context packet. Memory Man
 - Relevant file selection: identify files by relevance to task
 - Memory summary retrieval: pull cached summaries instead of re-reading
 - Stale-context detection: flag outdated summaries after file changes
-- Context budget enforcement: reject excessive file/search requests
+- Context budget declarations: identify bounded file and test expectations
 - Stop/continue recommendations: signal when working set is unclear or scope grows
 
 ## Memory Types
@@ -37,17 +37,26 @@ Scheduler calls Memory Manager pre-task to generate a context packet. Memory Man
 Compact YAML format agents receive before work:
 ```yaml
 objective: <task goal>
-phase: <current phase>
-branch: <git branch>
-changed_files: [list of git-changed paths]
-allowed_inspect_first: [files to read first]
-forbidden_unless_needed: [files to avoid]
-known_facts: [prior validated findings]
-acceptance_criteria: [pass/fail conditions]
-validation_commands: [CLI commands to verify]
-compute_limits: {max_files, max_searches, max_tests}
-stop_conditions: [rules that halt execution]
+current_phase: <current phase>
+branch: null
+pr_number: null
+changed_files: []
+allowed_inspect_first: []
+forbidden_unless_needed: []
+known_facts: []
+prior_decisions: []
+acceptance_criteria: []
+validation_commands: []
+compute_limits:
+  max_files_to_inspect: 8
+  targeted_tests_only: true
+  no_full_scheduler_suite: true
+stop_conditions: []
 ```
+
+`branch: null` means no branch exists. `pr_number: null` means no pull request exists. Non-null branches must be non-empty strings. Non-null PR numbers must be non-negative integers. `0` remains accepted only for legacy compatibility; new pre-PR packets use `null`.
+
+Compute limits are declarations and stop obligations. This issue does not add runtime counters or enforcement.
 
 ## Compute-Saving Policies
 - Prefer cached summaries over re-reading stable files
@@ -60,12 +69,12 @@ stop_conditions: [rules that halt execution]
 - Ask for clarification if working set is undefined
 
 ## Future Scheduler Integration
-- Pre-task context packet generation (Memory Manager generates before Executor runs)
-- Per-task file allowlist and budget enforcement
+- Pre-task context packet generation
+- Per-task file allowlist and budget declarations
 - Per-task test recommendations based on changed modules
-- Audit log entries for context used (files read, searches, tests run)
-- Memory cache invalidation after file changes (git diff triggers re-summary)
-- Approval gate when agent requests exceeds budget
+- Audit log entries for context used
+- Memory cache invalidation after file changes
+- Approval gate when requested work exceeds the declared budget
 
 ## Stop Conditions
 Recommend stopping when: budget exceeded, expensive tools called repeatedly, scope grows beyond phase, required context missing, auth failure, tests fail with no new evidence, unrelated cleanup proposed.

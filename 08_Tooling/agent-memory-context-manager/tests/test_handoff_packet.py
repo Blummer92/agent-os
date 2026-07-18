@@ -12,74 +12,47 @@ from agent_memory_context_manager import (  # noqa: E402
 
 def sample_packet_kwargs():
     return {
-        "objective": "Implement Memory 1A minimal packet generator",
-        "current_phase": "Memory 1A",
-        "branch": "claude/agent-memory-context-manager-1a-minimal-local-packet-generator",
-        "pr_number": 0,
-        "changed_files": [
-            "08_Tooling/agent-memory-context-manager/src/agent_memory_context_manager/handoff_packet.py",
-        ],
-        "allowed_inspect_first": [
-            "08_Tooling/agent-memory-context-manager/README.md",
-            "08_Tooling/agent-memory-context-manager/HANDOFF_PACKET_TEMPLATE.md",
-        ],
-        "forbidden_unless_needed": [
-            "Workflow Scheduler source",
-            "Executor",
-            "TaskAdapter",
-        ],
-        "known_facts": [
-            "Memory 0A-0F planning track is complete",
-        ],
-        "prior_decisions": [
-            "No Scheduler integration in 1A",
-        ],
-        "acceptance_criteria": [
-            "Packet generator returns a dict",
-        ],
-        "validation_commands": [
-            "PYTHONPATH=src python -m pytest tests/test_handoff_packet.py -q",
-        ],
-        "stop_conditions": [
-            "Need to inspect more than 8 files",
-        ],
+        "objective": "Implement a minimal handoff packet update",
+        "current_phase": "Memory H1",
+        "branch": None,
+        "pr_number": None,
+        "changed_files": ["handoff_packet.py"],
+        "allowed_inspect_first": ["README.md", "handoff_packet.py"],
+        "forbidden_unless_needed": ["Workflow Scheduler source"],
+        "known_facts": ["Memory Manager provides context only"],
+        "prior_decisions": ["No Scheduler integration in Memory H1"],
+        "acceptance_criteria": ["Pre-branch and pre-PR packets are valid"],
+        "validation_commands": ["PYTHONPATH=src python -m pytest tests/test_handoff_packet.py -q"],
+        "stop_conditions": ["A second module becomes necessary"],
     }
 
 
-def test_packet_creation_returns_dict():
+def test_packet_creation_returns_required_fields():
     packet = build_handoff_packet(**sample_packet_kwargs())
 
     assert isinstance(packet, dict)
+    assert set(REQUIRED_PACKET_FIELDS).issubset(packet)
 
 
-def test_all_required_fields_are_present():
+def test_pre_branch_and_pre_pr_values_are_preserved():
     packet = build_handoff_packet(**sample_packet_kwargs())
 
-    assert set(REQUIRED_PACKET_FIELDS).issubset(packet.keys())
+    assert packet["branch"] is None
+    assert packet["pr_number"] is None
 
 
-def test_explicit_values_are_preserved():
-    kwargs = sample_packet_kwargs()
-    packet = build_handoff_packet(**kwargs)
-
-    assert packet["objective"] == kwargs["objective"]
-    assert packet["current_phase"] == "Memory 1A"
-    assert packet["pr_number"] == 0
-    assert packet["changed_files"] == kwargs["changed_files"]
-
-
-def test_default_compute_limits_are_applied():
+def test_default_compute_limits_are_copied():
     packet = build_handoff_packet(**sample_packet_kwargs())
 
     assert packet["compute_limits"] == DEFAULT_COMPUTE_LIMITS
     assert packet["compute_limits"] is not DEFAULT_COMPUTE_LIMITS
 
 
-def test_provided_compute_limits_override_defaults():
+def test_provided_compute_limits_extend_canonical_defaults():
     kwargs = sample_packet_kwargs()
     kwargs["compute_limits"] = {
         "max_files_to_inspect": 4,
-        "custom_limit": "allowed",
+        "custom_limit": "legacy-extension",
     }
 
     packet = build_handoff_packet(**kwargs)
@@ -87,7 +60,7 @@ def test_provided_compute_limits_override_defaults():
     assert packet["compute_limits"]["max_files_to_inspect"] == 4
     assert packet["compute_limits"]["targeted_tests_only"] is True
     assert packet["compute_limits"]["no_full_scheduler_suite"] is True
-    assert packet["compute_limits"]["custom_limit"] == "allowed"
+    assert packet["compute_limits"]["custom_limit"] == "legacy-extension"
 
 
 def test_list_and_dict_inputs_are_copied():
@@ -96,11 +69,6 @@ def test_list_and_dict_inputs_are_copied():
     kwargs["compute_limits"] = custom_compute_limits
 
     packet = build_handoff_packet(**kwargs)
-
-    assert packet["changed_files"] is not kwargs["changed_files"]
-    assert packet["allowed_inspect_first"] is not kwargs["allowed_inspect_first"]
-    assert packet["compute_limits"] is not custom_compute_limits
-
     kwargs["changed_files"].append("mutated.py")
     custom_compute_limits["max_files_to_inspect"] = 99
 

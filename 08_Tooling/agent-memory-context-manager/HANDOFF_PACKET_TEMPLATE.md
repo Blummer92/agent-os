@@ -1,31 +1,30 @@
 # Agent Handoff Packet Template
 
 ## Purpose
-This template gives agents the smallest useful working set before they start. It reduces compute by naming the objective, files to inspect first, known facts, validation commands, and explicit stop conditions.
+Use this packet to give an agent the smallest verified working set before a bounded task.
 
-## When to Use This Packet
-Use this before code review, docs edits, small feature work, test triage, or PR validation. For large or unclear tasks, create a planning packet first instead of scanning the repo.
-
-## Packet Fields
+## Canonical Fields
 - `objective`: one-sentence goal
-- `current_phase`: phase and stage of work
-- `branch`: active git branch
-- `pr_number`: PR number or `null`
+- `current_phase`: current phase and stage
+- `branch`: active branch, or `null` before one exists
+- `pr_number`: PR number, or `null` before one exists
 - `changed_files`: files already changed
-- `allowed_inspect_first`: files the agent should read first
-- `forbidden_unless_needed`: files or folders to avoid unless justified
-- `known_facts`: validated facts the agent should reuse
-- `prior_decisions`: approved decisions and rejected alternatives
+- `allowed_inspect_first`: files to read first
+- `forbidden_unless_needed`: paths to avoid unless justified
+- `known_facts`: verified facts
+- `prior_decisions`: approved choices and rejected alternatives
 - `acceptance_criteria`: pass/fail conditions
-- `validation_commands`: commands to verify the work
-- `compute_limits`: maximum files, searches, test runs, connector calls
-- `stop_conditions`: conditions that require pausing or escalation
+- `validation_commands`: exact validation commands
+- `compute_limits`: canonical context and test limits
+- `stop_conditions`: pause or escalation conditions
+
+`pr_number: 0` is legacy-compatible only. New pre-PR packets use `null`.
 
 ## YAML Template
 ```yaml
 objective: "<task goal>"
 current_phase: "<phase and stage>"
-branch: "<git branch>"
+branch: null
 pr_number: null
 changed_files: []
 allowed_inspect_first: []
@@ -35,65 +34,56 @@ prior_decisions: []
 acceptance_criteria: []
 validation_commands: []
 compute_limits:
-  max_files: 7
-  max_searches: 5
-  max_test_runs: 1
-  max_connector_calls: 0
+  max_files_to_inspect: 8
+  targeted_tests_only: true
+  no_full_scheduler_suite: true
 stop_conditions: []
 ```
 
-## Small Task Example
+Compute limits are declarations and stop obligations, not runtime enforcement.
+
+## Existing-PR Example
 ```yaml
-objective: "Review one docs-only PR for scope accuracy"
-current_phase: "Memory 0B review"
-branch: "claude/agent-memory-context-manager-0b-handoff-template"
+objective: "Review one documentation-only pull request"
+current_phase: "review"
+branch: "docs/review-handoff"
 pr_number: 37
-changed_files:
-  - "08_Tooling/agent-memory-context-manager/HANDOFF_PACKET_TEMPLATE.md"
-allowed_inspect_first:
-  - "08_Tooling/agent-memory-context-manager/README.md"
-forbidden_unless_needed:
-  - "08_Tooling/workflow-scheduler/src/"
-  - "tests/"
-known_facts:
-  - "Memory Manager selects context; Workflow Scheduler executes tasks."
-acceptance_criteria:
-  - "One docs-only file under 100 lines."
-validation_commands:
-  - "manual diff review"
-compute_limits: {max_files: 3, max_searches: 2, max_test_runs: 0, max_connector_calls: 1}
-stop_conditions:
-  - "Source or test changes appear."
+changed_files: ["README.md"]
+allowed_inspect_first: ["README.md"]
+forbidden_unless_needed: ["08_Tooling/workflow-scheduler/"]
+known_facts: ["The pull request is documentation-only."]
+prior_decisions: ["No source changes are authorized."]
+acceptance_criteria: ["The documented command is accurate."]
+validation_commands: ["bash 07_Agent_Tests/validate-repo-structure.sh"]
+compute_limits:
+  max_files_to_inspect: 3
+  targeted_tests_only: true
+  no_full_scheduler_suite: true
+stop_conditions: ["Source or workflow changes appear."]
 ```
 
-## Medium Task Example
+## Pre-Branch Example
 ```yaml
-objective: "Plan a focused docs update for one tooling module"
-current_phase: "Design refinement"
-branch: "claude/example-medium-docs-task"
+objective: "Plan one focused module update"
+current_phase: "design refinement"
+branch: null
 pr_number: null
 changed_files: []
-allowed_inspect_first:
-  - "08_Tooling/agent-memory-context-manager/README.md"
-  - "04_Registry/module-version-map.md"
-forbidden_unless_needed:
-  - "08_Tooling/workflow-scheduler/src/"
-known_facts:
-  - "Large tasks require planning before scanning."
-prior_decisions:
-  - "No embeddings, REST API, dashboard, or daemon yet."
-acceptance_criteria:
-  - "Scope remains docs-only and focused on one module."
-validation_commands:
-  - "bash 07_Agent_Tests/validate-repo-structure.sh"
-compute_limits: {max_files: 12, max_searches: 6, max_test_runs: 1, max_connector_calls: 2}
-stop_conditions:
-  - "More than 15 files are needed."
-  - "The task becomes implementation work."
+allowed_inspect_first: ["08_Tooling/agent-memory-context-manager/README.md"]
+forbidden_unless_needed: ["08_Tooling/workflow-scheduler/"]
+known_facts: ["Memory Manager selects context; it does not schedule execution."]
+prior_decisions: ["No Scheduler integration is in scope."]
+acceptance_criteria: ["The implementation allowlist is exact."]
+validation_commands: ["PYTHONPATH=src python -m pytest tests/test_handoff_packet.py -q"]
+compute_limits:
+  max_files_to_inspect: 6
+  targeted_tests_only: true
+  no_full_scheduler_suite: true
+stop_conditions: ["The task requires a second module."]
 ```
 
 ## Stop Conditions
-Stop when context budget is exceeded, target files are unclear, auth or approval fails, tests fail repeatedly without new evidence, full-repo search is requested before targeted search, or unrelated cleanup is proposed.
+Stop when the working set is unclear, a declared limit is exceeded, authorization is missing, blocked tools are retried without new evidence, or unrelated cleanup enters scope.
 
 ## Non-Goals
-No code implementation. No schema validator. No Python module. No Scheduler integration. No autonomous writes. No vector DB. No embeddings. No REST API. No dashboard. No daemon. No Phase 4 adapter-contract work.
+No Scheduler integration, autonomous writes, generalized cache service, vector database, embeddings, REST API, dashboard, or daemon.
