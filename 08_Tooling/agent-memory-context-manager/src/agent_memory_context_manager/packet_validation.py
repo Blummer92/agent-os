@@ -8,7 +8,6 @@ from .handoff_packet import DEFAULT_COMPUTE_LIMITS, REQUIRED_PACKET_FIELDS
 STRING_PACKET_FIELDS: tuple[str, ...] = (
     "objective",
     "current_phase",
-    "branch",
 )
 
 LIST_PACKET_FIELDS: tuple[str, ...] = (
@@ -38,11 +37,18 @@ def validate_handoff_packet(packet: Mapping[str, Any]) -> list[str]:
         if field in packet and not isinstance(packet[field], str):
             errors.append(f"{field} must be a string")
 
+    if "branch" in packet:
+        branch = packet["branch"]
+        if branch is not None and not isinstance(branch, str):
+            errors.append("branch must be a string or None")
+        elif isinstance(branch, str) and not branch.strip():
+            errors.append("branch must be a non-empty string or None")
+
     if "pr_number" in packet:
         pr_number = packet["pr_number"]
-        if not isinstance(pr_number, int):
-            errors.append("pr_number must be an integer")
-        elif pr_number < 0:
+        if pr_number is not None and not isinstance(pr_number, int):
+            errors.append("pr_number must be an integer or None")
+        elif isinstance(pr_number, int) and pr_number < 0:
             errors.append("pr_number must not be negative")
 
     for field in LIST_PACKET_FIELDS:
