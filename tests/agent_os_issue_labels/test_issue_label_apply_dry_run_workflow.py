@@ -23,12 +23,23 @@ def test_dry_run_workflow_uses_minimal_permissions_and_per_issue_concurrency():
     assert "cancel-in-progress: true" in content
 
 
-def test_dry_run_workflow_reads_issue_and_repository_labels():
+def test_dry_run_workflow_uses_fixture_testable_payload_resolver():
+    content = WORKFLOW.read_text(encoding="utf-8")
+    assert "python -m scripts.agent_os_issue_labels.workflow_payload" in content
+    assert "--event-name" in content
+    assert "--event-path" in content
+    assert "--manual-issue-number" in content
+    assert "steps.resolve.outputs.status == 'pass'" in content
+    assert "steps.resolve.outputs.status != 'pass'" in content
+    assert "payload-summary.txt" in content
+
+
+def test_dry_run_workflow_refetches_issue_and_repository_labels():
     content = WORKFLOW.read_text(encoding="utf-8")
     assert "github.rest.issues.get" in content
     assert "github.rest.issues.listLabelsForRepo" in content
-    assert "workflow_dispatch requires a positive issue_number" in content
-    assert "context.payload.issue" in content
+    assert "RESOLVED_ISSUE_NUMBER" in content
+    assert "context.payload.issue" not in content
 
 
 def test_dry_run_workflow_calls_planner_and_publishes_audit_summary():
