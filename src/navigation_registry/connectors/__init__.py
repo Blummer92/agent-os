@@ -8,6 +8,7 @@ from .notion_contract_adapter import (
     NOTION_SEARCH_RESULT_SOURCE,
     NotionContractAdapter,
 )
+from .scheduler_notion_evidence import SchedulerNotionEvidenceAdapter
 
 __all__ = [
     "CACHED_NOTION_INDEX_SOURCE",
@@ -18,4 +19,5 @@ __all__ = [
     "NotionContractAdapter",
     "NotionReadOnlyConnector",
     "RegistryResource",
+    "SchedulerNotionEvidenceAdapter",
 ]
