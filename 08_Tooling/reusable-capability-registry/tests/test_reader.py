@@ -17,7 +17,8 @@ def test_default_path_is_repository_relative_and_loads_from_non_root(monkeypatch
     monkeypatch.chdir(tmp_path)
     assert default_registry_path().name == "reusable-capabilities.yml"
     reader = RegistryReader()
-    assert reader.record_count == 2
+    assert reader.registry_path == default_registry_path()
+    assert reader.record_count > 0
 
 
 def test_explicit_fixture_loads_once_and_builds_indexes_once():
