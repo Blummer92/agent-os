@@ -3,18 +3,22 @@
 ## Default Operating Order
 
 1. Read local structured evidence first.
-2. Use the latest snapshot and dependency graph before repeated live lookups.
-3. Read proposed-change manifests and validate them against local evidence.
-4. Use live systems only when local evidence is missing, stale, or contradictory.
+2. Read `evidence_path_summary` before loading or escalating dashboard evidence.
+3. Use the latest snapshot and dependency graph before repeated live lookups.
+4. Validate proposed-change manifests against local evidence.
+5. Escalate only for a specific evidence gap or governed decision gate.
 
-## Core Rules
+## Evidence Path Decision
 
-- Prefer snapshots and dependency graphs over repeated searches.
-- Never approve destructive changes if records or dependencies are unknown.
-- Reuse prior verified mappings only when current evidence still matches.
-- Treat missing evidence as `Requires manual review` or `Blocked by missing information`.
-- Do not archive, delete, rename, merge, or update Notion data.
-- Do not mutate Sheets, Drive, Apps Script, Notion, or production systems.
+- `placeholder_only`: fast local context only; not migration or retirement proof.
+- `cached_navigation_lookup`: routing or identifier evidence; live verification may
+  still be required.
+- `live_notion_verification`: approved read-only live evidence.
+- `mixed` or `unknown`: requires human review before governed decisions.
+- `empty`: no dashboards were available for evaluation.
+
+Never infer safety from absent fields. Missing, malformed, contradictory, or
+unrecognized evidence metadata fails closed.
 
 ## Recommended Sequence
 
@@ -24,8 +28,8 @@
 python scripts/snapshot_notion.py
 ```
 
-If live Notion access is unavailable, keep the placeholder output and treat gaps as
-blockers rather than proof.
+The default provider is local and placeholder-only. It performs no network call,
+requires no credentials, and leaves uncaptured evidence marked `missing`.
 
 ### 2. Build Dependency Coverage
 
@@ -41,13 +45,12 @@ python scripts/validate_changes.py --changes proposed_changes/proposed_changes.e
 
 ### 4. Escalate Only When Needed
 
-Use live lookups only to fill a specific evidence gap, verify stale evidence, or resolve
-contradictory evidence. Do not browse broadly when local files already answer the
-question.
+Use cached or live evidence only to resolve a specific gap, stale or contradictory
+record, or governed decision requirement. B2 provides evidence normalization; B4
+owns the future approved live-read boundary.
 
-## Freshness Expectations
+## Governing Rules
 
-- Placeholder snapshots are incomplete evidence.
-- Stale or contradictory graph nodes are unresolved risk.
-- Missing dependency coverage blocks destructive approval.
-- Evidence quality below verified local coverage stops short of retirement approval.
+See `01_Shared_Standards/dashboard-governance/dashboard-migration-verification.md`.
+Do not mutate Notion, Sheets, Drive, Apps Script, or production systems from this
+workflow.
