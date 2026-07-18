@@ -1,0 +1,101 @@
+name: Agent OS Issue Label Apply Dry Run
+
+on:
+  issues:
+    types: [opened, edited, reopened]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Existing issue number to inspect
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: read
+
+concurrency:
+  group: agent-os-issue-label-dry-run-${{ github.event.issue.number || inputs.issue_number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  dry-run:
+    name: Plan issue label additions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Collect issue and repository label evidence
+        id: collect
+        uses: actions/github-script@v7
+        env:
+          INPUT_ISSUE_NUMBER: ${{ inputs.issue_number }}
+        with:
+          script: |
+            const fs = require("fs");
+            const path = require("path");
+            const { owner, repo } = context.repo;
+            let issue;
+            let issueNumber;
+            if (context.eventName === "workflow_dispatch") {
+              issueNumber = Number(process.env.INPUT_ISSUE_NUMBER);
+              if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+                core.setFailed("workflow_dispatch requires a positive issue_number");
+                return;
+              }
+              issue = (await github.rest.issues.get({ owner, repo, issue_number: issueNumber })).data;
+            } else {
+              issue = context.payload.issue;
+              issueNumber = issue && issue.number;
+              if (!Number.isInteger(issueNumber) || issueNumber <= 0) {
+                core.setFailed("issue event payload is missing a valid issue number");
+                return;
+              }
+            }
+            const currentLabels = (issue.labels || [])
+              .map((label) => typeof label === "string" ? label : label.name)
+              .filter(Boolean)
+              .sort();
+            const available = await github.paginate(
+              github.rest.issues.listLabelsForRepo,
+              { owner, repo, per_page: 100 }
+            );
+            const availableLabels = available.map((label) => label.name).filter(Boolean).sort();
+            const out = path.join("tmp", "agent_os_issue_label_apply_dry_run");
+            fs.mkdirSync(out, { recursive: true });
+            fs.writeFileSync(path.join(out, "issue.md"), issue.body || "", "utf8");
+            fs.writeFileSync(path.join(out, "labels.txt"), currentLabels.join("\n") + "\n", "utf8");
+            fs.writeFileSync(path.join(out, "available_labels.txt"), availableLabels.join("\n") + "\n", "utf8");
+            core.setOutput("issue-number", String(issueNumber));
+            core.setOutput("event-action", context.payload.action || "manual");
+
+      - name: Run label application dry run
+        env:
+          EVENT_ACTION: ${{ steps.collect.outputs.event-action }}
+          ISSUE_NUMBER: ${{ steps.collect.outputs.issue-number }}
+        run: |
+          python -m scripts.agent_os_issue_labels.plan_cli \
+            --issue tmp/agent_os_issue_label_apply_dry_run/issue.md \
+            --labels tmp/agent_os_issue_label_apply_dry_run/labels.txt \
+            --available-labels tmp/agent_os_issue_label_apply_dry_run/available_labels.txt \
+            --issue-number "$ISSUE_NUMBER" \
+            --event-type "${GITHUB_EVENT_NAME}:${EVENT_ACTION}" \
+            --commit-sha "$GITHUB_SHA" \
+            | tee tmp/agent_os_issue_label_apply_dry_run/report.txt
+
+      - name: Publish dry-run summary
+        run: |
+          {
+            echo "## Agent OS Issue Label Application Dry Run"
+            echo
+            cat tmp/agent_os_issue_label_apply_dry_run/report.txt
+          } >> "$GITHUB_STEP_SUMMARY"
