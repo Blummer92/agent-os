@@ -1,5 +1,6 @@
 """Reusable Agent OS issue acceptance and readiness checks."""
 
+from .batch_checks import evaluate_base_batch_conflicts
 from .batch_graph import (
     IssueBatchGraph,
     IssueBatchNode,
@@ -22,6 +23,7 @@ __all__ = [
     "ReadinessResult",
     "build_issue_batch_graph",
     "evaluate_acceptance",
+    "evaluate_base_batch_conflicts",
     "evaluate_issue_readiness",
     "evaluate_issue_readiness_with_labels",
     "load_issue_batch_fixture",
