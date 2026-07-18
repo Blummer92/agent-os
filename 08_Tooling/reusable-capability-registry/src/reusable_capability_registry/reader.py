@@ -3,42 +3,24 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+import re
 
 import yaml
 
 from .models import CapabilityRecord
 
 SUPPORTED_REGISTRY_VERSIONS = frozenset({"0.1.0"})
-_REQUIRED_FIELDS = frozenset(
-    {
-        "capability_id",
-        "name",
-        "summary",
-        "status",
-        "canonical_paths",
-        "public_interfaces",
-        "owner_agent",
-        "known_consumers",
-        "tests",
-        "keywords",
-        "reuse_guidance",
-        "side_effects",
-    }
-)
-_OPTIONAL_FIELDS = frozenset(
-    {
-        "known_consumer_exemption",
-        "supporting_agents",
-        "deprecated_by",
-        "inputs",
-        "outputs",
-        "extension_points",
-        "invariants",
-        "failure_modes",
-        "compatibility",
-        "documentation_handoff",
-    }
-)
+_CAPABILITY_ID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_REQUIRED_FIELDS = frozenset({
+    "capability_id", "name", "summary", "status", "canonical_paths",
+    "public_interfaces", "owner_agent", "known_consumers", "tests",
+    "keywords", "reuse_guidance", "side_effects",
+})
+_OPTIONAL_FIELDS = frozenset({
+    "known_consumer_exemption", "supporting_agents", "deprecated_by", "inputs",
+    "outputs", "extension_points", "invariants", "failure_modes",
+    "compatibility", "documentation_handoff",
+})
 _ALLOWED_FIELDS = _REQUIRED_FIELDS | _OPTIONAL_FIELDS
 _ALLOWED_STATUSES = frozenset({"active", "experimental", "deprecated", "replaced", "internal-only"})
 
@@ -83,9 +65,7 @@ def _optional_text(record: Mapping[str, Any], field: str, capability_id: str) ->
     return value.strip()
 
 
-def _text_tuple(
-    record: Mapping[str, Any], field: str, capability_id: str, *, required: bool = False
-) -> tuple[str, ...]:
+def _text_tuple(record: Mapping[str, Any], field: str, capability_id: str, *, required: bool = False) -> tuple[str, ...]:
     value = record.get(field)
     if value is None and not required:
         return ()
@@ -111,6 +91,8 @@ def _parse_record(raw: Any) -> CapabilityRecord:
     if unknown:
         raise RegistryFormatError(f"{capability_id}: unsupported fields for registry 0.1.0: {', '.join(unknown)}")
     capability_id = _required_text(raw, "capability_id", capability_id)
+    if not _CAPABILITY_ID_RE.fullmatch(capability_id):
+        raise RegistryFormatError(f"{capability_id}: capability_id must be lowercase kebab-case")
     status = _required_text(raw, "status", capability_id)
     if status not in _ALLOWED_STATUSES:
         raise RegistryFormatError(f"{capability_id}: unsupported status: {status}")
@@ -142,7 +124,7 @@ def _parse_record(raw: Any) -> CapabilityRecord:
     )
 
 
-def _normalize(value: str) -> str:
+def normalize_keyword(value: str) -> str:
     return "-".join(value.strip().casefold().replace("_", "-").split())
 
 
@@ -172,6 +154,10 @@ class RegistryReader:
     def index_build_count(self) -> int:
         return self._index_build_count
 
+    @property
+    def index_entry_counts(self) -> tuple[tuple[str, int], ...]:
+        return tuple(sorted((field, len(index)) for field, index in self._indexes.items()))
+
     def _load_records(self) -> tuple[CapabilityRecord, ...]:
         self._parse_count += 1
         try:
@@ -200,8 +186,8 @@ class RegistryReader:
 
     def _build_indexes(self) -> None:
         self._index_build_count += 1
-        self._by_id = {_normalize(record.capability_id): record for record in self._records}
-        indexes: dict[str, dict[str, list[CapabilityRecord]]] = {
+        self._by_id = {record.capability_id: record for record in self._records}
+        mutable_indexes: dict[str, dict[str, list[CapabilityRecord]]] = {
             "keyword": {},
             "owner": {},
             "status": {},
@@ -209,30 +195,32 @@ class RegistryReader:
             "public_interface": {},
         }
         for record in self._records:
-            values = {
-                "keyword": record.keywords,
+            for keyword in record.keywords:
+                mutable_indexes["keyword"].setdefault(normalize_keyword(keyword), []).append(record)
+            exact_values = {
                 "owner": (record.owner_agent,),
                 "status": (record.status,),
                 "canonical_path": record.canonical_paths,
                 "public_interface": record.public_interfaces,
             }
-            for field, field_values in values.items():
-                for value in field_values:
-                    indexes[field].setdefault(_normalize(value), []).append(record)
+            for field, values in exact_values.items():
+                for value in values:
+                    mutable_indexes[field].setdefault(value, []).append(record)
         self._indexes = {
             field: {
                 key: tuple(sorted(matches, key=lambda item: item.capability_id))
                 for key, matches in values.items()
             }
-            for field, values in indexes.items()
+            for field, values in mutable_indexes.items()
         }
 
     def by_id(self, capability_id: str) -> CapabilityRecord | None:
-        return self._by_id.get(_normalize(capability_id))
+        return self._by_id.get(capability_id)
 
     def lookup(self, field: str, value: str) -> tuple[CapabilityRecord, ...]:
         try:
             index = self._indexes[field]
         except KeyError as exc:
             raise RegistryFormatError(f"unsupported lookup field: {field}") from exc
-        return index.get(_normalize(value), ())
+        key = normalize_keyword(value) if field == "keyword" else value
+        return index.get(key, ())
