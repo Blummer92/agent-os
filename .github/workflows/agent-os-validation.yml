@@ -9,13 +9,48 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: agent-os-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   validate:
     name: Run aggregate validation
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - name: Cloud Build validation migration notice
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install validation dependencies
         run: |
-          echo "Agent OS aggregate validation has migrated to Google Cloud Build."
-          echo "Use the Cloud Build PR trigger with cloudbuild.yaml as the required validation gate."
-          echo "This compatibility check avoids waiting for the retired self-hosted agent-os runner."
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+          python -m pip install -r 08_Tooling/workflow-scheduler/requirements.txt
+          python -m pip install -e "./08_Tooling/instructional-materials-coach[test]"
+          python -m pip install -e "./08_Tooling/notion-navigation-client[test]"
+          python -m pip install -e "./08_Tooling/reusable-capability-registry[test]"
+
+      - name: Run repository structure validation
+        run: bash 07_Agent_Tests/validate-repo-structure.sh
+
+      - name: Run aggregate validation
+        run: ./scripts/validate-all.sh
+
+      - name: Publish validation summary
+        if: always()
+        run: |
+          {
+            echo "## Agent OS Validation Gate"
+            echo
+            echo "- Commit: \`$GITHUB_SHA\`"
+            echo "- Event: \`$GITHUB_EVENT_NAME\`"
+            echo "- Structure validation and aggregate validation executed in GitHub Actions."
+            echo "- Cloud Build remains the canonical external comparison lane through \`cloudbuild.yaml\`."
+          } >> "$GITHUB_STEP_SUMMARY"
