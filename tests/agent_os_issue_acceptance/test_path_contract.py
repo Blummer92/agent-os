@@ -2,7 +2,9 @@ import pytest
 
 from scripts.agent_os_issue_acceptance.path_contract import (
     DeclaredPathError,
+    declared_path_matches,
     normalize_declared_path,
+    normalize_declared_pattern,
 )
 
 
@@ -63,3 +65,49 @@ def test_traversal_is_rejected_instead_of_normalized():
 def test_validation_is_deterministic_and_has_no_normalizing_side_effects():
     value = ".github/workflows/check.yml"
     assert normalize_declared_path(value) == normalize_declared_path(value)
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    ["production", "src/*.py", ".github/workflows/*.yml"],
+)
+def test_valid_declared_patterns_are_preserved(pattern):
+    assert normalize_declared_pattern(pattern) == pattern
+
+
+@pytest.mark.parametrize(
+    ("pattern", "code"),
+    [
+        ("src/**/test.py", "unsupported-double-star"),
+        ("src/file?.py", "unsupported-question-mark"),
+        ("src/[ab].py", "unsupported-bracket-class"),
+        ("../src/*.py", "traversal"),
+        ("C:/src/*.py", "absolute-windows-drive"),
+    ],
+)
+def test_unsupported_pattern_syntax_has_stable_codes(pattern, code):
+    with pytest.raises(DeclaredPathError) as caught:
+        normalize_declared_pattern(pattern)
+
+    assert caught.value.code == code
+
+
+@pytest.mark.parametrize(
+    ("path", "pattern", "expected"),
+    [
+        ("production", "production", True),
+        ("production/config/app.yml", "production", True),
+        ("production-old/config.yml", "production", False),
+        ("src/main.py", "src/*.py", True),
+        ("src/main.js", "src/*.py", False),
+        ("src/nested/main.py", "src/*.py", False),
+        (".github/workflows/check.yml", ".github/workflows/*.yml", True),
+    ],
+)
+def test_declared_path_matching_is_bounded(path, pattern, expected):
+    assert declared_path_matches(path, pattern) is expected
+
+
+def test_declared_path_matching_is_deterministic():
+    arguments = ("src/example.py", "src/*.py")
+    assert declared_path_matches(*arguments) == declared_path_matches(*arguments)
