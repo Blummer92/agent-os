@@ -15,7 +15,9 @@ Replace, Archive.
 | `00_Governance/write-authorization-policy.md` | Read-only default and write authorization checks. | GitHub Service Agent | GitHub | all agents | Active | Reuse | High — restate only as agent-specific exceptions in overlays. |
 | `04_Registry/agent-inheritance-registry.md` | Canonical agents, inheritance, overlays, routed combinations. | Integration Manager | GitHub | agents, routing | Active | Reuse | High — aliases must resolve here or via alias registry. |
 | `04_Registry/responsibility-matrix.md` | Responsibilities mapped to primary/support agents. | Integration Manager | GitHub | routing, handoffs | Active | Reuse | Medium — check before assigning ownership. |
-| `02_Agent_Overlays/integration-manager.md` | Integration Manager scope for cross-system routing and navigation governance. | Integration Manager | GitHub | Integration Manager, GitHub Service Agent | Active | Extend (IM-specific only) | Medium — do not repeat shared navigation rules. |
+| `04_Registry/reusable-capabilities.yml` | Canonical reusable capability registry data. | Integration Manager | GitHub | implementers, agents, QA | Active | Extend | High — records must follow the reusable capability registry standard. |
+| `02_Agent_Overlays/integration-manager.md` | Integration Manager scope for cross-system routing, navigation governance, and reusable capability registry lifecycle ownership. | Integration Manager | GitHub | Integration Manager, GitHub Service Agent | Active | Extend (IM-specific only) | Medium — do not repeat shared registry rules. |
+| `01_Shared_Standards/global-engineering/reusable-capability-registry-standard.md` | Governing contract for reusable capability evidence, ownership, lifecycle, and report-only validation. | Integration Manager | GitHub | implementers, registry consumers, QA | Active | Reuse | High — canonical for reusable capability registry rules. |
 | `02_Agent_Overlays/github-service-agent.md` | GitHub write executor scope and boundaries. | GitHub Service Agent | GitHub | GitHub Service Agent | Active | Reuse | Medium — GitHub write policy lives here + governance. |
 | `01_Shared_Standards/navigation/README.md` | Index and reading order for the navigation stack. | Integration Manager | GitHub | Navigation implementers | Active | Reuse | Medium — already owns navigation reading order. |
 | `01_Shared_Standards/navigation/navigation-registry-standard.md` | Governing standard for cross-system lookup boundaries. | Integration Manager | GitHub | registry consumers | Active | Reuse | High — canonical for registry purpose and write boundary. |
@@ -32,6 +34,6 @@ Replace, Archive.
 
 ## Coverage note
 
-This table currently seeds the governance, navigation, Notion-tooling, handoff, and test
-surfaces most relevant to Issue #97/#98. A generated inventory should eventually cover
+This table currently seeds the governance, navigation, reusable capability, Notion-tooling, handoff, and test
+surfaces most relevant to Issue #97/#98 and RC1. A generated inventory should eventually cover
 the full repository tree; see `coverage-validation.md`.
