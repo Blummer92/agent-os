@@ -1,5 +1,6 @@
 # Changelog
 ## 0.1.1-draft
+- Seeded five evidence-backed reusable capabilities, added deterministic registry validation, and added exact acceptance-report output regression coverage.
 - Added the Global Engineering 0.2.0 reusable capability registry contract, initialized the empty canonical registry, routed ownership and validation responsibilities, and registered both new files in the Documentation Dependency Map.
 - Added Dashboard Migration Verification standard and reusable tooling scaffold under `08_Tooling/dashboard-migration-verification/` with sanitized examples, placeholder snapshot generation, dependency graph validation, conservative report output, and tests.
 - Added Workspace Automation Builder sync handoff and dry-run receipt schemas, sanitized fixtures, and a local-only fixture validator.
