@@ -30,6 +30,7 @@ def _record_to_payload(record: CapabilityRecord) -> dict[str, object]:
         "failure_modes": list(record.failure_modes),
         "compatibility": list(record.compatibility),
         "documentation_handoff": list(record.documentation_handoff),
+        "deprecated_by": record.deprecated_by,
     }
 
 
