@@ -1,0 +1,8 @@
+agent-os
+owner:qa-test-agent
+owner:github-service-agent
+status:ready
+implementation-phase-1
+epic:issue-acceptance
+type:tooling
+type:validation
