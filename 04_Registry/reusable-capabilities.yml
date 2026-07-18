@@ -1,0 +1,178 @@
+registry_version: 0.1.0
+capabilities:
+  - capability_id: issue-acceptance-report
+    name: Issue Acceptance Report
+    summary: Builds and renders reusable issue-acceptance evidence using shared status and report models.
+    status: active
+    canonical_paths:
+      - scripts/agent_os_issue_acceptance/models.py
+      - scripts/agent_os_issue_acceptance/report.py
+      - scripts/agent_os_issue_acceptance/__init__.py
+      - scripts/agent_os_issue_acceptance/cli.py
+    public_interfaces:
+      - scripts.agent_os_issue_acceptance:render_report
+      - scripts.agent_os_issue_acceptance.models:Status
+      - scripts.agent_os_issue_acceptance.models:CheckResult
+      - scripts.agent_os_issue_acceptance.models:AcceptanceReport
+      - scripts.agent_os_issue_acceptance.models:strongest_status
+      - scripts.agent_os_issue_acceptance.report:exit_code_for
+    owner_agent: QA / Test Agent
+    supporting_agents:
+      - Integration Manager
+    known_consumers:
+      - scripts/agent_os_issue_acceptance/cli.py
+      - scripts/agent_os_issue_labels/checker.py
+    tests:
+      - tests/agent_os_issue_acceptance/test_report.py
+      - tests/agent_os_issue_labels/test_acceptance_report_integration.py
+    keywords:
+      - issue-acceptance
+      - report
+      - status
+      - evidence
+    reuse_guidance: Reuse the shared models and renderer for acceptance-style evidence; preserve exact rendered output unless a versioned contract change is approved.
+    side_effects:
+      - Returns text and exit-code values.
+      - Performs no network or repository writes.
+    invariants:
+      - render_report output remains backward compatible.
+      - exit_code_for returns nonzero only for fail status.
+
+  - capability_id: issue-readiness-evaluator
+    name: Issue Readiness Evaluator
+    summary: Evaluates issue content locally into ready, blocked, or needs-decision evidence.
+    status: active
+    canonical_paths:
+      - scripts/agent_os_issue_acceptance/readiness.py
+      - scripts/agent_os_issue_acceptance/__init__.py
+    public_interfaces:
+      - scripts.agent_os_issue_acceptance:ReadinessOutcome
+      - scripts.agent_os_issue_acceptance:ReadinessResult
+      - scripts.agent_os_issue_acceptance:evaluate_issue_readiness
+    owner_agent: QA / Test Agent
+    supporting_agents:
+      - Integration Manager
+    known_consumers: []
+    known_consumer_exemption: Approved for RC2 because the stable package interface, conservative behavior, and extensive tests are verified, but no non-test repository consumer currently exists.
+    tests:
+      - tests/agent_os_issue_acceptance/test_readiness.py
+    keywords:
+      - issue-readiness
+      - ready
+      - blocked
+      - needs-decision
+    reuse_guidance: Use for local readiness evidence only; never treat the result as authorization to implement, write, or merge.
+    side_effects:
+      - Parses supplied issue text locally.
+      - Performs no network calls or metadata writes.
+    invariants:
+      - A ready outcome remains evidence only.
+      - Malformed or unresolved inputs route conservatively.
+
+  - capability_id: issue-label-checker
+    name: Issue Label Checker
+    summary: Compares issue-form metadata and existing labels against the canonical label map without mutating labels.
+    status: active
+    canonical_paths:
+      - scripts/agent_os_issue_labels/checker.py
+      - scripts/agent_os_issue_labels/__init__.py
+      - scripts/agent_os_issue_labels/cli.py
+    public_interfaces:
+      - scripts.agent_os_issue_labels:evaluate_issue_labels
+    owner_agent: QA / Test Agent
+    supporting_agents:
+      - Integration Manager
+    known_consumers:
+      - scripts/agent_os_issue_labels/cli.py
+    tests:
+      - tests/agent_os_issue_labels/test_label_checker.py
+      - tests/agent_os_issue_labels/test_acceptance_report_integration.py
+    keywords:
+      - issue-labels
+      - metadata
+      - report-only
+      - acceptance
+    reuse_guidance: Use to produce label-comparison evidence from issue metadata and the label map; do not apply or remove labels.
+    side_effects:
+      - Reads local issue-form and label-map inputs.
+      - Produces an AcceptanceReport.
+      - Performs no label mutations.
+    invariants:
+      - Findings never imply readiness, approval, or merge authorization.
+
+  - capability_id: readonly-connector-contract
+    name: Read-Only Connector Contract
+    summary: Defines normalized resource, error, and protocol interfaces for read-only Navigation Registry connectors.
+    status: active
+    canonical_paths:
+      - src/navigation_registry/connectors/base.py
+      - src/navigation_registry/connectors/notion.py
+    public_interfaces:
+      - navigation_registry.connectors.base:ConnectorErrorCode
+      - navigation_registry.connectors.base:ConnectorError
+      - navigation_registry.connectors.base:RegistryResource
+      - navigation_registry.connectors.base:ReadOnlyConnector
+    owner_agent: Integration Manager
+    supporting_agents:
+      - Google Workspace Automation Engineer
+      - QA / Test Agent
+    known_consumers:
+      - src/navigation_registry/connectors/notion.py
+    tests:
+      - tests/navigation_registry/test_notion_read_only_connector.py
+    keywords:
+      - navigation-registry
+      - connector
+      - read-only
+      - normalized-evidence
+    reuse_guidance: Implement connector methods that return RegistryResource or ConnectorError evidence and never grant write authorization.
+    side_effects:
+      - The contract itself performs no I/O.
+      - Implementations may read approved sources but must not write.
+    failure_modes:
+      - Authentication failure
+      - Permission denial
+      - Missing or moved resources
+      - Rate limiting
+      - System unavailability
+      - Incomplete metadata
+      - Source-of-truth conflict
+      - Verification failure
+    invariants:
+      - RegistryResource.write_allowed defaults to false.
+      - Connector evidence does not authorize writes.
+
+  - capability_id: navigation-index-reader
+    name: Navigation Index Reader
+    summary: Provides cached, read-only lookups over the Notion navigation-index tabs.
+    status: active
+    canonical_paths:
+      - 08_Tooling/notion-navigation-client/src/notion_navigation_client/index.py
+      - 08_Tooling/notion-navigation-client/README.md
+      - 08_Tooling/notion-navigation-client/src/notion_navigation_client/cli.py
+    public_interfaces:
+      - notion_navigation_client.index:NavigationIndex
+    owner_agent: Integration Manager
+    supporting_agents:
+      - Google Workspace Automation Engineer
+      - QA / Test Agent
+    known_consumers:
+      - 08_Tooling/notion-navigation-client/src/notion_navigation_client/cli.py
+    tests:
+      - 08_Tooling/notion-navigation-client/tests/test_index.py
+    keywords:
+      - notion
+      - navigation-index
+      - cached-lookup
+      - duplicate-risk
+    reuse_guidance: Construct NavigationIndex with an approved read-only tab fetcher and preserve navigation warnings and human-review flags.
+    side_effects:
+      - Calls the supplied tab-fetch callback once per accessed tab per instance.
+      - Caches parsed tab records in memory.
+      - Performs no writes.
+    compatibility:
+      - Supports warning-banner and direct-header tab layouts.
+      - Supports Property Name and legacy Field Name headers.
+    invariants:
+      - Lookup results are navigation evidence, not write authorization.
+      - Each tab is fetched at most once per NavigationIndex instance.

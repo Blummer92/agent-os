@@ -6,7 +6,7 @@ Standards, Owned Systems, Allowed Write Surfaces, Blocked Write Surfaces, and
 Required Handoff Targets.
 
 ## Inherited Standards (baseline for all overlays)
-- Global Engineering 0.1.0
+- Global Engineering 0.2.0
 - Read-Only Default 0.1.0
 - Source-of-Truth Checks 0.1.0
 

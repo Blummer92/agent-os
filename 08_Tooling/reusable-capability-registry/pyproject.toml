@@ -1,0 +1,23 @@
+[project]
+name = "reusable-capability-registry"
+version = "0.1.0"
+description = "Offline, read-only discovery for Agent OS reusable capabilities."
+requires-python = ">=3.10"
+dependencies = ["PyYAML>=6.0,<7"]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.scripts]
+agent-os-capabilities = "reusable_capability_registry.cli:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

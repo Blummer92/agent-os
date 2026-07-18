@@ -1,31 +1,54 @@
-# Issue Acceptance Automation Standard
+# Issue Acceptance And Readiness Standard
 
 ## Purpose
-
-Define the Agent OS contract for checking whether a pull request satisfies the
-GitHub issue it claims to resolve. This standard is the IA1 source of truth;
-IA2 implements fixture-first checker code against it.
+Define one Agent OS contract for designing build-ready issues, deciding issue
+readiness, and checking whether a pull request satisfies its linked issue.
 
 ## Boundary
+This standard defines contracts and report shapes only. It does not authorize
+merges, issue closure, production writes, external writes, source-of-truth
+changes, readiness-field mutation, approval changes, or governed-field edits.
 
-This standard defines the data contract and report shape only. It does not
-implement checker code, add a GitHub Actions workflow, require live credentials,
-call external services, or authorize writes outside GitHub.
+## Canonical Lifecycle
+```text
+idea or request
+-> structured issue design
+-> one readiness decision
+-> implementation handoff
+-> pull request acceptance evidence
+```
+ChatGPT Orchestrator owns intake and routing. QA / Test Agent owns readiness and
+acceptance evidence. GitHub Service Agent is the sole repository write executor.
 
-## Build-Ready Issue Sections
+## Issue Tiers
+### Tier 0 - Small Safe Maintenance
+Required: objective, owner, allowed file or area, required validation, and one
+completion criterion. Source of truth defaults to GitHub and external writes
+default to none.
 
-Build-ready Agent OS issues should include objective, scope, non-goals, likely
-files or allowed areas, forbidden paths or capabilities, required tests, required
-docs, dependencies, blockers, acceptance criteria, and definition of done.
+### Tier 1 - Standard Implementation
+Required: objective, value, owner, scope, non-goals, likely files or allowed
+areas, required tests, required docs or `not applicable`, dependencies or
+`none`, acceptance criteria, and definition of done.
 
-When a field is not applicable, say so explicitly rather than omitting it.
+### Tier 2 - Governed Or Cross-System Work
+Includes Tier 1 plus source-of-truth analysis, explicit authorization, external
+write surfaces, governed fields, support routing, rollback, approval
+requirements, stop conditions, and migration or compatibility planning.
+Tier selection never weakens write-authorization or source-of-truth rules.
 
-## Optional Metadata Block
+## Readiness Outcomes
+The user-facing readiness result is exactly one of:
+- `ready`: required information and prerequisites for the tier are satisfied;
+- `blocked`: a required item is missing, failed, pending, or explicitly blocked;
+- `needs-decision`: human judgment is required for conflicting or unresolved
+  requirements, ownership, authorization, or source-of-truth evidence.
+Readiness is evidence only. It is not implementation or merge authorization.
 
-Issues may include a machine-checkable block for IA2 and later tooling:
-
+## Optional Machine-Checkable Metadata
 ```yaml
 agent_os_issue_acceptance:
+  tier: 1
   owner_agent: qa-test-agent
   source_of_truth: GitHub
   external_writes: none
@@ -36,62 +59,32 @@ agent_os_issue_acceptance:
   banned_patterns: []
   manual_review: []
 ```
-
-The metadata narrows automated checks. It does not replace the issue body,
+Metadata narrows automated checks. It does not replace the issue body,
 governance rules, or reviewer judgment.
 
-## Required PR Evidence
-
-Pull requests that resolve Agent OS issues should include linked issue, summary,
-files changed, tests run, docs updated, unresolved blockers, handoff
-recommendations, remaining risks, and an Issue Acceptance Report or manual-only
-explanation.
+## Pull Request Evidence
+PRs should include linked issue, summary, files changed, tests run, docs updated,
+unresolved blockers, handoff recommendations, remaining risks, and an Issue
+Acceptance Report or manual-only explanation.
 
 ## Acceptance Report Schema
-
-IA2 reports should use this shape:
-
 ```text
 Issue Acceptance Report
 Linked issue:
 Overall result: pass | warn | fail | manual-review
 Checks:
-- linked issue
-- required PR report fields
-- required files
-- forbidden paths
-- required tests
-- required docs
-- banned patterns
-- external-write boundary
 Manual review items:
 Evidence:
 Blockers:
 Remaining risks:
 ```
+Internal acceptance outcomes retain their existing meanings: `pass` satisfies
+machine-checkable requirements, `warn` is advisory, `fail` identifies a missing
+required or present forbidden item, and `manual-review` means automation cannot
+decide safely. At the readiness boundary, `fail` maps to `blocked` and
+`manual-review` maps to `needs-decision`.
 
-## Outcome Rules
-
-- `pass`: machine-checkable requirements are satisfied.
-- `warn`: review should continue, but a non-blocking gap exists.
-- `fail`: a declared required item is missing or a forbidden item is present.
-- `manual-review`: automation cannot decide safely from available evidence.
-
-A pass result never authorizes merge, production writes, external writes, source-
-of-truth changes, readiness changes, approval changes, or governed-field edits.
-
-## Ownership
-
-QA / Test Agent owns acceptance evidence and report interpretation. Integration
-Manager supports source-of-truth and cross-system boundary review. GitHub Service
-Agent executes approved repository changes and PR reporting.
-
-## IA2 Implementation Notes
-
-IA2 should start with offline fixtures, no network calls in unit tests, and no
-external credentials. Workflow integration should happen only after the local
-checker is stable and may start as non-blocking report-only mode.
-
-## Version
-
-0.1.0
+## Implementation Rules
+Reuse the existing `AcceptanceReport`, `CheckResult`, `Status`, `IssueMetadata`,
+renderer, parser, label evidence, and fixture patterns. Start offline with no
+network calls or external credentials. Workflow integration begins report-only.

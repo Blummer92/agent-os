@@ -37,6 +37,7 @@ def test_render_report_contains_ia1_schema_fields():
     assert "Remaining risks:" in rendered
 
 
+<<<<<<< HEAD
 def test_render_report_does_not_show_ambiguous_candidate_as_linked_issue():
     body = (FIXTURES / "pr_body_valid.md").read_text().replace(
         "Closes #164", "Closes #223\nFixes #224"
@@ -48,6 +49,8 @@ def test_render_report_does_not_show_ambiguous_candidate_as_linked_issue():
     assert "Linked issue: #223" not in rendered
 
 
+=======
+>>>>>>> origin/main
 def test_render_report_exact_output_is_backward_compatible():
     report = AcceptanceReport(
         linked_issue=243,
@@ -69,7 +72,10 @@ def test_render_report_exact_output_is_backward_compatible():
     assert render_report(report) == (
         "Issue Acceptance Report\n"
         "Linked issue: #243\n"
+<<<<<<< HEAD
         "Linked issue status: resolved\n"
+=======
+>>>>>>> origin/main
         "Overall result: warn\n"
         "Checks:\n"
         "- registry evidence: pass - five records verified\n"

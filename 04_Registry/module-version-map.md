@@ -6,7 +6,7 @@ versions change only when the module's standards or contract changes.
 
 | Module | Version |
 |---|---|
-| Global Engineering | 0.1.0 |
+| Global Engineering | 0.2.0 |
 | Read-Only Default | 0.1.0 |
 | Source-of-Truth Checks | 0.1.0 |
 | Python Standards | 0.1.0 |

@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 FORM = ROOT / ".github/ISSUE_TEMPLATE/agent-os-task.yml"
 MAP = ROOT / ".github/labeler/agent-os-issue-label-map.yml"
 
-_READY_BODY = """
+_LEGACY_READY_BODY = """
 ### Phase
 
 implementation-phase-1
@@ -41,67 +41,73 @@ GitHub
 no-external-write
 """
 
+_TIERED_READY_BODY = """
+### Issue tier
+
+tier:1-standard-implementation
+
+### Primary owner
+
+owner:qa-test-agent
+
+### Readiness candidate
+
+status:ready
+
+### Source of truth
+
+GitHub
+
+### External write boundary
+
+no-external-write
+"""
+
 _NEEDS_DECISION_BODY = """
-### Phase
+### Issue tier
 
-not-applicable
+tier:2-governed-cross-system
 
-### Epic
-
-needs-decision
-
-### Owner agent
+### Primary owner
 
 needs-decision
 
-### Status
+### Readiness candidate
 
 status:needs-decision
 
-### Type
-
-- type:tooling
-
-### Source-of-truth surface
+### Source of truth
 
 needs-decision
 
-### External write surface
+### External write boundary
 
 needs-decision
 """
 
 _EXTERNAL_WRITE_BODY = """
-### Phase
+### Issue tier
 
-not-applicable
+tier:2-governed-cross-system
 
-### Epic
-
-epic:issue-acceptance
-
-### Owner agent
+### Primary owner
 
 owner:qa-test-agent
 
-### Status
+### Readiness candidate
 
 status:blocked
 
-### Type
-
-- type:tooling
-
-### Source-of-truth surface
+### Source of truth
 
 GitHub
 
-### External write surface
+### External write boundary
 
 external-write-requested
 """
 
-_READY_LABELS = [
+_LEGACY_READY_LABELS = [
     "agent-os",
     "implementation-phase-1",
     "epic:issue-acceptance",
@@ -111,33 +117,65 @@ _READY_LABELS = [
     "type:validation",
 ]
 
+_TIERED_READY_LABELS = [
+    "agent-os",
+    "owner:qa-test-agent",
+    "status:ready",
+]
 
-def test_load_label_map_and_expected_labels():
+
+def test_legacy_form_still_maps_expected_labels():
     fields = load_issue_form_fields(FORM)
-    metadata = parse_issue_form_body(_READY_BODY, fields)
+    metadata = parse_issue_form_body(_LEGACY_READY_BODY, fields)
     labels, unknown = expected_labels(metadata, load_label_map(MAP))
+
     assert unknown == []
-    assert "agent-os" in labels
+    assert metadata["status"] == ["status:ready"]
+    assert "implementation-phase-1" in labels
+    assert "epic:issue-acceptance" in labels
     assert "owner:qa-test-agent" in labels
     assert "type:validation" in labels
 
 
-def test_ready_issue_labels_pass():
-    report = evaluate_issue_labels(_READY_BODY, _READY_LABELS, FORM, MAP)
+def test_tiered_form_maps_aliases_without_new_tier_labels():
+    fields = load_issue_form_fields(FORM)
+    metadata = parse_issue_form_body(_TIERED_READY_BODY, fields)
+    labels, unknown = expected_labels(metadata, load_label_map(MAP))
+
+    assert unknown == []
+    assert metadata["tier"] == ["tier:1-standard-implementation"]
+    assert metadata["status"] == ["status:ready"]
+    assert labels == set(_TIERED_READY_LABELS)
+
+
+def test_legacy_ready_issue_labels_pass():
+    report = evaluate_issue_labels(_LEGACY_READY_BODY, _LEGACY_READY_LABELS, FORM, MAP)
+
     assert report.overall_status == Status.PASS
     assert not report.manual_review_items
+    assert "metadata contract: legacy" in report.evidence
+
+
+def test_tiered_ready_issue_labels_pass():
+    report = evaluate_issue_labels(_TIERED_READY_BODY, _TIERED_READY_LABELS, FORM, MAP)
+
+    assert report.overall_status == Status.PASS
+    assert not report.manual_review_items
+    assert "metadata contract: tiered" in report.evidence
 
 
 def test_missing_expected_labels_warns_without_failing():
-    labels = ["agent-os", "epic:issue-acceptance", "status:ready", "type:tooling"]
-    report = evaluate_issue_labels(_READY_BODY, labels, FORM, MAP)
+    labels = ["agent-os", "status:ready"]
+    report = evaluate_issue_labels(_TIERED_READY_BODY, labels, FORM, MAP)
+
     assert report.overall_status == Status.WARN
     assert any("missing=" in item for check in report.checks for item in check.evidence)
 
 
 def test_needs_decision_routes_to_manual_review():
-    labels = ["agent-os", "status:needs-decision", "type:tooling"]
+    labels = ["agent-os", "status:needs-decision"]
     report = evaluate_issue_labels(_NEEDS_DECISION_BODY, labels, FORM, MAP)
+
     assert report.overall_status == Status.MANUAL_REVIEW
     assert any("needs-decision" in item for item in report.manual_review_items)
 
@@ -145,20 +183,36 @@ def test_needs_decision_routes_to_manual_review():
 def test_external_write_routes_to_manual_review():
     labels = [
         "agent-os",
-        "epic:issue-acceptance",
         "owner:qa-test-agent",
         "status:blocked",
         "status:needs-decision",
-        "type:tooling",
     ]
     report = evaluate_issue_labels(_EXTERNAL_WRITE_BODY, labels, FORM, MAP)
+
     assert report.overall_status == Status.MANUAL_REVIEW
     assert "external-write field requests review before any automation" in report.manual_review_items
 
 
+def test_incomplete_contract_routes_to_manual_review():
+    body = """
+### Primary owner
+
+owner:qa-test-agent
+
+### Readiness candidate
+
+status:ready
+"""
+    report = evaluate_issue_labels(body, ["agent-os", "owner:qa-test-agent", "status:ready"], FORM, MAP)
+
+    assert report.overall_status == Status.MANUAL_REVIEW
+    assert "metadata contract: incomplete" in report.evidence
+
+
 def test_report_reuses_ia_style_shape():
-    report = evaluate_issue_labels(_READY_BODY, _READY_LABELS, FORM, MAP)
+    report = evaluate_issue_labels(_TIERED_READY_BODY, _TIERED_READY_LABELS, FORM, MAP)
     rendered = render_label_report(report)
+
     assert "Issue Acceptance Report" in rendered
     assert "Overall result: pass" in rendered
     assert "expected labels:" in rendered

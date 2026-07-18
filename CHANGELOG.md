@@ -1,5 +1,9 @@
 # Changelog
 ## 0.1.1-draft
+- Hardened RC3 reusable capability discovery with exact non-keyword lookup semantics, result-specific keyword provenance and confidence, lowercase-kebab capability-ID enforcement, collision-safe indexes, deterministic executable regression coverage, and Cloud Build installation for the package.
+- Added the offline reusable capability registry reader and deterministic discovery package under `08_Tooling/reusable-capability-registry/`, with immutable records, detached JSON serialization, CLI/module interfaces, conservative confidence semantics, and fixture-backed tests.
+- Seeded five evidence-backed reusable capabilities, added deterministic registry validation, and added exact acceptance-report output regression coverage.
+- Added the Global Engineering 0.2.0 reusable capability registry contract, initialized the empty canonical registry, routed ownership and validation responsibilities, and registered both new files in the Documentation Dependency Map.
 - Added Dashboard Migration Verification standard and reusable tooling scaffold under `08_Tooling/dashboard-migration-verification/` with sanitized examples, placeholder snapshot generation, dependency graph validation, conservative report output, and tests.
 - Added Workspace Automation Builder sync handoff and dry-run receipt schemas, sanitized fixtures, and a local-only fixture validator.
 - Strengthened the Issue #98 Documentation Dependency Map into an index plus companion documents (`00_Governance/documentation-dependency-map.md` and `00_Governance/documentation-dependency-map/`), added a non-authoritative machine-readable `metadata.yaml`, connected it to Issue #97, defined measurable documentation-quality metrics and coverage-validation questions, and added a repository-path validation check to `07_Agent_Tests/validate-repo-structure.sh`.

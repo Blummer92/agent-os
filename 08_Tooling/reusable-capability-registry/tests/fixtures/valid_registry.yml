@@ -1,0 +1,46 @@
+registry_version: 0.1.0
+capabilities:
+  - capability_id: alpha-reader
+    name: Alpha Reader
+    summary: Reads alpha records.
+    status: active
+    canonical_paths:
+      - src/alpha.py
+    public_interfaces:
+      - alpha:Read
+    owner_agent: Integration Manager
+    known_consumers:
+      - scripts/use_alpha.py
+    tests:
+      - tests/test_alpha.py
+    keywords:
+      - Alpha
+      - shared
+    reuse_guidance: Reuse for alpha reads only.
+    side_effects:
+      - Performs no writes.
+    invariants:
+      - Output is deterministic.
+  - capability_id: beta-evaluator
+    name: Beta Evaluator
+    summary: Evaluates beta evidence.
+    status: active
+    canonical_paths:
+      - src/beta.py
+    public_interfaces:
+      - beta:evaluate
+    owner_agent: QA / Test Agent
+    supporting_agents:
+      - Integration Manager
+    known_consumers: []
+    known_consumer_exemption: Approved temporary exemption.
+    tests:
+      - tests/test_beta.py
+    keywords:
+      - alpha
+      - shared
+    reuse_guidance: Reuse for local evidence only.
+    side_effects:
+      - Performs no network calls.
+    compatibility:
+      - Supports legacy beta records.

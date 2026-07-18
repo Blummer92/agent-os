@@ -13,8 +13,18 @@ base_labels:
   - agent-os
 
 fields:
+  tier:
+    description: Tier classification evidence. No new labels are applied in this migration.
+    values:
+      tier:0-small-maintenance:
+        labels: []
+      tier:1-standard-implementation:
+        labels: []
+      tier:2-governed-cross-system:
+        labels: []
+
   phase:
-    description: Optional phase label from the issue form.
+    description: Legacy phase label from the former issue form.
     values:
       implementation-phase-1:
         labels: [implementation-phase-1]
@@ -26,7 +36,7 @@ fields:
         labels: []
 
   epic:
-    description: Primary roadmap or topic label.
+    description: Legacy roadmap or topic label.
     values:
       epic:foundation:
         labels: [epic:foundation]
@@ -52,7 +62,7 @@ fields:
         labels: [status:needs-decision]
 
   owner:
-    description: Primary owner label from the issue form.
+    description: Primary owner label from either supported issue form.
     values:
       owner:qa-test-agent:
         labels: [owner:qa-test-agent]
@@ -70,7 +80,7 @@ fields:
         labels: [status:needs-decision]
 
   status:
-    description: Current routing state.
+    description: Readiness candidate or legacy status value.
     values:
       status:ready:
         labels: [status:ready]
@@ -80,7 +90,7 @@ fields:
         labels: [status:needs-decision]
 
   type:
-    description: One or more work-type labels.
+    description: Legacy work-type labels.
     multiple: true
     values:
       type:docs:
@@ -95,7 +105,7 @@ fields:
         labels: [type:classroom-artifact]
 
   source-of-truth:
-    description: Source-of-truth routing evidence. No labels are applied in L2.
+    description: Source-of-truth routing evidence. No labels are applied except needs-decision.
     values:
       GitHub:
         labels: []
@@ -109,7 +119,7 @@ fields:
         labels: [status:needs-decision]
 
   external-write:
-    description: External write risk evidence. No labels are applied in L2 except needs-decision.
+    description: External write risk evidence. No labels are applied except needs-decision.
     values:
       no-external-write:
         labels: []
@@ -119,6 +129,7 @@ fields:
         labels: [status:needs-decision]
 
 validation_notes:
+  - This file supports both legacy and tiered issue-form output during migration.
+  - Tier values are evidence only and do not create a new label taxonomy in this change.
   - This file is configuration only and must not apply labels by itself.
-  - Future checker code should read this map and report expected labels before any automation applies them.
-  - Tests should use fixtures and must not require live GitHub credentials or network access.
+  - Tests must use fixtures and must not require live GitHub credentials or network access.
