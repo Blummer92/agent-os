@@ -80,7 +80,7 @@ agent_os_issue_acceptance:
   required_files:
     - production/secrets.txt
   forbidden_paths:
-    - production/
+    - production
 ```
 """
     )
@@ -98,11 +98,146 @@ agent_os_issue_acceptance:
   required_files:
     - docs/example.md
   forbidden_paths:
-    - production/
+    - production
 ```
 """
     )
     assert evaluate_issue_readiness(body).outcome == ReadinessOutcome.READY
+
+
+def test_leading_dot_path_and_segment_wildcard_are_preserved():
+    body = ready_body(
+        """
+```yaml
+agent_os_issue_acceptance:
+  tier: 0
+  required_files:
+    - .github/workflows/check.yml
+  forbidden_paths:
+    - .github/workflows/*.yml
+```
+"""
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.BLOCKED
+    forbidden_check = next(
+        check for check in result.report.checks if check.name == "declared forbidden paths"
+    )
+    assert forbidden_check.evidence == [".github/workflows/check.yml"]
+
+
+def test_sibling_prefix_does_not_conflict():
+    body = ready_body(
+        """
+```yaml
+agent_os_issue_acceptance:
+  tier: 0
+  required_files:
+    - production-old/config.yml
+  forbidden_paths:
+    - production
+```
+"""
+    )
+    assert evaluate_issue_readiness(body).outcome == ReadinessOutcome.READY
+
+
+def test_malformed_only_path_evidence_requires_decision():
+    body = ready_body(
+        """
+```yaml
+agent_os_issue_acceptance:
+  tier: 0
+  required_files:
+    - ../production/secrets.txt
+  forbidden_paths:
+    - production
+```
+"""
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    syntax_check = next(
+        check for check in result.report.checks if check.name == "declared path syntax"
+    )
+    assert syntax_check.status == Status.MANUAL_REVIEW
+    assert syntax_check.evidence == [
+        "field=required_files; value='../production/secrets.txt'; code=traversal"
+    ]
+    assert any("code=traversal" in item for item in result.report.manual_review_items)
+
+
+def test_malformed_and_valid_forbidden_conflict_preserve_both_findings():
+    body = ready_body(
+        """
+```yaml
+agent_os_issue_acceptance:
+  tier: 0
+  required_files:
+    - ../ignored.txt
+    - production/secrets.txt
+  forbidden_paths:
+    - production
+```
+"""
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.BLOCKED
+    checks = {check.name: check for check in result.report.checks}
+    assert checks["declared path syntax"].status == Status.MANUAL_REVIEW
+    assert checks["declared forbidden paths"].status == Status.FAIL
+    assert checks["declared forbidden paths"].evidence == ["production/secrets.txt"]
+    assert any("code=traversal" in item for item in result.report.manual_review_items)
+
+
+def test_unsupported_pattern_requires_decision_and_valid_values_continue():
+    body = ready_body(
+        """
+```yaml
+agent_os_issue_acceptance:
+  tier: 0
+  required_files:
+    - docs/example.md
+    - production/secrets.txt
+  forbidden_paths:
+    - docs/**
+    - production
+```
+"""
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.BLOCKED
+    checks = {check.name: check for check in result.report.checks}
+    assert checks["declared path syntax"].evidence == [
+        "field=forbidden_paths; value='docs/**'; code=unsupported-double-star"
+    ]
+    assert checks["declared forbidden paths"].evidence == ["production/secrets.txt"]
+
+
+def test_path_evidence_order_is_deterministic():
+    body = ready_body(
+        """
+```yaml
+agent_os_issue_acceptance:
+  tier: 0
+  required_files:
+    - ../z.txt
+    - /a.txt
+  forbidden_paths:
+    - src/**
+```
+"""
+    )
+    first = evaluate_issue_readiness(body)
+    second = evaluate_issue_readiness(body)
+    first_syntax = next(
+        check for check in first.report.checks if check.name == "declared path syntax"
+    )
+    second_syntax = next(
+        check for check in second.report.checks if check.name == "declared path syntax"
+    )
+    assert first_syntax.evidence == second_syntax.evidence
+    assert first.report.manual_review_items == second.report.manual_review_items
 
 
 def test_pass_label_evidence_supports_ready_result():
