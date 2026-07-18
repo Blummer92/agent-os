@@ -3,12 +3,17 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import Enum
-from fnmatch import fnmatch
 
 import yaml
 
 from .models import AcceptanceReport, CheckResult, IssueMetadata, Status, strongest_status
 from .parse_issue import parse_issue_metadata
+from .path_contract import (
+    DeclaredPathError,
+    declared_path_matches,
+    normalize_declared_path,
+    normalize_declared_pattern,
+)
 
 
 class ReadinessOutcome(str, Enum):
@@ -148,11 +153,10 @@ def evaluate_issue_readiness(
         if source_check.status == Status.MANUAL_REVIEW:
             manual_review_items.append("Resolve conflicting source-of-truth evidence.")
 
-    path_check = _check_declared_forbidden_paths(metadata)
-    if path_check is not None:
-        checks.append(path_check)
-        if path_check.status == Status.FAIL:
-            blockers.append(path_check.message)
+    path_checks, path_manual_review_items = _check_declared_forbidden_paths(metadata)
+    checks.extend(path_checks)
+    manual_review_items.extend(path_manual_review_items)
+    blockers.extend(check.message for check in path_checks if check.status == Status.FAIL)
 
     if metadata.present and metadata.manual_review:
         checks.append(
@@ -262,39 +266,87 @@ def _check_source_of_truth_evidence(
     )
 
 
-def _check_declared_forbidden_paths(metadata: IssueMetadata) -> CheckResult | None:
+def _check_declared_forbidden_paths(
+    metadata: IssueMetadata,
+) -> tuple[list[CheckResult], list[str]]:
     if not metadata.present:
-        return None
+        return [], []
+
+    syntax_evidence: list[str] = []
+    valid_paths: list[str] = []
+    valid_patterns: list[str] = []
+
+    for value in metadata.required_files:
+        try:
+            valid_paths.append(normalize_declared_path(value))
+        except DeclaredPathError as error:
+            syntax_evidence.append(_path_syntax_evidence("required_files", value, error.code))
+
+    for value in metadata.forbidden_paths:
+        try:
+            valid_patterns.append(normalize_declared_pattern(value))
+        except DeclaredPathError as error:
+            syntax_evidence.append(_path_syntax_evidence("forbidden_paths", value, error.code))
+
+    checks: list[CheckResult] = []
+    manual_review_items: list[str] = []
+    ordered_syntax_evidence = sorted(syntax_evidence)
+    if ordered_syntax_evidence:
+        checks.append(
+            CheckResult(
+                "declared path syntax",
+                Status.MANUAL_REVIEW,
+                "Malformed declared paths or patterns require human review.",
+                ordered_syntax_evidence,
+            )
+        )
+        manual_review_items.extend(
+            f"Review malformed declared path evidence: {item}."
+            for item in ordered_syntax_evidence
+        )
+    else:
+        checks.append(
+            CheckResult(
+                "declared path syntax",
+                Status.PASS,
+                "Declared paths and patterns use the approved bounded syntax.",
+            )
+        )
+
     violations = sorted(
         {
             path
-            for path in metadata.required_files
-            for pattern in metadata.forbidden_paths
-            if _path_matches(path, pattern)
+            for path in valid_paths
+            for pattern in valid_patterns
+            if declared_path_matches(path, pattern)
         }
     )
     if violations:
-        return CheckResult(
-            "declared forbidden paths",
-            Status.FAIL,
-            "Required files include declared forbidden paths.",
-            violations,
+        checks.append(
+            CheckResult(
+                "declared forbidden paths",
+                Status.FAIL,
+                "Required files include declared forbidden paths.",
+                violations,
+            )
         )
-    return CheckResult(
-        "declared forbidden paths",
-        Status.PASS,
-        "Required files do not include declared forbidden paths.",
-    )
+    else:
+        checks.append(
+            CheckResult(
+                "declared forbidden paths",
+                Status.PASS,
+                "Required files do not include declared forbidden paths.",
+            )
+        )
+
+    return checks, manual_review_items
 
 
-def _path_matches(path: str, pattern: str) -> bool:
-    clean_path = path.strip().lstrip("./")
-    clean_pattern = pattern.strip().lstrip("./")
-    return (
-        clean_path == clean_pattern
-        or clean_path.startswith(clean_pattern.rstrip("/") + "/")
-        or fnmatch(clean_path, clean_pattern)
-    )
+def _path_syntax_evidence(field: str, value: object, code: str) -> str:
+    bounded_value = repr(value)
+    if len(bounded_value) > 120:
+        bounded_value = f"{bounded_value[:117]}..."
+    return f"field={field}; value={bounded_value}; code={code}"
 
 
 def _normalize_source_value(value: str) -> str:
