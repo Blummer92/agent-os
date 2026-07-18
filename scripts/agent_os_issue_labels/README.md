@@ -68,6 +68,13 @@ dispatch events, uses read-only permissions, and has per-issue concurrency.
 
 Neither workflow applies, removes, or replaces labels.
 
+## Validation
+
+Changes must pass the executable `Agent OS Validation Gate`, which runs repository
+structure validation and `scripts/validate-all.sh` against the pull-request merge
+result. Focused planner tests and Python compilation remain required evidence,
+but they do not replace aggregate validation.
+
 ## Acceptance-report integration
 
 Label findings use the existing IA2 `AcceptanceReport` model. They are evidence
