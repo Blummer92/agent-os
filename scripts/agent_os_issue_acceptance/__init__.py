@@ -1,5 +1,11 @@
 """Reusable Agent OS issue acceptance and readiness checks."""
 
+from .batch_extensions import (
+    GraphCheck,
+    GraphCheckResult,
+    GraphCheckRun,
+    run_graph_checks,
+)
 from .batch_graph import (
     IssueBatchGraph,
     IssueBatchNode,
@@ -16,6 +22,9 @@ from .readiness import (
 from .report import render_report
 
 __all__ = [
+    "GraphCheck",
+    "GraphCheckResult",
+    "GraphCheckRun",
     "IssueBatchGraph",
     "IssueBatchNode",
     "ReadinessOutcome",
@@ -26,4 +35,5 @@ __all__ = [
     "evaluate_issue_readiness_with_labels",
     "load_issue_batch_fixture",
     "render_report",
+    "run_graph_checks",
 ]
