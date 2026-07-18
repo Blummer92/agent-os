@@ -8,8 +8,12 @@ Run all commands from `08_Tooling/dashboard-migration-verification/`.
 python scripts/snapshot_notion.py
 ```
 
-This writes a local placeholder snapshot to `snapshots/`. It does not connect to Notion
-or write to live systems.
+This writes a local placeholder snapshot to `snapshots/`. It performs no network
+call, requires no credentials, and writes to no live system. Read the generated
+`evidence_path_summary` before deciding whether escalation is required.
+
+See `evidence_file_reference_runtime.md` for the canonical evidence-path schema and
+`evidence_model.md` for tier meanings.
 
 ## Build Dependency Graph
 
@@ -17,8 +21,8 @@ or write to live systems.
 python scripts/build_dependency_graph.py --changes proposed_changes/proposed_changes.example.yaml
 ```
 
-This reads `snapshots/latest.json` and the target proposed-change manifest, then writes
-`graph/dependency_graph.json`.
+This reads `snapshots/latest.json` and the target proposed-change manifest, then
+writes `graph/dependency_graph.json`.
 
 ## Validate Changes
 
@@ -37,6 +41,7 @@ python -m pytest tests
 
 ## Notes
 
-- Live Notion connectivity is intentionally not wired in this scaffold.
+- Cached navigation integration is deferred; B2 already defines normalization.
+- Live Notion verification is deferred to the approved B4 read-only boundary.
 - Generated evidence files are ignored by Git.
-- Missing or placeholder evidence should resolve to manual review or blocked results.
+- Missing or placeholder evidence resolves to manual review or blocked results.
