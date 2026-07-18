@@ -1,12 +1,13 @@
 # Agent OS Issue Label Checker
 
-Local, fixture-first checker for issue taxonomy labels.
+Local, fixture-first tooling for issue taxonomy evidence and safe application
+planning.
 
-The checker reads the Agent OS issue form output and the declarative label map,
-computes expected labels, compares them with fixture labels, and renders an
+The checker reads Agent OS issue-form output and the declarative label map,
+computes expected labels, compares them with supplied labels, and renders an
 IA-style report.
 
-## Local usage
+## Local checker
 
 ```bash
 python -m scripts.agent_os_issue_labels.cli \
@@ -14,31 +15,57 @@ python -m scripts.agent_os_issue_labels.cli \
   --labels tests/agent_os_issue_labels/fixtures/labels_ready.txt
 ```
 
-## Acceptance report integration
+## Application planner
 
-Label findings are represented with the existing IA2 `AcceptanceReport` model and
-rendered through the IA report shape. The checker adds label-specific checks such
-as `label write boundary`, `label governance boundary`, `expected labels`, and
-`label manual review` without creating a separate acceptance standard.
+The planner is side-effect free. It consumes an issue body, current labels, and
+an explicit repository-label catalog, then reports:
 
-Label findings are evidence only. A pass, warning, or manual-review result from
-this checker does not authorize merge, readiness changes, approval changes,
-source-of-truth changes, or future additive label behavior.
+- candidate and approved additions;
+- expected labels already present;
+- findings skipped by policy;
+- owner-label conflicts;
+- unknown values and unavailable labels;
+- reasons requiring manual review.
 
-## Report-only workflow
+```bash
+python -m scripts.agent_os_issue_labels.plan_cli \
+  --issue tests/fixtures/agent_os_issue_labels/tiered_ready.md \
+  --labels tests/fixtures/agent_os_issue_labels/current_labels.txt \
+  --available-labels tests/fixtures/agent_os_issue_labels/available_labels.txt \
+  --issue-number 275 \
+  --event-type workflow_dispatch:manual \
+  --commit-sha local-test
+```
 
-`.github/workflows/agent-os-issue-label-report.yml` runs this checker from issue
-events. The workflow writes the issue body and current labels from the event
-payload into local temporary files, calls the CLI, and publishes the report to
-the job summary.
+The initial planning policy can approve only missing `agent-os` and one
+nonconflicting `owner:*` label derived from the explicit Primary owner field.
+Every `status:*` finding remains report-only. Legacy phase, epic, and type
+findings also remain report-only unless a later governed change expands the
+policy.
 
-The workflow uses read-only permissions and does not apply, remove, or replace
-labels. Additive label application remains a later review step.
+Malformed metadata, unknown values, unavailable labels, external-write signals,
+needs-decision values, and conflicting owner labels route to manual review. A
+manual-review plan contains no approved additions.
+
+## Read-only workflows
+
+`.github/workflows/agent-os-issue-label-report.yml` runs the checker from issue
+events and publishes its IA-style report.
+
+`.github/workflows/agent-os-issue-label-apply-dry-run.yml` reads the selected
+issue and repository-label catalog, calls the application planner, and publishes
+an auditable dry-run summary. It supports opened, edited, reopened, and manual
+dispatch events, uses read-only permissions, and has per-issue concurrency.
+
+Neither workflow applies, removes, or replaces labels.
+
+## Acceptance-report integration
+
+Label findings use the existing IA2 `AcceptanceReport` model. They are evidence
+only and do not authorize merge, readiness changes, approval changes,
+source-of-truth changes, issue closure, or future live label behavior.
 
 ## Boundary
 
-This checker is report-only. It does not call GitHub, apply labels, remove
-labels, replace labels, post comments, or touch external systems.
-
-Future workflow integration should call this CLI as a thin wrapper in
-report-only mode before any additive label application is considered.
+The checker and planner perform no GitHub API writes and touch no external
+systems. Live additive application remains a separately approved follow-up.
