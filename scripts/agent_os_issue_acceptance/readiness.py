@@ -3,10 +3,11 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import Enum
+from fnmatch import fnmatch
 
 import yaml
 
-from .models import AcceptanceReport, CheckResult, Status, strongest_status
+from .models import AcceptanceReport, CheckResult, IssueMetadata, Status, strongest_status
 from .parse_issue import parse_issue_metadata
 
 
@@ -141,6 +142,18 @@ def evaluate_issue_readiness(
         else:
             checks.append(CheckResult("required issue fields", Status.PASS, "Required tier fields are present."))
 
+    source_check = _check_source_of_truth_evidence(sections, metadata)
+    if source_check is not None:
+        checks.append(source_check)
+        if source_check.status == Status.MANUAL_REVIEW:
+            manual_review_items.append("Resolve conflicting source-of-truth evidence.")
+
+    path_check = _check_declared_forbidden_paths(metadata)
+    if path_check is not None:
+        checks.append(path_check)
+        if path_check.status == Status.FAIL:
+            blockers.append(path_check.message)
+
     if metadata.present and metadata.manual_review:
         checks.append(
             CheckResult(
@@ -164,18 +177,132 @@ def evaluate_issue_readiness(
         checks.append(CheckResult("required validation", Status.FAIL, "Required validation is pending."))
         blockers.append("Required validation is pending.")
 
+    return _build_result(checks, manual_review_items, blockers, [])
+
+
+def evaluate_issue_readiness_with_labels(
+    issue_body: str,
+    label_report: AcceptanceReport,
+    *,
+    dependency_blocked: bool = False,
+    validation_pending: bool = False,
+) -> ReadinessResult:
+    """Combine readiness with an existing report-only label evidence report."""
+    base = evaluate_issue_readiness(
+        issue_body,
+        dependency_blocked=dependency_blocked,
+        validation_pending=validation_pending,
+    )
+    return _build_result(
+        [*base.report.checks, *label_report.checks],
+        [*base.report.manual_review_items, *label_report.manual_review_items],
+        [*base.report.blockers, *label_report.blockers],
+        [*base.report.evidence, "label_evidence_consumed=true", *label_report.evidence],
+        [*base.report.remaining_risks, *label_report.remaining_risks],
+    )
+
+
+def _build_result(
+    checks: list[CheckResult],
+    manual_review_items: list[str],
+    blockers: list[str],
+    extra_evidence: list[str],
+    remaining_risks: list[str] | None = None,
+) -> ReadinessResult:
     overall = strongest_status(checks)
     outcome = _map_outcome(overall)
     report = AcceptanceReport(
         linked_issue=None,
         overall_status=overall,
         checks=checks,
-        manual_review_items=manual_review_items,
-        blockers=blockers,
-        evidence=[f"readiness_outcome={outcome.value}"],
-        remaining_risks=["A ready result is evidence only and does not authorize implementation or merge."],
+        manual_review_items=_dedupe(manual_review_items),
+        blockers=_dedupe(blockers),
+        evidence=[f"readiness_outcome={outcome.value}", *_dedupe(extra_evidence)],
+        remaining_risks=_dedupe(
+            remaining_risks
+            or ["A ready result is evidence only and does not authorize implementation or merge."]
+        ),
     )
     return ReadinessResult(outcome=outcome, report=report)
+
+
+def _check_source_of_truth_evidence(
+    sections: dict[str, str], metadata: IssueMetadata
+) -> CheckResult | None:
+    values: list[str] = []
+    if metadata.source_of_truth:
+        values.append(str(metadata.source_of_truth))
+    for heading, content in sections.items():
+        if heading == "source of truth" and content:
+            values.append(content.splitlines()[0].strip())
+        elif heading in {"owner and source of truth", "tier 2 controls, when applicable"}:
+            match = re.search(
+                r"(?im)^\s*(?:[-*]\s*)?source of truth\s*:\s*(.+?)\s*$",
+                content,
+            )
+            if match:
+                values.append(match.group(1).strip())
+
+    normalized = {_normalize_source_value(value) for value in values if value.strip()}
+    if not normalized:
+        return None
+    evidence = [f"observed={value}" for value in sorted(normalized)]
+    if len(normalized) > 1:
+        return CheckResult(
+            "source-of-truth evidence",
+            Status.MANUAL_REVIEW,
+            "Conflicting source-of-truth evidence requires a decision.",
+            evidence,
+        )
+    return CheckResult(
+        "source-of-truth evidence",
+        Status.PASS,
+        "Source-of-truth evidence is consistent.",
+        evidence,
+    )
+
+
+def _check_declared_forbidden_paths(metadata: IssueMetadata) -> CheckResult | None:
+    if not metadata.present:
+        return None
+    violations = sorted(
+        {
+            path
+            for path in metadata.required_files
+            for pattern in metadata.forbidden_paths
+            if _path_matches(path, pattern)
+        }
+    )
+    if violations:
+        return CheckResult(
+            "declared forbidden paths",
+            Status.FAIL,
+            "Required files include declared forbidden paths.",
+            violations,
+        )
+    return CheckResult(
+        "declared forbidden paths",
+        Status.PASS,
+        "Required files do not include declared forbidden paths.",
+    )
+
+
+def _path_matches(path: str, pattern: str) -> bool:
+    clean_path = path.strip().lstrip("./")
+    clean_pattern = pattern.strip().lstrip("./")
+    return (
+        clean_path == clean_pattern
+        or clean_path.startswith(clean_pattern.rstrip("/") + "/")
+        or fnmatch(clean_path, clean_pattern)
+    )
+
+
+def _normalize_source_value(value: str) -> str:
+    return re.sub(r"\s+", " ", value.strip().lower())
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(value for value in values if value))
 
 
 def _map_outcome(status: Status) -> ReadinessOutcome:
@@ -230,7 +357,15 @@ def _contains_field(sections: dict[str, str], name: str) -> bool:
             continue
         if not content or content == "_No response_":
             continue
-        if heading == "tier 2 controls, when applicable" and name not in {"authorization", "source of truth", "external", "rollback", "approval", "stop conditions", "compatibility"}:
+        if heading == "tier 2 controls, when applicable" and name not in {
+            "authorization",
+            "source of truth",
+            "external",
+            "rollback",
+            "approval",
+            "stop conditions",
+            "compatibility",
+        }:
             continue
         if heading == "tier 2 controls, when applicable":
             return _contains_labeled_value(content, name)
@@ -248,7 +383,13 @@ def _contains_labeled_value(content: str, name: str) -> bool:
         "stop conditions": ("stop conditions",),
         "compatibility": ("compatibility", "migration"),
     }[name]
-    return any(re.search(rf"(?im)^\s*(?:[-*]\s*)?{re.escape(label)}\s*:\s*\S.+$", content) for label in labels)
+    return any(
+        re.search(
+            rf"(?im)^\s*(?:[-*]\s*)?{re.escape(label)}\s*:\s*\S.+$",
+            content,
+        )
+        for label in labels
+    )
 
 
 def _contains_needs_decision(body: str) -> bool:
