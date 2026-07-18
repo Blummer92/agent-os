@@ -1,7 +1,11 @@
 from pathlib import Path
 
 from scripts.agent_os_issue_acceptance.models import Status
-from scripts.agent_os_issue_labels.planner import plan_label_application, render_application_plan
+from scripts.agent_os_issue_labels.planner import (
+    application_plan_to_dict,
+    plan_label_application,
+    render_application_plan,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 FORM = ROOT / ".github/ISSUE_TEMPLATE/agent-os-task.yml"
@@ -31,10 +35,35 @@ def test_application_plan_is_deterministic_and_idempotent():
     second = plan(existing=["status:ready"])
     assert first == second
     assert first.outcome == Status.PASS
-    assert first.approved_additions == ("agent-os", "owner:qa-test-agent")
+    assert first.approved_additions == ("agent-os",)
 
 
-def test_existing_safe_labels_are_skipped_as_already_present():
+def test_owner_labels_are_participation_evidence_and_never_approved():
+    result = plan(existing=["status:ready"])
+    assert result.owner_policy_status == "report-only-participation-labels"
+    assert result.desired_primary_owner == "owner:qa-test-agent"
+    assert "owner:qa-test-agent" in result.skipped_by_policy
+    assert all(not label.startswith("owner:") for label in result.approved_additions)
+
+
+def test_multiple_owner_labels_are_preserved_without_being_treated_as_exclusive():
+    result = plan(
+        existing=[
+            "owner:qa-test-agent",
+            "owner:github-service-agent",
+            "status:ready",
+        ]
+    )
+    assert result.outcome == Status.PASS
+    assert result.existing_owner_labels == (
+        "owner:github-service-agent",
+        "owner:qa-test-agent",
+    )
+    assert result.conflicting_labels == ()
+    assert result.approved_additions == ("agent-os",)
+
+
+def test_existing_safe_label_is_skipped_as_already_present():
     result = plan(existing=["agent-os", "owner:qa-test-agent", "status:ready"])
     assert result.approved_additions == ()
     assert "agent-os" in result.already_present
@@ -48,31 +77,18 @@ def test_status_labels_are_never_proposed():
     assert all(not label.startswith("status:") for label in result.approved_additions)
 
 
-def test_conflicting_owner_routes_to_manual_review_and_withholds_additions():
-    result = plan(existing=["owner:github-service-agent"])
+def test_unavailable_agent_os_routes_to_manual_review():
+    result = plan(existing=[], available=["owner:qa-test-agent", "status:ready"])
     assert result.outcome == Status.MANUAL_REVIEW
     assert result.approved_additions == ()
-    assert result.conflicting_labels == (
-        "owner:github-service-agent",
-        "owner:qa-test-agent",
-    )
+    assert result.unavailable_labels == ("agent-os",)
 
 
-def test_multiple_existing_owners_conflict_even_when_desired_owner_is_present():
-    result = plan(existing=["owner:qa-test-agent", "owner:github-service-agent"])
-    assert result.outcome == Status.MANUAL_REVIEW
-    assert result.approved_additions == ()
-    assert result.conflicting_labels == (
-        "owner:github-service-agent",
-        "owner:qa-test-agent",
-    )
-
-
-def test_unavailable_safe_label_routes_to_manual_review():
+def test_unavailable_owner_label_does_not_block_agent_os_planning():
     result = plan(existing=[], available=["agent-os", "status:ready"])
-    assert result.outcome == Status.MANUAL_REVIEW
-    assert result.approved_additions == ()
-    assert result.unavailable_labels == ("owner:qa-test-agent",)
+    assert result.outcome == Status.PASS
+    assert result.approved_additions == ("agent-os",)
+    assert result.unavailable_labels == ()
 
 
 def test_unknown_metadata_routes_to_manual_review():
@@ -85,9 +101,10 @@ def test_unknown_metadata_routes_to_manual_review():
 
 def test_malformed_metadata_routes_to_manual_review():
     result = plan(body="### Primary owner\n\nowner:qa-test-agent\n")
+    assert result.metadata_contract == "incomplete"
+    assert result.application_eligibility == "manual-review"
     assert result.outcome == Status.MANUAL_REVIEW
     assert result.approved_additions == ()
-    assert any("issue metadata" in reason for reason in result.manual_review_reasons)
 
 
 def test_free_form_existing_label_is_preserved_but_never_proposed():
@@ -97,16 +114,27 @@ def test_free_form_existing_label_is_preserved_but_never_proposed():
     assert "custom:keep-me" not in result.approved_additions
 
 
-def test_legacy_issue_remains_compatible_but_legacy_labels_are_report_only():
+def test_legacy_issue_is_compatible_but_application_is_report_only():
     result = plan(body=LEGACY_READY, existing=["status:ready"])
-    assert result.outcome == Status.PASS
-    assert result.approved_additions == ("agent-os", "owner:qa-test-agent")
+    assert result.metadata_contract == "legacy"
+    assert result.application_eligibility == "report-only"
+    assert result.outcome == Status.MANUAL_REVIEW
+    assert result.candidate_additions == ("agent-os",)
+    assert result.approved_additions == ()
     assert "implementation-phase-1" in result.skipped_by_policy
     assert "epic:issue-acceptance" in result.skipped_by_policy
     assert "type:tooling" in result.skipped_by_policy
 
 
-def test_rendered_plan_contains_auditable_fields():
+def test_plan_serialization_always_denies_authorization():
+    data = application_plan_to_dict(plan(existing=["status:ready"]))
+    assert data["mutation_performed"] is False
+    assert data["write_authorized"] is False
+    assert data["l5b_authorized"] is False
+    assert data["approval_required"] is True
+
+
+def test_rendered_plan_contains_auditable_and_non_authorization_fields():
     rendered = render_application_plan(
         plan(existing=["status:ready"]),
         issue_number=275,
@@ -116,6 +144,14 @@ def test_rendered_plan_contains_auditable_fields():
     assert "Issue number: #275" in rendered
     assert "Event type: issues:edited" in rendered
     assert "Tested commit SHA: abc123" in rendered
+    assert "Metadata contract: tiered" in rendered
+    assert "Application eligibility: eligible" in rendered
+    assert "Owner policy status: report-only-participation-labels" in rendered
+    assert "Desired primary owner: owner:qa-test-agent" in rendered
+    assert "Mutation performed: no" in rendered
+    assert "Write authorized: no" in rendered
+    assert "L5B authorized: no" in rendered
+    assert "Approval required: yes" in rendered
     assert "Approved additions:" in rendered
     assert "Skipped by policy:" in rendered
     assert "Manual review reasons:" in rendered
