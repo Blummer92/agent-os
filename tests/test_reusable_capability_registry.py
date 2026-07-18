@@ -43,13 +43,17 @@ def _load_registry() -> dict:
     return yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))
 
 
-def _defined_symbols(path: Path) -> set[str]:
+def _defined_or_exported_symbols(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    return {
-        node.name
-        for node in tree.body
-        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
-    }
+    symbols: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            symbols.add(node.name)
+        elif isinstance(node, ast.ImportFrom):
+            symbols.update(alias.asname or alias.name for alias in node.names)
+        elif isinstance(node, ast.Import):
+            symbols.update(alias.asname or alias.name.split(".", 1)[0] for alias in node.names)
+    return symbols
 
 
 def _module_candidates(module_name: str, canonical_paths: list[str]) -> list[Path]:
@@ -98,7 +102,7 @@ def test_public_interfaces_have_valid_format_and_static_symbols() -> None:
             module_name, symbol_name = interface.split(":", 1)
             candidates = _module_candidates(module_name, record["canonical_paths"])
             assert candidates, f"No canonical source file found for {interface}"
-            assert any(symbol_name in _defined_symbols(path) for path in candidates), (
+            assert any(symbol_name in _defined_or_exported_symbols(path) for path in candidates), (
                 f"Static symbol {symbol_name} not found for {interface}"
             )
 
