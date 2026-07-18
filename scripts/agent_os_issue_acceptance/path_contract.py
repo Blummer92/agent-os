@@ -15,11 +15,7 @@ class DeclaredPathError(ValueError):
 
 
 def normalize_declared_path(value: str) -> str:
-    """Validate and return one canonical repository-relative POSIX path.
-
-    This function is intentionally lexical. It does not inspect a repository,
-    resolve a filesystem path, check existence, normalize case, or follow links.
-    """
+    """Validate and return one canonical repository-relative POSIX path."""
 
     if not isinstance(value, str) or value == "":
         raise DeclaredPathError("empty", value)
@@ -51,3 +47,33 @@ def normalize_declared_path(value: str) -> str:
         raise DeclaredPathError("noncanonical-separator", value)
 
     return value
+
+
+def normalize_declared_pattern(value: str) -> str:
+    """Validate the bounded declared-pattern grammar and preserve its text."""
+
+    normalized = normalize_declared_path(value)
+
+    if "**" in normalized:
+        raise DeclaredPathError("unsupported-double-star", value)
+    if "?" in normalized:
+        raise DeclaredPathError("unsupported-question-mark", value)
+    if "[" in normalized or "]" in normalized:
+        raise DeclaredPathError("unsupported-bracket-class", value)
+
+    return normalized
+
+
+def declared_path_matches(path: str, pattern: str) -> bool:
+    """Match a validated path using literal or segment-local wildcard rules."""
+
+    normalized_path = normalize_declared_path(path)
+    normalized_pattern = normalize_declared_pattern(pattern)
+
+    if "*" not in normalized_pattern:
+        return normalized_path == normalized_pattern or normalized_path.startswith(
+            f"{normalized_pattern}/"
+        )
+
+    expression = "^" + re.escape(normalized_pattern).replace(r"\*", "[^/]*") + "$"
+    return re.fullmatch(expression, normalized_path) is not None
