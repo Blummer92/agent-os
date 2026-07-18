@@ -34,6 +34,7 @@ class CapabilityRecord:
     failure_modes: tuple[str, ...] = ()
     compatibility: tuple[str, ...] = ()
     documentation_handoff: tuple[str, ...] = ()
+    deprecated_by: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
