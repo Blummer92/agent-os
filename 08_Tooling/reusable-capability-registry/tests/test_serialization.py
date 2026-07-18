@@ -28,3 +28,12 @@ def test_json_is_deterministic_and_round_trip_mutation_is_isolated():
     assert first == second
     assert first.endswith("\n")
     assert "informational_notice" in json.loads(first)
+
+
+def test_exact_json_snapshot():
+    result = discover_capabilities(
+        RegistryReader(FIXTURES / "valid_registry.yml"), capability_id="alpha-reader"
+    )
+    actual = serialize_discovery_results(result)
+    expected = '{"informational_notice":"Discovery evidence is informational and does not authorize implementation, repository writes, readiness changes, or merge.","results":[{"capability":{"canonical_paths":["src/alpha.py"],"capability_id":"alpha-reader","compatibility":[],"deprecated_by":null,"documentation_handoff":[],"extension_points":[],"failure_modes":[],"inputs":[],"invariants":["Output is deterministic."],"keywords":["Alpha","shared"],"known_consumer_exemption":null,"known_consumers":["scripts/use_alpha.py"],"name":"Alpha Reader","outputs":[],"owner_agent":"Integration Manager","public_interfaces":["alpha:Read"],"reuse_guidance":"Reuse for alpha reads only.","side_effects":["Performs no writes."],"status":"active","summary":"Reads alpha records.","supporting_agents":[],"tests":["tests/test_alpha.py"]},"discovery":{"confidence":"verified","evidence_basis":["exact-capability-id-match"],"manual_review_reasons":[],"warnings":["behavioral-compatibility-not-evaluated","consumer-evidence-not-validated","direct-module-stability-commitment","ownership-not-validated","test-evidence-not-validated"]},"informational_notice":"Discovery evidence is informational and does not authorize implementation, repository writes, readiness changes, or merge."}]}\n'
+    assert actual == expected

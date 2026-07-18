@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+import yaml
 
 from reusable_capability_registry import (
     RegistryFileError,
@@ -62,7 +63,6 @@ def test_unknown_same_version_field_is_rejected(tmp_path):
 def test_optional_supporting_agents_and_conditional_deprecated_by(tmp_path):
     reader = RegistryReader(FIXTURES / "valid_registry.yml")
     assert reader.by_id("alpha-reader").supporting_agents == ()
-
     deprecated = tmp_path / "deprecated.yml"
     deprecated.write_text(
         """registry_version: 0.1.0
@@ -86,7 +86,6 @@ capabilities:
     )
     record = RegistryReader(deprecated).by_id("old-reader")
     assert record.deprecated_by == "new-reader"
-
     deprecated.write_text(deprecated.read_text().replace("    deprecated_by: new-reader\n", ""), encoding="utf-8")
     with pytest.raises(RegistryFormatError, match="deprecated_by is required"):
         RegistryReader(deprecated)
@@ -98,3 +97,57 @@ def test_invalid_status_is_rejected(tmp_path):
     path.write_text(text.replace("    status: active", "    status: unknown", 1), encoding="utf-8")
     with pytest.raises(RegistryFormatError, match="unsupported status"):
         RegistryReader(path)
+
+
+def test_exact_non_keyword_indexes_reject_normalized_variants():
+    reader = RegistryReader(FIXTURES / "valid_registry.yml")
+    assert reader.by_id("alpha-reader") is not None
+    assert reader.by_id("ALPHA_READER") is None
+    assert reader.lookup("owner", "Integration Manager")
+    assert reader.lookup("owner", "integration_manager") == ()
+    assert reader.lookup("status", "active")
+    assert reader.lookup("status", " ACTIVE ") == ()
+    assert reader.lookup("canonical_path", "src/alpha.py")
+    assert reader.lookup("canonical_path", "SRC/ALPHA.PY") == ()
+    assert reader.lookup("public_interface", "alpha:Read")
+    assert reader.lookup("public_interface", "alpha:read") == ()
+
+
+def test_keyword_index_remains_normalized():
+    reader = RegistryReader(FIXTURES / "valid_registry.yml")
+    assert [record.capability_id for record in reader.lookup("keyword", "ALPHA")] == ["alpha-reader", "beta-evaluator"]
+
+
+@pytest.mark.parametrize("invalid_id", ["foo_bar", "Foo-Bar", "foo bar", "-foo", "foo-", "foo--bar"])
+def test_invalid_capability_id_fails_conservatively(tmp_path, invalid_id):
+    data = yaml.safe_load((FIXTURES / "valid_registry.yml").read_text())
+    data["capabilities"][0]["capability_id"] = invalid_id
+    path = tmp_path / "invalid-id.yml"
+    path.write_text(yaml.safe_dump(data, sort_keys=False))
+    with pytest.raises(RegistryFormatError, match="lowercase kebab-case"):
+        RegistryReader(path)
+
+
+def test_record_does_not_retain_source_dictionary(tmp_path):
+    data = yaml.safe_load((FIXTURES / "valid_registry.yml").read_text())
+    path = tmp_path / "copy.yml"
+    path.write_text(yaml.safe_dump(data, sort_keys=False))
+    record = RegistryReader(path).by_id("alpha-reader")
+    data["capabilities"][0]["keywords"].append("mutated")
+    data["capabilities"][0]["canonical_paths"][0] = "changed.py"
+    assert record.keywords == ("Alpha", "shared")
+    assert record.canonical_paths == ("src/alpha.py",)
+
+
+def test_100_record_indexes_are_stable():
+    reader = RegistryReader(FIXTURES / "registry_100.yml")
+    counts = reader.index_entry_counts
+    records = reader.records
+    for _ in range(25):
+        assert reader.by_id("capability-050").capability_id == "capability-050"
+        assert reader.lookup("keyword", "FIXTURE")
+    assert reader.parse_count == 1
+    assert reader.index_build_count == 1
+    assert reader.record_count == 100
+    assert reader.records is records
+    assert reader.index_entry_counts == counts
