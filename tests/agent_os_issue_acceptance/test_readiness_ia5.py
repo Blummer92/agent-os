@@ -430,7 +430,10 @@ docs/example.md
     result = evaluate_issue_readiness(body)
     assert result.outcome == ReadinessOutcome.NEEDS_DECISION
     check = _doc_check(result)
-    assert "field=required_docs; code=documentation-path-conflict" in check.evidence
+    assert any(
+        item.startswith("field=required_docs; code=documentation-path-conflict")
+        for item in check.evidence
+    )
 
 
 def test_docs_not_required_with_expected_change_requires_decision():
@@ -554,7 +557,10 @@ agent_os_issue_acceptance:
     result = evaluate_issue_readiness(body)
     assert result.outcome == ReadinessOutcome.NEEDS_DECISION
     check = _doc_check(result)
-    assert check.evidence == ["field=documentation_impact; code=documentation-source-conflict"]
+    assert check.evidence == [
+        "field=documentation_impact; code=documentation-source-conflict; "
+        "yaml_present=true; body_present=true"
+    ]
 
 
 def test_duplicate_documentation_impact_heading_requires_decision():
@@ -624,7 +630,10 @@ docs-not-required
     result = evaluate_issue_readiness(body)
     assert result.outcome == ReadinessOutcome.NEEDS_DECISION
     check = _doc_check(result)
-    assert check.evidence == ["field=documentation_impact; code=documentation-source-conflict"]
+    assert check.evidence == [
+        "field=documentation_impact; code=documentation-source-conflict; "
+        "yaml_present=false; body_present=true"
+    ]
 
 
 def test_stronger_existing_blocker_remains_blocked_despite_valid_documentation_evidence():
@@ -686,4 +695,232 @@ docs-not-required
     )
     result = evaluate_issue_readiness(body)
     assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    assert exit_code_for(result.report.overall_status) == 0
+
+
+# --- Review fix 1: multiline free-text fields ------------------------------
+
+
+def test_multiline_body_only_expected_change_is_one_value():
+    body = base_body(
+        """
+## Documentation impact
+docs-required
+## Required documentation paths or bounded areas
+docs/example.md
+## Expected documentation change
+This behavior changes in three ways.
+First, the operator sees a new field.
+Second, the default changes.
+"""
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.READY
+    check = _doc_check(result)
+    assert check.status == Status.PASS
+    assert "expected_change_present=true" in check.evidence
+    assert not any("First, the operator" in item for item in check.evidence)
+
+
+def test_multiline_body_only_exemption_reason_is_one_value():
+    body = base_body(
+        """
+## Documentation impact
+docs-not-required
+## Documentation exemption reason
+No behavior changes.
+This is purely an internal refactor.
+"""
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.READY
+    check = _doc_check(result)
+    assert check.status == Status.PASS
+    assert "exemption_reason_present=true" in check.evidence
+    assert not any("internal refactor" in item for item in check.evidence)
+
+
+def test_multiline_yaml_literal_block_is_one_value():
+    body = base_body(
+        extra="""
+```yaml
+agent_os_issue_acceptance:
+  tier: 0
+  documentation_impact: docs-not-required
+  documentation_exemption_reason: |
+    No behavior changes.
+    This is purely an internal refactor.
+```
+"""
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.READY
+    check = _doc_check(result)
+    assert check.status == Status.PASS
+    assert "exemption_reason_present=true" in check.evidence
+
+
+def test_multiline_yaml_folded_block_is_one_value():
+    body = base_body(
+        extra="""
+```yaml
+agent_os_issue_acceptance:
+  tier: 0
+  documentation_impact: docs-not-required
+  documentation_exemption_reason: >
+    No behavior changes.
+    This is purely an internal refactor.
+```
+"""
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.READY
+    check = _doc_check(result)
+    assert check.status == Status.PASS
+    assert "exemption_reason_present=true" in check.evidence
+
+
+def test_equivalent_multiline_yaml_and_body_values_dedupe_to_ready():
+    body = base_body(
+        """
+## Documentation impact
+docs-not-required
+## Documentation exemption reason
+No behavior   changes.
+This is purely   an internal refactor.
+""",
+        extra="""
+```yaml
+agent_os_issue_acceptance:
+  tier: 0
+  documentation_exemption_reason: |
+    No behavior changes.
+    This is purely an internal refactor.
+```
+""",
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.READY
+    check = _doc_check(result)
+    assert check.status == Status.PASS
+
+
+def test_conflicting_multiline_yaml_and_body_values_requires_decision():
+    body = base_body(
+        """
+## Documentation impact
+docs-not-required
+## Documentation exemption reason
+No behavior changes.
+This is purely an internal refactor.
+""",
+        extra="""
+```yaml
+agent_os_issue_acceptance:
+  tier: 0
+  documentation_exemption_reason: |
+    A completely different explanation.
+    With different reasoning entirely.
+```
+""",
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    check = _doc_check(result)
+    assert check.evidence == [
+        "impact=docs-not-required",
+        "field=documentation_exemption_reason; code=documentation-exemption-conflict; "
+        "yaml_present=true; body_present=true",
+    ]
+    assert not any("completely different" in item for item in check.evidence)
+    assert not any("internal refactor" in item for item in check.evidence)
+
+
+# --- Review fix 2: malformed YAML runtime types -----------------------------
+
+
+def test_malformed_documentation_impact_list_type_requires_decision():
+    body = base_body(
+        extra="""
+```yaml
+agent_os_issue_acceptance:
+  tier: 0
+  documentation_impact:
+    - docs-required
+```
+"""
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    check = _doc_check(result)
+    assert check.evidence == [
+        "field=documentation_impact; code=documentation-source-malformed; source=yaml; type=list"
+    ]
+
+
+def test_malformed_documentation_expected_change_int_type_requires_decision():
+    body = base_body(
+        """
+## Documentation impact
+docs-required
+## Required documentation paths or bounded areas
+docs/example.md
+""",
+        extra="""
+```yaml
+agent_os_issue_acceptance:
+  tier: 0
+  documentation_expected_change: 42
+```
+""",
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    check = _doc_check(result)
+    assert (
+        "field=documentation_expected_change; code=documentation-source-malformed; "
+        "source=yaml; type=int"
+    ) in check.evidence
+
+
+def test_malformed_documentation_exemption_reason_mapping_type_requires_decision():
+    body = base_body(
+        """
+## Documentation impact
+docs-not-required
+""",
+        extra="""
+```yaml
+agent_os_issue_acceptance:
+  tier: 0
+  documentation_exemption_reason:
+    reason: none
+```
+""",
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    check = _doc_check(result)
+    assert (
+        "field=documentation_exemption_reason; code=documentation-source-malformed; "
+        "source=yaml; type=dict"
+    ) in check.evidence
+
+
+def test_malformed_yaml_type_does_not_crash_and_stays_report_only():
+    body = base_body(
+        extra="""
+```yaml
+agent_os_issue_acceptance:
+  tier: 0
+  documentation_impact: true
+```
+"""
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    check = _doc_check(result)
+    assert check.evidence == [
+        "field=documentation_impact; code=documentation-source-malformed; source=yaml; type=bool"
+    ]
     assert exit_code_for(result.report.overall_status) == 0
