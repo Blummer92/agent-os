@@ -25,7 +25,7 @@ versions change only when the module's standards or contract changes.
 | Workflow Scheduler | 0.6.0 |
 | Workspace Automation Builder Tooling | 0.1.1 |
 | Agent Memory & Context Budget Manager | 0.1.0 |
-| IA4D-to-Scheduler Handoff Contract | 0.1.0 |
+| IA4D-to-Scheduler Handoff Contract | 0.2.0 |
 
 **Dashboard Migration Verification**
 (`08_Tooling/dashboard-migration-verification/`) starts as a verification-only
@@ -68,12 +68,17 @@ part of the module: `README.md`, `HANDOFF_PACKET_TEMPLATE.md`,
 
 **IA4D-to-Scheduler Handoff Contract**
 (`00_Governance/architecture-decisions/adr-0002-ia4d-scheduler-handoff-contract.md`
-plus its `adr-0002-details-*` companions) is planning-only: a versioned,
-immutable, non-executable envelope decision for a future handoff between
-IA4D supplied-graph planning (`scripts/agent_os_issue_acceptance/batch_planning.py`)
-and Workflow Scheduler. No serializer, validator, Scheduler adapter, task
-creation, approval storage, queueing, leasing, or dispatch is implemented
-by this version.
+plus its `adr-0002-details-*` companions) is registered now, at this
+table's version, as a planning-only contract: a versioned, immutable,
+non-executable envelope decision for a future handoff between IA4D
+supplied-graph planning (`scripts/agent_os_issue_acceptance/batch_planning.py`)
+and Workflow Scheduler. Implementation status is explicitly **not
+implemented** — no serializer, validator, Scheduler adapter, task
+creation, approval storage, queueing, leasing, or dispatch exists yet.
+IA5B may add a pure local serializer/validator as separate,
+separately-approved work once this contract is reviewed; that future
+work follows `00_Governance/standards-change-control.md` and bumps this
+row, not a new registry entry.
 
 ## Reconciliation Notes
 

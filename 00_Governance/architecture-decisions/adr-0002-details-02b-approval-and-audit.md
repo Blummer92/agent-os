@@ -8,7 +8,9 @@ Companion to `adr-0002-ia4d-scheduler-handoff-contract.md` and
 Any future Scheduler approval record must bind to all of:
 
 - task-proposal digest;
-- handoff digest;
+- `handoff_digest` (the envelope field defined in
+  `adr-0002-details-01d-handoff-digest.md`, not a separately computed
+  value);
 - `graph_digest`;
 - `planning_result_digest`;
 - `evaluated_repository_sha`;
@@ -40,4 +42,10 @@ that performs the rejection.
 
 ## Version
 
-0.1.0
+0.2.0
+
+## Changelog
+
+- 0.2.0 pointed the approval-binding `handoff_digest` bullet at its
+  concrete envelope-field definition.
+- 0.1.0 initial approval binding and rejection audit contract.
