@@ -56,6 +56,10 @@ def baseline(tmp_path: Path) -> Path:
     return tmp_path
 
 
+def test_current_repository_passes() -> None:
+    assert MODULE.validate(MODULE.ROOT) == []
+
+
 def test_clean_baseline_passes(tmp_path: Path) -> None:
     assert MODULE.validate(baseline(tmp_path)) == []
 
