@@ -6,9 +6,56 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 FORM = ROOT / ".github/ISSUE_TEMPLATE/agent-os-task.yml"
 
+_EXPECTED_EXISTING_FIELDS = {
+    "tier": "Issue tier",
+    "objective": "Objective and value",
+    "owner": "Primary owner",
+    "readiness": "Readiness candidate",
+    "source-of-truth": "Source of truth",
+    "external-write": "External write boundary",
+    "scope": "Scope and non-goals",
+    "files": "Allowed files, areas, or governed surfaces",
+    "validation": "Required tests, validation, and documentation",
+    "dependencies": "Dependencies and blockers",
+    "acceptance": "Acceptance criteria and definition of done",
+    "tier2-controls": "Tier 2 controls, when applicable",
+    "safety": "Safety confirmation",
+}
+
+_DOCUMENTATION_FIELDS = {
+    "documentation-impact": ("Documentation impact", "dropdown", True),
+    "required-docs": (
+        "Required documentation paths or bounded areas",
+        "textarea",
+        False,
+    ),
+    "documentation-expected-change": (
+        "Expected documentation change",
+        "textarea",
+        False,
+    ),
+    "documentation-exemption-reason": (
+        "Documentation exemption reason",
+        "textarea",
+        False,
+    ),
+}
+
+
+def _load_form() -> dict:
+    return yaml.safe_load(FORM.read_text(encoding="utf-8"))
+
+
+def _interactive_fields(data: dict) -> dict[str, dict]:
+    return {
+        item["id"]: item
+        for item in data["body"]
+        if item.get("type") != "markdown"
+    }
+
 
 def test_agent_os_issue_form_schema_is_valid_offline():
-    data = yaml.safe_load(FORM.read_text(encoding="utf-8"))
+    data = _load_form()
 
     assert isinstance(data, dict)
     assert data.get("name")
@@ -52,3 +99,39 @@ def test_agent_os_issue_form_schema_is_valid_offline():
             assert isinstance(validations.get("required"), bool)
 
     assert len(ids) == len(set(ids))
+
+
+def test_existing_issue_form_field_contract_is_preserved():
+    fields = _interactive_fields(_load_form())
+
+    for field_id, label in _EXPECTED_EXISTING_FIELDS.items():
+        assert fields[field_id]["attributes"]["label"] == label
+
+
+def test_documentation_impact_contract_is_exact():
+    fields = _interactive_fields(_load_form())
+
+    for field_id, (label, item_type, required) in _DOCUMENTATION_FIELDS.items():
+        item = fields[field_id]
+        assert item["attributes"]["label"] == label
+        assert item["type"] == item_type
+        assert item["validations"]["required"] is required
+
+    assert fields["documentation-impact"]["attributes"]["options"] == [
+        "docs-required",
+        "docs-not-required",
+        "docs-needs-decision",
+    ]
+
+
+def test_required_docs_guidance_uses_bounded_canonical_paths():
+    fields = _interactive_fields(_load_form())
+    guidance = fields["required-docs"]["attributes"]["description"]
+
+    assert "01_Shared_Standards/github" in guidance
+    assert ".github/workflows" in guidance
+    assert "without trailing slashes" in guidance
+    assert "01_Shared_Standards/github/" not in guidance
+    assert ".github/workflows/" not in guidance
+    for unsupported in ("**", "?", "bracket classes", "absolute paths", "./"):
+        assert unsupported in guidance

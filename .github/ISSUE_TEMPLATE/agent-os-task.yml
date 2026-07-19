@@ -73,6 +73,35 @@ body:
       placeholder: "Allowed:\n- ...\n\nForbidden or protected:\n- ..."
     validations: {required: true}
 
+  - type: dropdown
+    id: documentation-impact
+    attributes:
+      label: Documentation impact
+      description: Choose whether implementation requires documentation, does not require it, or needs a human decision.
+      options: [docs-required, docs-not-required, docs-needs-decision]
+    validations: {required: true}
+
+  - type: textarea
+    id: required-docs
+    attributes:
+      label: Required documentation paths or bounded areas
+      description: One repository-relative POSIX path per line. Use exact files or bounded directories without trailing slashes, such as 01_Shared_Standards/github or .github/workflows. Do not use **, ?, bracket classes, absolute paths, ./, traversal, backslashes, repeated separators, or trailing separators.
+    validations: {required: false}
+
+  - type: textarea
+    id: documentation-expected-change
+    attributes:
+      label: Expected documentation change
+      description: When documentation is required, state the behavior, contract, workflow, or operator guidance that must change.
+    validations: {required: false}
+
+  - type: textarea
+    id: documentation-exemption-reason
+    attributes:
+      label: Documentation exemption reason
+      description: When documentation is not required, explain why the implementation does not change documented behavior or operator guidance.
+    validations: {required: false}
+
   - type: textarea
     id: validation
     attributes:
