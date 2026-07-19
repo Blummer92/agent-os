@@ -43,6 +43,25 @@ _REQUIRED_FIELDS = frozenset(
         "handoff_digest",
     }
 )
+_FIXED_REASON_CODES = frozenset(
+    {
+        "unknown-field",
+        "unsupported-contract-version",
+        "unsupported-planning-result-version",
+        "planning-scope-violation",
+        "execution-authorized-violation",
+        "partial-graph-coverage",
+        "handoff-digest-mismatch",
+        "external-revalidation-required",
+        "malformed-field:handoff",
+    }
+)
+_REASON_CODES = frozenset(
+    set(_FIXED_REASON_CODES)
+    | {f"missing-field:{name}" for name in _REQUIRED_FIELDS}
+    | {f"malformed-field:{name}" for name in _REQUIRED_FIELDS}
+)
+
 _SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
@@ -101,7 +120,10 @@ class HandoffValidationResult:
     execution_authorized: Literal[False] = field(default=False, init=False)
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "reason_codes", tuple(self.reason_codes))
+        codes = tuple(sorted(set(self.reason_codes)))
+        if not set(codes) <= _REASON_CODES:
+            raise ValueError("reason_codes must use the bounded WSC1 vocabulary")
+        object.__setattr__(self, "reason_codes", codes)
 
 
 def _canonical_bytes(payload: object) -> bytes:
@@ -136,22 +158,21 @@ def compute_graph_digest(graph: IssueBatchGraph) -> str:
                 "provenance": sorted(set(node.provenance)),
             }
         )
-    payload = {
-        "nodes": nodes,
-        "resolved_dependencies": [
-            list(pair) for pair in sorted(set(graph.resolved_dependencies))
-        ],
-        "unresolved_dependencies": [
-            list(pair) for pair in sorted(set(graph.unresolved_dependencies))
-        ],
-    }
-    return _digest(payload)
+    return _digest(
+        {
+            "nodes": nodes,
+            "resolved_dependencies": [
+                list(pair) for pair in sorted(set(graph.resolved_dependencies))
+            ],
+            "unresolved_dependencies": [
+                list(pair) for pair in sorted(set(graph.unresolved_dependencies))
+            ],
+        }
+    )
 
 
-def compute_planning_result_digest(result: BatchPlanningResult) -> str:
-    if not isinstance(result, BatchPlanningResult):
-        raise TypeError("result must be a BatchPlanningResult")
-    payload = {
+def _planning_result_payload(result: BatchPlanningResult) -> dict[str, Any]:
+    return {
         "supplied_node_ids": list(result.supplied_node_ids),
         "overall_classification": result.overall_classification.value,
         "cohorts": [
@@ -166,17 +187,22 @@ def compute_planning_result_digest(result: BatchPlanningResult) -> str:
         ],
         "batch_reason_codes": list(result.batch_reason_codes),
         "cycle_node_groups": [list(group) for group in result.cycle_node_groups],
-        "planning_scope": result.planning_scope,
-        "execution_authorized": result.execution_authorized,
     }
-    return _digest(payload)
+
+
+def compute_planning_result_digest(result: BatchPlanningResult) -> str:
+    if not isinstance(result, BatchPlanningResult):
+        raise TypeError("result must be a BatchPlanningResult")
+    return _digest(_planning_result_payload(result))
 
 
 def _cohort_payload(value: HandoffCohort | Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(value, HandoffCohort):
-        node_ids = value.node_ids
-        classification = value.classification
-        reason_codes = value.reason_codes
+        node_ids, classification, reason_codes = (
+            value.node_ids,
+            value.classification,
+            value.reason_codes,
+        )
     elif isinstance(value, Mapping):
         node_ids = value["node_ids"]
         classification = value["classification"]
@@ -190,7 +216,9 @@ def _cohort_payload(value: HandoffCohort | Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _handoff_mapping(handoff: SchedulerPlanningHandoff | Mapping[str, Any]) -> dict[str, Any]:
+def _handoff_mapping(
+    handoff: SchedulerPlanningHandoff | Mapping[str, Any],
+) -> dict[str, Any]:
     if isinstance(handoff, SchedulerPlanningHandoff):
         return {
             "contract_version": handoff.contract_version,
@@ -214,9 +242,7 @@ def _handoff_mapping(handoff: SchedulerPlanningHandoff | Mapping[str, Any]) -> d
 
 
 def _canonical_handoff_payload(
-    handoff: SchedulerPlanningHandoff | Mapping[str, Any],
-    *,
-    include_digest: bool,
+    handoff: SchedulerPlanningHandoff | Mapping[str, Any], *, include_digest: bool
 ) -> dict[str, Any]:
     raw = _handoff_mapping(handoff)
     payload = {key: raw[key] for key in _REQUIRED_FIELDS if key in raw}
@@ -240,7 +266,9 @@ def _canonical_handoff_payload(
 def compute_handoff_digest(
     handoff_without_digest: SchedulerPlanningHandoff | Mapping[str, Any],
 ) -> str:
-    return _digest(_canonical_handoff_payload(handoff_without_digest, include_digest=False))
+    return _digest(
+        _canonical_handoff_payload(handoff_without_digest, include_digest=False)
+    )
 
 
 def serialize_scheduler_planning_handoff(handoff: SchedulerPlanningHandoff) -> bytes:
@@ -271,12 +299,10 @@ def _valid_branch(value: object) -> bool:
         return False
     if value.startswith("refs/") or any(char in value for char in _FORBIDDEN_BRANCH_CHARS):
         return False
-    if ".." in value or "~" in value or "^" in value:
-        return False
-    return True
+    return not any(token in value for token in ("..", "~", "^"))
 
 
-def _is_string_tuple(value: object, *, nonempty: bool = False) -> bool:
+def _is_string_sequence(value: object, *, nonempty: bool = False) -> bool:
     if not isinstance(value, (tuple, list)):
         return False
     if nonempty and not value:
@@ -290,9 +316,11 @@ def _validate_cohorts(value: object) -> tuple[bool, tuple[str, ...]]:
     flattened: list[str] = []
     for item in value:
         if isinstance(item, HandoffCohort):
-            node_ids = item.node_ids
-            classification = item.classification
-            reason_codes = item.reason_codes
+            node_ids, classification, reason_codes = (
+                item.node_ids,
+                item.classification,
+                item.reason_codes,
+            )
         elif isinstance(item, Mapping):
             if set(item) != {"node_ids", "classification", "reason_codes"}:
                 return False, ()
@@ -301,13 +329,13 @@ def _validate_cohorts(value: object) -> tuple[bool, tuple[str, ...]]:
             reason_codes = item.get("reason_codes")
         else:
             return False, ()
-        if not _is_string_tuple(node_ids, nonempty=True):
+        if not _is_string_sequence(node_ids, nonempty=True):
             return False, ()
         if tuple(node_ids) != tuple(sorted(node_ids)) or len(node_ids) != len(set(node_ids)):
             return False, ()
         if classification not in _CLASSIFICATION_PRECEDENCE:
             return False, ()
-        if not _is_string_tuple(reason_codes):
+        if not _is_string_sequence(reason_codes):
             return False, ()
         if tuple(reason_codes) != tuple(sorted(reason_codes)):
             return False, ()
@@ -315,20 +343,27 @@ def _validate_cohorts(value: object) -> tuple[bool, tuple[str, ...]]:
     return True, tuple(flattened)
 
 
+def _result(
+    outcome: HandoffValidationOutcome,
+    passed: bool,
+    reasons: set[str] | tuple[str, ...],
+) -> HandoffValidationResult:
+    return HandoffValidationResult(outcome, passed, tuple(reasons))
+
+
 def validate_scheduler_planning_handoff(
     handoff: SchedulerPlanningHandoff | Mapping[str, Any],
 ) -> HandoffValidationResult:
     if not isinstance(handoff, (SchedulerPlanningHandoff, Mapping)):
-        return HandoffValidationResult(
+        return _result(
             HandoffValidationOutcome.INVALID,
             False,
             ("malformed-field:handoff",),
         )
-
     try:
         raw = _handoff_mapping(handoff)
     except (TypeError, ValueError, KeyError):
-        return HandoffValidationResult(
+        return _result(
             HandoffValidationOutcome.INVALID,
             False,
             ("malformed-field:handoff",),
@@ -336,7 +371,11 @@ def validate_scheduler_planning_handoff(
 
     reasons: set[str] = set()
     contract_version = raw.get("contract_version")
-    optional = DECLARED_OPTIONAL_FIELDS.get(contract_version, frozenset())
+    optional = (
+        DECLARED_OPTIONAL_FIELDS.get(contract_version, frozenset())
+        if isinstance(contract_version, str)
+        else frozenset()
+    )
     for name in sorted(_REQUIRED_FIELDS - set(raw)):
         reasons.add(f"missing-field:{name}")
     if set(raw) - _REQUIRED_FIELDS - optional:
@@ -370,7 +409,7 @@ def validate_scheduler_planning_handoff(
             reasons.add(f"malformed-field:{name}")
 
     supplied = raw.get("supplied_node_ids")
-    supplied_valid = _is_string_tuple(supplied, nonempty=True)
+    supplied_valid = _is_string_sequence(supplied, nonempty=True)
     if supplied_valid:
         supplied_tuple = tuple(supplied)
         supplied_valid = (
@@ -405,12 +444,8 @@ def validate_scheduler_planning_handoff(
             reasons.add("malformed-field:handoff")
 
     if reasons:
-        return HandoffValidationResult(
-            HandoffValidationOutcome.INVALID,
-            False,
-            tuple(sorted(reasons)),
-        )
-    return HandoffValidationResult(
+        return _result(HandoffValidationOutcome.INVALID, False, reasons)
+    return _result(
         HandoffValidationOutcome.NEEDS_DECISION,
         True,
         ("external-revalidation-required",),
