@@ -29,12 +29,22 @@ EXPECTED_IDS = {
     "issue-label-checker",
     "readonly-connector-contract",
     "navigation-index-reader",
+    "issue-batch-identity-collision-check",
+}
+EXPECTED_STATUSES = {
+    "issue-acceptance-report": "active",
+    "issue-readiness-evaluator": "active",
+    "issue-label-checker": "active",
+    "readonly-connector-contract": "active",
+    "navigation-index-reader": "active",
+    "issue-batch-identity-collision-check": "experimental",
 }
 SAFE_PACKAGE_INTERFACES = {
     "scripts.agent_os_issue_acceptance:render_report",
     "scripts.agent_os_issue_acceptance:ReadinessOutcome",
     "scripts.agent_os_issue_acceptance:ReadinessResult",
     "scripts.agent_os_issue_acceptance:evaluate_issue_readiness",
+    "scripts.agent_os_issue_acceptance:entity_id_collision_check",
     "scripts.agent_os_issue_labels:evaluate_issue_labels",
 }
 
@@ -72,9 +82,11 @@ def test_registry_shape_and_seed_count() -> None:
     capabilities = registry["capabilities"]
 
     assert registry["registry_version"] == "0.1.0"
-    assert len(capabilities) == 5
+    assert len(capabilities) == len(EXPECTED_IDS)
     assert {record["capability_id"] for record in capabilities} == EXPECTED_IDS
-    assert all(record["status"] == "active" for record in capabilities)
+    assert {
+        record["capability_id"]: record["status"] for record in capabilities
+    } == EXPECTED_STATUSES
 
 
 def test_required_fields_identifiers_and_consumer_evidence() -> None:
