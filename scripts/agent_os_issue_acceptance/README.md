@@ -64,6 +64,12 @@ The text report includes `Linked issue status`. JSON output preserves the existi
 Outcome meaning and authorization boundaries remain governed by
 `01_Shared_Standards/github/issue-acceptance-automation.md`.
 
+## Metadata validation
+
+`metadata_validation.py` evaluates MD2A fixture evidence offline and report-only.
+It returns only `pass`, `warn`, `fail`, or `manual-review` checks and never edits
+issues, labels, templates, readiness fields, workflows, or external systems.
+
 ## Workflow rollout
 
 The checker remains local and fixture-first. PR #227 currently owns the proposed
