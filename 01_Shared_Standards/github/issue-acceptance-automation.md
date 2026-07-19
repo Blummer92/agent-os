@@ -58,7 +58,10 @@ agent_os_issue_acceptance:
   required_files: []
   forbidden_paths: []
   required_tests: []
+  documentation_impact: docs-required
   required_docs: []
+  documentation_expected_change: null
+  documentation_exemption_reason: null
   banned_patterns: []
   manual_review: []
 ```
