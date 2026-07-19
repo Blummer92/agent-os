@@ -148,6 +148,46 @@ def test_tiered_form_maps_aliases_without_new_tier_labels():
     assert labels == set(_TIERED_READY_LABELS)
 
 
+def test_documentation_fields_map_without_changing_label_contract():
+    body = _TIERED_READY_BODY + """
+### Documentation impact
+
+docs-needs-decision
+
+### Required documentation paths or bounded areas
+
+01_Shared_Standards/github
+bad//path
+
+### Expected documentation change
+
+Document the parser contract.
+
+### Documentation exemption reason
+
+_No response_
+
+### Unrelated heading
+
+ignored
+"""
+    fields = load_issue_form_fields(FORM)
+    metadata = parse_issue_form_body(body, fields)
+    labels, unknown = expected_labels(metadata, load_label_map(MAP))
+    report = evaluate_issue_labels(body, _TIERED_READY_LABELS, FORM, MAP)
+
+    assert metadata["documentation_impact"] == ["docs-needs-decision"]
+    assert metadata["required_docs"] == ["01_Shared_Standards/github", "bad//path"]
+    assert metadata["documentation_expected_change"] == ["Document the parser contract."]
+    assert "documentation_exemption_reason" not in metadata
+    assert "Unrelated heading" not in metadata
+    assert labels == set(_TIERED_READY_LABELS)
+    assert unknown == []
+    assert report.overall_status == Status.PASS
+    assert not report.manual_review_items
+    assert "metadata contract: tiered" in report.evidence
+
+
 def test_legacy_ready_issue_labels_pass():
     report = evaluate_issue_labels(_LEGACY_READY_BODY, _LEGACY_READY_LABELS, FORM, MAP)
 
