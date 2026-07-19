@@ -28,7 +28,7 @@ def baseline(tmp_path: Path) -> Path:
 
 | Workflow | Canonical Owner | Overlays |
 |---|---|---|
-| Example | Integration Manager | Integration Manager |
+| Example | Integration Manager | selected registered owner |
 """)
     write(tmp_path, "04_Registry/responsibility-matrix.md", """# Responsibility Matrix
 
@@ -42,6 +42,14 @@ def baseline(tmp_path: Path) -> Path:
     write(tmp_path, "07_Agent_Tests/qa-test-agent.tests.md", "# Tests\n")
     write(tmp_path, "01_Shared_Standards/navigation/navigation-registry-standard.md", "# Standard\n")
     return tmp_path
+
+
+def replace_matrix_support(root: Path, value: str) -> None:
+    matrix = root / "04_Registry/responsibility-matrix.md"
+    matrix.write_text(
+        matrix.read_text(encoding="utf-8").replace("QA / Test Agent", value),
+        encoding="utf-8",
+    )
 
 
 def test_current_repository_passes() -> None:
@@ -76,8 +84,25 @@ def test_missing_test_file_fails(tmp_path: Path) -> None:
 
 def test_unknown_matrix_agent_fails(tmp_path: Path) -> None:
     root = baseline(tmp_path)
-    matrix = root / "04_Registry/responsibility-matrix.md"
-    matrix.write_text(matrix.read_text(encoding="utf-8").replace("QA / Test Agent", "Unknown Agent"), encoding="utf-8")
+    replace_matrix_support(root, "Unknown Agent")
+    assert any("Unknown support value" in error for error in MODULE.validate(root))
+
+
+def test_routing_placeholder_is_not_valid_matrix_support(tmp_path: Path) -> None:
+    root = baseline(tmp_path)
+    replace_matrix_support(root, "selected registered owner")
+    assert any("Unknown support value" in error for error in MODULE.validate(root))
+
+
+def test_exact_helper_support_surface_passes(tmp_path: Path) -> None:
+    root = baseline(tmp_path)
+    replace_matrix_support(root, "Python Development Overlay")
+    assert MODULE.validate(root) == []
+
+
+def test_near_match_helper_support_surface_fails(tmp_path: Path) -> None:
+    root = baseline(tmp_path)
+    replace_matrix_support(root, "Python Development")
     assert any("Unknown support value" in error for error in MODULE.validate(root))
 
 
