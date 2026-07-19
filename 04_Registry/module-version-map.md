@@ -25,6 +25,7 @@ versions change only when the module's standards or contract changes.
 | Workflow Scheduler | 0.6.0 |
 | Workspace Automation Builder Tooling | 0.1.1 |
 | Agent Memory & Context Budget Manager | 0.1.0 |
+| IA4D-to-Scheduler Handoff Contract | 0.1.0 |
 
 **Dashboard Migration Verification**
 (`08_Tooling/dashboard-migration-verification/`) starts as a verification-only
@@ -64,6 +65,15 @@ API, dashboard, daemon, and production deployment. The planning documents remain
 part of the module: `README.md`, `HANDOFF_PACKET_TEMPLATE.md`,
 `CONTEXT_BUDGET_POLICY.md`, `SUMMARY_CACHE_FORMAT.md`, and
 `SCHEDULER_INTEGRATION_DESIGN.md`.
+
+**IA4D-to-Scheduler Handoff Contract**
+(`00_Governance/architecture-decisions/adr-0002-ia4d-scheduler-handoff-contract.md`
+plus its `adr-0002-details-*` companions) is planning-only: a versioned,
+immutable, non-executable envelope decision for a future handoff between
+IA4D supplied-graph planning (`scripts/agent_os_issue_acceptance/batch_planning.py`)
+and Workflow Scheduler. No serializer, validator, Scheduler adapter, task
+creation, approval storage, queueing, leasing, or dispatch is implemented
+by this version.
 
 ## Reconciliation Notes
 

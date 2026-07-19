@@ -1,5 +1,6 @@
 # Changelog
 ## 0.1.1-draft
+- Added ADR 0002 (IA5A, #325): the versioned, immutable, non-executable `SchedulerPlanningHandoff` envelope, classification boundary, serialization/digest rules, and freshness/revalidation/approval-binding contract between IA4D supplied-graph planning and Workflow Scheduler. Planning and documentation only; no serializer, validator, adapter, task creation, approval storage, or dispatch implemented.
 - Recorded the documentation-impact issue-intake contract merged by #305, including the canonical form fields, documentation values, bounded path guidance, and report-only downstream readiness handoff.
 - Hardened RC3 reusable capability discovery with exact non-keyword lookup semantics, result-specific keyword provenance and confidence, lowercase-kebab capability-ID enforcement, collision-safe indexes, deterministic executable regression coverage, and Cloud Build installation for the package.
 - Added the offline reusable capability registry reader and deterministic discovery package under `08_Tooling/reusable-capability-registry/`, with immutable records, detached JSON serialization, CLI/module interfaces, conservative confidence semantics, and fixture-backed tests.
