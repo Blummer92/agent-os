@@ -4,6 +4,11 @@ import argparse
 import json
 from pathlib import Path
 
+from .legacy_preflight import (
+    evaluate_legacy_preflight,
+    legacy_preflight_to_dict,
+    render_legacy_preflight,
+)
 from .models import AcceptanceInput, LinkedIssueParseStatus
 from .policy import evaluate_acceptance
 from .report import exit_code_for, render_report
@@ -20,15 +25,60 @@ def _read_changed_files(path: str | None) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
+def _read_json(path: str) -> object:
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run Agent OS issue acceptance checks from local fixture data.")
-    parser.add_argument("--issue", required=True, help="Path to the linked issue body markdown.")
-    parser.add_argument("--pr-body", required=True, help="Path to the pull request body markdown.")
-    parser.add_argument("--changed-files", required=True, help="Path to newline-delimited changed files.")
+    parser.add_argument("--issue", help="Path to the linked issue body markdown.")
+    parser.add_argument("--pr-body", help="Path to the pull request body markdown.")
+    parser.add_argument("--changed-files", help="Path to newline-delimited changed files.")
     parser.add_argument("--diff", help="Optional path to unified diff or patch text.")
     parser.add_argument("--pr-title", default="", help="Optional pull request title.")
+    parser.add_argument(
+        "--legacy-preflight-snapshot",
+        help="Optional path to a bounded read-only legacy issue snapshot JSON file.",
+    )
     parser.add_argument("--format", choices=("text", "json"), default="text")
     args = parser.parse_args(argv)
+
+    if args.legacy_preflight_snapshot:
+        mixed = [
+            name
+            for name, value in (
+                ("--issue", args.issue),
+                ("--pr-body", args.pr_body),
+                ("--changed-files", args.changed_files),
+                ("--diff", args.diff),
+            )
+            if value
+        ]
+        if mixed or args.pr_title:
+            parser.error(
+                "--legacy-preflight-snapshot cannot be combined with acceptance input arguments"
+            )
+        try:
+            report = evaluate_legacy_preflight(_read_json(args.legacy_preflight_snapshot))
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as error:
+            parser.error(f"invalid legacy preflight snapshot: {error}")
+        if args.format == "json":
+            print(json.dumps(legacy_preflight_to_dict(report), indent=2, sort_keys=True))
+        else:
+            print(render_legacy_preflight(report), end="")
+        return 0
+
+    missing = [
+        option
+        for option, value in (
+            ("--issue", args.issue),
+            ("--pr-body", args.pr_body),
+            ("--changed-files", args.changed_files),
+        )
+        if not value
+    ]
+    if missing:
+        parser.error(f"the following arguments are required: {', '.join(missing)}")
 
     report = evaluate_acceptance(
         AcceptanceInput(
