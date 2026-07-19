@@ -1,19 +1,20 @@
 # Issue Acceptance And Readiness Standard
 
 ## Purpose
-Define one Agent OS contract for designing build-ready issues, deciding issue
-readiness, and checking whether a pull request satisfies its linked issue.
+Define one Agent OS contract for build-ready issues, readiness decisions, and pull
+request acceptance evidence.
 
 ## Boundary
 This standard defines contracts and report shapes only. It does not authorize
-merges, issue closure, production writes, external writes, source-of-truth
-changes, readiness-field mutation, approval changes, or governed-field edits.
+implementation, scheduling, merge, closure, production or external writes,
+source-of-truth changes, readiness mutation, approvals, or governed-field edits.
 
 ## Canonical Lifecycle
 ```text
 idea or request
 -> structured issue design
--> one readiness decision
+-> normalized issue metadata
+-> readiness evidence
 -> implementation handoff
 -> pull request acceptance evidence
 ```
@@ -21,29 +22,31 @@ ChatGPT Orchestrator owns intake and routing. QA / Test Agent owns readiness and
 acceptance evidence. GitHub Service Agent is the sole repository write executor.
 
 ## Issue Tiers
-### Tier 0 - Small Safe Maintenance
-Required: objective, owner, allowed file or area, required validation, and one
-completion criterion. Source of truth defaults to GitHub and external writes
-default to none.
+- Tier 0 requires objective, owner, allowed area, validation, and completion.
+- Tier 1 adds value, scope, non-goals, likely files, tests, documentation,
+  dependencies, acceptance criteria, and definition of done.
+- Tier 2 adds source-of-truth analysis, authorization, external surfaces,
+  governed fields, rollback, approvals, stop conditions, and compatibility.
+Tier selection never weakens governance or write authorization.
 
-### Tier 1 - Standard Implementation
-Required: objective, value, owner, scope, non-goals, likely files or allowed
-areas, required tests, required docs or `not applicable`, dependencies or
-`none`, acceptance criteria, and definition of done.
-
-### Tier 2 - Governed Or Cross-System Work
-Includes Tier 1 plus source-of-truth analysis, explicit authorization, external
-write surfaces, governed fields, support routing, rollback, approval
-requirements, stop conditions, and migration or compatibility planning.
-Tier selection never weakens write-authorization or source-of-truth rules.
+## Documentation Impact Intake
+The canonical issue form uses these exact fields:
+- `documentation-impact`: required dropdown with `docs-required`,
+  `docs-not-required`, or `docs-needs-decision`;
+- `required-docs`: optional textarea with one repository-relative POSIX path per
+  line, using exact files or bounded directories without trailing slashes;
+- `documentation-expected-change`: optional textarea describing required
+  behavior, contract, workflow, or operator-guidance changes;
+- `documentation-exemption-reason`: optional textarea explaining why
+  documentation is not required.
+GitHub forms cannot conditionally require supporting fields. Readiness performs
+that semantic validation. Do not use absolute paths, traversal, backslashes,
+`./`, repeated or trailing separators, `**`, `?`, or bracket classes.
 
 ## Readiness Outcomes
-The user-facing readiness result is exactly one of:
-- `ready`: required information and prerequisites for the tier are satisfied;
-- `blocked`: a required item is missing, failed, pending, or explicitly blocked;
-- `needs-decision`: human judgment is required for conflicting or unresolved
-  requirements, ownership, authorization, or source-of-truth evidence.
-Readiness is evidence only. It is not implementation or merge authorization.
+The user-facing result is exactly `ready`, `blocked`, or `needs-decision`.
+`ready` satisfies tier requirements, `blocked` has a missing or failed required
+item, and `needs-decision` requires human judgment. Readiness is evidence only.
 
 ## Optional Machine-Checkable Metadata
 ```yaml
@@ -59,13 +62,12 @@ agent_os_issue_acceptance:
   banned_patterns: []
   manual_review: []
 ```
-Metadata narrows automated checks. It does not replace the issue body,
-governance rules, or reviewer judgment.
+Metadata narrows checks; it does not replace the issue body, governance, or
+reviewer judgment.
 
 ## Pull Request Evidence
-PRs should include linked issue, summary, files changed, tests run, docs updated,
-unresolved blockers, handoff recommendations, remaining risks, and an Issue
-Acceptance Report or manual-only explanation.
+PRs should include linked issue, summary, files changed, tests, docs, blockers,
+handoffs, risks, and an Issue Acceptance Report or manual-only explanation.
 
 ## Acceptance Report Schema
 ```text
@@ -78,13 +80,9 @@ Evidence:
 Blockers:
 Remaining risks:
 ```
-Internal acceptance outcomes retain their existing meanings: `pass` satisfies
-machine-checkable requirements, `warn` is advisory, `fail` identifies a missing
-required or present forbidden item, and `manual-review` means automation cannot
-decide safely. At the readiness boundary, `fail` maps to `blocked` and
-`manual-review` maps to `needs-decision`.
+`fail` maps to `blocked`; `manual-review` maps to `needs-decision`.
 
 ## Implementation Rules
-Reuse the existing `AcceptanceReport`, `CheckResult`, `Status`, `IssueMetadata`,
-renderer, parser, label evidence, and fixture patterns. Start offline with no
-network calls or external credentials. Workflow integration begins report-only.
+Reuse existing report, check, status, metadata, renderer, parser, label evidence,
+and fixture patterns. Start offline with no credentials. Workflow integration is
+report-only first.
