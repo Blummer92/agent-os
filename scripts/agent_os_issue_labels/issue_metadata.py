@@ -11,6 +11,10 @@ _HEADING_RE = re.compile(r"^###\s+(.+?)\s*$")
 # both the legacy and tiered issue forms to be parsed by one implementation.
 _FIELD_ID_ALIASES = {
     "readiness": "status",
+    "documentation-impact": "documentation_impact",
+    "required-docs": "required_docs",
+    "documentation-expected-change": "documentation_expected_change",
+    "documentation-exemption-reason": "documentation_exemption_reason",
 }
 
 _HEADING_ALIASES = {

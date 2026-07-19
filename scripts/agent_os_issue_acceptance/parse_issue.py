@@ -46,5 +46,8 @@ def parse_issue_metadata(issue_body: str) -> IssueMetadata:
             banned_patterns=_as_list(block.get("banned_patterns")),
             manual_review=_as_list(block.get("manual_review")),
             raw=block,
+            documentation_impact=block.get("documentation_impact"),
+            documentation_expected_change=block.get("documentation_expected_change"),
+            documentation_exemption_reason=block.get("documentation_exemption_reason"),
         )
     return IssueMetadata.empty()
