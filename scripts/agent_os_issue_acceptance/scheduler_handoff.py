@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import asdict, dataclass, fields, replace
+from dataclasses import dataclass, fields, replace
 from enum import Enum
 from typing import Any, Mapping
 
@@ -40,8 +40,10 @@ class HandoffCohort:
     reason_codes: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        node_ids = _normalized_string_tuple(self.node_ids, "node_ids")
-        reason_codes = _normalized_string_tuple(self.reason_codes, "reason_codes")
+        node_ids = _sorted_string_tuple(
+            self.node_ids, "node_ids", reject_duplicates=True
+        )
+        reason_codes = _sorted_string_tuple(self.reason_codes, "reason_codes")
         classification = _classification_value(self.classification)
         if not node_ids:
             raise ValueError("node_ids must not be empty")
@@ -68,10 +70,15 @@ class SchedulerPlanningHandoff:
     handoff_digest: str
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "supplied_node_ids", _normalized_string_tuple(self.supplied_node_ids, "supplied_node_ids"))
+        supplied_node_ids = _sorted_string_tuple(
+            self.supplied_node_ids,
+            "supplied_node_ids",
+            reject_duplicates=True,
+        )
         cohorts = tuple(self.cohort_summaries)
         if any(not isinstance(item, HandoffCohort) for item in cohorts):
             raise TypeError("cohort_summaries must contain only HandoffCohort values")
+        object.__setattr__(self, "supplied_node_ids", supplied_node_ids)
         object.__setattr__(self, "cohort_summaries", _sorted_cohorts(cohorts))
 
 
@@ -97,20 +104,36 @@ def compute_graph_digest(graph: IssueBatchGraph) -> str:
             {
                 "node_id": node.node_id,
                 "readiness": node.readiness.value,
-                "readiness_evidence": list(_normalized_string_tuple(node.readiness_evidence, "readiness_evidence")),
+                "readiness_evidence": list(
+                    _sorted_string_tuple(
+                        node.readiness_evidence, "readiness_evidence"
+                    )
+                ),
                 "owner": node.owner,
                 "source_of_truth": node.source_of_truth,
-                "affected_paths": list(_normalized_string_tuple(node.affected_paths, "affected_paths")),
-                "forbidden_paths": list(_normalized_string_tuple(node.forbidden_paths, "forbidden_paths")),
-                "dependency_ids": list(_normalized_string_tuple(node.dependency_ids, "dependency_ids")),
+                "affected_paths": list(
+                    _sorted_string_tuple(node.affected_paths, "affected_paths")
+                ),
+                "forbidden_paths": list(
+                    _sorted_string_tuple(node.forbidden_paths, "forbidden_paths")
+                ),
+                "dependency_ids": list(
+                    _sorted_string_tuple(node.dependency_ids, "dependency_ids")
+                ),
                 "entity_id": node.entity_id,
-                "provenance": list(_normalized_string_tuple(node.provenance, "provenance")),
+                "provenance": list(
+                    _sorted_string_tuple(node.provenance, "provenance")
+                ),
             }
         )
     payload = {
         "nodes": nodes,
-        "resolved_dependencies": [list(pair) for pair in sorted(set(graph.resolved_dependencies))],
-        "unresolved_dependencies": [list(pair) for pair in sorted(set(graph.unresolved_dependencies))],
+        "resolved_dependencies": [
+            list(pair) for pair in sorted(set(graph.resolved_dependencies))
+        ],
+        "unresolved_dependencies": [
+            list(pair) for pair in sorted(set(graph.unresolved_dependencies))
+        ],
     }
     return _sha256(payload)
 
@@ -126,16 +149,28 @@ def compute_planning_result_digest(result: BatchPlanningResult) -> str:
                 "node_ids": list(tuple(sorted(cohort.node_ids))),
                 "classification": cohort.classification.value,
                 "reason_codes": list(tuple(sorted(set(cohort.reason_codes)))),
-                "dependency_pairs": [list(pair) for pair in sorted(set(cohort.dependency_pairs))],
-                "sequencing_pairs": [list(pair) for pair in sorted(set(cohort.sequencing_pairs))],
+                "dependency_pairs": [
+                    list(pair) for pair in sorted(set(cohort.dependency_pairs))
+                ],
+                "sequencing_pairs": [
+                    list(pair) for pair in sorted(set(cohort.sequencing_pairs))
+                ],
             }
             for cohort in sorted(
                 result.cohorts,
-                key=lambda item: (_CLASSIFICATION_ORDER[item.classification.value], tuple(sorted(item.node_ids))),
+                key=lambda item: (
+                    _CLASSIFICATION_ORDER[item.classification.value],
+                    tuple(sorted(item.node_ids)),
+                ),
             )
         ],
         "batch_reason_codes": list(tuple(sorted(set(result.batch_reason_codes)))),
-        "cycle_node_groups": [list(group) for group in sorted({tuple(sorted(group)) for group in result.cycle_node_groups})],
+        "cycle_node_groups": [
+            list(group)
+            for group in sorted(
+                {tuple(sorted(group)) for group in result.cycle_node_groups}
+            )
+        ],
     }
     return _sha256(payload)
 
@@ -146,7 +181,9 @@ def compute_handoff_digest(handoff_without_digest: SchedulerPlanningHandoff) -> 
     return _sha256(_handoff_payload(handoff_without_digest, include_digest=False))
 
 
-def with_computed_handoff_digest(handoff: SchedulerPlanningHandoff) -> SchedulerPlanningHandoff:
+def with_computed_handoff_digest(
+    handoff: SchedulerPlanningHandoff,
+) -> SchedulerPlanningHandoff:
     """Return a new immutable handoff with its canonical digest attached."""
     return replace(handoff, handoff_digest=compute_handoff_digest(handoff))
 
@@ -163,7 +200,9 @@ def validate_scheduler_planning_handoff(
     try:
         candidate = _coerce_handoff(handoff)
     except (TypeError, ValueError, KeyError):
-        return HandoffValidationResult(HandoffValidationOutcome.INVALID, ("malformed-handoff",))
+        return HandoffValidationResult(
+            HandoffValidationOutcome.INVALID, ("malformed-handoff",)
+        )
 
     reasons: list[str] = []
     if candidate.contract_version not in SUPPORTED_CONTRACT_VERSIONS:
@@ -186,13 +225,17 @@ def validate_scheduler_planning_handoff(
         reasons.append("malformed-created-at")
     if not candidate.supplied_node_ids:
         reasons.append("empty-supplied-node-ids")
-    if len(candidate.supplied_node_ids) != len(set(candidate.supplied_node_ids)):
-        reasons.append("duplicate-supplied-node-ids")
     for field_name in ("graph_digest", "planning_result_digest", "handoff_digest"):
         if not _SHA256_RE.fullmatch(getattr(candidate, field_name)):
             reasons.append(f"malformed-{field_name.replace('_', '-')}")
 
-    covered = tuple(sorted(node_id for cohort in candidate.cohort_summaries for node_id in cohort.node_ids))
+    covered = tuple(
+        sorted(
+            node_id
+            for cohort in candidate.cohort_summaries
+            for node_id in cohort.node_ids
+        )
+    )
     if covered != candidate.supplied_node_ids or len(covered) != len(set(covered)):
         reasons.append("partial-or-duplicate-cohort-coverage")
     if candidate.handoff_digest and _SHA256_RE.fullmatch(candidate.handoff_digest):
@@ -200,14 +243,18 @@ def validate_scheduler_planning_handoff(
             reasons.append("handoff-digest-mismatch")
 
     if reasons:
-        return HandoffValidationResult(HandoffValidationOutcome.INVALID, tuple(sorted(set(reasons))))
+        return HandoffValidationResult(
+            HandoffValidationOutcome.INVALID, tuple(sorted(set(reasons)))
+        )
     return HandoffValidationResult(
         HandoffValidationOutcome.NEEDS_DECISION,
         ("current-state-revalidation-required",),
     )
 
 
-def _coerce_handoff(value: SchedulerPlanningHandoff | Mapping[str, Any]) -> SchedulerPlanningHandoff:
+def _coerce_handoff(
+    value: SchedulerPlanningHandoff | Mapping[str, Any],
+) -> SchedulerPlanningHandoff:
     if isinstance(value, SchedulerPlanningHandoff):
         return value
     if not isinstance(value, Mapping):
@@ -224,10 +271,14 @@ def _coerce_handoff(value: SchedulerPlanningHandoff | Mapping[str, Any]) -> Sche
         item if isinstance(item, HandoffCohort) else HandoffCohort(**item)
         for item in cohorts_raw
     )
-    return SchedulerPlanningHandoff(**{**dict(value), "cohort_summaries": cohorts})
+    return SchedulerPlanningHandoff(
+        **{**dict(value), "cohort_summaries": cohorts}
+    )
 
 
-def _handoff_payload(handoff: SchedulerPlanningHandoff, *, include_digest: bool) -> dict[str, Any]:
+def _handoff_payload(
+    handoff: SchedulerPlanningHandoff, *, include_digest: bool
+) -> dict[str, Any]:
     payload = {
         "contract_version": handoff.contract_version,
         "planning_result_version": handoff.planning_result_version,
@@ -235,7 +286,7 @@ def _handoff_payload(handoff: SchedulerPlanningHandoff, *, include_digest: bool)
         "repository": handoff.repository,
         "base_branch": handoff.base_branch,
         "evaluated_repository_sha": handoff.evaluated_repository_sha,
-        "supplied_node_ids": list(tuple(sorted(handoff.supplied_node_ids))),
+        "supplied_node_ids": list(handoff.supplied_node_ids),
         "graph_digest": handoff.graph_digest,
         "planning_result_digest": handoff.planning_result_digest,
         "cohort_summaries": [
@@ -255,11 +306,16 @@ def _handoff_payload(handoff: SchedulerPlanningHandoff, *, include_digest: bool)
     return payload
 
 
-def _sorted_cohorts(cohorts: tuple[HandoffCohort, ...]) -> tuple[HandoffCohort, ...]:
+def _sorted_cohorts(
+    cohorts: tuple[HandoffCohort, ...],
+) -> tuple[HandoffCohort, ...]:
     return tuple(
         sorted(
             cohorts,
-            key=lambda item: (_CLASSIFICATION_ORDER[item.classification], item.node_ids[0]),
+            key=lambda item: (
+                _CLASSIFICATION_ORDER[item.classification],
+                item.node_ids[0],
+            ),
         )
     )
 
@@ -271,15 +327,22 @@ def _classification_value(value: str | PlanningClassification) -> str:
     return canonical
 
 
-def _normalized_string_tuple(values: Any, field_name: str) -> tuple[str, ...]:
+def _sorted_string_tuple(
+    values: Any,
+    field_name: str,
+    *,
+    reject_duplicates: bool = False,
+) -> tuple[str, ...]:
     if isinstance(values, (str, bytes)):
         raise TypeError(f"{field_name} must be an iterable of strings")
-    normalized = set()
+    normalized: list[str] = []
     for value in values:
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"{field_name} must contain non-empty strings")
-        normalized.add(value.strip())
-    return tuple(sorted(normalized))
+        normalized.append(value.strip())
+    if reject_duplicates and len(normalized) != len(set(normalized)):
+        raise ValueError(f"{field_name} must not contain duplicate values")
+    return tuple(sorted(set(normalized)))
 
 
 def _canonical_bytes(payload: Any) -> bytes:
@@ -296,7 +359,11 @@ def _sha256(payload: Any) -> str:
 
 
 def _valid_repository(value: object) -> bool:
-    return isinstance(value, str) and value.count("/") == 1 and all(part.strip() for part in value.split("/"))
+    return (
+        isinstance(value, str)
+        and value.count("/") == 1
+        and all(part.strip() for part in value.split("/"))
+    )
 
 
 def _non_empty(value: object) -> bool:
