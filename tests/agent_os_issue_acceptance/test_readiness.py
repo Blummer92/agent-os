@@ -1,9 +1,11 @@
 from pathlib import Path
 
+from scripts.agent_os_issue_acceptance.models import Status
 from scripts.agent_os_issue_acceptance.readiness import (
     ReadinessOutcome,
     evaluate_issue_readiness,
 )
+from scripts.agent_os_issue_acceptance.report import exit_code_for
 
 
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "agent_os_issue_readiness"
@@ -22,6 +24,10 @@ QA / Test Agent
 - pytest tests/test_example.py
 ## Completion Criterion
 - Warning no longer appears.
+## Documentation impact
+docs-not-required
+## Documentation exemption reason
+Removing a deprecation warning does not change documented behavior.
 """
     result = evaluate_issue_readiness(body)
     assert result.outcome == ReadinessOutcome.READY
@@ -52,6 +58,12 @@ QA / Test Agent
 - [ ] Checker reports one result.
 ## Definition Of Done
 - [ ] Tests pass.
+## Documentation impact
+docs-required
+## Required documentation paths or bounded areas
+README.md
+## Expected documentation change
+Explain the new local checker behavior.
 """
     result = evaluate_issue_readiness(body)
     assert result.outcome == ReadinessOutcome.READY
@@ -96,6 +108,12 @@ Human approval before merge.
 Stop on unclear ownership.
 ## Migration Or Compatibility Planning
 Preserve old issue-form parsing during migration.
+## Documentation impact
+docs-required
+## Required documentation paths or bounded areas
+01_Shared_Standards
+## Expected documentation change
+Explain the updated governed integration contract.
 """
     result = evaluate_issue_readiness(body)
     assert result.outcome == ReadinessOutcome.READY
@@ -222,7 +240,11 @@ agent_os_issue_acceptance:
     assert "confirm ownership" in result.report.manual_review_items
 
 
-def test_legacy_ia_metadata_tier_is_supported():
+def test_legacy_ia_metadata_without_documentation_impact_requires_decision():
+    """DOC2B intentional transition: a previously-ready legacy body with no
+    documentation-impact evidence now becomes needs-decision. Every other
+    check continues to pass, and report-only exit-code behavior is unchanged.
+    """
     body = """
 ## Objective
 Update documentation.
@@ -244,7 +266,15 @@ agent_os_issue_acceptance:
 ```
 """
     result = evaluate_issue_readiness(body)
-    assert result.outcome == ReadinessOutcome.READY
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+
+    checks = {check.name: check for check in result.report.checks}
+    assert checks["issue tier"].status == Status.PASS
+    assert checks["required issue fields"].status == Status.PASS
+    assert checks["documentation impact"].status == Status.MANUAL_REVIEW
+    assert "field=documentation_impact; code=legacy-metadata-missing" in checks["documentation impact"].evidence
+    assert not result.report.blockers
+    assert exit_code_for(result.report.overall_status) == 0
 
 
 def test_unrelated_prose_does_not_satisfy_required_sections():
@@ -274,6 +304,10 @@ GitHub Service Agent
 - markdown check
 ## Completion Criterion
 - Text is corrected.
+## Documentation impact
+docs-not-required
+## Documentation exemption reason
+This change does not alter documented behavior or operator guidance.
 
 <!-- needs-decision -->
 > needs-decision
@@ -316,6 +350,12 @@ Update a governed contract and reduce ambiguity.
 - Approval: human approval required
 - Stop conditions: stop on unclear ownership
 - Compatibility: preserve legacy parsing
+## Documentation impact
+docs-required
+## Required documentation paths or bounded areas
+01_Shared_Standards
+## Expected documentation change
+Explain the updated governed contract.
 """
     result = evaluate_issue_readiness(body)
     assert result.outcome == ReadinessOutcome.READY
