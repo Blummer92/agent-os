@@ -189,10 +189,11 @@ capabilities:
     owner_agent: Integration Manager
     supporting_agents:
       - QA / Test Agent
-    known_consumers: []
-    known_consumer_exemption: Approved for IA4C2 because the public graph-check interface and focused tests are verified; IA4D is the planned non-test consumer.
+    known_consumers:
+      - scripts/agent_os_issue_acceptance/batch_planning.py
     tests:
       - tests/agent_os_issue_acceptance/test_batch_identity_checks.py
+      - tests/agent_os_issue_acceptance/test_batch_planning.py
     keywords:
       - issue-batch
       - identity
@@ -220,10 +221,11 @@ capabilities:
     owner_agent: Integration Manager
     supporting_agents:
       - QA / Test Agent
-    known_consumers: []
-    known_consumer_exemption: Approved for IA4C3 because the public graph-check and coverage interfaces are verified; IA4D is the planned non-test consumer.
+    known_consumers:
+      - scripts/agent_os_issue_acceptance/batch_planning.py
     tests:
       - tests/agent_os_issue_acceptance/test_batch_scope_checks.py
+      - tests/agent_os_issue_acceptance/test_batch_planning.py
     keywords:
       - issue-batch
       - supplied-graph
