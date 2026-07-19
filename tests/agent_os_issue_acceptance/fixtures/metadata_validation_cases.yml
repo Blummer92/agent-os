@@ -191,7 +191,7 @@ cases:
 
   - id: owner-unregistered-prose
     field: primary_owner
-    input_evidence: Recommended owner agent: Metadata Maintainer
+    input_evidence: 'Recommended owner agent: Metadata Maintainer'
     classification: ambiguous
     expected_outcome: manual-review
     reason: Unregistered owner prose must not create a new agent.
