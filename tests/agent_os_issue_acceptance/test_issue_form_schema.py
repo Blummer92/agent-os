@@ -1,6 +1,9 @@
+import re
 from pathlib import Path
 
 import yaml
+
+from scripts.agent_os_issue_acceptance.path_contract import normalize_declared_path
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -52,6 +55,12 @@ def _interactive_fields(data: dict) -> dict[str, dict]:
         for item in data["body"]
         if item.get("type") != "markdown"
     }
+
+
+def _advertised_required_doc_examples(guidance: str) -> list[str]:
+    match = re.search(r"such as (.+?)\. Do not use", guidance)
+    assert match is not None
+    return [value.strip() for value in match.group(1).split(" or ")]
 
 
 def test_agent_os_issue_form_schema_is_valid_offline():
@@ -135,3 +144,7 @@ def test_required_docs_guidance_uses_bounded_canonical_paths():
     assert ".github/workflows/" not in guidance
     for unsupported in ("**", "?", "bracket classes", "absolute paths", "./"):
         assert unsupported in guidance
+
+    examples = _advertised_required_doc_examples(guidance)
+    assert examples == ["01_Shared_Standards/github", ".github/workflows"]
+    assert [normalize_declared_path(value) for value in examples] == examples
