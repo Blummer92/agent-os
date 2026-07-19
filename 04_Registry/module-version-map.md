@@ -68,17 +68,14 @@ part of the module: `README.md`, `HANDOFF_PACKET_TEMPLATE.md`,
 
 **IA4D-to-Scheduler Handoff Contract**
 (`00_Governance/architecture-decisions/adr-0002-ia4d-scheduler-handoff-contract.md`
-plus its `adr-0002-details-*` companions) is registered now, at this
-table's version, as a planning-only contract: a versioned, immutable,
-non-executable envelope decision for a future handoff between IA4D
-supplied-graph planning (`scripts/agent_os_issue_acceptance/batch_planning.py`)
-and Workflow Scheduler. Implementation status is explicitly **not
-implemented** — no serializer, validator, Scheduler adapter, task
-creation, approval storage, queueing, leasing, or dispatch exists yet.
-IA5B may add a pure local serializer/validator as separate,
-separately-approved work once this contract is reviewed; that future
-work follows `00_Governance/standards-change-control.md` and bumps this
-row, not a new registry entry.
+plus its `adr-0002-details-*` companions) remains version `0.2.0`. WSC1 implements
+that existing contract in
+`scripts/agent_os_issue_acceptance/scheduler_handoff.py`, supporting
+`contract_version=0.2.0` and `planning_result_version=0.1.0`. The implementation
+performs pure local serialization, digesting, and validation only; it does not
+establish freshness, authorize execution, or change Workflow Scheduler runtime.
+Future version changes require an approved standards or contract change under
+`00_Governance/standards-change-control.md`.
 
 ## Reconciliation Notes
 
