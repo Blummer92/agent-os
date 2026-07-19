@@ -12,6 +12,7 @@ from .batch_graph import (
     build_issue_batch_graph,
     load_issue_batch_fixture,
 )
+from .batch_identity_checks import entity_id_collision_check
 from .policy import evaluate_acceptance
 from .readiness import (
     ReadinessOutcome,
@@ -30,6 +31,7 @@ __all__ = [
     "ReadinessOutcome",
     "ReadinessResult",
     "build_issue_batch_graph",
+    "entity_id_collision_check",
     "evaluate_acceptance",
     "evaluate_issue_readiness",
     "evaluate_issue_readiness_with_labels",
