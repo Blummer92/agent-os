@@ -4,14 +4,11 @@ import re
 from dataclasses import dataclass
 from typing import Any, Iterable
 
+from .parse_issue import parse_issue_metadata
 from .path_contract import DeclaredPathError, normalize_declared_path
 from .readiness import ReadinessOutcome, evaluate_issue_readiness
 
-_APPROVED_IMPACTS = {
-    "docs-required",
-    "docs-not-required",
-    "docs-needs-decision",
-}
+_APPROVED_IMPACTS = {"docs-required", "docs-not-required", "docs-needs-decision"}
 _CANONICAL_HEADINGS = {
     "documentation impact": "documentation_impact",
     "required documentation paths or bounded areas": "required_docs",
@@ -35,15 +32,21 @@ class LegacyIssueSnapshot:
 
     @classmethod
     def from_mapping(cls, value: dict[str, Any]) -> "LegacyIssueSnapshot":
+        if not isinstance(value, dict):
+            raise ValueError("each snapshot row must be an object")
         number = value.get("number")
         if isinstance(number, bool) or not isinstance(number, int):
             raise ValueError("snapshot number must be an integer")
-        labels = tuple(sorted({str(item) for item in value.get("labels", []) if str(item)}))
+        raw_labels = value.get("labels", [])
+        raw_prs = value.get("open_pr_numbers", [])
+        if not isinstance(raw_labels, list) or not isinstance(raw_prs, list):
+            raise ValueError("snapshot labels and open_pr_numbers must be lists")
+        labels = tuple(sorted({str(item) for item in raw_labels if str(item)}))
         prs = tuple(
             sorted(
                 {
-                    int(item)
-                    for item in value.get("open_pr_numbers", [])
+                    item
+                    for item in raw_prs
                     if isinstance(item, int) and not isinstance(item, bool)
                 }
             )
@@ -80,7 +83,9 @@ class LegacyPreflightReport:
     evaluator_sha: str | None = None
 
 
-def evaluate_legacy_preflight(payload: dict[str, Any] | list[dict[str, Any]]) -> LegacyPreflightReport:
+def evaluate_legacy_preflight(
+    payload: dict[str, Any] | list[dict[str, Any]],
+) -> LegacyPreflightReport:
     if isinstance(payload, dict):
         raw_issues = payload.get("issues", [])
         evaluator_sha = str(payload["evaluator_sha"]) if payload.get("evaluator_sha") else None
@@ -89,34 +94,47 @@ def evaluate_legacy_preflight(payload: dict[str, Any] | list[dict[str, Any]]) ->
         evaluator_sha = None
     else:
         raise ValueError("preflight payload must be a list or an object containing issues")
+    if not isinstance(raw_issues, list):
+        raise ValueError("preflight issues must be a list")
 
-    snapshots = _dedupe_snapshots(LegacyIssueSnapshot.from_mapping(item) for item in raw_issues)
+    snapshots = _dedupe_snapshots(
+        LegacyIssueSnapshot.from_mapping(item) for item in raw_issues
+    )
     assessments = tuple(
-        assessment
+        classify_legacy_issue(snapshot)
         for snapshot in snapshots
         if snapshot.state == "open"
-        for assessment in (classify_legacy_issue(snapshot),)
     )
-    implementation = tuple(item for item in assessments if item.classification != "tracker-or-roadmap")
-    manual_review = sum(item.predicted_documentation_status == "manual-review" for item in implementation)
+    implementation = tuple(
+        item for item in assessments if item.classification != "tracker-or-roadmap"
+    )
+    manual_review = sum(
+        item.predicted_documentation_status == "manual-review" for item in implementation
+    )
     denominator = len(implementation)
     metrics: dict[str, int | float] = {
         "open_implementation_candidates": denominator,
-        "missing_documentation_impact": _count_reason(implementation, "legacy-metadata-missing"),
+        "missing_documentation_impact": _count_reason(
+            implementation, "legacy-metadata-missing"
+        ),
         "currently_ready_label_missing_contract": sum(
-            item.status_label == "status:ready" and "legacy-metadata-missing" in item.reason_codes
+            item.status_label == "status:ready"
+            and "legacy-metadata-missing" in item.reason_codes
             for item in implementation
         ),
         "open_pr_linked_issue_missing_contract": sum(
-            bool(item.open_pr_numbers) and "legacy-metadata-missing" in item.reason_codes
+            bool(item.open_pr_numbers)
+            and "legacy-metadata-missing" in item.reason_codes
             for item in implementation
         ),
         "already_blocked_missing_contract": sum(
-            item.status_label == "status:blocked" and "legacy-metadata-missing" in item.reason_codes
+            item.status_label == "status:blocked"
+            and "legacy-metadata-missing" in item.reason_codes
             for item in implementation
         ),
         "would_change_ready_to_needs_decision": sum(
-            item.predicted_transition == "ready->needs-decision" for item in implementation
+            item.predicted_transition == "ready->needs-decision"
+            for item in implementation
         ),
         "unknown_or_conflicting_contract": sum(
             bool(
@@ -128,7 +146,9 @@ def evaluate_legacy_preflight(payload: dict[str, Any] | list[dict[str, Any]]) ->
         "duplicate_heading_candidates": _count_reason(
             implementation, "duplicate-documentation-heading"
         ),
-        "manual_review_rate_estimate": 0.0 if denominator == 0 else manual_review / denominator,
+        "manual_review_rate_estimate": (
+            0.0 if denominator == 0 else manual_review / denominator
+        ),
     }
     return LegacyPreflightReport(
         assessments=tuple(sorted(assessments, key=lambda item: item.number)),
@@ -138,7 +158,7 @@ def evaluate_legacy_preflight(payload: dict[str, Any] | list[dict[str, Any]]) ->
 
 
 def classify_legacy_issue(snapshot: LegacyIssueSnapshot) -> LegacyIssueAssessment:
-    status_label = next((label for label in snapshot.labels if label.startswith("status:")), None)
+    status_label = _status_label(snapshot.labels)
     if _is_tracker_or_roadmap(snapshot):
         return LegacyIssueAssessment(
             number=snapshot.number,
@@ -155,11 +175,7 @@ def classify_legacy_issue(snapshot: LegacyIssueSnapshot) -> LegacyIssueAssessmen
 
     evidence = _documentation_evidence(snapshot.body)
     doc_status, reasons = _predict_documentation_status(evidence)
-    existing = evaluate_issue_readiness(
-        snapshot.body,
-        dependency_blocked=status_label == "status:blocked",
-    ).outcome
-    transition = _predict_transition(existing, doc_status)
+    transition = _predict_transition(_baseline_outcome(snapshot, status_label), doc_status)
 
     if not reasons and doc_status == "pass":
         classification = "already-compliant"
@@ -203,8 +219,7 @@ def render_legacy_preflight(report: LegacyPreflightReport) -> str:
     lines = ["Legacy Documentation Readiness Preflight", ""]
     if report.evaluator_sha:
         lines.append(f"evaluator_sha={report.evaluator_sha}")
-    for key in sorted(report.metrics):
-        lines.append(f"{key}={report.metrics[key]}")
+    lines.extend(f"{key}={report.metrics[key]}" for key in sorted(report.metrics))
     lines.append("")
     for item in report.assessments:
         prs = ",".join(str(number) for number in item.open_pr_numbers) or "none"
@@ -212,7 +227,8 @@ def render_legacy_preflight(report: LegacyPreflightReport) -> str:
         lines.append(
             f"issue={item.number}; classification={item.classification}; "
             f"status_label={item.status_label or 'none'}; open_prs={prs}; "
-            f"impact={item.documentation_impact}; doc_status={item.predicted_documentation_status}; "
+            f"impact={item.documentation_impact}; "
+            f"doc_status={item.predicted_documentation_status}; "
             f"transition={item.predicted_transition}; reasons={reasons}"
         )
     return "\n".join(lines) + "\n"
@@ -240,9 +256,24 @@ def legacy_preflight_to_dict(report: LegacyPreflightReport) -> dict[str, Any]:
     }
 
 
+def _baseline_outcome(
+    snapshot: LegacyIssueSnapshot,
+    status_label: str | None,
+) -> ReadinessOutcome:
+    if status_label == "status:ready":
+        return ReadinessOutcome.READY
+    if status_label == "status:blocked":
+        return ReadinessOutcome.BLOCKED
+    if status_label == "status:needs-decision":
+        return ReadinessOutcome.NEEDS_DECISION
+    return evaluate_issue_readiness(snapshot.body).outcome
+
+
 def _documentation_evidence(body: str) -> dict[str, Any]:
     visible = _sanitize(body)
-    sections: dict[str, list[list[str]]] = {field: [] for field in _CANONICAL_HEADINGS.values()}
+    sections: dict[str, list[list[str]]] = {
+        field: [] for field in _CANONICAL_HEADINGS.values()
+    }
     current: str | None = None
     for raw_line in visible.splitlines():
         match = _HEADING_RE.match(raw_line)
@@ -254,20 +285,21 @@ def _documentation_evidence(body: str) -> dict[str, Any]:
         if current and sections[current]:
             sections[current][-1].append(raw_line)
 
-    yaml_values = _yaml_documentation_values(body)
-    reasons: list[str] = []
-    for field, occurrences in sections.items():
-        if len(occurrences) > 1:
-            reasons.append("duplicate-documentation-heading")
-
+    duplicate = any(len(occurrences) > 1 for occurrences in sections.values())
+    reasons = ["duplicate-documentation-heading"] if duplicate else []
     body_values = {
-        field: [_clean_line(line) for occurrence in occurrences for line in occurrence]
+        field: [
+            _clean_line(line)
+            for occurrence in occurrences
+            for line in occurrence
+        ]
         for field, occurrences in sections.items()
     }
     body_values = {
         field: [value for value in values if value and value != "_No response_"]
         for field, values in body_values.items()
     }
+    yaml_values = _yaml_documentation_values(body)
 
     impact, impact_conflict = _resolve_scalar(
         yaml_values.get("documentation_impact"), body_values["documentation_impact"]
@@ -285,7 +317,9 @@ def _documentation_evidence(body: str) -> dict[str, Any]:
         body_values["documentation_exemption_reason"],
         collapse=True,
     )
-    if any((impact_conflict, paths_conflict, expected_conflict, exemption_conflict)):
+    if not duplicate and any(
+        (impact_conflict, paths_conflict, expected_conflict, exemption_conflict)
+    ):
         reasons.append("documentation-source-conflict")
 
     return {
@@ -298,8 +332,6 @@ def _documentation_evidence(body: str) -> dict[str, Any]:
 
 
 def _yaml_documentation_values(body: str) -> dict[str, Any]:
-    from .parse_issue import parse_issue_metadata
-
     metadata = parse_issue_metadata(body)
     if not metadata.present:
         return {}
@@ -311,7 +343,9 @@ def _yaml_documentation_values(body: str) -> dict[str, Any]:
     }
 
 
-def _predict_documentation_status(evidence: dict[str, Any]) -> tuple[str, list[str]]:
+def _predict_documentation_status(
+    evidence: dict[str, Any],
+) -> tuple[str, list[str]]:
     reasons = list(evidence["reasons"])
     impact = evidence["impact"]
     if reasons:
@@ -325,13 +359,10 @@ def _predict_documentation_status(evidence: dict[str, Any]) -> tuple[str, list[s
     if impact == "docs-required":
         if not evidence["paths"]:
             return "fail", ["documentation-path-missing"]
-        malformed = []
-        for path in evidence["paths"]:
-            try:
+        try:
+            for path in evidence["paths"]:
                 normalize_declared_path(path)
-            except DeclaredPathError:
-                malformed.append(path)
-        if malformed:
+        except DeclaredPathError:
             return "manual-review", ["documentation-path-malformed"]
         if not evidence["expected"]:
             return "fail", ["documentation-expected-change-missing"]
@@ -347,7 +378,10 @@ def _predict_documentation_status(evidence: dict[str, Any]) -> tuple[str, list[s
     return "pass", []
 
 
-def _predict_transition(existing: ReadinessOutcome, documentation_status: str) -> str:
+def _predict_transition(
+    existing: ReadinessOutcome,
+    documentation_status: str,
+) -> str:
     if existing == ReadinessOutcome.BLOCKED:
         return "blocked->blocked"
     if existing == ReadinessOutcome.NEEDS_DECISION:
@@ -376,7 +410,10 @@ def _resolve_scalar(
     return yaml_text or body_text, False
 
 
-def _resolve_list(yaml_values: Iterable[Any], body_values: list[str]) -> tuple[list[str], bool]:
+def _resolve_list(
+    yaml_values: Iterable[Any],
+    body_values: list[str],
+) -> tuple[list[str], bool]:
     yaml_list = sorted({str(value).strip() for value in yaml_values if str(value).strip()})
     body_list = sorted({value.strip() for value in body_values if value.strip()})
     if yaml_list and body_list and yaml_list != body_list:
@@ -406,7 +443,9 @@ def _sanitize(body: str) -> str:
     without_fences = _FENCED_RE.sub("", body or "")
     without_comments = _COMMENT_RE.sub("", without_fences)
     return "\n".join(
-        line for line in without_comments.splitlines() if not line.lstrip().startswith(">")
+        line
+        for line in without_comments.splitlines()
+        if not line.lstrip().startswith(">")
     )
 
 
@@ -414,10 +453,12 @@ def _normalize_heading(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip().lower())
 
 
+def _status_label(labels: tuple[str, ...]) -> str | None:
+    return next((label for label in labels if label.startswith("status:")), None)
+
+
 def _is_tracker_or_roadmap(snapshot: LegacyIssueSnapshot) -> bool:
-    if "type:planning" not in snapshot.labels:
-        return False
-    return bool(
+    return "type:planning" in snapshot.labels and bool(
         re.search(
             r"(?i)\b(parent tracker only|roadmap|tracker-only|tracker only)\b",
             snapshot.body,
@@ -425,7 +466,9 @@ def _is_tracker_or_roadmap(snapshot: LegacyIssueSnapshot) -> bool:
     )
 
 
-def _dedupe_snapshots(snapshots: Iterable[LegacyIssueSnapshot]) -> tuple[LegacyIssueSnapshot, ...]:
+def _dedupe_snapshots(
+    snapshots: Iterable[LegacyIssueSnapshot],
+) -> tuple[LegacyIssueSnapshot, ...]:
     selected: dict[int, LegacyIssueSnapshot] = {}
     for snapshot in snapshots:
         current = selected.get(snapshot.number)
