@@ -30,6 +30,7 @@ EXPECTED_IDS = {
     "readonly-connector-contract",
     "navigation-index-reader",
     "issue-batch-identity-collision-check",
+    "issue-batch-supplied-graph-scope-checks",
 }
 EXPECTED_STATUSES = {
     "issue-acceptance-report": "active",
@@ -38,6 +39,7 @@ EXPECTED_STATUSES = {
     "readonly-connector-contract": "active",
     "navigation-index-reader": "active",
     "issue-batch-identity-collision-check": "experimental",
+    "issue-batch-supplied-graph-scope-checks": "experimental",
 }
 SAFE_PACKAGE_INTERFACES = {
     "scripts.agent_os_issue_acceptance:render_report",
@@ -45,6 +47,8 @@ SAFE_PACKAGE_INTERFACES = {
     "scripts.agent_os_issue_acceptance:ReadinessResult",
     "scripts.agent_os_issue_acceptance:evaluate_issue_readiness",
     "scripts.agent_os_issue_acceptance:entity_id_collision_check",
+    "scripts.agent_os_issue_acceptance:unresolved_dependency_check",
+    "scripts.agent_os_issue_acceptance:evaluate_input_scope_coverage",
     "scripts.agent_os_issue_labels:evaluate_issue_labels",
 }
 
