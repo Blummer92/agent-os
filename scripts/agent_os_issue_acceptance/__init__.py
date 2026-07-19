@@ -13,6 +13,10 @@ from .batch_graph import (
     load_issue_batch_fixture,
 )
 from .batch_identity_checks import entity_id_collision_check
+from .batch_scope_checks import (
+    evaluate_input_scope_coverage,
+    unresolved_dependency_check,
+)
 from .policy import evaluate_acceptance
 from .readiness import (
     ReadinessOutcome,
@@ -33,9 +37,11 @@ __all__ = [
     "build_issue_batch_graph",
     "entity_id_collision_check",
     "evaluate_acceptance",
+    "evaluate_input_scope_coverage",
     "evaluate_issue_readiness",
     "evaluate_issue_readiness_with_labels",
     "load_issue_batch_fixture",
     "render_report",
     "run_graph_checks",
+    "unresolved_dependency_check",
 ]
