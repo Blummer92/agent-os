@@ -58,11 +58,12 @@ handoff cannot be treated as `fresh`:
    HEAD SHA.
 7. Re-run IA4D (`evaluate_batch_plan`) against the current inputs.
 8. Compare the freshly computed classifications against the handoff's
-   `cohort_summaries`; any current classification that is *stronger*
-   (per `_ORDER` in `batch_planning.py`: `blocked` > `needs-decision` >
-   `sequencing-review` > `parallel-candidate`) than the stored one
-   invalidates the handoff outright — the stronger, current result
-   always wins.
+   `cohort_summaries`. Classification precedence, strongest first, is
+   `blocked` > `needs-decision` > `sequencing-review` >
+   `parallel-candidate` (stated directly here, not by reference to the
+   private `_ORDER` constant in `batch_planning.py`). Any current
+   classification stronger than the stored one invalidates freshness
+   outright — the stronger, current result always wins.
 9. Require current ownership-registry input
    (`04_Registry/ownership-matrix.md` or its successor) rather than
    trusting any ownership data implied by the handoff.
@@ -84,4 +85,10 @@ warrants inspection.
 
 ## Version
 
-0.1.0
+0.2.0
+
+## Changelog
+
+- 0.2.0 stated classification precedence directly (no `_ORDER`
+  reference).
+- 0.1.0 initial freshness and revalidation contract.
