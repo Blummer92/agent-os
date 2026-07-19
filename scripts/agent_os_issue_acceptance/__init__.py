@@ -1,5 +1,11 @@
 """Reusable Agent OS issue acceptance and readiness checks."""
 
+from .batch_checks import (
+    BatchConflictRun,
+    ForbiddenPathCrossing,
+    evaluate_base_batch_conflict_run,
+    evaluate_base_batch_conflicts,
+)
 from .batch_extensions import (
     GraphCheck,
     GraphCheckResult,
@@ -27,6 +33,8 @@ from .readiness import (
 from .report import render_report
 
 __all__ = [
+    "BatchConflictRun",
+    "ForbiddenPathCrossing",
     "GraphCheck",
     "GraphCheckResult",
     "GraphCheckRun",
@@ -37,6 +45,8 @@ __all__ = [
     "build_issue_batch_graph",
     "entity_id_collision_check",
     "evaluate_acceptance",
+    "evaluate_base_batch_conflict_run",
+    "evaluate_base_batch_conflicts",
     "evaluate_input_scope_coverage",
     "evaluate_issue_readiness",
     "evaluate_issue_readiness_with_labels",
