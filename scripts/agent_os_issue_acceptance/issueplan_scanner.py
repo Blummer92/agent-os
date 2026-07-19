@@ -9,7 +9,11 @@ import yaml
 
 _METADATA_KEY = "agent_os_issue_acceptance"
 _FENCED_YAML_RE = re.compile(r"```(?:yaml|yml)\s*(.*?)```", re.DOTALL | re.IGNORECASE)
+_METADATA_INTENT_RE = re.compile(
+    rf"(?:^|\n)\s*{re.escape(_METADATA_KEY)}\s*:", re.IGNORECASE
+)
 _GOVERNED_FIELDS = {
+    "profile_version",
     "entity_id",
     "owner_agent",
     "source_of_truth",
@@ -24,6 +28,20 @@ _GOVERNED_FIELDS = {
     "documentation_expected_change",
     "documentation_exemption_reason",
 }
+_STRICT_REQUIRED_FIELDS = {
+    "profile_version",
+    "entity_id",
+    "owner_agent",
+    "source_of_truth",
+    "external_writes",
+    "required_files",
+    "forbidden_paths",
+    "required_tests",
+    "required_docs",
+    "manual_review",
+    "documentation_impact",
+}
+_RECOGNIZED_PROFILE_VERSIONS = {"issueplan-core/v1"}
 
 
 class ScanFinding(str, Enum):
@@ -38,6 +56,8 @@ class ScanFinding(str, Enum):
     SOURCE_UNSUPPORTED = "source-unsupported"
     SOURCE_STALE = "source-stale"
     UNKNOWN_GOVERNED_FIELD = "unknown-governed-field"
+    STRICT_FIELDS_INCOMPLETE = "strict-fields-incomplete"
+    PROFILE_VERSION_UNSUPPORTED = "profile-version-unsupported"
     IDENTITY_FINDING_PRESENT = "identity-finding-present"
 
 
@@ -138,15 +158,28 @@ def scan_issueplan_source(envelope: SourceEnvelope) -> ScanResult:
         for candidate in valid
         if candidate.parsed and candidate.parsed.get("entity_id")
     }
+    strict_complete = False
+    if len(valid) == 1 and valid[0].parsed is not None:
+        block = valid[0].parsed
+        missing = _missing_strict_fields(block)
+        if missing:
+            findings.append(ScanFinding.STRICT_FIELDS_INCOMPLETE)
+        profile_version = str(block.get("profile_version", "")).strip()
+        if profile_version and profile_version not in _RECOGNIZED_PROFILE_VERSIONS:
+            findings.append(ScanFinding.PROFILE_VERSION_UNSUPPORTED)
+        strict_complete = not missing and profile_version in _RECOGNIZED_PROFILE_VERSIONS
+
     if len(identities) > 1:
         findings.append(ScanFinding.IDENTITY_FINDING_PRESENT)
         adoption = AdoptionClass.IDENTITY_QUARANTINED
     elif malformed or len(candidates) != 1 or unknown_fields:
         adoption = AdoptionClass.ADOPTION_BLOCKED
-    elif identities:
+    elif strict_complete:
         adoption = AdoptionClass.STRICT_NATIVE
-    else:
+    elif identities:
         adoption = AdoptionClass.ADOPTION_CANDIDATE
+    else:
+        adoption = AdoptionClass.LEGACY_COMPATIBLE
 
     strict_valid = adoption == AdoptionClass.STRICT_NATIVE
     return _result(envelope, findings, adoption, candidates, provenance, strict_valid)
@@ -169,10 +202,12 @@ def _discover_candidates(content: str) -> list[MetadataCandidate]:
     candidates: list[MetadataCandidate] = []
     for index, match in enumerate(_FENCED_YAML_RE.finditer(content or ""), start=1):
         raw = match.group(1)
+        intended_metadata = bool(_METADATA_INTENT_RE.search(raw))
         try:
             parsed = yaml.safe_load(raw) or {}
         except yaml.YAMLError:
-            candidates.append(MetadataCandidate(index, raw, None, True))
+            if intended_metadata:
+                candidates.append(MetadataCandidate(index, raw, None, True))
             continue
         if not isinstance(parsed, dict) or _METADATA_KEY not in parsed:
             continue
@@ -189,6 +224,17 @@ def _candidates_identical(candidates: list[MetadataCandidate]) -> bool:
         return False
     first = candidates[0].parsed
     return all(candidate.parsed == first for candidate in candidates[1:])
+
+
+def _missing_strict_fields(block: dict[str, Any]) -> set[str]:
+    missing: set[str] = set()
+    for field_name in _STRICT_REQUIRED_FIELDS:
+        if field_name not in block or block[field_name] is None:
+            missing.add(field_name)
+            continue
+        if isinstance(block[field_name], str) and not block[field_name].strip():
+            missing.add(field_name)
+    return missing
 
 
 def _field_provenance(
