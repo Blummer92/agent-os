@@ -73,8 +73,14 @@ issues, labels, templates, readiness fields, workflows, or external systems.
 ## Bounded issue scanning
 
 `issue_scanner.py` converts complete paginated issue retrieval into provenance-
-preserving scanner records for later report-only counts. It is offline-testable,
-fails closed when pagination or required fields are incomplete, and does not edit
+preserving scanner records for later report-only counts. `github_issue_source.py`
+and `issue_scan_cli.py` provide an explicit local GitHub runner:
+
+```bash
+python -m scripts.agent_os_issue_acceptance.issue_scan_cli --repository OWNER/REPO
+```
+
+The runner emits JSON, exits nonzero on incomplete retrieval, and does not edit
 issues, labels, readiness fields, templates, workflows, or external systems.
 
 ## Workflow rollout
