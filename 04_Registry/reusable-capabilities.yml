@@ -176,3 +176,33 @@ capabilities:
     invariants:
       - Lookup results are navigation evidence, not write authorization.
       - Each tab is fetched at most once per NavigationIndex instance.
+
+  - capability_id: issue-batch-identity-collision-check
+    name: Issue Batch Identity Collision Check
+    summary: Detects duplicate non-null entity identities in a supplied issue batch graph and returns quarantine evidence.
+    status: experimental
+    canonical_paths:
+      - scripts/agent_os_issue_acceptance/batch_identity_checks.py
+      - scripts/agent_os_issue_acceptance/__init__.py
+    public_interfaces:
+      - scripts.agent_os_issue_acceptance:entity_id_collision_check
+    owner_agent: Integration Manager
+    supporting_agents:
+      - QA / Test Agent
+    known_consumers: []
+    known_consumer_exemption: Approved for IA4C2 because the public graph-check interface and focused tests are verified; IA4D is the planned non-test consumer.
+    tests:
+      - tests/agent_os_issue_acceptance/test_batch_identity_checks.py
+    keywords:
+      - issue-batch
+      - identity
+      - collision
+      - quarantine
+    reuse_guidance: Run through run_graph_checks for supplied-graph collision evidence; never use the result to choose an identity owner, repair identity, or authorize execution.
+    side_effects:
+      - Reads only the supplied immutable IssueBatchGraph.
+      - Performs no network calls, repository searches, identity mutation, or external writes.
+    invariants:
+      - Every node sharing one duplicate non-null entity_id is quarantined.
+      - Missing entity_id values are not collisions.
+      - Collision findings require manual review and never select a canonical winner.
