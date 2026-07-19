@@ -42,3 +42,11 @@ Add one canonical readiness result so operators do not need to interpret several
 ## Definition Of Done
 
 - [ ] Tests pass.
+
+## Documentation impact
+
+docs-not-required
+
+## Documentation exemption reason
+
+This change adds an internal readiness result and does not alter documented behavior or operator guidance.

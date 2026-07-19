@@ -107,6 +107,21 @@ _COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 _METADATA_RE = re.compile(r"```(?:yaml|yml)\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 _HEADING_RE = re.compile(r"^#{2,3}\s+(.+?)\s*$")
 
+_NO_RESPONSE = "_No response_"
+_KNOWN_DOCUMENTATION_IMPACT_VALUES = {"docs-required", "docs-not-required", "docs-needs-decision"}
+_DOC_HEADING_FIELD_MAP = {
+    "documentation impact": "documentation_impact",
+    "required documentation paths or bounded areas": "required_docs",
+    "expected documentation change": "documentation_expected_change",
+    "documentation exemption reason": "documentation_exemption_reason",
+}
+
+
+@dataclass(frozen=True)
+class _FieldResolution:
+    status: str  # "missing" | "ok" | "conflict"
+    value: str | None
+
 
 def evaluate_issue_readiness(
     issue_body: str,
@@ -157,6 +172,13 @@ def evaluate_issue_readiness(
     checks.extend(path_checks)
     manual_review_items.extend(path_manual_review_items)
     blockers.extend(check.message for check in path_checks if check.status == Status.FAIL)
+
+    documentation_check = _evaluate_documentation_impact(metadata, body)
+    checks.append(documentation_check)
+    if documentation_check.status == Status.FAIL:
+        blockers.append(documentation_check.message)
+    elif documentation_check.status == Status.MANUAL_REVIEW:
+        manual_review_items.append(documentation_check.message)
 
     if metadata.present and metadata.manual_review:
         checks.append(
@@ -347,6 +369,269 @@ def _path_syntax_evidence(field: str, value: object, code: str) -> str:
     if len(bounded_value) > 120:
         bounded_value = f"{bounded_value[:117]}..."
     return f"field={field}; value={bounded_value}; code={code}"
+
+
+def _documentation_heading_occurrences(body: str) -> dict[str, list[str]]:
+    """Group content by canonical documentation heading, preserving duplicates."""
+    visible = _sanitize(body)
+    occurrences: dict[str, list[str]] = {}
+    current_field: str | None = None
+    current_lines: list[str] = []
+
+    def flush() -> None:
+        nonlocal current_field, current_lines
+        if current_field is not None:
+            occurrences.setdefault(current_field, []).append("\n".join(current_lines).strip())
+        current_field = None
+        current_lines = []
+
+    for line in visible.splitlines():
+        if line.lstrip().startswith(">"):
+            continue
+        match = _HEADING_RE.match(line.strip())
+        if match:
+            flush()
+            current_field = _DOC_HEADING_FIELD_MAP.get(_normalize(match.group(1)))
+            continue
+        if current_field is not None:
+            current_lines.append(line)
+    flush()
+    return occurrences
+
+
+def _duplicate_heading_evidence(occurrences: dict[str, list[str]]) -> list[str]:
+    return [
+        f"field={field}; code=duplicate-heading; count={len(occurrences[field])}"
+        for field in sorted(occurrences)
+        if len(occurrences[field]) > 1
+    ]
+
+
+def _first(values: list[str] | None) -> str | None:
+    return values[0] if values else None
+
+
+def _live_lines(text: str | None) -> list[str]:
+    if not text:
+        return []
+    return [
+        stripped
+        for stripped in (line.strip() for line in text.splitlines())
+        if stripped and stripped != _NO_RESPONSE
+    ]
+
+
+def _resolve_scalar_field(
+    yaml_text: str | None, body_text: str | None, *, collapse_whitespace: bool
+) -> _FieldResolution:
+    yaml_values = _live_lines(yaml_text)
+    body_values = _live_lines(body_text)
+    if len(yaml_values) > 1 or len(body_values) > 1:
+        return _FieldResolution("conflict", None)
+
+    yaml_value = yaml_values[0] if yaml_values else None
+    body_value = body_values[0] if body_values else None
+
+    if yaml_value is not None and body_value is not None:
+        left, right = yaml_value, body_value
+        if collapse_whitespace:
+            left = re.sub(r"\s+", " ", left)
+            right = re.sub(r"\s+", " ", right)
+        if left == right:
+            return _FieldResolution("ok", yaml_value)
+        return _FieldResolution("conflict", None)
+    if yaml_value is not None:
+        return _FieldResolution("ok", yaml_value)
+    if body_value is not None:
+        return _FieldResolution("ok", body_value)
+    return _FieldResolution("missing", None)
+
+
+def _resolve_required_docs(yaml_values: list[str], body_text: str | None) -> tuple[str, list[str]]:
+    body_values = _live_lines(body_text)
+    yaml_set = sorted({value.strip() for value in yaml_values if value.strip()})
+    body_set = sorted({value.strip() for value in body_values if value.strip()})
+
+    if yaml_set and body_set:
+        if yaml_set == body_set:
+            return "ok", yaml_set
+        return "conflict", []
+    if yaml_set:
+        return "ok", yaml_set
+    if body_set:
+        return "ok", body_set
+    return "missing", []
+
+
+def _evaluate_documentation_impact(metadata: IssueMetadata, body: str) -> CheckResult:
+    occurrences = _documentation_heading_occurrences(body)
+    duplicate_evidence = _duplicate_heading_evidence(occurrences)
+    if duplicate_evidence:
+        return CheckResult(
+            "documentation impact",
+            Status.MANUAL_REVIEW,
+            "Duplicate canonical documentation headings require human review.",
+            duplicate_evidence,
+        )
+
+    impact = _resolve_scalar_field(
+        metadata.documentation_impact,
+        _first(occurrences.get("documentation_impact")),
+        collapse_whitespace=False,
+    )
+    if impact.status == "conflict":
+        return CheckResult(
+            "documentation impact",
+            Status.MANUAL_REVIEW,
+            "Conflicting documentation-impact evidence requires human review.",
+            ["field=documentation_impact; code=documentation-source-conflict"],
+        )
+    if impact.status == "missing":
+        return CheckResult(
+            "documentation impact",
+            Status.MANUAL_REVIEW,
+            "Documentation-impact evidence is missing.",
+            ["field=documentation_impact; code=legacy-metadata-missing"],
+        )
+
+    impact_value = impact.value or ""
+    if impact_value not in _KNOWN_DOCUMENTATION_IMPACT_VALUES:
+        return CheckResult(
+            "documentation impact",
+            Status.MANUAL_REVIEW,
+            "Documentation-impact value is not recognized.",
+            ["field=documentation_impact; code=documentation-impact-unknown"],
+        )
+    if impact_value == "docs-needs-decision":
+        return CheckResult(
+            "documentation impact",
+            Status.MANUAL_REVIEW,
+            "Documentation impact explicitly needs a human decision.",
+            ["field=documentation_impact; code=documentation-needs-decision"],
+        )
+
+    docs_status, docs_values = _resolve_required_docs(
+        metadata.required_docs, _first(occurrences.get("required_docs"))
+    )
+    expected = _resolve_scalar_field(
+        metadata.documentation_expected_change,
+        _first(occurrences.get("documentation_expected_change")),
+        collapse_whitespace=True,
+    )
+    exemption = _resolve_scalar_field(
+        metadata.documentation_exemption_reason,
+        _first(occurrences.get("documentation_exemption_reason")),
+        collapse_whitespace=True,
+    )
+
+    if impact_value == "docs-required":
+        return _evaluate_docs_required(docs_status, docs_values, expected, exemption)
+    return _evaluate_docs_not_required(docs_status, docs_values, expected, exemption)
+
+
+def _evaluate_docs_required(
+    docs_status: str,
+    docs_values: list[str],
+    expected: _FieldResolution,
+    exemption: _FieldResolution,
+) -> CheckResult:
+    evidence = ["impact=docs-required"]
+    fail = False
+    manual = False
+
+    if docs_status == "missing":
+        fail = True
+        evidence.append("field=required_docs; code=documentation-path-missing")
+    elif docs_status == "conflict":
+        manual = True
+        evidence.append("field=required_docs; code=documentation-path-conflict")
+    else:
+        malformed: list[str] = []
+        valid_paths: list[str] = []
+        for value in docs_values:
+            try:
+                valid_paths.append(normalize_declared_path(value))
+            except DeclaredPathError as error:
+                malformed.append(_path_syntax_evidence("required_docs", value, error.code))
+        if malformed:
+            manual = True
+            evidence.extend(sorted(malformed))
+        evidence.extend(f"evidence_path={path}" for path in sorted(valid_paths))
+
+    if expected.status == "missing":
+        fail = True
+        evidence.append("field=documentation_expected_change; code=documentation-expected-change-missing")
+    elif expected.status == "conflict":
+        manual = True
+        evidence.append("field=documentation_expected_change; code=documentation-expected-change-conflict")
+    else:
+        evidence.append("expected_change_present=true")
+
+    if exemption.status in ("ok", "conflict"):
+        manual = True
+        evidence.append("field=documentation_exemption_reason; code=documentation-exemption-conflict")
+
+    if fail:
+        return CheckResult(
+            "documentation impact",
+            Status.FAIL,
+            "Documentation impact requires documentation, but required evidence is missing.",
+            evidence,
+        )
+    if manual:
+        return CheckResult(
+            "documentation impact",
+            Status.MANUAL_REVIEW,
+            "Documentation impact requires human review of conflicting or malformed evidence.",
+            evidence,
+        )
+    return CheckResult(
+        "documentation impact",
+        Status.PASS,
+        "Documentation impact evidence is complete and consistent.",
+        evidence,
+    )
+
+
+def _evaluate_docs_not_required(
+    docs_status: str,
+    docs_values: list[str],
+    expected: _FieldResolution,
+    exemption: _FieldResolution,
+) -> CheckResult:
+    evidence = ["impact=docs-not-required"]
+    manual = False
+
+    if exemption.status == "missing":
+        manual = True
+        evidence.append("field=documentation_exemption_reason; code=documentation-exemption-missing")
+    elif exemption.status == "conflict":
+        manual = True
+        evidence.append("field=documentation_exemption_reason; code=documentation-exemption-conflict")
+    else:
+        evidence.append("exemption_reason_present=true")
+
+    if docs_status in ("ok", "conflict") and (docs_status == "conflict" or docs_values):
+        manual = True
+        evidence.append("field=required_docs; code=documentation-path-conflict")
+
+    if expected.status in ("ok", "conflict"):
+        manual = True
+        evidence.append("field=documentation_expected_change; code=documentation-expected-change-conflict")
+
+    if manual:
+        return CheckResult(
+            "documentation impact",
+            Status.MANUAL_REVIEW,
+            "Documentation impact requires human review of unexpected documentation evidence.",
+            evidence,
+        )
+    return CheckResult(
+        "documentation impact",
+        Status.PASS,
+        "Documentation impact evidence indicates no documentation change is required.",
+        evidence,
+    )
 
 
 def _normalize_source_value(value: str) -> str:

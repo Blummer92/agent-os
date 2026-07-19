@@ -4,6 +4,7 @@ from scripts.agent_os_issue_acceptance.readiness import (
     evaluate_issue_readiness,
     evaluate_issue_readiness_with_labels,
 )
+from scripts.agent_os_issue_acceptance.report import exit_code_for
 
 
 def ready_body(extra: str = "") -> str:
@@ -19,8 +20,35 @@ QA / Test Agent
 - markdown check
 ## Completion Criterion
 - Text is corrected.
+## Documentation impact
+docs-not-required
+## Documentation exemption reason
+This change does not alter documented behavior or operator guidance.
 {extra}
 """
+
+
+def base_body(doc_section: str = "", *, extra: str = "") -> str:
+    """A ready-shaped Tier 0 body with no built-in documentation-impact evidence."""
+    return f"""
+Issue Tier: 0
+## Objective
+Update documentation.
+## Owner
+QA / Test Agent
+## Allowed Files
+- docs/example.md
+## Validation
+- markdown check
+## Completion Criterion
+- Text is corrected.
+{doc_section}
+{extra}
+"""
+
+
+def _doc_check(result) -> CheckResult:
+    return next(check for check in result.report.checks if check.name == "documentation impact")
 
 
 def label_report(status: Status) -> AcceptanceReport:
@@ -263,3 +291,399 @@ def test_failed_label_map_contract_blocks():
     result = evaluate_issue_readiness_with_labels(ready_body(), label_report(Status.FAIL))
     assert result.outcome == ReadinessOutcome.BLOCKED
     assert "label map is unsafe" in result.report.blockers
+
+
+# --- DOC2B: documentation-impact readiness evidence -----------------------------
+
+
+def test_docs_required_with_valid_evidence_is_ready():
+    body = base_body(
+        """
+## Documentation impact
+docs-required
+## Required documentation paths or bounded areas
+01_Shared_Standards/github
+docs/example.md
+## Expected documentation change
+Explain the new operator behavior.
+"""
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.READY
+    check = _doc_check(result)
+    assert check.status == Status.PASS
+    assert "evidence_path=01_Shared_Standards/github" in check.evidence
+    assert "evidence_path=docs/example.md" in check.evidence
+    assert "expected_change_present=true" in check.evidence
+
+
+def test_docs_required_missing_all_paths_is_blocked():
+    body = base_body(
+        """
+## Documentation impact
+docs-required
+## Expected documentation change
+Explain the new operator behavior.
+"""
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.BLOCKED
+    check = _doc_check(result)
+    assert check.status == Status.FAIL
+    assert "field=required_docs; code=documentation-path-missing" in check.evidence
+
+
+def test_docs_required_missing_expected_change_is_blocked():
+    body = base_body(
+        """
+## Documentation impact
+docs-required
+## Required documentation paths or bounded areas
+docs/example.md
+"""
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.BLOCKED
+    check = _doc_check(result)
+    assert check.status == Status.FAIL
+    assert "field=documentation_expected_change; code=documentation-expected-change-missing" in check.evidence
+
+
+def test_docs_required_with_malformed_path_requires_decision():
+    body = base_body(
+        """
+## Documentation impact
+docs-required
+## Required documentation paths or bounded areas
+../secrets.txt
+## Expected documentation change
+Explain the new operator behavior.
+"""
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    check = _doc_check(result)
+    assert check.status == Status.MANUAL_REVIEW
+    assert "field=required_docs; value='../secrets.txt'; code=traversal" in check.evidence
+
+
+def test_docs_required_with_exemption_reason_requires_decision():
+    body = base_body(
+        """
+## Documentation impact
+docs-required
+## Required documentation paths or bounded areas
+docs/example.md
+## Expected documentation change
+Explain the new operator behavior.
+## Documentation exemption reason
+Not needed.
+"""
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    check = _doc_check(result)
+    assert check.status == Status.MANUAL_REVIEW
+    assert "field=documentation_exemption_reason; code=documentation-exemption-conflict" in check.evidence
+
+
+def test_docs_not_required_with_valid_reason_is_ready():
+    body = base_body(
+        """
+## Documentation impact
+docs-not-required
+## Documentation exemption reason
+No operator-visible behavior changes.
+"""
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.READY
+    check = _doc_check(result)
+    assert check.status == Status.PASS
+    assert "exemption_reason_present=true" in check.evidence
+
+
+def test_docs_not_required_missing_reason_requires_decision():
+    body = base_body(
+        """
+## Documentation impact
+docs-not-required
+"""
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    check = _doc_check(result)
+    assert "field=documentation_exemption_reason; code=documentation-exemption-missing" in check.evidence
+
+
+def test_docs_not_required_with_paths_requires_decision():
+    body = base_body(
+        """
+## Documentation impact
+docs-not-required
+## Documentation exemption reason
+No operator-visible behavior changes.
+## Required documentation paths or bounded areas
+docs/example.md
+"""
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    check = _doc_check(result)
+    assert "field=required_docs; code=documentation-path-conflict" in check.evidence
+
+
+def test_docs_not_required_with_expected_change_requires_decision():
+    body = base_body(
+        """
+## Documentation impact
+docs-not-required
+## Documentation exemption reason
+No operator-visible behavior changes.
+## Expected documentation change
+Explain something anyway.
+"""
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    check = _doc_check(result)
+    assert "field=documentation_expected_change; code=documentation-expected-change-conflict" in check.evidence
+
+
+def test_docs_needs_decision_requires_decision_without_tripping_unrelated_logic():
+    body = base_body(
+        """
+## Documentation impact
+docs-needs-decision
+"""
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    check = _doc_check(result)
+    assert check.evidence == ["field=documentation_impact; code=documentation-needs-decision"]
+    # The generic "unresolved decisions" check is a distinct, independent finding.
+    assert not any(c.name == "unresolved decisions" for c in result.report.checks)
+
+
+def test_missing_documentation_impact_requires_decision():
+    body = base_body()
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    check = _doc_check(result)
+    assert check.evidence == ["field=documentation_impact; code=legacy-metadata-missing"]
+
+
+def test_unknown_documentation_impact_value_requires_decision():
+    body = base_body(
+        """
+## Documentation impact
+docs-maybe
+"""
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    check = _doc_check(result)
+    assert check.evidence == ["field=documentation_impact; code=documentation-impact-unknown"]
+
+
+def test_yaml_only_evidence_is_used():
+    body = base_body(
+        extra="""
+```yaml
+agent_os_issue_acceptance:
+  tier: 0
+  documentation_impact: docs-not-required
+  documentation_exemption_reason: No behavior changes.
+```
+"""
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.READY
+    check = _doc_check(result)
+    assert check.status == Status.PASS
+
+
+def test_body_section_only_evidence_is_used():
+    body = base_body(
+        """
+## Documentation impact
+docs-not-required
+## Documentation exemption reason
+No behavior changes.
+"""
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.READY
+
+
+def test_equivalent_dual_source_evidence_dedupes_to_ready():
+    body = base_body(
+        """
+## Documentation impact
+docs-not-required
+## Documentation exemption reason
+No   behavior   changes.
+""",
+        extra="""
+```yaml
+agent_os_issue_acceptance:
+  tier: 0
+  documentation_impact: docs-not-required
+  documentation_exemption_reason: No behavior changes.
+```
+""",
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.READY
+
+
+def test_conflicting_dual_source_evidence_requires_decision():
+    body = base_body(
+        """
+## Documentation impact
+docs-not-required
+""",
+        extra="""
+```yaml
+agent_os_issue_acceptance:
+  tier: 0
+  documentation_impact: docs-required
+```
+""",
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    check = _doc_check(result)
+    assert check.evidence == ["field=documentation_impact; code=documentation-source-conflict"]
+
+
+def test_duplicate_documentation_impact_heading_requires_decision():
+    body = base_body(
+        """
+## Documentation impact
+docs-not-required
+## Documentation impact
+docs-required
+"""
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    check = _doc_check(result)
+    assert check.evidence == ["field=documentation_impact; code=duplicate-heading; count=2"]
+
+
+def test_identical_duplicate_heading_content_still_requires_decision():
+    body = base_body(
+        """
+## Documentation impact
+docs-not-required
+## Documentation impact
+docs-not-required
+"""
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    check = _doc_check(result)
+    assert check.evidence == ["field=documentation_impact; code=duplicate-heading; count=2"]
+
+
+def test_duplicate_heading_hidden_in_fence_comment_or_blockquote_is_ignored():
+    body = base_body(
+        """
+## Documentation impact
+docs-not-required
+## Documentation exemption reason
+No behavior changes.
+
+<!--
+## Documentation impact
+docs-required
+-->
+> ## Documentation impact
+> docs-required
+```text
+## Documentation impact
+docs-required
+```
+"""
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.READY
+    check = _doc_check(result)
+    assert not any("duplicate-heading" in item for item in check.evidence)
+
+
+def test_multiple_live_values_under_scalar_heading_requires_decision():
+    body = base_body(
+        """
+## Documentation impact
+docs-required
+docs-not-required
+"""
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    check = _doc_check(result)
+    assert check.evidence == ["field=documentation_impact; code=documentation-source-conflict"]
+
+
+def test_stronger_existing_blocker_remains_blocked_despite_valid_documentation_evidence():
+    body = f"""
+Issue Tier: 1
+## Objective
+Add a local report-only checker.
+## Owner
+QA / Test Agent
+## Documentation impact
+docs-not-required
+## Documentation exemption reason
+No behavior changes.
+"""
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.BLOCKED
+    check = _doc_check(result)
+    assert check.status == Status.PASS
+
+
+def test_documentation_evidence_and_ordering_is_deterministic():
+    body = base_body(
+        """
+## Documentation impact
+docs-required
+## Required documentation paths or bounded areas
+docs/example.md
+01_Shared_Standards/github
+## Expected documentation change
+Explain the operator-visible change.
+"""
+    )
+    first = _doc_check(evaluate_issue_readiness(body))
+    second = _doc_check(evaluate_issue_readiness(body))
+    assert first.evidence == second.evidence
+
+
+def test_consumer_can_locate_documentation_check_without_reparsing_body():
+    body = base_body(
+        """
+## Documentation impact
+docs-not-required
+## Documentation exemption reason
+No behavior changes.
+"""
+    )
+    result = evaluate_issue_readiness(body)
+    matches = [check for check in result.report.checks if check.name == "documentation impact"]
+    assert len(matches) == 1
+    assert matches[0].status == Status.PASS
+
+
+def test_manual_review_documentation_outcome_keeps_zero_exit_code():
+    body = base_body(
+        """
+## Documentation impact
+docs-not-required
+"""
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    assert exit_code_for(result.report.overall_status) == 0
