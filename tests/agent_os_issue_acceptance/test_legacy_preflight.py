@@ -129,6 +129,33 @@ Document the new operator behavior.
     assert assessment.reason_codes == ("documentation-impact-present",)
 
 
+def test_multiline_expected_change_is_one_scalar_value():
+    body = ready_body(
+        """
+### Documentation impact
+
+docs-required
+
+### Required documentation paths or bounded areas
+
+01_Shared_Standards/github
+
+### Expected documentation change
+
+Document the operator behavior,
+including the failure and rollback path.
+"""
+    )
+
+    assessment = classify_legacy_issue(
+        LegacyIssueSnapshot.from_mapping(snapshot(13, body=body, labels=["status:ready"]))
+    )
+
+    assert assessment.classification == "already-compliant"
+    assert assessment.predicted_documentation_status == "pass"
+    assert "documentation-source-conflict" not in assessment.reason_codes
+
+
 def test_unknown_conflicting_and_duplicate_contracts_are_bounded_manual_review():
     unknown = ready_body("### Documentation impact\n\nfuture-value\n")
     conflicting = ready_body(
