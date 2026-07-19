@@ -37,6 +37,18 @@ from .readiness import (
     evaluate_issue_readiness_with_labels,
 )
 from .report import render_report
+from .scheduler_handoff import (
+    HandoffCohort,
+    HandoffValidationOutcome,
+    HandoffValidationResult,
+    SchedulerPlanningHandoff,
+    compute_graph_digest,
+    compute_handoff_digest,
+    compute_planning_result_digest,
+    serialize_scheduler_planning_handoff,
+    validate_scheduler_planning_handoff,
+    with_computed_handoff_digest,
+)
 
 __all__ = [
     "BatchConflictRun",
@@ -45,13 +57,20 @@ __all__ = [
     "GraphCheck",
     "GraphCheckResult",
     "GraphCheckRun",
+    "HandoffCohort",
+    "HandoffValidationOutcome",
+    "HandoffValidationResult",
     "IssueBatchGraph",
     "IssueBatchNode",
     "PlanningClassification",
     "PlanningCohort",
     "ReadinessOutcome",
     "ReadinessResult",
+    "SchedulerPlanningHandoff",
     "build_issue_batch_graph",
+    "compute_graph_digest",
+    "compute_handoff_digest",
+    "compute_planning_result_digest",
     "entity_id_collision_check",
     "evaluate_acceptance",
     "evaluate_base_batch_conflict_run",
@@ -63,5 +82,8 @@ __all__ = [
     "load_issue_batch_fixture",
     "render_report",
     "run_graph_checks",
+    "serialize_scheduler_planning_handoff",
     "unresolved_dependency_check",
+    "validate_scheduler_planning_handoff",
+    "with_computed_handoff_digest",
 ]
