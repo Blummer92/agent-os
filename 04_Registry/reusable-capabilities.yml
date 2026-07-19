@@ -206,3 +206,34 @@ capabilities:
       - Every node sharing one duplicate non-null entity_id is quarantined.
       - Missing entity_id values are not collisions.
       - Collision findings require manual review and never select a canonical winner.
+
+  - capability_id: issue-batch-supplied-graph-scope-checks
+    name: Issue Batch Supplied-Graph Scope Checks
+    summary: Reports unresolved dependencies and evaluates validated coverage over only the supplied issue batch graph.
+    status: experimental
+    canonical_paths:
+      - scripts/agent_os_issue_acceptance/batch_scope_checks.py
+      - scripts/agent_os_issue_acceptance/__init__.py
+    public_interfaces:
+      - scripts.agent_os_issue_acceptance:unresolved_dependency_check
+      - scripts.agent_os_issue_acceptance:evaluate_input_scope_coverage
+    owner_agent: Integration Manager
+    supporting_agents:
+      - QA / Test Agent
+    known_consumers: []
+    known_consumer_exemption: Approved for IA4C3 because the public graph-check and coverage interfaces are verified; IA4D is the planned non-test consumer.
+    tests:
+      - tests/agent_os_issue_acceptance/test_batch_scope_checks.py
+    keywords:
+      - issue-batch
+      - supplied-graph
+      - coverage
+      - unresolved-dependencies
+    reuse_guidance: Use only for unresolved-pair evidence and validated input_scope_covered decisions over the supplied graph; never claim repository-wide completeness or execution eligibility.
+    side_effects:
+      - Reads only the supplied immutable IssueBatchGraph and GraphCheckRun.
+      - Performs no network calls, repository searches, relationship mutation, or external writes.
+    invariants:
+      - Every coverage result declares coverage_scope=supplied-graph-only.
+      - Failed graph checks prevent a coverage pass.
+      - Unresolved dependency findings require manual review and never repair relationships.
