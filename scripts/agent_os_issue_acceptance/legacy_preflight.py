@@ -288,16 +288,14 @@ def _documentation_evidence(body: str) -> dict[str, Any]:
     duplicate = any(len(occurrences) > 1 for occurrences in sections.values())
     reasons = ["duplicate-documentation-heading"] if duplicate else []
     body_values = {
-        field: [
-            _clean_line(line)
-            for occurrence in occurrences
-            for line in occurrence
-        ]
-        for field, occurrences in sections.items()
-    }
-    body_values = {
-        field: [value for value in values if value and value != "_No response_"]
-        for field, values in body_values.items()
+        "documentation_impact": _line_values(sections["documentation_impact"]),
+        "required_docs": _line_values(sections["required_docs"]),
+        "documentation_expected_change": _text_values(
+            sections["documentation_expected_change"]
+        ),
+        "documentation_exemption_reason": _text_values(
+            sections["documentation_exemption_reason"]
+        ),
     }
     yaml_values = _yaml_documentation_values(body)
 
@@ -414,11 +412,35 @@ def _resolve_list(
     yaml_values: Iterable[Any],
     body_values: list[str],
 ) -> tuple[list[str], bool]:
-    yaml_list = sorted({str(value).strip() for value in yaml_values if str(value).strip()})
+    yaml_list = sorted(
+        {str(value).strip() for value in yaml_values if str(value).strip()}
+    )
     body_list = sorted({value.strip() for value in body_values if value.strip()})
     if yaml_list and body_list and yaml_list != body_list:
         return yaml_list, True
     return yaml_list or body_list, False
+
+
+def _line_values(occurrences: list[list[str]]) -> list[str]:
+    values = [
+        _clean_line(line)
+        for occurrence in occurrences
+        for line in occurrence
+    ]
+    return [value for value in values if value and value != "_No response_"]
+
+
+def _text_values(occurrences: list[list[str]]) -> list[str]:
+    values: list[str] = []
+    for occurrence in occurrences:
+        cleaned = [
+            value
+            for value in (_clean_line(line) for line in occurrence)
+            if value and value != "_No response_"
+        ]
+        if cleaned:
+            values.append(" ".join(cleaned))
+    return values
 
 
 def _clean_scalar(value: Any, *, collapse: bool) -> str | None:
