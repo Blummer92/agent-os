@@ -74,6 +74,9 @@ class IssueMetadata:
     banned_patterns: list[str] = field(default_factory=list)
     manual_review: list[str] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)
+    documentation_impact: str | None = None
+    documentation_expected_change: str | None = None
+    documentation_exemption_reason: str | None = None
 
     @classmethod
     def empty(cls) -> "IssueMetadata":
