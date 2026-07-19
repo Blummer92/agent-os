@@ -119,8 +119,20 @@ _DOC_HEADING_FIELD_MAP = {
 
 @dataclass(frozen=True)
 class _FieldResolution:
+    status: str  # "missing" | "ok" | "conflict" | "malformed"
+    value: str | None = None
+    yaml_present: bool = False
+    body_present: bool = False
+    malformed_source: str | None = None
+    malformed_type: str | None = None
+
+
+@dataclass(frozen=True)
+class _ListFieldResolution:
     status: str  # "missing" | "ok" | "conflict"
-    value: str | None
+    values: list[str]
+    yaml_count: int
+    body_count: int
 
 
 def evaluate_issue_readiness(
@@ -421,46 +433,97 @@ def _live_lines(text: str | None) -> list[str]:
     ]
 
 
+def _free_text_value(text: str | None) -> str | None:
+    """Treat an entire multiline block as one free-text value."""
+    if not text:
+        return None
+    stripped = text.strip()
+    if not stripped or stripped == _NO_RESPONSE:
+        return None
+    return stripped
+
+
+def _malformed_type_name(value: object) -> str | None:
+    """Return the YAML runtime type name when a value is present but not a string."""
+    if value is None or isinstance(value, str):
+        return None
+    return type(value).__name__
+
+
 def _resolve_scalar_field(
-    yaml_text: str | None, body_text: str | None, *, collapse_whitespace: bool
+    yaml_value: object,
+    body_text: str | None,
+    *,
+    collapse_whitespace: bool,
+    allow_multiline: bool,
 ) -> _FieldResolution:
-    yaml_values = _live_lines(yaml_text)
-    body_values = _live_lines(body_text)
-    if len(yaml_values) > 1 or len(body_values) > 1:
-        return _FieldResolution("conflict", None)
+    malformed_type = _malformed_type_name(yaml_value)
+    if malformed_type is not None:
+        return _FieldResolution("malformed", malformed_source="yaml", malformed_type=malformed_type)
+    yaml_text = yaml_value if isinstance(yaml_value, str) else None
 
-    yaml_value = yaml_values[0] if yaml_values else None
-    body_value = body_values[0] if body_values else None
+    if allow_multiline:
+        yaml_resolved = _free_text_value(yaml_text)
+        body_resolved = _free_text_value(body_text)
+    else:
+        yaml_values = _live_lines(yaml_text)
+        body_values = _live_lines(body_text)
+        if len(yaml_values) > 1 or len(body_values) > 1:
+            return _FieldResolution(
+                "conflict", yaml_present=bool(yaml_values), body_present=bool(body_values)
+            )
+        yaml_resolved = yaml_values[0] if yaml_values else None
+        body_resolved = body_values[0] if body_values else None
 
-    if yaml_value is not None and body_value is not None:
-        left, right = yaml_value, body_value
+    yaml_present = yaml_resolved is not None
+    body_present = body_resolved is not None
+
+    if yaml_present and body_present:
+        left, right = yaml_resolved, body_resolved
         if collapse_whitespace:
             left = re.sub(r"\s+", " ", left)
             right = re.sub(r"\s+", " ", right)
         if left == right:
-            return _FieldResolution("ok", yaml_value)
-        return _FieldResolution("conflict", None)
-    if yaml_value is not None:
-        return _FieldResolution("ok", yaml_value)
-    if body_value is not None:
-        return _FieldResolution("ok", body_value)
-    return _FieldResolution("missing", None)
+            return _FieldResolution("ok", yaml_resolved, yaml_present=True, body_present=True)
+        return _FieldResolution("conflict", yaml_present=True, body_present=True)
+    if yaml_present:
+        return _FieldResolution("ok", yaml_resolved, yaml_present=True, body_present=False)
+    if body_present:
+        return _FieldResolution("ok", body_resolved, yaml_present=False, body_present=True)
+    return _FieldResolution("missing")
 
 
-def _resolve_required_docs(yaml_values: list[str], body_text: str | None) -> tuple[str, list[str]]:
+def _resolve_required_docs(yaml_values: list[str], body_text: str | None) -> _ListFieldResolution:
     body_values = _live_lines(body_text)
     yaml_set = sorted({value.strip() for value in yaml_values if value.strip()})
     body_set = sorted({value.strip() for value in body_values if value.strip()})
 
     if yaml_set and body_set:
         if yaml_set == body_set:
-            return "ok", yaml_set
-        return "conflict", []
+            return _ListFieldResolution("ok", yaml_set, len(yaml_set), len(body_set))
+        return _ListFieldResolution("conflict", [], len(yaml_set), len(body_set))
     if yaml_set:
-        return "ok", yaml_set
+        return _ListFieldResolution("ok", yaml_set, len(yaml_set), 0)
     if body_set:
-        return "ok", body_set
-    return "missing", []
+        return _ListFieldResolution("ok", body_set, 0, len(body_set))
+    return _ListFieldResolution("missing", [], 0, 0)
+
+
+def _malformed_evidence(field: str, source: str | None, type_name: str | None) -> str:
+    return f"field={field}; code=documentation-source-malformed; source={source}; type={type_name}"
+
+
+def _conflict_evidence(field: str, code: str, resolution: _FieldResolution) -> str:
+    yaml_present = "true" if resolution.yaml_present else "false"
+    body_present = "true" if resolution.body_present else "false"
+    return f"field={field}; code={code}; yaml_present={yaml_present}; body_present={body_present}"
+
+
+def _required_docs_conflict_evidence(resolution: _ListFieldResolution) -> str:
+    return (
+        "field=required_docs; code=documentation-path-conflict; "
+        f"yaml_count={resolution.yaml_count}; body_count={resolution.body_count}"
+    )
 
 
 def _evaluate_documentation_impact(metadata: IssueMetadata, body: str) -> CheckResult:
@@ -478,13 +541,21 @@ def _evaluate_documentation_impact(metadata: IssueMetadata, body: str) -> CheckR
         metadata.documentation_impact,
         _first(occurrences.get("documentation_impact")),
         collapse_whitespace=False,
+        allow_multiline=False,
     )
+    if impact.status == "malformed":
+        return CheckResult(
+            "documentation impact",
+            Status.MANUAL_REVIEW,
+            "Documentation-impact YAML value has an unsupported type.",
+            [_malformed_evidence("documentation_impact", impact.malformed_source, impact.malformed_type)],
+        )
     if impact.status == "conflict":
         return CheckResult(
             "documentation impact",
             Status.MANUAL_REVIEW,
             "Conflicting documentation-impact evidence requires human review.",
-            ["field=documentation_impact; code=documentation-source-conflict"],
+            [_conflict_evidence("documentation_impact", "documentation-source-conflict", impact)],
         )
     if impact.status == "missing":
         return CheckResult(
@@ -510,28 +581,29 @@ def _evaluate_documentation_impact(metadata: IssueMetadata, body: str) -> CheckR
             ["field=documentation_impact; code=documentation-needs-decision"],
         )
 
-    docs_status, docs_values = _resolve_required_docs(
+    docs = _resolve_required_docs(
         metadata.required_docs, _first(occurrences.get("required_docs"))
     )
     expected = _resolve_scalar_field(
         metadata.documentation_expected_change,
         _first(occurrences.get("documentation_expected_change")),
         collapse_whitespace=True,
+        allow_multiline=True,
     )
     exemption = _resolve_scalar_field(
         metadata.documentation_exemption_reason,
         _first(occurrences.get("documentation_exemption_reason")),
         collapse_whitespace=True,
+        allow_multiline=True,
     )
 
     if impact_value == "docs-required":
-        return _evaluate_docs_required(docs_status, docs_values, expected, exemption)
-    return _evaluate_docs_not_required(docs_status, docs_values, expected, exemption)
+        return _evaluate_docs_required(docs, expected, exemption)
+    return _evaluate_docs_not_required(docs, expected, exemption)
 
 
 def _evaluate_docs_required(
-    docs_status: str,
-    docs_values: list[str],
+    docs: _ListFieldResolution,
     expected: _FieldResolution,
     exemption: _FieldResolution,
 ) -> CheckResult:
@@ -539,16 +611,16 @@ def _evaluate_docs_required(
     fail = False
     manual = False
 
-    if docs_status == "missing":
+    if docs.status == "missing":
         fail = True
         evidence.append("field=required_docs; code=documentation-path-missing")
-    elif docs_status == "conflict":
+    elif docs.status == "conflict":
         manual = True
-        evidence.append("field=required_docs; code=documentation-path-conflict")
+        evidence.append(_required_docs_conflict_evidence(docs))
     else:
         malformed: list[str] = []
         valid_paths: list[str] = []
-        for value in docs_values:
+        for value in docs.values:
             try:
                 valid_paths.append(normalize_declared_path(value))
             except DeclaredPathError as error:
@@ -558,16 +630,33 @@ def _evaluate_docs_required(
             evidence.extend(sorted(malformed))
         evidence.extend(f"evidence_path={path}" for path in sorted(valid_paths))
 
-    if expected.status == "missing":
+    if expected.status == "malformed":
+        manual = True
+        evidence.append(
+            _malformed_evidence("documentation_expected_change", expected.malformed_source, expected.malformed_type)
+        )
+    elif expected.status == "missing":
         fail = True
         evidence.append("field=documentation_expected_change; code=documentation-expected-change-missing")
     elif expected.status == "conflict":
         manual = True
-        evidence.append("field=documentation_expected_change; code=documentation-expected-change-conflict")
+        evidence.append(
+            _conflict_evidence("documentation_expected_change", "documentation-expected-change-conflict", expected)
+        )
     else:
         evidence.append("expected_change_present=true")
 
-    if exemption.status in ("ok", "conflict"):
+    if exemption.status == "malformed":
+        manual = True
+        evidence.append(
+            _malformed_evidence("documentation_exemption_reason", exemption.malformed_source, exemption.malformed_type)
+        )
+    elif exemption.status == "conflict":
+        manual = True
+        evidence.append(
+            _conflict_evidence("documentation_exemption_reason", "documentation-exemption-conflict", exemption)
+        )
+    elif exemption.status == "ok":
         manual = True
         evidence.append("field=documentation_exemption_reason; code=documentation-exemption-conflict")
 
@@ -594,28 +683,47 @@ def _evaluate_docs_required(
 
 
 def _evaluate_docs_not_required(
-    docs_status: str,
-    docs_values: list[str],
+    docs: _ListFieldResolution,
     expected: _FieldResolution,
     exemption: _FieldResolution,
 ) -> CheckResult:
     evidence = ["impact=docs-not-required"]
     manual = False
 
-    if exemption.status == "missing":
+    if exemption.status == "malformed":
+        manual = True
+        evidence.append(
+            _malformed_evidence("documentation_exemption_reason", exemption.malformed_source, exemption.malformed_type)
+        )
+    elif exemption.status == "missing":
         manual = True
         evidence.append("field=documentation_exemption_reason; code=documentation-exemption-missing")
     elif exemption.status == "conflict":
         manual = True
-        evidence.append("field=documentation_exemption_reason; code=documentation-exemption-conflict")
+        evidence.append(
+            _conflict_evidence("documentation_exemption_reason", "documentation-exemption-conflict", exemption)
+        )
     else:
         evidence.append("exemption_reason_present=true")
 
-    if docs_status in ("ok", "conflict") and (docs_status == "conflict" or docs_values):
+    if docs.status == "conflict":
         manual = True
-        evidence.append("field=required_docs; code=documentation-path-conflict")
+        evidence.append(_required_docs_conflict_evidence(docs))
+    elif docs.status == "ok" and docs.values:
+        manual = True
+        evidence.append(_required_docs_conflict_evidence(docs))
 
-    if expected.status in ("ok", "conflict"):
+    if expected.status == "malformed":
+        manual = True
+        evidence.append(
+            _malformed_evidence("documentation_expected_change", expected.malformed_source, expected.malformed_type)
+        )
+    elif expected.status == "conflict":
+        manual = True
+        evidence.append(
+            _conflict_evidence("documentation_expected_change", "documentation-expected-change-conflict", expected)
+        )
+    elif expected.status == "ok":
         manual = True
         evidence.append("field=documentation_expected_change; code=documentation-expected-change-conflict")
 
