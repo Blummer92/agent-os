@@ -19,6 +19,12 @@ from .batch_graph import (
     load_issue_batch_fixture,
 )
 from .batch_identity_checks import entity_id_collision_check
+from .batch_planning import (
+    BatchPlanningResult,
+    PlanningClassification,
+    PlanningCohort,
+    evaluate_batch_plan,
+)
 from .batch_scope_checks import (
     evaluate_input_scope_coverage,
     unresolved_dependency_check,
@@ -34,12 +40,15 @@ from .report import render_report
 
 __all__ = [
     "BatchConflictRun",
+    "BatchPlanningResult",
     "ForbiddenPathCrossing",
     "GraphCheck",
     "GraphCheckResult",
     "GraphCheckRun",
     "IssueBatchGraph",
     "IssueBatchNode",
+    "PlanningClassification",
+    "PlanningCohort",
     "ReadinessOutcome",
     "ReadinessResult",
     "build_issue_batch_graph",
@@ -47,6 +56,7 @@ __all__ = [
     "evaluate_acceptance",
     "evaluate_base_batch_conflict_run",
     "evaluate_base_batch_conflicts",
+    "evaluate_batch_plan",
     "evaluate_input_scope_coverage",
     "evaluate_issue_readiness",
     "evaluate_issue_readiness_with_labels",
