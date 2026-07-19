@@ -14,12 +14,8 @@ HELPER_OVERLAYS = {
 SUPPORT_SURFACES = {
     "Apps Script Sync Test Overlay",
     "Dashboard Builder Overlay",
-    "GitHub Change Request",
-    "Instructional Design Standards",
-    "Navigation Registry Standard",
     "Python Development Overlay",
     "Workspace Implementation Overlay",
-    "selected registered owner",
 }
 PATH_RE = re.compile(r"`((?:00_Governance|01_Shared_Standards|04_Registry)/[^`]+)`")
 
