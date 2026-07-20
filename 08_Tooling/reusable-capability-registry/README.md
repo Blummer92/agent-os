@@ -1,15 +1,14 @@
 # Reusable Capability Registry
 
-Offline, read-only discovery and validation for the Agent OS reusable-capability
-registry.
+Offline, read-only discovery for the Agent OS reusable-capability registry.
 
 ## Guarantees
 
 - Reads `04_Registry/reusable-capabilities.yml` without modifying it.
 - Uses immutable records and detached serialized output.
-- Produces deterministic discovery and validation results.
-- Treats confidence and validation findings as evidence, not authorization.
-- Performs no network calls, arbitrary runtime imports, or repository writes.
+- Produces deterministic lookup results.
+- Treats confidence as match strength, not behavioral validation.
+- Performs no network calls, source inspection, imports, or repository writes.
 
 ## Install for development
 
@@ -17,7 +16,7 @@ registry.
 python -m pip install -e '.[test]'
 ```
 
-## Discovery CLI
+## CLI
 
 ```bash
 agent-os-capabilities --id issue-acceptance-report
@@ -31,12 +30,12 @@ Exit codes:
 
 - `0`: one or more deterministic results
 - `1`: no results
-- `2`: invalid input, malformed registry, unsupported version, or ambiguous result
+- `2`: invalid input, malformed registry, unsupported version, or ambiguous keyword-only result
 
 All output is informational. A discovery result does not authorize implementation,
 repository writes, readiness changes, or merge.
 
-## Discovery API
+## Python API
 
 ```python
 from reusable_capability_registry import RegistryReader, discover_capabilities
@@ -48,33 +47,6 @@ results = discover_capabilities(reader, capability_id="issue-acceptance-report")
 `CapabilityRecord` and `DiscoveryResult` are frozen, slotted dataclasses. Repeated
 values use tuples. JSON payloads are fresh projections and share no mutable state
 with the reader.
-
-## Report-only validation API
-
-```python
-from reusable_capability_registry import (
-    serialize_validation_report,
-    validate_registry,
-)
-
-report = validate_registry()
-print(serialize_validation_report(report), end="")
-```
-
-Validation reuses `RegistryReader`, then performs bounded static inspection for:
-
-- canonical paths and public Python symbols;
-- compatibility-preserving package re-exports;
-- known-consumer and listed-test evidence;
-- test-only consumer classification;
-- recognized owner and supporting-agent names;
-- active consumer exemptions and newly detected non-test consumers.
-
-Results are `pass`, `warn`, `manual-review`, or `fail`. Findings use a finite reason
-vocabulary and preserve human detail separately. Reports always set
-`authoritative`, `mutation_authorized`, and `side_effects_performed` to `false`.
-The validator does not import registered modules, mutate registry data, remove
-exemptions, reassign owners, update issues, or create workflows.
 
 ## Validation
 
