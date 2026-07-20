@@ -42,6 +42,15 @@ Modeling must produce four artifact types that Materials Coach reuses:
 - Example: "I thought we add first, but that's wrong because of the parentheses"
 - Materials uses: Anchor charts, error-pattern slides, misconception checks
 
+## Vocabulary Integration
+
+Inherit `unit-vocabulary-map-standard.md` and
+`lesson-vocabulary-planner-response-standard.md`. Preserve source location,
+evidence class, confirmation state, CLS2 category, CLS4 category, and practice
+evidence. Keep teacher language, student language, material safety, and assessment
+eligibility independent. Only confirmed vocabulary marked material-safe may flow
+to student-facing materials. Assessment requires explicit instruction or practice.
+
 ## Pipeline Rule
 
 1. **Teacher Modeling Coach** creates all 4 artifact types in student voice
@@ -50,7 +59,8 @@ Modeling must produce four artifact types that Materials Coach reuses:
    - Must be ≥3: Slide text comes from modeling OR approved student frames
    - Student voice is authentic (exploratory, peer-focused, evidence-based)
    - Never teacher directives or formal academic syntax
+4. Student-facing materials use approved Google Drive destinations, not GitHub storage.
 
 ## Version
 
-0.1.0
+0.2.0
