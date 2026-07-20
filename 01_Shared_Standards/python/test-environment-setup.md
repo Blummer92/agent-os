@@ -191,6 +191,9 @@ docker-compose run app /bin/bash
 
 ## CI/CD Integration
 
+Use the environment-provided pip by default. Upgrade or pin it only when a documented
+compatibility requirement proves the provided installer is insufficient.
+
 ### GitHub Actions
 
 Create `.github/workflows/tests.yml`:
@@ -236,19 +239,18 @@ jobs:
           - 6379:6379
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: 'pip'
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install -r requirements-dev.txt
+          python -m pip install -r requirements.txt
+          python -m pip install -r requirements-dev.txt
 
       - name: Lint with flake8
         run: |
@@ -434,7 +436,7 @@ def s3_client():
 @mock_dynamodb
 def dynamodb_table():
     """Mocked DynamoDB table."""
-    dynamodb = boto3.resource('dynamodb', region_name='us-east-1')
+    dynamodb = boto3.resource('dynamodb')
     table = dynamodb.create_table(
         TableName='test-table',
         KeySchema=[{'AttributeName': 'id', 'KeyType': 'HASH'}],

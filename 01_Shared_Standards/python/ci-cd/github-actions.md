@@ -1,5 +1,10 @@
 # GitHub Actions Workflow
 
+## Installer Policy
+
+Use the environment-provided pip by default. Upgrade or pin pip only for a documented
+compatibility requirement. Cache restoration never replaces dependency installation.
+
 ## Basic Workflow
 
 Create `.github/workflows/tests.yml`:
@@ -24,14 +29,14 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
+        cache: "pip"
+        cache-dependency-path: requirements-dev.txt
 
     - name: Install dependencies
-      run: |
-        pip install --upgrade pip
-        pip install -r requirements-dev.txt
+      run: python -m pip install -r requirements-dev.txt
 
     - name: Run tests
       run: pytest --cov=src --cov-fail-under=80
@@ -40,8 +45,7 @@ jobs:
       uses: codecov/codecov-action@v3
 ```
 
-The `strategy.matrix` block above runs tests on each listed Python
-version as a separate job.
+The `strategy.matrix` block runs each listed Python version as a separate job.
 
 ## Service Dependencies
 
@@ -69,8 +73,7 @@ Only run on main branch:
 ```yaml
 - name: Report coverage
   if: github.ref == 'refs/heads/main'
-  run: |
-    echo "Coverage: ${{ env.COVERAGE }}"
+  run: echo "Coverage: ${{ env.COVERAGE }}"
 ```
 
 ## Artifact Upload
@@ -88,6 +91,5 @@ Save test results:
 
 ## Manual Trigger
 
-Add `workflow_dispatch:` under `on:` to allow triggering from the GitHub
-UI, and add a status badge to your README with
-`![Tests](.../workflows/tests.yml/badge.svg)`.
+Add `workflow_dispatch:` under `on:` to allow triggering from the GitHub UI. Add a
+status badge to the README with `![Tests](.../workflows/tests.yml/badge.svg)`.

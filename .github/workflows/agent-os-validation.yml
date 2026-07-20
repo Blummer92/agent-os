@@ -37,7 +37,6 @@ jobs:
       - name: Install validation dependencies
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip
           python -m pip install -r requirements-dev.txt
           python -m pip install -r 08_Tooling/workflow-scheduler/requirements.txt
           python -m pip install -e "./08_Tooling/instructional-materials-coach[test]"
