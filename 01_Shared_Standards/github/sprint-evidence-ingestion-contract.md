@@ -9,8 +9,7 @@
 - Source of truth: GitHub
 - Execution authorization: false
 
-This contract defines bounded, read-only evidence collection for explicitly supplied
-Sprint candidates.
+This contract defines bounded, read-only evidence collection for supplied Sprint candidates.
 
 ## Inputs
 
@@ -70,8 +69,7 @@ It must not add competing reporting fields or alter schema ownership.
 - Preserve issue and PR timestamps and detect head movement during collection.
 - Reject repository mismatch and ambiguous linked PR identity.
 - Treat missing changed-file or check evidence as unknown, not empty or passing.
-- Reruns against unchanged GitHub state normalize identically except for retrieval
-  timestamps.
+- Reruns against unchanged GitHub state normalize identically except for retrieval timestamps.
 
 ## Failure Handling
 
@@ -95,6 +93,5 @@ pagination, conflicting dependencies, no linked PR, closed candidates, changed P
 unavailable checks, deterministic normalization, and unsupported schema versions. One
 bounded connected read-only smoke test is permitted after offline fixtures pass.
 
-#375 renders the normalized contract. #379 owns schema vocabulary and validation. #376
-stops when schema version, source identity, pagination completeness, or permission status
-cannot be proven.
+#375 renders this contract; #379 owns schema vocabulary and validation. #376 stops when
+schema version, source identity, pagination completeness, or permission cannot be proven.
