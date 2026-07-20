@@ -23,6 +23,7 @@ ROUTING_PLACEHOLDERS = {
     "package owner",
     "GitHub Service Agent or system owner",
     "target owner",
+    "Integration Manager when cross-system",
 }
 PATH_RE = re.compile(r"`((?:00_Governance|01_Shared_Standards|04_Registry)/[^`]+)`")
 
@@ -152,12 +153,15 @@ def validate_routing_documents(
             errors.append("Task Routing Guide contains a malformed or empty row")
             continue
         workflow, primary, support, tier_intake, source, stop = row
-        if primary not in agents:
+        if primary not in agents and primary not in ROUTING_PLACEHOLDERS:
             errors.append(f"Unknown routing primary role: {workflow} -> {primary}")
-        if support not in ROUTING_PLACEHOLDERS:
-            for value in split_people(support):
-                if value not in agents and value not in SUPPORT_SURFACES:
-                    errors.append(f"Unknown routing support value: {workflow} -> {value}")
+        for value in split_people(support):
+            if (
+                value not in agents
+                and value not in SUPPORT_SURFACES
+                and value not in ROUTING_PLACEHOLDERS
+            ):
+                errors.append(f"Unknown routing support value: {workflow} -> {value}")
 
         tier_lower = tier_intake.lower()
         workflow_lower = workflow.lower()
