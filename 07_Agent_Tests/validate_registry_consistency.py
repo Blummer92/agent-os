@@ -153,7 +153,7 @@ def validate_write_boundaries(
     if "cross-system navigation governance" not in owned_systems:
         errors.append("Integration Manager must retain cross-system navigation governance")
     blocked_writes = normalized(section_text(integration_text, "Blocked Write Surfaces"))
-    if "direct GitHub writes outside the GitHub Service Agent handoff" not in blocked_writes:
+    if "direct github writes outside the github service agent handoff" not in blocked_writes.lower():
         errors.append("Integration Manager must block direct GitHub writes outside the GitHub Service Agent handoff")
     allowed_writes = normalized(section_text(integration_text, "Allowed Write Surfaces"))
     if re.search(r"\b(?:direct )?GitHub writes?\b|\bwrite to GitHub\b", allowed_writes, re.IGNORECASE):
