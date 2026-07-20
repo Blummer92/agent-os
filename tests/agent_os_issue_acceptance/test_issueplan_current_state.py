@@ -62,6 +62,7 @@ def _build(
     source_family: str = "github-issue",
     projection_complete: bool = True,
     projection_lookup_succeeded: bool = True,
+    freshness_boundary: str = "main@abc123",
 ):
     result = scan_result or _scan_result(source_revision=source_revision)
     envelope = SourceEnvelope(
@@ -77,7 +78,7 @@ def _build(
         envelope=envelope,
         scan_result=result,
         observed_at="2026-07-20T01:00:00Z",
-        freshness_boundary="main@abc123",
+        freshness_boundary=freshness_boundary,
         implementation_contract=contract
         or {
             "scope": ("current-state evidence",),
@@ -276,3 +277,58 @@ def test_comparison_keeps_human_details_separate_from_reason_codes():
         "changed binding: graph.reference",
         "reason: contract.scope-changed",
     )
+
+
+def test_scanner_result_fingerprint_change_is_stale():
+    expected, _ = _build()
+    current_result = replace(_scan_result(), evidence=("bounded=false",))
+    current, _ = _build(scan_result=current_result)
+
+    comparison = compare_issueplan_current_state(
+        expected, current, current_scan_result=current_result
+    )
+    assert comparison.outcome == IssuePlanCurrentStateOutcome.STALE
+    assert "candidate.changed" in comparison.reason_codes
+    assert "scanner.result" in comparison.changed_bindings
+
+
+def test_unknown_contract_binding_change_is_stale():
+    expected, _ = _build()
+    current, result = _build(
+        contract={
+            "scope": ("current-state evidence",),
+            "allowlist": ("issueplan_current_state.py",),
+            "required_tests": ("test_issueplan_current_state.py",),
+            "future_binding": "changed",
+        }
+    )
+
+    comparison = compare_issueplan_current_state(
+        expected, current, current_scan_result=result
+    )
+    assert comparison.outcome == IssuePlanCurrentStateOutcome.STALE
+    assert comparison.reason_codes == ("contract.scope-changed",)
+    assert "contract.fingerprint" in comparison.changed_bindings
+
+
+def test_freshness_boundary_change_is_stale():
+    expected, _ = _build()
+    current, result = _build(freshness_boundary="main@def456")
+
+    comparison = compare_issueplan_current_state(
+        expected, current, current_scan_result=result
+    )
+    assert comparison.outcome == IssuePlanCurrentStateOutcome.STALE
+    assert "source.revision-changed" in comparison.reason_codes
+    assert "freshness.boundary" in comparison.changed_bindings
+
+
+def test_incomplete_expected_evidence_also_fails_closed():
+    expected, _ = _build(retrieval_complete=False)
+    current, result = _build()
+
+    comparison = compare_issueplan_current_state(
+        expected, current, current_scan_result=result
+    )
+    assert comparison.outcome == IssuePlanCurrentStateOutcome.BLOCKED
+    assert "source.partial" in comparison.reason_codes
