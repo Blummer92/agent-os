@@ -62,7 +62,20 @@ class DocumentationGapReport:
 
 
 _CANDIDATE = frozenset({"type:implementation", "type:tooling", "type:validation", "type:docs", "type:governance"})
-_NOT_APPLICABLE = frozenset({"type:roadmap", "type:tracker", "type:discussion"})
+_NOT_APPLICABLE = frozenset({"type:roadmap", "type:tracker", "type:discussion", "type:planning"})
+_NOT_APPLICABLE_BODY_PATTERNS = (
+    "this issue is a roadmap only",
+    "this issue is a tracker only",
+    "coordination only; no implementation",
+    "planning and gap-analysis issue only",
+    "roadmap issue —",
+    "roadmap issue -",
+    "master epic / roadmap",
+    "tracker only",
+    "tracking issue",
+    "planning and readiness only",
+    "planning-only",
+)
 _CLEANUP = frozenset({"duplicate", "status:obsolete", "status:superseded"})
 _OWNER_HEADINGS = ("owner", "primary owner", "owners", "owner routing")
 _SOURCE_HEADINGS = ("source of truth", "owner and source of truth")
@@ -99,7 +112,7 @@ def classify_documentation_gap(record: IssueScannerRecord) -> DocumentationGapRo
     impact = _impact_value(check)
     impact_code = "documentation-impact-missing" if impact == "missing" else "documentation-impact-present"
 
-    if labels & _NOT_APPLICABLE or _body_has(body, ("this issue is a roadmap only", "this issue is a tracker only", "coordination only; no implementation")):
+    if labels & _NOT_APPLICABLE or _body_has(body, _NOT_APPLICABLE_BODY_PATTERNS):
         return _row(record, DocumentationGapCategory.NOT_APPLICABLE, impact, (*canonical_codes, impact_code, "tracker-or-roadmap"), "No metadata backfill is recommended.")
     if not _is_candidate(labels, body):
         return _row(record, DocumentationGapCategory.NOT_APPLICABLE, impact, (*canonical_codes, impact_code, "not-implementation-candidate"), "No implementation-candidate evidence is present.")
