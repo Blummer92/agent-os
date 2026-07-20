@@ -1,55 +1,40 @@
-"""No-op adapter for testing task execution."""
+"""No-op adapter for local tests."""
 
 from typing import Any, Dict
 
 from workflow_scheduler.adapters.base_adapter import TaskAdapter
-from workflow_scheduler.models import Task
+from workflow_scheduler.models import ExecutionRequest
 
 
 class NoopAdapter(TaskAdapter):
-    """No-op adapter that always succeeds and logs task execution."""
+    """No-op adapter that always returns success."""
+
+    accepts_execution_request = True
 
     def __init__(self, log_output: bool = True):
-        """Initialize no-op adapter.
-
-        Args:
-            log_output: Whether to log execution details
-        """
         self.log_output = log_output
         self.execution_log: list[Dict[str, Any]] = []
 
-    def execute(self, task: Task) -> Dict[str, Any]:
-        """Execute a task (no-op: always succeeds).
-
-        Args:
-            task: Task to execute
-
-        Returns:
-            Dict with success=True and echo of task details
-        """
+    def execute(self, request: ExecutionRequest) -> Dict[str, Any]:
         result = {
             "success": True,
             "error": None,
             "output": {
-                "task_id": task.id,
-                "action": task.action,
-                "message": f"No-op execution of {task.type} task {task.id}",
-                "idempotency_key": task.idempotency_key,
+                "task_id": request.task_id,
+                "workflow_id": request.workflow_id,
+                "owner": request.owner,
+                "message": f"No-op execution of task {request.task_id}",
             },
         }
-
         if self.log_output:
             self.execution_log.append(
                 {
-                    "task_id": task.id,
-                    "action": task.action,
-                    "timestamp": task.updated_at.isoformat(),
+                    "task_id": request.task_id,
+                    "timestamp": request.created_at.isoformat(),
                     "result": result,
                 }
             )
-
         return result
 
     def get_execution_log(self) -> list[Dict[str, Any]]:
-        """Get log of all executions."""
         return self.execution_log
