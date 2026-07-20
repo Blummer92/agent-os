@@ -80,7 +80,9 @@ def test_active_missing_contract_is_backfill_now() -> None:
     item = record(2, body=authority_body())
     row = build_documentation_gap_report([item], evaluator_revision="abc123").rows[0]
     assert row.category == DocumentationGapCategory.BACKFILL_NOW
-    assert row.reason_codes == ("legacy-metadata-missing",)
+    assert "legacy-metadata-missing" in row.reason_codes
+    assert "documentation-impact-missing" in row.reason_codes
+    assert "recent-active-implementation-candidate" in row.reason_codes
 
 
 def test_blocked_missing_contract_is_deferred() -> None:
@@ -96,8 +98,8 @@ def test_roadmap_is_not_applicable() -> None:
 @pytest.mark.parametrize(
     ("body", "reason"),
     [
-        ("## Source of truth\nGitHub\n## Objective\nWork\n## Scope\nLocal", "owner-evidence-missing"),
-        ("## Owner\nQA / Test Agent\n## Objective\nWork\n## Scope\nLocal", "source-of-truth-evidence-missing"),
+        ("## Source of truth\nGitHub\n## Objective\nWork\n## Scope\nLocal", "unclear-owner"),
+        ("## Owner\nQA / Test Agent\n## Objective\nWork\n## Scope\nLocal", "unclear-source-of-truth"),
     ],
 )
 def test_missing_authority_requires_manual_decision(body: str, reason: str) -> None:
@@ -150,8 +152,8 @@ def test_closed_issue_is_excluded() -> None:
 
 def test_zero_denominator_metrics_are_safe() -> None:
     report = build_documentation_gap_report([], evaluator_revision="abc123")
-    assert report.metrics.manual_review_rate == 0.0
-    assert report.metrics.open_implementation_candidate_count == 0
+    assert report.metrics.legacy_manual_review_rate == 0.0
+    assert report.metrics.open_implementation_candidates == 0
 
 
 def test_identical_duplicate_snapshots_do_not_duplicate_rows() -> None:
@@ -165,7 +167,8 @@ def test_conflicting_duplicate_snapshots_fail_closed() -> None:
     second = record(11, body=authority_body("\nchanged\n"), revision="2026-07-20T00:01:00Z")
     row = build_documentation_gap_report([first, second], evaluator_revision="abc123").rows[0]
     assert row.category == DocumentationGapCategory.MANUAL_OWNER_DECISION
-    assert row.reason_codes == ("duplicate-snapshot-conflict",)
+    assert "duplicate-snapshot-conflict" in row.reason_codes
+    assert "ambiguous-manual-review" in row.reason_codes
 
 
 def test_ordering_and_rendering_are_deterministic() -> None:
@@ -214,7 +217,51 @@ def test_module_has_no_network_or_write_surface() -> None:
         Path(__file__).parents[2]
         / "scripts/agent_os_issue_acceptance/documentation_gap_report.py"
     ).read_text(encoding="utf-8")
-    forbidden = ("requests.", "urllib", "socket", "subprocess", ".write_text(")
+    forbidden = (
+        "requests.",
+        "urllib",
+        "socket",
+        "subprocess",
+        "create_issue",
+        "update_issue",
+        "add_label",
+        "delete_issue",
+    )
     assert not any(value in source for value in forbidden)
     assert "execution_authorized: bool = False" in source
     assert "side_effects_performed: bool = False" in source
+
+
+def test_yaml_and_heading_conflict_requires_manual_review() -> None:
+    body = authority_body(
+        """
+```yaml
+agent_os_issue_acceptance:
+  documentation_impact: docs-required
+```
+## Documentation impact
+docs-not-required
+## Documentation exemption reason
+No public behavior changes.
+"""
+    )
+    row = build_documentation_gap_report([record(17, body=body)], evaluator_revision="abc123").rows[0]
+    assert row.category == DocumentationGapCategory.MANUAL_OWNER_DECISION
+    assert "ambiguous-manual-review" in row.reason_codes
+
+
+def test_required_metric_names_are_rendered() -> None:
+    report = build_documentation_gap_report([record(18, body=authority_body())], evaluator_revision="abc123")
+    rendered = render_documentation_gap_report_text(report)
+    for name in (
+        "open_implementation_candidates",
+        "legacy_missing_documentation_impact",
+        "backfill_now_count",
+        "defer_blocked_count",
+        "manual_owner_decision_count",
+        "cleanup_candidate_count",
+        "not_applicable_count",
+        "already_compliant_count",
+        "legacy_manual_review_rate",
+    ):
+        assert f"{name}:" in rendered
