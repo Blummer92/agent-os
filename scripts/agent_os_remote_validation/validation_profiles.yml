@@ -1,0 +1,31 @@
+{
+  "selector_version": "1.0.0",
+  "repository": "Blummer92/agent-os",
+  "documentation_suffixes": [".md", ".txt", ".rst"],
+  "documentation_prefixes": ["00_Governance/", "01_Shared_Standards/", "02_Agent_Overlays/", "03_Templates/", "04_Registry/", "05_Roadmap/", "06_Archive/"],
+  "aggregate_paths": ["cloudbuild.yaml", "pyproject.toml", "requirements.txt", "pytest.ini"],
+  "aggregate_prefixes": [".github/workflows/", "scripts/run_", "tests/test_agent_os_validation_workflow.py"],
+  "focused_rules": [
+    {
+      "name": "issue-acceptance",
+      "prefixes": ["scripts/agent_os_issue_acceptance/", "tests/agent_os_issue_acceptance/"],
+      "commands": ["python -m pytest tests/agent_os_issue_acceptance"]
+    },
+    {
+      "name": "workflow-scheduler",
+      "prefixes": ["08_Tooling/workflow-scheduler/"],
+      "commands": ["python -m pytest 08_Tooling/workflow-scheduler/tests"]
+    },
+    {
+      "name": "navigation-registry",
+      "prefixes": ["08_Tooling/notion-navigation-client/"],
+      "commands": ["python -m pytest 08_Tooling/notion-navigation-client/tests"]
+    },
+    {
+      "name": "instructional-materials-coach",
+      "prefixes": ["08_Tooling/instructional-materials-coach/"],
+      "commands": ["python -m pytest 08_Tooling/instructional-materials-coach/tests"]
+    }
+  ],
+  "aggregate_command": "python -m pytest"
+}
