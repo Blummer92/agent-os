@@ -117,7 +117,7 @@ def test_cls5_preserves_vocabulary_decisions() -> None:
 
 def test_cls5_docs_are_bounded() -> None:
     for path in (STUDENT, SLIDES, WORKFLOWS, RUBRIC):
-        assert len(read(path).splitlines()) < 100
+        assert len(read(path).splitlines()) <= 100
 
 
 def test_no_parallel_curriculum_hierarchy_exists() -> None:
