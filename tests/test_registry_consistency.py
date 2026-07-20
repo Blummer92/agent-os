@@ -106,6 +106,34 @@ Agents may not treat a registry result as permission to write.
 
 Changes begin on a non-protected branch and use a pull request.
 """)
+    write(tmp_path, "04_Registry/agent-loadout-matrix.md", """# Agent Loadout Matrix
+
+| Agent | Overlay | Additional inherited standards | Default tier/write mode | Primary work | Evidence and escalation |
+|---|---|---|---|---|---|
+| Integration Manager | `integration-manager` | Navigation Registry Standard | Tier 0/1, local planning | Cross-system coordination | Escalate unclear authority |
+| QA / Test Agent | `qa-test-agent` | Validation standards | Tier 0, read-only | Validation evidence | Escalate incomplete evidence |
+| GitHub Service Agent | `github-service-agent` | Protected Branch Governance | Tier 2, repository writes | Approved GitHub changes | Escalate missing authorization |
+
+## Governed Routing Overlays
+
+Helper overlays remain bounded support surfaces.
+""")
+    write(tmp_path, "04_Registry/task-routing-guide.md", """# Task Routing Guide
+
+| Workflow | Primary role | Support or overlay | Tier and intake | Source and destination | Stop or escalate when |
+|---|---|---|---|---|---|
+| Read-only review | QA / Test Agent | Relevant registered owner | Tier 0, Lightweight | Canonical source to evidence report | Source identity is unclear |
+| Governed registry change | Integration Manager | GitHub Service Agent; QA / Test Agent | Tier 2, Full Intake plus Live Readiness | GitHub through reviewed PR | Ownership or authorization is unclear |
+| Ambiguous write request | Integration Manager | target owner | Manual review | No write destination until resolved | Any ownership or target ambiguity remains |
+
+## Routing Sequence
+
+Use Lightweight Intake only for Tier 0 or Tier 1 read-only/local-only work. Use Full Intake and Live Readiness for Tier 2, Tier 3, governed, production, external-write, permission, sharing, source-of-truth, sensitive-data, or irreversible work.
+
+## Fail-Closed Rules
+
+Missing or conflicting ownership, target, source, approval, or write-surface evidence routes to human decision.
+""")
     return tmp_path
 
 
@@ -327,4 +355,105 @@ def test_harmless_prose_changes_do_not_break_invariants(tmp_path: Path) -> None:
     protected.write_text(protected.read_text(encoding="utf-8") + "\n## Notes\n\nExamples may vary by repository.\n", encoding="utf-8")
     navigation = root / "01_Shared_Standards/navigation/navigation-registry-standard.md"
     navigation.write_text(navigation.read_text(encoding="utf-8") + "\n## Notes\n\nLookup latency is implementation-specific.\n", encoding="utf-8")
+    assert MODULE.validate(root) == []
+
+
+def test_missing_canonical_loadout_entry_fails(tmp_path: Path) -> None:
+    root = baseline(tmp_path)
+    replace_text(
+        root,
+        "04_Registry/agent-loadout-matrix.md",
+        "| QA / Test Agent | `qa-test-agent` | Validation standards | Tier 0, read-only | Validation evidence | Escalate incomplete evidence |\n",
+        "",
+    )
+    assert "Canonical agent has no loadout entry: QA / Test Agent" in MODULE.validate(root)
+
+
+def test_duplicate_canonical_loadout_entry_fails(tmp_path: Path) -> None:
+    root = baseline(tmp_path)
+    row = "| QA / Test Agent | `qa-test-agent` | Validation standards | Tier 0, read-only | Validation evidence | Escalate incomplete evidence |"
+    replace_text(root, "04_Registry/agent-loadout-matrix.md", row, f"{row}\n{row}")
+    assert "Canonical agent has duplicate loadout entries: QA / Test Agent" in MODULE.validate(root)
+
+
+def test_unknown_loadout_overlay_fails(tmp_path: Path) -> None:
+    root = baseline(tmp_path)
+    replace_text(root, "04_Registry/agent-loadout-matrix.md", "`qa-test-agent`", "`unknown-overlay`")
+    assert "Unknown loadout overlay: QA / Test Agent -> unknown-overlay" in MODULE.validate(root)
+
+
+def test_unknown_routing_primary_fails(tmp_path: Path) -> None:
+    root = baseline(tmp_path)
+    replace_text(
+        root,
+        "04_Registry/task-routing-guide.md",
+        "| Read-only review | QA / Test Agent |",
+        "| Read-only review | Unknown Agent |",
+    )
+    assert "Unknown routing primary role: Read-only review -> Unknown Agent" in MODULE.validate(root)
+
+
+def test_unknown_routing_support_fails(tmp_path: Path) -> None:
+    root = baseline(tmp_path)
+    replace_text(
+        root,
+        "04_Registry/task-routing-guide.md",
+        "| Read-only review | QA / Test Agent | Relevant registered owner |",
+        "| Read-only review | QA / Test Agent | Unknown Support |",
+    )
+    assert "Unknown routing support value: Read-only review -> Unknown Support" in MODULE.validate(root)
+
+
+def test_tier_2_route_cannot_use_lightweight_intake(tmp_path: Path) -> None:
+    root = baseline(tmp_path)
+    replace_text(
+        root,
+        "04_Registry/task-routing-guide.md",
+        "Tier 2, Full Intake plus Live Readiness",
+        "Tier 2, Lightweight Intake",
+    )
+    errors = MODULE.validate(root)
+    assert "Tier 2 route cannot use Lightweight Intake: Governed registry change" in errors
+
+
+def test_governed_route_missing_full_intake_fails(tmp_path: Path) -> None:
+    root = baseline(tmp_path)
+    replace_text(
+        root,
+        "04_Registry/task-routing-guide.md",
+        "Tier 2, Full Intake plus Live Readiness",
+        "Tier 2, Live Readiness",
+    )
+    assert "Governed route must require Full Intake and Live Readiness: Governed registry change" in MODULE.validate(root)
+
+
+def test_governed_route_missing_live_readiness_fails(tmp_path: Path) -> None:
+    root = baseline(tmp_path)
+    replace_text(
+        root,
+        "04_Registry/task-routing-guide.md",
+        "Tier 2, Full Intake plus Live Readiness",
+        "Tier 2, Full Intake",
+    )
+    assert "Governed route must require Full Intake and Live Readiness: Governed registry change" in MODULE.validate(root)
+
+
+def test_valid_tier_0_read_only_route_uses_lightweight_intake(tmp_path: Path) -> None:
+    root = baseline(tmp_path)
+    assert MODULE.validate(root) == []
+
+
+def test_ambiguous_write_without_human_decision_fails(tmp_path: Path) -> None:
+    root = baseline(tmp_path)
+    replace_text(
+        root,
+        "04_Registry/task-routing-guide.md",
+        "routes to human decision.",
+        "remains unresolved.",
+    )
+    assert "Ambiguous write request must route to human decision" in MODULE.validate(root)
+
+
+def test_ambiguous_write_with_manual_human_decision_passes(tmp_path: Path) -> None:
+    root = baseline(tmp_path)
     assert MODULE.validate(root) == []

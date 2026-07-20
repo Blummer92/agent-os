@@ -17,6 +17,14 @@ SUPPORT_SURFACES = {
     "Python Development Overlay",
     "Workspace Implementation Overlay",
 }
+ROUTING_PLACEHOLDERS = {
+    "Relevant registered owner",
+    "Selected owner",
+    "package owner",
+    "GitHub Service Agent or system owner",
+    "target owner",
+    "Integration Manager when cross-system",
+}
 PATH_RE = re.compile(r"`((?:00_Governance|01_Shared_Standards|04_Registry)/[^`]+)`")
 
 
@@ -72,6 +80,128 @@ def read_required(path: Path, label: str, errors: list[str]) -> str:
         errors.append(f"Required governance file is missing: {label}")
         return ""
     return path.read_text(encoding="utf-8")
+
+
+def validate_routing_documents(
+    root: Path,
+    agents: set[str],
+    overlay_slugs: set[str],
+    errors: list[str],
+) -> None:
+    loadout_text = read_required(
+        root / "04_Registry/agent-loadout-matrix.md",
+        "Agent Loadout Matrix",
+        errors,
+    )
+    routing_text = read_required(
+        root / "04_Registry/task-routing-guide.md",
+        "Task Routing Guide",
+        errors,
+    )
+    if not loadout_text or not routing_text:
+        return
+
+    loadout_rows = table_rows(
+        loadout_text,
+        (
+            "Agent",
+            "Overlay",
+            "Additional inherited standards",
+            "Default tier/write mode",
+            "Primary work",
+            "Evidence and escalation",
+        ),
+        "## Governed Routing Overlays",
+    )
+    if not loadout_rows:
+        errors.append("Agent Loadout Matrix table is missing or empty")
+    loadout_agents: list[str] = []
+    for row in loadout_rows:
+        if len(row) != 6 or not all(row):
+            errors.append("Agent Loadout Matrix contains a malformed or empty row")
+            continue
+        agent, overlay, _, _, _, _ = row
+        loadout_agents.append(agent)
+        if agent not in agents:
+            errors.append(f"Unknown loadout agent: {agent}")
+        slug = overlay.strip("`")
+        if slug not in overlay_slugs:
+            errors.append(f"Unknown loadout overlay: {agent} -> {slug}")
+
+    for agent in sorted(agents):
+        count = loadout_agents.count(agent)
+        if count == 0:
+            errors.append(f"Canonical agent has no loadout entry: {agent}")
+        elif count > 1:
+            errors.append(f"Canonical agent has duplicate loadout entries: {agent}")
+
+    routing_rows = table_rows(
+        routing_text,
+        (
+            "Workflow",
+            "Primary role",
+            "Support or overlay",
+            "Tier and intake",
+            "Source and destination",
+            "Stop or escalate when",
+        ),
+    )
+    if not routing_rows:
+        errors.append("Task Routing Guide table is missing or empty")
+    for row in routing_rows:
+        if len(row) != 6 or not all(row):
+            errors.append("Task Routing Guide contains a malformed or empty row")
+            continue
+        workflow, primary, support, tier_intake, source, stop = row
+        if primary not in agents and primary not in ROUTING_PLACEHOLDERS:
+            errors.append(f"Unknown routing primary role: {workflow} -> {primary}")
+        for value in split_people(support):
+            if (
+                value not in agents
+                and value not in SUPPORT_SURFACES
+                and value not in ROUTING_PLACEHOLDERS
+            ):
+                errors.append(f"Unknown routing support value: {workflow} -> {value}")
+
+        tier_lower = tier_intake.lower()
+        workflow_lower = workflow.lower()
+        if "tier 2" in tier_lower and "lightweight" in tier_lower:
+            errors.append(f"Tier 2 route cannot use Lightweight Intake: {workflow}")
+        if "tier 3" in tier_lower and "lightweight" in tier_lower:
+            errors.append(f"Tier 3 route cannot use Lightweight Intake: {workflow}")
+
+        explicitly_governed = (
+            "governed" in workflow_lower
+            or "workspace implementation" in workflow_lower
+            or "google workspace automation" in workflow_lower
+            or "standards, overlay, governance, or registry change" in workflow_lower
+        )
+        if explicitly_governed and (
+            "full" not in tier_lower or "live readiness" not in tier_lower
+        ):
+            errors.append(
+                f"Governed route must require Full Intake and Live Readiness: {workflow}"
+            )
+
+        if workflow_lower == "ambiguous write request":
+            combined = normalized(f"{tier_intake} {source} {stop}").lower()
+            fail_closed = normalized(section_text(routing_text, "Fail-Closed Rules")).lower()
+            if "manual review" not in combined or "human decision" not in fail_closed:
+                errors.append("Ambiguous write request must route to human decision")
+
+    routing_sequence = normalized(section_text(routing_text, "Routing Sequence")).lower()
+    required_sequence = (
+        "full intake",
+        "live readiness",
+        "tier 2",
+        "tier 3",
+        "external-write",
+        "irreversible",
+    )
+    if any(value not in routing_sequence for value in required_sequence):
+        errors.append(
+            "Task Routing Guide must require Full Intake and Live Readiness for governed work"
+        )
 
 
 def validate_write_boundaries(
@@ -242,6 +372,7 @@ def validate(root: Path = ROOT) -> list[str]:
     if not integration.is_file() or "navigation-registry-standard.md" not in integration.read_text(encoding="utf-8"):
         errors.append("Integration Manager must inherit the Navigation Registry standard")
 
+    validate_routing_documents(root, agents, overlay_slugs, errors)
     validate_write_boundaries(root, overlays, valid_matrix_rows, errors)
     return sorted(set(errors))
 
