@@ -250,7 +250,7 @@ class ApprovalRecord:
             raise ValueError("expired revisions require expires_at")
         reasons = _reason_codes(self.reason_codes)
         required = _LIFECYCLE_REASON.get(self.state.value)
-        lifecycle_reasons = reasons & set(_LIFECYCLE_REASON.values())
+        lifecycle_reasons = set(reasons) & set(_LIFECYCLE_REASON.values())
         if required is None and lifecycle_reasons:
             raise ValueError("lifecycle reason does not match approval state")
         if required is not None and lifecycle_reasons != {required}:
