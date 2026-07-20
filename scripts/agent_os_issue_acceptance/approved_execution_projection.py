@@ -276,11 +276,14 @@ def build_approved_execution_projection(
         )
 
     if recomputed.status != "applicable":
-        return _failure(
-            recomputed.status,
-            recomputed.reason_codes or ("projection.incomplete",),
-            recomputed.details,
-        )
+        reasons = recomputed.reason_codes
+        if not reasons:
+            reasons = (
+                ("candidate.changed",)
+                if recomputed.status == "stale"
+                else ("projection.incomplete",)
+            )
+        return _failure(recomputed.status, reasons, recomputed.details)
 
     binding = approval_record.binding
     if repository_state_evidence.tested_sha is None:
