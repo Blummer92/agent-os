@@ -34,7 +34,6 @@ out of scope.
 import json
 import sqlite3
 import threading
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -48,6 +47,7 @@ from workflow_scheduler.models import (
     WorkflowMode,
     WorkflowStatus,
 )
+from workflow_scheduler.time_utils import parse_utc_storage, utc_now, utc_storage_string
 
 
 class SQLiteRepository:
@@ -73,7 +73,6 @@ class SQLiteRepository:
             conn = self._get_connection()
             cursor = conn.cursor()
 
-            # Workflows table
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS workflows (
@@ -91,7 +90,6 @@ class SQLiteRepository:
                 """
             )
 
-            # Tasks table
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS tasks (
@@ -122,7 +120,6 @@ class SQLiteRepository:
             )
             self._migrate_tasks_table(cursor)
 
-            # Approval requests table
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS approval_requests (
@@ -139,7 +136,6 @@ class SQLiteRepository:
                 """
             )
 
-            # Audit log table
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS audit_log (
@@ -157,11 +153,7 @@ class SQLiteRepository:
             conn.commit()
 
     def _migrate_tasks_table(self, cursor: sqlite3.Cursor) -> None:
-        """Add columns to a pre-existing tasks table that predate them
-        (Phase 2B retry columns, Phase 2C paused_from_status, Phase 2D
-        batch_id). CREATE TABLE IF NOT EXISTS only applies new columns to
-        brand-new databases; existing local DBs need this explicit
-        migration.
+        """Add columns to a pre-existing tasks table that predate them.
 
         Internal helper: assumes self._lock is already held by the
         caller (_init_db). Does not acquire the lock itself.
@@ -224,8 +216,8 @@ class SQLiteRepository:
                     json.dumps(workflow.tasks),
                     json.dumps(workflow.dependencies),
                     json.dumps(workflow.metadata),
-                    workflow.created_at.isoformat(),
-                    workflow.updated_at.isoformat(),
+                    utc_storage_string(workflow.created_at),
+                    utc_storage_string(workflow.updated_at),
                 ),
             )
             conn.commit()
@@ -251,8 +243,8 @@ class SQLiteRepository:
                 tasks=json.loads(row["tasks"]),
                 dependencies=json.loads(row["dependencies"]),
                 metadata=json.loads(row["metadata"]),
-                created_at=datetime.fromisoformat(row["created_at"]),
-                updated_at=datetime.fromisoformat(row["updated_at"]),
+                created_at=parse_utc_storage(row["created_at"]),
+                updated_at=parse_utc_storage(row["updated_at"]),
             )
 
     def update_workflow(self, workflow: WorkflowPlan) -> None:
@@ -272,7 +264,7 @@ class SQLiteRepository:
                     json.dumps(workflow.tasks),
                     json.dumps(workflow.dependencies),
                     json.dumps(workflow.metadata),
-                    workflow.updated_at.isoformat(),
+                    utc_storage_string(workflow.updated_at),
                     workflow.workflow_id,
                 ),
             )
@@ -305,12 +297,12 @@ class SQLiteRepository:
                     task.approval_required,
                     json.dumps(task.depends_on),
                     json.dumps(task.payload),
-                    task.lease_lock.isoformat() if task.lease_lock else None,
+                    utc_storage_string(task.lease_lock) if task.lease_lock else None,
                     task.production_ready,
-                    task.created_at.isoformat(),
-                    task.updated_at.isoformat(),
+                    utc_storage_string(task.created_at),
+                    utc_storage_string(task.updated_at),
                     task.retry_count,
-                    task.next_retry_at.isoformat() if task.next_retry_at else None,
+                    utc_storage_string(task.next_retry_at) if task.next_retry_at else None,
                     task.max_retries,
                     task.paused_from_status,
                     task.batch_id,
@@ -343,12 +335,12 @@ class SQLiteRepository:
                 approval_required=bool(row["approval_required"]),
                 depends_on=json.loads(row["depends_on"]),
                 payload=json.loads(row["payload"]),
-                lease_lock=datetime.fromisoformat(row["lease_lock"]) if row["lease_lock"] else None,
+                lease_lock=parse_utc_storage(row["lease_lock"]) if row["lease_lock"] else None,
                 production_ready=bool(row["production_ready"]),
-                created_at=datetime.fromisoformat(row["created_at"]),
-                updated_at=datetime.fromisoformat(row["updated_at"]),
+                created_at=parse_utc_storage(row["created_at"]),
+                updated_at=parse_utc_storage(row["updated_at"]),
                 retry_count=row["retry_count"],
-                next_retry_at=datetime.fromisoformat(row["next_retry_at"]) if row["next_retry_at"] else None,
+                next_retry_at=parse_utc_storage(row["next_retry_at"]) if row["next_retry_at"] else None,
                 max_retries=row["max_retries"],
                 paused_from_status=row["paused_from_status"],
                 batch_id=row["batch_id"],
@@ -370,10 +362,10 @@ class SQLiteRepository:
                 (
                     task.status.value,
                     json.dumps(task.payload),
-                    task.lease_lock.isoformat() if task.lease_lock else None,
-                    task.updated_at.isoformat(),
+                    utc_storage_string(task.lease_lock) if task.lease_lock else None,
+                    utc_storage_string(task.updated_at),
                     task.retry_count,
-                    task.next_retry_at.isoformat() if task.next_retry_at else None,
+                    utc_storage_string(task.next_retry_at) if task.next_retry_at else None,
                     task.max_retries,
                     task.paused_from_status,
                     task.batch_id,
@@ -407,12 +399,14 @@ class SQLiteRepository:
                         approval_required=bool(row["approval_required"]),
                         depends_on=json.loads(row["depends_on"]),
                         payload=json.loads(row["payload"]),
-                        lease_lock=datetime.fromisoformat(row["lease_lock"]) if row["lease_lock"] else None,
+                        lease_lock=parse_utc_storage(row["lease_lock"]) if row["lease_lock"] else None,
                         production_ready=bool(row["production_ready"]),
-                        created_at=datetime.fromisoformat(row["created_at"]),
-                        updated_at=datetime.fromisoformat(row["updated_at"]),
+                        created_at=parse_utc_storage(row["created_at"]),
+                        updated_at=parse_utc_storage(row["updated_at"]),
                         retry_count=row["retry_count"],
-                        next_retry_at=datetime.fromisoformat(row["next_retry_at"]) if row["next_retry_at"] else None,
+                        next_retry_at=(
+                            parse_utc_storage(row["next_retry_at"]) if row["next_retry_at"] else None
+                        ),
                         max_retries=row["max_retries"],
                         paused_from_status=row["paused_from_status"],
                         batch_id=row["batch_id"],
@@ -439,8 +433,8 @@ class SQLiteRepository:
                     approval.approver,
                     approval.decision.value,
                     approval.reason,
-                    approval.created_at.isoformat(),
-                    approval.decided_at.isoformat() if approval.decided_at else None,
+                    utc_storage_string(approval.created_at),
+                    utc_storage_string(approval.decided_at) if approval.decided_at else None,
                 ),
             )
             conn.commit()
@@ -467,8 +461,8 @@ class SQLiteRepository:
                 approver=row["approver"],
                 decision=ApprovalDecision(row["decision"]),
                 reason=row["reason"],
-                created_at=datetime.fromisoformat(row["created_at"]),
-                decided_at=datetime.fromisoformat(row["decided_at"]) if row["decided_at"] else None,
+                created_at=parse_utc_storage(row["created_at"]),
+                decided_at=parse_utc_storage(row["decided_at"]) if row["decided_at"] else None,
             )
 
     def update_approval_decision(
@@ -488,7 +482,7 @@ class SQLiteRepository:
             conn = self._get_connection()
             cursor = conn.cursor()
 
-            now = datetime.utcnow().isoformat()
+            now = utc_storage_string(utc_now())
             cursor.execute(
                 """
                 UPDATE approval_requests
@@ -500,14 +494,20 @@ class SQLiteRepository:
             conn.commit()
             return self.get_approval_request(task_id)
 
-    def log_event(self, event_type: str, task_id: Optional[str] = None, workflow_id: Optional[str] = None, details: Optional[Dict[str, Any]] = None) -> None:
+    def log_event(
+        self,
+        event_type: str,
+        task_id: Optional[str] = None,
+        workflow_id: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """Log audit event."""
         with self._lock:
             conn = self._get_connection()
             cursor = conn.cursor()
 
             details_json = json.dumps(details or {})
-            now = datetime.utcnow().isoformat()
+            now = utc_storage_string(utc_now())
 
             cursor.execute(
                 """
@@ -518,7 +518,11 @@ class SQLiteRepository:
             )
             conn.commit()
 
-    def get_audit_log(self, workflow_id: Optional[str] = None, task_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_audit_log(
+        self,
+        workflow_id: Optional[str] = None,
+        task_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """Retrieve audit log events."""
         with self._lock:
             conn = self._get_connection()
