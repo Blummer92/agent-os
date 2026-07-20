@@ -76,6 +76,17 @@ _NOT_APPLICABLE_BODY_PATTERNS = (
     "planning and readiness only",
     "planning-only",
 )
+_TRACKING_TITLE_PATTERNS = ("roadmap", "tracking issue")
+_TRACKING_BODY_EVIDENCE = (
+    "## major sequence",
+    "## current roadmap",
+    "## child issues",
+    "## existing child issues",
+    "track a bounded",
+    "track the complete",
+    "this roadmap does not authorize",
+    "does not authorize implementation",
+)
 _CLEANUP = frozenset({"duplicate", "status:obsolete", "status:superseded"})
 _OWNER_HEADINGS = ("owner", "primary owner", "owners", "owner routing")
 _SOURCE_HEADINGS = ("source of truth", "owner and source of truth")
@@ -112,7 +123,7 @@ def classify_documentation_gap(record: IssueScannerRecord) -> DocumentationGapRo
     impact = _impact_value(check)
     impact_code = "documentation-impact-missing" if impact == "missing" else "documentation-impact-present"
 
-    if labels & _NOT_APPLICABLE or _body_has(body, _NOT_APPLICABLE_BODY_PATTERNS):
+    if _is_not_applicable(record, labels, body):
         return _row(record, DocumentationGapCategory.NOT_APPLICABLE, impact, (*canonical_codes, impact_code, "tracker-or-roadmap"), "No metadata backfill is recommended.")
     if not _is_candidate(labels, body):
         return _row(record, DocumentationGapCategory.NOT_APPLICABLE, impact, (*canonical_codes, impact_code, "not-implementation-candidate"), "No implementation-candidate evidence is present.")
@@ -201,6 +212,13 @@ def _row(record: IssueScannerRecord, category: DocumentationGapCategory, impact:
 
 def _headings(body: str) -> set[str]:
     return {" ".join(match.group(1).strip().lower().split()) for match in _HEADING_RE.finditer(body)}
+
+
+def _is_not_applicable(record: IssueScannerRecord, labels: frozenset[str], body: str) -> bool:
+    if labels & _NOT_APPLICABLE or _body_has(body, _NOT_APPLICABLE_BODY_PATTERNS):
+        return True
+    title = " ".join(record.title.lower().split())
+    return any(value in title for value in _TRACKING_TITLE_PATTERNS) and _body_has(body, _TRACKING_BODY_EVIDENCE)
 
 
 def _is_candidate(labels: frozenset[str], body: str) -> bool:
