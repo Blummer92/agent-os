@@ -181,7 +181,8 @@ def validate_routing_documents(
 
         if workflow_lower == "ambiguous write request":
             combined = normalized(f"{tier_intake} {source} {stop}").lower()
-            if "manual review" not in combined or "human" not in combined:
+            fail_closed = normalized(section_text(routing_text, "Fail-Closed Rules")).lower()
+            if "manual review" not in combined or "human decision" not in fail_closed:
                 errors.append("Ambiguous write request must route to human decision")
 
     routing_sequence = normalized(section_text(routing_text, "Routing Sequence")).lower()
