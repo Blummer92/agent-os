@@ -1,5 +1,16 @@
 """Reusable Agent OS issue acceptance and readiness checks."""
 
+from .approval_records import (
+    APPROVAL_RECORD_SCHEMA_VERSION,
+    ApprovalApplicabilityResult,
+    ApprovalBinding,
+    ApprovalKind,
+    ApprovalRecord,
+    ApprovalState,
+    build_approval_candidate,
+    evaluate_approval_applicability,
+    record_approval_decision,
+)
 from .batch_checks import (
     BatchConflictRun,
     ForbiddenPathCrossing,
@@ -62,6 +73,12 @@ from .scheduler_handoff import (
 )
 
 __all__ = [
+    "APPROVAL_RECORD_SCHEMA_VERSION",
+    "ApprovalApplicabilityResult",
+    "ApprovalBinding",
+    "ApprovalKind",
+    "ApprovalRecord",
+    "ApprovalState",
     "BatchConflictRun",
     "BatchPlanningResult",
     "ForbiddenPathCrossing",
@@ -85,6 +102,7 @@ __all__ = [
     "SUPPORTED_CONTRACT_VERSIONS",
     "SUPPORTED_PLANNING_RESULT_VERSIONS",
     "SchedulerPlanningHandoff",
+    "build_approval_candidate",
     "build_issue_batch_graph",
     "build_issueplan_current_state_evidence",
     "compare_issueplan_current_state",
@@ -94,6 +112,7 @@ __all__ = [
     "compute_planning_result_digest",
     "entity_id_collision_check",
     "evaluate_acceptance",
+    "evaluate_approval_applicability",
     "evaluate_base_batch_conflict_run",
     "evaluate_base_batch_conflicts",
     "evaluate_batch_plan",
@@ -101,6 +120,7 @@ __all__ = [
     "evaluate_issue_readiness",
     "evaluate_issue_readiness_with_labels",
     "load_issue_batch_fixture",
+    "record_approval_decision",
     "render_report",
     "run_graph_checks",
     "serialize_scheduler_planning_handoff",
