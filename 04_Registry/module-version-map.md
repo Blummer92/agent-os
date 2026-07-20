@@ -22,7 +22,7 @@ versions change only when the module's standards or contract changes.
 | Teacher Modeling Coach | 0.2.0 |
 | Instructional Materials Coach | 0.3.0 |
 | Student Language Standard | 0.1.0 |
-| Workflow Scheduler | 0.6.0 |
+| Workflow Scheduler | 0.7.0 |
 | Workspace Automation Builder Tooling | 0.1.1 |
 | Agent Memory & Context Budget Manager | 0.1.0 |
 | IA4D-to-Scheduler Handoff Contract | 0.2.0 |
@@ -41,14 +41,15 @@ JSON schemas, validation fixtures, and a local-only fixture validator. It does
 not authorize live Workspace, Notion, trigger, sharing, or production writes.
 
 **Workflow Scheduler** (`08_Tooling/workflow-scheduler/`) version reflects
-thirteen shipped milestones: Phase 1 (MVP), 2A (approval engine), 2B (retry
+fourteen shipped milestones: Phase 1 (MVP), 2A (approval engine), 2B (retry
 manager), 2C (pause/resume/cancel lifecycle), 2D (task batching), 2E
 (opt-in parallel ready-list dispatch), 3A (GitHub read-only adapter), 3B
 (Notion read-only adapter), 3C (GitHub approved comment adapter), 3D
 (five-state result contract), 3E (GitHub approved label adapter), 3F
-(adapter contract migration). Current documented package baseline: 612 tests
-passing, 96% coverage overall. Real adapters use five-state contract;
-noop/fakes still cover legacy shape. See
+(adapter contract migration), and WSC3 (stateless draft-proposal ingestion).
+WSC3 validates supplied WSC1, IssuePlanCore, and GEX evidence and emits only
+immutable, unapproved proposal evidence. It does not create tasks, approvals,
+queues, leases, workers, dispatch state, persistence, or external I/O. See
 `08_Tooling/workflow-scheduler/docs/ARCHITECTURE.md` for implementation details.
 
 **Agent Memory & Context Budget Manager**

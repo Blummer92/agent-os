@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Workflow Scheduler is a simple, governance-first task execution engine. Phase 1 shipped the core engine; Phase 2A-2E added approvals, retries, pause/resume/cancel, batching, and opt-in parallel dispatch on top of it. Phase 3A-3F added real external adapters with structured result contracts: Phase 3A (GitHub read-only), 3B (Notion read-only), 3C (GitHub approved comment writer), 3D (five-state result contract), 3E (GitHub approved label writer), 3F (adapter contract migration). It prioritizes:
+The Workflow Scheduler is a simple, governance-first task execution engine. Phase 1 shipped the core engine; Phase 2A-2E added approvals, retries, pause/resume/cancel, batching, and opt-in parallel dispatch on top of it. Phase 3A-3F added real external adapters with structured result contracts: Phase 3A (GitHub read-only), 3B (Notion read-only), 3C (GitHub approved comment writer), 3D (five-state result contract), 3E (GitHub approved label writer), 3F (adapter contract migration). WSC3 adds stateless proposal ingestion without changing execution behavior. It prioritizes:
 1. **Governance enforcement** - Stop conditions checked before execution
 2. **Audit compliance** - All state transitions logged
 3. **Lease locks** - Prevent concurrent execution of the same task
@@ -148,6 +148,29 @@ Every state transition logged:
 
 All real adapters (Phase 3A-3E) now return a five-state contract with `status`, `message`, and conditional `output`, `retry_after`, `blocked_reason`, or `approval_reason`. Legacy fake/noop adapters still use the original `success`/`error`/`is_transient` shape for backward compatibility. Executor validates and classifies results before retry/retry-scheduling/failure decisions.
 
+## WSC3 Draft Proposal Ingestion
+
+The planning package accepts an untrusted WSC1 handoff plus caller-supplied
+IssuePlanCore and GEX evidence. It calls the public upstream validators and
+preserves their outcomes and reason codes without aliases or local repair.
+
+A proposal is emitted only when the exact repository identity, base branch,
+source head, requested source SHA, separately validated tested SHA, evidence
+type, contract fingerprint, graph and planning digests, handoff digest, node
+set, cohort coverage, and upstream evidence IDs are consistent. Synthetic-merge
+evidence keeps the source head and tested merge SHA as distinct identities.
+
+Proposal identity is deterministic and excludes caller-supplied `created_at`.
+The package never reads the system clock. Results are limited to `eligible`,
+`blocked`, `stale`, `invalid`, or `needs-decision`; WSC3 owns only
+`hard-dependency-unmet`, `planning-state-mismatch`, and
+`approval-not-evaluated`.
+
+Every result keeps authorization unevaluated and fixes
+`execution_authorized=false` and `side_effects_performed=false`. Task creation,
+approval storage, queues, leases, workspaces, workers, adapter calls, dispatch,
+persistence, credentials, and external I/O remain outside WSC3.
+
 ## Design Constraints
 
 ✅ **Simple**: No ORM, no Redis, no cloud workers  
@@ -155,11 +178,11 @@ All real adapters (Phase 3A-3E) now return a five-state contract with `status`, 
 ✅ **Idempotent**: Adapter responsible for deduplication  
 ✅ **Structured results**: Real adapters use five-state contract; legacy shapes supported for tests
 ✅ **Audited**: All transitions logged  
-✅ **Tested**: 612 tests, 96% coverage  
-✅ **Shipped (Phase 1-3F)**: Core engine, approval, retries, pause/resume/cancel, batching, parallel dispatch, real external adapters (GitHub read/write, Notion read), five-state result contract
+✅ **Tested**: 612-test pre-WSC3 baseline plus focused WSC3 regression coverage  
+✅ **Shipped (Phase 1-3F + WSC3)**: Core engine, approval, retries, pause/resume/cancel, batching, parallel dispatch, real external adapters, five-state adapter results, and stateless draft-proposal ingestion
 
-❌ **Still out of scope**: Request-side adapter contract, REST API, web dashboard UI, background/daemon mode, cross-process concurrency, production deployment runbook
+❌ **Still out of scope**: WSC4 approval binding, WSC5-WSC7 controlled dispatch pilots, REST API, web dashboard UI, background/daemon mode, cross-process concurrency, production deployment runbook
 
 ## Future Phases
 
-**Phase 4+**: REST API, web dashboard UI, request-side adapter contract, production readiness
+**WSC4+ / Phase 4+**: approval binding and invalidation, separately governed dispatch pilots, REST API, web dashboard UI, request-side adapter contract, production readiness
