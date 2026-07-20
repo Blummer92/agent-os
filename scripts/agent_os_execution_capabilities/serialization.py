@@ -66,6 +66,7 @@ def _envelope_payload(value: CapabilityEvidenceEnvelope) -> dict[str, Any]:
         "handoffs": list(value.handoffs),
         "decision": value.decision.value,
         "execution_authorized": False,
+        "side_effects_performed": False,
     }
 
 
