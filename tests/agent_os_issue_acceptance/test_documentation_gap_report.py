@@ -347,3 +347,75 @@ def test_required_metric_names_are_rendered() -> None:
         "legacy_manual_review_rate",
     ):
         assert f"{name}:" in rendered
+
+
+def test_body_only_roadmap_authorization_boundary_is_not_applicable() -> None:
+    item = record(
+        25,
+        title="Layered protection program",
+        body="""## Objective
+Coordinate child protections.
+## Owner
+Integration Manager
+## Source of truth
+GitHub
+## Scope
+Sequence child work.
+## Acceptance criteria
+- [ ] Child work remains accurate.
+
+This roadmap does not authorize implementation or repository changes.
+""",
+        labels=("type:governance",),
+    )
+    assert category_for(item) == DocumentationGapCategory.NOT_APPLICABLE
+
+
+def test_body_only_current_roadmap_heading_is_not_applicable() -> None:
+    item = record(
+        26,
+        title="Reusable capability program",
+        body="""## Objective
+Coordinate capability work.
+## Current roadmap
+1. Complete registry review.
+2. Complete validation.
+## Owner
+Integration Manager
+## Source of truth
+GitHub
+## Scope
+Coordinate child issues.
+## Acceptance criteria
+- [ ] Child sequencing remains current.
+""",
+        labels=("type:governance",),
+    )
+    assert category_for(item) == DocumentationGapCategory.NOT_APPLICABLE
+
+
+def test_needs_decision_missing_contract_requires_manual_decision() -> None:
+    item = record(
+        27,
+        body=authority_body(),
+        labels=("type:implementation", "status:needs-decision"),
+    )
+    row = build_documentation_gap_report([item], evaluator_revision="abc123").rows[0]
+    assert row.category == DocumentationGapCategory.MANUAL_OWNER_DECISION
+    assert "ambiguous-manual-review" in row.reason_codes
+
+
+def test_compliant_needs_decision_issue_remains_already_compliant() -> None:
+    item = record(
+        28,
+        body=authority_body(
+            """
+## Documentation impact
+docs-not-required
+## Documentation exemption reason
+The decision does not change documented behavior.
+"""
+        ),
+        labels=("type:implementation", "status:needs-decision"),
+    )
+    assert category_for(item) == DocumentationGapCategory.ALREADY_COMPLIANT
