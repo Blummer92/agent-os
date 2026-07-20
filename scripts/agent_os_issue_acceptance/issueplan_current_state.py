@@ -281,6 +281,24 @@ def compare_issueplan_current_state(
             "source.revision-changed",
         ),
         (
+            "source.expected-revision",
+            expected.source.expected_revision,
+            current.source.expected_revision,
+            "source.revision-changed",
+        ),
+        (
+            "freshness.boundary",
+            expected.freshness_boundary,
+            current.freshness_boundary,
+            "source.revision-changed",
+        ),
+        (
+            "scanner.result",
+            expected.scanner_fingerprint,
+            current.scanner_fingerprint,
+            "candidate.changed",
+        ),
+        (
             "candidate.set",
             expected.candidate_set_fingerprint,
             current.candidate_set_fingerprint,
@@ -297,6 +315,12 @@ def compare_issueplan_current_state(
             expected.governed_fields,
             current.governed_fields,
             "candidate.changed",
+        ),
+        (
+            "contract.fingerprint",
+            expected.implementation_contract_fingerprint,
+            current.implementation_contract_fingerprint,
+            "contract.scope-changed",
         ),
         (
             "contract.scope",
@@ -340,18 +364,19 @@ def compare_issueplan_current_state(
             changed.append(name)
             reasons.append(reason)
 
-    if not current.source.accessible:
-        reasons.append("source.inaccessible")
-    if not current.source.retrieval_complete:
-        reasons.append("source.partial")
-    if not current.source.pagination_complete:
-        reasons.append("source.unknown-pagination")
-    if current.source.source_family != "github-issue":
-        reasons.append("source.unsupported")
-    if not current.projection_complete:
-        reasons.append("projection.incomplete")
-    if not current.projection_lookup_succeeded:
-        reasons.append("projection.lookup-failed")
+    for evidence in (expected, current):
+        if not evidence.source.accessible:
+            reasons.append("source.inaccessible")
+        if not evidence.source.retrieval_complete:
+            reasons.append("source.partial")
+        if not evidence.source.pagination_complete:
+            reasons.append("source.unknown-pagination")
+        if evidence.source.source_family != "github-issue":
+            reasons.append("source.unsupported")
+        if not evidence.projection_complete:
+            reasons.append("projection.incomplete")
+        if not evidence.projection_lookup_succeeded:
+            reasons.append("projection.lookup-failed")
 
     if current_scan_result is not None:
         finding_reasons = {
