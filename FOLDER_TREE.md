@@ -1,24 +1,16 @@
-# Folder Tree
+# Folder Tree — Historical Snapshot
 
-Review root: `/workspace/output/Agent_OS_Review_Access/`
+This file was generated for an earlier review package. Its absolute workspace path
+and folder listing are historical and must not be treated as the current Agent OS
+repository structure.
 
-The full tree is split to preserve the under-100-line Markdown rule.
+Use the canonical navigation sources instead:
 
-## Detail Files
+- `AGENTS.md` for the repository entry point;
+- `00_Governance/documentation-dependency-map.md` for reading paths;
+- `04_Registry/navigation-alias-registry.md` for common path aliases;
+- GitHub's current repository tree for the actual file layout.
 
-- `FOLDER_TREE_DETAILS_01.md`
-- `FOLDER_TREE_DETAILS_02.md`
-
-## Top-Level Structure
-
-```text
-Agent OS/
-  00_Governance/
-  01_Shared_Standards/
-  02_Agent_Overlays/
-  03_Templates/
-  04_Registry/
-  05_Examples/
-  06_Archive/
-  07_Agent_Tests/
-```
+`FOLDER_TREE_DETAILS_01.md` and `FOLDER_TREE_DETAILS_02.md` are retained only as
+provenance for the same historical snapshot. Do not manually regenerate these
+files as a competing repository index.
