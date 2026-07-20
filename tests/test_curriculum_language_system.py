@@ -72,7 +72,13 @@ def test_lesson_vocabulary_planner_contract_is_complete() -> None:
         "on-grade-level students",
         "advanced students",
     )
-    evidence_classes = ("`explicit`", "`partial`", "`inferred`", "`missing`", "`unavailable`")
+    evidence_classes = (
+        "`explicit`",
+        "`partial`",
+        "`inferred`",
+        "`missing`",
+        "`unavailable`",
+    )
     required_fields = (
         "Word",
         "Lesson Category",
@@ -151,6 +157,16 @@ def test_cls4_keeps_language_material_and_assessment_decisions_separate() -> Non
     )
     for phrase in required_boundaries:
         assert phrase in content, f"missing CLS4 decision boundary: {phrase}"
+
+
+def test_cls4_defines_snapshot_and_assessment_outputs() -> None:
+    content = read(CLS4_STANDARD)
+    for phrase in (
+        "Vocabulary Snapshot summarizes category counts and unresolved evidence",
+        "Assessment Vocabulary lists only `Assess Today? = Yes` rows",
+        "with their practice evidence, or `None`",
+    ):
+        assert phrase in content, f"missing CLS4 output rule: {phrase}"
 
 
 def test_cls4_is_concise_and_does_not_authorize_external_writes() -> None:
