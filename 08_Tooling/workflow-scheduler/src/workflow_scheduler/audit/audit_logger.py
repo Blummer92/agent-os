@@ -157,7 +157,7 @@ class AuditLogger:
             status_after=TaskStatus.RETRY_SCHEDULED.value,
             details={
                 "retry_count": task.retry_count,
-                "next_retry_at": task.next_retry_at.isoformat() if task.next_retry_at else None,
+                "next_retry_at": utc_storage_string(task.next_retry_at) if task.next_retry_at else None,
                 "delay_seconds": delay_seconds,
             },
         )
