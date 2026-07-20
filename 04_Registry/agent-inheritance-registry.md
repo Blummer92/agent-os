@@ -2,16 +2,16 @@
 
 | Agent | Inherits | Overlay |
 |---|---|---|
-| ChatGPT Orchestrator | Global, Source-of-Truth, Read-Only Default | chatgpt-orchestrator |
-| GitHub Service Agent | Global, Source-of-Truth, Read-Only Default, Testing/Release | github-service-agent |
-| Google Workspace Automation Engineer | Global, Python, Workspace, Notion | google-workspace-automation-engineer |
-| Modeling & Dashboard Governance Agent | Global, Dashboard Governance, Notion | modeling-dashboard-governance-agent |
-| Integration Manager | Global, Workspace, Notion, Navigation Registry | integration-manager |
-| QA / Test Agent | Global, QA/Test | qa-test-agent |
-| Agent Orchestrator | Global, Instructional Design | agent-orchestrator |
-| Unit Alignment Agent | Global, Instructional Design, Notion | unit-alignment-agent |
-| Teacher Modeling Coach | Global, Instructional Design | teacher-modeling-coach |
-| Instructional Materials Coach | Global, Workspace, Python, Instructional Design | instructional-materials-coach |
+| ChatGPT Orchestrator | Global Engineering, Source-of-Truth Checks, Read-Only Default | chatgpt-orchestrator |
+| GitHub Service Agent | Global Engineering, Source-of-Truth Checks, Read-Only Default | github-service-agent |
+| Google Workspace Automation Engineer | Global Engineering, Python Standards, Google Workspace Standards, Notion Standards | google-workspace-automation-engineer |
+| Modeling & Dashboard Governance Agent | Global Engineering, Dashboard Governance, Notion Standards | modeling-dashboard-governance-agent |
+| Integration Manager | Global Engineering, Google Workspace Standards, Notion Standards | integration-manager |
+| QA / Test Agent | Global Engineering, QA/Test Standards | qa-test-agent |
+| Agent Orchestrator | Global Engineering, Instructional Design Standards | agent-orchestrator |
+| Unit Alignment Agent | Global Engineering, Instructional Design Standards, Notion Standards | unit-alignment-agent |
+| Teacher Modeling Coach | Global Engineering, Instructional Design Standards | teacher-modeling-coach |
+| Instructional Materials Coach | Global Engineering, Google Workspace Standards, Python Standards, Instructional Design Standards | instructional-materials-coach |
 
 ## Legacy Alias Resolution
 
