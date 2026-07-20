@@ -1,4 +1,9 @@
-"""Connector adapters for the Navigation Registry offline prototype."""
+"""Navigation Registry contract adapters and compatibility shims.
+
+``NotionContractAdapter`` is the canonical root normalization bridge.
+``NotionReadOnlyConnector`` is retained only as an offline fixture compatibility
+shim; it is not a cached lookup client or live Notion API reader.
+"""
 
 from .base import ConnectorError, ConnectorErrorCode, RegistryResource
 from .notion import NotionReadOnlyConnector
