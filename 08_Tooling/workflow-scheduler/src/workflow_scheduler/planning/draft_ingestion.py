@@ -48,7 +48,7 @@ _TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 @dataclass(frozen=True, slots=True)
 class DraftTaskProposal:
-    """Immutable, unapproved WSC3 proposal evidence."""
+    """Immutable, content-verified, unapproved WSC3 proposal evidence."""
 
     proposal_version: str
     proposal_id: str
@@ -73,11 +73,6 @@ class DraftTaskProposal:
     def __post_init__(self) -> None:
         if self.proposal_version != DRAFT_TASK_PROPOSAL_VERSION:
             raise ValueError("unsupported proposal_version")
-        prefix = "draft-task-proposal:"
-        if not self.proposal_id.startswith(prefix) or not _SHA256_RE.fullmatch(
-            self.proposal_id.removeprefix(prefix)
-        ):
-            raise ValueError("proposal_id must use the canonical SHA-256 identity")
         for name in ("handoff_digest", "graph_digest", "planning_result_digest"):
             value = getattr(self, name)
             if not isinstance(value, str) or not _SHA256_RE.fullmatch(value):
@@ -90,6 +85,24 @@ class DraftTaskProposal:
             raise ValueError("cohort_summaries must cover supplied_node_ids exactly")
         object.__setattr__(self, "supplied_node_ids", node_ids)
         object.__setattr__(self, "cohort_summaries", cohorts)
+        expected_id = _proposal_id_from_fields(
+            proposal_version=self.proposal_version,
+            handoff_digest=self.handoff_digest,
+            graph_digest=self.graph_digest,
+            planning_result_digest=self.planning_result_digest,
+            repository=self.repository,
+            base_branch=self.base_branch,
+            evaluated_repository_sha=self.evaluated_repository_sha,
+            evaluator_commit_sha=self.evaluator_commit_sha,
+            supplied_node_ids=node_ids,
+            cohort_summaries=cohorts,
+            issueplan_current_state_evidence_id=(
+                self.issueplan_current_state_evidence_id
+            ),
+            repository_state_evidence_id=self.repository_state_evidence_id,
+        )
+        if self.proposal_id != expected_id:
+            raise ValueError("proposal_id does not match proposal content")
 
 
 @dataclass(frozen=True, slots=True)
@@ -324,26 +337,57 @@ def _proposal_id(
     issueplan: IssuePlanCurrentStateEvidence,
     repository: RepositoryStateValidationResult,
 ) -> str:
+    return _proposal_id_from_fields(
+        proposal_version=DRAFT_TASK_PROPOSAL_VERSION,
+        handoff_digest=handoff.handoff_digest,
+        graph_digest=handoff.graph_digest,
+        planning_result_digest=handoff.planning_result_digest,
+        repository=handoff.repository,
+        base_branch=handoff.base_branch,
+        evaluated_repository_sha=handoff.evaluated_repository_sha,
+        evaluator_commit_sha=handoff.evaluator_commit_sha,
+        supplied_node_ids=handoff.supplied_node_ids,
+        cohort_summaries=handoff.cohort_summaries,
+        issueplan_current_state_evidence_id=issueplan.evidence_id,
+        repository_state_evidence_id=repository.evidence_id,
+    )
+
+
+def _proposal_id_from_fields(
+    *,
+    proposal_version: str,
+    handoff_digest: str,
+    graph_digest: str,
+    planning_result_digest: str,
+    repository: str,
+    base_branch: str,
+    evaluated_repository_sha: str,
+    evaluator_commit_sha: str,
+    supplied_node_ids: tuple[str, ...],
+    cohort_summaries: tuple[HandoffCohort, ...],
+    issueplan_current_state_evidence_id: str,
+    repository_state_evidence_id: str,
+) -> str:
     payload = {
-        "proposal_version": DRAFT_TASK_PROPOSAL_VERSION,
-        "handoff_digest": handoff.handoff_digest,
-        "graph_digest": handoff.graph_digest,
-        "planning_result_digest": handoff.planning_result_digest,
-        "repository": handoff.repository,
-        "base_branch": handoff.base_branch,
-        "evaluated_repository_sha": handoff.evaluated_repository_sha,
-        "evaluator_commit_sha": handoff.evaluator_commit_sha,
-        "supplied_node_ids": list(handoff.supplied_node_ids),
+        "proposal_version": proposal_version,
+        "handoff_digest": handoff_digest,
+        "graph_digest": graph_digest,
+        "planning_result_digest": planning_result_digest,
+        "repository": repository,
+        "base_branch": base_branch,
+        "evaluated_repository_sha": evaluated_repository_sha,
+        "evaluator_commit_sha": evaluator_commit_sha,
+        "supplied_node_ids": list(_strings(supplied_node_ids)),
         "cohort_summaries": [
             {
                 "node_ids": list(cohort.node_ids),
                 "classification": cohort.classification,
                 "reason_codes": list(cohort.reason_codes),
             }
-            for cohort in _canonical_cohorts(handoff.cohort_summaries)
+            for cohort in _canonical_cohorts(cohort_summaries)
         ],
-        "issueplan_current_state_evidence_id": issueplan.evidence_id,
-        "repository_state_evidence_id": repository.evidence_id,
+        "issueplan_current_state_evidence_id": issueplan_current_state_evidence_id,
+        "repository_state_evidence_id": repository_state_evidence_id,
     }
     digest = hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
