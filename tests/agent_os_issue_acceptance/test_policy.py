@@ -34,6 +34,7 @@ def test_valid_fixture_produces_pass_report():
     assert report.linked_issue_result.status == LinkedIssueParseStatus.RESOLVED
     assert report.overall_status == Status.PASS
     assert all(check.status == Status.PASS for check in report.checks)
+    assert "issueplan_scan_finding=metadata-single" in report.evidence
 
 
 def test_missing_linked_issue_fails_and_remains_distinct_from_ambiguity():
@@ -146,3 +147,49 @@ def test_missing_metadata_requires_manual_review():
 
     assert report.overall_status == Status.MANUAL_REVIEW
     assert _result(report, "required files").status == Status.MANUAL_REVIEW
+    assert "issueplan_scan_finding=metadata-missing" in report.evidence
+    assert "Issue metadata block is missing." in report.manual_review_items
+
+
+def test_malformed_metadata_is_not_normalized_to_missing():
+    report = evaluate_acceptance(
+        AcceptanceInput(
+            issue_body="```yaml\nagent_os_issue_acceptance: [\n```",
+            pr_body=_read("pr_body_valid.md"),
+            changed_files=_changed("changed_files_valid.txt"),
+            diff_text=_read("diff_clean.patch"),
+        )
+    )
+
+    assert report.overall_status == Status.MANUAL_REVIEW
+    assert "issueplan_scan_finding=metadata-malformed" in report.evidence
+    assert "issueplan-scanner:metadata-malformed" in report.manual_review_items
+    assert "Issue metadata block is missing." not in report.manual_review_items
+
+
+def test_duplicate_and_conflicting_candidates_remain_distinct():
+    first = "```yaml\nagent_os_issue_acceptance:\n  owner_agent: qa-test-agent\n```"
+    duplicate = evaluate_acceptance(
+        AcceptanceInput(
+            issue_body=f"{first}\n{first}",
+            pr_body=_read("pr_body_valid.md"),
+            changed_files=_changed("changed_files_valid.txt"),
+            diff_text=_read("diff_clean.patch"),
+        )
+    )
+    conflict = evaluate_acceptance(
+        AcceptanceInput(
+            issue_body=(
+                f"{first}\n```yaml\nagent_os_issue_acceptance:\n"
+                "  owner_agent: integration-manager\n```"
+            ),
+            pr_body=_read("pr_body_valid.md"),
+            changed_files=_changed("changed_files_valid.txt"),
+            diff_text=_read("diff_clean.patch"),
+        )
+    )
+
+    assert "issueplan_scan_finding=metadata-duplicated-identical" in duplicate.evidence
+    assert "issueplan_scan_finding=metadata-conflicting" in conflict.evidence
+    assert duplicate.overall_status == Status.MANUAL_REVIEW
+    assert conflict.overall_status == Status.MANUAL_REVIEW

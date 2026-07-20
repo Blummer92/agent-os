@@ -10,6 +10,7 @@ from .checks import (
     required_tests,
     validation_commands,
 )
+from .issueplan_scanner import ScanFinding
 from .models import (
     AcceptanceInput,
     AcceptanceReport,
@@ -18,13 +19,14 @@ from .models import (
     Status,
     strongest_status,
 )
-from .parse_issue import parse_issue_metadata
+from .parse_issue import project_issue_metadata, scan_issue_metadata
 from .parse_pr import parse_linked_issue_result
 
 
 def evaluate_acceptance(data: AcceptanceInput, pr_title: str = "") -> AcceptanceReport:
     """Run IA2 v1 checks against offline issue, PR, file-list, and diff inputs."""
-    metadata = parse_issue_metadata(data.issue_body)
+    scan_result = scan_issue_metadata(data.issue_body)
+    metadata = project_issue_metadata(scan_result)
     linked_issue_result = parse_linked_issue_result(data.pr_body, pr_title)
     checks: list[CheckResult] = [
         linked_issue.check(parse_result=linked_issue_result),
@@ -43,7 +45,12 @@ def evaluate_acceptance(data: AcceptanceInput, pr_title: str = "") -> Acceptance
             f"Linked issue: {reason}" for reason in linked_issue_result.reasons
         )
     if not metadata.present:
-        manual_review_items.append("Issue metadata block is missing or ambiguous.")
+        if ScanFinding.METADATA_MISSING in scan_result.findings:
+            manual_review_items.append("Issue metadata block is missing.")
+        else:
+            manual_review_items.append(
+                "Issue metadata scanner could not produce one safe compatibility projection."
+            )
     if metadata.external_writes and metadata.external_writes != "none":
         manual_review_items.append(f"External writes declared: {metadata.external_writes}")
 
@@ -55,7 +62,12 @@ def evaluate_acceptance(data: AcceptanceInput, pr_title: str = "") -> Acceptance
         f"changed_files={len(data.changed_files)}",
         f"metadata_present={metadata.present}",
         f"linked_issue_status={linked_issue_result.status.value}",
+        f"issueplan_adoption_class={scan_result.adoption_class.value}",
+        f"issueplan_candidate_count={len(scan_result.candidates)}",
     ]
+    evidence.extend(
+        f"issueplan_scan_finding={finding.value}" for finding in scan_result.findings
+    )
     evidence.extend(
         f"linked_issue_reason={reason}" for reason in linked_issue_result.reasons
     )

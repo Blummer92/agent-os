@@ -51,6 +51,12 @@ from .issueplan_current_state import (
     compare_issueplan_current_state,
     compute_issueplan_current_state_fingerprint,
 )
+from .parse_issue import (
+    parse_issue_metadata,
+    project_issue_metadata,
+    scan_issue_metadata,
+    scanner_manual_review_items,
+)
 from .policy import evaluate_acceptance
 from .readiness import (
     ReadinessOutcome,
@@ -122,9 +128,13 @@ __all__ = [
     "evaluate_issue_readiness",
     "evaluate_issue_readiness_with_labels",
     "load_issue_batch_fixture",
+    "parse_issue_metadata",
+    "project_issue_metadata",
     "record_approval_decision",
     "render_report",
     "run_graph_checks",
+    "scan_issue_metadata",
+    "scanner_manual_review_items",
     "serialize_scheduler_planning_handoff",
     "unresolved_dependency_check",
     "validate_scheduler_planning_handoff",

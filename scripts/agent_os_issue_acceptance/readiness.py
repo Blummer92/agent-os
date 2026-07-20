@@ -4,10 +4,9 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
-import yaml
-
+from .issueplan_scanner import ScanFinding
 from .models import AcceptanceReport, CheckResult, IssueMetadata, Status, strongest_status
-from .parse_issue import parse_issue_metadata
+from .parse_issue import project_issue_metadata, scan_issue_metadata
 from .path_contract import (
     DeclaredPathError,
     declared_path_matches,
@@ -104,7 +103,6 @@ _FIELD_ALIASES = {
 
 _FENCED_RE = re.compile(r"```.*?```", re.DOTALL)
 _COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
-_METADATA_RE = re.compile(r"```(?:yaml|yml)\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 _HEADING_RE = re.compile(r"^#{2,3}\s+(.+?)\s*$")
 
 _NO_RESPONSE = "_No response_"
@@ -143,7 +141,8 @@ def evaluate_issue_readiness(
 ) -> ReadinessResult:
     """Evaluate one issue locally without network calls or metadata writes."""
     body = issue_body or ""
-    metadata = parse_issue_metadata(body)
+    scan_result = scan_issue_metadata(body)
+    metadata = project_issue_metadata(scan_result)
     sections = _markdown_sections(body)
     tier = _parse_tier(body, metadata.raw.get("tier") if metadata.present else None)
 
@@ -151,9 +150,22 @@ def evaluate_issue_readiness(
     blockers: list[str] = []
     manual_review_items: list[str] = []
 
-    if _has_malformed_acceptance_metadata(body):
-        checks.append(CheckResult("issue metadata", Status.MANUAL_REVIEW, "Acceptance metadata is malformed."))
-        manual_review_items.append("Repair the agent_os_issue_acceptance YAML block.")
+    scanner_review_items = [
+        item for item in metadata.manual_review if item.startswith("issueplan-scanner:")
+    ]
+    declared_review_items = [
+        item for item in metadata.manual_review if not item.startswith("issueplan-scanner:")
+    ]
+    if scanner_review_items:
+        checks.append(
+            CheckResult(
+                "issue metadata",
+                Status.MANUAL_REVIEW,
+                "Issue metadata scanner requires human review.",
+                scanner_review_items,
+            )
+        )
+        manual_review_items.extend(scanner_review_items)
 
     if tier is None:
         checks.append(CheckResult("issue tier", Status.MANUAL_REVIEW, "Issue tier is missing or invalid."))
@@ -192,16 +204,16 @@ def evaluate_issue_readiness(
     elif documentation_check.status == Status.MANUAL_REVIEW:
         manual_review_items.append(documentation_check.message)
 
-    if metadata.present and metadata.manual_review:
+    if declared_review_items:
         checks.append(
             CheckResult(
                 "declared decisions",
                 Status.MANUAL_REVIEW,
                 "The issue declares items requiring human judgment.",
-                metadata.manual_review,
+                declared_review_items,
             )
         )
-        manual_review_items.extend(metadata.manual_review)
+        manual_review_items.extend(declared_review_items)
 
     if _contains_needs_decision(body):
         checks.append(CheckResult("unresolved decisions", Status.MANUAL_REVIEW, "The issue contains an unresolved decision value."))
@@ -215,7 +227,12 @@ def evaluate_issue_readiness(
         checks.append(CheckResult("required validation", Status.FAIL, "Required validation is pending."))
         blockers.append("Required validation is pending.")
 
-    return _build_result(checks, manual_review_items, blockers, [])
+    scanner_evidence = [
+        f"issueplan_adoption_class={scan_result.adoption_class.value}",
+        f"issueplan_candidate_count={len(scan_result.candidates)}",
+        *(f"issueplan_scan_finding={finding.value}" for finding in scan_result.findings),
+    ]
+    return _build_result(checks, manual_review_items, blockers, scanner_evidence)
 
 
 def evaluate_issue_readiness_with_labels(
@@ -850,20 +867,6 @@ def _contains_needs_decision(body: str) -> bool:
 def _declares_blocked_dependency(body: str) -> bool:
     visible = _sanitize(body)
     return bool(re.search(r"(?im)^\s*(?:blocked by|blockers?)\s*:\s*(?!none\b|not applicable\b).+", visible))
-
-
-def _has_malformed_acceptance_metadata(body: str) -> bool:
-    for match in _METADATA_RE.finditer(body):
-        raw = match.group(1)
-        if "agent_os_issue_acceptance" not in raw:
-            continue
-        try:
-            parsed = yaml.safe_load(raw)
-        except yaml.YAMLError:
-            return True
-        if not isinstance(parsed, dict) or not isinstance(parsed.get("agent_os_issue_acceptance"), dict):
-            return True
-    return False
 
 
 def _sanitize(body: str) -> str:
