@@ -1,96 +1,136 @@
+"""Connector-backed read-only GitHub issue paging."""
+
 from __future__ import annotations
 
-import json
-import os
+import re
 from dataclasses import dataclass
-from typing import Any
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from typing import Any, Mapping, Protocol
 
 from .issue_scanner import IssueScanPage, scan_open_issues
 
+_REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_ERROR_KINDS = frozenset({
+    "rate-limited",
+    "permission-denied",
+    "malformed-response",
+    "source-inaccessible",
+    "api-error",
+})
 
-GITHUB_API_ROOT = "https://api.github.com"
+
+@dataclass(frozen=True, slots=True)
+class GitHubIssuePageResponse:
+    items: tuple[Mapping[str, object], ...]
+    next_page: int | None
+    complete: bool = True
+    error_kind: str | None = None
+
+    def __post_init__(self) -> None:
+        items = tuple(self.items)
+        if not all(isinstance(item, Mapping) for item in items):
+            raise TypeError("items must contain mappings")
+        if self.next_page is not None and (
+            not isinstance(self.next_page, int)
+            or isinstance(self.next_page, bool)
+            or self.next_page < 1
+        ):
+            raise ValueError("next_page must be a positive integer or None")
+        if self.error_kind is not None and self.error_kind not in _ERROR_KINDS:
+            raise ValueError("error_kind is unsupported")
+        object.__setattr__(self, "items", items)
 
 
-@dataclass(frozen=True)
+class GitHubIssuePageReader(Protocol):
+    def read_issue_page(
+        self,
+        repository: str,
+        *,
+        page: int,
+        per_page: int,
+        state: str,
+    ) -> GitHubIssuePageResponse:
+        """Return one normalized issue page."""
+
+
 class GitHubIssuePageSource:
-    """Paginated GitHub issue source for report-only scanner execution."""
-
-    repository: str
-    token: str | None = None
-    per_page: int = 100
-    api_root: str = GITHUB_API_ROOT
+    def __init__(
+        self,
+        repository: str,
+        reader: GitHubIssuePageReader,
+        *,
+        per_page: int = 100,
+    ) -> None:
+        if not isinstance(repository, str) or not _REPOSITORY_RE.fullmatch(repository):
+            raise ValueError("repository must use owner/name form")
+        if not isinstance(per_page, int) or isinstance(per_page, bool) or not 1 <= per_page <= 100:
+            raise ValueError("per_page must be an integer from 1 to 100")
+        if reader is None:
+            raise TypeError("reader is required")
+        self.repository = repository
+        self.reader = reader
+        self.per_page = per_page
 
     def fetch_page(self, page: int) -> IssueScanPage:
-        if page < 1:
-            return IssueScanPage((), None, complete=False, error="page must be >= 1")
-        if not 1 <= self.per_page <= 100:
-            return IssueScanPage((), None, complete=False, error="per_page must be between 1 and 100")
-
-        url = self._page_url(page)
-        request = Request(url, headers=self._headers())
+        if not isinstance(page, int) or isinstance(page, bool) or page < 1:
+            raise ValueError("page must be a positive integer")
         try:
-            with urlopen(request, timeout=30) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-                if not isinstance(payload, list):
-                    return IssueScanPage((), None, complete=False, error="GitHub response was not a list")
-                next_page = _parse_next_page(response.headers.get("Link"))
-                items = tuple(_normalise_issue_item(item) for item in payload)
-                return IssueScanPage(items=items, next_page=next_page, complete=True)
-        except HTTPError as exc:
-            return IssueScanPage((), None, complete=False, error=f"GitHub API HTTP {exc.code}")
-        except URLError as exc:
-            return IssueScanPage((), None, complete=False, error=f"GitHub API URL error: {exc.reason}")
-        except TimeoutError:
-            return IssueScanPage((), None, complete=False, error="GitHub API request timed out")
-        except json.JSONDecodeError:
-            return IssueScanPage((), None, complete=False, error="GitHub response was not valid JSON")
+            response = self.reader.read_issue_page(
+                self.repository,
+                page=page,
+                per_page=self.per_page,
+                state="open",
+            )
+        except (TypeError, ValueError):
+            return IssueScanPage(items=(), next_page=None, error="malformed-response")
+        except PermissionError:
+            return IssueScanPage(items=(), next_page=None, error="permission-denied")
+        except LookupError:
+            return IssueScanPage(items=(), next_page=None, error="source-inaccessible")
+        except RuntimeError:
+            return IssueScanPage(items=(), next_page=None, error="api-error")
 
-    def _page_url(self, page: int) -> str:
-        query = urlencode(
-            {
-                "state": "open",
-                "per_page": self.per_page,
-                "page": page,
-            }
+        if not isinstance(response, GitHubIssuePageResponse):
+            return IssueScanPage(items=(), next_page=None, error="malformed-response")
+        if response.error_kind is not None:
+            return IssueScanPage(items=(), next_page=None, error=response.error_kind)
+        if response.next_page is not None and response.next_page <= page:
+            return IssueScanPage(items=(), next_page=None, complete=False)
+
+        issues = tuple(item for item in response.items if "pull_request" not in item)
+        return IssueScanPage(
+            items=issues,
+            next_page=response.next_page,
+            complete=response.complete,
         )
-        return f"{self.api_root}/repos/{self.repository}/issues?{query}"
-
-    def _headers(self) -> dict[str, str]:
-        headers = {
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": "agent-os-issue-scanner",
-        }
-        if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
-        return headers
 
 
-def scan_repository_open_issues(repository: str, *, token: str | None = None, per_page: int = 100):
-    """Run the report-only scanner against one repository's open issues."""
-    source = GitHubIssuePageSource(repository=repository, token=token, per_page=per_page)
+def scan_connected_open_issues(
+    repository: str,
+    reader: GitHubIssuePageReader,
+    *,
+    per_page: int = 100,
+):
+    """Run the canonical scanner over one explicitly supplied connected reader."""
+
+    source = GitHubIssuePageSource(repository, reader, per_page=per_page)
     return scan_open_issues(source, source_query=f"repo={repository} state=open")
 
 
-def scan_repository_from_env():
-    """Run scanner from environment for explicit local use.
+def result_to_report(result: object) -> dict[str, Any]:
+    """Project scanner evidence into a stable report-only payload for #346."""
 
-    Required: GITHUB_REPOSITORY in owner/name form.
-    Optional: GITHUB_TOKEN, GITHUB_PER_PAGE.
-    """
-    repository = os.environ.get("GITHUB_REPOSITORY")
-    if not repository:
-        raise ValueError("GITHUB_REPOSITORY is required")
-    per_page = int(os.environ.get("GITHUB_PER_PAGE", "100"))
-    token = os.environ.get("GITHUB_TOKEN")
-    return scan_repository_open_issues(repository, token=token, per_page=per_page)
-
-
-def result_to_report(result) -> dict[str, Any]:
-    """Return stable report-only output for #346."""
+    required = (
+        "status",
+        "complete",
+        "page_count",
+        "item_count",
+        "source_query",
+        "findings",
+        "reasons",
+        "records",
+    )
+    if not all(hasattr(result, name) for name in required):
+        raise TypeError("result must be an IssueScanResult")
     return {
         "status": result.status.value,
         "complete": result.complete,
@@ -113,34 +153,3 @@ def result_to_report(result) -> dict[str, Any]:
             for record in result.records
         ],
     }
-
-
-def _normalise_issue_item(item: object) -> dict[str, object]:
-    if not isinstance(item, dict):
-        return {}
-    return {
-        "number": item.get("number"),
-        "title": item.get("title"),
-        "state": item.get("state"),
-        "body": item.get("body"),
-        "html_url": item.get("html_url"),
-        "created_at": item.get("created_at"),
-        "updated_at": item.get("updated_at"),
-        "labels": item.get("labels", ()),
-    }
-
-
-def _parse_next_page(link_header: str | None) -> int | None:
-    if not link_header:
-        return None
-    for part in link_header.split(","):
-        section, _, rel = part.partition(";")
-        if 'rel="next"' not in rel:
-            continue
-        url = section.strip().strip("<>")
-        _, _, query = url.partition("?")
-        for item in query.split("&"):
-            key, _, value = item.partition("=")
-            if key == "page" and value.isdigit():
-                return int(value)
-    return None

@@ -35,6 +35,13 @@ Use slide sequences that support:
 3. student attempt
 4. check, critique, or reflection
 
+## Vocabulary Gate
+
+Use the CLS2 and CLS4 decisions before placing vocabulary on slides. Require a
+confirmed entry and `Slide/Worksheet Safe? = Yes`. Keep teacher language separate
+from student language. Slide appearance does not make a term assessable; explicit
+instruction or practice is still required.
+
 ## Slide Design Rules
 
 - Keep one main teaching move or task per slide.
@@ -85,4 +92,4 @@ purpose, or user request clearly requires a different structure or density.
 
 ## Version
 
-0.1.1
+0.2.0

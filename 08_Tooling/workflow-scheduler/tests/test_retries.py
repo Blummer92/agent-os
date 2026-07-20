@@ -1,6 +1,6 @@
 """Tests for the Phase 2B retry manager."""
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Dict
 
 import pytest
@@ -131,11 +131,11 @@ class TestRetryManagerEligibility:
         assert RetryManager.is_due(task) is True
 
     def test_is_due_true_when_in_past(self):
-        task = make_task(next_retry_at=datetime.utcnow() - timedelta(seconds=10))
+        task = make_task(next_retry_at=datetime.now(UTC) - timedelta(seconds=10))
         assert RetryManager.is_due(task) is True
 
     def test_is_due_false_when_in_future(self):
-        task = make_task(next_retry_at=datetime.utcnow() + timedelta(seconds=600))
+        task = make_task(next_retry_at=datetime.now(UTC) + timedelta(seconds=600))
         assert RetryManager.is_due(task) is False
 
     def test_is_due_with_explicit_now(self):
@@ -151,7 +151,7 @@ class TestTaskScheduleRetry:
 
     def test_schedule_retry_sets_fields(self):
         task = make_task()
-        before = datetime.utcnow()
+        before = datetime.now(UTC)
 
         task.schedule_retry(delay_seconds=10)
 
@@ -187,7 +187,7 @@ class TestExecutorRetryFlow:
         assert stored_task.status == TaskStatus.RETRY_SCHEDULED
         assert stored_task.retry_count == 1
         assert stored_task.next_retry_at is not None
-        assert stored_task.next_retry_at > datetime.utcnow()
+        assert stored_task.next_retry_at > datetime.now(UTC)
 
     def test_transient_failure_exhausts_retries_then_fails(self, repository):
         adapter = AlwaysTransientAdapter()
@@ -311,7 +311,7 @@ class TestRepositoryRetryPersistence:
 
     def test_create_and_get_task_persists_retry_fields(self, repository):
         task = make_task(retry_count=2, max_retries=5)
-        task.next_retry_at = datetime.utcnow() + timedelta(seconds=30)
+        task.next_retry_at = datetime.now(UTC) + timedelta(seconds=30)
         repository.create_task(task)
 
         retrieved = repository.get_task(task.id)
@@ -451,7 +451,7 @@ class TestWorkflowRetryRerun:
 
         task = cli.repository.get_task("task-1")
         assert task.status == TaskStatus.RETRY_SCHEDULED
-        assert task.next_retry_at > datetime.utcnow()
+        assert task.next_retry_at > datetime.now(UTC)
 
         calls_after_first_run = adapter.calls
 
@@ -474,7 +474,7 @@ class TestWorkflowRetryRerun:
 
         # Simulate the backoff window having elapsed.
         task = cli.repository.get_task("task-1")
-        task.next_retry_at = datetime.utcnow() - timedelta(seconds=1)
+        task.next_retry_at = datetime.now(UTC) - timedelta(seconds=1)
         cli.repository.update_task(task)
 
         second_run = cli.run_workflow("retry-workflow")
@@ -497,7 +497,7 @@ class TestWorkflowRetryRerun:
         cli.run_workflow("retry-workflow")
 
         task = cli.repository.get_task("task-1")
-        task.next_retry_at = datetime.utcnow() - timedelta(seconds=1)
+        task.next_retry_at = datetime.now(UTC) - timedelta(seconds=1)
         cli.repository.update_task(task)
 
         second_run = cli.run_workflow("retry-workflow")
@@ -541,7 +541,7 @@ class TestWorkflowRetryRerun:
         # failure is correctly treated as exhausted, without a long loop.
         task = cli.repository.get_task("task-1")
         task.retry_count = task.max_retries
-        task.next_retry_at = datetime.utcnow() - timedelta(seconds=1)
+        task.next_retry_at = datetime.now(UTC) - timedelta(seconds=1)
         task.status = TaskStatus.RETRY_SCHEDULED
         cli.repository.update_task(task)
 

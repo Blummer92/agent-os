@@ -15,6 +15,8 @@ See `_common-overlay-rules.md` plus:
 
 - `01_Shared_Standards/instructional-design/unit-alignment-rules.md`
 - `01_Shared_Standards/instructional-design/unit-alignment-essential-questions.md`
+- `01_Shared_Standards/instructional-design/unit-vocabulary-map-standard.md`
+- `01_Shared_Standards/instructional-design/lesson-vocabulary-planner-response-standard.md`
 - `01_Shared_Standards/instructional-design/production-gates-and-compute.md`
 - `01_Shared_Standards/notion/notion-navigation-index-standard.md`
 
@@ -38,14 +40,18 @@ explicit owner approval.
 
 Alignment verification link, status for six canonical checks, status for 12
 essential questions, blockers, `next_owner: Teacher Modeling Coach`,
-handoff_artifacts, and ready-for-modeling status.
+handoff_artifacts, and ready-for-modeling status. For lesson vocabulary, verify
+the canonical source, CLS2 unit category, and evidence status without bypassing
+assessment eligibility or destination rules.
 
 ## Version
 
-0.3.0
+0.3.2
 
 ## Changelog
 
+- 0.3.2 inherits the Lesson Vocabulary Planner response standard and verifies its source and evidence fields.
+- 0.3.1 inherits the Unit Vocabulary Map standard for source-backed unit language classification.
 - 0.3.0 inherits the Notion navigation-index standard and keeps execution rules
   in standards.
 - 0.2.0 added Tier 2 essential questions.

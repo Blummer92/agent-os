@@ -12,6 +12,12 @@
 - [ ] Mock API/external service fixtures created (see
       `../frameworks/mocking-setup.md`)
 - [ ] Docker setup for consistent environments (see `docker-setup.md`)
-- [ ] Pre-commit hooks configured (see `pre-commit-hooks.md`)
+- [ ] Optional pre-commit hooks configured (see `pre-commit-hooks.md`)
+- [ ] Agent OS protected-branch safeguard installed with
+      `python scripts/protected_branch_push_guard.py install`
+- [ ] Safeguard status verified with
+      `python scripts/protected_branch_push_guard.py status`
+- [ ] Existing local `core.hooksPath` preserved or any conflict resolved manually
+- [ ] Removal command and emergency-approval boundary understood
 - [ ] Coverage reporting configured (see `../coverage/reporting.md`)
 - [ ] Database cleanup procedures in place

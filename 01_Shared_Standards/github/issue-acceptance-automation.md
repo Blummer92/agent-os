@@ -20,6 +20,8 @@ idea or request
 ```
 ChatGPT Orchestrator owns intake and routing. QA / Test Agent owns readiness and
 acceptance evidence. GitHub Service Agent is the sole repository write executor.
+Work-level contracts for roadmap issues, implementation issues, and pull
+requests live in `issue-lifecycle-standard.md`.
 
 ## Issue Tiers
 - Tier 0 requires objective, owner, allowed area, validation, and completion.

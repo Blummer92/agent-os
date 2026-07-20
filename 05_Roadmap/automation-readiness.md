@@ -1,82 +1,90 @@
 # Agent OS Automation Readiness
 
+Last verified: 2026-07-20 against `main` and current GitHub issue state.
+
 ## Purpose
 
-This note defines the safe automation boundary for Agent OS before dry-run classroom artifact workflows, live writes, or issue-to-PR automation are added.
+This note summarizes implemented automation surfaces, their safe boundaries, and the
+remaining approval gates. It is roadmap evidence, not authorization and not a second
+source of truth for governance.
 
-It is an implementation-readiness note only. It does not authorize live writes, change governance, or expand Agent OS scope.
+## Currently Implemented And Safe
 
-## Current Safe Automation Boundary
+- Manual, issue-scoped repository work through a descriptive branch and pull request.
+- GitHub writes performed by the GitHub Service Agent after explicit user approval.
+- Local aggregate validation through `./scripts/validate-all.sh`.
+- Pull-request and manual-dispatch validation through `Agent OS Validation Gate`.
+- GitHub-hosted validation on `ubuntu-latest`; no weekday schedule is currently defined.
+- External comparison validation through `cloudbuild.yaml` when Cloud Build is available.
+- Read-only or report-only issue acceptance, issue-label analysis, and label dry-run plans.
+- Local Scheduler and project-execution dry-run models with no live external writes.
+- Read-only Notion and Drive review, plus explicit handoffs to approved destinations.
 
-Safe after A2 is merged:
+## Implemented But Not Authorization
 
-- Manual issue-by-issue implementation.
-- Read-only roadmap and issue review.
-- Local aggregate validation with `./scripts/validate-all.sh`.
-- Pull-request validation through the `Agent OS Validation Gate` GitHub Actions workflow on the self-hosted `agent-os` runner.
-- Manual GitHub Actions validation through workflow dispatch on the self-hosted `agent-os` runner.
-- Weekday scheduled GitHub Actions validation on the self-hosted `agent-os` runner.
-- Documentation-only readiness notes that clarify sequencing and safety.
+The following provide evidence or planning capability only:
 
-Not yet safe:
+- passing CI checks and validation summaries;
+- issue-readiness and documentation-impact reports;
+- proposed label additions from dry-run workflows;
+- dependency graphs, queues, leases, validation states, and safe-parallel planning;
+- dashboards, execution prompts, context packets, and audit-style reports;
+- cached dependency restoration or scheduled analysis;
+- dry-run Scheduler projections and worker-assignment models.
 
-- Issue-to-PR automation.
-- Daily autonomous code edits.
-- Unattended live Google Drive writes.
-- Automatic source-of-truth updates.
-- Automatic governance changes.
-- Automatic live classroom artifact generation.
+None of these authorize autonomous code changes, issue mutation, merge, external writes,
+or changes to governance, readiness, approval, ownership, or sharing fields.
 
-## Dependency Ladder
+## Still Blocked Or Approval-Required
 
-1. **After A1 (#106):** The local aggregate validation command `./scripts/validate-all.sh` is safe to run manually.
-2. **After A2a (#143):** A self-hosted Agent OS runner labeled `agent-os` is available for validation jobs.
-3. **After A2 (#107):** GitHub Actions validation is safe on pull requests, manual dispatch, and a scheduled weekday run when it uses the self-hosted `agent-os` runner.
-4. **After C3 (#118):** A dry-run classroom artifact workflow is safe when it produces receipts and does not write to live Google Drive.
-5. **After explicit approval and C4 (#119):** A governed live artifact run may be performed only inside the approved workflow and destination boundaries.
+- Autonomous issue-to-code or issue-to-PR execution without explicit human approval.
+- Autonomous merge or any worker-controlled merge gate.
+- Production-system changes or irreversible artifacts.
+- Automatic source-of-truth or governance updates.
+- Live Google Drive writes outside an approved destination and governed workflow.
+- Live classroom artifact generation before C3 (#118), C4 (#119), and explicit approval.
+- Automatic changes to sharing, ownership, readiness, approval, or audit fields.
 
-## Blocked Automation
+## Current Dependency Ladder
 
-Blocked until C3 exists:
+1. A1 (#106), A2a (#143), and A2 (#107) are completed historical foundations.
+2. Current validation uses GitHub-hosted Actions plus the Cloud Build comparison lane.
+3. Report-only and dry-run tooling may expand while preserving non-mutation boundaries.
+4. C3 (#118) must prove the Scheduler-to-Materials-Coach path without live Drive writes.
+5. C4 (#119) and explicit approval are required before one governed live artifact run.
+6. Autonomous issue-to-PR or merge requires a separate approved governance change.
 
-- Classroom artifact workflow dry-runs through the Scheduler -> Materials Coach path.
-- Any repeatable classroom artifact workflow validation.
+The original self-hosted-runner design remains historical context; it is not the current
+validation architecture described by this note.
 
-Blocked until a future governed workflow is explicitly approved:
+## Execution Surfaces And Boundaries
 
-- Automatic issue-to-branch implementation.
-- Automatic issue-to-PR implementation.
-- Any automation that commits, pushes, opens pull requests, or changes source-of-truth records without human approval.
-
-## Approval-Required Automation
-
-The following require explicit approval and live-system boundary confirmation before use:
-
-- Live Google Drive writes.
-- Live classroom artifact generation.
-- Production system changes.
-- Source-of-truth updates.
-- Governance changes.
-- Sharing, readiness, approval, ownership, or other governed-field changes.
-- Any automation that modifies irreversible artifacts.
-
-## Recommended Next Issue
-
-After A2 is merged, continue the M1 validation/status work before attempting any issue-to-PR automation.
-
-Reason: A2 creates a validation-only GitHub Actions gate on a self-hosted Agent OS runner. It does not create autonomous implementation or build-from-issue behavior.
+| Surface | Current boundary |
+|---|---|
+| Local validation | Manual, read-only repository checks |
+| GitHub Actions | PR and manual-dispatch validation on `ubuntu-latest` |
+| Cloud Build | External aggregate comparison; no GitHub mutation |
+| GitHub Service Agent | Approved branches, commits, issues, and pull requests only |
+| Report workflows | Read-only evidence and dry-run plans; no approval or mutation |
+| Workflow Scheduler | Local dry-run planning; no live dispatch or external writes |
+| Notion | Planning and working knowledge; read-only unless explicitly approved |
+| Google Drive | Approved classroom destinations; live writes require approval |
 
 ## Stop Conditions
 
-Stop before automation if:
+Stop before automation when authorization, target, system of record, or field ownership
+is unclear; when a dry-run boundary would be crossed; or when work would modify a live
+system, protected setting, governed field, or irreversible artifact without approval.
 
-- the target system of record is unclear;
-- authorization is unclear;
-- the automation would modify live systems before a dry-run exists;
-- the automation would write to Google Drive without an approved folder and explicit approval;
-- the automation would update source-of-truth, governance, sharing, readiness, approval, or ownership fields automatically;
-- the automation would bypass the issue sequence A1 -> A2a -> A2 -> C3 -> C4.
+## Maintenance Rule
+
+Re-verify this note when runner type, workflow triggers, required checks, governance,
+write authorization, C3/C4 status, issue-to-PR authority, merge authority, or external-
+write capability changes. Repository workflows, governance files, and open issue state
+remain authoritative when this summary conflicts with current evidence.
 
 ## Status
 
-After this A2 workflow is merged, Agent OS is ready for validation-only GitHub Actions on pull requests, manual dispatch, and weekday scheduled runs through the self-hosted `agent-os` runner. It is not ready for issue-to-PR automation, dry-run classroom workflows, or live classroom artifact generation.
+Agent OS is ready for governed manual implementation, validation, reporting, and dry-run
+planning. It is not authorized for autonomous implementation, autonomous merge, or live
+classroom artifact generation.

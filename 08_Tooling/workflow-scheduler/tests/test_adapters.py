@@ -1,111 +1,66 @@
-"""Tests for task adapters."""
-
-import pytest
+"""Tests for the local no-op adapter."""
 
 from workflow_scheduler.adapters import NoopAdapter
+from workflow_scheduler.audit import AuditLogger
+from workflow_scheduler.execution import Executor
 from workflow_scheduler.models import Task
+from workflow_scheduler.repository import SQLiteRepository
+
+
+def make_task(task_id="task-1"):
+    return Task(
+        id=task_id,
+        workflow_id="workflow-1",
+        type="test",
+        owner="system",
+        action="test",
+        idempotency_key=f"key-{task_id}",
+    )
+
+
+def run_adapter(adapter, task):
+    repository = SQLiteRepository(":memory:")
+    repository.create_task(task)
+    runner = Executor(
+        adapter=adapter,
+        repository=repository,
+        audit_logger=AuditLogger(),
+        run_id="run-test",
+    )
+    return runner.execute(task)
 
 
 class TestNoopAdapter:
-    """Tests for NoopAdapter."""
+    def test_returns_success(self):
+        result = run_adapter(NoopAdapter(), make_task())
+        assert result.success is True
+        assert result.error is None
+        assert result.output is not None
 
-    def test_execute_returns_success(self):
-        """Test that noop adapter always returns success."""
-        adapter = NoopAdapter()
+    def test_echoes_request_details(self):
+        result = run_adapter(NoopAdapter(), make_task())
+        assert result.output["task_id"] == "task-1"
+        assert result.output["workflow_id"] == "workflow-1"
+        assert result.output["owner"] == "system"
 
-        task = Task(
-            id="task-1",
-            workflow_id="workflow-1",
-            type="test",
-            owner="system",
-            action="test",
-            idempotency_key="key-1",
-        )
-
-        result = adapter.execute(task)
-
-        assert result["success"] is True
-        assert result["error"] is None
-        assert "output" in result
-
-    def test_execute_echoes_task_details(self):
-        """Test that noop adapter echoes task details."""
-        adapter = NoopAdapter()
-
-        task = Task(
-            id="task-1",
-            workflow_id="workflow-1",
-            type="test_type",
-            owner="test_owner",
-            action="test_action",
-            idempotency_key="key-1",
-        )
-
-        result = adapter.execute(task)
-
-        assert result["output"]["task_id"] == "task-1"
-        assert result["output"]["action"] == "test_action"
-        assert result["output"]["idempotency_key"] == "key-1"
-
-    def test_execute_logging_enabled(self):
-        """Test that adapter logs executions when enabled."""
+    def test_logging_enabled(self):
         adapter = NoopAdapter(log_output=True)
+        run_adapter(adapter, make_task())
+        assert len(adapter.get_execution_log()) == 1
+        assert adapter.get_execution_log()[0]["task_id"] == "task-1"
 
-        task = Task(
-            id="task-1",
-            workflow_id="workflow-1",
-            type="test",
-            owner="system",
-            action="test",
-            idempotency_key="key-1",
-        )
-
-        adapter.execute(task)
-
-        log = adapter.get_execution_log()
-        assert len(log) == 1
-        assert log[0]["task_id"] == "task-1"
-
-    def test_execute_logging_disabled(self):
-        """Test that adapter doesn't log when disabled."""
+    def test_logging_disabled(self):
         adapter = NoopAdapter(log_output=False)
+        run_adapter(adapter, make_task())
+        assert adapter.get_execution_log() == []
 
-        task = Task(
-            id="task-1",
-            workflow_id="workflow-1",
-            type="test",
-            owner="system",
-            action="test",
-            idempotency_key="key-1",
-        )
-
-        adapter.execute(task)
-
-        log = adapter.get_execution_log()
-        assert len(log) == 0
-
-    def test_multiple_executions_logged(self):
-        """Test that multiple executions are logged."""
+    def test_multiple_calls_logged(self):
         adapter = NoopAdapter(log_output=True)
+        for index in range(3):
+            run_adapter(adapter, make_task(f"task-{index}"))
+        assert len(adapter.get_execution_log()) == 3
 
-        for i in range(3):
-            task = Task(
-                id=f"task-{i}",
-                workflow_id="workflow-1",
-                type="test",
-                owner="system",
-                action="test",
-                idempotency_key=f"key-{i}",
-            )
-            adapter.execute(task)
-
-        log = adapter.get_execution_log()
-        assert len(log) == 3
-
-    def test_empty_execution_log(self):
-        """Test getting execution log when empty."""
-        adapter = NoopAdapter()
-
-        log = adapter.get_execution_log()
-        assert len(log) == 0
+    def test_empty_log(self):
+        log = NoopAdapter().get_execution_log()
+        assert log == []
         assert isinstance(log, list)

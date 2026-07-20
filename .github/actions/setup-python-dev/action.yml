@@ -1,0 +1,16 @@
+name: Set up Python dev environment
+description: Set up Python 3.11, restore the requirements-dev pip cache, and install test dependencies.
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+        cache: "pip"
+        cache-dependency-path: requirements-dev.txt
+
+    - name: Install test dependencies
+      shell: bash
+      run: python -m pip install -r requirements-dev.txt

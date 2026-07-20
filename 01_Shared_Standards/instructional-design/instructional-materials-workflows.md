@@ -35,6 +35,15 @@ Rank tradeoffs in this order unless the user overrides them:
 - Make next actions obvious for students.
 - Simplify before adding more.
 
+## Vocabulary Integration Gate
+
+Before adding vocabulary to a slide, worksheet, handout, or assessment, inherit
+the CLS2 and CLS4 decisions. Use only confirmed entries and preserve teacher
+language, student language, material safety, and assessment eligibility as
+separate fields. Student-facing material requires `Slide/Worksheet Safe? = Yes`.
+Assessment language requires explicit instruction or guided or independent
+practice; exposure or appearance in material is insufficient.
+
 ## Final Delivery QA
 
 Use before final delivery of generated worksheets, handouts, guided notes, or slide decks.
@@ -48,6 +57,7 @@ Check that:
 - layout supports fast classroom use
 - worksheets have sufficient response space and matched reading load
 - slides have one main idea, readable text, and obvious hierarchy
+- vocabulary decisions match the governing source and safety fields
 
 ## Modular Context Rules
 
@@ -85,4 +95,4 @@ formal release notes, version logs, or long histories in Memory.
 
 ## Version
 
-0.1.2
+0.2.0

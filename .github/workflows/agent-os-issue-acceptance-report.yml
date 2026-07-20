@@ -1,0 +1,105 @@
+name: Agent OS Issue Acceptance Report
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Pull request number to report on"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  report:
+    name: Run issue acceptance report
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python test environment
+        uses: ./.github/actions/setup-python-dev
+
+      - name: Build local acceptance fixtures from PR data
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          out="tmp/agent_os_issue_acceptance_report"
+          mkdir -p "$out"
+          : > "$out/issue.md"
+          : > "$out/pr_body.md"
+          : > "$out/pr_title.txt"
+          : > "$out/changed_files.txt"
+          : > "$out/diff.patch"
+
+          if [ -z "${PR_NUMBER:-}" ]; then
+            cat > "$out/pr_body.md" <<'MD'
+          Manual workflow dispatch did not provide a pull request number.
+
+          This report-only workflow should route missing pull request context to manual review or fail according to IA2 semantics.
+          MD
+            exit 0
+          fi
+
+          gh pr view "$PR_NUMBER" --json title --jq '.title // ""' > "$out/pr_title.txt"
+          gh pr view "$PR_NUMBER" --json body --jq '.body // ""' > "$out/pr_body.md"
+          gh pr view "$PR_NUMBER" --json files --jq '.files[].path' > "$out/changed_files.txt"
+          gh pr diff "$PR_NUMBER" --patch > "$out/diff.patch" || :
+
+          linked_issue="$(
+            python - <<'PY'
+          from pathlib import Path
+
+          from scripts.agent_os_issue_acceptance.models import LinkedIssueParseStatus
+          from scripts.agent_os_issue_acceptance.parse_pr import parse_linked_issue_result
+
+          out = Path("tmp/agent_os_issue_acceptance_report")
+          result = parse_linked_issue_result(
+              (out / "pr_body.md").read_text(encoding="utf-8"),
+              (out / "pr_title.txt").read_text(encoding="utf-8"),
+          )
+          if result.status == LinkedIssueParseStatus.RESOLVED:
+              print(result.issue_number or "")
+          else:
+              print("")
+          PY
+          )"
+
+          if [ -n "$linked_issue" ]; then
+            gh issue view "$linked_issue" --json body --jq '.body // ""' > "$out/issue.md" || :
+          fi
+
+      - name: Run report-only issue acceptance checker
+        id: acceptance
+        run: |
+          set +e
+          python -m scripts.agent_os_issue_acceptance.cli \
+            --issue tmp/agent_os_issue_acceptance_report/issue.md \
+            --pr-body tmp/agent_os_issue_acceptance_report/pr_body.md \
+            --changed-files tmp/agent_os_issue_acceptance_report/changed_files.txt \
+            --diff tmp/agent_os_issue_acceptance_report/diff.patch \
+            --pr-title "$(cat tmp/agent_os_issue_acceptance_report/pr_title.txt)" \
+            | tee tmp/agent_os_issue_acceptance_report/report.txt
+          checker_exit_code=${PIPESTATUS[0]}
+          echo "checker_exit_code=${checker_exit_code}" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Publish report summary
+        run: |
+          {
+            echo "## Agent OS Issue Acceptance Report"
+            echo
+            cat tmp/agent_os_issue_acceptance_report/report.txt
+            echo
+            echo "Checker exit code: ${{ steps.acceptance.outputs.checker_exit_code }}"
+            echo
+            echo "Report-only boundary: this workflow does not approve, merge, label, close, or mutate issues or pull requests."
+          } >> "$GITHUB_STEP_SUMMARY"

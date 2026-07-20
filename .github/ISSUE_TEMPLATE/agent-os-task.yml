@@ -8,6 +8,8 @@ body:
       value: |
         This is the canonical Agent OS issue entry path. Choose the smallest tier that safely fits the work. Readiness is evidence only and never authorizes merge or external writes.
 
+        Follow `01_Shared_Standards/github/issue-lifecycle-standard.md`: one objective per implementation issue, link canonical boilerplate and risk owners instead of pasting them, and keep the body authoritative as decisions change.
+
   - type: dropdown
     id: tier
     attributes:
