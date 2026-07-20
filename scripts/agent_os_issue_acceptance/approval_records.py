@@ -250,8 +250,13 @@ class ApprovalRecord:
             raise ValueError("expired revisions require expires_at")
         reasons = _reason_codes(self.reason_codes)
         required = _LIFECYCLE_REASON.get(self.state.value)
-        if required is not None and required not in reasons:
-            raise ValueError(f"{self.state.value} revisions require {required}")
+        lifecycle_reasons = reasons & set(_LIFECYCLE_REASON.values())
+        if required is None and lifecycle_reasons:
+            raise ValueError("lifecycle reason does not match approval state")
+        if required is not None and lifecycle_reasons != {required}:
+            raise ValueError(
+                f"{self.state.value} revisions require only {required}"
+            )
         if self.state == ApprovalState.PENDING and reasons:
             raise ValueError("pending candidates cannot carry invalidation reasons")
         object.__setattr__(self, "reason_codes", reasons)
@@ -483,7 +488,9 @@ def evaluate_approval_applicability(
             (),
             current_details,
         )
-    reasons = set(_reason_codes(invalidation_events))
+    reasons = set(approval.reason_codes) | set(
+        _reason_codes(invalidation_events)
+    )
     changed = _changed_bindings(approval.binding, binding)
     reasons.update(_binding_reasons(changed))
     details = list(current_details)
