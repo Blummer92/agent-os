@@ -14,7 +14,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
-from scripts.agent_os_execution_capabilities import (
+from scripts.agent_os_execution_capabilities import (  # noqa: E402
     CAPABILITY_EVIDENCE_SCHEMA_NAME,
     CAPABILITY_EVIDENCE_SCHEMA_VERSION,
     RepositoryEvidenceType,
@@ -22,24 +22,24 @@ from scripts.agent_os_execution_capabilities import (
     RepositoryStateEvidence,
     WorktreeState,
 )
-from scripts.agent_os_issue_acceptance import (
+from scripts.agent_os_issue_acceptance import (  # noqa: E402
     HandoffCohort,
     SchedulerPlanningHandoff,
     build_issueplan_current_state_evidence,
     compute_handoff_digest,
 )
-from scripts.agent_os_issue_acceptance.issueplan_scanner import (
+from scripts.agent_os_issue_acceptance.issueplan_scanner import (  # noqa: E402
     AdoptionClass,
     MetadataCandidate,
     ScanResult,
     SourceEnvelope,
 )
-from workflow_scheduler.planning import (
+from workflow_scheduler.planning import (  # noqa: E402
     DRAFT_TASK_PROPOSAL_VERSION,
     DraftTaskProposal,
     build_draft_task_proposals,
 )
-from workflow_scheduler.planning import draft_ingestion
+from workflow_scheduler.planning import draft_ingestion  # noqa: E402
 
 HEAD_SHA = "a" * 40
 BASE_SHA = "b" * 40
@@ -306,6 +306,32 @@ def test_missing_external_evidence_is_blocked_not_inferred():
     assert build_draft_task_proposals(
         handoff, _issueplan(handoff), None, created_at=CREATED_AT
     ).reason_codes == ("hard-dependency-unmet",)
+
+
+@pytest.mark.parametrize(
+    ("classification", "status", "reason"),
+    [
+        ("blocked", "blocked", "hard-dependency-unmet"),
+        ("needs-decision", "needs-decision", "planning-state-mismatch"),
+        ("sequencing-review", "needs-decision", "planning-state-mismatch"),
+    ],
+)
+def test_non_executable_cohort_classification_never_emits_proposal(
+    classification, status, reason
+):
+    handoff = _handoff(
+        cohort_summaries=[
+            {
+                "node_ids": ["issue-362"],
+                "classification": classification,
+                "reason_codes": ["cohort-not-executable"],
+            }
+        ]
+    )
+    result = _build(handoff=handoff, issueplan=_issueplan(handoff))
+    assert result.status == status
+    assert result.reason_codes == (reason,)
+    assert result.proposals == ()
 
 
 @pytest.mark.parametrize(
