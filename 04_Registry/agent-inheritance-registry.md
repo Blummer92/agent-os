@@ -1,9 +1,15 @@
 # Agent Inheritance Registry
 
+Every registered agent overlay inherits the universal baseline from
+`02_Agent_Overlays/_common-overlay-rules.md`: `Global Engineering`,
+`Read-Only Default`, and `Source-of-Truth Checks`. The two universal safety
+modules are inherited through that common baseline and are not repeated in
+individual agent rows.
+
 | Agent | Inherits | Overlay |
 |---|---|---|
-| ChatGPT Orchestrator | Global Engineering, Source-of-Truth Checks, Read-Only Default | chatgpt-orchestrator |
-| GitHub Service Agent | Global Engineering, Source-of-Truth Checks, Read-Only Default | github-service-agent |
+| ChatGPT Orchestrator | Global Engineering | chatgpt-orchestrator |
+| GitHub Service Agent | Global Engineering | github-service-agent |
 | Google Workspace Automation Engineer | Global Engineering, Python Standards, Google Workspace Standards, Notion Standards | google-workspace-automation-engineer |
 | Modeling & Dashboard Governance Agent | Global Engineering, Dashboard Governance, Notion Standards | modeling-dashboard-governance-agent |
 | Integration Manager | Global Engineering, Google Workspace Standards, Notion Standards | integration-manager |
