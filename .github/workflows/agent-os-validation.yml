@@ -37,9 +37,6 @@ jobs:
           python -m pip install -e "./08_Tooling/notion-navigation-client[test]"
           python -m pip install -e "./08_Tooling/reusable-capability-registry[test]"
 
-      - name: Run repository structure validation
-        run: bash 07_Agent_Tests/validate-repo-structure.sh
-
       - name: Run aggregate validation
         run: ./scripts/validate-all.sh
 
@@ -51,6 +48,6 @@ jobs:
             echo
             echo "- Commit: \`$GITHUB_SHA\`"
             echo "- Event: \`$GITHUB_EVENT_NAME\`"
-            echo "- Structure validation and aggregate validation executed in GitHub Actions."
+            echo "- Aggregate validation, including repository structure validation, executed in GitHub Actions."
             echo "- Cloud Build remains the canonical external comparison lane through \`cloudbuild.yaml\`."
           } >> "$GITHUB_STEP_SUMMARY"
