@@ -1,5 +1,12 @@
 """Reusable Agent OS issue acceptance and readiness checks."""
 
+from .approved_execution_projection import (
+    APPROVED_EXECUTION_PROJECTION_SCHEMA_VERSION,
+    ApprovedExecutionProjection,
+    ApprovedExecutionProjectionResult,
+    build_approved_execution_projection,
+    serialize_approved_execution_projection,
+)
 from .approval_records import (
     APPROVAL_INVALIDATION_REASON_CODES,
     APPROVAL_RECORD_SCHEMA_VERSION,
@@ -82,11 +89,14 @@ from .scheduler_handoff import (
 __all__ = [
     "APPROVAL_INVALIDATION_REASON_CODES",
     "APPROVAL_RECORD_SCHEMA_VERSION",
+    "APPROVED_EXECUTION_PROJECTION_SCHEMA_VERSION",
     "ApprovalApplicabilityResult",
     "ApprovalBinding",
     "ApprovalKind",
     "ApprovalRecord",
     "ApprovalState",
+    "ApprovedExecutionProjection",
+    "ApprovedExecutionProjectionResult",
     "BatchConflictRun",
     "BatchPlanningResult",
     "ForbiddenPathCrossing",
@@ -111,6 +121,7 @@ __all__ = [
     "SUPPORTED_PLANNING_RESULT_VERSIONS",
     "SchedulerPlanningHandoff",
     "build_approval_candidate",
+    "build_approved_execution_projection",
     "build_issue_batch_graph",
     "build_issueplan_current_state_evidence",
     "compare_issueplan_current_state",
@@ -135,6 +146,7 @@ __all__ = [
     "run_graph_checks",
     "scan_issue_metadata",
     "scanner_manual_review_items",
+    "serialize_approved_execution_projection",
     "serialize_scheduler_planning_handoff",
     "unresolved_dependency_check",
     "validate_scheduler_planning_handoff",
