@@ -1,78 +1,13 @@
-# Folder Tree Details 2
+# Folder Tree Details 2 — Historical Snapshot
 
-```text
-      README.md
-      folder-structure.md
-      sample-env-example.md
-      sample-pyproject.md
-      sample-readme.md
-    reports/
-      bug-report-template.md
-      final-report-template.md
-      qa-test-report-template.md
-      release-checklist-template.md
-  04_Registry/
-    README.md
-    agent-inheritance-registry.md
-    alias-and-deprecation-map.md
-    legacy-agent-alias-registry.md
-    module-version-map.md
-    ownership-matrix.md
-    responsibility-matrix.md
-  05_Examples/
-    README.md
-    compliant-agent-response-example.md
-    compliant-python-tool-example.md
-    registry-compliance-test-example.md
-  06_Archive/
-    README.md
-    retired-aliases.md
-    superseded-documents.md
-  07_Agent_Tests/
-    README.md
-    common-test-checklist.md
-    validate-repo-structure.sh
-    apps-script-sync-test-overlay.tests.md
-    dashboard-builder-overlay.tests.md
-    google-workspace-automation-engineer.tests.md
-    integration-manager.tests.md
-    modeling-dashboard-governance-agent.tests.md
-    python-development-overlay.tests.md
-    qa-test-agent.tests.md
-    workspace-implementation-overlay.tests.md
-  08_Tooling/
-    workspace-automation-builder/
-      README.md
-      apps-script/
-        AppsScriptSyncSafetyBridge.gs
-        AppsScriptSyncSafetyBridgeTest.gs
-      docs/
-        drive-ops-sync-collaboration-guide.md
-        sync-safety-validation-checklist.md
-      fixtures/
-        dry-run-receipt.invalid-count-mismatch.json
-        dry-run-receipt.invalid-target-mismatch.json
-        dry-run-receipt.valid.json
-        sync-handoff.invalid-missing-range.json
-        sync-handoff.invalid-missing-target.json
-        sync-handoff.valid.json
-      samples/
-        unit-alignment-handoff/
-          HandoffService.gs
-          HandoffServiceTest.gs
-          handoff.json
-      schemas/
-        sync-dry-run-receipt.v1.schema.json
-        sync-handoff.v1.schema.json
-      tests/
-        validate-fixtures.test.js
-  ADOPTION_REVIEW_PACKET.md
-  CHANGELOG.md
-  FILE_MANIFEST.md
-  FILE_MANIFEST_DETAILS_01.md
-  FOLDER_TREE.md
-  README.md
-  README_FOR_GOVERNANCE_REVIEW.md
-  VALIDATION_REPORT.md
-  VERSION.md
-```
+This document completes an earlier generated folder-tree review package. It is
+retained for provenance only and is not a maintained repository index.
+
+For current navigation, use:
+
+- `AGENTS.md`;
+- `00_Governance/documentation-dependency-map.md`;
+- `04_Registry/navigation-alias-registry.md`;
+- GitHub's current repository tree.
+
+Do not update this file as a live inventory or use it as source-of-truth evidence.
