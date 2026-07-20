@@ -81,3 +81,5 @@ exemptions, reassign owners, update issues, or create workflows.
 ```bash
 pytest
 ```
+
+<!-- validation-cycle: current-main refresh after PR #426 -->
