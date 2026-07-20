@@ -1,0 +1,7 @@
+{
+  "static": ["01_Shared_Standards/github/protected-branch-governance.md"],
+  "focused": ["scripts/agent_os_issue_acceptance/readiness.py", "tests/agent_os_issue_acceptance/test_readiness_ia5.py"],
+  "aggregate": [".github/workflows/agent-os-validation.yml"],
+  "unknown_executable": ["scripts/new_unmapped_tool.py"],
+  "ambiguous": ["assets/example.bin"]
+}
