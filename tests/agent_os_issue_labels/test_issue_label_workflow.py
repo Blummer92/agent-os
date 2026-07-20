@@ -14,6 +14,15 @@ def test_report_only_workflow_exists_and_calls_checker():
     assert "GITHUB_STEP_SUMMARY" in content
 
 
+def test_report_only_workflow_uses_shared_environment_after_checkout():
+    content = WORKFLOW.read_text(encoding="utf-8")
+    checkout = content.index("uses: actions/checkout@v4")
+    shared_setup = content.index("uses: ./.github/actions/setup-python-dev")
+    assert checkout < shared_setup
+    assert "uses: actions/setup-python@v5" not in content
+    assert "python -m pip install -r requirements-dev.txt" not in content
+
+
 def test_report_only_workflow_has_no_label_mutation_paths():
     content = WORKFLOW.read_text(encoding="utf-8")
     forbidden = [
