@@ -1,13 +1,11 @@
 # Lesson Vocabulary Planner Response Standard
 
 ## Purpose
-
 Define a source-backed lesson response that consumes the CLS2 Unit Vocabulary Map,
 separates instruction from exposure, and blocks assessment before practice. This
 standard defines a response contract, not vocabulary for a live lesson or unit.
 
 ## Source Reading Order
-
 1. Read `unit-vocabulary-map-standard.md` and the approved CLS2 Unit Vocabulary Map.
 2. Resolve the canonical unit registry record.
 3. Follow its `Source of Truth` pointer.
@@ -18,7 +16,6 @@ standard defines a response contract, not vocabulary for a live lesson or unit.
 7. Check instruction or practice evidence before allowing assessment.
 
 ## Evidence Classification
-
 | Class | Decision |
 |---|---|
 | `explicit` | May qualify as approved vocabulary when source location and meaning are confirmed. |
@@ -31,7 +28,6 @@ Conflicting evidence also returns `needs-decision`. Preserve the exact source pa
 exact source section or property, evidence class, and confirmation state.
 
 ## Required Response Sections
-
 1. Vocabulary Snapshot
 2. Vocabulary Planner Table
 3. Difficulty by Student Group
@@ -41,12 +37,10 @@ exact source section or property, evidence class, and confirmation state.
 7. Next Action
 
 ## Vocabulary Planner Table
-
 | Word | Lesson Category | CLS2 Unit Category | Exact Source Page | Exact Source Section or Property | Evidence Class | Confirmation State | Prior Unit Connection | Student-Friendly Meaning | Teacher Language Use | Student Language Use | Slide/Worksheet Safe? | Assess Today? | Instruction or Practice Evidence | Notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 
 Use exactly one lesson-facing category per row:
-
 | Lesson Category | Use |
 |---|---|
 | Teach & Use Today | Confirmed language explicitly taught and used in this lesson. |
@@ -57,7 +51,6 @@ Use exactly one lesson-facing category per row:
 does not replace Review, Teach, Introduce, Transfer, or Future decisions from CLS2.
 
 ## Difficulty by Student Group
-
 Use only general planning lenses for `lowest-performing students`,
 `on-grade-level students`, and `advanced students`. Guidance may adjust vocabulary
 load, repetition, sentence frames, examples and non-examples, visual or contextual
@@ -67,7 +60,6 @@ cognitive claims. Do not assign difficulty to a named student without an approve
 student-data workflow.
 
 ## Decision Boundaries
-
 - Decide Teacher Language Use, Student Language Use, Slide/Worksheet Safe?, and
   Assess Today? independently.
 - Teacher-appropriate does not imply student-facing; student-facing does not imply
@@ -83,7 +75,6 @@ student-data workflow.
   a separate CLS6 Notion handoff.
 
 ## CLS3 Audit Constraints
-
 Typography and Candy Branding contain explicit structures. Photography Foundations,
 Candy Brand Motion Spot, Production Cycles, and Adobe Express Foundations contain
 partial evidence that requires confirmation. Graphic Design / Principles / Poster
@@ -91,7 +82,6 @@ Design is canonically `Split` with human review required; return `needs-decision
 and do not create a vocabulary plan from its broad legacy map.
 
 ## Overlay Responsibilities And Stops
-
 - Unit Alignment verifies canonical source, CLS2 category, and evidence status.
 - Teacher Modeling converts confirmed entries into distinct teacher and student
   language without changing source decisions.
@@ -102,5 +92,4 @@ and do not create a vocabulary plan from its broad legacy map.
   system through this standard.
 
 ## Version
-
 0.1.0
