@@ -52,6 +52,16 @@ def replace_matrix_support(root: Path, value: str) -> None:
     )
 
 
+def append_matrix_row(root: Path, row: str) -> None:
+    matrix = root / "04_Registry/responsibility-matrix.md"
+    matrix.write_text(matrix.read_text(encoding="utf-8") + row, encoding="utf-8")
+
+
+def errors_with_support(root: Path, value: str) -> list[str]:
+    replace_matrix_support(root, value)
+    return MODULE.validate(root)
+
+
 def test_current_repository_passes() -> None:
     assert MODULE.validate(MODULE.ROOT) == []
 
@@ -82,34 +92,65 @@ def test_missing_test_file_fails(tmp_path: Path) -> None:
     assert "Registered agent has no test file: qa-test-agent" in MODULE.validate(root)
 
 
-def test_unknown_matrix_agent_fails(tmp_path: Path) -> None:
-    root = baseline(tmp_path)
-    replace_matrix_support(root, "Unknown Agent")
-    assert any("Unknown support value" in error for error in MODULE.validate(root))
+def test_unknown_matrix_agent_fails_and_does_not_count_as_coverage(tmp_path: Path) -> None:
+    errors = errors_with_support(baseline(tmp_path), "Unknown Agent")
+    assert any("Unknown support value" in error for error in errors)
+    assert "Canonical agent has no Responsibility Matrix assignment: QA / Test Agent" in errors
 
 
-def test_routing_placeholder_is_not_valid_matrix_support(tmp_path: Path) -> None:
-    root = baseline(tmp_path)
-    replace_matrix_support(root, "selected registered owner")
-    assert any("Unknown support value" in error for error in MODULE.validate(root))
+def test_routing_placeholder_is_not_valid_matrix_support_or_coverage(tmp_path: Path) -> None:
+    errors = errors_with_support(baseline(tmp_path), "selected registered owner")
+    assert any("Unknown support value" in error for error in errors)
+    assert "Canonical agent has no Responsibility Matrix assignment: QA / Test Agent" in errors
 
 
-def test_exact_helper_support_surface_passes(tmp_path: Path) -> None:
+def test_exact_helper_support_surface_is_valid_but_not_agent_coverage(tmp_path: Path) -> None:
+    errors = errors_with_support(baseline(tmp_path), "Python Development Overlay")
+    assert not any("Unknown support value" in error for error in errors)
+    assert "Canonical agent has no Responsibility Matrix assignment: QA / Test Agent" in errors
+
+
+def test_near_match_helper_support_surface_fails_and_is_not_coverage(tmp_path: Path) -> None:
+    errors = errors_with_support(baseline(tmp_path), "Python Development")
+    assert any("Unknown support value" in error for error in errors)
+    assert "Canonical agent has no Responsibility Matrix assignment: QA / Test Agent" in errors
+
+
+def test_legacy_alias_is_not_agent_coverage(tmp_path: Path) -> None:
+    errors = errors_with_support(baseline(tmp_path), "QA Agent")
+    assert any("Unknown support value" in error for error in errors)
+    assert "Canonical agent has no Responsibility Matrix assignment: QA / Test Agent" in errors
+
+
+def test_primary_assignment_counts_as_coverage(tmp_path: Path) -> None:
     root = baseline(tmp_path)
     replace_matrix_support(root, "Python Development Overlay")
+    append_matrix_row(root, "| Validation evidence | QA / Test Agent | Integration Manager |\n")
     assert MODULE.validate(root) == []
 
 
-def test_near_match_helper_support_surface_fails(tmp_path: Path) -> None:
+def test_exact_canonical_support_assignment_counts_as_coverage(tmp_path: Path) -> None:
+    assert MODULE.validate(baseline(tmp_path)) == []
+
+
+def test_registered_agent_without_any_matrix_assignment_fails(tmp_path: Path) -> None:
     root = baseline(tmp_path)
-    replace_matrix_support(root, "Python Development")
-    assert any("Unknown support value" in error for error in MODULE.validate(root))
+    registry = root / "04_Registry/agent-inheritance-registry.md"
+    registry.write_text(
+        registry.read_text(encoding="utf-8").replace(
+            "| QA / Test Agent | Global | qa-test-agent |",
+            "| QA / Test Agent | Global | qa-test-agent |\n| Agent Orchestrator | Global | agent-orchestrator |",
+        ),
+        encoding="utf-8",
+    )
+    write(root, "02_Agent_Overlays/agent-orchestrator.md", "# Agent Orchestrator\n")
+    write(root, "07_Agent_Tests/agent-orchestrator.tests.md", "# Tests\n")
+    assert "Canonical agent has no Responsibility Matrix assignment: Agent Orchestrator" in MODULE.validate(root)
 
 
 def test_malformed_or_empty_matrix_row_fails(tmp_path: Path) -> None:
     root = baseline(tmp_path)
-    matrix = root / "04_Registry/responsibility-matrix.md"
-    matrix.write_text(matrix.read_text(encoding="utf-8") + "| Empty support | Integration Manager | |\n", encoding="utf-8")
+    append_matrix_row(root, "| Empty support | Integration Manager | |\n")
     assert "Responsibility Matrix contains a malformed or empty row" in MODULE.validate(root)
 
 
