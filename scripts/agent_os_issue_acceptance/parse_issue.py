@@ -11,10 +11,13 @@ from .issueplan_scanner import (
 from .models import IssueMetadata
 
 _COMPATIBILITY_SOURCE_LOCATOR = "compatibility:raw-body"
+_LEGACY_COMPATIBILITY_FIELDS = frozenset({"tier"})
 
 # Findings that make a legacy compatibility projection unsafe. Strict-field
 # incompleteness is intentionally not listed: legacy issue bodies may remain
-# readable without being promoted to strict IssuePlan validity.
+# readable without being promoted to strict IssuePlan validity. Unknown fields
+# are evaluated separately so the historical readiness-only ``tier`` key can be
+# read without silently admitting any new governed field.
 _BLOCKING_FINDINGS = frozenset(
     {
         ScanFinding.METADATA_DUPLICATED_IDENTICAL,
@@ -24,7 +27,6 @@ _BLOCKING_FINDINGS = frozenset(
         ScanFinding.SOURCE_INACCESSIBLE,
         ScanFinding.SOURCE_UNSUPPORTED,
         ScanFinding.SOURCE_STALE,
-        ScanFinding.UNKNOWN_GOVERNED_FIELD,
         ScanFinding.PROFILE_VERSION_UNSUPPORTED,
         ScanFinding.IDENTITY_FINDING_PRESENT,
     }
@@ -74,6 +76,14 @@ def scan_issue_metadata(
     )
 
 
+def _unknown_field_names(scan_result: ScanResult) -> set[str]:
+    return {
+        item.field_name
+        for item in scan_result.provenance
+        if item.extraction_status == "unknown-field"
+    }
+
+
 def scanner_manual_review_items(scan_result: ScanResult) -> list[str]:
     """Return stable compatibility reason codes for unsafe scanner findings."""
 
@@ -82,6 +92,10 @@ def scanner_manual_review_items(scan_result: ScanResult) -> list[str]:
         for finding in scan_result.findings
         if finding in _BLOCKING_FINDINGS
     ]
+    unknown_fields = _unknown_field_names(scan_result)
+    unsupported_unknowns = unknown_fields - _LEGACY_COMPATIBILITY_FIELDS
+    if unsupported_unknowns:
+        items.append("issueplan-scanner:unknown-governed-field")
     if len(scan_result.candidates) != 1 and not items:
         items.append("issueplan-scanner:unresolved-candidate-set")
     return items
@@ -122,8 +136,9 @@ def project_issue_metadata(scan_result: ScanResult) -> IssueMetadata:
     """Project one safe scanner result into the legacy ``IssueMetadata`` model.
 
     Missing metadata remains the historical empty value. Malformed, duplicate,
-    conflicting, stale, partial, inaccessible, unsupported, unknown-field, and
-    identity-quarantined evidence remains distinct and fails closed.
+    conflicting, stale, partial, inaccessible, unsupported, truly unknown-field,
+    and identity-quarantined evidence remains distinct and fails closed. The
+    historical readiness-only ``tier`` key is the sole bounded compatibility field.
     """
 
     findings = set(scan_result.findings)
