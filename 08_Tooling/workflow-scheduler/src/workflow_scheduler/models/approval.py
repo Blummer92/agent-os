@@ -5,6 +5,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
+from workflow_scheduler.time_utils import utc_now
+
 
 class ApprovalDecision(str, Enum):
     """Decision state of an approval request."""
@@ -24,5 +26,5 @@ class ApprovalRequest:
     approver: Optional[str] = None
     decision: ApprovalDecision = ApprovalDecision.PENDING
     reason: Optional[str] = None
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=utc_now)
     decided_at: Optional[datetime] = None

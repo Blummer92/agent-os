@@ -1,7 +1,7 @@
 """Tests for workflow scheduler models."""
 
 import pytest
-from datetime import datetime
+from datetime import UTC, datetime
 
 from workflow_scheduler.models import Task, TaskMode, TaskStatus, WorkflowPlan, WorkflowMode, WorkflowStatus
 
@@ -151,7 +151,7 @@ class TestTaskModel:
         assert task.has_active_lease(timeout_seconds=300)
 
         # Old lease (expired)
-        task.lease_lock = datetime.utcnow()
+        task.lease_lock = datetime.now(UTC)
         import time
 
         time.sleep(0.01)

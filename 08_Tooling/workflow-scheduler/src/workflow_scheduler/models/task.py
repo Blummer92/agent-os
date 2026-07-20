@@ -5,6 +5,8 @@ from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from workflow_scheduler.time_utils import ensure_utc, utc_now
+
 
 class TaskStatus(str, Enum):
     """Task execution states."""
@@ -47,8 +49,8 @@ class Task:
     approval_required: bool = False
     depends_on: List[str] = field(default_factory=list)
     payload: Dict[str, Any] = field(default_factory=dict)
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
     lease_lock: Optional[datetime] = None
     production_ready: bool = False
     retry_count: int = 0
@@ -60,17 +62,17 @@ class Task:
     def mark_approved(self) -> None:
         """Mark task as approved."""
         self.status = TaskStatus.APPROVED
-        self.updated_at = datetime.utcnow()
+        self.updated_at = utc_now()
 
     def mark_approval_pending(self) -> None:
         """Mark task as awaiting explicit approval decision."""
         self.status = TaskStatus.APPROVAL_PENDING
-        self.updated_at = datetime.utcnow()
+        self.updated_at = utc_now()
 
     def mark_completed(self, result: Optional[Dict[str, Any]] = None) -> None:
         """Mark task as completed."""
         self.status = TaskStatus.COMPLETED
-        self.updated_at = datetime.utcnow()
+        self.updated_at = utc_now()
         if result:
             self.payload["result"] = result
 
@@ -80,21 +82,21 @@ class Task:
             self.status = TaskStatus.RETRY_SCHEDULED
         else:
             self.status = TaskStatus.FAILED
-        self.updated_at = datetime.utcnow()
+        self.updated_at = utc_now()
         self.payload["error"] = error
 
     def schedule_retry(self, delay_seconds: float) -> None:
         """Schedule task for retry after a transient failure."""
         self.retry_count += 1
-        self.next_retry_at = datetime.utcnow() + timedelta(seconds=delay_seconds)
+        self.next_retry_at = utc_now() + timedelta(seconds=delay_seconds)
         self.status = TaskStatus.RETRY_SCHEDULED
-        self.updated_at = datetime.utcnow()
+        self.updated_at = utc_now()
 
     def mark_paused(self) -> None:
         """Mark task as paused, remembering its exact prior status for resume."""
         self.paused_from_status = self.status.value
         self.status = TaskStatus.PAUSED
-        self.updated_at = datetime.utcnow()
+        self.updated_at = utc_now()
 
     def resume(self) -> None:
         """Restore a paused task to its exact prior status.
@@ -114,18 +116,18 @@ class Task:
 
         self.status = restored_status
         self.paused_from_status = None
-        self.updated_at = datetime.utcnow()
+        self.updated_at = utc_now()
 
     def mark_cancelled(self, reason: str = "") -> None:
         """Mark task as cancelled."""
         self.status = TaskStatus.CANCELLED
-        self.updated_at = datetime.utcnow()
+        self.updated_at = utc_now()
         if reason:
             self.payload["cancellation_reason"] = reason
 
     def acquire_lease(self) -> None:
         """Acquire execution lease lock."""
-        self.lease_lock = datetime.utcnow()
+        self.lease_lock = utc_now()
         self.status = TaskStatus.RUNNING
 
     def release_lease(self) -> None:
@@ -140,7 +142,7 @@ class Task:
         """Check if task has active lease lock."""
         if self.lease_lock is None:
             return False
-        elapsed = (datetime.utcnow() - self.lease_lock).total_seconds()
+        elapsed = (utc_now() - ensure_utc(self.lease_lock)).total_seconds()
         return elapsed < timeout_seconds
 
     def is_completed(self) -> bool:
