@@ -279,6 +279,50 @@ def test_rendered_and_json_outputs_do_not_leak_issue_body():
     assert "legacy-metadata-missing" in encoded
 
 
+def test_malformed_metadata_stays_distinct_from_missing_in_preflight():
+    assessment = classify_legacy_issue(
+        LegacyIssueSnapshot.from_mapping(
+            snapshot(
+                14,
+                body=ready_body(
+                    "```yaml\nagent_os_issue_acceptance: [\n```"
+                ),
+                labels=["status:ready"],
+            )
+        )
+    )
+
+    assert assessment.predicted_documentation_status == "manual-review"
+    assert "issueplan-scanner:metadata-malformed" in assessment.reason_codes
+    assert "legacy-metadata-missing" not in assessment.reason_codes
+
+
+def test_duplicate_and_conflicting_scanner_candidates_stay_distinct_in_preflight():
+    first = "```yaml\nagent_os_issue_acceptance:\n  documentation_impact: docs-required\n```"
+    duplicate = classify_legacy_issue(
+        LegacyIssueSnapshot.from_mapping(
+            snapshot(15, body=ready_body(f"{first}\n{first}"), labels=["status:ready"])
+        )
+    )
+    conflict = classify_legacy_issue(
+        LegacyIssueSnapshot.from_mapping(
+            snapshot(
+                16,
+                body=ready_body(
+                    f"{first}\n```yaml\nagent_os_issue_acceptance:\n"
+                    "  documentation_impact: docs-not-required\n```"
+                ),
+                labels=["status:ready"],
+            )
+        )
+    )
+
+    assert "issueplan-scanner:metadata-duplicated-identical" in duplicate.reason_codes
+    assert "issueplan-scanner:metadata-conflicting" in conflict.reason_codes
+    assert duplicate.predicted_documentation_status == "manual-review"
+    assert conflict.predicted_documentation_status == "manual-review"
+
+
 def test_invalid_snapshot_number_is_rejected():
     try:
         LegacyIssueSnapshot.from_mapping({"number": True})
