@@ -160,6 +160,20 @@ All real adapters (Phase 3A-3E) now return a five-state contract with `status`, 
 
 ❌ **Still out of scope**: Request-side adapter contract, REST API, web dashboard UI, background/daemon mode, cross-process concurrency, production deployment runbook
 
+## WSC3 Draft Proposal Ingestion
+
+The planning package accepts a WSC1 handoff plus caller-supplied IssuePlanCore
+and GEX evidence. It uses the public upstream validators and compares exact
+repository, branch, tested SHA, digest, node, cohort, and contract bindings.
+Only matching current evidence produces an immutable reviewable proposal.
+
+The proposal ID binds the handoff, graph and planning digests, repository and
+revision fields, node and cohort content, and both upstream evidence IDs.
+Caller-supplied `created_at` is provenance and is not part of proposal identity.
+Every result keeps authorization unevaluated and performs no Scheduler runtime
+action. Task creation, approval storage, queues, leases, workspaces, workers,
+adapter calls, dispatch, and concurrency changes remain outside WSC3.
+
 ## Future Phases
 
 **Phase 4+**: REST API, web dashboard UI, request-side adapter contract, production readiness
