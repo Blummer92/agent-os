@@ -1,75 +1,13 @@
-# Folder Tree Details 1
+# Folder Tree Details 1 — Historical Snapshot
 
-```text
-  00_Governance/
-    README.md
-    agent-creation-policy.md
-    engineering-agent-consolidation-review.md
-    engineering-standards-framework.md
-    memory-rules.md
-    ownership-and-source-of-truth.md
-    standards-change-control.md
-    write-authorization-policy.md
-  01_Shared_Standards/
-    apps-script/
-      README.md
-      apps-script-boundaries.md
-      deployment-and-trigger-safety.md
-      sync-testing.md
-    dashboard-governance/
-      README.md
-      governed-field-boundaries.md
-      owner-vs-consumer-dashboards.md
-      schema-change-safety.md
-    global-engineering/
-      README.md
-      bug-learning-workflow.md
-      final-report-standard.md
-      pre-work-review.md
-      read-only-default-policy.md
-      secrets-and-production-safety.md
-      source-of-truth-checks.md
-      testing-and-release.md
-    google-workspace/
-      README.md
-      drive-docs-sheets-safety.md
-      workspace-api-boundaries.md
-      workspace-write-authorization.md
-    notion/
-      README.md
-      notion-knowledge-policy.md
-      notion-learning-databases.md
-      notion-record-update-safety.md
-    python/
-      README.md
-      bug-and-changelog-files.md
-      module-boundaries.md
-      packaging-standard.md
-      python-project-template.md
-      testing-standard.md
-    qa-test/
-      README.md
-      acceptance-testing.md
-      regression-testing.md
-      release-evidence.md
-  02_Agent_Overlays/
-    README.md
-    _common-overlay-rules.md
-    apps-script-sync-test-overlay.md
-    dashboard-builder-overlay.md
-    google-workspace-automation-engineer.md
-    integration-manager.md
-    modeling-dashboard-governance-agent.md
-    python-development-overlay.md
-    qa-test-agent.md
-    workspace-implementation-overlay.md
-  03_Templates/
-    README.md
-    prompts/
-      bug-learning-review.md
-      package-python-project.md
-      release-readiness-review.md
-      run-compliance-test.md
-      update-agent-overlay.md
-    python-project-template/
-```
+This document is part of an earlier generated folder-tree review package. It is
+retained for provenance only and is not a maintained repository index.
+
+For current navigation, use:
+
+- `AGENTS.md`;
+- `00_Governance/documentation-dependency-map.md`;
+- `04_Registry/navigation-alias-registry.md`;
+- GitHub's current repository tree.
+
+Do not update this file as a live inventory or use it as source-of-truth evidence.
