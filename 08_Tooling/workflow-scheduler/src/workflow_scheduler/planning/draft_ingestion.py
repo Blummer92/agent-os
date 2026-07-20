@@ -165,6 +165,20 @@ def build_draft_task_proposals(
         )
 
     handoff = _coerce_validated_handoff(transported_handoff)
+    cohort_status = _cohort_status(handoff)
+    if cohort_status == "blocked":
+        return _result(
+            "blocked",
+            ("hard-dependency-unmet",),
+            handoff_validation,
+        )
+    if cohort_status == "needs-decision":
+        return _result(
+            "needs-decision",
+            ("planning-state-mismatch",),
+            handoff_validation,
+        )
+
     if issueplan_current_state_evidence is None or repository_state_evidence is None:
         return _result(
             "blocked",
@@ -265,6 +279,15 @@ def _result(
         issueplan_comparison=issueplan_comparison,
         repository_state_validation=repository_state_validation,
     )
+
+
+def _cohort_status(handoff: SchedulerPlanningHandoff) -> str:
+    classifications = {cohort.classification for cohort in handoff.cohort_summaries}
+    if "blocked" in classifications:
+        return "blocked"
+    if classifications & {"needs-decision", "sequencing-review"}:
+        return "needs-decision"
+    return "eligible"
 
 
 def _issueplan_status(outcome: IssuePlanCurrentStateOutcome) -> str:
