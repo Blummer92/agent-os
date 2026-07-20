@@ -11,7 +11,10 @@ from typing import Iterable, Mapping, Sequence
 
 from .issue_scanner import IssueScannerRecord
 from .models import CheckResult, Status
+from .parse_issue import project_issue_metadata, scan_issue_metadata
 from .readiness import evaluate_issue_readiness
+
+SCHEMA_VERSION = "1.0"
 
 
 class DocumentationGapCategory(str, Enum):
@@ -36,11 +39,15 @@ class DocumentationGapRow:
 @dataclass(frozen=True, slots=True)
 class DocumentationGapMetrics:
     open_issue_count: int
-    open_implementation_candidate_count: int
-    missing_documentation_impact_count: int
+    open_implementation_candidates: int
+    legacy_missing_documentation_impact: int
+    backfill_now_count: int
+    defer_blocked_count: int
+    manual_owner_decision_count: int
+    cleanup_candidate_count: int
+    not_applicable_count: int
     already_compliant_count: int
-    manual_review_rate: float
-    category_counts: tuple[tuple[str, int], ...]
+    legacy_manual_review_rate: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +55,7 @@ class DocumentationGapReport:
     evaluator_revision: str
     rows: tuple[DocumentationGapRow, ...]
     metrics: DocumentationGapMetrics
+    schema_version: str = SCHEMA_VERSION
     complete: bool = True
     execution_authorized: bool = False
     side_effects_performed: bool = False
@@ -76,7 +84,7 @@ def build_documentation_gap_report(records: Iterable[IssueScannerRecord], *, eva
         unique = list(dict.fromkeys(grouped[number]))
         if len(unique) > 1:
             latest = max(unique, key=lambda item: (item.source_revision, item.updated_at))
-            rows.append(_row(latest, DocumentationGapCategory.MANUAL_OWNER_DECISION, "unknown", ("duplicate-snapshot-conflict",), "Resolve conflicting source snapshots before classification."))
+            rows.append(_row(latest, DocumentationGapCategory.MANUAL_OWNER_DECISION, "unknown", ("ambiguous-manual-review", "duplicate-snapshot-conflict"), "Resolve conflicting source snapshots before classification."))
         else:
             rows.append(classify_documentation_gap(unique[0]))
     ordered = tuple(sorted(rows, key=lambda row: (row.category.value, row.issue_number)))
@@ -87,24 +95,26 @@ def classify_documentation_gap(record: IssueScannerRecord) -> DocumentationGapRo
     labels = frozenset(label.strip().lower() for label in record.labels)
     body = record.body or ""
     check = _documentation_check(body)
-    codes = _reason_codes(check)
+    canonical_codes = _reason_codes(check)
     impact = _impact_value(check)
+    impact_code = "documentation-impact-missing" if impact == "missing" else "documentation-impact-present"
+
     if labels & _NOT_APPLICABLE or _body_has(body, ("this issue is a roadmap only", "this issue is a tracker only", "coordination only; no implementation")):
-        return _row(record, DocumentationGapCategory.NOT_APPLICABLE, impact, codes, "No metadata backfill is recommended.")
+        return _row(record, DocumentationGapCategory.NOT_APPLICABLE, impact, (*canonical_codes, impact_code, "tracker-or-roadmap"), "No metadata backfill is recommended.")
     if not _is_candidate(labels, body):
-        return _row(record, DocumentationGapCategory.NOT_APPLICABLE, impact, codes, "No implementation-candidate evidence is present.")
+        return _row(record, DocumentationGapCategory.NOT_APPLICABLE, impact, (*canonical_codes, impact_code, "not-implementation-candidate"), "No implementation-candidate evidence is present.")
     if check.status == Status.PASS:
-        return _row(record, DocumentationGapCategory.ALREADY_COMPLIANT, impact, codes, "No action is required.")
+        return _row(record, DocumentationGapCategory.ALREADY_COMPLIANT, impact, (*canonical_codes, "documentation-impact-present"), "No action is required.")
     if labels & _CLEANUP or _body_has(body, ("this issue is obsolete", "duplicate of #", "superseded by #")):
-        return _row(record, DocumentationGapCategory.CLEANUP_CANDIDATE, impact, codes, "Review for closure or supersession; do not mutate automatically.")
+        return _row(record, DocumentationGapCategory.CLEANUP_CANDIDATE, impact, (*canonical_codes, impact_code, "possible-cleanup"), "Review for closure or supersession; do not mutate automatically.")
     if "status:blocked" in labels:
-        return _row(record, DocumentationGapCategory.DEFER_BLOCKED, impact, codes, "Re-evaluate after the recorded blocker clears.")
-    if "legacy-metadata-missing" in codes:
+        return _row(record, DocumentationGapCategory.DEFER_BLOCKED, impact, (*canonical_codes, impact_code, "blocked-dependency"), "Re-evaluate after the recorded blocker clears.")
+    if "legacy-metadata-missing" in canonical_codes:
         missing = _missing_authority(body)
         if missing:
-            return _row(record, DocumentationGapCategory.MANUAL_OWNER_DECISION, impact, tuple(sorted({*codes, *missing})), "Resolve owner and source-of-truth evidence before backfill.")
-        return _row(record, DocumentationGapCategory.BACKFILL_NOW, impact, codes, "Add the canonical documentation-impact contract through an authorized issue edit.")
-    return _row(record, DocumentationGapCategory.MANUAL_OWNER_DECISION, impact, codes or ("documentation-evidence-review-required",), "Resolve malformed, conflicting, unknown, or incomplete documentation evidence.")
+            return _row(record, DocumentationGapCategory.MANUAL_OWNER_DECISION, impact, (*canonical_codes, "documentation-impact-missing", "ambiguous-manual-review", *missing), "Resolve owner and source-of-truth evidence before backfill.")
+        return _row(record, DocumentationGapCategory.BACKFILL_NOW, impact, (*canonical_codes, "documentation-impact-missing", "recent-active-implementation-candidate"), "Add the canonical documentation-impact contract through an authorized issue edit.")
+    return _row(record, DocumentationGapCategory.MANUAL_OWNER_DECISION, impact, (*canonical_codes, impact_code, "ambiguous-manual-review"), "Resolve malformed, conflicting, unknown, or incomplete documentation evidence.")
 
 
 def render_documentation_gap_report_json(report: DocumentationGapReport) -> str:
@@ -112,15 +122,21 @@ def render_documentation_gap_report_json(report: DocumentationGapReport) -> str:
 
 
 def render_documentation_gap_report_text(report: DocumentationGapReport) -> str:
-    metrics = report.metrics
+    m = report.metrics
     lines = [
         "Documentation-impact gap report",
+        f"schema_version: {report.schema_version}",
         f"evaluator_revision: {report.evaluator_revision}",
-        f"open_issue_count: {metrics.open_issue_count}",
-        f"open_implementation_candidate_count: {metrics.open_implementation_candidate_count}",
-        f"missing_documentation_impact_count: {metrics.missing_documentation_impact_count}",
-        f"already_compliant_count: {metrics.already_compliant_count}",
-        f"manual_review_rate: {metrics.manual_review_rate:.6f}",
+        f"open_issue_count: {m.open_issue_count}",
+        f"open_implementation_candidates: {m.open_implementation_candidates}",
+        f"legacy_missing_documentation_impact: {m.legacy_missing_documentation_impact}",
+        f"backfill_now_count: {m.backfill_now_count}",
+        f"defer_blocked_count: {m.defer_blocked_count}",
+        f"manual_owner_decision_count: {m.manual_owner_decision_count}",
+        f"cleanup_candidate_count: {m.cleanup_candidate_count}",
+        f"not_applicable_count: {m.not_applicable_count}",
+        f"already_compliant_count: {m.already_compliant_count}",
+        f"legacy_manual_review_rate: {m.legacy_manual_review_rate:.6f}",
         "rows:",
     ]
     for row in report.rows:
@@ -181,11 +197,12 @@ def _is_candidate(labels: frozenset[str], body: str) -> bool:
 
 def _missing_authority(body: str) -> tuple[str, ...]:
     headings = _headings(body)
+    metadata = project_issue_metadata(scan_issue_metadata(body))
     missing: list[str] = []
-    if not any(value in headings for value in _OWNER_HEADINGS):
-        missing.append("owner-evidence-missing")
-    if not any(value in headings for value in _SOURCE_HEADINGS):
-        missing.append("source-of-truth-evidence-missing")
+    if not metadata.owner_agent and not any(value in headings for value in _OWNER_HEADINGS):
+        missing.append("unclear-owner")
+    if not metadata.source_of_truth and not any(value in headings for value in _SOURCE_HEADINGS):
+        missing.append("unclear-source-of-truth")
     return tuple(missing)
 
 
@@ -195,12 +212,23 @@ def _body_has(body: str, phrases: tuple[str, ...]) -> bool:
 
 
 def _metrics(rows: tuple[DocumentationGapRow, ...]) -> DocumentationGapMetrics:
-    counts = {category.value: 0 for category in DocumentationGapCategory}
+    counts = {category: 0 for category in DocumentationGapCategory}
     for row in rows:
-        counts[row.category.value] += 1
+        counts[row.category] += 1
     candidates = [row for row in rows if row.category != DocumentationGapCategory.NOT_APPLICABLE]
     missing = sum(row.documentation_impact == "missing" for row in candidates)
-    return DocumentationGapMetrics(len(rows), len(candidates), missing, counts[DocumentationGapCategory.ALREADY_COMPLIANT.value], missing / len(candidates) if candidates else 0.0, tuple(sorted(counts.items())))
+    return DocumentationGapMetrics(
+        open_issue_count=len(rows),
+        open_implementation_candidates=len(candidates),
+        legacy_missing_documentation_impact=missing,
+        backfill_now_count=counts[DocumentationGapCategory.BACKFILL_NOW],
+        defer_blocked_count=counts[DocumentationGapCategory.DEFER_BLOCKED],
+        manual_owner_decision_count=counts[DocumentationGapCategory.MANUAL_OWNER_DECISION],
+        cleanup_candidate_count=counts[DocumentationGapCategory.CLEANUP_CANDIDATE],
+        not_applicable_count=counts[DocumentationGapCategory.NOT_APPLICABLE],
+        already_compliant_count=counts[DocumentationGapCategory.ALREADY_COMPLIANT],
+        legacy_manual_review_rate=missing / len(candidates) if candidates else 0.0,
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
