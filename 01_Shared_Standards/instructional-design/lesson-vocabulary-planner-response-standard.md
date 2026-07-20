@@ -36,6 +36,9 @@ exact source section or property, evidence class, and confirmation state.
 6. Recommendation
 7. Next Action
 
+Vocabulary Snapshot summarizes category counts and unresolved evidence. Assessment
+Vocabulary lists only `Assess Today? = Yes` rows with their practice evidence, or `None`.
+
 ## Vocabulary Planner Table
 | Word | Lesson Category | CLS2 Unit Category | Exact Source Page | Exact Source Section or Property | Evidence Class | Confirmation State | Prior Unit Connection | Student-Friendly Meaning | Teacher Language Use | Student Language Use | Slide/Worksheet Safe? | Assess Today? | Instruction or Practice Evidence | Notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
