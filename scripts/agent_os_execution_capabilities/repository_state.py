@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from dataclasses import asdict
 from typing import Any
 
 from .models import (
@@ -30,87 +29,40 @@ _SECRET_PATTERNS = (
     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
     re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
 )
-
 _CAPABILITY_FIELDS = frozenset(
     {
-        "capability_id",
-        "status",
-        "evidence_strength",
-        "operation_scope",
-        "repository_scope",
-        "ref_scope",
-        "sha_scope",
-        "principal_type",
-        "runtime_fingerprint",
-        "freshness_boundary",
-        "reason_code",
-        "reason",
+        "capability_id", "status", "evidence_strength", "operation_scope",
+        "repository_scope", "ref_scope", "sha_scope", "principal_type",
+        "runtime_fingerprint", "freshness_boundary", "reason_code", "reason",
         "required_handoff",
     }
 )
 _ENVELOPE_FIELDS = frozenset(
     {
-        "schema_name",
-        "evidence_schema_version",
-        "serializer_version",
-        "producer_adapter",
-        "producer_adapter_version",
-        "correlation_id",
-        "environment_class",
-        "repository_identity",
-        "base_ref",
-        "head_ref",
-        "observed_sha",
-        "contract_fingerprint",
-        "capabilities",
-        "invalidation_reasons",
-        "handoffs",
-        "decision",
-        "execution_authorized",
-        "side_effects_performed",
+        "schema_name", "evidence_schema_version", "serializer_version",
+        "producer_adapter", "producer_adapter_version", "correlation_id",
+        "environment_class", "repository_identity", "base_ref", "head_ref",
+        "observed_sha", "contract_fingerprint", "capabilities",
+        "invalidation_reasons", "handoffs", "decision",
+        "execution_authorized", "side_effects_performed",
     }
 )
 _REPOSITORY_FIELDS = frozenset(
     {
-        "schema_name",
-        "evidence_schema_version",
-        "producer_adapter",
-        "producer_adapter_version",
-        "correlation_id",
-        "repository_identity",
-        "base_ref",
-        "base_sha",
-        "head_ref",
-        "head_sha",
-        "requested_ref",
-        "requested_sha",
-        "observed_sha",
-        "tested_sha",
-        "pushed_sha",
-        "proposed_pr_sha",
-        "synthetic_merge_sha",
-        "external_build_sha",
-        "evidence_type",
-        "contract_fingerprint",
-        "worktree_state",
-        "worktree_reason_codes",
-        "observed_at",
-        "freshness_boundary",
-        "evidence_id",
-        "execution_authorized",
-        "side_effects_performed",
+        "schema_name", "evidence_schema_version", "producer_adapter",
+        "producer_adapter_version", "correlation_id", "repository_identity",
+        "base_ref", "base_sha", "head_ref", "head_sha", "requested_ref",
+        "requested_sha", "observed_sha", "tested_sha", "pushed_sha",
+        "proposed_pr_sha", "synthetic_merge_sha", "external_build_sha",
+        "evidence_type", "contract_fingerprint", "worktree_state",
+        "worktree_reason_codes", "observed_at", "freshness_boundary",
+        "evidence_id", "execution_authorized", "side_effects_performed",
     }
 )
 _IDENTITY_FIELDS = frozenset(
     {
-        "host",
-        "owner",
-        "repository",
-        "repository_id",
-        "is_fork",
-        "upstream_owner",
-        "upstream_repository",
-        "upstream_repository_id",
+        "host", "owner", "repository", "repository_id", "is_fork",
+        "upstream_owner", "upstream_repository", "upstream_repository_id",
         "default_branch",
     }
 )
@@ -121,13 +73,11 @@ def validate_capability_evidence(
 ) -> CapabilityEvidenceEnvelope:
     if isinstance(value, CapabilityEvidenceEnvelope):
         return value
-    if not isinstance(value, Mapping):
+    if not isinstance(value, Mapping) or _contains_secret_like(value):
         return _fallback_capability(("schema.unknown-field",))
 
     supplied = dict(value)
     reasons: set[str] = set()
-    if _contains_secret_like(supplied):
-        return _fallback_capability(("schema.unknown-field",))
     if set(supplied) - _ENVELOPE_FIELDS:
         reasons.add("schema.unknown-field")
     if supplied.get("execution_authorized", False) is not False or supplied.get(
@@ -141,7 +91,6 @@ def validate_capability_evidence(
         version = "0.0"
     elif version != CAPABILITY_EVIDENCE_SCHEMA_VERSION:
         reasons.add("schema.unsupported-version")
-
     if supplied.get("schema_name") != CAPABILITY_EVIDENCE_SCHEMA_NAME:
         reasons.add("schema.unknown-field")
 
@@ -163,34 +112,35 @@ def validate_capability_evidence(
         reasons.add("schema.unknown-field")
         capabilities = list({item.capability_id: item for item in capabilities}.values())
 
-    for code in supplied.get("invalidation_reasons", ()):
-        if isinstance(code, str) and code in APPROVED_REASON_CODES:
-            reasons.add(code)
-        else:
-            reasons.add("schema.unknown-field")
+    raw_reasons = supplied.get("invalidation_reasons", ())
+    if isinstance(raw_reasons, str) or not isinstance(
+        raw_reasons, (tuple, list, set, frozenset)
+    ):
+        reasons.add("schema.unknown-field")
+    else:
+        for code in raw_reasons:
+            if isinstance(code, str) and code in APPROVED_REASON_CODES:
+                reasons.add(code)
+            else:
+                reasons.add("schema.unknown-field")
 
-    decision = _capability_decision(tuple(capabilities), reasons)
     return CapabilityEvidenceEnvelope(
         schema_name=CAPABILITY_EVIDENCE_SCHEMA_NAME,
         evidence_schema_version=version,
         serializer_version=_valid_version(supplied.get("serializer_version")),
         producer_adapter=adapter,
-        producer_adapter_version=(
-            adapter_version if _VERSION_RE.fullmatch(adapter_version) else "0.0"
-        ),
+        producer_adapter_version=(adapter_version if _VERSION_RE.fullmatch(adapter_version) else "0.0"),
         correlation_id=_string(supplied.get("correlation_id"), "unknown"),
         environment_class=_string(supplied.get("environment_class"), "analysis-only"),
         repository_identity=_parse_identity(supplied.get("repository_identity"), reasons),
         base_ref=_optional_string(supplied.get("base_ref")),
         head_ref=_optional_string(supplied.get("head_ref")),
         observed_sha=_optional_sha(supplied.get("observed_sha"), reasons),
-        contract_fingerprint=_optional_fingerprint(
-            supplied.get("contract_fingerprint"), reasons
-        ),
+        contract_fingerprint=_optional_fingerprint(supplied.get("contract_fingerprint"), reasons),
         capabilities=tuple(capabilities),
         invalidation_reasons=tuple(reasons),
         handoffs=_string_collection(supplied.get("handoffs", ())),
-        decision=decision,
+        decision=_capability_decision(tuple(capabilities), reasons),
     )
 
 
@@ -213,27 +163,19 @@ def validate_repository_state_evidence(
 
     if evidence.evidence_schema_version != CAPABILITY_EVIDENCE_SCHEMA_VERSION:
         reasons.add("schema.unsupported-version")
-
     if expected_repository is not None and (
         evidence.repository_identity.canonical_key != expected_repository.canonical_key
     ):
         actual = evidence.repository_identity
-        expected = expected_repository
         same_repo = (
-            actual.host,
-            actual.owner,
-            actual.repository,
-            actual.repository_id,
+            actual.host, actual.owner, actual.repository, actual.repository_id
         ) == (
-            expected.host,
-            expected.owner,
-            expected.repository,
-            expected.repository_id,
+            expected_repository.host, expected_repository.owner,
+            expected_repository.repository, expected_repository.repository_id
         )
-        if same_repo:
-            reasons.add("repo.fork-upstream-mismatch")
-        else:
-            reasons.add("repo.identity-mismatch")
+        reasons.add(
+            "repo.fork-upstream-mismatch" if same_repo else "repo.identity-mismatch"
+        )
     if expected_base_ref is not None and evidence.base_ref != expected_base_ref:
         reasons.add("ref.base-mismatch")
     if expected_base_sha is not None and evidence.base_sha != expected_base_sha:
@@ -259,22 +201,16 @@ def validate_repository_state_evidence(
         reasons.add("worktree.indeterminate")
 
     if reasons & {
-        "schema.malformed-version",
-        "schema.unsupported-version",
-        "schema.unknown-field",
-        "adapter.incompatible",
+        "schema.malformed-version", "schema.unsupported-version",
+        "schema.unknown-field", "adapter.incompatible",
     }:
         outcome = "invalid"
     elif "worktree.indeterminate" in reasons:
         outcome = "needs-decision"
     elif reasons & {
-        "worktree.uncommitted",
-        "worktree.dirty",
-        "worktree.untracked",
-        "worktree.ignored-relevant",
-        "worktree.operation-unresolved",
-        "worktree.detached-head",
-        "worktree.shallow-history",
+        "worktree.uncommitted", "worktree.dirty", "worktree.untracked",
+        "worktree.ignored-relevant", "worktree.operation-unresolved",
+        "worktree.detached-head", "worktree.shallow-history",
     }:
         outcome = "blocked"
     elif reasons:
@@ -289,9 +225,10 @@ def _validate_sha_bindings(
 ) -> None:
     if evidence.tested_sha is None:
         reasons.add("ref.test-sha-mismatch")
-    if evidence.requested_sha is not None and evidence.tested_sha is not None:
-        if evidence.requested_sha != evidence.tested_sha:
-            reasons.add("ref.test-sha-mismatch")
+    # The requested SHA identifies the source head. A synthetic merge has a distinct
+    # tested SHA and must retain both identities without treating the difference as drift.
+    if evidence.requested_sha is not None and evidence.requested_sha != evidence.head_sha:
+        reasons.add("ref.test-sha-mismatch")
     if evidence.external_build_sha is not None and evidence.tested_sha is not None:
         if evidence.external_build_sha != evidence.tested_sha:
             reasons.add("ref.build-sha-mismatch")
@@ -299,6 +236,7 @@ def _validate_sha_bindings(
         reasons.add("ref.stale-sha")
     if evidence.proposed_pr_sha is not None and evidence.proposed_pr_sha != evidence.head_sha:
         reasons.add("ref.pr-head-mismatch")
+
     if evidence.evidence_type == RepositoryEvidenceType.BRANCH_HEAD:
         if evidence.observed_sha != evidence.head_sha or evidence.tested_sha != evidence.head_sha:
             reasons.add("ref.stale-sha")
@@ -308,9 +246,7 @@ def _validate_sha_bindings(
         if evidence.synthetic_merge_sha is None:
             reasons.add("ref.test-sha-mismatch")
         elif not (
-            evidence.observed_sha
-            == evidence.tested_sha
-            == evidence.synthetic_merge_sha
+            evidence.observed_sha == evidence.tested_sha == evidence.synthetic_merge_sha
         ):
             reasons.add("ref.stale-sha")
     elif evidence.evidence_type == RepositoryEvidenceType.BASE_SHA:
@@ -362,9 +298,7 @@ def _coerce_repository_state(
             schema_name=supplied.get("schema_name"),
             evidence_schema_version=version,
             producer_adapter=_string(supplied.get("producer_adapter"), "unknown-adapter"),
-            producer_adapter_version=_valid_version(
-                supplied.get("producer_adapter_version")
-            ),
+            producer_adapter_version=_valid_version(supplied.get("producer_adapter_version")),
             correlation_id=_string(supplied.get("correlation_id"), "unknown"),
             repository_identity=identity,
             base_ref=_string(supplied.get("base_ref"), "unknown"),
@@ -377,22 +311,14 @@ def _coerce_repository_state(
             tested_sha=_optional_sha(supplied.get("tested_sha"), reasons),
             pushed_sha=_optional_sha(supplied.get("pushed_sha"), reasons),
             proposed_pr_sha=_optional_sha(supplied.get("proposed_pr_sha"), reasons),
-            synthetic_merge_sha=_optional_sha(
-                supplied.get("synthetic_merge_sha"), reasons
-            ),
-            external_build_sha=_optional_sha(
-                supplied.get("external_build_sha"), reasons
-            ),
+            synthetic_merge_sha=_optional_sha(supplied.get("synthetic_merge_sha"), reasons),
+            external_build_sha=_optional_sha(supplied.get("external_build_sha"), reasons),
             evidence_type=evidence_type,
-            contract_fingerprint=_required_fingerprint(
-                supplied.get("contract_fingerprint")
-            ),
+            contract_fingerprint=_required_fingerprint(supplied.get("contract_fingerprint")),
             worktree_state=worktree_state,
             worktree_reason_codes=worktree_reasons,
             observed_at=_string(supplied.get("observed_at"), "unknown"),
-            freshness_boundary=_string(
-                supplied.get("freshness_boundary"), "unknown"
-            ),
+            freshness_boundary=_string(supplied.get("freshness_boundary"), "unknown"),
             evidence_id=_string(supplied.get("evidence_id"), ""),
         )
     except (TypeError, ValueError):
@@ -405,12 +331,9 @@ def _result(
     outcome: str,
     reasons: set[str],
 ) -> RepositoryStateValidationResult:
-    details = tuple(f"reason:{code}" for code in sorted(reasons))
     return RepositoryStateValidationResult(
         outcome=outcome,
-        schema_version=(
-            evidence.evidence_schema_version if evidence else CAPABILITY_EVIDENCE_SCHEMA_VERSION
-        ),
+        schema_version=(evidence.evidence_schema_version if evidence else CAPABILITY_EVIDENCE_SCHEMA_VERSION),
         evidence_id=evidence.evidence_id if evidence else "",
         repository_identity=evidence.repository_identity if evidence else None,
         base_ref=evidence.base_ref if evidence else None,
@@ -429,13 +352,11 @@ def _result(
         contract_fingerprint=evidence.contract_fingerprint if evidence else None,
         worktree_state=evidence.worktree_state if evidence else None,
         reason_codes=tuple(reasons),
-        details=details,
+        details=tuple(f"reason:{code}" for code in sorted(reasons)),
     )
 
 
-def _parse_capability(
-    value: object, reasons: set[str]
-) -> CapabilityEvidence | None:
+def _parse_capability(value: object, reasons: set[str]) -> CapabilityEvidence | None:
     if not isinstance(value, Mapping):
         reasons.add("schema.unknown-field")
         return None
@@ -452,17 +373,11 @@ def _parse_capability(
             ref_scope=_optional_string(supplied.get("ref_scope")),
             sha_scope=_optional_sha(supplied.get("sha_scope"), reasons),
             principal_type=_optional_string(supplied.get("principal_type")),
-            runtime_fingerprint=_optional_string(
-                supplied.get("runtime_fingerprint")
-            ),
-            freshness_boundary=_optional_string(
-                supplied.get("freshness_boundary")
-            ),
+            runtime_fingerprint=_optional_string(supplied.get("runtime_fingerprint")),
+            freshness_boundary=_optional_string(supplied.get("freshness_boundary")),
             reason_code=supplied.get("reason_code", "adapter.incompatible"),
             reason=_string(supplied.get("reason"), ""),
-            required_handoff=_optional_string(
-                supplied.get("required_handoff")
-            ),
+            required_handoff=_optional_string(supplied.get("required_handoff")),
         )
     except (TypeError, ValueError):
         reasons.add("schema.unknown-field")
@@ -473,10 +388,8 @@ def _capability_decision(
     capabilities: tuple[CapabilityEvidence, ...], reasons: set[str]
 ) -> ExecutionDecision:
     if reasons & {
-        "schema.malformed-version",
-        "schema.unsupported-version",
-        "schema.unknown-field",
-        "adapter.incompatible",
+        "schema.malformed-version", "schema.unsupported-version",
+        "schema.unknown-field", "adapter.incompatible",
     }:
         return ExecutionDecision.NEEDS_DECISION
     if any(item.status == CapabilityStatus.INDETERMINATE for item in capabilities):
@@ -531,10 +444,7 @@ def _contains_secret_like(value: object) -> bool:
     if isinstance(value, str):
         return any(pattern.search(value) for pattern in _SECRET_PATTERNS)
     if isinstance(value, Mapping):
-        return any(
-            _contains_secret_like(key) or _contains_secret_like(item)
-            for key, item in value.items()
-        )
+        return any(_contains_secret_like(k) or _contains_secret_like(v) for k, v in value.items())
     if isinstance(value, (tuple, list, set, frozenset)):
         return any(_contains_secret_like(item) for item in value)
     return False
