@@ -2,12 +2,12 @@
 
 ## Purpose
 
-Define one repeatable Agent OS pattern for selecting, executing, reviewing, and refining three compatible GitHub issues as a coordinated sprint.
+Define one repeatable pattern for selecting, executing, reviewing, and refining up to three compatible GitHub issues.
 
 ## Sprint Cycle
 
 ```text
-select three compatible issues
+select compatible issues
 -> execute coordinated lanes
 -> publish sprint dashboard
 -> investigate risks and update related issues
@@ -16,96 +16,76 @@ select three compatible issues
 
 ## Selection Rules
 
-A sprint should contain up to three issues that:
+A sprint may contain up to three issues that:
 
-- have compatible dependencies;
-- can use separate branches or clearly separated file surfaces;
-- do not require conflicting source-of-truth changes;
+- have compatible dependencies and source-of-truth boundaries;
+- use separate branches or clearly separated file surfaces;
 - have a safe merge order;
 - can be validated without unnecessary compute;
-- include planning-only work when a dependency blocks implementation.
+- use planning-only work when implementation is dependency-blocked.
 
-Do not treat three issues as parallel-safe merely because they are all open. File overlap, shared interfaces, workflow changes, and downstream dependencies must be checked first.
+Open issues are not automatically parallel-safe. Check dependencies, shared files, governed surfaces, interfaces, and validation needs first.
 
-## Execution Prompt Contract
+## Execution Contract
 
-The coordinated execution prompt must:
+The coordinated prompt must:
 
-- name the three issues and repository;
-- assign one lane per issue;
-- create separate branches and draft pull requests for implementation work;
-- allow planning or contract work when an issue is not implementation-ready;
-- prevent overlapping edits where practical;
-- minimize Cloud Build use through fixture-first and focused validation;
+- name the repository and issue lanes;
+- preserve implementation, planning-only, review, and blocked modes;
+- use separate branches and draft pull requests for implementation;
+- minimize Cloud Build through fixture-first and focused validation;
 - avoid merge, approval, branch-protection, required-check, and production-setting changes;
-- track shared files, interface dependencies, blockers, stale assumptions, missing tests, and discovered risks;
-- finish with one combined sprint dashboard.
+- track shared files, dependencies, blockers, missing tests, and discovered risks;
+- finish with one combined Sprint Dashboard.
 
-## Risk Review And Backlog Refinement Contract
+## Risk And Backlog Contract
 
-After execution, review the three issue lanes and directly related open issues.
+Every risk must include category, severity, status, owner, affected issue or roadmap references, evidence, recommended action, and due phase.
 
-Update existing issues when:
+Allowed actions are:
 
-- dependencies changed;
-- scope is stale;
-- acceptance criteria need clarification;
-- risks or test requirements are missing;
-- implementation order changed;
-- work was already satisfied elsewhere.
+- update an existing issue;
+- update the roadmap;
+- create an ADR;
+- create a new issue for distinct work;
+- close or merge duplicate work;
+- mark needs-decision;
+- take no action.
 
-Create a new issue only when the work has a distinct owner, implementation boundary, validation requirement, or release decision. Do not create duplicate follow-up issues.
+Unowned risks must route to needs-decision. Create a new issue only for a distinct owner, implementation boundary, validation requirement, or release decision.
 
-Risk-review work does not implement code or change production settings.
+## Dashboard Contract
 
-## Sprint Dashboard Contract
+Every dashboard must report:
 
-Every sprint dashboard must report:
+- sprint goal, state, evidence mode, freshness, and provenance;
+- lane and pull-request status;
+- files changed, tests run, docs updated, and validation evidence;
+- Cloud Build runs and builds avoided when evidenced;
+- risk register with severity and affected issues;
+- Risk Delta and unowned-risk count;
+- issue impact and recommended GitHub changes;
+- blockers, dependencies, merge order, and sequential-only work;
+- recommended next sprint.
 
-- sprint goal and state;
-- the three issue lanes;
-- issue and pull-request status;
-- completed and deferred scope;
-- files changed;
-- tests run;
-- documentation updated;
-- Cloud Build runs triggered;
-- builds avoided when evidence exists;
-- file overlap and merge-conflict risk;
-- blockers and dependencies;
-- risks discovered;
-- issues that should be updated;
-- recommended merge order;
-- recommended next three-issue sprint;
-- issues that must remain sequential.
-
-Unknown values must be shown as unknown or not yet measurable. Do not invent build savings, cost, test, or readiness evidence.
+Unknown values remain unknown. Do not invent build savings, confidence, test, readiness, or cost evidence.
 
 ## Low-Compute Default
 
-Use this validation order unless an issue requires stricter evidence:
+1. Offline fixtures and unit tests.
+2. Static and configuration checks.
+3. Focused package tests.
+4. One focused remote smoke test when required.
+5. Aggregate validation once on the final implementation head.
 
-1. offline fixtures and unit tests;
-2. static and configuration checks;
-3. focused package tests;
-4. one focused remote smoke test when required;
-5. aggregate validation once on the final implementation head.
+Avoid polling, persistent runners, duplicate remote builds, and repeated aggregate validation during iteration.
 
-Avoid scheduled polling, persistent runners, duplicate remote builds, and repeated aggregate validation during iteration.
-
-## Merge And Review Rules
+## Merge And Reporting Rules
 
 - Keep implementation lanes on separate branches.
 - Open draft pull requests by default.
-- Do not merge from the coordinated sprint prompt.
 - Reconcile interface changes before dependent implementation begins.
-- Report the recommended merge order, but do not treat it as approval.
+- A recommended merge order is not approval.
+- Do not merge from the coordinated sprint prompt.
 
-## Required Final Report
-
-- files changed
-- tests run
-- docs updated
-- unresolved blockers
-- handoff recommendations
-- remaining risks
+Every final report includes files changed, tests run, docs updated, unresolved blockers, handoff recommendations, and remaining risks.
