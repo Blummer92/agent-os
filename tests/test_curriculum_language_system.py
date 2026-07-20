@@ -162,9 +162,9 @@ def test_cls4_keeps_language_material_and_assessment_decisions_separate() -> Non
 def test_cls4_defines_snapshot_and_assessment_outputs() -> None:
     content = read(CLS4_STANDARD)
     for phrase in (
-        "Vocabulary Snapshot summarizes category counts and unresolved evidence",
-        "Assessment Vocabulary lists only `Assess Today? = Yes` rows",
-        "with their practice evidence, or `None`",
+        "`Vocabulary Snapshot`: summarize category counts and unresolved evidence",
+        "`Assessment Vocabulary`: list only `Assess Today? = Yes` rows",
+        "with practice evidence, or `None`",
     ):
         assert phrase in content, f"missing CLS4 output rule: {phrase}"
 
