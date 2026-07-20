@@ -1,7 +1,7 @@
 # Agent OS Issue Acceptance Checker
 
-Fixture-first checker for IA2. It evaluates local issue, PR, changed-file, and
-diff inputs against the IA1 issue acceptance standard.
+Fixture-first, report-only checks for local issue, pull-request, changed-file, and
+diff evidence under the Agent OS issue-acceptance standard.
 
 ## Local usage
 
@@ -15,81 +15,73 @@ python -m scripts.agent_os_issue_acceptance.cli \
 
 Use `--format json` for stable machine-readable report fields.
 
+## Canonical IssuePlan scanning
+
+`issueplan_scanner.py` is the only acceptance-block candidate discovery and YAML
+parsing implementation. It scans all candidates before classification and keeps
+source identity, source revision, candidate multiplicity, malformed candidates,
+unknown governed fields, profile compatibility, and identity findings distinct.
+
+`parse_issue_metadata()` remains a temporary lossy compatibility facade. It calls
+the canonical scanner and projects only one safe candidate into `IssueMetadata`.
+It contains no regex, fenced-block, or YAML parser of its own.
+
+Compatibility behavior is fail-closed:
+
+- no candidate remains ordinary missing metadata;
+- malformed, duplicate-identical, and conflicting candidates remain distinct;
+- partial, inaccessible, unsupported, or stale sources remain distinct;
+- unknown governed fields and unsupported versions are not coerced;
+- unsafe findings carry bounded `issueplan-scanner:*` manual-review reasons;
+- scanner validity, readiness, labels, and approvals never authorize execution.
+
+Policy, readiness, IA5 documentation readiness, and legacy preflight consume this
+scanner-backed evidence. Markdown headings remain a separate human-readable input
+where their existing contracts require them; they do not rediscover YAML blocks.
+Removal of the compatibility facade requires a separately governed public-API
+migration after all callers consume scanner results directly.
+
 ## Linked-issue parsing
 
 The checker resolves a linked issue only when exactly one unique same-repository
 target is introduced by a supported explicit closing keyword.
 
-Supported keywords are case-insensitive:
+Supported case-insensitive keywords are `close`, `closes`, `closed`, `fix`,
+`fixes`, `fixed`, `resolve`, `resolves`, and `resolved`. Whitespace and optional
+colon forms are supported, such as `Closes #223` and `Closes: #223`.
 
-- `close`, `closes`, `closed`
-- `fix`, `fixes`, `fixed`
-- `resolve`, `resolves`, `resolved`
+The structured parser returns:
 
-Both whitespace and optional-colon forms are supported, for example
-`Closes #223` and `Closes: #223`.
+- `resolved`: exactly one unique supported explicit target;
+- `none`: no issue-like references;
+- `manual-review`: references exist but one authoritative target is not proven.
 
-The parser returns one of three states:
+Bare references and `Addresses #223` are non-authoritative. Fenced code, inline
+code, blockquotes, and HTML comments are masked before resolution.
+`parse_linked_issue()` remains a lossy wrapper; critical consumers use
+`parse_linked_issue_result()`.
 
-- `resolved`: exactly one unique supported explicit target exists;
-- `none`: no issue-like references exist;
-- `manual-review`: issue references exist, but one authoritative target cannot be
-  proven safely.
-
-Bare references such as `#223` or `Related to #223` are non-authoritative. They
-do not override one supported explicit target. Bare-only references require
-manual review. Repeated explicit references to the same target are deduplicated,
-while multiple unique explicit targets and conflicting title/body targets require
-manual review.
-
-`Addresses #223` is not an authoritative closing phrase. Repository-qualified
-targets such as `owner/repository#223` preserve repository identity and require
-manual review until cross-repository issue evaluation is supported end to end.
-
-A small deterministic Markdown masking step prevents references found only in
-fenced code, inline code, blockquotes, or HTML comments from silently becoming
-authoritative. This is intentionally not a full Markdown parser; uncertain future
-contexts should route to manual review rather than adding heuristic confidence
-scoring.
-
-`parse_linked_issue()` remains as a lossy compatibility wrapper. It returns an
-integer only for `resolved` and returns `None` for both `none` and
-`manual-review`. Critical IA2 consumers use `parse_linked_issue_result()` so those
-states remain distinct in checks, text reports, and JSON output.
-
-The text report includes `Linked issue status`. JSON output preserves the existing
-`linked_issue` field and adds `linked_issue_status`, `linked_issue_reasons`, and
-`linked_issue_candidates`.
-
-Outcome meaning and authorization boundaries remain governed by
-`01_Shared_Standards/github/issue-acceptance-automation.md`.
-
-## Metadata validation
+## Metadata and issue scanning
 
 `metadata_validation.py` evaluates MD2A fixture evidence offline and report-only.
-It returns only `pass`, `warn`, `fail`, or `manual-review` checks and never edits
-issues, labels, templates, readiness fields, workflows, or external systems.
+It never edits issues, labels, readiness fields, workflows, or external systems.
 
-## Bounded issue scanning
-
-`issue_scanner.py` converts complete paginated issue retrieval into provenance-
-preserving scanner records for later report-only counts. `github_issue_source.py`
-and `issue_scan_cli.py` provide an explicit local GitHub runner:
+`issue_scanner.py` converts complete paginated retrieval into provenance-preserving
+records. `issue_scan_cli.py` provides an explicit local GitHub runner:
 
 ```bash
 python -m scripts.agent_os_issue_acceptance.issue_scan_cli --repository OWNER/REPO
 ```
 
-The runner emits JSON, exits nonzero on incomplete retrieval, and does not edit
-issues, labels, readiness fields, templates, workflows, or external systems.
+Incomplete retrieval exits nonzero. The runner performs no issue or label writes.
 
-## Workflow rollout
+## Workflow boundary
 
-The checker remains local and fixture-first. PR #227 currently owns the proposed
-report-only GitHub Actions wrapper and is not yet merged into `main`. Workflow
-caller migration is therefore deferred: after that workflow lands, it must use
-the structured parser result, perform issue lookup only for a resolved
-same-repository target, and retain read-only/report-only behavior.
+The merged report-only workflow consumes structured linked-issue and acceptance
+evidence. It performs issue lookup only for a resolved same-repository target and
+keeps all findings non-authoritative.
 
-The checker does not require external credentials, Notion, Google Drive, Sheets,
-Docs, Apps Script, or production systems.
+Outcome meaning remains governed by
+`01_Shared_Standards/github/issue-acceptance-automation.md`. The package requires
+no Notion, Drive, Sheets, Docs, Apps Script, production credentials, or external
+write access.
