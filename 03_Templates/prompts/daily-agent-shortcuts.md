@@ -4,21 +4,25 @@ Use these shortcuts for common low-friction agent work. They operate under
 `00_Governance/agent-os-advisory-mode.md` during pilot review and do not override
 `00_Governance/write-authorization-policy.md`; they clarify safe daily lanes.
 
-The canonical tier definitions and escalation rules live in
-`04_Registry/agent-risk-tiers.md`.
+Canonical routing:
+
+- risk tiers: `04_Registry/agent-risk-tiers.md`;
+- lightweight or full intake: `03_Templates/prompts/agent-intake-form.md`;
+- Tier 2, Tier 3, or governed work: `03_Templates/reports/live-readiness-checklist.md`.
 
 ## Daily Mode Rule
 
 For read-only, local-only, planning, QA notes, routing, draft specs, and local
-documentation tasks, proceed after lightweight intake.
+documentation tasks, complete Lightweight Intake and proceed when the boundary is clear.
 
-Tier 0 and Tier 1 tasks should proceed without extra approval when they stay
+Tier 0 and Tier 1 tasks should proceed without production-style gates while they stay
 read-only or local-only.
 
-Use full intake and live-readiness review for Tier 2 and Tier 3 work. Escalate when
-a task touches external writes, production systems, governed fields, sharing or
-permissions, source-of-truth records, sensitive student/private data, or
-irreversible actions.
+Use Full Intake and Live Readiness for Tier 2 and Tier 3 work. Escalate when a task
+touches external writes, production systems, governed fields, sharing or permissions,
+source-of-truth records, sensitive student or private data, or irreversible actions.
+
+Ambiguous write authority fails closed to human decision.
 
 ## Dashboard Draft
 
