@@ -28,11 +28,12 @@ versions change only when the module's standards or contract changes.
 | IA4D-to-Scheduler Handoff Contract | 0.2.0 |
 
 **Dashboard Migration Verification**
-(`08_Tooling/dashboard-migration-verification/`) starts as a verification-only
+(`08_Tooling/dashboard-migration-verification/`) is a packaged verification-only
 migration evidence toolkit for dashboard registry examples, placeholder snapshots,
 dependency graphs, conservative validation results, and human-readable reports. It
 never authorizes live Notion, Workspace, trigger, sharing, source-of-truth, or
-production dashboard writes. Packaging status remains unreconciled until D2 (#123).
+production dashboard writes. D2 / #123 completed the package metadata and standard
+install/test participation without changing that verification-only boundary.
 
 **Workspace Automation Builder Tooling**
 (`08_Tooling/workspace-automation-builder/`) includes an Apps Script safety
@@ -54,18 +55,18 @@ queues, leases, workers, dispatch state, persistence, or external I/O. See
 
 **Agent Memory & Context Budget Manager**
 (`08_Tooling/agent-memory-context-manager/`) has moved beyond planning-only
-status. Current disk evidence includes a local Python module under `src/` and
-pytest coverage under `tests/` for handoff packet construction and validation,
-cache-key generation, packet summaries, summary cache read/write helpers,
-summary cache lookup, and packet-to-cache writing. Current phase evidence reaches
-Memory 1G local summary-cache write-from-packet helpers.
+status. Current disk evidence includes standardized package metadata, a local Python
+module under `src/`, and pytest coverage under `tests/` for handoff packet
+construction and validation, cache-key generation, packet summaries, summary cache
+read/write helpers, summary cache lookup, and packet-to-cache writing. D1 / #122
+completed package metadata; current phase evidence reaches Memory 1G local
+summary-cache write-from-packet helpers.
 
-Still unsupported or incomplete: standardized packaging metadata (D1 / #122),
-Scheduler runtime integration, autonomous writes, vector DB, embeddings, REST
-API, dashboard, daemon, and production deployment. The planning documents remain
-part of the module: `README.md`, `HANDOFF_PACKET_TEMPLATE.md`,
-`CONTEXT_BUDGET_POLICY.md`, `SUMMARY_CACHE_FORMAT.md`, and
-`SCHEDULER_INTEGRATION_DESIGN.md`.
+Still unsupported or incomplete: Scheduler runtime integration, autonomous writes,
+vector DB, embeddings, REST API, dashboard, daemon, and production deployment. The
+planning documents remain part of the module: `README.md`,
+`HANDOFF_PACKET_TEMPLATE.md`, `CONTEXT_BUDGET_POLICY.md`,
+`SUMMARY_CACHE_FORMAT.md`, and `SCHEDULER_INTEGRATION_DESIGN.md`.
 
 **IA4D-to-Scheduler Handoff Contract**
 (`00_Governance/architecture-decisions/adr-0002-ia4d-scheduler-handoff-contract.md`
