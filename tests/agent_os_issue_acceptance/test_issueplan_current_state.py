@@ -265,6 +265,30 @@ def test_governed_input_changes_are_stale(change, reason):
     assert reason in comparison.reason_codes
 
 
+def test_freshness_boundary_has_dedicated_reason():
+    comparison = compare_issueplan_current_state(
+        _build(), _build(freshness_boundary="main@def456")
+    )
+    assert comparison.outcome == IssuePlanCurrentStateOutcome.STALE
+    assert comparison.changed_bindings == ("freshness_boundary",)
+    assert comparison.reason_codes == ("source.freshness-boundary-changed",)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"graph_reference": "changed-graph"},
+        {"planning_result_reference": "changed-planning"},
+        {"handoff_reference": "changed-handoff"},
+    ],
+)
+def test_planning_reference_changes_are_neutral_issueplan_bindings(change):
+    comparison = compare_issueplan_current_state(_build(), _build(**change))
+    assert comparison.outcome == IssuePlanCurrentStateOutcome.STALE
+    assert comparison.changed_bindings == (next(iter(change)),)
+    assert comparison.reason_codes == ()
+
+
 def test_unsupported_schema_is_invalid():
     current = _build(schema_version="2.0")
     comparison = compare_issueplan_current_state(_build(), current)
