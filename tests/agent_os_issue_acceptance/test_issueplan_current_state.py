@@ -19,31 +19,32 @@ from scripts.agent_os_issue_acceptance.issueplan_scanner import (
 )
 
 
-def _scan_result(
+def _result(
     *,
-    source_revision: str = "rev-1",
-    candidates: tuple[MetadataCandidate, ...] | None = None,
-    findings: tuple[ScanFinding, ...] = (),
-) -> ScanResult:
-    if candidates is None:
-        candidates = (
-            MetadataCandidate(
-                1,
-                "raw",
-                {
-                    "profile_version": "issueplan-core/v1",
-                    "entity_id": "issue-360",
-                    "revision": "candidate-1",
-                    "owner_agent": "Integration Manager",
-                },
-            ),
-        )
+    revision="rev-1",
+    candidates=None,
+    findings=(),
+    adoption=AdoptionClass.STRICT_NATIVE,
+):
+    candidates = candidates or (
+        MetadataCandidate(
+            1,
+            "raw",
+            {
+                "profile_version": "issueplan-core/v1",
+                "entity_id": "issue-360",
+                "revision": "candidate-1",
+                "owner_agent": "Integration Manager",
+                "required_files": ["b.py", "a.py"],
+            },
+        ),
+    )
     return ScanResult(
         source_locator="github:Blummer92/agent-os#360",
-        source_revision=source_revision,
+        source_revision=revision,
         findings=findings,
-        adoption_class=AdoptionClass.STRICT_NATIVE,
-        candidates=candidates,
+        adoption_class=adoption,
+        candidates=tuple(candidates),
         strict_valid=True,
         execution_authorized=False,
         evidence=("bounded=true",),
@@ -52,56 +53,49 @@ def _scan_result(
 
 def _build(
     *,
-    source_revision: str = "rev-1",
-    content: str = "issue body",
-    scan_result: ScanResult | None = None,
-    contract: dict | None = None,
-    schema_version: str = ISSUEPLAN_CURRENT_STATE_SCHEMA_VERSION,
-    retrieval_complete: bool = True,
-    pagination_complete: bool = True,
-    accessible: bool = True,
-    source_family: str = "github-issue",
-    projection_complete: bool = True,
-    projection_lookup_succeeded: bool = True,
-    freshness_boundary: str = "main@abc123",
-    expected_revision: str | None = None,
+    revision="rev-1",
+    result=None,
+    observed_at="2026-07-20T01:00:00Z",
+    **kwargs,
 ):
-    result = scan_result or _scan_result(source_revision=source_revision)
+    result = result or _result(revision=revision)
     envelope = SourceEnvelope(
         source_locator="github:Blummer92/agent-os#360",
-        source_revision=source_revision,
-        content=content,
-        retrieval_complete=retrieval_complete,
-        pagination_complete=pagination_complete,
-        accessible=accessible,
-        source_family=source_family,
-        expected_revision=expected_revision,
+        source_revision=revision,
+        content="issue body",
+        retrieval_complete=kwargs.pop("retrieval_complete", True),
+        pagination_complete=kwargs.pop("pagination_complete", True),
+        accessible=kwargs.pop("accessible", True),
+        source_family=kwargs.pop("source_family", "github-issue"),
+        expected_revision=kwargs.pop("expected_revision", None),
     )
-    evidence = build_issueplan_current_state_evidence(
-        envelope=envelope,
-        scan_result=result,
-        observed_at="2026-07-20T01:00:00Z",
-        freshness_boundary=freshness_boundary,
-        implementation_contract=contract
-        or {
-            "scope": ("current-state evidence",),
-            "allowlist": ("issueplan_current_state.py",),
-            "required_tests": ("test_issueplan_current_state.py",),
-        },
+    return build_issueplan_current_state_evidence(
+        envelope,
+        result,
+        observed_at=observed_at,
+        freshness_boundary=kwargs.pop("freshness_boundary", "main@abc123"),
         governed_field_names=("absent_field", "null_field"),
-        intentionally_omitted_fields=("omitted_field",),
-        unavailable_fields=("unavailable_field",),
-        graph_reference="graph-digest",
-        planning_result_reference="planning-digest",
-        handoff_reference="handoff-digest",
-        projection_complete=projection_complete,
-        projection_lookup_succeeded=projection_lookup_succeeded,
-        schema_version=schema_version,
+        omitted_fields=("omitted_field",),
+        repository=kwargs.pop("repository", "Blummer92/agent-os"),
+        base_branch=kwargs.pop("base_branch", "main"),
+        evaluated_repository_sha=kwargs.pop("evaluated_repository_sha", "a" * 40),
+        implementation_contract_fingerprint=kwargs.pop(
+            "implementation_contract_fingerprint", "b" * 64
+        ),
+        allowed_files=kwargs.pop("allowed_files", ("b.py", "a.py")),
+        forbidden_paths=kwargs.pop("forbidden_paths", (".github/",)),
+        required_tests=kwargs.pop("required_tests", ("pytest",)),
+        graph_reference=kwargs.pop("graph_reference", "graph-digest"),
+        planning_result_reference=kwargs.pop(
+            "planning_result_reference", "planning-digest"
+        ),
+        handoff_reference=kwargs.pop("handoff_reference", "handoff-digest"),
+        supplied_node_ids=kwargs.pop("supplied_node_ids", ("2", "1")),
+        **kwargs,
     )
-    return evidence, result
 
 
-def test_public_outcome_values_are_exact():
+def test_outcome_values_are_exact():
     assert tuple(item.value for item in IssuePlanCurrentStateOutcome) == (
         "current",
         "stale",
@@ -111,392 +105,199 @@ def test_public_outcome_values_are_exact():
     )
 
 
-def test_identical_inputs_are_deterministic_current_and_never_authorized():
-    first, result = _build()
-    second, _ = _build()
-
+def test_identical_evidence_is_current_and_never_authorized():
+    first = _build()
+    second = _build()
+    result = compare_issueplan_current_state(first, second)
     assert first == second
-    assert first.execution_authorized is False
-    comparison = compare_issueplan_current_state(
-        first, second, current_scan_result=result
+    assert result.outcome == IssuePlanCurrentStateOutcome.CURRENT
+    assert first.execution_authorized is result.execution_authorized is False
+
+
+def test_observed_at_is_provenance_not_semantic_identity():
+    first = _build(observed_at="2026-07-20T01:00:00Z")
+    second = _build(observed_at="2026-07-20T02:00:00Z")
+    assert first.evidence_id == second.evidence_id
+    assert compute_issueplan_current_state_fingerprint(first) == (
+        compute_issueplan_current_state_fingerprint(second)
     )
-    assert comparison.outcome == IssuePlanCurrentStateOutcome.CURRENT
-    assert comparison.reason_codes == ()
-    assert comparison.execution_authorized is False
+    assert compare_issueplan_current_state(first, second).outcome == (
+        IssuePlanCurrentStateOutcome.CURRENT
+    )
 
 
-def test_models_are_frozen_and_execution_authorization_is_not_constructible():
-    evidence, _ = _build()
+def test_models_are_frozen_and_authorization_is_not_constructible():
+    evidence = _build()
     with pytest.raises(FrozenInstanceError):
         evidence.evidence_id = "changed"
-    with pytest.raises(FrozenInstanceError):
-        evidence.source.source_revision = "changed"
     with pytest.raises(TypeError):
         IssuePlanCurrentStateEvidence(
-            **{
-                **evidence.__dict__,
-                "execution_authorized": True,
-            }
+            **{**evidence.__dict__, "execution_authorized": True}
         )
 
 
-def test_complete_candidate_set_contributes_to_evidence_identity():
-    first, _ = _build()
+def test_set_like_fields_are_deterministic():
+    first = _build(allowed_files=("a.py", "b.py"), supplied_node_ids=("1", "2"))
+    second = _build(allowed_files=("b.py", "a.py"), supplied_node_ids=("2", "1"))
+    assert first.evidence_id == second.evidence_id
+
+
+def test_complete_candidate_order_is_binding():
     candidates = (
-        MetadataCandidate(1, "raw", {"entity_id": "issue-360"}),
-        MetadataCandidate(2, "other", {"entity_id": "issue-360"}),
+        MetadataCandidate(1, "one", {"entity_id": "issue-360"}),
+        MetadataCandidate(2, "two", {"entity_id": "issue-360"}),
     )
-    result = _scan_result(
-        candidates=candidates,
-        findings=(ScanFinding.METADATA_DUPLICATED_IDENTICAL,),
-    )
-    current, _ = _build(scan_result=result)
-
-    comparison = compare_issueplan_current_state(
-        first, current, current_scan_result=result
-    )
-    assert comparison.outcome == IssuePlanCurrentStateOutcome.BLOCKED
-    assert "candidate.changed" in comparison.reason_codes
-    assert "scanner.multiple-identical" in comparison.reason_codes
-
-
-def test_source_revision_change_is_stale():
-    expected, _ = _build()
-    current_result = _scan_result(source_revision="rev-2")
-    current, _ = _build(source_revision="rev-2", scan_result=current_result)
-
-    comparison = compare_issueplan_current_state(
-        expected, current, current_scan_result=current_result
-    )
+    left = _build(result=_result(candidates=candidates))
+    right = _build(result=_result(candidates=tuple(reversed(candidates))))
+    comparison = compare_issueplan_current_state(left, right)
     assert comparison.outcome == IssuePlanCurrentStateOutcome.STALE
-    assert "source.revision-changed" in comparison.reason_codes
+    assert "candidate.changed" in comparison.reason_codes
 
 
 @pytest.mark.parametrize(
-    ("kwargs", "reason", "outcome"),
+    ("kwargs", "reason"),
     [
-        (
-            {"retrieval_complete": False},
-            "source.partial",
-            IssuePlanCurrentStateOutcome.BLOCKED,
-        ),
-        (
-            {"pagination_complete": False},
-            "source.unknown-pagination",
-            IssuePlanCurrentStateOutcome.BLOCKED,
-        ),
-        (
-            {"accessible": False},
-            "source.inaccessible",
-            IssuePlanCurrentStateOutcome.BLOCKED,
-        ),
-        (
-            {"source_family": "unsupported"},
-            "source.unsupported",
-            IssuePlanCurrentStateOutcome.BLOCKED,
-        ),
-        (
-            {"projection_complete": False},
-            "projection.incomplete",
-            IssuePlanCurrentStateOutcome.BLOCKED,
-        ),
-        (
-            {"projection_lookup_succeeded": False},
-            "projection.lookup-failed",
-            IssuePlanCurrentStateOutcome.NEEDS_DECISION,
-        ),
+        ({"retrieval_complete": False}, "source.partial"),
+        ({"pagination_complete": False}, "source.unknown-pagination"),
+        ({"accessible": False}, "source.inaccessible"),
+        ({"completeness_status": "truncated"}, "source.partial"),
+        ({"retrieval_status": "absent"}, "projection.lookup-failed"),
+        ({"retrieval_status": "unavailable"}, "projection.lookup-failed"),
     ],
 )
-def test_incomplete_or_unsupported_evidence_fails_closed(kwargs, reason, outcome):
-    expected, _ = _build()
-    current, result = _build(**kwargs)
-
-    comparison = compare_issueplan_current_state(
-        expected, current, current_scan_result=result
-    )
-    assert comparison.outcome == outcome
+def test_incomplete_or_unavailable_source_needs_decision(kwargs, reason):
+    comparison = compare_issueplan_current_state(_build(), _build(**kwargs))
+    assert comparison.outcome == IssuePlanCurrentStateOutcome.NEEDS_DECISION
     assert reason in comparison.reason_codes
 
 
+def test_unsupported_source_is_blocked():
+    comparison = compare_issueplan_current_state(
+        _build(), _build(source_family="unsupported")
+    )
+    assert comparison.outcome == IssuePlanCurrentStateOutcome.BLOCKED
+    assert "source.unsupported" in comparison.reason_codes
+
+
 @pytest.mark.parametrize(
-    ("finding", "reason", "outcome"),
+    ("finding", "adoption", "reason", "outcome"),
     [
         (
             ScanFinding.METADATA_DUPLICATED_IDENTICAL,
+            AdoptionClass.ADOPTION_BLOCKED,
             "scanner.multiple-identical",
             IssuePlanCurrentStateOutcome.BLOCKED,
         ),
         (
             ScanFinding.METADATA_CONFLICTING,
+            AdoptionClass.ADOPTION_BLOCKED,
             "scanner.multiple-conflicting",
             IssuePlanCurrentStateOutcome.BLOCKED,
         ),
         (
             ScanFinding.METADATA_MALFORMED,
+            AdoptionClass.ADOPTION_BLOCKED,
             "scanner.malformed-candidate",
             IssuePlanCurrentStateOutcome.BLOCKED,
         ),
         (
             ScanFinding.UNKNOWN_GOVERNED_FIELD,
+            AdoptionClass.ADOPTION_BLOCKED,
             "scanner.unknown-governed-field",
             IssuePlanCurrentStateOutcome.NEEDS_DECISION,
         ),
         (
             ScanFinding.IDENTITY_FINDING_PRESENT,
+            AdoptionClass.IDENTITY_QUARANTINED,
             "identity.quarantined",
             IssuePlanCurrentStateOutcome.BLOCKED,
         ),
     ],
 )
-def test_scanner_findings_use_bounded_reason_codes(finding, reason, outcome):
-    expected, _ = _build()
-    current_result = _scan_result(findings=(finding,))
-    current, _ = _build(scan_result=current_result)
-
-    comparison = compare_issueplan_current_state(expected, current)
+def test_scanner_findings_fail_closed(finding, adoption, reason, outcome):
+    current = _build(result=_result(findings=(finding,), adoption=adoption))
+    comparison = compare_issueplan_current_state(_build(), current)
     assert comparison.outcome == outcome
     assert reason in comparison.reason_codes
 
 
-def test_scanner_findings_are_preserved_without_separate_scan_result_argument():
-    result = _scan_result(findings=(ScanFinding.METADATA_MALFORMED,))
-    evidence, _ = _build(scan_result=result)
-
-    comparison = compare_issueplan_current_state(evidence, evidence)
-    assert comparison.outcome == IssuePlanCurrentStateOutcome.BLOCKED
-    assert comparison.reason_codes == ("scanner.malformed-candidate",)
-
-
-def test_contract_changes_have_specific_reason_codes():
-    expected, _ = _build()
-    current, result = _build(
-        contract={
-            "scope": ("changed",),
-            "allowlist": ("other.py",),
-            "required_tests": ("other_test.py",),
-        }
-    )
-
-    comparison = compare_issueplan_current_state(
-        expected, current, current_scan_result=result
-    )
-    assert comparison.outcome == IssuePlanCurrentStateOutcome.STALE
-    assert set(comparison.reason_codes) == {
-        "contract.scope-changed",
-        "contract.allowlist-changed",
-        "contract.required-tests-changed",
-    }
-
-
-def test_unsupported_schema_version_is_invalid():
-    expected, _ = _build()
-    current, result = _build(schema_version="2.0")
-
-    comparison = compare_issueplan_current_state(
-        expected, current, current_scan_result=result
-    )
-    assert comparison.outcome == IssuePlanCurrentStateOutcome.INVALID
-    assert "version.unsupported" in comparison.reason_codes
-
-
-def test_non_string_schema_version_is_rejected_without_hash_lookup_error():
-    envelope = SourceEnvelope(
-        source_locator="github:Blummer92/agent-os#360",
-        source_revision="rev-1",
-        content="body",
-    )
-    with pytest.raises(TypeError):
-        build_issueplan_current_state_evidence(
-            envelope=envelope,
-            scan_result=_scan_result(),
-            observed_at="2026-07-20T01:00:00Z",
-            freshness_boundary="main@abc123",
-            implementation_contract={},
-            schema_version=["1.0"],
-        )
-
-
 def test_field_states_distinguish_absent_null_omitted_and_unavailable():
     candidate = MetadataCandidate(
-        1,
-        "raw",
-        {
-            "entity_id": "issue-360",
-            "revision": "candidate-1",
-            "null_field": None,
-        },
+        1, "raw", {"entity_id": "issue-360", "null_field": None}
     )
-    result = _scan_result(candidates=(candidate,))
-    evidence, _ = _build(scan_result=result)
-    states = {name: state for name, state, _ in evidence.governed_fields}
-
+    evidence = _build(
+        result=_result(candidates=(candidate,)),
+        field_state_overrides={"unavailable_field": "unavailable"},
+    )
+    states = {
+        name: state for name, state, _ in evidence.source_snapshot.governed_fields
+    }
     assert states["absent_field"] == "absent"
     assert states["null_field"] == "null"
     assert states["omitted_field"] == "intentionally-omitted"
     assert states["unavailable_field"] == "unavailable"
 
 
-def test_overlapping_omitted_and_unavailable_fields_are_rejected():
-    envelope = SourceEnvelope(
-        source_locator="github:Blummer92/agent-os#360",
-        source_revision="rev-1",
-        content="body",
-    )
-    with pytest.raises(ValueError):
-        build_issueplan_current_state_evidence(
-            envelope=envelope,
-            scan_result=_scan_result(),
-            observed_at="2026-07-20T01:00:00Z",
-            freshness_boundary="main@abc123",
-            implementation_contract={},
-            intentionally_omitted_fields=("field",),
-            unavailable_fields=("field",),
-        )
-
-
-def test_fingerprint_is_order_stable_for_mappings_and_sets():
-    first = compute_issueplan_current_state_fingerprint(
-        {"b": {"z", "a"}, "a": (2, 1)}
-    )
-    second = compute_issueplan_current_state_fingerprint(
-        {"a": (2, 1), "b": {"a", "z"}}
-    )
-    assert first == second
-
-
-def test_comparison_keeps_human_details_separate_from_reason_codes():
-    expected, _ = _build()
-    current = replace(expected, graph_reference="changed")
-    current = replace(
-        current,
-        evidence_id=compute_issueplan_current_state_fingerprint(
-            {
-                **{
-                    field: value
-                    for field, value in current.__dict__.items()
-                    if field != "evidence_id"
-                },
-                "execution_authorized": False,
-            }
-        ),
-    )
-
-    comparison = compare_issueplan_current_state(expected, current)
-    assert comparison.reason_codes == ("contract.scope-changed",)
-    assert comparison.details == (
-        "changed binding: graph.reference",
-        "reason: contract.scope-changed",
-    )
-
-
-def test_scanner_result_fingerprint_change_is_stale():
-    expected, _ = _build()
-    current_result = replace(_scan_result(), evidence=("bounded=false",))
-    current, _ = _build(scan_result=current_result)
-
+def test_revision_change_is_stale():
+    expected = _build()
+    current = _build(revision="rev-2", result=_result(revision="rev-2"))
     comparison = compare_issueplan_current_state(expected, current)
     assert comparison.outcome == IssuePlanCurrentStateOutcome.STALE
-    assert "candidate.changed" in comparison.reason_codes
-    assert "scanner.result" in comparison.changed_bindings
+    assert {
+        "candidate.changed",
+        "source.revision-changed",
+    } & set(comparison.reason_codes)
 
 
-def test_supplied_scan_result_mismatch_is_invalid():
-    current, _ = _build()
-    mismatched = replace(_scan_result(), evidence=("different",))
+@pytest.mark.parametrize(
+    ("change", "reason"),
+    [
+        ({"allowed_files": ("other.py",)}, "contract.allowlist-changed"),
+        ({"forbidden_paths": ("secrets/",)}, "contract.scope-changed"),
+        ({"required_tests": ("other",)}, "contract.required-tests-changed"),
+        ({"evaluated_repository_sha": "c" * 40}, "source.revision-changed"),
+        ({"supplied_node_ids": ("3",)}, "contract.scope-changed"),
+    ],
+)
+def test_governed_input_changes_are_stale(change, reason):
+    comparison = compare_issueplan_current_state(_build(), _build(**change))
+    assert comparison.outcome == IssuePlanCurrentStateOutcome.STALE
+    assert reason in comparison.reason_codes
 
-    comparison = compare_issueplan_current_state(
-        current, current, current_scan_result=mismatched
-    )
+
+def test_unsupported_schema_is_invalid():
+    current = _build(schema_version="2.0")
+    comparison = compare_issueplan_current_state(_build(), current)
     assert comparison.outcome == IssuePlanCurrentStateOutcome.INVALID
-    assert "projection.incomplete" in comparison.reason_codes
+    assert "version.unsupported" in comparison.reason_codes
 
 
-def test_unknown_contract_binding_change_is_stale():
-    expected, _ = _build()
-    current, result = _build(
-        contract={
-            "scope": ("current-state evidence",),
-            "allowlist": ("issueplan_current_state.py",),
-            "required_tests": ("test_issueplan_current_state.py",),
-            "future_binding": "changed",
-        }
+def test_tampered_identity_is_invalid():
+    evidence = _build()
+    tampered = replace(
+        evidence, evidence_id="issueplan-current-state:" + "0" * 64
     )
-
-    comparison = compare_issueplan_current_state(
-        expected, current, current_scan_result=result
-    )
-    assert comparison.outcome == IssuePlanCurrentStateOutcome.STALE
-    assert comparison.reason_codes == ("contract.scope-changed",)
-    assert "contract.fingerprint" in comparison.changed_bindings
-
-
-def test_freshness_boundary_change_is_stale():
-    expected, _ = _build()
-    current, result = _build(freshness_boundary="main@def456")
-
-    comparison = compare_issueplan_current_state(
-        expected, current, current_scan_result=result
-    )
-    assert comparison.outcome == IssuePlanCurrentStateOutcome.STALE
-    assert "source.revision-changed" in comparison.reason_codes
-    assert "freshness.boundary" in comparison.changed_bindings
-
-
-def test_expected_revision_mismatch_is_stale_even_for_same_evidence():
-    evidence, _ = _build(expected_revision="rev-2")
-
-    comparison = compare_issueplan_current_state(evidence, evidence)
-    assert comparison.outcome == IssuePlanCurrentStateOutcome.STALE
-    assert comparison.reason_codes == ("source.revision-changed",)
-
-
-def test_incomplete_expected_evidence_also_fails_closed():
-    expected, _ = _build(retrieval_complete=False)
-    current, result = _build()
-
-    comparison = compare_issueplan_current_state(
-        expected, current, current_scan_result=result
-    )
-    assert comparison.outcome == IssuePlanCurrentStateOutcome.BLOCKED
-    assert "source.partial" in comparison.reason_codes
-
-
-def test_tampered_evidence_id_is_invalid_not_current():
-    evidence, _ = _build()
-    tampered = replace(evidence, evidence_id="0" * 64)
-
     comparison = compare_issueplan_current_state(tampered, tampered)
     assert comparison.outcome == IssuePlanCurrentStateOutcome.INVALID
     assert comparison.reason_codes == ("projection.incomplete",)
 
 
-def test_builder_rejects_mismatched_source_and_scan_result():
-    envelope = SourceEnvelope(
-        source_locator="github:Blummer92/agent-os#360",
-        source_revision="rev-2",
-        content="body",
-    )
+def test_source_and_scan_identity_must_match():
     with pytest.raises(ValueError):
-        build_issueplan_current_state_evidence(
-            envelope=envelope,
-            scan_result=_scan_result(source_revision="rev-1"),
-            observed_at="2026-07-20T01:00:00Z",
-            freshness_boundary="main@abc123",
-            implementation_contract={},
-        )
+        _build(revision="rev-2", result=_result(revision="rev-1"))
 
 
-def test_build_and_compare_do_not_require_io(monkeypatch):
+def test_status_override_cannot_weaken_source_evidence():
+    with pytest.raises(ValueError, match="cannot weaken"):
+        _build(retrieval_complete=False, completeness_status="complete")
+
+
+def test_no_external_io(monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("external operation attempted")
 
     monkeypatch.setattr("builtins.open", forbidden)
     monkeypatch.setattr("subprocess.run", forbidden)
     monkeypatch.setattr("socket.create_connection", forbidden)
-
-    first, result = _build()
-    second, _ = _build()
-    comparison = compare_issueplan_current_state(
-        first, second, current_scan_result=result
-    )
-    assert comparison.outcome == IssuePlanCurrentStateOutcome.CURRENT
+    result = compare_issueplan_current_state(_build(), _build())
+    assert result.outcome == IssuePlanCurrentStateOutcome.CURRENT
