@@ -13,10 +13,13 @@ CAPABILITY_EVIDENCE_SCHEMA_NAME = "agent-os-capability-evidence"
 CAPABILITY_EVIDENCE_SCHEMA_VERSION = "1.0"
 CAPABILITY_EVIDENCE_SERIALIZER_VERSION = "1.0"
 
-_CAPABILITY_ID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _VERSION_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+_CAPABILITY_ID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_REPOSITORY_OUTCOMES = frozenset(
+    {"valid", "stale", "blocked", "invalid", "needs-decision"}
+)
 
 
 class CapabilityStatus(str, Enum):
@@ -49,12 +52,7 @@ class RepositoryEvidenceType(str, Enum):
 class WorktreeState(str, Enum):
     CLEAN = "clean"
     DIRTY = "dirty"
-    UNTRACKED = "untracked"
-    IGNORED = "ignored"
-    DETACHED = "detached"
-    SHALLOW = "shallow"
-    UNRESOLVED_OPERATION = "unresolved-operation"
-    UNCOMMITTED = "uncommitted"
+    INDETERMINATE = "indeterminate"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -74,8 +72,10 @@ class RepositoryIdentity:
             value = getattr(self, name)
             if not isinstance(value, str) or not value.strip():
                 raise TypeError(f"{name} must be a non-empty string")
-        if not isinstance(self.is_fork, bool):
-            raise TypeError("is_fork must be boolean")
+        object.__setattr__(self, "host", self.host.strip().lower())
+        object.__setattr__(self, "owner", self.owner.strip().lower())
+        object.__setattr__(self, "repository", self.repository.strip().lower())
+        object.__setattr__(self, "default_branch", self.default_branch.strip())
         if self.repository_id is not None and (
             not isinstance(self.repository_id, int) or isinstance(self.repository_id, bool)
         ):
@@ -85,10 +85,6 @@ class RepositoryIdentity:
             or isinstance(self.upstream_repository_id, bool)
         ):
             raise TypeError("upstream_repository_id must be an integer or None")
-        object.__setattr__(self, "host", self.host.strip().lower())
-        object.__setattr__(self, "owner", self.owner.strip().lower())
-        object.__setattr__(self, "repository", self.repository.strip().lower())
-        object.__setattr__(self, "default_branch", self.default_branch.strip())
         if self.is_fork:
             if not self.upstream_owner or not self.upstream_repository:
                 raise ValueError("fork identities require upstream owner and repository")
@@ -133,7 +129,7 @@ class CapabilityEvidence:
     principal_type: str | None = None
     runtime_fingerprint: str | None = None
     freshness_boundary: str | None = None
-    reason_code: str = "adapter.evidence-unproven"
+    reason_code: str = "adapter.incompatible"
     reason: str = ""
     required_handoff: str | None = None
 
@@ -143,22 +139,11 @@ class CapabilityEvidence:
         ):
             raise ValueError("capability_id must be lowercase kebab-case")
         if not isinstance(self.status, CapabilityStatus):
-            raise TypeError("status must be a CapabilityStatus")
+            raise TypeError("status must be CapabilityStatus")
         if not isinstance(self.evidence_strength, EvidenceStrength):
-            raise TypeError("evidence_strength must be an EvidenceStrength")
+            raise TypeError("evidence_strength must be EvidenceStrength")
         if not isinstance(self.operation_scope, str) or not self.operation_scope.strip():
             raise TypeError("operation_scope must be a non-empty string")
-        for name in (
-            "repository_scope",
-            "ref_scope",
-            "principal_type",
-            "runtime_fingerprint",
-            "freshness_boundary",
-            "required_handoff",
-        ):
-            value = getattr(self, name)
-            if value is not None and (not isinstance(value, str) or not value.strip()):
-                raise TypeError(f"{name} must be a non-empty string or None")
         if self.sha_scope is not None and (
             not isinstance(self.sha_scope, str) or not _SHA40_RE.fullmatch(self.sha_scope)
         ):
@@ -188,58 +173,27 @@ class CapabilityEvidenceEnvelope:
     handoffs: tuple[str, ...]
     decision: ExecutionDecision
     execution_authorized: Literal[False] = field(default=False, init=False)
+    side_effects_performed: Literal[False] = field(default=False, init=False)
 
     def __post_init__(self) -> None:
         if self.schema_name != CAPABILITY_EVIDENCE_SCHEMA_NAME:
             raise ValueError("schema_name is unsupported")
-        if not isinstance(self.evidence_schema_version, str) or not _VERSION_RE.fullmatch(
-            self.evidence_schema_version
-        ):
-            raise ValueError("evidence_schema_version must use MAJOR.MINOR")
-        if not isinstance(self.serializer_version, str) or not _VERSION_RE.fullmatch(
-            self.serializer_version
-        ):
-            raise ValueError("serializer_version must use MAJOR.MINOR")
-        for name in (
-            "producer_adapter",
-            "producer_adapter_version",
-            "correlation_id",
-            "environment_class",
-        ):
+        for name in ("evidence_schema_version", "serializer_version"):
             value = getattr(self, name)
-            if not isinstance(value, str) or not value.strip():
-                raise TypeError(f"{name} must be a non-empty string")
-        if self.repository_identity is not None and not isinstance(
-            self.repository_identity, RepositoryIdentity
-        ):
-            raise TypeError("repository_identity must be RepositoryIdentity or None")
-        for name in ("base_ref", "head_ref"):
-            value = getattr(self, name)
-            if value is not None and (not isinstance(value, str) or not value.strip()):
-                raise TypeError(f"{name} must be a non-empty string or None")
-        if self.observed_sha is not None and (
-            not isinstance(self.observed_sha, str)
-            or not _SHA40_RE.fullmatch(self.observed_sha)
-        ):
-            raise ValueError("observed_sha must be a full lowercase commit SHA or None")
-        if self.contract_fingerprint is not None and (
-            not isinstance(self.contract_fingerprint, str)
-            or not _SHA256_RE.fullmatch(self.contract_fingerprint)
-        ):
-            raise ValueError("contract_fingerprint must be a SHA-256 hex digest or None")
+            if not isinstance(value, str) or not _VERSION_RE.fullmatch(value):
+                raise ValueError(f"{name} must use MAJOR.MINOR")
         if not isinstance(self.decision, ExecutionDecision):
-            raise TypeError("decision must be an ExecutionDecision")
-        capabilities = tuple(sorted(tuple(self.capabilities), key=lambda item: item.capability_id))
+            raise TypeError("decision must be ExecutionDecision")
+        capabilities = tuple(sorted(self.capabilities, key=lambda item: item.capability_id))
         if not all(isinstance(item, CapabilityEvidence) for item in capabilities):
             raise TypeError("capabilities must contain CapabilityEvidence values")
-        ids = tuple(item.capability_id for item in capabilities)
-        if len(ids) != len(set(ids)):
+        if len({item.capability_id for item in capabilities}) != len(capabilities):
             raise ValueError("capability IDs must be unique")
         object.__setattr__(self, "capabilities", capabilities)
         object.__setattr__(
             self, "invalidation_reasons", normalize_reason_codes(self.invalidation_reasons)
         )
-        object.__setattr__(self, "handoffs", _normalize_strings(self.handoffs, "handoffs"))
+        object.__setattr__(self, "handoffs", _normalize_strings(self.handoffs))
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -264,11 +218,13 @@ class RepositoryStateEvidence:
     external_build_sha: str | None
     evidence_type: RepositoryEvidenceType
     contract_fingerprint: str
-    worktree_state: tuple[WorktreeState, ...]
+    worktree_state: WorktreeState
+    worktree_reason_codes: tuple[str, ...]
     observed_at: str
     freshness_boundary: str
     evidence_id: str = ""
     execution_authorized: Literal[False] = field(default=False, init=False)
+    side_effects_performed: Literal[False] = field(default=False, init=False)
 
     def __post_init__(self) -> None:
         if self.schema_name != CAPABILITY_EVIDENCE_SCHEMA_NAME:
@@ -278,25 +234,11 @@ class RepositoryStateEvidence:
         ):
             raise ValueError("evidence_schema_version must use MAJOR.MINOR")
         if not isinstance(self.repository_identity, RepositoryIdentity):
-            raise TypeError("repository_identity must be a RepositoryIdentity")
+            raise TypeError("repository_identity must be RepositoryIdentity")
         if not isinstance(self.evidence_type, RepositoryEvidenceType):
-            raise TypeError("evidence_type must be a RepositoryEvidenceType")
-        for name in (
-            "producer_adapter",
-            "producer_adapter_version",
-            "correlation_id",
-            "base_ref",
-            "head_ref",
-            "observed_at",
-            "freshness_boundary",
-        ):
-            value = getattr(self, name)
-            if not isinstance(value, str) or not value.strip():
-                raise TypeError(f"{name} must be a non-empty string")
-        for name in ("requested_ref",):
-            value = getattr(self, name)
-            if value is not None and (not isinstance(value, str) or not value.strip()):
-                raise TypeError(f"{name} must be a non-empty string or None")
+            raise TypeError("evidence_type must be RepositoryEvidenceType")
+        if not isinstance(self.worktree_state, WorktreeState):
+            raise TypeError("worktree_state must be WorktreeState")
         for name in (
             "base_sha",
             "head_sha",
@@ -317,102 +259,66 @@ class RepositoryStateEvidence:
             self.contract_fingerprint
         ):
             raise ValueError("contract_fingerprint must be a SHA-256 hex digest")
-        states = tuple(sorted(set(self.worktree_state), key=lambda item: item.value))
-        if not states or not all(isinstance(item, WorktreeState) for item in states):
-            raise TypeError("worktree_state must contain WorktreeState values")
-        if WorktreeState.CLEAN in states and len(states) != 1:
-            raise ValueError("clean worktree state cannot be combined with findings")
-        object.__setattr__(self, "worktree_state", states)
-        computed_id = repository_state_evidence_id(self)
-        if self.evidence_id and self.evidence_id != computed_id:
+        worktree_reasons = normalize_reason_codes(self.worktree_reason_codes)
+        if not all(code.startswith("worktree.") for code in worktree_reasons):
+            raise ValueError("worktree_reason_codes must use worktree.* codes")
+        object.__setattr__(self, "worktree_reason_codes", worktree_reasons)
+        computed = repository_state_evidence_id(self)
+        if self.evidence_id and self.evidence_id != computed:
             raise ValueError("evidence_id does not match repository-state content")
-        object.__setattr__(self, "evidence_id", computed_id)
+        object.__setattr__(self, "evidence_id", computed)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RepositoryStateValidationResult:
-    decision: ExecutionDecision
-    valid: bool
+    outcome: str
+    schema_version: str
     evidence_id: str
+    repository_identity: RepositoryIdentity | None
+    base_ref: str | None
+    base_sha: str | None
+    head_ref: str | None
+    head_sha: str | None
+    requested_ref: str | None
+    requested_sha: str | None
+    observed_sha: str | None
     tested_sha: str | None
+    pushed_sha: str | None
+    proposed_pr_sha: str | None
+    synthetic_merge_sha: str | None
+    external_build_sha: str | None
+    evidence_type: RepositoryEvidenceType | None
+    contract_fingerprint: str | None
+    worktree_state: WorktreeState | None
     reason_codes: tuple[str, ...]
     details: tuple[str, ...]
     execution_authorized: Literal[False] = field(default=False, init=False)
+    side_effects_performed: Literal[False] = field(default=False, init=False)
 
     def __post_init__(self) -> None:
-        if not isinstance(self.decision, ExecutionDecision):
-            raise TypeError("decision must be an ExecutionDecision")
-        if not isinstance(self.valid, bool):
-            raise TypeError("valid must be boolean")
-        if not isinstance(self.evidence_id, str):
-            raise TypeError("evidence_id must be a string")
-        if self.tested_sha is not None and (
-            not isinstance(self.tested_sha, str) or not _SHA40_RE.fullmatch(self.tested_sha)
-        ):
-            raise ValueError("tested_sha must be a full lowercase commit SHA or None")
+        if self.outcome not in _REPOSITORY_OUTCOMES:
+            raise ValueError("unsupported repository-state outcome")
         object.__setattr__(self, "reason_codes", normalize_reason_codes(self.reason_codes))
         object.__setattr__(self, "details", tuple(str(item) for item in self.details))
 
 
-def repository_state_evidence_payload(value: RepositoryStateEvidence) -> dict[str, Any]:
-    return {
-        "schema_name": value.schema_name,
-        "evidence_schema_version": value.evidence_schema_version,
-        "producer_adapter": value.producer_adapter,
-        "producer_adapter_version": value.producer_adapter_version,
-        "correlation_id": value.correlation_id,
-        "repository_identity": _canonicalize(asdict(value.repository_identity)),
-        "base_ref": value.base_ref,
-        "base_sha": value.base_sha,
-        "head_ref": value.head_ref,
-        "head_sha": value.head_sha,
-        "requested_ref": value.requested_ref,
-        "requested_sha": value.requested_sha,
-        "observed_sha": value.observed_sha,
-        "tested_sha": value.tested_sha,
-        "pushed_sha": value.pushed_sha,
-        "proposed_pr_sha": value.proposed_pr_sha,
-        "synthetic_merge_sha": value.synthetic_merge_sha,
-        "external_build_sha": value.external_build_sha,
-        "evidence_type": value.evidence_type.value,
-        "contract_fingerprint": value.contract_fingerprint,
-        "worktree_state": [item.value for item in value.worktree_state],
-        "observed_at": value.observed_at,
-        "freshness_boundary": value.freshness_boundary,
-        "execution_authorized": False,
-    }
-
 
 def repository_state_evidence_id(value: RepositoryStateEvidence) -> str:
-    payload = json.dumps(
-        repository_state_evidence_payload(value),
-        ensure_ascii=True,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
+    payload = asdict(value)
+    payload.pop("evidence_id", None)
+    payload.pop("execution_authorized", None)
+    payload.pop("side_effects_performed", None)
+    payload["repository_identity"] = list(value.repository_identity.canonical_key)
+    payload["evidence_type"] = value.evidence_type.value
+    payload["worktree_state"] = value.worktree_state.value
+    payload["worktree_reason_codes"] = list(value.worktree_reason_codes)
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
-def _normalize_strings(values: object, name: str) -> tuple[str, ...]:
-    if isinstance(values, str) or not isinstance(values, (tuple, list, set, frozenset)):
-        raise TypeError(f"{name} must be a collection of strings")
-    normalized = tuple(sorted(set(values)))
-    if not all(isinstance(item, str) and item for item in normalized):
-        raise TypeError(f"{name} must contain non-empty strings")
-    return normalized
-
-
-def _canonicalize(value: Any) -> Any:
-    if isinstance(value, Enum):
-        return value.value
-    if isinstance(value, dict):
-        return {
-            str(key): _canonicalize(item)
-            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
-        }
-    if isinstance(value, (tuple, list)):
-        return [_canonicalize(item) for item in value]
-    if isinstance(value, (set, frozenset)):
-        items = [_canonicalize(item) for item in value]
-        return sorted(items, key=lambda item: json.dumps(item, sort_keys=True))
-    return value
+def _normalize_strings(values: tuple[str, ...]) -> tuple[str, ...]:
+    result = tuple(sorted(set(values)))
+    if not all(isinstance(value, str) and value for value in result):
+        raise ValueError("values must be non-empty strings")
+    return result
