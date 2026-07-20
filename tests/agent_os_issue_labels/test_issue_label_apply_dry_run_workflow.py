@@ -23,6 +23,15 @@ def test_dry_run_workflow_uses_minimal_permissions_and_per_issue_concurrency():
     assert "cancel-in-progress: true" in content
 
 
+def test_dry_run_workflow_uses_shared_environment_after_checkout():
+    content = WORKFLOW.read_text(encoding="utf-8")
+    checkout = content.index("uses: actions/checkout@v4")
+    shared_setup = content.index("uses: ./.github/actions/setup-python-dev")
+    assert checkout < shared_setup
+    assert "uses: actions/setup-python@v5" not in content
+    assert "python -m pip install -r requirements-dev.txt" not in content
+
+
 def test_dry_run_workflow_uses_fixture_testable_payload_resolver():
     content = WORKFLOW.read_text(encoding="utf-8")
     assert "python -m scripts.agent_os_issue_labels.workflow_payload" in content

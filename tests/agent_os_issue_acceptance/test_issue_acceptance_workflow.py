@@ -15,9 +15,19 @@ def test_report_only_acceptance_workflow_exists_and_calls_checker():
     assert "pull_request:" in content
     assert "workflow_dispatch:" in content
     assert "actions/checkout@v4" in content
-    assert "actions/setup-python@v5" in content
+    assert "./.github/actions/setup-python-dev" in content
     assert "python -m scripts.agent_os_issue_acceptance.cli" in content
     assert "GITHUB_STEP_SUMMARY" in content
+
+
+def test_report_only_acceptance_workflow_uses_shared_environment_after_checkout():
+    content = _content()
+
+    checkout = content.index("uses: actions/checkout@v4")
+    shared_setup = content.index("uses: ./.github/actions/setup-python-dev")
+    assert checkout < shared_setup
+    assert "uses: actions/setup-python@v5" not in content
+    assert "python -m pip install -r requirements-dev.txt" not in content
 
 
 def test_report_only_acceptance_workflow_uses_read_permissions():

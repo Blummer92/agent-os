@@ -17,13 +17,8 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install test dependencies
-        run: python -m pip install -r requirements-dev.txt
+      - name: Set up Python test environment
+        uses: ./.github/actions/setup-python-dev
 
       - name: Build local issue fixtures from event payload
         run: |
