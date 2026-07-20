@@ -19,8 +19,10 @@ This contract governs the Sprint Dashboard and Sprint Governance Report. Reporti
 | `sprint_goal` | string | required; non-empty |
 | `sprint_state` | enum | planned, active, review, blocked, complete |
 | `evidence_mode` | enum | supplied-evidence, connected-read-only |
+| `execution_authorized` | boolean | required; always false |
 | `evaluated_at` | RFC3339 UTC | required |
 | `freshness` | enum | current, stale, incomplete, conflicting |
+| `manual_review_reasons` | string[] | required; sorted, may be empty |
 | `sources` | source[] | required; may be empty only in supplied mode |
 | `lanes` | lane[1..3] | unique issue numbers |
 | `risks` | risk[] | unique stable risk IDs |
@@ -55,6 +57,7 @@ This contract governs the Sprint Dashboard and Sprint Governance Report. Reporti
 - Missing validation is pending or unknown, never passing.
 - Confidence percentages are forbidden until a separate evidence-based scoring contract exists.
 - Stale, incomplete, or conflicting evidence forces sprint state `review` unless all lanes are blocked.
+- Non-empty manual-review reasons force a visible manual-review section.
 
 ## Risk Delta
 
@@ -70,10 +73,10 @@ Missing prior evidence does not imply a severity or lifecycle change.
 
 ## Canonicalization And Compatibility
 
-Serialize UTF-8 JSON with sorted keys and compact separators. Sort lanes by issue, risks by risk ID, sources by repository/object type/object ID, decisions and recommendations by ID, and string collections lexically. Reject duplicate identities, unresolved risk references, unknown required fields, and unsupported versions. Optional fields require an explicit schema revision.
+Serialize UTF-8 JSON with sorted keys and compact separators. Sort lanes by issue, risks by risk ID, sources by repository/object type/object ID, decisions and recommendations by ID, manual-review reasons and other string collections lexically. Reject duplicate identities, unresolved risk references, unknown required fields, and unsupported versions. Optional fields require an explicit schema revision.
 
 ## Output And Migration Handoff
 
-The Dashboard shows sprint status, lanes, top risks, Risk Delta, issue impact, GitHub changes, validation, blockers, merge order, and next sprint. The Governance Report adds all sources, decisions, dependencies, and final handoff.
+The Dashboard shows sprint status, lanes, top risks, Risk Delta, issue impact, GitHub changes, validation, manual-review reasons, blockers, merge order, and next sprint. The Governance Report adds all sources, decisions, dependencies, and final handoff.
 
-#375 must implement this record shape and mark supplied evidence honestly. #376 populates source, freshness, and connected-read-only fields without changing schema ownership. Both preserve `execution_authorized=false`.
+#375 must implement this record shape and mark supplied evidence honestly. #376 populates source, freshness, manual-review, and connected-read-only fields without changing schema ownership. Both preserve `execution_authorized=false`.
