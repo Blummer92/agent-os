@@ -10,7 +10,8 @@ Define one repeatable pattern for selecting, executing, reviewing, and refining 
 select compatible issues
 -> execute coordinated lanes
 -> publish sprint dashboard
--> investigate risks and update related issues
+-> publish governance report when decisions or risks change
+-> update related issues and roadmap
 -> recommend the next sprint
 ```
 
@@ -42,33 +43,24 @@ The coordinated prompt must:
 
 Every risk must include category, severity, status, owner, affected issue or roadmap references, evidence, recommended action, and due phase.
 
-Allowed actions are:
-
-- update an existing issue;
-- update the roadmap;
-- create an ADR;
-- create a new issue for distinct work;
-- close or merge duplicate work;
-- mark needs-decision;
-- take no action.
+Allowed actions are update an existing issue, update the roadmap, create an ADR, create a new issue for distinct work, close or merge duplicate work, mark needs-decision, or take no action.
 
 Unowned risks must route to needs-decision. Create a new issue only for a distinct owner, implementation boundary, validation requirement, or release decision.
 
-## Dashboard Contract
+## Dashboard And Governance Report
 
 Every dashboard must report:
 
-- sprint goal, state, evidence mode, freshness, and provenance;
+- sprint goal, state, evidence mode, freshness, provenance, and execution authorization;
 - lane and pull-request status;
 - files changed, tests run, docs updated, and validation evidence;
 - Cloud Build runs and builds avoided when evidenced;
-- risk register with severity and affected issues;
-- Risk Delta and unowned-risk count;
-- issue impact and recommended GitHub changes;
-- blockers, dependencies, merge order, and sequential-only work;
-- recommended next sprint.
+- risk register, severity, affected issues, Risk Delta, and unowned-risk count;
+- issue impact, recommended GitHub changes, blockers, dependencies, merge order, and next sprint.
 
-Unknown values remain unknown. Do not invent build savings, confidence, test, readiness, or cost evidence.
+When risks, dependencies, or backlog decisions change, publish a Governance Report from the same evidence. It adds the full provenance, decision log, recommendation rationale, dependency changes, and final handoff.
+
+Unknown values remain unknown. Do not invent build savings, confidence, test, readiness, or cost evidence. Reporting evidence must preserve `execution_authorized=false`.
 
 ## Low-Compute Default
 
