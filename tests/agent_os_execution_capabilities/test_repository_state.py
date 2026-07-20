@@ -310,6 +310,20 @@ def test_supplied_repository_invalidation_routes_to_handoff():
     assert result.invalidation_reasons == ("repo.identity-mismatch",)
 
 
+@pytest.mark.parametrize("bad_value", [["bad"], {"bad": True}, 1, True, None])
+def test_nested_reason_code_values_fail_closed(bad_value):
+    invalidation_payload = _capability_mapping(invalidation_reasons=[bad_value])
+    invalidation = validate_capability_evidence(invalidation_payload)
+    assert invalidation.decision == ExecutionDecision.NEEDS_DECISION
+    assert "schema.unknown-enum" in invalidation.invalidation_reasons
+
+    capability_payload = _capability_mapping()
+    capability_payload["capabilities"][0]["reason_code"] = bad_value
+    capability = validate_capability_evidence(capability_payload)
+    assert capability.decision == ExecutionDecision.NEEDS_DECISION
+    assert "schema.unknown-enum" in capability.invalidation_reasons
+
+
 def test_capability_unknown_field_flood_is_bounded():
     payload = _capability_mapping()
     payload.update({f"unknown_{index}": index for index in range(500)})
