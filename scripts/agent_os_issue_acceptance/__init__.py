@@ -29,6 +29,16 @@ from .batch_scope_checks import (
     evaluate_input_scope_coverage,
     unresolved_dependency_check,
 )
+from .issueplan_current_state import (
+    ISSUEPLAN_CURRENT_STATE_SCHEMA_VERSION,
+    IssuePlanCurrentStateComparison,
+    IssuePlanCurrentStateEvidence,
+    IssuePlanCurrentStateOutcome,
+    IssuePlanSourceSnapshot,
+    build_issueplan_current_state_evidence,
+    compare_issueplan_current_state,
+    compute_issueplan_current_state_fingerprint,
+)
 from .policy import evaluate_acceptance
 from .readiness import (
     ReadinessOutcome,
@@ -61,8 +71,13 @@ __all__ = [
     "HandoffCohort",
     "HandoffValidationOutcome",
     "HandoffValidationResult",
+    "ISSUEPLAN_CURRENT_STATE_SCHEMA_VERSION",
     "IssueBatchGraph",
     "IssueBatchNode",
+    "IssuePlanCurrentStateComparison",
+    "IssuePlanCurrentStateEvidence",
+    "IssuePlanCurrentStateOutcome",
+    "IssuePlanSourceSnapshot",
     "PlanningClassification",
     "PlanningCohort",
     "ReadinessOutcome",
@@ -71,8 +86,11 @@ __all__ = [
     "SUPPORTED_PLANNING_RESULT_VERSIONS",
     "SchedulerPlanningHandoff",
     "build_issue_batch_graph",
+    "build_issueplan_current_state_evidence",
+    "compare_issueplan_current_state",
     "compute_graph_digest",
     "compute_handoff_digest",
+    "compute_issueplan_current_state_fingerprint",
     "compute_planning_result_digest",
     "entity_id_collision_check",
     "evaluate_acceptance",
