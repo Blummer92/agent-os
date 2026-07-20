@@ -26,6 +26,7 @@ versions change only when the module's standards or contract changes.
 | Workspace Automation Builder Tooling | 0.1.1 |
 | Agent Memory & Context Budget Manager | 0.1.0 |
 | IA4D-to-Scheduler Handoff Contract | 0.2.0 |
+| GitHub Issue Lifecycle Standard | 0.1.0 |
 
 **Dashboard Migration Verification**
 (`08_Tooling/dashboard-migration-verification/`) starts as a verification-only
