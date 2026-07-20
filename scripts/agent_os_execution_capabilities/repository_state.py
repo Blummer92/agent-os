@@ -281,13 +281,24 @@ def validate_repository_state_evidence(
         if not isinstance(expected_repository, RepositoryIdentity):
             reasons.add("schema.incomplete")
         elif evidence.repository_identity.canonical_key != expected_repository.canonical_key:
-            if (
-                evidence.repository_identity.host == expected_repository.host
-                and evidence.repository_identity.owner == expected_repository.owner
-                and evidence.repository_identity.repository == expected_repository.repository
-                and evidence.repository_identity.is_fork != expected_repository.is_fork
-            ):
+            actual = evidence.repository_identity
+            expected = expected_repository
+            same_repo = (
+                actual.host == expected.host
+                and actual.owner == expected.owner
+                and actual.repository == expected.repository
+                and actual.repository_id == expected.repository_id
+            )
+            same_fork_scope = (
+                actual.is_fork == expected.is_fork
+                and actual.upstream_owner == expected.upstream_owner
+                and actual.upstream_repository == expected.upstream_repository
+                and actual.upstream_repository_id == expected.upstream_repository_id
+            )
+            if same_repo and not same_fork_scope:
                 reasons.add("repo.fork-upstream-mismatch")
+            elif same_repo and same_fork_scope and actual.default_branch != expected.default_branch:
+                reasons.add("repo.default-branch-mismatch")
             else:
                 reasons.add("repo.identity-mismatch")
     if expected_base_ref is not None and evidence.base_ref != expected_base_ref:
@@ -342,8 +353,6 @@ def _validate_sha_bindings(
 ) -> None:
     if evidence.tested_sha is None:
         reasons.add("ref.tested-sha-missing")
-    if evidence.observed_sha != evidence.head_sha:
-        reasons.add("ref.observed-sha-stale")
     if evidence.requested_sha is not None and evidence.requested_sha != evidence.head_sha:
         reasons.add("ref.requested-tested-mismatch")
     if evidence.external_build_sha is not None and evidence.tested_sha is not None:
@@ -355,6 +364,8 @@ def _validate_sha_bindings(
         reasons.add("ref.pr-head-mismatch")
 
     if evidence.evidence_type == RepositoryEvidenceType.BRANCH_HEAD:
+        if evidence.observed_sha != evidence.head_sha:
+            reasons.add("ref.observed-sha-stale")
         if evidence.tested_sha is not None and evidence.tested_sha != evidence.head_sha:
             reasons.add("ref.tested-sha-mismatch")
         if evidence.synthetic_merge_sha is not None:
@@ -362,11 +373,16 @@ def _validate_sha_bindings(
     elif evidence.evidence_type == RepositoryEvidenceType.SYNTHETIC_PR_MERGE:
         if evidence.synthetic_merge_sha is None or evidence.tested_sha is None:
             reasons.add("ref.tested-sha-ambiguous")
-        elif evidence.tested_sha != evidence.synthetic_merge_sha:
-            reasons.add("ref.tested-sha-mismatch")
+        else:
+            if evidence.observed_sha != evidence.synthetic_merge_sha:
+                reasons.add("ref.observed-sha-stale")
+            if evidence.tested_sha != evidence.synthetic_merge_sha:
+                reasons.add("ref.tested-sha-mismatch")
         if evidence.tested_sha == evidence.head_sha:
             reasons.add("ref.evidence-type-mismatch")
     elif evidence.evidence_type == RepositoryEvidenceType.BASE_SHA:
+        if evidence.observed_sha != evidence.base_sha:
+            reasons.add("ref.observed-sha-stale")
         if evidence.tested_sha is not None and evidence.tested_sha != evidence.base_sha:
             reasons.add("ref.tested-sha-mismatch")
     elif evidence.evidence_type == RepositoryEvidenceType.UNCOMMITTED_WORKTREE:
@@ -543,8 +559,10 @@ def _parse_repository_identity(
 def _derive_capability_decision(
     capabilities: tuple[CapabilityEvidence, ...], reasons: set[str]
 ) -> ExecutionDecision:
-    if reasons:
+    if any(reason.startswith(("schema.", "adapter.")) for reason in reasons):
         return ExecutionDecision.NEEDS_DECISION
+    if any(reason.startswith(("repo.", "ref.", "worktree.")) for reason in reasons):
+        return ExecutionDecision.HANDOFF_REQUIRED
     if any(item.status == CapabilityStatus.INDETERMINATE for item in capabilities):
         return ExecutionDecision.NEEDS_DECISION
     if any(
