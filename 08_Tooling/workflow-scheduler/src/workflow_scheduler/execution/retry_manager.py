@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Optional
 
 from workflow_scheduler.models import Task
+from workflow_scheduler.time_utils import ensure_utc, utc_now
 
 
 class RetryManager:
@@ -52,12 +53,13 @@ class RetryManager:
 
         Args:
             task: Task to check
-            now: Reference time (defaults to current UTC time)
+            now: Reference time (defaults to current UTC time). Legacy naive
+                values are interpreted as UTC for compatibility.
 
         Returns:
             True if the task has no scheduled retry time, or that time has passed
         """
         if task.next_retry_at is None:
             return True
-        now = now or datetime.utcnow()
-        return task.next_retry_at <= now
+        reference_time = ensure_utc(now) if now is not None else utc_now()
+        return ensure_utc(task.next_retry_at) <= reference_time
