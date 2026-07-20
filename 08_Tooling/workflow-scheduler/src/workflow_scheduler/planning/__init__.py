@@ -1,14 +1,14 @@
-"""Pure-local WSC3 draft proposal ingestion."""
+"""Stateless Workflow Scheduler planning surfaces."""
 
 from .draft_ingestion import (
-    PROPOSAL_VERSION,
+    DRAFT_TASK_PROPOSAL_VERSION,
     DraftTaskProposal,
     DraftTaskProposalResult,
     build_draft_task_proposals,
 )
 
 __all__ = [
-    "PROPOSAL_VERSION",
+    "DRAFT_TASK_PROPOSAL_VERSION",
     "DraftTaskProposal",
     "DraftTaskProposalResult",
     "build_draft_task_proposals",
