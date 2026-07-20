@@ -26,6 +26,13 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: |
+            requirements-dev.txt
+            08_Tooling/workflow-scheduler/requirements.txt
+            08_Tooling/instructional-materials-coach/pyproject.toml
+            08_Tooling/notion-navigation-client/pyproject.toml
+            08_Tooling/reusable-capability-registry/pyproject.toml
 
       - name: Install validation dependencies
         run: |
