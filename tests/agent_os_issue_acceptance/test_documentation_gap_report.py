@@ -95,6 +95,48 @@ def test_roadmap_is_not_applicable() -> None:
     assert category_for(item) == DocumentationGapCategory.NOT_APPLICABLE
 
 
+def test_current_type_planning_label_is_not_applicable() -> None:
+    item = record(19, body=authority_body(), labels=("type:planning", "type:documentation"))
+    assert category_for(item) == DocumentationGapCategory.NOT_APPLICABLE
+
+
+def test_current_roadmap_body_contract_is_not_applicable() -> None:
+    item = record(
+        20,
+        body="""Roadmap issue — Level 1 contract.
+## Objective
+Coordinate child implementation issues.
+## Owner
+Integration Manager
+## Source of truth
+GitHub
+## Scope
+Track sequencing only.
+## Acceptance criteria
+- [ ] Child dependencies remain accurate.
+""",
+        labels=("type:documentation",),
+    )
+    assert category_for(item) == DocumentationGapCategory.NOT_APPLICABLE
+
+
+def test_current_planning_only_body_contract_is_not_applicable() -> None:
+    item = record(
+        21,
+        body="""## Objective
+Review existing assets.
+## Scope
+Produce a recommendation.
+## Acceptance criteria
+- [ ] Recommendation is complete.
+
+This is a planning and gap-analysis issue only. Do not implement code.
+""",
+        labels=(),
+    )
+    assert category_for(item) == DocumentationGapCategory.NOT_APPLICABLE
+
+
 @pytest.mark.parametrize(
     ("body", "reason"),
     [
