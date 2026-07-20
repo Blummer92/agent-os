@@ -12,7 +12,7 @@ Google Drive access, folder creation, permission changes, or artifact generation
 
 Provide these values at runtime through an approved private execution surface:
 
-- Google Cloud project and OAuth client identity;
+- Google Cloud project name and OAuth client type, not a private client identifier;
 - authorized operator account;
 - approved OAuth scopes limited to the required Drive operation;
 - credential and token storage location outside the repository;
