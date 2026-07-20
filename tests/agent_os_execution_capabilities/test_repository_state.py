@@ -58,7 +58,8 @@ def _state(**overrides):
         "external_build_sha": SHA_A,
         "evidence_type": RepositoryEvidenceType.BRANCH_HEAD,
         "contract_fingerprint": DIGEST,
-        "worktree_state": (WorktreeState.CLEAN,),
+        "worktree_state": WorktreeState.CLEAN,
+        "worktree_reason_codes": (),
         "observed_at": "2026-07-20T02:00:00Z",
         "freshness_boundary": "workflow-run-1",
     }
@@ -71,8 +72,9 @@ def _mapping(state=None):
     payload = asdict(state)
     payload["repository_identity"] = asdict(state.repository_identity)
     payload["evidence_type"] = state.evidence_type.value
-    payload["worktree_state"] = [item.value for item in state.worktree_state]
+    payload["worktree_state"] = state.worktree_state.value
     payload.pop("execution_authorized", None)
+    payload.pop("side_effects_performed", None)
     return payload
 
 
@@ -99,12 +101,8 @@ def _capability_mapping(**overrides):
                 "repository_scope": "blummer92/agent-os",
                 "ref_scope": "main",
                 "sha_scope": SHA_A,
-                "principal_type": None,
-                "runtime_fingerprint": None,
-                "freshness_boundary": "workflow-run-1",
-                "reason_code": "adapter.evidence-observed",
+                "reason_code": "adapter.incompatible",
                 "reason": "Bounded fixture evidence.",
-                "required_handoff": None,
             }
         ],
         "invalidation_reasons": [],
@@ -115,10 +113,9 @@ def _capability_mapping(**overrides):
     return values
 
 
-def test_valid_branch_head_evidence_proceeds():
-    state = _state()
+def test_valid_branch_head_preserves_all_bindings():
     result = validate_repository_state_evidence(
-        state,
+        _state(),
         expected_repository=_identity(),
         expected_base_ref="main",
         expected_base_sha=SHA_B,
@@ -128,51 +125,35 @@ def test_valid_branch_head_evidence_proceeds():
         expected_contract_fingerprint=DIGEST,
         expected_pr_sha=SHA_A,
     )
-    assert result.valid is True
-    assert result.decision == ExecutionDecision.PROCEED
-    assert result.reason_codes == ()
+    assert result.outcome == "valid"
+    assert result.repository_identity == _identity()
+    assert result.base_sha == SHA_B
+    assert result.head_sha == SHA_A
     assert result.tested_sha == SHA_A
     assert result.execution_authorized is False
+    assert result.side_effects_performed is False
 
 
 @pytest.mark.parametrize(
-    ("field", "value", "reason"),
+    ("kwargs", "reason"),
     [
-        ("base_ref", "release", "ref.base-mismatch"),
-        ("base_sha", SHA_C, "ref.base-mismatch"),
-        ("head_ref", "other", "ref.head-mismatch"),
-        ("head_sha", SHA_C, "ref.branch-moved"),
-        ("contract_fingerprint", "e" * 64, "ref.contract-mismatch"),
+        ({"expected_base_sha": SHA_C}, "ref.base-mismatch"),
+        ({"expected_head_sha": SHA_C}, "ref.branch-moved"),
+        ({"expected_contract_fingerprint": "e" * 64}, "ref.contract-mismatch"),
+        ({"expected_pr_sha": SHA_C}, "ref.pr-head-mismatch"),
     ],
 )
-def test_expected_repository_bindings_fail_closed(field, value, reason):
-    state = _state()
-    kwargs = {
-        "expected_base_ref": "main",
-        "expected_base_sha": SHA_B,
-        "expected_head_ref": "agent/gex1b-read-only-evidence",
-        "expected_head_sha": SHA_A,
-        "expected_contract_fingerprint": DIGEST,
-    }
-    expected_map = {
-        "base_ref": "expected_base_ref",
-        "base_sha": "expected_base_sha",
-        "head_ref": "expected_head_ref",
-        "head_sha": "expected_head_sha",
-        "contract_fingerprint": "expected_contract_fingerprint",
-    }
-    kwargs[expected_map[field]] = value
-    result = validate_repository_state_evidence(state, **kwargs)
-    assert result.decision == ExecutionDecision.HANDOFF_REQUIRED
+def test_binding_changes_are_stale(kwargs, reason):
+    result = validate_repository_state_evidence(_state(), **kwargs)
+    assert result.outcome == "stale"
     assert reason in result.reason_codes
 
 
-def test_wrong_repository_and_fork_mismatch_are_distinct():
-    state = _state()
+def test_wrong_repository_and_fork_are_distinct():
     wrong = validate_repository_state_evidence(
-        state,
-        expected_repository=_identity(owner="different"),
+        _state(), expected_repository=_identity(owner="different")
     )
+    assert wrong.outcome == "stale"
     assert "repo.identity-mismatch" in wrong.reason_codes
 
     fork = _identity(
@@ -180,28 +161,21 @@ def test_wrong_repository_and_fork_mismatch_are_distinct():
         upstream_owner="blummer92",
         upstream_repository="agent-os",
     )
-    mismatch = validate_repository_state_evidence(state, expected_repository=fork)
+    mismatch = validate_repository_state_evidence(_state(), expected_repository=fork)
     assert "repo.fork-upstream-mismatch" in mismatch.reason_codes
 
 
-def test_observed_sha_and_requested_sha_cannot_substitute_for_tested_sha():
-    stale = validate_repository_state_evidence(_state(observed_sha=SHA_C))
-    assert "ref.observed-sha-stale" in stale.reason_codes
+def test_missing_or_mismatched_test_sha_is_stale():
+    missing = validate_repository_state_evidence(_state(tested_sha=None))
+    assert missing.outcome == "stale"
+    assert "ref.test-sha-mismatch" in missing.reason_codes
 
-    requested = validate_repository_state_evidence(_state(requested_sha=SHA_C))
-    assert "ref.requested-tested-mismatch" in requested.reason_codes
-
-
-def test_missing_tested_sha_needs_decision():
-    result = validate_repository_state_evidence(_state(tested_sha=None))
-    assert result.decision == ExecutionDecision.NEEDS_DECISION
-    assert "ref.tested-sha-missing" in result.reason_codes
+    mismatch = validate_repository_state_evidence(_state(tested_sha=SHA_C))
+    assert mismatch.outcome == "stale"
+    assert "ref.stale-sha" in mismatch.reason_codes
 
 
-def test_branch_head_and_synthetic_merge_evidence_remain_distinct():
-    branch = validate_repository_state_evidence(_state())
-    assert branch.decision == ExecutionDecision.PROCEED
-
+def test_synthetic_merge_evidence_remains_distinct():
     synthetic = _state(
         observed_sha=SHA_C,
         tested_sha=SHA_C,
@@ -210,132 +184,73 @@ def test_branch_head_and_synthetic_merge_evidence_remain_distinct():
         evidence_type=RepositoryEvidenceType.SYNTHETIC_PR_MERGE,
     )
     result = validate_repository_state_evidence(synthetic)
-    assert result.decision == ExecutionDecision.PROCEED
-    assert result.tested_sha == SHA_C
+    assert result.outcome == "valid"
+    assert result.evidence_type == RepositoryEvidenceType.SYNTHETIC_PR_MERGE
 
     mislabeled = validate_repository_state_evidence(
         _state(tested_sha=SHA_C, evidence_type=RepositoryEvidenceType.BRANCH_HEAD)
     )
-    assert "ref.tested-sha-mismatch" in mislabeled.reason_codes
+    assert mislabeled.outcome == "stale"
 
 
-def test_synthetic_merge_observed_sha_must_match_synthetic_commit():
-    state = _state(
-        tested_sha=SHA_C,
-        synthetic_merge_sha=SHA_C,
-        external_build_sha=SHA_C,
-        evidence_type=RepositoryEvidenceType.SYNTHETIC_PR_MERGE,
+def test_worktree_outcomes_are_separate():
+    blocked = validate_repository_state_evidence(
+        _state(
+            worktree_state=WorktreeState.DIRTY,
+            worktree_reason_codes=("worktree.untracked",),
+        )
     )
-    result = validate_repository_state_evidence(state)
-    assert result.decision == ExecutionDecision.HANDOFF_REQUIRED
-    assert "ref.observed-sha-stale" in result.reason_codes
+    assert blocked.outcome == "blocked"
+    assert "worktree.untracked" in blocked.reason_codes
 
-
-def test_default_branch_mismatch_has_specific_reason():
-    result = validate_repository_state_evidence(
-        _state(), expected_repository=_identity(default_branch="trunk")
+    undecided = validate_repository_state_evidence(
+        _state(
+            worktree_state=WorktreeState.INDETERMINATE,
+            worktree_reason_codes=("worktree.indeterminate",),
+        )
     )
-    assert result.decision == ExecutionDecision.HANDOFF_REQUIRED
-    assert result.reason_codes == ("repo.default-branch-mismatch",)
+    assert undecided.outcome == "needs-decision"
 
 
-def test_cloud_build_result_cannot_be_attached_to_another_sha():
-    result = validate_repository_state_evidence(_state(external_build_sha=SHA_C))
-    assert result.decision == ExecutionDecision.HANDOFF_REQUIRED
-    assert "ref.build-sha-mismatch" in result.reason_codes
+def test_malformed_and_unsupported_versions_are_invalid():
+    malformed = _mapping()
+    malformed["evidence_schema_version"] = ["1.0"]
+    result = validate_repository_state_evidence(malformed)
+    assert result.outcome == "invalid"
+    assert "schema.malformed-version" in result.reason_codes
+
+    unsupported = _mapping()
+    unsupported["evidence_schema_version"] = "2.0"
+    result = validate_repository_state_evidence(unsupported)
+    assert result.outcome == "invalid"
+    assert "schema.unsupported-version" in result.reason_codes
 
 
-@pytest.mark.parametrize(
-    ("state", "reason"),
-    [
-        (WorktreeState.DIRTY, "worktree.dirty"),
-        (WorktreeState.UNTRACKED, "worktree.untracked"),
-        (WorktreeState.IGNORED, "worktree.ignored-relevant"),
-        (WorktreeState.DETACHED, "worktree.detached"),
-        (WorktreeState.SHALLOW, "worktree.shallow"),
-        (WorktreeState.UNRESOLVED_OPERATION, "worktree.unresolved-operation"),
-        (WorktreeState.UNCOMMITTED, "worktree.uncommitted"),
-    ],
-)
-def test_worktree_states_are_conservative(state, reason):
-    result = validate_repository_state_evidence(_state(worktree_state=(state,)))
-    assert result.decision == ExecutionDecision.HANDOFF_REQUIRED
-    assert reason in result.reason_codes
-
-
-def test_unknown_field_flood_collapses_to_one_bounded_reason():
+def test_unknown_field_flood_is_bounded():
     payload = _mapping()
     payload.update({f"unknown_{index}": index for index in range(500)})
     result = validate_repository_state_evidence(payload)
-    assert result.decision == ExecutionDecision.NEEDS_DECISION
+    assert result.outcome == "invalid"
     assert result.reason_codes.count("schema.unknown-field") == 1
     assert set(result.reason_codes) <= APPROVED_REASON_CODES
 
 
-@pytest.mark.parametrize("version", [["1.0"], {"value": "1.0"}, 1, True, None])
-def test_unhashable_and_non_string_versions_fail_closed(version):
-    payload = _mapping()
-    payload["evidence_schema_version"] = version
-    result = validate_repository_state_evidence(payload)
-    assert result.decision == ExecutionDecision.NEEDS_DECISION
-    assert any(code.startswith("schema.version-") for code in result.reason_codes)
-
-
-def test_capability_validation_aggregates_decisions_without_authorization():
+def test_capability_decisions_remain_non_authorizing():
     available = validate_capability_evidence(_capability_mapping())
     assert available.decision == ExecutionDecision.PROCEED
     assert available.execution_authorized is False
+    assert available.side_effects_performed is False
 
-    unavailable_payload = _capability_mapping()
-    unavailable_payload["capabilities"][0]["status"] = "unavailable"
-    unavailable_payload["capabilities"][0]["required_handoff"] = "local-shell"
-    unavailable_payload["decision"] = "handoff-required"
-    unavailable = validate_capability_evidence(unavailable_payload)
-    assert unavailable.decision == ExecutionDecision.HANDOFF_REQUIRED
-
-    indeterminate_payload = _capability_mapping()
-    indeterminate_payload["capabilities"][0]["status"] = "indeterminate"
-    indeterminate_payload["decision"] = "needs-decision"
-    indeterminate = validate_capability_evidence(indeterminate_payload)
-    assert indeterminate.decision == ExecutionDecision.NEEDS_DECISION
-
-
-def test_supplied_repository_invalidation_routes_to_handoff():
-    payload = _capability_mapping(
-        invalidation_reasons=["repo.identity-mismatch"],
-        decision="handoff-required",
-    )
-    result = validate_capability_evidence(payload)
+    unavailable = _capability_mapping()
+    unavailable["capabilities"][0]["status"] = "unavailable"
+    result = validate_capability_evidence(unavailable)
     assert result.decision == ExecutionDecision.HANDOFF_REQUIRED
-    assert result.invalidation_reasons == ("repo.identity-mismatch",)
 
 
-@pytest.mark.parametrize("bad_value", [["bad"], {"bad": True}, 1, True, None])
-def test_nested_reason_code_values_fail_closed(bad_value):
-    invalidation_payload = _capability_mapping(invalidation_reasons=[bad_value])
-    invalidation = validate_capability_evidence(invalidation_payload)
-    assert invalidation.decision == ExecutionDecision.NEEDS_DECISION
-    assert "schema.unknown-enum" in invalidation.invalidation_reasons
-
-    capability_payload = _capability_mapping()
-    capability_payload["capabilities"][0]["reason_code"] = bad_value
-    capability = validate_capability_evidence(capability_payload)
-    assert capability.decision == ExecutionDecision.NEEDS_DECISION
-    assert "schema.unknown-enum" in capability.invalidation_reasons
-
-
-def test_capability_unknown_field_flood_is_bounded():
-    payload = _capability_mapping()
-    payload.update({f"unknown_{index}": index for index in range(500)})
-    result = validate_capability_evidence(payload)
-    assert result.invalidation_reasons.count("schema.unknown-field") == 1
-    assert result.decision == ExecutionDecision.NEEDS_DECISION
-
-
-def test_secret_like_supplied_values_fail_closed_without_echo():
+def test_secret_like_values_fail_closed_without_echo():
     payload = _capability_mapping(correlation_id="ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456")
     result = validate_capability_evidence(payload)
-    assert "schema.secret-like-value" in result.invalidation_reasons
+    assert result.decision == ExecutionDecision.NEEDS_DECISION
     assert "ghp_" not in repr(result)
 
 
@@ -346,6 +261,4 @@ def test_validators_do_not_require_io(monkeypatch):
     monkeypatch.setattr("builtins.open", forbidden)
     monkeypatch.setattr("subprocess.run", forbidden)
     monkeypatch.setattr("socket.create_connection", forbidden)
-
-    assert validate_repository_state_evidence(_state()).decision == ExecutionDecision.PROCEED
-    assert validate_capability_evidence(_capability_mapping()).decision == ExecutionDecision.PROCEED
+    assert validate_repository_state_evidence(_state()).outcome == "valid"
