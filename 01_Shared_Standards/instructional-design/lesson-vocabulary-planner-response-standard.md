@@ -36,8 +36,8 @@ exact source section or property, evidence class, and confirmation state.
 6. Recommendation
 7. Next Action
 
-Vocabulary Snapshot summarizes category counts and unresolved evidence. Assessment
-Vocabulary lists only `Assess Today? = Yes` rows with their practice evidence, or `None`.
+- `Vocabulary Snapshot`: summarize category counts and unresolved evidence.
+- `Assessment Vocabulary`: list only `Assess Today? = Yes` rows with practice evidence, or `None`.
 
 ## Vocabulary Planner Table
 | Word | Lesson Category | CLS2 Unit Category | Exact Source Page | Exact Source Section or Property | Evidence Class | Confirmation State | Prior Unit Connection | Student-Friendly Meaning | Teacher Language Use | Student Language Use | Slide/Worksheet Safe? | Assess Today? | Instruction or Practice Evidence | Notes |
@@ -67,9 +67,9 @@ student-data workflow.
   Assess Today? independently.
 - Teacher-appropriate does not imply student-facing; student-facing does not imply
   material-safe; material-safe does not imply assessable.
-- `Assess Today? = Yes` requires explicit instruction or explicit guided or
-  independent practice. Exposure, mention, teacher use, slide appearance, or packet
-  inclusion is insufficient. Otherwise use `No`, `Not yet`, or `needs-decision`.
+- `Assess Today? = Yes` requires explicit instruction or explicit guided or independent practice.
+- Exposure, mention, teacher use, slide appearance, or packet inclusion is insufficient.
+  Otherwise use `No`, `Not yet`, or `needs-decision`.
 - Issue and Fix names one bounded instructional-language problem and corrective
   action, such as excess new words, premature assessment, conflated language, or
   unconfirmed evidence.
@@ -90,9 +90,9 @@ and do not create a vocabulary plan from its broad legacy map.
   language without changing source decisions.
 - Instructional Materials uses only confirmed, material-safe language.
 - No role may bypass assessment eligibility or destination rules.
-- Do not write to Notion or Drive, generate classroom artifacts, store student-facing
-  materials in GitHub, call live connectors, use credentials, or mutate an external
-  system through this standard.
+- Do not write to Notion or Drive.
+- Do not generate classroom artifacts or store student-facing materials in GitHub.
+- Do not call live connectors, use credentials, or mutate an external system.
 
 ## Version
 0.1.0
