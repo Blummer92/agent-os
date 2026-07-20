@@ -9,17 +9,23 @@ from typing import Any, Dict, List, Optional
 from workflow_scheduler.adapters.base_adapter import TaskAdapter
 from workflow_scheduler.models import ExecutionRequest, Task
 
+AdapterInput = Task | ExecutionRequest
+
+
+def _task_id(value: AdapterInput) -> str:
+    return value.task_id if isinstance(value, ExecutionRequest) else value.id
+
 
 class FakeSuccessAdapter(TaskAdapter):
     """Always succeeds."""
 
     accepts_execution_request = True
 
-    def execute(self, request: ExecutionRequest) -> Dict[str, Any]:
+    def execute(self, value: AdapterInput) -> Dict[str, Any]:
         return {
             "success": True,
             "error": None,
-            "output": {"task_id": request.task_id, "message": "fake success"},
+            "output": {"task_id": _task_id(value), "message": "fake success"},
         }
 
 
@@ -28,7 +34,7 @@ class FakeFailureAdapter(TaskAdapter):
 
     accepts_execution_request = True
 
-    def execute(self, request: ExecutionRequest) -> Dict[str, Any]:
+    def execute(self, value: AdapterInput) -> Dict[str, Any]:
         return {
             "success": False,
             "error": "fake permanent failure",
@@ -41,7 +47,7 @@ class FakeRetryableAdapter(TaskAdapter):
 
     accepts_execution_request = True
 
-    def execute(self, request: ExecutionRequest) -> Dict[str, Any]:
+    def execute(self, value: AdapterInput) -> Dict[str, Any]:
         return {
             "success": False,
             "error": "fake transient failure",
@@ -50,13 +56,13 @@ class FakeRetryableAdapter(TaskAdapter):
 
 
 class FakeNeverCalledAdapter(TaskAdapter):
-    """Fails the test if execute is reached after a scheduler stop condition."""
+    """Fails the test if reached after a scheduler stop condition."""
 
     accepts_execution_request = True
 
-    def execute(self, request: ExecutionRequest) -> Dict[str, Any]:
+    def execute(self, value: AdapterInput) -> Dict[str, Any]:
         raise AssertionError(
-            f"FakeNeverCalledAdapter.execute() was called for task {request.task_id!r}"
+            f"FakeNeverCalledAdapter.execute() was called for task {_task_id(value)!r}"
         )
 
 
@@ -72,19 +78,16 @@ class FakeSlowAdapter(TaskAdapter):
         self.max_in_flight = 0
         self.executed_task_ids: List[str] = []
 
-    def execute(self, request: ExecutionRequest) -> Dict[str, Any]:
+    def execute(self, value: AdapterInput) -> Dict[str, Any]:
+        task_id = _task_id(value)
         with self._state_lock:
             self._in_flight += 1
             self.max_in_flight = max(self.max_in_flight, self._in_flight)
         try:
             time.sleep(self.hold_seconds)
             with self._state_lock:
-                self.executed_task_ids.append(request.task_id)
-            return {
-                "success": True,
-                "error": None,
-                "output": {"task_id": request.task_id},
-            }
+                self.executed_task_ids.append(task_id)
+            return {"success": True, "error": None, "output": {"task_id": task_id}}
         finally:
             with self._state_lock:
                 self._in_flight -= 1
@@ -98,7 +101,7 @@ class FakeMalformedReturnAdapter(TaskAdapter):
     def __init__(self, malformed_value: Any = "not-a-dict"):
         self.malformed_value = malformed_value
 
-    def execute(self, request: ExecutionRequest) -> Any:
+    def execute(self, value: AdapterInput) -> Any:
         return self.malformed_value
 
 
@@ -110,7 +113,7 @@ class FakeRaisingAdapter(TaskAdapter):
     def __init__(self, exception: Optional[Exception] = None):
         self.exception = exception or RuntimeError("fake adapter blew up")
 
-    def execute(self, request: ExecutionRequest) -> Dict[str, Any]:
+    def execute(self, value: AdapterInput) -> Dict[str, Any]:
         raise self.exception
 
 
