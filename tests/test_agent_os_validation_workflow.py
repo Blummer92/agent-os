@@ -1,10 +1,64 @@
+import re
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/agent-os-validation.yml"
 SCHEDULER_WORKFLOW = ROOT / ".github/workflows/workflow-scheduler-validation.yml"
 CLOUD_BUILD = ROOT / "cloudbuild.yaml"
+
+_REQUIREMENTS_INSTALL = re.compile(
+    r"python -m pip install -r [\"']?([^\s\"']+)[\"']?"
+)
+_EDITABLE_INSTALL = re.compile(
+    r"python -m pip install -e [\"']\./([^\"'\[]+)"
+    r"(?:\[[^\"']+\])?[\"']"
+)
+
+
+def _cache_dependency_paths(content: str) -> set[str]:
+    lines = content.splitlines()
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped.startswith("cache-dependency-path:"):
+            continue
+
+        value = stripped.split(":", 1)[1].strip()
+        if value and value != "|":
+            return {value.strip("\"'")}
+
+        parent_indent = len(line) - len(line.lstrip())
+        paths: set[str] = set()
+        for candidate in lines[index + 1 :]:
+            if not candidate.strip():
+                continue
+            indent = len(candidate) - len(candidate.lstrip())
+            if indent <= parent_indent:
+                break
+            paths.add(candidate.strip().strip("\"'"))
+        return paths
+
+    return set()
+
+
+def _installed_dependency_manifests(content: str) -> set[str]:
+    manifests = set(_REQUIREMENTS_INSTALL.findall(content))
+    for package_path in _EDITABLE_INSTALL.findall(content):
+        manifests.add(f"{package_path}/pyproject.toml")
+    return manifests
+
+
+def _assert_dependency_cache_parity(content: str) -> None:
+    installed = _installed_dependency_manifests(content)
+    cached = _cache_dependency_paths(content)
+    missing = sorted(installed - cached)
+    stale = sorted(cached - installed)
+    assert not missing and not stale, (
+        "dependency cache paths must exactly match installed dependency manifests; "
+        f"missing={missing}, stale={stale}"
+    )
 
 
 def test_validation_gate_executes_only_canonical_aggregate_command():
@@ -55,32 +109,44 @@ def test_validation_gate_installs_same_dependencies_as_cloud_build():
         assert dependency in cloudbuild
 
 
-def test_validation_gate_caches_all_installed_dependency_manifests():
+def test_validation_gate_cache_paths_match_installed_dependency_manifests():
     content = WORKFLOW.read_text(encoding="utf-8")
     assert "uses: actions/setup-python@v5" in content
     assert 'cache: "pip"' in content
-    required_manifests = [
-        "requirements-dev.txt",
-        "08_Tooling/workflow-scheduler/requirements.txt",
-        "08_Tooling/instructional-materials-coach/pyproject.toml",
-        "08_Tooling/notion-navigation-client/pyproject.toml",
-        "08_Tooling/reusable-capability-registry/pyproject.toml",
-    ]
-    for manifest in required_manifests:
-        assert manifest in content
+    _assert_dependency_cache_parity(content)
 
 
-def test_scheduler_validation_uses_its_requirements_for_pip_cache():
+def test_scheduler_cache_paths_match_installed_dependency_manifests():
     content = SCHEDULER_WORKFLOW.read_text(encoding="utf-8")
     assert "uses: actions/setup-python@v5" in content
     assert 'cache: "pip"' in content
-    assert (
-        "cache-dependency-path: 08_Tooling/workflow-scheduler/requirements.txt"
-        in content
-    )
-    assert content.count("cache-dependency-path:") == 1
-    assert "requirements-dev.txt" not in content
-    assert "pyproject.toml" not in content
+    _assert_dependency_cache_parity(content)
+    assert _cache_dependency_paths(content) == {
+        "08_Tooling/workflow-scheduler/requirements.txt"
+    }
+
+
+def test_parity_check_fails_when_new_install_manifest_is_not_cached():
+    incomplete = """
+      cache-dependency-path: requirements-dev.txt
+      run: |
+        python -m pip install -r requirements-dev.txt
+        python -m pip install -r added-requirements.txt
+    """
+    with pytest.raises(AssertionError, match="added-requirements.txt"):
+        _assert_dependency_cache_parity(incomplete)
+
+
+def test_parity_check_fails_when_required_cache_path_is_removed():
+    incomplete = """
+      cache-dependency-path: |
+        requirements-dev.txt
+      run: |
+        python -m pip install -r requirements-dev.txt
+        python -m pip install -e "./08_Tooling/example-package[test]"
+    """
+    with pytest.raises(AssertionError, match="example-package/pyproject.toml"):
+        _assert_dependency_cache_parity(incomplete)
 
 
 def test_cache_configuration_does_not_replace_install_or_validation_commands():
