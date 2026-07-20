@@ -15,6 +15,7 @@ See `_common-overlay-rules.md` plus:
 
 - `01_Shared_Standards/instructional-design/unit-alignment-rules.md`
 - `01_Shared_Standards/instructional-design/unit-alignment-essential-questions.md`
+- `01_Shared_Standards/instructional-design/unit-vocabulary-map-standard.md`
 - `01_Shared_Standards/instructional-design/production-gates-and-compute.md`
 - `01_Shared_Standards/notion/notion-navigation-index-standard.md`
 
@@ -42,10 +43,11 @@ handoff_artifacts, and ready-for-modeling status.
 
 ## Version
 
-0.3.0
+0.3.1
 
 ## Changelog
 
+- 0.3.1 inherits the Unit Vocabulary Map standard for source-backed unit language classification.
 - 0.3.0 inherits the Notion navigation-index standard and keeps execution rules
   in standards.
 - 0.2.0 added Tier 2 essential questions.
