@@ -1,11 +1,5 @@
-"""Local-only fake adapters for testing the scheduler's execution paths.
+"""Local-only fake adapters for testing scheduler execution paths."""
 
-These are test doubles, not real integrations -- no external system is
-contacted by anything in this module. See the adapter registry
-(registry.py) for how they're named/resolved, and
-docs/ADAPTER_CONTRACT_FUTURE.md for the (not yet enforced) contract these
-are expected to keep conforming to as it's formalized.
-"""
 from __future__ import annotations
 
 import threading
@@ -13,24 +7,28 @@ import time
 from typing import Any, Dict, List, Optional
 
 from workflow_scheduler.adapters.base_adapter import TaskAdapter
-from workflow_scheduler.models import Task
+from workflow_scheduler.models import ExecutionRequest, Task
 
 
 class FakeSuccessAdapter(TaskAdapter):
     """Always succeeds."""
 
-    def execute(self, task: Task) -> Dict[str, Any]:
+    accepts_execution_request = True
+
+    def execute(self, request: ExecutionRequest) -> Dict[str, Any]:
         return {
             "success": True,
             "error": None,
-            "output": {"task_id": task.id, "message": "fake success"},
+            "output": {"task_id": request.task_id, "message": "fake success"},
         }
 
 
 class FakeFailureAdapter(TaskAdapter):
-    """Always fails with a permanent (non-retryable) error."""
+    """Always fails with a permanent error."""
 
-    def execute(self, task: Task) -> Dict[str, Any]:
+    accepts_execution_request = True
+
+    def execute(self, request: ExecutionRequest) -> Dict[str, Any]:
         return {
             "success": False,
             "error": "fake permanent failure",
@@ -39,9 +37,11 @@ class FakeFailureAdapter(TaskAdapter):
 
 
 class FakeRetryableAdapter(TaskAdapter):
-    """Always fails with a transient (retryable) error."""
+    """Always fails with a transient error."""
 
-    def execute(self, task: Task) -> Dict[str, Any]:
+    accepts_execution_request = True
+
+    def execute(self, request: ExecutionRequest) -> Dict[str, Any]:
         return {
             "success": False,
             "error": "fake transient failure",
@@ -50,31 +50,20 @@ class FakeRetryableAdapter(TaskAdapter):
 
 
 class FakeNeverCalledAdapter(TaskAdapter):
-    """Fails the test if execute() is ever called.
+    """Fails the test if execute is reached after a scheduler stop condition."""
 
-    Approval-required and governance-blocked tasks are intercepted by
-    StopConditionChecker before the executor ever reaches the adapter --
-    there is no adapter-level "approval required" or "blocked" return
-    value to simulate. This adapter proves that interception actually
-    happens: pair it with a task configured to trigger the stop condition
-    under test (approval_required=True, production_ready=True, or an
-    empty action for ambiguous_target).
-    """
+    accepts_execution_request = True
 
-    def execute(self, task: Task) -> Dict[str, Any]:
+    def execute(self, request: ExecutionRequest) -> Dict[str, Any]:
         raise AssertionError(
-            f"FakeNeverCalledAdapter.execute() was called for task {task.id!r} -- "
-            "a governance/approval stop condition should have intercepted this "
-            "task before the adapter was ever reached."
+            f"FakeNeverCalledAdapter.execute() was called for task {request.task_id!r}"
         )
 
 
 class FakeSlowAdapter(TaskAdapter):
-    """Succeeds after a short delay; records concurrent in-flight count.
+    """Succeeds after a short delay and records concurrent calls."""
 
-    Used to prove Executor.execute_many() actually overlaps executions
-    when max_workers > 1, not just that it accepts the parameter.
-    """
+    accepts_execution_request = True
 
     def __init__(self, hold_seconds: float = 0.05):
         self.hold_seconds = hold_seconds
@@ -83,57 +72,50 @@ class FakeSlowAdapter(TaskAdapter):
         self.max_in_flight = 0
         self.executed_task_ids: List[str] = []
 
-    def execute(self, task: Task) -> Dict[str, Any]:
+    def execute(self, request: ExecutionRequest) -> Dict[str, Any]:
         with self._state_lock:
             self._in_flight += 1
             self.max_in_flight = max(self.max_in_flight, self._in_flight)
         try:
             time.sleep(self.hold_seconds)
             with self._state_lock:
-                self.executed_task_ids.append(task.id)
-            return {"success": True, "error": None, "output": {"task_id": task.id}}
+                self.executed_task_ids.append(request.task_id)
+            return {
+                "success": True,
+                "error": None,
+                "output": {"task_id": request.task_id},
+            }
         finally:
             with self._state_lock:
                 self._in_flight -= 1
 
 
 class FakeMalformedReturnAdapter(TaskAdapter):
-    """Returns something that is not a valid adapter result, per what the
-    caller configures. Used to test the executor's adapter-result
-    validation without needing a real broken adapter."""
+    """Returns a caller-configured malformed value."""
+
+    accepts_execution_request = True
 
     def __init__(self, malformed_value: Any = "not-a-dict"):
         self.malformed_value = malformed_value
 
-    def execute(self, task: Task) -> Any:
+    def execute(self, request: ExecutionRequest) -> Any:
         return self.malformed_value
 
 
 class FakeRaisingAdapter(TaskAdapter):
-    """Raises instead of returning, to test that an adapter exception is
-    treated as a contract violation (controlled failure) rather than
-    propagating and crashing the scheduler loop."""
+    """Raises a caller-configured exception."""
+
+    accepts_execution_request = True
 
     def __init__(self, exception: Optional[Exception] = None):
         self.exception = exception or RuntimeError("fake adapter blew up")
 
-    def execute(self, task: Task) -> Dict[str, Any]:
+    def execute(self, request: ExecutionRequest) -> Dict[str, Any]:
         raise self.exception
 
 
 class FakeContractAdapter(TaskAdapter):
-    """Reference example of an adapter opting into the Phase 3D
-    five-state result contract (status/message, from
-    docs/ADAPTER_CONTRACT_FUTURE.md) instead of the original success/
-    error/is_transient shape every other adapter in this file uses.
-    Not registered in the adapter registry -- this class exists purely
-    to document and test the shape, not as a selectable local adapter.
-
-    Configure `status` to one of success/failure/retryable/blocked/
-    approval-required; the conditional field each status requires
-    (retry_after/blocked_reason/approval_reason) defaults to a fake
-    value but can be overridden.
-    """
+    """Legacy-input reference adapter for the five-state result contract."""
 
     def __init__(
         self,
