@@ -25,6 +25,7 @@ See `_common-overlay-rules.md` plus:
 - `01_Shared_Standards/instructional-design/production-gates-and-compute.md`
 - `01_Shared_Standards/instructional-design/student-language-standard.md`
 - `01_Shared_Standards/instructional-design/unit-vocabulary-map-standard.md`
+- `01_Shared_Standards/instructional-design/lesson-vocabulary-planner-response-standard.md`
 - `01_Shared_Standards/google-workspace/`
 
 ## Owned Systems
@@ -55,14 +56,17 @@ folder. Repository storage requires explicit approval and a GitHub Change Reques
 
 Generated file links, template IDs used, content spec used, approved assets used,
 gate status, remaining rubric risks, and on failure the local lesson-candidate
-record path for human review before any Notion update.
+record path for human review before any Notion update. For lesson vocabulary, use
+only confirmed entries marked material-safe without changing assessment eligibility
+or destination rules.
 
 ## Version
 
-0.4.6
+0.4.7
 
 ## Changelog
 
+- 0.4.7 inherits the Lesson Vocabulary Planner response standard and limits materials to confirmed, material-safe entries.
 - 0.4.6 inherits the Unit Vocabulary Map standard and limits materials to approved, material-safe vocabulary.
 - 0.4.5 added inherited instructional materials context defaults standard.
 - 0.4.4 added inherited instructional materials design system standard.
