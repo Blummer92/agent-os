@@ -203,6 +203,7 @@ def test_branch_head_and_synthetic_merge_evidence_remain_distinct():
     assert branch.decision == ExecutionDecision.PROCEED
 
     synthetic = _state(
+        observed_sha=SHA_C,
         tested_sha=SHA_C,
         synthetic_merge_sha=SHA_C,
         external_build_sha=SHA_C,
@@ -216,6 +217,26 @@ def test_branch_head_and_synthetic_merge_evidence_remain_distinct():
         _state(tested_sha=SHA_C, evidence_type=RepositoryEvidenceType.BRANCH_HEAD)
     )
     assert "ref.tested-sha-mismatch" in mislabeled.reason_codes
+
+
+def test_synthetic_merge_observed_sha_must_match_synthetic_commit():
+    state = _state(
+        tested_sha=SHA_C,
+        synthetic_merge_sha=SHA_C,
+        external_build_sha=SHA_C,
+        evidence_type=RepositoryEvidenceType.SYNTHETIC_PR_MERGE,
+    )
+    result = validate_repository_state_evidence(state)
+    assert result.decision == ExecutionDecision.HANDOFF_REQUIRED
+    assert "ref.observed-sha-stale" in result.reason_codes
+
+
+def test_default_branch_mismatch_has_specific_reason():
+    result = validate_repository_state_evidence(
+        _state(), expected_repository=_identity(default_branch="trunk")
+    )
+    assert result.decision == ExecutionDecision.HANDOFF_REQUIRED
+    assert result.reason_codes == ("repo.default-branch-mismatch",)
 
 
 def test_cloud_build_result_cannot_be_attached_to_another_sha():
@@ -277,6 +298,16 @@ def test_capability_validation_aggregates_decisions_without_authorization():
     indeterminate_payload["decision"] = "needs-decision"
     indeterminate = validate_capability_evidence(indeterminate_payload)
     assert indeterminate.decision == ExecutionDecision.NEEDS_DECISION
+
+
+def test_supplied_repository_invalidation_routes_to_handoff():
+    payload = _capability_mapping(
+        invalidation_reasons=["repo.identity-mismatch"],
+        decision="handoff-required",
+    )
+    result = validate_capability_evidence(payload)
+    assert result.decision == ExecutionDecision.HANDOFF_REQUIRED
+    assert result.invalidation_reasons == ("repo.identity-mismatch",)
 
 
 def test_capability_unknown_field_flood_is_bounded():
