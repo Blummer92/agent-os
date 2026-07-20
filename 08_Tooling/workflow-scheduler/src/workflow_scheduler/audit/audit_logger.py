@@ -1,10 +1,10 @@
 """Audit logger for task and workflow state transitions."""
 
 from dataclasses import dataclass, asdict
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from workflow_scheduler.models import Task, TaskStatus, WorkflowPlan, WorkflowStatus
+from workflow_scheduler.time_utils import utc_now, utc_storage_string
 
 
 @dataclass
@@ -47,7 +47,7 @@ class AuditLogger:
     ) -> None:
         """Internal logging method."""
         event = AuditEvent(
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=utc_storage_string(utc_now()),
             event_type=event_type,
             task_id=task.id if task else None,
             workflow_id=workflow.workflow_id if workflow else None,
@@ -111,7 +111,7 @@ class AuditLogger:
             task=task,
             status_before=TaskStatus.QUEUED.value,
             status_after=TaskStatus.RUNNING.value,
-            details={"lease_acquired": datetime.utcnow().isoformat()},
+            details={"lease_acquired": utc_storage_string(utc_now())},
         )
 
     def log_task_completed(self, task: Task, result: Optional[Dict[str, Any]] = None) -> None:
