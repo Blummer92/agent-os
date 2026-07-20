@@ -87,12 +87,36 @@ def test_incomplete_metadata_maps_to_metadata_incomplete() -> None:
     assert result.code == ConnectorErrorCode.METADATA_INCOMPLETE
 
 
-def test_connector_health_reports_no_live_system_access() -> None:
+def test_connector_health_identifies_fixture_compatibility_role() -> None:
     health = connector_with_default_fixtures().report_health()
 
     assert health["live_system_access"] is False
-    assert health["health_state"] == "Healthy"
+    assert health["health_state"] == "CompatibilityOnly"
+    assert health["role"] == "fixture-compatibility-shim"
+    assert health["deprecated_for_new_code"] is True
+    assert health["canonical_cached_lookup"] == "08_Tooling/notion-navigation-client/"
+    assert health["canonical_contract_adapter"].endswith("notion_contract_adapter.py")
+    assert health["canonical_live_read"].endswith("notion_readonly_adapter.py")
 
 
 def test_connector_write_capabilities_is_none() -> None:
     assert connector_with_default_fixtures().write_capabilities == "none"
+
+
+def test_fixture_shim_has_no_write_or_live_client_methods() -> None:
+    connector = connector_with_default_fixtures()
+    forbidden = {
+        "create_page",
+        "update_page",
+        "delete_page",
+        "archive_page",
+        "share_page",
+        "query_database",
+        "retrieve_page_metadata",
+        "retrieve_database_metadata",
+        "write_cache_record",
+        "refresh_cache",
+        "repair_relationship",
+    }
+
+    assert all(not hasattr(connector, method) for method in forbidden)
