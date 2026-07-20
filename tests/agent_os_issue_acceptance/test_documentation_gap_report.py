@@ -137,6 +137,46 @@ This is a planning and gap-analysis issue only. Do not implement code.
     assert category_for(item) == DocumentationGapCategory.NOT_APPLICABLE
 
 
+def test_tracking_title_requires_supporting_body_evidence() -> None:
+    item = record(
+        22,
+        title="Memory compatibility tracking issue",
+        body="""## Objective
+Track a bounded three-package upgrade.
+## Major sequence
+1. Complete package A.
+2. Complete package B.
+""",
+        labels=(),
+    )
+    assert category_for(item) == DocumentationGapCategory.NOT_APPLICABLE
+
+
+def test_roadmap_title_requires_supporting_body_evidence() -> None:
+    item = record(
+        23,
+        title="Execution evidence roadmap",
+        body="""## Objective
+Coordinate governed execution evidence.
+## Major sequence
+1. Define capability evidence.
+2. Add validation evidence.
+""",
+        labels=("type:validation",),
+    )
+    assert category_for(item) == DocumentationGapCategory.NOT_APPLICABLE
+
+
+def test_roadmap_word_in_title_alone_does_not_override_body() -> None:
+    item = record(
+        24,
+        title="Roadmap parser implementation",
+        body=authority_body(),
+        labels=("type:implementation",),
+    )
+    assert category_for(item) == DocumentationGapCategory.BACKFILL_NOW
+
+
 @pytest.mark.parametrize(
     ("body", "reason"),
     [
