@@ -99,6 +99,7 @@ def validate(root: Path = ROOT) -> list[str]:
         errors.append("Responsibility Matrix table is missing or empty")
 
     valid_matrix_rows: list[list[str]] = []
+    assigned_agents: set[str] = set()
     for row in matrix_rows:
         if len(row) != 3 or not all(row):
             errors.append("Responsibility Matrix contains a malformed or empty row")
@@ -106,11 +107,18 @@ def validate(root: Path = ROOT) -> list[str]:
         valid_matrix_rows.append(row)
         responsibility, primary, support = row
         for name in split_people(primary):
-            if name not in agents:
+            if name in agents:
+                assigned_agents.add(name)
+            else:
                 errors.append(f"Unknown primary agent: {responsibility} -> {name}")
         for name in split_people(support):
-            if name not in agents and name not in SUPPORT_SURFACES:
+            if name in agents:
+                assigned_agents.add(name)
+            elif name not in SUPPORT_SURFACES:
                 errors.append(f"Unknown support value: {responsibility} -> {name}")
+
+    for agent in sorted(agents - assigned_agents):
+        errors.append(f"Canonical agent has no Responsibility Matrix assignment: {agent}")
 
     nav_rows = [row for row in valid_matrix_rows if "Navigation Registry" in row[0]]
     if len(nav_rows) != 1 or nav_rows[0][1] != "Integration Manager":

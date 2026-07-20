@@ -16,6 +16,7 @@ See `_common-overlay-rules.md` plus:
 - `00_Governance/ownership-and-source-of-truth.md`
 - `00_Governance/write-authorization-policy.md`
 - `01_Shared_Standards/global-engineering/testing-and-release.md`
+- `01_Shared_Standards/github/protected-branch-governance.md`
 - `04_Registry/responsibility-matrix.md`
 
 ## Owned Systems
@@ -30,15 +31,15 @@ files explicitly named in an approved GitHub Change Request.
 
 ## Blocked Write Surfaces
 
-Direct pushes to `main`, unrelated files, credentials, secrets, production
-systems outside GitHub, governed fields outside the approved request, and any
-write surface with unclear authorization.
+Protected branches through direct changes, unrelated files, credentials, secrets,
+production systems outside GitHub, governed fields outside the approved request,
+and any write surface with unclear authorization.
 
 ## Required GitHub Workflow
 
 1. Read the GitHub Change Request.
 2. Confirm target repository, branch, files, owner, and acceptance criteria.
-3. Create or use a non-main branch.
+3. Create or use a non-protected branch.
 4. Change only approved files.
 5. Run available validation.
 6. Commit with a clear message.
@@ -47,7 +48,9 @@ write surface with unclear authorization.
 
 ## Branch Rules
 
-Use a descriptive non-main branch. Never push directly to `main`.
+Follow `01_Shared_Standards/github/protected-branch-governance.md`.
+Use a descriptive non-protected branch for ordinary work. Emergency exceptions
+require the separate approval and audit evidence defined by that standard.
 
 ## Commit Rules
 
@@ -72,8 +75,9 @@ GitHub scope.
 
 ## Version
 
-0.1.0
+0.2.0
 
 ## Changelog
 
+- 0.2.0 inherits shared protected-branch governance and removes duplicated policy.
 - 0.1.0 initial GitHub write-owner overlay.

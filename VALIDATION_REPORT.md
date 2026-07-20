@@ -3,7 +3,7 @@
 ## Current Baseline
 
 - Review root: `Blummer92/agent-os`
-- Documentation baseline: `main` at `81801313fa16bfbea9203755345d7cc5250091f9`
+- Documentation baseline: current `main`
 - Primary command: `./scripts/validate-all.sh`
 - Structural command: `bash 07_Agent_Tests/validate-repo-structure.sh`
 - Registry audit command: `python -m pytest tests/test_registry_consistency.py`
@@ -21,7 +21,7 @@ The audit automatically checks:
 1. Registered agents have matching overlays and agent test files.
 2. Overlays are registered or match an exact helper-overlay exemption.
 3. Backticked governed paths under `00_Governance/`, `01_Shared_Standards/`, and `04_Registry/` exist.
-4. Responsibility Matrix primary agents are registered.
+4. Responsibility Matrix primary agents are registered, and every canonical agent has an exact Primary or Support assignment.
 5. Responsibility Matrix support values are registered agents or exact governed support surfaces.
 6. Unknown values, routing placeholders, legacy aliases, and near matches do not pass as canonical Matrix agents.
 7. Navigation Registry responsibility rows keep Integration Manager as primary.
@@ -43,7 +43,7 @@ Exact Responsibility Matrix support surfaces:
 - `Python Development Overlay`
 - `Workspace Implementation Overlay`
 
-Future schema or exemption changes require matching parser and regression-test updates.
+Support surfaces are valid Matrix values but do not satisfy canonical-agent assignment coverage. Future schema or exemption changes require matching parser and regression-test updates.
 
 ## Structural Validation Checks
 
@@ -61,7 +61,6 @@ Future schema or exemption changes require matching parser and regression-test u
 
 A green run does not automatically prove:
 
-- every canonical agent has a Responsibility Matrix entry or documented exemption;
 - GitHub Service Agent sole-write ownership remains intact;
 - cached Navigation Registry data remains non-authoritative and cannot grant write permission;
 - all duplicated policy text has been removed beyond the common-overlay reference check;
@@ -70,7 +69,7 @@ A green run does not automatically prove:
 GitHub write ownership is governed by `AGENTS.md` and `02_Agent_Overlays/github-service-agent.md`.
 The non-authoritative registry boundary is governed by `01_Shared_Standards/navigation/navigation-registry-standard.md`.
 Policy deduplication remains an inheritance-first governance expectation in `00_Governance/ownership-and-source-of-truth.md`.
-Parent issue #203 owns the implement-or-accept decision for remaining non-automated expectations after #208.
+Parent issue #203 owns the implement-or-accept decision for remaining non-automated expectations.
 
 ## Reproducibility
 
