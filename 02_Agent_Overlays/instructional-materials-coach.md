@@ -24,6 +24,7 @@ See `_common-overlay-rules.md` plus:
 - `01_Shared_Standards/instructional-design/material-quality-rubric.md`
 - `01_Shared_Standards/instructional-design/production-gates-and-compute.md`
 - `01_Shared_Standards/instructional-design/student-language-standard.md`
+- `01_Shared_Standards/instructional-design/unit-vocabulary-map-standard.md`
 - `01_Shared_Standards/google-workspace/`
 
 ## Owned Systems
@@ -58,10 +59,11 @@ record path for human review before any Notion update.
 
 ## Version
 
-0.4.5
+0.4.6
 
 ## Changelog
 
+- 0.4.6 inherits the Unit Vocabulary Map standard and limits materials to approved, material-safe vocabulary.
 - 0.4.5 added inherited instructional materials context defaults standard.
 - 0.4.4 added inherited instructional materials design system standard.
 - 0.4.3 added inherited material design defaults standard.

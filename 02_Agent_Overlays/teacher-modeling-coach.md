@@ -18,6 +18,7 @@ See `_common-overlay-rules.md` plus:
 - `01_Shared_Standards/instructional-design/teacher-modeling-workflows.md`
 - `01_Shared_Standards/instructional-design/teacher-modeling-memory-and-sources.md`
 - `01_Shared_Standards/instructional-design/student-language-standard.md`
+- `01_Shared_Standards/instructional-design/unit-vocabulary-map-standard.md`
 - `01_Shared_Standards/instructional-design/production-gates-and-compute.md`
 
 ## Owned Systems
@@ -53,10 +54,11 @@ handoff artifacts.
 
 ## Version
 
-0.3.0
+0.3.1
 
 ## Changelog
 
+- 0.3.1 inherits the Unit Vocabulary Map standard and preserves its approved vocabulary decisions.
 - 0.3.0 migrated practical coaching, source, memory, and workflow boundaries.
 - 0.2.0 inherits student-language standard and keeps execution rules in standards.
 - 0.1.0 initial overlay.
