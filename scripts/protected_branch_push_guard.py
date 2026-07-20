@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 from dataclasses import dataclass
 import json
 import os
@@ -8,7 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-from typing import Mapping, TextIO
+from typing import TextIO
 
 PROTECTED_REF = "refs/heads/main"
 HOOKS_PATH = ".githooks"
@@ -153,6 +154,23 @@ def _marker_path(root: Path) -> Path:
     return _git_dir(root) / MARKER_NAME
 
 
+def _read_marker(marker: Path) -> dict[str, object]:
+    try:
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise GuardInstallError("installer marker is unreadable or malformed") from exc
+    if not isinstance(payload, dict):
+        raise GuardInstallError("installer marker must contain a JSON object")
+    if payload.get("installed_hooks_path") != HOOKS_PATH:
+        raise GuardInstallError("installer marker is not recognized")
+    if not isinstance(payload.get("changed_config"), bool):
+        raise GuardInstallError("installer marker has an invalid changed_config value")
+    previous = payload.get("previous_hooks_path")
+    if previous is not None and not isinstance(previous, str):
+        raise GuardInstallError("installer marker has an invalid previous_hooks_path value")
+    return payload
+
+
 def install(root: Path | None = None) -> int:
     root = repository_root(root)
     hook = root / HOOKS_PATH / "pre-push"
@@ -168,20 +186,32 @@ def install(root: Path | None = None) -> int:
 
     marker = _marker_path(root)
     if marker.exists():
-        payload = json.loads(marker.read_text(encoding="utf-8"))
-        if payload.get("installed_hooks_path") != HOOKS_PATH:
-            raise GuardInstallError("existing installer marker is not recognized")
-    else:
-        payload = {
-            "changed_config": current is None,
-            "installed_hooks_path": HOOKS_PATH,
-            "previous_hooks_path": current,
-        }
-        marker.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+        _read_marker(marker)
+        if current != HOOKS_PATH:
+            raise GuardInstallError(
+                "installer marker exists but core.hooksPath is not configured as expected"
+            )
+        hook.chmod(hook.stat().st_mode | 0o111)
+        print(f"Agent OS protected-branch hook is already installed via {HOOKS_PATH}.")
+        return 0
 
-    if current is None:
-        _run_git(root, "config", "--local", "core.hooksPath", HOOKS_PATH)
-    hook.chmod(hook.stat().st_mode | 0o111)
+    payload = {
+        "changed_config": current is None,
+        "installed_hooks_path": HOOKS_PATH,
+        "previous_hooks_path": current,
+    }
+    changed_config = current is None
+    try:
+        if changed_config:
+            _run_git(root, "config", "--local", "core.hooksPath", HOOKS_PATH)
+        hook.chmod(hook.stat().st_mode | 0o111)
+        marker.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+    except (OSError, subprocess.CalledProcessError) as exc:
+        if changed_config:
+            _run_git(root, "config", "--local", "--unset", "core.hooksPath", check=False)
+        marker.unlink(missing_ok=True)
+        raise GuardInstallError("installation failed and local configuration was rolled back") from exc
+
     print(f"Installed Agent OS protected-branch hook via {HOOKS_PATH}.")
     return 0
 
@@ -192,17 +222,14 @@ def remove(root: Path | None = None) -> int:
     if not marker.is_file():
         raise GuardInstallError("no Agent OS installer marker found; no changes made")
 
-    payload = json.loads(marker.read_text(encoding="utf-8"))
-    if payload.get("installed_hooks_path") != HOOKS_PATH:
-        raise GuardInstallError("installer marker is not recognized")
-
+    payload = _read_marker(marker)
     current = _configured_hooks_path(root)
     if current != HOOKS_PATH:
         raise GuardInstallError(
             "core.hooksPath changed after installation; refusing to modify it"
         )
 
-    if payload.get("changed_config") is True:
+    if payload["changed_config"] is True:
         _run_git(root, "config", "--local", "--unset", "core.hooksPath")
     marker.unlink()
     print("Removed Agent OS protected-branch hook configuration safely.")
@@ -237,8 +264,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "remove":
             return remove()
         return status()
-    except (GuardInstallError, json.JSONDecodeError) as exc:
-        print(f"Agent OS protected-branch guard: {exc}", file=sys.stderr)
+    except (GuardInstallError, OSError, subprocess.CalledProcessError) as exc:
+        detail = exc.stderr.strip() if isinstance(exc, subprocess.CalledProcessError) and exc.stderr else str(exc)
+        print(f"Agent OS protected-branch guard: {detail}", file=sys.stderr)
         return 2
 
 
