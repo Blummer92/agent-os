@@ -33,7 +33,6 @@ jobs:
 
       - name: Install Workflow Scheduler test dependencies
         run: |
-          python -m pip install --upgrade pip
           python -m pip install -r 08_Tooling/workflow-scheduler/requirements.txt
 
       - name: Run Workflow Scheduler test suite

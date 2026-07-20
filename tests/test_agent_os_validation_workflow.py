@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/agent-os-validation.yml"
 SCHEDULER_WORKFLOW = ROOT / ".github/workflows/workflow-scheduler-validation.yml"
 CLOUD_BUILD = ROOT / "cloudbuild.yaml"
+SHARED_ACTION = ROOT / ".github/actions/setup-python-dev/action.yml"
 
 _REQUIREMENTS_INSTALL = re.compile(
     r"python -m pip install -r [\"']?([^\s\"']+)[\"']?"
@@ -107,6 +108,12 @@ def test_validation_gate_installs_same_dependencies_as_cloud_build():
     for dependency in required:
         assert dependency in workflow
         assert dependency in cloudbuild
+
+
+def test_governed_validation_paths_do_not_upgrade_pip_unconditionally():
+    for path in (WORKFLOW, SCHEDULER_WORKFLOW, CLOUD_BUILD, SHARED_ACTION):
+        content = path.read_text(encoding="utf-8")
+        assert "pip install --upgrade pip" not in content, path
 
 
 def test_validation_gate_cache_paths_match_installed_dependency_manifests():
