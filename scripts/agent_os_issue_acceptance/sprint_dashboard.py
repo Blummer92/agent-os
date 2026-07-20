@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Iterable, Literal
@@ -252,7 +252,9 @@ class SuppliedSprintEvidence:
     recommendations: tuple[RecommendationEvidence, ...]
     validation: ValidationEvidence
     final_handoff: FinalHandoff
+    manual_review_reasons: tuple[str, ...] = ()
     schema_version: str = SCHEMA_VERSION
+    execution_authorized: Literal[False] = field(default=False, init=False)
 
     def __post_init__(self) -> None:
         if self.schema_version != SCHEMA_VERSION:
@@ -294,6 +296,9 @@ class SuppliedSprintEvidence:
         if not recommendation_risks <= risk_ids:
             raise ValueError("recommendation risk ids must resolve to top-level risks")
 
+        object.__setattr__(
+            self, "manual_review_reasons", tuple(sorted(set(self.manual_review_reasons)))
+        )
         object.__setattr__(
             self,
             "sources",
@@ -509,6 +514,7 @@ def render_sprint_dashboard(repository: str, evidence: SuppliedSprintEvidence) -
         f"- Sprint state: `{evidence.sprint_state}`",
         f"- Evaluated at: `{evidence.evaluated_at}`",
         f"- Freshness: `{evidence.freshness}`",
+        f"- Execution authorized: `{str(evidence.execution_authorized).lower()}`",
         f"- Sources: {_join_or_unknown(source_ids)}",
         "",
         "| Lane | Issue | Mode | Compatibility | PR | Reasons |",
@@ -593,6 +599,9 @@ def render_sprint_dashboard(repository: str, evidence: SuppliedSprintEvidence) -
     lines.extend(f"- {item}" for item in blockers)
     if not blockers:
         lines.append("- none recorded")
+    if evidence.manual_review_reasons:
+        lines.extend(["", "## Manual review reasons"])
+        lines.extend(f"- {reason}" for reason in evidence.manual_review_reasons)
     if evidence.freshness != "current":
         lines.extend(
             [
