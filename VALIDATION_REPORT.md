@@ -21,13 +21,16 @@ The audit automatically checks:
 1. Registered agents have matching overlays and agent test files.
 2. Overlays are registered or match an exact helper-overlay exemption.
 3. Backticked governed paths under `00_Governance/`, `01_Shared_Standards/`, and `04_Registry/` exist.
-4. Responsibility Matrix primary agents are registered, and every canonical agent has an exact Primary or Support assignment.
-5. Responsibility Matrix support values are registered agents or exact governed support surfaces.
-6. Unknown values, routing placeholders, legacy aliases, and near matches do not pass as canonical Matrix agents.
-7. Navigation Registry responsibility rows keep Integration Manager as primary.
-8. Integration Manager inherits the Navigation Registry Standard.
-9. Missing, empty, or malformed registry and Matrix tables and rows fail conservatively.
-10. Validation output is deterministic and does not mutate repository content.
+4. Matrix primary agents are registered, and every canonical agent has an exact Primary or Support assignment.
+5. Matrix support values are registered agents or exact governed support surfaces.
+6. Unknown values, routing placeholders, legacy aliases, and near matches do not pass as canonical agents.
+7. Navigation Registry responsibilities keep Integration Manager as primary and inheriting the Navigation Registry Standard.
+8. GitHub repository writes remain assigned to GitHub Service Agent, matching AGENTS access rules and the service overlay's sole-writer role.
+9. GitHub Service Agent inherits the Write Authorization Policy and Protected Branch Governance normal PR path.
+10. Navigation Registry records remain non-authoritative and cannot grant write permission.
+11. Integration Manager retains navigation governance without direct GitHub write authority.
+12. Missing or malformed tables, governed files, and required invariant sections fail conservatively.
+13. Validation output is deterministic and does not mutate repository content.
 
 Exact helper-overlay exemptions:
 
@@ -43,7 +46,7 @@ Exact Responsibility Matrix support surfaces:
 - `Python Development Overlay`
 - `Workspace Implementation Overlay`
 
-Support surfaces are valid Matrix values but do not satisfy canonical-agent assignment coverage. Future schema or exemption changes require matching parser and regression-test updates.
+Support surfaces are valid Matrix values but do not satisfy canonical-agent assignment coverage. Write-boundary checks use scoped headings, stable paths, and ownership tuples instead of full-paragraph matching. Future schema or exemption changes require matching parser and regression-test updates.
 
 ## Structural Validation Checks
 
@@ -61,15 +64,10 @@ Support surfaces are valid Matrix values but do not satisfy canonical-agent assi
 
 A green run does not automatically prove:
 
-- GitHub Service Agent sole-write ownership remains intact;
-- cached Navigation Registry data remains non-authoritative and cannot grant write permission;
 - all duplicated policy text has been removed beyond the common-overlay reference check;
 - every possible repository reference exists outside the implemented path checks.
 
-GitHub write ownership is governed by `AGENTS.md` and `02_Agent_Overlays/github-service-agent.md`.
-The non-authoritative registry boundary is governed by `01_Shared_Standards/navigation/navigation-registry-standard.md`.
-Policy deduplication remains an inheritance-first governance expectation in `00_Governance/ownership-and-source-of-truth.md`.
-Parent issue #203 owns the implement-or-accept decision for remaining non-automated expectations.
+Policy deduplication remains an inheritance-first governance expectation in `00_Governance/ownership-and-source-of-truth.md`. Parent issue #203 owns the implement-or-accept decision for remaining non-automated expectations.
 
 ## Reproducibility
 
