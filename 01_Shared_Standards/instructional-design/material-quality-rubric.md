@@ -8,7 +8,8 @@ Score each category from 1 to 4.
 - 4 = Exemplary
 
 A material should not ship below 3 on instructional alignment, teacher modeling
-support, accessibility, student-language authenticity, or digital media throughline.
+support, accessibility, student-language authenticity, vocabulary integration,
+or digital media throughline.
 
 | Category | 3 means |
 |---|---|
@@ -19,7 +20,8 @@ support, accessibility, student-language authenticity, or digital media throughl
 | Worksheet usability | Directions, model, practice, and reflection are present. |
 | Accessibility/UDL | Alt text, contrast, and multiple representations are present. |
 | 9th-grade readability | Grade-level rigor with clear vocabulary support. |
-| Student language authenticity | Slide text comes from modeling outputs or student frames; student voice is exploratory, peer-focused, evidence-based; never teacher directives. |
+| Student language authenticity | Slide text comes from modeling outputs or approved student frames; student voice is exploratory, peer-focused, evidence-based; never teacher directives. |
+| Vocabulary integration | Uses confirmed vocabulary, preserves teacher/student separation, honors `Slide/Worksheet Safe?`, and assesses only after explicit instruction or practice. |
 | Digital media throughline | Shows creator choices shaping audience interpretation. |
 | Student independence | Scaffold level matches student readiness. |
 | Teacher revision burden | Requires only minor teacher edits. |
@@ -53,4 +55,4 @@ or a gate violation is discovered.
 
 ## Version
 
-0.1.1
+0.2.0
