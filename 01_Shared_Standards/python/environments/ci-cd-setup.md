@@ -1,5 +1,8 @@
 # CI/CD Setup (GitHub Actions)
 
+Use the installer policy in `../ci-cd/github-actions.md`: keep the environment-provided
+pip unless a documented compatibility requirement justifies a constrained version.
+
 ## Workflow File
 
 Create `.github/workflows/tests.yml`:
@@ -38,14 +41,14 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
+        cache: "pip"
+        cache-dependency-path: requirements-dev.txt
 
     - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements-dev.txt
+      run: python -m pip install -r requirements-dev.txt
 
     - name: Run tests
       run: pytest --cov=src --cov-report=xml
@@ -66,18 +69,19 @@ jobs:
 
 In GitHub repository settings:
 
-1. Go to **Settings** → **Branches**
-2. Add rule for `main` branch
-3. Enable:
-   - ✓ Require pull request reviews
-   - ✓ Require status checks to pass
-   - ✓ Require branches to be up to date
+1. Go to **Settings** → **Branches**.
+2. Add a rule for `main`.
+3. Require pull-request reviews, passing status checks, and current branches.
+
+Documentation does not authorize a repository-setting change. Follow the repository's
+protected-branch governance and approved settings-change process.
 
 ## Check Status in PR
 
-Workflow results show in PR:
+Workflow results show in the pull request:
+
 - ✓ All tests passed
-- ✗ Tests failed (click to see logs)
+- ✗ Tests failed; open the check for logs
 
 ## Local vs CI
 
@@ -90,4 +94,4 @@ black src tests
 mypy src
 ```
 
-This matches CI checks.
+This matches the example CI checks.
