@@ -2,62 +2,23 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
-from datetime import datetime
+import re
+from dataclasses import asdict, dataclass, field
 from enum import Enum
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 
-from .issueplan_scanner import AdoptionClass, ScanFinding, ScanResult, SourceEnvelope
+from .issueplan_scanner import ScanFinding, ScanResult, SourceEnvelope
 
 ISSUEPLAN_CURRENT_STATE_SCHEMA_VERSION = "1.0"
+_SUPPORTED = frozenset({ISSUEPLAN_CURRENT_STATE_SCHEMA_VERSION})
+_REQUIRED_CONTRACT_FIELDS = frozenset({"scope", "allowlist", "required_tests"})
+_FIELD_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
-_SET_LIKE_FIELDS = frozenset(
-    {
-        "required_files",
-        "forbidden_paths",
-        "required_tests",
-        "required_docs",
-        "banned_patterns",
-        "manual_review",
-    }
-)
-_FIELD_STATES = frozenset(
-    {
-        "present",
-        "absent",
-        "null",
-        "intentionally-omitted",
-        "unavailable",
-        "malformed",
-        "unsupported",
-        "stale",
-        "ambiguous",
-        "identity-quarantined",
-        "unknown-governed-field",
-    }
-)
-_RETRIEVAL_STATES = frozenset(
-    {"present", "absent", "unavailable", "inaccessible", "unsupported", "stale"}
-)
-_COMPLETENESS_STATES = frozenset(
-    {"complete", "partial", "truncated", "unknown-pagination"}
-)
-_METADATA_STATES = frozenset(
-    {
-        "present",
-        "absent",
-        "duplicate-identical",
-        "malformed",
-        "ambiguous",
-        "identity-quarantined",
-        "unknown-governed-field",
-        "unsupported",
-    }
-)
-_REASON_CODES = frozenset(
+_APPROVED_REASONS = frozenset(
     {
         "source.revision-changed",
+        "source.freshness-boundary-changed",
         "source.partial",
         "source.inaccessible",
         "source.unsupported",
@@ -76,24 +37,37 @@ _REASON_CODES = frozenset(
         "version.unsupported",
     }
 )
-_NEEDS_DECISION = frozenset(
+_AMBIGUOUS_REASONS = frozenset(
     {
-        "source.partial",
-        "source.inaccessible",
-        "source.unknown-pagination",
-        "scanner.unknown-governed-field",
-        "projection.incomplete",
-        "projection.lookup-failed",
-    }
-)
-_BLOCKED = frozenset(
-    {
-        "source.unsupported",
         "scanner.multiple-identical",
         "scanner.multiple-conflicting",
         "scanner.malformed-candidate",
+        "scanner.unknown-governed-field",
         "identity.quarantined",
     }
+)
+_STALE_REASONS = frozenset(
+    {
+        "source.revision-changed",
+        "source.freshness-boundary-changed",
+        "candidate.changed",
+        "contract.scope-changed",
+        "contract.allowlist-changed",
+        "contract.required-tests-changed",
+    }
+)
+_BLOCKING_REASONS = _APPROVED_REASONS - _AMBIGUOUS_REASONS - _STALE_REASONS - {
+    "version.unsupported"
+}
+_FINDING_REASONS = {
+    ScanFinding.METADATA_DUPLICATED_IDENTICAL: "scanner.multiple-identical",
+    ScanFinding.METADATA_CONFLICTING: "scanner.multiple-conflicting",
+    ScanFinding.METADATA_MALFORMED: "scanner.malformed-candidate",
+    ScanFinding.UNKNOWN_GOVERNED_FIELD: "scanner.unknown-governed-field",
+    ScanFinding.IDENTITY_FINDING_PRESENT: "identity.quarantined",
+}
+_FIELD_STATES = frozenset(
+    {"absent", "null", "intentionally-omitted", "unavailable", "present"}
 )
 
 
@@ -108,47 +82,23 @@ class IssuePlanCurrentStateOutcome(str, Enum):
 @dataclass(frozen=True)
 class IssuePlanSourceSnapshot:
     source_locator: str
-    source_family: str
     source_revision: str
-    retrieval_status: str
-    completeness_status: str
-    metadata_status: str
-    governed_fields: tuple[tuple[str, str, str | None], ...]
-    omitted_fields: tuple[str, ...]
-    provenance_references: tuple[str, ...]
-    candidate_set_fingerprint: str
-    scanner_result_fingerprint: str
-    reason_codes: tuple[str, ...] = field(default_factory=tuple)
+    source_family: str
+    retrieval_complete: bool
+    pagination_complete: bool
+    accessible: bool
+    expected_revision: str | None
+    source_fingerprint: str
 
     def __post_init__(self) -> None:
-        _text(self.source_locator, "source_locator")
-        _text(self.source_family, "source_family")
-        _text(self.source_revision, "source_revision")
-        if self.retrieval_status not in _RETRIEVAL_STATES:
-            raise ValueError("unsupported retrieval_status")
-        if self.completeness_status not in _COMPLETENESS_STATES:
-            raise ValueError("unsupported completeness_status")
-        if self.metadata_status not in _METADATA_STATES:
-            raise ValueError("unsupported metadata_status")
-        fields = tuple(sorted(self.governed_fields, key=lambda item: item[0]))
-        if len({item[0] for item in fields}) != len(fields):
-            raise ValueError("governed_fields cannot contain duplicate names")
-        for name, state, value in fields:
-            _text(name, "governed field name")
-            if state not in _FIELD_STATES:
-                raise ValueError(f"unsupported governed-field state: {state}")
-            if state == "present" and value is None:
-                raise ValueError("present governed fields require a value")
-            if state == "null" and value != "null":
-                raise ValueError("null governed fields require canonical null")
-            if state not in {"present", "null"} and value is not None:
-                raise ValueError("non-value governed-field states cannot contain a value")
-        object.__setattr__(self, "governed_fields", fields)
-        object.__setattr__(self, "omitted_fields", _strings(self.omitted_fields))
-        object.__setattr__(
-            self, "provenance_references", _strings(self.provenance_references)
-        )
-        object.__setattr__(self, "reason_codes", _reasons(self.reason_codes))
+        for name in ("source_locator", "source_revision", "source_family"):
+            _require_text(getattr(self, name), name)
+        if self.expected_revision is not None:
+            _require_text(self.expected_revision, "expected_revision")
+        for name in ("retrieval_complete", "pagination_complete", "accessible"):
+            if not isinstance(getattr(self, name), bool):
+                raise TypeError(f"{name} must be a boolean")
+        _require_sha(self.source_fingerprint, "source_fingerprint")
 
 
 @dataclass(frozen=True)
@@ -157,626 +107,555 @@ class IssuePlanCurrentStateEvidence:
     evidence_id: str
     observed_at: str
     freshness_boundary: str
-    source_snapshot: IssuePlanSourceSnapshot
-    source_snapshot_fingerprint: str
-    scanner_result_fingerprint: str
+    source: IssuePlanSourceSnapshot
+    scanner_fingerprint: str
+    candidate_set_fingerprint: str
     entity_ids: tuple[str, ...]
     candidate_revisions: tuple[str, ...]
-    repository: str | None = None
-    base_branch: str | None = None
-    evaluated_repository_sha: str | None = None
-    implementation_contract_fingerprint: str | None = None
-    allowed_files: tuple[str, ...] = ()
-    forbidden_paths: tuple[str, ...] = ()
-    required_tests: tuple[str, ...] = ()
+    governed_fields: tuple[tuple[str, str, Any], ...]
+    intentionally_omitted_fields: tuple[str, ...]
+    unavailable_fields: tuple[str, ...]
+    provenance_references: tuple[str, ...]
+    scanner_reason_codes: tuple[str, ...]
+    contract_scope_fingerprint: str
+    contract_allowlist_fingerprint: str
+    contract_required_tests_fingerprint: str
+    implementation_contract_fingerprint: str
     graph_reference: str | None = None
     planning_result_reference: str | None = None
     handoff_reference: str | None = None
-    supplied_node_ids: tuple[str, ...] = ()
-    reason_codes: tuple[str, ...] = field(default_factory=tuple)
+    projection_complete: bool = True
+    projection_lookup_succeeded: bool = True
     execution_authorized: Literal[False] = field(default=False, init=False)
 
     def __post_init__(self) -> None:
-        _text(self.schema_version, "schema_version")
-        _text(self.evidence_id, "evidence_id")
-        _timestamp(self.observed_at)
-        _text(self.freshness_boundary, "freshness_boundary")
-        if not isinstance(self.source_snapshot, IssuePlanSourceSnapshot):
-            raise TypeError("source_snapshot must be IssuePlanSourceSnapshot")
-        object.__setattr__(self, "entity_ids", _strings(self.entity_ids))
-        object.__setattr__(
-            self, "candidate_revisions", _strings(self.candidate_revisions)
+        if not isinstance(self.source, IssuePlanSourceSnapshot):
+            raise TypeError("source must be an IssuePlanSourceSnapshot")
+        for name in ("schema_version", "observed_at", "freshness_boundary"):
+            _require_text(getattr(self, name), name)
+        for name in (
+            "evidence_id",
+            "scanner_fingerprint",
+            "candidate_set_fingerprint",
+            "contract_scope_fingerprint",
+            "contract_allowlist_fingerprint",
+            "contract_required_tests_fingerprint",
+            "implementation_contract_fingerprint",
+        ):
+            _require_sha(getattr(self, name), name)
+        for name in ("projection_complete", "projection_lookup_succeeded"):
+            if not isinstance(getattr(self, name), bool):
+                raise TypeError(f"{name} must be a boolean")
+        for name in ("graph_reference", "planning_result_reference", "handoff_reference"):
+            value = getattr(self, name)
+            if value is not None:
+                _require_text(value, name)
+        entity_ids = _strings(self.entity_ids, "entity_ids")
+        revisions = _strings(self.candidate_revisions, "candidate_revisions")
+        omitted = _field_names(
+            self.intentionally_omitted_fields, "intentionally_omitted_fields"
         )
-        object.__setattr__(self, "allowed_files", _strings(self.allowed_files))
-        object.__setattr__(self, "forbidden_paths", _strings(self.forbidden_paths))
-        object.__setattr__(self, "required_tests", _strings(self.required_tests))
-        object.__setattr__(
-            self, "supplied_node_ids", _strings(self.supplied_node_ids)
-        )
-        reasons = _reasons(self.reason_codes)
-        if not set(self.source_snapshot.reason_codes) <= set(reasons):
-            raise ValueError("evidence reason_codes must include snapshot reason_codes")
-        object.__setattr__(self, "reason_codes", reasons)
+        unavailable = _field_names(self.unavailable_fields, "unavailable_fields")
+        if set(omitted) & set(unavailable):
+            raise ValueError("omitted and unavailable field inventories must be disjoint")
+        provenance = _strings(self.provenance_references, "provenance_references")
+        scanner_reasons = tuple(sorted(set(self.scanner_reason_codes)))
+        if not set(scanner_reasons) <= _AMBIGUOUS_REASONS:
+            raise ValueError("scanner_reason_codes must use the bounded scanner vocabulary")
+        object.__setattr__(self, "entity_ids", entity_ids)
+        object.__setattr__(self, "candidate_revisions", revisions)
+        object.__setattr__(self, "intentionally_omitted_fields", omitted)
+        object.__setattr__(self, "unavailable_fields", unavailable)
+        object.__setattr__(self, "provenance_references", provenance)
+        object.__setattr__(self, "scanner_reason_codes", scanner_reasons)
+        object.__setattr__(self, "governed_fields", _governed(self.governed_fields))
 
 
 @dataclass(frozen=True)
 class IssuePlanCurrentStateComparison:
+    outcome: IssuePlanCurrentStateOutcome
     expected_evidence_id: str
     current_evidence_id: str
-    expected_fingerprint: str
-    current_fingerprint: str
     changed_bindings: tuple[str, ...]
-    outcome: IssuePlanCurrentStateOutcome
     reason_codes: tuple[str, ...]
-    details: tuple[str, ...] = field(default_factory=tuple)
+    details: tuple[str, ...]
     execution_authorized: Literal[False] = field(default=False, init=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.outcome, IssuePlanCurrentStateOutcome):
-            raise TypeError("outcome must be IssuePlanCurrentStateOutcome")
-        object.__setattr__(
-            self, "changed_bindings", _strings(self.changed_bindings)
-        )
-        object.__setattr__(self, "reason_codes", _reasons(self.reason_codes))
+            raise TypeError("outcome must be an IssuePlanCurrentStateOutcome")
+        changed = _strings(self.changed_bindings, "changed_bindings")
+        reasons = tuple(sorted(set(self.reason_codes)))
+        if not set(reasons) <= _APPROVED_REASONS:
+            raise ValueError("reason_codes must use the bounded IDB2A vocabulary")
+        object.__setattr__(self, "changed_bindings", changed)
+        object.__setattr__(self, "reason_codes", reasons)
         object.__setattr__(self, "details", tuple(str(item) for item in self.details))
 
 
+def compute_issueplan_current_state_fingerprint(value: Any) -> str:
+    raw = json.dumps(
+        _canonical(value), sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
 def build_issueplan_current_state_evidence(
+    *,
     envelope: SourceEnvelope,
     scan_result: ScanResult,
-    *,
     observed_at: str,
     freshness_boundary: str,
-    governed_field_names: Iterable[str] = (),
-    field_state_overrides: Mapping[str, str] | None = None,
-    omitted_fields: Iterable[str] = (),
-    retrieval_status: str | None = None,
-    completeness_status: str | None = None,
-    metadata_status: str | None = None,
-    repository: str | None = None,
-    base_branch: str | None = None,
-    evaluated_repository_sha: str | None = None,
-    implementation_contract_fingerprint: str | None = None,
-    allowed_files: Iterable[str] = (),
-    forbidden_paths: Iterable[str] = (),
-    required_tests: Iterable[str] = (),
+    implementation_contract: Mapping[str, Any],
+    governed_field_names: tuple[str, ...] = (),
+    intentionally_omitted_fields: tuple[str, ...] = (),
+    unavailable_fields: tuple[str, ...] = (),
     graph_reference: str | None = None,
     planning_result_reference: str | None = None,
     handoff_reference: str | None = None,
-    supplied_node_ids: Iterable[str] = (),
+    projection_complete: bool = True,
+    projection_lookup_succeeded: bool = True,
     schema_version: str = ISSUEPLAN_CURRENT_STATE_SCHEMA_VERSION,
 ) -> IssuePlanCurrentStateEvidence:
-    if not isinstance(envelope, SourceEnvelope) or not isinstance(
-        scan_result, ScanResult
+    contract = _build_inputs(
+        envelope,
+        scan_result,
+        observed_at,
+        freshness_boundary,
+        implementation_contract,
+        schema_version,
+        projection_complete,
+        projection_lookup_succeeded,
+    )
+    if (envelope.source_locator, envelope.source_revision) != (
+        scan_result.source_locator,
+        scan_result.source_revision,
     ):
-        raise TypeError("envelope and scan_result must use scanner models")
-    if (scan_result.source_locator, scan_result.source_revision) != (
-        envelope.source_locator,
-        envelope.source_revision,
-    ):
-        raise ValueError("scan_result source identity does not match envelope")
+        raise ValueError("scan_result must bind to the supplied source envelope")
     if scan_result.execution_authorized is not False:
-        raise ValueError("scanner evidence cannot authorize execution")
-    _timestamp(observed_at)
-    _text(freshness_boundary, "freshness_boundary")
+        raise ValueError("scan_result cannot authorize execution")
+    names = _field_names(governed_field_names, "governed_field_names")
+    omitted = _field_names(
+        intentionally_omitted_fields, "intentionally_omitted_fields"
+    )
+    unavailable = _field_names(unavailable_fields, "unavailable_fields")
+    if set(omitted) & set(unavailable):
+        raise ValueError("omitted and unavailable field inventories must be disjoint")
 
-    retrieval = _derive_retrieval(envelope)
-    completeness = _derive_completeness(envelope)
-    metadata = _derive_metadata(scan_result)
-    retrieval = _override_status(
-        retrieval, retrieval_status, "present", _RETRIEVAL_STATES
-    )
-    completeness = _override_status(
-        completeness, completeness_status, "complete", _COMPLETENESS_STATES
-    )
-    metadata = _override_status(
-        metadata, metadata_status, "present", _METADATA_STATES
-    )
-
-    overrides = dict(field_state_overrides or {})
-    for name in omitted_fields:
-        overrides.setdefault(name, "intentionally-omitted")
-    fields = _field_projection(scan_result, tuple(governed_field_names), overrides)
-    candidates = _candidate_payload(scan_result)
-    scanner_payload = _scanner_payload(scan_result, candidates)
-    candidate_fingerprint = _digest(candidates)
-    scanner_fingerprint = _digest(scanner_payload)
-    reasons = _state_reasons(
-        scan_result, retrieval, completeness, metadata, schema_version
-    )
-    snapshot = IssuePlanSourceSnapshot(
+    source = IssuePlanSourceSnapshot(
         source_locator=envelope.source_locator,
-        source_family=envelope.source_family,
         source_revision=envelope.source_revision,
-        retrieval_status=retrieval,
-        completeness_status=completeness,
-        metadata_status=metadata,
-        governed_fields=fields,
-        omitted_fields=tuple(
-            name for name, state, _ in fields if state == "intentionally-omitted"
-        ),
-        provenance_references=tuple(
-            item.raw_excerpt_or_reference for item in scan_result.provenance
-        ),
-        candidate_set_fingerprint=candidate_fingerprint,
-        scanner_result_fingerprint=scanner_fingerprint,
-        reason_codes=reasons,
+        source_family=envelope.source_family,
+        retrieval_complete=envelope.retrieval_complete,
+        pagination_complete=envelope.pagination_complete,
+        accessible=envelope.accessible,
+        expected_revision=envelope.expected_revision,
+        source_fingerprint=compute_issueplan_current_state_fingerprint(envelope.content),
     )
-    snapshot_fingerprint = _digest(_snapshot_payload(snapshot))
-    values = {
-        "schema_version": schema_version,
-        "freshness_boundary": freshness_boundary,
-        "source_snapshot": snapshot,
-        "source_snapshot_fingerprint": snapshot_fingerprint,
-        "scanner_result_fingerprint": scanner_fingerprint,
-        "entity_ids": _candidate_values(scan_result, "entity_id"),
-        "candidate_revisions": _candidate_values(scan_result, "revision"),
-        "repository": repository,
-        "base_branch": base_branch,
-        "evaluated_repository_sha": evaluated_repository_sha,
-        "implementation_contract_fingerprint": implementation_contract_fingerprint,
-        "allowed_files": _strings(allowed_files),
-        "forbidden_paths": _strings(forbidden_paths),
-        "required_tests": _strings(required_tests),
-        "graph_reference": graph_reference,
-        "planning_result_reference": planning_result_reference,
-        "handoff_reference": handoff_reference,
-        "supplied_node_ids": _strings(supplied_node_ids),
-        "reason_codes": reasons,
-    }
-    fingerprint = _digest(_evidence_payload(**values))
-    return IssuePlanCurrentStateEvidence(
-        evidence_id=f"issueplan-current-state:{fingerprint}",
-        observed_at=observed_at,
-        **values,
-    )
-
-
-def compute_issueplan_current_state_fingerprint(
-    evidence: IssuePlanCurrentStateEvidence,
-) -> str:
-    if not isinstance(evidence, IssuePlanCurrentStateEvidence):
-        raise TypeError("evidence must be IssuePlanCurrentStateEvidence")
-    return _digest(
-        _evidence_payload(
-            schema_version=evidence.schema_version,
-            freshness_boundary=evidence.freshness_boundary,
-            source_snapshot=evidence.source_snapshot,
-            source_snapshot_fingerprint=evidence.source_snapshot_fingerprint,
-            scanner_result_fingerprint=evidence.scanner_result_fingerprint,
-            entity_ids=evidence.entity_ids,
-            candidate_revisions=evidence.candidate_revisions,
-            repository=evidence.repository,
-            base_branch=evidence.base_branch,
-            evaluated_repository_sha=evidence.evaluated_repository_sha,
-            implementation_contract_fingerprint=(
-                evidence.implementation_contract_fingerprint
-            ),
-            allowed_files=evidence.allowed_files,
-            forbidden_paths=evidence.forbidden_paths,
-            required_tests=evidence.required_tests,
-            graph_reference=evidence.graph_reference,
-            planning_result_reference=evidence.planning_result_reference,
-            handoff_reference=evidence.handoff_reference,
-            supplied_node_ids=evidence.supplied_node_ids,
-            reason_codes=evidence.reason_codes,
+    candidates = _candidate_projection(scan_result)
+    entity_ids = tuple(
+        sorted(
+            {
+                str(item.parsed["entity_id"]).strip()
+                for item in scan_result.candidates
+                if item.parsed and item.parsed.get("entity_id") is not None
+            }
         )
     )
+    revisions = tuple(
+        sorted(
+            {
+                str(item.parsed["revision"]).strip()
+                for item in scan_result.candidates
+                if item.parsed and item.parsed.get("revision") is not None
+            }
+        )
+    )
+    discovered = {
+        name
+        for item in scan_result.candidates
+        if item.parsed
+        for name in item.parsed
+    }
+    all_names = tuple(sorted(set(names) | discovered | set(omitted) | set(unavailable)))
+    fields = tuple(_field_state(name, scan_result, omitted, unavailable) for name in all_names)
+    provenance = tuple(
+        sorted(
+            f"{item.source_locator}@{item.source_revision}:"
+            f"{item.source_region_or_block}:{item.field_name}"
+            for item in scan_result.provenance
+        )
+    )
+    scanner_reasons = _scanner_reasons(scan_result)
+    scanner_fingerprint = _scanner_fingerprint(scan_result)
+    candidate_fingerprint = compute_issueplan_current_state_fingerprint(candidates)
+    scope_fingerprint = compute_issueplan_current_state_fingerprint(contract["scope"])
+    allowlist_fingerprint = compute_issueplan_current_state_fingerprint(
+        contract["allowlist"]
+    )
+    tests_fingerprint = compute_issueplan_current_state_fingerprint(
+        contract["required_tests"]
+    )
+    contract_fingerprint = compute_issueplan_current_state_fingerprint(contract)
+    values = dict(
+        schema_version=schema_version,
+        observed_at=observed_at,
+        freshness_boundary=freshness_boundary,
+        source=source,
+        scanner_fingerprint=scanner_fingerprint,
+        candidate_set_fingerprint=candidate_fingerprint,
+        entity_ids=entity_ids,
+        candidate_revisions=revisions,
+        governed_fields=fields,
+        intentionally_omitted_fields=omitted,
+        unavailable_fields=unavailable,
+        provenance_references=provenance,
+        scanner_reason_codes=scanner_reasons,
+        contract_scope_fingerprint=scope_fingerprint,
+        contract_allowlist_fingerprint=allowlist_fingerprint,
+        contract_required_tests_fingerprint=tests_fingerprint,
+        implementation_contract_fingerprint=contract_fingerprint,
+        graph_reference=graph_reference,
+        planning_result_reference=planning_result_reference,
+        handoff_reference=handoff_reference,
+        projection_complete=projection_complete,
+        projection_lookup_succeeded=projection_lookup_succeeded,
+    )
+    evidence_id = compute_issueplan_current_state_fingerprint(
+        {**values, "execution_authorized": False}
+    )
+    return IssuePlanCurrentStateEvidence(evidence_id=evidence_id, **values)
 
 
 def compare_issueplan_current_state(
     expected: IssuePlanCurrentStateEvidence,
     current: IssuePlanCurrentStateEvidence,
+    *,
+    current_scan_result: ScanResult | None = None,
 ) -> IssuePlanCurrentStateComparison:
     if not isinstance(expected, IssuePlanCurrentStateEvidence) or not isinstance(
         current, IssuePlanCurrentStateEvidence
     ):
-        raise TypeError("expected and current must be IssuePlanCurrentStateEvidence")
-    expected_fingerprint = compute_issueplan_current_state_fingerprint(expected)
-    current_fingerprint = compute_issueplan_current_state_fingerprint(current)
-    if expected.evidence_id != f"issueplan-current-state:{expected_fingerprint}" or (
-        current.evidence_id != f"issueplan-current-state:{current_fingerprint}"
-    ):
-        return _comparison(
-            expected,
-            current,
-            expected_fingerprint,
-            current_fingerprint,
+        return _result(
+            IssuePlanCurrentStateOutcome.INVALID,
+            _safe_id(expected),
+            _safe_id(current),
             (),
             ("projection.incomplete",),
-            IssuePlanCurrentStateOutcome.INVALID,
         )
+    changed: list[str] = []
+    reasons: list[str] = []
+    invalid = not _evidence_valid(expected) or not _evidence_valid(current)
+    if invalid:
+        reasons.append("projection.incomplete")
+    if expected.schema_version not in _SUPPORTED or current.schema_version not in _SUPPORTED:
+        reasons.append("version.unsupported")
 
-    changed = _changed(expected, current)
-    reasons = set(current.reason_codes) | set(_change_reasons(changed))
-    if "version.unsupported" in reasons:
+    bindings: tuple[tuple[str, Any, Any, str | None], ...] = (
+        ("source.locator", expected.source.source_locator, current.source.source_locator, "source.revision-changed"),
+        ("source.revision", expected.source.source_revision, current.source.source_revision, "source.revision-changed"),
+        ("source.fingerprint", expected.source.source_fingerprint, current.source.source_fingerprint, "source.revision-changed"),
+        ("source.expected-revision", expected.source.expected_revision, current.source.expected_revision, "source.revision-changed"),
+        ("freshness.boundary", expected.freshness_boundary, current.freshness_boundary, "source.freshness-boundary-changed"),
+        ("scanner.result", expected.scanner_fingerprint, current.scanner_fingerprint, "candidate.changed"),
+        ("candidate.set", expected.candidate_set_fingerprint, current.candidate_set_fingerprint, "candidate.changed"),
+        ("candidate.entities", expected.entity_ids, current.entity_ids, "candidate.changed"),
+        ("candidate.revisions", expected.candidate_revisions, current.candidate_revisions, "candidate.changed"),
+        ("governed.fields", expected.governed_fields, current.governed_fields, "candidate.changed"),
+        ("governed.omitted-fields", expected.intentionally_omitted_fields, current.intentionally_omitted_fields, "candidate.changed"),
+        ("governed.unavailable-fields", expected.unavailable_fields, current.unavailable_fields, "candidate.changed"),
+        ("provenance.references", expected.provenance_references, current.provenance_references, "candidate.changed"),
+        ("contract.fingerprint", expected.implementation_contract_fingerprint, current.implementation_contract_fingerprint, "contract.scope-changed"),
+        ("contract.scope", expected.contract_scope_fingerprint, current.contract_scope_fingerprint, "contract.scope-changed"),
+        ("contract.allowlist", expected.contract_allowlist_fingerprint, current.contract_allowlist_fingerprint, "contract.allowlist-changed"),
+        ("contract.required-tests", expected.contract_required_tests_fingerprint, current.contract_required_tests_fingerprint, "contract.required-tests-changed"),
+        ("graph.reference", expected.graph_reference, current.graph_reference, None),
+        ("planning-result.reference", expected.planning_result_reference, current.planning_result_reference, None),
+        ("handoff.reference", expected.handoff_reference, current.handoff_reference, None),
+    )
+    for name, old, new, reason in bindings:
+        if old != new:
+            changed.append(name)
+            if reason:
+                reasons.append(reason)
+
+    for evidence in (expected, current):
+        reasons.extend(evidence.scanner_reason_codes)
+        if not evidence.source.accessible:
+            reasons.append("source.inaccessible")
+        if not evidence.source.retrieval_complete:
+            reasons.append("source.partial")
+        if not evidence.source.pagination_complete:
+            reasons.append("source.unknown-pagination")
+        if evidence.source.source_family != "github-issue":
+            reasons.append("source.unsupported")
+        if (
+            evidence.source.expected_revision is not None
+            and evidence.source.expected_revision != evidence.source.source_revision
+        ):
+            reasons.append("source.revision-changed")
+        if not evidence.projection_complete:
+            reasons.append("projection.incomplete")
+        if not evidence.projection_lookup_succeeded:
+            reasons.append("projection.lookup-failed")
+
+    if current_scan_result is not None:
+        if not isinstance(current_scan_result, ScanResult) or (
+            _scanner_fingerprint(current_scan_result) != current.scanner_fingerprint
+            or _scanner_reasons(current_scan_result) != current.scanner_reason_codes
+            or current_scan_result.source_locator != current.source.source_locator
+            or current_scan_result.source_revision != current.source.source_revision
+            or current_scan_result.execution_authorized is not False
+        ):
+            invalid = True
+            reasons.extend(("candidate.changed", "projection.incomplete"))
+
+    reason_codes = tuple(sorted(set(reasons)))
+    changed_bindings = tuple(sorted(set(changed)))
+    if invalid or "version.unsupported" in reason_codes:
         outcome = IssuePlanCurrentStateOutcome.INVALID
-    elif reasons & _BLOCKED:
-        outcome = IssuePlanCurrentStateOutcome.BLOCKED
-    elif reasons & _NEEDS_DECISION:
+    elif set(reason_codes) & _AMBIGUOUS_REASONS:
         outcome = IssuePlanCurrentStateOutcome.NEEDS_DECISION
-    elif changed or reasons:
+    elif set(reason_codes) & _BLOCKING_REASONS:
+        outcome = IssuePlanCurrentStateOutcome.BLOCKED
+    elif reason_codes or changed_bindings:
         outcome = IssuePlanCurrentStateOutcome.STALE
     else:
         outcome = IssuePlanCurrentStateOutcome.CURRENT
-    return _comparison(
-        expected,
-        current,
-        expected_fingerprint,
-        current_fingerprint,
-        changed,
-        tuple(reasons),
+    return _result(
         outcome,
+        expected.evidence_id,
+        current.evidence_id,
+        changed_bindings,
+        reason_codes,
     )
 
 
-def _comparison(
-    expected: IssuePlanCurrentStateEvidence,
-    current: IssuePlanCurrentStateEvidence,
-    expected_fp: str,
-    current_fp: str,
-    changed: Iterable[str],
-    reasons: Iterable[str],
+def _result(
     outcome: IssuePlanCurrentStateOutcome,
+    expected_id: str,
+    current_id: str,
+    changed: tuple[str, ...],
+    reasons: tuple[str, ...],
 ) -> IssuePlanCurrentStateComparison:
-    changed_tuple = _strings(changed)
-    reason_tuple = _reasons(reasons)
+    changed = tuple(sorted(set(changed)))
+    reasons = tuple(sorted(set(reasons)))
+    details = tuple(
+        [f"changed binding: {item}" for item in changed]
+        + [f"reason: {item}" for item in reasons]
+    )
     return IssuePlanCurrentStateComparison(
-        expected_evidence_id=expected.evidence_id,
-        current_evidence_id=current.evidence_id,
-        expected_fingerprint=expected_fp,
-        current_fingerprint=current_fp,
-        changed_bindings=changed_tuple,
-        outcome=outcome,
-        reason_codes=reason_tuple,
-        details=tuple(f"changed:{item}" for item in changed_tuple),
+        outcome, expected_id, current_id, changed, reasons, details
     )
 
 
-def _candidate_payload(scan_result: ScanResult) -> list[dict[str, Any]]:
-    payload: list[dict[str, Any]] = []
-    for candidate in scan_result.candidates:
-        parsed = None
-        if candidate.parsed is not None:
-            parsed = {
-                key: _field_value(key, candidate.parsed[key])
-                for key in sorted(candidate.parsed)
-            }
-        payload.append(
-            {
-                "index": candidate.index,
-                "parsed": parsed,
-                "malformed": candidate.malformed,
-                "raw_digest": (
-                    hashlib.sha256(candidate.raw.encode("utf-8")).hexdigest()
-                    if parsed is None
-                    else None
-                ),
-            }
+def _candidate_projection(scan_result: ScanResult) -> tuple[dict[str, Any], ...]:
+    return tuple(
+        dict(
+            index=item.index,
+            raw=item.raw,
+            parsed=item.parsed,
+            malformed=item.malformed,
         )
-    return payload
-
-
-def _scanner_payload(
-    scan_result: ScanResult, candidates: list[dict[str, Any]]
-) -> dict[str, Any]:
-    return {
-        "source_locator": scan_result.source_locator,
-        "source_revision": scan_result.source_revision,
-        "findings": sorted({item.value for item in scan_result.findings}),
-        "adoption_class": scan_result.adoption_class.value,
-        "candidates": candidates,
-        "provenance": [
-            {
-                "field_name": item.field_name,
-                "value": _field_value(item.field_name, item.normalized_value),
-                "source_locator": item.source_locator,
-                "source_revision": item.source_revision,
-                "source_region_or_block": item.source_region_or_block,
-                "raw_excerpt_or_reference": item.raw_excerpt_or_reference,
-                "extraction_status": item.extraction_status,
-                "profile_classification": item.profile_classification,
-            }
-            for item in scan_result.provenance
-        ],
-        "strict_valid": scan_result.strict_valid,
-        "execution_authorized": False,
-        "evidence": sorted(set(scan_result.evidence)),
-    }
-
-
-def _field_projection(
-    scan_result: ScanResult,
-    governed_names: tuple[str, ...],
-    overrides: Mapping[str, str],
-) -> tuple[tuple[str, str, str | None], ...]:
-    values: dict[str, list[str]] = {}
-    for candidate in scan_result.candidates:
-        if candidate.parsed:
-            for name, value in candidate.parsed.items():
-                values.setdefault(name, []).append(
-                    _bytes(_field_value(name, value)).decode()
-                )
-    names = set(governed_names) | set(values) | set(overrides)
-    projected: list[tuple[str, str, str | None]] = []
-    for name in sorted(names):
-        state = overrides.get(name)
-        candidates = values.get(name, [])
-        if state is None:
-            if not candidates:
-                state, value = "absent", None
-            elif len(set(candidates)) > 1:
-                state, value = "ambiguous", None
-            elif candidates[0] == "null":
-                state, value = "null", "null"
-            else:
-                state, value = "present", candidates[0]
-        else:
-            if state not in _FIELD_STATES:
-                raise ValueError(f"unsupported field state: {state}")
-            value = candidates[0] if state == "present" and candidates else None
-            if state == "present" and value is None:
-                raise ValueError(f"present override for {name} requires a value")
-            if state == "null":
-                value = "null"
-        projected.append((name, state, value))
-    return tuple(projected)
-
-
-def _derive_retrieval(envelope: SourceEnvelope) -> str:
-    if envelope.source_family != "github-issue":
-        return "unsupported"
-    if not envelope.accessible:
-        return "inaccessible"
-    if envelope.expected_revision and envelope.expected_revision != envelope.source_revision:
-        return "stale"
-    return "present"
-
-
-def _derive_completeness(envelope: SourceEnvelope) -> str:
-    if not envelope.pagination_complete:
-        return "unknown-pagination"
-    if not envelope.retrieval_complete:
-        return "partial"
-    return "complete"
-
-
-def _derive_metadata(scan_result: ScanResult) -> str:
-    findings = set(scan_result.findings)
-    if scan_result.adoption_class == AdoptionClass.IDENTITY_QUARANTINED:
-        return "identity-quarantined"
-    if ScanFinding.METADATA_CONFLICTING in findings:
-        return "ambiguous"
-    if ScanFinding.METADATA_MALFORMED in findings:
-        return "malformed"
-    if ScanFinding.UNKNOWN_GOVERNED_FIELD in findings:
-        return "unknown-governed-field"
-    if ScanFinding.METADATA_DUPLICATED_IDENTICAL in findings:
-        return "duplicate-identical"
-    if ScanFinding.PROFILE_VERSION_UNSUPPORTED in findings:
-        return "unsupported"
-    if ScanFinding.METADATA_MISSING in findings:
-        return "absent"
-    return "present"
-
-
-def _override_status(
-    derived: str,
-    override: str | None,
-    neutral: str,
-    allowed: frozenset[str],
-) -> str:
-    if override is None:
-        return derived
-    if override not in allowed:
-        raise ValueError(f"unsupported status override: {override}")
-    if derived != neutral and override == neutral:
-        raise ValueError("status override cannot weaken evidence")
-    return override
-
-
-def _state_reasons(
-    scan_result: ScanResult,
-    retrieval: str,
-    completeness: str,
-    metadata: str,
-    schema_version: str,
-) -> tuple[str, ...]:
-    reasons: set[str] = set()
-    if schema_version != ISSUEPLAN_CURRENT_STATE_SCHEMA_VERSION:
-        reasons.add("version.unsupported")
-    if retrieval == "stale":
-        reasons.add("source.revision-changed")
-    elif retrieval in {"absent", "unavailable", "inaccessible"}:
-        reasons.update({"source.inaccessible", "projection.lookup-failed"})
-    elif retrieval == "unsupported":
-        reasons.add("source.unsupported")
-    if completeness in {"partial", "truncated"}:
-        reasons.update({"source.partial", "projection.incomplete"})
-    elif completeness == "unknown-pagination":
-        reasons.update({"source.unknown-pagination", "projection.incomplete"})
-    metadata_codes = {
-        "duplicate-identical": "scanner.multiple-identical",
-        "malformed": "scanner.malformed-candidate",
-        "ambiguous": "scanner.multiple-conflicting",
-        "identity-quarantined": "identity.quarantined",
-        "unknown-governed-field": "scanner.unknown-governed-field",
-        "unsupported": "version.unsupported",
-    }
-    if metadata in metadata_codes:
-        reasons.add(metadata_codes[metadata])
-    if ScanFinding.SOURCE_STALE in scan_result.findings:
-        reasons.add("source.revision-changed")
-    return _reasons(reasons)
-
-
-def _snapshot_payload(snapshot: IssuePlanSourceSnapshot) -> dict[str, Any]:
-    return {
-        "source_locator": snapshot.source_locator,
-        "source_family": snapshot.source_family,
-        "source_revision": snapshot.source_revision,
-        "retrieval_status": snapshot.retrieval_status,
-        "completeness_status": snapshot.completeness_status,
-        "metadata_status": snapshot.metadata_status,
-        "governed_fields": [list(item) for item in snapshot.governed_fields],
-        "omitted_fields": list(snapshot.omitted_fields),
-        "provenance_references": list(snapshot.provenance_references),
-        "candidate_set_fingerprint": snapshot.candidate_set_fingerprint,
-        "scanner_result_fingerprint": snapshot.scanner_result_fingerprint,
-        "reason_codes": list(snapshot.reason_codes),
-    }
-
-
-def _evidence_payload(**values: Any) -> dict[str, Any]:
-    payload = dict(values)
-    payload["source_snapshot"] = _snapshot_payload(payload["source_snapshot"])
-    for name in (
-        "entity_ids",
-        "candidate_revisions",
-        "allowed_files",
-        "forbidden_paths",
-        "required_tests",
-        "supplied_node_ids",
-        "reason_codes",
-    ):
-        payload[name] = list(payload[name])
-    payload["execution_authorized"] = False
-    return payload
-
-
-def _changed(
-    expected: IssuePlanCurrentStateEvidence,
-    current: IssuePlanCurrentStateEvidence,
-) -> tuple[str, ...]:
-    names = (
-        "schema_version",
-        "freshness_boundary",
-        "source_snapshot_fingerprint",
-        "scanner_result_fingerprint",
-        "entity_ids",
-        "candidate_revisions",
-        "repository",
-        "base_branch",
-        "evaluated_repository_sha",
-        "implementation_contract_fingerprint",
-        "allowed_files",
-        "forbidden_paths",
-        "required_tests",
-        "graph_reference",
-        "planning_result_reference",
-        "handoff_reference",
-        "supplied_node_ids",
+        for item in scan_result.candidates
     )
+
+
+def _scanner_fingerprint(scan_result: ScanResult) -> str:
+    return compute_issueplan_current_state_fingerprint(
+        dict(
+            source_locator=scan_result.source_locator,
+            source_revision=scan_result.source_revision,
+            findings=tuple(item.value for item in scan_result.findings),
+            adoption_class=scan_result.adoption_class.value,
+            strict_valid=scan_result.strict_valid,
+            candidates=_candidate_projection(scan_result),
+            provenance=scan_result.provenance,
+            evidence=scan_result.evidence,
+            execution_authorized=False,
+        )
+    )
+
+
+def _scanner_reasons(scan_result: ScanResult) -> tuple[str, ...]:
     return tuple(
         sorted(
-            name
-            for name in names
-            if getattr(expected, name) != getattr(current, name)
+            reason
+            for finding, reason in _FINDING_REASONS.items()
+            if finding in scan_result.findings
         )
     )
 
 
-def _change_reasons(changed: Iterable[str]) -> tuple[str, ...]:
-    names = set(changed)
-    reasons: set[str] = set()
-    if "schema_version" in names:
-        reasons.add("version.unsupported")
-    if names & {
-        "repository",
-        "base_branch",
-        "evaluated_repository_sha",
-        "freshness_boundary",
-    }:
-        reasons.add("source.revision-changed")
-    if names & {
-        "implementation_contract_fingerprint",
-        "forbidden_paths",
-        "graph_reference",
-        "planning_result_reference",
-        "handoff_reference",
-        "supplied_node_ids",
-    }:
-        reasons.add("contract.scope-changed")
-    if "allowed_files" in names:
-        reasons.add("contract.allowlist-changed")
-    if "required_tests" in names:
-        reasons.add("contract.required-tests-changed")
-    if names & {
-        "source_snapshot_fingerprint",
-        "scanner_result_fingerprint",
-        "entity_ids",
-        "candidate_revisions",
-    }:
-        reasons.add("candidate.changed")
-    return _reasons(reasons)
+def _identity(evidence: IssuePlanCurrentStateEvidence) -> dict[str, Any]:
+    values = {
+        name: value
+        for name, value in evidence.__dict__.items()
+        if name != "evidence_id"
+    }
+    values["execution_authorized"] = False
+    return values
 
 
-def _candidate_values(scan_result: ScanResult, name: str) -> tuple[str, ...]:
-    return _strings(
-        str(candidate.parsed[name]).strip()
-        for candidate in scan_result.candidates
-        if candidate.parsed and candidate.parsed.get(name) is not None
-    )
-
-
-def _field_value(name: str, value: Any) -> Any:
-    normalized = _jsonable(value)
-    if name not in _SET_LIKE_FIELDS or not isinstance(normalized, list):
-        return normalized
-    unique = {_bytes(item): item for item in normalized}
-    return [unique[key] for key in sorted(unique)]
-
-
-def _jsonable(value: Any) -> Any:
-    if value is None or isinstance(value, (str, bool, int, float)):
-        return value
-    if isinstance(value, Mapping):
-        if not all(isinstance(key, str) for key in value):
-            raise TypeError("mapping keys must be strings")
-        return {key: _jsonable(value[key]) for key in sorted(value)}
-    if isinstance(value, (tuple, list)):
-        return [_jsonable(item) for item in value]
-    if isinstance(value, (set, frozenset)):
-        unique = {_bytes(_jsonable(item)): _jsonable(item) for item in value}
-        return [unique[key] for key in sorted(unique)]
-    raise TypeError(f"unsupported canonical value type: {type(value).__name__}")
-
-
-def _bytes(value: Any) -> bytes:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode()
-
-
-def _digest(value: Any) -> str:
-    return hashlib.sha256(_bytes(value)).hexdigest()
-
-
-def _reasons(values: Iterable[str]) -> tuple[str, ...]:
-    result = tuple(sorted(set(values)))
-    if not set(result) <= _REASON_CODES:
-        raise ValueError("reason_codes must use the bounded IssuePlanCore vocabulary")
-    return result
-
-
-def _strings(values: Iterable[str]) -> tuple[str, ...]:
-    result = tuple(sorted(set(values)))
-    if not all(isinstance(value, str) and value for value in result):
-        raise ValueError("values must be non-empty strings")
-    return result
-
-
-def _text(value: object, name: str) -> None:
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{name} must be a non-empty string")
-
-
-def _timestamp(value: str) -> None:
-    _text(value, "observed_at")
+def _evidence_valid(evidence: IssuePlanCurrentStateEvidence) -> bool:
     try:
-        datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
-    except ValueError as exc:
-        raise ValueError("observed_at must use RFC 3339 UTC seconds") from exc
+        return evidence.evidence_id == compute_issueplan_current_state_fingerprint(
+            _identity(evidence)
+        )
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+
+def _field_state(
+    name: str,
+    scan_result: ScanResult,
+    omitted: tuple[str, ...],
+    unavailable: tuple[str, ...],
+) -> tuple[str, str, Any]:
+    if name in unavailable:
+        return (name, "unavailable", None)
+    if name in omitted:
+        return (name, "intentionally-omitted", None)
+    present = tuple(
+        (item.index, _freeze(item.parsed[name]))
+        for item in scan_result.candidates
+        if item.parsed is not None and name in item.parsed
+    )
+    if not present:
+        return (name, "absent", None)
+    if all(value is None for _, value in present):
+        return (name, "null", present)
+    return (name, "present", present)
+
+
+def _governed(values: Any) -> tuple[tuple[str, str, Any], ...]:
+    normalized = []
+    for item in tuple(values):
+        if not isinstance(item, (tuple, list)) or len(item) != 3:
+            raise ValueError("governed_fields entries must be three-item sequences")
+        name, state, value = item
+        _field_name(name)
+        if state not in _FIELD_STATES:
+            raise ValueError("governed field state is unsupported")
+        normalized.append((name, state, _freeze(value)))
+    normalized.sort(key=lambda item: (item[0], item[1], json.dumps(_canonical(item[2]), sort_keys=True)))
+    return tuple(normalized)
+
+
+def _strings(values: Any, name: str) -> tuple[str, ...]:
+    if isinstance(values, str):
+        raise TypeError(f"{name} must be a sequence of strings")
+    try:
+        values = tuple(values)
+    except TypeError as exc:
+        raise TypeError(f"{name} must be a sequence of strings") from exc
+    if not all(isinstance(item, str) and item and item == item.strip() for item in values):
+        raise TypeError(f"{name} must contain non-empty trimmed strings")
+    return tuple(sorted(set(values)))
+
+
+def _field_names(values: Any, name: str) -> tuple[str, ...]:
+    values = _strings(values, name)
+    for value in values:
+        _field_name(value)
+    return values
+
+
+def _field_name(value: object) -> None:
+    if not isinstance(value, str) or not _FIELD_NAME_RE.fullmatch(value):
+        raise ValueError("governed field names must be bounded identifiers")
+
+
+def _build_inputs(
+    envelope: SourceEnvelope,
+    scan_result: ScanResult,
+    observed_at: str,
+    freshness_boundary: str,
+    contract: Mapping[str, Any],
+    schema_version: str,
+    projection_complete: bool,
+    projection_lookup_succeeded: bool,
+) -> dict[str, Any]:
+    if not isinstance(envelope, SourceEnvelope):
+        raise TypeError("envelope must be a SourceEnvelope")
+    if not isinstance(scan_result, ScanResult):
+        raise TypeError("scan_result must be a ScanResult")
+    if not isinstance(contract, Mapping):
+        raise TypeError("implementation_contract must be a mapping")
+    for name, value in (
+        ("observed_at", observed_at),
+        ("freshness_boundary", freshness_boundary),
+        ("schema_version", schema_version),
+    ):
+        _require_text(value, name)
+    if schema_version not in _SUPPORTED:
+        raise ValueError("schema_version is unsupported")
+    if not isinstance(envelope.content, str):
+        raise TypeError("source content must be a string")
+    if not isinstance(projection_complete, bool) or not isinstance(
+        projection_lookup_succeeded, bool
+    ):
+        raise TypeError("projection status values must be booleans")
+    missing = _REQUIRED_CONTRACT_FIELDS - set(contract)
+    if missing:
+        raise ValueError(
+            "implementation_contract is missing required fields: "
+            + ", ".join(sorted(missing))
+        )
+    result = dict(contract)
+    for name in _REQUIRED_CONTRACT_FIELDS:
+        _contract_collection(result[name], name)
+    return result
+
+
+def _contract_collection(value: object, name: str) -> None:
+    if isinstance(value, (str, bytes, Mapping)) or not isinstance(
+        value, (tuple, list, set, frozenset)
+    ):
+        raise TypeError(f"implementation_contract.{name} has an unsupported shape")
+    if not value:
+        raise ValueError(f"implementation_contract.{name} must not be empty")
+    if not all(isinstance(item, str) and item and item == item.strip() for item in value):
+        raise TypeError(
+            f"implementation_contract.{name} must contain non-empty trimmed strings"
+        )
+
+
+def _require_text(value: object, name: str) -> None:
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise TypeError(f"{name} must be a non-empty trimmed string")
+
+
+def _require_sha(value: object, name: str) -> None:
+    if not isinstance(value, str) or not _SHA256_RE.fullmatch(value):
+        raise ValueError(f"{name} must be a lowercase SHA-256 hex digest")
+
+
+def _safe_id(value: object) -> str:
+    evidence_id = getattr(value, "evidence_id", None)
+    return evidence_id if isinstance(evidence_id, str) else "<invalid>"
+
+
+def _freeze(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return tuple((str(key), _freeze(item)) for key, item in sorted(value.items(), key=lambda pair: str(pair[0])))
+    if isinstance(value, (tuple, list)):
+        return tuple(_freeze(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return tuple(sorted((_freeze(item) for item in value), key=lambda item: json.dumps(_canonical(item), sort_keys=True)))
+    return value
+
+
+def _canonical(value: Any) -> Any:
+    if isinstance(value, Enum):
+        return value.value
+    if hasattr(value, "__dataclass_fields__"):
+        return _canonical(asdict(value))
+    if isinstance(value, Mapping):
+        return {str(key): _canonical(item) for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))}
+    if isinstance(value, (tuple, list)):
+        return [_canonical(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        items = (_canonical(item) for item in value)
+        return sorted(items, key=lambda item: json.dumps(item, sort_keys=True))
+    return value
