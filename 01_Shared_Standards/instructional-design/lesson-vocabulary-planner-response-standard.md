@@ -57,10 +57,10 @@ does not replace Review, Teach, Introduce, Transfer, or Future decisions from CL
 Use only general planning lenses for `lowest-performing students`,
 `on-grade-level students`, and `advanced students`. Guidance may adjust vocabulary
 load, repetition, sentence frames, examples and non-examples, visual or contextual
-support, transfer, and precision. Do not diagnose an individual without approved
-evidence or invent disability, reading-level, language-development, behavioral, or
-cognitive claims. Do not assign difficulty to a named student without an approved
-student-data workflow.
+support, transfer, and precision.
+Do not diagnose an individual without approved evidence or invent disability,
+reading-level, language-development, behavioral, or cognitive claims.
+Do not assign difficulty to a named student without an approved student-data workflow.
 
 ## Decision Boundaries
 - Decide Teacher Language Use, Student Language Use, Slide/Worksheet Safe?, and
