@@ -127,6 +127,7 @@ def _evidence(*, freshness="current", mode="supplied-evidence"):
             handoff_recommendations=("review schema first",),
             remaining_risks=("live evidence behavior unproven",),
         ),
+        manual_review_reasons=(),
     )
 
 
@@ -142,6 +143,7 @@ def test_dashboard_reports_schema_risks_issue_impact_and_validation():
     assert "update-existing-issue" in rendered
     assert "Repository validation: `pending`" in rendered
     assert "Status checks: `not-posted`" in rendered
+    assert "Execution authorized: `false`" in rendered
 
 
 def test_governance_report_includes_decisions_provenance_and_handoff():
@@ -164,6 +166,7 @@ def test_canonical_payload_is_deterministic_and_contains_risk_delta():
     assert first == second
     payload = json.loads(first)
     assert payload["schema_version"] == "0.1.0"
+    assert payload["execution_authorized"] is False
     assert payload["risk_delta"]["severity-increased"] == 1
     assert canonical_sprint_payload(evidence)["risk_delta"]["unowned"] == 0
 
@@ -285,6 +288,32 @@ def test_unresolved_lane_risk_is_rejected():
             validation=base.validation,
             final_handoff=base.final_handoff,
         )
+
+
+def test_manual_review_reasons_are_sorted_and_rendered():
+    base = _evidence(freshness="stale")
+    evidence = SuppliedSprintEvidence(
+        sprint_id=base.sprint_id,
+        sprint_goal=base.sprint_goal,
+        sprint_state=base.sprint_state,
+        evidence_mode=base.evidence_mode,
+        evaluated_at=base.evaluated_at,
+        freshness=base.freshness,
+        sources=base.sources,
+        lanes=base.lanes,
+        risks=base.risks,
+        decisions=base.decisions,
+        recommendations=base.recommendations,
+        validation=base.validation,
+        final_handoff=base.final_handoff,
+        manual_review_reasons=("source changed", "permission unavailable"),
+    )
+
+    rendered = render_sprint_dashboard("Blummer92/agent-os", evidence)
+    assert "## Manual review reasons" in rendered
+    assert "permission unavailable" in rendered
+    assert "source changed" in rendered
+    assert evidence.execution_authorized is False
 
 
 def test_prompts_are_short_and_name_all_issues():
