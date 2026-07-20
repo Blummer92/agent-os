@@ -192,7 +192,7 @@ def validate_capability_evidence(
         raw_reasons, str
     ):
         for reason in raw_reasons:
-            if reason in APPROVED_REASON_CODES:
+            if isinstance(reason, str) and reason in APPROVED_REASON_CODES:
                 reasons.add(reason)
             else:
                 reasons.add("schema.unknown-enum")
@@ -502,7 +502,7 @@ def _parse_capability(
         reasons.add("schema.unknown-enum")
         return None
     reason_code = raw.get("reason_code", "adapter.evidence-unproven")
-    if reason_code not in APPROVED_REASON_CODES:
+    if not isinstance(reason_code, str) or reason_code not in APPROVED_REASON_CODES:
         reasons.add("schema.unknown-enum")
         reason_code = "adapter.evidence-unproven"
     try:
