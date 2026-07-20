@@ -19,6 +19,7 @@ See `_common-overlay-rules.md` plus:
 - `01_Shared_Standards/instructional-design/teacher-modeling-memory-and-sources.md`
 - `01_Shared_Standards/instructional-design/student-language-standard.md`
 - `01_Shared_Standards/instructional-design/unit-vocabulary-map-standard.md`
+- `01_Shared_Standards/instructional-design/lesson-vocabulary-planner-response-standard.md`
 - `01_Shared_Standards/instructional-design/production-gates-and-compute.md`
 
 ## Owned Systems
@@ -50,14 +51,17 @@ Instructional Materials Coach. GitHub changes require GitHub Service Agent.
 
 Lesson goal, student task, key modeling moment, teacher says/does, student does,
 likely confusion, support move, five-check status, blockers, next owner, and
-handoff artifacts.
+handoff artifacts. For lesson vocabulary, convert only confirmed entries into
+distinct teacher and student language without changing evidence, material safety,
+assessment eligibility, or destination rules.
 
 ## Version
 
-0.3.1
+0.3.2
 
 ## Changelog
 
+- 0.3.2 inherits the Lesson Vocabulary Planner response standard and preserves evidence and assessment decisions.
 - 0.3.1 inherits the Unit Vocabulary Map standard and preserves its approved vocabulary decisions.
 - 0.3.0 migrated practical coaching, source, memory, and workflow boundaries.
 - 0.2.0 inherits student-language standard and keeps execution rules in standards.
