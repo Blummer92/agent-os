@@ -4,7 +4,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-from .parse_issue import parse_issue_metadata
+from .models import IssueMetadata
+from .parse_issue import project_issue_metadata, scan_issue_metadata
 from .path_contract import DeclaredPathError, normalize_declared_path
 from .readiness import ReadinessOutcome, evaluate_issue_readiness
 
@@ -173,7 +174,16 @@ def classify_legacy_issue(snapshot: LegacyIssueSnapshot) -> LegacyIssueAssessmen
             updated_at=snapshot.updated_at,
         )
 
-    evidence = _documentation_evidence(snapshot.body)
+    scan_result = scan_issue_metadata(
+        snapshot.body,
+        source_locator=f"github-issue:{snapshot.number}",
+        source_revision=snapshot.updated_at or "",
+    )
+    metadata = project_issue_metadata(scan_result)
+    evidence = _documentation_evidence(snapshot.body, metadata)
+    evidence["reasons"].extend(
+        item for item in metadata.manual_review if item.startswith("issueplan-scanner:")
+    )
     doc_status, reasons = _predict_documentation_status(evidence)
     transition = _predict_transition(_baseline_outcome(snapshot, status_label), doc_status)
 
@@ -269,7 +279,7 @@ def _baseline_outcome(
     return evaluate_issue_readiness(snapshot.body).outcome
 
 
-def _documentation_evidence(body: str) -> dict[str, Any]:
+def _documentation_evidence(body: str, metadata: IssueMetadata) -> dict[str, Any]:
     visible = _sanitize(body)
     sections: dict[str, list[list[str]]] = {
         field: [] for field in _CANONICAL_HEADINGS.values()
@@ -297,7 +307,7 @@ def _documentation_evidence(body: str) -> dict[str, Any]:
             sections["documentation_exemption_reason"]
         ),
     }
-    yaml_values = _yaml_documentation_values(body)
+    yaml_values = _yaml_documentation_values(metadata)
 
     impact, impact_conflict = _resolve_scalar(
         yaml_values.get("documentation_impact"), body_values["documentation_impact"]
@@ -329,8 +339,7 @@ def _documentation_evidence(body: str) -> dict[str, Any]:
     }
 
 
-def _yaml_documentation_values(body: str) -> dict[str, Any]:
-    metadata = parse_issue_metadata(body)
+def _yaml_documentation_values(metadata: IssueMetadata) -> dict[str, Any]:
     if not metadata.present:
         return {}
     return {
