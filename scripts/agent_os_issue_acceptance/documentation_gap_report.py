@@ -75,6 +75,8 @@ _NOT_APPLICABLE_BODY_PATTERNS = (
     "tracking issue",
     "planning and readiness only",
     "planning-only",
+    "this roadmap does not authorize",
+    "## current roadmap",
 )
 _TRACKING_TITLE_PATTERNS = ("roadmap", "tracking issue")
 _TRACKING_BODY_EVIDENCE = (
@@ -88,6 +90,7 @@ _TRACKING_BODY_EVIDENCE = (
     "does not authorize implementation",
 )
 _CLEANUP = frozenset({"duplicate", "status:obsolete", "status:superseded"})
+_MANUAL_DECISION = frozenset({"status:needs-decision"})
 _OWNER_HEADINGS = ("owner", "primary owner", "owners", "owner routing")
 _SOURCE_HEADINGS = ("source of truth", "owner and source of truth")
 _HEADING_RE = re.compile(r"(?im)^#{2,3}\s+(.+?)\s*$")
@@ -133,6 +136,8 @@ def classify_documentation_gap(record: IssueScannerRecord) -> DocumentationGapRo
         return _row(record, DocumentationGapCategory.CLEANUP_CANDIDATE, impact, (*canonical_codes, impact_code, "possible-cleanup"), "Review for closure or supersession; do not mutate automatically.")
     if "status:blocked" in labels:
         return _row(record, DocumentationGapCategory.DEFER_BLOCKED, impact, (*canonical_codes, impact_code, "blocked-dependency"), "Re-evaluate after the recorded blocker clears.")
+    if labels & _MANUAL_DECISION:
+        return _row(record, DocumentationGapCategory.MANUAL_OWNER_DECISION, impact, (*canonical_codes, impact_code, "ambiguous-manual-review"), "Resolve the recorded decision before metadata backfill.")
     if "legacy-metadata-missing" in canonical_codes:
         missing = _missing_authority(body)
         if missing:
