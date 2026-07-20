@@ -27,7 +27,7 @@ def _capability(capability_id, strength=EvidenceStrength.OBSERVED, reason="bound
         repository_scope="blummer92/agent-os",
         ref_scope="main",
         sha_scope=SHA,
-        reason_code="adapter.evidence-observed",
+        reason_code="adapter.incompatible",
         reason=reason,
     )
 
@@ -108,8 +108,10 @@ def test_serializer_has_exact_governed_top_level_keys():
         "handoffs",
         "decision",
         "execution_authorized",
+        "side_effects_performed",
     }
     assert payload["execution_authorized"] is False
+    assert payload["side_effects_performed"] is False
 
 
 def test_serializer_rejects_wrong_type():
