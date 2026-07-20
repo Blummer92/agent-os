@@ -58,6 +58,7 @@ _METADATA_STATES = frozenset(
 _REASON_CODES = frozenset(
     {
         "source.revision-changed",
+        "source.freshness-boundary-changed",
         "source.partial",
         "source.inaccessible",
         "source.unsupported",
@@ -685,15 +686,13 @@ def _change_reasons(changed: Iterable[str]) -> tuple[str, ...]:
         "repository",
         "base_branch",
         "evaluated_repository_sha",
-        "freshness_boundary",
     }:
         reasons.add("source.revision-changed")
+    if "freshness_boundary" in names:
+        reasons.add("source.freshness-boundary-changed")
     if names & {
         "implementation_contract_fingerprint",
         "forbidden_paths",
-        "graph_reference",
-        "planning_result_reference",
-        "handoff_reference",
         "supplied_node_ids",
     }:
         reasons.add("contract.scope-changed")
