@@ -1,221 +1,107 @@
 # Google Cloud Transition Handoff
 
-Use this template for proposed Agent OS work involving Google Cloud runtime,
-cache, build, storage, messaging, observability, or deployment surfaces.
+Use this with `03_Templates/prompts/github-change-request.md` for proposed Agent OS
+cloud runtime, cache, build, storage, messaging, observability, or deployment work.
+It does not authorize implementation, external changes, or production activation.
 
-This template extends `03_Templates/prompts/github-change-request.md`. It does not
-authorize cloud provisioning, production activation, credentials, external writes,
-or repository implementation by itself.
+## Request
 
-## Request Summary
+- Title, issue, requesting agent, and responsible owner:
+- Repository, base branch, and exact files:
+- Intended outcome and non-goals:
+- Cloud project reference, region, and services:
+- Private runtime values supplied outside GitHub:
 
-- Request title:
-- Requesting agent and overlay:
-- Responsible owner:
-- Target repository and base branch:
-- Related issue or approved change request:
-- Intended outcome:
+## Systems And Authority
 
-## Systems Involved
+Reference issue #173 and current governance; do not duplicate their policy text.
 
-List every affected system and its role.
-
-| System | Role | Read operations | Proposed write operations |
+| Data or decision | Authoritative system | Derived or cache surface | Live check |
 |---|---|---|---|
-| GitHub | | | |
-| Notion | | | |
-| Google Drive | | | |
-| Google Cloud service | | | |
+| Agent OS governance, contracts, tests, templates | GitHub | | Required |
+| Planning, review, approval, working knowledge | Notion or approved named source | | Required |
+| Artifact identity, content, and permissions | Google Drive | | Required |
+| Runtime, logs, metrics, and cached lookup evidence | Named cloud service | | Required before authority-dependent action |
 
-## Source Of Truth And Authority
+- Conflict and drift handling:
+- Record classification: runtime, non-authoritative cache, audit evidence, approved
+  configuration, or prohibited authoritative duplicate:
+- Explain why cloud evidence cannot decide readiness, approval, ownership, sharing,
+  schema, duplicate merging, production activation, or provider write-back.
 
-Reference the boundary decision in issue #173 and the current governance files.
-Do not redefine their policy text here.
+## Read, Write, And Data Boundary
 
-| Data or decision | Authoritative system | Derived/cache location | Live verification required |
-|---|---|---|---|
-| Agent OS governance and contracts | GitHub | | Yes before governed changes |
-| Planning, review, approvals, and handoffs | Notion or named approved source | | Yes before writes |
-| Student-facing artifact identity and permissions | Google Drive | | Yes before writes |
-| Runtime or cache evidence | Named Google Cloud service | | Yes before authority-dependent action |
-
-Explain how conflicts between cached cloud data and an authoritative system will
-stop the workflow and route to manual review.
-
-## Google Cloud Target
-
-- Project identifier or runtime-supplied reference:
-- Region:
-- Services involved:
-- Runtime purpose:
-- Data retained:
-- Retention period:
-- Network or connector dependencies:
+- Allowed reads and verification method:
+- Proposed writes and receiving systems:
+- Duplicate-prevention method:
+- Protected governed fields, records, and permissions:
+- Retained data, retention period, and cleanup owner:
+- Report-only operations:
 - Expected cost boundary:
-
-Do not include private project identifiers when they are not approved for
-repository storage.
-
-## Runtime And Cache Classification
-
-Classify every proposed cloud record as one of:
-
-- ephemeral runtime state;
-- derived non-authoritative cache;
-- audit or observability evidence;
-- approved configuration;
-- prohibited authoritative duplicate.
-
-State why the record cannot independently authorize readiness, approval,
-ownership, sharing, schema changes, duplicate merging, production activation, or
-write-back to another system.
-
-## Read And Write Boundary
-
-- Allowed reads:
-- Proposed writes:
-- External systems receiving writes:
-- Idempotency or duplicate-prevention method:
-- Live-state checks immediately before writing:
-- Governed fields or records explicitly protected:
-- Operations that remain report-only:
 
 Any production or external-system write requires separate explicit approval.
 
-## Credentials And Secrets Plan
+## Access Plan
 
-Record names and approved storage locations only. Never paste secret values,
-tokens, keys, cookies, private certificates, or service-account credentials.
+Record reference names and approved storage locations only. Never place private
+values, tokens, keys, or certificates in this document.
 
-- Authentication method:
-- Secret names:
-- Approved secret store:
-- Least-privilege roles required:
-- Credential owner:
-- Rotation and revocation owner:
-- Local-development fallback:
-- Missing-credential behavior:
+- Authentication method and access owner:
+- Approved private-value storage location:
+- Minimum permissions required:
+- Rotation, revocation, and missing-access behavior:
+- Permission-completeness check:
 
-The workflow must fail closed when credentials or permissions are missing,
-ambiguous, expired, or broader than approved.
-
-## Private Runtime Values
-
-List values supplied outside GitHub, such as project IDs, folder IDs, account
-identifiers, callback URLs, or deployment names. State how each value is
-validated without committing it to the repository.
-
-## Repository Change Scope
-
-- Files to add:
-- Files to edit:
-- Files to remove:
-- Forbidden paths:
-- Reused standards, templates, or tooling:
-- Duplicate implementation checked:
-
-Only the GitHub Service Agent may perform approved repository writes.
+Fail closed when identity, access, permissions, or scope are unclear or broader
+than approved.
 
 ## Approval Gates
 
-Name the required decision maker and evidence for each applicable gate.
+Name the decision maker and evidence for each applicable gate:
 
-- Repository implementation:
-- Google Cloud resource creation:
-- IAM or service-account changes:
-- Secret creation or access:
-- Production deployment:
-- External-system write-back:
-- Schema or governed-field changes:
-- Rollout expansion:
+- repository implementation;
+- cloud resource or access changes;
+- schema or governed-field changes;
+- external write-back or production deployment;
+- rollout or concurrency expansion.
 
-Issue readiness, passing validation, cached evidence, and successful dry runs are
-evidence only. They are not approval or execution authorization.
+Readiness, cache state, dry runs, and passing validation are evidence only.
 
-## Validation Plan
+## Validation And Audit
 
-- Focused tests:
-- Offline or synthetic fixtures:
-- Repository structure validation:
-- Aggregate validation:
+- Focused tests and sanitized fixtures:
+- Structure and aggregate validation:
 - Cloud configuration validation or dry run:
-- Exact branch-head SHA evidence:
-- Synthetic-merge SHA evidence:
-- Runtime smoke test, if separately authorized:
-- Evidence location and retention:
+- Exact branch-head and synthetic-merge SHAs:
+- Build or execution ID, tested SHA, failed step, result, and exit code:
+- Logs, metrics, redaction, retention, and evidence owner:
+- Incomplete, stale, malformed, ambiguous, permission-denied, or paginated evidence
+  handling:
 
-Validation must use synthetic or sanitized fixtures and must not expose secrets or
-private identifiers.
+Unknown evidence remains unknown and routes to manual review.
 
-## Rollout Plan
+## Rollout And Rollback
 
-- Initial environment:
-- Maximum scope or concurrency:
-- Dry-run behavior:
-- Pilot success criteria:
-- Manual review points:
-- Expansion decision:
-- Production activation owner:
-
-Do not skip staged rollout levels or infer production approval from a successful
-lower environment.
-
-## Disablement And Rollback
-
-- Immediate disablement method:
-- Repository rollback:
-- Cloud resource rollback:
-- Data/cache cleanup:
-- Credential revocation:
+- Initial environment, maximum scope, and dry-run behavior:
+- Pilot criteria and manual review points:
+- Immediate disablement:
+- Repository and cloud rollback:
+- Cache or data cleanup and access revocation:
 - External-system correction:
-- Owner responsible for verification:
 - Evidence proving rollback completion:
 
-Rollback must preserve authoritative records and avoid destructive cleanup unless
-that cleanup is separately approved.
-
-## Observability And Audit
-
-- Required logs and metrics:
-- Exact repository, branch, source SHA, and tested SHA fields:
-- Cloud build or execution identifier:
-- Failed-step and exit-code evidence:
-- Permission or pagination completeness evidence:
-- Redaction requirements:
-- Audit retention and owner:
-
-Unknown, incomplete, stale, malformed, or permission-denied evidence must remain
-unknown and route to manual review.
+Do not infer production approval from a lower-environment result. Preserve
+canonical records unless destructive cleanup is separately approved.
 
 ## Stop Conditions
 
-Stop and return `needs-decision` when any of the following is unclear or required
-outside the approved scope:
+Return `needs-decision` when target, authority, owner, access, permissions,
+file or resource allowlist, governed fields, cost, validation, rollback, audit,
+production activation, external write-back, or cache/live-state conflict is unclear.
+Stop if the request creates a competing source of truth or duplicate framework.
 
-- target project, service, repository, branch, or resource;
-- system of record or authority boundary;
-- owner or approval path;
-- credentials, secret storage, or least-privilege role;
-- governed fields, permissions, sharing, or schema changes;
-- production activation or external write-back;
-- exact file or resource allowlist;
-- validation, rollback, cost, or audit evidence;
-- a competing source of truth or duplicate framework;
-- a conflict between cloud cache and live authoritative state.
+## Final Report
 
-## Required Final Report
-
-Report:
-
-- branch and pull request;
-- cloud resources changed, or `none`;
-- files changed;
-- tests and validation run;
-- documentation updated;
-- external writes performed, or `none`;
-- approvals used;
-- exact tested SHA and runtime/build identifiers;
-- unresolved blockers;
-- rollback status;
-- handoff recommendations;
-- remaining risks.
+Report branch and PR; cloud resources changed or `none`; files changed; tests and
+validation; docs; external writes or `none`; approvals; exact tested SHA and
+runtime or build IDs; blockers; rollback status; handoffs; and remaining risks.
