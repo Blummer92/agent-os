@@ -30,4 +30,6 @@ bash 07_Agent_Tests/validate-repo-structure.sh
 
 ## Handoff recommendations
 
+## Rollback
+
 ## Remaining risks
