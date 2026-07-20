@@ -92,7 +92,10 @@ def test_cache_configuration_does_not_replace_install_or_validation_commands():
         "python -m pip install -r 08_Tooling/workflow-scheduler/requirements.txt"
         in scheduler
     )
-    assert "PYTHONPATH=src python3 -m pytest tests/ -v --cov=src/workflow_scheduler" in scheduler
+    scheduler_test_command = (
+        "PYTHONPATH=src python3 -m pytest tests/ -v --cov=src/workflow_scheduler"
+    )
+    assert scheduler_test_command in scheduler
     assert "bash 07_Agent_Tests/validate-repo-structure.sh" in scheduler
 
 
