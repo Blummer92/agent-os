@@ -1,9 +1,11 @@
+import dataclasses
 from pathlib import Path
 
 import pytest
 import yaml
 
 from reusable_capability_registry import (
+    CapabilityRecord,
     RegistryFileError,
     RegistryFormatError,
     RegistryReader,
@@ -291,3 +293,68 @@ def test_canonical_registry_still_loads_under_duplicate_rejection():
     # The fail-closed duplicate rule must not reject the current canonical registry.
     reader = RegistryReader()
     assert reader.record_count > 0
+
+
+# Explicit inventory of every governed set-like field, paired with a plausible
+# duplicate-able value. This table is the visible field inventory required by
+# #481's exhaustive-coverage requirement; the guard test below keeps it
+# synchronized with the live CapabilityRecord model rather than trusting it
+# to stay correct by convention.
+_GOVERNED_SET_LIKE_FIELD_DUPLICATE_CASES = (
+    ("canonical_paths", "src/probe.py"),
+    ("public_interfaces", "probe:Read"),
+    ("supporting_agents", "QA / Test Agent"),
+    ("known_consumers", "scripts/use_probe.py"),
+    ("tests", "tests/test_probe.py"),
+    ("keywords", "probe"),
+    ("side_effects", "Performs no writes."),
+    ("inputs", "issue body text"),
+    ("outputs", "acceptance report"),
+    ("extension_points", "custom check hook"),
+    ("invariants", "Output is deterministic."),
+    ("failure_modes", "Malformed input is rejected."),
+    ("compatibility", "Supports registry version 0.1.0."),
+    ("documentation_handoff", "README.md"),
+)
+_GOVERNED_SET_LIKE_FIELDS = tuple(field for field, _ in _GOVERNED_SET_LIKE_FIELD_DUPLICATE_CASES)
+
+# The smallest valid single-capability record: every required scalar and
+# required set-like field present with exactly one value, no optional fields.
+_MINIMAL_VALID_RECORD = {
+    "capability_id": "field-coverage-probe",
+    "name": "Field Coverage Probe",
+    "summary": "Minimal record used to prove duplicate rejection for every governed field.",
+    "status": "active",
+    "canonical_paths": ["src/probe.py"],
+    "public_interfaces": ["probe:Read"],
+    "owner_agent": "Integration Manager",
+    "known_consumers": ["scripts/use_probe.py"],
+    "tests": ["tests/test_probe.py"],
+    "keywords": ["probe"],
+    "reuse_guidance": "Reuse for coverage probing only.",
+    "side_effects": ["Performs no writes."],
+}
+
+
+def test_governed_set_like_field_inventory_matches_capability_record_model():
+    # Fails loudly if a set-like field is added to (or removed from) the
+    # model without updating the exhaustive-coverage table below, instead of
+    # silently leaving the new field untested.
+    model_set_like_fields = tuple(
+        sorted(f.name for f in dataclasses.fields(CapabilityRecord) if f.type == "tuple[str, ...]")
+    )
+    assert model_set_like_fields == tuple(sorted(_GOVERNED_SET_LIKE_FIELDS))
+    assert len(_GOVERNED_SET_LIKE_FIELDS) == 14
+
+
+@pytest.mark.parametrize(
+    "field_name, value",
+    _GOVERNED_SET_LIKE_FIELD_DUPLICATE_CASES,
+    ids=[case[0] for case in _GOVERNED_SET_LIKE_FIELD_DUPLICATE_CASES],
+)
+def test_every_governed_set_like_field_rejects_exact_duplicate_after_trim(tmp_path, field_name, value):
+    record = dict(_MINIMAL_VALID_RECORD)
+    record[field_name] = [value, f"  {value}  "]  # exact duplicate only after trimming
+    data = {"registry_version": "0.1.0", "capabilities": [record]}
+    with pytest.raises(RegistryFormatError, match=f"field-coverage-probe: {field_name} contains duplicate value"):
+        RegistryReader(_write_registry(tmp_path, data))
