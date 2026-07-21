@@ -23,3 +23,26 @@ jobs:
           python -m pip install -e "./08_Tooling/reusable-capability-registry[test]"
       - name: Run focused tests
         run: python -m pytest tests/rc6_technical_pilot -q
+
+  structural-validation:
+    name: Run repository structure validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run structural validation
+        run: bash 07_Agent_Tests/validate-repo-structure.sh
+
+  root-tests:
+    name: Run root pytest suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install root dependencies
+        run: |
+          python -m pip install -r requirements-dev.txt
+          python -m pip install -e "./08_Tooling/reusable-capability-registry[test]"
+      - name: Run root tests
+        run: python -m pytest tests -q
