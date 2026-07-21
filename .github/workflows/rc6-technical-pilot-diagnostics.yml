@@ -40,9 +40,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install root dependencies
+      - name: Install aggregate-gate dependencies
         run: |
           python -m pip install -q -r requirements-dev.txt
+          python -m pip install -q -r 08_Tooling/workflow-scheduler/requirements.txt
+          python -m pip install -q -e "./08_Tooling/instructional-materials-coach[test]"
+          python -m pip install -q -e "./08_Tooling/notion-navigation-client[test]"
           python -m pip install -q -e "./08_Tooling/reusable-capability-registry[test]"
       - name: Capture root test output
         id: root_tests
