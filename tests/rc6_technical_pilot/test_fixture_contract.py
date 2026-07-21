@@ -11,19 +11,20 @@ from scripts.agent_os_rc6_technical_pilot.runner import (
     FIXTURE_SHA256,
     FROZEN_SHA,
     FixtureContractError,
+    canonical_json_bytes,
     load_frozen_package,
     validate_frozen_package,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
-FIXTURE = ROOT / "tests/fixtures/rc6_technical_pilot/cases.json"
+FIXTURE_DIR = ROOT / "tests/fixtures/rc6_technical_pilot"
+FIXTURE = FIXTURE_DIR / "manifest.json"
 
 
 def test_frozen_fixture_digest_and_identity_are_exact():
-    raw = FIXTURE.read_bytes()
     package = load_frozen_package(FIXTURE)
 
-    assert hashlib.sha256(raw).hexdigest() == FIXTURE_SHA256
+    assert hashlib.sha256(canonical_json_bytes(package)).hexdigest() == FIXTURE_SHA256
     assert package["frozen_sha"] == FROZEN_SHA
     assert package["package_version"] == "RC6-TF-1.0"
 
@@ -36,7 +37,9 @@ def test_frozen_fixture_contains_exactly_ordered_t01_through_t24():
 
 
 def test_frozen_fixture_has_no_actual_result_fields():
-    text = FIXTURE.read_text(encoding="utf-8")
+    text = "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(FIXTURE_DIR.glob("*.json"))
+    )
 
     assert '"actual_' not in text
 
