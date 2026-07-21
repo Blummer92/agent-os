@@ -40,13 +40,14 @@ jobs:
       - name: Execute RC6 technical pilot
         id: pilot
         env:
-          PYTHONPATH: ${{ github.workspace }}/08_Tooling/reusable-capability-registry/src
+          PYTHONPATH: ${{ github.workspace }}
+          RC6_FROZEN_ROOT: ${{ github.workspace }}/frozen-repo
           OUTPUT_DIR: ${{ runner.temp }}/rc6-technical-pilot
         run: |
           set +e
           runner_sha="$(git rev-parse HEAD)"
-          python -m scripts.agent_os_rc6_technical_pilot.cli \
-            --repository-root frozen-repo \
+          python scripts/agent_os_rc6_technical_pilot/frozen_cli.py \
+            --repository-root "$RC6_FROZEN_ROOT" \
             --frozen-sha "${{ inputs.frozen_sha }}" \
             --runner-sha "$runner_sha" \
             --output-dir "$OUTPUT_DIR"
