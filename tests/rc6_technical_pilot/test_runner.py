@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from scripts import agent_os_rc6_technical_pilot as pilot
+from scripts import agent_os_rc6_pilot_support as support
 
 RUNNER_ROOT = Path(__file__).resolve().parents[2]
 BASELINE_ROOT = Path(os.environ.get("RC6_BASELINE_ROOT", RUNNER_ROOT)).resolve()
@@ -23,10 +24,52 @@ def _package():
 
 def test_fixture_is_exact_ordered_frozen_package():
     package = pilot.load_frozen_package(FIXTURE)
-    assert package["package_version"] == "RC6-TF-1.0"
+    assert package["package_version"] == "RC6-TF-1.1"
     assert package["frozen_sha"] == pilot.FROZEN_SHA
     assert [case["case_id"] for case in package["cases"]] == list(pilot.EXPECTED_IDS)
     assert len(package["cases"]) == 24
+
+
+def test_fixture_records_exact_clean_and_t14_behavioral_contracts():
+    package = _package()
+    assert package["synthetic_fixture_contract"] == {
+        "S-CLEAN": {
+            "invariants": ["run(value) returns value + 1 for integer input."],
+            "compatibility": [
+                "src.pkg.mod:run remains stable within the RC6 synthetic fixture contract."
+            ],
+        },
+        "behavioral_contract_missing": {
+            "invariants": [],
+            "compatibility": [],
+        },
+    }
+    assert support.S_CLEAN_CONTRACT == package["synthetic_fixture_contract"]["S-CLEAN"]
+    assert support.T14_OVERRIDE == package["synthetic_fixture_contract"]["behavioral_contract_missing"]
+
+
+def test_t01_and_t14_remain_behaviorally_distinct():
+    package = pilot.load_frozen_package(FIXTURE)
+    by_id = {case["case_id"]: case for case in package["cases"]}
+    assert by_id["T01"]["scenario"] == "clean_verified"
+    assert by_id["T14"]["scenario"] == "behavioral_contract_missing"
+    assert by_id["T14"]["expected"]["rc5_informational_statuses"] == ["pass"]
+    assert by_id["T14"]["expected"]["rc5_evidence_disposition"] == (
+        "positive-with-explicit-residual-risk"
+    )
+    assert by_id["T14"]["expected"]["required_rc5_evidence"] == [
+        "remaining_risk=behavioral-contract-not-evaluated"
+    ]
+
+
+def test_runtime_record_contract_matches_package_and_t14_removes_it():
+    clean = support._record()
+    missing = support._record(**support.T14_OVERRIDE)
+    assert clean["invariants"] == support.S_CLEAN_INVARIANTS
+    assert clean["compatibility"] == support.S_CLEAN_COMPATIBILITY
+    assert missing["invariants"] == []
+    assert missing["compatibility"] == []
+    assert clean != missing
 
 
 def test_fixture_contains_no_actual_result_fields():
@@ -67,6 +110,13 @@ def test_fixture_rejects_actual_field_injection():
         pilot.validate_frozen_package(package)
 
 
+def test_fixture_rejects_synthetic_contract_drift():
+    package = copy.deepcopy(_package())
+    package["synthetic_fixture_contract"]["S-CLEAN"]["invariants"] = []
+    with pytest.raises(pilot.PilotContractError, match="synthetic fixture contract"):
+        pilot.validate_frozen_package(package)
+
+
 def test_threshold_denominators_are_frozen():
     package = pilot.load_frozen_package(FIXTURE)
     thresholds = package["thresholds"]
@@ -78,9 +128,26 @@ def test_threshold_denominators_are_frozen():
     assert thresholds["active_exemptions_reviewed"]["denominator"] == ["T13"]
 
 
+def test_frozen_component_identities_and_sha_are_unchanged():
+    package = _package()
+    assert package["frozen_sha"] == "ca980c38d74b8d3ab30ca67461a9f576281edc75"
+    assert package["frozen_identities"] == {
+        "registry_blob": "92fa715d25081487c975969663cedbba9f641e02",
+        "registry_version": "0.1.0",
+        "provenance_algorithm": "registry-canonical-records",
+        "provenance_algorithm_version": 1,
+        "provenance_digest": "6cccfc9e86387865c97d10eb7f782c589ebbf016cf507d0cb28c99f48e00a7be",
+        "discovery_blob": "c0faa18f7cb7aa7dc71b7ad48437c87db595eb0a",
+        "validation_blob": "950d6210c057dd8c2512f356b97398eb8249e42a",
+        "rc5_blob": "b1610da51b73ae94202a9c304460e680952fa33b",
+        "rc4_package_version": "0.2.0",
+        "rc4_report_version": "1.0",
+    }
+
+
 def test_preflight_validates_frozen_boundary_without_executing_cases(monkeypatch):
     cases = [{"case_id": case_id} for case_id in pilot.EXPECTED_IDS]
-    package = {"package_version": "RC6-TF-1.0", "cases": cases}
+    package = {"package_version": "RC6-TF-1.1", "cases": cases}
     calls = []
     api = object()
 
@@ -116,7 +183,7 @@ def test_preflight_validates_frozen_boundary_without_executing_cases(monkeypatch
 
 def test_runner_orchestrates_two_passes_without_executing_frozen_pilot(monkeypatch):
     cases = [{"case_id": f"T{number:02d}", "title": "fixture"} for number in range(1, 25)]
-    package = {"package_version": "RC6-TF-1.0", "cases": cases, "thresholds": {}}
+    package = {"package_version": "RC6-TF-1.1", "cases": cases, "thresholds": {}}
     calls = []
 
     def fake_once(case, root, api):
