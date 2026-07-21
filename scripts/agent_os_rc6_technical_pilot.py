@@ -49,7 +49,23 @@ def _provenance(results: list[Any], report: Any, api: Any) -> str:
     return "matched" if discovery.is_supported else "unsupported"
 
 
-def _summarize(case: dict[str, Any], base: Any, results: list[Any], report: Any, attached: Any, rendered: str, api: Any) -> dict[str, Any]:
+def _check_payload(item: Any) -> dict[str, Any]:
+    return {
+        "name": item.name,
+        "status": item.status.value,
+        "evidence": list(item.evidence),
+    }
+
+
+def _summarize(
+    case: dict[str, Any],
+    base: Any,
+    results: list[Any],
+    report: Any,
+    attached: Any,
+    rendered: str,
+    api: Any,
+) -> dict[str, Any]:
     valid = [item for item in results if isinstance(item, api.DiscoveryResult)]
     candidates = [{
         "capability_id": item.capability.capability_id,
@@ -64,17 +80,29 @@ def _summarize(case: dict[str, Any], base: Any, results: list[Any], report: Any,
         codes = sorted(item.code for item in findings)
     else:
         severity, codes = "invalid", []
+
     info = list(attached.report.informational_checks)
-    statuses, names = [item.status.value for item in info], [item.name for item in info]
+    candidate_checks = [item for item in info if item.name.startswith("reuse candidate")]
+    diagnostic_checks = [item for item in info if item not in candidate_checks]
+    status_checks = candidate_checks if candidate_checks else info
+    statuses = [item.status.value for item in status_checks]
+    names = [item.name for item in info]
+    candidate_lines = [line for item in candidate_checks for line in item.evidence]
     lines = [line for item in info for line in item.evidence]
-    positive = any(item.status.value in {"pass", "warn"} and item.name.startswith("reuse candidate") for item in info)
+    positive = any(item.status.value in {"pass", "warn"} for item in candidate_checks)
+
     if not info:
         disposition = "identity-no-informational-section"
     elif names == ["reuse-evidence-error"]:
         disposition = "reuse-evidence-error"
-    elif case["scenario"] == "future_validation_code" and any("future.surface-check" in line for line in lines):
+    elif case["scenario"] == "future_validation_code" and any(
+        "future.surface-check" in line for line in lines
+    ):
         disposition = "unknown-evidence-preserved"
-    elif positive and any("remaining_risk=behavioral-contract-not-evaluated" in line for line in lines):
+    elif positive and any(
+        "remaining_risk=behavioral-contract-not-evaluated" in line
+        for line in candidate_lines
+    ):
         disposition = "positive-with-explicit-residual-risk"
     elif any(status in {"manual-review", "fail"} for status in statuses):
         disposition = "positive-guidance-suppressed"
@@ -82,23 +110,41 @@ def _summarize(case: dict[str, Any], base: Any, results: list[Any], report: Any,
         disposition = "qualified-positive"
     else:
         disposition = "positive-informational"
+
     return {
-        "case_id": case["case_id"], "rc3_results": candidates,
+        "case_id": case["case_id"],
+        "rc3_results": candidates,
         "rc3_warnings": sorted({warning for item in valid for warning in item.warnings}),
-        "rc3_manual_review_reasons": sorted({reason for item in valid for reason in item.manual_review_reasons}),
-        "rc4_severity": severity, "rc4_finding_codes": codes,
+        "rc3_manual_review_reasons": sorted({
+            reason for item in valid for reason in item.manual_review_reasons
+        }),
+        "rc4_severity": severity,
+        "rc4_finding_codes": codes,
         "provenance_interpretation": _provenance(results, report, api),
-        "rc5_informational_statuses": statuses, "rc5_check_names": names,
-        "rc5_evidence": lines, "rc5_evidence_disposition": disposition,
-        "base_readiness_before": base.outcome.value, "base_readiness_after": attached.outcome.value,
+        "rc5_informational_statuses": statuses,
+        "rc5_check_names": names,
+        "rc5_candidate_checks": [_check_payload(item) for item in candidate_checks],
+        "rc5_diagnostic_checks": [_check_payload(item) for item in diagnostic_checks],
+        "rc5_evidence": lines,
+        "rc5_evidence_disposition": disposition,
+        "base_readiness_before": base.outcome.value,
+        "base_readiness_after": attached.outcome.value,
         "implementation_authorization": "not-authorized",
-        "repository_write_authorization": "not-authorized", "merge_authorization": "not-authorized",
-        "automatic_selection": False, "positive_guidance": positive, "rendered_report": rendered,
+        "repository_write_authorization": "not-authorized",
+        "merge_authorization": "not-authorized",
+        "automatic_selection": False,
+        "positive_guidance": positive,
+        "rendered_report": rendered,
     }
 
 
 def _compare(case: dict[str, Any], actual: dict[str, Any]) -> list[str]:
     expected, failures = case["expected"], []
+    unordered_fields = {
+        "rc3_warnings",
+        "rc3_manual_review_reasons",
+        "rc4_finding_codes",
+    }
     fields = (
         "rc3_results", "rc3_warnings", "rc3_manual_review_reasons", "rc4_severity",
         "rc4_finding_codes", "provenance_interpretation", "rc5_informational_statuses",
@@ -107,7 +153,10 @@ def _compare(case: dict[str, Any], actual: dict[str, Any]) -> list[str]:
         "merge_authorization", "automatic_selection",
     )
     for field in fields:
-        if actual[field] != expected[field]:
+        observed, required = actual[field], expected[field]
+        if field in unordered_fields:
+            observed, required = sorted(observed), sorted(required)
+        if observed != required:
             failures.append(f"{field}: expected {expected[field]!r}, got {actual[field]!r}")
     for value in expected.get("required_rc5_evidence", []):
         if not any(value in line for line in actual["rc5_evidence"]):
@@ -117,7 +166,11 @@ def _compare(case: dict[str, Any], actual: dict[str, Any]) -> list[str]:
             failures.append(f"required RC5 check missing: {value}")
     if actual["base_readiness_before"] != actual["base_readiness_after"]:
         failures.append("RC5 changed base readiness")
-    if actual["rc5_check_names"] and "reuse-evidence-error" not in actual["rc5_check_names"] and AUTH_EVIDENCE not in actual["rc5_evidence"]:
+    if (
+        actual["rc5_check_names"]
+        and "reuse-evidence-error" not in actual["rc5_check_names"]
+        and AUTH_EVIDENCE not in actual["rc5_evidence"]
+    ):
         failures.append("authorization-boundary evidence missing")
     return failures
 
@@ -147,11 +200,25 @@ def _thresholds(package: dict[str, Any], actuals: list[dict[str, Any]]) -> dict[
         "contradicted_evidence_positive": [int(by_id["T12"]["positive_guidance"]), 1, 0],
         "missing_active_path_positive": [int(by_id["T15"]["positive_guidance"]), 1, 0],
     }
-    output = {name: {"numerator": a, "denominator": b, "limit": limit, "passed": a <= limit} for name, (a, b, limit) in metrics.items()}
+    output = {
+        name: {"numerator": a, "denominator": b, "limit": limit, "passed": a <= limit}
+        for name, (a, b, limit) in metrics.items()
+    }
     deterministic = sum(item["deterministic"] for item in all_values)
-    output["deterministic_repeated_output"] = {"numerator": deterministic, "denominator": 24, "required": 24, "passed": deterministic == 24}
+    output["deterministic_repeated_output"] = {
+        "numerator": deterministic,
+        "denominator": 24,
+        "required": 24,
+        "passed": deterministic == 24,
+    }
     reviewed = int(any("consumer_exemption=" in line for line in by_id["T13"]["rc5_evidence"]))
-    output["active_exemptions_reviewed"] = {"numerator": reviewed, "denominator": 1, "required_percent": 100, "percent": 100 * reviewed, "passed": reviewed == 1}
+    output["active_exemptions_reviewed"] = {
+        "numerator": reviewed,
+        "denominator": 1,
+        "required_percent": 100,
+        "percent": 100 * reviewed,
+        "passed": reviewed == 1,
+    }
     return output
 
 
@@ -166,16 +233,28 @@ def _markdown(payload: dict[str, Any]) -> str:
         "| Metric | Result | Observed | Required |", "|---|---:|---:|---:|",
     ]
     for name, metric in payload["thresholds"].items():
-        required = f"<= {metric['limit']}" if "limit" in metric else (f"= {metric['required']}" if "required" in metric else f"= {metric['required_percent']}%")
-        lines.append(f"| `{name}` | {'pass' if metric['passed'] else 'fail'} | {metric['numerator']}/{metric['denominator']} | {required} |")
+        required = f"<= {metric['limit']}" if "limit" in metric else (
+            f"= {metric['required']}" if "required" in metric else f"= {metric['required_percent']}%"
+        )
+        lines.append(
+            f"| `{name}` | {'pass' if metric['passed'] else 'fail'} | "
+            f"{metric['numerator']}/{metric['denominator']} | {required} |"
+        )
     lines += ["", "## Cases", "", "| Case | Result | RC3 | RC4 | RC5 | Readiness |", "|---|---:|---|---|---|---|"]
     for item in payload["cases"]:
         actual = item["actual"]
         rc3 = ", ".join(value["capability_id"] for value in actual["rc3_results"]) or "none"
         rc5 = ", ".join(actual["rc5_informational_statuses"]) or "none"
         ready = f"{actual['base_readiness_before']} -> {actual['base_readiness_after']}"
-        lines.append(f"| {item['case_id']} | {'pass' if item['passed'] else 'fail'} | {rc3} | {actual['rc4_severity']} | {rc5} | {ready} |")
+        lines.append(
+            f"| {item['case_id']} | {'pass' if item['passed'] else 'fail'} | "
+            f"{rc3} | {actual['rc4_severity']} | {rc5} | {ready} |"
+        )
         lines += [f"\n- **{item['case_id']} failure:** {failure}" for failure in item["failures"]]
+        diagnostics = actual.get("rc5_diagnostic_checks", [])
+        if diagnostics:
+            names = ", ".join(check["name"] for check in diagnostics)
+            lines.append(f"\n- **{item['case_id']} diagnostic checks:** {names}")
     lines += ["", "## Authorization Boundary", "", "This report is evidence only. It does not authorize implementation, repository writes, readiness changes, or merge.", ""]
     return "\n".join(lines)
 
