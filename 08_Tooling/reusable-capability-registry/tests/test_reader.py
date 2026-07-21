@@ -232,3 +232,62 @@ def test_record_level_unknown_field_rejection_is_preserved(tmp_path):
     data["capabilities"][0]["confidence"] = "verified"
     with pytest.raises(RegistryFormatError, match="unsupported fields"):
         RegistryReader(_write_registry(tmp_path, data))
+
+
+def test_duplicate_required_set_like_value_is_rejected(tmp_path):
+    data = _valid_registry_data()
+    data["capabilities"][0]["keywords"].append("Alpha")
+    with pytest.raises(RegistryFormatError, match="alpha-reader: keywords contains duplicate value"):
+        RegistryReader(_write_registry(tmp_path, data))
+
+
+def test_duplicate_optional_set_like_value_is_rejected(tmp_path):
+    data = _valid_registry_data()
+    data["capabilities"][1]["supporting_agents"].append("Integration Manager")
+    with pytest.raises(RegistryFormatError, match="beta-evaluator: supporting_agents contains duplicate value"):
+        RegistryReader(_write_registry(tmp_path, data))
+
+
+def test_duplicate_only_after_trimming_is_rejected(tmp_path):
+    data = _valid_registry_data()
+    data["capabilities"][0]["canonical_paths"].append("  src/alpha.py  ")
+    with pytest.raises(RegistryFormatError, match="canonical_paths contains duplicate value"):
+        RegistryReader(_write_registry(tmp_path, data))
+
+
+def test_case_variant_set_like_values_remain_distinct(tmp_path):
+    data = _valid_registry_data()
+    data["capabilities"][0]["canonical_paths"].append("src/Alpha.py")
+    record = RegistryReader(_write_registry(tmp_path, data)).by_id("alpha-reader")
+    assert record.canonical_paths == ("src/alpha.py", "src/Alpha.py")
+
+
+def test_path_spelling_variant_set_like_values_remain_distinct(tmp_path):
+    data = _valid_registry_data()
+    data["capabilities"][0]["canonical_paths"].append("./src/alpha.py")
+    record = RegistryReader(_write_registry(tmp_path, data)).by_id("alpha-reader")
+    assert record.canonical_paths == ("src/alpha.py", "./src/alpha.py")
+
+
+def test_unicode_composed_and_decomposed_set_like_values_remain_distinct(tmp_path):
+    data = _valid_registry_data()
+    composed = "café-note"  # e-acute as one code point
+    decomposed = "café-note"  # e + combining acute accent
+    assert composed != decomposed
+    data["capabilities"][0]["side_effects"] = [composed, decomposed]
+    record = RegistryReader(_write_registry(tmp_path, data)).by_id("alpha-reader")
+    assert record.side_effects == (composed, decomposed)
+
+
+def test_missing_optional_list_and_empty_list_remain_equivalent(tmp_path):
+    data = _valid_registry_data()
+    data["capabilities"][1]["inputs"] = []
+    reader = RegistryReader(_write_registry(tmp_path, data))
+    assert reader.by_id("alpha-reader").inputs == ()
+    assert reader.by_id("beta-evaluator").inputs == ()
+
+
+def test_canonical_registry_still_loads_under_duplicate_rejection():
+    # The fail-closed duplicate rule must not reject the current canonical registry.
+    reader = RegistryReader()
+    assert reader.record_count > 0
