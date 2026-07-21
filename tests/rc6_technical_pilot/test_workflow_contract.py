@@ -28,7 +28,9 @@ def test_workflow_separates_runner_source_from_frozen_tested_checkout():
     assert "path: frozen-repo" in content
     assert "persist-credentials: false" in content
     assert "./.github/actions/setup-python-dev" in content
-    assert "--repository-root frozen-repo" in content
+    assert "RC6_FROZEN_ROOT: ${{ github.workspace }}/frozen-repo" in content
+    assert "python scripts/agent_os_rc6_technical_pilot/frozen_cli.py" in content
+    assert '--repository-root "$RC6_FROZEN_ROOT"' in content
     assert '--runner-sha "$runner_sha"' in content
 
 
@@ -60,7 +62,7 @@ def test_workflow_runs_focused_tests_uploads_artifacts_and_publishes_summary():
     content = _content()
 
     assert "python -m pytest tests/rc6_technical_pilot" in content
-    assert "python -m scripts.agent_os_rc6_technical_pilot.cli" in content
+    assert "frozen_cli.py" in content
     assert "actions/upload-artifact@v4" in content
     assert "rc6-technical-pilot-${{ inputs.frozen_sha }}" in content
     assert "GITHUB_STEP_SUMMARY" in content
