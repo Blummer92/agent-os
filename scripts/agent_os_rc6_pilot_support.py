@@ -1,6 +1,7 @@
 """Frozen RC6 technical-pilot contract, baseline guards, and case inputs."""
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import subprocess
@@ -55,18 +56,31 @@ class PilotContractError(ValueError):
     pass
 
 
+def _expand_package(package: dict[str, Any]) -> dict[str, Any]:
+    expanded = copy.deepcopy(package)
+    defaults = expanded.pop("expected_defaults", {})
+    if defaults and not isinstance(defaults, dict):
+        raise PilotContractError("expected_defaults must be an object")
+    for case in expanded.get("cases", []):
+        if isinstance(case, dict) and isinstance(case.get("expected"), dict):
+            case["expected"] = {**defaults, **case["expected"]}
+    return expanded
+
+
 def load_package(path: str | Path) -> dict[str, Any]:
     try:
         package = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise PilotContractError(f"unable to load frozen package: {path}") from exc
-    validate_package(package)
-    return package
+    expanded = _expand_package(package)
+    validate_package(expanded)
+    return expanded
 
 
 def validate_package(package: object) -> None:
     if not isinstance(package, dict):
         raise PilotContractError("frozen package must be a JSON object")
+    package = _expand_package(package)
     for field in ("package_version", "frozen_sha", "frozen_identities", "thresholds", "cases"):
         if field not in package:
             raise PilotContractError(f"frozen package missing field: {field}")
