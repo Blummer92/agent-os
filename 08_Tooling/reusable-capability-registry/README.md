@@ -48,6 +48,15 @@ results = discover_capabilities(reader, capability_id="issue-acceptance-report")
 values use tuples. JSON payloads are fresh projections and share no mutable state
 with the reader.
 
+## Supported PyYAML versions
+
+The package supports `PyYAML>=6.0,<7`. The duplicate-key loader contract is
+proven across that range by a bounded compatibility matrix
+(`.github/workflows/reusable-capability-registry-pyyaml-compat.yml`) covering the
+minimum (`6.0`), the ordinary-CI-resolved, and the newest compatible `<7`
+release. The declared range is changed only with evidence from a failing matrix
+lane and a separate explicit decision.
+
 ## Validation
 
 ```bash

@@ -1,0 +1,85 @@
+name: Reusable Capability Registry PyYAML Compatibility
+
+# Bounded compatibility matrix for the #489 duplicate-key loader contract across
+# the package's declared PyYAML range (PyYAML>=6.0,<7). It changes no registry
+# content, schema, provenance, or dependency policy; it only proves the merged
+# reader boundary at the minimum, ordinary-CI, and newest-compatible versions.
+
+on:
+  pull_request:
+    paths:
+      - "08_Tooling/reusable-capability-registry/**"
+      - ".github/workflows/reusable-capability-registry-pyyaml-compat.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "08_Tooling/reusable-capability-registry/**"
+      - ".github/workflows/reusable-capability-registry-pyyaml-compat.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pyyaml-matrix:
+    name: PyYAML ${{ matrix.lane }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Minimum declared version.
+          - lane: minimum
+            pyyaml: "PyYAML==6.0"
+          # Whatever the ordinary validation environment resolves (the package
+          # constraint alone: PyYAML>=6.0,<7). Recorded exactly at run time.
+          - lane: ci-resolved
+            pyyaml: ""
+          # Newest release still satisfying <7 at execution time.
+          - lane: newest-compatible
+            pyyaml: "PyYAML<7"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package (test extra)
+        working-directory: 08_Tooling/reusable-capability-registry
+        run: python -m pip install -e ".[test]"
+
+      - name: Pin PyYAML for this lane
+        if: matrix.pyyaml != ''
+        run: python -m pip install "${{ matrix.pyyaml }}"
+
+      - name: Record and range-check resolved PyYAML version
+        run: |
+          set -euo pipefail
+          VERSION="$(python -c 'import yaml; print(yaml.__version__)')"
+          {
+            echo "### Lane \`${{ matrix.lane }}\`"
+            echo "- Requested: \`${{ matrix.pyyaml || 'package constraint (PyYAML>=6.0,<7)' }}\`"
+            echo "- Resolved PyYAML: \`$VERSION\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+          python - <<'PY'
+          import yaml
+          major, minor = (int(part) for part in yaml.__version__.split(".")[:2])
+          assert (major, minor) >= (6, 0) and major < 7, f"out-of-range PyYAML {yaml.__version__}"
+          print(f"PyYAML {yaml.__version__} is within the declared >=6.0,<7 range")
+          PY
+
+      - name: Run loader compatibility contract and full reader suite
+        working-directory: 08_Tooling/reusable-capability-registry
+        run: |
+          set -euo pipefail
+          # -p no:cacheprovider keeps the run hermetic; the command fails (exit 5)
+          # if no tests are collected, so a silently skipped lane cannot pass.
+          PYTHONPATH=src python -m pytest \
+            tests/test_pyyaml_compatibility.py \
+            tests/test_reader.py \
+            -p no:cacheprovider -v
