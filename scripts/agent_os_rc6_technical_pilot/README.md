@@ -7,6 +7,8 @@ This package implements issue #500 as a deterministic, offline orchestration lay
 - The frozen input is `tests/fixtures/rc6_technical_pilot/manifest.json` plus six ordered case-part files.
 - The runner accepts only frozen SHA `ca980c38d74b8d3ab30ca67461a9f576281edc75`.
 - RC3 discovery, RC4 validation, RC5 reuse evidence, readiness evaluation, and report rendering are imported from their existing implementations.
+- During the manual workflow, `frozen_cli.py` preloads those canonical interfaces from the separate exact-SHA checkout before importing the current runner package.
+- The current checkout therefore supplies only the runner, frozen fixture, tests, and workflow; the tested Agent OS implementation and repository evidence come from `frozen-repo`.
 - The runner does not update GitHub, labels, issues, pull requests, registry records, readiness state, repository source files, Notion, Drive, Cloud Build, or production systems.
 - Result artifacts are written only to the caller-provided output directory.
 - A passing result is technical evidence only. It does not authorize implementation, repository writes, merge, deployment, or broader adoption.
@@ -25,6 +27,6 @@ python -m scripts.agent_os_rc6_technical_pilot.cli \
 
 ## Authorized manual execution
 
-The `RC6 Technical Pilot` GitHub Actions workflow is `workflow_dispatch` only. It keeps the merged runner source separate from the exact frozen checkout, runs focused contract tests, executes T01-T24 twice, and uploads deterministic JSON and Markdown artifacts.
+The `RC6 Technical Pilot` GitHub Actions workflow is `workflow_dispatch` only. It keeps the merged runner source separate from the exact frozen checkout, preloads RC3-RC5/readiness modules from that frozen checkout, runs focused contract tests, executes T01-T24 twice, and uploads deterministic JSON and Markdown artifacts.
 
 Do not dispatch the workflow until parent issue #249 separately authorizes technical pilot execution.
