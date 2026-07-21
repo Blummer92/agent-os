@@ -23,6 +23,7 @@ _OPTIONAL_FIELDS = frozenset({
 })
 _ALLOWED_FIELDS = _REQUIRED_FIELDS | _OPTIONAL_FIELDS
 _ALLOWED_STATUSES = frozenset({"active", "experimental", "deprecated", "replaced", "internal-only"})
+_ALLOWED_TOP_LEVEL_FIELDS = frozenset({"registry_version", "capabilities"})
 
 
 class RegistryError(ValueError):
@@ -170,6 +171,11 @@ class RegistryReader:
             raise RegistryFormatError("registry YAML is malformed") from exc
         if not isinstance(document, Mapping):
             raise RegistryFormatError("registry top level must be a mapping")
+        unknown_top_level = sorted(set(document) - _ALLOWED_TOP_LEVEL_FIELDS)
+        if unknown_top_level:
+            raise RegistryFormatError(
+                f"unsupported top-level registry keys for registry 0.1.0: {', '.join(unknown_top_level)}"
+            )
         version = document.get("registry_version")
         if not isinstance(version, str):
             raise RegistryFormatError("registry_version must be a string")
