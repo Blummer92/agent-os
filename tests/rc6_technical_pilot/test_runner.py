@@ -4,7 +4,9 @@ import copy
 import hashlib
 import json
 import os
+import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -167,6 +169,104 @@ def test_runner_orchestrates_two_passes_without_executing_frozen_pilot(monkeypat
     assert "This report is evidence only" in result.markdown_text
 
 
+def _fake_summary(status: str):
+    class DiscoveryResult:
+        pass
+
+    class ValidationReport:
+        pass
+
+    class Provenance:
+        is_supported = True
+
+        def __hash__(self):
+            return 1
+
+        def __eq__(self, other):
+            return isinstance(other, Provenance)
+
+    provenance = Provenance()
+    result = DiscoveryResult()
+    result.capability = SimpleNamespace(capability_id="widget")
+    result.confidence = SimpleNamespace(value="verified")
+    result.evidence_basis = ("exact-capability-id-match",)
+    result.warnings = ()
+    result.manual_review_reasons = ()
+    result.provenance = provenance
+    report = ValidationReport()
+    report.provenance = provenance
+    report.findings = ()
+    candidate = SimpleNamespace(
+        name="reuse candidate widget",
+        status=SimpleNamespace(value=status),
+        evidence=[pilot.AUTH_EVIDENCE],
+    )
+    unmatched = SimpleNamespace(
+        name="reuse unmatched validation findings",
+        status=SimpleNamespace(value="manual-review"),
+        evidence=["validation_finding=unrelated"],
+    )
+    attached = SimpleNamespace(
+        outcome=SimpleNamespace(value="ready"),
+        report=SimpleNamespace(informational_checks=(candidate, unmatched)),
+    )
+    base = SimpleNamespace(outcome=SimpleNamespace(value="ready"))
+    api = SimpleNamespace(DiscoveryResult=DiscoveryResult, ValidationReport=ValidationReport)
+    case = {"case_id": "T21", "scenario": "current_clean"}
+    return pilot._summarize(case, base, [result], report, attached, "rendered", api)
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_disposition"),
+    [("pass", "positive-informational"), ("warn", "qualified-positive")],
+)
+def test_candidate_status_is_not_conflated_with_unmatched_diagnostics(status, expected_disposition):
+    summary = _fake_summary(status)
+
+    assert summary["rc5_informational_statuses"] == [status]
+    assert summary["rc5_evidence_disposition"] == expected_disposition
+    assert summary["positive_guidance"] is True
+    assert summary["rc5_candidate_checks"] == [{
+        "name": "reuse candidate widget",
+        "status": status,
+        "evidence": [pilot.AUTH_EVIDENCE],
+    }]
+    assert summary["rc5_diagnostic_checks"] == [{
+        "name": "reuse unmatched validation findings",
+        "status": "manual-review",
+        "evidence": ["validation_finding=unrelated"],
+    }]
+
+
+def test_compare_treats_warning_and_review_collections_as_unordered():
+    expected = {
+        "rc3_results": [],
+        "rc3_warnings": ["a", "b"],
+        "rc3_manual_review_reasons": ["c", "d"],
+        "rc4_severity": "pass",
+        "rc4_finding_codes": ["x", "y"],
+        "provenance_interpretation": "matched",
+        "rc5_informational_statuses": ["pass"],
+        "rc5_evidence_disposition": "positive-informational",
+        "base_readiness_before": "ready",
+        "base_readiness_after": "ready",
+        "implementation_authorization": "not-authorized",
+        "repository_write_authorization": "not-authorized",
+        "merge_authorization": "not-authorized",
+        "automatic_selection": False,
+    }
+    actual = dict(expected)
+    actual.update({
+        "rc3_warnings": ["b", "a"],
+        "rc3_manual_review_reasons": ["d", "c"],
+        "rc4_finding_codes": ["y", "x"],
+        "rc5_check_names": ["reuse candidate widget"],
+        "rc5_evidence": [pilot.AUTH_EVIDENCE],
+    })
+
+    assert pilot._compare({"expected": expected}, actual) == []
+
+
 @pytest.mark.parametrize("target", ["run_preflight", "run_pilot"])
 def test_wrong_sha_fails_closed_before_loading_interfaces(monkeypatch, target):
     monkeypatch.setattr(
@@ -209,3 +309,10 @@ def test_cli_contract_error_writes_failed_closed_evidence(monkeypatch, tmp_path)
         f"{hashlib.sha256((tmp_path / 'rc6-technical-pilot.json').read_bytes()).hexdigest()}  rc6-technical-pilot.json",
         f"{hashlib.sha256((tmp_path / 'rc6-technical-pilot.md').read_bytes()).hexdigest()}  rc6-technical-pilot.md",
     ]
+    subprocess.run(
+        ["sha256sum", "-c", "SHA256SUMS"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
