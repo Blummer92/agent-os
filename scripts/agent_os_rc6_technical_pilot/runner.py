@@ -24,9 +24,9 @@ from .execution import execute_case
 
 FROZEN_SHA = "ca980c38d74b8d3ab30ca67461a9f576281edc75"
 PACKAGE_VERSION = "RC6-TF-1.0"
-FIXTURE_SHA256 = "336158b346e2c954b88fa7e3060098e6aabd4237cfb18c4b5df77ef39b5c8186"
+FIXTURE_SHA256 = "7deb85abeafc31e9294a04cbb8425c818b3a6639b4e55fb435a1cf6380732775"
 EXPECTED_IDS = tuple(f"T{number:02d}" for number in range(1, 25))
-DEFAULT_FIXTURE = RUNNER_ROOT / "tests" / "fixtures" / "rc6_technical_pilot" / "cases.json"
+DEFAULT_FIXTURE = RUNNER_ROOT / "tests" / "fixtures" / "rc6_technical_pilot" / "manifest.json"
 
 _REQUIRED_EXPECTED_FIELDS = frozenset(
     {
@@ -93,17 +93,33 @@ class PilotRun:
 
 
 def load_frozen_package(path: str | Path = DEFAULT_FIXTURE) -> dict[str, Any]:
-    fixture_path = Path(path)
-    raw = fixture_path.read_bytes()
-    digest = hashlib.sha256(raw).hexdigest()
+    manifest_path = Path(path)
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise FixtureContractError("fixture manifest must be readable UTF-8 JSON") from exc
+    parts = manifest.pop("parts", None)
+    if not isinstance(parts, list) or not parts or not all(
+        isinstance(item, str) for item in parts
+    ):
+        raise FixtureContractError("fixture manifest must list ordered JSON parts")
+    cases: list[dict[str, Any]] = []
+    for relative in parts:
+        part_path = manifest_path.parent / relative
+        try:
+            part = json.loads(part_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise FixtureContractError(f"fixture part is unreadable: {relative}") from exc
+        part_cases = part.get("cases") if isinstance(part, Mapping) else None
+        if not isinstance(part_cases, list):
+            raise FixtureContractError(f"fixture part must contain cases: {relative}")
+        cases.extend(part_cases)
+    package = {**manifest, "cases": cases}
+    digest = hashlib.sha256(canonical_json_bytes(package)).hexdigest()
     if digest != FIXTURE_SHA256:
         raise FixtureContractError(
             f"fixture digest mismatch: expected {FIXTURE_SHA256}, observed {digest}"
         )
-    try:
-        package = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise FixtureContractError("fixture must be valid UTF-8 JSON") from exc
     validate_frozen_package(package)
     return package
 
@@ -237,7 +253,9 @@ def run_pilot(
     metrics = calculate_metrics(package, case_payloads)
     threshold_results = apply_thresholds(package["thresholds"], metrics)
     all_cases_pass = all(item["case_result"] == "pass" for item in case_payloads)
-    all_thresholds_pass = all(item["result"] == "pass" for item in threshold_results.values())
+    all_thresholds_pass = all(
+        item["result"] == "pass" for item in threshold_results.values()
+    )
     payload = {
         "schema_version": "1.0",
         "package_version": package["package_version"],
