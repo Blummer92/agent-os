@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the frozen, read-only RC6 T01-T24 technical pilot."""
+"""Run or preflight the frozen, read-only RC6 T01-T24 technical pilot."""
 from __future__ import annotations
 
 import argparse
@@ -180,6 +180,89 @@ def _markdown(payload: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _preflight_markdown(payload: dict[str, Any]) -> str:
+    return "\n".join([
+        "# RC6 Technical Pilot Preflight",
+        "",
+        f"- Tested SHA: `{payload['tested_sha']}`",
+        f"- Package: `{payload['package_version']}`",
+        f"- Frozen cases validated: {payload['summary']['validated_cases']}",
+        f"- Overall result: **{payload['summary']['result'].upper()}**",
+        "",
+        "Validated the fixture contract, exact frozen SHA, component blob identities, registry provenance, and import boundary.",
+        "No T01-T24 case was executed.",
+        "",
+        "## Authorization Boundary",
+        "",
+        "This preflight is evidence only. It does not authorize pilot execution, implementation, repository writes, readiness changes, or merge.",
+        "",
+    ])
+
+
+def _failure_run(mode: str, tested_sha: str, exc: Exception, exit_code: int) -> PilotRun:
+    payload = {
+        "report_version": "1.0",
+        "mode": mode,
+        "package_version": "RC6-TF-1.0",
+        "tested_sha": tested_sha,
+        "summary": {"result": "failed-closed"},
+        "error": {"type": type(exc).__name__, "message": str(exc)},
+        "authorization": {"pilot_execution": "not-authorized", "implementation": "not-authorized", "repository_writes": "not-authorized", "merge": "not-authorized"},
+    }
+    markdown = "\n".join([
+        "# RC6 Technical Pilot Failure Evidence",
+        "",
+        f"- Mode: `{mode}`",
+        f"- Tested SHA: `{tested_sha}`",
+        "- Overall result: **FAILED CLOSED**",
+        f"- Error type: `{type(exc).__name__}`",
+        f"- Error: {exc}",
+        "",
+        "No authorization was granted by this failed run.",
+        "",
+    ])
+    return PilotRun(payload, json.dumps(payload, sort_keys=True, indent=2) + "\n", markdown, exit_code)
+
+
+def _write_outputs(run: PilotRun, output_dir: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    json_path = output_dir / "rc6-technical-pilot.json"
+    markdown_path = output_dir / "rc6-technical-pilot.md"
+    json_path.write_text(run.json_text, encoding="utf-8")
+    markdown_path.write_text(run.markdown_text, encoding="utf-8")
+    manifest = "\n".join([
+        f"{hashlib.sha256(json_path.read_bytes()).hexdigest()}  {json_path.name}",
+        f"{hashlib.sha256(markdown_path.read_bytes()).hexdigest()}  {markdown_path.name}",
+        "",
+    ])
+    (output_dir / "SHA256SUMS").write_text(manifest, encoding="utf-8")
+
+
+def run_preflight(fixture: str | Path, repository_root: str | Path, tested_sha: str, verify_head: bool = True) -> PilotRun:
+    package = load_package(fixture)
+    if tested_sha != FROZEN_SHA:
+        raise PilotContractError(f"tested SHA must be {FROZEN_SHA}")
+    root = Path(repository_root).resolve()
+    api = load_api(root)
+    verify_baseline(root, package, tested_sha, api, verify_head)
+    payload = {
+        "report_version": "1.0",
+        "mode": "preflight",
+        "package_version": package["package_version"],
+        "tested_sha": tested_sha,
+        "summary": {"result": "pass", "validated_cases": len(package["cases"]), "cases_executed": 0},
+        "checks": {
+            "fixture_contract": "pass",
+            "frozen_sha": "pass",
+            "component_blob_identities": "pass",
+            "registry_provenance": "pass",
+            "import_boundary": "pass",
+        },
+        "authorization": {"pilot_execution": "not-authorized", "implementation": "not-authorized", "repository_writes": "not-authorized", "merge": "not-authorized"},
+    }
+    return PilotRun(payload, json.dumps(payload, sort_keys=True, indent=2) + "\n", _preflight_markdown(payload), 0)
+
+
 def run_pilot(fixture: str | Path, repository_root: str | Path, tested_sha: str, verify_head: bool = True) -> PilotRun:
     package = load_package(fixture)
     if tested_sha != FROZEN_SHA:
@@ -205,7 +288,7 @@ def run_pilot(fixture: str | Path, repository_root: str | Path, tested_sha: str,
     passed, deterministic = sum(case["passed"] for case in cases), sum(case["actual"]["deterministic"] for case in cases)
     ok = passed == 24 and deterministic == 24 and all(item["passed"] for item in thresholds.values())
     payload = {
-        "report_version": "1.0", "package_version": package["package_version"], "tested_sha": tested_sha,
+        "report_version": "1.0", "mode": "pilot", "package_version": package["package_version"], "tested_sha": tested_sha,
         "summary": {"result": "pass" if ok else "fail", "total_cases": 24, "passed_cases": passed, "failed_cases": 24 - passed, "deterministic_cases": deterministic, "thresholds_passed": all(item["passed"] for item in thresholds.values())},
         "thresholds": thresholds, "cases": cases,
         "authorization": {"implementation": "not-authorized", "repository_writes": "not-authorized", "merge": "not-authorized"},
@@ -219,20 +302,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repository-root", type=Path, default=Path("."))
     parser.add_argument("--tested-sha", required=True)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--preflight-only", action="store_true")
     args = parser.parse_args(argv)
+    mode = "preflight" if args.preflight_only else "pilot"
     try:
-        run = run_pilot(args.fixture, args.repository_root, args.tested_sha)
-        args.output_dir.mkdir(parents=True, exist_ok=True)
-        (args.output_dir / "rc6-technical-pilot.json").write_text(run.json_text, encoding="utf-8")
-        (args.output_dir / "rc6-technical-pilot.md").write_text(run.markdown_text, encoding="utf-8")
-        print(run.markdown_text, end="")
-        return run.exit_code
+        run = run_preflight(args.fixture, args.repository_root, args.tested_sha) if args.preflight_only else run_pilot(args.fixture, args.repository_root, args.tested_sha)
     except PilotContractError as exc:
-        print(f"RC6 technical pilot contract error: {exc}", file=sys.stderr)
-        return 2
+        run = _failure_run(mode, args.tested_sha, exc, 2)
     except Exception as exc:
-        print(f"RC6 technical pilot execution error: {exc}", file=sys.stderr)
-        return 3
+        run = _failure_run(mode, args.tested_sha, exc, 3)
+    try:
+        _write_outputs(run, args.output_dir)
+    except OSError as exc:
+        print(f"RC6 technical pilot evidence-write error: {exc}", file=sys.stderr)
+        return 4
+    print(run.markdown_text, end="")
+    return run.exit_code
 
 
 if __name__ == "__main__":

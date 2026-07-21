@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -75,6 +76,42 @@ def test_threshold_denominators_are_frozen():
     assert thresholds["active_exemptions_reviewed"]["denominator"] == ["T13"]
 
 
+def test_preflight_validates_frozen_boundary_without_executing_cases(monkeypatch):
+    cases = [{"case_id": case_id} for case_id in pilot.EXPECTED_IDS]
+    package = {"package_version": "RC6-TF-1.0", "cases": cases}
+    calls = []
+    api = object()
+
+    monkeypatch.setattr(pilot, "load_package", lambda fixture: package)
+    monkeypatch.setattr(pilot, "load_api", lambda root: api)
+    monkeypatch.setattr(
+        pilot,
+        "verify_baseline",
+        lambda root, value, sha, loaded_api, verify_head: calls.append(
+            (root, value, sha, loaded_api, verify_head)
+        ),
+    )
+    monkeypatch.setattr(
+        pilot,
+        "_once",
+        lambda *args: pytest.fail("preflight must not execute a pilot case"),
+    )
+
+    result = pilot.run_preflight(FIXTURE, BASELINE_ROOT, pilot.FROZEN_SHA, verify_head=False)
+
+    assert calls == [(BASELINE_ROOT, package, pilot.FROZEN_SHA, api, False)]
+    assert result.exit_code == 0
+    assert result.payload["mode"] == "preflight"
+    assert result.payload["summary"] == {
+        "result": "pass",
+        "validated_cases": 24,
+        "cases_executed": 0,
+    }
+    assert result.payload["authorization"]["pilot_execution"] == "not-authorized"
+    assert "No T01-T24 case was executed" in result.markdown_text
+    assert json.loads(result.json_text) == result.payload
+
+
 def test_runner_orchestrates_two_passes_without_executing_frozen_pilot(monkeypatch):
     cases = [{"case_id": f"T{number:02d}", "title": "fixture"} for number in range(1, 25)]
     package = {"package_version": "RC6-TF-1.0", "cases": cases, "thresholds": {}}
@@ -119,6 +156,7 @@ def test_runner_orchestrates_two_passes_without_executing_frozen_pilot(monkeypat
 
     assert calls == [case_id for case_id in pilot.EXPECTED_IDS for _ in range(2)]
     assert result.exit_code == 0
+    assert result.payload["mode"] == "pilot"
     assert result.payload["summary"]["passed_cases"] == 24
     assert result.payload["summary"]["deterministic_cases"] == 24
     assert all(
@@ -129,17 +167,18 @@ def test_runner_orchestrates_two_passes_without_executing_frozen_pilot(monkeypat
     assert "This report is evidence only" in result.markdown_text
 
 
-def test_wrong_sha_fails_closed_before_loading_interfaces(monkeypatch):
+@pytest.mark.parametrize("target", ["run_preflight", "run_pilot"])
+def test_wrong_sha_fails_closed_before_loading_interfaces(monkeypatch, target):
     monkeypatch.setattr(
         pilot,
         "load_api",
         lambda root: pytest.fail("interfaces must not load for a mismatched SHA"),
     )
     with pytest.raises(pilot.PilotContractError, match="tested SHA"):
-        pilot.run_pilot(FIXTURE, BASELINE_ROOT, "0" * 40, verify_head=False)
+        getattr(pilot, target)(FIXTURE, BASELINE_ROOT, "0" * 40, verify_head=False)
 
 
-def test_cli_contract_error_exit_code(monkeypatch, tmp_path):
+def test_cli_contract_error_writes_failed_closed_evidence(monkeypatch, tmp_path):
     code = pilot.main(
         [
             "--fixture",
@@ -152,5 +191,21 @@ def test_cli_contract_error_exit_code(monkeypatch, tmp_path):
             str(tmp_path),
         ]
     )
+
     assert code == 2
-    assert not list(tmp_path.iterdir())
+    assert {path.name for path in tmp_path.iterdir()} == {
+        "rc6-technical-pilot.json",
+        "rc6-technical-pilot.md",
+        "SHA256SUMS",
+    }
+    payload = json.loads((tmp_path / "rc6-technical-pilot.json").read_text(encoding="utf-8"))
+    assert payload["summary"]["result"] == "failed-closed"
+    assert payload["error"]["type"] == "PilotContractError"
+    assert payload["authorization"]["repository_writes"] == "not-authorized"
+    markdown = (tmp_path / "rc6-technical-pilot.md").read_text(encoding="utf-8")
+    assert "FAILED CLOSED" in markdown
+    manifest = (tmp_path / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
+    assert manifest == [
+        f"{hashlib.sha256((tmp_path / 'rc6-technical-pilot.json').read_bytes()).hexdigest()}  rc6-technical-pilot.json",
+        f"{hashlib.sha256((tmp_path / 'rc6-technical-pilot.md').read_bytes()).hexdigest()}  rc6-technical-pilot.md",
+    ]
