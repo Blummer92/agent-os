@@ -53,7 +53,7 @@ def test_workflow_uses_separate_verified_runner_and_frozen_checkouts():
     assert "RC6_BASELINE_ROOT: ${{ github.workspace }}/baseline" in text
 
 
-def test_workflow_evidence_is_traceable_and_retained_for_review():
+def test_workflow_evidence_is_traceable_retained_and_portable():
     text = _text()
     assert "${{ github.run_id }}" in text
     assert "${{ github.run_attempt }}" in text
@@ -62,3 +62,7 @@ def test_workflow_evidence_is_traceable_and_retained_for_review():
     assert "Artifact: `%s`" in text
     assert "Runner SHA: `%s`" in text
     assert "Frozen SHA: `%s`" in text
+    assert "if ! test -f evidence/SHA256SUMS; then" in text
+    assert "(cd evidence && sha256sum -c SHA256SUMS)" in text
+    assert "sha256sum \\\n                rc6-technical-pilot.json" in text
+    assert "sha256sum \\\n            evidence/rc6-technical-pilot.json" not in text

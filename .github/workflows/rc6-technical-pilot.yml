@@ -143,10 +143,16 @@ jobs:
           The workflow stopped before normal pilot evidence was produced. This record is evidence only and grants no authorization.
           EOF
           fi
-          sha256sum \
-            evidence/rc6-technical-pilot.json \
-            evidence/rc6-technical-pilot.md \
-            > evidence/SHA256SUMS
+          if ! test -f evidence/SHA256SUMS; then
+            (
+              cd evidence
+              sha256sum \
+                rc6-technical-pilot.json \
+                rc6-technical-pilot.md \
+                > SHA256SUMS
+            )
+          fi
+          (cd evidence && sha256sum -c SHA256SUMS)
 
       - name: Publish step summary
         if: always()
