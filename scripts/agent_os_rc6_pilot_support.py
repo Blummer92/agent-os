@@ -13,8 +13,18 @@ from types import SimpleNamespace
 from typing import Any
 
 FROZEN_SHA = "ca980c38d74b8d3ab30ca67461a9f576281edc75"
+PACKAGE_VERSION = "RC6-TF-1.1"
 EXPECTED_IDS = tuple(f"T{n:02d}" for n in range(1, 25))
 AUTH_EVIDENCE = "authorization=evidence-only-not-implementation-write-or-merge"
+S_CLEAN_INVARIANTS = ["run(value) returns value + 1 for integer input."]
+S_CLEAN_COMPATIBILITY = [
+    "src.pkg.mod:run remains stable within the RC6 synthetic fixture contract."
+]
+S_CLEAN_CONTRACT = {
+    "invariants": S_CLEAN_INVARIANTS,
+    "compatibility": S_CLEAN_COMPATIBILITY,
+}
+T14_OVERRIDE = {"invariants": [], "compatibility": []}
 REQUIRED_CASE_FIELDS = {
     "case_id", "title", "source_type", "scenario", "sanitized_input",
     "fixture_references", "expected", "threshold_classes",
@@ -81,11 +91,20 @@ def validate_package(package: object) -> None:
     if not isinstance(package, dict):
         raise PilotContractError("frozen package must be a JSON object")
     package = _expand_package(package)
-    for field in ("package_version", "frozen_sha", "frozen_identities", "thresholds", "cases"):
+    for field in (
+        "package_version", "frozen_sha", "frozen_identities", "thresholds",
+        "synthetic_fixture_contract", "cases",
+    ):
         if field not in package:
             raise PilotContractError(f"frozen package missing field: {field}")
-    if package["package_version"] != "RC6-TF-1.0" or package["frozen_sha"] != FROZEN_SHA:
+    if package["package_version"] != PACKAGE_VERSION or package["frozen_sha"] != FROZEN_SHA:
         raise PilotContractError("frozen package identity mismatch")
+    contract = package["synthetic_fixture_contract"]
+    if contract != {
+        "S-CLEAN": S_CLEAN_CONTRACT,
+        "behavioral_contract_missing": T14_OVERRIDE,
+    }:
+        raise PilotContractError("synthetic fixture contract mismatch")
     cases = package["cases"]
     if not isinstance(cases, list):
         raise PilotContractError("cases must be a list")
@@ -158,14 +177,22 @@ def _blob_sha(path: Path) -> str:
     return hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest()
 
 
-def verify_baseline(root: Path, package: dict[str, Any], tested_sha: str, api: SimpleNamespace, verify_head: bool) -> None:
+def verify_baseline(
+    root: Path,
+    package: dict[str, Any],
+    tested_sha: str,
+    api: SimpleNamespace,
+    verify_head: bool,
+) -> None:
     if tested_sha != FROZEN_SHA:
         raise PilotContractError(f"tested SHA must be {FROZEN_SHA}")
     if verify_head:
         try:
             head = subprocess.run(
                 ["git", "-C", str(root), "rev-parse", "HEAD"],
-                check=True, capture_output=True, text=True,
+                check=True,
+                capture_output=True,
+                text=True,
             ).stdout.strip()
         except (OSError, subprocess.SubprocessError) as exc:
             raise PilotContractError("unable to verify baseline HEAD") from exc
@@ -186,41 +213,67 @@ def verify_baseline(root: Path, package: dict[str, Any], tested_sha: str, api: S
         if actual != ids[name]:
             raise PilotContractError(f"frozen implementation identity mismatch: {name}")
     provenance = api.compute_registry_provenance(api.RegistryReader(paths["registry_blob"]))
-    observed = (provenance.registry_version, provenance.algorithm, provenance.algorithm_version, provenance.digest)
-    expected = (ids["registry_version"], ids["provenance_algorithm"], ids["provenance_algorithm_version"], ids["provenance_digest"])
+    observed = (
+        provenance.registry_version,
+        provenance.algorithm,
+        provenance.algorithm_version,
+        provenance.digest,
+    )
+    expected = (
+        ids["registry_version"],
+        ids["provenance_algorithm"],
+        ids["provenance_algorithm_version"],
+        ids["provenance_digest"],
+    )
     if observed != expected:
         raise PilotContractError("registry provenance identity drift")
 
 
 def _record(**overrides: Any) -> dict[str, Any]:
     value = {
-        "capability_id": "widget", "name": "Widget", "summary": "A widget.",
-        "status": "active", "canonical_paths": ["src/pkg/mod.py"],
-        "public_interfaces": ["src.pkg.mod:run"], "owner_agent": "Integration Manager",
-        "known_consumers": ["src/pkg/consumer.py"], "tests": ["test_pkg.py"],
-        "keywords": ["widget"], "reuse_guidance": "Reuse the widget.",
+        "capability_id": "widget",
+        "name": "Widget",
+        "summary": "A widget.",
+        "status": "active",
+        "canonical_paths": ["src/pkg/mod.py"],
+        "public_interfaces": ["src.pkg.mod:run"],
+        "owner_agent": "Integration Manager",
+        "known_consumers": ["src/pkg/consumer.py"],
+        "tests": ["test_pkg.py"],
+        "keywords": ["widget"],
+        "reuse_guidance": "Reuse the widget.",
         "side_effects": ["Performs no writes."],
+        "invariants": list(S_CLEAN_INVARIANTS),
+        "compatibility": list(S_CLEAN_COMPATIBILITY),
     }
     value.update(overrides)
     return value
 
 
-def _write_repo(root: Path, records: list[dict[str, Any]], missing_symbol: bool = False, ambiguous_alias: bool = False) -> None:
+def _write_repo(
+    root: Path,
+    records: list[dict[str, Any]],
+    missing_symbol: bool = False,
+    ambiguous_alias: bool = False,
+) -> None:
     for path in ("04_Registry", "02_Agent_Overlays", "src/pkg"):
         (root / path).mkdir(parents=True, exist_ok=True)
     (root / "04_Registry/reusable-capabilities.yml").write_text(
-        json.dumps({"registry_version": "0.1.0", "capabilities": records}) + "\n", encoding="utf-8"
+        json.dumps({"registry_version": "0.1.0", "capabilities": records}) + "\n",
+        encoding="utf-8",
     )
     (root / "04_Registry/agent-inheritance-registry.md").write_text(
         "| Agent | Inherits | Overlay |\n|---|---|---|\n"
         "| Integration Manager | Global Engineering | integration-manager |\n"
-        "| QA / Test Agent | Global Engineering | qa-test-agent |\n", encoding="utf-8"
+        "| QA / Test Agent | Global Engineering | qa-test-agent |\n",
+        encoding="utf-8",
     )
     alias = "| Legacy Name / Property | Canonical Agent | Status | Notes |\n|---|---|---|---|\n"
     if ambiguous_alias:
         alias += (
             "\n| Legacy Name / Property | Default Canonical Agent | Alternate Canonical Agent | Reason |\n"
-            "|---|---|---|---|\n| PM Agent / Reporting Agent | Integration Manager | QA / Test Agent | fixture |\n"
+            "|---|---|---|---|\n"
+            "| PM Agent / Reporting Agent | Integration Manager | QA / Test Agent | fixture |\n"
         )
     (root / "04_Registry/legacy-agent-alias-registry.md").write_text(alias, encoding="utf-8")
     (root / "02_Agent_Overlays/integration-manager.md").write_text("# Integration Manager\n", encoding="utf-8")
@@ -228,14 +281,19 @@ def _write_repo(root: Path, records: list[dict[str, Any]], missing_symbol: bool 
     (root / "src/pkg/mod.py").write_text("def run(value):\n    return value + 1\n", encoding="utf-8")
     symbol = "missing" if missing_symbol else "run"
     (root / "src/pkg/consumer.py").write_text(
-        f"from src.pkg.mod import {symbol}\n\ndef use(value):\n    return {symbol}(value)\n", encoding="utf-8"
+        f"from src.pkg.mod import {symbol}\n\ndef use(value):\n    return {symbol}(value)\n",
+        encoding="utf-8",
     )
     (root / "test_pkg.py").write_text(
-        f"from src.pkg.mod import {symbol}\n\ndef test_value():\n    assert {symbol}(1) == 2\n", encoding="utf-8"
+        f"from src.pkg.mod import {symbol}\n\ndef test_value():\n    assert {symbol}(1) == 2\n",
+        encoding="utf-8",
     )
 
 
-def synthetic(api: SimpleNamespace, variant: str) -> tuple[list[Any], Any, tempfile.TemporaryDirectory[str]]:
+def synthetic(
+    api: SimpleNamespace,
+    variant: str,
+) -> tuple[list[Any], Any, tempfile.TemporaryDirectory[str]]:
     temp = tempfile.TemporaryDirectory(prefix="rc6-pilot-")
     root = Path(temp.name)
     records, lookup, missing, ambiguous = [_record()], {"capability_id": "widget"}, False, False
@@ -257,6 +315,8 @@ def synthetic(api: SimpleNamespace, variant: str) -> tuple[list[Any], Any, tempf
         records, missing = [_record(public_interfaces=["src.pkg.mod:missing"])], True
     elif variant == "missing_active_path":
         records = [_record(canonical_paths=["src/pkg/mod.py", "src/pkg/missing.py"])]
+    elif variant == "behavioral_contract_missing":
+        records = [_record(**T14_OVERRIDE)]
     _write_repo(root, records, missing, ambiguous)
     reader = api.RegistryReader(root / "04_Registry/reusable-capabilities.yml")
     results = list(api.discover_capabilities(reader, attach_provenance=True, **lookup))
@@ -267,11 +327,17 @@ def readiness(api: SimpleNamespace, expected: str) -> Any:
     body = {"ready": R_READY, "blocked": R_BLOCKED, "needs-decision": R_NEEDS}[expected]
     value = api.evaluate_issue_readiness(body)
     if value.outcome.value != expected:
-        raise PilotContractError(f"readiness fixture produced {value.outcome.value}, expected {expected}")
+        raise PilotContractError(
+            f"readiness fixture produced {value.outcome.value}, expected {expected}"
+        )
     return value
 
 
-def evidence(case: dict[str, Any], root: Path, api: SimpleNamespace) -> tuple[Any, list[Any], Any, Any, list[Any]]:
+def evidence(
+    case: dict[str, Any],
+    root: Path,
+    api: SimpleNamespace,
+) -> tuple[Any, list[Any], Any, Any, list[Any]]:
     scenario, expected = case["scenario"], case["expected"]
     base, keep = readiness(api, expected["base_readiness_before"]), []
     if scenario in {"current_exemption", "current_clean"}:
@@ -280,41 +346,65 @@ def evidence(case: dict[str, Any], root: Path, api: SimpleNamespace) -> tuple[An
         results = list(api.discover_capabilities(reader, capability_id=cid, attach_provenance=True))
         report = api.validate_registry(root)
     elif scenario == "no_match":
-        _, report, temp = synthetic(api, "clean_verified"); keep.append(temp)
+        _, report, temp = synthetic(api, "clean_verified")
+        keep.append(temp)
         reader = api.RegistryReader(Path(temp.name) / "04_Registry/reusable-capabilities.yml")
-        results = list(api.discover_capabilities(reader, capability_id="does-not-exist", attach_provenance=True))
+        results = list(
+            api.discover_capabilities(reader, capability_id="does-not-exist", attach_provenance=True)
+        )
     elif scenario == "provenance_mismatch":
-        results, _, a = synthetic(api, "clean_verified"); _, report, b = synthetic(api, "snapshot_b"); keep += [a, b]
+        results, _, a = synthetic(api, "clean_verified")
+        _, report, b = synthetic(api, "snapshot_b")
+        keep += [a, b]
     elif scenario == "missing_provenance":
-        results, report, temp = synthetic(api, "clean_verified"); keep.append(temp)
+        results, report, temp = synthetic(api, "clean_verified")
+        keep.append(temp)
         results = [replace(item, provenance=None) for item in results]
     elif scenario == "unsupported_provenance":
-        results, _, temp = synthetic(api, "clean_verified"); keep.append(temp)
+        results, _, temp = synthetic(api, "clean_verified")
+        keep.append(temp)
         p = api.RegistryProvenance("future-registry-provenance", 999, "0.1.0", "0" * 64)
         results = [replace(item, provenance=p) for item in results]
-        report = api.ValidationReport.from_findings([], provenance=p, capabilities_checked=1, checks_run=1)
+        report = api.ValidationReport.from_findings(
+            [], provenance=p, capabilities_checked=1, checks_run=1
+        )
     elif scenario == "unverified_boundary":
-        results, report, temp = synthetic(api, "clean_verified"); keep.append(temp)
+        results, report, temp = synthetic(api, "clean_verified")
+        keep.append(temp)
         results = [replace(item, confidence=api.Confidence.UNVERIFIED) for item in results]
     elif scenario in {"contradicted_evidence", "future_validation_code"}:
-        results, _, temp = synthetic(api, "clean_verified"); keep.append(temp)
+        results, _, temp = synthetic(api, "clean_verified")
+        keep.append(temp)
         future = scenario == "future_validation_code"
         finding = api.ValidationFinding(
             "future.surface-check" if future else "contract.contradicted",
             api.EvidenceConfidence.MANUAL_REVIEW if future else api.EvidenceConfidence.CONTRADICTED,
             api.ValidationSeverity.MANUAL_REVIEW if future else api.ValidationSeverity.WARN,
-            "widget", "future" if future else "contract",
+            "widget",
+            "future" if future else "contract",
             "Future validation evidence requires review." if future else "Caller evidence is contradicted.",
             (api.ValidationEvidence("src/pkg/mod.py", 1, "run", "fixture", "structured evidence"),),
             "future code is not yet governed" if future else None,
         )
-        report = api.ValidationReport.from_findings([finding], provenance=results[0].provenance, capabilities_checked=1, checks_run=1)
+        report = api.ValidationReport.from_findings(
+            [finding],
+            provenance=results[0].provenance,
+            capabilities_checked=1,
+            checks_run=1,
+        )
     elif scenario == "malformed_discovery":
-        _, report, temp = synthetic(api, "clean_verified"); keep.append(temp); results = ["not-a-result"]
+        _, report, temp = synthetic(api, "clean_verified")
+        keep.append(temp)
+        results = ["not-a-result"]
     elif scenario == "malformed_validation":
-        results, _, temp = synthetic(api, "clean_verified"); keep.append(temp); report = object()
+        results, _, temp = synthetic(api, "clean_verified")
+        keep.append(temp)
+        report = object()
     else:
-        variant = scenario if scenario not in {"blocked_readiness", "needs_decision_readiness", "behavioral_contract_missing", "clean_verified"} else "clean_verified"
-        results, report, temp = synthetic(api, variant); keep.append(temp)
+        variant = scenario if scenario not in {
+            "blocked_readiness", "needs_decision_readiness", "clean_verified"
+        } else "clean_verified"
+        results, report, temp = synthetic(api, variant)
+        keep.append(temp)
     attached = api.attach_reuse_evidence(base, results, report)
     return base, results, report, attached, keep
