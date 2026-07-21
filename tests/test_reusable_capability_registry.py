@@ -3,12 +3,18 @@ from __future__ import annotations
 import ast
 import importlib
 import re
+import sys
 from pathlib import Path
 
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 REGISTRY_PATH = ROOT / "04_Registry" / "reusable-capabilities.yml"
+REGISTRY_PACKAGE_SRC = ROOT / "08_Tooling" / "reusable-capability-registry" / "src"
+sys.path.insert(0, str(REGISTRY_PACKAGE_SRC))
+
+from reusable_capability_registry.reader import RegistryReader  # noqa: E402
+
 REQUIRED_FIELDS = {
     "capability_id",
     "name",
@@ -23,23 +29,20 @@ REQUIRED_FIELDS = {
     "reuse_guidance",
     "side_effects",
 }
-EXPECTED_IDS = {
-    "issue-acceptance-report",
-    "issue-readiness-evaluator",
-    "issue-label-checker",
-    "readonly-connector-contract",
-    "navigation-index-reader",
-    "issue-batch-identity-collision-check",
-    "issue-batch-supplied-graph-scope-checks",
-}
-EXPECTED_STATUSES = {
+APPROVED_CAPABILITY_STATUSES = {
+    "approval-applicability-evidence": "experimental",
     "issue-acceptance-report": "active",
-    "issue-readiness-evaluator": "active",
-    "issue-label-checker": "active",
-    "readonly-connector-contract": "active",
-    "navigation-index-reader": "active",
+    "issue-batch-graph": "experimental",
     "issue-batch-identity-collision-check": "experimental",
+    "issue-batch-planning": "experimental",
     "issue-batch-supplied-graph-scope-checks": "experimental",
+    "issue-label-checker": "active",
+    "issue-readiness-evaluator": "active",
+    "issueplan-current-state-evidence": "active",
+    "issueplan-metadata-scanner": "active",
+    "navigation-index-reader": "active",
+    "readonly-connector-contract": "active",
+    "scheduler-planning-handoff": "active",
 }
 SAFE_PACKAGE_INTERFACES = {
     "scripts.agent_os_issue_acceptance:render_report",
@@ -81,16 +84,32 @@ def _module_candidates(module_name: str, canonical_paths: list[str]) -> list[Pat
     ]
 
 
-def test_registry_shape_and_seed_count() -> None:
+def test_registry_matches_approved_capability_statuses() -> None:
     registry = _load_registry()
     capabilities = registry["capabilities"]
 
     assert registry["registry_version"] == "0.1.0"
-    assert len(capabilities) == len(EXPECTED_IDS)
-    assert {record["capability_id"] for record in capabilities} == EXPECTED_IDS
     assert {
         record["capability_id"]: record["status"] for record in capabilities
-    } == EXPECTED_STATUSES
+    } == APPROVED_CAPABILITY_STATUSES
+
+
+def test_registry_reader_is_deterministic_and_id_sorted(tmp_path: Path) -> None:
+    first = RegistryReader(REGISTRY_PATH).records
+    second = RegistryReader(REGISTRY_PATH).records
+    assert first == second
+    assert tuple(record.capability_id for record in first) == tuple(
+        sorted(APPROVED_CAPABILITY_STATUSES)
+    )
+
+    document = _load_registry()
+    document["capabilities"] = list(reversed(document["capabilities"]))
+    reordered_path = tmp_path / "reordered.yml"
+    reordered_path.write_text(
+        yaml.safe_dump(document, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    assert RegistryReader(reordered_path).records == first
 
 
 def test_required_fields_identifiers_and_consumer_evidence() -> None:
@@ -102,9 +121,9 @@ def test_required_fields_identifiers_and_consumer_evidence() -> None:
         assert record["known_consumers"] or record.get("known_consumer_exemption")
 
 
-def test_canonical_and_test_paths_exist() -> None:
+def test_canonical_consumer_and_test_paths_exist() -> None:
     for record in _load_registry()["capabilities"]:
-        for field in ("canonical_paths", "tests"):
+        for field in ("canonical_paths", "known_consumers", "tests"):
             for relative_path in record[field]:
                 assert (ROOT / relative_path).exists(), (
                     f"{record['capability_id']} references missing {field} path: {relative_path}"

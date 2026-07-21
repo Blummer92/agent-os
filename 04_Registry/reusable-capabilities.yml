@@ -239,3 +239,298 @@ capabilities:
       - Every coverage result declares coverage_scope=supplied-graph-only.
       - Failed graph checks prevent a coverage pass.
       - Unresolved dependency findings require manual review and never repair relationships.
+
+  - capability_id: issueplan-metadata-scanner
+    name: IssuePlan Metadata Scanner
+    summary: Scans supplied issue text for all IssuePlan metadata candidates and projects safe compatibility evidence without authorizing execution.
+    status: active
+    canonical_paths:
+      - scripts/agent_os_issue_acceptance/issueplan_scanner.py
+      - scripts/agent_os_issue_acceptance/parse_issue.py
+    public_interfaces:
+      - scripts.agent_os_issue_acceptance.issueplan_scanner:SourceEnvelope
+      - scripts.agent_os_issue_acceptance.issueplan_scanner:ScanFinding
+      - scripts.agent_os_issue_acceptance.issueplan_scanner:AdoptionClass
+      - scripts.agent_os_issue_acceptance.issueplan_scanner:ScanResult
+      - scripts.agent_os_issue_acceptance.issueplan_scanner:scan_issueplan_source
+      - scripts.agent_os_issue_acceptance.parse_issue:scan_issue_metadata
+      - scripts.agent_os_issue_acceptance.parse_issue:project_issue_metadata
+    owner_agent: Integration Manager
+    supporting_agents:
+      - QA / Test Agent
+    known_consumers:
+      - scripts/agent_os_issue_acceptance/parse_issue.py
+    tests:
+      - tests/agent_os_issue_acceptance/test_issueplan_scanner.py
+      - tests/agent_os_issue_acceptance/test_parse_issue.py
+    keywords:
+      - issueplan
+      - metadata-scanner
+      - provenance
+      - compatibility-projection
+    reuse_guidance: Use the canonical scanner for all-candidates-first parsing and use the projection functions only for the documented legacy compatibility boundary; do not create another YAML parser.
+    side_effects:
+      - Parses only caller-supplied text and source metadata.
+      - Performs no network calls, issue mutation, repository writes, or authorization decisions.
+    extension_points:
+      - Add governed fields only through the scanner contract and corresponding focused tests.
+    invariants:
+      - issueplan_scanner.py remains the sole fenced-YAML IssuePlan parser.
+      - Scanner and projection evidence always preserve execution_authorized=false.
+      - Unsafe, stale, malformed, conflicting, or unknown evidence fails closed.
+    failure_modes:
+      - Malformed metadata candidates
+      - Conflicting or duplicate candidates
+      - Partial, inaccessible, unsupported, or stale source evidence
+      - Unknown governed fields or unsupported profile versions
+    compatibility:
+      - parse_issue_metadata remains a temporary lossy compatibility facade backed exclusively by the canonical scanner.
+      - New consumers should use direct-module scanner and projection interfaces.
+
+  - capability_id: issue-batch-graph
+    name: Immutable Issue Batch Graph
+    summary: Builds one deterministic immutable graph from normalized supplied issue nodes and preserves resolved and unresolved dependency evidence.
+    status: experimental
+    canonical_paths:
+      - scripts/agent_os_issue_acceptance/batch_graph.py
+    public_interfaces:
+      - scripts.agent_os_issue_acceptance.batch_graph:IssueBatchNode
+      - scripts.agent_os_issue_acceptance.batch_graph:IssueBatchGraph
+      - scripts.agent_os_issue_acceptance.batch_graph:load_issue_batch_fixture
+      - scripts.agent_os_issue_acceptance.batch_graph:build_issue_batch_graph
+    owner_agent: Integration Manager
+    supporting_agents:
+      - QA / Test Agent
+    known_consumers:
+      - scripts/agent_os_issue_acceptance/batch_checks.py
+      - scripts/agent_os_issue_acceptance/batch_extensions.py
+      - scripts/agent_os_issue_acceptance/batch_planning.py
+      - scripts/agent_os_issue_acceptance/scheduler_handoff.py
+    tests:
+      - tests/agent_os_issue_acceptance/test_batch_graph.py
+      - tests/agent_os_issue_acceptance/test_batch_checks.py
+      - tests/agent_os_issue_acceptance/test_batch_planning.py
+    keywords:
+      - issue-batch
+      - immutable-graph
+      - dependencies
+      - supplied-evidence
+    reuse_guidance: Build graphs only from normalized supplied nodes; preserve deterministic node and dependency ordering and do not infer repository-wide completeness.
+    side_effects:
+      - Reads only supplied in-memory node evidence.
+      - Performs no repository search, network call, issue mutation, or external write.
+    inputs:
+      - Normalized IssueBatchNode values or bounded fixture mappings.
+    outputs:
+      - Deterministic immutable IssueBatchGraph evidence.
+    invariants:
+      - Node IDs are unique and graph nodes are ordered by node_id.
+      - Resolved and unresolved dependencies remain distinct.
+      - Graph construction does not authorize execution.
+    failure_modes:
+      - Duplicate node IDs
+      - Unknown fixture fields
+      - Malformed node or dependency values
+    compatibility:
+      - Existing package-facade exports remain supported compatibility surfaces.
+      - New consumers should import the graph contract directly from batch_graph.
+
+  - capability_id: issue-batch-planning
+    name: Supplied-Graph Batch Planning
+    summary: Runs bounded graph checks and classifies supplied issue nodes into deterministic planning cohorts without authorizing execution.
+    status: experimental
+    canonical_paths:
+      - scripts/agent_os_issue_acceptance/batch_extensions.py
+      - scripts/agent_os_issue_acceptance/batch_planning.py
+      - scripts/agent_os_issue_acceptance/batch_checks.py
+    public_interfaces:
+      - scripts.agent_os_issue_acceptance.batch_extensions:GraphCheck
+      - scripts.agent_os_issue_acceptance.batch_extensions:GraphCheckResult
+      - scripts.agent_os_issue_acceptance.batch_extensions:GraphCheckRun
+      - scripts.agent_os_issue_acceptance.batch_extensions:run_graph_checks
+      - scripts.agent_os_issue_acceptance.batch_planning:PlanningClassification
+      - scripts.agent_os_issue_acceptance.batch_planning:PlanningCohort
+      - scripts.agent_os_issue_acceptance.batch_planning:BatchPlanningResult
+      - scripts.agent_os_issue_acceptance.batch_planning:evaluate_batch_plan
+    owner_agent: Integration Manager
+    supporting_agents:
+      - QA / Test Agent
+    known_consumers:
+      - scripts/agent_os_issue_acceptance/scheduler_handoff.py
+    tests:
+      - tests/agent_os_issue_acceptance/test_batch_extensions.py
+      - tests/agent_os_issue_acceptance/test_batch_planning.py
+      - tests/agent_os_issue_acceptance/test_batch_checks.py
+    keywords:
+      - issue-batch
+      - graph-checks
+      - planning
+      - cohorts
+    reuse_guidance: Run planning only over a supplied immutable graph, preserve fail-closed extension behavior, and treat every classification as evidence rather than execution authorization.
+    side_effects:
+      - Reads only supplied graph and check evidence.
+      - Performs no Scheduler task creation, repository search, issue mutation, or external write.
+    inputs:
+      - Immutable IssueBatchGraph evidence.
+    outputs:
+      - Deterministic GraphCheckRun and BatchPlanningResult evidence.
+    extension_points:
+      - Add bounded graph checks through the GraphCheck protocol with unique stable check IDs.
+    invariants:
+      - Planning scope remains supplied-graph-only.
+      - execution_authorized remains false.
+      - Malformed or failing extensions route conservatively instead of escaping the boundary.
+    failure_modes:
+      - Duplicate or malformed check identifiers
+      - Malformed extension output
+      - Unknown node or dependency evidence
+      - Incomplete graph coverage
+    compatibility:
+      - Existing package-facade exports remain supported compatibility surfaces.
+      - New consumers should use direct-module planning and extension imports.
+
+  - capability_id: scheduler-planning-handoff
+    name: Scheduler Planning Handoff Contract
+    summary: Produces and validates a deterministic versioned handoff binding supplied-graph planning evidence to canonical digests for downstream Scheduler consumers.
+    status: active
+    canonical_paths:
+      - scripts/agent_os_issue_acceptance/scheduler_handoff.py
+    public_interfaces:
+      - scripts.agent_os_issue_acceptance.scheduler_handoff:HandoffCohort
+      - scripts.agent_os_issue_acceptance.scheduler_handoff:SchedulerPlanningHandoff
+      - scripts.agent_os_issue_acceptance.scheduler_handoff:HandoffValidationOutcome
+      - scripts.agent_os_issue_acceptance.scheduler_handoff:HandoffValidationResult
+      - scripts.agent_os_issue_acceptance.scheduler_handoff:compute_graph_digest
+      - scripts.agent_os_issue_acceptance.scheduler_handoff:compute_planning_result_digest
+      - scripts.agent_os_issue_acceptance.scheduler_handoff:compute_handoff_digest
+      - scripts.agent_os_issue_acceptance.scheduler_handoff:serialize_scheduler_planning_handoff
+      - scripts.agent_os_issue_acceptance.scheduler_handoff:validate_scheduler_planning_handoff
+    owner_agent: Integration Manager
+    supporting_agents:
+      - QA / Test Agent
+    known_consumers:
+      - 08_Tooling/workflow-scheduler/src/workflow_scheduler/planning/draft_ingestion.py
+    tests:
+      - tests/agent_os_issue_acceptance/test_scheduler_handoff.py
+      - 08_Tooling/workflow-scheduler/tests/test_draft_ingestion.py
+    keywords:
+      - scheduler
+      - planning-handoff
+      - digest
+      - deterministic-serialization
+    reuse_guidance: Use the direct-module contract to create or validate supplied handoff evidence; downstream consumers must perform their own freshness and authorization checks.
+    side_effects:
+      - Computes deterministic JSON bytes and SHA-256 digests from supplied evidence.
+      - Performs no network calls, task creation, approval storage, or external writes.
+    inputs:
+      - Immutable IssueBatchGraph and BatchPlanningResult evidence.
+    outputs:
+      - Versioned SchedulerPlanningHandoff bytes and fail-closed validation evidence.
+    invariants:
+      - planning_scope remains supplied-graph-only.
+      - execution_authorized remains false.
+      - Unknown fields, malformed values, or digest mismatch fail closed.
+    failure_modes:
+      - Unsupported contract or planning-result version
+      - Missing, malformed, or unknown fields
+      - Partial graph coverage
+      - Handoff digest mismatch
+      - Required external revalidation unavailable
+    compatibility:
+      - The existing package facade used by Workflow Scheduler remains a supported compatibility surface.
+      - New consumers should prefer direct-module imports.
+
+  - capability_id: issueplan-current-state-evidence
+    name: IssuePlan Current-State Evidence
+    summary: Builds immutable versioned source snapshots and compares current IssuePlan evidence against an expected implementation contract.
+    status: active
+    canonical_paths:
+      - scripts/agent_os_issue_acceptance/issueplan_current_state.py
+    public_interfaces:
+      - scripts.agent_os_issue_acceptance.issueplan_current_state:IssuePlanSourceSnapshot
+      - scripts.agent_os_issue_acceptance.issueplan_current_state:IssuePlanCurrentStateEvidence
+      - scripts.agent_os_issue_acceptance.issueplan_current_state:IssuePlanCurrentStateComparison
+      - scripts.agent_os_issue_acceptance.issueplan_current_state:IssuePlanCurrentStateOutcome
+      - scripts.agent_os_issue_acceptance.issueplan_current_state:build_issueplan_current_state_evidence
+      - scripts.agent_os_issue_acceptance.issueplan_current_state:compare_issueplan_current_state
+      - scripts.agent_os_issue_acceptance.issueplan_current_state:compute_issueplan_current_state_fingerprint
+    owner_agent: Integration Manager
+    supporting_agents:
+      - QA / Test Agent
+    known_consumers:
+      - scripts/agent_os_issue_acceptance/approval_records.py
+      - 08_Tooling/workflow-scheduler/src/workflow_scheduler/planning/draft_ingestion.py
+    tests:
+      - tests/agent_os_issue_acceptance/test_issueplan_current_state.py
+      - tests/agent_os_issue_acceptance/test_approval_records.py
+      - 08_Tooling/workflow-scheduler/tests/test_draft_ingestion.py
+    keywords:
+      - issueplan
+      - current-state
+      - freshness
+      - evidence-fingerprint
+    reuse_guidance: Build evidence only from a matching SourceEnvelope and ScanResult, supply timestamps explicitly, and compare immutable evidence before relying on an earlier implementation contract.
+    side_effects:
+      - Computes deterministic local evidence and fingerprints.
+      - Performs no live lookup, mutation, approval, or external write.
+    inputs:
+      - Supplied scanner envelope and scanner result with explicit observation metadata.
+    outputs:
+      - Immutable IssuePlanCurrentStateEvidence and comparison results.
+    invariants:
+      - Source identity must match between the envelope and scanner result.
+      - Set-like governed fields are canonicalized deterministically.
+      - execution_authorized remains false.
+    failure_modes:
+      - Source identity mismatch
+      - Partial, inaccessible, unsupported, stale, or ambiguous evidence
+      - Unsupported schema or field state
+      - Changed source or implementation-contract bindings
+    compatibility:
+      - Existing package-facade imports remain supported for current Workflow Scheduler consumers.
+      - New consumers should prefer direct-module imports.
+
+  - capability_id: approval-applicability-evidence
+    name: Approval Applicability Evidence
+    summary: Represents immutable approval bindings and evaluates whether supplied approval evidence still applies to current repository and IssuePlan evidence.
+    status: experimental
+    canonical_paths:
+      - scripts/agent_os_issue_acceptance/approval_records.py
+    public_interfaces:
+      - scripts.agent_os_issue_acceptance.approval_records:ApprovalBinding
+      - scripts.agent_os_issue_acceptance.approval_records:ApprovalRecord
+      - scripts.agent_os_issue_acceptance.approval_records:ApprovalApplicabilityResult
+      - scripts.agent_os_issue_acceptance.approval_records:evaluate_approval_applicability
+    owner_agent: Integration Manager
+    supporting_agents:
+      - QA / Test Agent
+    known_consumers:
+      - scripts/agent_os_issue_acceptance/approved_execution_projection.py
+    tests:
+      - tests/agent_os_issue_acceptance/test_approval_records.py
+      - tests/agent_os_issue_acceptance/test_approved_execution_projection.py
+    keywords:
+      - approval
+      - applicability
+      - immutable-binding
+      - invalidation
+    reuse_guidance: Evaluate only caller-supplied immutable evidence and treat applicability as report evidence; this capability does not issue approval or authorize execution.
+    side_effects:
+      - Computes immutable approval and applicability evidence locally.
+      - Performs no approval persistence, repository mutation, Scheduler dispatch, or external write.
+    inputs:
+      - Supplied approval record, proposal, current IssuePlan evidence, and repository-state evidence.
+    outputs:
+      - Fail-closed ApprovalApplicabilityResult evidence.
+    invariants:
+      - Approval bindings remain content-addressed and versioned.
+      - Stale, changed, expired, invalidated, or unsupported evidence fails closed.
+      - execution_authorized and side_effects_performed remain false.
+    failure_modes:
+      - Unsupported version or malformed binding
+      - Changed source, graph, handoff, repository, or contract evidence
+      - Expired, invalidated, or superseded approval
+      - Missing or incomplete current evidence
+    compatibility:
+      - Existing package-facade exports remain supported compatibility surfaces.
+      - New consumers should prefer direct-module imports.
