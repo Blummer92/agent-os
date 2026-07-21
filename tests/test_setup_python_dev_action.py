@@ -11,6 +11,7 @@ EXPECTED_CALLERS = {
     "agent-os-issue-acceptance-report.yml",
     "agent-os-issue-label-apply-dry-run.yml",
     "agent-os-issue-label-report.yml",
+    "rc6-technical-pilot.yml",
 }
 
 
@@ -44,7 +45,7 @@ def test_shared_python_dev_action_has_narrow_contract():
     assert content.count("python -m pip install -r requirements-dev.txt") == 1
 
 
-def test_exactly_three_approved_workflows_use_shared_action():
+def test_exactly_four_approved_workflows_use_shared_action():
     callers = {
         path.name
         for path in WORKFLOWS.glob("*.yml")
