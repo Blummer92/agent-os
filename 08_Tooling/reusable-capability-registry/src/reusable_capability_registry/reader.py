@@ -6,6 +6,7 @@ from typing import Any
 import re
 
 import yaml
+from yaml.nodes import MappingNode
 
 from .models import CapabilityRecord
 
@@ -24,6 +25,7 @@ _OPTIONAL_FIELDS = frozenset({
 _ALLOWED_FIELDS = _REQUIRED_FIELDS | _OPTIONAL_FIELDS
 _ALLOWED_STATUSES = frozenset({"active", "experimental", "deprecated", "replaced", "internal-only"})
 _ALLOWED_TOP_LEVEL_FIELDS = frozenset({"registry_version", "capabilities"})
+_MERGE_TAG = "tag:yaml.org,2002:merge"
 
 
 class RegistryError(ValueError):
@@ -40,6 +42,44 @@ class RegistryFormatError(RegistryError):
 
 class UnsupportedRegistryVersion(RegistryError):
     pass
+
+
+class _DuplicateMappingKeyError(yaml.YAMLError):
+    pass
+
+
+class _UniqueKeySafeLoader(yaml.SafeLoader):
+    """SafeLoader variant that rejects duplicate explicitly authored keys."""
+
+    def construct_mapping(self, node: MappingNode, deep: bool = False) -> dict[Any, Any]:
+        if not isinstance(node, MappingNode):
+            return super().construct_mapping(node, deep=deep)
+
+        seen: set[tuple[str, Any]] = set()
+        for key_node, _ in node.value:
+            if key_node.tag == _MERGE_TAG:
+                identity = ("merge", "<<")
+                key_text = "<<"
+            else:
+                key = self.construct_object(key_node, deep=False)
+                try:
+                    hash(key)
+                except TypeError:
+                    # Preserve PyYAML's normal failure for unhashable mapping keys.
+                    continue
+                identity = ("key", key)
+                key_text = str(key)
+
+            if identity in seen:
+                key_line = key_node.start_mark.line + 1
+                mapping_line = node.start_mark.line + 1
+                raise _DuplicateMappingKeyError(
+                    f"duplicate YAML mapping key {key_text!r} at line {key_line} "
+                    f"(mapping starts at line {mapping_line})"
+                )
+            seen.add(identity)
+
+        return super().construct_mapping(node, deep=deep)
 
 
 def repository_root() -> Path:
@@ -171,7 +211,9 @@ class RegistryReader:
         except OSError as exc:
             raise RegistryFileError(f"unable to read registry: {self.registry_path}") from exc
         try:
-            document = yaml.safe_load(text)
+            document = yaml.load(text, Loader=_UniqueKeySafeLoader)
+        except _DuplicateMappingKeyError as exc:
+            raise RegistryFormatError(str(exc)) from exc
         except yaml.YAMLError as exc:
             raise RegistryFormatError("registry YAML is malformed") from exc
         if not isinstance(document, Mapping):
