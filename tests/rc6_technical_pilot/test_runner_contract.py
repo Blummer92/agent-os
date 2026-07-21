@@ -18,8 +18,8 @@ from scripts.agent_os_rc6_technical_pilot.runner import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
-FIXTURE = ROOT / "tests/fixtures/rc6_technical_pilot/cases.json"
-SOURCE = ROOT / "scripts/agent_os_rc6_technical_pilot/runner.py"
+FIXTURE = ROOT / "tests/fixtures/rc6_technical_pilot/manifest.json"
+SOURCE_DIR = ROOT / "scripts/agent_os_rc6_technical_pilot"
 
 
 def test_exact_sha_guard_fails_closed_for_input_or_checkout_mismatch():
@@ -116,7 +116,9 @@ def test_markdown_summary_states_evidence_only_authorization_boundary():
 
 
 def test_runner_source_has_no_github_or_external_mutation_path():
-    source = SOURCE.read_text(encoding="utf-8")
+    source = "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(SOURCE_DIR.glob("*.py"))
+    )
     forbidden = [
         "requests.",
         "urllib.request",
