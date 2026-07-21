@@ -1,4 +1,4 @@
-"""Reusable Agent OS issue acceptance and readiness checks."""
+"""Agent OS issue-automation contracts and evidence across scanner, readiness, planning, handoff, approval, projection, and reporting domains."""
 
 from .approved_execution_projection import (
     APPROVED_EXECUTION_PROJECTION_SCHEMA_VERSION,
