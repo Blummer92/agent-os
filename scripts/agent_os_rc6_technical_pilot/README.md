@@ -4,7 +4,7 @@ This package implements issue #500 as a deterministic, offline orchestration lay
 
 ## Boundaries
 
-- The frozen input is `tests/fixtures/rc6_technical_pilot/cases.json`.
+- The frozen input is `tests/fixtures/rc6_technical_pilot/manifest.json` plus six ordered case-part files.
 - The runner accepts only frozen SHA `ca980c38d74b8d3ab30ca67461a9f576281edc75`.
 - RC3 discovery, RC4 validation, RC5 reuse evidence, readiness evaluation, and report rendering are imported from their existing implementations.
 - The runner does not update GitHub, labels, issues, pull requests, registry records, readiness state, repository source files, Notion, Drive, Cloud Build, or production systems.
