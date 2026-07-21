@@ -1,0 +1,91 @@
+name: RC6 Technical Pilot
+
+on:
+  workflow_dispatch:
+    inputs:
+      frozen_sha:
+        description: "Exact frozen Agent OS SHA to test"
+        required: true
+        default: "ca980c38d74b8d3ab30ca67461a9f576281edc75"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  technical-pilot:
+    name: Execute frozen T01-T24 technical package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out runner implementation
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python test environment
+        uses: ./.github/actions/setup-python-dev
+
+      - name: Check out exact frozen baseline
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.frozen_sha }}
+          path: frozen-repo
+          persist-credentials: false
+
+      - name: Run focused runner and workflow contract tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}/08_Tooling/reusable-capability-registry/src
+        run: python -m pytest tests/rc6_technical_pilot
+
+      - name: Execute RC6 technical pilot
+        id: pilot
+        env:
+          PYTHONPATH: ${{ github.workspace }}/08_Tooling/reusable-capability-registry/src
+          OUTPUT_DIR: ${{ runner.temp }}/rc6-technical-pilot
+        run: |
+          set +e
+          runner_sha="$(git rev-parse HEAD)"
+          python -m scripts.agent_os_rc6_technical_pilot.cli \
+            --repository-root frozen-repo \
+            --frozen-sha "${{ inputs.frozen_sha }}" \
+            --runner-sha "$runner_sha" \
+            --output-dir "$OUTPUT_DIR"
+          exit_code=$?
+          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+          echo "runner_sha=$runner_sha" >> "$GITHUB_OUTPUT"
+          echo "artifact_dir=$OUTPUT_DIR" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload structured technical-pilot artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rc6-technical-pilot-${{ inputs.frozen_sha }}
+          path: |
+            ${{ steps.pilot.outputs.artifact_dir }}/rc6-technical-pilot.json
+            ${{ steps.pilot.outputs.artifact_dir }}/rc6-technical-pilot.md
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Publish technical-pilot step summary
+        if: always()
+        run: |
+          {
+            echo "## RC6 Technical Pilot"
+            echo
+            echo "Runner SHA: \`${{ steps.pilot.outputs.runner_sha }}\`"
+            echo "Tested SHA: \`${{ inputs.frozen_sha }}\`"
+            echo "Artifact: \`rc6-technical-pilot-${{ inputs.frozen_sha }}\`"
+            echo "Runner exit code: \`${{ steps.pilot.outputs.exit_code }}\`"
+            echo
+            summary="${{ steps.pilot.outputs.artifact_dir }}/rc6-technical-pilot.md"
+            if [ -f "$summary" ]; then
+              cat "$summary"
+            else
+              echo "The runner failed closed before producing a Markdown artifact."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce technical-pilot result
+        if: always()
+        run: exit "${{ steps.pilot.outputs.exit_code || '2' }}"
