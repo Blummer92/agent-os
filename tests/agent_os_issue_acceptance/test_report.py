@@ -90,3 +90,59 @@ def test_exit_code_is_nonzero_only_for_fail():
     assert exit_code_for(Status.WARN) == 0
     assert exit_code_for(Status.MANUAL_REVIEW) == 0
     assert exit_code_for(Status.FAIL) == 1
+
+
+def _report_with(informational):
+    return AcceptanceReport(
+        linked_issue=243,
+        overall_status=Status.WARN,
+        checks=[CheckResult("registry evidence", Status.PASS, "ok", ["records=5"])],
+        manual_review_items=[],
+        evidence=[],
+        blockers=[],
+        remaining_risks=["Registry evidence does not authorize merge."],
+        informational_checks=informational,
+    )
+
+
+def test_empty_informational_checks_render_byte_for_byte_legacy_output():
+    # Adding the defaulted field but leaving it empty must not change the output.
+    empty = _report_with(())
+    assert "Reusable-capability evidence" not in render_report(empty)
+    assert render_report(empty) == (
+        "Issue Acceptance Report\n"
+        "Linked issue: #243\n"
+        "Linked issue status: resolved\n"
+        "Overall result: warn\n"
+        "Checks:\n"
+        "- registry evidence: pass - ok\n"
+        "  - evidence: records=5\n"
+        "Manual review items:\n"
+        "- none\n"
+        "Evidence:\n"
+        "- none\n"
+        "Blockers:\n"
+        "- none\n"
+        "Remaining risks:\n"
+        "- Registry evidence does not authorize merge.\n"
+    )
+
+
+def test_populated_informational_section_renders_after_remaining_risks():
+    report = _report_with(
+        (
+            CheckResult("reuse candidate alpha", Status.PASS, "positive match", ["capability_id=alpha"]),
+        )
+    )
+    rendered = render_report(report)
+    tail = rendered.split("Remaining risks:\n- Registry evidence does not authorize merge.\n", 1)[1]
+    assert tail == (
+        "Reusable-capability evidence (informational):\n"
+        "- notice: Reusable-capability evidence is informational only; it does not authorize "
+        "implementation, repository writes, readiness changes, or merge, and matching "
+        "registry provenance proves only same-snapshot identity, not correctness, "
+        "compatibility, ownership, approval, or readiness.\n"
+        "- reuse candidate alpha: pass - positive match\n"
+        "  - evidence: capability_id=alpha\n"
+    )
+    assert rendered.endswith("\n") and not rendered.endswith("\n\n")
