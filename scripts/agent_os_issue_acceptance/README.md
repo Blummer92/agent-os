@@ -1,9 +1,8 @@
-# Agent OS Issue Acceptance Checker
+# Agent OS Issue Automation
 
-Fixture-first, report-only checks for local issue, pull-request, changed-file, and
-diff evidence under the Agent OS issue-acceptance standard.
+Pure-local contracts, evidence models, scanners, planners, handoffs, approvals, and reports used by Agent OS issue automation.
 
-## Local usage
+## Local acceptance usage
 
 ```bash
 python -m scripts.agent_os_issue_acceptance.cli \
@@ -15,59 +14,71 @@ python -m scripts.agent_os_issue_acceptance.cli \
 
 Use `--format json` for stable machine-readable report fields.
 
+## Canonical domains
+
+| Domain | Canonical modules |
+|---|---|
+| IssuePlan scanning and compatibility projection | `issueplan_scanner.py`, `parse_issue.py` |
+| Acceptance and readiness evidence | `policy.py`, `readiness.py`, `models.py`, `report.py` |
+| Connected issue retrieval and pagination evidence | `issue_scanner.py`, `github_issue_source.py` |
+| Batch graph, conflict checks, extensions, and planning | `batch_graph.py`, `batch_checks.py`, `batch_extensions.py`, `batch_planning.py`, related check modules |
+| Scheduler planning-handoff contracts | `scheduler_handoff.py` |
+| IssuePlan current-state evidence | `issueplan_current_state.py` |
+| Approval records and approved-execution projection | `approval_records.py`, `approved_execution_projection.py` |
+| Sprint governance and reporting | `sprint_dashboard.py` |
+
+This map documents the current package; it does not create new APIs or authorize a physical split.
+
+## Permitted dependency direction
+
+```text
+IssuePlan scanner -> acceptance/readiness and current-state evidence
+acceptance primitives -> batch graph/planning -> Scheduler handoff
+current-state + handoff + repository evidence -> approvals -> execution projection
+Sprint reporting -> supplied immutable evidence only
+Workflow Scheduler runtime -> stable public contracts only
+```
+
+Production modules must not reverse these directions. Scanner or retrieval code must not import planning, approval, projection, reporting, or Workflow Scheduler runtime code. Acceptance and readiness code must not import planning or Scheduler contracts. Planning must not create Scheduler tasks or execution state. Reporting must not mutate readiness, planning, approvals, Scheduler state, or canonical evidence. Compatibility code must not become a second parser or authority.
+
 ## Canonical IssuePlan scanning
 
-`issueplan_scanner.py` is the only acceptance-block candidate discovery and YAML
-parsing implementation. It scans all candidates before classification and keeps
-source identity, source revision, candidate multiplicity, malformed candidates,
-unknown governed fields, profile compatibility, and identity findings distinct.
+`issueplan_scanner.py` is the only acceptance-block candidate discovery and YAML parsing implementation. It preserves source identity, revision, multiplicity, malformed candidates, unknown governed fields, profile compatibility, and identity findings.
 
-`parse_issue_metadata()` remains a temporary lossy compatibility facade. It calls
-the canonical scanner and projects only one safe candidate into `IssueMetadata`.
-It contains no regex, fenced-block, or YAML parser of its own.
+`parse_issue_metadata()` is a temporary lossy compatibility facade. It calls the canonical scanner and contains no parser of its own. Removal requires a separately governed API migration after all callers consume scanner results directly.
 
-Compatibility behavior is fail-closed:
-
-- no candidate remains ordinary missing metadata;
-- malformed, duplicate-identical, and conflicting candidates remain distinct;
-- partial, inaccessible, unsupported, or stale sources remain distinct;
-- unknown governed fields and unsupported versions are not coerced;
-- unsafe findings carry bounded `issueplan-scanner:*` manual-review reasons;
-- scanner validity, readiness, labels, and approvals never authorize execution.
-
-Policy, readiness, IA5 documentation readiness, and legacy preflight consume this
-scanner-backed evidence. Markdown headings remain a separate human-readable input
-where their existing contracts require them; they do not rediscover YAML blocks.
-Removal of the compatibility facade requires a separately governed public-API
-migration after all callers consume scanner results directly.
+Scanner validity, readiness, labels, and approvals never authorize execution.
 
 ## Linked-issue parsing
 
-The checker resolves a linked issue only when exactly one unique same-repository
-target is introduced by a supported explicit closing keyword.
+A linked issue resolves only when exactly one unique same-repository target is introduced by a supported closing keyword: `close`, `closes`, `closed`, `fix`, `fixes`, `fixed`, `resolve`, `resolves`, or `resolved`. Optional colon and whitespace forms are supported.
 
-Supported case-insensitive keywords are `close`, `closes`, `closed`, `fix`,
-`fixes`, `fixed`, `resolve`, `resolves`, and `resolved`. Whitespace and optional
-colon forms are supported, such as `Closes #223` and `Closes: #223`.
+Bare references and `Addresses #...` are non-authoritative. Fenced code, inline code, blockquotes, and HTML comments are masked. Critical consumers use `parse_linked_issue_result()`; `parse_linked_issue()` remains a lossy wrapper.
 
-The structured parser returns:
+## Public-interface policy
 
-- `resolved`: exactly one unique supported explicit target;
-- `none`: no issue-like references;
-- `manual-review`: references exist but one authoritative target is not proven.
+Existing package exports remain supported until a separately governed compatibility migration proves removal safe. New interfaces use direct-module imports by default.
 
-Bare references and `Addresses #223` are non-authoritative. Fenced code, inline
-code, blockquotes, and HTML comments are masked before resolution.
-`parse_linked_issue()` remains a lossy wrapper; critical consumers use
-`parse_linked_issue_result()`.
+A package-level re-export requires all of:
+
+- intentional stability;
+- a verified operational consumer;
+- focused tests;
+- owner evidence;
+- compatibility guidance;
+- a registry-impact decision when applicable.
+
+Facade growth is not justified by convenience alone. Private helpers and speculative interfaces remain internal.
+
+## Physical-split threshold
+
+A later package split requires current evidence of at least one of: circular dependency pressure, conflicting ownership, incompatible release requirements, repeated unrelated facade changes, inability to test or distribute a domain independently, or independently versioned operational consumers. Directory size or visual cleanliness is not sufficient.
 
 ## Metadata and issue scanning
 
-`metadata_validation.py` evaluates MD2A fixture evidence offline and report-only.
-It never edits issues, labels, readiness fields, workflows, or external systems.
+`metadata_validation.py` evaluates MD2A fixture evidence offline and report-only. It never edits issues, labels, readiness fields, workflows, or external systems.
 
-`issue_scanner.py` converts complete paginated retrieval into provenance-preserving
-records. `issue_scan_cli.py` provides an explicit local GitHub runner:
+`issue_scanner.py` converts complete paginated retrieval into provenance-preserving records. `issue_scan_cli.py` provides an explicit local GitHub runner:
 
 ```bash
 python -m scripts.agent_os_issue_acceptance.issue_scan_cli --repository OWNER/REPO
@@ -75,13 +86,8 @@ python -m scripts.agent_os_issue_acceptance.issue_scan_cli --repository OWNER/RE
 
 Incomplete retrieval exits nonzero. The runner performs no issue or label writes.
 
-## Workflow boundary
+## Workflow and write boundary
 
-The merged report-only workflow consumes structured linked-issue and acceptance
-evidence. It performs issue lookup only for a resolved same-repository target and
-keeps all findings non-authoritative.
+Metadata validation and scanning remain offline and report-only. Connected retrieval consumes caller-supplied readers and preserves provenance. The package does not authorize issue, label, readiness, workflow, Scheduler, credential, production, or external-system writes.
 
-Outcome meaning remains governed by
-`01_Shared_Standards/github/issue-acceptance-automation.md`. The package requires
-no Notion, Drive, Sheets, Docs, Apps Script, production credentials, or external
-write access.
+Outcome meaning remains governed by `01_Shared_Standards/github/issue-acceptance-automation.md`. Package boundaries and facade decisions are governed by issue #464 and the applicable Agent OS governance standards.
