@@ -51,7 +51,7 @@ jobs:
         id: root_tests
         run: |
           set +e
-          python -m pytest tests -q --maxfail=1 > rc6-root-test.log 2>&1
+          PYTHONPATH=src python -m pytest tests -q --maxfail=1 > rc6-root-test.log 2>&1
           code=$?
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           exit 0
