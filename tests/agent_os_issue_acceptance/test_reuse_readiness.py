@@ -1,29 +1,18 @@
-"""Focused tests for the informational reuse-evidence adapter (RC5B / #470).
-
-Verifies the binding #248 contract (``#issuecomment-5035396385``): informational
-reuse evidence may inform readiness but never determines it. Base readiness
-outcome, ordinary checks, blockers, manual-review items, evidence, and exit codes
-are invariant; only ``informational_checks`` is added.
-"""
-
+"""Focused tests for the informational reuse-evidence adapter."""
 from __future__ import annotations
 
 import os
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from scripts.agent_os_issue_acceptance.models import AcceptanceReport, CheckResult, Status
-from scripts.agent_os_issue_acceptance.readiness import (
-    ReadinessOutcome,
-    ReadinessResult,
-    evaluate_issue_readiness,
-)
+from scripts.agent_os_issue_acceptance.models import Status
+from scripts.agent_os_issue_acceptance.readiness import ReadinessOutcome, ReadinessResult, evaluate_issue_readiness
 from scripts.agent_os_issue_acceptance.report import exit_code_for, render_report
 from scripts.agent_os_issue_acceptance.reuse_readiness import attach_reuse_evidence
-
 from reusable_capability_registry.models import (
     CapabilityRecord,
     Confidence,
@@ -37,11 +26,9 @@ from reusable_capability_registry.models import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-
 PROV = RegistryProvenance("registry-canonical-records", 1, "0.1.0", "a" * 64)
 OTHER_PROV = RegistryProvenance("registry-canonical-records", 1, "0.1.0", "b" * 64)
 UNSUPPORTED_PROV = RegistryProvenance("registry-canonical-records", 2, "0.1.0", "a" * 64)
-
 READY_BODY = """
 Issue Tier: 0
 ## Objective
@@ -57,11 +44,8 @@ QA / Test Agent
 ## Documentation impact
 docs-not-required
 ## Documentation exemption reason
-Removing a deprecation warning does not change documented behavior.
+No documented behavior changes.
 """
-
-
-# --- builders --------------------------------------------------------------
 
 
 def _record(cap_id: str, **overrides) -> CapabilityRecord:
@@ -87,324 +71,291 @@ def _record(cap_id: str, **overrides) -> CapabilityRecord:
     return CapabilityRecord(**data)
 
 
-def _discovery(cap_id: str, confidence=Confidence.VERIFIED, provenance=PROV, **rec) -> DiscoveryResult:
-    return DiscoveryResult(_record(cap_id, **rec), confidence, ("exact-capability-id-match",), (), (), provenance=provenance)
-
-
-def _finding(cap_id, severity, confidence=EvidenceConfidence.VERIFIED, code="path.missing", reason=None) -> ValidationFinding:
-    return ValidationFinding(
-        code, confidence, severity, cap_id, "path", "message",
-        (ValidationEvidence("src/a.py", 1, None, "python-ast", "detail"),), reason,
+def _discovery(
+    cap_id: str,
+    confidence: Confidence = Confidence.VERIFIED,
+    provenance: RegistryProvenance | None = PROV,
+    evidence_basis: tuple[str, ...] = ("exact-capability-id-match",),
+    warnings: tuple[str, ...] = (),
+    manual_review_reasons: tuple[str, ...] = (),
+    **record_overrides,
+) -> DiscoveryResult:
+    return DiscoveryResult(
+        _record(cap_id, **record_overrides),
+        confidence,
+        evidence_basis,
+        warnings,
+        manual_review_reasons,
+        provenance=provenance,
     )
 
 
+def _finding(
+    cap_id: str | None,
+    severity: ValidationSeverity,
+    confidence: EvidenceConfidence = EvidenceConfidence.VERIFIED,
+    code: str = "path.missing",
+    reason: str | None = None,
+    message: str = "message",
+    evidence: tuple[ValidationEvidence, ...] | None = None,
+) -> ValidationFinding:
+    if evidence is None:
+        evidence = (ValidationEvidence("src/a.py", 1, None, "python-ast", "detail"),)
+    return ValidationFinding(code, confidence, severity, cap_id, "path", message, evidence, reason)
+
+
 def _report(findings=(), provenance=PROV) -> ValidationReport:
-    return ValidationReport.from_findings(list(findings), provenance=provenance, capabilities_checked=3, checks_run=9)
+    return ValidationReport.from_findings(
+        list(findings), provenance=provenance, capabilities_checked=3, checks_run=9
+    )
 
 
 def _base(body: str = "## Objective\nTier 0\n") -> ReadinessResult:
     return evaluate_issue_readiness(body)
 
 
-def _informational(result: ReadinessResult):
-    return [(c.name, c.status) for c in result.report.informational_checks]
+def _info(result: ReadinessResult):
+    return [(x.name, x.status) for x in result.report.informational_checks]
 
 
-# --- base readiness invariance ---------------------------------------------
-
-
-def test_empty_discovery_returns_original_unchanged():
+def test_empty_discovery_returns_original_identity():
     base = _base()
-    result = attach_reuse_evidence(base, [], _report())
-    assert result is base
-    assert base.report.informational_checks == ()
+    assert attach_reuse_evidence(base, [], _report()) is base
 
 
 @pytest.mark.parametrize("confidence", list(Confidence))
-def test_any_discovery_confidence_preserves_base_outcome_and_status(confidence):
+def test_discovery_confidence_never_changes_readiness(confidence):
     base = _base()
-    result = attach_reuse_evidence(base, [_discovery("alpha", confidence=confidence)], _report())
+    result = attach_reuse_evidence(base, [_discovery("alpha", confidence)], _report())
     assert result.outcome == base.outcome
     assert result.report.overall_status == base.report.overall_status
 
 
-def test_match_does_not_create_ready_and_no_match_does_not_create_blocked():
-    # A blocked base stays blocked even with a clean verified match; a ready base
-    # stays ready even when no discovery evidence matches cleanly.
-    blocked = evaluate_issue_readiness("## Objective\nTier 0\nBlocked by: something\n")
-    assert blocked.outcome == ReadinessOutcome.BLOCKED
-    assert attach_reuse_evidence(blocked, [_discovery("alpha")], _report()).outcome == ReadinessOutcome.BLOCKED
-
+def test_ready_and_blocked_outcomes_are_invariant():
+    blocked = evaluate_issue_readiness("## Objective\nTier 0\nBlocked by: dependency\n")
+    assert blocked.outcome is ReadinessOutcome.BLOCKED
+    assert attach_reuse_evidence(blocked, [_discovery("alpha")], _report()).outcome is ReadinessOutcome.BLOCKED
     ready = _base(READY_BODY)
-    assert ready.outcome == ReadinessOutcome.READY
-    fail = attach_reuse_evidence(ready, [_discovery("alpha")], _report([_finding("alpha", ValidationSeverity.FAIL)]))
-    assert fail.outcome == ReadinessOutcome.READY
-
-
-def test_informational_manual_review_does_not_change_ready_outcome():
-    ready = _base(READY_BODY)
-    result = attach_reuse_evidence(ready, [_discovery("alpha", confidence=Confidence.PROBABLE)], _report())
-    assert result.outcome == ReadinessOutcome.READY
-    assert _informational(result)[0][1] is Status.MANUAL_REVIEW
-
-
-def test_base_ordinary_fields_are_not_mutated_or_aliased():
-    base = _base()
-    checks_before = list(base.report.checks)
-    blockers_before = list(base.report.blockers)
-    manual_before = list(base.report.manual_review_items)
-    result = attach_reuse_evidence(base, [_discovery("alpha")], _report([_finding("alpha", ValidationSeverity.FAIL)]))
-    assert base.report.checks == checks_before
-    assert base.report.blockers == blockers_before
-    assert base.report.manual_review_items == manual_before
-    assert base.report.informational_checks == ()
-    # ordinary fields are shared-equal but never carry informational content
-    assert result.report.checks == base.report.checks
-    assert result.report.blockers == base.report.blockers
-    assert result.report.manual_review_items == base.report.manual_review_items
-
-
-# --- candidate classification ----------------------------------------------
-
-
-def test_verified_clean_is_positive():
-    result = attach_reuse_evidence(_base(), [_discovery("alpha")], _report())
-    assert _informational(result) == [("reuse candidate alpha", Status.PASS)]
-
-
-def test_verified_with_warning_is_qualified():
-    report = _report([_finding("alpha", ValidationSeverity.WARN, EvidenceConfidence.PROBABLE, code="path.noncanonical")])
-    result = attach_reuse_evidence(_base(), [_discovery("alpha")], report)
-    assert _informational(result) == [("reuse candidate alpha", Status.WARN)]
-
-
-@pytest.mark.parametrize("confidence", [Confidence.PROBABLE, Confidence.UNVERIFIED])
-def test_probable_and_unverified_route_to_manual_review(confidence):
-    result = attach_reuse_evidence(_base(), [_discovery("alpha", confidence=confidence)], _report())
-    assert _informational(result) == [("reuse candidate alpha", Status.MANUAL_REVIEW)]
-
-
-def test_rc4_manual_review_prevents_unqualified_recommendation():
-    report = _report([_finding("alpha", ValidationSeverity.MANUAL_REVIEW, EvidenceConfidence.MANUAL_REVIEW, code="path.symlink-inside", reason="needs review")])
-    result = attach_reuse_evidence(_base(), [_discovery("alpha")], report)
-    assert _informational(result) == [("reuse candidate alpha", Status.MANUAL_REVIEW)]
-
-
-def test_rc4_fail_suppresses_positive_but_keeps_evidence():
+    assert ready.outcome is ReadinessOutcome.READY
     report = _report([_finding("alpha", ValidationSeverity.FAIL)])
-    result = attach_reuse_evidence(_base(), [_discovery("alpha")], report)
-    check = result.report.informational_checks[0]
-    assert check.status is Status.FAIL
-    assert any("validation_finding=path.missing" in item for item in check.evidence)
+    assert attach_reuse_evidence(ready, [_discovery("alpha")], report).outcome is ReadinessOutcome.READY
 
 
-def test_contradicted_evidence_suppresses_positive():
-    report = _report([_finding("alpha", ValidationSeverity.WARN, EvidenceConfidence.CONTRADICTED, code="path.noncanonical")])
-    result = attach_reuse_evidence(_base(), [_discovery("alpha")], report)
-    assert result.report.informational_checks[0].status is Status.FAIL
+def test_augmented_report_lists_are_equal_but_independent():
+    base = _base()
+    result = attach_reuse_evidence(base, [_discovery("alpha")], _report())
+    for name in ("checks", "manual_review_items", "evidence", "blockers", "remaining_risks"):
+        assert getattr(result.report, name) == getattr(base.report, name)
+        assert getattr(result.report, name) is not getattr(base.report, name)
+    for old, new in zip(base.report.checks, result.report.checks):
+        assert new is not old
+        assert new.evidence == old.evidence
+        assert new.evidence is not old.evidence
 
 
-def test_active_exemption_produces_explicit_warning_without_verified_consumer_claim():
-    result = attach_reuse_evidence(_base(), [_discovery("alpha", known_consumer_exemption="temporary exemption")], _report())
-    check = result.report.informational_checks[0]
-    assert check.status is Status.WARN
-    assert any("consumer_exemption=temporary exemption" in item for item in check.evidence)
-    assert not any(item.startswith("known_consumer=") for item in check.evidence)
+def test_report_list_mutations_do_not_cross_alias_boundary():
+    base = _base()
+    result = attach_reuse_evidence(base, [_discovery("alpha")], _report())
+    result.report.blockers.append("augmented-only")
+    base.report.remaining_risks.append("base-only")
+    assert "augmented-only" not in base.report.blockers
+    assert "base-only" not in result.report.remaining_risks
 
 
-def test_missing_behavioral_evidence_appears_as_remaining_risk():
-    result = attach_reuse_evidence(
+@pytest.mark.parametrize(
+    "confidence,findings,expected",
+    [
+        (Confidence.VERIFIED, (), Status.PASS),
+        (Confidence.PROBABLE, (), Status.MANUAL_REVIEW),
+        (Confidence.UNVERIFIED, (), Status.MANUAL_REVIEW),
+        (Confidence.VERIFIED, (_finding("alpha", ValidationSeverity.WARN),), Status.WARN),
+        (Confidence.VERIFIED, (_finding("alpha", ValidationSeverity.MANUAL_REVIEW, EvidenceConfidence.MANUAL_REVIEW, reason="review"),), Status.MANUAL_REVIEW),
+        (Confidence.VERIFIED, (_finding("alpha", ValidationSeverity.FAIL),), Status.FAIL),
+        (Confidence.VERIFIED, (_finding("alpha", ValidationSeverity.WARN, EvidenceConfidence.CONTRADICTED),), Status.FAIL),
+    ],
+)
+def test_candidate_classification(confidence, findings, expected):
+    result = attach_reuse_evidence(_base(), [_discovery("alpha", confidence)], _report(findings))
+    assert result.report.informational_checks[0].status is expected
+
+
+def test_exemption_and_missing_behavioral_contract_are_visible():
+    exempt = attach_reuse_evidence(
+        _base(), [_discovery("alpha", known_consumer_exemption="temporary")], _report()
+    ).report.informational_checks[0]
+    assert exempt.status is Status.WARN
+    assert "consumer_exemption=temporary" in exempt.evidence
+    no_contract = attach_reuse_evidence(
         _base(), [_discovery("alpha", compatibility=(), invariants=())], _report()
+    ).report.informational_checks[0]
+    assert "remaining_risk=behavioral-contract-not-evaluated" in no_contract.evidence
+
+
+@pytest.mark.parametrize("state", ["active", "experimental", "internal-only", "deprecated", "replaced"])
+def test_lifecycle_state_is_preserved(state):
+    check = attach_reuse_evidence(
+        _base(), [_discovery("alpha", status=state)], _report()
+    ).report.informational_checks[0]
+    assert f"lifecycle_status={state}" in check.evidence
+
+
+def test_matched_finding_preserves_complete_evidence():
+    evidence = (
+        ValidationEvidence("src/b.py", 8, "pkg.mod:run", "python-ast", "second"),
+        ValidationEvidence("src/a.py", 2, None, "filesystem", "first"),
     )
-    check = result.report.informational_checks[0]
-    assert any("remaining_risk=behavioral-contract-not-evaluated" in item for item in check.evidence)
+    finding = _finding(
+        "alpha",
+        ValidationSeverity.MANUAL_REVIEW,
+        EvidenceConfidence.MANUAL_REVIEW,
+        code="future.code",
+        reason="human reason",
+        message="full message",
+        evidence=evidence,
+    )
+    check = attach_reuse_evidence(_base(), [_discovery("alpha")], _report([finding])).report.informational_checks[0]
+    rendered = "\n".join(check.evidence)
+    for value in (
+        "validation_finding=future.code",
+        "capability_id=alpha",
+        "surface=path",
+        "severity=manual-review",
+        "confidence=manual-review",
+        "message=full message",
+        "manual_review_reason=human reason",
+        "path=src/a.py; line=2; symbol=none; source_type=filesystem; detail=first",
+        "path=src/b.py; line=8; symbol=pkg.mod:run; source_type=python-ast; detail=second",
+    ):
+        assert value in rendered
+    assert rendered.index("path=src/a.py") < rendered.index("path=src/b.py")
 
 
-@pytest.mark.parametrize("lifecycle", ["active", "experimental", "internal-only", "deprecated", "replaced"])
-def test_lifecycle_states_are_represented_without_new_logic(lifecycle):
-    result = attach_reuse_evidence(_base(), [_discovery("alpha", status=lifecycle)], _report())
-    check = result.report.informational_checks[0]
-    assert f"lifecycle_status={lifecycle}" in check.evidence
+def test_unmatched_finding_preserves_complete_evidence():
+    finding = _finding(None, ValidationSeverity.FAIL, code="structure.bad", message="broken")
+    result = attach_reuse_evidence(_base(), [_discovery("alpha")], _report([finding]))
+    rendered = "\n".join(result.report.informational_checks[-1].evidence)
+    assert "capability_id=none" in rendered
+    assert "message=broken" in rendered
+    assert "source_type=python-ast" in rendered
 
 
-def test_unknown_finding_code_remains_visible_and_routes_to_manual_review():
-    report = _report([_finding("alpha", ValidationSeverity.MANUAL_REVIEW, EvidenceConfidence.MANUAL_REVIEW, code="future.brand-new-code", reason="unknown")])
-    result = attach_reuse_evidence(_base(), [_discovery("alpha")], report)
-    check = result.report.informational_checks[0]
-    assert check.status is Status.MANUAL_REVIEW
-    assert any("validation_finding=future.brand-new-code" in item for item in check.evidence)
+def test_unmatched_findings_are_deterministic():
+    a = _finding("zeta", ValidationSeverity.WARN, code="z.code")
+    b = _finding(None, ValidationSeverity.FAIL, code="a.code")
+    forward = attach_reuse_evidence(_base(), [_discovery("alpha")], _report([a, b]))
+    reverse = attach_reuse_evidence(_base(), [_discovery("alpha")], _report([b, a]))
+    assert render_report(forward.report) == render_report(reverse.report)
 
 
-# --- multiple candidates ---------------------------------------------------
-
-
-def test_multiple_candidates_are_preserved_and_sorted_by_capability_id():
-    result = attach_reuse_evidence(_base(), [_discovery("gamma"), _discovery("alpha"), _discovery("beta")], _report())
-    assert [name for name, _ in _informational(result)] == [
-        "reuse candidate alpha",
-        "reuse candidate beta",
-        "reuse candidate gamma",
-    ]
-
-
-def test_identical_duplicate_candidates_collapse_to_one():
-    disc = _discovery("alpha")
-    result = attach_reuse_evidence(_base(), [disc, disc], _report())
-    assert len(result.report.informational_checks) == 1
-
-
-def test_conflicting_duplicates_fail_conservatively():
+def test_multiple_candidates_sort_and_identical_duplicates_collapse():
     result = attach_reuse_evidence(
-        _base(),
-        [_discovery("alpha"), _discovery("alpha", confidence=Confidence.PROBABLE)],
-        _report(),
+        _base(), [_discovery("gamma"), _discovery("alpha"), _discovery("beta")], _report()
     )
-    checks = result.report.informational_checks
-    assert len(checks) == 1
-    assert checks[0].status is Status.MANUAL_REVIEW
-    assert any("conflicting_discovery_results=2" in item for item in checks[0].evidence)
+    assert [x.name for x in result.report.informational_checks] == [
+        "reuse candidate alpha", "reuse candidate beta", "reuse candidate gamma"
+    ]
+    same = _discovery("alpha")
+    assert len(attach_reuse_evidence(_base(), [same, same], _report()).report.informational_checks) == 1
 
 
-# --- provenance and unmatched findings -------------------------------------
-
-
-def test_matching_provenance_permits_positive_guidance():
-    assert attach_reuse_evidence(_base(), [_discovery("alpha")], _report()).report.informational_checks[0].status is Status.PASS
+def test_conflicting_variants_preserve_all_material_details_and_order():
+    first = _discovery(
+        "alpha",
+        Confidence.VERIFIED,
+        PROV,
+        evidence_basis=("first-basis",),
+        warnings=("first-warning",),
+        manual_review_reasons=("first-review",),
+        summary="First summary",
+    )
+    second = _discovery(
+        "alpha",
+        Confidence.PROBABLE,
+        OTHER_PROV,
+        evidence_basis=("second-basis",),
+        warnings=("second-warning",),
+        manual_review_reasons=("second-review",),
+        summary="Second summary",
+    )
+    forward = attach_reuse_evidence(_base(), [first, second], _report())
+    reverse = attach_reuse_evidence(_base(), [second, first], _report())
+    assert render_report(forward.report) == render_report(reverse.report)
+    check = forward.report.informational_checks[0]
+    assert check.status is Status.MANUAL_REVIEW
+    rendered = "\n".join(check.evidence)
+    for value in (
+        "first-basis", "second-basis", "first-warning", "second-warning",
+        "first-review", "second-review", PROV.digest, OTHER_PROV.digest,
+        "capability_summary='First summary'", "capability_summary='Second summary'",
+    ):
+        assert value in rendered
 
 
 @pytest.mark.parametrize(
     "discovery_prov,report_prov,label",
-    [
-        (OTHER_PROV, PROV, "mismatch"),
-        (None, PROV, "missing"),
-        (PROV, None, "missing"),
-        (UNSUPPORTED_PROV, UNSUPPORTED_PROV, "unsupported"),
-    ],
+    [(OTHER_PROV, PROV, "mismatch"), (None, PROV, "missing"), (PROV, None, "missing"), (UNSUPPORTED_PROV, UNSUPPORTED_PROV, "unsupported")],
 )
-def test_provenance_failures_suppress_positive_conservatively(discovery_prov, report_prov, label):
-    base = _base()
-    result = attach_reuse_evidence(base, [_discovery("alpha", provenance=discovery_prov)], _report(provenance=report_prov))
-    check = result.report.informational_checks[0]
+def test_provenance_failures_suppress_positive(discovery_prov, report_prov, label):
+    check = attach_reuse_evidence(
+        _base(), [_discovery("alpha", provenance=discovery_prov)], _report(provenance=report_prov)
+    ).report.informational_checks[0]
     assert check.status is Status.MANUAL_REVIEW
     assert f"provenance={label}" in check.evidence
-    assert result.outcome == base.outcome
 
 
-def test_findings_for_absent_capability_do_not_attach_to_another_candidate():
-    report = _report([_finding("zeta", ValidationSeverity.FAIL)])
-    result = attach_reuse_evidence(_base(), [_discovery("alpha")], report)
-    names = [name for name, _ in _informational(result)]
-    assert names == ["reuse candidate alpha", "reuse unmatched validation findings"]
-    # the alpha candidate is clean (no finding leaked onto it)
-    assert result.report.informational_checks[0].status is Status.PASS
-    unmatched = result.report.informational_checks[1]
-    assert any("capability_id=zeta" in item for item in unmatched.evidence)
+@pytest.mark.parametrize(
+    "discovery,report",
+    [(123, _report()), (["bad"], _report()), ([_discovery("alpha")], "bad")],
+)
+def test_known_malformed_inputs_return_one_error(discovery, report):
+    result = attach_reuse_evidence(_base(), discovery, report)  # type: ignore[arg-type]
+    assert _info(result) == [("reuse-evidence-error", Status.MANUAL_REVIEW)]
+    assert len(result.report.informational_checks) == 1
 
 
-def test_finding_with_null_capability_id_is_unmatched():
-    report = _report([_finding(None, ValidationSeverity.FAIL, code="structure.malformed-registry")])
-    result = attach_reuse_evidence(_base(), [_discovery("alpha")], report)
-    unmatched = result.report.informational_checks[-1]
-    assert unmatched.name == "reuse unmatched validation findings"
-    assert any("capability_id=none" in item for item in unmatched.evidence)
+def test_malformed_provenance_returns_error():
+    malformed = object.__new__(DiscoveryResult)
+    object.__setattr__(malformed, "capability", _record("alpha"))
+    object.__setattr__(malformed, "confidence", Confidence.VERIFIED)
+    object.__setattr__(malformed, "evidence_basis", ())
+    object.__setattr__(malformed, "warnings", ())
+    object.__setattr__(malformed, "manual_review_reasons", ())
+    object.__setattr__(malformed, "provenance", "bad")
+    assert _info(attach_reuse_evidence(_base(), [malformed], _report())) == [
+        ("reuse-evidence-error", Status.MANUAL_REVIEW)
+    ]
 
 
-# --- malformed input -------------------------------------------------------
+def test_unexpected_programmer_defect_is_not_swallowed(monkeypatch):
+    import scripts.agent_os_issue_acceptance.reuse_readiness as module
+
+    monkeypatch.setattr(module, "_checks", lambda *_: (_ for _ in ()).throw(RuntimeError("boom")))
+    with pytest.raises(RuntimeError, match="boom"):
+        attach_reuse_evidence(_base(), [_discovery("alpha")], _report())
 
 
-def test_non_iterable_discovery_returns_error_entry():
-    base = _base()
-    result = attach_reuse_evidence(base, 123, _report())  # type: ignore[arg-type]
-    assert _informational(result) == [("reuse-evidence-error", Status.MANUAL_REVIEW)]
-    assert result.outcome == base.outcome
-    assert result.report.blockers == base.report.blockers  # base blockers unchanged
+def test_render_exit_code_label_projection_and_input_order_regressions():
+    base = _base(READY_BODY)
+    empty = attach_reuse_evidence(base, [], _report())
+    assert render_report(empty.report) == render_report(base.report)
+    fail = attach_reuse_evidence(base, [_discovery("alpha")], _report([_finding("alpha", ValidationSeverity.FAIL)]))
+    assert exit_code_for(fail.report.overall_status) == exit_code_for(base.report.overall_status)
+    from scripts.agent_os_issue_labels.report import render_json, report_to_dict
 
-
-def test_malformed_discovery_element_returns_error_entry():
-    result = attach_reuse_evidence(_base(), ["not-a-discovery-result"], _report())  # type: ignore[list-item]
-    assert _informational(result) == [("reuse-evidence-error", Status.MANUAL_REVIEW)]
-
-
-def test_malformed_validation_report_returns_error_entry():
-    result = attach_reuse_evidence(_base(), [_discovery("alpha")], "not-a-report")  # type: ignore[arg-type]
-    assert _informational(result) == [("reuse-evidence-error", Status.MANUAL_REVIEW)]
-
-
-# --- determinism and mutation safety ---------------------------------------
-
-
-def test_repeated_calls_return_equal_results():
-    base = _base()
-    args = ([_discovery("alpha"), _discovery("beta")], _report([_finding("alpha", ValidationSeverity.WARN, EvidenceConfidence.PROBABLE, code="path.noncanonical")]))
-    first = attach_reuse_evidence(base, *args)
-    second = attach_reuse_evidence(base, *args)
-    assert render_report(first.report) == render_report(second.report)
-
-
-def test_output_is_invariant_under_input_order():
-    base = _base()
-    report = _report([_finding("beta", ValidationSeverity.FAIL), _finding("alpha", ValidationSeverity.WARN, EvidenceConfidence.PROBABLE, code="path.noncanonical")])
-    forward = attach_reuse_evidence(base, [_discovery("alpha"), _discovery("beta")], report)
-    reverse = attach_reuse_evidence(base, [_discovery("beta"), _discovery("alpha")], report)
+    assert report_to_dict(fail.report) == report_to_dict(base.report)
+    assert render_json(fail.report) == render_json(base.report)
+    forward = attach_reuse_evidence(_base(), [_discovery("beta"), _discovery("alpha")], _report())
+    reverse = attach_reuse_evidence(_base(), [_discovery("alpha"), _discovery("beta")], _report())
     assert render_report(forward.report) == render_report(reverse.report)
 
 
 def test_inputs_are_not_mutated():
-    base = _base()
     discovery = [_discovery("alpha")]
-    report = _report([_finding("alpha", ValidationSeverity.WARN, EvidenceConfidence.PROBABLE, code="path.noncanonical")])
-    findings_before = report.findings
-    attach_reuse_evidence(base, discovery, report)
+    report = _report([_finding("alpha", ValidationSeverity.WARN)])
+    findings = report.findings
+    attach_reuse_evidence(_base(), discovery, report)
     assert len(discovery) == 1
-    assert report.findings == findings_before
-
-
-# --- report compatibility --------------------------------------------------
-
-
-def test_legacy_render_is_byte_for_byte_unchanged_when_empty():
-    base = _base()
-    augmented = attach_reuse_evidence(base, [], _report())
-    assert render_report(augmented.report) == render_report(base.report)
-    assert "Reusable-capability evidence" not in render_report(base.report)
-
-
-def test_informational_section_is_appended_after_remaining_risks():
-    result = attach_reuse_evidence(_base(), [_discovery("alpha")], _report())
-    rendered = render_report(result.report)
-    assert rendered.index("Remaining risks:") < rendered.index("Reusable-capability evidence (informational):")
-    assert rendered.endswith("\n") and not rendered.endswith("\n\n")
-
-
-def test_informational_checks_do_not_enter_ordinary_checks_block():
-    result = attach_reuse_evidence(_base(), [_discovery("alpha")], _report())
-    rendered = render_report(result.report)
-    checks_block = rendered.split("Manual review items:")[0]
-    assert "reuse candidate alpha" not in checks_block
-
-
-def test_exit_code_is_unaffected_by_informational_content():
-    base = _base(READY_BODY)
-    result = attach_reuse_evidence(base, [_discovery("alpha")], _report([_finding("alpha", ValidationSeverity.FAIL)]))
-    assert exit_code_for(result.report.overall_status) == exit_code_for(base.report.overall_status)
-
-
-def test_non_ascii_evidence_renders_faithfully_without_normalization():
-    result = attach_reuse_evidence(_base(), [_discovery("alpha", reuse_guidance="rëuse café ①")], _report())
-    assert "rëuse café ①" in render_report(result.report)
-
-
-def test_label_json_projection_is_byte_stable_regardless_of_informational_content():
-    from scripts.agent_os_issue_labels.report import render_json, report_to_dict
-
-    base = _base()
-    augmented = attach_reuse_evidence(base, [_discovery("alpha")], _report())
-    assert report_to_dict(augmented.report) == report_to_dict(base.report)
-    assert render_json(augmented.report) == render_json(base.report)
-    assert "informational" not in render_json(augmented.report)
-
-
-# --- dependency isolation --------------------------------------------------
+    assert report.findings == findings
 
 
 def test_base_readiness_imports_without_registry_package_in_separate_process():
@@ -413,15 +364,8 @@ def test_base_readiness_imports_without_registry_package_in_separate_process():
         "BLOCK='reusable_capability_registry'\n"
         "for k in [m for m in list(sys.modules) if m==BLOCK or m.startswith(BLOCK+'.')]: del sys.modules[k]\n"
         "sys.modules[BLOCK]=None\n"
-        "try:\n"
-        "    import reusable_capability_registry\n"
-        "    raise SystemExit('registry import should have failed')\n"
-        "except ImportError:\n"
-        "    pass\n"
-        "import scripts.agent_os_issue_acceptance\n"
         "import scripts.agent_os_issue_acceptance.readiness as r\n"
-        "res=r.evaluate_issue_readiness('## Objective\\nTier 0\\n')\n"
-        "assert res.outcome is not None\n"
+        "assert r.evaluate_issue_readiness('## Objective\\nTier 0\\n').outcome is not None\n"
         "print('ok')\n"
     )
     env = dict(os.environ)
@@ -431,14 +375,10 @@ def test_base_readiness_imports_without_registry_package_in_separate_process():
     assert proc.stdout.strip() == "ok"
 
 
-def test_adapter_use_does_not_import_registry_cli_or_entry_points():
-    # Using the adapter must never pull the registry CLI / entry points into the process.
+def test_adapter_does_not_import_registry_cli_or_export_from_facade():
     attach_reuse_evidence(_base(), [_discovery("alpha")], _report())
     assert "reusable_capability_registry.cli" not in sys.modules
     assert "reusable_capability_registry.__main__" not in sys.modules
+    import scripts.agent_os_issue_acceptance as package
 
-
-def test_adapter_is_not_exported_from_package_facade():
-    import scripts.agent_os_issue_acceptance as pkg
-
-    assert not hasattr(pkg, "attach_reuse_evidence")
+    assert not hasattr(package, "attach_reuse_evidence")

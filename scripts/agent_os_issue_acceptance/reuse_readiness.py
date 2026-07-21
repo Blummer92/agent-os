@@ -1,60 +1,31 @@
-"""Informational reusable-capability evidence adapter (RC5B / #470).
-
-Sole cross-package boundary between issue readiness and the reusable-capability
-registry. It attaches caller-supplied RC3 discovery evidence and corrected-RC4
-validation evidence to an already-computed ``ReadinessResult`` as a strictly
-informational layer, per the binding #248 contract (``#issuecomment-5035396385``)
-composing #471 (provenance), #472 (report compatibility), #475/#476.
-
-Guarantees (see the #248 contract):
-
-* Reusable-capability evidence may inform readiness but may never determine it.
-  The returned result's ``outcome`` and every ordinary ``AcceptanceReport`` field
-  (checks, overall status, blockers, manual-review items, evidence, remaining
-  risks) are identical to the base result; only ``informational_checks`` is added.
-* Empty discovery evidence returns the original ``ReadinessResult`` unchanged.
-* Malformed input returns the base readiness plus one informational error entry —
-  never an ordinary blocker or ordinary manual-review item.
-* Provenance is compared using caller-supplied ``RegistryProvenance`` values only
-  (strict, version-aware whole-object equality). This module never reads the
-  registry, recomputes canonicalization, or invokes ``RegistryReader``, discovery
-  ranking, or RC4 validation/serialization orchestration.
-* Pure, offline, deterministic, and mutation-free; output is invariant under
-  input ordering.
-
-The base ``readiness.py`` does not import this module, so base issue readiness
-remains usable without the reusable-capability package installed.
-"""
-
+"""Attach informational reusable-capability evidence without changing readiness."""
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import replace
+from dataclasses import fields, replace
 
 from .models import CheckResult, Status
 from .readiness import ReadinessResult
-
-# Direct-submodule import of registry *data types only* (no reader/discovery/
-# validation/serialization orchestration is invoked from this module).
 from reusable_capability_registry.models import (
+    CapabilityRecord,
     Confidence,
     DiscoveryResult,
     EvidenceConfidence,
+    RegistryProvenance,
+    ValidationEvidence,
     ValidationFinding,
     ValidationReport,
     ValidationSeverity,
 )
 
 __all__ = ["attach_reuse_evidence"]
-
-_SEVERITY_ORDER = {
+_AUTH = "authorization=evidence-only-not-implementation-write-or-merge"
+_RANK = {
     ValidationSeverity.PASS: 0,
     ValidationSeverity.WARN: 1,
     ValidationSeverity.MANUAL_REVIEW: 2,
     ValidationSeverity.FAIL: 3,
 }
-
-_AUTHORIZATION_EVIDENCE = "authorization=evidence-only-not-implementation-write-or-merge"
 
 
 def attach_reuse_evidence(
@@ -62,34 +33,63 @@ def attach_reuse_evidence(
     discovery_results: Iterable[DiscoveryResult],
     validation_report: ValidationReport,
 ) -> ReadinessResult:
-    """Attach informational reuse evidence without changing base readiness."""
     try:
         results = list(discovery_results)
-    except TypeError:
-        return _with_informational(readiness, [_error_check("discovery evidence is not iterable")])
-
+    except (TypeError, ValueError):
+        return _attach(readiness, [_error("discovery evidence is not iterable")])
     if not results:
-        # No reuse evidence supplied: return the original result unchanged.
         return readiness
-
-    try:
-        checks = _build_informational_checks(results, validation_report)
-    except Exception as exc:  # noqa: BLE001 - fail closed, never crash the readiness path
-        return _with_informational(readiness, [_error_check(f"unusable reuse evidence ({type(exc).__name__})")])
-
-    return _with_informational(readiness, checks)
+    problem = _input_problem(results, validation_report)
+    if problem:
+        return _attach(readiness, [_error(problem)])
+    return _attach(readiness, _checks(results, validation_report))
 
 
-# --- result assembly -------------------------------------------------------
+def _input_problem(results: list[DiscoveryResult], report: object) -> str | None:
+    if not isinstance(report, ValidationReport):
+        return "validation_report must be a ValidationReport"
+    if report.provenance is not None and not isinstance(report.provenance, RegistryProvenance):
+        return "validation report provenance is malformed"
+    if not isinstance(report.findings, tuple) or not all(
+        isinstance(x, ValidationFinding) for x in report.findings
+    ):
+        return "validation report findings are malformed"
+    for finding in report.findings:
+        if not isinstance(finding.evidence, tuple) or not all(
+            isinstance(x, ValidationEvidence) for x in finding.evidence
+        ):
+            return "validation finding evidence is malformed"
+    for result in results:
+        if not isinstance(result, DiscoveryResult):
+            return "discovery_results must contain DiscoveryResult values"
+        if not isinstance(result.capability, CapabilityRecord):
+            return "discovery capability is malformed"
+        if not isinstance(result.confidence, Confidence):
+            return "discovery confidence is malformed"
+        if result.provenance is not None and not isinstance(result.provenance, RegistryProvenance):
+            return "discovery provenance is malformed"
+        for name in ("evidence_basis", "warnings", "manual_review_reasons"):
+            value = getattr(result, name)
+            if not isinstance(value, tuple) or not all(isinstance(x, str) for x in value):
+                return f"discovery {name} is malformed"
+    return None
 
 
-def _with_informational(readiness: ReadinessResult, checks: list[CheckResult]) -> ReadinessResult:
-    """Return a new ReadinessResult with only ``informational_checks`` populated."""
-    report = replace(readiness.report, informational_checks=tuple(checks))
-    return ReadinessResult(outcome=readiness.outcome, report=report)
+def _attach(readiness: ReadinessResult, info: list[CheckResult]) -> ReadinessResult:
+    base = readiness.report
+    report = replace(
+        base,
+        checks=[replace(x, evidence=list(x.evidence)) for x in base.checks],
+        manual_review_items=list(base.manual_review_items),
+        evidence=list(base.evidence),
+        blockers=list(base.blockers),
+        remaining_risks=list(base.remaining_risks),
+        informational_checks=tuple(info),
+    )
+    return ReadinessResult(readiness.outcome, report)
 
 
-def _error_check(detail: str) -> CheckResult:
+def _error(detail: str) -> CheckResult:
     return CheckResult(
         "reuse-evidence-error",
         Status.MANUAL_REVIEW,
@@ -98,193 +98,175 @@ def _error_check(detail: str) -> CheckResult:
     )
 
 
-def _build_informational_checks(
-    results: list[DiscoveryResult], validation_report: ValidationReport
-) -> list[CheckResult]:
-    if not isinstance(validation_report, ValidationReport):
-        raise TypeError("validation_report must be a ValidationReport")
-    if not all(isinstance(item, DiscoveryResult) for item in results):
-        raise TypeError("discovery_results must contain DiscoveryResult values")
-
-    # Full-value dedup (frozen-dataclass equality); identical duplicates collapse.
+def _checks(results: list[DiscoveryResult], report: ValidationReport) -> list[CheckResult]:
     unique: list[DiscoveryResult] = []
-    for item in results:
-        if item not in unique:
-            unique.append(item)
-
+    for result in results:
+        if result not in unique:
+            unique.append(result)
     grouped: dict[str, list[DiscoveryResult]] = {}
-    for item in unique:
-        grouped.setdefault(item.capability.capability_id, []).append(item)
-
-    discovered_ids = set(grouped)
-    checks: list[CheckResult] = []
-    for cap_id in sorted(grouped):
-        group = grouped[cap_id]
-        if len(group) > 1:
-            checks.append(_conflicting_check(cap_id, group))
-        else:
-            checks.append(_candidate_check(group[0], validation_report))
-
-    unmatched = [
-        finding
-        for finding in validation_report.findings
-        if finding.capability_id is None or finding.capability_id not in discovered_ids
+    for result in unique:
+        grouped.setdefault(result.capability.capability_id, []).append(result)
+    output = [
+        _conflict(cap_id, group) if len(group) > 1 else _candidate(group[0], report)
+        for cap_id, group in sorted(grouped.items())
     ]
+    ids = set(grouped)
+    unmatched = [x for x in report.findings if x.capability_id is None or x.capability_id not in ids]
     if unmatched:
-        checks.append(_unmatched_findings_check(unmatched))
-
-    return checks
-
-
-# --- classification --------------------------------------------------------
+        output.append(_unmatched(unmatched))
+    return output
 
 
-def _worst_severity(findings: tuple[ValidationFinding, ...]) -> ValidationSeverity:
-    worst = ValidationSeverity.PASS
-    for finding in findings:
-        if _SEVERITY_ORDER[finding.severity] > _SEVERITY_ORDER[worst]:
-            worst = finding.severity
-    return worst
-
-
-def _provenance_state(disc_prov, val_prov) -> str:
-    """Compare caller-supplied provenance values only (never read the registry)."""
-    if disc_prov is None or val_prov is None:
+def _provenance(a: RegistryProvenance | None, b: RegistryProvenance | None) -> str:
+    if a is None or b is None:
         return "missing"
-    if disc_prov != val_prov:
+    if a != b:
         return "mismatch"
-    if not disc_prov.is_supported:
-        return "unsupported"
-    return "matched"
+    return "matched" if a.is_supported else "unsupported"
 
 
-def _candidate_check(discovery: DiscoveryResult, report: ValidationReport) -> CheckResult:
-    cap = discovery.capability
-    matched = tuple(f for f in report.findings if f.capability_id == cap.capability_id)
-    prov_state = _provenance_state(discovery.provenance, report.provenance)
-    status, message = _classify(discovery, matched, prov_state)
-    evidence = _candidate_evidence(discovery, matched, prov_state)
-    return CheckResult(f"reuse candidate {cap.capability_id}", status, message, evidence)
-
-
-def _classify(
-    discovery: DiscoveryResult, matched: tuple[ValidationFinding, ...], prov_state: str
-) -> tuple[Status, str]:
-    cap_id = discovery.capability.capability_id
-    exemption = bool(discovery.capability.known_consumer_exemption)
-
-    if prov_state != "matched":
-        return (
-            Status.MANUAL_REVIEW,
-            f"Reusable capability {cap_id}: registry provenance {prov_state}; positive reuse "
-            "guidance is suppressed. Base readiness is unchanged.",
-        )
-
-    worst = _worst_severity(matched)
-    contradicted = any(f.confidence is EvidenceConfidence.CONTRADICTED for f in matched)
-
-    if worst is ValidationSeverity.FAIL or contradicted:
-        return (
-            Status.FAIL,
-            f"Reusable capability {cap_id}: positive reuse guidance is suppressed by failing or "
-            "contradicted validation evidence; the evidence is retained below.",
-        )
-    if worst is ValidationSeverity.MANUAL_REVIEW:
-        return (
-            Status.MANUAL_REVIEW,
-            f"Reusable capability {cap_id}: validation manual-review evidence prevents an "
-            "unqualified recommendation; human review is required.",
-        )
-    if worst is ValidationSeverity.WARN:
-        if discovery.confidence is Confidence.VERIFIED:
-            return (
-                Status.WARN,
-                f"Reusable capability {cap_id}: qualified informational match (verified discovery "
-                "with validation warnings); review the warnings before reuse.",
-            )
-        return (
-            Status.MANUAL_REVIEW,
-            f"Reusable capability {cap_id}: {discovery.confidence.value} discovery with validation "
-            "warnings; human review is required and no positive reuse guidance is given.",
-        )
-
-    # No matched findings: with matched provenance the whole-registry validation
-    # evaluated this capability, so absence of a finding is evaluated-clean.
-    if discovery.confidence is Confidence.VERIFIED:
-        if exemption:
-            return (
-                Status.WARN,
-                f"Reusable capability {cap_id}: active consumer exemption; treated as a qualified "
-                "match with an explicit warning and no verified-consumer claim.",
-            )
-        return (
-            Status.PASS,
-            f"Reusable capability {cap_id}: positive informational match (verified discovery, "
-            "clean same-snapshot validation).",
-        )
-    return (
-        Status.MANUAL_REVIEW,
-        f"Reusable capability {cap_id}: {discovery.confidence.value} discovery evidence; "
-        "informational manual-review advisory, no positive reuse guidance.",
-    )
-
-
-# --- evidence rendering ----------------------------------------------------
-
-
-def _candidate_evidence(
-    discovery: DiscoveryResult, matched: tuple[ValidationFinding, ...], prov_state: str
-) -> list[str]:
-    cap = discovery.capability
+def _candidate(result: DiscoveryResult, report: ValidationReport) -> CheckResult:
+    cap = result.capability
+    findings = tuple(x for x in report.findings if x.capability_id == cap.capability_id)
+    provenance = _provenance(result.provenance, report.provenance)
+    status, message = _classification(result, findings, provenance)
     evidence = [
         f"capability_id={cap.capability_id}",
         f"lifecycle_status={cap.status}",
-        f"discovery_confidence={discovery.confidence.value}",
-        f"provenance={prov_state}",
+        f"discovery_confidence={result.confidence.value}",
+        f"provenance={provenance}",
     ]
-    evidence.extend(f"discovery_evidence={item}" for item in discovery.evidence_basis)
-    evidence.extend(f"interface={item}" for item in cap.public_interfaces)
-    evidence.extend(f"discovery_warning={item}" for item in discovery.warnings)
-    evidence.extend(f"discovery_manual_review={item}" for item in discovery.manual_review_reasons)
-    for finding in matched:
-        evidence.append(
-            f"validation_finding={finding.code}; surface={finding.surface}; "
-            f"severity={finding.severity.value}; confidence={finding.confidence.value}"
-        )
+    evidence += [f"discovery_evidence={x}" for x in result.evidence_basis]
+    evidence += [f"interface={x}" for x in cap.public_interfaces]
+    evidence += [f"discovery_warning={x}" for x in result.warnings]
+    evidence += [f"discovery_manual_review={x}" for x in result.manual_review_reasons]
+    for finding in sorted(findings, key=lambda x: x.sort_key()):
+        evidence += _finding_lines(finding)
     if cap.known_consumer_exemption:
         evidence.append(f"consumer_exemption={cap.known_consumer_exemption}")
     else:
-        evidence.extend(f"known_consumer={item}" for item in cap.known_consumers)
-    evidence.extend(f"test={item}" for item in cap.tests)
+        evidence += [f"known_consumer={x}" for x in cap.known_consumers]
+    evidence += [f"test={x}" for x in cap.tests]
     if cap.reuse_guidance:
         evidence.append(f"reuse_guidance={cap.reuse_guidance}")
-    evidence.extend(f"side_effect={item}" for item in cap.side_effects)
-    evidence.extend(f"invariant={item}" for item in cap.invariants)
-    evidence.extend(f"compatibility={item}" for item in cap.compatibility)
+    evidence += [f"side_effect={x}" for x in cap.side_effects]
+    evidence += [f"invariant={x}" for x in cap.invariants]
+    evidence += [f"compatibility={x}" for x in cap.compatibility]
     if not cap.compatibility and not cap.invariants:
         evidence.append("remaining_risk=behavioral-contract-not-evaluated")
-    evidence.append(_AUTHORIZATION_EVIDENCE)
-    return evidence
+    evidence.append(_AUTH)
+    return CheckResult(f"reuse candidate {cap.capability_id}", status, message, evidence)
 
 
-def _disc_sort_key(discovery: DiscoveryResult) -> tuple:
-    return (
-        discovery.confidence.value,
-        discovery.provenance.digest if discovery.provenance is not None else "",
-        discovery.evidence_basis,
-        discovery.warnings,
-        discovery.manual_review_reasons,
+def _classification(
+    result: DiscoveryResult, findings: tuple[ValidationFinding, ...], provenance: str
+) -> tuple[Status, str]:
+    cap_id = result.capability.capability_id
+    if provenance != "matched":
+        return Status.MANUAL_REVIEW, (
+            f"Reusable capability {cap_id}: registry provenance {provenance}; positive reuse "
+            "guidance is suppressed. Base readiness is unchanged."
+        )
+    worst = max((x.severity for x in findings), key=lambda x: _RANK[x], default=ValidationSeverity.PASS)
+    contradicted = any(x.confidence is EvidenceConfidence.CONTRADICTED for x in findings)
+    if worst is ValidationSeverity.FAIL or contradicted:
+        return Status.FAIL, (
+            f"Reusable capability {cap_id}: positive reuse guidance is suppressed by failing or "
+            "contradicted validation evidence; the evidence is retained below."
+        )
+    if worst is ValidationSeverity.MANUAL_REVIEW:
+        return Status.MANUAL_REVIEW, (
+            f"Reusable capability {cap_id}: validation manual-review evidence prevents an "
+            "unqualified recommendation; human review is required."
+        )
+    if worst is ValidationSeverity.WARN:
+        if result.confidence is Confidence.VERIFIED:
+            return Status.WARN, (
+                f"Reusable capability {cap_id}: qualified informational match (verified discovery "
+                "with validation warnings); review the warnings before reuse."
+            )
+        return Status.MANUAL_REVIEW, (
+            f"Reusable capability {cap_id}: {result.confidence.value} discovery with validation "
+            "warnings; human review is required and no positive reuse guidance is given."
+        )
+    if result.confidence is Confidence.VERIFIED:
+        if result.capability.known_consumer_exemption:
+            return Status.WARN, (
+                f"Reusable capability {cap_id}: active consumer exemption; treated as a qualified "
+                "match with an explicit warning and no verified-consumer claim."
+            )
+        return Status.PASS, (
+            f"Reusable capability {cap_id}: positive informational match (verified discovery, "
+            "clean same-snapshot validation)."
+        )
+    return Status.MANUAL_REVIEW, (
+        f"Reusable capability {cap_id}: {result.confidence.value} discovery evidence; "
+        "informational manual-review advisory, no positive reuse guidance."
     )
 
 
-def _conflicting_check(cap_id: str, group: list[DiscoveryResult]) -> CheckResult:
-    evidence = [f"capability_id={cap_id}", f"conflicting_discovery_results={len(group)}"]
-    for index, discovery in enumerate(sorted(group, key=_disc_sort_key)):
-        evidence.append(
-            f"variant={index}; confidence={discovery.confidence.value}; "
-            f"provenance={'present' if discovery.provenance is not None else 'absent'}"
+def _finding_lines(finding: ValidationFinding) -> list[str]:
+    lines = [
+        f"validation_finding={finding.code}; capability_id={finding.capability_id or 'none'}; "
+        f"surface={finding.surface}; severity={finding.severity.value}; "
+        f"confidence={finding.confidence.value}; message={finding.message}"
+    ]
+    if finding.manual_review_reason:
+        lines.append(
+            f"validation_finding={finding.code}; manual_review_reason={finding.manual_review_reason}"
         )
-    evidence.append(_AUTHORIZATION_EVIDENCE)
+    for item in sorted(finding.evidence, key=lambda x: x.sort_key()):
+        lines.append(
+            f"validation_finding={finding.code}; validation_evidence="
+            f"path={item.path or 'none'}; line={item.line if item.line is not None else 'none'}; "
+            f"symbol={item.symbol or 'none'}; source_type={item.source_type}; detail={item.detail}"
+        )
+    return lines
+
+
+def _provenance_key(value: RegistryProvenance | None) -> tuple:
+    if value is None:
+        return ("", 0, "", "")
+    return (value.algorithm, value.algorithm_version, value.registry_version, value.digest)
+
+
+def _result_key(result: DiscoveryResult) -> tuple:
+    cap = tuple((x.name, getattr(result.capability, x.name)) for x in fields(result.capability))
+    return (
+        result.confidence.value,
+        _provenance_key(result.provenance),
+        result.evidence_basis,
+        result.warnings,
+        result.manual_review_reasons,
+        cap,
+    )
+
+
+def _conflict(cap_id: str, group: list[DiscoveryResult]) -> CheckResult:
+    ordered = sorted(group, key=_result_key)
+    differing = [
+        x.name
+        for x in fields(ordered[0].capability)
+        if len({repr(getattr(r.capability, x.name)) for r in ordered}) > 1
+    ]
+    evidence = [f"capability_id={cap_id}", f"conflicting_discovery_results={len(group)}"]
+    for index, result in enumerate(ordered):
+        prefix = f"variant={index}"
+        evidence.append(f"{prefix}; confidence={result.confidence.value}")
+        if result.provenance is None:
+            evidence.append(f"{prefix}; provenance=absent")
+        else:
+            p = result.provenance
+            evidence.append(
+                f"{prefix}; provenance_algorithm={p.algorithm}; "
+                f"provenance_algorithm_version={p.algorithm_version}; "
+                f"provenance_registry_version={p.registry_version}; provenance_digest={p.digest}"
+            )
+        evidence += [f"{prefix}; evidence_basis={x}" for x in result.evidence_basis]
+        evidence += [f"{prefix}; warning={x}" for x in result.warnings]
+        evidence += [f"{prefix}; manual_review_reason={x}" for x in result.manual_review_reasons]
+        evidence += [f"{prefix}; capability_{x}={getattr(result.capability, x)!r}" for x in differing]
+    evidence.append(_AUTH)
     return CheckResult(
         f"reuse candidate {cap_id}",
         Status.MANUAL_REVIEW,
@@ -294,18 +276,11 @@ def _conflicting_check(cap_id: str, group: list[DiscoveryResult]) -> CheckResult
     )
 
 
-def _unmatched_findings_check(unmatched: list[ValidationFinding]) -> CheckResult:
-    ordered = sorted(
-        unmatched,
-        key=lambda f: (f.capability_id or "", f.code, f.surface, f.severity.value),
-    )
-    evidence = [
-        f"validation_finding={finding.code}; capability_id={finding.capability_id or 'none'}; "
-        f"surface={finding.surface}; severity={finding.severity.value}; "
-        f"confidence={finding.confidence.value}"
-        for finding in ordered
-    ]
-    evidence.append(_AUTHORIZATION_EVIDENCE)
+def _unmatched(findings: list[ValidationFinding]) -> CheckResult:
+    evidence: list[str] = []
+    for finding in sorted(findings, key=lambda x: x.sort_key()):
+        evidence += _finding_lines(finding)
+    evidence.append(_AUTH)
     return CheckResult(
         "reuse unmatched validation findings",
         Status.MANUAL_REVIEW,
