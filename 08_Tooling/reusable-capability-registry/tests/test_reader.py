@@ -184,6 +184,21 @@ def test_unknown_top_level_list_key_is_rejected(tmp_path):
         RegistryReader(_write_registry(tmp_path, data))
 
 
+def test_unknown_top_level_null_valued_key_is_rejected(tmp_path):
+    # The rejection is key-membership-based (set(document) - _ALLOWED_TOP_LEVEL_FIELDS),
+    # not value-type-based: an unknown key must be rejected because its name is
+    # unrecognized, regardless of whether its YAML value is null. yaml.safe_dump
+    # renders a None value as an explicit `null` token; that parses back to the
+    # same None value as a bare `metadata:` key with no value, so this exercises
+    # the same document shape a "forgot to fill in a stub field" author would produce.
+    data = _valid_registry_data()
+    data["metadata"] = None
+    written = _write_registry(tmp_path, data)
+    assert "metadata: null" in written.read_text(encoding="utf-8")
+    with pytest.raises(RegistryFormatError, match="unsupported top-level registry keys.*metadata"):
+        RegistryReader(written)
+
+
 def test_mistyped_capabilities_key_fails_closed_not_zero_records(tmp_path):
     data = _valid_registry_data()
     data["capabilties"] = data.pop("capabilities")  # typo drops the real key
