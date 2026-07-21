@@ -187,6 +187,9 @@ def test_unknown_top_level_list_key_is_rejected(tmp_path):
 
 
 def test_unknown_top_level_null_valued_key_is_rejected(tmp_path):
+    # Contract: unknown top-level keys are rejected by key membership, not by
+    # value, so a key whose value is YAML null (`metadata: null`) still fails
+    # closed rather than being ignored as "empty".
     data = _valid_registry_data()
     data["metadata"] = None
     written = _write_registry(tmp_path, data)
@@ -265,6 +268,9 @@ def test_path_spelling_variant_set_like_values_remain_distinct(tmp_path):
 
 
 def test_unicode_composed_and_decomposed_set_like_values_remain_distinct(tmp_path):
+    # Contract: composed (NFC) and decomposed (NFD) Unicode strings are
+    # intentionally distinct values. The reader performs no Unicode
+    # normalization, so both spellings must survive as separate list entries.
     data = _valid_registry_data()
     composed = "café-note"
     decomposed = "café-note"
@@ -287,6 +293,9 @@ def test_canonical_registry_still_loads_under_duplicate_rejection():
     assert reader.record_count > 0
 
 
+# Governed #481 coverage table: one representative value per set-like field. This
+# is the authoritative inventory of the 14 governed collection fields; the guard
+# test below fails if it drifts from the CapabilityRecord tuple-field set.
 _GOVERNED_SET_LIKE_FIELD_DUPLICATE_CASES = (
     ("canonical_paths", "src/probe.py"),
     ("public_interfaces", "probe:Read"),
@@ -305,6 +314,9 @@ _GOVERNED_SET_LIKE_FIELD_DUPLICATE_CASES = (
 )
 _GOVERNED_SET_LIKE_FIELDS = tuple(field for field, _ in _GOVERNED_SET_LIKE_FIELD_DUPLICATE_CASES)
 
+# Minimal record carrying only the required fields, so the exhaustive
+# per-field duplicate-rejection tests below exercise one governed field at a
+# time without unrelated optional-field or status validation noise.
 _MINIMAL_VALID_RECORD = {
     "capability_id": "field-coverage-probe",
     "name": "Field Coverage Probe",
@@ -322,6 +334,9 @@ _MINIMAL_VALID_RECORD = {
 
 
 def test_governed_set_like_field_inventory_matches_capability_record_model():
+    # Inventory guard: this must fail if the CapabilityRecord tuple-field set
+    # changes (a field added, removed, or retyped), forcing the #481 coverage
+    # table above to be updated deliberately rather than silently drifting.
     model_set_like_fields = tuple(
         sorted(f.name for f in dataclasses.fields(CapabilityRecord) if f.type == "tuple[str, ...]")
     )
