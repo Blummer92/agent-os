@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from collections.abc import Iterable
+from dataclasses import dataclass, replace
 from enum import Enum
 
 # Canonical identity of the reusable-capability registry provenance algorithm,
@@ -121,3 +122,193 @@ class DiscoveryResult:
     # legacy discovery/serialization output; a populated value is attached
     # identically to every result from one reader snapshot.
     provenance: RegistryProvenance | None = None
+
+
+# ---------------------------------------------------------------------------
+# RC4 report-only validation models (#494 under the #254 binding contract).
+# Distinct from the RC3 discovery Confidence: evidence confidence and validation
+# severity are independent axes and are never inter-converted.
+# ---------------------------------------------------------------------------
+
+VALIDATION_REPORT_VERSION = "1.0"
+VALIDATION_INFORMATIONAL_NOTICE = (
+    "Static report-only validation evidence; it does not authorize implementation, "
+    "registry mutation, repository writes, readiness changes, approval, or merge. "
+    "Matching registry provenance proves only that discovery and validation used the "
+    "same canonical registry snapshot; it does not prove correctness, compatibility, "
+    "ownership validity, readiness, or authorization."
+)
+
+
+class EvidenceConfidence(str, Enum):
+    VERIFIED = "verified"
+    PROBABLE = "probable"
+    UNVERIFIED = "unverified"
+    CONTRADICTED = "contradicted"
+    MANUAL_REVIEW = "manual-review"
+
+
+class ValidationSeverity(str, Enum):
+    PASS = "pass"
+    WARN = "warn"
+    MANUAL_REVIEW = "manual-review"
+    FAIL = "fail"
+
+
+_SEVERITY_RANK = {
+    ValidationSeverity.PASS: 0,
+    ValidationSeverity.WARN: 1,
+    ValidationSeverity.MANUAL_REVIEW: 2,
+    ValidationSeverity.FAIL: 3,
+}
+
+
+def _none_first(value: object) -> tuple[int, object]:
+    """Sort key placing ``None`` before populated values without comparing across types."""
+    return (1, value) if value is not None else (0, "")
+
+
+def _aggregate_severity(findings: Iterable["ValidationFinding"]) -> ValidationSeverity:
+    severity = ValidationSeverity.PASS
+    for finding in findings:
+        if _SEVERITY_RANK[finding.severity] > _SEVERITY_RANK[severity]:
+            severity = finding.severity
+    return severity
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationEvidence:
+    path: str | None
+    line: int | None
+    symbol: str | None
+    source_type: str
+    detail: str
+
+    def __post_init__(self) -> None:
+        if self.path is not None and (
+            not isinstance(self.path, str) or not self.path or self.path.startswith("/") or "\\" in self.path
+        ):
+            raise ValueError("evidence path must be a non-empty repository-relative POSIX path")
+        if self.line is not None and (not isinstance(self.line, int) or isinstance(self.line, bool) or self.line <= 0):
+            raise ValueError("evidence line must be a positive integer when present")
+        if self.symbol is not None and (not isinstance(self.symbol, str) or not self.symbol):
+            raise ValueError("evidence symbol must be a non-empty string when present")
+        if not isinstance(self.source_type, str) or not self.source_type:
+            raise ValueError("evidence source_type must be a non-empty string")
+        if not isinstance(self.detail, str) or not self.detail:
+            raise ValueError("evidence detail must be a non-empty string")
+
+    def sort_key(self) -> tuple:
+        return (_none_first(self.path), _none_first(self.line), _none_first(self.symbol), self.source_type, self.detail)
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationFinding:
+    code: str
+    confidence: EvidenceConfidence
+    severity: ValidationSeverity
+    capability_id: str | None
+    surface: str
+    message: str
+    evidence: tuple[ValidationEvidence, ...] = ()
+    manual_review_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("code", "surface", "message"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"finding {name} must be a non-empty string")
+        if not isinstance(self.confidence, EvidenceConfidence):
+            raise ValueError("finding confidence must be an EvidenceConfidence")
+        if not isinstance(self.severity, ValidationSeverity):
+            raise ValueError("finding severity must be a ValidationSeverity")
+        if self.capability_id is not None and (not isinstance(self.capability_id, str) or not self.capability_id):
+            raise ValueError("finding capability_id must be a non-empty string or None")
+        if not isinstance(self.evidence, tuple):
+            raise ValueError("finding evidence must be a tuple")
+        needs_reason = self.severity is ValidationSeverity.MANUAL_REVIEW
+        has_reason = bool(self.manual_review_reason)
+        if needs_reason and not has_reason:
+            raise ValueError("manual-review findings require a manual_review_reason")
+        if not needs_reason and self.manual_review_reason is not None:
+            raise ValueError("manual_review_reason is only allowed on manual-review findings")
+
+    def normalized(self) -> "ValidationFinding":
+        return replace(self, evidence=tuple(sorted(self.evidence, key=lambda item: item.sort_key())))
+
+    def sort_key(self) -> tuple:
+        first = self.evidence[0] if self.evidence else None
+        first_path = first.path if first is not None else None
+        first_line = first.line if first is not None else None
+        return (
+            -_SEVERITY_RANK[self.severity],
+            _none_first(self.capability_id),
+            self.code,
+            self.surface,
+            _none_first(first_path),
+            _none_first(first_line),
+            self.message,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationReport:
+    report_version: str
+    severity: ValidationSeverity
+    provenance: RegistryProvenance | None
+    capabilities_checked: int
+    checks_run: int
+    confidence_counts: tuple[tuple[str, int], ...]
+    severity_counts: tuple[tuple[str, int], ...]
+    findings: tuple[ValidationFinding, ...]
+    informational_notice: str
+
+    def __post_init__(self) -> None:
+        if self.report_version != VALIDATION_REPORT_VERSION:
+            raise ValueError("report_version must be '1.0'")
+        if not isinstance(self.severity, ValidationSeverity):
+            raise ValueError("report severity must be a ValidationSeverity")
+        if self.provenance is not None and not isinstance(self.provenance, RegistryProvenance):
+            raise ValueError("report provenance must be a RegistryProvenance or None")
+        for name in ("capabilities_checked", "checks_run"):
+            value = getattr(self, name)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise ValueError(f"{name} must be a non-negative integer")
+        if not isinstance(self.findings, tuple):
+            raise ValueError("findings must be a tuple")
+        if self.severity is not _aggregate_severity(self.findings):
+            raise ValueError("report severity must equal the aggregated finding severity")
+        if not isinstance(self.informational_notice, str) or not self.informational_notice:
+            raise ValueError("informational_notice must be a non-empty string")
+
+    @classmethod
+    def from_findings(
+        cls,
+        findings: Iterable["ValidationFinding"],
+        *,
+        provenance: "RegistryProvenance | None",
+        capabilities_checked: int,
+        checks_run: int,
+        informational_notice: str = VALIDATION_INFORMATIONAL_NOTICE,
+    ) -> "ValidationReport":
+        """The single construction path: normalizes/orders once and derives severity+counts."""
+        normalized = tuple(sorted((item.normalized() for item in findings), key=lambda item: item.sort_key()))
+        confidence_counts = tuple(
+            (member.value, sum(1 for finding in normalized if finding.confidence is member))
+            for member in sorted(EvidenceConfidence, key=lambda member: member.value)
+        )
+        severity_counts = tuple(
+            (member.value, sum(1 for finding in normalized if finding.severity is member))
+            for member in sorted(ValidationSeverity, key=lambda member: member.value)
+        )
+        return cls(
+            report_version=VALIDATION_REPORT_VERSION,
+            severity=_aggregate_severity(normalized),
+            provenance=provenance,
+            capabilities_checked=capabilities_checked,
+            checks_run=checks_run,
+            confidence_counts=confidence_counts,
+            severity_counts=severity_counts,
+            findings=normalized,
+            informational_notice=informational_notice,
+        )
