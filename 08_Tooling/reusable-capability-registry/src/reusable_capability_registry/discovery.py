@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from .models import CapabilityRecord, Confidence, DiscoveryResult
+from .provenance import compute_registry_provenance
 from .reader import RegistryFormatError, RegistryReader, normalize_keyword
 
 INFORMATIONAL_NOTICE = (
@@ -64,10 +65,15 @@ def discover_capabilities(
     status: str | None = None,
     canonical_path: str | None = None,
     public_interface: str | None = None,
+    attach_provenance: bool = False,
 ) -> tuple[DiscoveryResult, ...]:
     keyword_values = tuple(value for value in keywords if value and value.strip())
     if not any((capability_id, keyword_values, owner, status, canonical_path, public_interface)):
         raise RegistryFormatError("at least one lookup option is required")
+
+    # Provenance is computed once per snapshot and attached identically to every
+    # result. Absent (the default) preserves the approved legacy output.
+    provenance = compute_registry_provenance(reader) if attach_provenance else None
 
     groups: list[tuple[CapabilityRecord, ...]] = []
     fixed_evidence: list[str] = []
@@ -111,6 +117,7 @@ def discover_capabilities(
                 evidence_basis=tuple(sorted(set(fixed_evidence) | set(keyword_evidence))),
                 warnings=_warnings(record),
                 manual_review_reasons=manual_review_reasons,
+                provenance=provenance,
             )
         )
     return tuple(results)

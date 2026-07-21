@@ -48,6 +48,29 @@ results = discover_capabilities(reader, capability_id="issue-acceptance-report")
 values use tuples. JSON payloads are fresh projections and share no mutable state
 with the reader.
 
+## Snapshot provenance
+
+```python
+from reusable_capability_registry.provenance import provenance_for_registry
+
+provenance = provenance_for_registry()  # RegistryProvenance
+```
+
+Provenance is a deterministic, offline SHA-256 digest (`algorithm
+registry-canonical-records`, version `1`) computed from the validated parsed
+records plus `registry_version` — never from raw YAML bytes. Records are ordered
+by `capability_id` and governed set-like lists by exact Unicode code point;
+duplicate set-like values fail closed. Formatting-only edits keep the digest;
+any semantic change (including case, path spelling, or Unicode composed/decomposed
+form) changes it. `discover_capabilities(reader, ..., attach_provenance=True)`
+attaches equal provenance to every result; the default omits it and preserves the
+legacy output byte-for-byte.
+
+Matching provenance proves only that two artifacts were computed from the same
+canonical registry snapshot. It does **not** prove correctness, freshness,
+authorship, trustworthiness, authorization, compatibility, test adequacy,
+ownership validity, approval, readiness, or permission to execute or write.
+
 ## Supported PyYAML versions
 
 The package supports `PyYAML>=6.0,<7`. The duplicate-key loader contract is
