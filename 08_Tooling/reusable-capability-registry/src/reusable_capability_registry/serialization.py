@@ -35,7 +35,7 @@ def _record_to_payload(record: CapabilityRecord) -> dict[str, object]:
 
 
 def discovery_result_to_payload(result: DiscoveryResult) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "capability": _record_to_payload(result.capability),
         "discovery": {
             "confidence": result.confidence.value,
@@ -45,6 +45,11 @@ def discovery_result_to_payload(result: DiscoveryResult) -> dict[str, object]:
         },
         "informational_notice": INFORMATIONAL_NOTICE,
     }
+    # Populated provenance is serialized deterministically; absent provenance is
+    # omitted so approved legacy output is preserved byte-for-byte.
+    if result.provenance is not None:
+        payload["provenance"] = result.provenance.to_payload()
+    return payload
 
 
 def serialize_discovery_results(results: Iterable[DiscoveryResult]) -> str:
