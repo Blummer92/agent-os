@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import scripts.agent_os_rc6_technical_pilot.runner as runner_module
 from scripts.agent_os_rc6_technical_pilot.runner import (
     FROZEN_SHA,
     PilotExecutionError,
@@ -82,6 +83,69 @@ def test_zero_tolerance_authorization_violation_fails_threshold():
 
     assert metrics["false_implementation_authorizations"] == 1
     assert thresholds["false_implementation_authorizations"]["result"] == "fail"
+
+
+def test_runner_executes_each_case_twice_and_returns_zero_for_stable_expected_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    calls: list[str] = []
+
+    def fake_execute(case, _repository_root):
+        calls.append(case["case_id"])
+        return copy.deepcopy(case["expected"])
+
+    monkeypatch.setattr(runner_module, "execute_case", fake_execute)
+
+    run = runner_module.run_pilot(
+        tmp_path,
+        supplied_sha=FROZEN_SHA,
+        actual_head_sha=FROZEN_SHA,
+        fixture_path=FIXTURE,
+        runner_sha="1" * 40,
+    )
+
+    assert run.passed
+    assert run.exit_code == 0
+    assert len(calls) == 48
+    assert calls[:4] == ["T01", "T01", "T02", "T02"]
+    assert run.payload["metrics"]["deterministic_cases"] == 24
+    assert run.payload["authorization"] == {
+        "implementation_authorized": False,
+        "repository_write_authorized": False,
+        "merge_authorized": False,
+        "automatic_selection_performed": False,
+    }
+
+
+def test_runner_returns_nonzero_when_repeated_case_bytes_differ(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    sequence = 0
+
+    def fake_execute(case, _repository_root):
+        nonlocal sequence
+        result = copy.deepcopy(case["expected"])
+        if case["case_id"] == "T01":
+            sequence += 1
+            result["volatile_sequence"] = sequence
+        return result
+
+    monkeypatch.setattr(runner_module, "execute_case", fake_execute)
+
+    run = runner_module.run_pilot(
+        tmp_path,
+        supplied_sha=FROZEN_SHA,
+        actual_head_sha=FROZEN_SHA,
+        fixture_path=FIXTURE,
+    )
+
+    assert not run.passed
+    assert run.exit_code == 1
+    assert run.payload["metrics"]["deterministic_cases"] == 23
+    assert run.payload["threshold_results"]["deterministic_cases"]["result"] == "fail"
+    assert run.payload["cases"][0]["case_result"] == "fail"
 
 
 def test_markdown_summary_states_evidence_only_authorization_boundary():
