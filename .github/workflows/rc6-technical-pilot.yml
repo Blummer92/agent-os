@@ -1,0 +1,97 @@
+name: RC6 Technical Pilot
+
+on:
+  workflow_dispatch:
+    inputs:
+      frozen_sha:
+        description: Exact frozen baseline SHA from RC6-TF-1.0
+        required: true
+        type: string
+        default: "ca980c38d74b8d3ab30ca67461a9f576281edc75"
+
+permissions:
+  contents: read
+
+jobs:
+  technical-pilot:
+    name: Execute frozen T01-T24 package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout runner source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: runner-source
+          persist-credentials: false
+
+      - name: Checkout exact frozen baseline
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.frozen_sha }}
+          path: baseline
+          persist-credentials: false
+
+      - name: Fail closed unless baseline is exact
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git -C baseline rev-parse HEAD)"
+          test "$actual" = "${{ inputs.frozen_sha }}"
+          test "$actual" = "ca980c38d74b8d3ab30ca67461a9f576281edc75"
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: runner-source/08_Tooling/reusable-capability-registry/pyproject.toml
+
+      - name: Install frozen package and test dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e './baseline/08_Tooling/reusable-capability-registry[test]'
+
+      - name: Run focused contract tests
+        shell: bash
+        env:
+          RC6_BASELINE_ROOT: ${{ github.workspace }}/baseline
+          PYTHONPATH: ${{ github.workspace }}/baseline:${{ github.workspace }}/baseline/08_Tooling/reusable-capability-registry/src:${{ github.workspace }}/runner-source
+        run: |
+          set -euo pipefail
+          pytest -q runner-source/tests/rc6_technical_pilot
+
+      - name: Execute RC6 technical pilot
+        shell: bash
+        env:
+          PYTHONPATH: ${{ github.workspace }}/baseline:${{ github.workspace }}/baseline/08_Tooling/reusable-capability-registry/src:${{ github.workspace }}/runner-source
+        run: |
+          set -euo pipefail
+          python runner-source/scripts/agent_os_rc6_technical_pilot.py \
+            --fixture runner-source/tests/fixtures/rc6_technical_pilot/frozen_package.json \
+            --repository-root baseline \
+            --tested-sha "${{ inputs.frozen_sha }}" \
+            --output-dir evidence
+
+      - name: Publish step summary
+        if: always()
+        shell: bash
+        run: |
+          if test -f evidence/rc6-technical-pilot.md; then
+            cat evidence/rc6-technical-pilot.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '# RC6 Technical Pilot\n\nEvidence was not produced because execution failed closed.\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload structured evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rc6-technical-pilot-${{ inputs.frozen_sha }}
+          path: |
+            evidence/rc6-technical-pilot.json
+            evidence/rc6-technical-pilot.md
+          if-no-files-found: error
+          retention-days: 30
