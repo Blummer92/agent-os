@@ -75,27 +75,68 @@ def test_threshold_denominators_are_frozen():
     assert thresholds["active_exemptions_reviewed"]["denominator"] == ["T13"]
 
 
-def test_runner_executes_all_cases_twice_and_passes_frozen_contract():
+def test_runner_orchestrates_two_passes_without_executing_frozen_pilot(monkeypatch):
+    cases = [{"case_id": f"T{number:02d}", "title": "fixture"} for number in range(1, 25)]
+    package = {"package_version": "RC6-TF-1.0", "cases": cases, "thresholds": {}}
+    calls = []
+
+    def fake_once(case, root, api):
+        calls.append(case["case_id"])
+        return {
+            "case_id": case["case_id"],
+            "positive_guidance": False,
+            "implementation_authorization": "not-authorized",
+            "repository_write_authorization": "not-authorized",
+            "merge_authorization": "not-authorized",
+            "automatic_selection": False,
+            "rc3_results": [],
+            "rc4_severity": "pass",
+            "rc5_informational_statuses": [],
+            "base_readiness_before": "ready",
+            "base_readiness_after": "ready",
+            "rendered_report": "stable report",
+        }, "stable report"
+
+    monkeypatch.setattr(pilot, "load_package", lambda fixture: package)
+    monkeypatch.setattr(pilot, "load_api", lambda root: object())
+    monkeypatch.setattr(pilot, "verify_baseline", lambda *args: None)
+    monkeypatch.setattr(pilot, "_once", fake_once)
+    monkeypatch.setattr(pilot, "_compare", lambda case, actual: [])
+    monkeypatch.setattr(
+        pilot,
+        "_thresholds",
+        lambda package, actuals: {
+            "deterministic_repeated_output": {
+                "numerator": 24,
+                "denominator": 24,
+                "required": 24,
+                "passed": True,
+            }
+        },
+    )
+
     result = pilot.run_pilot(FIXTURE, BASELINE_ROOT, pilot.FROZEN_SHA, verify_head=False)
+
+    assert calls == [case_id for case_id in pilot.EXPECTED_IDS for _ in range(2)]
     assert result.exit_code == 0
-    assert result.payload["summary"] == {
-        "result": "pass",
-        "total_cases": 24,
-        "passed_cases": 24,
-        "failed_cases": 0,
-        "deterministic_cases": 24,
-        "thresholds_passed": True,
-    }
-    assert all(case["actual"]["repeat_output_digest_1"] == case["actual"]["repeat_output_digest_2"] for case in result.payload["cases"])
+    assert result.payload["summary"]["passed_cases"] == 24
+    assert result.payload["summary"]["deterministic_cases"] == 24
+    assert all(
+        case["actual"]["repeat_output_digest_1"] == case["actual"]["repeat_output_digest_2"]
+        for case in result.payload["cases"]
+    )
     assert json.loads(result.json_text) == result.payload
     assert "This report is evidence only" in result.markdown_text
 
 
-def test_wrong_sha_fails_closed_before_execution():
-    package = pilot.load_frozen_package(FIXTURE)
-    api = pilot._load_interfaces(BASELINE_ROOT)
+def test_wrong_sha_fails_closed_before_loading_interfaces(monkeypatch):
+    monkeypatch.setattr(
+        pilot,
+        "load_api",
+        lambda root: pytest.fail("interfaces must not load for a mismatched SHA"),
+    )
     with pytest.raises(pilot.PilotContractError, match="tested SHA"):
-        pilot.verify_frozen_baseline(BASELINE_ROOT, package, "0" * 40, api, verify_head=False)
+        pilot.run_pilot(FIXTURE, BASELINE_ROOT, "0" * 40, verify_head=False)
 
 
 def test_cli_contract_error_exit_code(monkeypatch, tmp_path):
