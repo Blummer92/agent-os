@@ -73,10 +73,15 @@ def _text_tuple(record: Mapping[str, Any], field: str, capability_id: str, *, re
     if not isinstance(value, list):
         raise RegistryFormatError(f"{capability_id}: {field} must be a list of strings")
     items: list[str] = []
+    seen: set[str] = set()
     for item in value:
         if not isinstance(item, str) or not item.strip():
             raise RegistryFormatError(f"{capability_id}: {field} must contain non-empty strings")
-        items.append(item.strip())
+        trimmed = item.strip()
+        if trimmed in seen:
+            raise RegistryFormatError(f"{capability_id}: {field} contains duplicate value: {trimmed}")
+        seen.add(trimmed)
+        items.append(trimmed)
     return tuple(items)
 
 
