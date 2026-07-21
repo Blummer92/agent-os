@@ -101,6 +101,12 @@ class AcceptanceReport:
     evidence: list[str] = field(default_factory=list)
     blockers: list[str] = field(default_factory=list)
     remaining_risks: list[str] = field(default_factory=list)
+    # Strictly informational reuse-evidence channel (RC5B / #470 under the #248
+    # contract). Immutable, defaulted to empty, and excluded from `repr`. It is
+    # never read by `strongest_status()`, `overall_status`, `ReadinessOutcome`,
+    # blockers, ordinary manual-review items, or `exit_code_for()`; when empty the
+    # rendered report is byte-for-byte identical to legacy output.
+    informational_checks: tuple[CheckResult, ...] = field(default=(), repr=False)
 
 
 def strongest_status(results: list[CheckResult]) -> Status:
