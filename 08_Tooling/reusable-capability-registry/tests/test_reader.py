@@ -187,12 +187,6 @@ def test_unknown_top_level_list_key_is_rejected(tmp_path):
 
 
 def test_unknown_top_level_null_valued_key_is_rejected(tmp_path):
-    # The rejection is key-membership-based (set(document) - _ALLOWED_TOP_LEVEL_FIELDS),
-    # not value-type-based: an unknown key must be rejected because its name is
-    # unrecognized, regardless of whether its YAML value is null. yaml.safe_dump
-    # renders a None value as an explicit `null` token; that parses back to the
-    # same None value as a bare `metadata:` key with no value, so this exercises
-    # the same document shape a "forgot to fill in a stub field" author would produce.
     data = _valid_registry_data()
     data["metadata"] = None
     written = _write_registry(tmp_path, data)
@@ -203,7 +197,7 @@ def test_unknown_top_level_null_valued_key_is_rejected(tmp_path):
 
 def test_mistyped_capabilities_key_fails_closed_not_zero_records(tmp_path):
     data = _valid_registry_data()
-    data["capabilties"] = data.pop("capabilities")  # typo drops the real key
+    data["capabilties"] = data.pop("capabilities")
     with pytest.raises(RegistryFormatError, match="unsupported top-level registry keys.*capabilties"):
         RegistryReader(_write_registry(tmp_path, data))
 
@@ -224,7 +218,6 @@ def test_formatting_only_top_level_key_reorder_remains_valid(tmp_path):
 
 
 def test_canonical_registry_still_loads_under_top_level_key_rejection():
-    # The fail-closed top-level-key rule must not reject the current canonical registry.
     reader = RegistryReader()
     assert reader.record_count > 0
 
@@ -273,8 +266,8 @@ def test_path_spelling_variant_set_like_values_remain_distinct(tmp_path):
 
 def test_unicode_composed_and_decomposed_set_like_values_remain_distinct(tmp_path):
     data = _valid_registry_data()
-    composed = "café-note"  # e-acute as one code point
-    decomposed = "café-note"  # e + combining acute accent
+    composed = "café-note"
+    decomposed = "café-note"
     assert composed != decomposed
     data["capabilities"][0]["side_effects"] = [composed, decomposed]
     record = RegistryReader(_write_registry(tmp_path, data)).by_id("alpha-reader")
@@ -290,16 +283,10 @@ def test_missing_optional_list_and_empty_list_remain_equivalent(tmp_path):
 
 
 def test_canonical_registry_still_loads_under_duplicate_rejection():
-    # The fail-closed duplicate rule must not reject the current canonical registry.
     reader = RegistryReader()
     assert reader.record_count > 0
 
 
-# Explicit inventory of every governed set-like field, paired with a plausible
-# duplicate-able value. This table is the visible field inventory required by
-# #481's exhaustive-coverage requirement; the guard test below keeps it
-# synchronized with the live CapabilityRecord model rather than trusting it
-# to stay correct by convention.
 _GOVERNED_SET_LIKE_FIELD_DUPLICATE_CASES = (
     ("canonical_paths", "src/probe.py"),
     ("public_interfaces", "probe:Read"),
@@ -318,8 +305,6 @@ _GOVERNED_SET_LIKE_FIELD_DUPLICATE_CASES = (
 )
 _GOVERNED_SET_LIKE_FIELDS = tuple(field for field, _ in _GOVERNED_SET_LIKE_FIELD_DUPLICATE_CASES)
 
-# The smallest valid single-capability record: every required scalar and
-# required set-like field present with exactly one value, no optional fields.
 _MINIMAL_VALID_RECORD = {
     "capability_id": "field-coverage-probe",
     "name": "Field Coverage Probe",
@@ -337,9 +322,6 @@ _MINIMAL_VALID_RECORD = {
 
 
 def test_governed_set_like_field_inventory_matches_capability_record_model():
-    # Fails loudly if a set-like field is added to (or removed from) the
-    # model without updating the exhaustive-coverage table below, instead of
-    # silently leaving the new field untested.
     model_set_like_fields = tuple(
         sorted(f.name for f in dataclasses.fields(CapabilityRecord) if f.type == "tuple[str, ...]")
     )
@@ -354,7 +336,228 @@ def test_governed_set_like_field_inventory_matches_capability_record_model():
 )
 def test_every_governed_set_like_field_rejects_exact_duplicate_after_trim(tmp_path, field_name, value):
     record = dict(_MINIMAL_VALID_RECORD)
-    record[field_name] = [value, f"  {value}  "]  # exact duplicate only after trimming
+    record[field_name] = [value, f"  {value}  "]
     data = {"registry_version": "0.1.0", "capabilities": [record]}
     with pytest.raises(RegistryFormatError, match=f"field-coverage-probe: {field_name} contains duplicate value"):
         RegistryReader(_write_registry(tmp_path, data))
+
+
+def _valid_registry_text():
+    return (FIXTURES / "valid_registry.yml").read_text(encoding="utf-8")
+
+
+def _write_raw_registry(tmp_path, text, name="raw-registry.yml"):
+    path = tmp_path / name
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize(
+    "needle,replacement,key",
+    (
+        pytest.param(
+            "registry_version: 0.1.0\n",
+            "registry_version: 0.1.0\nregistry_version: 0.1.0\n",
+            "registry_version",
+            id="top-level-version-equal-values",
+        ),
+        pytest.param(
+            "capabilities:\n",
+            "capabilities: []\ncapabilities:\n",
+            "capabilities",
+            id="top-level-capabilities-different-values",
+        ),
+        pytest.param(
+            "  - capability_id: alpha-reader\n",
+            "  - capability_id: alpha-reader\n    capability_id: alpha-reader\n",
+            "capability_id",
+            id="record-id-equal-values",
+        ),
+        pytest.param(
+            "    summary: Reads alpha records.\n",
+            "    summary: Reads alpha records.\n    summary: Different summary.\n",
+            "summary",
+            id="required-scalar-different-values",
+        ),
+        pytest.param(
+            "    keywords:\n      - Alpha\n      - shared\n",
+            "    keywords: [Alpha]\n    keywords: [shared]\n",
+            "keywords",
+            id="required-list-different-values",
+        ),
+        pytest.param(
+            "    invariants:\n      - Output is deterministic.\n",
+            "    invariants: [Output is deterministic.]\n    invariants: [Still deterministic.]\n",
+            "invariants",
+            id="optional-list-different-values",
+        ),
+    ),
+)
+def test_duplicate_explicit_mapping_keys_are_rejected(tmp_path, needle, replacement, key):
+    text = _valid_registry_text().replace(needle, replacement, 1)
+    with pytest.raises(RegistryFormatError, match=f"duplicate YAML mapping key '{key}' at line"):
+        RegistryReader(_write_raw_registry(tmp_path, text))
+
+
+def test_quoted_and_unquoted_equivalent_keys_are_duplicates(tmp_path):
+    text = _valid_registry_text().replace(
+        "    summary: Reads alpha records.\n",
+        '    summary: Reads alpha records.\n    "summary": Different summary.\n',
+        1,
+    )
+    with pytest.raises(RegistryFormatError, match="duplicate YAML mapping key 'summary'"):
+        RegistryReader(_write_raw_registry(tmp_path, text))
+
+
+def test_case_distinct_key_reaches_unknown_field_validation(tmp_path):
+    text = _valid_registry_text().replace(
+        "    summary: Reads alpha records.\n",
+        "    summary: Reads alpha records.\n    Summary: Different case.\n",
+        1,
+    )
+    with pytest.raises(RegistryFormatError, match="unsupported fields.*Summary"):
+        RegistryReader(_write_raw_registry(tmp_path, text))
+
+
+def test_first_duplicate_is_reported_in_source_order_with_bounded_location(tmp_path):
+    text = _valid_registry_text().replace(
+        "    summary: Reads alpha records.\n",
+        "    summary: Reads alpha records.\n    summary: Duplicate summary.\n",
+        1,
+    ).replace(
+        "    status: active\n",
+        "    status: active\n    status: experimental\n",
+        1,
+    )
+    with pytest.raises(RegistryFormatError) as exc_info:
+        RegistryReader(_write_raw_registry(tmp_path, text))
+    message = str(exc_info.value)
+    assert "duplicate YAML mapping key 'summary'" in message
+    assert "at line" in message
+    assert "mapping starts at line" in message
+    assert "experimental" not in message
+
+
+def test_duplicate_failure_does_not_modify_input_bytes(tmp_path):
+    text = _valid_registry_text().replace(
+        "    summary: Reads alpha records.\n",
+        "    summary: Reads alpha records.\n    summary: Duplicate summary.\n",
+        1,
+    )
+    path = _write_raw_registry(tmp_path, text)
+    before = path.read_bytes()
+    with pytest.raises(RegistryFormatError):
+        RegistryReader(path)
+    assert path.read_bytes() == before
+
+
+def test_alias_value_without_duplicate_key_remains_valid(tmp_path):
+    text = _valid_registry_text().replace(
+        "    summary: Reads alpha records.\n",
+        "    summary: &shared_text Reads alpha records.\n",
+        1,
+    ).replace(
+        "    reuse_guidance: Reuse for alpha reads only.\n",
+        "    reuse_guidance: *shared_text\n",
+        1,
+    )
+    record = RegistryReader(_write_raw_registry(tmp_path, text)).by_id("alpha-reader")
+    assert record.summary == record.reuse_guidance == "Reads alpha records."
+
+
+_MERGE_BASE = """registry_version: 0.1.0
+capabilities:
+  - &base
+    capability_id: base-reader
+    name: Base Reader
+    summary: Base summary.
+    status: active
+    canonical_paths: [src/base.py]
+    public_interfaces: [base:Read]
+    owner_agent: Integration Manager
+    known_consumers: []
+    tests: [tests/test_base.py]
+    keywords: [base]
+    reuse_guidance: Base guidance.
+    side_effects: [Performs no writes.]
+"""
+
+
+def test_single_merge_and_explicit_override_remain_valid(tmp_path):
+    text = _MERGE_BASE + """  - <<: *base
+    capability_id: merged-reader
+    name: Merged Reader
+    canonical_paths: [src/merged.py]
+    public_interfaces: [merged:Read]
+    tests: [tests/test_merged.py]
+    keywords: [merged]
+"""
+    record = RegistryReader(_write_raw_registry(tmp_path, text)).by_id("merged-reader")
+    assert record.summary == "Base summary."
+    assert record.capability_id == "merged-reader"
+
+
+def test_merge_sequence_preserves_existing_deterministic_precedence(tmp_path):
+    text = """registry_version: 0.1.0
+capabilities:
+  - &first
+    capability_id: first-reader
+    name: First Reader
+    summary: First summary.
+    status: active
+    canonical_paths: [src/first.py]
+    public_interfaces: [first:Read]
+    owner_agent: Integration Manager
+    known_consumers: []
+    tests: [tests/test_first.py]
+    keywords: [first]
+    reuse_guidance: First guidance.
+    side_effects: [Performs no writes.]
+  - &second
+    capability_id: second-reader
+    name: Second Reader
+    summary: Second summary.
+    status: active
+    canonical_paths: [src/second.py]
+    public_interfaces: [second:Read]
+    owner_agent: QA / Test Agent
+    known_consumers: []
+    tests: [tests/test_second.py]
+    keywords: [second]
+    reuse_guidance: Second guidance.
+    side_effects: [Performs no network calls.]
+  - <<: [*first, *second]
+    capability_id: merged-reader
+    name: Merged Reader
+    canonical_paths: [src/merged.py]
+    public_interfaces: [merged:Read]
+    tests: [tests/test_merged.py]
+    keywords: [merged]
+"""
+    record = RegistryReader(_write_raw_registry(tmp_path, text)).by_id("merged-reader")
+    assert record.summary == "First summary."
+    assert record.owner_agent == "Integration Manager"
+
+
+def test_repeated_explicit_merge_keys_are_rejected(tmp_path):
+    text = _MERGE_BASE + """  - <<: *base
+    <<: *base
+    capability_id: merged-reader
+"""
+    with pytest.raises(RegistryFormatError, match="duplicate YAML mapping key '<<'"):
+        RegistryReader(_write_raw_registry(tmp_path, text))
+
+
+def test_merge_plus_duplicate_explicit_key_is_rejected(tmp_path):
+    text = _MERGE_BASE + """  - <<: *base
+    capability_id: merged-reader
+    capability_id: duplicate-reader
+"""
+    with pytest.raises(RegistryFormatError, match="duplicate YAML mapping key 'capability_id'"):
+        RegistryReader(_write_raw_registry(tmp_path, text))
+
+
+def test_duplicate_capability_id_regression_remains_fail_closed(tmp_path):
+    text = _valid_registry_text().replace("capability_id: beta-evaluator", "capability_id: alpha-reader", 1)
+    with pytest.raises(RegistryFormatError, match="capability_id values must be unique"):
+        RegistryReader(_write_raw_registry(tmp_path, text))
