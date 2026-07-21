@@ -1,7 +1,7 @@
 [project]
 name = "reusable-capability-registry"
-version = "0.1.0"
-description = "Offline, read-only discovery for Agent OS reusable capabilities."
+version = "0.2.0"
+description = "Offline, read-only discovery and report-only validation for Agent OS reusable capabilities."
 requires-python = ">=3.10"
 dependencies = ["PyYAML>=6.0,<7"]
 
@@ -10,6 +10,7 @@ test = ["pytest>=7"]
 
 [project.scripts]
 agent-os-capabilities = "reusable_capability_registry.cli:main"
+agent-os-capability-validate = "reusable_capability_registry.validation_cli:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
@@ -21,3 +22,6 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+# Validation fixtures contain intentional example/test files that must not be
+# collected as part of this package's own suite.
+norecursedirs = ["fixtures", ".*", "build", "dist", "*.egg", "__pycache__"]

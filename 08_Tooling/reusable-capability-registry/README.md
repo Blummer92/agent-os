@@ -71,6 +71,10 @@ canonical registry snapshot. It does **not** prove correctness, freshness,
 authorship, trustworthiness, authorization, compatibility, test adequacy,
 ownership validity, approval, readiness, or permission to execute or write.
 
+## Report-only validation
+
+`agent-os-capability-validate --repository-root . --format json` (or `validate_registry(repository_root=".")`) runs deterministic, offline, static, **report-only** validation: bounded `ast`-only inspection of registered canonical paths, interfaces, consumers, tests, ownership, and exemptions. Every finding carries an independent `EvidenceConfidence` and `ValidationSeverity` (`fail>manual-review>warn>pass`); the report includes the same-snapshot `RegistryProvenance` (reused, never recomputed). Successful checks emit no findings; it imports/executes nothing, never scans the whole repository, and never mutates anything. CLI exit codes: `0` pass/warn, `1` fail, `2` manual-review or misuse, `3` execution error. Versions: package `0.2.0`, `report_version` `1.0`, `registry_version` `0.1.0`.
+
 ## Supported PyYAML versions
 
 The package supports `PyYAML>=6.0,<7`. The duplicate-key loader contract is

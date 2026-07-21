@@ -4,7 +4,13 @@ import json
 from collections.abc import Iterable
 
 from .discovery import INFORMATIONAL_NOTICE
-from .models import CapabilityRecord, DiscoveryResult
+from .models import (
+    CapabilityRecord,
+    DiscoveryResult,
+    ValidationEvidence,
+    ValidationFinding,
+    ValidationReport,
+)
 
 
 def _record_to_payload(record: CapabilityRecord) -> dict[str, object]:
@@ -57,6 +63,52 @@ def serialize_discovery_results(results: Iterable[DiscoveryResult]) -> str:
         "informational_notice": INFORMATIONAL_NOTICE,
         "results": [discovery_result_to_payload(result) for result in results],
     }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+
+
+def _evidence_to_payload(evidence: ValidationEvidence) -> dict[str, object]:
+    return {
+        "path": evidence.path,
+        "line": evidence.line,
+        "symbol": evidence.symbol,
+        "source_type": evidence.source_type,
+        "detail": evidence.detail,
+    }
+
+
+def _finding_to_payload(finding: ValidationFinding) -> dict[str, object]:
+    return {
+        "code": finding.code,
+        "confidence": finding.confidence.value,
+        "severity": finding.severity.value,
+        "capability_id": finding.capability_id,
+        "surface": finding.surface,
+        "message": finding.message,
+        "evidence": [_evidence_to_payload(item) for item in finding.evidence],
+        "manual_review_reason": finding.manual_review_reason,
+    }
+
+
+def validation_report_to_payload(report: ValidationReport) -> dict[str, object]:
+    """Deterministic projection of a validation report (keys sorted by the serializer)."""
+    return {
+        "report_version": report.report_version,
+        "informational_notice": report.informational_notice,
+        "provenance": report.provenance.to_payload() if report.provenance is not None else None,
+        "summary": {
+            "severity": report.severity.value,
+            "capabilities_checked": report.capabilities_checked,
+            "checks_run": report.checks_run,
+            "confidence_counts": {label: count for label, count in report.confidence_counts},
+            "severity_counts": {label: count for label, count in report.severity_counts},
+        },
+        "findings": [_finding_to_payload(finding) for finding in report.findings],
+    }
+
+
+def serialize_validation_report(report: ValidationReport) -> str:
+    """Canonical validation JSON: UTF-8, sorted keys, compact, exactly one final newline."""
+    payload = validation_report_to_payload(report)
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
 
 
