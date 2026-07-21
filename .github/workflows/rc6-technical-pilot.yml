@@ -12,6 +12,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: rc6-technical-pilot
+  cancel-in-progress: false
+
+env:
+  FROZEN_SHA: "ca980c38d74b8d3ab30ca67461a9f576281edc75"
+  ARTIFACT_NAME: rc6-technical-pilot-${{ inputs.frozen_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+
 jobs:
   technical-pilot:
     name: Execute frozen T01-T24 package
@@ -32,13 +40,16 @@ jobs:
           path: baseline
           persist-credentials: false
 
-      - name: Fail closed unless baseline is exact
+      - name: Fail closed unless refs and checkouts are exact
         shell: bash
         run: |
           set -euo pipefail
-          actual="$(git -C baseline rev-parse HEAD)"
-          test "$actual" = "${{ inputs.frozen_sha }}"
-          test "$actual" = "ca980c38d74b8d3ab30ca67461a9f576281edc75"
+          test "$GITHUB_REF" = "refs/heads/main"
+          runner_sha="$(git -C runner-source rev-parse HEAD)"
+          baseline_sha="$(git -C baseline rev-parse HEAD)"
+          test "$runner_sha" = "$GITHUB_SHA"
+          test "$baseline_sha" = "${{ inputs.frozen_sha }}"
+          test "$baseline_sha" = "$FROZEN_SHA"
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -53,6 +64,19 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install -e './baseline/08_Tooling/reusable-capability-registry[test]'
+
+      - name: Run non-executing frozen-baseline preflight
+        shell: bash
+        env:
+          PYTHONPATH: ${{ github.workspace }}/baseline:${{ github.workspace }}/baseline/08_Tooling/reusable-capability-registry/src:${{ github.workspace }}/runner-source
+        run: |
+          set -euo pipefail
+          python runner-source/scripts/agent_os_rc6_technical_pilot.py \
+            --preflight-only \
+            --fixture runner-source/tests/fixtures/rc6_technical_pilot/frozen_package.json \
+            --repository-root baseline \
+            --tested-sha "${{ inputs.frozen_sha }}" \
+            --output-dir preflight-evidence
 
       - name: Run focused contract tests
         shell: bash
@@ -75,23 +99,77 @@ jobs:
             --tested-sha "${{ inputs.frozen_sha }}" \
             --output-dir evidence
 
+      - name: Ensure downloadable evidence exists
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          if ! test -f evidence/rc6-technical-pilot.json; then
+            cat > evidence/rc6-technical-pilot.json <<EOF
+          {
+            "report_version": "1.0",
+            "mode": "workflow-failure",
+            "package_version": "RC6-TF-1.0",
+            "tested_sha": "${{ inputs.frozen_sha }}",
+            "runner_sha": "$GITHUB_SHA",
+            "summary": {"result": "failed-closed"},
+            "workflow": {
+              "ref": "$GITHUB_REF",
+              "run_id": "$GITHUB_RUN_ID",
+              "run_attempt": "$GITHUB_RUN_ATTEMPT",
+              "job_status": "${{ job.status }}"
+            },
+            "authorization": {
+              "pilot_execution": "not-authorized",
+              "implementation": "not-authorized",
+              "repository_writes": "not-authorized",
+              "merge": "not-authorized"
+            }
+          }
+          EOF
+          fi
+          if ! test -f evidence/rc6-technical-pilot.md; then
+            cat > evidence/rc6-technical-pilot.md <<EOF
+          # RC6 Technical Pilot Failure Evidence
+
+          - Overall result: **FAILED CLOSED**
+          - Runner SHA: \`$GITHUB_SHA\`
+          - Frozen SHA: \`${{ inputs.frozen_sha }}\`
+          - Ref: \`$GITHUB_REF\`
+          - Run: \`$GITHUB_RUN_ID\` attempt \`$GITHUB_RUN_ATTEMPT\`
+          - Job status: \`${{ job.status }}\`
+
+          The workflow stopped before normal pilot evidence was produced. This record is evidence only and grants no authorization.
+          EOF
+          fi
+          sha256sum \
+            evidence/rc6-technical-pilot.json \
+            evidence/rc6-technical-pilot.md \
+            > evidence/SHA256SUMS
+
       - name: Publish step summary
         if: always()
         shell: bash
         run: |
-          if test -f evidence/rc6-technical-pilot.md; then
-            cat evidence/rc6-technical-pilot.md >> "$GITHUB_STEP_SUMMARY"
-          else
-            printf '# RC6 Technical Pilot\n\nEvidence was not produced because execution failed closed.\n' >> "$GITHUB_STEP_SUMMARY"
-          fi
+          {
+            printf '# RC6 Technical Pilot Run\n\n'
+            printf -- '- Artifact: `%s`\n' "$ARTIFACT_NAME"
+            printf -- '- Runner SHA: `%s`\n' "$GITHUB_SHA"
+            printf -- '- Frozen SHA: `%s`\n' "${{ inputs.frozen_sha }}"
+            printf -- '- Ref: `%s`\n' "$GITHUB_REF"
+            printf -- '- Run: `%s` attempt `%s`\n\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+            cat evidence/rc6-technical-pilot.md
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload structured evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rc6-technical-pilot-${{ inputs.frozen_sha }}
+          name: ${{ env.ARTIFACT_NAME }}
           path: |
             evidence/rc6-technical-pilot.json
             evidence/rc6-technical-pilot.md
+            evidence/SHA256SUMS
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 90
