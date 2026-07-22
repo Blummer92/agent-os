@@ -21,6 +21,7 @@ pyyaml>=6.0.0
 google-auth>=2.0.0
 google-api-python-client>=2.0.0
 google-auth-oauthlib>=1.0.0
+PyGithub==2.9.1
 
 # Coverage
 coverage[toml]>=6.0.0
