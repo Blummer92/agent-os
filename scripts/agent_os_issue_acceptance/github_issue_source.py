@@ -6,7 +6,12 @@ import re
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 
-from .issue_scanner import IssueScanPage, scan_open_issues
+from .issue_scanner import (
+    IssueScanPage,
+    IssueStateFilter,
+    scan_issues,
+    scan_open_issues,
+)
 
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _ERROR_KINDS = frozenset({
@@ -58,16 +63,20 @@ class GitHubIssuePageSource:
         repository: str,
         reader: GitHubIssuePageReader,
         *,
+        state: IssueStateFilter,
         per_page: int = 100,
     ) -> None:
         if not isinstance(repository, str) or not _REPOSITORY_RE.fullmatch(repository):
             raise ValueError("repository must use owner/name form")
+        if not isinstance(state, IssueStateFilter):
+            raise TypeError("state must be an IssueStateFilter")
         if not isinstance(per_page, int) or isinstance(per_page, bool) or not 1 <= per_page <= 100:
             raise ValueError("per_page must be an integer from 1 to 100")
         if reader is None:
             raise TypeError("reader is required")
         self.repository = repository
         self.reader = reader
+        self.state = state
         self.per_page = per_page
 
     def fetch_page(self, page: int) -> IssueScanPage:
@@ -78,7 +87,7 @@ class GitHubIssuePageSource:
                 self.repository,
                 page=page,
                 per_page=self.per_page,
-                state="open",
+                state=self.state.value,
             )
         except (TypeError, ValueError):
             return IssueScanPage(items=(), next_page=None, error="malformed-response")
@@ -104,26 +113,49 @@ class GitHubIssuePageSource:
         )
 
 
+def scan_connected_issues(
+    repository: str,
+    reader: GitHubIssuePageReader,
+    *,
+    state: IssueStateFilter,
+    retrieved_at: str,
+    per_page: int = 100,
+):
+    """Run one state-aware scan over an explicitly supplied connected reader."""
+    source = GitHubIssuePageSource(repository, reader, state=state, per_page=per_page)
+    return scan_issues(
+        source,
+        requested_state=state,
+        retrieved_at=retrieved_at,
+        source_query=f"repo={repository} state={state.value}",
+    )
+
+
 def scan_connected_open_issues(
     repository: str,
     reader: GitHubIssuePageReader,
     *,
     per_page: int = 100,
 ):
-    """Run the canonical scanner over one explicitly supplied connected reader."""
-
-    source = GitHubIssuePageSource(repository, reader, per_page=per_page)
+    """Compatibility wrapper for the legacy connected open-only scan."""
+    source = GitHubIssuePageSource(
+        repository,
+        reader,
+        state=IssueStateFilter.OPEN,
+        per_page=per_page,
+    )
     return scan_open_issues(source, source_query=f"repo={repository} state=open")
 
 
 def result_to_report(result: object) -> dict[str, Any]:
     """Project scanner evidence into a stable report-only payload for #346."""
-
     required = (
         "status",
         "complete",
         "page_count",
         "item_count",
+        "requested_state",
+        "retrieved_at",
         "source_query",
         "findings",
         "reasons",
@@ -136,6 +168,8 @@ def result_to_report(result: object) -> dict[str, Any]:
         "complete": result.complete,
         "page_count": result.page_count,
         "item_count": result.item_count,
+        "requested_state": result.requested_state.value,
+        "retrieved_at": result.retrieved_at,
         "source_query": result.source_query,
         "findings": [finding.value for finding in result.findings],
         "reasons": list(result.reasons),
@@ -149,6 +183,8 @@ def result_to_report(result: object) -> dict[str, Any]:
                 "created_at": record.created_at,
                 "updated_at": record.updated_at,
                 "source_revision": record.source_revision,
+                "closed_at": record.closed_at,
+                "state_reason": record.state_reason,
             }
             for record in result.records
         ],
