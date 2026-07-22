@@ -5,6 +5,7 @@ from typing import Any, Dict
 
 import yaml
 
+from task_helpers import make_plain_task as make_task
 from workflow_scheduler.adapters import TaskAdapter
 from workflow_scheduler.cli import WorkflowSchedulerCLI
 from workflow_scheduler.models import Task, TaskStatus, WorkflowStatus
@@ -17,19 +18,6 @@ class NeverCalledAdapter(TaskAdapter):
     def execute(self, task: Task) -> Dict[str, Any]:
         self.calls += 1
         raise AssertionError("Adapter.execute() should never be called for this task")
-
-
-def make_task(task_id: str = "task-1", **overrides) -> Task:
-    defaults = dict(
-        id=task_id,
-        workflow_id="workflow-1",
-        type="test",
-        owner="system",
-        action="test_action",
-        idempotency_key=f"key-{task_id}",
-    )
-    defaults.update(overrides)
-    return Task(**defaults)
 
 
 def write_workflow(tmp_path, workflow_id: str, title: str, action: str = "test_action") -> str:
