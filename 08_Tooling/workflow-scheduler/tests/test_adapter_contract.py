@@ -9,6 +9,7 @@ adapter opting into it."""
 
 import pytest
 
+from task_helpers import make_plain_task as make_task
 from workflow_scheduler.adapters.fake_adapters import FakeContractAdapter, FakeSuccessAdapter
 from workflow_scheduler.audit import AuditLogger
 from workflow_scheduler.execution import Executor
@@ -17,21 +18,8 @@ from workflow_scheduler.execution.executor import (
     _validate_adapter_result,
     _validate_contract_result,
 )
-from workflow_scheduler.models import ApprovalDecision, Task, TaskStatus
+from workflow_scheduler.models import ApprovalDecision, TaskStatus
 from workflow_scheduler.repository import SQLiteRepository
-
-
-def make_task(task_id: str = "task-1", **overrides) -> Task:
-    defaults = dict(
-        id=task_id,
-        workflow_id="workflow-1",
-        type="test",
-        owner="system",
-        action="test_action",
-        idempotency_key=f"key-{task_id}",
-    )
-    defaults.update(overrides)
-    return Task(**defaults)
 
 
 @pytest.fixture
