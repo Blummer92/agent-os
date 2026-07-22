@@ -4,6 +4,7 @@ major execution flows."""
 
 import pytest
 
+from task_helpers import make_plain_task as make_task
 from workflow_scheduler.adapters import (
     FakeFailureAdapter,
     FakeMalformedReturnAdapter,
@@ -19,21 +20,8 @@ from workflow_scheduler.adapters import (
 )
 from workflow_scheduler.audit import AuditLogger
 from workflow_scheduler.execution import Executor
-from workflow_scheduler.models import Task, TaskStatus
+from workflow_scheduler.models import TaskStatus
 from workflow_scheduler.repository import SQLiteRepository
-
-
-def make_task(task_id: str = "task-1", **overrides) -> Task:
-    defaults = dict(
-        id=task_id,
-        workflow_id="workflow-1",
-        type="test",
-        owner="system",
-        action="test_action",
-        idempotency_key=f"key-{task_id}",
-    )
-    defaults.update(overrides)
-    return Task(**defaults)
 
 
 def make_executor(repository, adapter, max_workers: int = 1) -> Executor:

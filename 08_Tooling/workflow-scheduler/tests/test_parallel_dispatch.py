@@ -9,6 +9,7 @@ from typing import Any, Dict
 import pytest
 import yaml
 
+from task_helpers import make_plain_task as make_task
 from workflow_scheduler.adapters import TaskAdapter
 from workflow_scheduler.audit import AuditLogger
 from workflow_scheduler.cli import WorkflowSchedulerCLI, main
@@ -54,20 +55,6 @@ class MixedResultAdapter(TaskAdapter):
         if task.id in self.failing_ids:
             return {"success": False, "error": "boom", "is_transient": False}
         return {"success": True, "error": None, "output": {"task_id": task.id}}
-
-
-def make_task(task_id: str = "task-1", **overrides) -> Task:
-    """Build a plain (non-governed) task, matching test_retries.py's convention."""
-    defaults = dict(
-        id=task_id,
-        workflow_id="workflow-1",
-        type="test",
-        owner="system",
-        action="test_action",
-        idempotency_key=f"key-{task_id}",
-    )
-    defaults.update(overrides)
-    return Task(**defaults)
 
 
 def make_executor(repository, adapter, max_workers: int = 1) -> Executor:

@@ -6,6 +6,7 @@ from typing import Any, Dict
 import pytest
 import yaml
 
+from task_helpers import make_plain_task as make_task
 from workflow_scheduler.adapters import TaskAdapter
 from workflow_scheduler.audit import AuditLogger
 from workflow_scheduler.cli import WorkflowSchedulerCLI
@@ -63,20 +64,6 @@ class FlakyThenSucceedsAdapter(TaskAdapter):
 def repository():
     """Create in-memory SQLite repository for testing."""
     return SQLiteRepository(":memory:")
-
-
-def make_task(task_id: str = "task-1", **overrides) -> Task:
-    """Build a plain (non-governed) task suitable for retry testing."""
-    defaults = dict(
-        id=task_id,
-        workflow_id="workflow-1",
-        type="test",
-        owner="system",
-        action="test_action",
-        idempotency_key=f"key-{task_id}",
-    )
-    defaults.update(overrides)
-    return Task(**defaults)
 
 
 def make_executor(repository, adapter):
