@@ -9,17 +9,14 @@ def parse_link_header(value: str | None) -> dict[str, str]:
         return {}
 
     # RFC 8288 robust parsing: <URL>; param="value", <URL>; param="value"
-    # This regex identifies the main Link-Value components (URL and params block)
-    # while correctly ignoring commas inside quotes.
-    # Note: This parser assumes the common case where URLs are in angle brackets
-    # and relations are provided via the 'rel' parameter.
-    link_regex = re.compile(r'\s*<([^>]*)>\s*(?:;\s*(.*))?')
+    # Split only on delimiters outside quoted strings and angle-bracket URIs.
+    link_regex = re.compile(r'\s*<([^>]*)>\s*(?:;\s*(.*))?\s*')
     param_regex = re.compile(r'([a-zA-Z0-9!#$%&\'*+\-.^_`|~]+)\s*=\s*(?:([^",;]+)|"([^"]*)")')
 
     relations: dict[str, str] = {}
 
     for part in _split_links(value):
-        match = link_regex.match(part)
+        match = link_regex.fullmatch(part)
         if not match:
             raise ValueError("malformed Link header")
 
@@ -38,7 +35,7 @@ def parse_link_header(value: str | None) -> dict[str, str]:
                         if rel in relations:
                             raise ValueError("duplicate or ambiguous Link relation")
                         relations[rel] = url
-        
+
         if not rel_found:
             raise ValueError("missing or duplicate Link relation")
 
@@ -46,20 +43,61 @@ def parse_link_header(value: str | None) -> dict[str, str]:
 
 
 def _split_links(value: str) -> list[str]:
-    # Split by commas that are NOT inside double quotes.
-    links = []
-    current = []
+    """Split Link values only at top-level commas.
+
+    Quoted parameter strings and angle-bracket URI references may legally contain
+    commas. Malformed quote or angle-bracket state fails closed.
+    """
+
+    links: list[str] = []
+    current: list[str] = []
     in_quotes = False
+    in_uri = False
+    escaped = False
+
     for char in value:
-        if char == '"':
-            in_quotes = not in_quotes
-        elif char == ',' and not in_quotes:
-            links.append("".join(current).strip())
-            current = []
+        if in_quotes:
+            current.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_quotes = False
             continue
-        current.append(char)
-    if current:
-        links.append("".join(current).strip())
+
+        if in_uri:
+            current.append(char)
+            if char == "<":
+                raise ValueError("malformed Link header")
+            if char == ">":
+                in_uri = False
+            continue
+
+        if char == '"':
+            in_quotes = True
+            current.append(char)
+        elif char == "<":
+            in_uri = True
+            current.append(char)
+        elif char == ">":
+            raise ValueError("malformed Link header")
+        elif char == ",":
+            part = "".join(current).strip()
+            if not part:
+                raise ValueError("malformed Link header")
+            links.append(part)
+            current = []
+        else:
+            current.append(char)
+
+    if in_quotes or in_uri:
+        raise ValueError("malformed Link header")
+
+    part = "".join(current).strip()
+    if not part:
+        raise ValueError("malformed Link header")
+    links.append(part)
     return links
 
 
