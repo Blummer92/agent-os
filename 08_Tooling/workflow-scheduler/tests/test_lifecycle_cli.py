@@ -2,22 +2,10 @@
 
 from datetime import UTC, datetime, timedelta
 
+from task_helpers import make_plain_task as make_task
 from workflow_scheduler.audit import AuditLogger
 from workflow_scheduler.cli import WorkflowSchedulerCLI
-from workflow_scheduler.models import Task, TaskStatus, WorkflowPlan, WorkflowStatus
-
-
-def make_task(task_id: str = "task-1", **overrides) -> Task:
-    defaults = dict(
-        id=task_id,
-        workflow_id="workflow-1",
-        type="test",
-        owner="system",
-        action="test_action",
-        idempotency_key=f"key-{task_id}",
-    )
-    defaults.update(overrides)
-    return Task(**defaults)
+from workflow_scheduler.models import TaskStatus, WorkflowPlan, WorkflowStatus
 
 
 def make_workflow(workflow_id: str = "workflow-1", **overrides) -> WorkflowPlan:
