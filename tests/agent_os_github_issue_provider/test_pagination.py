@@ -12,6 +12,18 @@ def test_parse_link_header_valid():
     assert parsed["next"] == "https://api.github.com/repos/owner/repo/issues?page=2"
     assert parsed["last"] == "https://api.github.com/repos/owner/repo/issues?page=5"
 
+def test_parse_link_header_comma_in_quotes():
+    header = '<https://example.com>; rel="next", <https://example.com/2>; rel="something,else"'
+    parsed = parse_link_header(header)
+    assert parsed["next"] == "https://example.com"
+    assert parsed["something,else"] == "https://example.com/2"
+
+def test_parse_link_header_multiple_rels():
+    header = '<https://example.com>; rel="next last"'
+    parsed = parse_link_header(header)
+    assert parsed["next"] == "https://example.com"
+    assert parsed["last"] == "https://example.com"
+
 def test_parse_link_header_empty():
     assert parse_link_header("") == {}
     assert parse_link_header(None) == {}
@@ -19,8 +31,32 @@ def test_parse_link_header_empty():
 def test_parse_link_header_malformed():
     with pytest.raises(ValueError, match="malformed Link header"):
         parse_link_header("not a link")
+    
+    # Missing angle brackets
+    with pytest.raises(ValueError, match="malformed Link header"):
+        parse_link_header("http://example.com; rel=next")
+
+def test_parse_link_header_duplicate_or_ambiguous():
+    # Duplicate rel across entries
+    header = '<https://ex.com/1>; rel="next", <https://ex.com/2>; rel="next"'
+    with pytest.raises(ValueError, match="duplicate or ambiguous Link relation"):
+        parse_link_header(header)
+    
+    # Duplicate rel within one entry
+    header = '<https://ex.com/1>; rel="next next"'
+    with pytest.raises(ValueError, match="duplicate or ambiguous Link relation"):
+        parse_link_header(header)
+
+def test_parse_link_header_missing_rel():
+    # Entirely missing rel
+    header = '<https://example.com>; title="Something"'
     with pytest.raises(ValueError, match="missing or duplicate Link relation"):
-        parse_link_header("<http://example.com>; rel=")
+        parse_link_header(header)
+    
+    # Empty rel
+    header = '<https://example.com>; rel=""'
+    with pytest.raises(ValueError, match="missing or duplicate Link relation"):
+        parse_link_header(header)
 
 def test_validated_next_page_valid():
     header = '<https://api.github.com/repos/owner/repo/issues?page=2&per_page=100&state=open>; rel="next"'

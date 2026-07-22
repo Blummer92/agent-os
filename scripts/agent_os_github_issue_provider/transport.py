@@ -5,6 +5,7 @@ from typing import Protocol
 
 from github import Github
 from github.GithubException import GithubException, RateLimitExceededException
+import requests.exceptions
 
 from .models import TransportAttempt, TransportResponse
 
@@ -77,10 +78,19 @@ class PyGithubRestTransport:
                 attempts.append(TransportAttempt(attempt_number, kind))
                 if kind != "api-error" or attempt_number == self.max_attempts:
                     raise GitHubTransportError(kind, tuple(attempts)) from error
-            except (TimeoutError, ConnectionError) as error:
+            except (
+                requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError,
+                TimeoutError,
+                ConnectionError,
+            ) as error:
                 attempts.append(TransportAttempt(attempt_number, "api-error"))
                 if attempt_number == self.max_attempts:
                     raise GitHubTransportError("api-error", tuple(attempts)) from error
+            except Exception as error:
+                # Wrap any other internal library exceptions to prevent leak
+                attempts.append(TransportAttempt(attempt_number, "api-error"))
+                raise GitHubTransportError("api-error", tuple(attempts)) from error
         raise GitHubTransportError("api-error", tuple(attempts))
 
 

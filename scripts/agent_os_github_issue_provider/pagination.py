@@ -1,25 +1,66 @@
 from __future__ import annotations
 
+import re
 from urllib.parse import parse_qs, urlparse
 
 
 def parse_link_header(value: str | None) -> dict[str, str]:
     if not value:
         return {}
+
+    # RFC 8288 robust parsing: <URL>; param="value", <URL>; param="value"
+    # This regex identifies the main Link-Value components (URL and params block)
+    # while correctly ignoring commas inside quotes.
+    # Note: This parser assumes the common case where URLs are in angle brackets
+    # and relations are provided via the 'rel' parameter.
+    link_regex = re.compile(r'\s*<([^>]*)>\s*(?:;\s*(.*))?')
+    param_regex = re.compile(r'([a-zA-Z0-9!#$%&\'*+\-.^_`|~]+)\s*=\s*(?:([^",;]+)|"([^"]*)")')
+
     relations: dict[str, str] = {}
-    for part in value.split(","):
-        sections = [section.strip() for section in part.split(";")]
-        if not sections or not sections[0].startswith("<") or not sections[0].endswith(">"):
+
+    for part in _split_links(value):
+        match = link_regex.match(part)
+        if not match:
             raise ValueError("malformed Link header")
-        url = sections[0][1:-1]
-        rel = None
-        for section in sections[1:]:
-            if section.startswith("rel="):
-                rel = section[4:].strip('"')
-        if not rel or rel in relations:
+
+        url, params_str = match.groups()
+        rel_found = False
+        if params_str:
+            for param_match in param_regex.finditer(params_str):
+                name, token_val, quoted_val = param_match.groups()
+                if name.lower() == "rel":
+                    rel_val = token_val or quoted_val
+                    if not rel_val:
+                        continue
+                    rel_found = True
+                    # RFC 8288 allows space-separated relations in rel="next prev"
+                    for rel in rel_val.split():
+                        if rel in relations:
+                            raise ValueError("duplicate or ambiguous Link relation")
+                        relations[rel] = url
+        
+        if not rel_found:
             raise ValueError("missing or duplicate Link relation")
-        relations[rel] = url
+
     return relations
+
+
+def _split_links(value: str) -> list[str]:
+    # Split by commas that are NOT inside double quotes.
+    links = []
+    current = []
+    in_quotes = False
+    for char in value:
+        if char == '"':
+            in_quotes = not in_quotes
+        elif char == ',' and not in_quotes:
+            links.append("".join(current).strip())
+            current = []
+            continue
+        current.append(char)
+    if current:
+        links.append("".join(current).strip())
+    return links
 
 
 def validated_next_page(
