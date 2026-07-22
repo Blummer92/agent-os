@@ -78,13 +78,20 @@ A later package split requires current evidence of at least one of: circular dep
 
 `metadata_validation.py` evaluates MD2A fixture evidence offline and report-only. It never edits issues, labels, readiness fields, workflows, or external systems.
 
-`issue_scanner.py` converts complete paginated retrieval into provenance-preserving records. `issue_scan_cli.py` provides an explicit local GitHub runner:
+`issue_scanner.py` is the pure scanner library. It owns pagination, requested-state validation for `open`, `closed`, and `all`, source-state consistency, duplicate detection, deterministic ordering, and complete-versus-incomplete evidence. The legacy `scan_open_issues()` function remains a thin compatibility wrapper over the canonical state-aware scanner.
 
-```bash
-python -m scripts.agent_os_issue_acceptance.issue_scan_cli --repository OWNER/REPO
-```
+`github_issue_source.py` defines the caller-supplied `GitHubIssuePageReader` protocol and the bounded connected-source adapter. It normalizes supplied page evidence, excludes pull-request records, maps connector failures into bounded scanner errors, and projects scan results into report-only payloads. `scan_connected_open_issues()` remains a compatibility wrapper; new state-aware callers use `scan_connected_issues()` with an explicit `IssueStateFilter` and caller-supplied UTC retrieval timestamp.
 
-Incomplete retrieval exits nonzero. The runner performs no issue or label writes.
+External execution belongs to a separately approved connected caller. That caller must supply the repository, requested state, retrieval timestamp, complete page reader, and its own credential and permission boundary.
+
+This package does not provide:
+
+- network transport or a concrete live GitHub reader;
+- GitHub authentication, token loading, credential lookup, or authorization headers;
+- a connected scanner CLI or subprocess wrapper;
+- issue or label mutation;
+- automatic report posting;
+- Workflow Scheduler execution behavior.
 
 ## Informational reuse evidence (optional adapter)
 
