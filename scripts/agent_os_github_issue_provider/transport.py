@@ -91,6 +91,8 @@ def _github_error_kind(status: int | None) -> str:
         return "source-inaccessible"
     if status == 429:
         return "rate-limited"
+    if status == 408:
+        return "api-error"
     if status is not None and 400 <= status < 500:
         return "malformed-response"
     return "api-error"

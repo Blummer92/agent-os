@@ -59,7 +59,7 @@ class PyGithubIssuePageProvider:
                 normalized["source_revision"] = issue_source_revision(normalized)
                 normalized_items.append(normalized)
             headers = {key.lower(): value for key, value in response.headers.items()}
-            next_page = validated_next_page(
+            next_page, terminal_proven = validated_next_page(
                 headers.get("link"),
                 repository=repository,
                 current_page=page,
@@ -75,4 +75,5 @@ class PyGithubIssuePageProvider:
             items=tuple(normalized_items),
             next_page=next_page,
             complete=True,
+            terminal_page_proven=terminal_proven,
         )

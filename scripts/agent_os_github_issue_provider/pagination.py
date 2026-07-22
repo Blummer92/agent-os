@@ -29,10 +29,16 @@ def validated_next_page(
     current_page: int,
     per_page: int,
     state: str,
-) -> int | None:
-    next_url = parse_link_header(link_header).get("next")
+) -> tuple[int | None, bool]:
+    relations = parse_link_header(link_header)
+    next_url = relations.get("next")
     if next_url is None:
-        return None
+        # If there is a link header but no next relation, it is proven terminal.
+        # If there is NO link header on the first page, it means the result set
+        # is not paginated (single page), which is also proven terminal.
+        terminal_proven = (link_header is not None) or (current_page == 1)
+        return None, terminal_proven
+
     parsed = urlparse(next_url)
     if parsed.scheme != "https" or parsed.netloc != "api.github.com":
         raise ValueError("next link must target api.github.com")
@@ -49,4 +55,4 @@ def validated_next_page(
         raise ValueError("next link does not advance")
     if linked_per_page != per_page or query.get("state", [None])[0] != state:
         raise ValueError("next link changed the requested query")
-    return page
+    return page, False
