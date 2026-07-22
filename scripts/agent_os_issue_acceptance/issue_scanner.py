@@ -280,6 +280,7 @@ def issue_record_from_mapping(
     url = _required_string(raw_item["html_url"], "html_url")
     created_at = _required_timestamp(raw_item["created_at"], "created_at")
     updated_at = _required_timestamp(raw_item["updated_at"], "updated_at")
+    source_revision = _optional_source_revision(raw_item.get("source_revision"), updated_at)
 
     closed_at = _optional_timestamp(raw_item.get("closed_at"), "closed_at")
     state_reason = _optional_string(raw_item.get("state_reason"), "state_reason")
@@ -294,7 +295,7 @@ def issue_record_from_mapping(
         url=url,
         created_at=created_at,
         updated_at=updated_at,
-        source_revision=updated_at,
+        source_revision=source_revision,
         closed_at=closed_at,
         state_reason=state_reason,
     )
@@ -391,6 +392,17 @@ def _optional_string(value: object, field: str) -> str | None:
         raise _RecordValidationError(
             RetrievalFinding.MISSING_FIELD,
             f"issue record {field} must be a non-empty string when supplied",
+        )
+    return value
+
+
+def _optional_source_revision(value: object, fallback: str) -> str:
+    if value is None:
+        return fallback
+    if not isinstance(value, str) or not value.strip():
+        raise _RecordValidationError(
+            RetrievalFinding.MISSING_FIELD,
+            "issue record source_revision must be a non-empty string when supplied",
         )
     return value
 
