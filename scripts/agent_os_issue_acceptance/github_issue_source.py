@@ -28,6 +28,7 @@ class GitHubIssuePageResponse:
     items: tuple[Mapping[str, object], ...]
     next_page: int | None
     complete: bool = True
+    terminal_page_proven: bool = False
     error_kind: str | None = None
 
     def __post_init__(self) -> None:
@@ -109,7 +110,7 @@ class GitHubIssuePageSource:
         return IssueScanPage(
             items=issues,
             next_page=response.next_page,
-            complete=response.complete,
+            complete=response.complete and (response.next_page is not None or response.terminal_page_proven),
         )
 
 

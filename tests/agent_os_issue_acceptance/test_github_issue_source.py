@@ -57,7 +57,7 @@ def test_connected_source_exhausts_pages_and_preserves_state_provenance():
     reader = FakeReader(
         {
             1: GitHubIssuePageResponse((_issue(2, state="closed"),), 2),
-            2: GitHubIssuePageResponse((_issue(1, state="closed"),), None),
+            2: GitHubIssuePageResponse((_issue(1, state="closed"),), None, terminal_page_proven=True),
         }
     )
     source = GitHubIssuePageSource(
@@ -91,6 +91,7 @@ def test_connected_all_state_passes_requested_state_unchanged_to_reader():
             1: GitHubIssuePageResponse(
                 (_issue(1), _issue(2, state="closed")),
                 None,
+                terminal_page_proven=True,
             )
         }
     )
@@ -121,6 +122,7 @@ def test_report_handoff_preserves_existing_keys_and_adds_state_evidence():
                     ),
                 ),
                 None,
+                terminal_page_proven=True,
             )
         }
     )
@@ -171,7 +173,7 @@ def test_report_handoff_preserves_existing_keys_and_adds_state_evidence():
 
 
 def test_compatibility_connected_wrapper_preserves_open_contract_without_clock():
-    reader = FakeReader({1: GitHubIssuePageResponse((_issue(1),), None)})
+    reader = FakeReader({1: GitHubIssuePageResponse((_issue(1),), None, terminal_page_proven=True)})
 
     result = scan_connected_open_issues("Blummer92/agent-os", reader, per_page=25)
     report = result_to_report(result)
@@ -186,7 +188,7 @@ def test_compatibility_connected_wrapper_preserves_open_contract_without_clock()
 def test_source_excludes_pull_request_records_from_issue_endpoint():
     pull_request = dict(_issue(9), pull_request={"url": "example"})
     reader = FakeReader(
-        {1: GitHubIssuePageResponse((_issue(1), pull_request), None)}
+        {1: GitHubIssuePageResponse((_issue(1), pull_request), None, terminal_page_proven=True)}
     )
 
     result = scan_open_issues(
@@ -324,7 +326,7 @@ def test_response_is_immutable():
 
 def test_repeated_report_output_is_deterministic():
     def build_report():
-        reader = FakeReader({1: GitHubIssuePageResponse((_issue(1),), None)})
+        reader = FakeReader({1: GitHubIssuePageResponse((_issue(1),), None, terminal_page_proven=True)})
         return result_to_report(
             scan_connected_issues(
                 "Blummer92/agent-os",
