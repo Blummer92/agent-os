@@ -41,6 +41,7 @@ def test_provider_read_page_success():
     assert "source_revision" in response.items[0]
     assert response.next_page == 2
     assert response.terminal_page_proven is False
+    assert provider.last_diagnostic_kind is None
 
 
 def test_provider_read_page_terminal():
@@ -60,6 +61,7 @@ def test_provider_read_page_terminal():
     assert len(response.items) == 0
     assert response.next_page is None
     assert response.terminal_page_proven is True
+    assert provider.last_diagnostic_kind is None
 
 
 def test_provider_read_page_transport_error():
@@ -75,6 +77,7 @@ def test_provider_read_page_transport_error():
     assert response.complete is False
     assert response.error_kind == "permission-denied"
     assert response.next_page is None
+    assert provider.last_diagnostic_kind == "transport:permission-denied"
 
 
 def test_provider_read_page_distinguishes_payload_shape_failure():
@@ -85,8 +88,9 @@ def test_provider_read_page_distinguishes_payload_shape_failure():
         payload={"message": "not-a-page"},
         attempts=(TransportAttempt(1),),
     )
+    provider = PyGithubIssuePageProvider(transport)
 
-    response = PyGithubIssuePageProvider(transport).read_issue_page(
+    response = provider.read_issue_page(
         "owner/repo",
         page=1,
         per_page=100,
@@ -94,7 +98,8 @@ def test_provider_read_page_distinguishes_payload_shape_failure():
     )
 
     assert response.complete is False
-    assert response.error_kind == "malformed-payload"
+    assert response.error_kind == "malformed-response"
+    assert provider.last_diagnostic_kind == "payload-shape"
 
 
 def test_provider_read_page_distinguishes_item_shape_failure():
@@ -105,8 +110,9 @@ def test_provider_read_page_distinguishes_item_shape_failure():
         payload=["not-a-mapping"],
         attempts=(TransportAttempt(1),),
     )
+    provider = PyGithubIssuePageProvider(transport)
 
-    response = PyGithubIssuePageProvider(transport).read_issue_page(
+    response = provider.read_issue_page(
         "owner/repo",
         page=1,
         per_page=100,
@@ -114,7 +120,8 @@ def test_provider_read_page_distinguishes_item_shape_failure():
     )
 
     assert response.complete is False
-    assert response.error_kind == "malformed-item"
+    assert response.error_kind == "malformed-response"
+    assert provider.last_diagnostic_kind == "item-shape"
 
 
 def test_provider_read_page_distinguishes_revision_failure():
@@ -127,8 +134,9 @@ def test_provider_read_page_distinguishes_revision_failure():
         payload=[payload],
         attempts=(TransportAttempt(1),),
     )
+    provider = PyGithubIssuePageProvider(transport)
 
-    response = PyGithubIssuePageProvider(transport).read_issue_page(
+    response = provider.read_issue_page(
         "owner/repo",
         page=1,
         per_page=100,
@@ -136,7 +144,8 @@ def test_provider_read_page_distinguishes_revision_failure():
     )
 
     assert response.complete is False
-    assert response.error_kind == "malformed-revision"
+    assert response.error_kind == "malformed-response"
+    assert provider.last_diagnostic_kind == "revision-normalization"
 
 
 def test_provider_read_page_distinguishes_pagination_failure():
@@ -149,8 +158,9 @@ def test_provider_read_page_distinguishes_pagination_failure():
         payload=[_issue_payload()],
         attempts=(TransportAttempt(1),),
     )
+    provider = PyGithubIssuePageProvider(transport)
 
-    response = PyGithubIssuePageProvider(transport).read_issue_page(
+    response = provider.read_issue_page(
         "owner/repo",
         page=1,
         per_page=100,
@@ -158,4 +168,5 @@ def test_provider_read_page_distinguishes_pagination_failure():
     )
 
     assert response.complete is False
-    assert response.error_kind == "malformed-pagination"
+    assert response.error_kind == "malformed-response"
+    assert provider.last_diagnostic_kind == "pagination-validation"
