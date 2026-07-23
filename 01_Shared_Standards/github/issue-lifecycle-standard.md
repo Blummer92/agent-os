@@ -44,6 +44,32 @@ Each cross-cutting risk has exactly one canonical owner issue, recorded in `04_R
 
 Close a planning issue with one dated handoff comment once its implementation-ready children exist. Close duplicates with a pointer to the canonical item. Preserve links; never rewrite closed historical bodies.
 
+## Closed-Issue Authority
+
+The open issue body is authoritative while the issue is active and must be
+synchronized immediately before closure. After closure the body is immutable
+historical evidence; never rewrite a closed body or its comments. Future
+execution routing is controlled by the closed state, the closure reason, the
+latest dated final-disposition comment, and the canonical successor or duplicate
+pointer — not by any historical `status:ready`, `status:blocked`, or
+`status:needs-decision` label, which cannot reactivate a closed issue.
+`completed`, `completed/no-change`, `not planned`, `duplicate`, and `superseded`
+are distinct terminal dispositions. New related work normally opens a new issue;
+reopening requires explicit authorization and the same original objective.
+
+## Refactor And Consolidation Value
+
+A shared abstraction normally requires at least three behaviorally identical
+callers; fewer requires a concrete correctness or drift defect and explicit
+justification. Net nonblank logical lines are supporting evidence only after
+helper, import, test, and docs overhead, and unrelated helpers cannot be
+combined to cross a threshold. Lifecycle, mutation, cleanup, diagnostics, import
+direction, validation cost, rollback cost, and future coupling are part of the
+decision. There is no universal 40-line threshold, and no-change is a valid
+successful disposition when proof cost exceeds benefit. The optional
+`refactor-evidence` intake field applies when this policy applies; readiness
+never makes it globally mandatory.
+
 ## Label Policy
 
 Minimal set: `agent-os`, one `owner:*`, one `status:*` (`ready|blocked|needs-decision`), optionally one `type:*` and one `epic:*`. Do not delete or rename any label until `.github/labeler/agent-os-issue-label-map.yml` and its workflows are migrated by a separate bounded change.

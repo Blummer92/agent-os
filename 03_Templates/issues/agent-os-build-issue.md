@@ -38,6 +38,14 @@ State the outcome and why it matters.
 - Allowed files or areas:
 - Forbidden or protected files, paths, capabilities, or systems: none
 
+## Prior Scope, Duplicate, And Supersession Review
+
+Prior or closed issues, branches, and PRs reviewed; why this is not a duplicate or retired-scope revival.
+
+## Refactor Or Consolidation Evidence, When Applicable
+
+Caller count and correctness or drift evidence for refactor work; otherwise not applicable.
+
 ## Validation And Documentation
 
 - Required tests or validation:

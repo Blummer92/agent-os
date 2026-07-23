@@ -7,6 +7,14 @@ from scripts.agent_os_issue_acceptance.readiness import (
 from scripts.agent_os_issue_acceptance.report import exit_code_for
 
 
+# Prior-scope review is required for every tier; ready-shaped fixtures include it
+# so these documentation-impact tests continue to isolate documentation behavior.
+_PRIOR_SCOPE = (
+    "## Prior scope, duplicate, and supersession review\n"
+    "Reviewed related prior issues; no duplicate or superseded scope applies.\n"
+)
+
+
 def ready_body(extra: str = "") -> str:
     return f"""
 Issue Tier: 0
@@ -20,7 +28,7 @@ QA / Test Agent
 - markdown check
 ## Completion Criterion
 - Text is corrected.
-## Documentation impact
+{_PRIOR_SCOPE}## Documentation impact
 docs-not-required
 ## Documentation exemption reason
 This change does not alter documented behavior or operator guidance.
@@ -42,7 +50,7 @@ QA / Test Agent
 - markdown check
 ## Completion Criterion
 - Text is corrected.
-{doc_section}
+{_PRIOR_SCOPE}{doc_section}
 {extra}
 """
 

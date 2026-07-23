@@ -15,6 +15,7 @@ file is registry data only and authorizes nothing.
 | Acceptance-parser compatibility drift | #358 | #398, readiness consumers | Canonical scanner convergence | open |
 | Protected-branch enforcement gap | #231 | #233, #234, #235, #236 | Layered local safeguards, future ruleset handoff | open |
 | Documentation-impact gaps | #304 | #306, #310, #323 | Documentation-impact readiness evidence | open |
+| Issue-lifecycle authority and retired-scope revival | #543 | all issue intake and refactor/consolidation work | Immutable closed-body rule, prior-scope review, and behavioral/value evidence | mitigated / monitoring |
 
 Update rows through normal registry change control when an owner issue
 closes or ownership transfers. A risk with two claimed owners is a

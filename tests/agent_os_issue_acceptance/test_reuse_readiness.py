@@ -41,6 +41,8 @@ QA / Test Agent
 - pytest tests/test_example.py
 ## Completion Criterion
 - Warning no longer appears.
+## Prior scope, duplicate, and supersession review
+Reviewed related prior issues; no duplicate or superseded scope applies.
 ## Documentation impact
 docs-not-required
 ## Documentation exemption reason

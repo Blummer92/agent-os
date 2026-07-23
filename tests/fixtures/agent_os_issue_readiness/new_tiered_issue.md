@@ -43,6 +43,10 @@ Add one canonical readiness result so operators do not need to interpret several
 
 - [ ] Tests pass.
 
+## Prior scope, duplicate, and supersession review
+
+Reviewed related prior issues; no duplicate or superseded scope applies.
+
 ## Documentation impact
 
 docs-not-required

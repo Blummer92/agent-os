@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from scripts.agent_os_issue_acceptance.models import Status
 from scripts.agent_os_issue_acceptance.readiness import (
     ReadinessOutcome,
@@ -24,6 +26,8 @@ QA / Test Agent
 - pytest tests/test_example.py
 ## Completion Criterion
 - Warning no longer appears.
+## Prior scope, duplicate, and supersession review
+Reviewed related prior issues; no duplicate or superseded scope applies.
 ## Documentation impact
 docs-not-required
 ## Documentation exemption reason
@@ -58,6 +62,8 @@ QA / Test Agent
 - [ ] Checker reports one result.
 ## Definition Of Done
 - [ ] Tests pass.
+## Prior scope, duplicate, and supersession review
+Reviewed related prior issues; no duplicate or superseded scope applies.
 ## Documentation impact
 docs-required
 ## Required documentation paths or bounded areas
@@ -108,6 +114,8 @@ Human approval before merge.
 Stop on unclear ownership.
 ## Migration Or Compatibility Planning
 Preserve old issue-form parsing during migration.
+## Prior scope, duplicate, and supersession review
+Reviewed related prior issues; no duplicate or superseded scope applies.
 ## Documentation impact
 docs-required
 ## Required documentation paths or bounded areas
@@ -304,6 +312,8 @@ GitHub Service Agent
 - markdown check
 ## Completion Criterion
 - Text is corrected.
+## Prior scope, duplicate, and supersession review
+Reviewed related prior issues; no duplicate or superseded scope applies.
 ## Documentation impact
 docs-not-required
 ## Documentation exemption reason
@@ -350,6 +360,8 @@ Update a governed contract and reduce ambiguity.
 - Approval: human approval required
 - Stop conditions: stop on unclear ownership
 - Compatibility: preserve legacy parsing
+## Prior scope, duplicate, and supersession review
+Reviewed related prior issues; no duplicate or superseded scope applies.
 ## Documentation impact
 docs-required
 ## Required documentation paths or bounded areas
@@ -386,3 +398,169 @@ def test_new_tiered_issue_fixture_is_ready():
     body = (FIXTURES / "new_tiered_issue.md").read_text()
     result = evaluate_issue_readiness(body)
     assert result.outcome == ReadinessOutcome.READY
+
+
+# --- prior-scope review readiness enforcement --------------------------------
+
+# Otherwise-ready bodies (all tier fields present, documentation impact resolved)
+# whose only missing evidence is the prior-scope review section.
+_TIER_BODIES = {
+    0: """
+Issue Tier: 0
+## Objective
+Remove one deprecation warning.
+## Owner
+QA / Test Agent
+## Allowed Files
+- src/example.py
+## Validation
+- pytest tests/test_example.py
+## Completion Criterion
+- Warning no longer appears.
+## Documentation impact
+docs-not-required
+## Documentation exemption reason
+Removing a deprecation warning does not change documented behavior.
+""",
+    1: """
+Issue Tier: 1
+## Objective
+Add a local report-only checker.
+## Value
+Make readiness visible.
+## Owner
+QA / Test Agent
+## Scope
+- Add local checker.
+## Non-Goals
+- No writes.
+## Allowed Files
+- scripts/example/
+## Validation
+- pytest tests/example
+## Documentation
+- Update README.
+## Dependencies
+- none
+## Acceptance Criteria
+- [ ] Checker reports one result.
+## Definition Of Done
+- [ ] Tests pass.
+## Documentation impact
+docs-not-required
+## Documentation exemption reason
+Internal checker only.
+""",
+    2: """
+Issue Tier: 2
+## Objective
+Update a governed integration contract.
+## Value
+Reduce routing ambiguity.
+## Owner
+Integration Manager
+## Scope
+- Update the contract.
+## Non-Goals
+- No production writes.
+## Allowed Files
+- 01_Shared_Standards/
+## Validation
+- validate-all.sh
+## Documentation
+- Update operator guidance.
+## Dependencies
+- none
+## Acceptance Criteria
+- [ ] Contract is explicit.
+## Definition Of Done
+- [ ] Validation passes.
+## Authorization
+Explicit approval required.
+## Source Of Truth
+GitHub
+## External Write Boundary
+None
+## Rollback
+Revert the PR.
+## Approval Requirements
+Human approval before merge.
+## Stop Conditions
+Stop on unclear ownership.
+## Migration Or Compatibility Planning
+Preserve old issue-form parsing during migration.
+## Documentation impact
+docs-not-required
+## Documentation exemption reason
+Governed contract text only.
+""",
+}
+
+_PRIOR_SCOPE_SECTION = (
+    "## Prior scope, duplicate, and supersession review\n"
+    "Reviewed related prior issues; no duplicate or superseded scope applies.\n"
+)
+
+
+def _prior_scope_check(result):
+    return next(
+        check for check in result.report.checks if check.name == "prior scope review"
+    )
+
+
+@pytest.mark.parametrize("tier", [0, 1, 2])
+def test_missing_prior_scope_review_is_needs_decision_for_all_tiers(tier):
+    result = evaluate_issue_readiness(_TIER_BODIES[tier])
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    check = _prior_scope_check(result)
+    assert check.status == Status.MANUAL_REVIEW
+    assert check.evidence == ["field=prior_scope_review; code=prior-scope-review-missing"]
+    # Missing prior-scope evidence is fail-closed to needs-decision, never blocked.
+    assert not result.report.blockers
+
+
+@pytest.mark.parametrize("tier", [0, 1, 2])
+def test_valid_prior_scope_review_preserves_ready_for_all_tiers(tier):
+    result = evaluate_issue_readiness(_TIER_BODIES[tier] + _PRIOR_SCOPE_SECTION)
+    assert result.outcome == ReadinessOutcome.READY
+    assert _prior_scope_check(result).status == Status.PASS
+
+
+def test_prior_scope_review_no_response_is_needs_decision():
+    body = _TIER_BODIES[0] + (
+        "## Prior scope, duplicate, and supersession review\n_No response_\n"
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    assert _prior_scope_check(result).status == Status.MANUAL_REVIEW
+
+
+def test_prior_scope_review_blank_is_needs_decision():
+    body = _TIER_BODIES[0] + "## Prior scope, duplicate, and supersession review\n\n"
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    assert _prior_scope_check(result).status == Status.MANUAL_REVIEW
+
+
+def test_prior_scope_review_only_quoted_fenced_or_commented_is_needs_decision():
+    body = _TIER_BODIES[0] + (
+        "## Prior scope, duplicate, and supersession review\n"
+        "> Reviewed #1; not a duplicate.\n"
+        "<!-- Reviewed #2; not a duplicate. -->\n"
+        "```\nReviewed #3; not a duplicate.\n```\n"
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    check = _prior_scope_check(result)
+    assert check.status == Status.MANUAL_REVIEW
+    assert check.evidence == ["field=prior_scope_review; code=prior-scope-review-missing"]
+
+
+def test_unrelated_prose_without_prior_scope_heading_is_needs_decision():
+    # Prior-scope-shaped prose that is not under the canonical heading is not credited.
+    body = _TIER_BODIES[0] + (
+        "## Notes\nWe reviewed prior scope, duplicates, and supersession informally.\n"
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    assert _prior_scope_check(result).status == Status.MANUAL_REVIEW
