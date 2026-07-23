@@ -6,7 +6,11 @@ from unittest.mock import MagicMock
 import pytest
 
 from scripts.agent_os_github_issue_provider import provider as provider_module
-from scripts.agent_os_github_issue_provider.models import TransportAttempt, TransportResponse
+from scripts.agent_os_github_issue_provider.models import (
+    TransportAttempt,
+    TransportResponse,
+    TrustedRepositoryIdentity,
+)
 from scripts.agent_os_github_issue_provider.provider import PyGithubIssuePageProvider
 from scripts.agent_os_github_issue_provider.transport import GitHubTransportError
 
@@ -36,10 +40,33 @@ def _transport_for_link(link: str | None) -> MagicMock:
     return transport
 
 
-def _read(transport: MagicMock):
-    return PyGithubIssuePageProvider(transport).read_issue_page(
-        "owner/repo", page=1, per_page=100, state="open"
-    )
+def _identity(
+    repository: str = "owner/repo", repository_id: int = 123
+) -> TrustedRepositoryIdentity:
+    return TrustedRepositoryIdentity(repository=repository, repository_id=repository_id)
+
+
+def _read(
+    transport: MagicMock,
+    *,
+    identities: tuple[TrustedRepositoryIdentity, ...] = (),
+):
+    return PyGithubIssuePageProvider(
+        transport, trusted_repository_identities=identities
+    ).read_issue_page("owner/repo", page=1, per_page=100, state="open")
+
+
+def test_provider_rejects_invalid_or_duplicate_trusted_identities():
+    transport = MagicMock()
+    with pytest.raises(TypeError):
+        PyGithubIssuePageProvider(  # type: ignore[arg-type]
+            transport, trusted_repository_identities=(object(),)
+        )
+    with pytest.raises(ValueError):
+        PyGithubIssuePageProvider(
+            transport,
+            trusted_repository_identities=(_identity(), _identity(repository_id=456)),
+        )
 
 
 def test_provider_read_page_success_emits_no_diagnostic(caplog):
@@ -60,6 +87,44 @@ def test_provider_read_page_success_emits_no_diagnostic(caplog):
     transport.get_issue_page.assert_called_once_with(
         "owner/repo", page=1, per_page=100, state="open"
     )
+
+
+def test_provider_accepts_verified_numeric_path_without_extra_request(caplog):
+    transport = _transport_for_link(
+        '<https://api.github.com/repositories/123/issues?'
+        'page=2&per_page=100&state=open>; rel="next"'
+    )
+
+    with caplog.at_level(logging.WARNING):
+        response = _read(transport, identities=(_identity(),))
+
+    assert response.complete is True
+    assert response.next_page == 2
+    assert response.terminal_page_proven is False
+    assert "github issue-page provider diagnostic=" not in caplog.text
+    transport.get_issue_page.assert_called_once_with(
+        "owner/repo", page=1, per_page=100, state="open"
+    )
+
+
+def test_provider_numeric_path_without_matching_identity_fails_closed(caplog):
+    header = '<https://api.github.com/repositories/123/issues?page=2>; rel="next"'
+    for identities in ((), (_identity(repository_id=456),), (_identity("other/repo"),)):
+        caplog.clear()
+        transport = _transport_for_link(header)
+        with caplog.at_level(logging.WARNING):
+            response = _read(transport, identities=identities)
+
+        assert response.complete is False
+        assert response.items == ()
+        assert response.next_page is None
+        assert response.error_kind == "malformed-response"
+        assert caplog.text.count(
+            "github issue-page provider diagnostic=pagination:next-path"
+        ) == 1
+        transport.get_issue_page.assert_called_once_with(
+            "owner/repo", page=1, per_page=100, state="open"
+        )
 
 
 def test_provider_accepts_omitted_trusted_link_parameters(caplog):
@@ -221,7 +286,7 @@ def test_provider_diagnostic_logs_exclude_sensitive_inputs(caplog):
         status=200,
         headers={
             "link": (
-                "<https://api.evil.com/repos/owner/repo/issues"
+                "<https://api.github.com/repositories/456/issues"
                 f"?page=2&token={link_secret}>; rel=\"next\""
             )
         },
@@ -230,28 +295,28 @@ def test_provider_diagnostic_logs_exclude_sensitive_inputs(caplog):
     )
 
     with caplog.at_level(logging.WARNING):
-        response = _read(transport)
+        response = _read(transport, identities=(_identity(),))
 
     assert response.complete is False
-    assert "github issue-page provider diagnostic=pagination:next-host" in caplog.text
+    assert "github issue-page provider diagnostic=pagination:next-path" in caplog.text
     assert link_secret not in caplog.text
     assert title_secret not in caplog.text
     assert body_secret not in caplog.text
-    assert "api.evil.com" not in caplog.text
+    assert "repositories/456" not in caplog.text
 
 
 def test_sequential_calls_do_not_contaminate_diagnostics(caplog):
     failing = _transport_for_link(
-        '<https://api.evil.com/repos/owner/repo/issues?page=2>; rel="next"'
+        '<https://api.github.com/repositories/456/issues?page=2>; rel="next"'
     )
     succeeding = _transport_for_link(
-        '<https://api.github.com/repos/owner/repo/issues?page=2>; rel="next"'
+        '<https://api.github.com/repositories/123/issues?page=2>; rel="next"'
     )
 
     with caplog.at_level(logging.WARNING):
-        failed_response = _read(failing)
+        failed_response = _read(failing, identities=(_identity(),))
         caplog.clear()
-        successful_response = _read(succeeding)
+        successful_response = _read(succeeding, identities=(_identity(),))
 
     assert failed_response.complete is False
     assert successful_response.complete is True
