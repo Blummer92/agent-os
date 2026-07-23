@@ -113,6 +113,7 @@ _DOC_HEADING_FIELD_MAP = {
     "expected documentation change": "documentation_expected_change",
     "documentation exemption reason": "documentation_exemption_reason",
 }
+_PRIOR_SCOPE_HEADING = "prior scope, duplicate, and supersession review"
 
 
 @dataclass(frozen=True)
@@ -203,6 +204,13 @@ def evaluate_issue_readiness(
         blockers.append(documentation_check.message)
     elif documentation_check.status == Status.MANUAL_REVIEW:
         manual_review_items.append(documentation_check.message)
+
+    prior_scope_check = _check_prior_scope_review(sections)
+    checks.append(prior_scope_check)
+    if prior_scope_check.status == Status.MANUAL_REVIEW:
+        manual_review_items.append(
+            "Provide visible prior-scope, duplicate, and supersession review evidence."
+        )
 
     if declared_review_items:
         checks.append(
@@ -314,6 +322,33 @@ def _check_source_of_truth_evidence(
         Status.PASS,
         "Source-of-truth evidence is consistent.",
         evidence,
+    )
+
+
+def _check_prior_scope_review(sections: dict[str, str]) -> CheckResult:
+    """Report-only prior-scope, duplicate, and supersession review check.
+
+    Passes only when visible text exists under the canonical
+    ``Prior scope, duplicate, and supersession review`` heading. Quoted, fenced,
+    and HTML-commented content is already stripped by ``_markdown_sections``, so
+    those plus blank, ``_No response_``, or absent evidence fail closed to
+    ``MANUAL_REVIEW`` (overall ``needs-decision``), never ``blocked``. Required
+    for every tier. The check never parses or validates live links; substantive
+    adequacy remains human review.
+    """
+    content = sections.get(_PRIOR_SCOPE_HEADING, "").strip()
+    if content and content != _NO_RESPONSE:
+        return CheckResult(
+            "prior scope review",
+            Status.PASS,
+            "Prior-scope, duplicate, and supersession review evidence is present.",
+            ["field=prior_scope_review; code=evidence-present"],
+        )
+    return CheckResult(
+        "prior scope review",
+        Status.MANUAL_REVIEW,
+        "Prior-scope, duplicate, and supersession review evidence is missing or not visible.",
+        ["field=prior_scope_review; code=prior-scope-review-missing"],
     )
 
 

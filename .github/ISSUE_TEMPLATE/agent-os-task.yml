@@ -75,6 +75,20 @@ body:
       placeholder: "Allowed:\n- ...\n\nForbidden or protected:\n- ..."
     validations: {required: true}
 
+  - type: textarea
+    id: prior-scope-review
+    attributes:
+      label: Prior scope, duplicate, and supersession review
+      description: Which prior or closed issues, branches, and pull requests were reviewed, and why this is not a duplicate or retired-scope revival. Readiness requires visible evidence here for every tier.
+    validations: {required: true}
+
+  - type: textarea
+    id: refactor-evidence
+    attributes:
+      label: Refactor or consolidation evidence, when applicable
+      description: For refactor or consolidation work, give caller count and concrete correctness or drift evidence. State not applicable otherwise. See the issue-lifecycle standard for when this is required.
+    validations: {required: false}
+
   - type: dropdown
     id: documentation-impact
     attributes:

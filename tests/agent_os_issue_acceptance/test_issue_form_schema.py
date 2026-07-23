@@ -25,6 +25,19 @@ _EXPECTED_EXISTING_FIELDS = {
     "safety": "Safety confirmation",
 }
 
+_PRIOR_SCOPE_FIELDS = {
+    "prior-scope-review": (
+        "Prior scope, duplicate, and supersession review",
+        "textarea",
+        True,
+    ),
+    "refactor-evidence": (
+        "Refactor or consolidation evidence, when applicable",
+        "textarea",
+        False,
+    ),
+}
+
 _DOCUMENTATION_FIELDS = {
     "documentation-impact": ("Documentation impact", "dropdown", True),
     "required-docs": (
@@ -115,6 +128,16 @@ def test_existing_issue_form_field_contract_is_preserved():
 
     for field_id, label in _EXPECTED_EXISTING_FIELDS.items():
         assert fields[field_id]["attributes"]["label"] == label
+
+
+def test_prior_scope_and_refactor_intake_fields_are_exact():
+    fields = _interactive_fields(_load_form())
+
+    for field_id, (label, item_type, required) in _PRIOR_SCOPE_FIELDS.items():
+        item = fields[field_id]
+        assert item["attributes"]["label"] == label
+        assert item["type"] == item_type
+        assert item["validations"]["required"] is required
 
 
 def test_documentation_impact_contract_is_exact():

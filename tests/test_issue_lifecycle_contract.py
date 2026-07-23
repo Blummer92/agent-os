@@ -32,6 +32,8 @@ REQUIRED_LIFECYCLE_SECTIONS = [
     "Issue-Body Maintenance",
     "Risk Ownership",
     "Closure And Supersession",
+    "Closed-Issue Authority",
+    "Refactor And Consolidation Value",
     "Label Policy",
 ]
 
@@ -110,6 +112,51 @@ def test_risk_map_rows_have_exactly_one_canonical_owner() -> None:
 
 def test_risk_map_is_linked_from_lifecycle_standard() -> None:
     assert "risk-owner-map.md" in LIFECYCLE.read_text(encoding="utf-8")
+
+
+def test_lifecycle_standard_defines_closed_issue_authority_and_dispositions() -> None:
+    text = LIFECYCLE.read_text(encoding="utf-8")
+    for phrase in (
+        "immutable",
+        "cannot reactivate a closed issue",
+        "reopening requires explicit authorization",
+    ):
+        assert phrase in text, f"missing closed-issue authority phrase: {phrase}"
+    for disposition in (
+        "completed",
+        "completed/no-change",
+        "not planned",
+        "duplicate",
+        "superseded",
+    ):
+        assert f"`{disposition}`" in text, f"missing terminal disposition: {disposition}"
+
+
+def test_lifecycle_standard_defines_refactor_value_policy() -> None:
+    text = LIFECYCLE.read_text(encoding="utf-8")
+    for phrase in (
+        "three behaviorally identical",
+        "no universal 40-line threshold",
+        "no-change is a valid",
+    ):
+        assert phrase in text, f"missing refactor-value phrase: {phrase}"
+
+
+def test_risk_map_names_issue_lifecycle_owner_543_not_544() -> None:
+    text = RISK_MAP.read_text(encoding="utf-8")
+    row = next(
+        (
+            line
+            for line in text.splitlines()
+            if line.startswith("|") and "retired-scope revival" in line
+        ),
+        None,
+    )
+    assert row is not None, "risk-owner map is missing the issue-lifecycle authority row"
+    cells = [cell.strip() for cell in row.strip("|").split("|")]
+    assert cells[1] == "#543", f"issue-lifecycle risk owner must be #543, found {cells[1]}"
+    # #544 closes after implementation and must never become a persistent owner.
+    assert "#544" not in text
 
 
 def _pr_satisfies_linked_issue_contract(pr_body: str, pr_title: str = "") -> bool:
