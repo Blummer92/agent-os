@@ -94,6 +94,35 @@ def test_validated_next_page_valid():
     assert terminal_proven is False
 
 
+def test_validated_next_page_accepts_omitted_trusted_query_parameters():
+    header = '<https://api.github.com/repos/owner/repo/issues?page=2>; rel="next"'
+    next_page, terminal_proven = validated_next_page(
+        header,
+        repository="owner/repo",
+        current_page=1,
+        per_page=100,
+        state="open",
+    )
+    assert next_page == 2
+    assert terminal_proven is False
+
+
+def test_validated_next_page_accepts_individually_omitted_trusted_parameters():
+    for header in (
+        '<https://api.github.com/repos/owner/repo/issues?page=2&state=open>; rel="next"',
+        '<https://api.github.com/repos/owner/repo/issues?page=2&per_page=100>; rel="next"',
+    ):
+        next_page, terminal_proven = validated_next_page(
+            header,
+            repository="owner/repo",
+            current_page=1,
+            per_page=100,
+            state="open",
+        )
+        assert next_page == 2
+        assert terminal_proven is False
+
+
 def test_validated_next_page_none():
     next_page, terminal_proven = validated_next_page(None, repository="a/b", current_page=1, per_page=10, state="o")
     assert next_page is None
@@ -127,11 +156,23 @@ def test_validated_next_page_does_not_advance():
         validated_next_page(header, repository="owner/repo", current_page=1, per_page=100, state="open")
 
 
-def test_validated_next_page_changed_query():
-    header = '<https://api.github.com/repos/owner/repo/issues?page=2&per_page=50&state=open>; rel="next"'
-    with pytest.raises(ValueError, match="next link changed the requested query"):
+def test_validated_next_page_requires_page():
+    header = '<https://api.github.com/repos/owner/repo/issues?per_page=100&state=open>; rel="next"'
+    with pytest.raises(ValueError, match="missing the page parameter"):
         validated_next_page(header, repository="owner/repo", current_page=1, per_page=100, state="open")
 
+
+def test_validated_next_page_rejects_changed_or_invalid_page_size():
+    header = '<https://api.github.com/repos/owner/repo/issues?page=2&per_page=50&state=open>; rel="next"'
+    with pytest.raises(ValueError, match="changed the requested page size"):
+        validated_next_page(header, repository="owner/repo", current_page=1, per_page=100, state="open")
+
+    header = '<https://api.github.com/repos/owner/repo/issues?page=2&per_page=abc&state=open>; rel="next"'
+    with pytest.raises(ValueError, match="invalid per_page"):
+        validated_next_page(header, repository="owner/repo", current_page=1, per_page=100, state="open")
+
+
+def test_validated_next_page_rejects_changed_state():
     header = '<https://api.github.com/repos/owner/repo/issues?page=2&per_page=100&state=closed>; rel="next"'
-    with pytest.raises(ValueError, match="next link changed the requested query"):
+    with pytest.raises(ValueError, match="changed the requested state"):
         validated_next_page(header, repository="owner/repo", current_page=1, per_page=100, state="open")
