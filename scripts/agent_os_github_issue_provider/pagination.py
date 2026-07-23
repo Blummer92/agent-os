@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from urllib.parse import parse_qsl, urlparse
 
+from .models import TrustedRepositoryIdentity
+
 
 PAGINATION_DIAGNOSTIC_KINDS = frozenset(
     {
@@ -79,7 +81,6 @@ def parse_link_header(value: str | None) -> dict[str, str]:
                                 "duplicate or ambiguous Link relation",
                             )
                         relations[rel] = url
-
         if not rel_found:
             _fail("pagination:link-parse", "missing Link relation")
 
@@ -152,6 +153,28 @@ def _query_values(query: str) -> dict[str, list[str]]:
     return values
 
 
+def _validate_repository_path(
+    path: str,
+    *,
+    repository: str,
+    trusted_repository_identity: TrustedRepositoryIdentity | None,
+) -> None:
+    named_path = f"/repos/{repository}/issues"
+    if path == named_path:
+        return
+
+    numeric_match = re.fullmatch(r"/repositories/([1-9][0-9]*)/issues", path)
+    if numeric_match is None:
+        _fail("pagination:next-path", "next link changed repository or endpoint")
+
+    if (
+        trusted_repository_identity is None
+        or trusted_repository_identity.repository != repository
+        or trusted_repository_identity.repository_id != int(numeric_match.group(1))
+    ):
+        _fail("pagination:next-path", "next link repository identity is unverified")
+
+
 def validated_next_page(
     link_header: str | None,
     *,
@@ -159,6 +182,7 @@ def validated_next_page(
     current_page: int,
     per_page: int,
     state: str,
+    trusted_repository_identity: TrustedRepositoryIdentity | None = None,
 ) -> tuple[int | None, bool]:
     relations = parse_link_header(link_header)
     next_url = relations.get("next")
@@ -174,9 +198,11 @@ def validated_next_page(
     if parsed.netloc != "api.github.com":
         _fail("pagination:next-host", "next link changed the API authority")
 
-    expected_path = f"/repos/{repository}/issues"
-    if parsed.path != expected_path:
-        _fail("pagination:next-path", "next link changed repository or endpoint")
+    _validate_repository_path(
+        parsed.path,
+        repository=repository,
+        trusted_repository_identity=trusted_repository_identity,
+    )
 
     query = _query_values(parsed.query)
     page_values = query.get("page")
