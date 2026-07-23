@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 import logging
+from types import MappingProxyType
 
 from scripts.agent_os_issue_acceptance.github_issue_source import (
     GitHubIssuePageResponse,
 )
 
+from .models import TrustedRepositoryIdentity
 from .pagination import PaginationDiagnosticError, validated_next_page
 from .revision import issue_source_revision
 from .transport import GitHubRestTransport, GitHubTransportError
@@ -22,10 +24,28 @@ def _record_diagnostic(kind: str) -> None:
 class PyGithubIssuePageProvider:
     """Read-only adapter implementing the existing issue-page reader contract."""
 
-    def __init__(self, transport: GitHubRestTransport) -> None:
+    def __init__(
+        self,
+        transport: GitHubRestTransport,
+        *,
+        trusted_repository_identities: Iterable[TrustedRepositoryIdentity] = (),
+    ) -> None:
         if transport is None:
             raise TypeError("transport is required")
+
+        identities: dict[str, TrustedRepositoryIdentity] = {}
+        for identity in trusted_repository_identities:
+            if not isinstance(identity, TrustedRepositoryIdentity):
+                raise TypeError(
+                    "trusted_repository_identities must contain "
+                    "TrustedRepositoryIdentity values"
+                )
+            if identity.repository in identities:
+                raise ValueError("trusted repository identity is duplicated")
+            identities[identity.repository] = identity
+
         self._transport = transport
+        self._trusted_repository_identities = MappingProxyType(identities)
 
     def read_issue_page(
         self,
@@ -86,6 +106,9 @@ class PyGithubIssuePageProvider:
                 current_page=page,
                 per_page=per_page,
                 state=state,
+                trusted_repository_identity=self._trusted_repository_identities.get(
+                    repository
+                ),
             )
         except PaginationDiagnosticError as error:
             _record_diagnostic(error.kind)
