@@ -7,7 +7,7 @@ from scripts.agent_os_issue_acceptance.github_issue_source import (
     GitHubIssuePageResponse,
 )
 
-from .pagination import validated_next_page
+from .pagination import PaginationDiagnosticError, validated_next_page
 from .revision import issue_source_revision
 from .transport import GitHubRestTransport, GitHubTransportError
 
@@ -87,8 +87,14 @@ class PyGithubIssuePageProvider:
                 per_page=per_page,
                 state=state,
             )
-        except (TypeError, ValueError):
-            _record_diagnostic("pagination-validation")
+        except PaginationDiagnosticError as error:
+            _record_diagnostic(error.kind)
+            return GitHubIssuePageResponse(
+                items=(), next_page=None, complete=False, error_kind="malformed-response"
+            )
+        except Exception:
+            # Keep unexpected parser/library details out of logs and the public API.
+            _record_diagnostic("pagination:unexpected")
             return GitHubIssuePageResponse(
                 items=(), next_page=None, complete=False, error_kind="malformed-response"
             )
