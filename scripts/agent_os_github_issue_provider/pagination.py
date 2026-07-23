@@ -127,11 +127,26 @@ def validated_next_page(
     query = parse_qs(parsed.query)
     try:
         page = int(query["page"][0])
-        linked_per_page = int(query["per_page"][0])
     except (KeyError, IndexError, TypeError, ValueError) as error:
-        raise ValueError("next link is missing pagination parameters") from error
+        raise ValueError("next link is missing the page parameter") from error
     if page <= current_page:
         raise ValueError("next link does not advance")
-    if linked_per_page != per_page or query.get("state", [None])[0] != state:
-        raise ValueError("next link changed the requested query")
+
+    # GitHub may omit request parameters from a Link URL. Omission is safe because
+    # the provider constructs the following request from the original trusted
+    # arguments; the Link is used only to prove an advancing page. When GitHub
+    # includes state or per_page, any changed value still fails closed.
+    linked_per_page_values = query.get("per_page")
+    if linked_per_page_values is not None:
+        try:
+            linked_per_page = int(linked_per_page_values[0])
+        except (IndexError, TypeError, ValueError) as error:
+            raise ValueError("next link has invalid per_page") from error
+        if linked_per_page != per_page:
+            raise ValueError("next link changed the requested page size")
+
+    linked_state_values = query.get("state")
+    if linked_state_values is not None and linked_state_values[0] != state:
+        raise ValueError("next link changed the requested state")
+
     return page, False
