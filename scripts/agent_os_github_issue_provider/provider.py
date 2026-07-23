@@ -47,18 +47,26 @@ class PyGithubIssuePageProvider:
             response.payload, (str, bytes)
         ):
             return GitHubIssuePageResponse(
-                items=(), next_page=None, complete=False, error_kind="malformed-response"
+                items=(), next_page=None, complete=False, error_kind="malformed-payload"
             )
 
         normalized_items: list[Mapping[str, object]] = []
-        try:
-            for item in response.payload:
-                if not isinstance(item, Mapping):
-                    raise ValueError("issue item must be a mapping")
-                normalized = dict(item)
+        for item in response.payload:
+            if not isinstance(item, Mapping):
+                return GitHubIssuePageResponse(
+                    items=(), next_page=None, complete=False, error_kind="malformed-item"
+                )
+            normalized = dict(item)
+            try:
                 normalized["source_revision"] = issue_source_revision(normalized)
-                normalized_items.append(normalized)
-            headers = {key.lower(): value for key, value in response.headers.items()}
+            except (TypeError, ValueError):
+                return GitHubIssuePageResponse(
+                    items=(), next_page=None, complete=False, error_kind="malformed-revision"
+                )
+            normalized_items.append(normalized)
+
+        headers = {key.lower(): value for key, value in response.headers.items()}
+        try:
             next_page, terminal_proven = validated_next_page(
                 headers.get("link"),
                 repository=repository,
@@ -68,7 +76,7 @@ class PyGithubIssuePageProvider:
             )
         except (TypeError, ValueError):
             return GitHubIssuePageResponse(
-                items=(), next_page=None, complete=False, error_kind="malformed-response"
+                items=(), next_page=None, complete=False, error_kind="malformed-pagination"
             )
 
         return GitHubIssuePageResponse(
