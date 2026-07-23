@@ -2,6 +2,20 @@
 
 Pure-local contracts, evidence models, scanners, planners, handoffs, approvals, and reports used by Agent OS issue automation.
 
+## Acceptance-report transport
+
+The report-only transport adapter in `acceptance_report_transport.py` binds an existing acceptance report to a deterministic transport envelope for the workflow summary. It preserves the existing CLI behavior when transport arguments are absent, emits only the bounded envelope plus a summary, and never authorizes execution.
+
+The supported contract is `agent-os-acceptance-report-transport/v1` with these allowed transport states:
+
+- `snapshot-current`
+- `stale-issue`
+- `stale-pr-head`
+- `unsupported-contract`
+- `missing-provenance`
+
+The envelope contains only the required fields and uses a canonical JSON digest for deterministic report hashing.
+
 ## Local acceptance usage
 ```bash
 python -m scripts.agent_os_issue_acceptance.cli \

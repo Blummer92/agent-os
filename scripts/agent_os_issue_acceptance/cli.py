@@ -4,6 +4,10 @@ import argparse
 import json
 from pathlib import Path
 
+from .acceptance_report_transport import (
+    build_acceptance_report_transport,
+    render_transport_summary,
+)
 from .legacy_preflight import (
     evaluate_legacy_preflight,
     legacy_preflight_to_dict,
@@ -41,6 +45,38 @@ def main(argv: list[str] | None = None) -> int:
         help="Optional path to a bounded read-only legacy issue snapshot JSON file.",
     )
     parser.add_argument("--format", choices=("text", "json"), default="text")
+    parser.add_argument("--transport-repository", dest="transport_repository")
+    parser.add_argument("--transport-issue-number", type=int, dest="transport_issue_number")
+    parser.add_argument("--transport-issue-body", dest="transport_issue_body")
+    parser.add_argument("--transport-issue-body-sha256", dest="transport_issue_body_sha256")
+    parser.add_argument(
+        "--transport-issueplan-current-state-evidence-id",
+        dest="transport_issueplan_current_state_evidence_id",
+    )
+    parser.add_argument(
+        "--transport-issue-body-retrieval-failed",
+        action="store_true",
+        dest="transport_issue_body_retrieval_failed",
+    )
+    parser.add_argument("--transport-pr-number", type=int, dest="transport_pr_number")
+    parser.add_argument("--transport-pr-head-sha", dest="transport_pr_head_sha")
+    parser.add_argument("--transport-evaluator-sha", dest="transport_evaluator_sha")
+    parser.add_argument("--transport-workflow-run-id", dest="transport_workflow_run_id")
+    parser.add_argument(
+        "--transport-workflow-run-attempt",
+        type=int,
+        dest="transport_workflow_run_attempt",
+    )
+    parser.add_argument("--transport-fresh-issue-body", dest="transport_fresh_issue_body")
+    parser.add_argument(
+        "--transport-fresh-pr-head-sha",
+        dest="transport_fresh_pr_head_sha",
+    )
+    parser.add_argument(
+        "--transport-contract-version",
+        dest="transport_contract_version",
+        default="agent-os-acceptance-report-transport/v1",
+    )
     args = parser.parse_args(argv)
 
     if args.legacy_preflight_snapshot:
@@ -90,7 +126,56 @@ def main(argv: list[str] | None = None) -> int:
         pr_title=args.pr_title,
     )
 
-    if args.format == "json":
+    transport_payload = None
+    if any(
+        getattr(args, name) not in (None, "")
+        for name in (
+            "transport_repository",
+            "transport_issue_number",
+            "transport_issue_body",
+            "transport_issue_body_sha256",
+            "transport_issueplan_current_state_evidence_id",
+            "transport_pr_number",
+            "transport_pr_head_sha",
+            "transport_evaluator_sha",
+            "transport_workflow_run_id",
+            "transport_workflow_run_attempt",
+            "transport_issue_body_retrieval_failed",
+            "transport_fresh_issue_body",
+            "transport_fresh_pr_head_sha",
+        )
+    ):
+        evidence_id = args.transport_issueplan_current_state_evidence_id or ""
+        transport = build_acceptance_report_transport(
+            report=report,
+            repository=args.transport_repository or "",
+            issue_number=args.transport_issue_number,
+            issue_body=args.transport_issue_body or "",
+            issue_body_sha256=args.transport_issue_body_sha256 or "",
+            issueplan_current_state_evidence_id=evidence_id,
+            pr_number=args.transport_pr_number,
+            pr_head_sha=args.transport_pr_head_sha or "",
+            evaluator_sha=args.transport_evaluator_sha or "",
+            workflow_run_id=args.transport_workflow_run_id or "",
+            workflow_run_attempt=args.transport_workflow_run_attempt or 0,
+            fresh_issue_body=args.transport_fresh_issue_body,
+            fresh_pr_head_sha=args.transport_fresh_pr_head_sha,
+            issue_body_retrieval_failed=args.transport_issue_body_retrieval_failed,
+            contract_version=args.transport_contract_version,
+        )
+        transport_payload = {
+            "report": _report_to_dict(report),
+            "transport": transport.to_envelope(),
+            "transport_summary": render_transport_summary(transport, report),
+        }
+
+    if transport_payload is not None:
+        if args.format == "json":
+            print(json.dumps(transport_payload, indent=2, sort_keys=True))
+        else:
+            print(render_report(report), end="")
+            print(transport_payload["transport_summary"], end="")
+    elif args.format == "json":
         print(json.dumps(_report_to_dict(report), indent=2, sort_keys=True))
     else:
         print(render_report(report), end="")

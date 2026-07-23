@@ -122,6 +122,30 @@ def test_report_only_acceptance_workflow_declares_pr_number_dispatch_input():
     assert "PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}" in content
 
 
+def test_report_only_acceptance_workflow_binds_transport_provenance():
+    content = _content()
+
+    assert "--transport-repository" in content
+    assert "--transport-issue-number" in content
+    assert "--transport-issue-body-sha256" in content
+    assert "--transport-pr-head-sha" in content
+    assert "--transport-evaluator-sha" in content
+    assert "--transport-workflow-run-id" in content
+    assert "--transport-workflow-run-attempt" in content
+    assert "--transport-fresh-pr-head-sha" in content
+    assert "--transport-issue-body-retrieval-failed" in content
+
+
+def test_report_only_acceptance_workflow_uses_live_provenance_fetches():
+    content = _content()
+
+    assert "git rev-parse HEAD" in content
+    assert "gh pr view \"$PR_NUMBER\" --json headRefOid" in content
+    assert "gh issue view \"$linked_issue\" --json body --jq '.body // \"\\\"\"'" in content
+    assert "--transport-fresh-issue-body \"$fresh_issue_body\"" in content
+    assert "--transport-fresh-pr-head-sha \"$fresh_pr_head_sha\"" in content
+
+
 def test_report_only_acceptance_workflow_routes_missing_pr_number_to_manual_review():
     content = _content()
 
