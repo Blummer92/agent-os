@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from unittest.mock import MagicMock
 
 from scripts.agent_os_github_issue_provider.models import TransportAttempt, TransportResponse
@@ -20,7 +21,7 @@ def _issue_payload() -> dict[str, object]:
     }
 
 
-def test_provider_read_page_success():
+def test_provider_read_page_success(caplog):
     transport = MagicMock()
     headers = {
         "link": '<https://api.github.com/repos/owner/repo/issues?page=2&per_page=100&state=open>; rel="next"'
@@ -32,8 +33,10 @@ def test_provider_read_page_success():
         attempts=(TransportAttempt(1),),
     )
 
-    provider = PyGithubIssuePageProvider(transport)
-    response = provider.read_issue_page("owner/repo", page=1, per_page=100, state="open")
+    with caplog.at_level(logging.WARNING):
+        response = PyGithubIssuePageProvider(transport).read_issue_page(
+            "owner/repo", page=1, per_page=100, state="open"
+        )
 
     assert response.complete is True
     assert len(response.items) == 1
@@ -41,10 +44,10 @@ def test_provider_read_page_success():
     assert "source_revision" in response.items[0]
     assert response.next_page == 2
     assert response.terminal_page_proven is False
-    assert provider.last_diagnostic_kind is None
+    assert "github issue-page provider diagnostic=" not in caplog.text
 
 
-def test_provider_read_page_terminal():
+def test_provider_read_page_terminal(caplog):
     transport = MagicMock()
     headers = {"link": '<https://api.github.com/repos/owner/repo/issues?page=1>; rel="first"'}
     transport.get_issue_page.return_value = TransportResponse(
@@ -54,33 +57,37 @@ def test_provider_read_page_terminal():
         attempts=(TransportAttempt(1),),
     )
 
-    provider = PyGithubIssuePageProvider(transport)
-    response = provider.read_issue_page("owner/repo", page=2, per_page=100, state="open")
+    with caplog.at_level(logging.WARNING):
+        response = PyGithubIssuePageProvider(transport).read_issue_page(
+            "owner/repo", page=2, per_page=100, state="open"
+        )
 
     assert response.complete is True
     assert len(response.items) == 0
     assert response.next_page is None
     assert response.terminal_page_proven is True
-    assert provider.last_diagnostic_kind is None
+    assert "github issue-page provider diagnostic=" not in caplog.text
 
 
-def test_provider_read_page_transport_error():
+def test_provider_read_page_transport_error(caplog):
     transport = MagicMock()
     transport.get_issue_page.side_effect = GitHubTransportError(
         "permission-denied",
         (TransportAttempt(1, "permission-denied"),),
     )
 
-    provider = PyGithubIssuePageProvider(transport)
-    response = provider.read_issue_page("owner/repo", page=1, per_page=100, state="open")
+    with caplog.at_level(logging.WARNING):
+        response = PyGithubIssuePageProvider(transport).read_issue_page(
+            "owner/repo", page=1, per_page=100, state="open"
+        )
 
     assert response.complete is False
     assert response.error_kind == "permission-denied"
     assert response.next_page is None
-    assert provider.last_diagnostic_kind == "transport:permission-denied"
+    assert "github issue-page provider diagnostic=transport:permission-denied" in caplog.text
 
 
-def test_provider_read_page_distinguishes_payload_shape_failure():
+def test_provider_read_page_distinguishes_payload_shape_failure(caplog):
     transport = MagicMock()
     transport.get_issue_page.return_value = TransportResponse(
         status=200,
@@ -88,21 +95,18 @@ def test_provider_read_page_distinguishes_payload_shape_failure():
         payload={"message": "not-a-page"},
         attempts=(TransportAttempt(1),),
     )
-    provider = PyGithubIssuePageProvider(transport)
 
-    response = provider.read_issue_page(
-        "owner/repo",
-        page=1,
-        per_page=100,
-        state="open",
-    )
+    with caplog.at_level(logging.WARNING):
+        response = PyGithubIssuePageProvider(transport).read_issue_page(
+            "owner/repo", page=1, per_page=100, state="open"
+        )
 
     assert response.complete is False
     assert response.error_kind == "malformed-response"
-    assert provider.last_diagnostic_kind == "payload-shape"
+    assert "github issue-page provider diagnostic=payload-shape" in caplog.text
 
 
-def test_provider_read_page_distinguishes_item_shape_failure():
+def test_provider_read_page_distinguishes_item_shape_failure(caplog):
     transport = MagicMock()
     transport.get_issue_page.return_value = TransportResponse(
         status=200,
@@ -110,21 +114,18 @@ def test_provider_read_page_distinguishes_item_shape_failure():
         payload=["not-a-mapping"],
         attempts=(TransportAttempt(1),),
     )
-    provider = PyGithubIssuePageProvider(transport)
 
-    response = provider.read_issue_page(
-        "owner/repo",
-        page=1,
-        per_page=100,
-        state="open",
-    )
+    with caplog.at_level(logging.WARNING):
+        response = PyGithubIssuePageProvider(transport).read_issue_page(
+            "owner/repo", page=1, per_page=100, state="open"
+        )
 
     assert response.complete is False
     assert response.error_kind == "malformed-response"
-    assert provider.last_diagnostic_kind == "item-shape"
+    assert "github issue-page provider diagnostic=item-shape" in caplog.text
 
 
-def test_provider_read_page_distinguishes_revision_failure():
+def test_provider_read_page_distinguishes_revision_failure(caplog):
     transport = MagicMock()
     payload = _issue_payload()
     payload.pop("updated_at")
@@ -134,21 +135,18 @@ def test_provider_read_page_distinguishes_revision_failure():
         payload=[payload],
         attempts=(TransportAttempt(1),),
     )
-    provider = PyGithubIssuePageProvider(transport)
 
-    response = provider.read_issue_page(
-        "owner/repo",
-        page=1,
-        per_page=100,
-        state="open",
-    )
+    with caplog.at_level(logging.WARNING):
+        response = PyGithubIssuePageProvider(transport).read_issue_page(
+            "owner/repo", page=1, per_page=100, state="open"
+        )
 
     assert response.complete is False
     assert response.error_kind == "malformed-response"
-    assert provider.last_diagnostic_kind == "revision-normalization"
+    assert "github issue-page provider diagnostic=revision-normalization" in caplog.text
 
 
-def test_provider_read_page_distinguishes_pagination_failure():
+def test_provider_read_page_distinguishes_pagination_failure(caplog):
     transport = MagicMock()
     transport.get_issue_page.return_value = TransportResponse(
         status=200,
@@ -158,15 +156,12 @@ def test_provider_read_page_distinguishes_pagination_failure():
         payload=[_issue_payload()],
         attempts=(TransportAttempt(1),),
     )
-    provider = PyGithubIssuePageProvider(transport)
 
-    response = provider.read_issue_page(
-        "owner/repo",
-        page=1,
-        per_page=100,
-        state="open",
-    )
+    with caplog.at_level(logging.WARNING):
+        response = PyGithubIssuePageProvider(transport).read_issue_page(
+            "owner/repo", page=1, per_page=100, state="open"
+        )
 
     assert response.complete is False
     assert response.error_kind == "malformed-response"
-    assert provider.last_diagnostic_kind == "pagination-validation"
+    assert "github issue-page provider diagnostic=pagination-validation" in caplog.text
