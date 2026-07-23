@@ -10,7 +10,12 @@ _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 @dataclass(frozen=True, slots=True)
 class TrustedRepositoryIdentity:
-    """Caller-supplied repository identity verified outside pagination parsing."""
+    """Caller-supplied repository identity verified outside pagination parsing.
+
+    GitHub repository identity lookup is ASCII case-insensitive. The original
+    spelling remains available as evidence while ``repository_key`` is used for
+    canonical comparisons.
+    """
 
     repository: str
     repository_id: int
@@ -26,6 +31,12 @@ class TrustedRepositoryIdentity:
             or self.repository_id <= 0
         ):
             raise ValueError("repository_id must be a positive integer")
+
+    @property
+    def repository_key(self) -> str:
+        """Return the canonical case-insensitive repository lookup key."""
+
+        return self.repository.lower()
 
 
 @dataclass(frozen=True, slots=True)
