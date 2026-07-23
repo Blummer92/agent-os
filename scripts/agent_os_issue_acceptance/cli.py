@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import Any
 
 from .acceptance_report_transport import (
     build_acceptance_report_transport,
@@ -22,6 +23,12 @@ def _read_text(path: str | None) -> str:
     if not path:
         return ""
     return Path(path).read_text(encoding="utf-8")
+
+
+def _read_bytes(path: str | None) -> bytes:
+    if not path:
+        return b""
+    return Path(path).read_bytes()
 
 
 def _read_changed_files(path: str | None) -> list[str]:
@@ -48,11 +55,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--transport-repository", dest="transport_repository")
     parser.add_argument("--transport-issue-number", type=int, dest="transport_issue_number")
     parser.add_argument("--transport-issue-body", dest="transport_issue_body")
+    parser.add_argument("--transport-issue-body-file", dest="transport_issue_body_file")
     parser.add_argument("--transport-issue-body-sha256", dest="transport_issue_body_sha256")
-    parser.add_argument(
-        "--transport-issueplan-current-state-evidence-id",
-        dest="transport_issueplan_current_state_evidence_id",
-    )
     parser.add_argument(
         "--transport-issue-body-retrieval-failed",
         action="store_true",
@@ -68,10 +72,12 @@ def main(argv: list[str] | None = None) -> int:
         dest="transport_workflow_run_attempt",
     )
     parser.add_argument("--transport-fresh-issue-body", dest="transport_fresh_issue_body")
+    parser.add_argument("--transport-fresh-issue-body-file", dest="transport_fresh_issue_body_file")
     parser.add_argument(
         "--transport-fresh-pr-head-sha",
         dest="transport_fresh_pr_head_sha",
     )
+    parser.add_argument("--transport-observed-at", dest="transport_observed_at")
     parser.add_argument(
         "--transport-contract-version",
         dest="transport_contract_version",
@@ -133,8 +139,8 @@ def main(argv: list[str] | None = None) -> int:
             "transport_repository",
             "transport_issue_number",
             "transport_issue_body",
+            "transport_issue_body_file",
             "transport_issue_body_sha256",
-            "transport_issueplan_current_state_evidence_id",
             "transport_pr_number",
             "transport_pr_head_sha",
             "transport_evaluator_sha",
@@ -142,26 +148,33 @@ def main(argv: list[str] | None = None) -> int:
             "transport_workflow_run_attempt",
             "transport_issue_body_retrieval_failed",
             "transport_fresh_issue_body",
+            "transport_fresh_issue_body_file",
             "transport_fresh_pr_head_sha",
+            "transport_observed_at",
         )
     ):
-        evidence_id = args.transport_issueplan_current_state_evidence_id or ""
+        issue_body = args.transport_issue_body or ""
+        if args.transport_issue_body_file:
+            issue_body = _read_bytes(args.transport_issue_body_file).decode("utf-8")
+        fresh_issue_body = args.transport_fresh_issue_body
+        if args.transport_fresh_issue_body_file:
+            fresh_issue_body = _read_bytes(args.transport_fresh_issue_body_file).decode("utf-8")
         transport = build_acceptance_report_transport(
             report=report,
             repository=args.transport_repository or "",
             issue_number=args.transport_issue_number,
-            issue_body=args.transport_issue_body or "",
+            issue_body=issue_body,
             issue_body_sha256=args.transport_issue_body_sha256 or "",
-            issueplan_current_state_evidence_id=evidence_id,
             pr_number=args.transport_pr_number,
             pr_head_sha=args.transport_pr_head_sha or "",
             evaluator_sha=args.transport_evaluator_sha or "",
             workflow_run_id=args.transport_workflow_run_id or "",
             workflow_run_attempt=args.transport_workflow_run_attempt or 0,
-            fresh_issue_body=args.transport_fresh_issue_body,
+            fresh_issue_body=fresh_issue_body,
             fresh_pr_head_sha=args.transport_fresh_pr_head_sha,
             issue_body_retrieval_failed=args.transport_issue_body_retrieval_failed,
             contract_version=args.transport_contract_version,
+            observed_at=args.transport_observed_at,
         )
         transport_payload = {
             "report": _report_to_dict(report),

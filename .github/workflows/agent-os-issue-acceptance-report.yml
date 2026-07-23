@@ -52,7 +52,6 @@ jobs:
           gh pr view "$PR_NUMBER" --json title --jq '.title // ""' > "$out/pr_title.txt"
           gh pr view "$PR_NUMBER" --json body --jq '.body // ""' > "$out/pr_body.md"
           gh pr view "$PR_NUMBER" --json files --jq '.files[].path' > "$out/changed_files.txt"
-          # gh pr diff "$PR_NUMBER" --patch > "$out/diff.patch" || :
           gh pr diff "$PR_NUMBER" --patch > "$out/diff.patch" || true
 
           linked_issue="$(
@@ -75,8 +74,7 @@ jobs:
           )"
 
           if [ -n "$linked_issue" ]; then
-            # > "$out/issue.md" || :
-            if ! gh issue view "$linked_issue" --json body --jq '.body // "\""' > "$out/issue.md"; then
+            if ! gh issue view "$linked_issue" --json body --jq '.body // ""' > "$out/issue.md"; then
               : > "$out/issue.md"
             fi
           fi
@@ -90,15 +88,16 @@ jobs:
           GITHUB_PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
         run: |
           set +e
-          captured_issue_body="$(cat tmp/agent_os_issue_acceptance_report/issue.md)"
+          captured_issue_body_file="tmp/agent_os_issue_acceptance_report/issue.md"
           captured_pr_head_sha=""
           if [ -n "${GITHUB_PR_NUMBER:-}" ]; then
             captured_pr_head_sha="$(gh pr view "$GITHUB_PR_NUMBER" --json headRefOid --jq '.headRefOid // ""')"
           fi
           evaluator_sha="$(git rev-parse HEAD)"
+          observed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
           issue_body_retrieval_failed=false
-          fresh_issue_body=""
+          fresh_issue_body_file=""
           fresh_issue_body_available=false
           fresh_pr_head_sha=""
           fresh_pr_head_sha_available=false
@@ -112,17 +111,15 @@ jobs:
           PY
           )"
           if [ -n "$linked_issue" ]; then
-            # > "$out/issue.md" || :
-            if gh issue view "$linked_issue" --json body --jq '.body // "\""' > tmp/agent_os_issue_acceptance_report/issue_recheck.md; then
+            if gh issue view "$linked_issue" --json body --jq '.body // ""' > tmp/agent_os_issue_acceptance_report/issue_recheck.md; then
               fresh_issue_body_available=true
-              fresh_issue_body="$(cat tmp/agent_os_issue_acceptance_report/issue_recheck.md)"
+              fresh_issue_body_file="tmp/agent_os_issue_acceptance_report/issue_recheck.md"
             else
               issue_body_retrieval_failed=true
               : > tmp/agent_os_issue_acceptance_report/issue_recheck.md
             fi
           fi
           if [ -n "${GITHUB_PR_NUMBER:-}" ]; then
-            # gh pr view "$PR_NUMBER" --json headRefOid
             if fresh_pr_head_sha="$(gh pr view "$GITHUB_PR_NUMBER" --json headRefOid --jq '.headRefOid // ""')"; then
               if [ -n "$fresh_pr_head_sha" ]; then
                 fresh_pr_head_sha_available=true
@@ -134,17 +131,12 @@ jobs:
 
           transport_args=(
             --transport-repository "$GITHUB_REPOSITORY"
-            --transport-issue-body "$captured_issue_body"
-            --transport-issue-body-sha256 "$(python - <<'PY'
-          import hashlib
-          from pathlib import Path
-          print(hashlib.sha256(Path('tmp/agent_os_issue_acceptance_report/issue.md').read_bytes()).hexdigest())
-          PY
-          )"
+            --transport-issue-body-file "$captured_issue_body_file"
             --transport-pr-head-sha "$captured_pr_head_sha"
             --transport-evaluator-sha "$evaluator_sha"
             --transport-workflow-run-id "$GITHUB_RUN_ID"
             --transport-workflow-run-attempt "$GITHUB_RUN_ATTEMPT"
+            --transport-observed-at "$observed_at"
           )
           if [ -n "$linked_issue" ]; then
             transport_args+=(--transport-issue-number "$linked_issue")
@@ -153,7 +145,7 @@ jobs:
             transport_args+=(--transport-issue-body-retrieval-failed)
           fi
           if [ "$fresh_issue_body_available" = true ]; then
-            transport_args+=(--transport-fresh-issue-body "$fresh_issue_body")
+            transport_args+=(--transport-fresh-issue-body-file "$fresh_issue_body_file")
           fi
           if [ "$fresh_pr_head_sha_available" = true ]; then
             transport_args+=(--transport-fresh-pr-head-sha "$fresh_pr_head_sha")

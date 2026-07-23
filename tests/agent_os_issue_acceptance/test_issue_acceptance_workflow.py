@@ -30,6 +30,17 @@ def test_report_only_acceptance_workflow_uses_shared_environment_after_checkout(
     assert "python -m pip install -r requirements-dev.txt" not in content
 
 
+def test_report_only_acceptance_workflow_uses_observed_at_and_file_based_transport_inputs():
+    content = _content()
+
+    assert "--transport-issue-body-file" in content
+    assert "--transport-fresh-issue-body-file" in content
+    assert "--transport-observed-at" in content
+    assert "tmp/agent_os_issue_acceptance_report/issue_recheck.md" in content
+    assert "gh issue view \"$linked_issue\" --json body" in content
+    assert '> "$out/issue.md" || :' not in content
+
+
 def test_report_only_acceptance_workflow_uses_read_permissions():
     content = _content()
 
@@ -102,7 +113,7 @@ def test_report_only_acceptance_workflow_tolerates_unreadable_linked_issue():
 
     assert 'gh issue view "$linked_issue"' in content
     assert 'gh issue view "$linked_issue" --json body --jq' in content
-    assert '> "$out/issue.md" || :' in content
+    assert ': > "$out/issue.md"' in content
 
 
 def test_report_only_acceptance_workflow_publishes_report_without_gating():
@@ -127,7 +138,7 @@ def test_report_only_acceptance_workflow_binds_transport_provenance():
 
     assert "--transport-repository" in content
     assert "--transport-issue-number" in content
-    assert "--transport-issue-body-sha256" in content
+    assert "--transport-issue-body-file" in content
     assert "--transport-pr-head-sha" in content
     assert "--transport-evaluator-sha" in content
     assert "--transport-workflow-run-id" in content
@@ -140,9 +151,9 @@ def test_report_only_acceptance_workflow_uses_live_provenance_fetches():
     content = _content()
 
     assert "git rev-parse HEAD" in content
-    assert "gh pr view \"$PR_NUMBER\" --json headRefOid" in content
-    assert "gh issue view \"$linked_issue\" --json body --jq '.body // \"\\\"\"'" in content
-    assert "--transport-fresh-issue-body \"$fresh_issue_body\"" in content
+    assert "gh pr view \"$GITHUB_PR_NUMBER\" --json headRefOid" in content
+    assert "gh issue view \"$linked_issue\" --json body --jq '.body // \"\"'" in content
+    assert "--transport-fresh-issue-body-file \"$fresh_issue_body_file\"" in content
     assert "--transport-fresh-pr-head-sha \"$fresh_pr_head_sha\"" in content
 
 
