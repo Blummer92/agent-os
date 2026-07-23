@@ -26,6 +26,8 @@ PAGINATION_DIAGNOSTIC_KINDS = frozenset(
     }
 )
 
+_MAX_REPOSITORY_ID_DIGITS = 20
+
 
 class PaginationDiagnosticError(ValueError):
     """Fail-closed pagination error carrying one fixed internal identifier."""
@@ -49,8 +51,6 @@ def parse_link_header(value: str | None) -> dict[str, str]:
     if not value.strip():
         _fail("pagination:link-empty", "Link header is present but empty")
 
-    # RFC 8288 robust parsing: <URL>; param="value", <URL>; param="value"
-    # Split only on delimiters outside quoted strings and angle-bracket URIs.
     link_regex = re.compile(r"\s*<([^>]*)>\s*(?:;\s*(.*))?\s*")
     param_regex = re.compile(
         r"([a-zA-Z0-9!#$%&\'*+\-.^_`|~]+)\s*=\s*(?:([^\",;]+)|\"([^\"]*)\")"
@@ -73,7 +73,6 @@ def parse_link_header(value: str | None) -> dict[str, str]:
                     if not rel_val:
                         continue
                     rel_found = True
-                    # RFC 8288 allows space-separated relations in rel="next prev".
                     for rel in rel_val.split():
                         if rel in relations:
                             _fail(
@@ -88,12 +87,6 @@ def parse_link_header(value: str | None) -> dict[str, str]:
 
 
 def _split_links(value: str) -> list[str]:
-    """Split Link values only at top-level commas.
-
-    Quoted parameter strings and angle-bracket URI references may legally contain
-    commas. Malformed quote or angle-bracket state fails closed.
-    """
-
     links: list[str] = []
     current: list[str] = []
     in_quotes = False
@@ -163,13 +156,16 @@ def _validate_repository_path(
     if path == named_path:
         return
 
-    numeric_match = re.fullmatch(r"/repositories/([1-9][0-9]*)/issues", path)
+    numeric_match = re.fullmatch(
+        rf"/repositories/([1-9][0-9]{{0,{_MAX_REPOSITORY_ID_DIGITS - 1}}})/issues",
+        path,
+    )
     if numeric_match is None:
         _fail("pagination:next-path", "next link changed repository or endpoint")
 
     if (
         trusted_repository_identity is None
-        or trusted_repository_identity.repository != repository
+        or trusted_repository_identity.repository_key != repository.lower()
         or trusted_repository_identity.repository_id != int(numeric_match.group(1))
     ):
         _fail("pagination:next-path", "next link repository identity is unverified")
@@ -187,8 +183,6 @@ def validated_next_page(
     relations = parse_link_header(link_header)
     next_url = relations.get("next")
     if next_url is None:
-        # A non-empty Link without next proves terminal. No Link on page one means
-        # the result set fits on one page. Later pages still require explicit proof.
         terminal_proven = (link_header is not None) or (current_page == 1)
         return None, terminal_proven
 
@@ -219,9 +213,6 @@ def validated_next_page(
     if page <= current_page:
         _fail("pagination:next-page-non-advancing", "next link does not advance")
 
-    # GitHub may omit trusted request parameters. Omission is safe because the
-    # provider constructs the following request from the original arguments. If
-    # GitHub includes state or per_page, ambiguity and drift still fail closed.
     linked_per_page_values = query.get("per_page")
     if linked_per_page_values is not None:
         if len(linked_per_page_values) != 1:
