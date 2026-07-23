@@ -30,6 +30,17 @@ def test_report_only_acceptance_workflow_uses_shared_environment_after_checkout(
     assert "python -m pip install -r requirements-dev.txt" not in content
 
 
+def test_report_only_acceptance_workflow_uses_observed_at_and_file_based_transport_inputs():
+    content = _content()
+
+    assert "--transport-issue-body-file" in content
+    assert "--transport-fresh-issue-body-file" in content
+    assert "--transport-observed-at" in content
+    assert "tmp/agent_os_issue_acceptance_report/issue_recheck.md" in content
+    assert "gh issue view \"$linked_issue\" --json body" in content
+    assert '> "$out/issue.md" || :' not in content
+
+
 def test_report_only_acceptance_workflow_uses_read_permissions():
     content = _content()
 
@@ -97,12 +108,17 @@ def test_report_only_acceptance_workflow_bounds_issue_lookup_to_resolved_result(
     assert 'gh issue view "$linked_issue"' in content
 
 
-def test_report_only_acceptance_workflow_tolerates_unreadable_linked_issue():
+def test_report_only_acceptance_workflow_preserves_initial_issue_lookup_failure():
     content = _content()
 
-    assert 'gh issue view "$linked_issue"' in content
-    assert 'gh issue view "$linked_issue" --json body --jq' in content
-    assert '> "$out/issue.md" || :' in content
+    marker = 'issue_body_retrieval_failed.txt'
+    initial_lookup = 'if ! gh issue view "$linked_issue" --json body --jq \' .body // ""\''
+    assert marker in content
+    assert "printf '%s\\n' false > \"$out/issue_body_retrieval_failed.txt\"" in content
+    assert "printf '%s\\n' true > \"$out/issue_body_retrieval_failed.txt\"" in content
+    assert 'issue_body_retrieval_failed="$(cat tmp/agent_os_issue_acceptance_report/issue_body_retrieval_failed.txt)"' in content
+    assert "--transport-issue-body-retrieval-failed" in content
+    assert initial_lookup.replace("' ", "'") in content
 
 
 def test_report_only_acceptance_workflow_publishes_report_without_gating():
@@ -122,6 +138,30 @@ def test_report_only_acceptance_workflow_declares_pr_number_dispatch_input():
     assert "PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}" in content
 
 
+def test_report_only_acceptance_workflow_binds_transport_provenance():
+    content = _content()
+
+    assert "--transport-repository" in content
+    assert "--transport-issue-number" in content
+    assert "--transport-issue-body-file" in content
+    assert "--transport-pr-head-sha" in content
+    assert "--transport-evaluator-sha" in content
+    assert "--transport-workflow-run-id" in content
+    assert "--transport-workflow-run-attempt" in content
+    assert "--transport-fresh-pr-head-sha" in content
+    assert "--transport-issue-body-retrieval-failed" in content
+
+
+def test_report_only_acceptance_workflow_uses_live_provenance_fetches():
+    content = _content()
+
+    assert "git rev-parse HEAD" in content
+    assert "gh pr view \"$GITHUB_PR_NUMBER\" --json headRefOid" in content
+    assert "gh issue view \"$linked_issue\" --json body --jq '.body // \"\"'" in content
+    assert "--transport-fresh-issue-body-file \"$fresh_issue_body_file\"" in content
+    assert "--transport-fresh-pr-head-sha \"$fresh_pr_head_sha\"" in content
+
+
 def test_report_only_acceptance_workflow_routes_missing_pr_number_to_manual_review():
     content = _content()
 
@@ -136,7 +176,7 @@ def test_report_only_acceptance_workflow_routes_missing_pr_number_to_manual_revi
 def test_report_only_acceptance_workflow_tolerates_malformed_diff_payload():
     content = _content()
 
-    assert 'gh pr diff "$PR_NUMBER" --patch > "$out/diff.patch" || :' in content
+    assert 'gh pr diff "$PR_NUMBER" --patch > "$out/diff.patch" || true' in content
     assert ': > "$out/issue.md"' in content
     assert ': > "$out/pr_body.md"' in content
     assert ': > "$out/pr_title.txt"' in content

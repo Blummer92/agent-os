@@ -7,6 +7,30 @@ from scripts.agent_os_issue_acceptance.cli import _report_to_dict, main
 from scripts.agent_os_issue_acceptance.models import AcceptanceInput
 from scripts.agent_os_issue_acceptance.policy import evaluate_acceptance
 
+
+def test_transport_arguments_are_optional_when_absent(tmp_path, capsys):
+    issue = tmp_path / "issue.md"
+    issue.write_text("Issue body", encoding="utf-8")
+    pr_body = tmp_path / "pr_body.md"
+    pr_body.write_text("Closes #323", encoding="utf-8")
+    changed_files = tmp_path / "changed_files.txt"
+    changed_files.write_text("scripts/agent_os_issue_acceptance/cli.py\n", encoding="utf-8")
+
+    exit_code = main(
+        [
+            "--issue",
+            str(issue),
+            "--pr-body",
+            str(pr_body),
+            "--changed-files",
+            str(changed_files),
+        ]
+    )
+
+    assert exit_code in {0, 1}
+    output = capsys.readouterr().out
+    assert "overall_status" in output or output.strip()
+
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
