@@ -47,6 +47,28 @@ def test_provider_read_page_success(caplog):
     assert "github issue-page provider diagnostic=" not in caplog.text
 
 
+def test_provider_read_page_accepts_omitted_trusted_link_parameters(caplog):
+    transport = MagicMock()
+    transport.get_issue_page.return_value = TransportResponse(
+        status=200,
+        headers={
+            "link": '<https://api.github.com/repos/owner/repo/issues?page=2>; rel="next"'
+        },
+        payload=[_issue_payload()],
+        attempts=(TransportAttempt(1),),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        response = PyGithubIssuePageProvider(transport).read_issue_page(
+            "owner/repo", page=1, per_page=100, state="open"
+        )
+
+    assert response.complete is True
+    assert response.next_page == 2
+    assert response.terminal_page_proven is False
+    assert "github issue-page provider diagnostic=" not in caplog.text
+
+
 def test_provider_read_page_terminal(caplog):
     transport = MagicMock()
     headers = {"link": '<https://api.github.com/repos/owner/repo/issues?page=1>; rel="first"'}
@@ -151,7 +173,7 @@ def test_provider_read_page_distinguishes_pagination_failure(caplog):
     transport.get_issue_page.return_value = TransportResponse(
         status=200,
         headers={
-            "link": '<https://api.github.com/repos/owner/repo/issues?page=2&per_page=100>; rel="next"'
+            "link": '<https://api.github.com/repos/owner/repo/issues?page=2&per_page=100&state=closed>; rel="next"'
         },
         payload=[_issue_payload()],
         attempts=(TransportAttempt(1),),
