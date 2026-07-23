@@ -1,7 +1,31 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Mapping
+
+
+_REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
+
+@dataclass(frozen=True, slots=True)
+class TrustedRepositoryIdentity:
+    """Caller-supplied repository identity verified outside pagination parsing."""
+
+    repository: str
+    repository_id: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.repository, str) or not _REPOSITORY_RE.fullmatch(
+            self.repository
+        ):
+            raise ValueError("repository must use owner/name form")
+        if (
+            not isinstance(self.repository_id, int)
+            or isinstance(self.repository_id, bool)
+            or self.repository_id <= 0
+        ):
+            raise ValueError("repository_id must be a positive integer")
 
 
 @dataclass(frozen=True, slots=True)
