@@ -40,9 +40,10 @@ class PyGithubIssuePageProvider:
                     "trusted_repository_identities must contain "
                     "TrustedRepositoryIdentity values"
                 )
-            if identity.repository in identities:
-                raise ValueError("trusted repository identity is duplicated")
-            identities[identity.repository] = identity
+            repository_key = identity.repository_key
+            if repository_key in identities:
+                raise ValueError("trusted repository identity is duplicated or case-colliding")
+            identities[repository_key] = identity
 
         self._transport = transport
         self._trusted_repository_identities = MappingProxyType(identities)
@@ -107,7 +108,7 @@ class PyGithubIssuePageProvider:
                 per_page=per_page,
                 state=state,
                 trusted_repository_identity=self._trusted_repository_identities.get(
-                    repository
+                    repository.lower()
                 ),
             )
         except PaginationDiagnosticError as error:
