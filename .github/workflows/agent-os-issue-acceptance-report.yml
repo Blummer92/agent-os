@@ -39,6 +39,7 @@ jobs:
           : > "$out/pr_title.txt"
           : > "$out/changed_files.txt"
           : > "$out/diff.patch"
+          printf '%s\n' false > "$out/issue_body_retrieval_failed.txt"
 
           if [ -z "${PR_NUMBER:-}" ]; then
             cat > "$out/pr_body.md" <<'MD'
@@ -76,6 +77,7 @@ jobs:
           if [ -n "$linked_issue" ]; then
             if ! gh issue view "$linked_issue" --json body --jq '.body // ""' > "$out/issue.md"; then
               : > "$out/issue.md"
+              printf '%s\n' true > "$out/issue_body_retrieval_failed.txt"
             fi
           fi
 
@@ -96,7 +98,7 @@ jobs:
           evaluator_sha="$(git rev-parse HEAD)"
           observed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-          issue_body_retrieval_failed=false
+          issue_body_retrieval_failed="$(cat tmp/agent_os_issue_acceptance_report/issue_body_retrieval_failed.txt)"
           fresh_issue_body_file=""
           fresh_issue_body_available=false
           fresh_pr_head_sha=""
@@ -154,7 +156,6 @@ jobs:
             transport_args+=(--transport-pr-number "$GITHUB_PR_NUMBER")
           fi
 
-          # gh pr diff "$PR_NUMBER" --patch > "$out/diff.patch" || :
           python -m scripts.agent_os_issue_acceptance.cli \
             --issue tmp/agent_os_issue_acceptance_report/issue.md \
             --pr-body tmp/agent_os_issue_acceptance_report/pr_body.md \
