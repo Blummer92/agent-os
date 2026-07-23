@@ -56,7 +56,7 @@ def _read(
     ).read_issue_page("owner/repo", page=1, per_page=100, state="open")
 
 
-def test_provider_rejects_invalid_or_duplicate_trusted_identities():
+def test_provider_rejects_invalid_duplicate_and_case_colliding_identities():
     transport = MagicMock()
     with pytest.raises(TypeError):
         PyGithubIssuePageProvider(  # type: ignore[arg-type]
@@ -66,6 +66,14 @@ def test_provider_rejects_invalid_or_duplicate_trusted_identities():
         PyGithubIssuePageProvider(
             transport,
             trusted_repository_identities=(_identity(), _identity(repository_id=456)),
+        )
+    with pytest.raises(ValueError):
+        PyGithubIssuePageProvider(
+            transport,
+            trusted_repository_identities=(
+                _identity("Owner/Repo"),
+                _identity("owner/repo", repository_id=456),
+            ),
         )
 
 
@@ -101,6 +109,22 @@ def test_provider_accepts_verified_numeric_path_without_extra_request(caplog):
     assert response.complete is True
     assert response.next_page == 2
     assert response.terminal_page_proven is False
+    assert "github issue-page provider diagnostic=" not in caplog.text
+    transport.get_issue_page.assert_called_once_with(
+        "owner/repo", page=1, per_page=100, state="open"
+    )
+
+
+def test_provider_accepts_case_variant_identity_for_same_repository(caplog):
+    transport = _transport_for_link(
+        '<https://api.github.com/repositories/123/issues?page=2>; rel="next"'
+    )
+
+    with caplog.at_level(logging.WARNING):
+        response = _read(transport, identities=(_identity("Owner/Repo"),))
+
+    assert response.complete is True
+    assert response.next_page == 2
     assert "github issue-page provider diagnostic=" not in caplog.text
     transport.get_issue_page.assert_called_once_with(
         "owner/repo", page=1, per_page=100, state="open"
