@@ -18,6 +18,12 @@ class PyGithubIssuePageProvider:
         if transport is None:
             raise TypeError("transport is required")
         self._transport = transport
+        self._last_diagnostic_kind: str | None = None
+
+    @property
+    def last_diagnostic_kind(self) -> str | None:
+        """Return a non-sensitive branch identifier for the most recent failure."""
+        return self._last_diagnostic_kind
 
     def read_issue_page(
         self,
@@ -27,6 +33,7 @@ class PyGithubIssuePageProvider:
         per_page: int,
         state: str,
     ) -> GitHubIssuePageResponse:
+        self._last_diagnostic_kind = None
         try:
             response = self._transport.get_issue_page(
                 repository,
@@ -35,33 +42,38 @@ class PyGithubIssuePageProvider:
                 state=state,
             )
         except GitHubTransportError as error:
+            self._last_diagnostic_kind = f"transport:{error.kind}"
             return GitHubIssuePageResponse(
                 items=(), next_page=None, complete=False, error_kind=error.kind
             )
 
         if response.status != 200:
+            self._last_diagnostic_kind = "unexpected-status"
             return GitHubIssuePageResponse(
                 items=(), next_page=None, complete=False, error_kind="api-error"
             )
         if not isinstance(response.payload, Sequence) or isinstance(
             response.payload, (str, bytes)
         ):
+            self._last_diagnostic_kind = "payload-shape"
             return GitHubIssuePageResponse(
-                items=(), next_page=None, complete=False, error_kind="malformed-payload"
+                items=(), next_page=None, complete=False, error_kind="malformed-response"
             )
 
         normalized_items: list[Mapping[str, object]] = []
         for item in response.payload:
             if not isinstance(item, Mapping):
+                self._last_diagnostic_kind = "item-shape"
                 return GitHubIssuePageResponse(
-                    items=(), next_page=None, complete=False, error_kind="malformed-item"
+                    items=(), next_page=None, complete=False, error_kind="malformed-response"
                 )
             normalized = dict(item)
             try:
                 normalized["source_revision"] = issue_source_revision(normalized)
             except (TypeError, ValueError):
+                self._last_diagnostic_kind = "revision-normalization"
                 return GitHubIssuePageResponse(
-                    items=(), next_page=None, complete=False, error_kind="malformed-revision"
+                    items=(), next_page=None, complete=False, error_kind="malformed-response"
                 )
             normalized_items.append(normalized)
 
@@ -75,8 +87,9 @@ class PyGithubIssuePageProvider:
                 state=state,
             )
         except (TypeError, ValueError):
+            self._last_diagnostic_kind = "pagination-validation"
             return GitHubIssuePageResponse(
-                items=(), next_page=None, complete=False, error_kind="malformed-pagination"
+                items=(), next_page=None, complete=False, error_kind="malformed-response"
             )
 
         return GitHubIssuePageResponse(
