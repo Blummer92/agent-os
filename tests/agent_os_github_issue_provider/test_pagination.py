@@ -30,7 +30,10 @@ def _identity(
 
 
 def test_trusted_repository_identity_validation():
-    assert _identity().repository_id == 123
+    identity = _identity("Owner/Repo")
+    assert identity.repository_id == 123
+    assert identity.repository == "Owner/Repo"
+    assert identity.repository_key == "owner/repo"
     for repository in ("", "owner", "owner/repo/extra", "owner repo/name"):
         with pytest.raises(ValueError):
             TrustedRepositoryIdentity(repository=repository, repository_id=123)
@@ -114,7 +117,7 @@ def test_matching_numeric_repository_path_is_accepted_with_trusted_identity():
         current_page=1,
         per_page=100,
         state="open",
-        trusted_repository_identity=_identity(),
+        trusted_repository_identity=_identity("Owner/Repo"),
     ) == (2, False)
 
 
@@ -148,6 +151,7 @@ def test_matching_numeric_path_preserves_page_state_and_page_size_checks():
         "/repositories/123/456/issues",
         "/repositories/%31%32%33/issues",
         "/repositories/123%2Fissues",
+        "/repositories/123456789012345678901/issues",
     ],
 )
 def test_numeric_repository_path_alternate_forms_fail_closed(path: str):
