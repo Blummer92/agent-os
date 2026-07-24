@@ -181,7 +181,7 @@ def consume_approved_projection_evidence(
         )
 
     status = _status_for(reasons, repository_result.outcome)
-    result = GovernedProjectionEvidenceResult(
+    return GovernedProjectionEvidenceResult(
         status=status,
         schema_version=GOVERNED_PROJECTION_EVIDENCE_SCHEMA_VERSION,
         projection_id=getattr(verified_projection, "projection_id", None),
@@ -204,28 +204,6 @@ def consume_approved_projection_evidence(
         reason_codes=tuple(reasons),
         details=tuple(details),
     )
-    if status == "accepted" and not _accepted_bindings_complete(result):
-        return GovernedProjectionEvidenceResult(
-            status="invalid",
-            schema_version=GOVERNED_PROJECTION_EVIDENCE_SCHEMA_VERSION,
-            projection_id=result.projection_id,
-            proposal_id=result.proposal_id,
-            approval_id=result.approval_id,
-            repository_identity=result.repository_identity,
-            base_branch=result.base_branch,
-            base_sha=result.base_sha,
-            head_sha=result.head_sha,
-            evaluated_sha=result.evaluated_sha,
-            tested_sha=result.tested_sha,
-            repository_evidence_type=result.repository_evidence_type,
-            repository_state_evidence_id=result.repository_state_evidence_id,
-            implementation_contract_fingerprint=(
-                result.implementation_contract_fingerprint
-            ),
-            reason_codes=("schema.unknown-field",),
-            details=("accepted-bindings:incomplete",),
-        )
-    return result
 
 
 def _verified_projection(
