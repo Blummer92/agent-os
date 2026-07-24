@@ -39,6 +39,7 @@ jobs:
           : > "$out/pr_title.txt"
           : > "$out/changed_files.txt"
           : > "$out/diff.patch"
+          printf '%s\n' false > "$out/issue_body_retrieval_failed.txt"
 
           if [ -z "${PR_NUMBER:-}" ]; then
             cat > "$out/pr_body.md" <<'MD'
@@ -52,7 +53,7 @@ jobs:
           gh pr view "$PR_NUMBER" --json title --jq '.title // ""' > "$out/pr_title.txt"
           gh pr view "$PR_NUMBER" --json body --jq '.body // ""' > "$out/pr_body.md"
           gh pr view "$PR_NUMBER" --json files --jq '.files[].path' > "$out/changed_files.txt"
-          gh pr diff "$PR_NUMBER" --patch > "$out/diff.patch" || :
+          gh pr diff "$PR_NUMBER" --patch > "$out/diff.patch" || true
 
           linked_issue="$(
             python - <<'PY'
@@ -74,19 +75,95 @@ jobs:
           )"
 
           if [ -n "$linked_issue" ]; then
-            gh issue view "$linked_issue" --json body --jq '.body // ""' > "$out/issue.md" || :
+            if ! gh issue view "$linked_issue" --json body --jq '.body // ""' > "$out/issue.md"; then
+              : > "$out/issue.md"
+              printf '%s\n' true > "$out/issue_body_retrieval_failed.txt"
+            fi
           fi
 
       - name: Run report-only issue acceptance checker
         id: acceptance
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
         run: |
           set +e
+          captured_issue_body_file="tmp/agent_os_issue_acceptance_report/issue.md"
+          captured_pr_head_sha=""
+          if [ -n "${GITHUB_PR_NUMBER:-}" ]; then
+            captured_pr_head_sha="$(gh pr view "$GITHUB_PR_NUMBER" --json headRefOid --jq '.headRefOid // ""')"
+          fi
+          evaluator_sha="$(git rev-parse HEAD)"
+          observed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+          issue_body_retrieval_failed="$(cat tmp/agent_os_issue_acceptance_report/issue_body_retrieval_failed.txt)"
+          fresh_issue_body_file=""
+          fresh_issue_body_available=false
+          fresh_pr_head_sha=""
+          fresh_pr_head_sha_available=false
+          linked_issue="$(python - <<'PY'
+          from pathlib import Path
+          from scripts.agent_os_issue_acceptance.parse_pr import parse_linked_issue_result
+          text = Path('tmp/agent_os_issue_acceptance_report/pr_body.md').read_text(encoding='utf-8')
+          title = Path('tmp/agent_os_issue_acceptance_report/pr_title.txt').read_text(encoding='utf-8')
+          result = parse_linked_issue_result(text, title)
+          print(result.issue_number or '')
+          PY
+          )"
+          if [ -n "$linked_issue" ]; then
+            if gh issue view "$linked_issue" --json body --jq '.body // ""' > tmp/agent_os_issue_acceptance_report/issue_recheck.md; then
+              fresh_issue_body_available=true
+              fresh_issue_body_file="tmp/agent_os_issue_acceptance_report/issue_recheck.md"
+            else
+              issue_body_retrieval_failed=true
+              : > tmp/agent_os_issue_acceptance_report/issue_recheck.md
+            fi
+          fi
+          if [ -n "${GITHUB_PR_NUMBER:-}" ]; then
+            if fresh_pr_head_sha="$(gh pr view "$GITHUB_PR_NUMBER" --json headRefOid --jq '.headRefOid // ""')"; then
+              if [ -n "$fresh_pr_head_sha" ]; then
+                fresh_pr_head_sha_available=true
+              fi
+            else
+              fresh_pr_head_sha=""
+            fi
+          fi
+
+          transport_args=(
+            --transport-repository "$GITHUB_REPOSITORY"
+            --transport-issue-body-file "$captured_issue_body_file"
+            --transport-pr-head-sha "$captured_pr_head_sha"
+            --transport-evaluator-sha "$evaluator_sha"
+            --transport-workflow-run-id "$GITHUB_RUN_ID"
+            --transport-workflow-run-attempt "$GITHUB_RUN_ATTEMPT"
+            --transport-observed-at "$observed_at"
+          )
+          if [ -n "$linked_issue" ]; then
+            transport_args+=(--transport-issue-number "$linked_issue")
+          fi
+          if [ "$issue_body_retrieval_failed" = true ]; then
+            transport_args+=(--transport-issue-body-retrieval-failed)
+          fi
+          if [ "$fresh_issue_body_available" = true ]; then
+            transport_args+=(--transport-fresh-issue-body-file "$fresh_issue_body_file")
+          fi
+          if [ "$fresh_pr_head_sha_available" = true ]; then
+            transport_args+=(--transport-fresh-pr-head-sha "$fresh_pr_head_sha")
+          fi
+          if [ -n "${GITHUB_PR_NUMBER:-}" ]; then
+            transport_args+=(--transport-pr-number "$GITHUB_PR_NUMBER")
+          fi
+
           python -m scripts.agent_os_issue_acceptance.cli \
             --issue tmp/agent_os_issue_acceptance_report/issue.md \
             --pr-body tmp/agent_os_issue_acceptance_report/pr_body.md \
             --changed-files tmp/agent_os_issue_acceptance_report/changed_files.txt \
             --diff tmp/agent_os_issue_acceptance_report/diff.patch \
             --pr-title "$(cat tmp/agent_os_issue_acceptance_report/pr_title.txt)" \
+            --documentation-advisory \
+            "${transport_args[@]}" \
             | tee tmp/agent_os_issue_acceptance_report/report.txt
           checker_exit_code=${PIPESTATUS[0]}
           echo "checker_exit_code=${checker_exit_code}" >> "$GITHUB_OUTPUT"
