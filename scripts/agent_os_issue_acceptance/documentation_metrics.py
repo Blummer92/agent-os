@@ -136,19 +136,13 @@ def build_documentation_observation(
         raise ValueError("retrieved_at is required")
 
     repository = _bounded_text(repository, "repository", MAX_REPOSITORY_LENGTH)
-    evaluator_revision = _bounded_text(
-        evaluator_revision, "evaluator_revision", MAX_IDENTITY_LENGTH
-    )
-    window_identity = _bounded_text(
-        window_identity, "window_identity", MAX_IDENTITY_LENGTH
-    )
-    source_fingerprint = _bounded_text(
-        source_fingerprint, "source_fingerprint", MAX_IDENTITY_LENGTH
-    )
+    evaluator_revision = _identity_text(evaluator_revision, "evaluator_revision")
+    window_identity = _identity_text(window_identity, "window_identity")
+    source_fingerprint = _identity_text(source_fingerprint, "source_fingerprint")
     schemas = tuple(
         sorted(
             {
-                _bounded_text(value, "supported_schema_version", MAX_IDENTITY_LENGTH)
+                _identity_text(value, "supported_schema_version")
                 for value in supported_schema_versions
             }
         )
@@ -156,15 +150,13 @@ def build_documentation_observation(
     if not schemas:
         raise ValueError("supported_schema_versions must not be empty")
 
-    records: list[DocumentationMetricRecord] = []
+    rows: list[DocumentationMetricRecord] = []
     retrieval_codes = [finding.value for finding in scan_result.findings]
     source_complete = scan_result.complete
-
     for source_record in scan_result.records:
         report = acceptance_reports.get(source_record.issue_number)
         if report is not None and not isinstance(report, AcceptanceReport):
             raise TypeError("acceptance_reports values must be AcceptanceReport values")
-
         metadata = project_issue_metadata(
             scan_issue_metadata(
                 source_record.body,
@@ -174,60 +166,53 @@ def build_documentation_observation(
                 pagination_complete=(
                     RetrievalFinding.PAGE_MISSING_NEXT not in scan_result.findings
                 ),
-                accessible=(RetrievalFinding.API_ERROR not in scan_result.findings),
+                accessible=RetrievalFinding.API_ERROR not in scan_result.findings,
                 expected_revision=source_record.source_revision,
             )
         )
         source_codes = tuple(sorted(_metadata_reason_codes(metadata.manual_review)))
-        if set(source_codes) & _INCOMPLETE_CODES:
+        incomplete_codes = set(source_codes) & _INCOMPLETE_CODES
+        if incomplete_codes:
             source_complete = False
-        retrieval_codes.extend(code for code in source_codes if code in _INCOMPLETE_CODES)
-
-        decision = _decision_state(metadata.documentation_impact, source_codes)
-        required_docs = tuple(
-            sorted(
-                {
-                    _bounded_text(path.strip(), "required_doc", MAX_IDENTITY_LENGTH)
-                    for path in metadata.required_docs
-                    if path.strip()
-                }
-            )
-        )
-        coverage_status = _required_docs_status(report)
-        advisory_markers = _advisory_markers(report)
-        source_revision = _bounded_text(
-            source_record.source_revision, "source_revision", MAX_IDENTITY_LENGTH
-        )
-        records.append(
+            retrieval_codes.extend(sorted(incomplete_codes))
+        rows.append(
             DocumentationMetricRecord(
                 issue_number=_bounded_integer(source_record.issue_number, "issue_number"),
-                decision=decision,
-                required_docs=required_docs,
-                coverage_status=coverage_status,
-                advisory_markers=advisory_markers,
-                source_revision=source_revision,
+                decision=_decision_state(metadata.documentation_impact, source_codes),
+                required_docs=tuple(
+                    sorted(
+                        {
+                            _identity_text(path.strip(), "required_doc")
+                            for path in metadata.required_docs
+                            if path.strip()
+                        }
+                    )
+                ),
+                coverage_status=_required_docs_status(report),
+                advisory_markers=_advisory_markers(report),
+                source_revision=_identity_text(
+                    source_record.source_revision, "source_revision"
+                ),
                 source_reason_codes=source_codes,
             )
         )
 
-    ordered = tuple(sorted(records, key=lambda item: item.issue_number))
+    records = tuple(sorted(rows, key=lambda item: item.issue_number))
     identity = ObservationIdentity(
         repository=repository,
         requested_state=_requested_state(scan_result.requested_state),
         window_identity=window_identity,
-        retrieved_at=_bounded_text(
-            scan_result.retrieved_at, "retrieved_at", MAX_IDENTITY_LENGTH
-        ),
+        retrieved_at=_identity_text(scan_result.retrieved_at, "retrieved_at"),
         evaluator_revision=evaluator_revision,
         supported_schema_versions=schemas,
         source_fingerprint=source_fingerprint,
         record_identities=tuple(
-            f"{item.issue_number}:{item.source_revision}" for item in ordered
+            f"{row.issue_number}:{row.source_revision}" for row in records
         ),
     )
     return DocumentationObservation(
         identity=identity,
-        records=ordered,
+        records=records,
         retrieval_distribution=_count_entries(retrieval_codes),
         complete=source_complete,
     )
@@ -240,13 +225,13 @@ def build_documentation_metrics_report(
 ) -> DocumentationMetricsReport:
     if not isinstance(current, DocumentationObservation):
         raise TypeError("current must be a DocumentationObservation")
-    metrics = _metrics(current)
     drift = compare_documentation_observations(previous, current) if previous else None
     return DocumentationMetricsReport(
         observation=current,
-        metrics=metrics,
+        metrics=_metrics(current),
         drift=drift,
-        complete=current.complete and (drift is None or drift.comparison_state == "comparable"),
+        complete=current.complete
+        and (drift is None or drift.comparison_state == "comparable"),
     )
 
 
@@ -260,56 +245,54 @@ def compare_documentation_observations(
         raise TypeError("previous and current must be DocumentationObservation values")
     if previous.identity == current.identity:
         raise ValueError("the same observation cannot be compared with itself")
-
-    mismatch = _comparison_mismatches(previous, current)
-    if mismatch:
+    mismatches = _comparison_mismatches(previous, current)
+    if mismatches:
+        incomparable = _count_entries(("incomparable",))
         return DocumentationDrift(
             comparison_state="incomparable",
-            reason_codes=tuple(mismatch),
-            documentation_decision_drift=_count_entries(("incomparable",)),
-            required_documentation_path_set_drift=_count_entries(("incomparable",)),
+            reason_codes=tuple(mismatches),
+            documentation_decision_drift=incomparable,
+            required_documentation_path_set_drift=incomparable,
         )
 
-    old = {item.issue_number: item for item in previous.records}
-    new = {item.issue_number: item for item in current.records}
-    decision_states: list[str] = []
-    path_states: list[str] = []
-    for issue_number in sorted(set(old) | set(new)):
-        before = old.get(issue_number)
-        after = new.get(issue_number)
+    old = {row.issue_number: row for row in previous.records}
+    new = {row.issue_number: row for row in current.records}
+    decisions: list[str] = []
+    paths: list[str] = []
+    for number in sorted(set(old) | set(new)):
+        before = old.get(number)
+        after = new.get(number)
         if before is None:
-            decision_states.append("added")
-            path_states.append("additions-only")
-        elif after is None:
-            decision_states.append("removed")
-            path_states.append("removals-only")
+            decisions.append("added")
+            paths.append("additions-only")
+            continue
+        if after is None:
+            decisions.append("removed")
+            paths.append("removals-only")
+            continue
+        decisions.append("unchanged" if before.decision == after.decision else "changed")
+        added = set(after.required_docs) - set(before.required_docs)
+        removed = set(before.required_docs) - set(after.required_docs)
+        if not added and not removed:
+            paths.append("unchanged")
+        elif added and removed:
+            paths.append("mixed-change")
+        elif added:
+            paths.append("additions-only")
         else:
-            decision_states.append(
-                "unchanged" if before.decision == after.decision else "changed"
-            )
-            before_paths = set(before.required_docs)
-            after_paths = set(after.required_docs)
-            added = after_paths - before_paths
-            removed = before_paths - after_paths
-            if not added and not removed:
-                path_states.append("unchanged")
-            elif added and removed:
-                path_states.append("mixed-change")
-            elif added:
-                path_states.append("additions-only")
-            else:
-                path_states.append("removals-only")
-
+            paths.append("removals-only")
     return DocumentationDrift(
         comparison_state="comparable",
         reason_codes=(),
-        documentation_decision_drift=_count_entries(decision_states),
-        required_documentation_path_set_drift=_count_entries(path_states),
+        documentation_decision_drift=_count_entries(decisions),
+        required_documentation_path_set_drift=_count_entries(paths),
     )
 
 
 def render_documentation_metrics_json(report: DocumentationMetricsReport) -> str:
-    return _encode_canonical(_primitive(report)).decode("utf-8")
+    if not isinstance(report, DocumentationMetricsReport):
+        raise TypeError("report must be a DocumentationMetricsReport")
+    return _encode_canonical(report).decode("utf-8")
 
 
 def render_documentation_metrics_text(report: DocumentationMetricsReport) -> str:
@@ -328,44 +311,58 @@ def render_documentation_metrics_text(report: DocumentationMetricsReport) -> str
         "execution_authorized: false",
         "side_effects_performed: false",
         _DISCLAIMER,
-        "metrics_json: " + json.dumps(_primitive(report.metrics), sort_keys=True, separators=(",", ":")),
+        "metrics_json: "
+        + json.dumps(_primitive(report.metrics), sort_keys=True, separators=(",", ":")),
     ]
     if report.drift is not None:
         lines.append(
             "drift_json: "
             + json.dumps(_primitive(report.drift), sort_keys=True, separators=(",", ":"))
         )
-    payload = ("\n".join(lines) + "\n").encode("utf-8", "strict")
-    if len(payload) > MAX_OUTPUT_BYTES:
+    encoded = ("\n".join(lines) + "\n").encode("utf-8", "strict")
+    if len(encoded) > MAX_OUTPUT_BYTES:
         raise ValueError("text output exceeds 65536 UTF-8 bytes")
-    return payload.decode("utf-8")
+    return encoded.decode("utf-8")
 
 
 def _metrics(observation: DocumentationObservation) -> DocumentationMetrics:
     records = observation.records
-    recognized = sum(item.decision in _RECOGNIZED_DECISIONS for item in records)
-    required = [item for item in records if item.decision == "docs-required"]
-    declared = sum(bool(item.required_docs) for item in required)
-    coverage = [item.coverage_status for item in required]
-    advisory_records = sum(bool(item.advisory_markers) for item in records)
-    advisory_markers = sum(len(item.advisory_markers) for item in records)
-    decision_review = sum(item.decision not in {"docs-required", "docs-not-required"} for item in records)
-    coverage_review = sum(item.coverage_status in {"manual-review", "missing"} for item in required)
-    incomplete_source = 0 if observation.complete else 1
+    recognized = sum(row.decision in _RECOGNIZED_DECISIONS for row in records)
+    required = [row for row in records if row.decision == "docs-required"]
+    advisory_records = sum(bool(row.advisory_markers) for row in records)
     return DocumentationMetrics(
         documentation_decision_coverage=_rate(recognized, len(records)),
-        required_documentation_declaration_coverage=_rate(declared, len(required)),
-        changed_file_coverage_distribution=_count_entries(coverage, names=_COVERAGE_STATES),
+        required_documentation_declaration_coverage=_rate(
+            sum(bool(row.required_docs) for row in required), len(required)
+        ),
+        changed_file_coverage_distribution=_count_entries(
+            [row.coverage_status for row in required], names=_COVERAGE_STATES
+        ),
         advisory_review_burden=(
             CountEntry("records-with-advisory", advisory_records),
-            CountEntry("advisory-marker-count", advisory_markers),
+            CountEntry(
+                "advisory-marker-count",
+                sum(len(row.advisory_markers) for row in records),
+            ),
         ),
         retrieval_completeness_distribution=observation.retrieval_distribution,
         operator_review_demand_counts=(
-            CountEntry("decision-review", decision_review),
-            CountEntry("coverage-review", coverage_review),
+            CountEntry(
+                "decision-review",
+                sum(
+                    row.decision not in {"docs-required", "docs-not-required"}
+                    for row in records
+                ),
+            ),
+            CountEntry(
+                "coverage-review",
+                sum(
+                    row.coverage_status in {"manual-review", "missing"}
+                    for row in required
+                ),
+            ),
             CountEntry("advisory-review", advisory_records),
-            CountEntry("incomplete-source", incomplete_source),
+            CountEntry("incomplete-source", 0 if observation.complete else 1),
         ),
     )
 
@@ -377,13 +374,12 @@ def _rate(numerator: int, denominator: int) -> ExactRate:
         raise ValueError("numerator cannot exceed denominator")
     if denominator == 0:
         return ExactRate(0, 0, 0, None, ("denominator-empty",))
-    reasons = ("limited-observations",) if denominator < 30 else ()
     return ExactRate(
         numerator=numerator,
         denominator=denominator,
         observation_count=denominator,
         basis_points=(numerator * 10_000) // denominator,
-        reasons=reasons,
+        reasons=("limited-observations",) if denominator < 30 else (),
     )
 
 
@@ -393,8 +389,8 @@ def _required_docs_status(report: AcceptanceReport | None) -> str:
     matches = [check for check in report.checks if check.name == "required docs"]
     if len(matches) != 1:
         return "missing"
-    value = matches[0].status.value
-    return value if value in _COVERAGE_STATES else "missing"
+    status = matches[0].status.value
+    return status if status in _COVERAGE_STATES else "missing"
 
 
 def _advisory_markers(report: AcceptanceReport | None) -> tuple[str, ...]:
@@ -406,7 +402,7 @@ def _advisory_markers(report: AcceptanceReport | None) -> tuple[str, ...]:
         "semantic_relevance_verification=human-review-required",
         "authorization=advisory-only-not-readiness-write-or-merge",
     }
-    return tuple(sorted({item for item in report.evidence if item in allowed}))
+    return tuple(sorted(set(report.evidence) & allowed))
 
 
 def _decision_state(value: str | None, reason_codes: Sequence[str]) -> str:
@@ -414,11 +410,11 @@ def _decision_state(value: str | None, reason_codes: Sequence[str]) -> str:
     if normalized in _RECOGNIZED_DECISIONS:
         return normalized
     codes = set(reason_codes)
-    if "metadata-conflicting" in codes or "metadata-duplicated-identical" in codes:
+    if codes & {"metadata-conflicting", "metadata-duplicated-identical"}:
         return "conflicting"
     if "metadata-malformed" in codes:
         return "malformed"
-    if "source-unsupported" in codes or "profile-version-unsupported" in codes:
+    if codes & {"source-unsupported", "profile-version-unsupported"}:
         return "unsupported"
     return "missing"
 
@@ -436,8 +432,16 @@ def _comparison_mismatches(
         ("repository-mismatch", previous.identity.repository, current.identity.repository),
         ("state-mismatch", previous.identity.requested_state, current.identity.requested_state),
         ("window-mismatch", previous.identity.window_identity, current.identity.window_identity),
-        ("schema-mismatch", previous.identity.supported_schema_versions, current.identity.supported_schema_versions),
-        ("evaluator-mismatch", previous.identity.evaluator_revision, current.identity.evaluator_revision),
+        (
+            "schema-mismatch",
+            previous.identity.supported_schema_versions,
+            current.identity.supported_schema_versions,
+        ),
+        (
+            "evaluator-mismatch",
+            previous.identity.evaluator_revision,
+            current.identity.evaluator_revision,
+        ),
     )
     reasons = [name for name, before, after in checks if before != after]
     if not previous.complete or not current.complete:
@@ -448,7 +452,7 @@ def _comparison_mismatches(
 def _count_entries(
     values: Sequence[str], *, names: Sequence[str] | None = None
 ) -> tuple[CountEntry, ...]:
-    counts: dict[str, int] = {name: 0 for name in names or ()}
+    counts = {name: 0 for name in names or ()}
     for value in values:
         counts[value] = counts.get(value, 0) + 1
     return tuple(CountEntry(name, counts[name]) for name in sorted(counts))
@@ -458,6 +462,10 @@ def _requested_state(value: IssueStateFilter) -> str:
     if not isinstance(value, IssueStateFilter):
         raise TypeError("requested_state must be an IssueStateFilter")
     return value.value
+
+
+def _identity_text(value: object, field: str) -> str:
+    return _bounded_text(value, field, MAX_IDENTITY_LENGTH)
 
 
 def _bounded_text(value: object, field: str, maximum: int) -> str:
@@ -487,20 +495,21 @@ def _reject_surrogates(value: str, field: str) -> None:
 
 def _primitive(value: object) -> object:
     if is_dataclass(value):
-        return {field.name: _primitive(getattr(value, field.name)) for field in fields(value)}
-    if isinstance(value, tuple):
-        return [_primitive(item) for item in value]
-    if isinstance(value, list):
+        return {
+            field.name: _primitive(getattr(value, field.name)) for field in fields(value)
+        }
+    if isinstance(value, (tuple, list)):
         return [_primitive(item) for item in value]
     if isinstance(value, dict):
         return {str(key): _primitive(item) for key, item in value.items()}
+    if value is None or isinstance(value, bool):
+        return value
     if isinstance(value, float):
         raise TypeError("floating-point values are not permitted")
     if isinstance(value, int):
-        _bounded_integer(value, "serialized integer", allow_zero=True)
+        return _bounded_integer(value, "serialized integer", allow_zero=True)
     if isinstance(value, str):
         _reject_surrogates(value, "serialized string")
-    if value is None or isinstance(value, (str, int, bool)):
         return value
     raise TypeError(f"unsupported canonical value: {type(value).__name__}")
 
@@ -508,9 +517,8 @@ def _primitive(value: object) -> object:
 def _encode_canonical(payload: object, *, max_bytes: int = MAX_OUTPUT_BYTES) -> bytes:
     if not isinstance(max_bytes, int) or isinstance(max_bytes, bool) or max_bytes <= 0:
         raise ValueError("max_bytes must be a positive integer")
-    normalized = _primitive(payload)
     text = json.dumps(
-        normalized,
+        _primitive(payload),
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
