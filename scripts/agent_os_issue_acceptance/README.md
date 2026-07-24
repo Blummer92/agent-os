@@ -17,6 +17,20 @@ Transport behavior is intentionally strict:
 
 The workflow stays read-only and job-summary-only. It publishes a report summary and never mutates issues, pull requests, labels, readiness state, or external systems.
 
+## Documentation ownership and relevance advisory
+The optional `--documentation-advisory` flag attaches bounded DOC5 evidence to the existing acceptance report before the transport computes `report_sha256`. The repository workflow enables this flag so the job summary identifies the exact augmented report shown to the operator.
+
+The advisory reuses only the canonical `IssueMetadata` projection and the existing `required docs` check. It reports the declared owner value, declared documentation-path count, existing coverage-check status, and whether an expected-change declaration is present. It does not parse registries, infer path ownership, score documentation quality, or decide semantic relevance or sufficiency.
+
+The evidence is advisory only:
+- a declared `owner_agent` is not proof of canonical ownership, write authorization, or responsibility for a path;
+- required-documentation path coverage does not prove relevance, sufficiency, correctness, or quality;
+- ownership, semantic relevance, and sufficiency remain human-review decisions;
+- the adapter never changes acceptance status, readiness, ordinary checks, blockers, manual-review items, exit codes, merge eligibility, or governed fields;
+- no comments, checks, statuses, labels, artifacts, external calls, or persistent writes are introduced;
+- omitting the flag preserves legacy text and JSON output byte-for-byte;
+- `docs-not-required` produces a fresh but value-equivalent report with no advisory evidence.
+
 ## Local acceptance usage
 ```bash
 python -m scripts.agent_os_issue_acceptance.cli \
