@@ -52,10 +52,8 @@ def _state(
     contract_fingerprint: str = CONTRACT_DIGEST,
     worktree_state: WorktreeState = WorktreeState.CLEAN,
     worktree_reason_codes: tuple[str, ...] = (),
-    tested_sha: str | None = None,
 ) -> RepositoryStateEvidence:
-    observed = MERGE_SHA if synthetic else HEAD_SHA
-    resolved_tested = observed if tested_sha is None else tested_sha
+    tested_sha = MERGE_SHA if synthetic else HEAD_SHA
     return RepositoryStateEvidence(
         schema_name=CAPABILITY_EVIDENCE_SCHEMA_NAME,
         evidence_schema_version=CAPABILITY_EVIDENCE_SCHEMA_VERSION,
@@ -69,12 +67,12 @@ def _state(
         head_sha=HEAD_SHA,
         requested_ref="agent/557-gex1e-approved-projection-evidence",
         requested_sha=HEAD_SHA,
-        observed_sha=observed,
-        tested_sha=resolved_tested,
+        observed_sha=tested_sha,
+        tested_sha=tested_sha,
         pushed_sha=HEAD_SHA,
         proposed_pr_sha=HEAD_SHA,
         synthetic_merge_sha=MERGE_SHA if synthetic else None,
-        external_build_sha=resolved_tested,
+        external_build_sha=tested_sha,
         evidence_type=(
             RepositoryEvidenceType.SYNTHETIC_PR_MERGE
             if synthetic
@@ -174,13 +172,13 @@ def _state_mapping(state: RepositoryStateEvidence) -> dict[str, object]:
     payload["repository_identity"] = asdict(state.repository_identity)
     payload["evidence_type"] = state.evidence_type.value
     payload["worktree_state"] = state.worktree_state.value
+    payload.pop("evidence_id", None)
     return payload
 
 
 def test_valid_branch_head_is_accepted_and_preserves_exact_bindings():
     state = _state()
     projection = _projection(state)
-
     result = _consume(
         projection,
         state,
@@ -207,7 +205,7 @@ def test_valid_branch_head_is_accepted_and_preserves_exact_bindings():
     assert result.side_effects_performed is False
 
 
-def test_valid_synthetic_merge_is_accepted_without_substituting_branch_head():
+def test_valid_synthetic_merge_preserves_source_and_tested_sha():
     state = _state(synthetic=True)
     result = _consume(_projection(state), state)
 
@@ -235,7 +233,6 @@ def test_valid_synthetic_merge_is_accepted_without_substituting_branch_head():
 )
 def test_repository_identity_mismatches_fail_closed(expected_repository, reason):
     result = _consume(expected_repository=expected_repository)
-
     assert result.status == "stale"
     assert reason in result.reason_codes
 
@@ -250,20 +247,18 @@ def test_repository_identity_mismatches_fail_closed(expected_repository, reason)
 )
 def test_expected_ref_and_sha_mismatches_are_stale(overrides, reason):
     result = _consume(**overrides)
-
     assert result.status == "stale"
     assert reason in result.reason_codes
 
 
-def test_tested_sha_mismatch_and_evidence_type_substitution_fail_closed():
+def test_tested_sha_and_evidence_type_substitution_fail_closed():
     state = _state(synthetic=True)
-    branch_projection = _projection(
+    projection = _projection(
         state,
         tested_repository_sha=HEAD_SHA,
         repository_evidence_type=RepositoryEvidenceType.BRANCH_HEAD.value,
     )
-
-    result = _consume(branch_projection, state)
+    result = _consume(projection, state)
 
     assert result.status == "stale"
     assert "ref.test-sha-mismatch" in result.reason_codes
@@ -272,24 +267,21 @@ def test_tested_sha_mismatch_and_evidence_type_substitution_fail_closed():
 
 
 @pytest.mark.parametrize(
-    "field",
-    ["expected_projection_id", "expected_approval_id", "expected_proposal_id"],
+    "field", ["expected_projection_id", "expected_approval_id", "expected_proposal_id"]
 )
 def test_projection_approval_and_proposal_identity_mismatches_are_stale(field):
     result = _consume(**{field: "wrong-identity"})
-
     assert result.status == "stale"
     assert "ref.contract-mismatch" in result.reason_codes
 
 
-def test_changed_implementation_contract_and_repository_evidence_id_are_stale():
+def test_contract_and_repository_evidence_identity_changes_are_stale():
     state = _state(contract_fingerprint=OTHER_CONTRACT_DIGEST)
     projection = _projection(
         state,
         implementation_contract_fingerprint=CONTRACT_DIGEST,
         repository_state_evidence_id="f" * 64,
     )
-
     result = _consume(projection, state)
 
     assert result.status == "stale"
@@ -321,15 +313,13 @@ def test_changed_implementation_contract_and_repository_evidence_id_are_stale():
 )
 def test_dirty_and_indeterminate_worktrees_never_accept(state, expected_status, reason):
     result = _consume(_projection(state), state)
-
     assert result.status == expected_status
     assert reason in result.reason_codes
 
 
 def test_missing_tested_sha_never_accepts():
     valid_state = _state()
-    missing_state = _state(tested_sha=None)
-    payload = _state_mapping(missing_state)
+    payload = _state_mapping(valid_state)
     payload["tested_sha"] = None
     payload["external_build_sha"] = None
     result = _consume(_projection(valid_state), payload)
@@ -358,29 +348,26 @@ def test_malformed_unsupported_and_authoritative_projection_inputs_are_invalid(
     projection, reason
 ):
     result = _consume(projection=projection)
-
     assert result.status == "invalid"
     assert reason in result.reason_codes
     assert result.execution_authorized is False
 
 
-def test_unknown_repository_reason_code_and_side_effect_claim_are_invalid():
+def test_unknown_repository_reason_and_side_effect_claim_are_invalid():
     payload = _state_mapping(_state())
     payload["worktree_reason_codes"] = ["worktree.future"]
     payload["side_effects_performed"] = True
-
     result = _consume(state=payload)
 
     assert result.status == "invalid"
     assert "schema.unknown-field" in result.reason_codes
 
 
-def test_expired_projection_at_its_supplied_boundary_is_stale_without_clock_read():
+def test_expired_projection_at_supplied_boundary_is_stale_without_clock_read():
     projection = _projection(
         approval_expires_at="2026-07-24T12:00:00Z",
         projected_at="2026-07-24T12:00:00Z",
     )
-
     result = _consume(projection=projection)
 
     assert result.status == "stale"
