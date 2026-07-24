@@ -1,5 +1,18 @@
 """Pure, offline validation planning and supplied evidence for Agent OS."""
 
+from .advisory_gate import (
+    ADVISORY_EVIDENCE_SCHEMA_NAME,
+    ADVISORY_EVIDENCE_SCHEMA_VERSION,
+    MAX_ADVISORY_COMMAND_RESULTS,
+    MAX_ADVISORY_DETAILS,
+    MAX_ADVISORY_REASON_CODES,
+    MAX_ADVISORY_SERIALIZED_BYTES,
+    MAX_ADVISORY_STRING_LENGTH,
+    AdvisoryEvidenceResult,
+    advisory_evidence_result_id,
+    evaluate_advisory_pre_pr_evidence,
+    serialize_advisory_evidence_result,
+)
 from .evidence_bundle import (
     MAX_BUNDLE_SERIALIZED_BYTES,
     MAX_RESULT_DIAGNOSTIC_LENGTH,
@@ -33,6 +46,13 @@ from .selector import (
 )
 
 __all__ = [
+    "ADVISORY_EVIDENCE_SCHEMA_NAME",
+    "ADVISORY_EVIDENCE_SCHEMA_VERSION",
+    "MAX_ADVISORY_COMMAND_RESULTS",
+    "MAX_ADVISORY_DETAILS",
+    "MAX_ADVISORY_REASON_CODES",
+    "MAX_ADVISORY_SERIALIZED_BYTES",
+    "MAX_ADVISORY_STRING_LENGTH",
     "MAX_BUNDLE_SERIALIZED_BYTES",
     "MAX_PLAN_COMMANDS",
     "MAX_PLAN_REASON_CODES",
@@ -44,15 +64,19 @@ __all__ = [
     "VALIDATION_EVIDENCE_BUNDLE_SCHEMA_VERSION",
     "VALIDATION_PLAN_SCHEMA_NAME",
     "VALIDATION_PLAN_SCHEMA_VERSION",
+    "AdvisoryEvidenceResult",
     "CommandResultEvidence",
     "SelectionInput",
     "SuppliedCommandResult",
     "ValidationEvidenceBundle",
     "ValidationPlan",
+    "advisory_evidence_result_id",
     "build_validation_evidence_bundle",
     "compute_command_set_digest",
+    "evaluate_advisory_pre_pr_evidence",
     "load_rule_map",
     "select_validation_plan",
+    "serialize_advisory_evidence_result",
     "serialize_validation_evidence_bundle",
     "serialize_validation_plan",
     "validate_validation_plan",
