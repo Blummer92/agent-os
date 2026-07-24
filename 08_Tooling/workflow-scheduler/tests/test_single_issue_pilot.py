@@ -1594,6 +1594,197 @@ def test_validation_runs_exactly_once_against_the_verified_plan() -> None:
 
 
 # --------------------------------------------------------------------------
+# Unexpected-error finalization
+# --------------------------------------------------------------------------
+
+
+class _Boom(Exception):
+    """An error type outside the handled adapter exception model."""
+
+
+class _HardStop(BaseException):
+    """Process-level termination, which must never be swallowed."""
+
+
+def _ambiguous_lease() -> FakeLease:
+    class AmbiguousLease(FakeLease):
+        def release(self, grant):
+            self.release_calls.append(grant)
+            return PilotLeaseReleaseObservation(
+                released=False,
+                lease_identity=grant.lease_identity,
+                holder_identity=grant.holder_identity,
+                generation=grant.generation,
+                ambiguous=True,
+                reason="store unreachable",
+            )
+
+    return AmbiguousLease()
+
+
+def test_unexpected_cancellation_probe_error_releases_the_lease_once() -> None:
+    def probe(checkpoint: str) -> bool:
+        if checkpoint == "post-lease":
+            raise _Boom("probe exploded")
+        return False
+
+    lease = FakeLease()
+    workspace = FakeWorkspace()
+    result = _run(cancelled=probe, lease=lease, workspace=workspace)
+
+    assert result.status == "quarantined"
+    assert result.primary_status == "quarantined"
+    assert "pilot.unexpected-error" in result.reason_codes
+    assert result.primary_error is not None
+    assert "_Boom: probe exploded" in result.primary_error
+    assert len(lease.release_calls) == 1
+    assert result.lease_release_attempts == 1
+    # No workspace was ever created, so cleanup is not applicable.
+    assert workspace.create_calls == []
+    assert workspace.cleanup_calls == []
+    assert result.workspace_cleanup_attempts == 0
+
+
+def test_unexpected_workspace_inspection_error_cleans_up_and_releases_once() -> None:
+    lease = FakeLease()
+    workspace = FakeWorkspace(inspect_error=_Boom("inspection exploded"))
+    executor = FakeExecutor()
+
+    result = _run(lease=lease, workspace=workspace, executor=executor)
+
+    assert result.status == "quarantined"
+    assert "pilot.unexpected-error" in result.reason_codes
+    assert result.primary_error is not None
+    assert "_Boom: inspection exploded" in result.primary_error
+    assert len(workspace.cleanup_calls) == 1
+    assert result.workspace_cleanup_attempts == 1
+    assert len(lease.release_calls) == 1
+    assert result.lease_release_attempts == 1
+    assert executor.calls == []
+    assert result.executor_called is False
+
+
+def test_unexpected_validation_error_cleans_up_and_releases_once() -> None:
+    lease = FakeLease()
+    workspace = FakeWorkspace()
+    executor = FakeExecutor()
+
+    result = _run(
+        lease=lease,
+        workspace=workspace,
+        executor=executor,
+        validator=FakeValidator(error=_Boom("runner exploded")),
+    )
+
+    assert result.status == "quarantined"
+    assert "pilot.unexpected-error" in result.reason_codes
+    assert result.primary_error is not None
+    assert "_Boom: runner exploded" in result.primary_error
+    assert result.executor_called is True
+    assert len(workspace.cleanup_calls) == 1
+    assert result.workspace_cleanup_attempts == 1
+    assert len(lease.release_calls) == 1
+    assert result.lease_release_attempts == 1
+
+
+def test_unexpected_teardown_errors_are_still_attempted_exactly_once() -> None:
+    lease = FakeLease(release_error=_Boom("release exploded"))
+    workspace = FakeWorkspace(
+        inspect_error=_Boom("inspection exploded"),
+        cleanup_error=_Boom("cleanup exploded"),
+    )
+
+    result = _run(lease=lease, workspace=workspace)
+
+    assert result.status == "quarantined"
+    assert len(workspace.cleanup_calls) == 1
+    assert result.workspace_cleanup_attempts == 1
+    assert len(lease.release_calls) == 1
+    assert result.lease_release_attempts == 1
+    # Teardown failures are recorded separately and never replace the primary
+    # error that caused the run to abort.
+    assert any("cleanup exploded" in entry for entry in result.cleanup_errors)
+    assert any("release exploded" in entry for entry in result.release_errors)
+    assert result.primary_error is not None
+    assert "inspection exploded" in result.primary_error
+
+
+def test_process_level_termination_propagates_after_teardown() -> None:
+    def probe(checkpoint: str) -> bool:
+        if checkpoint == "post-workspace":
+            raise _HardStop("terminated")
+        return False
+
+    lease = FakeLease()
+    workspace = FakeWorkspace()
+
+    with pytest.raises(_HardStop):
+        _run(cancelled=probe, lease=lease, workspace=workspace)
+
+    assert len(workspace.cleanup_calls) == 1
+    assert len(lease.release_calls) == 1
+
+
+# --------------------------------------------------------------------------
+# Quarantine dominance
+# --------------------------------------------------------------------------
+
+
+def test_needs_decision_after_cleanup_failure_is_quarantined() -> None:
+    workspace = FakeWorkspace(cleanup_error=OSError("device busy"))
+    result = _run(
+        validator=FakeValidator(observation=object()),
+        workspace=workspace,
+    )
+
+    assert result.primary_status == "needs-decision"
+    assert result.status == "quarantined"
+    assert "workspace.filesystem-cleanup-failed" in result.reason_codes
+    assert result.cleanup_errors
+    assert len(workspace.cleanup_calls) == 1
+
+
+def test_needs_decision_after_ambiguous_release_is_quarantined() -> None:
+    lease = _ambiguous_lease()
+    result = _run(validator=FakeValidator(observation=object()), lease=lease)
+
+    assert result.primary_status == "needs-decision"
+    assert result.status == "quarantined"
+    assert "lease.release-ambiguous" in result.reason_codes
+    assert result.release_errors
+    assert len(lease.release_calls) == 1
+
+
+def test_pre_resource_needs_decision_stays_needs_decision() -> None:
+    lease = FakeLease()
+    workspace = FakeWorkspace()
+    result = _run(_pilot_input(schema_version="9.9"), lease=lease, workspace=workspace)
+
+    assert result.primary_status == "needs-decision"
+    assert result.status == "needs-decision"
+    assert lease.acquire_calls == []
+    assert workspace.create_calls == []
+    assert result.lease_acquired is False
+    assert result.workspace_created is False
+    assert result.executor_called is False
+
+
+def test_stale_preflight_stays_stale_when_no_resource_was_acquired() -> None:
+    lease = FakeLease()
+    workspace = FakeWorkspace()
+    result = _run(
+        _pilot_input(source_head_sha="c" * 40), lease=lease, workspace=workspace
+    )
+
+    assert result.primary_status == "stale"
+    assert result.status == "stale"
+    assert lease.acquire_calls == []
+    assert workspace.create_calls == []
+    assert result.lease_acquired is False
+    assert result.workspace_created is False
+
+
+# --------------------------------------------------------------------------
 # Module boundaries
 # --------------------------------------------------------------------------
 

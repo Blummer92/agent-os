@@ -195,6 +195,7 @@ PILOT_REASON_CODES: frozenset[str] = frozenset(
         "validation.failed",
         "validation.error",
         "validation.required-tests-missing",
+        "pilot.unexpected-error",
     }
 )
 
@@ -929,19 +930,38 @@ def run_single_issue_pilot(
 
     state = _PilotState(pilot_input=pilot_input)
     try:
-        _drive_lifecycle(
-            state,
-            lease_adapter=lease,
-            workspace_adapter=workspace,
-            executor=executor,
-            validator=validator,
-            cancelled=cancelled,
-        )
-    except _PilotStop:
-        pass
+        try:
+            _drive_lifecycle(
+                state,
+                lease_adapter=lease,
+                workspace_adapter=workspace,
+                executor=executor,
+                validator=validator,
+                cancelled=cancelled,
+            )
+        except _PilotStop:
+            pass
+        except Exception as exc:  # noqa: BLE001 - converted to fail-closed evidence
+            # An unexpected error from a canonical API or a non-executor
+            # adapter proves nothing, so it becomes deterministic quarantine
+            # evidence rather than escaping past teardown.
+            _record_unexpected_failure(state, exc)
+    finally:
+        # Teardown is reached on every exit path, including a process-level
+        # BaseException, which is re-raised rather than swallowed.
+        _finalize(state, lease_adapter=lease, workspace_adapter=workspace)
 
-    _finalize(state, lease_adapter=lease, workspace_adapter=workspace)
     return _build_result(state)
+
+
+def _record_unexpected_failure(state: _PilotState, exc: BaseException) -> None:
+    """Convert an unexpected lifecycle error into fail-closed evidence."""
+    state.primary_status = "quarantined"
+    state.quarantined = True
+    state.reason_codes.add("pilot.unexpected-error")
+    state.details.append(f"{state.phase}:unexpected-error")
+    if state.primary_error is None:
+        state.primary_error = f"{type(exc).__name__}: {exc}"
 
 
 def _drive_lifecycle(
@@ -1908,10 +1928,29 @@ def _finalize(
     lease_adapter: LeaseAdapter,
     workspace_adapter: WorkspaceAdapter,
 ) -> None:
-    """Attempt cleanup once and release once, preserving the primary outcome."""
+    """Attempt cleanup once and release once, preserving the primary outcome.
+
+    Both attempts are counted before their adapter call, so an unexpected
+    teardown error still leaves each attempted exactly once and can never
+    replace the primary error.
+    """
     before = len(state.cleanup_errors) + len(state.release_errors)
-    _cleanup_workspace(state, workspace_adapter)
-    _release_lease(state, lease_adapter)
+    try:
+        _cleanup_workspace(state, workspace_adapter)
+    except Exception as exc:  # noqa: BLE001 - teardown must not mask the outcome
+        state.cleanup_errors.append(
+            f"workspace-cleanup:unexpected-error:{type(exc).__name__}: {exc}"
+        )
+        state.reason_codes.add("workspace.filesystem-cleanup-failed")
+        state.quarantined = True
+    try:
+        _release_lease(state, lease_adapter)
+    except Exception as exc:  # noqa: BLE001 - teardown must not mask the outcome
+        state.release_errors.append(
+            f"lease-release:unexpected-error:{type(exc).__name__}: {exc}"
+        )
+        state.reason_codes.add("lease.release-ambiguous")
+        state.quarantined = True
     if len(state.cleanup_errors) + len(state.release_errors) != before:
         # Only finalization itself degraded the outcome; otherwise the phase
         # keeps recording where the primary outcome was determined.
@@ -2030,16 +2069,37 @@ def _release_lease(state: _PilotState, lease_adapter: LeaseAdapter) -> None:
 # --------------------------------------------------------------------------
 
 
+def _side_effects_were_possible(state: _PilotState) -> bool:
+    """Report whether the run ever reached a side-effect-capable phase.
+
+    A lease or workspace that exists, an executor that was called, possible
+    partial effects, uncertain termination, or a failed teardown all mean the
+    run left something behind that a human has to look at.
+    """
+    return (
+        state.lease_acquired
+        or state.workspace_created
+        or state.executor_called
+        or state.possible_partial_effects
+        or (state.cancellation_requested and not state.termination_confirmed)
+        or bool(state.cleanup_errors)
+        or bool(state.release_errors)
+    )
+
+
 def _final_status(state: _PilotState) -> PilotStatus:
     """Apply the governed status precedence.
 
-    An ambiguous or unsupported contract and stale canonical evidence are both
-    decided before any lease, workspace, or executor exists, so no teardown
-    evidence can be lost by keeping them. Every other outcome is escalated to
-    ``quarantined`` when partial effects are possible, termination is
-    unconfirmed, the workspace is unsafe after execution, cleanup failed, or
-    release was ambiguous.
+    ``primary_status`` is preserved independently and always reported. Once a
+    side-effect-capable phase has been reached, ``quarantined`` dominates every
+    other final status, including ``needs-decision`` and ``stale`` -- a later
+    cleanup or release failure must never be reported as a decision request. A
+    pre-execution ``needs-decision`` or ``stale`` outcome that acquired no
+    lease, no workspace, and never dispatched the executor is decided before
+    anything could be left behind, so it is kept unchanged.
     """
+    if state.quarantined and _side_effects_were_possible(state):
+        return "quarantined"
     if state.primary_status == "needs-decision":
         return "needs-decision"
     if state.primary_status == "stale":
