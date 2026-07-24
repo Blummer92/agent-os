@@ -19,6 +19,7 @@ GOVERNED_PROJECTION_EVIDENCE_SCHEMA_VERSION = "1.0"
 
 _VERSION_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 _SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _RESULT_STATUSES = frozenset(
     {"accepted", "stale", "blocked", "invalid", "needs-decision"}
 )
@@ -78,6 +79,8 @@ class GovernedProjectionEvidenceResult:
             raise ValueError("accepted evidence cannot carry reason codes")
         if self.status != "accepted" and not reasons:
             raise ValueError("non-accepted evidence requires reason codes")
+        if self.status == "accepted" and not _accepted_bindings_complete(self):
+            raise ValueError("accepted evidence requires complete governed bindings")
         object.__setattr__(self, "reason_codes", reasons)
         object.__setattr__(self, "details", details)
 
@@ -90,12 +93,16 @@ def consume_approved_projection_evidence(
     expected_base_branch: str,
     expected_base_sha: str,
     expected_head_sha: str,
-    expected_projection_id: str | None = None,
-    expected_approval_id: str | None = None,
-    expected_proposal_id: str | None = None,
+    expected_tested_sha: str,
+    expected_projection_id: str,
+    expected_approval_id: str,
+    expected_proposal_id: str,
+    expected_repository_state_evidence_id: str,
+    expected_implementation_contract_fingerprint: str,
+    expected_repository_evidence_type: RepositoryEvidenceType,
     schema_version: str = GOVERNED_PROJECTION_EVIDENCE_SCHEMA_VERSION,
 ) -> GovernedProjectionEvidenceResult:
-    """Validate and compare one projection with one repository-state evidence value."""
+    """Validate one canonical projection against supplied repository-state evidence."""
 
     reasons: set[str] = set()
     details: set[str] = set()
@@ -109,36 +116,43 @@ def consume_approved_projection_evidence(
 
     valid_repository = isinstance(expected_repository, RepositoryIdentity)
     if not valid_repository:
-        reasons.add("schema.unknown-field")
-        details.add("expected-repository:invalid")
-    if not isinstance(expected_base_branch, str) or not expected_base_branch.strip():
-        reasons.add("schema.unknown-field")
-        details.add("expected-base-branch:invalid")
+        _invalid_expectation(reasons, details, "repository")
+    if not _nonempty_string(expected_base_branch):
+        _invalid_expectation(reasons, details, "base-branch")
     if not _is_sha(expected_base_sha):
-        reasons.add("schema.unknown-field")
-        details.add("expected-base-sha:invalid")
+        _invalid_expectation(reasons, details, "base-sha")
     if not _is_sha(expected_head_sha):
-        reasons.add("schema.unknown-field")
-        details.add("expected-head-sha:invalid")
+        _invalid_expectation(reasons, details, "head-sha")
+    if not _is_sha(expected_tested_sha):
+        _invalid_expectation(reasons, details, "tested-sha")
+    for label, value in (
+        ("projection-id", expected_projection_id),
+        ("approval-id", expected_approval_id),
+        ("proposal-id", expected_proposal_id),
+        ("repository-evidence-id", expected_repository_state_evidence_id),
+    ):
+        if not _nonempty_string(value):
+            _invalid_expectation(reasons, details, label)
+    if not _is_fingerprint(expected_implementation_contract_fingerprint):
+        _invalid_expectation(reasons, details, "implementation-contract")
+    if not isinstance(expected_repository_evidence_type, RepositoryEvidenceType):
+        _invalid_expectation(reasons, details, "repository-evidence-type")
 
     verified_projection = _verified_projection(projection, reasons, details)
-    expected_contract = (
-        verified_projection.implementation_contract_fingerprint
-        if verified_projection is not None
-        else None
-    )
     repository_result = validate_repository_state_evidence(
         repository_state_evidence,
         expected_repository=expected_repository if valid_repository else None,
         expected_base_ref=(
-            expected_base_branch
-            if isinstance(expected_base_branch, str) and expected_base_branch.strip()
-            else None
+            expected_base_branch if _nonempty_string(expected_base_branch) else None
         ),
         expected_base_sha=expected_base_sha if _is_sha(expected_base_sha) else None,
         expected_head_sha=expected_head_sha if _is_sha(expected_head_sha) else None,
         expected_requested_sha=expected_head_sha if _is_sha(expected_head_sha) else None,
-        expected_contract_fingerprint=expected_contract,
+        expected_contract_fingerprint=(
+            expected_implementation_contract_fingerprint
+            if _is_fingerprint(expected_implementation_contract_fingerprint)
+            else None
+        ),
     )
     reasons.update(repository_result.reason_codes)
     details.update(f"repository:{item}" for item in repository_result.details)
@@ -149,16 +163,25 @@ def consume_approved_projection_evidence(
             repository_result,
             expected_repository=expected_repository if valid_repository else None,
             expected_base_branch=expected_base_branch,
+            expected_base_sha=expected_base_sha,
             expected_head_sha=expected_head_sha,
+            expected_tested_sha=expected_tested_sha,
             expected_projection_id=expected_projection_id,
             expected_approval_id=expected_approval_id,
             expected_proposal_id=expected_proposal_id,
+            expected_repository_state_evidence_id=(
+                expected_repository_state_evidence_id
+            ),
+            expected_implementation_contract_fingerprint=(
+                expected_implementation_contract_fingerprint
+            ),
+            expected_repository_evidence_type=expected_repository_evidence_type,
             reasons=reasons,
             details=details,
         )
 
     status = _status_for(reasons, repository_result.outcome)
-    return GovernedProjectionEvidenceResult(
+    result = GovernedProjectionEvidenceResult(
         status=status,
         schema_version=GOVERNED_PROJECTION_EVIDENCE_SCHEMA_VERSION,
         projection_id=getattr(verified_projection, "projection_id", None),
@@ -177,12 +200,32 @@ def consume_approved_projection_evidence(
         tested_sha=repository_result.tested_sha,
         repository_evidence_type=repository_result.evidence_type,
         repository_state_evidence_id=repository_result.evidence_id or None,
-        implementation_contract_fingerprint=(
-            repository_result.contract_fingerprint
-        ),
+        implementation_contract_fingerprint=repository_result.contract_fingerprint,
         reason_codes=tuple(reasons),
         details=tuple(details),
     )
+    if status == "accepted" and not _accepted_bindings_complete(result):
+        return GovernedProjectionEvidenceResult(
+            status="invalid",
+            schema_version=GOVERNED_PROJECTION_EVIDENCE_SCHEMA_VERSION,
+            projection_id=result.projection_id,
+            proposal_id=result.proposal_id,
+            approval_id=result.approval_id,
+            repository_identity=result.repository_identity,
+            base_branch=result.base_branch,
+            base_sha=result.base_sha,
+            head_sha=result.head_sha,
+            evaluated_sha=result.evaluated_sha,
+            tested_sha=result.tested_sha,
+            repository_evidence_type=result.repository_evidence_type,
+            repository_state_evidence_id=result.repository_state_evidence_id,
+            implementation_contract_fingerprint=(
+                result.implementation_contract_fingerprint
+            ),
+            reason_codes=("schema.unknown-field",),
+            details=("accepted-bindings:incomplete",),
+        )
+    return result
 
 
 def _verified_projection(
@@ -191,29 +234,13 @@ def _verified_projection(
     details: set[str],
 ):
     from scripts.agent_os_issue_acceptance.approved_execution_projection import (
-        APPROVED_EXECUTION_PROJECTION_SCHEMA_VERSION,
         ApprovedExecutionProjection,
         serialize_approved_execution_projection,
     )
 
     if not isinstance(projection, ApprovedExecutionProjection):
-        if isinstance(projection, Mapping):
-            version = projection.get("schema_version")
-            if not isinstance(version, str) or not _VERSION_RE.fullmatch(version):
-                reasons.add("schema.malformed-version")
-                details.add("projection-schema:malformed")
-            elif version != APPROVED_EXECUTION_PROJECTION_SCHEMA_VERSION:
-                reasons.add("schema.unsupported-version")
-                details.add("projection-schema:unsupported")
-            if projection.get("execution_authorized", False) is not False or projection.get(
-                "side_effects_performed", False
-            ) is not False or projection.get("authoritative", False) is not False:
-                details.add("projection-authority:invalid")
-            reasons.add("schema.unknown-field")
-            details.add("projection:canonical-object-required")
-        else:
-            reasons.add("schema.unknown-field")
-            details.add("projection:invalid-type")
+        reasons.add("schema.unknown-field")
+        details.add("projection:canonical-object-required")
         return None
 
     try:
@@ -258,57 +285,93 @@ def _compare_projection(
     *,
     expected_repository: RepositoryIdentity | None,
     expected_base_branch: str,
+    expected_base_sha: str,
     expected_head_sha: str,
-    expected_projection_id: str | None,
-    expected_approval_id: str | None,
-    expected_proposal_id: str | None,
+    expected_tested_sha: str,
+    expected_projection_id: str,
+    expected_approval_id: str,
+    expected_proposal_id: str,
+    expected_repository_state_evidence_id: str,
+    expected_implementation_contract_fingerprint: str,
+    expected_repository_evidence_type: RepositoryEvidenceType,
     reasons: set[str],
     details: set[str],
 ) -> None:
     if expected_repository is not None:
         expected_name = f"{expected_repository.owner}/{expected_repository.repository}"
         if projection.repository.lower() != expected_name:
-            reasons.add("repo.identity-mismatch")
-            details.add("projection-repository:mismatch")
+            _stale(reasons, details, "repo.identity-mismatch", "projection-repository")
     if projection.base_branch != expected_base_branch:
-        reasons.add("ref.base-mismatch")
-        details.add("projection-base-branch:mismatch")
-    if projection.evaluated_repository_sha != expected_head_sha:
-        reasons.add("ref.branch-moved")
-        details.add("projection-evaluated-sha:mismatch")
+        _stale(reasons, details, "ref.base-mismatch", "projection-base-branch")
+    if projection.evaluated_repository_sha != expected_base_sha:
+        _stale(reasons, details, "ref.base-mismatch", "projection-evaluated-sha")
     if (
-        repository_result.head_sha is not None
-        and projection.evaluated_repository_sha != repository_result.head_sha
+        repository_result.base_sha is not None
+        and projection.evaluated_repository_sha != repository_result.base_sha
     ):
-        reasons.add("ref.branch-moved")
-        details.add("projection-repository-head:mismatch")
-    if projection.tested_repository_sha != repository_result.tested_sha:
-        reasons.add("ref.test-sha-mismatch")
-        details.add("projection-tested-sha:mismatch")
-    if (
-        repository_result.evidence_type is None
-        or projection.repository_evidence_type != repository_result.evidence_type.value
-    ):
-        reasons.add("ref.test-sha-mismatch")
-        details.add("projection-evidence-type:mismatch")
-    if projection.repository_state_evidence_id != repository_result.evidence_id:
-        reasons.add("ref.contract-mismatch")
-        details.add("projection-repository-evidence-id:mismatch")
-    if (
-        projection.implementation_contract_fingerprint
-        != repository_result.contract_fingerprint
-    ):
-        reasons.add("ref.contract-mismatch")
-        details.add("projection-implementation-contract:mismatch")
+        _stale(reasons, details, "ref.base-mismatch", "projection-repository-base")
+
+    if repository_result.head_sha != expected_head_sha:
+        _stale(reasons, details, "ref.branch-moved", "repository-head-sha")
+    if projection.tested_repository_sha != expected_tested_sha:
+        _stale(reasons, details, "ref.test-sha-mismatch", "projection-tested-sha")
+    if repository_result.tested_sha != expected_tested_sha:
+        _stale(reasons, details, "ref.test-sha-mismatch", "repository-tested-sha")
+
+    expected_type_value = (
+        expected_repository_evidence_type.value
+        if isinstance(expected_repository_evidence_type, RepositoryEvidenceType)
+        else None
+    )
+    if projection.repository_evidence_type != expected_type_value:
+        _stale(reasons, details, "ref.test-sha-mismatch", "projection-evidence-type")
+    if repository_result.evidence_type != expected_repository_evidence_type:
+        _stale(reasons, details, "ref.test-sha-mismatch", "repository-evidence-type")
 
     for expected, actual, label in (
         (expected_projection_id, projection.projection_id, "projection-id"),
         (expected_approval_id, projection.approval_id, "approval-id"),
         (expected_proposal_id, projection.proposal_id, "proposal-id"),
+        (
+            expected_repository_state_evidence_id,
+            projection.repository_state_evidence_id,
+            "projection-repository-evidence-id",
+        ),
+        (
+            expected_repository_state_evidence_id,
+            repository_result.evidence_id,
+            "repository-evidence-id",
+        ),
+        (
+            expected_implementation_contract_fingerprint,
+            projection.implementation_contract_fingerprint,
+            "projection-implementation-contract",
+        ),
+        (
+            expected_implementation_contract_fingerprint,
+            repository_result.contract_fingerprint,
+            "repository-implementation-contract",
+        ),
     ):
-        if expected is not None and expected != actual:
-            reasons.add("ref.contract-mismatch")
-            details.add(f"{label}:mismatch")
+        if expected != actual:
+            _stale(reasons, details, "ref.contract-mismatch", label)
+
+
+def _accepted_bindings_complete(result: GovernedProjectionEvidenceResult) -> bool:
+    return (
+        result.repository_identity is not None
+        and _nonempty_string(result.projection_id)
+        and _nonempty_string(result.proposal_id)
+        and _nonempty_string(result.approval_id)
+        and _nonempty_string(result.base_branch)
+        and _is_sha(result.base_sha)
+        and _is_sha(result.head_sha)
+        and _is_sha(result.evaluated_sha)
+        and _is_sha(result.tested_sha)
+        and isinstance(result.repository_evidence_type, RepositoryEvidenceType)
+        and _nonempty_string(result.repository_state_evidence_id)
+        and _is_fingerprint(result.implementation_contract_fingerprint)
+    )
 
 
 def _status_for(reasons: set[str], repository_outcome: str) -> str:
@@ -323,8 +386,30 @@ def _status_for(reasons: set[str], repository_outcome: str) -> str:
     return "stale"
 
 
+def _invalid_expectation(
+    reasons: set[str], details: set[str], label: str
+) -> None:
+    reasons.add("schema.unknown-field")
+    details.add(f"expected-{label}:invalid")
+
+
+def _stale(
+    reasons: set[str], details: set[str], reason: str, label: str
+) -> None:
+    reasons.add(reason)
+    details.add(f"{label}:mismatch")
+
+
+def _nonempty_string(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
 def _is_sha(value: object) -> bool:
     return isinstance(value, str) and _SHA40_RE.fullmatch(value) is not None
+
+
+def _is_fingerprint(value: object) -> bool:
+    return isinstance(value, str) and _SHA256_RE.fullmatch(value) is not None
 
 
 def _timestamp(value: object) -> datetime | None:
