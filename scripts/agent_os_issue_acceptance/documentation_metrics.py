@@ -8,6 +8,7 @@ from typing import Mapping, Sequence
 from .issue_scanner import IssueScanResult, IssueStateFilter, RetrievalFinding
 from .models import AcceptanceReport
 from .parse_issue import project_issue_metadata, scan_issue_metadata
+from .path_contract import DeclaredPathError, normalize_declared_pattern
 
 CONTRACT_ID = "agent-os-documentation-metrics/v1"
 MAX_RECORDS = 500
@@ -170,30 +171,25 @@ def build_documentation_observation(
                 expected_revision=source_record.source_revision,
             )
         )
-        source_codes = tuple(sorted(_metadata_reason_codes(metadata.manual_review)))
-        incomplete_codes = set(source_codes) & _INCOMPLETE_CODES
+        source_codes = set(_metadata_reason_codes(metadata.manual_review))
+        required_docs, path_invalid = _normalized_required_docs(metadata.required_docs)
+        if path_invalid:
+            source_codes.add("required-doc-invalid")
+        incomplete_codes = source_codes & _INCOMPLETE_CODES
         if incomplete_codes:
             source_complete = False
             retrieval_codes.extend(sorted(incomplete_codes))
         rows.append(
             DocumentationMetricRecord(
                 issue_number=_bounded_integer(source_record.issue_number, "issue_number"),
-                decision=_decision_state(metadata.documentation_impact, source_codes),
-                required_docs=tuple(
-                    sorted(
-                        {
-                            _identity_text(path.strip(), "required_doc")
-                            for path in metadata.required_docs
-                            if path.strip()
-                        }
-                    )
-                ),
+                decision=_decision_state(metadata.documentation_impact, tuple(source_codes)),
+                required_docs=required_docs,
                 coverage_status=_required_docs_status(report),
                 advisory_markers=_advisory_markers(report),
                 source_revision=_identity_text(
                     source_record.source_revision, "source_revision"
                 ),
-                source_reason_codes=source_codes,
+                source_reason_codes=tuple(sorted(source_codes)),
             )
         )
 
@@ -417,6 +413,17 @@ def _decision_state(value: str | None, reason_codes: Sequence[str]) -> str:
     if codes & {"source-unsupported", "profile-version-unsupported"}:
         return "unsupported"
     return "missing"
+
+
+def _normalized_required_docs(values: Sequence[str]) -> tuple[tuple[str, ...], bool]:
+    normalized: set[str] = set()
+    invalid = False
+    for value in values:
+        try:
+            normalized.add(normalize_declared_pattern(value))
+        except DeclaredPathError:
+            invalid = True
+    return tuple(sorted(normalized)), invalid
 
 
 def _metadata_reason_codes(values: Sequence[str]) -> set[str]:
