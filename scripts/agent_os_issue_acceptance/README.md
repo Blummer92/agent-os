@@ -18,8 +18,7 @@ Transport behavior is intentionally strict:
 The workflow stays read-only and job-summary-only. It publishes a report summary and never mutates issues, pull requests, labels, readiness state, or external systems.
 
 ## Documentation ownership and relevance advisory
-The optional `--documentation-advisory` flag attaches bounded DOC5 evidence before transport hashing by reusing the canonical `IssueMetadata` projection and existing `required docs` check; the workflow enables it while remaining read-only and job-summary-only.
-The adapter reports only a bounded declared-owner token, documentation-path count, existing coverage status, and expected-change presence. Ownership, relevance, sufficiency, and authorization remain human-review decisions; it never parses registries, infers path ownership, scores quality, changes acceptance/readiness/checks/blockers/exit codes/merge eligibility, or writes externally. Omitting the flag preserves legacy output byte-for-byte, and `docs-not-required` returns a fresh value-equivalent report without advisory evidence.
+The optional `--documentation-advisory` flag attaches bounded DOC5 evidence before transport hashing by reusing the canonical `IssueMetadata` projection and existing `required docs` check; the workflow enables it while remaining read-only and job-summary-only. The adapter reports only a bounded declared-owner token, documentation-path count, existing coverage status, and expected-change presence. Ownership, relevance, sufficiency, and authorization remain human-review decisions; it never parses registries, infers path ownership, scores quality, changes acceptance/readiness/checks/blockers/exit codes/merge eligibility, or writes externally. Omitting the flag preserves legacy output byte-for-byte, and `docs-not-required` returns a fresh value-equivalent report without advisory evidence.
 
 ## Local acceptance usage
 ```bash
@@ -44,6 +43,7 @@ Use `--format json` for stable machine-readable report fields.
 | Reporting | `acceptance_report_transport.py`, `documentation_advisory.py`, `documentation_gap_report.py`, `documentation_metrics.py`, `sprint_dashboard.py` |
 
 `documentation_metrics.py` is bounded, pure-local, supplied-evidence-only, deterministic, report-only, non-scheduling, non-retaining, and non-authoritative; this map creates no API or physical split.
+
 ## Permitted dependency direction
 ```text
 IssuePlan scanner -> acceptance/readiness and current-state evidence
