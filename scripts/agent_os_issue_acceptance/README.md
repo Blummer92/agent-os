@@ -44,7 +44,6 @@ Use `--format json` for stable machine-readable report fields.
 | Reporting | `acceptance_report_transport.py`, `documentation_advisory.py`, `documentation_gap_report.py`, `documentation_metrics.py`, `sprint_dashboard.py` |
 
 `documentation_metrics.py` is bounded, pure-local, supplied-evidence-only, deterministic, report-only, non-scheduling, non-retaining, and non-authoritative; this map creates no API or physical split.
-
 ## Permitted dependency direction
 ```text
 IssuePlan scanner -> acceptance/readiness and current-state evidence
