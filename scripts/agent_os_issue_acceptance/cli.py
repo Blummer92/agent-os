@@ -9,12 +9,14 @@ from .acceptance_report_transport import (
     build_acceptance_report_transport,
     render_transport_summary,
 )
+from .documentation_advisory import attach_documentation_advisory
 from .legacy_preflight import (
     evaluate_legacy_preflight,
     legacy_preflight_to_dict,
     render_legacy_preflight,
 )
 from .models import AcceptanceInput, LinkedIssueParseStatus
+from .parse_issue import project_issue_metadata, scan_issue_metadata
 from .policy import evaluate_acceptance
 from .report import exit_code_for, render_report
 
@@ -52,6 +54,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Optional path to a bounded read-only legacy issue snapshot JSON file.",
     )
     parser.add_argument("--format", choices=("text", "json"), default="text")
+    parser.add_argument(
+        "--documentation-advisory",
+        action="store_true",
+        help="Attach advisory-only documentation ownership and relevance evidence.",
+    )
     parser.add_argument("--transport-repository", dest="transport_repository")
     parser.add_argument("--transport-issue-number", type=int, dest="transport_issue_number")
     parser.add_argument("--transport-issue-body", dest="transport_issue_body")
@@ -122,15 +129,19 @@ def main(argv: list[str] | None = None) -> int:
     if missing:
         parser.error(f"the following arguments are required: {', '.join(missing)}")
 
+    issue_body = _read_text(args.issue)
     report = evaluate_acceptance(
         AcceptanceInput(
-            issue_body=_read_text(args.issue),
+            issue_body=issue_body,
             pr_body=_read_text(args.pr_body),
             changed_files=_read_changed_files(args.changed_files),
             diff_text=_read_text(args.diff),
         ),
         pr_title=args.pr_title,
     )
+    if args.documentation_advisory:
+        metadata = project_issue_metadata(scan_issue_metadata(issue_body))
+        report = attach_documentation_advisory(report, metadata)
 
     transport_payload = None
     if any(
