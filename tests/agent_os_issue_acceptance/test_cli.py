@@ -4,9 +4,14 @@ from pathlib import Path
 import pytest
 
 from scripts.agent_os_issue_acceptance.cli import _report_to_dict, main
-from scripts.agent_os_issue_acceptance.models import AcceptanceInput
+from scripts.agent_os_issue_acceptance.models import (
+    AcceptanceInput,
+    AcceptanceReport,
+    IssueMetadata,
+    Status,
+)
 from scripts.agent_os_issue_acceptance.policy import evaluate_acceptance
-from scripts.agent_os_issue_acceptance.report import exit_code_for, render_report
+from scripts.agent_os_issue_acceptance.report import render_report
 
 
 def test_transport_arguments_are_optional_when_absent(tmp_path, capsys):
@@ -36,43 +41,68 @@ def test_transport_arguments_are_optional_when_absent(tmp_path, capsys):
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-def _fixture_changed_files() -> list[str]:
-    return [
-        line.strip()
-        for line in (FIXTURES / "changed_files_valid.txt").read_text().splitlines()
-        if line.strip()
-    ]
+def test_documentation_advisory_flag_is_opt_in(monkeypatch, tmp_path, capsys):
+    issue = tmp_path / "issue.md"
+    issue.write_text("issue", encoding="utf-8")
+    pr_body = tmp_path / "pr.md"
+    pr_body.write_text("Closes #553", encoding="utf-8")
+    changed_files = tmp_path / "files.txt"
+    changed_files.write_text("scripts/example.py\n", encoding="utf-8")
 
+    base_report = AcceptanceReport(
+        linked_issue=553,
+        overall_status=Status.PASS,
+        checks=[],
+        evidence=["base-evidence"],
+    )
+    advisory_report = AcceptanceReport(
+        linked_issue=553,
+        overall_status=Status.PASS,
+        checks=[],
+        evidence=["base-evidence", "documentation_advisory=present"],
+    )
+    metadata = IssueMetadata(present=True, documentation_impact="docs-required")
+    calls = []
 
-def _fixture_cli_args() -> list[str]:
-    return [
-        "--issue",
-        str(FIXTURES / "issue_valid.md"),
-        "--pr-body",
-        str(FIXTURES / "pr_body_valid.md"),
-        "--changed-files",
-        str(FIXTURES / "changed_files_valid.txt"),
-        "--diff",
-        str(FIXTURES / "diff_clean.patch"),
-    ]
-
-
-def test_cli_default_output_is_unchanged_without_advisory_flag(capsys):
-    report = evaluate_acceptance(
-        AcceptanceInput(
-            issue_body=(FIXTURES / "issue_valid.md").read_text(),
-            pr_body=(FIXTURES / "pr_body_valid.md").read_text(),
-            changed_files=_fixture_changed_files(),
-            diff_text=(FIXTURES / "diff_clean.patch").read_text(),
-        )
+    monkeypatch.setattr(
+        "scripts.agent_os_issue_acceptance.cli.evaluate_acceptance",
+        lambda *_args, **_kwargs: base_report,
+    )
+    monkeypatch.setattr(
+        "scripts.agent_os_issue_acceptance.cli.scan_issue_metadata",
+        lambda body: (calls.append(("scan", body)), "scan-result")[1],
+    )
+    monkeypatch.setattr(
+        "scripts.agent_os_issue_acceptance.cli.project_issue_metadata",
+        lambda scan: (calls.append(("project", scan)), metadata)[1],
+    )
+    monkeypatch.setattr(
+        "scripts.agent_os_issue_acceptance.cli.attach_documentation_advisory",
+        lambda report, projected: (
+            calls.append(("attach", report, projected)),
+            advisory_report,
+        )[1],
     )
 
-    result = main(_fixture_cli_args())
+    args = [
+        "--issue",
+        str(issue),
+        "--pr-body",
+        str(pr_body),
+        "--changed-files",
+        str(changed_files),
+    ]
+    assert main(args) == 0
+    assert capsys.readouterr().out == render_report(base_report)
+    assert calls == []
 
-    assert result == exit_code_for(report.overall_status)
-    output = capsys.readouterr().out
-    assert output == render_report(report)
-    assert "documentation_advisory=present" not in output
+    assert main([*args, "--documentation-advisory"]) == 0
+    assert capsys.readouterr().out == render_report(advisory_report)
+    assert calls == [
+        ("scan", "issue"),
+        ("project", "scan-result"),
+        ("attach", base_report, metadata),
+    ]
 
 
 def test_json_report_distinguishes_manual_review_from_none():
@@ -83,7 +113,11 @@ def test_json_report_distinguishes_manual_review_from_none():
         AcceptanceInput(
             issue_body=(FIXTURES / "issue_valid.md").read_text(),
             pr_body=body,
-            changed_files=_fixture_changed_files(),
+            changed_files=[
+                line.strip()
+                for line in (FIXTURES / "changed_files_valid.txt").read_text().splitlines()
+                if line.strip()
+            ],
             diff_text=(FIXTURES / "diff_clean.patch").read_text(),
         )
     )
