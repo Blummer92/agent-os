@@ -4,11 +4,9 @@ Status: governed operator guidance for GEX4B
 Parent: #573 · Implementation: #574 / PR #576 / `974866e8c6be7418b931aa33e0420d9ce0d1d98b` · Publication: #240 · Gate: #560
 
 ## Purpose and authority
-
 This guide governs review of GEX4A advisory-render evidence during a bounded shadow pilot. The pilot reviews evidence only; it does not execute commands, publish GitHub state, authorize implementation or merge, prove freshness or provenance, verify attestation, or change Scheduler concurrency. Canonical code: `scripts/agent_os_remote_validation/advisory_render.py`.
 
 ## Canonical API and workflow
-
 Public API: `AdvisoryRenderResult`, `render_advisory_evidence(...)`, `observe_advisory_evidence_shadow(...)`, `serialize_advisory_render_result(...)`, and `advisory_render_result_id(...)`.
 
 `render_advisory_evidence(...)` accepts one canonical `AdvisoryEvidenceResult`, not mappings, logs, event payloads, free-form JSON, or live responses. It serializes through `serialize_advisory_evidence_result(...)`, recomputes identity with `advisory_evidence_result_id(...)`, and rejects disagreement.
@@ -24,7 +22,6 @@ Public API: `AdvisoryRenderResult`, `render_advisory_evidence(...)`, `observe_ad
 `observe_advisory_evidence_shadow(...)` accepts a tuple, rejects duplicate advisory-result identities, and returns deterministic in-memory observations. It is not a live repository observation or execution result.
 
 ## Fields, ordering, and SHA roles
-
 The render preserves advisory ID/status; repository/PR identity; base branch; base, source-head, and tested SHAs; plan/bundle IDs; runner/invocation IDs; ordered command-result IDs/statuses; bounded reasons; and bounded details. Do not reorder result IDs or statuses.
 
 - **Base SHA:** target-branch evaluation base.
@@ -34,7 +31,6 @@ The render preserves advisory ID/status; repository/PR identity; base branch; ba
 A passing status never repairs a SHA-role mismatch.
 
 ## Status interpretation
-
 | Status | Required interpretation |
 |---|---|
 | `passed` | Bound canonical checks passed; nothing further is authorized. |
@@ -47,7 +43,6 @@ A passing status never repairs a SHA-role mismatch.
 Operators must not promote, downgrade, combine, or reinterpret these statuses.
 
 ## Exact non-authority notices
-
 ```text
 advisory_only=true
 authoritative=false
@@ -59,11 +54,9 @@ freshness_proven=false
 provenance_verified=false
 side_effects_performed=false
 ```
-
 The notices may not be deleted, reordered, rewritten, or treated as optional. Hashes and semantic IDs bind content only; they do not prove producer identity, trusted environment, currentness, authentication, provenance, attestation, implementation authorization, or merge authorization. Timestamps do not prove freshness.
 
 ## Recording, publication, and storage
-
 Record only evidence required by the governed handoff: advisory/render IDs; status; repository/PR identity; three SHA roles; plan, bundle, runner, and invocation IDs; ordered result IDs/statuses; bounded reasons; independently verified workflow run IDs; and notice integrity.
 
 Do not record raw diagnostics, stdout/stderr, environment data, headers, tokens, credentials, unrelated logs, or publication prose.
@@ -73,7 +66,6 @@ Issue #240 solely owns Cloud Build routing and GitHub publication, including bui
 The pilot introduces no database, cache, archive, log store, or second source of truth. Keep only minimal evidence in the authorized GitHub issue or PR.
 
 ## Stop, escalation, and rollback
-
 Route to `status:needs-decision` when identity cannot be verified; repository/PR/SHA identity is stale, mixed, or unclear; ordered results disagree; reclassification is requested; a notice changes; diagnostics, secrets, environment data, or publication prose appear; live reads, writes, persistence, execution, Cloud Build, or Scheduler are required; work overlaps #240; #560's contract must change; or concurrency must exceed `0`.
 
 On stop, preserve exact IDs, record the bounded mismatch, halt publication/execution/merge/Scheduler progression, notify the issue owner, and create a focused follow-up only for a canonical API or governance decision.
@@ -81,9 +73,8 @@ On stop, preserve exact IDs, record the bounded mismatch, halt publication/execu
 For documentation defects, revert the guide merge. For renderer defects, revert GEX4A and keep #560 blocked. Rollback authorizes neither retry nor concurrency increase.
 
 ## Evidence checklist before rerunning #560
-
 - [ ] #574 / PR #576 is merged at `974866e8c6be7418b931aa33e0420d9ce0d1d98b` or a verified descendant.
-- [ ] Input is a canonical `AdvisoryEvidenceResult` and its serializer and result-ID API agree.
+- [ ] Input is canonical and its serializer and result-ID API agree.
 - [ ] The render serializer or render-ID API verifies the render ID.
 - [ ] Status is one of the six canonical values and is not reclassified.
 - [ ] Repository and PR identities match the intended candidate.
