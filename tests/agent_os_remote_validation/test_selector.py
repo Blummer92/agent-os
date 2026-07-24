@@ -2,15 +2,21 @@ from __future__ import annotations
 
 import copy
 import json
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
 
 import pytest
 
 from scripts.agent_os_remote_validation import (
+    MAX_PLAN_COMMANDS,
+    MAX_PLAN_STRING_LENGTH,
     SelectionInput,
+    compute_command_set_digest,
     load_rule_map,
     select_validation_plan,
+    serialize_validation_plan,
+    validate_validation_plan,
+    validation_plan_id,
 )
 
 BASE_SHA = "a" * 40
@@ -46,6 +52,7 @@ def test_documentation_only_is_static_and_zero_build() -> None:
     assert plan.remote_build_required is False
     assert plan.execution_authorized is False
     assert plan.side_effects_performed is False
+    assert validate_validation_plan(plan) == ()
 
 
 def test_mapped_package_is_focused() -> None:
@@ -56,6 +63,7 @@ def test_mapped_package_is_focused() -> None:
     )
     assert plan.reason_codes == ("profile.focused-package",)
     assert plan.remote_build_required is True
+    assert validate_validation_plan(plan) == ()
 
 
 def test_workflow_change_is_aggregate() -> None:
@@ -63,6 +71,7 @@ def test_workflow_change_is_aggregate() -> None:
     assert plan.profile == "aggregate"
     assert plan.commands == ("python -m pytest",)
     assert plan.reason_codes == ("profile.aggregate-configuration",)
+    assert validate_validation_plan(plan) == ()
 
 
 def test_unknown_executable_fails_safe_to_aggregate() -> None:
@@ -78,6 +87,7 @@ def test_ambiguous_non_executable_routes_to_manual_review() -> None:
     assert plan.profile == "manual-review"
     assert plan.commands == ()
     assert plan.command_set_digest == "unavailable"
+    assert validate_validation_plan(plan) == ()
 
 
 @pytest.mark.parametrize(
@@ -99,6 +109,7 @@ def test_invalid_identity_fails_closed(
     assert plan.profile == "manual-review"
     assert plan.reason_codes == (reason,)
     assert plan.remote_build_required is False
+    assert validate_validation_plan(plan) == ()
 
 
 @pytest.mark.parametrize(
@@ -147,6 +158,129 @@ def test_rule_or_command_change_changes_digest() -> None:
     assert original.command_set_digest != changed.command_set_digest
 
 
+def test_public_digest_matches_selector_and_binds_exact_order() -> None:
+    plan = _select(_input(_fixtures()["focused"]))
+    assert plan.command_set_digest == compute_command_set_digest(
+        plan.selector_version, plan.commands
+    )
+    assert compute_command_set_digest("1.0.0", ("one", "two")) != (
+        compute_command_set_digest("1.0.0", ("two", "one"))
+    )
+
+
+@pytest.mark.parametrize(
+    "changed,reason",
+    [
+        ({"command_set_digest": "0" * 64}, "plan.command-digest"),
+        ({"commands": ("one", "one")}, "plan.commands-duplicate"),
+        ({"commands": ()}, "plan.executable-commands"),
+        ({"remote_build_required": False}, "plan.executable-remote-build"),
+        ({"execution_authorized": True}, "plan.execution-authorized"),
+        ({"side_effects_performed": True}, "plan.side-effects"),
+        ({"reason_codes": ("rule.ambiguous",)}, "plan.reason-profile"),
+    ],
+)
+def test_plan_mutations_fail_closed(changed: dict[str, object], reason: str) -> None:
+    plan = _select(_input(_fixtures()["focused"]))
+    mutated = replace(plan, **changed)
+    assert reason in validate_validation_plan(mutated)
+
+
+def test_command_mutation_and_reordering_fail_digest_validation() -> None:
+    plan = _select(_input(_fixtures()["focused"]))
+    mutated = replace(plan, commands=(plan.commands[0] + " -q",))
+    assert "plan.command-digest" in validate_validation_plan(mutated)
+
+    aggregate = replace(
+        plan,
+        commands=("first", "second"),
+        command_set_digest=compute_command_set_digest(
+            plan.selector_version, ("first", "second")
+        ),
+    )
+    reordered = replace(aggregate, commands=("second", "first"))
+    assert "plan.command-digest" in validate_validation_plan(reordered)
+
+
+def test_static_and_manual_review_invariants_fail_closed() -> None:
+    static = _select(_input(_fixtures()["static"]))
+    assert "plan.static-commands" in validate_validation_plan(
+        replace(static, commands=("echo unsafe",))
+    )
+
+    manual = _select(_input(_fixtures()["ambiguous"]))
+    assert "plan.manual-review-digest" in validate_validation_plan(
+        replace(manual, command_set_digest="0" * 64)
+    )
+
+
+def test_bounds_and_control_characters_fail_closed() -> None:
+    plan = _select(_input(_fixtures()["focused"]))
+    too_many = tuple(f"command-{index}" for index in range(MAX_PLAN_COMMANDS + 1))
+    assert "plan.commands-limit" in validate_validation_plan(
+        replace(
+            plan,
+            commands=too_many,
+            command_set_digest=compute_command_set_digest(plan.selector_version, too_many),
+        )
+    )
+    assert "plan.command-invalid" in validate_validation_plan(
+        replace(
+            plan,
+            commands=("x" * (MAX_PLAN_STRING_LENGTH + 1),),
+            command_set_digest=compute_command_set_digest(
+                plan.selector_version, ("x" * (MAX_PLAN_STRING_LENGTH + 1),)
+            ),
+        )
+    )
+    assert "plan.command-invalid" in validate_validation_plan(
+        replace(
+            plan,
+            commands=("echo\x00secret",),
+            command_set_digest=compute_command_set_digest(
+                plan.selector_version, ("echo\x00secret",)
+            ),
+        )
+    )
+
+
+def test_canonical_serialization_and_plan_id_are_deterministic() -> None:
+    plan = _select(_input(_fixtures()["focused"]))
+    first = serialize_validation_plan(plan)
+    second = serialize_validation_plan(plan)
+    assert first == second
+    assert json.dumps(first, sort_keys=True, separators=(",", ":")) == json.dumps(
+        second, sort_keys=True, separators=(",", ":")
+    )
+    assert validation_plan_id(plan) == validation_plan_id(plan)
+    assert validation_plan_id(plan).startswith("validation-plan:")
+
+
+def test_semantic_change_changes_plan_id() -> None:
+    plan = _select(_input(_fixtures()["focused"]))
+    changed_commands = (plan.commands[0] + " -q",)
+    changed = replace(
+        plan,
+        commands=changed_commands,
+        command_set_digest=compute_command_set_digest(
+            plan.selector_version, changed_commands
+        ),
+    )
+    assert validate_validation_plan(changed) == ()
+    assert validation_plan_id(plan) != validation_plan_id(changed)
+
+
+def test_invalid_plan_cannot_be_serialized_or_identified() -> None:
+    plan = replace(
+        _select(_input(_fixtures()["focused"])),
+        command_set_digest="0" * 64,
+    )
+    with pytest.raises(ValueError, match="invalid validation plan"):
+        serialize_validation_plan(plan)
+    with pytest.raises(ValueError, match="invalid validation plan"):
+        validation_plan_id(plan)
+
+
 def test_selection_performs_no_file_io(monkeypatch: pytest.MonkeyPatch) -> None:
     value = _input(_fixtures()["focused"])
 
@@ -156,6 +290,7 @@ def test_selection_performs_no_file_io(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(Path, "read_text", fail_read)
     plan = select_validation_plan(value, RULES)
     assert plan.profile == "focused"
+    assert validate_validation_plan(plan) == ()
 
 
 def test_plan_is_immutable() -> None:

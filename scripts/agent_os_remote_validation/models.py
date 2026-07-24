@@ -3,6 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+VALIDATION_PLAN_SCHEMA_NAME = "agent-os-validation-plan"
+VALIDATION_PLAN_SCHEMA_VERSION = "1.0"
+MAX_PLAN_STRING_LENGTH = 4096
+MAX_PLAN_COMMANDS = 64
+MAX_PLAN_REASON_CODES = 32
+MAX_PLAN_SERIALIZED_BYTES = 262_144
+
 ValidationProfile = Literal["static", "focused", "aggregate", "manual-review"]
 
 
