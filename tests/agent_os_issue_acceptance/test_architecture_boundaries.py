@@ -17,7 +17,6 @@ DOMAIN_RULES: tuple[tuple[str, frozenset[str], tuple[str, ...]], ...] = (
         "acceptance",
         frozenset(
             {
-                "cli",
                 "legacy_preflight",
                 "linked_issue",
                 "metadata_validation",
@@ -62,6 +61,7 @@ DOMAIN_RULES: tuple[tuple[str, frozenset[str], tuple[str, ...]], ...] = (
         frozenset(
             {
                 "acceptance_report_transport",
+                "cli",
                 "documentation_advisory",
                 "documentation_gap_report",
                 "sprint_dashboard",
@@ -181,10 +181,7 @@ EXPECTED_PUBLIC_FACADE = (
 
 
 def _production_modules() -> dict[str, Path]:
-    return {
-        path.stem: path
-        for path in sorted(PACKAGE_ROOT.glob("*.py"))
-    }
+    return {path.stem: path for path in sorted(PACKAGE_ROOT.glob("*.py"))}
 
 
 def _domain_matches(module_name: str) -> list[str]:
