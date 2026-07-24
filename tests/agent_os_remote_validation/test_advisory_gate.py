@@ -90,6 +90,12 @@ def _plan(profile: str = "focused") -> ValidationPlan:
         if profile == "manual-review"
         else compute_command_set_digest("1.0.0", commands)
     )
+    reason = {
+        "static": "profile.documentation-static",
+        "focused": "profile.focused-package",
+        "aggregate": "profile.aggregate-configuration",
+        "manual-review": "rule.ambiguous",
+    }[profile]
     return ValidationPlan(
         selector_version="1.0.0",
         repository="Blummer92/agent-os",
@@ -99,7 +105,7 @@ def _plan(profile: str = "focused") -> ValidationPlan:
         profile=profile,
         commands=commands,
         command_set_digest=digest,
-        reason_codes=(f"profile.{profile}",),
+        reason_codes=(reason,),
         remote_build_required=profile in {"focused", "aggregate"},
     )
 
