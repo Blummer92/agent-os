@@ -41,9 +41,9 @@ Use `--format json` for stable machine-readable report fields.
 | Scheduler planning-handoff contracts | `scheduler_handoff.py` |
 | IssuePlan current-state evidence | `issueplan_current_state.py` |
 | Approval records and approved-execution projection | `approval_records.py`, `approved_execution_projection.py` |
-| Sprint governance and reporting | `sprint_dashboard.py` |
+| Reporting | `acceptance_report_transport.py`, `documentation_advisory.py`, `documentation_gap_report.py`, `documentation_metrics.py`, `sprint_dashboard.py` |
 
-This map documents the current package; it does not create new APIs or authorize a physical split.
+`documentation_metrics.py` is bounded, pure-local, supplied-evidence-only, deterministic, report-only, non-scheduling, non-retaining, and non-authoritative; this map creates no API or physical split.
 
 ## Permitted dependency direction
 ```text
