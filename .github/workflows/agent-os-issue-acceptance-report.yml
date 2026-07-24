@@ -162,6 +162,7 @@ jobs:
             --changed-files tmp/agent_os_issue_acceptance_report/changed_files.txt \
             --diff tmp/agent_os_issue_acceptance_report/diff.patch \
             --pr-title "$(cat tmp/agent_os_issue_acceptance_report/pr_title.txt)" \
+            --documentation-advisory \
             "${transport_args[@]}" \
             | tee tmp/agent_os_issue_acceptance_report/report.txt
           checker_exit_code=${PIPESTATUS[0]}
