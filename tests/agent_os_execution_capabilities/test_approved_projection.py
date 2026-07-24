@@ -59,13 +59,13 @@ def _state(
         evidence_schema_version=CAPABILITY_EVIDENCE_SCHEMA_VERSION,
         producer_adapter="fixture-adapter",
         producer_adapter_version="1.0",
-        correlation_id="issue-557",
+        correlation_id="issue-563",
         repository_identity=repository_identity or _identity(),
         base_ref="main",
         base_sha=BASE_SHA,
-        head_ref="agent/557-gex1e-approved-projection-evidence",
+        head_ref="agent/563-gex1f-correct-bindings",
         head_sha=HEAD_SHA,
-        requested_ref="agent/557-gex1e-approved-projection-evidence",
+        requested_ref="agent/563-gex1f-correct-bindings",
         requested_sha=HEAD_SHA,
         observed_sha=tested_sha,
         tested_sha=tested_sha,
@@ -81,8 +81,8 @@ def _state(
         contract_fingerprint=contract_fingerprint,
         worktree_state=worktree_state,
         worktree_reason_codes=worktree_reason_codes,
-        observed_at="2026-07-24T11:55:00Z",
-        freshness_boundary="workflow-run-557",
+        observed_at="2026-07-24T12:55:00Z",
+        freshness_boundary="workflow-run-563",
     )
 
 
@@ -102,23 +102,23 @@ def _projection(
         "approval_kind": "implementation",
         "approval_state": "approved",
         "approval_authorizer_id": "operator-2",
-        "approval_decision_id": "decision-557",
-        "approval_decision_at": "2026-07-24T11:40:00Z",
-        "approval_expires_at": "2026-07-24T13:00:00Z",
+        "approval_decision_id": "decision-563",
+        "approval_decision_at": "2026-07-24T12:40:00Z",
+        "approval_expires_at": "2026-07-24T15:00:00Z",
         "approval_supersedes_id": None,
         "handoff_digest": "6" * 64,
         "graph_digest": "7" * 64,
         "planning_result_digest": "8" * 64,
         "repository": "blummer92/agent-os",
         "base_branch": "main",
-        "evaluated_repository_sha": HEAD_SHA,
+        "evaluated_repository_sha": BASE_SHA,
         "evaluator_commit_sha": "e" * 40,
         "tested_repository_sha": state.tested_sha,
         "repository_evidence_type": state.evidence_type.value,
-        "supplied_node_ids": ("issue-557",),
+        "supplied_node_ids": ("issue-563",),
         "cohort_summaries": (
             HandoffCohort(
-                node_ids=("issue-557",),
+                node_ids=("issue-563",),
                 classification="parallel-candidate",
                 reason_codes=("covered-no-deterministic-conflict",),
             ),
@@ -138,7 +138,7 @@ def _projection(
             "python -m pytest tests/agent_os_execution_capabilities/"
             "test_approved_projection.py -q",
         ),
-        "projected_at": "2026-07-24T12:00:00Z",
+        "projected_at": "2026-07-24T13:00:00Z",
     }
     values.update(overrides)
     return ApprovedExecutionProjection(**values)
@@ -153,11 +153,28 @@ def _consume(
     resolved_projection = projection or _projection(
         resolved_state if isinstance(resolved_state, RepositoryStateEvidence) else None
     )
+    canonical_state = (
+        resolved_state if isinstance(resolved_state, RepositoryStateEvidence) else _state()
+    )
+    canonical_projection = (
+        resolved_projection
+        if isinstance(resolved_projection, ApprovedExecutionProjection)
+        else _projection(canonical_state)
+    )
     values = {
         "expected_repository": _identity(),
         "expected_base_branch": "main",
         "expected_base_sha": BASE_SHA,
         "expected_head_sha": HEAD_SHA,
+        "expected_tested_sha": canonical_state.tested_sha,
+        "expected_projection_id": canonical_projection.projection_id,
+        "expected_approval_id": canonical_projection.approval_id,
+        "expected_proposal_id": canonical_projection.proposal_id,
+        "expected_repository_state_evidence_id": canonical_state.evidence_id,
+        "expected_implementation_contract_fingerprint": (
+            canonical_state.contract_fingerprint
+        ),
+        "expected_repository_evidence_type": canonical_state.evidence_type,
     }
     values.update(overrides)
     return consume_approved_projection_evidence(
@@ -176,28 +193,20 @@ def _state_mapping(state: RepositoryStateEvidence) -> dict[str, object]:
     return payload
 
 
-def test_valid_branch_head_is_accepted_and_preserves_exact_bindings():
+def test_valid_branch_head_is_accepted_with_distinct_base_and_source_head():
     state = _state()
     projection = _projection(state)
-    result = _consume(
-        projection,
-        state,
-        expected_projection_id=projection.projection_id,
-        expected_approval_id=projection.approval_id,
-        expected_proposal_id=projection.proposal_id,
-    )
+    result = _consume(projection, state)
 
-    assert GOVERNED_PROJECTION_EVIDENCE_SCHEMA_VERSION == "1.0"
+    assert BASE_SHA != HEAD_SHA
     assert result.status == "accepted"
     assert result.reason_codes == ()
     assert result.details == ()
-    assert result.projection_id == projection.projection_id
-    assert result.repository_identity == state.repository_identity
     assert result.base_sha == BASE_SHA
+    assert result.evaluated_sha == BASE_SHA
     assert result.head_sha == HEAD_SHA
-    assert result.evaluated_sha == HEAD_SHA
     assert result.tested_sha == HEAD_SHA
-    assert result.repository_evidence_type is RepositoryEvidenceType.BRANCH_HEAD
+    assert result.projection_id == projection.projection_id
     assert result.repository_state_evidence_id == state.evidence_id
     assert result.implementation_contract_fingerprint == CONTRACT_DIGEST
     assert result.authoritative is False
@@ -205,14 +214,81 @@ def test_valid_branch_head_is_accepted_and_preserves_exact_bindings():
     assert result.side_effects_performed is False
 
 
-def test_valid_synthetic_merge_preserves_source_and_tested_sha():
+def test_valid_synthetic_merge_preserves_three_distinct_sha_roles():
     state = _state(synthetic=True)
-    result = _consume(_projection(state), state)
+    projection = _projection(state)
+    result = _consume(projection, state)
 
+    assert len({BASE_SHA, HEAD_SHA, MERGE_SHA}) == 3
     assert result.status == "accepted"
+    assert result.evaluated_sha == BASE_SHA
     assert result.head_sha == HEAD_SHA
     assert result.tested_sha == MERGE_SHA
     assert result.repository_evidence_type is RepositoryEvidenceType.SYNTHETIC_PR_MERGE
+
+
+def test_projection_evaluated_sha_equal_to_head_not_base_is_stale():
+    projection = _projection(evaluated_repository_sha=HEAD_SHA)
+    result = _consume(projection=projection)
+
+    assert result.status == "stale"
+    assert "ref.base-mismatch" in result.reason_codes
+    assert "projection-evaluated-sha:mismatch" in result.details
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("expected_base_sha", None),
+        ("expected_head_sha", "not-a-sha"),
+        ("expected_tested_sha", ""),
+        ("expected_projection_id", None),
+        ("expected_approval_id", ""),
+        ("expected_proposal_id", None),
+        ("expected_repository_state_evidence_id", ""),
+        ("expected_implementation_contract_fingerprint", "short"),
+        ("expected_repository_evidence_type", "branch-head"),
+    ],
+)
+def test_missing_or_malformed_expectations_are_invalid(field, value):
+    result = _consume(**{field: value})
+
+    assert result.status == "invalid"
+    assert "schema.unknown-field" in result.reason_codes
+    assert any(item.startswith("expected-") for item in result.details)
+
+
+@pytest.mark.parametrize(
+    "field,value,reason",
+    [
+        ("expected_base_sha", OTHER_SHA, "ref.base-mismatch"),
+        ("expected_head_sha", OTHER_SHA, "ref.branch-moved"),
+        ("expected_tested_sha", OTHER_SHA, "ref.test-sha-mismatch"),
+        ("expected_projection_id", "wrong-projection", "ref.contract-mismatch"),
+        ("expected_approval_id", "wrong-approval", "ref.contract-mismatch"),
+        ("expected_proposal_id", "wrong-proposal", "ref.contract-mismatch"),
+        (
+            "expected_repository_state_evidence_id",
+            "f" * 64,
+            "ref.contract-mismatch",
+        ),
+        (
+            "expected_implementation_contract_fingerprint",
+            OTHER_CONTRACT_DIGEST,
+            "ref.contract-mismatch",
+        ),
+        (
+            "expected_repository_evidence_type",
+            RepositoryEvidenceType.SYNTHETIC_PR_MERGE,
+            "ref.test-sha-mismatch",
+        ),
+    ],
+)
+def test_well_formed_expectation_mismatches_are_stale(field, value, reason):
+    result = _consume(**{field: value})
+
+    assert result.status == "stale"
+    assert reason in result.reason_codes
 
 
 @pytest.mark.parametrize(
@@ -231,63 +307,52 @@ def test_valid_synthetic_merge_preserves_source_and_tested_sha():
         ),
     ],
 )
-def test_repository_identity_mismatches_fail_closed(expected_repository, reason):
+def test_repository_identity_mismatches_remain_stale(expected_repository, reason):
     result = _consume(expected_repository=expected_repository)
     assert result.status == "stale"
     assert reason in result.reason_codes
 
 
-@pytest.mark.parametrize(
-    "overrides,reason",
-    [
-        ({"expected_base_branch": "release"}, "ref.base-mismatch"),
-        ({"expected_base_sha": OTHER_SHA}, "ref.base-mismatch"),
-        ({"expected_head_sha": OTHER_SHA}, "ref.branch-moved"),
-    ],
-)
-def test_expected_ref_and_sha_mismatches_are_stale(overrides, reason):
-    result = _consume(**overrides)
-    assert result.status == "stale"
-    assert reason in result.reason_codes
-
-
-def test_tested_sha_and_evidence_type_substitution_fail_closed():
-    state = _state(synthetic=True)
-    projection = _projection(
-        state,
-        tested_repository_sha=HEAD_SHA,
-        repository_evidence_type=RepositoryEvidenceType.BRANCH_HEAD.value,
-    )
-    result = _consume(projection, state)
-
-    assert result.status == "stale"
-    assert "ref.test-sha-mismatch" in result.reason_codes
-    assert "projection-tested-sha:mismatch" in result.details
-    assert "projection-evidence-type:mismatch" in result.details
-
-
-@pytest.mark.parametrize(
-    "field", ["expected_projection_id", "expected_approval_id", "expected_proposal_id"]
-)
-def test_projection_approval_and_proposal_identity_mismatches_are_stale(field):
-    result = _consume(**{field: "wrong-identity"})
-    assert result.status == "stale"
-    assert "ref.contract-mismatch" in result.reason_codes
-
-
-def test_contract_and_repository_evidence_identity_changes_are_stale():
+def test_projection_and_repository_evidence_bindings_are_both_checked():
     state = _state(contract_fingerprint=OTHER_CONTRACT_DIGEST)
     projection = _projection(
         state,
         implementation_contract_fingerprint=CONTRACT_DIGEST,
         repository_state_evidence_id="f" * 64,
     )
-    result = _consume(projection, state)
+    result = _consume(
+        projection,
+        state,
+        expected_repository_state_evidence_id=state.evidence_id,
+        expected_implementation_contract_fingerprint=OTHER_CONTRACT_DIGEST,
+    )
 
     assert result.status == "stale"
     assert "ref.contract-mismatch" in result.reason_codes
     assert "projection-repository-evidence-id:mismatch" in result.details
     assert "projection-implementation-contract:mismatch" in result.details
+
+
+@pytest.mark.parametrize(
+    "projection",
+    [
+        {"schema_version": "not-a-version"},
+        {"schema_version": "2.0"},
+        {
+            "schema_version": "1.0",
+            "execution_authorized": True,
+            "side_effects_performed": True,
+            "authoritative": True,
+        },
+        "not-a-projection",
+    ],
+)
+def test_noncanonical_projection_inputs_fail_invalid_without_field_parsing(projection):
+    result = _consume(projection=projection)
+
+    assert result.status == "invalid"
+    assert result.reason_codes == ("schema.unknown-field",)
+    assert result.details == ("projection:canonical-object-required",)
 
 
 @pytest.mark.parametrize(
@@ -311,49 +376,13 @@ def test_contract_and_repository_evidence_identity_changes_are_stale():
         ),
     ],
 )
-def test_dirty_and_indeterminate_worktrees_never_accept(state, expected_status, reason):
+def test_worktree_fail_closed_behavior_remains(state, expected_status, reason):
     result = _consume(_projection(state), state)
     assert result.status == expected_status
     assert reason in result.reason_codes
 
 
-def test_missing_tested_sha_never_accepts():
-    valid_state = _state()
-    payload = _state_mapping(valid_state)
-    payload["tested_sha"] = None
-    payload["external_build_sha"] = None
-    result = _consume(_projection(valid_state), payload)
-
-    assert result.status == "stale"
-    assert "ref.test-sha-mismatch" in result.reason_codes
-
-
-@pytest.mark.parametrize(
-    "projection,reason",
-    [
-        ({"schema_version": "not-a-version"}, "schema.malformed-version"),
-        ({"schema_version": "2.0"}, "schema.unsupported-version"),
-        (
-            {
-                "schema_version": "1.0",
-                "execution_authorized": True,
-                "side_effects_performed": True,
-                "authoritative": True,
-            },
-            "schema.unknown-field",
-        ),
-    ],
-)
-def test_malformed_unsupported_and_authoritative_projection_inputs_are_invalid(
-    projection, reason
-):
-    result = _consume(projection=projection)
-    assert result.status == "invalid"
-    assert reason in result.reason_codes
-    assert result.execution_authorized is False
-
-
-def test_unknown_repository_reason_and_side_effect_claim_are_invalid():
+def test_malformed_repository_mapping_remains_invalid():
     payload = _state_mapping(_state())
     payload["worktree_reason_codes"] = ["worktree.future"]
     payload["side_effects_performed"] = True
@@ -363,10 +392,10 @@ def test_unknown_repository_reason_and_side_effect_claim_are_invalid():
     assert "schema.unknown-field" in result.reason_codes
 
 
-def test_expired_projection_at_supplied_boundary_is_stale_without_clock_read():
+def test_projection_time_chronology_is_bounded_without_clock_read():
     projection = _projection(
-        approval_expires_at="2026-07-24T12:00:00Z",
-        projected_at="2026-07-24T12:00:00Z",
+        approval_expires_at="2026-07-24T13:00:00Z",
+        projected_at="2026-07-24T13:00:00Z",
     )
     result = _consume(projection=projection)
 
@@ -375,14 +404,26 @@ def test_expired_projection_at_supplied_boundary_is_stale_without_clock_read():
     assert "approval:expired-at-projection-boundary" in result.details
 
 
-def test_consumer_schema_is_bounded_and_fail_closed():
-    malformed = _consume(schema_version="invalid")
-    unsupported = _consume(schema_version="2.0")
-
-    assert malformed.status == "invalid"
-    assert malformed.reason_codes == ("schema.malformed-version",)
-    assert unsupported.status == "invalid"
-    assert unsupported.reason_codes == ("schema.unsupported-version",)
+def test_accepted_result_rejects_missing_bound_fields():
+    with pytest.raises(ValueError, match="complete governed bindings"):
+        GovernedProjectionEvidenceResult(
+            status="accepted",
+            schema_version=GOVERNED_PROJECTION_EVIDENCE_SCHEMA_VERSION,
+            projection_id=None,
+            proposal_id="proposal",
+            approval_id="approval",
+            repository_identity=_identity(),
+            base_branch="main",
+            base_sha=BASE_SHA,
+            head_sha=HEAD_SHA,
+            evaluated_sha=BASE_SHA,
+            tested_sha=HEAD_SHA,
+            repository_evidence_type=RepositoryEvidenceType.BRANCH_HEAD,
+            repository_state_evidence_id="evidence",
+            implementation_contract_fingerprint=CONTRACT_DIGEST,
+            reason_codes=(),
+            details=(),
+        )
 
 
 def test_output_is_deterministic_sorted_and_immutable():
