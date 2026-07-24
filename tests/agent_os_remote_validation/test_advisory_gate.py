@@ -51,9 +51,7 @@ def _identity() -> RepositoryIdentity:
 
 
 def _projection(
-    *,
-    status: str = "accepted",
-    synthetic: bool = False,
+    *, status: str = "accepted", synthetic: bool = False
 ) -> GovernedProjectionEvidenceResult:
     reasons = () if status == "accepted" else ("ref.branch-moved",)
     return GovernedProjectionEvidenceResult(
@@ -80,7 +78,7 @@ def _projection(
     )
 
 
-def _plan(*, profile: str = "focused") -> ValidationPlan:
+def _plan(profile: str = "focused") -> ValidationPlan:
     commands = {
         "static": (),
         "focused": ("python -m pytest tests/agent_os_remote_validation -q",),
@@ -134,7 +132,7 @@ def _result(
 
 def _evaluate(
     *,
-    projection=None,
+    projection: object | None = None,
     plan: object | None = None,
     results: object | None = None,
     synthetic: bool = False,
@@ -146,10 +144,13 @@ def _evaluate(
     )
     tested_sha = MERGE_SHA if synthetic else HEAD_SHA
     if results is None:
-        results = tuple(
-            _result(resolved_plan, tested_sha=tested_sha)
-            for _ in resolved_plan.commands
-        )
+        if isinstance(resolved_plan, ValidationPlan):
+            results = tuple(
+                _result(resolved_plan, tested_sha=tested_sha)
+                for _ in resolved_plan.commands
+            )
+        else:
+            results = ()
     values = {
         "expected_repository": _identity(),
         "expected_pull_request": 570,
@@ -196,42 +197,48 @@ def _evaluate(
     }
     values.update(overrides)
     return evaluate_advisory_pre_pr_evidence(
-        resolved_projection,
-        resolved_plan,
-        results,
-        **values,
+        resolved_projection, resolved_plan, results, **values
     )
 
 
 @pytest.mark.parametrize("profile", ["static", "focused", "aggregate"])
 def test_passed_profiles_are_fully_bound(profile: str) -> None:
-    plan = _plan(profile=profile)
+    plan = _plan(profile)
     result = _evaluate(plan=plan, results=() if profile == "static" else None)
     assert result.status == "passed"
-    assert result.base_sha == BASE_SHA
-    assert result.source_head_sha == HEAD_SHA
-    assert result.tested_sha == HEAD_SHA
+    assert (result.base_sha, result.source_head_sha, result.tested_sha) == (
+        BASE_SHA,
+        HEAD_SHA,
+        HEAD_SHA,
+    )
     assert result.plan_id == validation_plan_id(plan)
-    assert result.authoritative is False
-    assert result.execution_authorized is False
-    assert result.merge_authorized is False
-    assert result.attestation_verified is False
-    assert result.side_effects_performed is False
+    assert all(
+        value is False
+        for value in (
+            result.authoritative,
+            result.execution_authorized,
+            result.merge_authorized,
+            result.attestation_verified,
+            result.side_effects_performed,
+        )
+    )
 
 
 def test_synthetic_merge_preserves_three_sha_roles() -> None:
-    result = _evaluate(plan=_plan(profile="aggregate"), synthetic=True)
+    result = _evaluate(plan=_plan("aggregate"), synthetic=True)
     assert result.status == "passed"
-    assert result.base_sha == BASE_SHA
-    assert result.source_head_sha == HEAD_SHA
-    assert result.tested_sha == MERGE_SHA
+    assert (result.base_sha, result.source_head_sha, result.tested_sha) == (
+        BASE_SHA,
+        HEAD_SHA,
+        MERGE_SHA,
+    )
 
 
 @pytest.mark.parametrize(
     ("status", "exit_code"),
     [("failed", 1), ("timed-out", None), ("cancelled", None)],
 )
-def test_terminal_failures_map_to_failed_and_preserve_source_status(
+def test_terminal_failures_map_to_failed(
     status: str, exit_code: int | None
 ) -> None:
     plan = _plan()
@@ -240,19 +247,15 @@ def test_terminal_failures_map_to_failed_and_preserve_source_status(
     assert result.command_result_statuses == (status,)
 
 
-@pytest.mark.parametrize(
-    ("status", "exit_code"),
-    [("unavailable", None), ("infrastructure-error", None)],
-)
-def test_unavailable_results_need_decision(status: str, exit_code: int | None) -> None:
+@pytest.mark.parametrize("status", ["unavailable", "infrastructure-error"])
+def test_unavailable_results_need_decision(status: str) -> None:
     plan = _plan()
-    result = _evaluate(results=(_result(plan, status=status, exit_code=exit_code),))
+    result = _evaluate(results=(_result(plan, status=status, exit_code=None),))
     assert result.status == "needs-decision"
 
 
 def test_manual_review_and_blocked_projection_need_decision() -> None:
-    plan = _plan(profile="manual-review")
-    assert _evaluate(plan=plan, results=()).status == "needs-decision"
+    assert _evaluate(plan=_plan("manual-review"), results=()).status == "needs-decision"
     assert _evaluate(projection=_projection(status="blocked")).status == "needs-decision"
 
 
@@ -286,7 +289,7 @@ def test_malformed_types_and_mappings_return_invalid() -> None:
     assert _evaluate(results=[]).status == "invalid"
 
 
-def test_cross_run_plan_sha_and_expected_bundle_mixing_fail_closed() -> None:
+def test_cross_run_plan_sha_and_bundle_mixing_fail_closed() -> None:
     plan = _plan()
     base = _result(plan)
     assert _evaluate(results=(replace(base, invocation_id="other"),)).status == "invalid"
@@ -299,11 +302,12 @@ def test_cross_run_plan_sha_and_expected_bundle_mixing_fail_closed() -> None:
     ).status == "invalid"
 
 
-def test_command_diagnostics_do_not_propagate_to_advisory_output() -> None:
+def test_command_diagnostics_do_not_propagate() -> None:
     plan = _plan()
     marker = "safe bounded diagnostic"
-    result = _evaluate(results=(_result(plan, diagnostic_summary=marker),))
-    serialized = serialize_advisory_evidence_result(result)
+    serialized = serialize_advisory_evidence_result(
+        _evaluate(results=(_result(plan, diagnostic_summary=marker),))
+    )
     assert marker not in repr(serialized)
     assert "diagnostic" not in serialized
 
@@ -319,8 +323,7 @@ def test_unicode_is_preserved_without_normalization() -> None:
 def test_timestamp_changes_do_not_establish_freshness() -> None:
     first = _evaluate(started_at="2026-07-24T15:00:00Z")
     second = _evaluate(started_at="2026-07-24T14:59:59Z")
-    assert first.status == "passed"
-    assert second.status == "passed"
+    assert first.status == second.status == "passed"
     assert first.result_id != second.result_id
 
 
@@ -350,7 +353,7 @@ def test_serializer_enforces_final_size_limit(monkeypatch: pytest.MonkeyPatch) -
         serialize_advisory_evidence_result(result)
 
 
-def test_only_expected_validation_errors_are_converted(
+def test_unexpected_programmer_errors_are_not_swallowed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -384,6 +387,5 @@ def test_module_has_no_external_io_execution_or_clock_imports() -> None:
 
 
 def test_default_result_fits_declared_size_limit() -> None:
-    result = _evaluate()
-    encoded = repr(serialize_advisory_evidence_result(result)).encode("utf-8")
+    encoded = repr(serialize_advisory_evidence_result(_evaluate())).encode("utf-8")
     assert len(encoded) < MAX_ADVISORY_SERIALIZED_BYTES
