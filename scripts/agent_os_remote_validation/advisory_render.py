@@ -6,6 +6,9 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from .advisory_gate import (
+    MAX_ADVISORY_DETAILS,
+    MAX_ADVISORY_REASON_CODES,
+    MAX_ADVISORY_STRING_LENGTH,
     AdvisoryEvidenceResult,
     advisory_evidence_result_id,
     serialize_advisory_evidence_result,
@@ -17,6 +20,32 @@ MAX_RENDER_LINES = 256
 MAX_RENDER_LINE_LENGTH = 8192
 MAX_RENDER_SERIALIZED_BYTES = 262_144
 
+_ADVISORY_STATUSES = {
+    "passed",
+    "failed",
+    "incomplete",
+    "stale",
+    "invalid",
+    "needs-decision",
+}
+_RENDER_FIELD_NAMES = (
+    "advisory_result_id",
+    "status",
+    "repository_identity",
+    "pull_request",
+    "base_branch",
+    "base_sha",
+    "source_head_sha",
+    "tested_sha",
+    "plan_id",
+    "bundle_id",
+    "runner_id",
+    "invocation_id",
+    "command_result_ids",
+    "command_result_statuses",
+    "reason_codes",
+    "details",
+)
 _NOTICE_LINES = (
     "advisory_only=true",
     "authoritative=false",
@@ -41,6 +70,7 @@ class AdvisoryRenderResult:
     reason_codes: tuple[str, ...]
     details: tuple[str, ...]
     authoritative: Literal[False] = field(default=False, init=False)
+    implementation_authorized: Literal[False] = field(default=False, init=False)
     execution_authorized: Literal[False] = field(default=False, init=False)
     merge_authorized: Literal[False] = field(default=False, init=False)
     attestation_verified: Literal[False] = field(default=False, init=False)
@@ -119,24 +149,26 @@ def advisory_render_result_id(result: AdvisoryRenderResult) -> str:
 
 
 def _render_lines(serialized: dict[str, object]) -> tuple[str, ...]:
-    repository = serialized.get("repository_identity")
+    values = (
+        serialized.get("result_id"),
+        serialized.get("status"),
+        serialized.get("repository_identity"),
+        serialized.get("pull_request"),
+        serialized.get("base_branch"),
+        serialized.get("base_sha"),
+        serialized.get("source_head_sha"),
+        serialized.get("tested_sha"),
+        serialized.get("plan_id"),
+        serialized.get("bundle_id"),
+        serialized.get("runner_id"),
+        serialized.get("invocation_id"),
+        serialized.get("command_result_ids"),
+        serialized.get("command_result_statuses"),
+        serialized.get("reason_codes"),
+        serialized.get("details"),
+    )
     lines = [
-        _line("advisory_result_id", serialized.get("result_id")),
-        _line("status", serialized.get("status")),
-        _line("repository_identity", repository),
-        _line("pull_request", serialized.get("pull_request")),
-        _line("base_branch", serialized.get("base_branch")),
-        _line("base_sha", serialized.get("base_sha")),
-        _line("source_head_sha", serialized.get("source_head_sha")),
-        _line("tested_sha", serialized.get("tested_sha")),
-        _line("plan_id", serialized.get("plan_id")),
-        _line("bundle_id", serialized.get("bundle_id")),
-        _line("runner_id", serialized.get("runner_id")),
-        _line("invocation_id", serialized.get("invocation_id")),
-        _line("command_result_ids", serialized.get("command_result_ids")),
-        _line("command_result_statuses", serialized.get("command_result_statuses")),
-        _line("reason_codes", serialized.get("reason_codes")),
-        _line("details", serialized.get("details")),
+        *(_line(name, value) for name, value in zip(_RENDER_FIELD_NAMES, values)),
         *_NOTICE_LINES,
     ]
     if len(lines) > MAX_RENDER_LINES:
@@ -168,6 +200,7 @@ def _render_payload(result: AdvisoryRenderResult) -> dict[str, object]:
         "reason_codes": list(result.reason_codes),
         "details": list(result.details),
         "authoritative": False,
+        "implementation_authorized": False,
         "execution_authorized": False,
         "merge_authorized": False,
         "attestation_verified": False,
@@ -180,8 +213,13 @@ def _validate_payload(payload: dict[str, object]) -> None:
         raise ValueError("unsupported advisory render schema name")
     if payload.get("schema_version") != ADVISORY_RENDER_SCHEMA_VERSION:
         raise ValueError("unsupported advisory render schema version")
+    if payload.get("status") not in _ADVISORY_STATUSES:
+        raise ValueError("unsupported advisory render status")
+    if not _is_advisory_result_id(payload.get("advisory_result_id")):
+        raise ValueError("invalid advisory result identity")
     for field_name in (
         "authoritative",
+        "implementation_authorized",
         "execution_authorized",
         "merge_authorized",
         "attestation_verified",
@@ -189,14 +227,71 @@ def _validate_payload(payload: dict[str, object]) -> None:
     ):
         if payload.get(field_name) is not False:
             raise ValueError(f"{field_name} must remain false")
+
+    reason_codes = _validate_string_list(
+        payload.get("reason_codes"),
+        field_name="reason_codes",
+        maximum=MAX_ADVISORY_REASON_CODES,
+    )
+    details = _validate_string_list(
+        payload.get("details"),
+        field_name="details",
+        maximum=MAX_ADVISORY_DETAILS,
+    )
+
     lines = payload.get("lines")
-    if not isinstance(lines, list) or len(lines) > MAX_RENDER_LINES:
+    expected_count = len(_RENDER_FIELD_NAMES) + len(_NOTICE_LINES)
+    if not isinstance(lines, list) or len(lines) != expected_count:
         raise ValueError("invalid advisory render lines")
-    for line in lines:
-        if not isinstance(line, str) or len(line) > MAX_RENDER_LINE_LENGTH:
+    for index, name in enumerate(_RENDER_FIELD_NAMES):
+        line = lines[index]
+        if (
+            not isinstance(line, str)
+            or len(line) > MAX_RENDER_LINE_LENGTH
+            or "\n" in line
+            or "\r" in line
+            or not line.startswith(f"{name}=")
+        ):
             raise ValueError("invalid advisory render line")
+    if tuple(lines[len(_RENDER_FIELD_NAMES) :]) != _NOTICE_LINES:
+        raise ValueError("advisory authority notices are missing or altered")
+
+    if _line_value(lines[0]) != payload["advisory_result_id"]:
+        raise ValueError("rendered advisory identity mismatch")
+    if _line_value(lines[1]) != payload["status"]:
+        raise ValueError("rendered advisory status mismatch")
+    if _line_value(lines[14]) != reason_codes:
+        raise ValueError("rendered reason codes mismatch")
+    if _line_value(lines[15]) != details:
+        raise ValueError("rendered details mismatch")
+
     if len(_canonical_bytes(payload)) > MAX_RENDER_SERIALIZED_BYTES:
         raise ValueError("advisory render exceeds canonical size limit")
+
+
+def _validate_string_list(
+    value: object,
+    *,
+    field_name: str,
+    maximum: int,
+) -> list[str]:
+    if not isinstance(value, list) or len(value) > maximum:
+        raise ValueError(f"invalid advisory render {field_name}")
+    for item in value:
+        if not isinstance(item, str) or len(item) > MAX_ADVISORY_STRING_LENGTH:
+            raise ValueError(f"invalid advisory render {field_name}")
+    return value
+
+
+def _line_value(line: str) -> object:
+    return json.loads(line.split("=", 1)[1])
+
+
+def _is_advisory_result_id(value: object) -> bool:
+    if not isinstance(value, str) or not value.startswith("advisory-evidence:"):
+        return False
+    digest = value.removeprefix("advisory-evidence:")
+    return len(digest) == 64 and all(character in "0123456789abcdef" for character in digest)
 
 
 def _semantic_digest(payload: dict[str, object]) -> str:
