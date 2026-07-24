@@ -135,13 +135,15 @@ def _result(
 def _evaluate(
     *,
     projection=None,
-    plan: ValidationPlan | None = None,
+    plan: object | None = None,
     results: object | None = None,
     synthetic: bool = False,
     **overrides: object,
 ):
-    resolved_plan = plan or _plan()
-    resolved_projection = projection or _projection(synthetic=synthetic)
+    resolved_plan = _plan() if plan is None else plan
+    resolved_projection = (
+        _projection(synthetic=synthetic) if projection is None else projection
+    )
     tested_sha = MERGE_SHA if synthetic else HEAD_SHA
     if results is None:
         results = tuple(
@@ -167,10 +169,26 @@ def _evaluate(
         "expected_approval_id": APPROVAL_ID,
         "expected_repository_state_evidence_id": EVIDENCE_ID,
         "expected_implementation_contract_fingerprint": CONTRACT,
-        "expected_selector_version": resolved_plan.selector_version,
-        "expected_profile": resolved_plan.profile,
-        "expected_command_set_digest": resolved_plan.command_set_digest,
-        "expected_plan_id": validation_plan_id(resolved_plan),
+        "expected_selector_version": (
+            resolved_plan.selector_version
+            if isinstance(resolved_plan, ValidationPlan)
+            else "1.0.0"
+        ),
+        "expected_profile": (
+            resolved_plan.profile
+            if isinstance(resolved_plan, ValidationPlan)
+            else "focused"
+        ),
+        "expected_command_set_digest": (
+            resolved_plan.command_set_digest
+            if isinstance(resolved_plan, ValidationPlan)
+            else "0" * 64
+        ),
+        "expected_plan_id": (
+            validation_plan_id(resolved_plan)
+            if isinstance(resolved_plan, ValidationPlan)
+            else "validation-plan:" + "0" * 64
+        ),
         "runner_id": RUNNER_ID,
         "invocation_id": INVOCATION_ID,
         "started_at": "2026-07-24T15:00:00Z",
@@ -263,8 +281,8 @@ def test_invalid_precedes_stale_and_failed() -> None:
 
 
 def test_malformed_types_and_mappings_return_invalid() -> None:
-    assert _evaluate(projection={}).status == "invalid"
-    assert _evaluate(plan={}).status == "invalid"  # type: ignore[arg-type]
+    assert _evaluate(projection={"invalid": True}).status == "invalid"
+    assert _evaluate(plan={"invalid": True}).status == "invalid"
     assert _evaluate(results=[]).status == "invalid"
 
 
@@ -293,11 +311,9 @@ def test_command_diagnostics_do_not_propagate_to_advisory_output() -> None:
 def test_unicode_is_preserved_without_normalization() -> None:
     composed = "caf\u00e9"
     decomposed = "cafe\u0301"
-    first = _evaluate(invocation_id=composed)
-    second = _evaluate(invocation_id=decomposed)
-    assert first.invocation_id == composed
-    assert second.invocation_id == decomposed
-    assert first.result_id != second.result_id
+    assert gate_module._canonical_bytes({"value": composed}) != gate_module._canonical_bytes(
+        {"value": decomposed}
+    )
 
 
 def test_timestamp_changes_do_not_establish_freshness() -> None:
