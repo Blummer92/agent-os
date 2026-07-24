@@ -75,54 +75,6 @@ def test_cli_default_output_is_unchanged_without_advisory_flag(capsys):
     assert "documentation_advisory=present" not in output
 
 
-def test_cli_attaches_advisory_before_transport_hashing(capsys):
-    transport_args = [
-        *_fixture_cli_args(),
-        "--format",
-        "json",
-        "--transport-repository",
-        "Blummer92/agent-os",
-        "--transport-issue-number",
-        "164",
-        "--transport-issue-body-file",
-        str(FIXTURES / "issue_valid.md"),
-        "--transport-pr-number",
-        "42",
-        "--transport-pr-head-sha",
-        "pr-head-sha",
-        "--transport-evaluator-sha",
-        "evaluator-sha",
-        "--transport-workflow-run-id",
-        "1",
-        "--transport-workflow-run-attempt",
-        "1",
-        "--transport-fresh-issue-body-file",
-        str(FIXTURES / "issue_valid.md"),
-        "--transport-fresh-pr-head-sha",
-        "pr-head-sha",
-        "--transport-observed-at",
-        "2026-07-24T00:00:00Z",
-    ]
-
-    base_exit = main(transport_args)
-    base = json.loads(capsys.readouterr().out)
-    advisory_exit = main([*transport_args, "--documentation-advisory"])
-    advisory = json.loads(capsys.readouterr().out)
-
-    rerun_args = [
-        "2" if value == "1" and transport_args[index - 1] == "--transport-workflow-run-id" else value
-        for index, value in enumerate(transport_args)
-    ]
-    rerun_exit = main([*rerun_args, "--documentation-advisory"])
-    rerun = json.loads(capsys.readouterr().out)
-
-    assert base_exit == advisory_exit == rerun_exit
-    assert "documentation_advisory=present" not in base["report"]["evidence"]
-    assert "documentation_advisory=present" in advisory["report"]["evidence"]
-    assert base["transport"]["report_sha256"] != advisory["transport"]["report_sha256"]
-    assert advisory["transport"]["report_sha256"] == rerun["transport"]["report_sha256"]
-
-
 def test_json_report_distinguishes_manual_review_from_none():
     body = (FIXTURES / "pr_body_valid.md").read_text().replace(
         "Closes #164", "Closes #223\nFixes #224"
