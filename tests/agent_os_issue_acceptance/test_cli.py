@@ -6,6 +6,7 @@ import pytest
 from scripts.agent_os_issue_acceptance.cli import _report_to_dict, main
 from scripts.agent_os_issue_acceptance.models import AcceptanceInput
 from scripts.agent_os_issue_acceptance.policy import evaluate_acceptance
+from scripts.agent_os_issue_acceptance.report import exit_code_for, render_report
 
 
 def test_transport_arguments_are_optional_when_absent(tmp_path, capsys):
@@ -31,7 +32,95 @@ def test_transport_arguments_are_optional_when_absent(tmp_path, capsys):
     output = capsys.readouterr().out
     assert "overall_status" in output or output.strip()
 
+
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _fixture_changed_files() -> list[str]:
+    return [
+        line.strip()
+        for line in (FIXTURES / "changed_files_valid.txt").read_text().splitlines()
+        if line.strip()
+    ]
+
+
+def _fixture_cli_args() -> list[str]:
+    return [
+        "--issue",
+        str(FIXTURES / "issue_valid.md"),
+        "--pr-body",
+        str(FIXTURES / "pr_body_valid.md"),
+        "--changed-files",
+        str(FIXTURES / "changed_files_valid.txt"),
+        "--diff",
+        str(FIXTURES / "diff_clean.patch"),
+    ]
+
+
+def test_cli_default_output_is_unchanged_without_advisory_flag(capsys):
+    report = evaluate_acceptance(
+        AcceptanceInput(
+            issue_body=(FIXTURES / "issue_valid.md").read_text(),
+            pr_body=(FIXTURES / "pr_body_valid.md").read_text(),
+            changed_files=_fixture_changed_files(),
+            diff_text=(FIXTURES / "diff_clean.patch").read_text(),
+        )
+    )
+
+    result = main(_fixture_cli_args())
+
+    assert result == exit_code_for(report.overall_status)
+    output = capsys.readouterr().out
+    assert output == render_report(report)
+    assert "documentation_advisory=present" not in output
+
+
+def test_cli_attaches_advisory_before_transport_hashing(capsys):
+    transport_args = [
+        *_fixture_cli_args(),
+        "--format",
+        "json",
+        "--transport-repository",
+        "Blummer92/agent-os",
+        "--transport-issue-number",
+        "164",
+        "--transport-issue-body-file",
+        str(FIXTURES / "issue_valid.md"),
+        "--transport-pr-number",
+        "42",
+        "--transport-pr-head-sha",
+        "pr-head-sha",
+        "--transport-evaluator-sha",
+        "evaluator-sha",
+        "--transport-workflow-run-id",
+        "1",
+        "--transport-workflow-run-attempt",
+        "1",
+        "--transport-fresh-issue-body-file",
+        str(FIXTURES / "issue_valid.md"),
+        "--transport-fresh-pr-head-sha",
+        "pr-head-sha",
+        "--transport-observed-at",
+        "2026-07-24T00:00:00Z",
+    ]
+
+    base_exit = main(transport_args)
+    base = json.loads(capsys.readouterr().out)
+    advisory_exit = main([*transport_args, "--documentation-advisory"])
+    advisory = json.loads(capsys.readouterr().out)
+
+    rerun_args = [
+        "2" if value == "1" and transport_args[index - 1] == "--transport-workflow-run-id" else value
+        for index, value in enumerate(transport_args)
+    ]
+    rerun_exit = main([*rerun_args, "--documentation-advisory"])
+    rerun = json.loads(capsys.readouterr().out)
+
+    assert base_exit == advisory_exit == rerun_exit
+    assert "documentation_advisory=present" not in base["report"]["evidence"]
+    assert "documentation_advisory=present" in advisory["report"]["evidence"]
+    assert base["transport"]["report_sha256"] != advisory["transport"]["report_sha256"]
+    assert advisory["transport"]["report_sha256"] == rerun["transport"]["report_sha256"]
 
 
 def test_json_report_distinguishes_manual_review_from_none():
@@ -42,11 +131,7 @@ def test_json_report_distinguishes_manual_review_from_none():
         AcceptanceInput(
             issue_body=(FIXTURES / "issue_valid.md").read_text(),
             pr_body=body,
-            changed_files=[
-                line.strip()
-                for line in (FIXTURES / "changed_files_valid.txt").read_text().splitlines()
-                if line.strip()
-            ],
+            changed_files=_fixture_changed_files(),
             diff_text=(FIXTURES / "diff_clean.patch").read_text(),
         )
     )
