@@ -1,5 +1,18 @@
-"""Pure, offline validation planning for Agent OS."""
+"""Pure, offline validation planning and supplied evidence for Agent OS."""
 
+from .evidence_bundle import (
+    MAX_BUNDLE_SERIALIZED_BYTES,
+    MAX_RESULT_DIAGNOSTIC_LENGTH,
+    MAX_RUN_ID_LENGTH,
+    VALIDATION_EVIDENCE_BUNDLE_SCHEMA_NAME,
+    VALIDATION_EVIDENCE_BUNDLE_SCHEMA_VERSION,
+    CommandResultEvidence,
+    SuppliedCommandResult,
+    ValidationEvidenceBundle,
+    build_validation_evidence_bundle,
+    serialize_validation_evidence_bundle,
+    validation_evidence_bundle_id,
+)
 from .models import (
     MAX_PLAN_COMMANDS,
     MAX_PLAN_REASON_CODES,
@@ -20,18 +33,29 @@ from .selector import (
 )
 
 __all__ = [
+    "MAX_BUNDLE_SERIALIZED_BYTES",
     "MAX_PLAN_COMMANDS",
     "MAX_PLAN_REASON_CODES",
     "MAX_PLAN_SERIALIZED_BYTES",
     "MAX_PLAN_STRING_LENGTH",
+    "MAX_RESULT_DIAGNOSTIC_LENGTH",
+    "MAX_RUN_ID_LENGTH",
+    "VALIDATION_EVIDENCE_BUNDLE_SCHEMA_NAME",
+    "VALIDATION_EVIDENCE_BUNDLE_SCHEMA_VERSION",
     "VALIDATION_PLAN_SCHEMA_NAME",
     "VALIDATION_PLAN_SCHEMA_VERSION",
+    "CommandResultEvidence",
     "SelectionInput",
+    "SuppliedCommandResult",
+    "ValidationEvidenceBundle",
     "ValidationPlan",
+    "build_validation_evidence_bundle",
     "compute_command_set_digest",
     "load_rule_map",
     "select_validation_plan",
+    "serialize_validation_evidence_bundle",
     "serialize_validation_plan",
     "validate_validation_plan",
+    "validation_evidence_bundle_id",
     "validation_plan_id",
 ]
