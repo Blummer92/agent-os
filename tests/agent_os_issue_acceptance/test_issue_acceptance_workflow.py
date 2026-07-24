@@ -182,3 +182,12 @@ def test_report_only_acceptance_workflow_tolerates_malformed_diff_payload():
     assert ': > "$out/pr_title.txt"' in content
     assert ': > "$out/changed_files.txt"' in content
     assert ': > "$out/diff.patch"' in content
+
+
+def test_report_only_acceptance_workflow_enables_documentation_advisory_before_transport():
+    content = _content()
+
+    advisory = content.index("--documentation-advisory")
+    transport = content.index('"${transport_args[@]}"')
+    assert advisory < transport
+    assert content.count("--documentation-advisory") == 1
