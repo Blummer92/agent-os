@@ -1,0 +1,427 @@
+from __future__ import annotations
+
+import ast
+import inspect
+from dataclasses import FrozenInstanceError, asdict
+
+import pytest
+
+from scripts.agent_os_execution_capabilities import (
+    CAPABILITY_EVIDENCE_SCHEMA_NAME,
+    CAPABILITY_EVIDENCE_SCHEMA_VERSION,
+    GOVERNED_PROJECTION_EVIDENCE_SCHEMA_VERSION,
+    GovernedProjectionEvidenceResult,
+    RepositoryEvidenceType,
+    RepositoryIdentity,
+    RepositoryStateEvidence,
+    WorktreeState,
+    consume_approved_projection_evidence,
+)
+from scripts.agent_os_execution_capabilities import approved_projection as consumer_module
+from scripts.agent_os_issue_acceptance.approved_execution_projection import (
+    APPROVED_EXECUTION_PROJECTION_SCHEMA_VERSION,
+    ApprovedExecutionProjection,
+)
+from scripts.agent_os_issue_acceptance.scheduler_handoff import HandoffCohort
+
+HEAD_SHA = "a" * 40
+BASE_SHA = "b" * 40
+MERGE_SHA = "c" * 40
+OTHER_SHA = "d" * 40
+CONTRACT_DIGEST = "1" * 64
+OTHER_CONTRACT_DIGEST = "2" * 64
+
+
+def _identity(**overrides) -> RepositoryIdentity:
+    values = {
+        "host": "github.com",
+        "owner": "blummer92",
+        "repository": "agent-os",
+        "repository_id": 1289370915,
+        "is_fork": False,
+        "default_branch": "main",
+    }
+    values.update(overrides)
+    return RepositoryIdentity(**values)
+
+
+def _state(
+    *,
+    synthetic: bool = False,
+    repository_identity: RepositoryIdentity | None = None,
+    contract_fingerprint: str = CONTRACT_DIGEST,
+    worktree_state: WorktreeState = WorktreeState.CLEAN,
+    worktree_reason_codes: tuple[str, ...] = (),
+) -> RepositoryStateEvidence:
+    tested_sha = MERGE_SHA if synthetic else HEAD_SHA
+    return RepositoryStateEvidence(
+        schema_name=CAPABILITY_EVIDENCE_SCHEMA_NAME,
+        evidence_schema_version=CAPABILITY_EVIDENCE_SCHEMA_VERSION,
+        producer_adapter="fixture-adapter",
+        producer_adapter_version="1.0",
+        correlation_id="issue-557",
+        repository_identity=repository_identity or _identity(),
+        base_ref="main",
+        base_sha=BASE_SHA,
+        head_ref="agent/557-gex1e-approved-projection-evidence",
+        head_sha=HEAD_SHA,
+        requested_ref="agent/557-gex1e-approved-projection-evidence",
+        requested_sha=HEAD_SHA,
+        observed_sha=tested_sha,
+        tested_sha=tested_sha,
+        pushed_sha=HEAD_SHA,
+        proposed_pr_sha=HEAD_SHA,
+        synthetic_merge_sha=MERGE_SHA if synthetic else None,
+        external_build_sha=tested_sha,
+        evidence_type=(
+            RepositoryEvidenceType.SYNTHETIC_PR_MERGE
+            if synthetic
+            else RepositoryEvidenceType.BRANCH_HEAD
+        ),
+        contract_fingerprint=contract_fingerprint,
+        worktree_state=worktree_state,
+        worktree_reason_codes=worktree_reason_codes,
+        observed_at="2026-07-24T11:55:00Z",
+        freshness_boundary="workflow-run-557",
+    )
+
+
+def _projection(
+    state: RepositoryStateEvidence | None = None,
+    **overrides,
+) -> ApprovedExecutionProjection:
+    state = state or _state()
+    values = {
+        "schema_version": APPROVED_EXECUTION_PROJECTION_SCHEMA_VERSION,
+        "projection_id": "",
+        "proposal_version": "1.0",
+        "proposal_id": f"draft-task-proposal:{'3' * 64}",
+        "approval_id": f"approval:{'4' * 64}",
+        "approval_revision": f"approval-revision:{'5' * 64}",
+        "approval_revision_number": 2,
+        "approval_kind": "implementation",
+        "approval_state": "approved",
+        "approval_authorizer_id": "operator-2",
+        "approval_decision_id": "decision-557",
+        "approval_decision_at": "2026-07-24T11:40:00Z",
+        "approval_expires_at": "2026-07-24T13:00:00Z",
+        "approval_supersedes_id": None,
+        "handoff_digest": "6" * 64,
+        "graph_digest": "7" * 64,
+        "planning_result_digest": "8" * 64,
+        "repository": "blummer92/agent-os",
+        "base_branch": "main",
+        "evaluated_repository_sha": HEAD_SHA,
+        "evaluator_commit_sha": "e" * 40,
+        "tested_repository_sha": state.tested_sha,
+        "repository_evidence_type": state.evidence_type.value,
+        "supplied_node_ids": ("issue-557",),
+        "cohort_summaries": (
+            HandoffCohort(
+                node_ids=("issue-557",),
+                classification="parallel-candidate",
+                reason_codes=("covered-no-deterministic-conflict",),
+            ),
+        ),
+        "issueplan_current_state_evidence_id": (
+            f"issueplan-current-state:{'9' * 64}"
+        ),
+        "repository_state_evidence_id": state.evidence_id,
+        "source_snapshot_fingerprint": "a" * 64,
+        "scanner_result_fingerprint": "b" * 64,
+        "implementation_contract_fingerprint": state.contract_fingerprint,
+        "allowed_files": (
+            "scripts/agent_os_execution_capabilities/approved_projection.py",
+        ),
+        "forbidden_paths": (".github/workflows/**",),
+        "required_tests": (
+            "python -m pytest tests/agent_os_execution_capabilities/"
+            "test_approved_projection.py -q",
+        ),
+        "projected_at": "2026-07-24T12:00:00Z",
+    }
+    values.update(overrides)
+    return ApprovedExecutionProjection(**values)
+
+
+def _consume(
+    projection: object | None = None,
+    state: RepositoryStateEvidence | dict[str, object] | None = None,
+    **overrides,
+) -> GovernedProjectionEvidenceResult:
+    resolved_state = state or _state()
+    resolved_projection = projection or _projection(
+        resolved_state if isinstance(resolved_state, RepositoryStateEvidence) else None
+    )
+    values = {
+        "expected_repository": _identity(),
+        "expected_base_branch": "main",
+        "expected_base_sha": BASE_SHA,
+        "expected_head_sha": HEAD_SHA,
+    }
+    values.update(overrides)
+    return consume_approved_projection_evidence(
+        resolved_projection,
+        resolved_state,
+        **values,
+    )
+
+
+def _state_mapping(state: RepositoryStateEvidence) -> dict[str, object]:
+    payload = asdict(state)
+    payload["repository_identity"] = asdict(state.repository_identity)
+    payload["evidence_type"] = state.evidence_type.value
+    payload["worktree_state"] = state.worktree_state.value
+    payload.pop("evidence_id", None)
+    return payload
+
+
+def test_valid_branch_head_is_accepted_and_preserves_exact_bindings():
+    state = _state()
+    projection = _projection(state)
+    result = _consume(
+        projection,
+        state,
+        expected_projection_id=projection.projection_id,
+        expected_approval_id=projection.approval_id,
+        expected_proposal_id=projection.proposal_id,
+    )
+
+    assert GOVERNED_PROJECTION_EVIDENCE_SCHEMA_VERSION == "1.0"
+    assert result.status == "accepted"
+    assert result.reason_codes == ()
+    assert result.details == ()
+    assert result.projection_id == projection.projection_id
+    assert result.repository_identity == state.repository_identity
+    assert result.base_sha == BASE_SHA
+    assert result.head_sha == HEAD_SHA
+    assert result.evaluated_sha == HEAD_SHA
+    assert result.tested_sha == HEAD_SHA
+    assert result.repository_evidence_type is RepositoryEvidenceType.BRANCH_HEAD
+    assert result.repository_state_evidence_id == state.evidence_id
+    assert result.implementation_contract_fingerprint == CONTRACT_DIGEST
+    assert result.authoritative is False
+    assert result.execution_authorized is False
+    assert result.side_effects_performed is False
+
+
+def test_valid_synthetic_merge_preserves_source_and_tested_sha():
+    state = _state(synthetic=True)
+    result = _consume(_projection(state), state)
+
+    assert result.status == "accepted"
+    assert result.head_sha == HEAD_SHA
+    assert result.tested_sha == MERGE_SHA
+    assert result.repository_evidence_type is RepositoryEvidenceType.SYNTHETIC_PR_MERGE
+
+
+@pytest.mark.parametrize(
+    "expected_repository,reason",
+    [
+        (_identity(owner="different"), "repo.identity-mismatch"),
+        (_identity(repository_id=999), "repo.identity-mismatch"),
+        (
+            _identity(
+                is_fork=True,
+                upstream_owner="blummer92",
+                upstream_repository="agent-os",
+                upstream_repository_id=1289370915,
+            ),
+            "repo.fork-upstream-mismatch",
+        ),
+    ],
+)
+def test_repository_identity_mismatches_fail_closed(expected_repository, reason):
+    result = _consume(expected_repository=expected_repository)
+    assert result.status == "stale"
+    assert reason in result.reason_codes
+
+
+@pytest.mark.parametrize(
+    "overrides,reason",
+    [
+        ({"expected_base_branch": "release"}, "ref.base-mismatch"),
+        ({"expected_base_sha": OTHER_SHA}, "ref.base-mismatch"),
+        ({"expected_head_sha": OTHER_SHA}, "ref.branch-moved"),
+    ],
+)
+def test_expected_ref_and_sha_mismatches_are_stale(overrides, reason):
+    result = _consume(**overrides)
+    assert result.status == "stale"
+    assert reason in result.reason_codes
+
+
+def test_tested_sha_and_evidence_type_substitution_fail_closed():
+    state = _state(synthetic=True)
+    projection = _projection(
+        state,
+        tested_repository_sha=HEAD_SHA,
+        repository_evidence_type=RepositoryEvidenceType.BRANCH_HEAD.value,
+    )
+    result = _consume(projection, state)
+
+    assert result.status == "stale"
+    assert "ref.test-sha-mismatch" in result.reason_codes
+    assert "projection-tested-sha:mismatch" in result.details
+    assert "projection-evidence-type:mismatch" in result.details
+
+
+@pytest.mark.parametrize(
+    "field", ["expected_projection_id", "expected_approval_id", "expected_proposal_id"]
+)
+def test_projection_approval_and_proposal_identity_mismatches_are_stale(field):
+    result = _consume(**{field: "wrong-identity"})
+    assert result.status == "stale"
+    assert "ref.contract-mismatch" in result.reason_codes
+
+
+def test_contract_and_repository_evidence_identity_changes_are_stale():
+    state = _state(contract_fingerprint=OTHER_CONTRACT_DIGEST)
+    projection = _projection(
+        state,
+        implementation_contract_fingerprint=CONTRACT_DIGEST,
+        repository_state_evidence_id="f" * 64,
+    )
+    result = _consume(projection, state)
+
+    assert result.status == "stale"
+    assert "ref.contract-mismatch" in result.reason_codes
+    assert "projection-repository-evidence-id:mismatch" in result.details
+    assert "projection-implementation-contract:mismatch" in result.details
+
+
+@pytest.mark.parametrize(
+    "state,expected_status,reason",
+    [
+        (
+            _state(
+                worktree_state=WorktreeState.DIRTY,
+                worktree_reason_codes=("worktree.dirty",),
+            ),
+            "blocked",
+            "worktree.dirty",
+        ),
+        (
+            _state(
+                worktree_state=WorktreeState.INDETERMINATE,
+                worktree_reason_codes=("worktree.indeterminate",),
+            ),
+            "needs-decision",
+            "worktree.indeterminate",
+        ),
+    ],
+)
+def test_dirty_and_indeterminate_worktrees_never_accept(state, expected_status, reason):
+    result = _consume(_projection(state), state)
+    assert result.status == expected_status
+    assert reason in result.reason_codes
+
+
+def test_missing_tested_sha_never_accepts():
+    valid_state = _state()
+    payload = _state_mapping(valid_state)
+    payload["tested_sha"] = None
+    payload["external_build_sha"] = None
+    result = _consume(_projection(valid_state), payload)
+
+    assert result.status == "stale"
+    assert "ref.test-sha-mismatch" in result.reason_codes
+
+
+@pytest.mark.parametrize(
+    "projection,reason",
+    [
+        ({"schema_version": "not-a-version"}, "schema.malformed-version"),
+        ({"schema_version": "2.0"}, "schema.unsupported-version"),
+        (
+            {
+                "schema_version": "1.0",
+                "execution_authorized": True,
+                "side_effects_performed": True,
+                "authoritative": True,
+            },
+            "schema.unknown-field",
+        ),
+    ],
+)
+def test_malformed_unsupported_and_authoritative_projection_inputs_are_invalid(
+    projection, reason
+):
+    result = _consume(projection=projection)
+    assert result.status == "invalid"
+    assert reason in result.reason_codes
+    assert result.execution_authorized is False
+
+
+def test_unknown_repository_reason_and_side_effect_claim_are_invalid():
+    payload = _state_mapping(_state())
+    payload["worktree_reason_codes"] = ["worktree.future"]
+    payload["side_effects_performed"] = True
+    result = _consume(state=payload)
+
+    assert result.status == "invalid"
+    assert "schema.unknown-field" in result.reason_codes
+
+
+def test_expired_projection_at_supplied_boundary_is_stale_without_clock_read():
+    projection = _projection(
+        approval_expires_at="2026-07-24T12:00:00Z",
+        projected_at="2026-07-24T12:00:00Z",
+    )
+    result = _consume(projection=projection)
+
+    assert result.status == "stale"
+    assert "ref.contract-mismatch" in result.reason_codes
+    assert "approval:expired-at-projection-boundary" in result.details
+
+
+def test_consumer_schema_is_bounded_and_fail_closed():
+    malformed = _consume(schema_version="invalid")
+    unsupported = _consume(schema_version="2.0")
+
+    assert malformed.status == "invalid"
+    assert malformed.reason_codes == ("schema.malformed-version",)
+    assert unsupported.status == "invalid"
+    assert unsupported.reason_codes == ("schema.unsupported-version",)
+
+
+def test_output_is_deterministic_sorted_and_immutable():
+    first = _consume(expected_projection_id="wrong", expected_approval_id="wrong")
+    second = _consume(expected_projection_id="wrong", expected_approval_id="wrong")
+
+    assert first == second
+    assert first.reason_codes == tuple(sorted(first.reason_codes))
+    assert first.details == tuple(sorted(first.details))
+    with pytest.raises(FrozenInstanceError):
+        first.status = "accepted"  # type: ignore[misc]
+    with pytest.raises(TypeError):
+        first.details[0] = "changed"  # type: ignore[index]
+
+
+def test_module_has_no_clock_io_scheduler_or_runtime_side_effect_surface():
+    source = inspect.getsource(consumer_module)
+    tree = ast.parse(source)
+    imported_roots = {
+        alias.name.split(".", 1)[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    imported_roots.update(
+        node.module.split(".", 1)[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module
+    )
+    called_attributes = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+
+    assert imported_roots.isdisjoint(
+        {"os", "pathlib", "socket", "subprocess", "requests", "urllib", "time"}
+    )
+    assert "workflow_scheduler" not in source
+    assert called_attributes.isdisjoint(
+        {"now", "utcnow", "today", "open", "read_text", "write_text"}
+    )
