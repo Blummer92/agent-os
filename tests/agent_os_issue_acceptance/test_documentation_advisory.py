@@ -1,12 +1,30 @@
-from scripts.agent_os_issue_acceptance.documentation_advisory import attach_documentation_advisory
-from scripts.agent_os_issue_acceptance.models import AcceptanceReport, CheckResult, IssueMetadata, Status
+from scripts.agent_os_issue_acceptance.acceptance_report_transport import (
+    build_acceptance_report_transport,
+)
+from scripts.agent_os_issue_acceptance.documentation_advisory import (
+    attach_documentation_advisory,
+)
+from scripts.agent_os_issue_acceptance.models import (
+    AcceptanceReport,
+    CheckResult,
+    IssueMetadata,
+    Status,
+)
+from scripts.agent_os_issue_acceptance.report import render_report
 
 
 def _report(status=Status.PASS):
     return AcceptanceReport(
         linked_issue=553,
         overall_status=status,
-        checks=[CheckResult("required docs", Status.PASS, "covered", ["path=README.md"])],
+        checks=[
+            CheckResult(
+                "required docs",
+                Status.PASS,
+                "covered",
+                ["path=README.md"],
+            )
+        ],
         manual_review_items=["existing manual review"],
         evidence=["existing evidence"],
         blockers=["existing blocker"],
@@ -24,6 +42,24 @@ def _metadata(**overrides):
     )
     values.update(overrides)
     return IssueMetadata(**values)
+
+
+def _transport(report, workflow_run_id="1"):
+    return build_acceptance_report_transport(
+        report=report,
+        repository="Blummer92/agent-os",
+        issue_number=553,
+        issue_body="",
+        issue_body_sha256="",
+        pr_number=556,
+        pr_head_sha="pr-head-sha",
+        evaluator_sha="evaluator-sha",
+        workflow_run_id=workflow_run_id,
+        workflow_run_attempt=1,
+        fresh_issue_body="",
+        fresh_pr_head_sha="pr-head-sha",
+        observed_at="2026-07-24T00:00:00Z",
+    )
 
 
 def test_docs_required_adds_bounded_advisory_without_changing_decisions():
@@ -64,6 +100,19 @@ def test_docs_not_required_returns_fresh_equal_report():
     assert result.evidence is not report.evidence
     assert result.checks is not report.checks
     assert result.checks[0].evidence is not report.checks[0].evidence
+    assert render_report(result) == render_report(report)
+
+
+def test_advisory_evidence_changes_report_hash_but_run_identity_does_not():
+    report = _report()
+    advisory = attach_documentation_advisory(report, _metadata())
+
+    base_transport = _transport(report)
+    advisory_transport = _transport(advisory)
+    rerun_transport = _transport(advisory, workflow_run_id="2")
+
+    assert base_transport.report_sha256 != advisory_transport.report_sha256
+    assert advisory_transport.report_sha256 == rerun_transport.report_sha256
 
 
 def test_missing_or_unsafe_metadata_is_conservative_and_bounded():
