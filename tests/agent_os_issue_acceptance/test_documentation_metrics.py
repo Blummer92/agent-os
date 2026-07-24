@@ -35,6 +35,8 @@ MODULE = ROOT / "scripts" / "agent_os_issue_acceptance" / "documentation_metrics
 
 
 def _body(decision: str | None, docs: tuple[str, ...] = ()) -> str:
+    if decision is None and not docs:
+        return "issue body without IssuePlan metadata"
     lines = ["```yaml", "agent_os_issue_acceptance:"]
     if decision is not None:
         lines.append(f"  documentation_impact: {decision}")
