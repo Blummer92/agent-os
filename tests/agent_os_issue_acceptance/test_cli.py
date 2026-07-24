@@ -45,11 +45,11 @@ agent_os_issue_acceptance:
   source_of_truth: GitHub
   external_writes: none
   required_files:
-    - scripts/agent_os_issue_acceptance/
+    - scripts/agent_os_issue_acceptance/policy.py
   forbidden_paths:
-    - 00_Governance/
+    - 00_Governance/write-authorization-policy.md
   required_tests:
-    - tests/agent_os_issue_acceptance/
+    - tests/agent_os_issue_acceptance/test_policy.py
   required_docs:
     - scripts/agent_os_issue_acceptance/README.md
   banned_patterns:
