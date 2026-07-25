@@ -1,0 +1,23 @@
+{
+  "title": "Add deterministic issue draft preview",
+  "fields": {
+    "tier": "tier:1-standard-implementation",
+    "objective": "Create a reusable offline issue draft preview.",
+    "owner": "owner:github-service-agent",
+    "readiness": "status:ready",
+    "source-of-truth": "GitHub",
+    "external-write": "no-external-write",
+    "scope": "Scope:\n- Render a local preview.\n\nNon-goals:\n- No GitHub writes.",
+    "files": "Allowed:\n- scripts/agent_os_issue_labels\n\nForbidden or protected:\n- 00_Governance",
+    "prior-scope-review": "Reviewed #599 and #600; this extends the canonical issue-label architecture.",
+    "documentation-impact": "docs-not-required",
+    "validation": "Tests:\n- focused pytest\n- aggregate validation\n\nDocs:\n- not applicable",
+    "dependencies": "Dependencies: #599\nBlockers: none",
+    "acceptance": "Acceptance criteria:\n- [ ] Preview is deterministic.\n\nDefinition of done:\n- [ ] Validation passes.",
+    "safety": [
+      "No direct push to main, automatic merge, or autonomous issue closure is authorized.",
+      "No production, governed-field, source-of-truth, sharing, or external-system write is authorized without explicit approval.",
+      "Final implementation reporting will include files changed, tests run, docs updated, blockers, handoffs, and remaining risks."
+    ]
+  }
+}

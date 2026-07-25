@@ -6,12 +6,15 @@ from pathlib import Path
 from scripts.agent_os_issue_acceptance.models import Status
 
 from .checker import evaluate_issue_labels
-from .issue_metadata import load_issue_form_fields, parse_issue_form_body
+from .issue_metadata import (
+    load_issue_form_fields,
+    metadata_contract,
+    parse_issue_form_body,
+)
 from .label_map import expected_labels, load_label_map
 
 _OWNER_PREFIX = "owner:"
 _SAFE_BASE_LABELS = {"agent-os"}
-_LEGACY_FIELDS = {"phase", "epic", "type"}
 
 
 @dataclass(frozen=True)
@@ -50,7 +53,7 @@ def plan_label_application(
     label_map = load_label_map(label_map_path)
     fields = load_issue_form_fields(issue_form_path)
     metadata = parse_issue_form_body(issue_body, fields)
-    metadata_contract = _metadata_contract(metadata)
+    contract = metadata_contract(metadata)
     expected, unknown_values = expected_labels(metadata, label_map)
     checker_report = evaluate_issue_labels(
         issue_body=issue_body,
@@ -65,9 +68,11 @@ def plan_label_application(
             reasons.append(f"{check.name}: {check.message}")
             reasons.extend(check.evidence)
 
-    if metadata_contract == "legacy":
-        reasons.append("legacy metadata contract is report-only and cannot authorize label additions")
-    elif metadata_contract == "incomplete":
+    if contract == "legacy":
+        reasons.append(
+            "legacy metadata contract is report-only and cannot authorize label additions"
+        )
+    elif contract == "incomplete":
         reasons.append("metadata contract is incomplete and requires manual review")
 
     candidate_additions: set[str] = set()
@@ -85,7 +90,9 @@ def plan_label_application(
         )
 
     desired_owner = _desired_owner_label(metadata, label_map.fields, reasons)
-    existing_owners = {label for label in existing if label.startswith(_OWNER_PREFIX)}
+    existing_owners = {
+        label for label in existing if label.startswith(_OWNER_PREFIX)
+    }
     if desired_owner and desired_owner in existing:
         already_present.add(desired_owner)
 
@@ -101,15 +108,15 @@ def plan_label_application(
     approved = () if requires_review else tuple(sorted(candidate_additions))
     eligibility = (
         "eligible"
-        if metadata_contract == "tiered" and not requires_review
+        if contract == "tiered" and not requires_review
         else "report-only"
-        if metadata_contract == "legacy"
+        if contract == "legacy"
         else "manual-review"
     )
 
     return LabelApplicationPlan(
         outcome=outcome,
-        metadata_contract=metadata_contract,
+        metadata_contract=contract,
         application_eligibility=eligibility,
         owner_policy_status="report-only-participation-labels",
         desired_primary_owner=desired_owner,
@@ -199,14 +206,6 @@ def render_application_plan(
         f"Exit status: {exit_status}",
     ]
     return "\n".join(lines) + "\n"
-
-
-def _metadata_contract(metadata: dict[str, list[str]]) -> str:
-    if metadata.get("tier"):
-        return "tiered"
-    if _LEGACY_FIELDS.intersection(metadata):
-        return "legacy"
-    return "incomplete"
 
 
 def _consider_safe_label(

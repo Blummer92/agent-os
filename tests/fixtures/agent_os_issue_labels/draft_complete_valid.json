@@ -1,0 +1,28 @@
+{
+  "title": "[Agent OS] Preserve Unicode and multiline issue evidence",
+  "fields": {
+    "tier": "tier:2-governed-cross-system",
+    "objective": "Preserve deterministic multilingual evidence for café — 東京.",
+    "owner": "owner:github-service-agent",
+    "status": "status:blocked",
+    "source-of-truth": "GitHub",
+    "external-write": "no-external-write",
+    "scope": "Scope:\n- Preserve multiline text.\n- Preserve Unicode.\n\nNon-goals:\n- No external mutation.",
+    "files": "Allowed:\n- scripts/agent_os_issue_labels/draft.py\n- tests/agent_os_issue_labels/test_issue_draft.py\n\nForbidden or protected:\n- .github/workflows",
+    "prior-scope-review": "Reviewed #180, #599, #600, and the current issue-label parser and planner.",
+    "refactor-evidence": "The checker and planner duplicate metadata-contract detection; the new draft core is a third caller.",
+    "documentation_impact": "docs-required",
+    "required_docs": "scripts/agent_os_issue_labels/README.md\nscripts/agent_os_issue_labels/ISSUE_DRAFT_PREVIEW.md",
+    "documentation_expected_change": "Document structured input, deterministic output, and non-authorization semantics.",
+    "documentation_exemption_reason": null,
+    "validation": "Tests:\n- issue draft focused suite\n- label checker regression suite\n- aggregate validation\n\nDocs:\n- preview contract",
+    "dependencies": "Dependencies:\n- #599\n\nBlockers:\n- none",
+    "acceptance": "Acceptance criteria:\n- [ ] Unicode is preserved.\n- [ ] Ordering is canonical.\n\nDefinition of done:\n- [ ] Draft PR remains unmerged.",
+    "tier2-controls": "Authorization: offline preview only.\nRollback: revert the focused PR.\nStop: any external write requirement.",
+    "safety": [
+      "No direct push to main, automatic merge, or autonomous issue closure is authorized.",
+      "No production, governed-field, source-of-truth, sharing, or external-system write is authorized without explicit approval.",
+      "Final implementation reporting will include files changed, tests run, docs updated, blockers, handoffs, and remaining risks."
+    ]
+  }
+}

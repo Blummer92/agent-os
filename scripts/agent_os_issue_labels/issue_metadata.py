@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import yaml
 
 _HEADING_RE = re.compile(r"^###\s+(.+?)\s*$")
+_SUPPORTED_CONTROL_TYPES = {"checkboxes", "dropdown", "input", "textarea"}
 
 # Canonical field IDs preserve the existing label-map contract while allowing
 # both the legacy and tiered issue forms to be parsed by one implementation.
@@ -32,24 +35,141 @@ _HEADING_ALIASES = {
     "issue tier": "tier",
 }
 
+_REQUIRED_FIELDS = {
+    "legacy": frozenset(
+        {
+            "phase",
+            "epic",
+            "owner",
+            "status",
+            "type",
+            "source-of-truth",
+            "external-write",
+        }
+    ),
+    "tiered": frozenset(
+        {
+            "tier",
+            "owner",
+            "status",
+            "source-of-truth",
+            "external-write",
+        }
+    ),
+}
+
+
+@dataclass(frozen=True)
+class IssueFormField:
+    field_id: str
+    canonical_id: str
+    control_type: str
+    label: str
+    required: bool
+    options: tuple[str, ...] = ()
+    required_options: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class IssueFormSchema:
+    name: str
+    description: str
+    title_prefix: str
+    default_labels: tuple[str, ...]
+    default_assignees: tuple[str, ...]
+    issue_type: str | None
+    projects: tuple[str, ...]
+    fields: tuple[IssueFormField, ...]
+    unsupported_controls: tuple[str, ...] = ()
+
+
+def canonical_field_id(value: str) -> str:
+    return _FIELD_ID_ALIASES.get(value, value)
+
+
+def load_issue_form_schema(path: str | Path) -> IssueFormSchema:
+    data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    if not isinstance(data, dict):
+        raise ValueError("issue form must be a YAML mapping")
+
+    body = data.get("body", [])
+    if not isinstance(body, list):
+        raise ValueError("issue form body must be a list")
+
+    fields: list[IssueFormField] = []
+    unsupported: list[str] = []
+    seen_canonical_ids: set[str] = set()
+
+    for index, raw_item in enumerate(body):
+        if not isinstance(raw_item, dict):
+            unsupported.append(f"body[{index}] is not a mapping")
+            continue
+
+        control_type = str(raw_item.get("type") or "")
+        if control_type == "markdown":
+            continue
+
+        field_id = raw_item.get("id")
+        attributes = raw_item.get("attributes") or {}
+        validations = raw_item.get("validations") or {}
+        if not isinstance(attributes, dict) or not isinstance(validations, dict):
+            unsupported.append(f"body[{index}] has malformed attributes or validations")
+            continue
+
+        label = attributes.get("label")
+        if not field_id or not label:
+            unsupported.append(f"body[{index}] input control must define id and label")
+            continue
+        if control_type not in _SUPPORTED_CONTROL_TYPES:
+            unsupported.append(
+                f"body[{index}] field {field_id!s} uses unsupported control {control_type!r}"
+            )
+            continue
+
+        raw_id = str(field_id)
+        canonical_id = canonical_field_id(raw_id)
+        if canonical_id in seen_canonical_ids:
+            unsupported.append(f"duplicate canonical field id: {canonical_id}")
+            continue
+        seen_canonical_ids.add(canonical_id)
+
+        options, required_options = _load_options(control_type, attributes)
+        fields.append(
+            IssueFormField(
+                field_id=raw_id,
+                canonical_id=canonical_id,
+                control_type=control_type,
+                label=str(label),
+                required=validations.get("required") is True,
+                options=options,
+                required_options=required_options,
+            )
+        )
+
+    if not fields:
+        raise ValueError("issue form must define supported body fields with id and label")
+
+    return IssueFormSchema(
+        name=str(data.get("name") or ""),
+        description=str(data.get("description") or ""),
+        title_prefix=str(data.get("title") or ""),
+        default_labels=_string_tuple(data.get("labels")),
+        default_assignees=_string_tuple(data.get("assignees")),
+        issue_type=_optional_string(data.get("type")),
+        projects=_string_tuple(data.get("projects")),
+        fields=tuple(fields),
+        unsupported_controls=tuple(unsupported),
+    )
+
 
 def load_issue_form_fields(path: str | Path) -> dict[str, str]:
-    data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
-    fields: dict[str, str] = {}
-    for item in data.get("body", []):
-        field_id = item.get("id")
-        label = (item.get("attributes") or {}).get("label")
-        if field_id and label:
-            canonical_id = _FIELD_ID_ALIASES.get(str(field_id), str(field_id))
-            fields[canonical_id] = str(label)
-    if not fields:
-        raise ValueError("issue form must define body fields with id and label")
-    return fields
+    schema = load_issue_form_schema(path)
+    return {field.canonical_id: field.label for field in schema.fields}
 
 
 def parse_issue_form_body(issue_body: str, fields: dict[str, str]) -> dict[str, list[str]]:
     label_to_id = {
-        _normalize(label): _FIELD_ID_ALIASES.get(field_id, field_id)
+        _normalize(label): canonical_field_id(field_id)
         for field_id, label in fields.items()
     }
     label_to_id.update(_HEADING_ALIASES)
@@ -64,6 +184,60 @@ def parse_issue_form_body(issue_body: str, fields: dict[str, str]) -> dict[str, 
         if values:
             parsed[field_id] = values
     return parsed
+
+
+def metadata_contract(metadata: dict[str, list[str]]) -> str:
+    fields = set(metadata)
+    if _REQUIRED_FIELDS["tiered"] <= fields:
+        return "tiered"
+    if _REQUIRED_FIELDS["legacy"] <= fields:
+        return "legacy"
+    return "incomplete"
+
+
+def missing_metadata_fields(metadata: dict[str, list[str]]) -> dict[str, tuple[str, ...]]:
+    present = set(metadata)
+    return {
+        name: tuple(sorted(required - present))
+        for name, required in _REQUIRED_FIELDS.items()
+    }
+
+
+def _load_options(
+    control_type: str, attributes: dict[str, Any]
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    raw_options = attributes.get("options") or []
+    if not isinstance(raw_options, list):
+        return (), ()
+
+    options: list[str] = []
+    required_options: list[str] = []
+    for raw_option in raw_options:
+        if control_type == "checkboxes":
+            if not isinstance(raw_option, dict) or not raw_option.get("label"):
+                continue
+            label = str(raw_option["label"])
+            options.append(label)
+            if raw_option.get("required") is True:
+                required_options.append(label)
+        else:
+            options.append(str(raw_option))
+    return tuple(options), tuple(required_options)
+
+
+def _string_tuple(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, list):
+        return tuple(str(item) for item in value)
+    return (str(value),)
+
+
+def _optional_string(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _markdown_sections(text: str) -> dict[str, str]:
