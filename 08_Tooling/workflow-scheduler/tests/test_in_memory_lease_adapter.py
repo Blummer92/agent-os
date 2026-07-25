@@ -99,26 +99,28 @@ def test_repeated_release_is_distinct_and_non_mutating() -> None:
 def test_wrong_holder_wrong_generation_and_wrong_identity_do_not_mutate() -> None:
     adapter = InMemoryLeaseAdapter()
     request = _request()
-    grant = adapter.acquire(request)
+    first = adapter.acquire(request)
 
-    wrong_holder = adapter.release(_forge(grant, holder_identity="pilot-holder:wrong"))
+    wrong_holder = adapter.release(_forge(first, holder_identity="pilot-holder:wrong"))
     assert wrong_holder.released is False
     assert "holder" in wrong_holder.reason
+    assert adapter.release(first).released is True
 
-    stale = adapter.release(_forge(grant, generation=grant.generation - 1))
-    future = adapter.release(_forge(grant, generation=grant.generation + 1))
+    active = adapter.acquire(request)
+    stale = adapter.release(first)
+    future = adapter.release(_forge(active, generation=active.generation + 1))
     assert stale.released is False
     assert future.released is False
     assert "generation" in stale.reason
     assert "generation" in future.reason
 
     wrong_identity = adapter.release(
-        _forge(grant, lease_identity="pilot-lease:unknown")
+        _forge(active, lease_identity="pilot-lease:unknown")
     )
     assert wrong_identity.released is False
     assert wrong_identity.reason == "lease is not owned"
 
-    assert adapter.release(grant).released is True
+    assert adapter.release(active).released is True
 
 
 def test_unknown_release_does_not_consume_capacity_or_mutate_other_lease() -> None:
