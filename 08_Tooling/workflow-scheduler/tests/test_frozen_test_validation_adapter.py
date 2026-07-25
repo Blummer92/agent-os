@@ -1,31 +1,17 @@
-"""Tests for the WSC5B3B frozen-test validation adapter.
-
-All runners are small deterministic fakes; no real subprocess is ever
-spawned by this adapter or these tests. No arbitrary sleeps are used.
-"""
-
 from __future__ import annotations
 
-import ast
-import inspect
-import sys
-from pathlib import Path
+import math
 
 import pytest
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-SCHEDULER_SRC = REPOSITORY_ROOT / "08_Tooling/workflow-scheduler/src"
-if str(REPOSITORY_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPOSITORY_ROOT))
-if str(SCHEDULER_SRC) not in sys.path:
-    sys.path.insert(0, str(SCHEDULER_SRC))
-
-from workflow_scheduler.execution import frozen_test_validation_adapter as adapter_module  # noqa: E402
-from workflow_scheduler.execution.frozen_test_validation_adapter import (  # noqa: E402
+from workflow_scheduler.execution import frozen_test_validation_adapter as module
+from workflow_scheduler.execution.frozen_test_validation_adapter import (
     MAX_ARGUMENT_BYTES,
     MAX_ARGV_ITEMS,
     MAX_CHANGED_PATHS,
     MAX_COMMAND_BYTES,
+    MAX_OUTPUT_BYTES,
+    MAX_REASON_LENGTH,
     MAX_REQUIRED_TEST_COMMANDS,
     CommandRunObservation,
     CommandRunRequest,
@@ -34,538 +20,449 @@ from workflow_scheduler.execution.frozen_test_validation_adapter import (  # noq
     FrozenTestValidationError,
     run_frozen_test_validation,
 )
-from workflow_scheduler.execution.single_issue_pilot import (  # noqa: E402
+from workflow_scheduler.execution.single_issue_pilot import (
     PilotValidationObservation,
     PilotValidationRequest,
     ValidationAdapter,
-)
-
-MODULE_PATH = (
-    SCHEDULER_SRC / "workflow_scheduler" / "execution" / "frozen_test_validation_adapter.py"
 )
 
 ALLOWED_FILES = ("src/**",)
 FORBIDDEN_PATHS = (".github/workflows/**",)
 
 
-def _request(**changes: object) -> PilotValidationRequest:
+def request(*tests: str) -> PilotValidationRequest:
+    return PilotValidationRequest(
+        invocation_id="invocation-597",
+        workspace_identity="workspace-597",
+        plan_id="plan-597",
+        required_tests=tests or ("test-a", "test-b"),
+    )
+
+
+def commands(*test_ids: str) -> tuple[FrozenTestCommand, ...]:
+    return tuple(FrozenTestCommand(test_id=item, argv=("run", item)) for item in test_ids)
+
+
+def success(test_id: str, **changes: object) -> CommandRunObservation:
     values: dict[str, object] = {
-        "invocation_id": "invocation-597",
-        "workspace_identity": "workspace-597",
-        "plan_id": "plan-597",
-        "required_tests": ("test-a", "test-b"),
+        "test_id": test_id,
+        "outcome": "succeeded",
+        "started": True,
+        "return_code": 0,
     }
     values.update(changes)
-    return PilotValidationRequest(**values)  # type: ignore[arg-type]
-
-
-def _commands(*test_ids: str) -> tuple[FrozenTestCommand, ...]:
-    return tuple(
-        FrozenTestCommand(test_id=test_id, argv=("run", test_id)) for test_id in test_ids
-    )
+    return CommandRunObservation(**values)  # type: ignore[arg-type]
 
 
 class FakeRunner:
-    """Deterministic in-memory runner returning canned observations."""
-
     def __init__(self, responses: dict[str, object]) -> None:
-        self._responses = responses
+        self.responses = responses
         self.calls: list[CommandRunRequest] = []
 
-    def run(self, request: CommandRunRequest) -> CommandRunObservation:
-        self.calls.append(request)
-        response = self._responses[request.test_id]
+    def run(self, item: CommandRunRequest) -> CommandRunObservation:
+        self.calls.append(item)
+        response = self.responses[item.test_id]
         if isinstance(response, BaseException):
             raise response
-        return response
+        return response  # type: ignore[return-value]
 
 
-def _success(test_id: str, *, changed_paths: tuple[str, ...] = ()) -> CommandRunObservation:
-    return CommandRunObservation(
-        test_id=test_id, outcome="succeeded", started=True, return_code=0,
-        changed_paths=changed_paths,
+def make_adapter(
+    responses: dict[str, object],
+    *,
+    test_ids: tuple[str, ...] = ("test-a",),
+    **kwargs: object,
+) -> FrozenTestValidationAdapter:
+    return FrozenTestValidationAdapter(
+        required_test_commands=commands(*test_ids),
+        runner=FakeRunner(responses),
+        **kwargs,
     )
 
 
-# --------------------------------------------------------------------------
-# Frozen argv accepted and run exactly once
-# --------------------------------------------------------------------------
+def outcome(adapter: FrozenTestValidationAdapter) -> CommandRunObservation:
+    assert adapter.last_result is not None
+    return adapter.last_result.command_outcomes[0]
 
 
-def test_exact_frozen_required_test_argv_accepted_and_run_once() -> None:
-    runner = FakeRunner({"test-a": _success("test-a"), "test-b": _success("test-b")})
+def test_exact_frozen_argv_runs_once_and_passes() -> None:
+    runner = FakeRunner({"test-a": success("test-a"), "test-b": success("test-b")})
     adapter = FrozenTestValidationAdapter(
-        required_test_commands=_commands("test-a", "test-b"), runner=runner
+        required_test_commands=commands("test-a", "test-b"), runner=runner
     )
-    observation = adapter.validate(_request())
-    assert isinstance(observation, PilotValidationObservation)
-    assert observation.attempted is True
-    assert observation.passed is True
-    assert observation.completed_tests == ("test-a", "test-b")
-    assert len(runner.calls) == 2
-    assert runner.calls[0].argv == ("run", "test-a")
-    assert runner.calls[1].argv == ("run", "test-b")
-
-
-def test_adapter_satisfies_the_validation_adapter_protocol() -> None:
-    runner = FakeRunner({"test-a": _success("test-a")})
-    adapter = FrozenTestValidationAdapter(required_test_commands=_commands("test-a"), runner=runner)
+    observed = adapter.validate(request())
+    assert isinstance(observed, PilotValidationObservation)
+    assert observed.passed is True
+    assert observed.completed_tests == ("test-a", "test-b")
+    assert [item.argv for item in runner.calls] == [("run", "test-a"), ("run", "test-b")]
     assert isinstance(adapter, ValidationAdapter)
 
 
-def test_adapter_runs_at_most_once() -> None:
-    runner = FakeRunner({"test-a": _success("test-a")})
-    adapter = FrozenTestValidationAdapter(
-        required_test_commands=_commands("test-a"), runner=runner
-    )
-    adapter.validate(_request(required_tests=("test-a",)))
+def test_adapter_is_one_shot_and_last_result_is_read_only() -> None:
+    adapter = make_adapter({"test-a": success("test-a")})
+    assert adapter.last_result is None
+    adapter.validate(request("test-a"))
     with pytest.raises(RuntimeError):
-        adapter.validate(_request(required_tests=("test-a",)))
+        adapter.validate(request("test-a"))
+    with pytest.raises(AttributeError):
+        adapter.last_result = None  # type: ignore[misc]
 
 
-def test_adapter_rejects_wrong_request_type() -> None:
-    runner = FakeRunner({"test-a": _success("test-a")})
-    adapter = FrozenTestValidationAdapter(required_test_commands=_commands("test-a"), runner=runner)
+def test_wrong_request_type_leaves_no_result() -> None:
+    adapter = make_adapter({"test-a": success("test-a")})
     with pytest.raises(TypeError):
-        adapter.validate("not-a-request")  # type: ignore[arg-type]
+        adapter.validate("bad")  # type: ignore[arg-type]
+    assert adapter.last_result is None
 
 
-# --------------------------------------------------------------------------
-# Argv/config rejection before the runner is ever called
-# --------------------------------------------------------------------------
-
-
-def test_string_command_rejected_before_runner_call() -> None:
+@pytest.mark.parametrize(
+    "argv",
+    [
+        "run test",
+        (),
+        ("run", "bad\x00value"),
+        ("x",) * (MAX_ARGV_ITEMS + 1),
+        ("x" * (MAX_ARGUMENT_BYTES + 1),),
+    ],
+)
+def test_bad_argv_is_rejected(argv: object) -> None:
     with pytest.raises(FrozenTestValidationError):
-        FrozenTestCommand(test_id="test-a", argv="run test-a")  # type: ignore[arg-type]
+        FrozenTestCommand(test_id="test-a", argv=argv)  # type: ignore[arg-type]
 
 
-def test_empty_argv_rejected_before_runner_call() -> None:
+def test_aggregate_argv_and_command_counts_are_bounded() -> None:
+    count = (MAX_COMMAND_BYTES // MAX_ARGUMENT_BYTES) + 2
     with pytest.raises(FrozenTestValidationError):
-        FrozenTestCommand(test_id="test-a", argv=())
-
-
-def test_nul_byte_in_argv_rejected_before_runner_call() -> None:
+        FrozenTestCommand(
+            test_id="test-a",
+            argv=tuple("x" * MAX_ARGUMENT_BYTES for _ in range(count)),
+        )
     with pytest.raises(FrozenTestValidationError):
-        FrozenTestCommand(test_id="test-a", argv=("run", "test\x00a"))
+        FrozenTestValidationAdapter(
+            required_test_commands=commands(
+                *(f"t-{index}" for index in range(MAX_REQUIRED_TEST_COMMANDS + 1))
+            ),
+            runner=FakeRunner({}),
+        )
 
 
-def test_excessive_argument_count_rejected() -> None:
-    with pytest.raises(FrozenTestValidationError):
-        FrozenTestCommand(test_id="test-a", argv=("arg",) * (MAX_ARGV_ITEMS + 1))
-
-
-def test_oversized_single_argument_rejected() -> None:
-    with pytest.raises(FrozenTestValidationError):
-        FrozenTestCommand(test_id="test-a", argv=("x" * (MAX_ARGUMENT_BYTES + 1),))
-
-
-def test_oversized_aggregate_argv_bytes_rejected() -> None:
-    per_arg = MAX_ARGUMENT_BYTES
-    count = (MAX_COMMAND_BYTES // per_arg) + 2
-    with pytest.raises(FrozenTestValidationError):
-        FrozenTestCommand(test_id="test-a", argv=tuple("x" * per_arg for _ in range(count)))
-
-
-def test_excessive_command_count_rejected_before_runner_call() -> None:
-    runner = FakeRunner({})
-    commands = _commands(*(f"test-{i}" for i in range(MAX_REQUIRED_TEST_COMMANDS + 1)))
-    with pytest.raises(FrozenTestValidationError):
-        FrozenTestValidationAdapter(required_test_commands=commands, runner=runner)
-    assert runner.calls == []
-
-
-def test_duplicate_test_id_in_configuration_rejected() -> None:
-    commands = (
-        FrozenTestCommand(test_id="test-a", argv=("run", "a")),
-        FrozenTestCommand(test_id="test-a", argv=("run", "b")),
+def test_duplicate_test_id_is_rejected() -> None:
+    duplicate = (
+        FrozenTestCommand(test_id="a", argv=("run", "a")),
+        FrozenTestCommand(test_id="a", argv=("run", "b")),
     )
     with pytest.raises(FrozenTestValidationError):
         run_frozen_test_validation(
-            commands, ("test-a",), runner=FakeRunner({}), allowed_files=(), forbidden_paths=()
+            duplicate,
+            ("a",),
+            runner=FakeRunner({}),
+            allowed_files=(),
+            forbidden_paths=(),
         )
 
 
-def test_malformed_command_rejected_via_bad_test_id() -> None:
+def test_identity_and_order_mismatch_fails_before_runner() -> None:
+    runner = FakeRunner({"test-a": success("test-a"), "test-b": success("test-b")})
+    adapter = FrozenTestValidationAdapter(
+        required_test_commands=commands("test-a", "test-b"), runner=runner
+    )
+    observed = adapter.validate(request("test-b", "test-a"))
+    assert observed.passed is False
+    assert runner.calls == []
+
+
+@pytest.mark.parametrize(
+    ("changes", "reason_fragment"),
+    [
+        ({"started": False}, "requires started=True"),
+        ({"return_code": None}, "requires started=True"),
+        ({"return_code": 7}, "requires started=True"),
+        ({"outcome": "invented"}, "outcome was unsupported"),
+        ({"started": 1}, "started flag was malformed"),
+        ({"return_code": True}, "return code was malformed"),
+        ({"stdout_text": 1}, "stdout was malformed"),
+        ({"stderr_text": object()}, "stderr was malformed"),
+        ({"reason": 3}, "reason was malformed"),
+        ({"changed_paths": "src/file.py"}, "changed_paths must be"),
+    ],
+)
+def test_malformed_or_contradictory_success_never_completes(
+    changes: dict[str, object], reason_fragment: str
+) -> None:
+    adapter = make_adapter({"test-a": success("test-a", **changes)})
+    observed = adapter.validate(request("test-a"))
+    assert observed.passed is False
+    assert observed.completed_tests == ()
+    assert outcome(adapter).outcome == "failed"
+    assert reason_fragment in outcome(adapter).reason
+
+
+def test_identity_mismatch_has_exact_failure_reason() -> None:
+    adapter = make_adapter({"test-a": success("other")})
+    assert adapter.validate(request("test-a")).passed is False
+    assert outcome(adapter).reason == (
+        "runner observation identity did not match the requested command"
+    )
+
+
+def test_runner_exception_is_bounded_unavailable_evidence() -> None:
+    adapter = make_adapter({"test-a": RuntimeError("x" * 5000)})
+    assert adapter.validate(request("test-a")).passed is False
+    assert outcome(adapter).outcome == "unavailable"
+    assert len(outcome(adapter).reason) <= MAX_REASON_LENGTH
+
+
+def test_non_observation_fails_closed() -> None:
+    adapter = make_adapter({"test-a": "wrong"})
+    assert adapter.validate(request("test-a")).passed is False
+    assert outcome(adapter).reason == "runner returned a malformed observation"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("per_command_timeout_seconds", float("nan")),
+        ("per_command_timeout_seconds", float("inf")),
+        ("per_command_timeout_seconds", True),
+        (
+            "per_command_timeout_seconds",
+            module.DEFAULT_PER_COMMAND_TIMEOUT_SECONDS + 1,
+        ),
+        ("total_timeout_seconds", float("-inf")),
+        ("total_timeout_seconds", module.DEFAULT_TOTAL_TIMEOUT_SECONDS + 1),
+        ("max_output_bytes", True),
+        ("max_output_bytes", MAX_OUTPUT_BYTES + 1),
+    ],
+)
+def test_runtime_and_output_bounds_reject_invalid_or_expanded_values(
+    field: str, value: object
+) -> None:
     with pytest.raises(FrozenTestValidationError):
-        FrozenTestCommand(test_id="", argv=("run",))
+        make_adapter({"test-a": success("test-a")}, **{field: value})
 
 
-def test_non_conforming_runner_rejected_at_construction() -> None:
-    with pytest.raises(FrozenTestValidationError):
-        FrozenTestValidationAdapter(
-            required_test_commands=_commands("test-a"), runner=object()  # type: ignore[arg-type]
-        )
+def test_reduced_runtime_and_output_bounds_are_allowed() -> None:
+    adapter = make_adapter(
+        {"test-a": success("test-a")},
+        per_command_timeout_seconds=1,
+        total_timeout_seconds=2,
+        max_output_bytes=32,
+    )
+    assert adapter.validate(request("test-a")).passed is True
 
 
-# --------------------------------------------------------------------------
-# Required-test identity/order mismatch fails closed before running commands
-# --------------------------------------------------------------------------
+def test_elapsed_timeout_overrides_claimed_success_without_sleep(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ticks = iter((10.0, 10.2))
+    monkeypatch.setattr(module.time, "monotonic", lambda: next(ticks))
+    adapter = make_adapter(
+        {"test-a": success("test-a")},
+        per_command_timeout_seconds=0.1,
+    )
+    assert adapter.validate(request("test-a")).passed is False
+    assert outcome(adapter).outcome == "timed-out"
 
 
-def test_required_tests_identity_mismatch_fails_closed_before_runner_call() -> None:
-    runner = FakeRunner({"test-a": _success("test-a")})
-    adapter = FrozenTestValidationAdapter(required_test_commands=_commands("test-a"), runner=runner)
-    observation = adapter.validate(_request(required_tests=("test-a", "test-b")))
-    assert observation.attempted is True
-    assert observation.passed is False
-    assert runner.calls == []
-
-
-def test_required_tests_reordered_identity_fails_closed() -> None:
-    runner = FakeRunner({"test-a": _success("test-a"), "test-b": _success("test-b")})
+def test_total_runtime_budget_prevents_later_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ticks = iter((0.0, 0.75))
+    monkeypatch.setattr(module.time, "monotonic", lambda: next(ticks))
+    runner = FakeRunner({"test-a": success("test-a"), "test-b": success("test-b")})
     adapter = FrozenTestValidationAdapter(
-        required_test_commands=_commands("test-a", "test-b"), runner=runner
-    )
-    observation = adapter.validate(_request(required_tests=("test-b", "test-a")))
-    assert observation.passed is False
-    assert runner.calls == []
-
-
-# --------------------------------------------------------------------------
-# Missing / duplicate / timeout / cancellation / unavailable / malformed
-# --------------------------------------------------------------------------
-
-
-def test_missing_required_result_fails_closed() -> None:
-    runner = FakeRunner(
-        {"test-a": _success("test-a"), "test-b": CommandRunObservation(test_id="test-b", outcome="failed", started=True)}
-    )
-    adapter = FrozenTestValidationAdapter(
-        required_test_commands=_commands("test-a", "test-b"), runner=runner
-    )
-    observation = adapter.validate(_request())
-    assert observation.passed is False
-    assert observation.completed_tests == ()
-
-
-def test_duplicate_observation_identity_fails_closed() -> None:
-    runner = FakeRunner(
-        {"test-a": _success("test-a"), "test-b": CommandRunObservation(test_id="test-a", outcome="succeeded", started=True)}
-    )
-    adapter = FrozenTestValidationAdapter(
-        required_test_commands=_commands("test-a", "test-b"), runner=runner
-    )
-    observation = adapter.validate(_request())
-    assert observation.passed is False
-
-
-def test_reordered_result_identity_mismatch_fails_closed() -> None:
-    runner = FakeRunner(
-        {"test-a": CommandRunObservation(test_id="test-b", outcome="succeeded", started=True), "test-b": _success("test-b")}
-    )
-    adapter = FrozenTestValidationAdapter(
-        required_test_commands=_commands("test-a", "test-b"), runner=runner
-    )
-    observation = adapter.validate(_request())
-    assert observation.passed is False
-    assert "test-a" not in observation.completed_tests
-
-
-def test_timeout_result_fails_closed() -> None:
-    runner = FakeRunner(
-        {"test-a": CommandRunObservation(test_id="test-a", outcome="timed-out", started=True)}
-    )
-    adapter = FrozenTestValidationAdapter(required_test_commands=_commands("test-a"), runner=runner)
-    observation = adapter.validate(_request(required_tests=("test-a",)))
-    assert observation.passed is False
-    assert observation.completed_tests == ()
-
-
-def test_cancellation_before_first_command_fails_closed_without_calling_runner() -> None:
-    runner = FakeRunner({"test-a": _success("test-a")})
-    adapter = FrozenTestValidationAdapter(
-        required_test_commands=_commands("test-a"),
+        required_test_commands=commands("test-a", "test-b"),
         runner=runner,
-        cancelled=lambda: True,
+        per_command_timeout_seconds=1,
+        total_timeout_seconds=0.5,
     )
-    observation = adapter.validate(_request(required_tests=("test-a",)))
-    assert observation.passed is False
-    assert runner.calls == []
-
-
-def test_unavailable_runner_result_fails_closed() -> None:
-    runner = FakeRunner(
-        {"test-a": CommandRunObservation(test_id="test-a", outcome="unavailable", started=False)}
-    )
-    adapter = FrozenTestValidationAdapter(required_test_commands=_commands("test-a"), runner=runner)
-    observation = adapter.validate(_request(required_tests=("test-a",)))
-    assert observation.passed is False
-
-
-def test_runner_exception_maps_to_unavailable_and_fails_closed() -> None:
-    runner = FakeRunner({"test-a": RuntimeError("binary not found")})
-    adapter = FrozenTestValidationAdapter(required_test_commands=_commands("test-a"), runner=runner)
-    observation = adapter.validate(_request(required_tests=("test-a",)))
-    assert observation.passed is False
-    assert observation.attempted is True
-
-
-def test_malformed_observation_type_fails_closed() -> None:
-    runner = FakeRunner({"test-a": "not-an-observation"})
-    adapter = FrozenTestValidationAdapter(required_test_commands=_commands("test-a"), runner=runner)
-    observation = adapter.validate(_request(required_tests=("test-a",)))
-    assert observation.passed is False
-
-
-def test_oversized_output_is_bounded() -> None:
-    runner = FakeRunner(
-        {
-            "test-a": CommandRunObservation(
-                test_id="test-a",
-                outcome="succeeded",
-                started=True,
-                return_code=0,
-                stdout_text="x" * (adapter_module.MAX_OUTPUT_BYTES + 100),
-            )
-        }
-    )
-    adapter = FrozenTestValidationAdapter(
-        required_test_commands=_commands("test-a"), runner=runner, max_output_bytes=64
-    )
-    observation = adapter.validate(_request(required_tests=("test-a",)))
-    assert observation.passed is True
-    assert len(adapter.last_result.command_outcomes[0].stdout_text.encode("utf-8")) <= 64
-
-
-# --------------------------------------------------------------------------
-# Runtime budgets
-# --------------------------------------------------------------------------
-
-
-def test_per_command_timeout_budget_enforced_even_if_runner_claims_success() -> None:
-    class SlowRunner:
-        def run(self, request: CommandRunRequest) -> CommandRunObservation:
-            # Simulate a runner that took longer than the effective timeout
-            # by returning an observation whose own outcome claims success;
-            # the adapter measures wall time itself and must not trust it.
-            import time as _time
-
-            _time.sleep(0.05)
-            return CommandRunObservation(test_id=request.test_id, outcome="succeeded", started=True)
-
-    adapter = FrozenTestValidationAdapter(
-        required_test_commands=_commands("test-a"),
-        runner=SlowRunner(),
-        per_command_timeout_seconds=0.01,
-    )
-    observation = adapter.validate(_request(required_tests=("test-a",)))
-    assert observation.passed is False
-    assert adapter.last_result.command_outcomes[0].outcome == "timed-out"
-
-
-def test_total_runtime_budget_stops_remaining_commands() -> None:
-    runner = FakeRunner({"test-a": _success("test-a"), "test-b": _success("test-b")})
-    adapter = FrozenTestValidationAdapter(
-        required_test_commands=_commands("test-a", "test-b"),
-        runner=runner,
-        total_timeout_seconds=1e-9,
-    )
-    observation = adapter.validate(_request())
-    assert observation.passed is False
-    assert len(runner.calls) <= 1
-
-
-# --------------------------------------------------------------------------
-# Required-test subset semantics
-# --------------------------------------------------------------------------
-
-
-def test_required_test_subset_semantics_with_extra_completed_tests() -> None:
-    runner = FakeRunner({"test-a": _success("test-a"), "test-b": _success("test-b")})
-    adapter = FrozenTestValidationAdapter(
-        required_test_commands=_commands("test-a", "test-b"), runner=runner
-    )
-    observation = adapter.validate(_request())
-    assert set(("test-a", "test-b")) <= set(observation.completed_tests)
-
-
-def test_extra_success_cannot_replace_a_missing_required_command() -> None:
-    runner = FakeRunner(
-        {"test-a": _success("test-a"), "test-b": CommandRunObservation(test_id="test-b", outcome="failed", started=True)}
-    )
-    adapter = FrozenTestValidationAdapter(
-        required_test_commands=_commands("test-a", "test-b"), runner=runner
-    )
-    observation = adapter.validate(_request())
-    assert observation.passed is False
-    assert "test-b" not in observation.completed_tests
-
-
-# --------------------------------------------------------------------------
-# Changed-path validation
-# --------------------------------------------------------------------------
-
-
-def _adapter_with_paths(changed_paths: tuple[str, ...], **kwargs: object) -> PilotValidationObservation:
-    runner = FakeRunner({"test-a": _success("test-a", changed_paths=changed_paths)})
-    adapter = FrozenTestValidationAdapter(
-        required_test_commands=_commands("test-a"),
-        runner=runner,
-        allowed_files=kwargs.get("allowed_files", ALLOWED_FILES),  # type: ignore[arg-type]
-        forbidden_paths=kwargs.get("forbidden_paths", FORBIDDEN_PATHS),  # type: ignore[arg-type]
-    )
-    return adapter.validate(_request(required_tests=("test-a",)))
-
-
-def test_valid_changed_path_within_allowlist_passes() -> None:
-    observation = _adapter_with_paths(("src/file.py",))
-    assert observation.passed is True
-    assert observation.changed_paths == ("src/file.py",)
-
-
-def test_absolute_changed_path_rejected() -> None:
-    observation = _adapter_with_paths(("/etc/passwd",))
-    assert observation.passed is False
-
-
-def test_parent_traversal_changed_path_rejected() -> None:
-    observation = _adapter_with_paths(("src/../../etc/passwd",))
-    assert observation.passed is False
-
-
-def test_duplicate_changed_path_rejected() -> None:
-    observation = _adapter_with_paths(("src/file.py", "src/file.py"))
-    assert observation.passed is False
-
-
-def test_unnormalized_changed_path_rejected() -> None:
-    observation = _adapter_with_paths(("src/./file.py",))
-    assert observation.passed is False
-
-
-def test_forbidden_changed_path_rejected() -> None:
-    observation = _adapter_with_paths((".github/workflows/ci.yml",), allowed_files=(".github/**",))
-    assert observation.passed is False
-
-
-def test_out_of_allowlist_changed_path_rejected() -> None:
-    observation = _adapter_with_paths(("other/file.py",))
-    assert observation.passed is False
-
-
-def test_oversized_changed_path_rejected() -> None:
-    long_path = "src/" + ("a" * adapter_module.MAX_PATH_LENGTH) + ".py"
-    observation = _adapter_with_paths((long_path,), allowed_files=("src/**",))
-    assert observation.passed is False
-
-
-def test_changed_path_count_bounded() -> None:
-    paths = tuple(f"src/file{i}.py" for i in range(MAX_CHANGED_PATHS + 1))
-    observation = _adapter_with_paths(paths)
-    assert observation.passed is False
-
-
-def test_changed_paths_inspector_is_used_instead_of_worktree_ownership() -> None:
-    def inspector() -> tuple[str, ...]:
-        return ("src/inspected.py",)
-
-    runner = FakeRunner({"test-a": _success("test-a")})
-    adapter = FrozenTestValidationAdapter(
-        required_test_commands=_commands("test-a"),
-        runner=runner,
-        allowed_files=ALLOWED_FILES,
-        forbidden_paths=FORBIDDEN_PATHS,
-        changed_paths_inspector=inspector,
-    )
-    observation = adapter.validate(_request(required_tests=("test-a",)))
-    assert observation.passed is True
-    assert "src/inspected.py" in observation.changed_paths
-
-
-# --------------------------------------------------------------------------
-# No retry; runner called at most once per required command
-# --------------------------------------------------------------------------
-
-
-def test_runner_called_at_most_once_per_required_command() -> None:
-    runner = FakeRunner({"test-a": _success("test-a"), "test-b": _success("test-b")})
-    adapter = FrozenTestValidationAdapter(
-        required_test_commands=_commands("test-a", "test-b"), runner=runner
-    )
-    adapter.validate(_request())
-    call_counts: dict[str, int] = {}
-    for call in runner.calls:
-        call_counts[call.test_id] = call_counts.get(call.test_id, 0) + 1
-    assert all(count == 1 for count in call_counts.values())
-
-
-def test_no_retry_after_a_failed_command() -> None:
-    runner = FakeRunner(
-        {"test-a": CommandRunObservation(test_id="test-a", outcome="failed", started=True)}
-    )
-    adapter = FrozenTestValidationAdapter(required_test_commands=_commands("test-a"), runner=runner)
-    adapter.validate(_request(required_tests=("test-a",)))
+    assert adapter.validate(request()).passed is False
     assert len(runner.calls) == 1
 
 
-# --------------------------------------------------------------------------
-# Architecture boundary
-# --------------------------------------------------------------------------
+def test_output_limit_is_combined_across_stdout_and_stderr() -> None:
+    secret = "TOP-SECRET-SENTINEL"
+    adapter = make_adapter(
+        {
+            "test-a": success(
+                "test-a",
+                stdout_text="a" * 6,
+                stderr_text=secret,
+                reason=secret,
+            )
+        },
+        max_output_bytes=10,
+    )
+    assert adapter.validate(request("test-a")).passed is True
+    recorded = outcome(adapter)
+    retained = len(recorded.stdout_text.encode()) + len(recorded.stderr_text.encode())
+    assert retained <= 10
+    assert "output-truncated" in recorded.reason
+    assert secret not in repr(recorded)
+    assert secret not in repr(adapter.last_result)
 
 
-_FORBIDDEN_IMPORT_ROOTS = (
-    "subprocess",
-    "socket",
-    "urllib",
-    "http",
-    "requests",
-    "sqlite3",
-    "threading",
-    "multiprocessing",
-    "asyncio",
-    "queue",
-    "shutil",
-    "signal",
-    "selectors",
+def test_reason_and_stderr_are_bounded() -> None:
+    adapter = make_adapter(
+        {
+            "test-a": success(
+                "test-a",
+                stderr_text="e" * 1000,
+                reason="r" * 5000,
+            )
+        },
+        max_output_bytes=32,
+    )
+    assert adapter.validate(request("test-a")).passed is True
+    assert len(outcome(adapter).stderr_text.encode()) <= 32
+    assert len(outcome(adapter).reason) <= MAX_REASON_LENGTH
+
+
+def test_changed_path_generator_is_collected_only_to_hard_limit() -> None:
+    def paths():
+        for index in range(MAX_CHANGED_PATHS + 5):
+            yield f"src/{index}.py"
+
+    adapter = make_adapter(
+        {"test-a": success("test-a", changed_paths=paths())},
+        allowed_files=ALLOWED_FILES,
+    )
+    assert adapter.validate(request("test-a")).passed is False
+    assert "bounded count" in outcome(adapter).reason
+
+
+def test_cancellation_probe_exception_is_fail_closed() -> None:
+    def cancelled() -> bool:
+        raise RuntimeError("probe unavailable")
+
+    adapter = make_adapter(
+        {"test-a": success("test-a")},
+        cancelled=cancelled,
+    )
+    observed = adapter.validate(request("test-a"))
+    assert observed.passed is False
+    assert "cancellation check failed" in observed.reason
+
+
+def test_non_boolean_cancellation_probe_is_fail_closed() -> None:
+    adapter = make_adapter(
+        {"test-a": success("test-a")},
+        cancelled=lambda: 1,  # type: ignore[arg-type]
+    )
+    assert adapter.validate(request("test-a")).passed is False
+    assert adapter.last_result is not None
+    assert "non-boolean" in adapter.last_result.reason
+
+
+def test_changed_paths_inspector_exception_is_fail_closed() -> None:
+    def inspector() -> tuple[str, ...]:
+        raise OSError("worktree unavailable")
+
+    adapter = make_adapter(
+        {"test-a": success("test-a")},
+        allowed_files=ALLOWED_FILES,
+        changed_paths_inspector=inspector,
+    )
+    observed = adapter.validate(request("test-a"))
+    assert observed.passed is False
+    assert "inspector failed" in observed.reason
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/etc/passwd",
+        "src/../../etc/passwd",
+        "src/./file.py",
+        "C:\\repo\\file.py",
+        "C:/repo/file.py",
+        "\\\\server\\share\\file.py",
+        "src\\mixed/file.py",
+    ],
 )
-
-_FORBIDDEN_MODULE_SUBSTRINGS = (
-    "in_memory_lease_adapter",
-    "quarantine_review",
-    "request_dispatch",
-    "retry_manager",
-    "execution.executor",
-    "posix_process_adapter",
-    "github",
-    "workflow_dispatch",
-)
+def test_noncanonical_or_absolute_paths_are_rejected(path: str) -> None:
+    adapter = make_adapter(
+        {"test-a": success("test-a", changed_paths=(path,))},
+        allowed_files=("*",),
+    )
+    assert adapter.validate(request("test-a")).passed is False
 
 
-def test_module_imports_no_subprocess_worktree_lease_persistence_or_network_authority() -> None:
-    source = MODULE_PATH.read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    imported_modules: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported_modules.extend(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            imported_modules.append(node.module)
+def test_valid_posix_path_passes_and_duplicate_forbidden_outside_fail() -> None:
+    valid = make_adapter(
+        {"test-a": success("test-a", changed_paths=("src/file.py",))},
+        allowed_files=ALLOWED_FILES,
+        forbidden_paths=FORBIDDEN_PATHS,
+    )
+    assert valid.validate(request("test-a")).changed_paths == ("src/file.py",)
 
-    for module_name in imported_modules:
-        root = module_name.split(".")[0]
-        assert root not in _FORBIDDEN_IMPORT_ROOTS, f"forbidden import root: {module_name}"
-        lowered = module_name.lower()
-        for forbidden in _FORBIDDEN_MODULE_SUBSTRINGS:
-            assert forbidden not in lowered, f"forbidden import: {module_name}"
+    duplicate = make_adapter(
+        {
+            "test-a": success(
+                "test-a",
+                changed_paths=("src/file.py", "src/file.py"),
+            )
+        },
+        allowed_files=ALLOWED_FILES,
+    )
+    assert duplicate.validate(request("test-a")).passed is False
+
+    forbidden = make_adapter(
+        {
+            "test-a": success(
+                "test-a",
+                changed_paths=(".github/workflows/ci.yml",),
+            )
+        },
+        allowed_files=(".github/**",),
+        forbidden_paths=FORBIDDEN_PATHS,
+    )
+    assert forbidden.validate(request("test-a")).passed is False
+
+    outside = make_adapter(
+        {"test-a": success("test-a", changed_paths=("other/file.py",))},
+        allowed_files=ALLOWED_FILES,
+    )
+    assert outside.validate(request("test-a")).passed is False
 
 
-def test_module_defines_no_process_group_or_network_calls() -> None:
-    source = inspect.getsource(adapter_module)
-    for forbidden_token in (
-        "subprocess.",
-        "os.killpg",
-        "os.getpgid",
-        "socket.",
-        "sqlite3.",
-        "requests.",
-        "os.system(",
-        "shell=True",
-    ):
-        assert forbidden_token not in source
+def test_inspector_and_runner_paths_share_duplicate_and_count_checks() -> None:
+    adapter = make_adapter(
+        {"test-a": success("test-a", changed_paths=("src/file.py",))},
+        allowed_files=ALLOWED_FILES,
+        changed_paths_inspector=lambda: ("src/file.py",),
+    )
+    assert adapter.validate(request("test-a")).passed is False
 
 
-def test_module_never_retries_or_installs_packages() -> None:
-    source = inspect.getsource(adapter_module)
-    for forbidden_token in ("RetryManager", "retry_attempt", "max_retries", "pip install", "apt-get"):
-        assert forbidden_token not in source
+def test_failed_command_is_never_retried_and_extra_success_cannot_replace_missing() -> None:
+    runner = FakeRunner(
+        {
+            "test-a": success("test-a"),
+            "test-b": CommandRunObservation(
+                test_id="test-b",
+                outcome="failed",
+                started=True,
+                return_code=1,
+            ),
+        }
+    )
+    adapter = FrozenTestValidationAdapter(
+        required_test_commands=commands("test-a", "test-b"), runner=runner
+    )
+    observed = adapter.validate(request())
+    assert observed.passed is False
+    assert observed.completed_tests == ()
+    assert [item.test_id for item in runner.calls] == ["test-a", "test-b"]
+
+
+def test_no_nonfinite_value_slips_through_low_level_function() -> None:
+    with pytest.raises(FrozenTestValidationError):
+        run_frozen_test_validation(
+            commands("test-a"),
+            ("test-a",),
+            runner=FakeRunner({"test-a": success("test-a")}),
+            allowed_files=(),
+            forbidden_paths=(),
+            total_timeout_seconds=math.nan,
+        )

@@ -1,30 +1,17 @@
-"""WSC5B3B frozen-test validation adapter for the existing ValidationAdapter contract.
+"""Bounded frozen-test validation for the existing ValidationAdapter contract.
 
-Executes only the exact frozen required-test argv sequences supplied by the
-approved packet at construction time, through an injected bounded command
-runner, and returns bounded canonical evidence. It owns no subprocess,
-process group, Git worktree, lease, network, GitHub, workflow, persistence,
-retry, or package-install behavior -- that authority belongs to the injected
-runner and re-inspection hook, both supplied by the caller.
-
-Test commands are treated as data (argv tuples), never as shell programs:
-this module never parses command text, never invokes a shell, and never
-discovers additional tests beyond the frozen set bound at construction.
-
-``run_frozen_test_validation`` is the low-level, pure function that runs the
-frozen required-test set at most once each and returns a rich, bounded,
-immutable evidence record. ``FrozenTestValidationAdapter`` is a thin adapter
-around it that satisfies
-``workflow_scheduler.execution.single_issue_pilot.ValidationAdapter`` by
-mapping that rich evidence down onto the narrower, frozen
-``PilotValidationObservation`` contract; it invents no new fields there.
+Commands are immutable argv data supplied at construction time and are executed
+only through an injected runner. This module owns no subprocess, worktree,
+network, persistence, retry, publication, or GitHub authority.
 """
 
 from __future__ import annotations
 
+import math
+import ntpath
 import posixpath
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Literal, Protocol, runtime_checkable
 
 from workflow_scheduler.execution.single_issue_pilot import (
@@ -48,15 +35,12 @@ DEFAULT_PER_COMMAND_TIMEOUT_SECONDS = 30.0
 DEFAULT_TOTAL_TIMEOUT_SECONDS = 300.0
 
 CommandOutcome = Literal["succeeded", "failed", "timed-out", "cancelled", "unavailable"]
-
+_SUPPORTED_OUTCOMES = frozenset({"succeeded", "failed", "timed-out", "cancelled", "unavailable"})
 _RECOVERABLE_RUNNER_EXCEPTIONS = (TypeError, ValueError, RuntimeError, OSError)
 
 
 class FrozenTestValidationError(ValueError):
-    """Raised for malformed/oversized frozen test configuration.
-
-    Always raised before any command runner invocation.
-    """
+    """Raised for malformed or oversized frozen validation configuration."""
 
 
 CancellationCheck = Callable[[], bool]
@@ -69,11 +53,6 @@ class ChangedPathsInspector(Protocol):
     def __call__(self) -> tuple[str, ...]: ...
 
 
-# --------------------------------------------------------------------------
-# Frozen command configuration (validated before any execution)
-# --------------------------------------------------------------------------
-
-
 def _validate_argv(argv: object, *, name: str) -> tuple[str, ...]:
     if isinstance(argv, (str, bytes)):
         raise FrozenTestValidationError(
@@ -82,7 +61,7 @@ def _validate_argv(argv: object, *, name: str) -> tuple[str, ...]:
     if not isinstance(argv, (list, tuple)):
         raise FrozenTestValidationError(f"{name} must be a list or tuple of strings")
     items = tuple(argv)
-    if len(items) == 0:
+    if not items:
         raise FrozenTestValidationError(f"{name} must not be empty")
     if len(items) > MAX_ARGV_ITEMS:
         raise FrozenTestValidationError(f"{name} exceeds the bounded argument count")
@@ -115,7 +94,7 @@ def _validate_test_id(test_id: object) -> str:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class FrozenTestCommand:
-    """One canonical, frozen required-test identity bound to its argv."""
+    """One canonical required-test identity bound to its exact argv."""
 
     test_id: str
     argv: tuple[str, ...]
@@ -125,25 +104,20 @@ class FrozenTestCommand:
         object.__setattr__(self, "argv", _validate_argv(self.argv, name="argv"))
 
 
-def _validate_frozen_commands(
-    commands: object,
-) -> tuple[FrozenTestCommand, ...]:
+def _validate_frozen_commands(commands: object) -> tuple[FrozenTestCommand, ...]:
     if isinstance(commands, (str, bytes)) or not hasattr(commands, "__iter__"):
         raise FrozenTestValidationError("required_test_commands must be an iterable")
     items = tuple(commands)
-    if len(items) == 0:
+    if not items:
         raise FrozenTestValidationError("required_test_commands must not be empty")
     if len(items) > MAX_REQUIRED_TEST_COMMANDS:
         raise FrozenTestValidationError("required_test_commands exceeds the bounded command count")
-    for item in items:
-        if not isinstance(item, FrozenTestCommand):
-            raise FrozenTestValidationError("every required test command must be a FrozenTestCommand")
+    if any(not isinstance(item, FrozenTestCommand) for item in items):
+        raise FrozenTestValidationError("every required test command must be a FrozenTestCommand")
     test_ids = tuple(item.test_id for item in items)
     if len(set(test_ids)) != len(test_ids):
         raise FrozenTestValidationError("required_test_commands contains a duplicate test_id")
-    aggregate_bytes = sum(
-        len(part.encode("utf-8")) for item in items for part in item.argv
-    )
+    aggregate_bytes = sum(len(part.encode("utf-8")) for item in items for part in item.argv)
     if aggregate_bytes > MAX_AGGREGATE_ARGV_BYTES:
         raise FrozenTestValidationError(
             "required_test_commands exceeds the bounded aggregate argv byte length"
@@ -151,14 +125,9 @@ def _validate_frozen_commands(
     return items
 
 
-# --------------------------------------------------------------------------
-# Injected bounded command runner contract
-# --------------------------------------------------------------------------
-
-
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CommandRunRequest:
-    """One bounded request to run exactly one frozen required-test command."""
+    """One bounded request to run one exact frozen command."""
 
     test_id: str
     argv: tuple[str, ...]
@@ -167,16 +136,20 @@ class CommandRunRequest:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CommandRunObservation:
-    """One bounded, caller-supplied observation of a single command attempt."""
+    """One caller-supplied observation of a command attempt.
+
+    Output and runner-provided reasons are intentionally omitted from repr so a
+    normal debug representation does not disclose retained command evidence.
+    """
 
     test_id: str
     outcome: CommandOutcome
     started: bool
     return_code: int | None = None
-    stdout_text: str = ""
-    stderr_text: str = ""
+    stdout_text: str = field(default="", repr=False)
+    stderr_text: str = field(default="", repr=False)
     changed_paths: tuple[str, ...] = ()
-    reason: str = ""
+    reason: str = field(default="", repr=False)
 
 
 @runtime_checkable
@@ -184,11 +157,6 @@ class BoundedCommandRunner(Protocol):
     """Run exactly one bounded command per invocation; never retried."""
 
     def run(self, request: CommandRunRequest) -> CommandRunObservation: ...
-
-
-# --------------------------------------------------------------------------
-# Bounded changed-path normalization and validation
-# --------------------------------------------------------------------------
 
 
 def _matches_any(path: str, patterns: tuple[str, ...]) -> bool:
@@ -200,6 +168,20 @@ def _matches_any(path: str, patterns: tuple[str, ...]) -> bool:
         if pattern.endswith("*") and path.startswith(pattern[:-1]):
             return True
     return False
+
+
+def _validate_patterns(patterns: object, *, name: str) -> tuple[str, ...]:
+    if isinstance(patterns, (str, bytes)) or not isinstance(patterns, (list, tuple)):
+        raise FrozenTestValidationError(f"{name} must be a list or tuple of strings")
+    items = tuple(patterns)
+    if len(items) > MAX_CHANGED_PATHS:
+        raise FrozenTestValidationError(f"{name} exceeds the bounded pattern count")
+    for item in items:
+        if not isinstance(item, str) or not item:
+            raise FrozenTestValidationError(f"every element of {name} must be a non-empty string")
+        if "\x00" in item or len(item) > MAX_PATH_LENGTH:
+            raise FrozenTestValidationError(f"an element of {name} is malformed or oversized")
+    return items
 
 
 def _validate_changed_path(
@@ -215,8 +197,11 @@ def _validate_changed_path(
         raise FrozenTestValidationError("changed path exceeds the bounded length")
     if "\x00" in path:
         raise FrozenTestValidationError("changed path must not contain NUL bytes")
-    if posixpath.isabs(path):
-        raise FrozenTestValidationError("changed path must not be absolute")
+    if "\\" in path:
+        raise FrozenTestValidationError("changed path must use canonical forward slashes")
+    drive, _ = ntpath.splitdrive(path)
+    if drive or ntpath.isabs(path) or posixpath.isabs(path):
+        raise FrozenTestValidationError("changed path must not be absolute or drive-qualified")
     if any(part == ".." for part in path.split("/")):
         raise FrozenTestValidationError("changed path must not contain parent traversal")
     normalized = posixpath.normpath(path)
@@ -232,14 +217,9 @@ def _validate_changed_path(
     return normalized
 
 
-# --------------------------------------------------------------------------
-# Rich, bounded, immutable validation evidence
-# --------------------------------------------------------------------------
-
-
 @dataclass(frozen=True, slots=True, kw_only=True)
 class FrozenTestValidationResult:
-    """Bounded, immutable evidence for exactly one frozen-test validation attempt."""
+    """Bounded immutable evidence for one frozen-test validation attempt."""
 
     attempted: bool
     passed: bool
@@ -247,7 +227,7 @@ class FrozenTestValidationResult:
     total_timed_out: bool
     completed_tests: tuple[str, ...]
     changed_paths: tuple[str, ...]
-    command_outcomes: tuple[CommandRunObservation, ...]
+    command_outcomes: tuple[CommandRunObservation, ...] = field(repr=False)
     reason: str = ""
 
 
@@ -258,8 +238,139 @@ def _truncate(text: str, *, max_bytes: int) -> tuple[str, bool]:
     return encoded[:max_bytes].decode("utf-8", errors="ignore"), True
 
 
+def _truncate_output_pair(stdout: str, stderr: str, *, max_bytes: int) -> tuple[str, str, bool]:
+    """Retain at most max_bytes total across stdout then stderr for one command."""
+
+    bounded_stdout, stdout_truncated = _truncate(stdout, max_bytes=max_bytes)
+    used = len(bounded_stdout.encode("utf-8"))
+    remaining = max(0, max_bytes - used)
+    bounded_stderr, stderr_truncated = _truncate(stderr, max_bytes=remaining)
+    if remaining == 0 and stderr:
+        stderr_truncated = True
+    return bounded_stdout, bounded_stderr, stdout_truncated or stderr_truncated
+
+
 def _bounded_reason(text: str) -> str:
     return text[:MAX_REASON_LENGTH]
+
+
+def _validate_positive_bound(value: object, *, name: str, maximum: float) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise FrozenTestValidationError(f"{name} must be a positive finite number")
+    numeric = float(value)
+    if not math.isfinite(numeric) or numeric <= 0 or numeric > maximum:
+        raise FrozenTestValidationError(f"{name} must be positive, finite, and no greater than {maximum}")
+    return numeric
+
+
+def _validate_output_bound(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise FrozenTestValidationError("max_output_bytes must be a positive integer")
+    if value <= 0 or value > MAX_OUTPUT_BYTES:
+        raise FrozenTestValidationError(
+            f"max_output_bytes must be positive and no greater than {MAX_OUTPUT_BYTES}"
+        )
+    return value
+
+
+def _collect_changed_paths(value: object, *, maximum: int) -> tuple[str, ...]:
+    if isinstance(value, (str, bytes)) or not hasattr(value, "__iter__"):
+        raise FrozenTestValidationError("changed_paths must be a bounded iterable of strings")
+    collected: list[str] = []
+    try:
+        for item in value:  # type: ignore[union-attr]
+            if len(collected) >= maximum:
+                raise FrozenTestValidationError("changed paths exceed the bounded count")
+            if not isinstance(item, str):
+                raise FrozenTestValidationError("every changed path must be a string")
+            collected.append(item)
+    except _RECOVERABLE_RUNNER_EXCEPTIONS as exc:
+        if isinstance(exc, FrozenTestValidationError):
+            raise
+        raise FrozenTestValidationError(
+            _bounded_reason(f"changed path evidence failed: {type(exc).__name__}: {exc}")
+        ) from exc
+    return tuple(collected)
+
+
+def _failed_observation(test_id: str, reason: str, *, started: bool = False) -> CommandRunObservation:
+    return CommandRunObservation(
+        test_id=test_id,
+        outcome="failed",
+        started=started,
+        reason=_bounded_reason(reason),
+    )
+
+
+def _normalize_observation(
+    observation: object,
+    *,
+    command: FrozenTestCommand,
+    elapsed: float,
+    effective_timeout: float,
+    max_output_bytes: int,
+) -> CommandRunObservation:
+    if not isinstance(observation, CommandRunObservation):
+        return _failed_observation(command.test_id, "runner returned a malformed observation")
+
+    started = observation.started if type(observation.started) is bool else False
+    try:
+        observed_test_id = _validate_test_id(observation.test_id)
+    except FrozenTestValidationError:
+        return _failed_observation(command.test_id, "runner observation test_id was malformed", started=started)
+    if observed_test_id != command.test_id:
+        return _failed_observation(
+            command.test_id,
+            "runner observation identity did not match the requested command",
+            started=started,
+        )
+    if not isinstance(observation.outcome, str) or observation.outcome not in _SUPPORTED_OUTCOMES:
+        return _failed_observation(command.test_id, "runner observation outcome was unsupported", started=started)
+    if type(observation.started) is not bool:
+        return _failed_observation(command.test_id, "runner observation started flag was malformed")
+    if observation.return_code is not None and type(observation.return_code) is not int:
+        return _failed_observation(command.test_id, "runner observation return code was malformed", started=started)
+    if not isinstance(observation.stdout_text, str):
+        return _failed_observation(command.test_id, "runner observation stdout was malformed", started=started)
+    if not isinstance(observation.stderr_text, str):
+        return _failed_observation(command.test_id, "runner observation stderr was malformed", started=started)
+    if not isinstance(observation.reason, str):
+        return _failed_observation(command.test_id, "runner observation reason was malformed", started=started)
+    try:
+        changed_paths = _collect_changed_paths(observation.changed_paths, maximum=MAX_CHANGED_PATHS)
+    except FrozenTestValidationError as exc:
+        return _failed_observation(command.test_id, str(exc), started=started)
+
+    outcome: CommandOutcome = observation.outcome
+    reason = observation.reason
+    if outcome == "succeeded" and (observation.started is not True or observation.return_code != 0):
+        outcome = "failed"
+        reason = "successful runner observation requires started=True and return_code=0"
+    elif observation.started is False and observation.return_code is not None:
+        outcome = "failed"
+        reason = "runner observation reported a return code without starting"
+    if elapsed > effective_timeout and outcome not in ("timed-out", "cancelled"):
+        outcome = "timed-out"
+        reason = "command exceeded its effective timeout"
+
+    stdout_text, stderr_text, output_truncated = _truncate_output_pair(
+        observation.stdout_text,
+        observation.stderr_text,
+        max_bytes=max_output_bytes,
+    )
+    if output_truncated:
+        reason = f"{reason} output-truncated".strip()
+
+    return CommandRunObservation(
+        test_id=command.test_id,
+        outcome=outcome,
+        started=observation.started,
+        return_code=observation.return_code,
+        stdout_text=stdout_text,
+        stderr_text=stderr_text,
+        changed_paths=changed_paths,
+        reason=_bounded_reason(reason),
+    )
 
 
 def run_frozen_test_validation(
@@ -275,29 +386,28 @@ def run_frozen_test_validation(
     changed_paths_inspector: ChangedPathsInspector | None = None,
     cancelled: CancellationCheck | None = None,
 ) -> FrozenTestValidationResult:
-    """Run the frozen required-test set at most once each and return evidence.
+    """Run the exact frozen required-test set at most once and return bounded evidence."""
 
-    Every required command is attempted in frozen order, each exactly once,
-    through the injected ``runner``. Timeout, cancellation, an unavailable
-    or malformed runner observation, or an identity mismatch all fail
-    closed: the command is simply not counted as completed rather than
-    raising. Changed paths are normalized and validated -- against the
-    caller-supplied allowlist/forbidden-path patterns -- only after every
-    command has run, before a passing result can ever be emitted.
-    """
-    validated_commands = _validate_frozen_commands(required_test_commands)
+    commands = _validate_frozen_commands(required_test_commands)
     if not isinstance(supplied_required_tests, tuple) or any(
         not isinstance(item, str) for item in supplied_required_tests
     ):
         raise FrozenTestValidationError("supplied_required_tests must be a tuple of strings")
-    if not isinstance(per_command_timeout_seconds, (int, float)) or per_command_timeout_seconds <= 0:
-        raise FrozenTestValidationError("per_command_timeout_seconds must be a positive number")
-    if not isinstance(total_timeout_seconds, (int, float)) or total_timeout_seconds <= 0:
-        raise FrozenTestValidationError("total_timeout_seconds must be a positive number")
-    if not isinstance(max_output_bytes, int) or max_output_bytes <= 0:
-        raise FrozenTestValidationError("max_output_bytes must be a positive integer")
+    per_command_timeout = _validate_positive_bound(
+        per_command_timeout_seconds,
+        name="per_command_timeout_seconds",
+        maximum=DEFAULT_PER_COMMAND_TIMEOUT_SECONDS,
+    )
+    total_timeout = _validate_positive_bound(
+        total_timeout_seconds,
+        name="total_timeout_seconds",
+        maximum=DEFAULT_TOTAL_TIMEOUT_SECONDS,
+    )
+    output_limit = _validate_output_bound(max_output_bytes)
+    allowed = _validate_patterns(allowed_files, name="allowed_files")
+    forbidden = _validate_patterns(forbidden_paths, name="forbidden_paths")
 
-    frozen_test_ids = tuple(command.test_id for command in validated_commands)
+    frozen_test_ids = tuple(command.test_id for command in commands)
     if supplied_required_tests != frozen_test_ids:
         return FrozenTestValidationResult(
             attempted=True,
@@ -314,14 +424,13 @@ def run_frozen_test_validation(
 
     outcomes: list[CommandRunObservation] = []
     completed: list[str] = []
-    seen_test_ids: set[str] = set()
     cancellation_requested = False
     total_timed_out = False
     elapsed_total = 0.0
+    hook_error: str | None = None
 
-    for command in validated_commands:
-        if cancelled is not None and cancelled():
-            cancellation_requested = True
+    for command in commands:
+        if cancellation_requested:
             outcomes.append(
                 CommandRunObservation(
                     test_id=command.test_id,
@@ -332,7 +441,46 @@ def run_frozen_test_validation(
             )
             continue
 
-        remaining_budget = total_timeout_seconds - elapsed_total
+        if cancelled is not None:
+            try:
+                cancellation_value = cancelled()
+            except _RECOVERABLE_RUNNER_EXCEPTIONS as exc:
+                hook_error = _bounded_reason(
+                    f"cancellation check failed: {type(exc).__name__}: {exc}"
+                )
+                outcomes.append(
+                    CommandRunObservation(
+                        test_id=command.test_id,
+                        outcome="unavailable",
+                        started=False,
+                        reason=hook_error,
+                    )
+                )
+                break
+            if type(cancellation_value) is not bool:
+                hook_error = "cancellation check returned a non-boolean value"
+                outcomes.append(
+                    CommandRunObservation(
+                        test_id=command.test_id,
+                        outcome="unavailable",
+                        started=False,
+                        reason=hook_error,
+                    )
+                )
+                break
+            if cancellation_value:
+                cancellation_requested = True
+                outcomes.append(
+                    CommandRunObservation(
+                        test_id=command.test_id,
+                        outcome="cancelled",
+                        started=False,
+                        reason="cancellation requested before this command started",
+                    )
+                )
+                continue
+
+        remaining_budget = total_timeout - elapsed_total
         if remaining_budget <= 0:
             total_timed_out = True
             outcomes.append(
@@ -345,85 +493,47 @@ def run_frozen_test_validation(
             )
             continue
 
-        effective_timeout = min(per_command_timeout_seconds, remaining_budget)
+        effective_timeout = min(per_command_timeout, remaining_budget)
         request = CommandRunRequest(
-            test_id=command.test_id, argv=command.argv, timeout_seconds=effective_timeout
+            test_id=command.test_id,
+            argv=command.argv,
+            timeout_seconds=effective_timeout,
         )
         started_at = time.monotonic()
         try:
-            observation = runner.run(request)
+            raw_observation = runner.run(request)
         except _RECOVERABLE_RUNNER_EXCEPTIONS as exc:
-            elapsed_total += time.monotonic() - started_at
-            outcomes.append(
-                CommandRunObservation(
+            elapsed = time.monotonic() - started_at
+            elapsed_total += elapsed
+            if elapsed > effective_timeout:
+                normalized = CommandRunObservation(
+                    test_id=command.test_id,
+                    outcome="timed-out",
+                    started=False,
+                    reason="command exceeded its effective timeout",
+                )
+            else:
+                normalized = CommandRunObservation(
                     test_id=command.test_id,
                     outcome="unavailable",
                     started=False,
                     reason=_bounded_reason(f"runner raised {type(exc).__name__}: {exc}"),
                 )
+        else:
+            elapsed = time.monotonic() - started_at
+            elapsed_total += elapsed
+            normalized = _normalize_observation(
+                raw_observation,
+                command=command,
+                elapsed=elapsed,
+                effective_timeout=effective_timeout,
+                max_output_bytes=output_limit,
             )
-            continue
-        elapsed = time.monotonic() - started_at
-        elapsed_total += elapsed
 
-        if not isinstance(observation, CommandRunObservation):
-            outcomes.append(
-                CommandRunObservation(
-                    test_id=command.test_id,
-                    outcome="failed",
-                    started=False,
-                    reason="runner returned a malformed observation",
-                )
-            )
-            continue
-        if observation.test_id != command.test_id:
-            outcomes.append(
-                CommandRunObservation(
-                    test_id=command.test_id,
-                    outcome="failed",
-                    started=observation.started,
-                    reason="runner observation identity did not match the requested command",
-                )
-            )
-            continue
-        if observation.test_id in seen_test_ids:
-            outcomes.append(
-                CommandRunObservation(
-                    test_id=command.test_id,
-                    outcome="failed",
-                    started=observation.started,
-                    reason="duplicate observation identity",
-                )
-            )
-            continue
-
-        outcome = observation.outcome
-        if elapsed > effective_timeout and outcome not in ("timed-out", "cancelled"):
-            outcome = "timed-out"
-
-        stdout_text, stdout_truncated = _truncate(
-            observation.stdout_text, max_bytes=max_output_bytes
-        )
-        stderr_text, stderr_truncated = _truncate(
-            observation.stderr_text, max_bytes=max_output_bytes
-        )
-        reason = observation.reason
-        if stdout_truncated or stderr_truncated:
-            reason = _bounded_reason(f"{reason} output-truncated".strip())
-
-        bounded_observation = CommandRunObservation(
-            test_id=observation.test_id,
-            outcome=outcome,
-            started=observation.started,
-            return_code=observation.return_code,
-            stdout_text=stdout_text,
-            stderr_text=stderr_text,
-            changed_paths=tuple(observation.changed_paths),
-            reason=reason,
-        )
-        outcomes.append(bounded_observation)
-        seen_test_ids.add(observation.test_id)
-        if outcome == "succeeded":
+        if elapsed_total > total_timeout:
+            total_timed_out = True
+        outcomes.append(normalized)
+        if normalized.outcome == "succeeded":
             completed.append(command.test_id)
 
     if len(completed) > MAX_COMPLETED_TESTS:
@@ -435,51 +545,69 @@ def run_frozen_test_validation(
             completed_tests=(),
             changed_paths=(),
             command_outcomes=tuple(outcomes),
-            reason=_bounded_reason("completed test count exceeds the bounded observation limit"),
+            reason="completed test count exceeds the bounded observation limit",
         )
 
-    all_required_completed = set(frozen_test_ids) <= set(completed)
-
+    all_required_completed = tuple(completed) == frozen_test_ids
     changed_paths: tuple[str, ...] = ()
     path_error: str | None = None
-    if all_required_completed and not cancellation_requested and not total_timed_out:
-        seen_paths: set[str] = set()
-        ordered_raw_paths: list[str] = []
-        for outcome_item in outcomes:
-            ordered_raw_paths.extend(outcome_item.changed_paths)
-        if changed_paths_inspector is not None:
-            ordered_raw_paths.extend(changed_paths_inspector())
-        if len(ordered_raw_paths) > MAX_CHANGED_PATHS:
-            path_error = "changed paths exceed the bounded count"
+    if all_required_completed and not cancellation_requested and not total_timed_out and hook_error is None:
+        raw_paths: list[str] = []
+        try:
+            for outcome_item in outcomes:
+                for raw_path in outcome_item.changed_paths:
+                    if len(raw_paths) >= MAX_CHANGED_PATHS:
+                        raise FrozenTestValidationError("changed paths exceed the bounded count")
+                    raw_paths.append(raw_path)
+            if changed_paths_inspector is not None:
+                inspected = changed_paths_inspector()
+                remaining = MAX_CHANGED_PATHS - len(raw_paths)
+                raw_paths.extend(_collect_changed_paths(inspected, maximum=remaining))
+        except _RECOVERABLE_RUNNER_EXCEPTIONS as exc:
+            path_error = _bounded_reason(
+                str(exc)
+                if isinstance(exc, FrozenTestValidationError)
+                else f"changed paths inspector failed: {type(exc).__name__}: {exc}"
+            )
         else:
+            seen_paths: set[str] = set()
             validated_paths: list[str] = []
             try:
-                for raw_path in ordered_raw_paths:
+                for raw_path in raw_paths:
                     validated_paths.append(
                         _validate_changed_path(
                             raw_path,
                             seen=seen_paths,
-                            allowed_files=allowed_files,
-                            forbidden_paths=forbidden_paths,
+                            allowed_files=allowed,
+                            forbidden_paths=forbidden,
                         )
                     )
             except FrozenTestValidationError as exc:
-                path_error = str(exc)
+                path_error = _bounded_reason(str(exc))
             else:
                 changed_paths = tuple(validated_paths)
 
-    passed = bool(all_required_completed and path_error is None and not cancellation_requested and not total_timed_out)
+    passed = bool(
+        all_required_completed
+        and hook_error is None
+        and path_error is None
+        and not cancellation_requested
+        and not total_timed_out
+    )
 
-    reason = ""
-    if not all_required_completed:
+    if hook_error is not None:
+        reason = hook_error
+    elif not all_required_completed:
         missing = tuple(test_id for test_id in frozen_test_ids if test_id not in completed)
         reason = _bounded_reason("required tests did not complete: " + ",".join(missing))
     elif cancellation_requested:
-        reason = _bounded_reason("validation was cancelled before all required tests completed")
+        reason = "validation was cancelled before all required tests completed"
     elif total_timed_out:
-        reason = _bounded_reason("total validation runtime budget was exhausted")
+        reason = "total validation runtime budget was exhausted"
     elif path_error is not None:
         reason = _bounded_reason(path_error)
+    else:
+        reason = ""
 
     return FrozenTestValidationResult(
         attempted=True,
@@ -491,11 +619,6 @@ def run_frozen_test_validation(
         command_outcomes=tuple(outcomes),
         reason=reason,
     )
-
-
-# --------------------------------------------------------------------------
-# ValidationAdapter-conformant adapter
-# --------------------------------------------------------------------------
 
 
 def _to_pilot_validation_observation(
@@ -511,7 +634,7 @@ def _to_pilot_validation_observation(
 
 
 class FrozenTestValidationAdapter:
-    """A ``ValidationAdapter`` backed by a frozen, caller-supplied test set."""
+    """A one-shot ValidationAdapter backed by a frozen caller-supplied test set."""
 
     def __init__(
         self,
@@ -530,15 +653,29 @@ class FrozenTestValidationAdapter:
         if not isinstance(runner, BoundedCommandRunner):
             raise FrozenTestValidationError("runner does not satisfy the BoundedCommandRunner protocol")
         self._runner = runner
-        self._allowed_files = tuple(allowed_files)
-        self._forbidden_paths = tuple(forbidden_paths)
-        self._per_command_timeout_seconds = per_command_timeout_seconds
-        self._total_timeout_seconds = total_timeout_seconds
-        self._max_output_bytes = max_output_bytes
+        self._allowed_files = _validate_patterns(allowed_files, name="allowed_files")
+        self._forbidden_paths = _validate_patterns(forbidden_paths, name="forbidden_paths")
+        self._per_command_timeout_seconds = _validate_positive_bound(
+            per_command_timeout_seconds,
+            name="per_command_timeout_seconds",
+            maximum=DEFAULT_PER_COMMAND_TIMEOUT_SECONDS,
+        )
+        self._total_timeout_seconds = _validate_positive_bound(
+            total_timeout_seconds,
+            name="total_timeout_seconds",
+            maximum=DEFAULT_TOTAL_TIMEOUT_SECONDS,
+        )
+        self._max_output_bytes = _validate_output_bound(max_output_bytes)
         self._changed_paths_inspector = changed_paths_inspector
         self._cancelled = cancelled
         self._attempted = False
-        self.last_result: FrozenTestValidationResult | None = None
+        self._last_result: FrozenTestValidationResult | None = None
+
+    @property
+    def last_result(self) -> FrozenTestValidationResult | None:
+        """Return read-only local evidence from the completed attempt, if any."""
+
+        return self._last_result
 
     def validate(self, request: PilotValidationRequest) -> PilotValidationObservation:
         if not isinstance(request, PilotValidationRequest):
@@ -546,6 +683,7 @@ class FrozenTestValidationAdapter:
         if self._attempted:
             raise RuntimeError("the frozen-test validation adapter may run at most once")
         self._attempted = True
+        self._last_result = None
         result = run_frozen_test_validation(
             self._required_test_commands,
             tuple(request.required_tests),
@@ -558,5 +696,5 @@ class FrozenTestValidationAdapter:
             changed_paths_inspector=self._changed_paths_inspector,
             cancelled=self._cancelled,
         )
-        self.last_result = result
+        self._last_result = result
         return _to_pilot_validation_observation(result)
