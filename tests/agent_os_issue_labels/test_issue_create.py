@@ -342,35 +342,3 @@ def test_redaction_unicode_cli_static(monkeypatch, capsys, tmp_path):
     ):
         assert forbidden not in module
     assert 'env.pop("GH_REPO"' in module and 'env.pop("GH_HOST"' in module
-
-
-def _diagnose_core():
-    stage = "baseline"
-    try:
-        baseline = validation()
-        assert baseline.status in {Status.PASS, Status.WARN}
-        assert baseline.submission_eligible is True
-        stage = "planning"
-        plan, failure = plan_issue_creation(request(), Runner())
-        assert failure is None and plan is not None
-        stage = "confirmed"
-        result = execute_issue_creation(request(), Runner(), Confirm())
-        assert result.reason_code == IssueCreateReasonCode.CREATE_CONFIRMED
-        stage = "warning"
-        warning = warned()
-        rejected = execute_issue_creation(
-            request(result=warning), Runner(), Confirm(warnings=())
-        )
-        assert rejected.reason_code == IssueCreateReasonCode.ELIGIBLE_WARNING_NOT_ACCEPTED
-        accepted = execute_issue_creation(request(result=warning), Runner(), Confirm())
-        assert accepted.reason_code == IssueCreateReasonCode.CREATE_CONFIRMED
-    except BaseException as exc:
-        pytest.exit(
-            f"ISSUE_CREATE_CORE_FAIL stage={stage} "
-            f"type={type(exc).__name__} detail={exc!r}",
-            returncode=3,
-        )
-    pytest.exit("ISSUE_CREATE_CORE_PASS", returncode=0)
-
-
-_diagnose_core()
