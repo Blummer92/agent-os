@@ -1,11 +1,6 @@
 # Agent OS Issue Label Checker
 
-Local, fixture-first tooling for issue taxonomy evidence and safe application
-planning.
-
-The checker reads Agent OS issue-form output and the declarative label map,
-computes expected labels, compares them with supplied labels, and renders an
-IA-style report.
+Local, fixture-first tooling for issue taxonomy evidence, safe label planning, and deterministic offline issue-draft previews.
 
 ## Local checker
 
@@ -15,13 +10,11 @@ python -m scripts.agent_os_issue_labels.cli \
   --labels tests/agent_os_issue_labels/fixtures/labels_ready.txt
 ```
 
+The checker reads issue-form output and the declarative label map, compares expected and supplied labels, and renders an IA-style report.
+
 ## Offline issue draft preview
 
-The draft preview path consumes structured YAML or JSON, reads the canonical
-issue form as its schema contract, renders the issue title and Markdown body in
-form order, and reuses the existing label and acceptance-report logic.
-
-Input uses exactly two top-level keys:
+The preview path reads the canonical issue form as its schema contract, accepts structured YAML or JSON, renders title/body in form order, and reuses the existing label and acceptance-report logic.
 
 ```yaml
 title: Deterministic preview
@@ -34,9 +27,9 @@ fields:
   external-write: no-external-write
   scope: Preview only
   files: scripts/agent_os_issue_labels
-  prior-scope-review: Reviewed #599 and #600.
+  prior-scope-review: Reviewed issue 599 and issue 600.
   documentation-impact: docs-not-required
-  documentation-exemption-reason: No documentation behavior changes.
+  documentation-exemption-reason: No documented behavior changes.
   validation: pytest and compileall
   dependencies: none
   acceptance: deterministic output and no writes
@@ -46,102 +39,40 @@ fields:
     - Final implementation reporting will include files changed, tests run, docs updated, blockers, handoffs, and remaining risks.
 ```
 
-Preview a file:
+Preview a file or stdin:
 
 ```bash
 python -m scripts.agent_os_issue_labels.draft_cli \
   --input tests/agent_os_issue_labels/fixtures/issue_draft/valid_tier0.yml
+
+cat draft.yml | python -m scripts.agent_os_issue_labels.draft_cli \
+  --input - --format json
 ```
 
-Preview stdin as stable JSON:
+Output is deterministic for the same normalized input. Malformed input and duplicate mapping keys fail with exit code `1`. Missing required evidence, unsupported form elements, unknown fields/options, required checkbox omissions, `needs-decision` values, and external-write requests route explicitly to review.
 
-```bash
-cat tests/agent_os_issue_labels/fixtures/issue_draft/valid_tier0.yml | \
-  python -m scripts.agent_os_issue_labels.draft_cli \
-    --input - \
-    --format json
-```
-
-The same normalized input always produces the same title, body, proposed-label
-ordering, status, and serialized output. Duplicate mapping keys and malformed
-structured input fail with exit code `1`. A structurally parseable draft that
-needs human judgment returns `manual-review` through the shared status model and
-retains the existing non-failing acceptance exit-code behavior.
-
-Unsupported form elements, unknown fields or options, missing required fields,
-missing required checkbox confirmations, `needs-decision` values, and external
-write requests are reported explicitly. They are never silently ignored.
-
-Every preview states:
-
-- `mutation_performed=false`;
-- `write_authorized=false`.
-
-A successful preview or validation result does not authorize issue creation,
-label mutation, readiness changes, implementation, merge, or any external
-write. GitHub submission remains a separate governed capability under #602.
+Every result states `mutation_performed=false` and `write_authorized=false`. Preview or validation never authorizes issue creation, label or readiness mutation, implementation, merge, or another external write. Submission remains governed by issue #602.
 
 ## Application planner
-
-The planner is side-effect free. It consumes an issue body, current labels, and
-an explicit repository-label catalog, then reports:
-
-- metadata contract and application eligibility;
-- candidate and approved additions;
-- expected labels already present;
-- findings skipped by policy;
-- primary-owner and participation-label evidence;
-- unknown values and unavailable labels;
-- reasons requiring manual review;
-- explicit non-authorization fields.
 
 ```bash
 python -m scripts.agent_os_issue_labels.plan_cli \
   --issue tests/fixtures/agent_os_issue_labels/tiered_ready.md \
   --labels tests/fixtures/agent_os_issue_labels/current_labels.txt \
   --available-labels tests/fixtures/agent_os_issue_labels/available_labels.txt \
-  --issue-number 275 \
-  --event-type workflow_dispatch:manual \
-  --commit-sha local-test
+  --issue-number 275 --event-type workflow_dispatch:manual --commit-sha local-test
 ```
 
-The initial application policy can approve only missing `agent-os`. The issue
-body remains authoritative for the Primary owner. Existing `owner:*` labels are
-non-exclusive participation evidence and remain report-only until a separately
-approved taxonomy change defines writable owner semantics.
-
-Every `status:*`, phase, epic, and type finding remains report-only. Recognized
-legacy bodies remain parseable for evidence, but are not application-eligible
-and produce no approved additions. Incomplete or unknown metadata contracts
-route to manual review.
-
-Malformed metadata, unknown values, unavailable safe labels, external-write
-signals, and needs-decision values route to manual review. A manual-review plan
-contains no approved additions.
-
-Every text and JSON plan states that no mutation occurred, no write is
-authorized, L5B is not authorized, and explicit approval is still required.
+The planner is side-effect free. It reports candidate and approved additions, existing and unavailable labels, owner evidence, unknown values, manual-review reasons, and explicit non-authorization fields. Only missing `agent-os` can be approved by the current policy. Owner, status, phase, epic, and type findings remain report-only.
 
 ## Read-only workflows
 
-`.github/workflows/agent-os-issue-label-report.yml` runs the checker from issue
-events and publishes its IA-style report.
-
-`.github/workflows/agent-os-issue-label-apply-dry-run.yml` reads the selected
-issue and repository-label catalog, calls the application planner, and publishes
-an auditable dry-run summary. It supports opened, edited, reopened, and manual
-dispatch events, uses read-only permissions, and has per-issue concurrency.
+- `.github/workflows/agent-os-issue-label-report.yml` publishes checker evidence.
+- `.github/workflows/agent-os-issue-label-apply-dry-run.yml` publishes an auditable application plan.
 
 Neither workflow applies, removes, or replaces labels.
 
 ## Validation
-
-Changes must pass the executable `Agent OS Validation Gate`, which runs repository
-structure validation and `scripts/validate-all.sh` against the pull-request merge
-result. Focused planner tests and Python compilation remain required evidence,
-but they do not replace aggregate validation.
-
-Focused draft validation:
 
 ```bash
 python -m pytest \
@@ -150,18 +81,8 @@ python -m pytest \
   tests/agent_os_issue_labels/test_issue_metadata.py \
   tests/agent_os_issue_labels/test_issue_draft.py \
   tests/agent_os_issue_labels/test_draft_cli.py
-
 python -m compileall -q scripts/agent_os_issue_labels
+./scripts/validate-all.sh
 ```
 
-## Acceptance-report integration
-
-Label findings use the existing IA2 `AcceptanceReport` model. They are evidence
-only and do not authorize merge, readiness changes, approval changes,
-source-of-truth changes, issue closure, or future live label behavior.
-
-## Boundary
-
-The checker, planner, and draft preview perform no GitHub API writes and touch no
-external systems. Live issue submission and live additive label application
-remain separately approved follow-ups.
+Label and draft findings reuse the IA2 `AcceptanceReport` model. They are evidence only and do not authorize merge, readiness, approval, source-of-truth, issue-state, or future live-write changes.
