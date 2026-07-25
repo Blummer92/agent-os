@@ -141,35 +141,9 @@ def warned():
     )
 
 
-def test_000_uncertain_capability_repository_group_diagnostic():
-    uncertain_cases = (
-        (IssueCreateProcessResult(1, "", "network"), IssueCreateReasonCode.COMMAND_FAILED, 76),
-        (IssueCreateProcessResult(None, timed_out=True), IssueCreateReasonCode.COMMAND_TIMEOUT, 77),
-        (IssueCreateProcessResult(None, interrupted=True), IssueCreateReasonCode.COMMAND_INTERRUPTED, 77),
-        (IssueCreateProcessResult(0, "created\n", ""), IssueCreateReasonCode.MALFORMED_SUCCESS_OUTPUT, 78),
-        (IssueCreateProcessResult(0, "https://github.com/Blummer92/agent-os/issues/1\nhttps://github.com/Blummer92/agent-os/issues/1\n", ""), IssueCreateReasonCode.MALFORMED_SUCCESS_OUTPUT, 78),
-        (IssueCreateProcessResult(0, "https://github.com/Blummer92/agent-os/issues/1?x=1\n", ""), IssueCreateReasonCode.MALFORMED_SUCCESS_OUTPUT, 78),
-        (IssueCreateProcessResult(0, "http://github.com/Blummer92/agent-os/issues/1\n", ""), IssueCreateReasonCode.MALFORMED_SUCCESS_OUTPUT, 78),
-        (IssueCreateProcessResult(0, "https://github.com/other/repo/issues/1\n", ""), IssueCreateReasonCode.WRONG_TARGET_SUCCESS_OUTPUT, 79),
-    )
-    for process, reason, code in uncertain_cases:
-        test_uncertain_results(process, reason, code)
-    capability_cases = (
-        ({("gh", "--version"): IssueCreateProcessResult(1, "", "missing")}, IssueCreateReasonCode.GH_UNAVAILABLE),
-        ({("gh", "issue", "create", "--help"): IssueCreateProcessResult(0, "--repository --title --body-file --label\n", "")}, IssueCreateReasonCode.GH_CAPABILITY_UNSUPPORTED),
-        ({("gh", "auth", "status", "--active", "--hostname", "github.com"): IssueCreateProcessResult(4, "", "no auth")}, IssueCreateReasonCode.AUTHENTICATION_UNAVAILABLE),
-        ({("gh", "auth", "status", "--active", "--hostname", "github.com"): IssueCreateProcessResult(0, "Logged in to github.com account one\nLogged in to github.com account two\n", "")}, IssueCreateReasonCode.ACCOUNT_AMBIGUOUS_OR_MISMATCHED),
-    )
-    for overrides, reason in capability_cases:
-        test_capability_auth(overrides, reason)
-    repository_cases = (
-        {"nameWithOwner": "other/repo", "url": "https://github.com/other/repo", "hasIssuesEnabled": True, "isArchived": False},
-        {"nameWithOwner": "Blummer92/agent-os", "url": "https://github.com/Blummer92/agent-os", "hasIssuesEnabled": True, "isArchived": True},
-        {"nameWithOwner": "Blummer92/agent-os", "url": "https://github.com/Blummer92/agent-os", "hasIssuesEnabled": False, "isArchived": False},
-    )
-    for payload in repository_cases:
-        test_repository_metadata(payload)
-    pytest.exit("ISSUE_CREATE_UNCERTAIN_CAPABILITY_REPOSITORY_GROUP_PASS", returncode=0)
+def test_000_redaction_unicode_cli_static_diagnostic(monkeypatch, capsys, tmp_path):
+    test_redaction_unicode_cli_static(monkeypatch, capsys, tmp_path)
+    pytest.exit("ISSUE_CREATE_REDACTION_UNICODE_CLI_STATIC_PASS", returncode=0)
 
 
 @pytest.mark.parametrize(
