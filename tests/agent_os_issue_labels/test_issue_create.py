@@ -141,15 +141,14 @@ def warned():
     )
 
 
-def test_000_warning_rejection_diagnostic():
+def test_000_warning_acceptance_diagnostic():
     warning = warned()
     runner = Runner()
-    result = execute_issue_creation(
-        request(result=warning), runner, Confirm(warnings=())
-    )
-    assert result.reason_code == IssueCreateReasonCode.ELIGIBLE_WARNING_NOT_ACCEPTED, result
-    assert creates(runner) == [], runner.calls
-    pytest.exit("ISSUE_CREATE_WARNING_REJECTION_PASS", returncode=0)
+    result = execute_issue_creation(request(result=warning), runner, Confirm())
+    assert result.reason_code == IssueCreateReasonCode.CREATE_CONFIRMED, result
+    assert result.mutation_state == MutationState.CONFIRMED, result
+    assert len(creates(runner)) == 1, runner.calls
+    pytest.exit("ISSUE_CREATE_WARNING_ACCEPTANCE_PASS", returncode=0)
 
 
 @pytest.mark.parametrize(
