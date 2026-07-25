@@ -1003,6 +1003,13 @@ def _wrong_repository_evidence() -> dict[str, object]:
     }
 
 
+def _cross_check_state(**changes) -> "pilot_module._PilotState":
+    """Return a state positioned at the identity cross-check step."""
+    state = pilot_module._PilotState(pilot_input=_pilot_input(**changes))
+    state.projection = PROJECTION
+    return state
+
+
 def test_canonical_evidence_for_another_repository_is_blocked() -> None:
     evidence = _wrong_repository_evidence()
     # The plan, the bundle and the advisory are each internally canonical and
@@ -1018,22 +1025,43 @@ def test_canonical_evidence_for_another_repository_is_blocked() -> None:
 
 
 @pytest.mark.parametrize(
-    "source", ["projection-repository", "plan-repository", "bundle-repository", "advisory-repository"]
+    ("source", "changes"),
+    [
+        (
+            "plan-repository",
+            {"validation_plan": replace(PLAN, repository="Blummer92/other")},
+        ),
+        (
+            "bundle-repository",
+            {"evidence_bundle": replace(BUNDLE, repository_identity=_other_identity())},
+        ),
+        (
+            "advisory-repository",
+            {"advisory_result": replace(ADVISORY, repository_identity=_other_identity())},
+        ),
+    ],
 )
-def test_every_canonical_evidence_source_is_repository_checked(source: str) -> None:
-    evidence = _wrong_repository_evidence()
-    supplied = _pilot_input(**evidence)
-    values = {
-        "projection-repository": PROJECTION.repository,
-        "plan-repository": supplied.validation_plan.repository,
-        "bundle-repository": supplied.evidence_bundle.repository_identity,
-        "advisory-repository": supplied.advisory_result.repository_identity,
-    }
-    normalize = pilot_module._normalized_repository
-    # The projection still names the authorized repository; the three GEX
-    # objects do not, and each is compared against it by name.
-    expected_match = source == "projection-repository"
-    assert (normalize(values[source]) == REPOSITORY) is expected_match
+def test_each_gex_evidence_source_is_repository_checked(
+    source: str, changes: dict[str, object]
+) -> None:
+    # Each GEX object is checked on its own, so a mismatch in any one of them
+    # fails closed even when the others agree with the pilot repository. The
+    # cross-check runs after canonical-ID verification, so these states are
+    # driven directly rather than through a whole run.
+    state = _cross_check_state(**changes)
+    with pytest.raises(pilot_module._PilotStop):
+        pilot_module._cross_check_identities(state)
+    assert state.primary_status == "blocked"
+    assert "identity.repository-mismatch" in state.reason_codes
+    assert f"cross-check:{source}" in state.details
+
+
+def test_matching_repository_identities_pass_the_cross_check() -> None:
+    state = _cross_check_state()
+    pilot_module._cross_check_identities(state)
+    assert state.primary_status == "completed"
+    assert state.reason_codes == set()
+    assert state.details == []
 
 
 def test_repository_normalization_accepts_identity_and_string_forms() -> None:
@@ -1481,6 +1509,39 @@ def test_executor_process_termination_propagates_after_exactly_once_teardown() -
 
     # Process-level termination is never converted into a pilot result, but the
     # lease and workspace it left behind are still torn down exactly once.
+    assert len(workspace.cleanup_calls) == 1
+    assert len(lease.release_calls) == 1
+
+
+def test_executor_system_exit_propagates_after_exactly_once_teardown() -> None:
+    lease = FakeLease()
+    workspace = FakeWorkspace()
+
+    with pytest.raises(SystemExit):
+        _run(
+            lease=lease,
+            workspace=workspace,
+            executor=FakeExecutor(error=SystemExit("terminated")),
+        )
+
+    assert len(workspace.cleanup_calls) == 1
+    assert len(lease.release_calls) == 1
+
+
+def test_release_termination_preserves_cleanup_and_the_executor_termination() -> None:
+    lease = FakeLease(release_error=SystemExit("release terminated"))
+    workspace = FakeWorkspace()
+
+    # The executor's KeyboardInterrupt is the original termination. A later
+    # SystemExit from lease release must neither replace it nor erase the
+    # cleanup that already happened.
+    with pytest.raises(KeyboardInterrupt):
+        _run(
+            lease=lease,
+            workspace=workspace,
+            executor=FakeExecutor(error=KeyboardInterrupt("lifecycle terminated")),
+        )
+
     assert len(workspace.cleanup_calls) == 1
     assert len(lease.release_calls) == 1
 

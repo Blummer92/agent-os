@@ -821,7 +821,9 @@ def _completed_invariants_hold(result: SingleIssuePilotResult) -> bool:
         and not result.release_errors
         # Completion proves every governed test ran, not that nothing else did:
         # a validator reporting an additional successful test is still a
-        # complete run. Both tuples are already bounded and deduplicated.
+        # complete run. Both tuples are bounded, and ``completed_tests`` is
+        # rejected upstream if it repeats an entry, so set containment is a
+        # deterministic comparison over bounded, order-independent evidence.
         and set(result.required_tests) <= set(result.completed_tests)
     )
 
