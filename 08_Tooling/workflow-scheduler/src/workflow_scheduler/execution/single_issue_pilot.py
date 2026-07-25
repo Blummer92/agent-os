@@ -819,7 +819,10 @@ def _completed_invariants_hold(result: SingleIssuePilotResult) -> bool:
         and result.primary_error is None
         and not result.cleanup_errors
         and not result.release_errors
-        and tuple(sorted(result.completed_tests)) == tuple(sorted(result.required_tests))
+        # Completion proves every governed test ran, not that nothing else did:
+        # a validator reporting an additional successful test is still a
+        # complete run. Both tuples are already bounded and deduplicated.
+        and set(result.required_tests) <= set(result.completed_tests)
     )
 
 
@@ -929,6 +932,8 @@ def run_single_issue_pilot(
         raise TypeError("pilot_input must be SingleIssuePilotInput")
 
     state = _PilotState(pilot_input=pilot_input)
+    lifecycle_hard_stop: BaseException | None = None
+    teardown_hard_stop: BaseException | None = None
     try:
         try:
             _drive_lifecycle(
@@ -946,10 +951,23 @@ def run_single_issue_pilot(
             # adapter proves nothing, so it becomes deterministic quarantine
             # evidence rather than escaping past teardown.
             _record_unexpected_failure(state, exc)
+        except BaseException as exc:
+            # Process-level termination is never converted into evidence. It is
+            # held so teardown still runs, then re-raised unchanged below.
+            lifecycle_hard_stop = exc
+            _record_hard_stop(state, exc)
     finally:
-        # Teardown is reached on every exit path, including a process-level
-        # BaseException, which is re-raised rather than swallowed.
-        _finalize(state, lease_adapter=lease, workspace_adapter=workspace)
+        # Teardown is reached on every exit path and attempts cleanup and
+        # release independently of each other.
+        teardown_hard_stop = _finalize(
+            state, lease_adapter=lease, workspace_adapter=workspace
+        )
+
+    if lifecycle_hard_stop is not None:
+        # The original termination always wins over a teardown termination.
+        raise lifecycle_hard_stop
+    if teardown_hard_stop is not None:
+        raise teardown_hard_stop
 
     return _build_result(state)
 
@@ -960,6 +978,15 @@ def _record_unexpected_failure(state: _PilotState, exc: BaseException) -> None:
     state.quarantined = True
     state.reason_codes.add("pilot.unexpected-error")
     state.details.append(f"{state.phase}:unexpected-error")
+    if state.primary_error is None:
+        state.primary_error = f"{type(exc).__name__}: {exc}"
+
+
+def _record_hard_stop(state: _PilotState, exc: BaseException) -> None:
+    """Record a process-level termination without turning it into an outcome."""
+    state.quarantined = True
+    state.reason_codes.add("pilot.unexpected-error")
+    state.details.append(f"{state.phase}:process-terminated")
     if state.primary_error is None:
         state.primary_error = f"{type(exc).__name__}: {exc}"
 
@@ -1355,6 +1382,24 @@ def _cross_check_identities(state: _PilotState) -> None:
     issue = supplied.issue_numbers[0]
     expected_nodes = (f"issue-{issue}",)
 
+    # A canonical ID proves an evidence object is internally intact, not that
+    # it describes this repository. Every independently supplied canonical
+    # object is therefore checked against the pilot repository.
+    expected_repository = _normalized_repository(supplied.repository)
+    repositories: tuple[tuple[str, object], ...] = (
+        ("projection-repository", projection.repository),
+        ("plan-repository", supplied.validation_plan.repository),
+        ("bundle-repository", bundle.repository_identity),
+        ("advisory-repository", advisory.repository_identity),
+    )
+    for name, observed in repositories:
+        if _normalized_repository(observed) != expected_repository:
+            raise state.stop(
+                "blocked",
+                reasons=("identity.repository-mismatch",),
+                detail=f"cross-check:{name}",
+            )
+
     comparisons: tuple[tuple[str, object, object, str], ...] = (
         ("repository", projection.repository, supplied.repository, "identity.repository-mismatch"),
         ("bundle-base-branch", bundle.base_branch, supplied.base_branch, "identity.base-branch-mismatch"),
@@ -1391,6 +1436,20 @@ def _cross_check_identities(state: _PilotState) -> None:
 # --------------------------------------------------------------------------
 # Cancellation checkpoints
 # --------------------------------------------------------------------------
+
+
+def _normalized_repository(value: object) -> str:
+    """Return a comparable ``owner/repository`` key.
+
+    Canonical evidence carries the repository either as a ``RepositoryIdentity``
+    or as an ``owner/repository`` string, and GitHub treats both halves as
+    case-insensitive, so both forms normalize to the same key.
+    """
+    owner = getattr(value, "owner", None)
+    repository = getattr(value, "repository", None)
+    if isinstance(owner, str) and isinstance(repository, str):
+        return f"{owner}/{repository}".strip().lower()
+    return str(value).strip().lower()
 
 
 def _check_cancellation(
@@ -1674,8 +1733,9 @@ def _dispatch_executor(state: _PilotState, executor: PilotExecutor) -> None:
     state.executor_called = True
     try:
         observation = executor.run(request)
-    except BaseException as exc:  # noqa: BLE001 - unknown termination is unsafe
-        # An executor exception proves nothing about termination or effects.
+    except Exception as exc:  # noqa: BLE001 - unknown termination is unsafe
+        # An ordinary executor exception proves nothing about termination or
+        # effects, so it becomes fail-closed evidence.
         state.executor_started = True
         state.possible_partial_effects = True
         raise state.stop(
@@ -1689,6 +1749,14 @@ def _dispatch_executor(state: _PilotState, executor: PilotExecutor) -> None:
             error=f"{type(exc).__name__}: {exc}",
             quarantine=True,
         ) from exc
+    except BaseException:
+        # Process-level termination is not an outcome this orchestrator may
+        # report. It is recorded as unsafe and then propagates to the outer
+        # teardown boundary, which releases the lease and cleans the workspace
+        # before re-raising it unchanged.
+        state.executor_started = True
+        state.possible_partial_effects = True
+        raise
 
     if not isinstance(observation, PilotExecutionObservation):
         state.possible_partial_effects = True
@@ -1884,11 +1952,45 @@ def _run_validation(state: _PilotState, validator: ValidationAdapter) -> None:
 
     state.validation_attempted = bool(observation.attempted)
     state.validation_passed = bool(observation.passed)
-    state.completed_tests = tuple(observation.completed_tests)
+
+    # Bound the reported evidence here so an oversized, unbounded or duplicated
+    # observation becomes a deterministic outcome instead of an exception
+    # raised from result construction after teardown has already run.
+    try:
+        completed = _bounded_strings(
+            observation.completed_tests, "completed_tests", maximum=MAX_PILOT_TESTS
+        )
+    except (TypeError, ValueError) as exc:
+        raise state.stop(
+            "needs-decision",
+            reasons=("validation.error",),
+            detail="validation:unbounded-completed-tests",
+            error=str(exc),
+        ) from exc
+    if len(set(completed)) != len(completed):
+        raise state.stop(
+            "needs-decision",
+            reasons=("validation.error",),
+            detail="validation:duplicate-completed-tests",
+            error="validation reported the same completed test more than once",
+        )
+    state.completed_tests = completed
+
     if observation.changed_paths:
-        state.changed_paths = tuple(
+        merged = tuple(
             dict.fromkeys((*state.changed_paths, *observation.changed_paths))
         )
+        try:
+            state.changed_paths = _bounded_strings(
+                merged, "changed_paths", maximum=MAX_PILOT_PATHS
+            )
+        except (TypeError, ValueError) as exc:
+            raise state.stop(
+                "needs-decision",
+                reasons=("validation.error",),
+                detail="validation:unbounded-changed-paths",
+                error=str(exc),
+            ) from exc
 
     if not state.validation_attempted:
         raise state.stop(
@@ -1927,14 +2029,21 @@ def _finalize(
     *,
     lease_adapter: LeaseAdapter,
     workspace_adapter: WorkspaceAdapter,
-) -> None:
+) -> BaseException | None:
     """Attempt cleanup once and release once, preserving the primary outcome.
 
-    Both attempts are counted before their adapter call, so an unexpected
-    teardown error still leaves each attempted exactly once and can never
+    Cleanup and release are attempted independently: a failure of either --
+    including a process-level ``BaseException`` -- never prevents the other
+    from being attempted. Both attempts are counted before their adapter call,
+    so a teardown error still leaves each attempted exactly once and can never
     replace the primary error.
+
+    Returns the first process-level termination raised by teardown, if any, so
+    the caller can re-raise it once the original lifecycle termination has been
+    given priority.
     """
     before = len(state.cleanup_errors) + len(state.release_errors)
+    hard_stop: BaseException | None = None
     try:
         _cleanup_workspace(state, workspace_adapter)
     except Exception as exc:  # noqa: BLE001 - teardown must not mask the outcome
@@ -1943,6 +2052,13 @@ def _finalize(
         )
         state.reason_codes.add("workspace.filesystem-cleanup-failed")
         state.quarantined = True
+    except BaseException as exc:
+        state.cleanup_errors.append(
+            f"workspace-cleanup:process-terminated:{type(exc).__name__}: {exc}"
+        )
+        state.reason_codes.add("workspace.filesystem-cleanup-failed")
+        state.quarantined = True
+        hard_stop = exc
     try:
         _release_lease(state, lease_adapter)
     except Exception as exc:  # noqa: BLE001 - teardown must not mask the outcome
@@ -1951,10 +2067,19 @@ def _finalize(
         )
         state.reason_codes.add("lease.release-ambiguous")
         state.quarantined = True
+    except BaseException as exc:
+        state.release_errors.append(
+            f"lease-release:process-terminated:{type(exc).__name__}: {exc}"
+        )
+        state.reason_codes.add("lease.release-ambiguous")
+        state.quarantined = True
+        if hard_stop is None:
+            hard_stop = exc
     if len(state.cleanup_errors) + len(state.release_errors) != before:
         # Only finalization itself degraded the outcome; otherwise the phase
         # keeps recording where the primary outcome was determined.
         state.phase = "finalization"
+    return hard_stop
 
 
 def _cleanup_workspace(state: _PilotState, workspace_adapter: WorkspaceAdapter) -> None:

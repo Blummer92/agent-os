@@ -949,6 +949,102 @@ def test_unsupported_gex_evidence_type_needs_decision() -> None:
 
 
 # --------------------------------------------------------------------------
+# Repository identity across the canonical evidence chain
+# --------------------------------------------------------------------------
+
+
+def _other_identity() -> RepositoryIdentity:
+    return RepositoryIdentity(
+        host="github.com",
+        owner="blummer92",
+        repository="other",
+        repository_id=1289370915,
+        is_fork=False,
+        default_branch="main",
+    )
+
+
+def _wrong_repository_evidence() -> dict[str, object]:
+    """Build an internally canonical GEX chain for a different repository.
+
+    Every canonical ID is recomputed from the real APIs and every object agrees
+    with the others, so the chain passes identity verification and binding
+    verification. Only a repository cross-check can stop it. A partially wrong
+    chain is not built here because the canonical bundle builder already
+    rejects a plan whose repository disagrees with the evidence identity.
+    """
+    identity = _other_identity()
+    governed = replace(_governed_projection(), repository_identity=identity)
+    plan = replace(_plan(), repository="Blummer92/other")
+    results = _command_results(plan)
+    expectations = _gex_expectations(plan)
+    expectations["expected_repository"] = identity
+    bundle = build_validation_evidence_bundle(governed, plan, results, **expectations)
+    assert bundle.status == "passed"
+    advisory = evaluate_advisory_pre_pr_evidence(
+        governed,
+        plan,
+        results,
+        current_base_sha=BASE_SHA,
+        current_source_head_sha=HEAD_SHA,
+        **expectations,
+    )
+    assert advisory.status == "passed"
+    render = render_advisory_evidence(advisory)
+    return {
+        "validation_plan": plan,
+        "expected_plan_id": validation_plan_id(plan),
+        "evidence_bundle": bundle,
+        "expected_bundle_id": validation_evidence_bundle_id(bundle),
+        "advisory_result": advisory,
+        "expected_advisory_result_id": advisory.result_id,
+        "advisory_render": render,
+        "expected_advisory_render_id": render.render_id,
+    }
+
+
+def test_canonical_evidence_for_another_repository_is_blocked() -> None:
+    evidence = _wrong_repository_evidence()
+    # The plan, the bundle and the advisory are each internally canonical and
+    # each describes a different repository than the pilot was authorized for.
+    assert evidence["validation_plan"].repository == "Blummer92/other"
+    assert evidence["evidence_bundle"].repository_identity.repository == "other"
+    assert evidence["advisory_result"].repository_identity.repository == "other"
+
+    result = _run(_pilot_input(**evidence))
+    assert result.status == "blocked"
+    assert "identity.repository-mismatch" in result.reason_codes
+    assert "cross-check:plan-repository" in result.details
+
+
+@pytest.mark.parametrize(
+    "source", ["projection-repository", "plan-repository", "bundle-repository", "advisory-repository"]
+)
+def test_every_canonical_evidence_source_is_repository_checked(source: str) -> None:
+    evidence = _wrong_repository_evidence()
+    supplied = _pilot_input(**evidence)
+    values = {
+        "projection-repository": PROJECTION.repository,
+        "plan-repository": supplied.validation_plan.repository,
+        "bundle-repository": supplied.evidence_bundle.repository_identity,
+        "advisory-repository": supplied.advisory_result.repository_identity,
+    }
+    normalize = pilot_module._normalized_repository
+    # The projection still names the authorized repository; the three GEX
+    # objects do not, and each is compared against it by name.
+    expected_match = source == "projection-repository"
+    assert (normalize(values[source]) == REPOSITORY) is expected_match
+
+
+def test_repository_normalization_accepts_identity_and_string_forms() -> None:
+    normalize = pilot_module._normalized_repository
+    assert normalize(_identity()) == REPOSITORY
+    assert normalize("Blummer92/Agent-OS") == REPOSITORY
+    assert normalize("  blummer92/agent-os  ") == REPOSITORY
+    assert normalize(_other_identity()) != REPOSITORY
+
+
+# --------------------------------------------------------------------------
 # Identity cross-check
 # --------------------------------------------------------------------------
 
@@ -1372,10 +1468,21 @@ def test_executor_exception_is_quarantined_with_possible_partial_effects() -> No
     assert result.possible_partial_effects is True
 
 
-def test_executor_base_exception_is_also_quarantined() -> None:
-    result = _run(executor=FakeExecutor(error=KeyboardInterrupt()))
-    assert result.status == "quarantined"
-    assert "executor.exception" in result.reason_codes
+def test_executor_process_termination_propagates_after_exactly_once_teardown() -> None:
+    lease = FakeLease()
+    workspace = FakeWorkspace()
+
+    with pytest.raises(KeyboardInterrupt):
+        _run(
+            lease=lease,
+            workspace=workspace,
+            executor=FakeExecutor(error=KeyboardInterrupt()),
+        )
+
+    # Process-level termination is never converted into a pilot result, but the
+    # lease and workspace it left behind are still torn down exactly once.
+    assert len(workspace.cleanup_calls) == 1
+    assert len(lease.release_calls) == 1
 
 
 def test_timeout_with_confirmed_termination_is_timed_out() -> None:
@@ -1584,6 +1691,53 @@ def test_unsupported_validation_observation_needs_decision() -> None:
     assert "validation.error" in result.reason_codes
 
 
+def test_required_plus_extra_completed_tests_still_completes() -> None:
+    result = _run(
+        validator=FakeValidator(
+            observation=PilotValidationObservation(
+                attempted=True,
+                passed=True,
+                completed_tests=(*REQUIRED_TESTS, "python -m pytest tests/extra -q"),
+            )
+        )
+    )
+    # Completion proves every required test ran, not that nothing else did.
+    assert result.status == "completed"
+    assert set(REQUIRED_TESTS) <= set(result.completed_tests)
+
+
+def test_duplicate_completed_tests_needs_decision() -> None:
+    result = _run(
+        validator=FakeValidator(
+            observation=PilotValidationObservation(
+                attempted=True,
+                passed=True,
+                completed_tests=(*REQUIRED_TESTS, REQUIRED_TESTS[0]),
+            )
+        )
+    )
+    assert result.status == "needs-decision"
+    assert "validation.error" in result.reason_codes
+
+
+def test_oversized_completed_tests_needs_decision() -> None:
+    oversized = tuple(
+        f"python -m pytest tests/case_{index} -q"
+        for index in range(pilot_module.MAX_PILOT_TESTS + 1)
+    )
+    result = _run(
+        validator=FakeValidator(
+            observation=PilotValidationObservation(
+                attempted=True, passed=True, completed_tests=(*REQUIRED_TESTS, *oversized)
+            )
+        )
+    )
+    # An unbounded observation becomes deterministic evidence rather than an
+    # exception raised from result construction after teardown.
+    assert result.status == "needs-decision"
+    assert "validation.error" in result.reason_codes
+
+
 def test_validation_runs_exactly_once_against_the_verified_plan() -> None:
     validator = FakeValidator()
     result = _run(validator=validator)
@@ -1707,6 +1861,57 @@ def test_unexpected_teardown_errors_are_still_attempted_exactly_once() -> None:
     assert any("release exploded" in entry for entry in result.release_errors)
     assert result.primary_error is not None
     assert "inspection exploded" in result.primary_error
+
+
+def test_cleanup_process_termination_still_releases_the_lease() -> None:
+    lease = FakeLease()
+    workspace = FakeWorkspace(cleanup_error=KeyboardInterrupt("cleanup terminated"))
+
+    with pytest.raises(KeyboardInterrupt):
+        _run(lease=lease, workspace=workspace)
+
+    # Release is attempted independently of the cleanup outcome.
+    assert len(workspace.cleanup_calls) == 1
+    assert len(lease.release_calls) == 1
+
+
+def test_release_process_termination_still_follows_cleanup() -> None:
+    lease = FakeLease(release_error=KeyboardInterrupt("release terminated"))
+    workspace = FakeWorkspace()
+
+    with pytest.raises(KeyboardInterrupt):
+        _run(lease=lease, workspace=workspace)
+
+    assert len(workspace.cleanup_calls) == 1
+    assert len(lease.release_calls) == 1
+
+
+def test_dual_teardown_termination_attempts_both_and_raises_the_first() -> None:
+    lease = FakeLease(release_error=SystemExit("release terminated"))
+    workspace = FakeWorkspace(cleanup_error=KeyboardInterrupt("cleanup terminated"))
+
+    with pytest.raises(KeyboardInterrupt):
+        _run(lease=lease, workspace=workspace)
+
+    assert len(workspace.cleanup_calls) == 1
+    assert len(lease.release_calls) == 1
+
+
+def test_lifecycle_termination_wins_over_a_teardown_termination() -> None:
+    lease = FakeLease()
+    workspace = FakeWorkspace(cleanup_error=SystemExit("cleanup terminated"))
+
+    # The executor's KeyboardInterrupt is the original termination and must
+    # reach the caller unchanged, not be replaced by the teardown SystemExit.
+    with pytest.raises(KeyboardInterrupt):
+        _run(
+            lease=lease,
+            workspace=workspace,
+            executor=FakeExecutor(error=KeyboardInterrupt("lifecycle terminated")),
+        )
+
+    assert len(workspace.cleanup_calls) == 1
+    assert len(lease.release_calls) == 1
 
 
 def test_process_level_termination_propagates_after_teardown() -> None:
