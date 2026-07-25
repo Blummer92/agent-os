@@ -9,25 +9,12 @@ from scripts.agent_os_issue_acceptance.models import (
     strongest_status,
 )
 
-from .issue_metadata import load_issue_form_fields, parse_issue_form_body
+from .issue_metadata import (
+    load_issue_form_fields,
+    metadata_contract,
+    parse_issue_form_body,
+)
 from .label_map import expected_labels, load_label_map
-
-_LEGACY_REQUIRED_FIELDS = {
-    "phase",
-    "epic",
-    "owner",
-    "status",
-    "type",
-    "source-of-truth",
-    "external-write",
-}
-_TIERED_REQUIRED_FIELDS = {
-    "tier",
-    "owner",
-    "status",
-    "source-of-truth",
-    "external-write",
-}
 
 
 def evaluate_issue_labels(
@@ -61,7 +48,7 @@ def evaluate_issue_labels(
         manual_review_items=manual_review,
         evidence=[
             "report model: scripts.agent_os_issue_acceptance.models.AcceptanceReport",
-            f"metadata contract: {_metadata_contract(metadata)}",
+            f"metadata contract: {metadata_contract(metadata)}",
             f"expected labels: {', '.join(sorted(expected)) or 'none'}",
             f"present expected labels: {', '.join(present) or 'none'}",
             f"missing expected labels: {', '.join(missing) or 'none'}",
@@ -102,24 +89,29 @@ def _check_governance_boundary() -> CheckResult:
     )
 
 
-def _metadata_contract(metadata: dict[str, list[str]]) -> str:
-    fields = set(metadata)
-    if _TIERED_REQUIRED_FIELDS <= fields:
-        return "tiered"
-    if _LEGACY_REQUIRED_FIELDS <= fields:
-        return "legacy"
-    return "incomplete"
-
-
 def _check_metadata(metadata: dict[str, list[str]]) -> CheckResult:
-    contract = _metadata_contract(metadata)
+    contract = metadata_contract(metadata)
     if contract == "tiered":
         return CheckResult("issue metadata", Status.PASS, "tiered issue-form fields are present")
     if contract == "legacy":
         return CheckResult("issue metadata", Status.PASS, "legacy issue-form fields are present")
 
-    legacy_missing = sorted(_LEGACY_REQUIRED_FIELDS - set(metadata))
-    tiered_missing = sorted(_TIERED_REQUIRED_FIELDS - set(metadata))
+    legacy_missing = sorted(
+        {
+            "phase",
+            "epic",
+            "owner",
+            "status",
+            "type",
+            "source-of-truth",
+            "external-write",
+        }
+        - set(metadata)
+    )
+    tiered_missing = sorted(
+        {"tier", "owner", "status", "source-of-truth", "external-write"}
+        - set(metadata)
+    )
     return CheckResult(
         "issue metadata",
         Status.MANUAL_REVIEW,
