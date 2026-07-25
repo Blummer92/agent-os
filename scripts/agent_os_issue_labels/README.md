@@ -16,14 +16,11 @@ python -m scripts.agent_os_issue_labels.cli \
 ```
 
 ## Draft preview
-
 The preview command renders structured JSON into the canonical issue form without
 network access or GitHub mutation.
-
 ```bash
 python -m scripts.agent_os_issue_labels.draft_cli --input draft.json
 ```
-
 See [ISSUE_DRAFT_PREVIEW.md](ISSUE_DRAFT_PREVIEW.md) for the input contract.
 
 ## Application planner
