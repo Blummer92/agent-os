@@ -8,11 +8,10 @@ import pytest
 from scripts.agent_os_issue_labels.draft import IssueDraftInput, build_issue_draft
 from scripts.agent_os_issue_labels.issue_create import (
     GitHubRepositoryTarget,
-    IssueCreateConfirmation,
     IssueCreateProcessResult,
     IssueCreateReasonCode,
     IssueCreateRequest,
-    execute_issue_creation,
+    plan_issue_creation,
 )
 from scripts.agent_os_issue_labels.validation import validate_issue_draft
 
@@ -24,15 +23,16 @@ TARGET = GitHubRepositoryTarget.parse("Blummer92/agent-os")
 
 
 class Runner:
-    def __init__(self):
-        self.calls = []
+    def __init__(self, overrides=None):
+        self.overrides = overrides or {}
 
     def resolve_executable(self):
         return "gh"
 
     def run(self, argv, *, input_text=None, timeout=30.0):
         key = tuple(argv)
-        self.calls.append(key)
+        if key in self.overrides:
+            return self.overrides[key]
         defaults = {
             ("gh", "--version"): IssueCreateProcessResult(0, "gh version 2.80.0\n", ""),
             ("gh", "issue", "create", "--help"): IssueCreateProcessResult(0, "--repo --title --body-file --label\n", ""),
@@ -44,28 +44,6 @@ class Runner:
         raise AssertionError(key)
 
 
-class Confirmation:
-    def __init__(self, *, invocation="inv-1", confirmed=True, fingerprint=None, target=None):
-        self.invocation = invocation
-        self.confirmed = confirmed
-        self.fingerprint = fingerprint
-        self.target = target
-
-    def confirm(self, plan):
-        return IssueCreateConfirmation(
-            self.invocation,
-            self.fingerprint or plan.operation_fingerprint,
-            self.target or plan.target.canonical,
-            self.confirmed,
-            (),
-        )
-
-
-class Missing:
-    def confirm(self, plan):
-        return None
-
-
 def request():
     payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
     source = IssueDraftInput.from_mapping(payload)
@@ -74,15 +52,27 @@ def request():
     return IssueCreateRequest(validation, TARGET, "inv-1")
 
 
-@pytest.mark.parametrize("provider, reason", (
-    (Missing(), IssueCreateReasonCode.CONFIRMATION_MISSING),
-    (Confirmation(confirmed=False), IssueCreateReasonCode.CONFIRMATION_CANCELLED),
-    (Confirmation(fingerprint="stale"), IssueCreateReasonCode.CONFIRMATION_STALE_OR_MISMATCHED),
-    (Confirmation(invocation="other"), IssueCreateReasonCode.CONFIRMATION_STALE_OR_MISMATCHED),
-    (Confirmation(target="github.com/other/repo"), IssueCreateReasonCode.CONFIRMATION_STALE_OR_MISMATCHED),
+@pytest.mark.parametrize("overrides, reason", (
+    ({("gh", "--version"): IssueCreateProcessResult(1, "", "missing")}, IssueCreateReasonCode.GH_UNAVAILABLE),
+    ({("gh", "issue", "create", "--help"): IssueCreateProcessResult(0, "--repository --title --body-file --label\n", "")}, IssueCreateReasonCode.GH_CAPABILITY_UNSUPPORTED),
+    ({("gh", "auth", "status", "--active", "--hostname", "github.com"): IssueCreateProcessResult(4, "", "no auth")}, IssueCreateReasonCode.AUTHENTICATION_UNAVAILABLE),
+    ({("gh", "auth", "status", "--active", "--hostname", "github.com"): IssueCreateProcessResult(0, "Logged in to github.com account one\nLogged in to github.com account two\n", "")}, IssueCreateReasonCode.ACCOUNT_AMBIGUOUS_OR_MISMATCHED),
 ))
-def test_confirmation_failures_never_execute(provider, reason):
-    runner = Runner()
-    result = execute_issue_creation(request(), runner, provider)
-    assert result.reason_code == reason, result
-    assert not any("--body-file=-" in call for call in runner.calls)
+def test_capability_and_auth_fail_closed(overrides, reason):
+    plan, failure = plan_issue_creation(request(), Runner(overrides=overrides))
+    assert plan is None
+    assert failure.reason_code == reason, failure
+
+
+@pytest.mark.parametrize("payload", (
+    {"nameWithOwner": "other/repo", "url": "https://github.com/other/repo", "hasIssuesEnabled": True, "isArchived": False},
+    {"nameWithOwner": "Blummer92/agent-os", "url": "https://github.com/Blummer92/agent-os", "hasIssuesEnabled": True, "isArchived": True},
+    {"nameWithOwner": "Blummer92/agent-os", "url": "https://github.com/Blummer92/agent-os", "hasIssuesEnabled": False, "isArchived": False},
+))
+def test_repository_metadata_fails_closed(payload):
+    command = ("gh", "repo", "view", "github.com/Blummer92/agent-os", "--json", "nameWithOwner,url,hasIssuesEnabled,isArchived")
+    plan, failure = plan_issue_creation(
+        request(), Runner(overrides={command: IssueCreateProcessResult(0, json.dumps(payload), "")})
+    )
+    assert plan is None
+    assert failure.reason_code == IssueCreateReasonCode.TARGET_MISMATCHED, failure
