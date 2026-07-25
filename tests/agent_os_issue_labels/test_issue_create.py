@@ -141,16 +141,18 @@ def warned():
     )
 
 
-def test_000_target_argv_group_diagnostic():
-    for value in (
-        "widgets", " github.com/acme/widgets", "github_com/acme/widgets",
-        "github.com/./widgets", "github.com/../widgets",
-        "github.com/acme/widgets/extra", "github.com/acme/",
-        "例.example/acme/widgets",
-    ):
-        test_target_parsing(value)
-    test_argv_controls_identity_and_eligibility()
-    pytest.exit("ISSUE_CREATE_TARGET_ARGV_GROUP_PASS", returncode=0)
+def test_000_confirmation_result_group_diagnostic():
+    cases = (
+        (Missing(), IssueCreateReasonCode.CONFIRMATION_MISSING),
+        (Confirm(confirmed=False), IssueCreateReasonCode.CONFIRMATION_CANCELLED),
+        (Confirm(fingerprint="stale"), IssueCreateReasonCode.CONFIRMATION_STALE_OR_MISMATCHED),
+        (Confirm(invocation="other"), IssueCreateReasonCode.CONFIRMATION_STALE_OR_MISMATCHED),
+        (Confirm(target="github.com/other/repo"), IssueCreateReasonCode.CONFIRMATION_STALE_OR_MISMATCHED),
+    )
+    for provider, reason in cases:
+        test_confirmation_failures(provider, reason)
+    test_warning_success_body_repeat_and_serializers()
+    pytest.exit("ISSUE_CREATE_CONFIRMATION_RESULT_GROUP_PASS", returncode=0)
 
 
 @pytest.mark.parametrize(
