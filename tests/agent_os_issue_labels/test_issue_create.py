@@ -143,14 +143,14 @@ def warned():
     )
 
 
-def test_000_sibling_issue_labels_diagnostic():
+def test_000_external_root_diagnostic():
     process = subprocess.run(
         [
             sys.executable,
             "-m",
             "pytest",
-            "tests/agent_os_issue_labels",
-            "--ignore=tests/agent_os_issue_labels/test_issue_create.py",
+            "tests",
+            "--ignore=tests/agent_os_issue_labels",
             "-q",
             "--maxfail=1",
         ],
@@ -161,7 +161,7 @@ def test_000_sibling_issue_labels_diagnostic():
     )
     tail = "\n".join((process.stdout + "\n" + process.stderr).splitlines()[-20:])
     assert process.returncode == 0, tail
-    pytest.exit("ISSUE_LABEL_SIBLING_SUITE_PASS", returncode=0)
+    pytest.exit("EXTERNAL_ROOT_SUITE_PASS", returncode=0)
 
 
 @pytest.mark.parametrize(
