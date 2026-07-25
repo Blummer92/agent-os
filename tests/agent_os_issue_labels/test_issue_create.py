@@ -144,22 +144,17 @@ def warned():
     )
 
 
-def test_000_three_way_interaction_diagnostic():
+def test_000_exact_root_suite_diagnostic():
     if os.environ.get("ISSUE_CREATE_DIAGNOSTIC_CHILD") == "1":
         return
     env = os.environ.copy()
     env["ISSUE_CREATE_DIAGNOSTIC_CHILD"] = "1"
-    top_level = sorted(
-        str(path.relative_to(ROOT)) for path in (ROOT / "tests").glob("test_*.py")
-    )
     process = subprocess.run(
         [
             sys.executable,
             "-m",
             "pytest",
-            "tests/agent_os_issue_acceptance",
-            "tests/agent_os_issue_labels",
-            *top_level,
+            "tests",
             "-q",
             "--maxfail=1",
         ],
@@ -171,7 +166,7 @@ def test_000_three_way_interaction_diagnostic():
     )
     tail = "\n".join((process.stdout + "\n" + process.stderr).splitlines()[-20:])
     assert process.returncode == 0, tail
-    pytest.exit("THREE_WAY_INTERACTION_PASS", returncode=0)
+    pytest.exit("EXACT_ROOT_SUITE_PASS", returncode=0)
 
 
 @pytest.mark.parametrize(
