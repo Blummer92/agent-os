@@ -144,18 +144,21 @@ def warned():
     )
 
 
-def test_000_reusable_registry_interaction_diagnostic():
+def test_000_top_level_interaction_diagnostic():
     if os.environ.get("ISSUE_CREATE_DIAGNOSTIC_CHILD") == "1":
         return
     env = os.environ.copy()
     env["ISSUE_CREATE_DIAGNOSTIC_CHILD"] = "1"
+    top_level = sorted(
+        str(path.relative_to(ROOT)) for path in (ROOT / "tests").glob("test_*.py")
+    )
     process = subprocess.run(
         [
             sys.executable,
             "-m",
             "pytest",
             "tests/agent_os_issue_labels",
-            "tests/test_reusable_capability_registry.py",
+            *top_level,
             "-q",
             "--maxfail=1",
         ],
@@ -167,7 +170,7 @@ def test_000_reusable_registry_interaction_diagnostic():
     )
     tail = "\n".join((process.stdout + "\n" + process.stderr).splitlines()[-20:])
     assert process.returncode == 0, tail
-    pytest.exit("REUSABLE_REGISTRY_INTERACTION_PASS", returncode=0)
+    pytest.exit("TOP_LEVEL_INTERACTION_PASS", returncode=0)
 
 
 @pytest.mark.parametrize(
