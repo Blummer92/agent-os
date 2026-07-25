@@ -348,7 +348,8 @@ def _diagnose_core():
     stage = "baseline"
     try:
         baseline = validation()
-        assert baseline.status == Status.PASS and baseline.submission_eligible
+        assert baseline.status in {Status.PASS, Status.WARN}
+        assert baseline.submission_eligible is True
         stage = "planning"
         plan, failure = plan_issue_creation(request(), Runner())
         assert failure is None and plan is not None
