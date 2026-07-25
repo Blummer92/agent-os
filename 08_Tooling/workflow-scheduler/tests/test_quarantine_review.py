@@ -86,8 +86,8 @@ def _result(**overrides: object) -> SingleIssuePilotResult:
     return SingleIssuePilotResult(**base)  # type: ignore[arg-type]
 
 
-def _packet(**overrides: object) -> qr.QuarantineEvidencePacket:
-    return qr.build_quarantine_evidence_packet(_result(**overrides))
+def _packet(*, paused: bool | None = None, **overrides: object) -> qr.QuarantineEvidencePacket:
+    return qr.build_quarantine_evidence_packet(_result(**overrides), paused=paused)
 
 
 # --------------------------------------------------------------------------
@@ -196,6 +196,15 @@ def test_packet_rejects_non_quarantined_status_directly() -> None:
             base_sha="a" * 40,
             source_head_sha="b" * 40,
             tested_sha="c" * 40,
+            projection_id="projection-1",
+            proposal_id="proposal-1",
+            approval_id="approval-1",
+            approval_revision="1",
+            issueplan_evidence_id="issueplan-1",
+            plan_id="plan-1",
+            bundle_id="bundle-1",
+            advisory_result_id="advisory-1",
+            advisory_render_id="render-1",
             primary_status="failed",
             status="failed",
             initial_review_state="contained-evidence-incomplete",
@@ -475,8 +484,178 @@ def test_stop_all_state_still_permits_fresh_invocation_recovery_path() -> None:
         rationale="fully remediated and verified",
         machine_verified=True,
         new_invocation_id="invocation-588-0003",
+        stop_all_recovery_verification=("descendant processes confirmed exited via PID scan",),
     )
     assert event.resulting_state == "recovery-completed"
+
+
+# --------------------------------------------------------------------------
+# Preserved canonical evidence identities (projection/approval/plan/bundle/advisory)
+# --------------------------------------------------------------------------
+
+_EVIDENCE_IDENTITY_FIELDS = (
+    "projection_id",
+    "proposal_id",
+    "approval_id",
+    "approval_revision",
+    "issueplan_evidence_id",
+    "plan_id",
+    "bundle_id",
+    "advisory_result_id",
+    "advisory_render_id",
+)
+
+
+def test_packet_preserves_all_canonical_evidence_identities() -> None:
+    result = _result()
+    packet = qr.build_quarantine_evidence_packet(result)
+    for field_name in _EVIDENCE_IDENTITY_FIELDS:
+        assert getattr(packet, field_name) == getattr(result, field_name)
+    serialized = qr.serialize_quarantine_evidence_packet(packet)
+    for field_name in _EVIDENCE_IDENTITY_FIELDS:
+        assert serialized[field_name] == getattr(result, field_name)
+
+
+@pytest.mark.parametrize("field_name", _EVIDENCE_IDENTITY_FIELDS)
+def test_changing_any_evidence_identity_changes_packet_id(field_name: str) -> None:
+    baseline = _packet()
+    changed = _packet(**{field_name: f"different-{field_name}"})
+    assert changed.packet_id != baseline.packet_id
+
+
+def test_evidence_identity_tampering_fails_closed() -> None:
+    packet = _packet()
+    tampered = replace(packet, projection_id="tampered-projection-id")
+    with pytest.raises(qr.QuarantineReviewError):
+        qr.serialize_quarantine_evidence_packet(tampered)
+
+
+# --------------------------------------------------------------------------
+# Mandatory pause cannot be overridden
+# --------------------------------------------------------------------------
+
+
+def test_termination_unresolved_cannot_disable_mandatory_pause() -> None:
+    with pytest.raises(qr.QuarantineReviewError):
+        _packet(
+            termination_confirmed=False,
+            reason_codes=("executor.termination-unconfirmed",),
+            paused=False,
+        )
+
+
+def test_stop_all_cannot_disable_mandatory_pause() -> None:
+    with pytest.raises(qr.QuarantineReviewError):
+        _packet(reason_codes=("changed-paths.forbidden",), paused=False)
+
+
+def test_non_pausing_state_may_still_set_paused_true() -> None:
+    packet = _packet(reason_codes=(), paused=True)
+    assert packet.initial_review_state == "contained-evidence-incomplete"
+    assert qr.requires_pause(packet.initial_review_state) is False
+    assert packet.paused is True
+
+
+# --------------------------------------------------------------------------
+# Stop-all recovery requires structured, bounded verification evidence
+# --------------------------------------------------------------------------
+
+
+def test_stop_all_with_machine_verified_but_no_evidence_does_not_resolve() -> None:
+    packet = _packet(reason_codes=("changed-paths.forbidden",))
+    event = qr.append_review_event(
+        packet=packet,
+        prior_events=(),
+        reviewer_identity="operator-1",
+        review_timestamp="2026-07-25T00:00:00Z",
+        disposition="recommend-fresh-invocation",
+        rationale="claims remediation without evidence",
+        machine_verified=True,
+        new_invocation_id="invocation-588-0004",
+    )
+    assert event.resulting_state == "stop-all-scheduler-execution"
+
+
+def test_stop_all_resolves_only_through_allowed_resolving_disposition() -> None:
+    packet = _packet(reason_codes=("changed-paths.forbidden",))
+    non_resolving = qr.append_review_event(
+        packet=packet,
+        prior_events=(),
+        reviewer_identity="operator-1",
+        review_timestamp="2026-07-25T00:00:00Z",
+        disposition="require-repository-inspection",
+        rationale="inspecting scope",
+        machine_verified=True,
+        stop_all_recovery_verification=("repository scan confirmed no forbidden writes",),
+    )
+    assert non_resolving.resulting_state == "stop-all-scheduler-execution"
+
+    resolving = qr.append_review_event(
+        packet=packet,
+        prior_events=(non_resolving,),
+        reviewer_identity="operator-1",
+        review_timestamp="2026-07-25T00:05:00Z",
+        disposition="record-manual-remediation-evidence",
+        rationale="manual remediation confirmed",
+        machine_verified=True,
+        stop_all_recovery_verification=("repository scan confirmed no forbidden writes",),
+    )
+    assert resolving.resulting_state == "recovery-completed"
+
+
+def test_stop_all_recovery_evidence_change_changes_event_id() -> None:
+    packet = _packet(reason_codes=("changed-paths.forbidden",))
+    event_a = qr.append_review_event(
+        packet=packet,
+        prior_events=(),
+        reviewer_identity="operator-1",
+        review_timestamp="2026-07-25T00:00:00Z",
+        disposition="record-manual-remediation-evidence",
+        rationale="remediation",
+        machine_verified=True,
+        stop_all_recovery_verification=("fact one",),
+    )
+    event_b = qr.append_review_event(
+        packet=packet,
+        prior_events=(),
+        reviewer_identity="operator-1",
+        review_timestamp="2026-07-25T00:00:00Z",
+        disposition="record-manual-remediation-evidence",
+        rationale="remediation",
+        machine_verified=True,
+        stop_all_recovery_verification=("fact two",),
+    )
+    assert event_a.event_id != event_b.event_id
+
+
+def test_stop_all_recovery_evidence_rejects_secret_like_facts() -> None:
+    packet = _packet(reason_codes=("changed-paths.forbidden",))
+    with pytest.raises(qr.QuarantineReviewError):
+        qr.append_review_event(
+            packet=packet,
+            prior_events=(),
+            reviewer_identity="operator-1",
+            review_timestamp="2026-07-25T00:00:00Z",
+            disposition="record-manual-remediation-evidence",
+            rationale="remediation",
+            machine_verified=True,
+            stop_all_recovery_verification=("api_key: sk-abcdefghijklmnopqrstuvwx",),
+        )
+
+
+def test_stop_all_recovery_evidence_rejects_oversized_facts() -> None:
+    packet = _packet(reason_codes=("changed-paths.forbidden",))
+    with pytest.raises(qr.QuarantineReviewError):
+        qr.append_review_event(
+            packet=packet,
+            prior_events=(),
+            reviewer_identity="operator-1",
+            review_timestamp="2026-07-25T00:00:00Z",
+            disposition="record-manual-remediation-evidence",
+            rationale="remediation",
+            machine_verified=True,
+            stop_all_recovery_verification=("x" * (qr.MAX_FIELD_LENGTH + 1),),
+        )
 
 
 # --------------------------------------------------------------------------

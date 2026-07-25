@@ -355,6 +355,15 @@ class QuarantineEvidencePacket:
     base_sha: str
     source_head_sha: str
     tested_sha: str
+    projection_id: str | None
+    proposal_id: str | None
+    approval_id: str | None
+    approval_revision: str | None
+    issueplan_evidence_id: str | None
+    plan_id: str | None
+    bundle_id: str | None
+    advisory_result_id: str | None
+    advisory_render_id: str | None
     primary_status: str
     status: str
     initial_review_state: QuarantineReviewState
@@ -390,7 +399,42 @@ class QuarantineEvidencePacket:
             raise QuarantineReviewError("packet must bind a quarantined pilot result")
         if self.initial_review_state not in QUARANTINE_REVIEW_STATES:
             raise QuarantineReviewError("unsupported initial review state")
+        if requires_pause(self.initial_review_state) and not self.paused:
+            raise QuarantineReviewError(
+                f"{self.initial_review_state} requires a mandatory pause; paused cannot be False"
+            )
         object.__setattr__(self, "issue_numbers", tuple(self.issue_numbers))
+        object.__setattr__(
+            self, "projection_id", _bounded_optional_text(self.projection_id, "projection_id")
+        )
+        object.__setattr__(
+            self, "proposal_id", _bounded_optional_text(self.proposal_id, "proposal_id")
+        )
+        object.__setattr__(
+            self, "approval_id", _bounded_optional_text(self.approval_id, "approval_id")
+        )
+        object.__setattr__(
+            self,
+            "approval_revision",
+            _bounded_optional_text(self.approval_revision, "approval_revision"),
+        )
+        object.__setattr__(
+            self,
+            "issueplan_evidence_id",
+            _bounded_optional_text(self.issueplan_evidence_id, "issueplan_evidence_id"),
+        )
+        object.__setattr__(self, "plan_id", _bounded_optional_text(self.plan_id, "plan_id"))
+        object.__setattr__(self, "bundle_id", _bounded_optional_text(self.bundle_id, "bundle_id"))
+        object.__setattr__(
+            self,
+            "advisory_result_id",
+            _bounded_optional_text(self.advisory_result_id, "advisory_result_id"),
+        )
+        object.__setattr__(
+            self,
+            "advisory_render_id",
+            _bounded_optional_text(self.advisory_render_id, "advisory_render_id"),
+        )
         object.__setattr__(self, "changed_paths", _bounded_strings(self.changed_paths, "changed_paths"))
         object.__setattr__(self, "reason_codes", _bounded_strings(self.reason_codes, "reason_codes"))
         object.__setattr__(self, "details", _bounded_strings(self.details, "details"))
@@ -412,6 +456,15 @@ def _packet_payload(packet: QuarantineEvidencePacket) -> dict[str, object]:
         "base_sha": packet.base_sha,
         "source_head_sha": packet.source_head_sha,
         "tested_sha": packet.tested_sha,
+        "projection_id": packet.projection_id,
+        "proposal_id": packet.proposal_id,
+        "approval_id": packet.approval_id,
+        "approval_revision": packet.approval_revision,
+        "issueplan_evidence_id": packet.issueplan_evidence_id,
+        "plan_id": packet.plan_id,
+        "bundle_id": packet.bundle_id,
+        "advisory_result_id": packet.advisory_result_id,
+        "advisory_render_id": packet.advisory_render_id,
         "primary_status": packet.primary_status,
         "status": packet.status,
         "initial_review_state": packet.initial_review_state,
@@ -483,6 +536,15 @@ def build_quarantine_evidence_packet(
         "base_sha": result.base_sha,
         "source_head_sha": result.source_head_sha,
         "tested_sha": result.tested_sha,
+        "projection_id": result.projection_id,
+        "proposal_id": result.proposal_id,
+        "approval_id": result.approval_id,
+        "approval_revision": result.approval_revision,
+        "issueplan_evidence_id": result.issueplan_evidence_id,
+        "plan_id": result.plan_id,
+        "bundle_id": result.bundle_id,
+        "advisory_result_id": result.advisory_result_id,
+        "advisory_render_id": result.advisory_render_id,
         "primary_status": result.primary_status,
         "status": result.status,
         "initial_review_state": initial_state,
@@ -542,6 +604,7 @@ class ReviewEvent:
     machine_verified: bool
     resulting_state: QuarantineReviewState
     new_invocation_id: str | None
+    stop_all_recovery_verification: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.schema_name != QUARANTINE_REVIEW_SCHEMA_NAME:
@@ -560,6 +623,18 @@ class ReviewEvent:
         object.__setattr__(
             self, "new_invocation_id", _bounded_optional_text(self.new_invocation_id, "new_invocation_id")
         )
+        object.__setattr__(
+            self,
+            "stop_all_recovery_verification",
+            _bounded_verification_facts(self.stop_all_recovery_verification),
+        )
+
+
+def _bounded_verification_facts(values: object) -> tuple[str, ...]:
+    facts = _bounded_strings(values, "stop_all_recovery_verification", maximum=MAX_BOUNDED_ITEMS)
+    return tuple(
+        reject_if_secret_like(fact, name="stop_all_recovery_verification") for fact in facts
+    )
 
 
 def _event_payload(event: ReviewEvent) -> dict[str, object]:
@@ -576,6 +651,7 @@ def _event_payload(event: ReviewEvent) -> dict[str, object]:
         "machine_verified": event.machine_verified,
         "resulting_state": event.resulting_state,
         "new_invocation_id": event.new_invocation_id,
+        "stop_all_recovery_verification": list(event.stop_all_recovery_verification),
     }
 
 
@@ -607,9 +683,28 @@ def _next_resulting_state(
     machine_verified: bool,
     new_invocation_id: str | None,
     original_invocation_id: str,
+    stop_all_recovery_verification: tuple[str, ...] = (),
 ) -> QuarantineReviewState:
     if disposition == "pause-all-scheduler-execution":
         return "stop-all-scheduler-execution"
+
+    if prior_state == "stop-all-scheduler-execution":
+        # stop-all dominates every narrower disposition. Only an explicit,
+        # machine-verified, resolving disposition backed by non-empty
+        # structured verification evidence may move past it -- machine
+        # verification alone is never sufficient.
+        if disposition not in _RESOLVING_DISPOSITIONS:
+            return "stop-all-scheduler-execution"
+        if not machine_verified or not stop_all_recovery_verification:
+            return "stop-all-scheduler-execution"
+        if disposition == "recommend-fresh-invocation":
+            if new_invocation_id is None:
+                raise QuarantineReviewError("recommend-fresh-invocation requires a new invocation ID")
+            if new_invocation_id == original_invocation_id:
+                raise QuarantineReviewError(
+                    "a fresh invocation recommendation cannot reuse the original invocation identity"
+                )
+        return "recovery-completed"
 
     if disposition == "recommend-fresh-invocation":
         if new_invocation_id is None:
@@ -621,12 +716,6 @@ def _next_resulting_state(
         if not machine_verified:
             return prior_state
         return "recovery-completed"
-
-    if prior_state == "stop-all-scheduler-execution":
-        # stop-all dominates every narrower disposition; only an explicit,
-        # machine-verified fresh-invocation recommendation (handled above)
-        # may move past it.
-        return "stop-all-scheduler-execution"
 
     if disposition == "confirm-no-effects-with-evidence":
         if prior_state in _NON_DOWNGRADABLE_STATES:
@@ -664,6 +753,7 @@ def append_review_event(
     rationale: str,
     machine_verified: bool,
     new_invocation_id: str | None = None,
+    stop_all_recovery_verification: tuple[str, ...] = (),
     max_open_reviews: int = MAX_OPEN_REVIEWS,
 ) -> ReviewEvent:
     """Append exactly one new, deterministic review event.
@@ -707,6 +797,7 @@ def append_review_event(
         machine_verified=machine_verified,
         new_invocation_id=new_invocation_id,
         original_invocation_id=packet.invocation_id,
+        stop_all_recovery_verification=stop_all_recovery_verification,
     )
 
     sequence = len(prior_events) + 1
@@ -723,6 +814,7 @@ def append_review_event(
         "machine_verified": machine_verified,
         "resulting_state": resulting_state,
         "new_invocation_id": new_invocation_id,
+        "stop_all_recovery_verification": tuple(stop_all_recovery_verification),
     }
     event_id = "quarantine-review-event:" + _semantic_digest(
         "agent-os-wsc5r-quarantine-review-event", payload
