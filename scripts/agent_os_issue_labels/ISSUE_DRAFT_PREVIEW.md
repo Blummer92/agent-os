@@ -3,8 +3,8 @@
 ## Purpose
 
 Render structured input through the canonical Agent OS issue form and apply
-deterministic offline validation. The command performs no network request,
-subprocess execution, issue creation, label change, or other mutation.
+deterministic offline validation. No network request, subprocess, issue creation,
+label change, or other mutation occurs.
 
 ## Command
 
@@ -13,20 +13,16 @@ python -m scripts.agent_os_issue_labels.draft_cli \
   --input tests/fixtures/agent_os_issue_labels/draft_minimum_valid.json
 ```
 
-Use `--input -` for standard input and `--format json` for machine-readable
-output. Repeat `--available-label` only when supplying a complete local label
-set. Repeat `--candidate-summary` to supply local duplicate-candidate evidence.
+Use `--input -` for stdin and `--format json` for machine output. Repeat
+`--available-label` only for a complete local label set. Repeat
+`--candidate-summary` for local advisory duplicate evidence.
 
 ## Immutable result
 
-Text and JSON derive from one `IssueDraftValidationResult` containing:
-
-- validation status and stable ordered reason codes;
-- `format_valid` and `submission_eligible`;
-- parser, schema, and duplicate-candidate evidence;
-- normalized report evidence;
-- `write_authorized=false`;
-- `mutation_performed=false`.
+Text and JSON derive from one `IssueDraftValidationResult` containing status,
+ordered reason codes, `format_valid`, `submission_eligible`, parser/schema/
+duplicate evidence, a normalized report, `write_authorized=false`, and
+`mutation_performed=false`.
 
 ```text
 valid preview != readiness != approval != write authorization
@@ -34,7 +30,7 @@ valid preview != readiness != approval != write authorization
 
 ## Reason codes
 
-| Code | Default outcome |
+| Code | Outcome |
 |---|---|
 | `eligible-valid` | pass |
 | `eligible-warning` | warning |
@@ -49,42 +45,34 @@ valid preview != readiness != approval != write authorization
 | `unsupported-or-drifted-issue-form-schema` | manual review |
 | `duplicate-local-candidate-advisory` | warning |
 
-Free-form text is supporting evidence only. Callers consume the stable fields
-and codes.
-
 ## Exit codes
 
 | Exit | Symbol | Meaning |
 |---:|---|---|
 | `0` | `ELIGIBLE_SUCCESS` | eligible success |
-| `10` | `ELIGIBLE_WARNING` | eligible advisory warning |
+| `10` | `ELIGIBLE_WARNING` | eligible warning |
 | `20` | `MANUAL_REVIEW` | human decision required |
 | `30` | `VALIDATION_FAILURE` | hard validation failure |
-| `64` | `INVALID_INPUT_OR_USAGE` | invalid input or command usage |
+| `64` | `INVALID_INPUT_OR_USAGE` | invalid input or usage |
 
-Manual review is non-zero. Future #602 adapter outcomes must use separate codes.
+Manual review is non-zero. Future #602 outcomes use separate codes.
 
-## Parser ambiguity
+## Fail-closed evidence
 
-`parse_issue_form_body()` remains the only Markdown parser. Validation compares
-normalized source values, canonical rendered Markdown, and parsed output.
-Canonical-looking `###` headings inside multiline values, duplicate headings,
-missing or unexpected fields, and changed values produce
-`parser-round-trip-ambiguity` and `submission_eligible=false`.
+`parse_issue_form_body()` remains the only Markdown parser. Source values,
+rendered Markdown, and parsed output are compared. Canonical-looking `###`
+headings, duplicate headings, missing/unexpected fields, or changed values emit
+`parser-round-trip-ambiguity` and block submission eligibility.
 
-## Schema drift
-
-The local issue-form file is checked for unsupported controls or attributes,
-unknown validation shapes, malformed or duplicate options, duplicate raw or
-canonical IDs, duplicate labels, malformed body entries, and unsupported
-top-level keys. Drift produces manual review. The form is never edited here.
-
-## Duplicate candidates
+The local form is checked for unsupported controls, attributes, validation
+shapes, malformed or duplicate options, duplicate raw/canonical IDs, duplicate
+labels, malformed body entries, and unsupported top-level keys. Drift routes to
+manual review and never edits the form.
 
 Duplicate evidence uses only supplied local summaries and normalized exact-title
 matching. It is advisory and performs no search or issue mutation.
 
-## Write boundary
+## Write boundary and #602 handoff
 
 Every result preserves:
 
@@ -93,13 +81,10 @@ write_authorized=false
 mutation_performed=false
 ```
 
-Validation, readiness, and passing checks remain evidence only.
-
-## Handoff to #602
-
-#602 may consume only a merged result with `submission_eligible=true`. It must
-reuse these reason and exit contracts and add its own separately reviewed
-confirmation and command boundary. #601 does not submit an issue.
+Validation, readiness, and passing checks remain evidence only. #602 may consume
+only a merged result with `submission_eligible=true`, must reuse these reason and
+exit contracts, and must add its separately reviewed confirmation and command
+boundary. #601 does not submit an issue.
 
 ## Validation
 
