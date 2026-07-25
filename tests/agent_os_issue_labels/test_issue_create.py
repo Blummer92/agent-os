@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import inspect
 import json
+import subprocess
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -141,9 +143,25 @@ def warned():
     )
 
 
-def test_000_redaction_unicode_cli_static_diagnostic(monkeypatch, capsys, tmp_path):
-    test_redaction_unicode_cli_static(monkeypatch, capsys, tmp_path)
-    pytest.exit("ISSUE_CREATE_REDACTION_UNICODE_CLI_STATIC_PASS", returncode=0)
+def test_000_sibling_issue_labels_diagnostic():
+    process = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "tests/agent_os_issue_labels",
+            "--ignore=tests/agent_os_issue_labels/test_issue_create.py",
+            "-q",
+            "--maxfail=1",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    tail = "\n".join((process.stdout + "\n" + process.stderr).splitlines()[-20:])
+    assert process.returncode == 0, tail
+    pytest.exit("ISSUE_LABEL_SIBLING_SUITE_PASS", returncode=0)
 
 
 @pytest.mark.parametrize(
