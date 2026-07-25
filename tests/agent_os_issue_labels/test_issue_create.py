@@ -414,10 +414,6 @@ def test_failure_and_ambiguous_success_are_uncertain(process, reason, exit_code)
             IssueCreateReasonCode.GH_UNAVAILABLE,
         ),
         (
-            {("gh", "--version"): IssueCreateProcessResult(0, "not gh\n", "")},
-            IssueCreateReasonCode.GH_CAPABILITY_UNSUPPORTED,
-        ),
-        (
             {
                 ("gh", "issue", "create", "--help"): IssueCreateProcessResult(
                     0,
@@ -455,6 +451,23 @@ def test_capability_and_auth_checks_fail_closed(override, reason):
     )
     assert plan is None
     assert result.reason_code == reason
+
+
+def test_nonstandard_version_text_is_informational_when_features_pass():
+    plan, result = plan_issue_creation(
+        _request(),
+        FakeRunner(
+            overrides={
+                ("gh", "--version"): IssueCreateProcessResult(
+                    0,
+                    "custom gh build\n",
+                    "",
+                )
+            }
+        ),
+    )
+    assert result is None
+    assert plan.capability.version == "custom gh build"
 
 
 @pytest.mark.parametrize(
