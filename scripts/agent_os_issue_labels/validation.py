@@ -363,7 +363,7 @@ def _schema_evidence(
 
     evidence.extend(
         f"unsupported top-level issue-form key: {key}"
-        for key in sorted(set(raw) - _TOP_LEVEL_KEYS)
+        for key in _unexpected_keys(raw, _TOP_LEVEL_KEYS)
     )
     evidence.extend(_top_level_type_evidence(raw))
     body = raw.get("body", [])
@@ -380,14 +380,16 @@ def _schema_evidence(
             continue
         evidence.extend(
             f"body[{index}] has unsupported element key: {key}"
-            for key in sorted(set(item) - _ELEMENT_KEYS)
+            for key in _unexpected_keys(item, _ELEMENT_KEYS)
         )
         control = item.get("type")
         if not isinstance(control, str) or not control:
             evidence.append(f"body[{index}] type must be a non-empty string")
             continue
-        attrs = item.get("attributes") or {}
-        validations = item.get("validations") or {}
+        raw_attrs = item.get("attributes")
+        raw_validations = item.get("validations")
+        attrs = {} if raw_attrs is None else raw_attrs
+        validations = {} if raw_validations is None else raw_validations
         if not isinstance(attrs, Mapping) or not isinstance(validations, Mapping):
             evidence.append(f"body[{index}] has malformed attributes or validations")
             continue
@@ -395,6 +397,10 @@ def _schema_evidence(
         evidence.extend(_attribute_evidence(index, control, attrs))
         evidence.extend(_validation_evidence(index, item.get("id"), validations))
         if control == "markdown":
+            if item.get("id") is not None:
+                evidence.append(f"body[{index}] markdown element must not define id")
+            if validations:
+                evidence.append(f"body[{index}] markdown element must not define validations")
             continue
         non_markdown_fields += 1
 
@@ -437,6 +443,8 @@ def _top_level_type_evidence(raw: Mapping[object, object]) -> list[str]:
         value = raw.get(key)
         if not isinstance(value, str) or not value.strip():
             evidence.append(f"top-level {key} must be a non-empty string")
+    if isinstance(raw.get("name"), str) and len(raw["name"].strip()) <= 3:
+        evidence.append("top-level name must be longer than 3 characters")
     for key in ("title", "type"):
         if key in raw and not isinstance(raw[key], str):
             evidence.append(f"top-level {key} must be a string")
@@ -462,11 +470,11 @@ def _attribute_evidence(
     known_behavioral = _BEHAVIORAL_ATTRIBUTES.get(control, set())
     evidence = [
         f"body[{index}] field {field_name} has unsupported attribute: {key}"
-        for key in sorted(set(attrs) - allowed - known_behavioral)
+        for key in _unexpected_keys(attrs, allowed | known_behavioral)
     ]
     evidence.extend(
         f"body[{index}] field {field_name} uses unsupported renderer behavior: {key}"
-        for key in sorted(set(attrs) & known_behavioral)
+        for key in sorted(str(key) for key in attrs if key in known_behavioral)
     )
     for key in ("label", "description", "placeholder"):
         if key in attrs and not isinstance(attrs[key], str):
@@ -488,7 +496,7 @@ def _validation_evidence(
 ) -> list[str]:
     evidence = [
         f"body[{index}] field {field_id or '<none>'} has unsupported validation: {key}"
-        for key in sorted(set(validations) - {"required"})
+        for key in _unexpected_keys(validations, {"required"})
     ]
     if "required" in validations and not isinstance(validations["required"], bool):
         evidence.append(
@@ -511,7 +519,7 @@ def _option_evidence(index: int, control: str, options: object) -> list[str]:
                 continue
             evidence.extend(
                 f"body[{index}] checkbox option {option_index} has unsupported key: {key}"
-                for key in sorted(set(option) - {"label", "required"})
+                for key in _unexpected_keys(option, {"label", "required"})
             )
             label = option.get("label")
             if not isinstance(label, str) or not label.strip():
@@ -538,6 +546,16 @@ def _option_evidence(index: int, control: str, options: object) -> list[str]:
         for value in _duplicates(normalized)
     )
     return evidence
+
+
+def _unexpected_keys(mapping: Mapping[object, object], allowed: set[str]) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            str(key)
+            for key in mapping
+            if not isinstance(key, str) or key not in allowed
+        )
+    )
 
 
 def _duplicates(values: Sequence[str]) -> tuple[str, ...]:
