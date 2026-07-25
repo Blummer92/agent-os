@@ -15,6 +15,17 @@ python -m scripts.agent_os_issue_labels.cli \
   --labels tests/agent_os_issue_labels/fixtures/labels_ready.txt
 ```
 
+## Draft preview
+
+The preview command renders structured JSON into the canonical issue form without
+network access or GitHub mutation.
+
+```bash
+python -m scripts.agent_os_issue_labels.draft_cli --input draft.json
+```
+
+See [ISSUE_DRAFT_PREVIEW.md](ISSUE_DRAFT_PREVIEW.md) for the input contract.
+
 ## Application planner
 
 The planner is side-effect free. It consumes an issue body, current labels, and
@@ -83,5 +94,6 @@ source-of-truth changes, issue closure, or future live label behavior.
 
 ## Boundary
 
-The checker and planner perform no GitHub API writes and touch no external
-systems. Live additive application remains a separately approved follow-up.
+The checker, draft preview, and planner perform no GitHub API writes and touch no
+external systems. Live issue creation and additive label application remain
+separately approved follow-ups.
