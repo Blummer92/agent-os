@@ -122,7 +122,12 @@ def _request(*, validation=None, prior=(), optional=()):
 
 
 def _creates(runner):
-    return [call for call in runner.calls if call[0][:3] == ("gh", "issue", "create")]
+    return [
+        call
+        for call in runner.calls
+        if call[0][:3] == ("gh", "issue", "create")
+        and "--body-file=-" in call[0]
+    ]
 
 
 def test_target_and_argv_are_explicit_safe_and_deterministic():
