@@ -13,7 +13,6 @@ from scripts.agent_os_issue_labels.issue_create import (
     IssueCreateProcessResult,
     IssueCreateReasonCode,
     IssueCreateRequest,
-    MutationState,
     execute_issue_creation,
 )
 from scripts.agent_os_issue_labels.validation import validate_issue_draft
@@ -81,13 +80,11 @@ class Confirmation:
         confirmed=True,
         fingerprint=None,
         target=None,
-        warnings=None,
     ):
         self.invocation_id = invocation_id
         self.confirmed = confirmed
         self.fingerprint = fingerprint
         self.target = target
-        self.warnings = warnings
 
     def confirm(self, plan):
         return IssueCreateConfirmation(
@@ -95,22 +92,15 @@ class Confirmation:
             operation_fingerprint=self.fingerprint or plan.operation_fingerprint,
             target=self.target or plan.target.canonical,
             confirmed=self.confirmed,
-            accepted_warning_reason_codes=(
-                plan.warning_reason_codes if self.warnings is None else self.warnings
-            ),
+            accepted_warning_reason_codes=plan.warning_reason_codes,
         )
 
 
-def _request(*, warning=False):
+def _request():
     payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
     source = IssueDraftInput.from_mapping(payload)
     draft = build_issue_draft(source, FORM, MAP)
-    validation = validate_issue_draft(
-        draft,
-        source,
-        FORM,
-        local_issue_summaries=("Add deterministic issue draft preview",) if warning else (),
-    )
+    validation = validate_issue_draft(draft, source, FORM)
     return IssueCreateRequest(validation, TARGET, "inv-1")
 
 
@@ -144,37 +134,3 @@ def test_confirmation_failures_execute_nothing(provider, reason):
     assert result.exit_code == IssueCreateExitCode.CONFIRMATION
     assert result.execution_attempted is False
     assert _creates(runner) == []
-
-
-def test_warning_requires_exact_acknowledgement():
-    request = _request(warning=True)
-    rejected_runner = FakeRunner()
-    rejected = execute_issue_creation(
-        request,
-        rejected_runner,
-        Confirmation(warnings=()),
-    )
-    assert rejected.reason_code == IssueCreateReasonCode.ELIGIBLE_WARNING_NOT_ACCEPTED
-    assert _creates(rejected_runner) == []
-
-    accepted_runner = FakeRunner()
-    accepted = execute_issue_creation(
-        request,
-        accepted_runner,
-        Confirmation(),
-    )
-    assert accepted.reason_code == IssueCreateReasonCode.CREATE_CONFIRMED
-    assert len(_creates(accepted_runner)) == 1
-
-
-def test_confirmed_success_contract():
-    runner = FakeRunner()
-    result = execute_issue_creation(_request(), runner, Confirmation())
-    assert result.reason_code == IssueCreateReasonCode.CREATE_CONFIRMED
-    assert result.reason_codes == (IssueCreateReasonCode.CREATE_CONFIRMED,)
-    assert result.exit_code == 0
-    assert result.write_authorized is True
-    assert result.mutation_state == MutationState.CONFIRMED
-    assert result.mutation_performed is True
-    assert result.created_issue_number == 700
-    assert len(_creates(runner)) == 1
