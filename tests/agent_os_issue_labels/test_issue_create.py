@@ -2,9 +2,6 @@ from __future__ import annotations
 
 import inspect
 import json
-import os
-import subprocess
-import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -144,31 +141,6 @@ def warned():
     )
 
 
-def test_000_exact_root_suite_diagnostic():
-    if os.environ.get("ISSUE_CREATE_DIAGNOSTIC_CHILD") == "1":
-        return
-    env = os.environ.copy()
-    env["ISSUE_CREATE_DIAGNOSTIC_CHILD"] = "1"
-    process = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            "tests",
-            "-q",
-            "--maxfail=1",
-        ],
-        cwd=ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    tail = "\n".join((process.stdout + "\n" + process.stderr).splitlines()[-20:])
-    assert process.returncode == 0, tail
-    pytest.exit("EXACT_ROOT_SUITE_PASS", returncode=0)
-
-
 @pytest.mark.parametrize(
     "value",
     (
@@ -258,6 +230,22 @@ def test_warning_success_body_repeat_and_serializers():
     payload = issue_create_result_to_dict(result)
     assert payload["reason_code"] == result.reason_code.value
     assert result.operation_identity in render_issue_create_result(result)
+
+
+def test_success_parsing_precedes_sensitive_output_redaction():
+    issue_url = "https://github.com/Blummer92/agent-os/issues/700"
+    baseline = validation()
+    protected = replace(
+        baseline,
+        draft=replace(baseline.draft, body=issue_url),
+    )
+    runner = Runner(create=IssueCreateProcessResult(0, issue_url + "\n", ""))
+    result = execute_issue_creation(request(result=protected), runner, Confirm())
+    assert result.reason_code == IssueCreateReasonCode.CREATE_CONFIRMED
+    assert result.created_issue_url == issue_url
+    assert result.created_issue_number == 700
+    assert issue_url not in result.sanitized_stdout
+    assert "[REDACTED]" in result.sanitized_stdout
 
 
 @pytest.mark.parametrize(
