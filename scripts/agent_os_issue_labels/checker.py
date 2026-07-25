@@ -12,6 +12,7 @@ from scripts.agent_os_issue_acceptance.models import (
 from .issue_metadata import (
     load_issue_form_fields,
     metadata_contract,
+    missing_metadata_fields,
     parse_issue_form_body,
 )
 from .label_map import expected_labels, load_label_map
@@ -96,29 +97,14 @@ def _check_metadata(metadata: dict[str, list[str]]) -> CheckResult:
     if contract == "legacy":
         return CheckResult("issue metadata", Status.PASS, "legacy issue-form fields are present")
 
-    legacy_missing = sorted(
-        {
-            "phase",
-            "epic",
-            "owner",
-            "status",
-            "type",
-            "source-of-truth",
-            "external-write",
-        }
-        - set(metadata)
-    )
-    tiered_missing = sorted(
-        {"tier", "owner", "status", "source-of-truth", "external-write"}
-        - set(metadata)
-    )
+    missing = missing_metadata_fields(metadata)
     return CheckResult(
         "issue metadata",
         Status.MANUAL_REVIEW,
         "neither supported issue-form contract is complete",
         [
-            f"legacy missing: {', '.join(legacy_missing) or 'none'}",
-            f"tiered missing: {', '.join(tiered_missing) or 'none'}",
+            f"legacy missing: {', '.join(missing['legacy']) or 'none'}",
+            f"tiered missing: {', '.join(missing['tiered']) or 'none'}",
         ],
     )
 
