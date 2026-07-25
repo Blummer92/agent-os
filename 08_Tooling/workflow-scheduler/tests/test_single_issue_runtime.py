@@ -471,3 +471,169 @@ def test_no_pilot_workflow_issue_merge_or_concurrency_mutation_path_exists() -> 
         "workflow_dispatch",
     ):
         assert forbidden_token not in source
+
+
+# --------------------------------------------------------------------------
+# Aggregate observation-size enforcement (review fix)
+# --------------------------------------------------------------------------
+
+# A 4-byte-in-UTF-8 code point. Using it lets a field stay within
+# MAX_FIELD_LENGTH (a Python character count) while contributing far more
+# than MAX_FIELD_LENGTH bytes to the canonical UTF-8 serialized payload.
+_WIDE_CHAR = "\U0001F600"
+
+
+def _wide_named(base_cls: type) -> type:
+    """Return a subclass of ``base_cls`` whose ``__name__`` is exactly
+    ``MAX_FIELD_LENGTH`` wide (multibyte) characters -- long enough in UTF-8
+    bytes to blow the aggregate observation limit once several such names
+    are combined, but not long enough (in characters) to violate the
+    per-field bound on its own.
+    """
+    name = _WIDE_CHAR * runtime_module.MAX_FIELD_LENGTH
+    assert len(name) == runtime_module.MAX_FIELD_LENGTH
+    assert len(name.encode("utf-8")) > runtime_module.MAX_FIELD_LENGTH
+    return type(name, (base_cls,), {})
+
+
+class _ProbeBase:
+    def __call__(self, checkpoint: str) -> bool:
+        return False
+
+
+def test_normal_bounded_result_still_succeeds_after_fix() -> None:
+    outcome = _entrypoint()
+    assert outcome.result.status == "completed"
+    assert isinstance(outcome.observation, RuntimeObservation)
+    serialize_runtime_observation(outcome.observation)
+
+
+def test_orchestrator_still_called_exactly_once_after_fix(monkeypatch) -> None:
+    calls = []
+    original = runtime_module.run_single_issue_pilot
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(runtime_module, "run_single_issue_pilot", counting)
+    _entrypoint()
+    assert calls == [1]
+
+
+def test_oversized_aggregate_observation_fails_before_outcome_is_returned() -> None:
+    lease = _wide_named(tsp.FakeLease)()
+    workspace = _wide_named(tsp.FakeWorkspace)()
+    executor = _wide_named(tsp.FakeExecutor)()
+    validator = _wide_named(tsp.FakeValidator)()
+    cancelled = _wide_named(_ProbeBase)()
+
+    with pytest.raises(RuntimeEntrypointError):
+        run_single_issue_runtime_entrypoint(
+            tsp._pilot_input(),
+            lease=lease,
+            workspace=workspace,
+            executor=executor,
+            validator=validator,
+            cancelled=cancelled,
+        )
+
+
+def test_oversized_observation_field_lengths_individually_stay_bounded() -> None:
+    # Every adapter type name used above is exactly MAX_FIELD_LENGTH
+    # characters -- it does not violate the per-field character bound. Only
+    # the aggregate UTF-8 byte size is what trips the limit.
+    for base_cls in (tsp.FakeLease, tsp.FakeWorkspace, tsp.FakeExecutor, tsp.FakeValidator):
+        wide_cls = _wide_named(base_cls)
+        assert len(wide_cls.__name__) == runtime_module.MAX_FIELD_LENGTH
+
+
+def test_utf8_encoded_bytes_govern_the_size_check_not_character_count() -> None:
+    name = _WIDE_CHAR * runtime_module.MAX_FIELD_LENGTH
+    # Character count alone would never trip MAX_FIELD_LENGTH...
+    assert len(name) == runtime_module.MAX_FIELD_LENGTH
+    # ...but the UTF-8 encoded byte count is four times larger.
+    assert len(name.encode("utf-8")) == runtime_module.MAX_FIELD_LENGTH * 4
+
+    lease = _wide_named(tsp.FakeLease)()
+    workspace = _wide_named(tsp.FakeWorkspace)()
+    executor = _wide_named(tsp.FakeExecutor)()
+    validator = _wide_named(tsp.FakeValidator)()
+    cancelled = _wide_named(_ProbeBase)()
+
+    with pytest.raises(RuntimeEntrypointError):
+        run_single_issue_runtime_entrypoint(
+            tsp._pilot_input(),
+            lease=lease,
+            workspace=workspace,
+            executor=executor,
+            validator=validator,
+            cancelled=cancelled,
+        )
+
+
+def test_canonical_result_is_unaltered_by_the_size_check(monkeypatch) -> None:
+    captured = {}
+    original = runtime_module.run_single_issue_pilot
+
+    def capturing(*args, **kwargs):
+        result = original(*args, **kwargs)
+        captured["result_id"] = result.result_id
+        captured["status"] = result.status
+        return result
+
+    monkeypatch.setattr(runtime_module, "run_single_issue_pilot", capturing)
+
+    lease = _wide_named(tsp.FakeLease)()
+    workspace = _wide_named(tsp.FakeWorkspace)()
+    executor = _wide_named(tsp.FakeExecutor)()
+    validator = _wide_named(tsp.FakeValidator)()
+    cancelled = _wide_named(_ProbeBase)()
+
+    with pytest.raises(RuntimeEntrypointError):
+        run_single_issue_runtime_entrypoint(
+            tsp._pilot_input(),
+            lease=lease,
+            workspace=workspace,
+            executor=executor,
+            validator=validator,
+            cancelled=cancelled,
+        )
+
+    assert captured["status"] == "completed"
+
+    # The same canonical input still produces the identical result outside
+    # the oversized-observation path: the size check does not mutate or
+    # otherwise corrupt the orchestrator's canonical result.
+    direct = tsp._run(
+        lease=tsp.FakeLease(),
+        workspace=tsp.FakeWorkspace(),
+        executor=tsp.FakeExecutor(),
+        validator=tsp.FakeValidator(),
+    )
+    assert direct.result_id == captured["result_id"]
+
+
+def test_oversized_observation_does_not_introduce_quarantine_recovery() -> None:
+    lease = _wide_named(tsp.FakeLease)()
+    workspace = _wide_named(tsp.FakeWorkspace)()
+    executor = _wide_named(tsp.FakeExecutor)()
+    validator = _wide_named(tsp.FakeValidator)()
+    cancelled = _wide_named(_ProbeBase)()
+
+    try:
+        run_single_issue_runtime_entrypoint(
+            tsp._pilot_input(),
+            lease=lease,
+            workspace=workspace,
+            executor=executor,
+            validator=validator,
+            cancelled=cancelled,
+        )
+        raise AssertionError("expected RuntimeEntrypointError")
+    except RuntimeEntrypointError:
+        pass
+
+    source = inspect.getsource(runtime_module)
+    for forbidden_token in ("append_review_event", "ReviewEvent", "recovery", "rollback"):
+        assert forbidden_token not in source

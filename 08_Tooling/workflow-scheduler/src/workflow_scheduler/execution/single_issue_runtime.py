@@ -261,6 +261,11 @@ def run_single_issue_runtime_entrypoint(
         "agent-os-wsc5b1-runtime-observation", payload
     )
     observation = RuntimeObservation(observation_id=observation_id, **payload)
+    # Enforce the aggregate canonical size/identity bound here so an
+    # oversized or tampered observation can never leave the entrypoint; the
+    # original RuntimeObservation object (not the serialized dict) is still
+    # what gets returned.
+    serialize_runtime_observation(observation)
 
     return SingleIssueRuntimeOutcome(
         result=result, observation=observation, quarantine_evidence=quarantine_evidence
