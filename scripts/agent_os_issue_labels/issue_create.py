@@ -564,6 +564,7 @@ def execute_issue_creation(
         )
 
     process = runner.run(plan.argv, input_text=plan.body, timeout=_DEFAULT_TIMEOUT)
+    parse_text = _ANSI_RE.sub("", _coerce_text(process.stdout))
     sensitive_values = (
         plan.body,
         request.validation.draft.title,
@@ -612,7 +613,7 @@ def execute_issue_creation(
             **common,
         )
 
-    parsed = _parse_created_issue(stdout, request.target)
+    parsed = _parse_created_issue(parse_text, request.target)
     if parsed == "wrong-target":
         return _result(
             request,
