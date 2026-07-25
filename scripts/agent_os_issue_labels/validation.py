@@ -57,6 +57,31 @@ _FORMAT_INVALID = {
     DraftReasonCode.PARSER_ROUND_TRIP_AMBIGUITY,
     DraftReasonCode.ISSUE_FORM_SCHEMA_DRIFT,
 }
+_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_TOP_LEVEL_KEYS = {
+    "name",
+    "description",
+    "title",
+    "labels",
+    "assignees",
+    "type",
+    "projects",
+    "body",
+}
+_ELEMENT_KEYS = {"type", "id", "attributes", "validations"}
+_BASE_ATTRIBUTES = {"label", "description", "placeholder"}
+_SUPPORTED_ATTRIBUTES = {
+    "markdown": {"value"},
+    "input": _BASE_ATTRIBUTES,
+    "textarea": _BASE_ATTRIBUTES,
+    "dropdown": {"label", "description", "multiple", "options", "default"},
+    "checkboxes": {"label", "description", "options"},
+}
+_BEHAVIORAL_ATTRIBUTES = {
+    "input": {"value"},
+    "textarea": {"value", "render"},
+    "dropdown": {"default"},
+}
 
 
 class DraftExitCode(IntEnum):
@@ -335,93 +360,64 @@ def _schema_evidence(
     raw = yaml.safe_load(Path(issue_form_path).read_text(encoding="utf-8")) or {}
     if not isinstance(raw, Mapping):
         return ("issue form root is not a mapping",)
-    allowed_top = {
-        "name",
-        "description",
-        "title",
-        "labels",
-        "assignees",
-        "type",
-        "projects",
-        "body",
-    }
+
     evidence.extend(
         f"unsupported top-level issue-form key: {key}"
-        for key in sorted(set(raw) - allowed_top)
+        for key in sorted(set(raw) - _TOP_LEVEL_KEYS)
     )
+    evidence.extend(_top_level_type_evidence(raw))
     body = raw.get("body", [])
     if not isinstance(body, list):
         return tuple(sorted(set([*evidence, "issue form body is not a list"])))
 
-    allowed_attrs = {
-        "markdown": {"value"},
-        "input": {"label", "description", "placeholder", "value"},
-        "textarea": {"label", "description", "placeholder", "value", "render"},
-        "dropdown": {"label", "description", "multiple", "options", "default"},
-        "checkboxes": {"label", "description", "options"},
-    }
     raw_ids: list[str] = []
     canonical_ids: list[str] = []
     labels: list[str] = []
+    non_markdown_fields = 0
     for index, item in enumerate(body):
         if not isinstance(item, Mapping):
             evidence.append(f"body[{index}] is not a mapping")
             continue
-        control = str(item.get("type") or "")
+        evidence.extend(
+            f"body[{index}] has unsupported element key: {key}"
+            for key in sorted(set(item) - _ELEMENT_KEYS)
+        )
+        control = item.get("type")
+        if not isinstance(control, str) or not control:
+            evidence.append(f"body[{index}] type must be a non-empty string")
+            continue
         attrs = item.get("attributes") or {}
         validations = item.get("validations") or {}
         if not isinstance(attrs, Mapping) or not isinstance(validations, Mapping):
             evidence.append(f"body[{index}] has malformed attributes or validations")
             continue
-        evidence.extend(
-            f"body[{index}] field {item.get('id', '<none>')} has unsupported attribute: {key}"
-            for key in sorted(set(attrs) - allowed_attrs.get(control, set()))
-        )
-        evidence.extend(
-            f"body[{index}] field {item.get('id', '<none>')} has unsupported validation: {key}"
-            for key in sorted(set(validations) - {"required"})
-        )
-        if "required" in validations and not isinstance(validations["required"], bool):
-            evidence.append(
-                f"body[{index}] field {item.get('id', '<none>')} has non-boolean required validation"
-            )
+
+        evidence.extend(_attribute_evidence(index, control, attrs))
+        evidence.extend(_validation_evidence(index, item.get("id"), validations))
         if control == "markdown":
             continue
+        non_markdown_fields += 1
+
         raw_id = item.get("id")
+        if not isinstance(raw_id, str) or not raw_id:
+            evidence.append(f"body[{index}] input control must define a string id")
+        else:
+            raw_ids.append(raw_id)
+            canonical_ids.append(canonical_field_id(raw_id))
+            if not _ID_RE.fullmatch(raw_id):
+                evidence.append(f"body[{index}] field id is invalid: {raw_id}")
+
         label = attrs.get("label")
-        if raw_id:
-            raw_ids.append(str(raw_id))
-            canonical_ids.append(canonical_field_id(str(raw_id)))
-        if label:
-            labels.append(str(label))
-        options = attrs.get("options")
+        if not isinstance(label, str) or not label.strip():
+            evidence.append(f"body[{index}] label must be a non-empty string")
+        else:
+            labels.append(label)
+
         if control in {"dropdown", "checkboxes"}:
-            if not isinstance(options, list):
-                evidence.append(f"body[{index}] options are not a list")
-                continue
-            normalized: list[str] = []
-            for option_index, option in enumerate(options):
-                if control == "checkboxes":
-                    if not isinstance(option, Mapping) or not option.get("label"):
-                        evidence.append(
-                            f"body[{index}] checkbox option {option_index} is malformed"
-                        )
-                        continue
-                    if set(option) - {"label", "required"}:
-                        evidence.append(
-                            f"body[{index}] checkbox option {option_index} has unsupported keys"
-                        )
-                    normalized.append(str(option["label"]))
-                elif isinstance(option, Mapping):
-                    evidence.append(
-                        f"body[{index}] dropdown option {option_index} is malformed"
-                    )
-                else:
-                    normalized.append(str(option))
-            evidence.extend(
-                f"body[{index}] has duplicate option: {value}"
-                for value in _duplicates(normalized)
-            )
+            evidence.extend(_option_evidence(index, control, attrs.get("options")))
+
+    if not non_markdown_fields:
+        evidence.append("issue form body contains no input fields")
     evidence.extend(
         f"duplicate raw field id: {value}" for value in _duplicates(raw_ids)
     )
@@ -433,6 +429,115 @@ def _schema_evidence(
         f"duplicate field label: {value}" for value in _duplicates(labels)
     )
     return tuple(sorted(set(evidence)))
+
+
+def _top_level_type_evidence(raw: Mapping[object, object]) -> list[str]:
+    evidence: list[str] = []
+    for key in ("name", "description"):
+        value = raw.get(key)
+        if not isinstance(value, str) or not value.strip():
+            evidence.append(f"top-level {key} must be a non-empty string")
+    for key in ("title", "type"):
+        if key in raw and not isinstance(raw[key], str):
+            evidence.append(f"top-level {key} must be a string")
+    for key in ("labels", "assignees", "projects"):
+        if key in raw and not _string_or_string_list(raw[key]):
+            evidence.append(f"top-level {key} must be a string or string list")
+    return evidence
+
+
+def _string_or_string_list(value: object) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    return isinstance(value, list) and all(
+        isinstance(item, str) and bool(item.strip()) for item in value
+    )
+
+
+def _attribute_evidence(
+    index: int, control: str, attrs: Mapping[object, object]
+) -> list[str]:
+    field_name = attrs.get("label", "<none>")
+    allowed = _SUPPORTED_ATTRIBUTES.get(control, set())
+    known_behavioral = _BEHAVIORAL_ATTRIBUTES.get(control, set())
+    evidence = [
+        f"body[{index}] field {field_name} has unsupported attribute: {key}"
+        for key in sorted(set(attrs) - allowed - known_behavioral)
+    ]
+    evidence.extend(
+        f"body[{index}] field {field_name} uses unsupported renderer behavior: {key}"
+        for key in sorted(set(attrs) & known_behavioral)
+    )
+    for key in ("label", "description", "placeholder"):
+        if key in attrs and not isinstance(attrs[key], str):
+            evidence.append(f"body[{index}] attribute {key} must be a string")
+    if control == "markdown" and not isinstance(attrs.get("value"), str):
+        evidence.append(f"body[{index}] markdown value must be a string")
+    if control == "dropdown" and "multiple" in attrs:
+        if not isinstance(attrs["multiple"], bool):
+            evidence.append(f"body[{index}] dropdown multiple must be boolean")
+        elif attrs["multiple"] is True:
+            evidence.append(
+                f"body[{index}] dropdown multiple selection is unsupported by local renderer"
+            )
+    return evidence
+
+
+def _validation_evidence(
+    index: int, field_id: object, validations: Mapping[object, object]
+) -> list[str]:
+    evidence = [
+        f"body[{index}] field {field_id or '<none>'} has unsupported validation: {key}"
+        for key in sorted(set(validations) - {"required"})
+    ]
+    if "required" in validations and not isinstance(validations["required"], bool):
+        evidence.append(
+            f"body[{index}] field {field_id or '<none>'} has non-boolean required validation"
+        )
+    return evidence
+
+
+def _option_evidence(index: int, control: str, options: object) -> list[str]:
+    if not isinstance(options, list) or not options:
+        return [f"body[{index}] options must be a non-empty list"]
+    evidence: list[str] = []
+    normalized: list[str] = []
+    for option_index, option in enumerate(options):
+        if control == "checkboxes":
+            if not isinstance(option, Mapping):
+                evidence.append(
+                    f"body[{index}] checkbox option {option_index} is malformed"
+                )
+                continue
+            evidence.extend(
+                f"body[{index}] checkbox option {option_index} has unsupported key: {key}"
+                for key in sorted(set(option) - {"label", "required"})
+            )
+            label = option.get("label")
+            if not isinstance(label, str) or not label.strip():
+                evidence.append(
+                    f"body[{index}] checkbox option {option_index} label is invalid"
+                )
+                continue
+            if "required" in option and not isinstance(option["required"], bool):
+                evidence.append(
+                    f"body[{index}] checkbox option {option_index} required must be boolean"
+                )
+            normalized.append(label)
+            continue
+
+        if not isinstance(option, str) or not option.strip():
+            evidence.append(f"body[{index}] dropdown option {option_index} is invalid")
+            continue
+        if option.casefold() == "none":
+            evidence.append(f"body[{index}] dropdown option uses reserved value: {option}")
+        normalized.append(option)
+
+    evidence.extend(
+        f"body[{index}] has duplicate option: {value}"
+        for value in _duplicates(normalized)
+    )
+    return evidence
 
 
 def _duplicates(values: Sequence[str]) -> tuple[str, ...]:
