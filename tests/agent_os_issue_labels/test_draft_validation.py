@@ -255,3 +255,158 @@ def test_cli_invalid_json_uses_stable_invalid_input_exit(tmp_path: Path, capsys)
 
     assert code == DraftExitCode.INVALID_INPUT_OR_USAGE
     assert "unable to read structured draft input" in capsys.readouterr().err
+
+
+def test_supported_github_behavior_not_implemented_by_renderer_fails_closed(tmp_path: Path):
+    form = tmp_path / "behavioral.yml"
+    form.write_text(
+        """name: Test form
+description: Test
+title: '[Agent OS] '
+labels: [agent-os]
+body:
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective
+      value: Default text
+      render: shell
+    validations: {required: true}
+  - type: dropdown
+    id: owner
+    attributes:
+      label: Owner
+      multiple: true
+      options: [owner:github-service-agent, owner:qa-test-agent]
+      default: 0
+    validations: {required: true}
+""",
+        encoding="utf-8",
+    )
+    source = IssueDraftInput.from_mapping(
+        {
+            "title": "Example",
+            "fields": {
+                "objective": "A",
+                "owner": "owner:github-service-agent",
+            },
+        }
+    )
+    draft = build_issue_draft(source, form, MAP)
+    result = validate_issue_draft(draft, source, form)
+
+    assert result.status == Status.MANUAL_REVIEW
+    assert DraftReasonCode.ISSUE_FORM_SCHEMA_DRIFT in result.reason_codes
+    assert any("unsupported renderer behavior: value" in item for item in result.schema_drift_evidence)
+    assert any("unsupported renderer behavior: render" in item for item in result.schema_drift_evidence)
+    assert any("multiple selection is unsupported" in item for item in result.schema_drift_evidence)
+    assert any("unsupported renderer behavior: default" in item for item in result.schema_drift_evidence)
+
+
+def test_schema_types_ids_options_and_falsy_mappings_fail_closed(tmp_path: Path):
+    form = tmp_path / "malformed-schema.yml"
+    form.write_text(
+        """name: Test form
+description: Test
+labels: [agent-os]
+body:
+  - type: input
+    id: objective
+    attributes: {label: Objective}
+    validations: []
+  - type: dropdown
+    id: bad.id
+    attributes:
+      label: Choice
+      options: [None, true, valid]
+    validations: {required: true}
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety
+      options:
+        - {label: Confirm, required: yes}
+""",
+        encoding="utf-8",
+    )
+    source = IssueDraftInput.from_mapping(
+        {
+            "title": "Example",
+            "fields": {
+                "objective": "A",
+                "bad.id": "valid",
+                "safety": ["Confirm"],
+            },
+        }
+    )
+    draft = build_issue_draft(source, form, MAP)
+    result = validate_issue_draft(draft, source, form)
+
+    assert result.status == Status.MANUAL_REVIEW
+    assert DraftReasonCode.ISSUE_FORM_SCHEMA_DRIFT in result.reason_codes
+    assert any("malformed attributes or validations" in item for item in result.schema_drift_evidence)
+    assert any("field id is invalid: bad.id" in item for item in result.schema_drift_evidence)
+    assert any("reserved value: None" in item for item in result.schema_drift_evidence)
+    assert any("dropdown option 1 is invalid" in item for item in result.schema_drift_evidence)
+    assert any("required must be boolean" in item for item in result.schema_drift_evidence)
+
+
+def test_yaml_boolean_like_keys_become_review_evidence_not_crashes(tmp_path: Path):
+    form = tmp_path / "boolean-key.yml"
+    form.write_text(
+        """name: Test form
+description: Test
+yes: forbidden
+body:
+  - type: input
+    id: objective
+    yes: forbidden
+    attributes:
+      label: Objective
+      yes: forbidden
+    validations:
+      required: true
+      no: forbidden
+""",
+        encoding="utf-8",
+    )
+    source = IssueDraftInput.from_mapping(
+        {"title": "Example", "fields": {"objective": "A"}}
+    )
+    draft = build_issue_draft(source, form, MAP)
+    result = validate_issue_draft(draft, source, form)
+
+    assert result.status == Status.MANUAL_REVIEW
+    assert DraftReasonCode.ISSUE_FORM_SCHEMA_DRIFT in result.reason_codes
+    assert any("unsupported top-level issue-form key" in item for item in result.schema_drift_evidence)
+    assert any("unsupported element key" in item for item in result.schema_drift_evidence)
+    assert any("unsupported attribute" in item for item in result.schema_drift_evidence)
+    assert any("unsupported validation" in item for item in result.schema_drift_evidence)
+
+
+def test_upload_control_is_visible_schema_drift(tmp_path: Path):
+    form = tmp_path / "upload.yml"
+    form.write_text(
+        """name: Test form
+description: Test
+body:
+  - type: input
+    id: objective
+    attributes: {label: Objective}
+  - type: upload
+    id: screenshots
+    attributes:
+      label: Upload screenshots
+      description: Attach evidence
+""",
+        encoding="utf-8",
+    )
+    source = IssueDraftInput.from_mapping(
+        {"title": "Example", "fields": {"objective": "A"}}
+    )
+    draft = build_issue_draft(source, form, MAP)
+    result = validate_issue_draft(draft, source, form)
+
+    assert result.status == Status.MANUAL_REVIEW
+    assert DraftReasonCode.ISSUE_FORM_SCHEMA_DRIFT in result.reason_codes
+    assert any("unsupported control 'upload'" in item for item in result.schema_drift_evidence)
