@@ -141,6 +141,24 @@ def warned():
     )
 
 
+def test_000_core_diagnostic():
+    baseline = validation()
+    assert baseline.status in {Status.PASS, Status.WARN}
+    assert baseline.submission_eligible
+    plan, failure = plan_issue_creation(request(), Runner())
+    assert failure is None and plan is not None
+    result = execute_issue_creation(request(), Runner(), Confirm())
+    assert result.reason_code == IssueCreateReasonCode.CREATE_CONFIRMED
+    warning = warned()
+    rejected = execute_issue_creation(
+        request(result=warning), Runner(), Confirm(warnings=())
+    )
+    assert rejected.reason_code == IssueCreateReasonCode.ELIGIBLE_WARNING_NOT_ACCEPTED
+    accepted = execute_issue_creation(request(result=warning), Runner(), Confirm())
+    assert accepted.reason_code == IssueCreateReasonCode.CREATE_CONFIRMED
+    pytest.exit("ISSUE_CREATE_CORE_PASS", returncode=0)
+
+
 @pytest.mark.parametrize(
     "value",
     (
