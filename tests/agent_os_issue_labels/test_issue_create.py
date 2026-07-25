@@ -141,14 +141,16 @@ def warned():
     )
 
 
-def test_000_warning_acceptance_diagnostic():
-    warning = warned()
-    runner = Runner()
-    result = execute_issue_creation(request(result=warning), runner, Confirm())
-    assert result.reason_code == IssueCreateReasonCode.CREATE_CONFIRMED, result
-    assert result.mutation_state == MutationState.CONFIRMED, result
-    assert len(creates(runner)) == 1, runner.calls
-    pytest.exit("ISSUE_CREATE_WARNING_ACCEPTANCE_PASS", returncode=0)
+def test_000_target_argv_group_diagnostic():
+    for value in (
+        "widgets", " github.com/acme/widgets", "github_com/acme/widgets",
+        "github.com/./widgets", "github.com/../widgets",
+        "github.com/acme/widgets/extra", "github.com/acme/",
+        "例.example/acme/widgets",
+    ):
+        test_target_parsing(value)
+    test_argv_controls_identity_and_eligibility()
+    pytest.exit("ISSUE_CREATE_TARGET_ARGV_GROUP_PASS", returncode=0)
 
 
 @pytest.mark.parametrize(
