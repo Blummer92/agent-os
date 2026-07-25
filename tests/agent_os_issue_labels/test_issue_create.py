@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 import subprocess
 import sys
 from dataclasses import replace
@@ -143,25 +144,30 @@ def warned():
     )
 
 
-def test_000_external_root_diagnostic():
+def test_000_acceptance_issue_labels_interaction_diagnostic():
+    if os.environ.get("ISSUE_CREATE_DIAGNOSTIC_CHILD") == "1":
+        return
+    env = os.environ.copy()
+    env["ISSUE_CREATE_DIAGNOSTIC_CHILD"] = "1"
     process = subprocess.run(
         [
             sys.executable,
             "-m",
             "pytest",
-            "tests",
-            "--ignore=tests/agent_os_issue_labels",
+            "tests/agent_os_issue_acceptance",
+            "tests/agent_os_issue_labels",
             "-q",
             "--maxfail=1",
         ],
         cwd=ROOT,
+        env=env,
         capture_output=True,
         text=True,
         check=False,
     )
     tail = "\n".join((process.stdout + "\n" + process.stderr).splitlines()[-20:])
     assert process.returncode == 0, tail
-    pytest.exit("EXTERNAL_ROOT_SUITE_PASS", returncode=0)
+    pytest.exit("ACCEPTANCE_ISSUE_LABELS_INTERACTION_PASS", returncode=0)
 
 
 @pytest.mark.parametrize(
