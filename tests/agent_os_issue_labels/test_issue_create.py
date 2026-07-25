@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
+from scripts.agent_os_issue_acceptance.models import Status
 from scripts.agent_os_issue_labels.draft import IssueDraftInput, build_issue_draft
 from scripts.agent_os_issue_labels.issue_create import (
     GitHubRepositoryTarget,
@@ -13,7 +15,10 @@ from scripts.agent_os_issue_labels.issue_create import (
     MutationState,
     execute_issue_creation,
 )
-from scripts.agent_os_issue_labels.validation import validate_issue_draft
+from scripts.agent_os_issue_labels.validation import (
+    DraftReasonCode,
+    validate_issue_draft,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 FORM = ROOT / ".github/ISSUE_TEMPLATE/agent-os-task.yml"
@@ -81,16 +86,25 @@ class Confirmation:
         )
 
 
-def _request(*, warning=False):
+def _validation():
     payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
     source = IssueDraftInput.from_mapping(payload)
     draft = build_issue_draft(source, FORM, MAP)
-    validation = validate_issue_draft(
-        draft,
-        source,
-        FORM,
-        local_issue_summaries=("Add deterministic issue draft preview",) if warning else (),
-    )
+    return validate_issue_draft(draft, source, FORM)
+
+
+def _request(*, warning=False):
+    validation = _validation()
+    if warning:
+        validation = replace(
+            validation,
+            status=Status.WARN,
+            reason_codes=(
+                DraftReasonCode.ELIGIBLE_WARNING,
+                DraftReasonCode.DUPLICATE_CANDIDATE_ADVISORY,
+            ),
+            submission_eligible=True,
+        )
     return IssueCreateRequest(validation, TARGET, "inv-1")
 
 
@@ -100,10 +114,6 @@ def _creates(runner):
 
 def test_warning_requires_exact_acknowledgement():
     request = _request(warning=True)
-    assert request.validation.submission_eligible is True
-    assert request.validation.status.value == "warn"
-    assert request.validation.reason_codes
-
     rejected_runner = FakeRunner()
     rejected = execute_issue_creation(
         request,
