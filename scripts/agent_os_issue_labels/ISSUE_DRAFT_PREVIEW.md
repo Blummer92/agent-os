@@ -1,10 +1,10 @@
-# Issue Draft Preview
+# Issue Draft Preview and Validation
 
 ## Purpose
 
-Render structured local input through the canonical Agent OS issue form before
-any GitHub submission is considered. The preview performs no network call,
-subprocess execution, label mutation, issue creation, or authorization decision.
+Render structured input through the canonical Agent OS issue form and apply
+deterministic offline validation. The command performs no network request,
+subprocess execution, issue creation, label change, or other mutation.
 
 ## Command
 
@@ -13,63 +13,96 @@ python -m scripts.agent_os_issue_labels.draft_cli \
   --input tests/fixtures/agent_os_issue_labels/draft_minimum_valid.json
 ```
 
-Use `--input -` to read the same JSON object from standard input. Add
-`--format json` for deterministic machine-readable output.
+Use `--input -` for standard input and `--format json` for machine-readable
+output. Repeat `--available-label` only when supplying a complete local label
+set. Repeat `--candidate-summary` to supply local duplicate-candidate evidence.
 
-## Input
+## Immutable result
 
-The top-level object contains `title` and `fields`:
+Text and JSON derive from one `IssueDraftValidationResult` containing:
 
-```json
-{
-  "title": "Add deterministic preview",
-  "fields": {
-    "tier": "tier:1-standard-implementation",
-    "objective": "Describe the outcome",
-    "owner": "owner:github-service-agent",
-    "readiness": "status:ready"
-  }
-}
+- validation status and stable ordered reason codes;
+- `format_valid` and `submission_eligible`;
+- parser, schema, and duplicate-candidate evidence;
+- normalized report evidence;
+- `write_authorized=false`;
+- `mutation_performed=false`.
+
+```text
+valid preview != readiness != approval != write authorization
 ```
 
-Field keys may use the raw form ID or its existing canonical alias. Supplying
-both forms of the same canonical field routes the result to manual review.
-Values may be a string, a list of strings, or `null`. Multiline strings and
-Unicode are preserved after line-ending normalization.
+## Reason codes
 
-## Rendering
+| Code | Default outcome |
+|---|---|
+| `eligible-valid` | pass |
+| `eligible-warning` | warning |
+| `missing-required-evidence` | manual review |
+| `malformed-structured-input` | failure |
+| `unknown-or-unsupported-value` | manual review |
+| `duplicate-raw-or-canonical-field` | manual review |
+| `unavailable-label` | manual review |
+| `conflicting-owner-evidence` | manual review |
+| `unsafe-external-write-request` | failure |
+| `parser-round-trip-ambiguity` | manual review |
+| `unsupported-or-drifted-issue-form-schema` | manual review |
+| `duplicate-local-candidate-advisory` | warning |
 
-- The issue title receives the form's configured prefix exactly once.
-- Body sections follow the issue-form order.
-- Missing fields render as `_No response_`.
-- Checkbox options render in schema order with explicit selected state.
-- Proposed labels come from the existing declarative label map.
-- Form default labels, assignees, type, and projects remain separate evidence.
+Free-form text is supporting evidence only. Callers consume the stable fields
+and codes.
 
-Unsupported controls, unknown fields or options, missing required inputs,
-required unchecked boxes, invalid input types, and duplicate aliases appear as
-manual-review evidence rather than being silently ignored.
+## Exit codes
 
-## Output Boundary
+| Exit | Symbol | Meaning |
+|---:|---|---|
+| `0` | `ELIGIBLE_SUCCESS` | eligible success |
+| `10` | `ELIGIBLE_WARNING` | eligible advisory warning |
+| `20` | `MANUAL_REVIEW` | human decision required |
+| `30` | `VALIDATION_FAILURE` | hard validation failure |
+| `64` | `INVALID_INPUT_OR_USAGE` | invalid input or command usage |
 
-Text and JSON outputs derive from the same immutable result. Both include:
+Manual review is non-zero. Future #602 adapter outcomes must use separate codes.
 
-- title and canonical Markdown body;
-- metadata-contract classification;
-- proposed label evidence;
-- form metadata evidence;
-- manual-review reasons;
-- the reused issue-acceptance report;
-- `mutation_performed=false`;
-- `write_authorized=false`.
+## Parser ambiguity
 
-A `pass` preview proves deterministic local formatting only. It does not prove
-readiness, approval, correctness, merge authorization, or permission to create
-or modify an issue. See the repository write-authorization and protected-branch
-standards for the governing boundaries.
+`parse_issue_form_body()` remains the only Markdown parser. Validation compares
+normalized source values, canonical rendered Markdown, and parsed output.
+Canonical-looking `###` headings inside multiline values, duplicate headings,
+missing or unexpected fields, and changed values produce
+`parser-round-trip-ambiguity` and `submission_eligible=false`.
+
+## Schema drift
+
+The local issue-form file is checked for unsupported controls or attributes,
+unknown validation shapes, malformed or duplicate options, duplicate raw or
+canonical IDs, duplicate labels, malformed body entries, and unsupported
+top-level keys. Drift produces manual review. The form is never edited here.
+
+## Duplicate candidates
+
+Duplicate evidence uses only supplied local summaries and normalized exact-title
+matching. It is advisory and performs no search or issue mutation.
+
+## Write boundary
+
+Every result preserves:
+
+```text
+write_authorized=false
+mutation_performed=false
+```
+
+Validation, readiness, and passing checks remain evidence only.
+
+## Handoff to #602
+
+#602 may consume only a merged result with `submission_eligible=true`. It must
+reuse these reason and exit contracts and add its own separately reviewed
+confirmation and command boundary. #601 does not submit an issue.
 
 ## Validation
 
-Run the focused draft, checker, planner, and acceptance-integration tests, then
-run `bash 07_Agent_Tests/validate-repo-structure.sh` and
+Run focused draft and validation tests, checker and planner regressions, Python
+compilation, `bash 07_Agent_Tests/validate-repo-structure.sh`, and
 `./scripts/validate-all.sh`.
