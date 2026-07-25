@@ -3,16 +3,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from scripts.agent_os_issue_labels.draft import IssueDraftInput, build_issue_draft
 from scripts.agent_os_issue_labels.issue_create import (
     GitHubRepositoryTarget,
     IssueCreateConfirmation,
-    IssueCreateExitCode,
     IssueCreateProcessResult,
     IssueCreateReasonCode,
     IssueCreateRequest,
+    MutationState,
     execute_issue_creation,
 )
 from scripts.agent_os_issue_labels.validation import validate_issue_draft
@@ -67,40 +65,32 @@ class FakeRunner:
         raise AssertionError(key)
 
 
-class Missing:
-    def confirm(self, plan):
-        return None
-
-
 class Confirmation:
-    def __init__(
-        self,
-        *,
-        invocation_id="inv-1",
-        confirmed=True,
-        fingerprint=None,
-        target=None,
-    ):
-        self.invocation_id = invocation_id
-        self.confirmed = confirmed
-        self.fingerprint = fingerprint
-        self.target = target
+    def __init__(self, *, warnings=None):
+        self.warnings = warnings
 
     def confirm(self, plan):
         return IssueCreateConfirmation(
-            invocation_id=self.invocation_id,
-            operation_fingerprint=self.fingerprint or plan.operation_fingerprint,
-            target=self.target or plan.target.canonical,
-            confirmed=self.confirmed,
-            accepted_warning_reason_codes=plan.warning_reason_codes,
+            invocation_id="inv-1",
+            operation_fingerprint=plan.operation_fingerprint,
+            target=plan.target.canonical,
+            confirmed=True,
+            accepted_warning_reason_codes=(
+                plan.warning_reason_codes if self.warnings is None else self.warnings
+            ),
         )
 
 
-def _request():
+def _request(*, warning=False):
     payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
     source = IssueDraftInput.from_mapping(payload)
     draft = build_issue_draft(source, FORM, MAP)
-    validation = validate_issue_draft(draft, source, FORM)
+    validation = validate_issue_draft(
+        draft,
+        source,
+        FORM,
+        local_issue_summaries=("Add deterministic issue draft preview",) if warning else (),
+    )
     return IssueCreateRequest(validation, TARGET, "inv-1")
 
 
@@ -108,29 +98,39 @@ def _creates(runner):
     return [call for call in runner.calls if "--body-file=-" in call[0]]
 
 
-@pytest.mark.parametrize(
-    ("provider", "reason"),
-    [
-        (Missing(), IssueCreateReasonCode.CONFIRMATION_MISSING),
-        (Confirmation(confirmed=False), IssueCreateReasonCode.CONFIRMATION_CANCELLED),
-        (
-            Confirmation(fingerprint="stale"),
-            IssueCreateReasonCode.CONFIRMATION_STALE_OR_MISMATCHED,
-        ),
-        (
-            Confirmation(invocation_id="other"),
-            IssueCreateReasonCode.CONFIRMATION_STALE_OR_MISMATCHED,
-        ),
-        (
-            Confirmation(target="github.com/other/repo"),
-            IssueCreateReasonCode.CONFIRMATION_STALE_OR_MISMATCHED,
-        ),
-    ],
-)
-def test_confirmation_failures_execute_nothing(provider, reason):
+def test_warning_requires_exact_acknowledgement():
+    request = _request(warning=True)
+    assert request.validation.submission_eligible is True
+    assert request.validation.status.value == "warn"
+    assert request.validation.reason_codes
+
+    rejected_runner = FakeRunner()
+    rejected = execute_issue_creation(
+        request,
+        rejected_runner,
+        Confirmation(warnings=()),
+    )
+    assert rejected.reason_code == IssueCreateReasonCode.ELIGIBLE_WARNING_NOT_ACCEPTED
+    assert _creates(rejected_runner) == []
+
+    accepted_runner = FakeRunner()
+    accepted = execute_issue_creation(
+        request,
+        accepted_runner,
+        Confirmation(),
+    )
+    assert accepted.reason_code == IssueCreateReasonCode.CREATE_CONFIRMED
+    assert len(_creates(accepted_runner)) == 1
+
+
+def test_confirmed_success_contract():
     runner = FakeRunner()
-    result = execute_issue_creation(_request(), runner, provider)
-    assert result.reason_code == reason
-    assert result.exit_code == IssueCreateExitCode.CONFIRMATION
-    assert result.execution_attempted is False
-    assert _creates(runner) == []
+    result = execute_issue_creation(_request(), runner, Confirmation())
+    assert result.reason_code == IssueCreateReasonCode.CREATE_CONFIRMED
+    assert result.reason_codes == (IssueCreateReasonCode.CREATE_CONFIRMED,)
+    assert result.exit_code == 0
+    assert result.write_authorized is True
+    assert result.mutation_state == MutationState.CONFIRMED
+    assert result.mutation_performed is True
+    assert result.created_issue_number == 700
+    assert len(_creates(runner)) == 1
