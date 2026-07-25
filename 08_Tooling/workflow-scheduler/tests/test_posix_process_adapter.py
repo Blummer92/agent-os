@@ -318,7 +318,13 @@ def test_child_process_is_fully_reaped_after_completion() -> None:
 
 
 def test_child_process_is_reaped_after_timeout_and_termination() -> None:
-    script = "import os, time; print(os.getpid()); time.sleep(30)"
+    # stdout must be explicitly flushed: Python block-buffers stdout when it
+    # is a pipe (not a TTY), and a SIGTERM/SIGKILL termination bypasses the
+    # normal interpreter shutdown that would otherwise flush it. Without an
+    # explicit flush before the sleep, the pid text can be silently lost
+    # instead of ever reaching the pipe -- a real, platform-dependent
+    # ordering hazard, not a bounded timing assumption.
+    script = "import os, time; print(os.getpid()); import sys; sys.stdout.flush(); time.sleep(30)"
     result = run_bounded_posix_process(
         [PY, "-c", script], timeout_seconds=0.2, grace_period_seconds=0.5
     )
