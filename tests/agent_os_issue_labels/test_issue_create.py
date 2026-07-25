@@ -144,7 +144,7 @@ def warned():
     )
 
 
-def test_000_top_level_interaction_diagnostic():
+def test_000_three_way_interaction_diagnostic():
     if os.environ.get("ISSUE_CREATE_DIAGNOSTIC_CHILD") == "1":
         return
     env = os.environ.copy()
@@ -157,6 +157,7 @@ def test_000_top_level_interaction_diagnostic():
             sys.executable,
             "-m",
             "pytest",
+            "tests/agent_os_issue_acceptance",
             "tests/agent_os_issue_labels",
             *top_level,
             "-q",
@@ -170,7 +171,7 @@ def test_000_top_level_interaction_diagnostic():
     )
     tail = "\n".join((process.stdout + "\n" + process.stderr).splitlines()[-20:])
     assert process.returncode == 0, tail
-    pytest.exit("TOP_LEVEL_INTERACTION_PASS", returncode=0)
+    pytest.exit("THREE_WAY_INTERACTION_PASS", returncode=0)
 
 
 @pytest.mark.parametrize(
