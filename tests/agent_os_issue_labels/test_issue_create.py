@@ -62,17 +62,21 @@ class FakeRunner:
                 ),
                 "",
             )
+        if "--body-file=-" in key:
+            return IssueCreateProcessResult(
+                0, "https://github.com/Blummer92/agent-os/issues/700\n", ""
+            )
         raise AssertionError(key)
 
 
-class RejectWarnings:
+class AcceptWarnings:
     def confirm(self, plan):
         return IssueCreateConfirmation(
             invocation_id="inv-1",
             operation_fingerprint=plan.operation_fingerprint,
             target=plan.target.canonical,
             confirmed=True,
-            accepted_warning_reason_codes=(),
+            accepted_warning_reason_codes=plan.warning_reason_codes,
         )
 
 
@@ -93,8 +97,8 @@ def _request():
     return IssueCreateRequest(validation, TARGET, "inv-1")
 
 
-def test_warning_rejection_executes_nothing():
+def test_accepted_warning_executes_once():
     runner = FakeRunner()
-    result = execute_issue_creation(_request(), runner, RejectWarnings())
-    assert result.reason_code == IssueCreateReasonCode.ELIGIBLE_WARNING_NOT_ACCEPTED
-    assert [call for call in runner.calls if "--body-file=-" in call[0]] == []
+    result = execute_issue_creation(_request(), runner, AcceptWarnings())
+    assert result.reason_code == IssueCreateReasonCode.CREATE_CONFIRMED
+    assert len([call for call in runner.calls if "--body-file=-" in call[0]]) == 1
