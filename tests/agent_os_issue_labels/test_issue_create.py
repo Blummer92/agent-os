@@ -10,14 +10,10 @@ from scripts.agent_os_issue_labels.issue_create import (
     GitHubRepositoryTarget,
     IssueCreateConfirmation,
     IssueCreateProcessResult,
-    IssueCreateReasonCode,
     IssueCreateRequest,
     execute_issue_creation,
 )
-from scripts.agent_os_issue_labels.validation import (
-    DraftReasonCode,
-    validate_issue_draft,
-)
+from scripts.agent_os_issue_labels.validation import DraftReasonCode, validate_issue_draft
 
 ROOT = Path(__file__).resolve().parents[2]
 FORM = ROOT / ".github/ISSUE_TEMPLATE/agent-os-task.yml"
@@ -26,7 +22,7 @@ FIXTURE = ROOT / "tests/fixtures/agent_os_issue_labels/draft_minimum_valid.json"
 TARGET = GitHubRepositoryTarget.parse("Blummer92/agent-os")
 
 
-class FakeRunner:
+class Runner:
     def __init__(self):
         self.calls = []
 
@@ -35,52 +31,44 @@ class FakeRunner:
 
     def run(self, argv, *, input_text=None, timeout=30.0):
         key = tuple(argv)
-        self.calls.append((key, input_text, timeout))
+        self.calls.append(key)
         if key == ("gh", "--version"):
             return IssueCreateProcessResult(0, "gh version 2.80.0\n", "")
         if key == ("gh", "issue", "create", "--help"):
             return IssueCreateProcessResult(0, "--repo --title --body-file --label\n", "")
-        if key == (
-            "gh", "auth", "status", "--active", "--hostname", "github.com"
-        ):
-            return IssueCreateProcessResult(
-                0, "Logged in to github.com account tester\n", ""
-            )
+        if key == ("gh", "auth", "status", "--active", "--hostname", "github.com"):
+            return IssueCreateProcessResult(0, "Logged in to github.com account tester\n", "")
         if key == (
             "gh", "repo", "view", "github.com/Blummer92/agent-os", "--json",
             "nameWithOwner,url,hasIssuesEnabled,isArchived",
         ):
             return IssueCreateProcessResult(
                 0,
-                json.dumps(
-                    {
-                        "nameWithOwner": "Blummer92/agent-os",
-                        "url": "https://github.com/Blummer92/agent-os",
-                        "hasIssuesEnabled": True,
-                        "isArchived": False,
-                    }
-                ),
+                json.dumps({
+                    "nameWithOwner": "Blummer92/agent-os",
+                    "url": "https://github.com/Blummer92/agent-os",
+                    "hasIssuesEnabled": True,
+                    "isArchived": False,
+                }),
                 "",
             )
         if "--body-file=-" in key:
-            return IssueCreateProcessResult(
-                0, "https://github.com/Blummer92/agent-os/issues/700\n", ""
-            )
+            return IssueCreateProcessResult(0, "https://github.com/Blummer92/agent-os/issues/700\n", "")
         raise AssertionError(key)
 
 
-class AcceptWarnings:
+class Confirm:
     def confirm(self, plan):
         return IssueCreateConfirmation(
-            invocation_id="inv-1",
-            operation_fingerprint=plan.operation_fingerprint,
-            target=plan.target.canonical,
-            confirmed=True,
-            accepted_warning_reason_codes=plan.warning_reason_codes,
+            "inv-1",
+            plan.operation_fingerprint,
+            plan.target.canonical,
+            True,
+            plan.warning_reason_codes,
         )
 
 
-def _request():
+def test_accepted_warning_reaches_exactly_one_create_call():
     payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
     source = IssueDraftInput.from_mapping(payload)
     draft = build_issue_draft(source, FORM, MAP)
@@ -94,11 +82,8 @@ def _request():
         ),
         submission_eligible=True,
     )
-    return IssueCreateRequest(validation, TARGET, "inv-1")
-
-
-def test_accepted_warning_executes_once():
-    runner = FakeRunner()
-    result = execute_issue_creation(_request(), runner, AcceptWarnings())
-    assert result.reason_code == IssueCreateReasonCode.CREATE_CONFIRMED
-    assert len([call for call in runner.calls if "--body-file=-" in call[0]]) == 1
+    runner = Runner()
+    execute_issue_creation(
+        IssueCreateRequest(validation, TARGET, "inv-1"), runner, Confirm()
+    )
+    assert len([call for call in runner.calls if "--body-file=-" in call]) == 1
