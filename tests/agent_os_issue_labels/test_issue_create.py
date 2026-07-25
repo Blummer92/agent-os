@@ -144,7 +144,7 @@ def warned():
     )
 
 
-def test_000_acceptance_issue_labels_interaction_diagnostic():
+def test_000_reusable_registry_interaction_diagnostic():
     if os.environ.get("ISSUE_CREATE_DIAGNOSTIC_CHILD") == "1":
         return
     env = os.environ.copy()
@@ -154,8 +154,8 @@ def test_000_acceptance_issue_labels_interaction_diagnostic():
             sys.executable,
             "-m",
             "pytest",
-            "tests/agent_os_issue_acceptance",
             "tests/agent_os_issue_labels",
+            "tests/test_reusable_capability_registry.py",
             "-q",
             "--maxfail=1",
         ],
@@ -167,7 +167,7 @@ def test_000_acceptance_issue_labels_interaction_diagnostic():
     )
     tail = "\n".join((process.stdout + "\n" + process.stderr).splitlines()[-20:])
     assert process.returncode == 0, tail
-    pytest.exit("ACCEPTANCE_ISSUE_LABELS_INTERACTION_PASS", returncode=0)
+    pytest.exit("REUSABLE_REGISTRY_INTERACTION_PASS", returncode=0)
 
 
 @pytest.mark.parametrize(
