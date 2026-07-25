@@ -35,26 +35,28 @@ _HEADING_ALIASES = {
     "issue tier": "tier",
 }
 
-_LEGACY_REQUIRED_FIELDS = frozenset(
-    {
-        "phase",
-        "epic",
-        "owner",
-        "status",
-        "type",
-        "source-of-truth",
-        "external-write",
-    }
-)
-_TIERED_REQUIRED_FIELDS = frozenset(
-    {
-        "tier",
-        "owner",
-        "status",
-        "source-of-truth",
-        "external-write",
-    }
-)
+_REQUIRED_FIELDS = {
+    "legacy": frozenset(
+        {
+            "phase",
+            "epic",
+            "owner",
+            "status",
+            "type",
+            "source-of-truth",
+            "external-write",
+        }
+    ),
+    "tiered": frozenset(
+        {
+            "tier",
+            "owner",
+            "status",
+            "source-of-truth",
+            "external-write",
+        }
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -186,11 +188,19 @@ def parse_issue_form_body(issue_body: str, fields: dict[str, str]) -> dict[str, 
 
 def metadata_contract(metadata: dict[str, list[str]]) -> str:
     fields = set(metadata)
-    if _TIERED_REQUIRED_FIELDS <= fields:
+    if _REQUIRED_FIELDS["tiered"] <= fields:
         return "tiered"
-    if _LEGACY_REQUIRED_FIELDS <= fields:
+    if _REQUIRED_FIELDS["legacy"] <= fields:
         return "legacy"
     return "incomplete"
+
+
+def missing_metadata_fields(metadata: dict[str, list[str]]) -> dict[str, tuple[str, ...]]:
+    present = set(metadata)
+    return {
+        name: tuple(sorted(required - present))
+        for name, required in _REQUIRED_FIELDS.items()
+    }
 
 
 def _load_options(
