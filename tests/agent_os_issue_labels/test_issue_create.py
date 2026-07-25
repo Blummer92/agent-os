@@ -141,11 +141,17 @@ def warned():
     )
 
 
-def test_000_baseline_diagnostic():
+def test_000_execution_diagnostic():
     baseline = validation()
     assert baseline.status in {Status.PASS, Status.WARN}, baseline
     assert baseline.submission_eligible is True, baseline
-    pytest.exit("ISSUE_CREATE_BASELINE_PASS", returncode=0)
+    plan, failure = plan_issue_creation(request(), Runner())
+    assert failure is None and plan is not None, failure
+    runner = Runner()
+    result = execute_issue_creation(request(), runner, Confirm())
+    assert result.reason_code == IssueCreateReasonCode.CREATE_CONFIRMED, result
+    assert len(creates(runner)) == 1
+    pytest.exit("ISSUE_CREATE_EXECUTION_PASS", returncode=0)
 
 
 @pytest.mark.parametrize(
