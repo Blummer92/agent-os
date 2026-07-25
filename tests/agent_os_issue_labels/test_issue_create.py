@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from scripts.agent_os_issue_acceptance.models import Status
+from scripts.agent_os_issue_labels import issue_create_cli
 from scripts.agent_os_issue_labels.draft import IssueDraftInput, build_issue_draft
 from scripts.agent_os_issue_labels.issue_create import (
     GitHubRepositoryTarget,
@@ -32,33 +33,62 @@ FORM = ROOT / ".github/ISSUE_TEMPLATE/agent-os-task.yml"
 MAP = ROOT / ".github/labeler/agent-os-issue-label-map.yml"
 FIXTURE = ROOT / "tests/fixtures/agent_os_issue_labels/draft_minimum_valid.json"
 TARGET = GitHubRepositoryTarget.parse("Blummer92/agent-os")
-AUTH = ("gh", "auth", "status", "--active", "--hostname", "github.com")
-REPO = (
-    "gh", "repo", "view", "github.com/Blummer92/agent-os", "--json",
-    "nameWithOwner,url,hasIssuesEnabled,isArchived",
-)
 
 
 class FakeRunner:
-    def __init__(self, create=None, overrides=None):
+    def __init__(
+        self,
+        *,
+        executable: str = "gh",
+        create: IssueCreateProcessResult | None = None,
+        overrides: dict[tuple[str, ...], IssueCreateProcessResult] | None = None,
+    ) -> None:
+        self.executable = executable
         self.create = create or IssueCreateProcessResult(
-            0, "https://github.com/Blummer92/agent-os/issues/700\n", ""
+            0,
+            "https://github.com/Blummer92/agent-os/issues/700\n",
+            "",
         )
         self.overrides = overrides or {}
-        self.calls = []
+        self.calls: list[tuple[tuple[str, ...], str | None, float]] = []
+
+    def resolve_executable(self) -> str | None:
+        return self.executable
 
     def run(self, argv, *, input_text=None, timeout=30.0):
         key = tuple(argv)
         self.calls.append((key, input_text, timeout))
         if key in self.overrides:
             return self.overrides[key]
-        if key == ("gh", "--version"):
+        if key == (self.executable, "--version"):
             return IssueCreateProcessResult(0, "gh version 2.80.0\n", "")
-        if key == ("gh", "issue", "create", "--help"):
-            return IssueCreateProcessResult(0, "--repo --title --body-file --label\n", "")
-        if key == AUTH:
-            return IssueCreateProcessResult(0, "Logged in to github.com account tester\n", "")
-        if key == REPO:
+        if key == (self.executable, "issue", "create", "--help"):
+            return IssueCreateProcessResult(
+                0,
+                "--repo --title --body-file --label\n",
+                "",
+            )
+        if key == (
+            self.executable,
+            "auth",
+            "status",
+            "--active",
+            "--hostname",
+            "github.com",
+        ):
+            return IssueCreateProcessResult(
+                0,
+                "Logged in to github.com account tester\n",
+                "",
+            )
+        if key == (
+            self.executable,
+            "repo",
+            "view",
+            "github.com/Blummer92/agent-os",
+            "--json",
+            "nameWithOwner,url,hasIssuesEnabled,isArchived",
+        ):
             return IssueCreateProcessResult(
                 0,
                 json.dumps(
@@ -71,22 +101,32 @@ class FakeRunner:
                 ),
                 "",
             )
-        if key[:3] == ("gh", "issue", "create"):
+        if "--body-file=-" in key:
             return self.create
-        raise AssertionError(key)
+        raise AssertionError(f"unexpected argv: {key}")
 
 
 class Confirm:
-    def __init__(self, *, confirmed=True, mismatch=False, warnings=None):
+    def __init__(
+        self,
+        *,
+        invocation_id: str = "inv-1",
+        confirmed: bool = True,
+        fingerprint: str | None = None,
+        target: str | None = None,
+        warnings: tuple[str, ...] | None = None,
+    ) -> None:
+        self.invocation_id = invocation_id
         self.confirmed = confirmed
-        self.mismatch = mismatch
+        self.fingerprint = fingerprint
+        self.target = target
         self.warnings = warnings
 
     def confirm(self, plan):
         return IssueCreateConfirmation(
-            invocation_id="inv-1",
-            operation_fingerprint="stale" if self.mismatch else plan.operation_fingerprint,
-            target=plan.target.canonical,
+            invocation_id=self.invocation_id,
+            operation_fingerprint=self.fingerprint or plan.operation_fingerprint,
+            target=self.target or plan.target.canonical,
             confirmed=self.confirmed,
             accepted_warning_reason_codes=(
                 plan.warning_reason_codes if self.warnings is None else self.warnings
@@ -99,7 +139,7 @@ class Missing:
         return None
 
 
-def _validation(*, warning=False):
+def _validation(*, warning: bool = False):
     payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
     source = IssueDraftInput.from_mapping(payload)
     draft = build_issue_draft(source, FORM, MAP)
@@ -107,48 +147,96 @@ def _validation(*, warning=False):
         draft,
         source,
         FORM,
-        local_issue_summaries=("Add deterministic issue draft preview",) if warning else (),
+        local_issue_summaries=(
+            "Add deterministic issue draft preview",
+        )
+        if warning
+        else (),
     )
 
 
-def _request(*, validation=None, prior=(), optional=()):
+def _request(
+    *,
+    validation=None,
+    invocation_id: str = "inv-1",
+    prior: tuple[str, ...] = (),
+    optional: tuple[str, ...] = (),
+):
     return IssueCreateRequest(
         validation=validation or _validation(),
         target=TARGET,
-        invocation_id="inv-1",
+        invocation_id=invocation_id,
         prior_fingerprints=prior,
         optional_metadata=optional,
     )
 
 
-def _creates(runner):
-    return [
-        call
-        for call in runner.calls
-        if call[0][:3] == ("gh", "issue", "create")
-        and "--body-file=-" in call[0]
-    ]
+def _creates(runner: FakeRunner):
+    return [call for call in runner.calls if "--body-file=-" in call[0]]
 
 
-def test_target_and_argv_are_explicit_safe_and_deterministic():
+def _command(runner: FakeRunner, *parts: str) -> tuple[str, ...]:
+    return (runner.executable, *parts)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "widgets",
+        " github.com/acme/widgets",
+        "github_com/acme/widgets",
+        "github.com/./widgets",
+        "github.com/../widgets",
+        "github.com/acme/widgets/extra",
+        "github.com/acme/",
+        "例.example/acme/widgets",
+    ],
+)
+def test_target_parser_rejects_ambiguous_values(value):
+    with pytest.raises(ValueError):
+        GitHubRepositoryTarget.parse(value)
+
+
+def test_safe_argv_uses_resolved_executable_and_flag_equals_values():
     target = GitHubRepositoryTarget.parse("ghe.example.com/acme/widgets")
-    argv = build_issue_create_argv(target, "-title", ("z", "-label", "z"))
+    argv = build_issue_create_argv(
+        target,
+        "-title",
+        ("z", "-label", "z"),
+        executable="/usr/local/bin/gh",
+    )
     assert argv == (
-        "gh", "issue", "create", "--repo=ghe.example.com/acme/widgets",
-        "--title=-title", "--body-file=-", "--label=-label", "--label=z",
+        "/usr/local/bin/gh",
+        "issue",
+        "create",
+        "--repo=ghe.example.com/acme/widgets",
+        "--title=-title",
+        "--body-file=-",
+        "--label=-label",
+        "--label=z",
     )
     with pytest.raises(ValueError):
-        GitHubRepositoryTarget.parse("widgets")
+        build_issue_create_argv(target, "bad\ntitle", ())
+    with pytest.raises(ValueError):
+        build_issue_create_argv(target, "title", ("bad\rlabel",))
 
 
-def test_plan_is_deterministic_and_does_not_create():
-    first_runner = FakeRunner()
-    first, failure = plan_issue_creation(_request(), first_runner)
-    second, second_failure = plan_issue_creation(_request(), FakeRunner())
-    assert failure is None and second_failure is None
-    assert first == second
-    assert first.body_bytes == len(first.body.encode("utf-8"))
-    assert not _creates(first_runner)
+def test_operation_identity_is_stable_but_confirmation_is_fresh():
+    first, first_failure = plan_issue_creation(_request(invocation_id="one"), FakeRunner())
+    second, second_failure = plan_issue_creation(_request(invocation_id="two"), FakeRunner())
+    assert first_failure is None and second_failure is None
+    assert first.operation_identity == second.operation_identity
+    assert first.operation_fingerprint != second.operation_fingerprint
+    assert first.argv[0] == "gh"
+
+
+def test_resolved_executable_is_bound_into_plan_and_capabilities():
+    runner = FakeRunner(executable="/opt/gh/bin/gh")
+    plan, failure = plan_issue_creation(_request(), runner)
+    assert failure is None
+    assert plan.argv[0] == "/opt/gh/bin/gh"
+    assert plan.capability.executable_path == "/opt/gh/bin/gh"
+    assert plan.capability.fingerprint
 
 
 @pytest.mark.parametrize(
@@ -172,7 +260,10 @@ def test_ineligible_and_upstream_state_drift_never_run(validation):
 
 
 def test_optional_metadata_is_blocked_not_omitted():
-    plan, result = plan_issue_creation(_request(optional=("project",)), FakeRunner())
+    plan, result = plan_issue_creation(
+        _request(optional=("project",)),
+        FakeRunner(),
+    )
     assert plan is None
     assert result.reason_code == IssueCreateReasonCode.OPTIONAL_METADATA_UNSUPPORTED
 
@@ -182,7 +273,18 @@ def test_optional_metadata_is_blocked_not_omitted():
     [
         (Missing(), IssueCreateReasonCode.CONFIRMATION_MISSING),
         (Confirm(confirmed=False), IssueCreateReasonCode.CONFIRMATION_CANCELLED),
-        (Confirm(mismatch=True), IssueCreateReasonCode.CONFIRMATION_STALE_OR_MISMATCHED),
+        (
+            Confirm(fingerprint="stale"),
+            IssueCreateReasonCode.CONFIRMATION_STALE_OR_MISMATCHED,
+        ),
+        (
+            Confirm(invocation_id="other"),
+            IssueCreateReasonCode.CONFIRMATION_STALE_OR_MISMATCHED,
+        ),
+        (
+            Confirm(target="github.com/other/repo"),
+            IssueCreateReasonCode.CONFIRMATION_STALE_OR_MISMATCHED,
+        ),
     ],
 )
 def test_confirmation_failures_execute_zero_create_calls(provider, reason):
@@ -197,7 +299,11 @@ def test_confirmation_failures_execute_zero_create_calls(provider, reason):
 def test_warning_requires_exact_acknowledgement():
     request = _request(validation=_validation(warning=True))
     rejected_runner = FakeRunner()
-    rejected = execute_issue_creation(request, rejected_runner, Confirm(warnings=()))
+    rejected = execute_issue_creation(
+        request,
+        rejected_runner,
+        Confirm(warnings=()),
+    )
     accepted_runner = FakeRunner()
     accepted = execute_issue_creation(request, accepted_runner, Confirm())
     assert rejected.reason_code == IssueCreateReasonCode.ELIGIBLE_WARNING_NOT_ACCEPTED
@@ -206,12 +312,13 @@ def test_warning_requires_exact_acknowledgement():
     assert len(_creates(accepted_runner)) == 1
 
 
-def test_success_runs_once_with_body_only_on_stdin():
+def test_confirmed_execution_runs_once_with_body_only_on_stdin():
     runner = FakeRunner()
     request = _request()
     result = execute_issue_creation(request, runner, Confirm())
     create = _creates(runner)
     assert result.reason_code == IssueCreateReasonCode.CREATE_CONFIRMED
+    assert result.reason_codes == (IssueCreateReasonCode.CREATE_CONFIRMED,)
     assert result.exit_code == 0
     assert result.mutation_state == MutationState.CONFIRMED
     assert result.mutation_performed is True
@@ -225,30 +332,73 @@ def test_success_runs_once_with_body_only_on_stdin():
 @pytest.mark.parametrize(
     ("process", "reason", "exit_code"),
     [
-        (IssueCreateProcessResult(1, "", "network failed"), IssueCreateReasonCode.COMMAND_FAILED, 76),
-        (IssueCreateProcessResult(None, timed_out=True), IssueCreateReasonCode.COMMAND_TIMEOUT, 77),
-        (IssueCreateProcessResult(None, interrupted=True), IssueCreateReasonCode.COMMAND_INTERRUPTED, 77),
-        (IssueCreateProcessResult(0, "created\n", ""), IssueCreateReasonCode.MALFORMED_SUCCESS_OUTPUT, 78),
+        (
+            IssueCreateProcessResult(1, "", "network failed"),
+            IssueCreateReasonCode.COMMAND_FAILED,
+            76,
+        ),
+        (
+            IssueCreateProcessResult(None, timed_out=True),
+            IssueCreateReasonCode.COMMAND_TIMEOUT,
+            77,
+        ),
+        (
+            IssueCreateProcessResult(None, interrupted=True),
+            IssueCreateReasonCode.COMMAND_INTERRUPTED,
+            77,
+        ),
+        (
+            IssueCreateProcessResult(0, "created\n", ""),
+            IssueCreateReasonCode.MALFORMED_SUCCESS_OUTPUT,
+            78,
+        ),
         (
             IssueCreateProcessResult(
                 0,
                 "https://github.com/Blummer92/agent-os/issues/1\n"
-                "https://github.com/Blummer92/agent-os/issues/2\n",
+                "https://github.com/Blummer92/agent-os/issues/1\n",
                 "",
             ),
             IssueCreateReasonCode.MALFORMED_SUCCESS_OUTPUT,
             78,
         ),
         (
-            IssueCreateProcessResult(0, "https://github.com/other/repo/issues/1\n", ""),
+            IssueCreateProcessResult(
+                0,
+                "https://github.com/Blummer92/agent-os/issues/1?x=1\n",
+                "",
+            ),
+            IssueCreateReasonCode.MALFORMED_SUCCESS_OUTPUT,
+            78,
+        ),
+        (
+            IssueCreateProcessResult(
+                0,
+                "http://github.com/Blummer92/agent-os/issues/1\n",
+                "",
+            ),
+            IssueCreateReasonCode.MALFORMED_SUCCESS_OUTPUT,
+            78,
+        ),
+        (
+            IssueCreateProcessResult(
+                0,
+                "https://github.com/other/repo/issues/1\n",
+                "",
+            ),
             IssueCreateReasonCode.WRONG_TARGET_SUCCESS_OUTPUT,
             79,
         ),
     ],
 )
 def test_failure_and_ambiguous_success_are_uncertain(process, reason, exit_code):
-    result = execute_issue_creation(_request(), FakeRunner(create=process), Confirm())
+    result = execute_issue_creation(
+        _request(),
+        FakeRunner(create=process),
+        Confirm(),
+    )
     assert result.reason_code == reason
+    assert IssueCreateReasonCode.MUTATION_UNCERTAIN in result.reason_codes
     assert result.exit_code == exit_code
     assert result.mutation_state == MutationState.UNCERTAIN
     assert result.mutation_performed is False
@@ -259,17 +409,50 @@ def test_failure_and_ambiguous_success_are_uncertain(process, reason, exit_code)
 @pytest.mark.parametrize(
     ("override", "reason"),
     [
-        ({("gh", "--version"): IssueCreateProcessResult(1, "", "missing")}, IssueCreateReasonCode.GH_UNAVAILABLE),
         (
-            {("gh", "issue", "create", "--help"): IssueCreateProcessResult(0, "--repo --title", "")},
+            {("gh", "--version"): IssueCreateProcessResult(1, "", "missing")},
+            IssueCreateReasonCode.GH_UNAVAILABLE,
+        ),
+        (
+            {("gh", "--version"): IssueCreateProcessResult(0, "not gh\n", "")},
             IssueCreateReasonCode.GH_CAPABILITY_UNSUPPORTED,
         ),
-        ({AUTH: IssueCreateProcessResult(4, "", "not logged in")}, IssueCreateReasonCode.AUTHENTICATION_UNAVAILABLE),
-        ({AUTH: IssueCreateProcessResult(0, "account one account two", "")}, IssueCreateReasonCode.ACCOUNT_AMBIGUOUS_OR_MISMATCHED),
+        (
+            {
+                ("gh", "issue", "create", "--help"): IssueCreateProcessResult(
+                    0,
+                    "--repository --title --body-file --label\n",
+                    "",
+                )
+            },
+            IssueCreateReasonCode.GH_CAPABILITY_UNSUPPORTED,
+        ),
+        (
+            {
+                ("gh", "auth", "status", "--active", "--hostname", "github.com"):
+                    IssueCreateProcessResult(4, "", "not logged in")
+            },
+            IssueCreateReasonCode.AUTHENTICATION_UNAVAILABLE,
+        ),
+        (
+            {
+                ("gh", "auth", "status", "--active", "--hostname", "github.com"):
+                    IssueCreateProcessResult(
+                        0,
+                        "Logged in to github.com account one\n"
+                        "Logged in to github.com account two\n",
+                        "",
+                    )
+            },
+            IssueCreateReasonCode.ACCOUNT_AMBIGUOUS_OR_MISMATCHED,
+        ),
     ],
 )
 def test_capability_and_auth_checks_fail_closed(override, reason):
-    plan, result = plan_issue_creation(_request(), FakeRunner(overrides=override))
+    plan, result = plan_issue_creation(
+        _request(),
+        FakeRunner(overrides=override),
+    )
     assert plan is None
     assert result.reason_code == reason
 
@@ -277,74 +460,224 @@ def test_capability_and_auth_checks_fail_closed(override, reason):
 @pytest.mark.parametrize(
     "payload",
     [
-        {"nameWithOwner": "other/repo", "url": "https://github.com/other/repo", "hasIssuesEnabled": True, "isArchived": False},
-        {"nameWithOwner": "Blummer92/agent-os", "url": "https://github.com/Blummer92/agent-os", "hasIssuesEnabled": True, "isArchived": True},
-        {"nameWithOwner": "Blummer92/agent-os", "url": "https://github.com/Blummer92/agent-os", "hasIssuesEnabled": False, "isArchived": False},
+        {
+            "nameWithOwner": "other/repo",
+            "url": "https://github.com/other/repo",
+            "hasIssuesEnabled": True,
+            "isArchived": False,
+        },
+        {
+            "nameWithOwner": "Blummer92/agent-os",
+            "url": "https://github.com/Blummer92/agent-os",
+            "hasIssuesEnabled": True,
+            "isArchived": True,
+        },
+        {
+            "nameWithOwner": "Blummer92/agent-os",
+            "url": "https://github.com/Blummer92/agent-os",
+            "hasIssuesEnabled": False,
+            "isArchived": False,
+        },
+        {
+            "nameWithOwner": "Blummer92/agent-os",
+            "url": "https://github.com/Blummer92/agent-os?x=1",
+            "hasIssuesEnabled": True,
+            "isArchived": False,
+        },
     ],
 )
 def test_target_mismatch_archive_and_disabled_issues_fail_closed(payload):
+    runner = FakeRunner()
+    repo_command = _command(
+        runner,
+        "repo",
+        "view",
+        "github.com/Blummer92/agent-os",
+        "--json",
+        "nameWithOwner,url,hasIssuesEnabled,isArchived",
+    )
     plan, result = plan_issue_creation(
         _request(),
-        FakeRunner(overrides={REPO: IssueCreateProcessResult(0, json.dumps(payload), "")}),
+        FakeRunner(
+            overrides={repo_command: IssueCreateProcessResult(0, json.dumps(payload), "")}
+        ),
     )
     assert plan is None
     assert result.reason_code == IssueCreateReasonCode.TARGET_MISMATCHED
 
 
-def test_repeated_fingerprint_blocks_execution():
-    first, failure = plan_issue_creation(_request(), FakeRunner())
+def test_repeated_stable_operation_identity_blocks_new_invocation():
+    first, failure = plan_issue_creation(_request(invocation_id="first"), FakeRunner())
     assert failure is None
     runner = FakeRunner()
     plan, result = plan_issue_creation(
-        _request(prior=(first.operation_fingerprint,)), runner
+        _request(
+            invocation_id="second",
+            prior=(first.operation_identity,),
+        ),
+        runner,
     )
     assert plan is None
     assert result.reason_code == IssueCreateReasonCode.REPEAT_INVOCATION_DETECTED
     assert result.exit_code == 80
+    assert result.retry_allowed is False
     assert not _creates(runner)
 
 
-def test_redaction_bounding_and_serializers_never_leak_secrets():
+def test_redaction_covers_tokens_assignments_headers_urls_and_sensitive_content():
     secret = "github_pat_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
-    diagnostic = (
-        f"\x1b[31mAuthorization: Bearer {secret}\npassword=hunter2\n"
-        "https://u:p@example.com/\n" + "x" * 5000
+    title_secret = "private title"
+    label_secret = "private-label"
+    body_secret = "private body"
+    validation = _validation()
+    validation = replace(
+        validation,
+        draft=replace(
+            validation.draft,
+            title=title_secret,
+            body=body_secret,
+            proposed_labels=(label_secret,),
+        ),
     )
-    sanitized = sanitize_diagnostic_text(diagnostic, limit=100)
+    diagnostic = (
+        f"\x1b[31mAuthorization: Basic abc\nBearer abc.def\n"
+        f"token={secret}\npassword='hunter2'\n"
+        f"https://u:p@example.com/\n{title_secret}\n{label_secret}\n{body_secret}\n"
+        + "x" * 5000
+    )
     result = execute_issue_creation(
-        _request(), FakeRunner(create=IssueCreateProcessResult(1, secret, diagnostic)), Confirm()
+        _request(validation=validation),
+        FakeRunner(create=IssueCreateProcessResult(1, secret, diagnostic)),
+        Confirm(),
     )
     rendered = render_issue_create_result(result)
     payload = json.dumps(issue_create_result_to_dict(result), sort_keys=True)
-    assert secret not in sanitized + rendered + payload
-    assert "hunter2" not in sanitized
-    assert "u:p@" not in sanitized
-    assert "\x1b" not in sanitized
+    combined = rendered + payload
+    for value in (
+        secret,
+        "abc.def",
+        "hunter2",
+        "u:p@",
+        title_secret,
+        label_secret,
+        body_secret,
+    ):
+        assert value not in combined
+    assert "\x1b" not in combined
+
+
+def test_standalone_redaction_is_bounded_and_handles_control_characters():
+    value = "ghp_ABCDEFGHIJKL\rsecret=abc\x08" + "x" * 5000
+    sanitized = sanitize_diagnostic_text(value, limit=100)
+    assert "ABCDEFGHIJKL" not in sanitized
+    assert "secret=abc" not in sanitized
+    assert "\r" not in sanitized
+    assert "\x08" not in sanitized
     assert "TRUNCATED" in sanitized
-    assert result.operation_fingerprint in rendered
 
 
-def test_unicode_stdin_and_unsupported_controls():
+def test_unicode_body_and_control_rejection():
     validation = _validation()
     unicode_validation = replace(
         validation,
-        draft=replace(validation.draft, body=validation.draft.body + "\nRésumé — 東京\n"),
+        draft=replace(
+            validation.draft,
+            body=validation.draft.body + "\nRésumé — 東京\n",
+        ),
     )
-    plan, failure = plan_issue_creation(_request(validation=unicode_validation), FakeRunner())
+    plan, failure = plan_issue_creation(
+        _request(validation=unicode_validation),
+        FakeRunner(),
+    )
     assert failure is None
     assert "東京" in plan.body
-    bad = replace(validation, draft=replace(validation.draft, body=validation.draft.body + "\x00"))
-    with pytest.raises(ValueError):
-        plan_issue_creation(_request(validation=bad), FakeRunner())
+    bad = replace(
+        validation,
+        draft=replace(validation.draft, body=validation.draft.body + "\x00"),
+    )
+    plan, failure = plan_issue_creation(_request(validation=bad), FakeRunner())
+    assert plan is None
+    assert failure.reason_code == IssueCreateReasonCode.VALIDATION_INELIGIBLE
 
 
-def test_concrete_runner_has_no_shell_or_forbidden_auth_paths():
+def test_cli_planning_mode_never_executes_mutation_capable_call(
+    monkeypatch,
+    capsys,
+):
+    runner = FakeRunner()
+    monkeypatch.setattr(issue_create_cli, "SubprocessGhRunner", lambda: runner)
+    code = issue_create_cli.main(
+        [
+            "--input",
+            str(FIXTURE),
+            "--target",
+            "Blummer92/agent-os",
+            "--issue-form",
+            str(FORM),
+            "--label-map",
+            str(MAP),
+            "--format",
+            "json",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert code == IssueCreateExitCode.CONFIRMATION
+    assert payload["reason_code"] == IssueCreateReasonCode.CONFIRMATION_MISSING.value
+    assert _creates(runner) == []
+
+
+def test_cli_confirmation_diagnostics_do_not_print_raw_title_or_labels(
+    monkeypatch,
+    capsys,
+):
+    validation = _validation()
+    validation = replace(
+        validation,
+        draft=replace(
+            validation.draft,
+            title="secret title",
+            proposed_labels=("secret-label",),
+        ),
+    )
+    plan, failure = plan_issue_creation(_request(validation=validation), FakeRunner())
+    assert failure is None
+    monkeypatch.setattr("builtins.input", lambda prompt: "no")
+    confirmation = issue_create_cli._PromptConfirmation().confirm(plan)
+    captured = capsys.readouterr()
+    assert confirmation.confirmed is False
+    assert "secret title" not in captured.err
+    assert "secret-label" not in captured.err
+    assert plan.operation_identity in captured.err
+
+
+def test_serializers_share_immutable_result_and_uncertainty_reasons():
+    result = execute_issue_creation(
+        _request(),
+        FakeRunner(create=IssueCreateProcessResult(1, "", "failure")),
+        Confirm(),
+    )
+    payload = issue_create_result_to_dict(result)
+    rendered = render_issue_create_result(result)
+    assert payload["reason_code"] == result.reason_code.value
+    assert IssueCreateReasonCode.MUTATION_UNCERTAIN.value in payload["reason_codes"]
+    assert result.operation_identity in rendered
+    assert result.operation_fingerprint in rendered
+
+
+def test_concrete_runner_and_module_have_no_forbidden_paths():
     source = inspect.getsource(SubprocessGhRunner.run)
-    module_source = Path(inspect.getsourcefile(SubprocessGhRunner)).read_text(encoding="utf-8")
+    module_source = Path(inspect.getsourcefile(SubprocessGhRunner)).read_text(
+        encoding="utf-8"
+    )
+    test_source = Path(__file__).read_text(encoding="utf-8")
     forbidden_create_literal = " ".join(("gh", "issue", "create"))
+    assert "subprocess.Popen" in source
     assert "shell=False" in source
     assert "shell=True" not in module_source
+    assert "os.system" not in module_source
     assert "gh auth token" not in module_source
     assert "--show-token" not in module_source
     assert "gh auth refresh" not in module_source
-    assert forbidden_create_literal not in Path(__file__).read_text(encoding="utf-8")
+    assert "GH_REPO" in module_source and 'env.pop("GH_REPO"' in module_source
+    assert "GH_HOST" in module_source and 'env.pop("GH_HOST"' in module_source
+    assert forbidden_create_literal not in test_source
