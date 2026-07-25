@@ -39,10 +39,7 @@ class DraftReasonCode(str, Enum):
 
 
 _REASON_ORDER = tuple(DraftReasonCode)
-_HARD = {
-    DraftReasonCode.MALFORMED_STRUCTURED_INPUT,
-    DraftReasonCode.UNSAFE_EXTERNAL_WRITE,
-}
+_HARD = {DraftReasonCode.MALFORMED_STRUCTURED_INPUT, DraftReasonCode.UNSAFE_EXTERNAL_WRITE}
 _REVIEW = {
     DraftReasonCode.MISSING_REQUIRED_EVIDENCE,
     DraftReasonCode.UNKNOWN_OR_UNSUPPORTED_VALUE,
@@ -58,30 +55,16 @@ _FORMAT_INVALID = {
     DraftReasonCode.ISSUE_FORM_SCHEMA_DRIFT,
 }
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
-_TOP_LEVEL_KEYS = {
-    "name",
-    "description",
-    "title",
-    "labels",
-    "assignees",
-    "type",
-    "projects",
-    "body",
-}
+_TOP_KEYS = {"name", "description", "title", "labels", "assignees", "type", "projects", "body"}
 _ELEMENT_KEYS = {"type", "id", "attributes", "validations"}
-_BASE_ATTRIBUTES = {"label", "description", "placeholder"}
-_SUPPORTED_ATTRIBUTES = {
+_ATTRS = {
     "markdown": {"value"},
-    "input": _BASE_ATTRIBUTES,
-    "textarea": _BASE_ATTRIBUTES,
+    "input": {"label", "description", "placeholder"},
+    "textarea": {"label", "description", "placeholder"},
     "dropdown": {"label", "description", "multiple", "options", "default"},
     "checkboxes": {"label", "description", "options"},
 }
-_BEHAVIORAL_ATTRIBUTES = {
-    "input": {"value"},
-    "textarea": {"value", "render"},
-    "dropdown": {"default"},
-}
+_BEHAVIORAL = {"input": {"value"}, "textarea": {"value", "render"}, "dropdown": {"default"}}
 
 
 class DraftExitCode(IntEnum):
@@ -120,7 +103,6 @@ def validate_issue_draft(
     parser_evidence = _parser_evidence(draft, source_input, schema)
     schema_evidence = _schema_evidence(issue_form_path, schema)
     duplicate_evidence = _duplicate_evidence(draft.title, local_issue_summaries)
-
     reasons = set(_draft_reason_codes(draft, source_input))
     if parser_evidence:
         reasons.add(DraftReasonCode.PARSER_ROUND_TRIP_AMBIGUITY)
@@ -129,14 +111,11 @@ def validate_issue_draft(
     if duplicate_evidence:
         reasons.add(DraftReasonCode.DUPLICATE_CANDIDATE_ADVISORY)
 
-    source_values = _source_values(source_input)
-    owner_values = source_values.get("owner", ())
-    if owner_values and len(owner_values) != 1:
+    values = _source_values(source_input)
+    if values.get("owner") and len(values["owner"]) != 1:
         reasons.add(DraftReasonCode.CONFLICTING_OWNER)
-    external_values = source_values.get("external-write", ())
-    if external_values and any(value != "no-external-write" for value in external_values):
+    if any(value != "no-external-write" for value in values.get("external-write", ())):
         reasons.add(DraftReasonCode.UNSAFE_EXTERNAL_WRITE)
-
     unavailable = _unavailable_labels(draft.proposed_labels, available_labels)
     if unavailable:
         reasons.add(DraftReasonCode.UNAVAILABLE_LABEL)
@@ -149,25 +128,15 @@ def validate_issue_draft(
     ordered = tuple(code for code in _REASON_ORDER if code in reasons)
     format_valid = not bool(reasons & _FORMAT_INVALID)
     eligible = status in {Status.PASS, Status.WARN}
-    evidence = tuple(
-        [
-            f"reason codes: {', '.join(code.value for code in ordered)}",
-            f"format_valid={str(format_valid).lower()}",
-            f"submission_eligible={str(eligible).lower()}",
-            "write_authorized=false",
-            "mutation_performed=false",
-        ]
-        + [f"unavailable label: {label}" for label in unavailable]
+    evidence = (
+        f"reason codes: {', '.join(code.value for code in ordered)}",
+        f"format_valid={str(format_valid).lower()}",
+        f"submission_eligible={str(eligible).lower()}",
+        "write_authorized=false",
+        "mutation_performed=false",
+        *(f"unavailable label: {label}" for label in unavailable),
     )
-    report = _report(
-        draft,
-        status,
-        ordered,
-        parser_evidence,
-        schema_evidence,
-        duplicate_evidence,
-        evidence,
-    )
+    report = _report(draft, status, ordered, parser_evidence, schema_evidence, duplicate_evidence, evidence)
     return IssueDraftValidationResult(
         draft=draft,
         status=status,
@@ -226,47 +195,30 @@ def render_validation_preview(result: IssueDraftValidationResult) -> str:
 
 def validation_exit_code(result: IssueDraftValidationResult) -> int:
     return int(
-        DraftExitCode.ELIGIBLE_SUCCESS
-        if result.status == Status.PASS
-        else DraftExitCode.ELIGIBLE_WARNING
-        if result.status == Status.WARN
-        else DraftExitCode.MANUAL_REVIEW
-        if result.status == Status.MANUAL_REVIEW
-        else DraftExitCode.VALIDATION_FAILURE
+        DraftExitCode.ELIGIBLE_SUCCESS if result.status == Status.PASS else
+        DraftExitCode.ELIGIBLE_WARNING if result.status == Status.WARN else
+        DraftExitCode.MANUAL_REVIEW if result.status == Status.MANUAL_REVIEW else
+        DraftExitCode.VALIDATION_FAILURE
     )
 
 
-def _draft_reason_codes(
-    draft: IssueDraftResult, source_input: IssueDraftInput
-) -> tuple[DraftReasonCode, ...]:
+def _draft_reason_codes(draft: IssueDraftResult, source: IssueDraftInput) -> tuple[DraftReasonCode, ...]:
     codes: set[DraftReasonCode] = set()
-    if source_input.input_issues:
+    if source.input_issues:
         codes.add(DraftReasonCode.MALFORMED_STRUCTURED_INPUT)
     for reason in draft.manual_review_reasons:
         text = reason.casefold()
-        if (
-            "required field is missing" in text
-            or "required checkbox" in text
-            or "title is required" in text
-        ):
+        if any(term in text for term in ("required field is missing", "required checkbox", "title is required")):
             codes.add(DraftReasonCode.MISSING_REQUIRED_EVIDENCE)
-        elif (
-            "must be a string" in text
-            or "must be a mapping" in text
-            or "unknown top-level" in text
-        ):
+        elif any(term in text for term in ("must be a string", "must be a mapping", "unknown top-level")):
             codes.add(DraftReasonCode.MALFORMED_STRUCTURED_INPUT)
         elif "multiple input fields map" in text or "duplicate canonical field" in text:
             codes.add(DraftReasonCode.DUPLICATE_CANONICAL_FIELD)
         elif "repository label is unavailable" in text:
             codes.add(DraftReasonCode.UNAVAILABLE_LABEL)
-        elif "owner" in text and any(
-            word in text for word in ("multiple", "exactly one", "conflict")
-        ):
+        elif "owner" in text and any(term in text for term in ("multiple", "exactly one", "conflict")):
             codes.add(DraftReasonCode.CONFLICTING_OWNER)
-        elif "external-write" in text and any(
-            word in text for word in ("request", "unsafe")
-        ):
+        elif "external-write" in text and any(term in text for term in ("request", "unsafe")):
             codes.add(DraftReasonCode.UNSAFE_EXTERNAL_WRITE)
         elif "unsupported control" in text or "malformed attributes or validations" in text:
             codes.add(DraftReasonCode.ISSUE_FORM_SCHEMA_DRIFT)
@@ -287,57 +239,44 @@ def _status(draft_status: Status, reasons: set[DraftReasonCode]) -> Status:
     return Status.PASS
 
 
-def _source_values(source_input: IssueDraftInput) -> dict[str, tuple[str, ...]]:
+def _source_values(source: IssueDraftInput) -> dict[str, tuple[str, ...]]:
     grouped: dict[str, list[str]] = defaultdict(list)
-    for raw_key, values in source_input.fields:
+    for raw_key, values in source.fields:
         grouped[canonical_field_id(raw_key)].extend(values)
     return {key: tuple(values) for key, values in grouped.items()}
 
 
-def _parser_evidence(
-    draft: IssueDraftResult,
-    source_input: IssueDraftInput,
-    schema: IssueFormSchema,
-) -> tuple[str, ...]:
+def _parser_evidence(draft: IssueDraftResult, source: IssueDraftInput, schema: IssueFormSchema) -> tuple[str, ...]:
     evidence: list[str] = []
     fields = {field.canonical_id: field.label for field in schema.fields}
-    labels = {field.label.casefold(): field.canonical_id for field in schema.fields}
-    for raw_key, values in source_input.fields:
+    for raw_key, values in source.fields:
         for value in values:
             for line in value.splitlines():
                 match = re.match(r"^###\s+(.+?)\s*$", line)
-                if match and match.group(1).casefold() in labels:
-                    evidence.append(
-                        f"field {raw_key} contains canonical-looking heading: {match.group(1)}"
-                    )
+                if not match:
+                    continue
+                heading = match.group(1).strip()
+                if parse_issue_form_body(f"### {heading}\n\nprobe-value\n", fields):
+                    evidence.append(f"field {raw_key} contains parser-recognized heading: {heading}")
 
-    heading_counts = Counter(
-        line[4:].strip() for line in draft.body.splitlines() if line.startswith("### ")
-    )
+    counts = Counter(line[4:].strip() for line in draft.body.splitlines() if line.startswith("### "))
     for field in schema.fields:
-        count = heading_counts.get(field.label, 0)
-        if count != 1:
+        if counts.get(field.label, 0) != 1:
             evidence.append(
-                f"rendered heading count for {field.canonical_id} is {count}, expected 1"
+                f"rendered heading count for {field.canonical_id} is {counts.get(field.label, 0)}, expected 1"
             )
-
     parsed = parse_issue_form_body(draft.body, fields)
-    expected = _source_values(source_input)
-    schema_by_id = {field.canonical_id: field for field in schema.fields}
-    expected_keys = {
-        key for key, values in expected.items() if values and key in schema_by_id
-    }
-    parsed_keys = set(parsed)
-    for key in sorted(expected_keys - parsed_keys):
+    expected = _source_values(source)
+    by_id = {field.canonical_id: field for field in schema.fields}
+    expected_keys = {key for key, values in expected.items() if values and key in by_id}
+    for key in sorted(expected_keys - set(parsed)):
         evidence.append(f"rendered body did not round-trip expected field: {key}")
-    for key in sorted(parsed_keys - expected_keys):
-        if schema_by_id[key].control_type != "checkboxes":
+    for key in sorted(set(parsed) - expected_keys):
+        if by_id[key].control_type != "checkboxes":
             evidence.append(f"rendered body produced unexpected parsed field: {key}")
-    for key in sorted(expected_keys & parsed_keys):
-        field = schema_by_id[key]
-        if field.control_type == "checkboxes":
-            continue
-        if _expected_values(field, expected[key]) != tuple(parsed[key]):
+    for key in sorted(expected_keys & set(parsed)):
+        field = by_id[key]
+        if field.control_type != "checkboxes" and _expected_values(field, expected[key]) != tuple(parsed[key]):
             evidence.append(f"round-trip values changed for {key}")
     return tuple(sorted(set(evidence)))
 
@@ -346,26 +285,17 @@ def _expected_values(field: IssueFormField, values: tuple[str, ...]) -> tuple[st
     if not values:
         return ()
     content = values[0] if len(values) == 1 else "\n".join(f"- {value}" for value in values)
-    parsed = parse_issue_form_body(
-        f"### {field.label}\n\n{content}\n",
-        {field.canonical_id: field.label},
-    )
+    parsed = parse_issue_form_body(f"### {field.label}\n\n{content}\n", {field.canonical_id: field.label})
     return tuple(parsed.get(field.canonical_id, ()))
 
 
-def _schema_evidence(
-    issue_form_path: str | Path, schema: IssueFormSchema
-) -> tuple[str, ...]:
+def _schema_evidence(path: str | Path, schema: IssueFormSchema) -> tuple[str, ...]:
     evidence = list(schema.unsupported_controls)
-    raw = yaml.safe_load(Path(issue_form_path).read_text(encoding="utf-8")) or {}
+    raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     if not isinstance(raw, Mapping):
         return ("issue form root is not a mapping",)
-
-    evidence.extend(
-        f"unsupported top-level issue-form key: {key}"
-        for key in _unexpected_keys(raw, _TOP_LEVEL_KEYS)
-    )
-    evidence.extend(_top_level_type_evidence(raw))
+    evidence.extend(f"unsupported top-level issue-form key: {key}" for key in _unexpected(raw, _TOP_KEYS))
+    evidence.extend(_top_level_evidence(raw))
     body = raw.get("body", [])
     if not isinstance(body, list):
         return tuple(sorted(set([*evidence, "issue form body is not a list"])))
@@ -373,27 +303,21 @@ def _schema_evidence(
     raw_ids: list[str] = []
     canonical_ids: list[str] = []
     labels: list[str] = []
-    non_markdown_fields = 0
+    field_count = 0
     for index, item in enumerate(body):
         if not isinstance(item, Mapping):
             evidence.append(f"body[{index}] is not a mapping")
             continue
-        evidence.extend(
-            f"body[{index}] has unsupported element key: {key}"
-            for key in _unexpected_keys(item, _ELEMENT_KEYS)
-        )
+        evidence.extend(f"body[{index}] has unsupported element key: {key}" for key in _unexpected(item, _ELEMENT_KEYS))
         control = item.get("type")
         if not isinstance(control, str) or not control:
             evidence.append(f"body[{index}] type must be a non-empty string")
             continue
-        raw_attrs = item.get("attributes")
-        raw_validations = item.get("validations")
-        attrs = {} if raw_attrs is None else raw_attrs
-        validations = {} if raw_validations is None else raw_validations
+        attrs = {} if item.get("attributes") is None else item.get("attributes")
+        validations = {} if item.get("validations") is None else item.get("validations")
         if not isinstance(attrs, Mapping) or not isinstance(validations, Mapping):
             evidence.append(f"body[{index}] has malformed attributes or validations")
             continue
-
         evidence.extend(_attribute_evidence(index, control, attrs))
         evidence.extend(_validation_evidence(index, item.get("id"), validations))
         if control == "markdown":
@@ -402,8 +326,7 @@ def _schema_evidence(
             if validations:
                 evidence.append(f"body[{index}] markdown element must not define validations")
             continue
-        non_markdown_fields += 1
-
+        field_count += 1
         raw_id = item.get("id")
         if not isinstance(raw_id, str) or not raw_id:
             evidence.append(f"body[{index}] input control must define a string id")
@@ -412,32 +335,23 @@ def _schema_evidence(
             canonical_ids.append(canonical_field_id(raw_id))
             if not _ID_RE.fullmatch(raw_id):
                 evidence.append(f"body[{index}] field id is invalid: {raw_id}")
-
         label = attrs.get("label")
         if not isinstance(label, str) or not label.strip():
             evidence.append(f"body[{index}] label must be a non-empty string")
         else:
             labels.append(label)
-
         if control in {"dropdown", "checkboxes"}:
             evidence.extend(_option_evidence(index, control, attrs.get("options")))
 
-    if not non_markdown_fields:
+    if not field_count:
         evidence.append("issue form body contains no input fields")
-    evidence.extend(
-        f"duplicate raw field id: {value}" for value in _duplicates(raw_ids)
-    )
-    evidence.extend(
-        f"duplicate canonical field id: {value}"
-        for value in _duplicates(canonical_ids)
-    )
-    evidence.extend(
-        f"duplicate field label: {value}" for value in _duplicates(labels)
-    )
+    evidence.extend(f"duplicate raw field id: {value}" for value in _duplicates(raw_ids))
+    evidence.extend(f"duplicate canonical field id: {value}" for value in _duplicates(canonical_ids))
+    evidence.extend(f"duplicate field label: {value}" for value in _duplicates(labels))
     return tuple(sorted(set(evidence)))
 
 
-def _top_level_type_evidence(raw: Mapping[object, object]) -> list[str]:
+def _top_level_evidence(raw: Mapping[object, object]) -> list[str]:
     evidence: list[str] = []
     for key in ("name", "description"):
         value = raw.get(key)
@@ -449,32 +363,24 @@ def _top_level_type_evidence(raw: Mapping[object, object]) -> list[str]:
         if key in raw and not isinstance(raw[key], str):
             evidence.append(f"top-level {key} must be a string")
     for key in ("labels", "assignees", "projects"):
-        if key in raw and not _string_or_string_list(raw[key]):
+        value = raw.get(key)
+        valid = isinstance(value, str) and bool(value.strip())
+        valid = valid or isinstance(value, list) and all(isinstance(item, str) and item.strip() for item in value)
+        if key in raw and not valid:
             evidence.append(f"top-level {key} must be a string or string list")
     return evidence
 
 
-def _string_or_string_list(value: object) -> bool:
-    if isinstance(value, str):
-        return bool(value.strip())
-    return isinstance(value, list) and all(
-        isinstance(item, str) and bool(item.strip()) for item in value
-    )
-
-
-def _attribute_evidence(
-    index: int, control: str, attrs: Mapping[object, object]
-) -> list[str]:
-    field_name = attrs.get("label", "<none>")
-    allowed = _SUPPORTED_ATTRIBUTES.get(control, set())
-    known_behavioral = _BEHAVIORAL_ATTRIBUTES.get(control, set())
+def _attribute_evidence(index: int, control: str, attrs: Mapping[object, object]) -> list[str]:
+    label = attrs.get("label", "<none>")
+    behavioral = _BEHAVIORAL.get(control, set())
     evidence = [
-        f"body[{index}] field {field_name} has unsupported attribute: {key}"
-        for key in _unexpected_keys(attrs, allowed | known_behavioral)
+        f"body[{index}] field {label} has unsupported attribute: {key}"
+        for key in _unexpected(attrs, _ATTRS.get(control, set()) | behavioral)
     ]
     evidence.extend(
-        f"body[{index}] field {field_name} uses unsupported renderer behavior: {key}"
-        for key in sorted(str(key) for key in attrs if key in known_behavioral)
+        f"body[{index}] field {label} uses unsupported renderer behavior: {key}"
+        for key in sorted(str(key) for key in attrs if key in behavioral)
     )
     for key in ("label", "description", "placeholder"):
         if key in attrs and not isinstance(attrs[key], str):
@@ -484,24 +390,18 @@ def _attribute_evidence(
     if control == "dropdown" and "multiple" in attrs:
         if not isinstance(attrs["multiple"], bool):
             evidence.append(f"body[{index}] dropdown multiple must be boolean")
-        elif attrs["multiple"] is True:
-            evidence.append(
-                f"body[{index}] dropdown multiple selection is unsupported by local renderer"
-            )
+        elif attrs["multiple"]:
+            evidence.append(f"body[{index}] dropdown multiple selection is unsupported by local renderer")
     return evidence
 
 
-def _validation_evidence(
-    index: int, field_id: object, validations: Mapping[object, object]
-) -> list[str]:
+def _validation_evidence(index: int, field_id: object, validations: Mapping[object, object]) -> list[str]:
     evidence = [
         f"body[{index}] field {field_id or '<none>'} has unsupported validation: {key}"
-        for key in _unexpected_keys(validations, {"required"})
+        for key in _unexpected(validations, {"required"})
     ]
     if "required" in validations and not isinstance(validations["required"], bool):
-        evidence.append(
-            f"body[{index}] field {field_id or '<none>'} has non-boolean required validation"
-        )
+        evidence.append(f"body[{index}] field {field_id or '<none>'} has non-boolean required validation")
     return evidence
 
 
@@ -513,49 +413,31 @@ def _option_evidence(index: int, control: str, options: object) -> list[str]:
     for option_index, option in enumerate(options):
         if control == "checkboxes":
             if not isinstance(option, Mapping):
-                evidence.append(
-                    f"body[{index}] checkbox option {option_index} is malformed"
-                )
+                evidence.append(f"body[{index}] checkbox option {option_index} is malformed")
                 continue
             evidence.extend(
                 f"body[{index}] checkbox option {option_index} has unsupported key: {key}"
-                for key in _unexpected_keys(option, {"label", "required"})
+                for key in _unexpected(option, {"label", "required"})
             )
             label = option.get("label")
             if not isinstance(label, str) or not label.strip():
-                evidence.append(
-                    f"body[{index}] checkbox option {option_index} label is invalid"
-                )
+                evidence.append(f"body[{index}] checkbox option {option_index} label is invalid")
                 continue
             if "required" in option and not isinstance(option["required"], bool):
-                evidence.append(
-                    f"body[{index}] checkbox option {option_index} required must be boolean"
-                )
+                evidence.append(f"body[{index}] checkbox option {option_index} required must be boolean")
             normalized.append(label)
-            continue
-
-        if not isinstance(option, str) or not option.strip():
+        elif not isinstance(option, str) or not option.strip():
             evidence.append(f"body[{index}] dropdown option {option_index} is invalid")
-            continue
-        if option.casefold() == "none":
-            evidence.append(f"body[{index}] dropdown option uses reserved value: {option}")
-        normalized.append(option)
-
-    evidence.extend(
-        f"body[{index}] has duplicate option: {value}"
-        for value in _duplicates(normalized)
-    )
+        else:
+            if option.casefold() == "none":
+                evidence.append(f"body[{index}] dropdown option uses reserved value: {option}")
+            normalized.append(option)
+    evidence.extend(f"body[{index}] has duplicate option: {value}" for value in _duplicates(normalized))
     return evidence
 
 
-def _unexpected_keys(mapping: Mapping[object, object], allowed: set[str]) -> tuple[str, ...]:
-    return tuple(
-        sorted(
-            str(key)
-            for key in mapping
-            if not isinstance(key, str) or key not in allowed
-        )
-    )
+def _unexpected(mapping: Mapping[object, object], allowed: set[str]) -> tuple[str, ...]:
+    return tuple(sorted(str(key) for key in mapping if not isinstance(key, str) or key not in allowed))
 
 
 def _duplicates(values: Sequence[str]) -> tuple[str, ...]:
@@ -565,15 +447,7 @@ def _duplicates(values: Sequence[str]) -> tuple[str, ...]:
 
 def _duplicate_evidence(title: str, summaries: Sequence[str]) -> tuple[str, ...]:
     normalized = _normalize_candidate(title)
-    return tuple(
-        sorted(
-            {
-                f"local candidate matches prepared title: {summary}"
-                for summary in summaries
-                if _normalize_candidate(summary) == normalized
-            }
-        )
-    )
+    return tuple(sorted({f"local candidate matches prepared title: {summary}" for summary in summaries if _normalize_candidate(summary) == normalized}))
 
 
 def _normalize_candidate(value: str) -> str:
@@ -581,9 +455,7 @@ def _normalize_candidate(value: str) -> str:
     return re.sub(r"\s+", " ", value.casefold())
 
 
-def _unavailable_labels(
-    proposed: Sequence[str], available: Iterable[str] | None
-) -> tuple[str, ...]:
+def _unavailable_labels(proposed: Sequence[str], available: Iterable[str] | None) -> tuple[str, ...]:
     if available is None:
         return ()
     available_set = {label.strip() for label in available if label.strip()}
@@ -604,12 +476,7 @@ def _report(
         _check("parser round-trip", parser_evidence, Status.MANUAL_REVIEW),
         _check("issue-form schema drift", schema_evidence, Status.MANUAL_REVIEW),
         _check("duplicate candidates", duplicate_evidence, Status.WARN),
-        CheckResult(
-            "submission eligibility",
-            status,
-            "offline validation is deterministic and fail-closed",
-            list(evidence),
-        ),
+        CheckResult("submission eligibility", status, "offline validation is deterministic and fail-closed", list(evidence)),
         CheckResult(
             "authorization boundary",
             Status.PASS,
