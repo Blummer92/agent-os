@@ -123,11 +123,12 @@ def test_input_risks_have_stable_fail_closed_reasons(mutate, reason, status):
     assert result.mutation_performed is False
 
 
-def test_parser_ambiguity_routes_to_manual_review():
+@pytest.mark.parametrize("heading", ["Primary owner", "Status"])
+def test_parser_recognized_headings_route_to_manual_review(heading: str):
     payload = _payload()
     fields = dict(payload["fields"])
     fields["objective"] = (
-        "Describe the outcome\n### Primary owner\nowner:qa-test-agent"
+        f"Describe the outcome\n### {heading}\nowner:qa-test-agent"
     )
     payload["fields"] = fields
 
@@ -135,7 +136,7 @@ def test_parser_ambiguity_routes_to_manual_review():
 
     assert result.status == Status.MANUAL_REVIEW
     assert DraftReasonCode.PARSER_ROUND_TRIP_AMBIGUITY in result.reason_codes
-    assert result.parser_ambiguity_evidence
+    assert any(heading in item for item in result.parser_ambiguity_evidence)
     assert result.submission_eligible is False
 
 
