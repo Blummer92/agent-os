@@ -132,6 +132,15 @@ def test_create_fails_before_mutation_for_revision_repository_and_reuse(repo) ->
     with pytest.raises(GitWorktreeAdapterError, match="repository"):
         adapter(root, parent).create(wrong_repo)
 
+    full_ref = WorkspaceRequest(
+        workspace_request_id=request.workspace_request_id,
+        repository=request.repository,
+        branch="refs/heads/agent/596-work",
+        expected_revision=request.expected_revision,
+    )
+    with pytest.raises(GitWorktreeAdapterError, match="short name"):
+        adapter(root, parent).create(full_ref)
+
     external = parent / "external"
     git(root, "worktree", "add", str(external), request.branch)
     reused = adapter(root, parent).create(request)
@@ -164,6 +173,10 @@ def test_inspection_fails_closed_for_unsafe_states(repo, state: str) -> None:
     inspection = instance.inspect(handle)
     assert not inspection.resolved
     assert inspection.reason
+    if state == "dirty":
+        cleanup = instance.cleanup(handle)
+        assert not cleanup.filesystem_removed and "non-force" in cleanup.reason
+        assert "locked agent-os:" in git(root, "worktree", "list", "--porcelain")
 
 
 def test_filesystem_and_metadata_divergence_remain_independent(repo) -> None:
@@ -340,6 +353,8 @@ def test_configuration_bounds_and_malformed_unicode(repo) -> None:
         adapter(root, parent, git_binary="git\ud800")
     with pytest.raises(GitWorktreeAdapterError, match="environment"):
         adapter(root, parent, environment={"BAD=KEY": "value"})
+    with pytest.raises(GitWorktreeAdapterError, match="protected"):
+        adapter(root, parent, environment={"GIT_TERMINAL_PROMPT": "1"})
 
 
 def test_architecture_boundaries_and_no_force_or_prune() -> None:
