@@ -29,7 +29,7 @@ from workflow_scheduler.execution.single_issue_pilot import (
     pilot_workspace_identity,
 )
 
-MAX_GIT_OUTPUT_BYTES = 131_072
+MAX_GIT_OUTPUT_BYTES = 65_536
 MAX_GIT_TIMEOUT_SECONDS = 30.0
 MAX_REASON_BYTES = 512
 MAX_TEXT_BYTES = 4096
@@ -307,6 +307,10 @@ class GitWorktreeAdapter:
             for key, value in environment.items():
                 if not isinstance(key, str) or not isinstance(value, str) or "=" in key:
                     raise GitWorktreeAdapterError("environment is malformed")
+                if key in controlled:
+                    raise GitWorktreeAdapterError(
+                        "protected environment values cannot be overridden"
+                    )
                 _text(key, "environment key")
                 if value:
                     _text(value, "environment value")
@@ -374,6 +378,8 @@ class GitWorktreeAdapter:
         if _text(request.repository, "repository").lower() != expected_repo:
             raise GitWorktreeAdapterError("repository identity mismatch")
         branch = _text(request.branch, "branch")
+        if branch.startswith("refs/"):
+            raise GitWorktreeAdapterError("branch must use the canonical short name")
         if not _SHA40.fullmatch(request.expected_revision):
             raise GitWorktreeAdapterError(
                 "expected_revision must be a full lowercase SHA"
@@ -652,6 +658,23 @@ class GitWorktreeAdapter:
                 not os.path.exists(binding.path),
                 "identity or lock ownership diverged",
             )
+        if existed:
+            status = self._run(
+                "-C",
+                binding.path,
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--untracked-files=all",
+                cwd=binding.path,
+            )
+            if not status.succeeded or status.stdout:
+                return _cleanup_result(
+                    False,
+                    False,
+                    False,
+                    "refusing non-force cleanup of a dirty or unresolved worktree",
+                )
         if not self._run(
             "-C", self._root, "worktree", "unlock", binding.path
         ).succeeded:
@@ -685,11 +708,22 @@ class GitWorktreeAdapter:
             "-C", self._root, "worktree", "remove", binding.path
         )
         if not removed.succeeded:
+            restored = self._run(
+                "-C",
+                self._root,
+                "worktree",
+                "lock",
+                "--reason",
+                binding.lock_reason,
+                binding.path,
+            )
+            reason = (
+                "worktree removal failed; lock ownership restored"
+                if restored.succeeded
+                else "worktree removal failed; lock ownership is unresolved"
+            )
             return _cleanup_result(
-                False,
-                False,
-                not os.path.exists(binding.path),
-                "worktree removal failed",
+                False, False, not os.path.exists(binding.path), reason
             )
         try:
             metadata_removed = not any(
