@@ -87,6 +87,8 @@ def _handoff(**changes):
             "classification": "parallel-candidate",
             "reason_codes": ["covered-no-deterministic-conflict"],
         }],
+        "planning_scope": "supplied-graph-only",
+        "execution_authorized": False,
         "created_at": "2026-07-26T13:00:00Z",
         "handoff_digest": "0" * 64,
     }
