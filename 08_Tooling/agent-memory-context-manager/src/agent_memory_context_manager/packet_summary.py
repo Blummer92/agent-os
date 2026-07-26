@@ -20,13 +20,28 @@ DEFAULT_SUMMARY_LIST_LIMIT = 3
 MAX_SUMMARY_LIST_LIMIT = 25
 MAX_DISPLAY_VALUE_CHARS = 256
 MAX_COMPUTE_LIMIT_ENTRIES = 25
-MAX_CANONICAL_DEPTH = 24
-MAX_SAFE_INTEGER_BITS = 4096
+
+# Authorized renderer resource-limit contract.
+MAX_LIST_ENTRIES_PER_FIELD = 500
+MAX_TOTAL_LIST_ENTRIES = 2_000
+MAX_DICT_ENTRIES_PER_FIELD = 300
+MAX_TOTAL_DICT_ENTRIES = 1_500
+MAX_STRING_CHARS = 10_000
+MAX_TOTAL_STRING_BYTES = 50_000
+MAX_CANONICAL_NODES = 5_000
+MAX_CANONICAL_DEPTH = 20
+MAX_INTEGER_BITS = 1_024
+MAX_CANONICAL_SERIALIZED_BYTES = 100_000
+MAX_FINGERPRINT_INPUT_BYTES = 100_000
+MAX_TOTAL_NODES = 10_000
+
+# Backward-compatible private-policy alias retained for existing callers/tests.
+MAX_SAFE_INTEGER_BITS = MAX_INTEGER_BITS
 
 SUPPORTED_PACKET_SCHEMA_VERSION = "handoff-packet-v2"
 RENDERER_VERSION = "packet-summary-h2"
-SOURCE_FINGERPRINT_VERSION = "handoff-packet-source-h2-v2"
-SUMMARY_FINGERPRINT_VERSION = "rendered-handoff-summary-h2-v2"
+SOURCE_FINGERPRINT_VERSION = "handoff-packet-source-h2-v3"
+SUMMARY_FINGERPRINT_VERSION = "rendered-handoff-summary-h2-v3"
 NON_AUTHORIZATION_NOTICE_VERSION = "non-authorization-v2"
 
 TRUST_CURRENT = "current"
@@ -56,6 +71,7 @@ REASON_SOURCE_FINGERPRINT_MISSING = "source_fingerprint_missing"
 REASON_SOURCE_FINGERPRINT_INVALID = "source_fingerprint_invalid"
 REASON_SOURCE_FINGERPRINT_MISMATCH = "source_fingerprint_mismatch"
 REASON_PACKET_CONTENT_UNSAFE = "packet_content_unsafe_for_rendering"
+REASON_PACKET_RESOURCE_LIMIT_EXCEEDED = "packet_resource_limit_exceeded"
 REASON_RENDERING_OPTIONS_INVALID = "rendering_options_invalid"
 REASON_RENDERING_FAILURE = "rendering_failure"
 
@@ -76,6 +92,19 @@ _PROVENANCE_FAIL_REASONS: dict[str, str] = {
 
 _INVALID_DISPLAY = "<invalid>"
 _SUMMARY_FINGERPRINT_PLACEHOLDER = "<summary-fingerprint>"
+_RESOURCE_FAILURE_STATUS = "packet-resource-limit-exceeded"
+_UNSAFE_FAILURE_STATUS = "unsafe-rendering-input"
+
+_LIST_PACKET_FIELDS: tuple[str, ...] = (
+    "changed_files",
+    "allowed_inspect_first",
+    "forbidden_unless_needed",
+    "known_facts",
+    "prior_decisions",
+    "acceptance_criteria",
+    "validation_commands",
+    "stop_conditions",
+)
 
 NON_AUTHORIZATION_NOTICE = (
     "This summary is context evidence only. It does not authorize "
@@ -145,6 +174,47 @@ class _RenderedCore:
     safe: bool
 
 
+class _ResourceLimitExceeded(Exception):
+    """Internal signal for deterministic renderer resource rejection."""
+
+
+@dataclass
+class _ProcessingBudget:
+    total_nodes: int = 0
+    canonical_nodes: int = 0
+    total_list_entries: int = 0
+    total_dict_entries: int = 0
+    total_string_bytes: int = 0
+
+    def visit(self, *, canonical: bool, count: int = 1) -> None:
+        self.total_nodes += count
+        if self.total_nodes > MAX_TOTAL_NODES:
+            raise _ResourceLimitExceeded
+        if canonical:
+            self.canonical_nodes += count
+            if self.canonical_nodes > MAX_CANONICAL_NODES:
+                raise _ResourceLimitExceeded
+
+    def add_list_entries(self, count: int) -> None:
+        if count > MAX_LIST_ENTRIES_PER_FIELD:
+            raise _ResourceLimitExceeded
+        self.total_list_entries += count
+        if self.total_list_entries > MAX_TOTAL_LIST_ENTRIES:
+            raise _ResourceLimitExceeded
+
+    def add_dict_entries(self, count: int) -> None:
+        if count > MAX_DICT_ENTRIES_PER_FIELD:
+            raise _ResourceLimitExceeded
+        self.total_dict_entries += count
+        if self.total_dict_entries > MAX_TOTAL_DICT_ENTRIES:
+            raise _ResourceLimitExceeded
+
+    def add_string_bytes(self, count: int) -> None:
+        self.total_string_bytes += count
+        if self.total_string_bytes > MAX_TOTAL_STRING_BYTES:
+            raise _ResourceLimitExceeded
+
+
 def summarize_handoff_packet(
     packet: Mapping[str, Any],
     *,
@@ -154,12 +224,15 @@ def summarize_handoff_packet(
     """Return a deterministic, safety-complete summary for a handoff packet.
 
     The merged #265 validator remains the sole packet-validity authority. After
-    validation, this renderer applies a separate fail-closed display boundary so
-    hostile values cannot become trusted output or leak through formatting.
+    validation, this renderer applies a separate fail-closed display and resource
+    boundary; that boundary does not redefine packet validity.
     """
     normalized_evidence = _normalize_evidence(evidence)
     effective_limit, options_safe = _normalize_list_limit(list_limit)
 
+    # The canonical validator intentionally operates on caller data. This narrow
+    # boundary contains hostile caller methods while preserving canonical
+    # ValueError behavior and allowing BaseException subclasses to propagate.
     try:
         assert_valid_handoff_packet(packet)
     except ValueError:
@@ -169,14 +242,19 @@ def summarize_handoff_packet(
             evidence=normalized_evidence,
             effective_list_limit=effective_limit,
             trust_reason=REASON_PACKET_CONTENT_UNSAFE,
+            failure_status=_UNSAFE_FAILURE_STATUS,
         )
 
+    budget = _ProcessingBudget()
     try:
-        core = _render_core(packet, effective_limit)
+        _preflight_top_level_lengths(packet, budget)
         source_fingerprint, fingerprint_safe = _fingerprint_value_with_safety(
             packet,
             version=SOURCE_FINGERPRINT_VERSION,
+            budget=budget,
+            source_pass=True,
         )
+        core = _render_core(packet, effective_limit, budget)
         packet_safe = core.safe and fingerprint_safe
         trust_status, trust_reason = _classify_trust(
             normalized_evidence,
@@ -191,13 +269,44 @@ def summarize_handoff_packet(
             actual_source_fingerprint=source_fingerprint,
             trust_status=trust_status,
             trust_reason=trust_reason,
+            budget=budget,
         )
-    except Exception:
+    except _ResourceLimitExceeded:
         return _build_failed_summary(
             evidence=normalized_evidence,
             effective_list_limit=effective_limit,
-            trust_reason=REASON_RENDERING_FAILURE,
+            trust_reason=REASON_PACKET_RESOURCE_LIMIT_EXCEEDED,
+            failure_status=_RESOURCE_FAILURE_STATUS,
         )
+
+
+def _preflight_top_level_lengths(
+    packet: Mapping[str, Any], budget: _ProcessingBudget
+) -> None:
+    """Reject oversized direct packet containers before content traversal."""
+    budget.visit(canonical=False)
+    if type(packet) is not dict:
+        return
+
+    direct_list_total = 0
+    for field in _LIST_PACKET_FIELDS:
+        budget.visit(canonical=False)
+        value = dict.__getitem__(packet, field)
+        if type(value) is list:
+            count = list.__len__(value)
+            if count > MAX_LIST_ENTRIES_PER_FIELD:
+                raise _ResourceLimitExceeded
+            direct_list_total += count
+            if direct_list_total > MAX_TOTAL_LIST_ENTRIES:
+                raise _ResourceLimitExceeded
+
+    compute_limits = dict.__getitem__(packet, "compute_limits")
+    if type(compute_limits) is dict:
+        compute_count = dict.__len__(compute_limits)
+        if compute_count > MAX_DICT_ENTRIES_PER_FIELD:
+            raise _ResourceLimitExceeded
+        if dict.__len__(packet) + compute_count > MAX_TOTAL_DICT_ENTRIES:
+            raise _ResourceLimitExceeded
 
 
 def _build_failed_summary(
@@ -205,12 +314,10 @@ def _build_failed_summary(
     evidence: _NormalizedEvidence,
     effective_list_limit: int,
     trust_reason: str,
+    failure_status: str,
 ) -> RenderedHandoffSummary:
     core = _render_failed_core()
-    source_fingerprint = _fingerprint_value(
-        {"status": "unsafe-rendering-input"},
-        version=SOURCE_FINGERPRINT_VERSION,
-    )
+    source_fingerprint = _fixed_failure_fingerprint(failure_status)
     return _assemble_result(
         core_text=core.text,
         effective_list_limit=effective_list_limit,
@@ -218,6 +325,7 @@ def _build_failed_summary(
         actual_source_fingerprint=source_fingerprint,
         trust_status=TRUST_UNVERIFIABLE,
         trust_reason=trust_reason,
+        budget=None,
     )
 
 
@@ -229,6 +337,7 @@ def _assemble_result(
     actual_source_fingerprint: str,
     trust_status: str,
     trust_reason: str | None,
+    budget: _ProcessingBudget | None,
 ) -> RenderedHandoffSummary:
     summary_fingerprint = _build_summary_fingerprint(
         core_text=core_text,
@@ -237,6 +346,7 @@ def _assemble_result(
         actual_source_fingerprint=actual_source_fingerprint,
         trust_status=trust_status,
         trust_reason=trust_reason,
+        budget=budget,
     )
     full_text = _build_full_text(
         core_text=core_text,
@@ -258,6 +368,7 @@ def _assemble_result(
         trust_status=trust_status,
         trust_reason=trust_reason,
     )
+
 
 def _normalize_evidence(evidence: RenderingEvidence | None) -> _NormalizedEvidence:
     if evidence is None:
@@ -365,7 +476,9 @@ def _classify_trust(
     return TRUST_CURRENT, None
 
 
-def _render_core(packet: Mapping[str, Any], limit: int) -> _RenderedCore:
+def _render_core(
+    packet: Mapping[str, Any], limit: int, budget: _ProcessingBudget
+) -> _RenderedCore:
     if type(packet) is not dict:
         return _render_failed_core()
 
@@ -378,7 +491,7 @@ def _render_core(packet: Mapping[str, Any], limit: int) -> _RenderedCore:
         ("Branch", "branch"),
         ("PR number", "pr_number"),
     ):
-        rendered, value_safe = _render_scalar(dict.__getitem__(packet, key))
+        rendered, value_safe = _render_scalar(dict.__getitem__(packet, key), budget)
         lines.append(f"{label}: {rendered}")
         safe = safe and value_safe
 
@@ -396,17 +509,20 @@ def _render_core(packet: Mapping[str, Any], limit: int) -> _RenderedCore:
             label,
             dict.__getitem__(packet, key),
             limit,
+            budget,
         ) and safe
 
     safe = _append_compute_limits(
         lines,
         dict.__getitem__(packet, "compute_limits"),
+        budget,
     ) and safe
     safe = _append_list_section(
         lines,
         "Stop conditions",
         dict.__getitem__(packet, "stop_conditions"),
         limit,
+        budget,
     ) and safe
 
     return _RenderedCore(text="\n".join(lines), safe=safe)
@@ -445,8 +561,10 @@ def _append_list_section(
     title: str,
     values: Sequence[Any],
     limit: int,
+    budget: _ProcessingBudget,
 ) -> bool:
     lines.append(f"{title}:")
+    budget.visit(canonical=False)
     if type(values) is not list:
         lines.append(f"- {_INVALID_DISPLAY}")
         return False
@@ -455,7 +573,8 @@ def _append_list_section(
     count = list.__len__(values)
     displayed_count = min(limit, count)
     for index in range(displayed_count):
-        rendered, value_safe = _render_scalar(list.__getitem__(values, index))
+        budget.visit(canonical=False)
+        rendered, value_safe = _render_scalar(list.__getitem__(values, index), budget)
         lines.append(f"- {rendered}")
         safe = safe and value_safe
 
@@ -465,39 +584,48 @@ def _append_list_section(
     return safe
 
 
-def _append_compute_limits(lines: list[str], values: Mapping[str, Any]) -> bool:
+def _append_compute_limits(
+    lines: list[str], values: Mapping[str, Any], budget: _ProcessingBudget
+) -> bool:
     lines.append("Compute limits:")
+    budget.visit(canonical=False)
     if type(values) is not dict:
         lines.append(f"- {_INVALID_DISPLAY}")
         return False
 
-    items = list(dict.items(values))
+    count = dict.__len__(values)
+    displayed_count = min(count, MAX_COMPUTE_LIMIT_ENTRIES)
     safe = True
-    for key, value in items[:MAX_COMPUTE_LIMIT_ENTRIES]:
-        rendered_key, key_safe = _render_text_value(key)
-        rendered_value, value_safe = _render_scalar(value)
+    iterator = iter(dict.items(values))
+    for _ in range(displayed_count):
+        budget.visit(canonical=False)
+        key, value = next(iterator)
+        rendered_key, key_safe = _render_text_value(key, budget)
+        rendered_value, value_safe = _render_scalar(value, budget)
         lines.append(f"- {rendered_key}: {rendered_value}")
         safe = safe and key_safe and value_safe
 
-    remaining = len(items) - min(len(items), MAX_COMPUTE_LIMIT_ENTRIES)
+    remaining = count - displayed_count
     if remaining > 0:
         lines.append(f"...and {remaining} more compute limits")
     return safe
 
 
-def _render_scalar(value: Any) -> tuple[str, bool]:
+def _render_scalar(value: Any, budget: _ProcessingBudget) -> tuple[str, bool]:
+    budget.visit(canonical=False)
     if value is None:
         return "None", True
     if type(value) is str:
         return _bounded_text(value), True
     if type(value) is bool:
         return "True" if value else "False", True
-    if type(value) is int and value.bit_length() <= MAX_SAFE_INTEGER_BITS:
+    if type(value) is int and value.bit_length() <= MAX_INTEGER_BITS:
         return str(value), True
     return _INVALID_DISPLAY, False
 
 
-def _render_text_value(value: Any) -> tuple[str, bool]:
+def _render_text_value(value: Any, budget: _ProcessingBudget) -> tuple[str, bool]:
+    budget.visit(canonical=False)
     if type(value) is str:
         return _bounded_text(value), True
     return _INVALID_DISPLAY, False
@@ -538,6 +666,7 @@ def _build_summary_fingerprint(
     actual_source_fingerprint: str,
     trust_status: str,
     trust_reason: str | None,
+    budget: _ProcessingBudget | None,
 ) -> str:
     template = _build_full_text(
         core_text=core_text,
@@ -553,7 +682,12 @@ def _build_summary_fingerprint(
         "effective_list_limit": effective_list_limit,
         "rendered_text_template": template,
     }
-    return _fingerprint_value(payload, version=SUMMARY_FINGERPRINT_VERSION)
+    if budget is not None:
+        budget.visit(canonical=False, count=9)
+    return _fingerprint_internal_payload(
+        payload,
+        version=SUMMARY_FINGERPRINT_VERSION,
+    )
 
 
 def _build_full_text(
@@ -587,104 +721,185 @@ def _display_normalized(value: str | None) -> str:
     return _bounded_text(value) if value is not None else _INVALID_DISPLAY
 
 
-def _fingerprint_value(value: Any, *, version: str = SOURCE_FINGERPRINT_VERSION) -> str:
-    digest, _ = _fingerprint_value_with_safety(value, version=version)
-    return digest
+def _fingerprint_value(
+    value: Any, *, version: str = SOURCE_FINGERPRINT_VERSION
+) -> str:
+    try:
+        digest, _ = _fingerprint_value_with_safety(
+            value,
+            version=version,
+            budget=_ProcessingBudget(),
+            source_pass=True,
+        )
+        return digest
+    except _ResourceLimitExceeded:
+        return _fixed_failure_fingerprint(_RESOURCE_FAILURE_STATUS)
 
 
-def _fingerprint_value_with_safety(value: Any, *, version: str) -> tuple[str, bool]:
-    canonical, safe = _to_canonical(value, seen=set(), depth=0)
+def _fingerprint_value_with_safety(
+    value: Any,
+    *,
+    version: str,
+    budget: _ProcessingBudget,
+    source_pass: bool,
+) -> tuple[str, bool]:
+    canonical, safe = _canonical_bytes(
+        value,
+        budget=budget,
+        seen=set(),
+        depth=0,
+        source_pass=source_pass,
+    )
+    version_bytes = version.encode("utf-8")
+    framed = _bounded_frame(b"fingerprint", (version_bytes, canonical))
+    if len(framed) > MAX_FINGERPRINT_INPUT_BYTES:
+        raise _ResourceLimitExceeded
+    digest = hashlib.sha256()
+    digest.update(framed)
+    return digest.hexdigest(), safe
+
+
+def _canonical_bytes(
+    value: Any,
+    *,
+    budget: _ProcessingBudget,
+    seen: set[int],
+    depth: int,
+    source_pass: bool,
+) -> tuple[bytes, bool]:
+    if depth > MAX_CANONICAL_DEPTH:
+        raise _ResourceLimitExceeded
+
+    budget.visit(canonical=source_pass)
+
+    if value is None:
+        return b"none", True
+    if type(value) is bool:
+        return b"bool:1" if value else b"bool:0", True
+    if type(value) is int:
+        if value.bit_length() > MAX_INTEGER_BITS:
+            raise _ResourceLimitExceeded
+        encoded = str(value).encode("ascii")
+        return _bounded_frame(b"int", (encoded,)), True
+    if type(value) is str:
+        if len(value) > MAX_STRING_CHARS:
+            raise _ResourceLimitExceeded
+        try:
+            encoded = value.encode("utf-8")
+        except UnicodeEncodeError:
+            return b"invalid-string", False
+        budget.add_string_bytes(len(encoded))
+        char_count = str(len(value)).encode("ascii")
+        return _bounded_frame(b"str", (char_count, encoded)), True
+
+    if type(value) is list:
+        count = list.__len__(value)
+        budget.add_list_entries(count)
+        identity = id(value)
+        if identity in seen:
+            return b"invalid-cycle", False
+        seen.add(identity)
+        safe = True
+        parts: list[bytes] = [str(count).encode("ascii")]
+        try:
+            for index in range(count):
+                budget.visit(canonical=source_pass)
+                item_bytes, item_safe = _canonical_bytes(
+                    list.__getitem__(value, index),
+                    budget=budget,
+                    seen=seen,
+                    depth=depth + 1,
+                    source_pass=source_pass,
+                )
+                parts.append(item_bytes)
+                safe = safe and item_safe
+        finally:
+            seen.remove(identity)
+        return _bounded_frame(b"list", tuple(parts)), safe
+
+    if type(value) is dict:
+        count = dict.__len__(value)
+        budget.add_dict_entries(count)
+        identity = id(value)
+        if identity in seen:
+            return b"invalid-cycle", False
+        seen.add(identity)
+        safe = True
+        entries: list[bytes] = []
+        try:
+            for key, item in dict.items(value):
+                budget.visit(canonical=source_pass)
+                key_bytes, key_safe = _canonical_bytes(
+                    key,
+                    budget=budget,
+                    seen=seen,
+                    depth=depth + 1,
+                    source_pass=source_pass,
+                )
+                item_bytes, item_safe = _canonical_bytes(
+                    item,
+                    budget=budget,
+                    seen=seen,
+                    depth=depth + 1,
+                    source_pass=source_pass,
+                )
+                entries.append(_bounded_frame(b"entry", (key_bytes, item_bytes)))
+                safe = safe and key_safe and item_safe
+        finally:
+            seen.remove(identity)
+        entries.sort()
+        return _bounded_frame(
+            b"dict",
+            (str(count).encode("ascii"), *entries),
+        ), safe
+
+    return b"invalid-value", False
+
+
+def _bounded_frame(tag: bytes, parts: tuple[bytes, ...]) -> bytes:
+    output = bytearray()
+
+    def append(chunk: bytes) -> None:
+        if len(output) + len(chunk) > MAX_CANONICAL_SERIALIZED_BYTES:
+            raise _ResourceLimitExceeded
+        output.extend(chunk)
+
+    append(tag)
+    append(b"[")
+    for part in parts:
+        length = str(len(part)).encode("ascii")
+        append(length)
+        append(b":")
+        append(part)
+    append(b"]")
+    return bytes(output)
+
+
+def _fingerprint_internal_payload(payload: dict[str, Any], *, version: str) -> str:
     encoded = json.dumps(
-        {"version": version, "value": canonical},
+        {"version": version, "value": payload},
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=True,
-    )
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest(), safe
-
-
-def _to_canonical(
-    value: Any,
-    *,
-    seen: set[int],
-    depth: int,
-) -> tuple[Any, bool]:
-    if depth > MAX_CANONICAL_DEPTH:
-        return {"kind": "invalid-depth"}, False
-    if value is None:
-        return {"kind": "none"}, True
-    if type(value) is bool:
-        return {"kind": "bool", "value": value}, True
-    if type(value) is int:
-        if value.bit_length() > MAX_SAFE_INTEGER_BITS:
-            return {"kind": "invalid-integer", "bits": value.bit_length()}, False
-        return {"kind": "int", "value": str(value)}, True
-    if type(value) is str:
-        return {
-            "kind": "str",
-            "length": len(value),
-            "sha256": _hash_exact_text(value),
-        }, True
-
-    if type(value) in (list, tuple):
-        identity = id(value)
-        if identity in seen:
-            return {"kind": "invalid-cycle"}, False
-        seen.add(identity)
-        safe = True
-        items = []
-        for item in value:
-            canonical_item, item_safe = _to_canonical(
-                item,
-                seen=seen,
-                depth=depth + 1,
-            )
-            items.append(canonical_item)
-            safe = safe and item_safe
-        seen.remove(identity)
-        return {"kind": "list", "items": items}, safe
-
-    if type(value) is dict:
-        identity = id(value)
-        if identity in seen:
-            return {"kind": "invalid-cycle"}, False
-        seen.add(identity)
-        safe = True
-        sortable_entries = []
-        for key, item in dict.items(value):
-            canonical_key, key_safe = _to_canonical(
-                key,
-                seen=seen,
-                depth=depth + 1,
-            )
-            canonical_item, item_safe = _to_canonical(
-                item,
-                seen=seen,
-                depth=depth + 1,
-            )
-            sort_key = json.dumps(
-                [canonical_key, canonical_item],
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=True,
-            )
-            sortable_entries.append((sort_key, canonical_key, canonical_item))
-            safe = safe and key_safe and item_safe
-        seen.remove(identity)
-        sortable_entries.sort(key=lambda entry: entry[0])
-        return {
-            "kind": "dict",
-            "entries": [
-                [canonical_key, canonical_item]
-                for _, canonical_key, canonical_item in sortable_entries
-            ],
-        }, safe
-
-    return {"kind": "invalid-value"}, False
-
-
-def _hash_exact_text(value: str) -> str:
+    ).encode("utf-8")
+    if len(encoded) > MAX_CANONICAL_SERIALIZED_BYTES:
+        raise _ResourceLimitExceeded
+    if len(encoded) > MAX_FINGERPRINT_INPUT_BYTES:
+        raise _ResourceLimitExceeded
     digest = hashlib.sha256()
-    for start in range(0, len(value), 4096):
-        digest.update(value[start : start + 4096].encode("utf-8"))
+    digest.update(encoded)
     return digest.hexdigest()
+
+
+def _fixed_failure_fingerprint(status: str) -> str:
+    payload = {
+        "source_fingerprint_version": SOURCE_FINGERPRINT_VERSION,
+        "status": status,
+    }
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()

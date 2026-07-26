@@ -7,18 +7,29 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from agent_memory_context_manager import (  # noqa: E402
-    build_handoff_packet,
-    summarize_handoff_packet,
-)
+from agent_memory_context_manager import build_handoff_packet, summarize_handoff_packet  # noqa: E402
 import agent_memory_context_manager.packet_summary as packet_summary  # noqa: E402
 from agent_memory_context_manager.packet_summary import (  # noqa: E402
+    MAX_CANONICAL_DEPTH,
+    MAX_CANONICAL_NODES,
+    MAX_CANONICAL_SERIALIZED_BYTES,
+    MAX_COMPUTE_LIMIT_ENTRIES,
+    MAX_DICT_ENTRIES_PER_FIELD,
     MAX_DISPLAY_VALUE_CHARS,
+    MAX_FINGERPRINT_INPUT_BYTES,
+    MAX_INTEGER_BITS,
+    MAX_LIST_ENTRIES_PER_FIELD,
+    MAX_STRING_CHARS,
     MAX_SUMMARY_LIST_LIMIT,
+    MAX_TOTAL_DICT_ENTRIES,
+    MAX_TOTAL_LIST_ENTRIES,
+    MAX_TOTAL_NODES,
+    MAX_TOTAL_STRING_BYTES,
     NON_AUTHORIZATION_NOTICE,
     RENDERER_VERSION,
     REASON_EVIDENCE_INVALID,
     REASON_PACKET_CONTENT_UNSAFE,
+    REASON_PACKET_RESOURCE_LIMIT_EXCEEDED,
     REASON_PRODUCER_INVALID,
     REASON_PROVENANCE_CONTRADICTORY,
     REASON_PROVENANCE_DETACHED,
@@ -212,8 +223,9 @@ def test_invalid_list_limit_fails_closed_without_invoking_object_methods():
 
 
 def test_empty_safety_sections_remain_visible():
-    packet = sample_packet(forbidden_unless_needed=[], acceptance_criteria=[])
-    result = summarize_handoff_packet(packet)
+    result = summarize_handoff_packet(
+        sample_packet(forbidden_unless_needed=[], acceptance_criteria=[])
+    )
     assert "Forbidden unless needed:" in result.text
     assert "Acceptance criteria:" in result.text
 
@@ -298,11 +310,7 @@ def test_notice_change_changes_summary_fingerprint(monkeypatch):
 def test_notice_version_change_changes_summary_fingerprint(monkeypatch):
     packet = sample_packet()
     baseline = summarize_handoff_packet(packet, evidence=current_evidence(packet))
-    monkeypatch.setattr(
-        packet_summary,
-        "NON_AUTHORIZATION_NOTICE_VERSION",
-        "non-authorization-v3",
-    )
+    monkeypatch.setattr(packet_summary, "NON_AUTHORIZATION_NOTICE_VERSION", "v-next")
     changed = summarize_handoff_packet(packet, evidence=current_evidence(packet))
     assert baseline.summary_fingerprint != changed.summary_fingerprint
 
@@ -328,12 +336,30 @@ def test_notice_version_change_changes_summary_fingerprint(monkeypatch):
 def test_every_canonical_packet_field_changes_source_and_summary_fingerprint(
     field, replacement
 ):
-    base_packet = sample_packet()
-    changed_packet = sample_packet(**{field: replacement})
-    base = summarize_handoff_packet(base_packet)
-    changed = summarize_handoff_packet(changed_packet)
+    base = summarize_handoff_packet(sample_packet())
+    changed = summarize_handoff_packet(sample_packet(**{field: replacement}))
     assert base.source_fingerprint != changed.source_fingerprint
     assert base.summary_fingerprint != changed.summary_fingerprint
+
+
+@pytest.mark.parametrize(
+    "left,right",
+    [
+        (None, "None"),
+        (True, 1),
+        (1, "1"),
+        ({1: "x"}, {"1": "x"}),
+        ("line\nvalue", "line\\nvalue"),
+    ],
+)
+def test_type_tagged_fingerprint_distinguishes_values(left, right):
+    assert packet_summary._fingerprint_value(left) != packet_summary._fingerprint_value(right)
+
+
+def test_dictionary_fingerprint_is_insertion_order_independent():
+    left = {"b": 2, "a": 1}
+    right = {"a": 1, "b": 2}
+    assert packet_summary._fingerprint_value(left) == packet_summary._fingerprint_value(right)
 
 
 # Trust-state behavior.
@@ -404,7 +430,7 @@ def test_provenance_states_fail_closed(provenance_status, reason):
     assert result.trust_reason == reason
 
 
-# Hostile evidence containment.
+# Hostile evidence and packet containment.
 @pytest.mark.parametrize(
     "field",
     [
@@ -448,9 +474,6 @@ def test_overlong_evidence_is_bounded_and_unverifiable():
     assert producer not in result.text
 
 
-# Hostile packet-content containment.
-
-
 def test_hostile_branch_value_cannot_escape_canonical_validation_boundary():
     packet = sample_packet()
     packet["branch"] = HostileStr("hostile-branch")
@@ -470,6 +493,7 @@ def test_malformed_exact_source_fingerprint_is_unverifiable_not_missing():
     )
     assert result.trust_status == TRUST_UNVERIFIABLE
     assert result.trust_reason == REASON_SOURCE_FINGERPRINT_INVALID
+
 
 def test_hostile_scalar_packet_value_is_bounded_and_fails_closed():
     packet = sample_packet()
@@ -513,10 +537,10 @@ def test_compute_limit_collection_is_capped_and_reports_omissions():
     for index in range(100):
         packet["compute_limits"][f"extra_{index}"] = index
     result = summarize_handoff_packet(packet)
-    compute_section = result.text.split("Compute limits:\n", 1)[1].split("\nStop conditions:", 1)[0]
-    rendered_entries = [line for line in compute_section.splitlines() if line.startswith("- ")]
-    assert len(rendered_entries) == packet_summary.MAX_COMPUTE_LIMIT_ENTRIES
-    assert "more compute limits" in compute_section
+    section = result.text.split("Compute limits:\n", 1)[1].split("\nStop conditions:", 1)[0]
+    rendered = [line for line in section.splitlines() if line.startswith("- ")]
+    assert len(rendered) == MAX_COMPUTE_LIMIT_ENTRIES
+    assert "more compute limits" in section
 
 
 def test_recursive_list_does_not_recurse_forever_and_fails_closed():
@@ -531,13 +555,174 @@ def test_recursive_list_does_not_recurse_forever_and_fails_closed():
 
 
 def test_long_and_multiline_values_are_bounded_and_cannot_inject_lines():
-    packet = sample_packet(objective="safe\nInjected: yes\r\n" + "x" * 10_000)
+    packet = sample_packet(objective="safe\nInjected: yes\r\n" + "x" * 1_000)
     result = summarize_handoff_packet(packet)
     objective_line = result.text.splitlines()[0]
     assert "\\nInjected: yes\\r\\n" in objective_line
     assert "\nInjected: yes" not in result.text
     assert "<truncated" in objective_line
     assert len(objective_line) < MAX_DISPLAY_VALUE_CHARS + 100
+
+
+# Authorized resource-limit contract.
+def test_resource_limit_constants_match_authorized_contract():
+    assert MAX_LIST_ENTRIES_PER_FIELD == 500
+    assert MAX_TOTAL_LIST_ENTRIES == 2_000
+    assert MAX_DICT_ENTRIES_PER_FIELD == 300
+    assert MAX_TOTAL_DICT_ENTRIES == 1_500
+    assert MAX_STRING_CHARS == 10_000
+    assert MAX_TOTAL_STRING_BYTES == 50_000
+    assert MAX_CANONICAL_NODES == 5_000
+    assert MAX_CANONICAL_DEPTH == 20
+    assert MAX_INTEGER_BITS == 1_024
+    assert MAX_CANONICAL_SERIALIZED_BYTES == 100_000
+    assert MAX_FINGERPRINT_INPUT_BYTES == 100_000
+    assert MAX_TOTAL_NODES == 10_000
+
+
+def assert_resource_failure(result):
+    assert result.trust_status == TRUST_UNVERIFIABLE
+    assert result.trust_reason == REASON_PACKET_RESOURCE_LIMIT_EXCEEDED
+    assert "Objective: <invalid>" in result.text
+    assert "context evidence only" in result.text
+    assert "0x" not in result.text
+
+
+def test_oversized_top_level_list_fails_before_fingerprinting(monkeypatch):
+    packet = sample_packet(changed_files=["x"] * (MAX_LIST_ENTRIES_PER_FIELD + 1))
+
+    def should_not_run(*args, **kwargs):
+        raise AssertionError("fingerprint traversal started")
+
+    monkeypatch.setattr(packet_summary, "_fingerprint_value_with_safety", should_not_run)
+    assert_resource_failure(summarize_handoff_packet(packet))
+
+
+def test_total_list_entry_budget_cannot_be_distributed_across_fields():
+    values = ["x"] * 251
+    packet = sample_packet(
+        changed_files=list(values),
+        allowed_inspect_first=list(values),
+        forbidden_unless_needed=list(values),
+        known_facts=list(values),
+        prior_decisions=list(values),
+        acceptance_criteria=list(values),
+        validation_commands=list(values),
+        stop_conditions=list(values),
+    )
+    assert_resource_failure(summarize_handoff_packet(packet))
+
+
+def test_oversized_compute_limit_dictionary_fails_before_display_materialization():
+    extras = {f"extra_{index}": index for index in range(MAX_DICT_ENTRIES_PER_FIELD)}
+    packet = sample_packet(compute_limits=extras)
+    assert dict.__len__(packet["compute_limits"]) > MAX_DICT_ENTRIES_PER_FIELD
+    assert_resource_failure(summarize_handoff_packet(packet))
+
+
+def test_per_string_character_limit_rejects_before_trusted_rendering():
+    secret = "s" * (MAX_STRING_CHARS + 1)
+    result = summarize_handoff_packet(sample_packet(objective=secret))
+    assert_resource_failure(result)
+    assert secret[:100] not in result.text
+
+
+def test_aggregate_utf8_byte_limit_fails_closed():
+    chunk = "é" * 4_500  # 9,000 UTF-8 bytes, within the per-string char limit.
+    packet = sample_packet(
+        changed_files=[chunk],
+        allowed_inspect_first=[chunk],
+        forbidden_unless_needed=[chunk],
+        known_facts=[chunk],
+        prior_decisions=[chunk],
+        acceptance_criteria=[chunk],
+    )
+    assert_resource_failure(summarize_handoff_packet(packet))
+
+
+def test_integer_bit_limit_fails_closed_before_string_conversion():
+    packet = sample_packet(pr_number=1 << MAX_INTEGER_BITS)
+    assert_resource_failure(summarize_handoff_packet(packet))
+
+
+def test_excessive_nested_depth_fails_closed():
+    nested = "leaf"
+    for _ in range(MAX_CANONICAL_DEPTH + 1):
+        nested = [nested]
+    packet = sample_packet(known_facts=[nested])
+    assert_resource_failure(summarize_handoff_packet(packet))
+
+
+def test_canonical_node_budget_fails_closed_on_wide_bounded_content():
+    nested_dicts = [
+        {f"a{index}": index, f"b{index}": index, f"c{index}": index}
+        for index in range(490)
+    ]
+    packet = sample_packet(known_facts=nested_dicts)
+    assert_resource_failure(summarize_handoff_packet(packet))
+
+
+def test_resource_failure_fingerprint_is_deterministic_and_domain_separated():
+    first = summarize_handoff_packet(
+        sample_packet(changed_files=["x"] * (MAX_LIST_ENTRIES_PER_FIELD + 1))
+    )
+    second = summarize_handoff_packet(
+        sample_packet(changed_files=["y"] * (MAX_LIST_ENTRIES_PER_FIELD + 1))
+    )
+    valid = summarize_handoff_packet(sample_packet())
+    assert first.source_fingerprint == second.source_fingerprint
+    assert first.summary_fingerprint == second.summary_fingerprint
+    assert first.source_fingerprint != valid.source_fingerprint
+    assert first.source_fingerprint != packet_summary._fixed_failure_fingerprint(
+        packet_summary._UNSAFE_FAILURE_STATUS
+    )
+
+
+def test_resource_failure_cannot_become_current_with_matching_fixed_fingerprint():
+    packet = sample_packet(changed_files=["x"] * (MAX_LIST_ENTRIES_PER_FIELD + 1))
+    fixed = packet_summary._fingerprint_value(packet)
+    evidence = RenderingEvidence(
+        producer="google-workspace-automation-engineer",
+        packet_schema_version=SUPPORTED_PACKET_SCHEMA_VERSION,
+        renderer_version=RENDERER_VERSION,
+        provenance_status="supplied",
+        source_fingerprint=fixed,
+    )
+    assert_resource_failure(summarize_handoff_packet(packet, evidence=evidence))
+
+
+def test_serialization_buffer_rejects_before_oversized_join():
+    with pytest.raises(packet_summary._ResourceLimitExceeded):
+        packet_summary._bounded_frame(
+            b"test",
+            (b"x" * MAX_CANONICAL_SERIALIZED_BYTES,),
+        )
+
+
+def test_internal_programming_error_is_not_masked(monkeypatch):
+    def broken(*args, **kwargs):
+        raise RuntimeError("internal defect")
+
+    monkeypatch.setattr(packet_summary, "_render_core", broken)
+    with pytest.raises(RuntimeError, match="internal defect"):
+        summarize_handoff_packet(sample_packet())
+
+
+@pytest.mark.parametrize("exception_type", [KeyboardInterrupt, SystemExit, GeneratorExit])
+def test_base_exceptions_propagate_from_validator(monkeypatch, exception_type):
+    def stop(*args, **kwargs):
+        raise exception_type()
+
+    monkeypatch.setattr(packet_summary, "assert_valid_handoff_packet", stop)
+    with pytest.raises(exception_type):
+        summarize_handoff_packet(sample_packet())
+
+
+def test_no_complete_compute_mapping_materialization_or_complete_packet_json_tree():
+    source = Path(packet_summary.__file__).read_text(encoding="utf-8")
+    assert "list(dict.items(" not in source
+    assert "list(values.items(" not in source
+    assert 'json.dumps(\n        {"version": version, "value": canonical}' not in source
 
 
 # Full notice coverage.
@@ -577,6 +762,14 @@ def test_complete_non_authorization_notice_present_for_every_trust_state(
         evidence=current_evidence(packet, **evidence_kwargs),
     )
     assert result.trust_status == trust_status
+    for fragment in NOTICE_FRAGMENTS:
+        assert fragment in result.text
+
+
+def test_complete_notice_present_for_resource_failure():
+    result = summarize_handoff_packet(
+        sample_packet(changed_files=["x"] * (MAX_LIST_ENTRIES_PER_FIELD + 1))
+    )
     for fragment in NOTICE_FRAGMENTS:
         assert fragment in result.text
 
