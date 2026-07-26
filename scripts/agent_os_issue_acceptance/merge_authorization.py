@@ -1,7 +1,7 @@
 """Pure-local, content-bound merge authorization evidence.
 
 This module extends the canonical approval and projection contracts with one
-exact-pull-request merge authorization layer.  It performs no retrieval,
+exact-pull-request merge authorization layer. It performs no retrieval,
 publication, merge, issue mutation, settings change, scheduling, or external I/O.
 """
 
@@ -16,11 +16,15 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
 
-from .approved_execution_projection import ApprovedExecutionProjection
+from .approved_execution_projection import (
+    ApprovedExecutionProjection,
+    build_approved_execution_projection,
+)
 from .approval_records import (
     ApprovalApplicabilityResult,
     ApprovalRecord,
     ApprovalState,
+    evaluate_approval_applicability,
 )
 
 MERGE_AUTHORIZATION_SCHEMA_VERSION = "1.0"
@@ -31,13 +35,14 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 _AUTHORIZATION_ID_RE = re.compile(r"^merge-authorization:[0-9a-f]{64}$")
 _REVISION_ID_RE = re.compile(r"^merge-authorization-revision:[0-9a-f]{64}$")
-_CHECK_ID_RE = re.compile(r"^merge-check:[0-9a-f]{64}$")
-_PR_EVIDENCE_ID_RE = re.compile(
-    r"^pull-request-merge-evidence:[0-9a-f]{64}$"
-)
+_PR_EVIDENCE_ID_RE = re.compile(r"^pull-request-merge-evidence:[0-9a-f]{64}$")
 _APPLICABILITY_ID_RE = re.compile(r"^approval-applicability:[0-9a-f]{64}$")
 _PROJECTION_ID_RE = re.compile(r"^approved-execution-projection:[0-9a-f]{64}$")
 _OBSERVATION_ID_RE = re.compile(r"^merge-execution-observation:[0-9a-f]{64}$")
+_APPROVAL_ID_RE = re.compile(r"^approval:[0-9a-f]{64}$")
+_APPROVAL_REVISION_RE = re.compile(r"^approval-revision:[0-9a-f]{64}$")
+_EVIDENCE_ID_RE = re.compile(r"^[a-z][a-z0-9-]{1,63}:[0-9a-f]{64}$")
+_REPOSITORY_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _MAX_TEXT_BYTES = 4096
 _MAX_ITEMS = 256
 
@@ -213,7 +218,7 @@ class PullRequestMergeEvidence:
         _positive_int(self.pull_request_number, "pull_request_number")
         _sha40(self.head_sha, "head_sha")
         _text(self.base_branch, "base_branch")
-        _text(self.base_sha_or_evidence_id, "base_sha_or_evidence_id")
+        _base_identity(self.base_sha_or_evidence_id)
         if not isinstance(self.draft, bool) or not isinstance(
             self.ready_for_review, bool
         ):
@@ -234,8 +239,7 @@ class PullRequestMergeEvidence:
         object.__setattr__(
             self, "required_tests", _strings(self.required_tests, "required_tests")
         )
-        checks = _checks(self.required_checks)
-        object.__setattr__(self, "required_checks", checks)
+        object.__setattr__(self, "required_checks", _checks(self.required_checks))
         if not isinstance(self.review_evidence, MergeReviewEvidence):
             raise TypeError("review_evidence must be MergeReviewEvidence")
         expected = _identity("pull-request-merge-evidence", _pr_payload(self))
@@ -255,6 +259,7 @@ class MergeAuthorizationBinding:
     approval_id: str
     approval_revision: str
     approval_applicability_identity: str
+    approval_expires_at: str | None
     approved_execution_projection_id: str
     changed_scope_fingerprint: str
     allowed_files: tuple[str, ...]
@@ -269,20 +274,17 @@ class MergeAuthorizationBinding:
         _positive_int(self.pull_request_number, "pull_request_number")
         _sha40(self.exact_head_sha, "exact_head_sha")
         _text(self.target_base_branch, "target_base_branch")
-        _text(self.base_sha_or_evidence_id, "base_sha_or_evidence_id")
+        _base_identity(self.base_sha_or_evidence_id)
         if self.permitted_merge_method not in _MERGE_METHODS:
             raise ValueError("unsupported permitted_merge_method")
-        _matches(self.approval_id, re.compile(r"^approval:[0-9a-f]{64}$"), "approval_id")
-        _matches(
-            self.approval_revision,
-            re.compile(r"^approval-revision:[0-9a-f]{64}$"),
-            "approval_revision",
-        )
+        _matches(self.approval_id, _APPROVAL_ID_RE, "approval_id")
+        _matches(self.approval_revision, _APPROVAL_REVISION_RE, "approval_revision")
         _matches(
             self.approval_applicability_identity,
             _APPLICABILITY_ID_RE,
             "approval_applicability_identity",
         )
+        _optional_timestamp(self.approval_expires_at, "approval_expires_at")
         _matches(
             self.approved_execution_projection_id,
             _PROJECTION_ID_RE,
@@ -323,9 +325,10 @@ class MergeAuthorizationRecord:
     authorizer_id: str
     decision_id: str
     decision_at: str
-    expires_at: str | None
+    expires_at: str
     supersedes_authorization_id: str | None
     revoked_authorization_id: str | None
+    consumed_observation_id: str | None
     emergency_override_reason: str | None
     emergency_override_audit_location: str | None
     reason_codes: tuple[str, ...]
@@ -344,7 +347,20 @@ class MergeAuthorizationRecord:
         _text(self.authorizer_id, "authorizer_id")
         _text(self.decision_id, "decision_id")
         decision_time = _timestamp(self.decision_at, "decision_at")
-        expiry_time = _optional_timestamp(self.expires_at, "expires_at")
+        expiry_time = _timestamp(self.expires_at, "expires_at")
+        if decision_time >= expiry_time and self.state is not MergeAuthorizationState.EXPIRED:
+            raise ValueError("non-expiry decision must occur before expires_at")
+        approval_expiry = _optional_timestamp(
+            self.binding.approval_expires_at, "approval_expires_at"
+        )
+        if approval_expiry is not None and expiry_time > approval_expiry:
+            raise ValueError("merge authorization cannot outlive approval")
+        if (
+            approval_expiry is not None
+            and decision_time >= approval_expiry
+            and self.state is not MergeAuthorizationState.EXPIRED
+        ):
+            raise ValueError("decision must occur before approval expiry")
         if self.revision_number == 1:
             if (
                 self.previous_revision is not None
@@ -367,19 +383,20 @@ class MergeAuthorizationRecord:
                 _AUTHORIZATION_ID_RE,
                 "revoked_authorization_id",
             )
+        if self.consumed_observation_id is not None:
+            _matches(
+                self.consumed_observation_id,
+                _OBSERVATION_ID_RE,
+                "consumed_observation_id",
+            )
         _override_pair(
             self.emergency_override_reason,
             self.emergency_override_audit_location,
             expiry_time,
         )
-        if expiry_time is not None:
-            if self.state is MergeAuthorizationState.EXPIRED:
-                if decision_time < expiry_time:
-                    raise ValueError("expired revision requires decision_at >= expires_at")
-            elif decision_time >= expiry_time:
-                raise ValueError("non-expiry decision must occur before expires_at")
-        elif self.state is MergeAuthorizationState.EXPIRED:
-            raise ValueError("expired revision requires expires_at")
+        if self.state is MergeAuthorizationState.EXPIRED:
+            if decision_time < expiry_time:
+                raise ValueError("expired revision requires decision_at >= expires_at")
         reasons = _reason_codes(self.reason_codes)
         required = _LIFECYCLE_REASON.get(self.state.value)
         lifecycle = set(reasons) & set(_LIFECYCLE_REASON.values())
@@ -390,16 +407,23 @@ class MergeAuthorizationRecord:
         if self.state is MergeAuthorizationState.PENDING and reasons:
             raise ValueError("pending candidate cannot carry reason codes")
         if self.state is MergeAuthorizationState.INVALIDATED:
-            if self.revoked_authorization_id != self.authorization_id:
+            if self.revoked_authorization_id not in {"", self.authorization_id}:
                 raise ValueError("invalidated revision must revoke its authorization")
         elif self.revoked_authorization_id is not None:
             raise ValueError("revoked_authorization_id requires invalidated state")
+        if self.state is MergeAuthorizationState.CONSUMED:
+            if self.consumed_observation_id is None:
+                raise ValueError("consumed revision requires observation identity")
+        elif self.consumed_observation_id is not None:
+            raise ValueError("consumed_observation_id requires consumed state")
         object.__setattr__(self, "reason_codes", reasons)
         object.__setattr__(self, "details", tuple(str(item) for item in self.details))
         expected_id = _authorization_id(self)
         if self.authorization_id and self.authorization_id != expected_id:
             raise ValueError("authorization_id does not match candidate content")
         object.__setattr__(self, "authorization_id", expected_id)
+        if self.state is MergeAuthorizationState.INVALIDATED:
+            object.__setattr__(self, "revoked_authorization_id", expected_id)
         expected_revision = _authorization_revision(self)
         if self.authorization_revision and self.authorization_revision != expected_revision:
             raise ValueError("authorization_revision does not match record content")
@@ -442,12 +466,21 @@ class MergeAuthorizationApplicabilityResult:
                 _PR_EVIDENCE_ID_RE,
                 "current_pull_request_evidence_id",
             )
-        object.__setattr__(
-            self,
-            "changed_bindings",
-            tuple(sorted(set(str(item) for item in self.changed_bindings))),
-        )
-        object.__setattr__(self, "reason_codes", _reason_codes(self.reason_codes))
+        changed = tuple(sorted(set(str(item) for item in self.changed_bindings)))
+        reasons = _reason_codes(self.reason_codes)
+        if self.status == "applicable":
+            if (
+                self.authorization_id is None
+                or self.authorization_revision is None
+                or self.current_pull_request_evidence_id is None
+                or changed
+                or reasons
+            ):
+                raise ValueError("applicable result requires exact identifiers and no drift")
+        elif not reasons:
+            raise ValueError("non-applicable result requires reason codes")
+        object.__setattr__(self, "changed_bindings", changed)
+        object.__setattr__(self, "reason_codes", reasons)
         object.__setattr__(self, "details", tuple(str(item) for item in self.details))
 
 
@@ -482,7 +515,7 @@ class MergeExecutionObservation:
         _repository(self.repository)
         _positive_int(self.pull_request_number, "pull_request_number")
         _sha40(self.observed_head_sha, "observed_head_sha")
-        _text(self.observed_base_identity, "observed_base_identity")
+        _base_identity(self.observed_base_identity)
         if self.observed_merge_method not in _MERGE_METHODS:
             raise ValueError("unsupported observed_merge_method")
         _sha40(self.observed_merge_commit_sha, "observed_merge_commit_sha")
@@ -503,27 +536,48 @@ def build_merge_authorization_candidate(
     approved_execution_projection: ApprovedExecutionProjection,
     pull_request_evidence: PullRequestMergeEvidence,
     *,
+    current_proposal: object,
+    current_issueplan_evidence: object,
+    current_repository_state_evidence: object,
     authorizer_id: str,
     decision_id: str,
     decision_at: str,
-    expires_at: str | None = None,
+    expires_at: str,
     permitted_merge_method: str | None = None,
     supersedes: MergeAuthorizationRecord | None = None,
     emergency_override_reason: str | None = None,
     emergency_override_audit_location: str | None = None,
 ) -> MergeAuthorizationRecord:
+    if expires_at is None:
+        raise ValueError("merge authorization requires expires_at")
     binding, reasons, details = _current_binding(
         approval_record,
         approval_applicability,
         approved_execution_projection,
         pull_request_evidence,
+        current_proposal=current_proposal,
+        current_issueplan_evidence=current_issueplan_evidence,
+        current_repository_state_evidence=current_repository_state_evidence,
+        evaluated_at=decision_at,
         permitted_merge_method=permitted_merge_method,
     )
     if reasons:
         raise ValueError(
-            "merge authorization candidate requires current eligible evidence: "
+            "merge authorization candidate requires canonical eligible evidence: "
             + ",".join((*reasons, *details))
         )
+    decision_time = _timestamp(decision_at, "decision_at")
+    expiry_time = _timestamp(expires_at, "expires_at")
+    if decision_time >= expiry_time:
+        raise ValueError("merge authorization must expire after candidate decision")
+    approval_expiry = _optional_timestamp(
+        binding.approval_expires_at, "approval_expires_at"
+    )
+    if approval_expiry is not None:
+        if decision_time >= approval_expiry:
+            raise ValueError("candidate decision must occur before approval expiry")
+        if expiry_time > approval_expiry:
+            raise ValueError("merge authorization cannot outlive approval")
     prior_id = None
     if supersedes is not None:
         prior = _verified(supersedes, MergeAuthorizationRecord)
@@ -535,9 +589,7 @@ def build_merge_authorization_candidate(
             MergeAuthorizationState.SUPERSEDED,
         }:
             raise ValueError("replacement candidate requires terminal prior authorization")
-        if _timestamp(decision_at, "decision_at") < _timestamp(
-            prior.decision_at, "prior decision_at"
-        ):
+        if decision_time < _timestamp(prior.decision_at, "prior decision_at"):
             raise ValueError("replacement candidate cannot predate prior authorization")
         prior_id = prior.authorization_id
     return MergeAuthorizationRecord(
@@ -554,6 +606,7 @@ def build_merge_authorization_candidate(
         expires_at=expires_at,
         supersedes_authorization_id=prior_id,
         revoked_authorization_id=None,
+        consumed_observation_id=None,
         emergency_override_reason=emergency_override_reason,
         emergency_override_audit_location=emergency_override_audit_location,
         reason_codes=(),
@@ -583,7 +636,6 @@ def record_merge_authorization_decision(
         MergeAuthorizationState.AUTHORIZED: {
             MergeAuthorizationState.EXPIRED,
             MergeAuthorizationState.INVALIDATED,
-            MergeAuthorizationState.CONSUMED,
             MergeAuthorizationState.SUPERSEDED,
         },
     }
@@ -594,12 +646,18 @@ def record_merge_authorization_decision(
     decision_time = _timestamp(decision_at, "decision_at")
     if decision_time < _timestamp(current.decision_at, "current decision_at"):
         raise ValueError("decision revisions cannot move backward in time")
-    expiry_time = _optional_timestamp(current.expires_at, "expires_at")
+    expiry_time = _timestamp(current.expires_at, "expires_at")
+    approval_expiry = _optional_timestamp(
+        current.binding.approval_expires_at, "approval_expires_at"
+    )
     if target is MergeAuthorizationState.EXPIRED:
-        if expiry_time is None or decision_time < expiry_time:
+        if decision_time < expiry_time:
             raise ValueError("expired revision requires decision_at >= expires_at")
-    elif expiry_time is not None and decision_time >= expiry_time:
-        raise ValueError("non-expiry decision must occur before expires_at")
+    else:
+        if decision_time >= expiry_time:
+            raise ValueError("non-expiry decision must occur before expires_at")
+        if approval_expiry is not None and decision_time >= approval_expiry:
+            raise ValueError("decision must occur before approval expiry")
     reasons = set(_reason_codes(reason_codes))
     lifecycle = _LIFECYCLE_REASON.get(target.value)
     if lifecycle is not None:
@@ -619,6 +677,7 @@ def record_merge_authorization_decision(
         expires_at=current.expires_at,
         supersedes_authorization_id=current.supersedes_authorization_id,
         revoked_authorization_id=revoked,
+        consumed_observation_id=None,
         emergency_override_reason=current.emergency_override_reason,
         emergency_override_audit_location=current.emergency_override_audit_location,
         reason_codes=tuple(sorted(reasons)),
@@ -633,6 +692,9 @@ def evaluate_merge_authorization_applicability(
     current_approved_execution_projection: ApprovedExecutionProjection,
     current_pull_request_evidence: PullRequestMergeEvidence,
     *,
+    current_proposal: object,
+    current_issueplan_evidence: object,
+    current_repository_state_evidence: object,
     evaluated_at: str,
     invalidation_events: Iterable[str] = (),
 ) -> MergeAuthorizationApplicabilityResult:
@@ -683,6 +745,10 @@ def evaluate_merge_authorization_applicability(
             current_approval_applicability,
             current_approved_execution_projection,
             current_pr,
+            current_proposal=current_proposal,
+            current_issueplan_evidence=current_issueplan_evidence,
+            current_repository_state_evidence=current_repository_state_evidence,
+            evaluated_at=evaluated_at,
             permitted_merge_method=current_pr.proposed_merge_method,
         )
     except (TypeError, ValueError) as exc:
@@ -713,9 +779,13 @@ def evaluate_merge_authorization_applicability(
             reasons.add(lifecycle)
     if authorization.revoked_authorization_id is not None:
         reasons.add("authorization.revoked")
-    expiry_time = _optional_timestamp(authorization.expires_at, "expires_at")
-    if expiry_time is not None and evaluation_time >= expiry_time:
+    if evaluation_time >= _timestamp(authorization.expires_at, "expires_at"):
         reasons.add("authorization.expired")
+    approval_expiry = _optional_timestamp(
+        current_approval_record.expires_at, "approval_expires_at"
+    )
+    if approval_expiry is not None and evaluation_time >= approval_expiry:
+        reasons.add("approval.expired")
     status = _status_for_reasons(reasons)
     if status == "applicable" and (
         changed or authorization.state is not MergeAuthorizationState.AUTHORIZED
@@ -743,12 +813,12 @@ def record_merge_execution_observation(
     audit_location: str,
     observed_merge_method: str,
     linked_issue_closure_observed: bool = False,
-) -> MergeExecutionObservation:
+) -> tuple[MergeExecutionObservation, MergeAuthorizationRecord]:
     authorization = _verified(authorization_record, MergeAuthorizationRecord)
     result = _verified(applicability, MergeAuthorizationApplicabilityResult)
     current_pr = _verified(pull_request_evidence, PullRequestMergeEvidence)
     if authorization.state is not MergeAuthorizationState.AUTHORIZED:
-        raise ValueError("merge observation requires an authorized record")
+        raise ValueError("merge observation requires an authorized current revision")
     if (
         result.status != "applicable"
         or not result.merge_authorized
@@ -766,10 +836,14 @@ def record_merge_execution_observation(
     observed_time = _timestamp(observed_at, "observed_at")
     if observed_time < _timestamp(authorization.decision_at, "decision_at"):
         raise ValueError("merge observation cannot predate authorization")
-    expiry_time = _optional_timestamp(authorization.expires_at, "expires_at")
-    if expiry_time is not None and observed_time >= expiry_time:
+    if observed_time >= _timestamp(authorization.expires_at, "expires_at"):
         raise ValueError("merge observation cannot consume expired authorization")
-    return MergeExecutionObservation(
+    approval_expiry = _optional_timestamp(
+        authorization.binding.approval_expires_at, "approval_expires_at"
+    )
+    if approval_expiry is not None and observed_time >= approval_expiry:
+        raise ValueError("merge observation cannot consume expired approval")
+    observation = MergeExecutionObservation(
         schema_version=MERGE_EXECUTION_OBSERVATION_SCHEMA_VERSION,
         observation_id="",
         authorization_id=authorization.authorization_id,
@@ -785,11 +859,30 @@ def record_merge_execution_observation(
         audit_location=audit_location,
         linked_issue_closure_observed=linked_issue_closure_observed,
     )
+    consumed = MergeAuthorizationRecord(
+        schema_version=authorization.schema_version,
+        authorization_id=authorization.authorization_id,
+        authorization_revision="",
+        revision_number=authorization.revision_number + 1,
+        previous_revision=authorization.authorization_revision,
+        state=MergeAuthorizationState.CONSUMED,
+        binding=authorization.binding,
+        authorizer_id=observed_actor_id,
+        decision_id=f"merge-observation-{observation.observation_id.split(':', 1)[1]}",
+        decision_at=observed_at,
+        expires_at=authorization.expires_at,
+        supersedes_authorization_id=authorization.supersedes_authorization_id,
+        revoked_authorization_id=None,
+        consumed_observation_id=observation.observation_id,
+        emergency_override_reason=authorization.emergency_override_reason,
+        emergency_override_audit_location=authorization.emergency_override_audit_location,
+        reason_codes=("authorization.consumed",),
+        details=("merge-execution-observed",),
+    )
+    return observation, consumed
 
 
-def approval_applicability_identity(
-    result: ApprovalApplicabilityResult,
-) -> str:
+def approval_applicability_identity(result: ApprovalApplicabilityResult) -> str:
     verified = _verified(result, ApprovalApplicabilityResult)
     return _identity(
         "approval-applicability",
@@ -811,54 +904,92 @@ def _current_binding(
     projection: ApprovedExecutionProjection,
     pull_request: PullRequestMergeEvidence,
     *,
+    current_proposal: object,
+    current_issueplan_evidence: object,
+    current_repository_state_evidence: object,
+    evaluated_at: str,
     permitted_merge_method: str | None,
 ) -> tuple[MergeAuthorizationBinding, tuple[str, ...], tuple[str, ...]]:
     reasons: set[str] = set()
     details: list[str] = []
-    try:
-        approval = _verified(approval_record, ApprovalRecord)
-        applicability = _verified(approval_applicability, ApprovalApplicabilityResult)
-        projected = _verified(projection, ApprovedExecutionProjection)
-        pr = _verified(pull_request, PullRequestMergeEvidence)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"malformed merge-authorization input: {exc}") from exc
+    approval = _verified(approval_record, ApprovalRecord)
+    supplied_applicability = _verified(
+        approval_applicability, ApprovalApplicabilityResult
+    )
+    supplied_projection = _verified(projection, ApprovedExecutionProjection)
+    pr = _verified(pull_request, PullRequestMergeEvidence)
+    _timestamp(evaluated_at, "evaluated_at")
     method = permitted_merge_method or pr.proposed_merge_method
     if method not in _MERGE_METHODS:
         raise ValueError("unsupported permitted merge method")
+
+    canonical_applicability = evaluate_approval_applicability(
+        approval,
+        current_proposal,
+        current_issueplan_evidence,
+        current_repository_state_evidence,
+        evaluated_at=evaluated_at,
+    )
+    canonical_applicability = _verified(
+        canonical_applicability, ApprovalApplicabilityResult
+    )
+    if supplied_applicability != canonical_applicability:
+        reasons.add("approval.changed")
+        details.append("approval-applicability:mismatch")
     if approval.state is not ApprovalState.APPROVED:
         reasons.add("approval.not-approved")
-    if applicability.status != "applicable" or not applicability.approval_applicable:
-        reasons.add(
-            "approval.needs-decision"
-            if applicability.status == "needs-decision"
-            else "approval.not-applicable"
-        )
     if (
-        applicability.approval_id != approval.approval_id
-        or applicability.approval_revision != approval.approval_revision
-        or applicability.current_proposal_id != projected.proposal_id
+        canonical_applicability.status != "applicable"
+        or not canonical_applicability.approval_applicable
+    ):
+        _approval_result_reasons(canonical_applicability, reasons)
+    if (
+        canonical_applicability.approval_id != approval.approval_id
+        or canonical_applicability.approval_revision != approval.approval_revision
     ):
         reasons.add("approval.changed")
-    if (
-        projected.approval_id != approval.approval_id
-        or projected.approval_revision != approval.approval_revision
+
+    projection_result = build_approved_execution_projection(
+        proposal=current_proposal,
+        approval_record=approval,
+        approval_applicability=canonical_applicability,
+        issueplan_current_state_evidence=current_issueplan_evidence,
+        repository_state_evidence=current_repository_state_evidence,
+        projected_at=supplied_projection.projected_at,
+    )
+    canonical_projection = projection_result.projection
+    if projection_result.status != "complete" or canonical_projection is None:
+        reasons.add("projection.incomplete")
+        details.extend(
+            f"canonical-projection:{item}" for item in projection_result.reason_codes
+        )
+        effective_projection = supplied_projection
+    else:
+        effective_projection = canonical_projection
+        if supplied_projection != canonical_projection:
+            reasons.add("projection.changed")
+            details.append("approved-execution-projection:mismatch")
+
+    if effective_projection.approval_id != approval.approval_id or (
+        effective_projection.approval_revision != approval.approval_revision
     ):
         reasons.add("projection.changed")
-    if projected.repository != pr.repository:
+    if effective_projection.repository != pr.repository:
         reasons.add("pull-request.identity-changed")
-    if projected.base_branch != pr.base_branch:
+    if effective_projection.base_branch != pr.base_branch:
         reasons.add("pull-request.base-changed")
-    if projected.tested_repository_sha != pr.head_sha:
+    if effective_projection.tested_repository_sha != pr.head_sha:
         reasons.add("pull-request.head-changed")
-    if projected.allowed_files != pr.allowed_files:
+    if effective_projection.allowed_files != pr.allowed_files:
         reasons.add("contract.allowlist-changed")
-    if projected.forbidden_paths != pr.forbidden_paths:
+    if effective_projection.forbidden_paths != pr.forbidden_paths:
         reasons.add("contract.forbidden-paths-changed")
-    if projected.required_tests != pr.required_tests:
+    if effective_projection.required_tests != pr.required_tests:
         reasons.add("contract.required-tests-changed")
     reasons.update(_eligibility_reasons(pr))
     if method != pr.proposed_merge_method:
         reasons.add("merge.method-changed")
+
     binding = MergeAuthorizationBinding(
         repository=pr.repository,
         pull_request_number=pr.pull_request_number,
@@ -868,8 +999,11 @@ def _current_binding(
         permitted_merge_method=method,
         approval_id=approval.approval_id,
         approval_revision=approval.approval_revision,
-        approval_applicability_identity=approval_applicability_identity(applicability),
-        approved_execution_projection_id=projected.projection_id,
+        approval_applicability_identity=approval_applicability_identity(
+            canonical_applicability
+        ),
+        approval_expires_at=approval.expires_at,
+        approved_execution_projection_id=effective_projection.projection_id,
         changed_scope_fingerprint=pr.changed_scope_fingerprint,
         allowed_files=pr.allowed_files,
         forbidden_paths=pr.forbidden_paths,
@@ -878,7 +1012,24 @@ def _current_binding(
         review_evidence=pr.review_evidence,
         draft_ready_state="draft" if pr.draft else "ready",
     )
-    return binding, tuple(sorted(reasons)), tuple(details)
+    return binding, tuple(sorted(reasons)), tuple(sorted(set(details)))
+
+
+def _approval_result_reasons(
+    applicability: ApprovalApplicabilityResult, reasons: set[str]
+) -> None:
+    if "approval.expired" in applicability.reason_codes:
+        reasons.add("approval.expired")
+    if "approval.invalidated" in applicability.reason_codes:
+        reasons.add("approval.invalidated")
+    if "approval.superseded" in applicability.reason_codes:
+        reasons.add("approval.superseded")
+    if applicability.status == "needs-decision":
+        reasons.add("approval.needs-decision")
+    elif not reasons.intersection(
+        {"approval.expired", "approval.invalidated", "approval.superseded"}
+    ):
+        reasons.add("approval.not-applicable")
 
 
 def _eligibility_reasons(pr: PullRequestMergeEvidence) -> set[str]:
@@ -916,6 +1067,7 @@ def _binding_from_pr_and_record(
         approval_id=prior.approval_id,
         approval_revision=prior.approval_revision,
         approval_applicability_identity=prior.approval_applicability_identity,
+        approval_expires_at=prior.approval_expires_at,
         approved_execution_projection_id=prior.approved_execution_projection_id,
         changed_scope_fingerprint=pr.changed_scope_fingerprint,
         allowed_files=pr.allowed_files,
@@ -951,6 +1103,7 @@ def _binding_reasons(changed: Iterable[str]) -> set[str]:
         "approval_id": "approval.changed",
         "approval_revision": "approval.changed",
         "approval_applicability_identity": "approval.changed",
+        "approval_expires_at": "approval.changed",
         "approved_execution_projection_id": "projection.changed",
         "changed_scope_fingerprint": "contract.scope-changed",
         "allowed_files": "contract.allowlist-changed",
@@ -1002,7 +1155,11 @@ def _result(
 def _verified(value: Any, expected_type: type[Any]) -> Any:
     if not isinstance(value, expected_type):
         raise TypeError(f"expected {expected_type.__name__}")
-    kwargs = {item.name: getattr(value, item.name) for item in fields(expected_type) if item.init}
+    kwargs = {
+        item.name: getattr(value, item.name)
+        for item in fields(expected_type)
+        if item.init
+    }
     return expected_type(**kwargs)
 
 
@@ -1032,6 +1189,7 @@ def _authorization_revision(record: MergeAuthorizationRecord) -> str:
             "decision_id": record.decision_id,
             "decision_at": record.decision_at,
             "revoked_authorization_id": record.revoked_authorization_id,
+            "consumed_observation_id": record.consumed_observation_id,
             "reason_codes": record.reason_codes,
             "details": record.details,
         },
@@ -1142,14 +1300,16 @@ def _reason_codes(value: Iterable[str]) -> tuple[str, ...]:
     reasons = tuple(sorted(set(value)))
     unknown = set(reasons) - MERGE_AUTHORIZATION_REASON_CODES
     if unknown:
-        raise ValueError(f"unsupported merge-authorization reason codes: {sorted(unknown)}")
+        raise ValueError(
+            f"unsupported merge-authorization reason codes: {sorted(unknown)}"
+        )
     return reasons
 
 
 def _override_pair(
     reason: str | None,
     audit_location: str | None,
-    expiry_time: datetime | None,
+    expiry_time: datetime,
 ) -> None:
     if (reason is None) != (audit_location is None):
         raise ValueError("emergency override reason and audit location must be paired")
@@ -1162,14 +1322,30 @@ def _override_pair(
 
 def _repository(value: str) -> str:
     text = _text(value, "repository")
-    if text.count("/") != 1 or any(part in {"", ".", ".."} for part in text.split("/")):
+    if text.count("/") != 1:
         raise ValueError("repository must use owner/name form")
+    owner, name = text.split("/", 1)
+    if not _REPOSITORY_SEGMENT_RE.fullmatch(owner) or not _REPOSITORY_SEGMENT_RE.fullmatch(
+        name
+    ):
+        raise ValueError("repository must use canonical owner/name segments")
+    if owner in {".", ".."} or name in {".", ".."}:
+        raise ValueError("repository must use canonical owner/name segments")
+    return text
+
+
+def _base_identity(value: Any) -> str:
+    text = _text(value, "base_sha_or_evidence_id")
+    if not (_SHA40_RE.fullmatch(text) or _EVIDENCE_ID_RE.fullmatch(text)):
+        raise ValueError("base identity must be a full SHA or canonical evidence identity")
     return text
 
 
 def _text(value: Any, name: str) -> str:
     if not isinstance(value, str) or not value or "\x00" in value:
         raise ValueError(f"{name} must be non-empty NUL-free text")
+    if not value.strip() or value != value.strip():
+        raise ValueError(f"{name} must be canonical non-whitespace text")
     if len(value.encode("utf-8")) > _MAX_TEXT_BYTES:
         raise ValueError(f"{name} exceeds bounded byte length")
     return value
