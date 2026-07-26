@@ -39,12 +39,27 @@ and any write surface with unclear authorization.
 
 1. Read the GitHub Change Request.
 2. Confirm target repository, branch, files, owner, and acceptance criteria.
-3. Create or use a non-protected branch.
+3. Create or use a non-protected branch; verify state per Repository-State
+   Verification below.
 4. Change only approved files.
 5. Run available validation.
 6. Commit with a clear message.
 7. Open a draft pull request.
 8. Report files changed, tests run, docs updated, blockers, and risks.
+
+## Repository-State Verification
+
+When a local checkout is available, verify state with
+`scripts/verify-repo-state.sh` (usage: `scripts/verify-repo-state.md`)
+instead of reconstructing branch, fetch, retry, dirty-tree, switch, or
+fast-forward logic in a prompt. The GitHub Change Request or handoff supplies
+the target branch, base branch, and whether branch creation is authorized;
+pass `--create-from-base` only when creation is authorized.
+
+A nonzero exit is a fail-closed stop: report the diagnostic and halt. Do not
+bypass it with an ad hoc `git pull`, `reset`, `stash`, `clean`, `rebase`,
+force-update, or force-push. stderr is diagnostics; stdout is the evidence
+contract in `scripts/verify-repo-state-contract.md`.
 
 ## Branch Rules
 
@@ -75,9 +90,10 @@ GitHub scope.
 
 ## Version
 
-0.2.0
+0.3.0
 
 ## Changelog
 
+- 0.3.0 adds Repository-State Verification via `scripts/verify-repo-state.sh`.
 - 0.2.0 inherits shared protected-branch governance and removes duplicated policy.
 - 0.1.0 initial GitHub write-owner overlay.
