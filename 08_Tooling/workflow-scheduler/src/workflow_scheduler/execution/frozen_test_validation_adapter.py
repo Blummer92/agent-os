@@ -1,8 +1,8 @@
 """Bounded frozen-test validation for the existing ValidationAdapter contract.
 
 Commands are immutable argv data supplied at construction time and are executed
-only through an injected runner. This module owns no subprocess, worktree,
-network, persistence, retry, publication, or GitHub authority.
+only through an injected runner. This module owns no external execution,
+worktree, network, persistence, retry, publication, or GitHub authority.
 """
 
 from __future__ import annotations
@@ -136,11 +136,7 @@ class CommandRunRequest:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CommandRunObservation:
-    """One caller-supplied observation of a command attempt.
-
-    Output and runner-provided reasons are intentionally omitted from repr so a
-    normal debug representation does not disclose retained command evidence.
-    """
+    """One caller-supplied observation of a command attempt."""
 
     test_id: str
     outcome: CommandOutcome
@@ -228,30 +224,36 @@ class FrozenTestValidationResult:
     completed_tests: tuple[str, ...]
     changed_paths: tuple[str, ...]
     command_outcomes: tuple[CommandRunObservation, ...] = field(repr=False)
-    reason: str = ""
+    reason: str = field(default="", repr=False)
 
 
-def _truncate(text: str, *, max_bytes: int) -> tuple[str, bool]:
+def _normalize_utf8(text: str) -> tuple[str, bytes]:
     encoded = text.encode("utf-8", errors="replace")
+    return encoded.decode("utf-8", errors="strict"), encoded
+
+
+def _truncate(text: str, *, max_bytes: int) -> tuple[str, int, bool]:
+    normalized, encoded = _normalize_utf8(text)
     if len(encoded) <= max_bytes:
-        return text, False
-    return encoded[:max_bytes].decode("utf-8", errors="ignore"), True
+        return normalized, len(encoded), normalized != text
+    bounded = encoded[:max_bytes].decode("utf-8", errors="ignore")
+    return bounded, len(bounded.encode("utf-8")), True
 
 
 def _truncate_output_pair(stdout: str, stderr: str, *, max_bytes: int) -> tuple[str, str, bool]:
-    """Retain at most max_bytes total across stdout then stderr for one command."""
+    """Retain at most max_bytes total across normalized stdout then stderr."""
 
-    bounded_stdout, stdout_truncated = _truncate(stdout, max_bytes=max_bytes)
-    used = len(bounded_stdout.encode("utf-8"))
+    bounded_stdout, used, stdout_changed = _truncate(stdout, max_bytes=max_bytes)
     remaining = max(0, max_bytes - used)
-    bounded_stderr, stderr_truncated = _truncate(stderr, max_bytes=remaining)
+    bounded_stderr, _, stderr_changed = _truncate(stderr, max_bytes=remaining)
     if remaining == 0 and stderr:
-        stderr_truncated = True
-    return bounded_stdout, bounded_stderr, stdout_truncated or stderr_truncated
+        stderr_changed = True
+    return bounded_stdout, bounded_stderr, stdout_changed or stderr_changed
 
 
 def _bounded_reason(text: str) -> str:
-    return text[:MAX_REASON_LENGTH]
+    normalized, _ = _normalize_utf8(text)
+    return normalized[:MAX_REASON_LENGTH]
 
 
 def _validate_positive_bound(value: object, *, name: str, maximum: float) -> float:
@@ -353,13 +355,13 @@ def _normalize_observation(
         outcome = "timed-out"
         reason = "command exceeded its effective timeout"
 
-    stdout_text, stderr_text, output_truncated = _truncate_output_pair(
+    stdout_text, stderr_text, output_changed = _truncate_output_pair(
         observation.stdout_text,
         observation.stderr_text,
         max_bytes=max_output_bytes,
     )
-    if output_truncated:
-        reason = f"{reason} output-truncated".strip()
+    if output_changed:
+        reason = f"{reason} output-normalized-or-truncated".strip()
 
     return CommandRunObservation(
         test_id=command.test_id,
@@ -407,6 +409,11 @@ def run_frozen_test_validation(
     allowed = _validate_patterns(allowed_files, name="allowed_files")
     forbidden = _validate_patterns(forbidden_paths, name="forbidden_paths")
 
+    deadline = time.monotonic() + total_timeout
+
+    def remaining() -> float:
+        return deadline - time.monotonic()
+
     frozen_test_ids = tuple(command.test_id for command in commands)
     if supplied_required_tests != frozen_test_ids:
         return FrozenTestValidationResult(
@@ -426,10 +433,21 @@ def run_frozen_test_validation(
     completed: list[str] = []
     cancellation_requested = False
     total_timed_out = False
-    elapsed_total = 0.0
     hook_error: str | None = None
 
     for command in commands:
+        if remaining() <= 0:
+            total_timed_out = True
+            outcomes.append(
+                CommandRunObservation(
+                    test_id=command.test_id,
+                    outcome="timed-out",
+                    started=False,
+                    reason="total validation runtime budget was exhausted",
+                )
+            )
+            continue
+
         if cancellation_requested:
             outcomes.append(
                 CommandRunObservation(
@@ -457,6 +475,17 @@ def run_frozen_test_validation(
                     )
                 )
                 break
+            if remaining() <= 0:
+                total_timed_out = True
+                outcomes.append(
+                    CommandRunObservation(
+                        test_id=command.test_id,
+                        outcome="timed-out",
+                        started=False,
+                        reason="total validation runtime budget was exhausted during cancellation check",
+                    )
+                )
+                continue
             if type(cancellation_value) is not bool:
                 hook_error = "cancellation check returned a non-boolean value"
                 outcomes.append(
@@ -480,7 +509,7 @@ def run_frozen_test_validation(
                 )
                 continue
 
-        remaining_budget = total_timeout - elapsed_total
+        remaining_budget = remaining()
         if remaining_budget <= 0:
             total_timed_out = True
             outcomes.append(
@@ -504,8 +533,8 @@ def run_frozen_test_validation(
             raw_observation = runner.run(request)
         except _RECOVERABLE_RUNNER_EXCEPTIONS as exc:
             elapsed = time.monotonic() - started_at
-            elapsed_total += elapsed
-            if elapsed > effective_timeout:
+            if elapsed > effective_timeout or remaining() <= 0:
+                total_timed_out = remaining() <= 0
                 normalized = CommandRunObservation(
                     test_id=command.test_id,
                     outcome="timed-out",
@@ -521,7 +550,6 @@ def run_frozen_test_validation(
                 )
         else:
             elapsed = time.monotonic() - started_at
-            elapsed_total += elapsed
             normalized = _normalize_observation(
                 raw_observation,
                 command=command,
@@ -529,9 +557,19 @@ def run_frozen_test_validation(
                 effective_timeout=effective_timeout,
                 max_output_bytes=output_limit,
             )
+            if remaining() <= 0:
+                total_timed_out = True
+                normalized = CommandRunObservation(
+                    test_id=command.test_id,
+                    outcome="timed-out",
+                    started=normalized.started,
+                    return_code=normalized.return_code,
+                    stdout_text=normalized.stdout_text,
+                    stderr_text=normalized.stderr_text,
+                    changed_paths=normalized.changed_paths,
+                    reason="total validation runtime budget was exhausted",
+                )
 
-        if elapsed_total > total_timeout:
-            total_timed_out = True
         outcomes.append(normalized)
         if normalized.outcome == "succeeded":
             completed.append(command.test_id)
@@ -551,18 +589,29 @@ def run_frozen_test_validation(
     all_required_completed = tuple(completed) == frozen_test_ids
     changed_paths: tuple[str, ...] = ()
     path_error: str | None = None
+
     if all_required_completed and not cancellation_requested and not total_timed_out and hook_error is None:
         raw_paths: list[str] = []
         try:
             for outcome_item in outcomes:
                 for raw_path in outcome_item.changed_paths:
+                    if remaining() <= 0:
+                        raise TimeoutError("total validation runtime budget was exhausted during path collection")
                     if len(raw_paths) >= MAX_CHANGED_PATHS:
                         raise FrozenTestValidationError("changed paths exceed the bounded count")
                     raw_paths.append(raw_path)
             if changed_paths_inspector is not None:
+                if remaining() <= 0:
+                    raise TimeoutError("total validation runtime budget was exhausted before path inspection")
                 inspected = changed_paths_inspector()
-                remaining = MAX_CHANGED_PATHS - len(raw_paths)
-                raw_paths.extend(_collect_changed_paths(inspected, maximum=remaining))
+                if remaining() <= 0:
+                    raise TimeoutError("total validation runtime budget was exhausted during path inspection")
+                raw_paths.extend(
+                    _collect_changed_paths(inspected, maximum=MAX_CHANGED_PATHS - len(raw_paths))
+                )
+        except TimeoutError as exc:
+            total_timed_out = True
+            path_error = str(exc)
         except _RECOVERABLE_RUNNER_EXCEPTIONS as exc:
             path_error = _bounded_reason(
                 str(exc)
@@ -574,6 +623,10 @@ def run_frozen_test_validation(
             validated_paths: list[str] = []
             try:
                 for raw_path in raw_paths:
+                    if remaining() <= 0:
+                        raise TimeoutError(
+                            "total validation runtime budget was exhausted during path validation"
+                        )
                     validated_paths.append(
                         _validate_changed_path(
                             raw_path,
@@ -582,10 +635,16 @@ def run_frozen_test_validation(
                             forbidden_paths=forbidden,
                         )
                     )
+            except TimeoutError as exc:
+                total_timed_out = True
+                path_error = str(exc)
             except FrozenTestValidationError as exc:
                 path_error = _bounded_reason(str(exc))
             else:
                 changed_paths = tuple(validated_paths)
+
+    if remaining() <= 0:
+        total_timed_out = True
 
     passed = bool(
         all_required_completed
@@ -597,13 +656,13 @@ def run_frozen_test_validation(
 
     if hook_error is not None:
         reason = hook_error
+    elif total_timed_out:
+        reason = _bounded_reason(path_error or "total validation runtime budget was exhausted")
     elif not all_required_completed:
         missing = tuple(test_id for test_id in frozen_test_ids if test_id not in completed)
         reason = _bounded_reason("required tests did not complete: " + ",".join(missing))
     elif cancellation_requested:
         reason = "validation was cancelled before all required tests completed"
-    elif total_timed_out:
-        reason = "total validation runtime budget was exhausted"
     elif path_error is not None:
         reason = _bounded_reason(path_error)
     else:
