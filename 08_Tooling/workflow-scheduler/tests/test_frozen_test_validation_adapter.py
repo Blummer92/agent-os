@@ -520,6 +520,267 @@ def test_changed_paths_inspector_exception_is_fail_closed() -> None:
     assert observed.reason == "changed paths inspector failed"
 
 
+class CustomOperationalError(Exception):
+    """An ordinary operational failure outside the previously handled tuple."""
+
+
+ORDINARY_EXCEPTIONS = [Exception, KeyError, AssertionError, CustomOperationalError]
+PROCESS_CONTROL_EXCEPTIONS = [KeyboardInterrupt, SystemExit, GeneratorExit]
+
+SENTINEL_PATH = "src/secret-evidence-path.py"
+
+
+def assert_public_reason_is_stable(
+    observed: PilotValidationObservation,
+    *,
+    expected_reason: str,
+    error_type: type[BaseException],
+    secret: str,
+) -> None:
+    assert observed.attempted is True
+    assert observed.passed is False
+    assert observed.completed_tests == ()
+    assert observed.changed_paths == ()
+    assert observed.reason == expected_reason
+    for fragment in (secret, SENTINEL_PATH, error_type.__name__):
+        assert fragment not in observed.reason
+        assert fragment not in repr(observed)
+
+
+def assert_diagnostic_is_bounded(text: str, *, secret: str) -> None:
+    assert secret in text
+    assert len(text) <= MAX_REASON_LENGTH
+
+
+@pytest.mark.parametrize("error_type", ORDINARY_EXCEPTIONS)
+def test_ordinary_cancellation_probe_exception_fails_closed(
+    error_type: type[Exception],
+) -> None:
+    secret = f"CANCEL-{error_type.__name__}-{SENTINEL_PATH}"
+
+    def cancelled() -> bool:
+        raise error_type(secret)
+
+    runner = FakeRunner({"test-a": success("test-a")})
+    adapter = FrozenTestValidationAdapter(
+        required_test_commands=commands("test-a"),
+        runner=runner,
+        cancelled=cancelled,
+    )
+    observed = adapter.validate(request("test-a"))
+
+    assert_public_reason_is_stable(
+        observed,
+        expected_reason="cancellation check failed",
+        error_type=error_type,
+        secret=secret,
+    )
+    assert adapter.last_result is not None
+    assert_diagnostic_is_bounded(adapter.last_result.reason, secret=secret)
+    assert secret not in repr(adapter.last_result)
+    assert runner.calls == []
+
+
+@pytest.mark.parametrize("error_type", ORDINARY_EXCEPTIONS)
+def test_ordinary_runner_exception_fails_closed_without_retry(
+    error_type: type[Exception],
+) -> None:
+    secret = f"RUNNER-{error_type.__name__}-{SENTINEL_PATH}"
+    runner = FakeRunner({"test-a": error_type(secret)})
+    adapter = FrozenTestValidationAdapter(
+        required_test_commands=commands("test-a"), runner=runner
+    )
+    observed = adapter.validate(request("test-a"))
+
+    assert_public_reason_is_stable(
+        observed,
+        expected_reason="validation dependency unavailable",
+        error_type=error_type,
+        secret=secret,
+    )
+    assert adapter.last_result is not None
+    assert outcome(adapter).outcome == "unavailable"
+    assert outcome(adapter).started is False
+    assert_diagnostic_is_bounded(outcome(adapter).reason, secret=secret)
+    assert secret not in repr(outcome(adapter))
+    assert secret not in repr(adapter.last_result)
+    assert [item.test_id for item in runner.calls] == ["test-a"]
+
+
+@pytest.mark.parametrize("error_type", ORDINARY_EXCEPTIONS)
+def test_ordinary_inspector_exception_fails_closed(error_type: type[Exception]) -> None:
+    secret = f"INSPECTOR-{error_type.__name__}-{SENTINEL_PATH}"
+
+    def inspector() -> tuple[str, ...]:
+        raise error_type(secret)
+
+    runner = FakeRunner({"test-a": success("test-a")})
+    adapter = FrozenTestValidationAdapter(
+        required_test_commands=commands("test-a"),
+        runner=runner,
+        allowed_files=ALLOWED_FILES,
+        changed_paths_inspector=inspector,
+    )
+    observed = adapter.validate(request("test-a"))
+
+    assert_public_reason_is_stable(
+        observed,
+        expected_reason="changed paths inspector failed",
+        error_type=error_type,
+        secret=secret,
+    )
+    assert adapter.last_result is not None
+    assert_diagnostic_is_bounded(adapter.last_result.reason, secret=secret)
+    assert secret not in repr(adapter.last_result)
+    assert [item.test_id for item in runner.calls] == ["test-a"]
+
+
+@pytest.mark.parametrize("error_type", ORDINARY_EXCEPTIONS)
+def test_ordinary_inspector_iterable_exception_fails_closed(
+    error_type: type[Exception],
+) -> None:
+    secret = f"INSPECTOR-ITERABLE-{error_type.__name__}-{SENTINEL_PATH}"
+    runner = FakeRunner({"test-a": success("test-a")})
+    adapter = FrozenTestValidationAdapter(
+        required_test_commands=commands("test-a"),
+        runner=runner,
+        allowed_files=ALLOWED_FILES,
+        changed_paths_inspector=lambda: ExplodingPaths(secret, error_type),  # type: ignore[arg-type]
+    )
+    observed = adapter.validate(request("test-a"))
+
+    assert_public_reason_is_stable(
+        observed,
+        expected_reason="changed path evidence failed",
+        error_type=error_type,
+        secret=secret,
+    )
+    assert adapter.last_result is not None
+    assert_diagnostic_is_bounded(adapter.last_result.reason, secret=secret)
+    assert secret not in repr(adapter.last_result)
+
+
+@pytest.mark.parametrize("error_type", ORDINARY_EXCEPTIONS)
+def test_ordinary_runner_path_iterable_exception_fails_closed(
+    error_type: type[Exception],
+) -> None:
+    secret = f"RUNNER-ITERABLE-{error_type.__name__}-{SENTINEL_PATH}"
+    runner = FakeRunner(
+        {"test-a": success("test-a", changed_paths=ExplodingPaths(secret, error_type))}
+    )
+    adapter = FrozenTestValidationAdapter(
+        required_test_commands=commands("test-a"),
+        runner=runner,
+        allowed_files=ALLOWED_FILES,
+    )
+    observed = adapter.validate(request("test-a"))
+
+    assert_public_reason_is_stable(
+        observed,
+        expected_reason="changed path evidence failed",
+        error_type=error_type,
+        secret=secret,
+    )
+    assert adapter.last_result is not None
+    assert_diagnostic_is_bounded(outcome(adapter).reason, secret=secret)
+    assert secret not in repr(outcome(adapter))
+    assert secret not in repr(adapter.last_result)
+    assert [item.test_id for item in runner.calls] == ["test-a"]
+
+
+@pytest.mark.parametrize("error_type", PROCESS_CONTROL_EXCEPTIONS)
+def test_process_control_exception_propagates_from_cancellation_probe(
+    error_type: type[BaseException],
+) -> None:
+    def cancelled() -> bool:
+        raise error_type("process control")
+
+    adapter = make_adapter({"test-a": success("test-a")}, cancelled=cancelled)
+    with pytest.raises(error_type):
+        adapter.validate(request("test-a"))
+    assert adapter.last_result is None
+
+
+@pytest.mark.parametrize("error_type", PROCESS_CONTROL_EXCEPTIONS)
+def test_process_control_exception_propagates_from_runner(
+    error_type: type[BaseException],
+) -> None:
+    runner = FakeRunner({"test-a": error_type("process control")})
+    adapter = FrozenTestValidationAdapter(
+        required_test_commands=commands("test-a"), runner=runner
+    )
+    with pytest.raises(error_type):
+        adapter.validate(request("test-a"))
+    assert adapter.last_result is None
+    assert [item.test_id for item in runner.calls] == ["test-a"]
+
+
+@pytest.mark.parametrize("error_type", PROCESS_CONTROL_EXCEPTIONS)
+def test_process_control_exception_propagates_from_inspector(
+    error_type: type[BaseException],
+) -> None:
+    def inspector() -> tuple[str, ...]:
+        raise error_type("process control")
+
+    adapter = make_adapter(
+        {"test-a": success("test-a")},
+        allowed_files=ALLOWED_FILES,
+        changed_paths_inspector=inspector,
+    )
+    with pytest.raises(error_type):
+        adapter.validate(request("test-a"))
+    assert adapter.last_result is None
+
+
+@pytest.mark.parametrize("error_type", PROCESS_CONTROL_EXCEPTIONS)
+def test_process_control_exception_propagates_from_inspector_iterable(
+    error_type: type[BaseException],
+) -> None:
+    adapter = make_adapter(
+        {"test-a": success("test-a")},
+        allowed_files=ALLOWED_FILES,
+        changed_paths_inspector=lambda: ExplodingPaths("process control", error_type),  # type: ignore[arg-type]
+    )
+    with pytest.raises(error_type):
+        adapter.validate(request("test-a"))
+    assert adapter.last_result is None
+
+
+@pytest.mark.parametrize("error_type", PROCESS_CONTROL_EXCEPTIONS)
+def test_process_control_exception_propagates_from_runner_path_iterable(
+    error_type: type[BaseException],
+) -> None:
+    adapter = make_adapter(
+        {
+            "test-a": success(
+                "test-a",
+                changed_paths=ExplodingPaths("process control", error_type),  # type: ignore[arg-type]
+            )
+        },
+        allowed_files=ALLOWED_FILES,
+    )
+    with pytest.raises(error_type):
+        adapter.validate(request("test-a"))
+    assert adapter.last_result is None
+
+
+def test_adapter_never_catches_base_exception() -> None:
+    assert module._BOUNDARY_EXCEPTIONS == (Exception,)
+    tree = ast.parse(MODULE_PATH.read_text(encoding="utf-8"))
+    caught: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ExceptHandler):
+            continue
+        assert node.type is not None, "bare except is never allowed at a boundary"
+        caught.append(ast.unparse(node.type))
+    assert caught, "the adapter must still handle bounded operational failures"
+    for expression in caught:
+        assert "BaseException" not in expression
+        assert "KeyboardInterrupt" not in expression
+        assert "SystemExit" not in expression
+        assert "GeneratorExit" not in expression
+
+
 def test_combined_output_limit_and_command_repr_protection() -> None:
     secret = "TOP-SECRET-SENTINEL"
     adapter = make_adapter(
