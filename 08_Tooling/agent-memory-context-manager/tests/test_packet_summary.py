@@ -903,7 +903,7 @@ def test_hostile_class_probe_compute_limits_container_fails_closed_without_leak(
 
 @pytest.mark.parametrize(
     "field",
-    ["max_files_to_inspect", "targeted_tests_only", "no_ful_scheduler_suite"],
+    ["max_files_to_inspect", "targeted_tests_only", "no_full_scheduler_suite"],
 )
 def test_hostile_class_probe_compute_limit_value_fails_closed_without_leak(field):
     packet = sample_packet()
