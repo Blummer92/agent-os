@@ -2,8 +2,9 @@
 # Agent OS reusable repository-state verifier.
 #
 # Replaces the Git preflight block that was previously pasted into prompts.
-# Read-only with respect to remotes: it fetches, switches, and fast-forwards
-# locally, and never pushes, resets, stashes, cleans, or force-updates.
+# Read-only with respect to remotes: by default it fetches, then switches and
+# fast-forwards locally; --no-fetch reuses existing refs. It never pushes,
+# resets, stashes, cleans, rebases, or force-updates.
 #
 # Documentation: scripts/verify-repo-state.md
 # Policy by reference: 01_Shared_Standards/github/protected-branch-governance.md
@@ -33,7 +34,7 @@ die() { log "ERROR: $2"; exit "$1"; }
 
 usage() {
   cat >&2 <<'USAGE'
-Usage: scripts/verify-repo-state.sh [--create-from-base] <branch> [base]
+Usage: scripts/verify-repo-state.sh [--create-from-base] [--no-fetch] <branch> [base]
 
 Verifies that the repository is on <branch>, fast-forwarded to
 origin/<branch>, with no uncommitted tracked changes, then prints
@@ -47,6 +48,9 @@ Options:
   --create-from-base    Permit creating <branch> from origin/<base> when it
                         does not exist locally or on origin. Local only:
                         nothing is pushed.
+  --no-fetch            Reuse existing local and remote-tracking refs without
+                        contacting origin. Evidence explicitly reports that
+                        remote state was not freshly fetched.
   -h, --help            Show this help.
 
 Exit codes:
@@ -63,12 +67,14 @@ USAGE
 BRANCH=""
 BASE=""
 CREATE_FROM_BASE=0
+NO_FETCH=0
 branch_set=0
 base_set=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --create-from-base) CREATE_FROM_BASE=1 ;;
+    --no-fetch) NO_FETCH=1 ;;
     -h|--help) usage; exit "$EXIT_OK" ;;
     --) shift; break ;;
     -*) usage; die "$EXIT_USAGE" "unknown option: $1" ;;
@@ -131,6 +137,9 @@ git remote get-url "$REMOTE" >/dev/null 2>&1 ||
 # Blocks uncommitted tracked changes only. Untracked files are reported but not
 # blocking; ignored files are permitted and never inspected. Gate and diagnostic
 # use identical --untracked-files=no semantics. Never discards user work.
+#
+# The two status calls are intentionally retained: the first is the exact safety
+# gate, while the second adds only non-blocking untracked-file diagnostics.
 
 tracked_changes="$(git status --porcelain --untracked-files=no)"
 if [ -n "$tracked_changes" ]; then
@@ -164,8 +173,16 @@ fetch_with_retry() {
   return 1
 }
 
-log "fetching $REMOTE (prune)"
-fetch_with_retry || die "$EXIT_FETCH" "unable to fetch $REMOTE; remote may be unreachable"
+if [ "$NO_FETCH" -eq 1 ]; then
+  fetch_performed="false"
+  remote_state_source="existing-refs-not-freshly-fetched"
+  log "reusing existing refs; origin was not contacted"
+else
+  log "fetching $REMOTE (prune)"
+  fetch_with_retry || die "$EXIT_FETCH" "unable to fetch $REMOTE; remote may be unreachable"
+  fetch_performed="true"
+  remote_state_source="fresh-fetch"
+fi
 
 # --- Ref resolution from local refs only (no second network operation) -----
 
@@ -198,6 +215,10 @@ if has_ref "$remote_ref"; then has_remote=1; fi
 if [ "$has_local" -eq 0 ] && [ "$has_remote" -eq 0 ]; then
   require_complete_refspec || exit "$EXIT_BRANCH_MISSING"
   if [ "$CREATE_FROM_BASE" -eq 0 ]; then
+    if [ "$NO_FETCH" -eq 1 ]; then
+      die "$EXIT_BRANCH_MISSING" \
+        "branch '$BRANCH' is absent from existing local and remote-tracking refs; --no-fetch cannot prove remote absence"
+    fi
     die "$EXIT_BRANCH_MISSING" \
       "branch '$BRANCH' does not exist locally or on $REMOTE; pass --create-from-base to create it from $REMOTE/$BASE"
   fi
@@ -241,6 +262,10 @@ fi
 
 if ! has_ref "$base_remote_ref"; then
   require_complete_refspec || exit "$EXIT_BASE"
+  if [ "$NO_FETCH" -eq 1 ]; then
+    die "$EXIT_BASE" \
+      "base ref $REMOTE/$BASE is absent from existing refs; --no-fetch cannot refresh or prove remote state"
+  fi
   die "$EXIT_BASE" "base ref $REMOTE/$BASE does not exist"
 fi
 
@@ -264,6 +289,8 @@ printf 'HEAD_REF=%s\n' "$BRANCH"
 printf 'HEAD_SHA=%s\n' "$head_sha"
 printf 'BASE_REF=%s/%s\n' "$REMOTE" "$BASE"
 printf 'BASE_SHA=%s\n' "$base_sha"
+printf 'FETCH_PERFORMED=%s\n' "$fetch_performed"
+printf 'REMOTE_STATE_SOURCE=%s\n' "$remote_state_source"
 printf 'CHANGED_FILES_BEGIN\n'
 if [ -n "$changed" ]; then printf '%s\n' "$changed"; fi
 printf 'CHANGED_FILES_END\n'
