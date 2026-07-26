@@ -628,7 +628,7 @@ def test_per_string_character_limit_rejects_before_trusted_rendering():
 
 
 def test_aggregate_utf8_byte_limit_fails_closed():
-    chunk = "é" * 4_500  # 9,000 UTF-8 bytes, within the per-string char limit.
+    chunk = "é" * 4_500
     packet = sample_packet(
         changed_files=[chunk],
         allowed_inspect_first=[chunk],
@@ -708,6 +708,15 @@ def test_internal_programming_error_is_not_masked(monkeypatch):
         summarize_handoff_packet(sample_packet())
 
 
+def test_validator_internal_programming_error_is_not_masked(monkeypatch):
+    def broken(*args, **kwargs):
+        raise RuntimeError("validator internal defect")
+
+    monkeypatch.setattr(packet_summary, "assert_valid_handoff_packet", broken)
+    with pytest.raises(RuntimeError, match="validator internal defect"):
+        summarize_handoff_packet(sample_packet())
+
+
 @pytest.mark.parametrize("exception_type", [KeyboardInterrupt, SystemExit, GeneratorExit])
 def test_base_exceptions_propagate_from_validator(monkeypatch, exception_type):
     def stop(*args, **kwargs):
@@ -723,6 +732,144 @@ def test_no_complete_compute_mapping_materialization_or_complete_packet_json_tre
     assert "list(dict.items(" not in source
     assert "list(values.items(" not in source
     assert 'json.dumps(\n        {"version": version, "value": canonical}' not in source
+    internal_start = source.index("def _fingerprint_internal_payload")
+    internal_end = source.index("def _fixed_failure_fingerprint")
+    assert "json.dumps" not in source[internal_start:internal_end]
+
+
+@pytest.mark.parametrize(
+    "value,escaped",
+    [
+        ("\ud800", "\\ud800"),
+        ("\udfff", "\\udfff"),
+        ("before\ud800after", "before\\ud800after"),
+    ],
+)
+def test_surrogate_objective_is_escaped_utf8_safe_and_unverifiable(value, escaped):
+    packet = sample_packet(objective=value)
+    result = summarize_handoff_packet(packet, evidence=current_evidence(packet))
+    assert escaped in result.text
+    result.text.encode("utf-8", errors="strict")
+    assert result.trust_status == TRUST_UNVERIFIABLE
+    assert result.trust_reason == REASON_PACKET_CONTENT_UNSAFE
+
+
+def test_surrogate_list_entry_is_escaped_and_summary_is_utf8_safe():
+    packet = sample_packet(known_facts=["safe", "\ud800", "safe-again"])
+    result = summarize_handoff_packet(
+        packet,
+        list_limit=25,
+        evidence=current_evidence(packet),
+    )
+    assert "- \\ud800" in result.text
+    result.text.encode("utf-8", errors="strict")
+    assert result.trust_status == TRUST_UNVERIFIABLE
+
+
+@pytest.mark.parametrize(
+    "compute_limits,escaped",
+    [
+        ({"\ud800": "value"}, "\\ud800"),
+        ({"surrogate_value": "\udfff"}, "\\udfff"),
+    ],
+)
+def test_surrogate_compute_limit_key_or_value_is_utf8_safe_and_unverifiable(
+    compute_limits, escaped
+):
+    packet = sample_packet(compute_limits=compute_limits)
+    result = summarize_handoff_packet(packet, evidence=current_evidence(packet))
+    assert escaped in result.text
+    result.text.encode("utf-8", errors="strict")
+    assert result.trust_status == TRUST_UNVERIFIABLE
+
+
+def test_valid_unicode_and_emoji_remain_visible_and_current():
+    packet = sample_packet(objective="normal text ✓ café 😀")
+    result = summarize_handoff_packet(packet, evidence=current_evidence(packet))
+    assert "normal text ✓ café 😀" in result.text
+    result.text.encode("utf-8", errors="strict")
+    assert result.trust_status == TRUST_CURRENT
+
+
+class TrackingDigest:
+    def __init__(self):
+        self.chunks = []
+
+    def update(self, chunk):
+        self.chunks.append(bytes(chunk))
+
+    def hexdigest(self):
+        return "a" * 64
+
+
+def _tracked_internal_payload(monkeypatch, payload, version="v"):
+    trackers = []
+
+    def factory():
+        tracker = TrackingDigest()
+        trackers.append(tracker)
+        return tracker
+
+    monkeypatch.setattr(packet_summary.hashlib, "sha256", factory)
+    digest = packet_summary._fingerprint_internal_payload(payload, version=version)
+    return digest, trackers[-1]
+
+
+def test_streamed_internal_payload_is_deterministic_for_reordered_dictionary(monkeypatch):
+    first, _ = _tracked_internal_payload(
+        monkeypatch,
+        {"b": "😀 café", "a": 3},
+    )
+    monkeypatch.undo()
+    second, _ = _tracked_internal_payload(
+        monkeypatch,
+        {"a": 3, "b": "😀 café"},
+    )
+    assert first == second
+
+
+def test_streamed_internal_payload_rejects_before_oversized_digest_update(monkeypatch):
+    tracker = TrackingDigest()
+    monkeypatch.setattr(packet_summary.hashlib, "sha256", lambda: tracker)
+    monkeypatch.setattr(packet_summary, "MAX_CANONICAL_SERIALIZED_BYTES", 1_000)
+    monkeypatch.setattr(packet_summary, "MAX_FINGERPRINT_INPUT_BYTES", 1_000)
+
+    with pytest.raises(packet_summary._ResourceLimitExceeded):
+        packet_summary._fingerprint_internal_payload(
+            {"rendered_text_template": "😀" * 1_000},
+            version="v",
+        )
+
+    assert sum(len(chunk) for chunk in tracker.chunks) <= 1_000
+    assert max(map(len, tracker.chunks)) <= 4 * packet_summary._STREAM_TEXT_CHARS
+
+
+def test_streamed_internal_payload_honors_exact_serialized_boundary(monkeypatch):
+    _, tracker = _tracked_internal_payload(monkeypatch, {"text": "café 😀"})
+    size = sum(len(chunk) for chunk in tracker.chunks)
+    monkeypatch.undo()
+
+    monkeypatch.setattr(packet_summary, "MAX_CANONICAL_SERIALIZED_BYTES", size)
+    monkeypatch.setattr(packet_summary, "MAX_FINGERPRINT_INPUT_BYTES", size)
+    packet_summary._fingerprint_internal_payload({"text": "café 😀"}, version="v")
+
+    monkeypatch.setattr(packet_summary, "MAX_CANONICAL_SERIALIZED_BYTES", size - 1)
+    with pytest.raises(packet_summary._ResourceLimitExceeded):
+        packet_summary._fingerprint_internal_payload({"text": "café 😀"}, version="v")
+
+
+def test_streamed_internal_payload_honors_exact_fingerprint_boundary(monkeypatch):
+    _, tracker = _tracked_internal_payload(monkeypatch, {"text": "emoji 😀"})
+    size = sum(len(chunk) for chunk in tracker.chunks)
+    monkeypatch.undo()
+
+    monkeypatch.setattr(packet_summary, "MAX_CANONICAL_SERIALIZED_BYTES", size + 100)
+    monkeypatch.setattr(packet_summary, "MAX_FINGERPRINT_INPUT_BYTES", size)
+    packet_summary._fingerprint_internal_payload({"text": "emoji 😀"}, version="v")
+
+    monkeypatch.setattr(packet_summary, "MAX_FINGERPRINT_INPUT_BYTES", size - 1)
+    with pytest.raises(packet_summary._ResourceLimitExceeded):
+        packet_summary._fingerprint_internal_payload({"text": "emoji 😀"}, version="v")
 
 
 # Full notice coverage.

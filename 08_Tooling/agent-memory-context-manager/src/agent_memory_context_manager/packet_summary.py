@@ -41,7 +41,7 @@ MAX_SAFE_INTEGER_BITS = MAX_INTEGER_BITS
 SUPPORTED_PACKET_SCHEMA_VERSION = "handoff-packet-v2"
 RENDERER_VERSION = "packet-summary-h2"
 SOURCE_FINGERPRINT_VERSION = "handoff-packet-source-h2-v3"
-SUMMARY_FINGERPRINT_VERSION = "rendered-handoff-summary-h2-v3"
+SUMMARY_FINGERPRINT_VERSION = "rendered-handoff-summary-h2-v4"
 NON_AUTHORIZATION_NOTICE_VERSION = "non-authorization-v2"
 
 TRUST_CURRENT = "current"
@@ -94,6 +94,7 @@ _INVALID_DISPLAY = "<invalid>"
 _SUMMARY_FINGERPRINT_PLACEHOLDER = "<summary-fingerprint>"
 _RESOURCE_FAILURE_STATUS = "packet-resource-limit-exceeded"
 _UNSAFE_FAILURE_STATUS = "unsafe-rendering-input"
+_STREAM_TEXT_CHARS = 128
 
 _LIST_PACKET_FIELDS: tuple[str, ...] = (
     "changed_files",
@@ -215,6 +216,29 @@ class _ProcessingBudget:
             raise _ResourceLimitExceeded
 
 
+class _BoundedDigestWriter:
+    """Incrementally hash a deterministic payload without oversized buffers."""
+
+    def __init__(self) -> None:
+        self._digest = hashlib.sha256()
+        self.serialized_bytes = 0
+        self.fingerprint_bytes = 0
+
+    def write(self, chunk: bytes) -> None:
+        serialized_after = self.serialized_bytes + len(chunk)
+        if serialized_after > MAX_CANONICAL_SERIALIZED_BYTES:
+            raise _ResourceLimitExceeded
+        fingerprint_after = self.fingerprint_bytes + len(chunk)
+        if fingerprint_after > MAX_FINGERPRINT_INPUT_BYTES:
+            raise _ResourceLimitExceeded
+        self._digest.update(chunk)
+        self.serialized_bytes = serialized_after
+        self.fingerprint_bytes = fingerprint_after
+
+    def hexdigest(self) -> str:
+        return self._digest.hexdigest()
+
+
 def summarize_handoff_packet(
     packet: Mapping[str, Any],
     *,
@@ -230,20 +254,23 @@ def summarize_handoff_packet(
     normalized_evidence = _normalize_evidence(evidence)
     effective_limit, options_safe = _normalize_list_limit(list_limit)
 
-    # The canonical validator intentionally operates on caller data. This narrow
-    # boundary contains hostile caller methods while preserving canonical
-    # ValueError behavior and allowing BaseException subclasses to propagate.
-    try:
+    if _validator_requires_containment(packet):
+        try:
+            assert_valid_handoff_packet(packet)
+        except ValueError:
+            raise
+        except Exception:
+            return _build_failed_summary(
+                evidence=normalized_evidence,
+                effective_list_limit=effective_limit,
+                trust_reason=REASON_PACKET_CONTENT_UNSAFE,
+                failure_status=_UNSAFE_FAILURE_STATUS,
+            )
+    else:
+        # For an inert exact-built-in packet, validator defects are trusted
+        # subsystem defects and must remain visible rather than becoming a
+        # caller-input classification.
         assert_valid_handoff_packet(packet)
-    except ValueError:
-        raise
-    except Exception:
-        return _build_failed_summary(
-            evidence=normalized_evidence,
-            effective_list_limit=effective_limit,
-            trust_reason=REASON_PACKET_CONTENT_UNSAFE,
-            failure_status=_UNSAFE_FAILURE_STATUS,
-        )
 
     budget = _ProcessingBudget()
     try:
@@ -278,6 +305,44 @@ def summarize_handoff_packet(
             trust_reason=REASON_PACKET_RESOURCE_LIMIT_EXCEEDED,
             failure_status=_RESOURCE_FAILURE_STATUS,
         )
+
+
+def _validator_requires_containment(packet: Any) -> bool:
+    """Return whether canonical validation may invoke caller-defined behavior.
+
+    This is an inertness check, not a second packet validator. It inspects only
+    exact built-in surfaces that the canonical validator may call directly.
+    """
+    if type(packet) is not dict:
+        return True
+    if dict.__len__(packet) > MAX_DICT_ENTRIES_PER_FIELD:
+        return True
+    for key in dict.keys(packet):
+        if type(key) is not str:
+            return True
+
+    branch = dict.get(packet, "branch")
+    if isinstance(branch, str) and type(branch) is not str:
+        return True
+
+    pr_number = dict.get(packet, "pr_number")
+    if isinstance(pr_number, int) and type(pr_number) not in (int, bool):
+        return True
+
+    compute_limits = dict.get(packet, "compute_limits")
+    if isinstance(compute_limits, Mapping):
+        if type(compute_limits) is not dict:
+            return True
+        if dict.__len__(compute_limits) > MAX_DICT_ENTRIES_PER_FIELD:
+            return True
+        for key in dict.keys(compute_limits):
+            if type(key) is not str:
+                return True
+        max_files = dict.get(compute_limits, "max_files_to_inspect")
+        if isinstance(max_files, int) and type(max_files) not in (int, bool):
+            return True
+
+    return False
 
 
 def _preflight_top_level_lengths(
@@ -636,14 +701,17 @@ def _bounded_text(value: str) -> str:
     used = 0
     consumed = 0
     for char in value:
+        codepoint = ord(char)
         if char == "\n":
             fragment = "\\n"
         elif char == "\r":
             fragment = "\\r"
         elif char == "\t":
             fragment = "\\t"
-        elif ord(char) < 32 or ord(char) == 127:
-            fragment = f"\\u{ord(char):04x}"
+        elif 0xD800 <= codepoint <= 0xDFFF:
+            fragment = f"\\u{codepoint:04x}"
+        elif codepoint < 32 or codepoint == 127:
+            fragment = f"\\u{codepoint:04x}"
         else:
             fragment = char
         if used + len(fragment) > MAX_DISPLAY_VALUE_CHARS:
@@ -876,19 +944,54 @@ def _bounded_frame(tag: bytes, parts: tuple[bytes, ...]) -> bytes:
 
 
 def _fingerprint_internal_payload(payload: dict[str, Any], *, version: str) -> str:
-    encoded = json.dumps(
-        {"version": version, "value": payload},
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-    ).encode("utf-8")
-    if len(encoded) > MAX_CANONICAL_SERIALIZED_BYTES:
-        raise _ResourceLimitExceeded
-    if len(encoded) > MAX_FINGERPRINT_INPUT_BYTES:
-        raise _ResourceLimitExceeded
-    digest = hashlib.sha256()
-    digest.update(encoded)
-    return digest.hexdigest()
+    writer = _BoundedDigestWriter()
+    writer.write(b"internal-fingerprint[")
+    _write_stream_value(writer, version)
+    _write_stream_value(writer, payload)
+    writer.write(b"]")
+    return writer.hexdigest()
+
+
+def _write_stream_value(writer: _BoundedDigestWriter, value: Any) -> None:
+    if value is None:
+        writer.write(b"none;")
+        return
+    if type(value) is bool:
+        writer.write(b"bool:1;" if value else b"bool:0;")
+        return
+    if type(value) is int:
+        writer.write(b"int:")
+        writer.write(str(value).encode("ascii"))
+        writer.write(b";")
+        return
+    if type(value) is str:
+        writer.write(b"str[")
+        for start in range(0, len(value), _STREAM_TEXT_CHARS):
+            encoded = value[start : start + _STREAM_TEXT_CHARS].encode(
+                "utf-8", errors="strict"
+            )
+            writer.write(str(len(encoded)).encode("ascii"))
+            writer.write(b":")
+            writer.write(encoded)
+        writer.write(b"]")
+        return
+    if type(value) is list:
+        writer.write(b"list[")
+        for item in value:
+            _write_stream_value(writer, item)
+        writer.write(b"]")
+        return
+    if type(value) is dict:
+        writer.write(b"dict[")
+        keys = dict.keys(value)
+        if any(type(key) is not str for key in keys):
+            raise TypeError("internal fingerprint payload keys must be strings")
+        for key in sorted(keys):
+            _write_stream_value(writer, key)
+            _write_stream_value(writer, dict.__getitem__(value, key))
+        writer.write(b"]")
+        return
+    raise TypeError("unsupported internal fingerprint payload type")
 
 
 def _fixed_failure_fingerprint(status: str) -> str:
