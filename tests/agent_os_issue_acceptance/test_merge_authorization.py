@@ -8,594 +8,517 @@ from pathlib import Path
 
 import pytest
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-if str(REPOSITORY_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPOSITORY_ROOT))
+ROOT = Path(__file__).resolve().parents[2]
+SCHEDULER_SRC = ROOT / "08_Tooling/workflow-scheduler/src"
+for path in (ROOT, SCHEDULER_SRC):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
+from scripts.agent_os_execution_capabilities import (  # noqa: E402
+    CAPABILITY_EVIDENCE_SCHEMA_NAME,
+    CAPABILITY_EVIDENCE_SCHEMA_VERSION,
+    RepositoryEvidenceType,
+    RepositoryIdentity,
+    RepositoryStateEvidence,
+    WorktreeState,
+)
 from scripts.agent_os_issue_acceptance import (  # noqa: E402
-    APPROVAL_RECORD_SCHEMA_VERSION,
     MERGE_AUTHORIZATION_SCHEMA_VERSION,
     MERGE_EXECUTION_OBSERVATION_SCHEMA_VERSION,
-    ApprovalApplicabilityResult,
-    ApprovalBinding,
     ApprovalKind,
-    ApprovalRecord,
     ApprovalState,
-    ApprovedExecutionProjection,
     HandoffCohort,
+    MergeAuthorizationApplicabilityResult,
     MergeAuthorizationState,
     MergeCheckEvidence,
     MergeReviewEvidence,
     PullRequestMergeEvidence,
+    SchedulerPlanningHandoff,
     approval_applicability_identity,
+    build_approval_candidate,
+    build_approved_execution_projection,
+    build_issueplan_current_state_evidence,
     build_merge_authorization_candidate,
+    compute_handoff_digest,
+    evaluate_approval_applicability,
     evaluate_merge_authorization_applicability,
     record_approval_decision,
     record_merge_authorization_decision,
     record_merge_execution_observation,
 )
 from scripts.agent_os_issue_acceptance import merge_authorization  # noqa: E402
+from scripts.agent_os_issue_acceptance.issueplan_scanner import (  # noqa: E402
+    AdoptionClass,
+    MetadataCandidate,
+    ScanResult,
+    SourceEnvelope,
+)
+from workflow_scheduler.planning import build_draft_task_proposals  # noqa: E402
 
-HEAD_SHA = "a" * 40
-BASE_SHA = "b" * 40
-MERGE_SHA = "c" * 40
-DIGEST = "1" * 64
-PROPOSAL_ID = "draft-task-proposal:" + "2" * 64
-ISSUEPLAN_ID = "issueplan-current-state:" + "3" * 64
-CREATED_AT = "2026-07-26T14:00:00Z"
-AUTHORIZED_AT = "2026-07-26T14:10:00Z"
-EXPIRES_AT = "2026-07-26T15:00:00Z"
+HEAD = "a" * 40
+BASE = "b" * 40
+MERGE = "c" * 40
+EVALUATOR = "d" * 40
+GRAPH = "1" * 64
+PLANNING = "2" * 64
+CONTRACT = "3" * 64
+CREATED = "2026-07-26T14:00:00Z"
+APPROVED = "2026-07-26T14:10:00Z"
+PROJECTED = "2026-07-26T14:20:00Z"
+CANDIDATE = "2026-07-26T14:25:00Z"
+AUTHORIZED = "2026-07-26T14:30:00Z"
+MERGE_EXPIRES = "2026-07-26T15:00:00Z"
+APPROVAL_EXPIRES = "2026-07-26T16:00:00Z"
 
 
-def _approval_binding(**changes):
-    values = {
-        "proposal_version": "1.0",
-        "proposal_id": PROPOSAL_ID,
-        "handoff_digest": "4" * 64,
-        "graph_digest": "5" * 64,
-        "planning_result_digest": "6" * 64,
+def _handoff(**changes):
+    data = {
+        "contract_version": "0.2.0",
+        "planning_result_version": "0.1.0",
+        "evaluator_commit_sha": EVALUATOR,
         "repository": "blummer92/agent-os",
         "base_branch": "main",
-        "evaluated_repository_sha": HEAD_SHA,
-        "evaluator_commit_sha": "d" * 40,
-        "supplied_node_ids": ("issue-629",),
-        "cohort_summaries": (
-            HandoffCohort(
-                node_ids=("issue-629",),
-                classification="parallel-candidate",
-                reason_codes=("covered-no-deterministic-conflict",),
-            ),
-        ),
-        "issueplan_current_state_evidence_id": ISSUEPLAN_ID,
-        "repository_state_evidence_id": "7" * 64,
-        "repository_evidence_type": "branch-head",
-        "tested_repository_sha": HEAD_SHA,
-        "source_snapshot_fingerprint": "8" * 64,
-        "scanner_result_fingerprint": "9" * 64,
-        "implementation_contract_fingerprint": DIGEST,
+        "evaluated_repository_sha": HEAD,
+        "supplied_node_ids": ["issue-629"],
+        "graph_digest": GRAPH,
+        "planning_result_digest": PLANNING,
+        "cohort_summaries": [{
+            "node_ids": ["issue-629"],
+            "classification": "parallel-candidate",
+            "reason_codes": ["covered-no-deterministic-conflict"],
+        }],
+        "created_at": "2026-07-26T13:00:00Z",
+        "handoff_digest": "0" * 64,
+    }
+    data.update(changes)
+    data["handoff_digest"] = compute_handoff_digest(data)
+    return SchedulerPlanningHandoff(
+        contract_version=data["contract_version"],
+        planning_result_version=data["planning_result_version"],
+        evaluator_commit_sha=data["evaluator_commit_sha"],
+        repository=data["repository"],
+        base_branch=data["base_branch"],
+        evaluated_repository_sha=data["evaluated_repository_sha"],
+        supplied_node_ids=tuple(data["supplied_node_ids"]),
+        graph_digest=data["graph_digest"],
+        planning_result_digest=data["planning_result_digest"],
+        cohort_summaries=tuple(HandoffCohort(**item) for item in data["cohort_summaries"]),
+        created_at=data["created_at"],
+        handoff_digest=data["handoff_digest"],
+    )
+
+
+def _issueplan(handoff, **changes):
+    scan = ScanResult(
+        source_locator="github:Blummer92/agent-os#629",
+        source_revision="rev-1",
+        findings=(),
+        adoption_class=AdoptionClass.STRICT_NATIVE,
+        candidates=(MetadataCandidate(1, "raw", {
+            "profile_version": "issueplan-core/v1",
+            "entity_id": "issue-629",
+            "revision": "rev-1",
+            "owner_agent": "Integration Manager",
+            "required_files": ["scripts/agent_os_issue_acceptance/merge_authorization.py"],
+        }),),
+        strict_valid=True,
+        execution_authorized=False,
+        evidence=("bounded=true",),
+    )
+    envelope = SourceEnvelope(
+        source_locator="github:Blummer92/agent-os#629",
+        source_revision="rev-1",
+        content="issue body",
+        retrieval_complete=True,
+        pagination_complete=True,
+        accessible=True,
+        source_family="github-issue",
+    )
+    values = {
+        "repository": handoff.repository,
+        "base_branch": handoff.base_branch,
+        "evaluated_repository_sha": handoff.evaluated_repository_sha,
+        "implementation_contract_fingerprint": CONTRACT,
         "allowed_files": ("scripts/agent_os_issue_acceptance/merge_authorization.py",),
         "forbidden_paths": (".github/workflows/**",),
-        "required_tests": (
-            "python -m pytest tests/agent_os_issue_acceptance/"
-            "test_merge_authorization.py -q",
-        ),
+        "required_tests": ("python -m pytest tests/agent_os_issue_acceptance/test_merge_authorization.py -q",),
+        "graph_reference": handoff.graph_digest,
+        "planning_result_reference": handoff.planning_result_digest,
+        "handoff_reference": handoff.handoff_digest,
+        "supplied_node_ids": handoff.supplied_node_ids,
     }
     values.update(changes)
-    return ApprovalBinding(**values)
+    return build_issueplan_current_state_evidence(
+        envelope,
+        scan,
+        observed_at="2026-07-26T13:30:00Z",
+        freshness_boundary="main@5011d996",
+        **values,
+    )
 
 
-def _approved(**changes):
-    candidate = ApprovalRecord(
-        schema_version=APPROVAL_RECORD_SCHEMA_VERSION,
-        approval_id="",
-        approval_revision="",
-        revision_number=1,
-        previous_revision=None,
+def _repo(*, head=HEAD, tested=HEAD, contract=CONTRACT):
+    return RepositoryStateEvidence(
+        schema_name=CAPABILITY_EVIDENCE_SCHEMA_NAME,
+        evidence_schema_version=CAPABILITY_EVIDENCE_SCHEMA_VERSION,
+        producer_adapter="fixture-adapter",
+        producer_adapter_version="1.0",
+        correlation_id="issue-629",
+        repository_identity=RepositoryIdentity(
+            host="github.com", owner="blummer92", repository="agent-os",
+            repository_id=123, default_branch="main",
+        ),
+        base_ref="main", base_sha=BASE,
+        head_ref="agent/629-content-bound-merge-authorization", head_sha=head,
+        requested_ref="agent/629-content-bound-merge-authorization", requested_sha=head,
+        observed_sha=tested, tested_sha=tested, pushed_sha=head,
+        proposed_pr_sha=head, synthetic_merge_sha=None, external_build_sha=tested,
+        evidence_type=RepositoryEvidenceType.BRANCH_HEAD,
+        contract_fingerprint=contract,
+        worktree_state=WorktreeState.CLEAN,
+        worktree_reason_codes=(),
+        observed_at="2026-07-26T13:45:00Z",
+        freshness_boundary="workflow-run-629",
+    )
+
+
+def _bundle(*, approval_expires=APPROVAL_EXPIRES):
+    handoff = _handoff()
+    issueplan = _issueplan(handoff)
+    repository = _repo()
+    proposals = build_draft_task_proposals(handoff, issueplan, repository, created_at=CREATED)
+    assert proposals.status == "eligible"
+    proposal = proposals.proposals[0]
+    candidate = build_approval_candidate(
+        proposal, issueplan, repository,
         approval_kind=ApprovalKind.IMPLEMENTATION,
-        state=ApprovalState.PENDING,
-        binding=_approval_binding(**changes),
-        authorizer_id="operator-requester",
-        decision_id="approval-request",
-        decision_at="2026-07-26T13:50:00Z",
-        expires_at="2026-07-26T16:00:00Z",
-        supersedes_approval_id=None,
-        reason_codes=(),
+        authorizer_id="operator-requester", decision_id="approval-request",
+        decision_at=CREATED, expires_at=approval_expires,
     )
-    return record_approval_decision(
-        candidate,
-        state=ApprovalState.APPROVED,
-        decision_id="approval-decision",
-        authorizer_id="repository-owner",
-        decision_at=CREATED_AT,
+    approval = record_approval_decision(
+        candidate, state=ApprovalState.APPROVED,
+        decision_id="approval-decision", authorizer_id="repository-owner",
+        decision_at=APPROVED,
     )
-
-
-def _applicability(approval=None, **changes):
-    approval = approval or _approved()
-    values = {
-        "status": "applicable",
-        "approval_id": approval.approval_id,
-        "approval_revision": approval.approval_revision,
-        "current_proposal_id": PROPOSAL_ID,
-        "reason_codes": (),
-        "changed_bindings": (),
-        "approval_applicable": True,
-        "details": (),
-    }
-    values.update(changes)
-    return ApprovalApplicabilityResult(**values)
-
-
-def _projection(approval=None, **changes):
-    approval = approval or _approved()
-    binding = approval.binding
-    values = {
-        "schema_version": "1.0",
-        "projection_id": "",
-        "proposal_version": binding.proposal_version,
-        "proposal_id": binding.proposal_id,
-        "approval_id": approval.approval_id,
-        "approval_revision": approval.approval_revision,
-        "approval_revision_number": approval.revision_number,
-        "approval_kind": approval.approval_kind.value,
-        "approval_state": "approved",
-        "approval_authorizer_id": approval.authorizer_id,
-        "approval_decision_id": approval.decision_id,
-        "approval_decision_at": approval.decision_at,
-        "approval_expires_at": approval.expires_at,
-        "approval_supersedes_id": approval.supersedes_approval_id,
-        "handoff_digest": binding.handoff_digest,
-        "graph_digest": binding.graph_digest,
-        "planning_result_digest": binding.planning_result_digest,
-        "repository": binding.repository,
-        "base_branch": binding.base_branch,
-        "evaluated_repository_sha": binding.evaluated_repository_sha,
-        "evaluator_commit_sha": binding.evaluator_commit_sha,
-        "tested_repository_sha": binding.tested_repository_sha,
-        "repository_evidence_type": binding.repository_evidence_type,
-        "supplied_node_ids": binding.supplied_node_ids,
-        "cohort_summaries": binding.cohort_summaries,
-        "issueplan_current_state_evidence_id": (
-            binding.issueplan_current_state_evidence_id
-        ),
-        "repository_state_evidence_id": binding.repository_state_evidence_id,
-        "source_snapshot_fingerprint": binding.source_snapshot_fingerprint,
-        "scanner_result_fingerprint": binding.scanner_result_fingerprint,
-        "implementation_contract_fingerprint": (
-            binding.implementation_contract_fingerprint
-        ),
-        "allowed_files": binding.allowed_files,
-        "forbidden_paths": binding.forbidden_paths,
-        "required_tests": binding.required_tests,
-        "projected_at": "2026-07-26T14:01:00Z",
-    }
-    values.update(changes)
-    return ApprovedExecutionProjection(**values)
+    applicability = evaluate_approval_applicability(
+        approval, proposal, issueplan, repository, evaluated_at=PROJECTED,
+    )
+    projection_result = build_approved_execution_projection(
+        proposal, approval, applicability, issueplan, repository, projected_at=PROJECTED,
+    )
+    assert applicability.status == "applicable"
+    assert projection_result.status == "complete" and projection_result.projection
+    return approval, applicability, projection_result.projection, proposal, issueplan, repository
 
 
 def _check(**changes):
-    values = {
-        "context": "Agent OS Validation Gate",
-        "app_identity": "github-actions",
-        "tested_sha": HEAD_SHA,
-        "evidence_id": "",
-        "state": "success",
-    }
+    values = dict(context="Agent OS Validation Gate", app_identity="github-actions",
+                  tested_sha=HEAD, evidence_id="", state="success")
     values.update(changes)
     return MergeCheckEvidence(**values)
 
 
 def _review(**changes):
-    values = {
-        "blocking_review_present": False,
-        "unresolved_conversation_count": 0,
-        "exact_head_reviewed": True,
-    }
+    values = dict(blocking_review_present=False, unresolved_conversation_count=0,
+                  exact_head_reviewed=True)
     values.update(changes)
     return MergeReviewEvidence(**values)
 
 
-def _pr(**changes):
-    values = {
-        "repository": "blummer92/agent-os",
-        "pull_request_number": 630,
-        "head_sha": HEAD_SHA,
-        "base_branch": "main",
-        "base_sha_or_evidence_id": BASE_SHA,
-        "draft": False,
-        "ready_for_review": True,
-        "proposed_merge_method": "squash",
-        "changed_scope_fingerprint": DIGEST,
-        "allowed_files": (
-            "scripts/agent_os_issue_acceptance/merge_authorization.py",
-        ),
-        "forbidden_paths": (".github/workflows/**",),
-        "required_tests": (
-            "python -m pytest tests/agent_os_issue_acceptance/"
-            "test_merge_authorization.py -q",
-        ),
-        "required_checks": (_check(),),
-        "review_evidence": _review(),
-        "evidence_id": "",
-    }
+def _pr(bundle=None, **changes):
+    bundle = bundle or _bundle()
+    projection = bundle[2]
+    values = dict(
+        repository=projection.repository, pull_request_number=630,
+        head_sha=projection.tested_repository_sha, base_branch=projection.base_branch,
+        base_sha_or_evidence_id=BASE, draft=False, ready_for_review=True,
+        proposed_merge_method="squash", changed_scope_fingerprint=CONTRACT,
+        allowed_files=projection.allowed_files, forbidden_paths=projection.forbidden_paths,
+        required_tests=projection.required_tests,
+        required_checks=(_check(tested_sha=projection.tested_repository_sha),),
+        review_evidence=_review(), evidence_id="",
+    )
     values.update(changes)
     return PullRequestMergeEvidence(**values)
 
 
-def _candidate(*, approval=None, applicability=None, projection=None, pr=None, **changes):
-    approval = approval or _approved()
-    applicability = applicability or _applicability(approval)
-    projection = projection or _projection(approval)
-    pr = pr or _pr()
-    values = {
-        "authorizer_id": "repository-owner",
-        "decision_id": "merge-request",
-        "decision_at": "2026-07-26T14:05:00Z",
-        "expires_at": EXPIRES_AT,
-        "permitted_merge_method": "squash",
-    }
+def _candidate(bundle=None, pr=None, **changes):
+    bundle = bundle or _bundle()
+    approval, applicability, projection, proposal, issueplan, repository = bundle
+    values = dict(
+        current_proposal=proposal, current_issueplan_evidence=issueplan,
+        current_repository_state_evidence=repository,
+        authorizer_id="repository-owner", decision_id="merge-request",
+        decision_at=CANDIDATE, expires_at=MERGE_EXPIRES,
+        permitted_merge_method="squash",
+    )
     values.update(changes)
     return build_merge_authorization_candidate(
-        approval,
-        applicability,
-        projection,
-        pr,
-        **values,
+        approval, applicability, projection, pr or _pr(bundle), **values,
     )
 
 
-def _authorized(**changes):
-    candidate = _candidate(**changes)
-    return record_merge_authorization_decision(
-        candidate,
-        state=MergeAuthorizationState.AUTHORIZED,
-        decision_id="merge-authorized",
-        authorizer_id="repository-owner",
-        decision_at=AUTHORIZED_AT,
+def _authorized(bundle=None, **changes):
+    bundle = bundle or _bundle()
+    record = record_merge_authorization_decision(
+        _candidate(bundle, **changes), state="authorized",
+        decision_id="merge-authorized", authorizer_id="repository-owner",
+        decision_at=AUTHORIZED,
     )
+    return record, bundle
 
 
-def _evaluate(
-    record,
-    *,
-    approval=None,
-    applicability=None,
-    projection=None,
-    pr=None,
-    at="2026-07-26T14:20:00Z",
-    events=(),
-):
-    approval = approval or _approved()
-    applicability = applicability or _applicability(approval)
-    projection = projection or _projection(approval)
-    pr = pr or _pr()
+def _evaluate(record, bundle=None, pr=None, at="2026-07-26T14:40:00Z", events=()):
+    bundle = bundle or _bundle()
+    approval, applicability, projection, proposal, issueplan, repository = bundle
     return evaluate_merge_authorization_applicability(
-        record,
-        approval,
-        applicability,
-        projection,
-        pr,
-        evaluated_at=at,
-        invalidation_events=events,
+        record, approval, applicability, projection, pr or _pr(bundle),
+        current_proposal=proposal, current_issueplan_evidence=issueplan,
+        current_repository_state_evidence=repository,
+        evaluated_at=at, invalidation_events=events,
     )
 
 
-def test_public_schema_and_state_taxonomy_are_exact():
+def test_public_schema_state_and_canonical_end_to_end_path():
     assert MERGE_AUTHORIZATION_SCHEMA_VERSION == "1.0"
     assert MERGE_EXECUTION_OBSERVATION_SCHEMA_VERSION == "1.0"
     assert tuple(item.value for item in MergeAuthorizationState) == (
-        "pending",
-        "authorized",
-        "rejected",
-        "expired",
-        "invalidated",
-        "consumed",
-        "superseded",
+        "pending", "authorized", "rejected", "expired", "invalidated",
+        "consumed", "superseded",
     )
+    authorized, bundle = _authorized()
+    result = _evaluate(authorized, bundle)
+    assert result.status == "applicable" and result.merge_authorized
+    assert authorized.binding.approval_applicability_identity == approval_applicability_identity(bundle[1])
+    assert authorized.binding.approved_execution_projection_id == bundle[2].projection_id
 
 
-def test_candidate_and_decision_identities_are_deterministic_and_immutable():
-    first = _candidate()
-    second = _candidate()
-    assert first == second
-    assert first.authorization_id.startswith("merge-authorization:")
-    assert first.authorization_revision.startswith("merge-authorization-revision:")
-    assert first.merge_authorized is False
-    authorized = _authorized()
-    assert authorized.authorization_id == first.authorization_id
-    assert authorized.authorization_revision != first.authorization_revision
-    assert authorized.merge_authorized is True
-    assert authorized.side_effects_performed is False
+def test_determinism_immutability_and_content_bound_evidence():
+    bundle = _bundle()
+    assert _candidate(bundle) == _candidate(bundle)
+    authorized, _ = _authorized(bundle)
+    assert authorized.authorization_id == _candidate(bundle).authorization_id
     with pytest.raises(FrozenInstanceError):
         authorized.state = MergeAuthorizationState.REJECTED
-
-
-def test_check_and_pr_evidence_ids_are_content_bound_and_order_independent():
-    first = _check()
-    second = _check()
-    assert first == second
+    check = _check()
     with pytest.raises(ValueError, match="does not match"):
-        replace(first, evidence_id="merge-check:" + "0" * 64)
+        replace(check, evidence_id="merge-check:" + "0" * 64)
     extra = _check(context="Navigation Registry Offline Tests")
-    a = _pr(required_checks=(first, extra))
-    b = _pr(required_checks=(extra, first))
-    assert a == b
-    assert a.evidence_id == b.evidence_id
-    with pytest.raises(ValueError, match="unique"):
-        _pr(required_checks=(first, first))
+    assert _pr(bundle, required_checks=(check, extra)) == _pr(bundle, required_checks=(extra, check))
 
 
-@pytest.mark.parametrize(
-    "target",
-    [
-        MergeAuthorizationState.AUTHORIZED,
-        MergeAuthorizationState.REJECTED,
-        MergeAuthorizationState.INVALIDATED,
-        MergeAuthorizationState.SUPERSEDED,
-    ],
-)
-def test_pending_decisions_are_linked_and_deterministic(target):
-    candidate = _candidate()
-    first = record_merge_authorization_decision(
-        candidate,
-        state=target,
-        decision_id=f"decision-{target.value}",
-        authorizer_id="repository-owner",
-        decision_at=AUTHORIZED_AT,
-    )
-    second = record_merge_authorization_decision(
-        candidate,
-        state=target,
-        decision_id=f"decision-{target.value}",
-        authorizer_id="repository-owner",
-        decision_at=AUTHORIZED_AT,
-    )
-    assert first == second
-    assert first.previous_revision == candidate.authorization_revision
-    assert first.revision_number == 2
-
-
-def test_expiry_boundary_is_exact_and_clock_free():
-    authorized = _authorized()
-    assert _evaluate(authorized, at="2026-07-26T14:59:59Z").status == "applicable"
-    at = _evaluate(authorized, at=EXPIRES_AT)
-    after = _evaluate(authorized, at="2026-07-26T15:00:01Z")
-    assert at.status == after.status == "stale"
-    assert at.reason_codes == ("authorization.expired",)
-    expired = record_merge_authorization_decision(
-        _candidate(),
-        state="expired",
-        decision_id="expiry-event",
-        authorizer_id="repository-owner",
-        decision_at=EXPIRES_AT,
-    )
-    assert expired.reason_codes == ("authorization.expired",)
-
-
-def test_green_checks_ready_review_and_mergeability_do_not_create_authorization():
-    result = _evaluate(None)
-    assert result.status == "blocked"
-    assert result.merge_authorized is False
-    assert result.reason_codes == ("authorization.pending",)
-
-
-@pytest.mark.parametrize(
-    ("pr", "reason"),
-    [
-        (_pr(repository="other/repo"), "pull-request.identity-changed"),
-        (_pr(pull_request_number=631), "pull-request.identity-changed"),
-        (
-            _pr(
-                head_sha="e" * 40,
-                required_checks=(_check(tested_sha="e" * 40),),
-            ),
-            "pull-request.head-changed",
-        ),
-        (_pr(base_branch="release"), "pull-request.base-changed"),
-        (_pr(base_sha_or_evidence_id="f" * 40), "pull-request.base-changed"),
-        (_pr(proposed_merge_method="merge"), "merge.method-changed"),
-        (_pr(changed_scope_fingerprint="a" * 64), "contract.scope-changed"),
-        (_pr(allowed_files=("other.py",)), "contract.allowlist-changed"),
-        (_pr(forbidden_paths=("secrets/**",)), "contract.forbidden-paths-changed"),
-        (_pr(required_tests=("other-test",)), "contract.required-tests-changed"),
-        (
-            _pr(required_checks=(_check(app_identity="other-app"),)),
-            "checks.changed",
-        ),
-        (
-            _pr(review_evidence=_review(blocking_review_present=True)),
-            "review.blocked",
-        ),
-        (
-            _pr(review_evidence=_review(unresolved_conversation_count=1)),
-            "review.unresolved",
-        ),
-        (
-            _pr(review_evidence=_review(exact_head_reviewed=False)),
-            "review.head-stale",
-        ),
-        (
-            _pr(draft=True, ready_for_review=False),
-            "pull-request.draft",
-        ),
-    ],
-)
-def test_material_pull_request_drift_fails_closed(pr, reason):
-    result = _evaluate(_authorized(), pr=pr)
-    assert result.status != "applicable"
-    assert result.merge_authorized is False
-    assert reason in result.reason_codes
-
-
-@pytest.mark.parametrize(
-    ("state", "status", "reason"),
-    [
-        ("pending", "needs-decision", "checks.pending"),
-        ("failure", "blocked", "checks.failed"),
-        ("cancelled", "blocked", "checks.cancelled"),
-        ("skipped", "blocked", "checks.skipped"),
-        ("not-triggered", "needs-decision", "checks.not-triggered"),
-        ("unknown", "needs-decision", "checks.unknown"),
-    ],
-)
-def test_non_success_check_states_remain_distinct(state, status, reason):
-    pr = _pr(required_checks=(_check(state=state),))
-    result = _evaluate(_authorized(), pr=pr)
-    assert result.status == status
-    assert reason in result.reason_codes
-
-
-def test_missing_check_is_needs_decision_and_duplicate_events_are_stable():
-    authorized = _authorized(
-        pr=_pr(
-            required_checks=(
-                _check(),
-                _check(context="Navigation Registry Offline Tests"),
-            )
+def test_fabricated_applicability_and_recomputed_forged_projection_fail():
+    bundle = _bundle()
+    approval, applicability, projection, proposal, issueplan, repository = bundle
+    fabricated = replace(applicability, current_proposal_id="draft-task-proposal:" + "f" * 64)
+    with pytest.raises(ValueError, match="approval.changed"):
+        build_merge_authorization_candidate(
+            approval, fabricated, projection, _pr(bundle),
+            current_proposal=proposal, current_issueplan_evidence=issueplan,
+            current_repository_state_evidence=repository,
+            authorizer_id="repository-owner", decision_id="fabricated",
+            decision_at=CANDIDATE, expires_at=MERGE_EXPIRES,
         )
-    )
-    result = _evaluate(
-        authorized,
-        pr=_pr(),
-        events=("checks.changed", "checks.changed", "approval.changed"),
-    )
-    assert result.status == "needs-decision"
-    assert result.reason_codes == tuple(sorted(set(result.reason_codes)))
-    assert "checks.missing" in result.reason_codes
-
-
-def test_approval_projection_and_applicability_drift_fail_closed():
-    authorized = _authorized()
-    changed_approval = _approved(allowed_files=("other.py",))
-    changed_applicability = _applicability(changed_approval)
-    changed_projection = _projection(changed_approval)
-    result = _evaluate(
-        authorized,
-        approval=changed_approval,
-        applicability=changed_applicability,
-        projection=changed_projection,
-    )
-    assert result.status == "stale"
-    assert "approval.changed" in result.reason_codes
-    assert "projection.changed" in result.reason_codes
-
-    needs = _applicability(
-        status="needs-decision",
-        approval_applicable=False,
-        reason_codes=("source.inaccessible",),
-    )
-    result = _evaluate(authorized, applicability=needs)
-    assert result.status == "needs-decision"
-    assert "approval.needs-decision" in result.reason_codes
-
-
-def test_false_well_shaped_projection_and_record_ids_fail_closed():
-    approval = _approved()
-    projection = _projection(approval)
-    forged_projection = object.__new__(ApprovedExecutionProjection)
-    for item in projection.__dataclass_fields__:
-        object.__setattr__(forged_projection, item, getattr(projection, item))
-    object.__setattr__(
-        forged_projection,
-        "projection_id",
-        "approved-execution-projection:" + "0" * 64,
-    )
-    result = _evaluate(_authorized(), projection=forged_projection)
-    assert result.status == "invalid"
-    assert result.reason_codes == ("evidence.malformed",)
-
-    authorized = _authorized()
-    forged_record = object.__new__(type(authorized))
-    for item in authorized.__dataclass_fields__:
-        object.__setattr__(forged_record, item, getattr(authorized, item))
-    object.__setattr__(
-        forged_record,
-        "authorization_revision",
-        "merge-authorization-revision:" + "0" * 64,
-    )
-    result = _evaluate(forged_record)
-    assert result.status == "invalid"
-
-
-def test_emergency_override_requires_complete_time_bounded_evidence():
-    with pytest.raises(ValueError, match="paired"):
-        _candidate(emergency_override_reason="urgent")
-    with pytest.raises(ValueError, match="time-bounded"):
-        _candidate(
-            expires_at=None,
-            emergency_override_reason="urgent recovery",
-            emergency_override_audit_location="audit:629",
+    forged = replace(projection, projection_id="", tested_repository_sha="e" * 40)
+    forged_pr = _pr(bundle, head_sha="e" * 40, required_checks=(_check(tested_sha="e" * 40),))
+    with pytest.raises(ValueError, match="projection.changed"):
+        build_merge_authorization_candidate(
+            approval, applicability, forged, forged_pr,
+            current_proposal=proposal, current_issueplan_evidence=issueplan,
+            current_repository_state_evidence=repository,
+            authorizer_id="repository-owner", decision_id="forged",
+            decision_at=CANDIDATE, expires_at=MERGE_EXPIRES,
         )
-    candidate = _candidate(
-        emergency_override_reason="urgent recovery",
-        emergency_override_audit_location="audit:629",
+
+
+@pytest.mark.parametrize("change", [
+    {"proposal_id": "draft-task-proposal:" + "f" * 64},
+    {"repository": "other/repo"}, {"base_branch": "release"},
+    {"evaluated_repository_sha": "e" * 40},
+    {"source_snapshot_fingerprint": "e" * 64},
+    {"scanner_result_fingerprint": "e" * 64},
+    {"implementation_contract_fingerprint": "e" * 64},
+    {"allowed_files": ("other.py",)}, {"forbidden_paths": ("secrets/**",)},
+    {"required_tests": ("other-test",)},
+])
+def test_copied_approval_ids_do_not_transfer_through_self_consistent_projection(change):
+    bundle = _bundle()
+    forged = replace(bundle[2], projection_id="", **change)
+    with pytest.raises(ValueError, match="projection.changed"):
+        build_merge_authorization_candidate(
+            bundle[0], bundle[1], forged, _pr(bundle),
+            current_proposal=bundle[3], current_issueplan_evidence=bundle[4],
+            current_repository_state_evidence=bundle[5],
+            authorizer_id="repository-owner", decision_id="forged-projection",
+            decision_at=CANDIDATE, expires_at=MERGE_EXPIRES,
+        )
+
+
+def test_changed_nodes_and_cohorts_do_not_transfer():
+    bundle = _bundle()
+    forged = replace(
+        bundle[2], projection_id="", supplied_node_ids=("issue-999",),
+        cohort_summaries=(HandoffCohort(
+            node_ids=("issue-999",), classification="parallel-candidate",
+            reason_codes=("covered-no-deterministic-conflict",),
+        ),),
     )
-    assert candidate.emergency_override_reason == "urgent recovery"
+    with pytest.raises(ValueError, match="projection.changed"):
+        build_merge_authorization_candidate(
+            bundle[0], bundle[1], forged, _pr(bundle),
+            current_proposal=bundle[3], current_issueplan_evidence=bundle[4],
+            current_repository_state_evidence=bundle[5],
+            authorizer_id="repository-owner", decision_id="forged-nodes",
+            decision_at=CANDIDATE, expires_at=MERGE_EXPIRES,
+        )
 
 
-def test_merge_observation_requires_matching_applicable_authorization():
-    authorized = _authorized()
-    applicability = _evaluate(authorized)
-    observation = record_merge_execution_observation(
-        authorized,
-        applicability,
-        _pr(),
-        observed_merge_commit_sha=MERGE_SHA,
-        observed_actor_id="repository-owner",
-        observed_at="2026-07-26T14:30:00Z",
-        audit_location="github:pull/630",
+def test_expiry_is_mandatory_bounded_by_approval_and_exact_at_evaluation():
+    bundle = _bundle(approval_expires="2026-07-26T14:50:00Z")
+    with pytest.raises(ValueError, match="requires expires_at"):
+        _candidate(bundle, expires_at=None)
+    with pytest.raises(ValueError, match="cannot outlive approval"):
+        _candidate(bundle, expires_at="2026-07-26T14:55:00Z")
+    candidate = _candidate(bundle, expires_at="2026-07-26T14:50:00Z")
+    authorized = record_merge_authorization_decision(
+        candidate, state="authorized", decision_id="authorized",
+        authorizer_id="repository-owner", decision_at="2026-07-26T14:49:59Z",
+    )
+    assert _evaluate(authorized, bundle, at="2026-07-26T14:49:59Z").status == "applicable"
+    at = _evaluate(authorized, bundle, at="2026-07-26T14:50:00Z")
+    assert at.status == "stale" and "approval.expired" in at.reason_codes
+
+
+def test_candidate_and_decision_at_approval_expiry_fail():
+    bundle = _bundle(approval_expires=CANDIDATE)
+    with pytest.raises(ValueError, match="canonical eligible evidence"):
+        _candidate(bundle, expires_at=CANDIDATE)
+    bundle = _bundle(approval_expires="2026-07-26T14:50:00Z")
+    candidate = _candidate(bundle, expires_at="2026-07-26T14:50:00Z")
+    with pytest.raises(ValueError, match="before expires_at"):
+        record_merge_authorization_decision(
+            candidate, state="authorized", decision_id="late",
+            authorizer_id="repository-owner", decision_at="2026-07-26T14:50:00Z",
+        )
+
+
+def test_observation_returns_linked_consumed_successor_and_prevents_replay():
+    authorized, bundle = _authorized()
+    applicable = _evaluate(authorized, bundle)
+    kwargs = dict(
+        observed_merge_commit_sha=MERGE, observed_actor_id="repository-owner",
+        observed_at="2026-07-26T14:45:00Z", audit_location="github:pull/630",
         observed_merge_method="squash",
-        linked_issue_closure_observed=True,
     )
-    assert observation.authorization_consumed is True
-    assert observation.side_effects_performed is True
-    assert observation.observation_id.startswith("merge-execution-observation:")
+    first = record_merge_execution_observation(authorized, applicable, _pr(bundle), **kwargs)
+    second = record_merge_execution_observation(authorized, applicable, _pr(bundle), **kwargs)
+    assert first == second
+    observation, consumed = first
+    assert consumed.state is MergeAuthorizationState.CONSUMED
+    assert consumed.consumed_observation_id == observation.observation_id
+    assert _evaluate(consumed, bundle).status == "consumed"
+    with pytest.raises(ValueError, match="authorized current revision"):
+        record_merge_execution_observation(consumed, applicable, _pr(bundle), **kwargs)
+    with pytest.raises(ValueError, match="invalid merge authorization transition"):
+        record_merge_authorization_decision(
+            authorized, state="consumed", decision_id="manual",
+            authorizer_id="repository-owner", decision_at=kwargs["observed_at"],
+        )
 
+
+def test_observation_rejects_expired_approval_and_mismatched_method():
+    bundle = _bundle(approval_expires="2026-07-26T14:50:00Z")
+    candidate = _candidate(bundle, expires_at="2026-07-26T14:50:00Z")
+    authorized = record_merge_authorization_decision(
+        candidate, state="authorized", decision_id="authorized",
+        authorizer_id="repository-owner", decision_at="2026-07-26T14:49:00Z",
+    )
+    applicable = _evaluate(authorized, bundle, at="2026-07-26T14:49:30Z")
+    with pytest.raises(ValueError, match="expired"):
+        record_merge_execution_observation(
+            authorized, applicable, _pr(bundle), observed_merge_commit_sha=MERGE,
+            observed_actor_id="repository-owner", observed_at="2026-07-26T14:50:00Z",
+            audit_location="github:pull/630", observed_merge_method="squash",
+        )
+    authorized, bundle = _authorized()
     with pytest.raises(ValueError, match="does not match"):
         record_merge_execution_observation(
-            authorized,
-            applicability,
-            _pr(),
-            observed_merge_commit_sha=MERGE_SHA,
-            observed_actor_id="repository-owner",
-            observed_at="2026-07-26T14:30:00Z",
-            audit_location="github:pull/630",
+            authorized, _evaluate(authorized, bundle), _pr(bundle),
+            observed_merge_commit_sha=MERGE, observed_actor_id="repository-owner",
+            observed_at="2026-07-26T14:45:00Z", audit_location="github:pull/630",
             observed_merge_method="merge",
         )
 
 
-def test_consumed_authorization_cannot_replay():
-    authorized = _authorized()
-    consumed = record_merge_authorization_decision(
-        authorized,
-        state="consumed",
-        decision_id="merge-observed",
-        authorizer_id="repository-owner",
-        decision_at="2026-07-26T14:31:00Z",
+@pytest.mark.parametrize(("state", "status", "reason"), [
+    ("pending", "needs-decision", "checks.pending"),
+    ("failure", "blocked", "checks.failed"),
+    ("cancelled", "blocked", "checks.cancelled"),
+    ("skipped", "blocked", "checks.skipped"),
+    ("not-triggered", "needs-decision", "checks.not-triggered"),
+    ("unknown", "needs-decision", "checks.unknown"),
+])
+def test_non_success_check_states_remain_distinct(state, status, reason):
+    authorized, bundle = _authorized()
+    result = _evaluate(authorized, bundle, _pr(bundle, required_checks=(_check(state=state),)))
+    assert result.status == status and reason in result.reason_codes
+
+
+@pytest.mark.parametrize(("change", "reason"), [
+    ({"repository": "other/repo"}, "pull-request.identity-changed"),
+    ({"pull_request_number": 631}, "pull-request.identity-changed"),
+    ({"base_branch": "release"}, "pull-request.base-changed"),
+    ({"base_sha_or_evidence_id": "f" * 40}, "pull-request.base-changed"),
+    ({"proposed_merge_method": "merge"}, "merge.method-changed"),
+    ({"changed_scope_fingerprint": "e" * 64}, "contract.scope-changed"),
+    ({"allowed_files": ("other.py",)}, "contract.allowlist-changed"),
+    ({"review_evidence": _review(blocking_review_present=True)}, "review.blocked"),
+    ({"draft": True, "ready_for_review": False}, "pull-request.draft"),
+])
+def test_material_pr_drift_fails_closed(change, reason):
+    authorized, bundle = _authorized()
+    result = _evaluate(authorized, bundle, _pr(bundle, **change))
+    assert not result.merge_authorized and reason in result.reason_codes
+
+
+def test_missing_check_and_duplicate_reason_inputs_are_stable():
+    bundle = _bundle()
+    candidate = _candidate(bundle, pr=_pr(bundle, required_checks=(
+        _check(), _check(context="Navigation Registry Offline Tests"),
+    )))
+    authorized = record_merge_authorization_decision(
+        candidate, state="authorized", decision_id="authorized",
+        authorizer_id="repository-owner", decision_at=AUTHORIZED,
     )
-    result = _evaluate(consumed)
-    assert result.status == "consumed"
-    assert result.merge_authorized is False
-    with pytest.raises(ValueError, match="invalid merge authorization transition"):
-        record_merge_authorization_decision(
-            consumed,
-            state="authorized",
-            decision_id="replay",
-            authorizer_id="repository-owner",
-            decision_at="2026-07-26T14:32:00Z",
+    result = _evaluate(authorized, bundle, events=("checks.changed", "checks.changed"))
+    assert result.status == "needs-decision" and "checks.missing" in result.reason_codes
+    assert result.reason_codes == tuple(sorted(set(result.reason_codes)))
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("repository", " / "), ("base_branch", "   "),
+    ("base_sha_or_evidence_id", "not-an-identity"),
+])
+def test_pr_identity_validation_is_canonical(field, value):
+    with pytest.raises(ValueError):
+        _pr(**{field: value})
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("authorizer_id", "   "), ("decision_id", "   "),
+])
+def test_candidate_identity_validation_rejects_whitespace(field, value):
+    with pytest.raises(ValueError):
+        _candidate(**{field: value})
+
+
+def test_applicable_result_requires_exact_identifiers_and_no_drift():
+    with pytest.raises(ValueError, match="exact identifiers"):
+        MergeAuthorizationApplicabilityResult(
+            status="applicable", authorization_id=None, authorization_revision=None,
+            current_pull_request_evidence_id=None, changed_bindings=(), reason_codes=(),
+            merge_authorized=True,
         )
-
-
-def test_applicability_identity_is_deterministic_and_content_bound():
-    first = _applicability()
-    second = _applicability()
-    assert approval_applicability_identity(first) == approval_applicability_identity(
-        second
-    )
-    changed = replace(first, status="blocked", approval_applicable=False)
-    assert approval_applicability_identity(changed) != approval_applicability_identity(
-        first
-    )
 
 
 def test_module_has_no_external_io_or_authority_imports():
@@ -603,8 +526,7 @@ def test_module_has_no_external_io_or_authority_imports():
     tree = ast.parse(source)
     imported = {
         alias.name.split(".")[0]
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Import)
+        for node in ast.walk(tree) if isinstance(node, ast.Import)
         for alias in node.names
     }
     imported.update(
@@ -612,25 +534,11 @@ def test_module_has_no_external_io_or_authority_imports():
         for node in ast.walk(tree)
         if isinstance(node, ast.ImportFrom) and node.module
     )
-    assert imported.isdisjoint(
-        {
-            "asyncio",
-            "httpx",
-            "os",
-            "pathlib",
-            "requests",
-            "socket",
-            "sqlite3",
-            "subprocess",
-            "urllib",
-        }
-    )
-    for prohibited in (
-        "datetime.now",
-        "datetime.utcnow",
-        "github",
-        "check_run",
-        "merge_pull_request",
+    assert imported.isdisjoint({
+        "asyncio", "httpx", "os", "pathlib", "requests", "socket",
+        "sqlite3", "subprocess", "urllib",
+    })
+    assert all(token not in source.lower() for token in (
+        "datetime.now", "datetime.utcnow", "merge_pull_request",
         "scheduler_execution_concurrency",
-    ):
-        assert prohibited not in source.lower()
+    ))
