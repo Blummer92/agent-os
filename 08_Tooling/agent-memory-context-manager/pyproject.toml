@@ -1,6 +1,6 @@
 [project]
 name = "agent-memory-context-manager"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local helpers for Agent OS context packets, budget-aware handoffs, and summary cache lookup without runtime Scheduler integration."
 requires-python = ">=3.10"
 dependencies = []

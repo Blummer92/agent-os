@@ -9,21 +9,10 @@ Reduce agent compute by selecting only the context needed. Agents waste compute 
 Scheduler calls Memory Manager pre-task to generate a context packet. Memory Manager does not execute workflows.
 
 ## Core Responsibilities
-- Task context planning: determine what context is needed
-- Relevant file selection: identify files by relevance to task
-- Memory summary retrieval: pull cached summaries instead of re-reading
-- Stale-context detection: flag outdated summaries after file changes
-- Context budget declarations: identify bounded file and test expectations
-- Stop/continue recommendations: signal when working set is unclear or scope grows
+Task context planning (what context is needed); relevant file selection by task relevance; memory summary retrieval instead of re-reading; stale-context detection after file changes; context budget declarations for bounded file and test expectations; stop/continue recommendations when the working set is unclear or scope grows.
 
 ## Memory Types
-- **Project memory**: stable architecture, conventions, rules
-- **Phase memory**: goals, completed milestones
-- **PR memory**: branch, PR number, changed files, validation state
-- **File memory**: summaries; last-read timestamp
-- **Test memory**: test coverage; pass/fail state
-- **Decision memory**: approved choices, rejected alternatives
-- **Risk memory**: known hazards, blockers, unsupported features
+**Project** (stable architecture, conventions, rules); **phase** (goals, completed milestones); **PR** (branch, PR number, changed files, validation state); **file** (summaries, last-read timestamp); **test** (coverage, pass/fail state); **decision** (approved choices, rejected alternatives); **risk** (known hazards, blockers, unsupported features).
 
 ## Context Budget Rules
 - **Small task** (3–7 files max): typo fix, single-line change, simple rename
@@ -59,14 +48,7 @@ stop_conditions: []
 Compute limits are declarations and stop obligations. This issue does not add runtime counters or enforcement.
 
 ## Compute-Saving Policies
-- Prefer cached summaries over re-reading stable files
-- Prefer targeted grep/glob over full-repo search
-- Prefer targeted tests over full test suite
-- Avoid generated/cache files (.git/, __pycache__/, node_modules/)
-- Don't re-read unchanged files after validation
-- Don't retry blocked tools; escalate instead
-- Don't subscribe to PR activity unless explicitly needed
-- Ask for clarification if working set is undefined
+Prefer cached summaries over re-reading stable files, targeted grep/glob over full-repo search, and targeted tests over the full suite. Avoid generated/cache files (`.git/`, `__pycache__/`, `node_modules/`). Don't re-read unchanged files after validation, don't retry blocked tools (escalate instead), and don't subscribe to PR activity unless explicitly needed. Ask for clarification if the working set is undefined.
 
 ## Memory H2 — Safety-Complete Summary Rendering
 - `packet_summary.summarize_handoff_packet(packet, evidence=...)` renders every canonical field in fixed order, reuses #265's validator as sole packet-validity authority, preserves truthful nullable branch/PR values, reports truncation, and keeps safety-critical sections visible. Validator defects propagate for inert exact-built-in packets; only validation surfaces that may invoke caller-defined behavior use the fail-closed containment boundary.
@@ -75,6 +57,17 @@ Compute limits are declarations and stop obligations. This issue does not add ru
 - Within those processing limits, the source fingerprint binds the complete packet through canonical type-tagged UTF-8 data and the summary fingerprint binds the complete rendered contract through bounded incremental type-tagged framing. The summary digest checks every encoded chunk before hashing it and never constructs one oversized JSON serialization first. A structurally valid packet exceeding a renderer limit receives a deterministic `unverifiable` resource result and no trusted source fingerprint; renderer limits do not redefine #265 packet validity. Fingerprints are deterministic equality checks, not signatures or authorization.
 - Every summary states that it is context evidence only and does not authorize implementation, execution, readiness/status changes, external writes, governed-field changes, merge, deployment, or production action; it is not a substitute for the canonical GitHub issue, approval record, or repository state.
 - The renderer stays pure-local, deterministic, side-effect free, with no cache, Scheduler, network, filesystem-write, or GitHub-write behavior. Memory H3 may later consume this contract for cache-key v2 and related behavior; none is implemented here.
+
+## Memory H3 — Cache Contract v2 and Cutover
+- **Cache-key v2.** `build_handoff_packet_cache_key_v2(packet)` returns `handoff-summary-v2:2.0:<64 hex>`. The digest binds the cache-key, cache-entry, and namespace versions, the supported packet-schema and renderer versions, the H2 source-fingerprint algorithm version, and the complete H2 source fingerprint. Because that fingerprint is produced by the merged H2 renderer, every canonical packet field binds cache identity -- including `forbidden_unless_needed` and `acceptance_criteria`, which the v1 key omits -- and `branch: null` / `pr_number: null` stay distinct from strings, integers, and legacy sentinels. `handoff_packet_source_fingerprint(packet)` exposes the same fingerprint so callers can build matching evidence. Limitations: a packet that H2 reports as unsafe or over its resource limits gets no v2 identity, and mapping key order does not change identity.
+- **Cache-entry v2.** One strict schema with exactly these fields: `cache_entry_version`, `cache_key`, `cache_key_version`, `cache_namespace_version`, `packet_schema_version`, `producer`, `provenance_status`, `renderer_version`, `source_fingerprint`, `source_packet`, `summary`, `summary_fingerprint`, `trust_status`. The v1 optional `metadata` contract is deliberately **not** carried forward, so no field can influence identity or trust. One shared bounded validator serves build, write, and lookup.
+- **Strict bounded JSON.** Reading opens the exact expected path once, reads at most `MAX_CACHE_ENTRY_BYTES + 1` (512 KiB), rejects over-limit files before parsing, decodes strict UTF-8, rejects duplicate object names, `NaN`/`Infinity`/`-Infinity`, and floats, requires an exact built-in `dict` at the top level, allows only exact built-in JSON types, and enforces depth 8, 20,000 nodes, 1,000 entries per collection, 40,000 characters per string, and 400,000 total string bytes.
+- **Atomic publication.** The final path is never written directly. The writer serializes bounded deterministic bytes, creates a securely named temporary file inside the v2 namespace, writes, flushes, closes, then publishes with same-filesystem `os.replace()`, removing the temporary file after failure where safely possible. Any failure before replacement preserves the previously published entry. Mapping key order is preserved rather than sorted, because the canonical renderer displays compute limits in insertion order.
+- **Namespace and paths.** All v2 entries live under the fixed `v2/` child of the caller-supplied cache root, and the filename comes only from the validated fixed-format digest -- never arbitrary caller text. Absolute paths, `..`, slash and backslash variants, drive-letter and UNC forms, null characters, reserved platform names, and trailing dot/space forms are structurally excluded, and the lexical path is confirmed to stay inside the namespace. A symlink at the namespace or destination is rejected where portable checks allow. The cache root is assumed to be owned and controlled by the caller; a privileged adversary concurrently replacing trusted ancestor directories is outside this portable local-cache threat model.
+- **Canonical writer eligibility.** `write_summary_cache_v2(cache_root, packet, evidence=...)` calls `summarize_handoff_packet(...)` itself. It accepts no summary text and no externally assembled `RenderedHandoffSummary`. Only a complete, supported, matching H2 result whose trust status is exactly `current` is published; `stale`, `unsupported`, and `unverifiable` fail closed and create no entry.
+- **Fail-closed lookup and rejection.** `lookup_summary_cache_v2(...)` performs one bounded open/read (no `exists()`-then-read race), then verifies every version, key, packet, renderer, source, summary, provenance, trust, and rendered-text binding by re-rendering the stored packet through the canonical H2 public renderer. Any inconsistency is a miss, never a partially trusted hit. Misses use one finite non-sensitive vocabulary -- `not_found`, `malformed_or_oversized`, `unsupported_version`, `identity_mismatch`, `trust_not_current`, `unsafe_path_or_entry`, `local_io_unavailable` -- and never expose decoder text, exception text, paths, temporary filenames, object representations, caller data, or partial entry content. `KeyboardInterrupt`, `SystemExit`, and `GeneratorExit` propagate.
+- **No v1 fallback.** v2 never reads v1 keys, v1 entry schemas, unversioned files, or the old root namespace, never scans the directory, and never searches alternative filenames. Old v1 files are **left completely untouched**: v2 neither migrates, rewrites, reinterprets, nor deletes them, and the v1 helpers remain available and unchanged. Because the two contracts use separate namespaces, cutover and rollback are manual and non-destructive: adopt v2 by calling the v2 functions, and roll back by reverting to the v1 calls. Stale `v2/` files left behind are ignored by v1 code and may be deleted by the operator when convenient. Treat any pre-existing root-level `*.json` cache file as a v1-era marker; there is no automatic migration.
+- **Boundaries.** v2 is pure-local and deterministic: no clock, Git, GitHub, environment, network, subprocess, or Scheduler input, and no dependency was added. Fingerprints are integrity and equality evidence only -- never signatures, approval, authorization, or proof of writer identity. A process with write access to the trusted cache root can fabricate an internally consistent entry, so a cache hit is context evidence only and authorizes nothing. The Scheduler boundary is unchanged: nothing here is wired into Scheduler execution.
 
 ## Future Scheduler Integration
 Pre-task context packet generation; per-task file allowlist and budget declarations; per-task test recommendations based on changed modules; audit log entries for context used; memory cache invalidation after file changes; approval gate when requested work exceeds the declared budget.
