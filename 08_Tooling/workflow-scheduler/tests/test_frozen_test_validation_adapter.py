@@ -125,6 +125,13 @@ def test_adapter_is_one_shot_and_last_result_is_read_only() -> None:
         adapter.last_result = None  # type: ignore[misc]
 
 
+def test_wrong_request_type_leaves_no_result() -> None:
+    adapter = make_adapter({"test-a": success("test-a")})
+    with pytest.raises(TypeError):
+        adapter.validate("bad")  # type: ignore[arg-type]
+    assert adapter.last_result is None
+
+
 @pytest.mark.parametrize(
     "argv",
     [
@@ -156,6 +163,21 @@ def test_aggregate_argv_and_command_counts_are_bounded() -> None:
         )
 
 
+def test_duplicate_test_id_is_rejected() -> None:
+    duplicate = (
+        FrozenTestCommand(test_id="a", argv=("run", "a")),
+        FrozenTestCommand(test_id="a", argv=("run", "b")),
+    )
+    with pytest.raises(FrozenTestValidationError):
+        run_frozen_test_validation(
+            duplicate,
+            ("a",),
+            runner=FakeRunner({}),
+            allowed_files=(),
+            forbidden_paths=(),
+        )
+
+
 def test_identity_and_order_mismatch_fails_before_runner() -> None:
     runner = FakeRunner({"test-a": success("test-a"), "test-b": success("test-b")})
     adapter = FrozenTestValidationAdapter(
@@ -164,6 +186,14 @@ def test_identity_and_order_mismatch_fails_before_runner() -> None:
     observed = adapter.validate(request("test-b", "test-a"))
     assert observed.passed is False
     assert runner.calls == []
+
+
+def test_identity_mismatch_has_exact_failure_reason() -> None:
+    adapter = make_adapter({"test-a": success("other")})
+    assert adapter.validate(request("test-a")).passed is False
+    assert outcome(adapter).reason == (
+        "runner observation identity did not match the requested command"
+    )
 
 
 @pytest.mark.parametrize(
@@ -192,6 +222,19 @@ def test_malformed_or_contradictory_success_never_completes(
     assert reason_fragment in outcome(adapter).reason
 
 
+def test_runner_exception_is_bounded_unavailable_evidence() -> None:
+    adapter = make_adapter({"test-a": RuntimeError("x" * 5000)})
+    assert adapter.validate(request("test-a")).passed is False
+    assert outcome(adapter).outcome == "unavailable"
+    assert len(outcome(adapter).reason) <= MAX_REASON_LENGTH
+
+
+def test_non_observation_fails_closed() -> None:
+    adapter = make_adapter({"test-a": "wrong"})
+    assert adapter.validate(request("test-a")).passed is False
+    assert outcome(adapter).reason == "runner returned a malformed observation"
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -212,6 +255,16 @@ def test_runtime_and_output_bounds_reject_invalid_or_expanded_values(
         make_adapter({"test-a": success("test-a")}, **{field: value})
 
 
+def test_reduced_runtime_and_output_bounds_are_allowed() -> None:
+    adapter = make_adapter(
+        {"test-a": success("test-a")},
+        per_command_timeout_seconds=1,
+        total_timeout_seconds=2,
+        max_output_bytes=32,
+    )
+    assert adapter.validate(request("test-a")).passed is True
+
+
 def test_elapsed_timeout_overrides_claimed_success_without_sleep(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -223,6 +276,23 @@ def test_elapsed_timeout_overrides_claimed_success_without_sleep(
     )
     assert adapter.validate(request("test-a")).passed is False
     assert outcome(adapter).outcome == "timed-out"
+
+
+def test_total_runtime_budget_prevents_later_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        module.time,
+        "monotonic",
+        Clock(0.0, 0.0, 0.0, 0.75, 0.75, 0.75, 0.75),
+    )
+    runner = FakeRunner({"test-a": success("test-a"), "test-b": success("test-b")})
+    adapter = FrozenTestValidationAdapter(
+        required_test_commands=commands("test-a", "test-b"),
+        runner=runner,
+        per_command_timeout_seconds=1,
+        total_timeout_seconds=0.5,
+    )
+    assert adapter.validate(request()).passed is False
+    assert len(runner.calls) == 1
 
 
 def test_cancellation_probe_consumes_total_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -322,6 +392,40 @@ def test_hook_exception_secrets_are_not_in_result_repr() -> None:
     assert secret not in repr(inspector_adapter.last_result)
 
 
+def test_cancellation_probe_exception_is_fail_closed() -> None:
+    def cancelled() -> bool:
+        raise RuntimeError("probe unavailable")
+
+    adapter = make_adapter({"test-a": success("test-a")}, cancelled=cancelled)
+    observed = adapter.validate(request("test-a"))
+    assert observed.passed is False
+    assert "cancellation check failed" in observed.reason
+
+
+def test_non_boolean_cancellation_probe_is_fail_closed() -> None:
+    adapter = make_adapter(
+        {"test-a": success("test-a")},
+        cancelled=lambda: 1,  # type: ignore[arg-type]
+    )
+    assert adapter.validate(request("test-a")).passed is False
+    assert adapter.last_result is not None
+    assert "non-boolean" in adapter.last_result.reason
+
+
+def test_changed_paths_inspector_exception_is_fail_closed() -> None:
+    def inspector() -> tuple[str, ...]:
+        raise OSError("worktree unavailable")
+
+    adapter = make_adapter(
+        {"test-a": success("test-a")},
+        allowed_files=ALLOWED_FILES,
+        changed_paths_inspector=inspector,
+    )
+    observed = adapter.validate(request("test-a"))
+    assert observed.passed is False
+    assert "inspector failed" in observed.reason
+
+
 def test_combined_output_limit_and_command_repr_protection() -> None:
     secret = "TOP-SECRET-SENTINEL"
     adapter = make_adapter(
@@ -340,6 +444,22 @@ def test_combined_output_limit_and_command_repr_protection() -> None:
     assert len(recorded.stdout_text.encode()) + len(recorded.stderr_text.encode()) <= 10
     assert secret not in repr(recorded)
     assert secret not in repr(adapter.last_result)
+
+
+def test_reason_and_stderr_are_bounded() -> None:
+    adapter = make_adapter(
+        {
+            "test-a": success(
+                "test-a",
+                stderr_text="e" * 1000,
+                reason="r" * 5000,
+            )
+        },
+        max_output_bytes=32,
+    )
+    assert adapter.validate(request("test-a")).passed is True
+    assert len(outcome(adapter).stderr_text.encode()) <= 32
+    assert len(outcome(adapter).reason) <= MAX_REASON_LENGTH
 
 
 @pytest.mark.parametrize(
@@ -362,6 +482,51 @@ def test_noncanonical_or_absolute_paths_are_rejected(path: str) -> None:
     assert adapter.validate(request("test-a")).passed is False
 
 
+def test_valid_posix_path_passes_and_duplicate_forbidden_outside_fail() -> None:
+    valid = make_adapter(
+        {"test-a": success("test-a", changed_paths=("src/file.py",))},
+        allowed_files=ALLOWED_FILES,
+        forbidden_paths=FORBIDDEN_PATHS,
+    )
+    assert valid.validate(request("test-a")).changed_paths == ("src/file.py",)
+
+    duplicate = make_adapter(
+        {"test-a": success("test-a", changed_paths=("src/file.py", "src/file.py"))},
+        allowed_files=ALLOWED_FILES,
+    )
+    assert duplicate.validate(request("test-a")).passed is False
+
+    forbidden = make_adapter(
+        {"test-a": success("test-a", changed_paths=(".github/workflows/ci.yml",))},
+        allowed_files=(".github/**",),
+        forbidden_paths=FORBIDDEN_PATHS,
+    )
+    assert forbidden.validate(request("test-a")).passed is False
+
+    outside = make_adapter(
+        {"test-a": success("test-a", changed_paths=("other/file.py",))},
+        allowed_files=ALLOWED_FILES,
+    )
+    assert outside.validate(request("test-a")).passed is False
+
+
+def test_inspector_and_runner_paths_share_duplicate_and_count_checks() -> None:
+    duplicate = make_adapter(
+        {"test-a": success("test-a", changed_paths=("src/file.py",))},
+        allowed_files=ALLOWED_FILES,
+        changed_paths_inspector=lambda: ("src/file.py",),
+    )
+    assert duplicate.validate(request("test-a")).passed is False
+
+    runner_paths = tuple(f"src/{index}.py" for index in range(MAX_CHANGED_PATHS))
+    excessive = make_adapter(
+        {"test-a": success("test-a", changed_paths=runner_paths)},
+        allowed_files=ALLOWED_FILES,
+        changed_paths_inspector=lambda: ("src/extra.py",),
+    )
+    assert excessive.validate(request("test-a")).passed is False
+
+
 def test_changed_path_generator_is_collected_only_to_hard_limit() -> None:
     def paths():
         for index in range(MAX_CHANGED_PATHS + 5):
@@ -373,6 +538,27 @@ def test_changed_path_generator_is_collected_only_to_hard_limit() -> None:
     )
     assert adapter.validate(request("test-a")).passed is False
     assert "bounded count" in outcome(adapter).reason
+
+
+def test_failed_command_is_never_retried_and_extra_success_cannot_replace_missing() -> None:
+    runner = FakeRunner(
+        {
+            "test-a": success("test-a"),
+            "test-b": CommandRunObservation(
+                test_id="test-b",
+                outcome="failed",
+                started=True,
+                return_code=1,
+            ),
+        }
+    )
+    adapter = FrozenTestValidationAdapter(
+        required_test_commands=commands("test-a", "test-b"), runner=runner
+    )
+    observed = adapter.validate(request())
+    assert observed.passed is False
+    assert observed.completed_tests == ()
+    assert [item.test_id for item in runner.calls] == ["test-a", "test-b"]
 
 
 def test_no_nonfinite_value_slips_through_low_level_function() -> None:
