@@ -310,36 +310,56 @@ def summarize_handoff_packet(
 def _validator_requires_containment(packet: Any) -> bool:
     """Return whether canonical validation may invoke caller-defined behavior.
 
-    This is an inertness check, not a second packet validator. It inspects only
-    exact built-in surfaces that the canonical validator may call directly.
+    This is an inertness check, not a second packet validator. It uses only
+    exact-type and direct built-in operations so the classifier itself cannot
+    dispatch to caller-controlled ``__class__`` or container methods.
     """
     if type(packet) is not dict:
         return True
     if dict.__len__(packet) > MAX_DICT_ENTRIES_PER_FIELD:
         return True
-    for key in dict.keys(packet):
-        if type(key) is not str:
-            return True
-
-    branch = dict.get(packet, "branch")
-    if isinstance(branch, str) and type(branch) is not str:
+    if any(type(key) is not str for key in dict.keys(packet)):
         return True
 
-    pr_number = dict.get(packet, "pr_number")
-    if isinstance(pr_number, int) and type(pr_number) not in (int, bool):
+    missing = object()
+    for field in ("objective", "current_phase"):
+        value = dict.get(packet, field, missing)
+        if value is not missing and type(value) is not str:
+            return True
+
+    branch = dict.get(packet, "branch", missing)
+    if branch is not missing and branch is not None and type(branch) is not str:
         return True
 
-    compute_limits = dict.get(packet, "compute_limits")
-    if isinstance(compute_limits, Mapping):
-        if type(compute_limits) is not dict:
+    pr_number = dict.get(packet, "pr_number", missing)
+    if (
+        pr_number is not missing
+        and pr_number is not None
+        and type(pr_number) not in (int, bool)
+    ):
+        return True
+
+    for field in _LIST_PACKET_FIELDS:
+        value = dict.get(packet, field, missing)
+        if value is not missing and type(value) is not list:
             return True
-        if dict.__len__(compute_limits) > MAX_DICT_ENTRIES_PER_FIELD:
-            return True
-        for key in dict.keys(compute_limits):
-            if type(key) is not str:
-                return True
-        max_files = dict.get(compute_limits, "max_files_to_inspect")
-        if isinstance(max_files, int) and type(max_files) not in (int, bool):
+
+    compute_limits = dict.get(packet, "compute_limits", missing)
+    if compute_limits is missing:
+        return False
+    if type(compute_limits) is not dict:
+        return True
+    if dict.__len__(compute_limits) > MAX_DICT_ENTRIES_PER_FIELD:
+        return True
+    if any(type(key) is not str for key in dict.keys(compute_limits)):
+        return True
+
+    max_files = dict.get(compute_limits, "max_files_to_inspect", missing)
+    if max_files is not missing and type(max_files) not in (int, bool):
+        return True
+    for field in ("targeted_tests_only", "no_full_scheduler_suite"):
+        value = dict.get(compute_limits, field, missing)
+        if value is not missing and type(value) is not bool:
             return True
 
     return False

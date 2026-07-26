@@ -872,6 +872,55 @@ def test_streamed_internal_payload_honors_exact_fingerprint_boundary(monkeypatch
         packet_summary._fingerprint_internal_payload({"text": "emoji 😀"}, version="v")
 
 
+class HostileClassProbe:
+    @property
+    def __class__(self):
+        raise RuntimeError("SECRET hostile __class__ leak")
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["branch", "pr_number", "objective", "current_phase", "changed_files"],
+)
+def test_hostile_class_probe_in_validator_field_fails_closed_without_leak(field):
+    packet = sample_packet()
+    packet[field] = HostileClassProbe()
+    result = summarize_handoff_packet(packet, evidence=current_evidence(sample_packet()))
+    assert result.trust_status == TRUST_UNVERIFIABLE
+    assert result.trust_reason == REASON_PACKET_CONTENT_UNSAFE
+    assert "SECRET hostile __class__ leak" not in result.text
+    assert "context evidence only" in result.text
+
+
+def test_hostile_class_probe_compute_limits_container_fails_closed_without_leak():
+    packet = sample_packet()
+    packet["compute_limits"] = HostileClassProbe()
+    result = summarize_handoff_packet(packet, evidence=current_evidence(sample_packet()))
+    assert result.trust_status == TRUST_UNVERIFIABLE
+    assert result.trust_reason == REASON_PACKET_CONTENT_UNSAFE
+    assert "SECRET hostile __class__ leak" not in result.text
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["max_files_to_inspect", "targeted_tests_only", "no_ful_scheduler_suite"],
+)
+def test_hostile_class_probe_compute_limit_value_fails_closed_without_leak(field):
+    packet = sample_packet()
+    packet["compute_limits"][field] = HostileClassProbe()
+    result = summarize_handoff_packet(packet, evidence=current_evidence(sample_packet()))
+    assert result.trust_status == TRUST_UNVERIFIABLE
+    assert result.trust_reason == REASON_PACKET_CONTENT_UNSAFE
+    assert "SECRET hostile __class__ leak" not in result.text
+
+
+def test_containment_classifier_never_uses_isinstance():
+    import inspect
+
+    source = inspect.getsource(packet_summary._validator_requires_containment)
+    assert "isinstance(" not in source
+
+
 # Full notice coverage.
 NOTICE_FRAGMENTS = [
     "context evidence only",
