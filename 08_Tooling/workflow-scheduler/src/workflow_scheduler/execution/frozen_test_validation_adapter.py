@@ -680,6 +680,41 @@ def run_frozen_test_validation(
     )
 
 
+def _public_validation_reason(result: FrozenTestValidationResult) -> str:
+    """Return one stable non-sensitive classification for the public observation."""
+
+    diagnostic = result.reason
+    command_reasons = tuple(item.reason for item in result.command_outcomes)
+
+    if result.passed:
+        return ""
+    if diagnostic.startswith("cancellation check failed:"):
+        return "cancellation check failed"
+    if diagnostic == "cancellation check returned a non-boolean value":
+        return "cancellation check returned invalid evidence"
+    if diagnostic.startswith("changed paths inspector failed:"):
+        return "changed paths inspector failed"
+    if diagnostic.startswith("changed path evidence failed:") or any(
+        reason.startswith("changed path evidence failed:") for reason in command_reasons
+    ):
+        return "changed path evidence failed"
+    if result.total_timed_out:
+        return "validation timed out"
+    if result.cancellation_requested:
+        return "validation cancelled"
+    if diagnostic.startswith("supplied required tests do not match"):
+        return "frozen required tests do not match"
+    if diagnostic.startswith("completed test count exceeds"):
+        return "validation evidence exceeded limits"
+    if diagnostic.startswith("required tests did not complete"):
+        if any(item.outcome == "unavailable" for item in result.command_outcomes):
+            return "validation dependency unavailable"
+        return "required tests did not complete"
+    if diagnostic.startswith("changed path") or diagnostic.startswith("changed paths"):
+        return "changed path validation failed"
+    return "validation failed"
+
+
 def _to_pilot_validation_observation(
     result: FrozenTestValidationResult,
 ) -> PilotValidationObservation:
@@ -688,7 +723,7 @@ def _to_pilot_validation_observation(
         passed=result.passed,
         completed_tests=result.completed_tests,
         changed_paths=result.changed_paths,
-        reason=result.reason,
+        reason=_public_validation_reason(result),
     )
 
 

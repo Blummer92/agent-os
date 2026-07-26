@@ -84,6 +84,16 @@ class Clock:
         return self.last
 
 
+class ExplodingPaths:
+    def __init__(self, secret: str, error_type: type[Exception] = RuntimeError) -> None:
+        self.secret = secret
+        self.error_type = error_type
+
+    def __iter__(self):
+        yield "src/file.py"
+        raise self.error_type(self.secret)
+
+
 def make_adapter(
     responses: dict[str, object],
     *,
@@ -392,6 +402,88 @@ def test_hook_exception_secrets_are_not_in_result_repr() -> None:
     assert secret not in repr(inspector_adapter.last_result)
 
 
+@pytest.mark.parametrize("error_type", [RuntimeError, OSError])
+def test_cancellation_exception_is_private_and_public_reason_is_stable(
+    error_type: type[Exception],
+) -> None:
+    secret = f"CANCELLATION-SECRET-{error_type.__name__}"
+
+    def cancelled() -> bool:
+        raise error_type(secret)
+
+    adapter = make_adapter({"test-a": success("test-a")}, cancelled=cancelled)
+    observed = adapter.validate(request("test-a"))
+
+    assert observed.passed is False
+    assert observed.reason == "cancellation check failed"
+    assert secret not in observed.reason
+    assert secret not in repr(observed)
+    assert adapter.last_result is not None
+    assert secret in adapter.last_result.reason
+    assert secret not in repr(adapter.last_result)
+
+
+@pytest.mark.parametrize("error_type", [RuntimeError, OSError])
+def test_inspector_exception_is_private_and_public_reason_is_stable(
+    error_type: type[Exception],
+) -> None:
+    secret = f"INSPECTOR-SECRET-{error_type.__name__}"
+
+    def inspector() -> tuple[str, ...]:
+        raise error_type(secret)
+
+    adapter = make_adapter(
+        {"test-a": success("test-a")},
+        allowed_files=ALLOWED_FILES,
+        changed_paths_inspector=inspector,
+    )
+    observed = adapter.validate(request("test-a"))
+
+    assert observed.passed is False
+    assert observed.reason == "changed paths inspector failed"
+    assert secret not in observed.reason
+    assert secret not in repr(observed)
+    assert adapter.last_result is not None
+    assert secret in adapter.last_result.reason
+    assert secret not in repr(adapter.last_result)
+
+
+def test_inspector_iterable_exception_is_private_and_public_reason_is_stable() -> None:
+    secret = "INSPECTOR-ITERABLE-SECRET"
+    adapter = make_adapter(
+        {"test-a": success("test-a")},
+        allowed_files=ALLOWED_FILES,
+        changed_paths_inspector=lambda: ExplodingPaths(secret),  # type: ignore[arg-type]
+    )
+    observed = adapter.validate(request("test-a"))
+
+    assert observed.passed is False
+    assert observed.reason == "changed path evidence failed"
+    assert secret not in observed.reason
+    assert secret not in repr(observed)
+    assert adapter.last_result is not None
+    assert secret in adapter.last_result.reason
+    assert secret not in repr(adapter.last_result)
+
+
+def test_runner_path_iterable_exception_is_private_and_public_reason_is_stable() -> None:
+    secret = "RUNNER-PATH-ITERABLE-SECRET"
+    adapter = make_adapter(
+        {"test-a": success("test-a", changed_paths=ExplodingPaths(secret))},
+        allowed_files=ALLOWED_FILES,
+    )
+    observed = adapter.validate(request("test-a"))
+
+    assert observed.passed is False
+    assert observed.reason == "changed path evidence failed"
+    assert secret not in observed.reason
+    assert secret not in repr(observed)
+    assert adapter.last_result is not None
+    assert secret in outcome(adapter).reason
+    assert secret not in repr(outcome(adapter))
+    assert secret not in repr(adapter.last_result)
+
+
 def test_cancellation_probe_exception_is_fail_closed() -> None:
     def cancelled() -> bool:
         raise RuntimeError("probe unavailable")
@@ -399,7 +491,7 @@ def test_cancellation_probe_exception_is_fail_closed() -> None:
     adapter = make_adapter({"test-a": success("test-a")}, cancelled=cancelled)
     observed = adapter.validate(request("test-a"))
     assert observed.passed is False
-    assert "cancellation check failed" in observed.reason
+    assert observed.reason == "cancellation check failed"
 
 
 def test_non_boolean_cancellation_probe_is_fail_closed() -> None:
@@ -407,7 +499,9 @@ def test_non_boolean_cancellation_probe_is_fail_closed() -> None:
         {"test-a": success("test-a")},
         cancelled=lambda: 1,  # type: ignore[arg-type]
     )
-    assert adapter.validate(request("test-a")).passed is False
+    observed = adapter.validate(request("test-a"))
+    assert observed.passed is False
+    assert observed.reason == "cancellation check returned invalid evidence"
     assert adapter.last_result is not None
     assert "non-boolean" in adapter.last_result.reason
 
@@ -423,7 +517,7 @@ def test_changed_paths_inspector_exception_is_fail_closed() -> None:
     )
     observed = adapter.validate(request("test-a"))
     assert observed.passed is False
-    assert "inspector failed" in observed.reason
+    assert observed.reason == "changed paths inspector failed"
 
 
 def test_combined_output_limit_and_command_repr_protection() -> None:
