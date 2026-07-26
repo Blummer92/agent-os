@@ -36,7 +36,11 @@ DEFAULT_TOTAL_TIMEOUT_SECONDS = 300.0
 
 CommandOutcome = Literal["succeeded", "failed", "timed-out", "cancelled", "unavailable"]
 _SUPPORTED_OUTCOMES = frozenset({"succeeded", "failed", "timed-out", "cancelled", "unavailable"})
-_RECOVERABLE_RUNNER_EXCEPTIONS = (TypeError, ValueError, RuntimeError, OSError)
+# Ordinary operational failures raised at an injected boundary fail closed through
+# the bounded validation contract. Process-control exceptions (KeyboardInterrupt,
+# SystemExit, GeneratorExit) derive from BaseException rather than Exception, so
+# they keep propagating; this module never catches BaseException.
+_BOUNDARY_EXCEPTIONS: tuple[type[Exception], ...] = (Exception,)
 
 
 class FrozenTestValidationError(ValueError):
@@ -256,6 +260,16 @@ def _bounded_reason(text: str) -> str:
     return normalized[:MAX_REASON_LENGTH]
 
 
+def _boundary_detail(classification: str, exc: Exception) -> str:
+    """Return one bounded private diagnostic for an injected-boundary failure.
+
+    The returned text is retained only in local evidence, never in the public
+    observation, which carries the stable classification alone.
+    """
+
+    return _bounded_reason(f"{classification}: {type(exc).__name__}: {exc}")
+
+
 def _validate_positive_bound(value: object, *, name: str, maximum: float) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise FrozenTestValidationError(f"{name} must be a positive finite number")
@@ -286,11 +300,11 @@ def _collect_changed_paths(value: object, *, maximum: int) -> tuple[str, ...]:
             if not isinstance(item, str):
                 raise FrozenTestValidationError("every changed path must be a string")
             collected.append(item)
-    except _RECOVERABLE_RUNNER_EXCEPTIONS as exc:
+    except _BOUNDARY_EXCEPTIONS as exc:
         if isinstance(exc, FrozenTestValidationError):
             raise
         raise FrozenTestValidationError(
-            _bounded_reason(f"changed path evidence failed: {type(exc).__name__}: {exc}")
+            _boundary_detail("changed path evidence failed", exc)
         ) from exc
     return tuple(collected)
 
@@ -462,10 +476,8 @@ def run_frozen_test_validation(
         if cancelled is not None:
             try:
                 cancellation_value = cancelled()
-            except _RECOVERABLE_RUNNER_EXCEPTIONS as exc:
-                hook_error = _bounded_reason(
-                    f"cancellation check failed: {type(exc).__name__}: {exc}"
-                )
+            except _BOUNDARY_EXCEPTIONS as exc:
+                hook_error = _boundary_detail("cancellation check failed", exc)
                 outcomes.append(
                     CommandRunObservation(
                         test_id=command.test_id,
@@ -531,7 +543,7 @@ def run_frozen_test_validation(
         started_at = time.monotonic()
         try:
             raw_observation = runner.run(request)
-        except _RECOVERABLE_RUNNER_EXCEPTIONS as exc:
+        except _BOUNDARY_EXCEPTIONS as exc:
             elapsed = time.monotonic() - started_at
             if elapsed > effective_timeout or remaining() <= 0:
                 total_timed_out = remaining() <= 0
@@ -546,7 +558,7 @@ def run_frozen_test_validation(
                     test_id=command.test_id,
                     outcome="unavailable",
                     started=False,
-                    reason=_bounded_reason(f"runner raised {type(exc).__name__}: {exc}"),
+                    reason=_boundary_detail("runner raised", exc),
                 )
         else:
             elapsed = time.monotonic() - started_at
@@ -612,11 +624,11 @@ def run_frozen_test_validation(
         except TimeoutError as exc:
             total_timed_out = True
             path_error = str(exc)
-        except _RECOVERABLE_RUNNER_EXCEPTIONS as exc:
-            path_error = _bounded_reason(
-                str(exc)
+        except _BOUNDARY_EXCEPTIONS as exc:
+            path_error = (
+                _bounded_reason(str(exc))
                 if isinstance(exc, FrozenTestValidationError)
-                else f"changed paths inspector failed: {type(exc).__name__}: {exc}"
+                else _boundary_detail("changed paths inspector failed", exc)
             )
         else:
             seen_paths: set[str] = set()
