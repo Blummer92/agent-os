@@ -298,6 +298,14 @@ class _HostileEquality:
         raise AssertionError("caller-controlled equality executed")
 
 
+class _HostileString(str):
+    def __eq__(self, other: object) -> bool:
+        raise AssertionError("caller-controlled string equality executed")
+
+    def __hash__(self) -> int:
+        raise AssertionError("caller-controlled string hash executed")
+
+
 def test_hostile_non_string_metadata_fails_closed_without_equality_dispatch() -> None:
     plan = _plan()
     record = replace(
@@ -309,6 +317,25 @@ def test_hostile_non_string_metadata_fails_closed_without_equality_dispatch() ->
     assert summary.status == "manual-review"
     assert "records.build-id" in summary.reason_codes
     assert "records.machine-type" in summary.reason_codes
+
+
+def test_hostile_schema_and_string_subclasses_fail_closed_without_dispatch() -> None:
+    plan = _plan()
+    schema_summary = build_compute_evidence_summary(
+        plan,
+        (),
+        schema_version=_HostileEquality(),
+    )
+    assert schema_summary.status == "manual-review"
+    assert "summary.schema-version" in schema_summary.reason_codes
+
+    record = replace(
+        _record(plan, "reused"),
+        record_id=_HostileString("record-1"),
+    )
+    record_summary = _summary(plan, (record,))
+    assert record_summary.status == "manual-review"
+    assert "records.record-id" in record_summary.reason_codes
 
 
 def test_duplicate_record_decision_and_build_ids_fail_closed() -> None:
