@@ -8,7 +8,7 @@ This roadmap coordinates repository standards and validation. It does not store 
 
 ## Current State
 
-Curriculum Language System v1 and its three post-v1 extensions are complete. The only active CLS work is roadmap synchronization through #639.
+Curriculum Language System v1 and its three post-v1 extensions are complete. No CLS implementation issue is currently active; future work requires a newly authorized focused issue.
 
 - GitHub owns CLS standards, overlays, tests, automation-readable rules, and this roadmap.
 - Notion may hold actual unit vocabulary, lesson vocabulary, teacher planning, and source evidence after target and owner approval.
