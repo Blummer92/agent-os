@@ -251,12 +251,8 @@ def verify_remote_validation_provenance(
                 "identity",
             )
         if expected is not None:
-            _compare(
-                asdict(expected),
-                {key: getattr(receipt, key) for key in asdict(expected)},
-                reasons["identity-mismatch"],
-                "identity",
-            )
+            _compare(asdict(expected), {key: getattr(receipt, key) for key in asdict(expected)},
+                     reasons["identity-mismatch"], "identity")
 
         created, retrieved, expires = map(
             _timestamp, (receipt.evidence_created_at, receipt.retrieved_at, receipt.expires_at)
@@ -300,6 +296,11 @@ def to_supplied_compute_record(
         raise ValueError("only verified provenance may project to compute evidence")
     if receipt.dispatch_decision_id != dispatch_decision.decision_id:
         raise ValueError("dispatch decision ID mismatch")
+    if (
+        dispatch_decision.status != "launch-eligible"
+        or dispatch_decision.launch_recommended is not True
+    ):
+        raise ValueError("compute projection requires launch-eligible decision")
     return SuppliedComputeRecord(
         record_id=result.verification_id,
         dispatch_decision=dispatch_decision,
@@ -311,9 +312,7 @@ def to_supplied_compute_record(
     )
 
 
-def serialize_provenance_verification(
-    result: ProvenanceVerificationResult,
-) -> dict[str, object]:
+def serialize_provenance_verification(result: ProvenanceVerificationResult) -> dict[str, object]:
     if type(result) is not ProvenanceVerificationResult:
         raise TypeError("result must be ProvenanceVerificationResult")
     payload = _payload(result)
@@ -332,11 +331,8 @@ def provenance_verification_id(result: ProvenanceVerificationResult) -> str:
     return str(serialize_provenance_verification(result)["verification_id"])
 
 
-def _result(
-    receipt: NormalizedVerificationReceipt | None,
-    state: TrustState,
-    reasons: set[str],
-) -> ProvenanceVerificationResult:
+def _result(receipt: NormalizedVerificationReceipt | None, state: TrustState,
+            reasons: set[str]) -> ProvenanceVerificationResult:
     codes = tuple(sorted(reasons))
     if not codes or len(codes) > MAX_PROVENANCE_REASON_CODES:
         raise ValueError("reason codes outside bounded contract")
@@ -350,8 +346,7 @@ def _result(
     )
     return replace(
         preliminary,
-        verification_id="provenance-verification:"
-        + _digest(
+        verification_id="provenance-verification:" + _digest(
             "agent-os-validation-provenance-verification:v1", _payload(preliminary)
         ),
     )
@@ -373,19 +368,9 @@ def _receipt_errors(receipt: NormalizedVerificationReceipt) -> set[str]:
     if receipt.schema_version != PROVENANCE_RECEIPT_SCHEMA_VERSION:
         errors.add("receipt.schema-version")
     identifiers = (
-        "receipt_id",
-        "trust_root_id",
-        "verifier_id",
-        "evidence_source",
-        "producer_identity",
-        "provider",
-        "provider_account",
-        "provider_location",
-        "build_id",
-        "trigger_identity",
-        "replay_id",
-        "profile",
-        "selector_version",
+        "receipt_id", "trust_root_id", "verifier_id", "evidence_source",
+        "producer_identity", "provider", "provider_account", "provider_location",
+        "build_id", "trigger_identity", "replay_id", "profile", "selector_version",
     )
     for name in identifiers:
         if not _identifier(getattr(receipt, name)):
@@ -401,10 +386,10 @@ def _receipt_errors(receipt: NormalizedVerificationReceipt) -> set[str]:
         "proof-digest": _match(_SHA256, receipt.proof_digest),
         "proof-type": type(receipt.proof_type) is str,
         "terminal-status": receipt.terminal_status in _TERMINAL,
-        "machine-type": receipt.machine_type == "unavailable"
-        or _safe(receipt.machine_type),
-        "elapsed-seconds": receipt.elapsed_seconds is None
-        or (type(receipt.elapsed_seconds) is int and receipt.elapsed_seconds >= 0),
+        "machine-type": receipt.machine_type == "unavailable" or _safe(receipt.machine_type),
+        "elapsed-seconds": receipt.elapsed_seconds is None or (
+            type(receipt.elapsed_seconds) is int and receipt.elapsed_seconds >= 0
+        ),
     }
     for label, valid in checks.items():
         if not valid:
@@ -415,24 +400,16 @@ def _receipt_errors(receipt: NormalizedVerificationReceipt) -> set[str]:
     return errors
 
 
-def _compare(
-    expected: dict[str, object],
-    actual: dict[str, object],
-    reasons: set[str],
-    prefix: str,
-) -> None:
+def _compare(expected: dict[str, object], actual: dict[str, object],
+             reasons: set[str], prefix: str) -> None:
     for key, value in expected.items():
         normalized = key.replace("_", "-")
         if actual.get(key) != value:
             reasons.add(f"{prefix}.{normalized}")
 
 
-def _identifier_set(
-    value: object,
-    limit: int,
-    *,
-    allow_empty: bool = False,
-) -> frozenset[str] | None:
+def _identifier_set(value: object, limit: int, *, allow_empty: bool = False
+                    ) -> frozenset[str] | None:
     if type(value) is not tuple or len(value) > limit or (not value and not allow_empty):
         return None
     if len(set(value)) != len(value) or any(not _identifier(item) for item in value):
@@ -446,10 +423,8 @@ def _identifier(value: object) -> bool:
 
 def _safe(value: object, limit: int = MAX_PROVENANCE_STRING_LENGTH) -> bool:
     return (
-        type(value) is str
-        and 0 < len(value) <= limit
-        and not _CONTROL.search(value)
-        and not _SECRET.search(value)
+        type(value) is str and 0 < len(value) <= limit
+        and not _CONTROL.search(value) and not _SECRET.search(value)
     )
 
 
@@ -490,9 +465,4 @@ def _digest(domain: str, payload: object) -> str:
 
 
 def _canonical(payload: object) -> bytes:
-    return json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-    ).encode("ascii")
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
