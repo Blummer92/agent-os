@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from scripts.agent_os_remote_validation import (
+    DispatchEvidence,
     ExpectedProvenanceIdentity,
     NormalizedVerificationReceipt,
     ProvenanceVerificationResult,
@@ -186,11 +187,7 @@ def test_false_proof_flag_is_unverified_not_presence_triggered_manual_review():
         ),
     ],
 )
-def test_exact_identity_mismatches_fail_closed(
-    field: str,
-    value: object,
-    reason: str,
-):
+def test_exact_identity_mismatches_fail_closed(field: str, value: object, reason: str):
     result = _verify(_receipt(**{field: value}))
     assert result.state == "identity-mismatch"
     assert reason in result.reason_codes
@@ -216,10 +213,7 @@ def test_moved_current_head_and_expired_receipt_are_stale():
         ({"verifier_id": "unknown-verifier:v1"}, "proof.verifier"),
     ],
 )
-def test_unknown_proof_or_trust_root_is_unsupported(
-    overrides: dict[str, object],
-    reason: str,
-):
+def test_unknown_proof_or_trust_root_is_unsupported(overrides: dict[str, object], reason: str):
     result = _verify(_receipt(**overrides))
     assert result.state == "unsupported"
     assert result.reason_codes == (reason,)
@@ -271,10 +265,7 @@ def test_timestamp_order_and_future_retrieval_require_manual_review():
         )
     )
     future = _verify(
-        _receipt(
-            retrieved_at="2026-07-27T18:30:00Z",
-            expires_at="2026-07-27T19:00:00Z",
-        )
+        _receipt(retrieved_at="2026-07-27T18:30:00Z", expires_at="2026-07-27T19:00:00Z")
     )
     assert reversed_time.state == "manual-review"
     assert "receipt.timestamp-order" in reversed_time.reason_codes
@@ -323,10 +314,28 @@ def test_compute_projection_rejects_unverified_or_mismatched_results():
         to_supplied_compute_record(verified, other_decision)
 
 
-def test_schema_is_closed_portable_structure_only_and_matches_receipt_contract():
-    schema_path = Path(provenance_module.__file__).with_name(
-        "provenance_input.schema.json"
+def test_compute_projection_rejects_verified_reuse_as_a_new_build():
+    plan = _plan()
+    evidence = DispatchEvidence(
+        record_id="prior-success",
+        validation_plan=plan,
+        attempt=0,
+        state="succeeded",
     )
+    reused = evaluate_dispatch_decision(
+        plan,
+        (evidence,),
+        current_pr_head_sha=plan.head_sha,
+    )
+    receipt = _receipt(dispatch_decision_id=reused.decision_id)
+    verified = _verify(receipt, dispatch_decision=reused)
+    assert verified.state == "verified"
+    with pytest.raises(ValueError, match="launch-eligible"):
+        to_supplied_compute_record(verified, reused)
+
+
+def test_schema_is_closed_portable_structure_only_and_matches_receipt_contract():
+    schema_path = Path(provenance_module.__file__).with_name("provenance_input.schema.json")
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
     assert schema["additionalProperties"] is False
