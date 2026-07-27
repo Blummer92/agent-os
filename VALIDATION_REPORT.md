@@ -93,6 +93,5 @@ Validation results are evidence only. They do not authorize writes, readiness or
 - Only one retry is permitted for the approved transient-infrastructure class; excess retries require `manual-review`.
 - Missing build ID, terminal status, machine type, or elapsed seconds remains `unavailable`, never inferred.
 - `within-policy` is clean evidence; `warning` needs attention; contradictory or excessive evidence is `manual-review`.
-- Evidence is non-authorizing; follow `00_Governance/write-authorization-policy.md` and protected-branch governance.
-- Optional budget alerts require a separate approved handoff with verified project and billing scope; this report gives no prices, credentials, IAM steps, or automatic shutdown action.
+- Evidence is non-authorizing; governance applies, and optional budget alerts require a separate approved handoff with verified project and billing scope—never inferred prices, credentials, IAM steps, or automatic shutdown.
 - Rollback removes the compute-evidence module, exports, tests, and this section without external cleanup.
