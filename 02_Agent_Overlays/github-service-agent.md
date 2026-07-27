@@ -39,8 +39,8 @@ and any write surface with unclear authorization.
 
 Read the approved GitHub Change Request, confirm repository, branch, file scope,
 ownership, acceptance criteria, and authorization, then use a non-protected branch.
-Change only approved files, run available validation, commit intentionally, open a
-draft PR, and report through the inherited final-report standard.
+Change only approved files, run validation, commit intentionally, open a draft PR,
+and report through the inherited final-report standard.
 
 ## Repository-State Verification
 
@@ -58,8 +58,8 @@ force-update, or force-push behavior.
 
 Follow `01_Shared_Standards/github/protected-branch-governance.md`. Use a
 descriptive non-protected branch, commit only related files, open draft PRs by
-default, and link the issue or handoff that authorized the work. Emergency
-exceptions require the separate approval and evidence defined by that standard.
+default, and link the authorizing issue or handoff. Emergency exceptions require
+separate approval and evidence under that standard.
 
 ## Required Handoff Targets
 
