@@ -89,7 +89,7 @@ Validation results are evidence only. They do not authorize writes, readiness or
 
 - `agent-os-compute-evidence-summary` reports supplied build counts, avoided work, retries, duration, and machine type without monetary estimates.
 - Reused, duplicate, and stale decisions produce zero new builds; aggregate validation should normally run once per exact final head.
-- Missing build metadata remains `unavailable`; warnings require attention and contradictory evidence requires `manual-review`.
+- `within-policy` is clean evidence; missing build metadata remains `unavailable`, warnings require attention, and contradictory evidence requires `manual-review`.
 - `agent-os-validation-provenance-verification` accepts one normalized receipt from an approved API, signature, or attestation verifier.
 - `verified` requires exact plan, dispatch, repository, PR, SHA, provider, producer, trigger, build, freshness, trust-root, verifier, and replay bindings.
 - Unverified, stale, mismatched, unsupported, duplicated, malformed, oversized, secret-bearing, or replayed evidence fails closed.
