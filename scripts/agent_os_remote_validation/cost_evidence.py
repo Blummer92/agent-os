@@ -118,21 +118,24 @@ def build_compute_evidence_summary(
     warnings: set[str] = set()
     manual: set[str] = set()
 
-    plan = validation_plan if isinstance(validation_plan, ValidationPlan) else None
+    plan = validation_plan if type(validation_plan) is ValidationPlan else None
     plan_reasons = _plan_boundary_reasons(validation_plan)
     if plan_reasons:
         invalid.add("plan.invalid")
         invalid.update(f"plan-detail.{reason}" for reason in plan_reasons)
 
-    if schema_version != COMPUTE_EVIDENCE_SCHEMA_VERSION:
+    if (
+        type(schema_version) is not str
+        or schema_version != COMPUTE_EVIDENCE_SCHEMA_VERSION
+    ):
         invalid.add("summary.schema-version")
 
     records: tuple[SuppliedComputeRecord, ...] = ()
-    if not isinstance(supplied_records, tuple):
+    if type(supplied_records) is not tuple:
         invalid.add("records.invalid-collection")
     elif len(supplied_records) > MAX_COMPUTE_RECORDS:
         invalid.add("records.collection-limit")
-    elif any(not isinstance(item, SuppliedComputeRecord) for item in supplied_records):
+    elif any(type(item) is not SuppliedComputeRecord for item in supplied_records):
         invalid.add("records.invalid-record-type")
     else:
         records = supplied_records
@@ -284,7 +287,7 @@ def serialize_compute_evidence_summary(
     summary: ComputeEvidenceSummary,
 ) -> dict[str, object]:
     """Return canonical summary data after verifying its semantic identity."""
-    if not isinstance(summary, ComputeEvidenceSummary):
+    if type(summary) is not ComputeEvidenceSummary:
         raise TypeError("summary must be ComputeEvidenceSummary")
     payload = _summary_payload(summary)
     expected = "compute-evidence-summary:" + _semantic_digest(
@@ -353,7 +356,7 @@ def _summary(
 
 
 def _plan_boundary_reasons(plan: object) -> tuple[str, ...]:
-    if not isinstance(plan, ValidationPlan):
+    if type(plan) is not ValidationPlan:
         return ("plan.invalid-type",)
     if not _runtime_safe_plan(plan):
         return ("plan.malformed-runtime",)
@@ -365,21 +368,20 @@ def _plan_boundary_reasons(plan: object) -> tuple[str, ...]:
 
 def _runtime_safe_plan(plan: ValidationPlan) -> bool:
     return (
-        isinstance(plan.selector_version, str)
-        and isinstance(plan.repository, str)
-        and isinstance(plan.pull_request, int)
-        and not isinstance(plan.pull_request, bool)
-        and isinstance(plan.base_sha, str)
-        and isinstance(plan.head_sha, str)
-        and isinstance(plan.profile, str)
-        and isinstance(plan.commands, tuple)
-        and all(isinstance(command, str) for command in plan.commands)
-        and isinstance(plan.command_set_digest, str)
-        and isinstance(plan.reason_codes, tuple)
-        and all(isinstance(reason, str) for reason in plan.reason_codes)
-        and isinstance(plan.remote_build_required, bool)
-        and isinstance(plan.execution_authorized, bool)
-        and isinstance(plan.side_effects_performed, bool)
+        type(plan.selector_version) is str
+        and type(plan.repository) is str
+        and type(plan.pull_request) is int
+        and type(plan.base_sha) is str
+        and type(plan.head_sha) is str
+        and type(plan.profile) is str
+        and type(plan.commands) is tuple
+        and all(type(command) is str for command in plan.commands)
+        and type(plan.command_set_digest) is str
+        and type(plan.reason_codes) is tuple
+        and all(type(reason) is str for reason in plan.reason_codes)
+        and type(plan.remote_build_required) is bool
+        and type(plan.execution_authorized) is bool
+        and type(plan.side_effects_performed) is bool
     )
 
 
@@ -390,27 +392,25 @@ def _record_reasons(
     reasons: set[str] = set()
     if not _identifier(record.record_id, _RECORD_ID):
         reasons.add("records.record-id")
-    if not isinstance(record.remote_build_triggered, bool):
+    if type(record.remote_build_triggered) is not bool:
         reasons.add("records.remote-build-triggered")
     if not _unavailable_or_identifier(record.build_id, _BUILD_ID):
         reasons.add("records.build-id")
     if (
-        not isinstance(record.terminal_status, str)
+        type(record.terminal_status) is not str
         or record.terminal_status not in _TERMINAL_STATUSES
     ):
         reasons.add("records.terminal-status")
     if not _unavailable_or_text(record.machine_type):
         reasons.add("records.machine-type")
     if record.elapsed_seconds is not None and (
-        not isinstance(record.elapsed_seconds, int)
-        or isinstance(record.elapsed_seconds, bool)
-        or record.elapsed_seconds < 0
+        type(record.elapsed_seconds) is not int or record.elapsed_seconds < 0
     ):
         reasons.add("records.elapsed-seconds")
     if not _valid_decision(record.dispatch_decision):
         reasons.add("records.dispatch-decision")
 
-    if reasons or not isinstance(record.dispatch_decision, DispatchDecision):
+    if reasons or type(record.dispatch_decision) is not DispatchDecision:
         return tuple(sorted(reasons))
 
     decision = record.dispatch_decision
@@ -453,7 +453,7 @@ def _record_reasons(
 
 
 def _valid_decision(decision: object) -> bool:
-    if not isinstance(decision, DispatchDecision):
+    if type(decision) is not DispatchDecision:
         return False
     if not _runtime_safe_decision(decision):
         return False
@@ -482,28 +482,22 @@ def _valid_decision(decision: object) -> bool:
 
 def _runtime_safe_decision(decision: DispatchDecision) -> bool:
     return (
-        isinstance(decision.schema_name, str)
-        and isinstance(decision.schema_version, str)
-        and isinstance(decision.status, str)
-        and isinstance(decision.decision_id, str)
+        type(decision.schema_name) is str
+        and type(decision.schema_version) is str
+        and type(decision.status) is str
+        and type(decision.decision_id) is str
         and _fullmatch(_DECISION_ID, decision.decision_id)
         and (
             decision.dispatch_identity is None
-            or isinstance(decision.dispatch_identity, str)
+            or type(decision.dispatch_identity) is str
         )
-        and (decision.repository is None or isinstance(decision.repository, str))
-        and (
-            decision.pull_request is None
-            or (
-                isinstance(decision.pull_request, int)
-                and not isinstance(decision.pull_request, bool)
-            )
-        )
+        and (decision.repository is None or type(decision.repository) is str)
+        and (decision.pull_request is None or type(decision.pull_request) is int)
         and (decision.head_sha is None or _fullmatch(_SHA40, decision.head_sha))
-        and (decision.profile is None or isinstance(decision.profile, str))
+        and (decision.profile is None or type(decision.profile) is str)
         and (
             decision.selector_version is None
-            or isinstance(decision.selector_version, str)
+            or type(decision.selector_version) is str
         )
         and (
             decision.command_set_digest is None
@@ -511,19 +505,13 @@ def _runtime_safe_decision(decision: DispatchDecision) -> bool:
             or _fullmatch(_HEX64, decision.command_set_digest)
         )
         and (decision.plan_id is None or _fullmatch(_PLAN_ID, decision.plan_id))
-        and isinstance(decision.launch_recommended, bool)
-        and isinstance(decision.retry_recommended, bool)
-        and (
-            decision.retry_attempt is None
-            or (
-                isinstance(decision.retry_attempt, int)
-                and not isinstance(decision.retry_attempt, bool)
-            )
-        )
-        and isinstance(decision.matched_record_ids, tuple)
-        and all(isinstance(value, str) for value in decision.matched_record_ids)
-        and isinstance(decision.reason_codes, tuple)
-        and all(isinstance(value, str) for value in decision.reason_codes)
+        and type(decision.launch_recommended) is bool
+        and type(decision.retry_recommended) is bool
+        and (decision.retry_attempt is None or type(decision.retry_attempt) is int)
+        and type(decision.matched_record_ids) is tuple
+        and all(type(value) is str for value in decision.matched_record_ids)
+        and type(decision.reason_codes) is tuple
+        and all(type(value) is str for value in decision.reason_codes)
         and decision.execution_authorized is False
         and decision.side_effects_performed is False
     )
@@ -586,7 +574,7 @@ def _canonical_bytes(payload: dict[str, object]) -> bytes:
 
 def _identifier(value: object, pattern: re.Pattern[str]) -> bool:
     return (
-        isinstance(value, str)
+        type(value) is str
         and bool(value)
         and len(value) <= MAX_COMPUTE_STRING_LENGTH
         and _CONTROL.search(value) is None
@@ -596,13 +584,13 @@ def _identifier(value: object, pattern: re.Pattern[str]) -> bool:
 
 
 def _unavailable_or_identifier(value: object, pattern: re.Pattern[str]) -> bool:
-    return isinstance(value, str) and (
+    return type(value) is str and (
         value == "unavailable" or _identifier(value, pattern)
     )
 
 
 def _unavailable_or_text(value: object) -> bool:
-    return isinstance(value, str) and (
+    return type(value) is str and (
         value == "unavailable"
         or (
             bool(value)
@@ -614,4 +602,4 @@ def _unavailable_or_text(value: object) -> bool:
 
 
 def _fullmatch(pattern: re.Pattern[str], value: object) -> bool:
-    return isinstance(value, str) and pattern.fullmatch(value) is not None
+    return type(value) is str and pattern.fullmatch(value) is not None
