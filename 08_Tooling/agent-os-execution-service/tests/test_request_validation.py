@@ -1,6 +1,10 @@
 from dataclasses import FrozenInstanceError, replace
+from pathlib import Path
+import sys
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from scripts.agent_os_execution_capabilities import RepositoryIdentity
 from agent_os_execution_service import (
