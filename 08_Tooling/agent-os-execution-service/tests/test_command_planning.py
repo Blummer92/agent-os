@@ -35,7 +35,7 @@ def request(**overrides: object) -> ExecutionServiceRequest:
         "expires_at": "2026-07-27T04:00:00Z",
         "repository_identity": RepositoryIdentity(
             host="github.com",
-            owner="blummer92",
+            owner="Blummer92",
             repository="agent-os",
             repository_id=123,
             default_branch="main",
@@ -71,7 +71,7 @@ def plan(
 ) -> ValidationPlan:
     return ValidationPlan(
         selector_version="1.0.0",
-        repository="blummer92/agent-os",
+        repository="Blummer92/agent-os",
         pull_request=680,
         base_sha=A,
         head_sha=B,
@@ -146,7 +146,7 @@ def test_unknown_command_and_manual_review_fail_closed() -> None:
         )
     manual = ValidationPlan(
         selector_version="1.0.0",
-        repository="blummer92/agent-os",
+        repository="Blummer92/agent-os",
         pull_request=680,
         base_sha="",
         head_sha="",
