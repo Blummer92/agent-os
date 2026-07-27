@@ -156,17 +156,17 @@ def evaluate_dispatch_decision(
             status="manual-review",
             reason_codes=("plan.manual-review",),
         )
-    if plan.remote_build_required is False:
-        return _decision(
-            plan=plan,
-            status="duplicate-no-op",
-            reason_codes=("plan.remote-build-not-required",),
-        )
     if current_pr_head_sha != plan.head_sha:
         return _decision(
             plan=plan,
             status="stale-skipped",
             reason_codes=("head.stale",),
+        )
+    if plan.remote_build_required is False:
+        return _decision(
+            plan=plan,
+            status="duplicate-no-op",
+            reason_codes=("plan.remote-build-not-required",),
         )
 
     active = tuple(record for record in records if record.state == "active")
@@ -314,12 +314,34 @@ def _decision(
 
 
 def _plan_boundary_reasons(plan: object) -> tuple[str, ...]:
-    reasons = set(validate_validation_plan(plan))
     if not isinstance(plan, ValidationPlan):
-        return tuple(sorted(reasons))
+        return ("plan.invalid-type",)
+    if not _runtime_safe_plan(plan):
+        return ("plan.malformed-runtime",)
+    reasons = set(validate_validation_plan(plan))
     if not _identifier(plan.repository, _REPOSITORY):
         reasons.add("plan.repository-boundary")
     return tuple(sorted(reasons))
+
+
+def _runtime_safe_plan(plan: ValidationPlan) -> bool:
+    return (
+        isinstance(plan.selector_version, str)
+        and isinstance(plan.repository, str)
+        and isinstance(plan.pull_request, int)
+        and not isinstance(plan.pull_request, bool)
+        and isinstance(plan.base_sha, str)
+        and isinstance(plan.head_sha, str)
+        and isinstance(plan.profile, str)
+        and isinstance(plan.commands, tuple)
+        and all(isinstance(command, str) for command in plan.commands)
+        and isinstance(plan.command_set_digest, str)
+        and isinstance(plan.reason_codes, tuple)
+        and all(isinstance(reason, str) for reason in plan.reason_codes)
+        and isinstance(plan.remote_build_required, bool)
+        and isinstance(plan.execution_authorized, bool)
+        and isinstance(plan.side_effects_performed, bool)
+    )
 
 
 def _validate_records(
@@ -385,7 +407,11 @@ def _valid_record(record: DispatchEvidence) -> bool:
         return False
     if record.attempt not in {0, 1}:
         return False
-    if record.state not in _STATES or record.failure_class not in _FAILURE_CLASSES:
+    if not isinstance(record.state, str) or record.state not in _STATES:
+        return False
+    if not isinstance(record.failure_class, str):
+        return False
+    if record.failure_class not in _FAILURE_CLASSES:
         return False
     if record.state in {"active", "succeeded"}:
         return record.failure_class == "none"
