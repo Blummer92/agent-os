@@ -37,63 +37,49 @@ and any write surface with unclear authorization.
 
 ## Required GitHub Workflow
 
-1. Read the GitHub Change Request.
-2. Confirm target repository, branch, files, owner, and acceptance criteria.
-3. Create or use a non-protected branch; verify state per Repository-State
-   Verification below.
-4. Change only approved files.
-5. Run available validation.
-6. Commit with a clear message.
-7. Open a draft pull request.
-8. Report files changed, tests run, docs updated, blockers, and risks.
+Read the approved GitHub Change Request, confirm repository, branch, file scope,
+ownership, acceptance criteria, and authorization, then use a non-protected branch.
+Change only approved files, run validation, commit intentionally, open a draft PR,
+and report through the inherited final-report standard.
 
 ## Repository-State Verification
 
-When a local checkout is available, verify state with
-`scripts/verify-repo-state.sh` (usage: `scripts/verify-repo-state.md`)
-instead of reconstructing branch, fetch, retry, dirty-tree, switch, or
-fast-forward logic in a prompt. The GitHub Change Request or handoff supplies
-the target branch, base branch, and whether branch creation is authorized;
-pass `--create-from-base` only when creation is authorized.
+When a local checkout is available, use `scripts/verify-repo-state.sh`; usage is in
+`scripts/verify-repo-state.md`, and stdout follows
+`scripts/verify-repo-state-contract.md`. The handoff supplies target branch, base
+branch, and branch-creation authorization; pass `--create-from-base` only when
+creation is authorized.
 
-A nonzero exit is a fail-closed stop: report the diagnostic and halt. Do not
-bypass it with an ad hoc `git pull`, `reset`, `stash`, `clean`, `rebase`,
-force-update, or force-push. stderr is diagnostics; stdout is the evidence
-contract in `scripts/verify-repo-state-contract.md`.
+A nonzero exit is a fail-closed stop. Report the diagnostic and halt; do not
+bypass it with ad hoc `git pull`, `reset`, `stash`, `clean`, `rebase`,
+force-update, or force-push behavior.
 
-## Branch Rules
+## GitHub-Specific Rules
 
-Follow `01_Shared_Standards/github/protected-branch-governance.md`.
-Use a descriptive non-protected branch for ordinary work. Emergency exceptions
-require the separate approval and audit evidence defined by that standard.
+Follow `01_Shared_Standards/github/protected-branch-governance.md`. Use a
+descriptive non-protected branch, commit only related files, open draft PRs by
+default, and link the authorizing issue or handoff. Emergency exceptions require
+separate approval and evidence under that standard.
 
-## Commit Rules
+## Required Handoff Targets
 
-Commit only related files. Use clear, factual commit messages.
-
-## Pull Request Rules
-
-Open draft PRs by default. Link the issue or handoff that authorized the work.
-
-## Reporting Rules
-
-Final reports must include branch, PR link, files changed, tests run, docs
-updated, unresolved blockers, and remaining risks.
+Return implementation evidence and unresolved decisions to the requesting owner.
+Route validation uncertainty to QA / Test Agent support and cross-system ownership
+or source-of-truth conflicts to the Integration Manager.
 
 ## Stop Conditions
 
-Stop when the target repo, branch, file list, ownership, authorization, or
-acceptance criteria are unclear.
-
-Stop when the request requires credentials or write access outside the approved
-GitHub scope.
+Stop when repository, branch, file list, ownership, authorization, acceptance
+criteria, or source of truth is unclear, or when credentials or writes outside the
+approved GitHub scope are required.
 
 ## Version
 
-0.3.0
+0.4.0
 
 ## Changelog
 
+- 0.4.0 removes inherited workflow and reporting duplication while preserving GitHub-specific routing and verifier rules.
 - 0.3.0 adds Repository-State Verification via `scripts/verify-repo-state.sh`.
 - 0.2.0 inherits shared protected-branch governance and removes duplicated policy.
 - 0.1.0 initial GitHub write-owner overlay.
