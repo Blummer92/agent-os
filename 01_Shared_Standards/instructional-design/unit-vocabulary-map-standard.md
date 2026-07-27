@@ -16,6 +16,45 @@ This standard defines structure and decision rules, not vocabulary values.
    the missing source, property, or owner.
 5. Do not write to Notion, Drive, or a classroom artifact through this standard.
 
+## Source Identity-State Contract
+
+This contract governs CLS2 unit-language discovery only. It separates source
+identity from vocabulary evidence and never authorizes canonical onboarding.
+
+| Evidence state | CLS2 discovery outcome | Stop and write boundary |
+|---|---|---|
+| Current canonical match | Proceed as `canonical-confirmed` under the current canonical source. | No automatic write. |
+| No canonical record plus one unique authorized working source | Proceed as `working-source-confirmed`; the result is visibly provisional and CLS2-only. | No automatic onboarding, registry mutation, or external write. |
+| Canonical lookup unavailable | Return `needs-decision`; make no provisional vocabulary decision. | Stop until lookup evidence is available. |
+| Canonical lookup unverifiable | Return `needs-decision`; make no provisional vocabulary decision. | Stop until lookup evidence is verifiable. |
+| Multiple plausible sources | Block for source-owner resolution. | No write. |
+| Canonical/working-source conflict | Block and route to the canonical owner. | No write. |
+| Stale canonical pointer | Block until the canonical owner refreshes it. | No write. |
+| One governed alias resolves uniquely | Apply the resolved canonical or working-source rule. | No automatic write. |
+| Alias collision | Block for identity resolution. | No write. |
+| Unresolved alias | Block for identity resolution. | No write. |
+
+A missing canonical registry record is not the same state as a canonical lookup
+that is unavailable or unverifiable. Never infer one from the other.
+
+## Provisional Working-Source Evidence
+
+Every `working-source-confirmed` result must preserve:
+
+- source identity;
+- exact page, property, heading, table, or section;
+- the relevant source section;
+- freshness evidence;
+- provisional status and the reason the source is uniquely usable;
+- `execution_authorized: false`;
+- an explicit statement that the result authorizes no readiness, assessment,
+  publication, canonical onboarding, registry mutation, or external write.
+
+`working-source-confirmed` may support provisional CLS2 discovery only. It is not
+approved canonical evidence for CLS4 lesson-language planning. This contract does
+not implement a live resolver, connector-backed identity resolution, or runtime
+source-resolution behavior.
+
 ## Required Categories
 
 | Category | Use |
@@ -51,18 +90,20 @@ unit connection in `Prior Unit Connection`; do not duplicate the row.
 
 ## Decision Order
 
-1. Confirm the unit and approved source.
-2. Reuse an existing map when the source and unit are unchanged.
-3. Check prior-unit connections before assigning `Teach Vocabulary`.
-4. Assign one primary category.
-5. Separate teacher language from student language.
-6. Decide material safety independently from assessment eligibility.
-7. Block assessment when instruction or practice evidence is missing.
-8. Record unresolved evidence and route it to the source owner.
+1. Classify source identity using the Source Identity-State Contract.
+2. Confirm the unit and permitted source for the resulting identity state.
+3. Reuse an existing map when the source and unit are unchanged.
+4. Check prior-unit connections before assigning `Teach Vocabulary`.
+5. Assign one primary category.
+6. Separate teacher language from student language.
+7. Decide material safety independently from assessment eligibility.
+8. Block assessment when instruction or practice evidence is missing.
+9. Record unresolved evidence and route it to the source owner.
 
 ## Overlay Responsibilities
 
-- Unit Alignment Agent verifies unit connection, category, and evidence status.
+- Unit Alignment Agent verifies unit connection, category, evidence status, and
+  source identity state.
 - Teacher Modeling Coach converts approved entries into teacher and student
   language without changing the source vocabulary decision.
 - Instructional Materials Coach uses only entries marked material-safe and does
@@ -71,8 +112,9 @@ unit connection in `Prior Unit Connection`; do not duplicate the row.
 ## Prohibited Expansion
 
 Do not create a curriculum overlay folder, vocabulary-specific agent, Lesson
-Vocabulary Planner, Notion schema, or classroom artifact under this standard.
+Vocabulary Planner, Notion schema, canonical registry record, live resolver, or
+classroom artifact under this standard.
 
 ## Version
 
-0.1.0
+0.2.0
