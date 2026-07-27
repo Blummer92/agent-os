@@ -1,5 +1,15 @@
 """Immutable, read-only Agent OS execution-service contracts."""
 
+from .command_planning import (
+    COMMAND_PLAN_SCHEMA_VERSION,
+    COMMAND_REGISTRY_VERSION,
+    CommandOperation,
+    CommandPlanEntry,
+    ValidationCommandPlan,
+    build_validation_command_plan,
+    serialize_validation_command_plan,
+    validation_command_plan_id,
+)
 from .models import (
     EXECUTION_SERVICE_FINGERPRINT_VERSION,
     EXECUTION_SERVICE_REQUEST_SCHEMA_VERSION,
@@ -27,10 +37,14 @@ from .request_validation import (
 )
 
 __all__ = [
+    "COMMAND_PLAN_SCHEMA_VERSION",
+    "COMMAND_REGISTRY_VERSION",
     "EXECUTION_SERVICE_FINGERPRINT_VERSION",
     "EXECUTION_SERVICE_REQUEST_SCHEMA_VERSION",
     "EXECUTION_SERVICE_RESULT_SCHEMA_VERSION",
     "EXECUTION_SERVICE_VERSION",
+    "CommandOperation",
+    "CommandPlanEntry",
     "EvidenceVisibilityPolicy",
     "ExecutionServiceCapability",
     "ExecutionServiceInvalidationCondition",
@@ -42,11 +56,15 @@ __all__ = [
     "PrivateEvidence",
     "RepositoryInspectionObservation",
     "RepositoryInspector",
+    "ValidationCommandPlan",
+    "build_validation_command_plan",
     "contains_secret_marker",
     "evaluate_read_only_request",
     "execution_service_request_fingerprint",
     "execution_service_result_fingerprint",
     "project_public_result",
     "redact_public_text",
+    "serialize_validation_command_plan",
     "validate_execution_service_request",
+    "validation_command_plan_id",
 ]
