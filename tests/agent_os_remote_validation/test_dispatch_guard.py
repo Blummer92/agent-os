@@ -44,28 +44,28 @@ def _plan(**overrides: object) -> ValidationPlan:
     return ValidationPlan(**values)
 
 
-def _record(
-    plan: ValidationPlan,
-    *,
-    record_id: str = "run-1",
-    attempt: int = 0,
-    state: str = "succeeded",
-    failure_class: str = "none",
-) -> DispatchEvidence:
-    return DispatchEvidence(
-        record_id=record_id,
-        validation_plan=plan,
-        attempt=attempt,
-        state=state,
-        failure_class=failure_class,
-    )
-
-
-def _evaluate(plan: object | None = None, evidence: object = (), **overrides: object):
-    resolved = _plan() if plan is None else plan
-    values = {"current_pr_head_sha": HEAD_SHA}
+def _static_plan(**overrides: object) -> ValidationPlan:
+    values = {
+        "profile": "static",
+        "commands": (),
+        "command_set_digest": compute_command_set_digest("1.0.0", ()),
+        "reason_codes": ("profile.documentation-static",),
+        "remote_build_required": False,
+    }
     values.update(overrides)
-    return evaluate_dispatch_decision(resolved, evidence, **values)
+    return _plan(**values)
+
+
+def _manual_plan(**overrides: object) -> ValidationPlan:
+    values = {
+        "profile": "manual-review",
+        "commands": (),
+        "command_set_digest": "unavailable",
+        "reason_codes": ("rule.ambiguous",),
+        "remote_build_required": False,
+    }
+    values.update(overrides)
+    return _plan(**values)
 
 
 def _aggregate_plan(**overrides: object) -> ValidationPlan:
@@ -80,7 +80,31 @@ def _aggregate_plan(**overrides: object) -> ValidationPlan:
     return _plan(**values)
 
 
-def test_no_prior_result_is_launch_eligible() -> None:
+def _record(
+    plan: object,
+    *,
+    record_id: object = "run-1",
+    attempt: object = 0,
+    state: object = "succeeded",
+    failure_class: object = "none",
+) -> DispatchEvidence:
+    return DispatchEvidence(
+        record_id=record_id,  # type: ignore[arg-type]
+        validation_plan=plan,  # type: ignore[arg-type]
+        attempt=attempt,  # type: ignore[arg-type]
+        state=state,  # type: ignore[arg-type]
+        failure_class=failure_class,  # type: ignore[arg-type]
+    )
+
+
+def _evaluate(plan: object | None = None, evidence: object = (), **overrides: object):
+    resolved = _plan() if plan is None else plan
+    values = {"current_pr_head_sha": HEAD_SHA}
+    values.update(overrides)
+    return evaluate_dispatch_decision(resolved, evidence, **values)
+
+
+def test_no_prior_result_is_launch_eligible_and_non_authorizing() -> None:
     result = _evaluate()
     assert result.status == "launch-eligible"
     assert result.launch_recommended is True
@@ -97,10 +121,10 @@ def test_exact_success_is_reused() -> None:
     assert result.matched_record_ids == ("run-1",)
 
 
-def test_each_identity_component_prevents_reuse_when_changed() -> None:
+def test_every_dispatch_identity_component_prevents_reuse_when_changed() -> None:
     plan = _plan()
     changed_commands = (plan.commands[0] + " -q",)
-    same_scope_variants = (
+    variants = (
         replace(plan, head_sha=NEW_HEAD_SHA),
         _aggregate_plan(),
         replace(
@@ -121,10 +145,8 @@ def test_each_identity_component_prevents_reuse_when_changed() -> None:
     assert validation_dispatch_identity(
         replace(plan, repository="Other/agent-os")
     ) != identity
-    assert all(
-        validation_dispatch_identity(item) != identity for item in same_scope_variants
-    )
-    for index, variant in enumerate(same_scope_variants):
+    assert all(validation_dispatch_identity(item) != identity for item in variants)
+    for index, variant in enumerate(variants):
         result = _evaluate(plan, (_record(variant, record_id=f"other-{index}"),))
         assert result.status == "launch-eligible"
 
@@ -136,9 +158,16 @@ def test_exact_active_identity_is_duplicate_no_op() -> None:
     assert result.launch_recommended is False
 
 
-def test_stale_proposed_head_is_skipped() -> None:
-    result = _evaluate(current_pr_head_sha=NEW_HEAD_SHA)
+@pytest.mark.parametrize("plan", [_plan(), _static_plan()])
+def test_stale_head_is_skipped_before_launch_or_static_no_op(plan: ValidationPlan) -> None:
+    result = _evaluate(plan, current_pr_head_sha=NEW_HEAD_SHA)
     assert result.status == "stale-skipped"
+    assert result.launch_recommended is False
+
+
+def test_manual_review_plan_remains_manual_review() -> None:
+    result = _evaluate(_manual_plan(), current_pr_head_sha=NEW_HEAD_SHA)
+    assert result.status == "manual-review"
     assert result.launch_recommended is False
 
 
@@ -196,7 +225,17 @@ def test_one_transient_retry_is_recommended() -> None:
     assert result.retry_attempt == 1
 
 
-def test_active_retry_is_a_duplicate_no_op() -> None:
+@pytest.mark.parametrize(
+    ("retry_state", "failure_class", "expected_status"),
+    [
+        ("active", "none", "duplicate-no-op"),
+        ("succeeded", "none", "reused"),
+        ("failed", "transient-infrastructure", "manual-review"),
+    ],
+)
+def test_second_attempt_is_bounded(
+    retry_state: str, failure_class: str, expected_status: str
+) -> None:
     plan = _plan()
     result = _evaluate(
         plan,
@@ -211,107 +250,58 @@ def test_active_retry_is_a_duplicate_no_op() -> None:
                 plan,
                 record_id="attempt-1",
                 attempt=1,
-                state="active",
+                state=retry_state,
+                failure_class=failure_class,
             ),
         ),
     )
-    assert result.status == "duplicate-no-op"
-    assert result.matched_record_ids == ("attempt-1",)
-
-
-def test_successful_retry_is_reused() -> None:
-    plan = _plan()
-    result = _evaluate(
-        plan,
-        (
-            _record(
-                plan,
-                record_id="attempt-0",
-                state="failed",
-                failure_class="transient-infrastructure",
-            ),
-            _record(
-                plan,
-                record_id="attempt-1",
-                attempt=1,
-                state="succeeded",
-            ),
-        ),
-    )
-    assert result.status == "reused"
-    assert result.matched_record_ids == ("attempt-1",)
-
-
-def test_second_transient_retry_is_rejected() -> None:
-    plan = _plan()
-    result = _evaluate(
-        plan,
-        (
-            _record(
-                plan,
-                record_id="attempt-0",
-                state="failed",
-                failure_class="transient-infrastructure",
-            ),
-            _record(
-                plan,
-                record_id="attempt-1",
-                attempt=1,
-                state="failed",
-                failure_class="transient-infrastructure",
-            ),
-        ),
-    )
-    assert result.status == "manual-review"
-    assert result.reason_codes == ("retry.limit-reached",)
+    assert result.status == expected_status
+    if retry_state == "failed":
+        assert result.reason_codes == ("retry.limit-reached",)
+    else:
+        assert result.matched_record_ids == ("attempt-1",)
 
 
 @pytest.mark.parametrize(
     "record",
     [
-        DispatchEvidence(
-            record_id="run-1",
-            validation_plan=_plan(head_sha="bad"),
-            attempt=0,
-            state="succeeded",
-        ),
-        DispatchEvidence(
-            record_id="run-1",
-            validation_plan=_plan(command_set_digest="bad"),
-            attempt=0,
-            state="succeeded",
-        ),
-        DispatchEvidence(
-            record_id="run-1",
-            validation_plan=_plan(selector_version="v1"),
-            attempt=0,
-            state="succeeded",
-        ),
-        DispatchEvidence(
-            record_id="run-1",
-            validation_plan=_plan(),
-            attempt=2,
-            state="succeeded",
-        ),
-        DispatchEvidence(
-            record_id="run-1",
-            validation_plan=_plan(),
-            attempt=0,
-            state="unknown",
-        ),
-        DispatchEvidence(
-            record_id="run-1",
-            validation_plan=_plan(),
-            attempt=0,
-            state="failed",
-            failure_class="unknown",
-        ),
+        _record(_plan(head_sha="bad")),
+        _record(_plan(command_set_digest="bad")),
+        _record(_plan(selector_version="v1")),
+        _record(_plan(), attempt=2),
+        _record(_plan(), state="unknown"),
+        _record(_plan(), failure_class="unknown"),
+        _record(_plan(), state=[]),
+        _record(_plan(), failure_class={}),
+        _record(_plan(), record_id=[]),
     ],
 )
-def test_malformed_record_fields_fail_closed(record: DispatchEvidence) -> None:
+def test_malformed_record_fields_fail_closed_without_raising(
+    record: DispatchEvidence,
+) -> None:
     result = _evaluate(evidence=(record,))
     assert result.status == "manual-review"
     assert "evidence.record-invalid" in result.reason_codes
+
+
+@pytest.mark.parametrize(
+    "plan",
+    [
+        _plan(profile=[]),
+        _plan(commands=([],)),
+        _plan(reason_codes=([],)),
+        _plan(command_set_digest=[]),
+        _plan(repository=[]),
+        _plan(pull_request=[]),
+    ],
+)
+def test_unhashable_or_malformed_plan_fields_fail_closed_without_raising(
+    plan: ValidationPlan,
+) -> None:
+    result = _evaluate(plan)
+    assert result.status == "manual-review"
+    assert "plan.invalid" in result.reason_codes
+    assert "plan-detail.plan.malformed-runtime" in result.reason_codes
 
 
 def test_duplicate_record_and_attempt_evidence_fail_closed() -> None:
@@ -323,7 +313,7 @@ def test_duplicate_record_and_attempt_evidence_fail_closed() -> None:
     assert "evidence.duplicate-attempt" in result.reason_codes
 
 
-def test_retry_after_non_retryable_failure_is_rejected_as_contradictory() -> None:
+def test_retry_after_non_retryable_failure_is_contradictory() -> None:
     plan = _plan()
     result = _evaluate(
         plan,
@@ -346,7 +336,7 @@ def test_retry_after_non_retryable_failure_is_rejected_as_contradictory() -> Non
     assert "evidence.retry-sequence" in result.reason_codes
 
 
-def test_invalid_plan_collection_current_head_and_bounds_fail_closed() -> None:
+def test_invalid_collection_current_head_and_bounds_fail_closed() -> None:
     assert _evaluate(plan={"bad": True}).status == "manual-review"
     assert _evaluate(evidence=[]).status == "manual-review"
     assert _evaluate(current_pr_head_sha="bad").status == "manual-review"
@@ -370,25 +360,10 @@ def test_cross_repository_or_pr_evidence_fails_closed() -> None:
     ).status == "manual-review"
 
 
-def test_static_plan_is_zero_build_no_op_and_manual_plan_needs_review() -> None:
-    static = _plan(
-        profile="static",
-        commands=(),
-        command_set_digest=compute_command_set_digest("1.0.0", ()),
-        reason_codes=("profile.documentation-static",),
-        remote_build_required=False,
-    )
-    static_result = _evaluate(static)
-    assert static_result.status == "duplicate-no-op"
-    assert static_result.launch_recommended is False
-    manual = _plan(
-        profile="manual-review",
-        commands=(),
-        command_set_digest="unavailable",
-        reason_codes=("rule.ambiguous",),
-        remote_build_required=False,
-    )
-    assert _evaluate(manual).status == "manual-review"
+def test_static_plan_is_zero_build_no_op() -> None:
+    result = _evaluate(_static_plan())
+    assert result.status == "duplicate-no-op"
+    assert result.launch_recommended is False
 
 
 def test_input_order_does_not_change_result_or_semantic_id() -> None:
