@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-os.invalid/schemas/validation-provenance-receipt.v1.json",
+  "title": "Agent OS normalized validation provenance receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_name",
+    "schema_version",
+    "receipt_id",
+    "proof_type",
+    "proof_verified",
+    "proof_digest",
+    "trust_root_id",
+    "verifier_id",
+    "evidence_source",
+    "producer_identity",
+    "provider",
+    "provider_account",
+    "provider_location",
+    "repository",
+    "pull_request",
+    "tested_sha",
+    "profile",
+    "selector_version",
+    "command_set_digest",
+    "plan_id",
+    "dispatch_decision_id",
+    "build_id",
+    "trigger_identity",
+    "terminal_status",
+    "evidence_created_at",
+    "retrieved_at",
+    "expires_at",
+    "replay_id",
+    "machine_type",
+    "elapsed_seconds"
+  ],
+  "properties": {
+    "schema_name": {
+      "const": "agent-os-validation-provenance-receipt"
+    },
+    "schema_version": {
+      "const": "1.0"
+    },
+    "receipt_id": { "$ref": "#/$defs/identifier" },
+    "proof_type": {
+      "enum": ["provider-api", "signed-envelope", "attestation"]
+    },
+    "proof_verified": { "type": "boolean" },
+    "proof_digest": { "$ref": "#/$defs/sha256" },
+    "trust_root_id": { "$ref": "#/$defs/identifier" },
+    "verifier_id": { "$ref": "#/$defs/identifier" },
+    "evidence_source": { "$ref": "#/$defs/identifier" },
+    "producer_identity": { "$ref": "#/$defs/identifier" },
+    "provider": { "$ref": "#/$defs/identifier" },
+    "provider_account": { "$ref": "#/$defs/identifier" },
+    "provider_location": { "$ref": "#/$defs/identifier" },
+    "repository": {
+      "type": "string",
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+    },
+    "pull_request": { "type": "integer", "minimum": 1 },
+    "tested_sha": { "$ref": "#/$defs/sha40" },
+    "profile": { "$ref": "#/$defs/identifier" },
+    "selector_version": { "$ref": "#/$defs/identifier" },
+    "command_set_digest": { "$ref": "#/$defs/sha256" },
+    "plan_id": {
+      "type": "string",
+      "pattern": "^validation-plan:[0-9a-f]{64}$"
+    },
+    "dispatch_decision_id": {
+      "type": "string",
+      "pattern": "^validation-dispatch-decision:[0-9a-f]{64}$"
+    },
+    "build_id": { "$ref": "#/$defs/identifier" },
+    "trigger_identity": { "$ref": "#/$defs/identifier" },
+    "terminal_status": {
+      "enum": [
+        "succeeded",
+        "failed",
+        "cancelled",
+        "timed-out",
+        "infrastructure-error"
+      ]
+    },
+    "evidence_created_at": { "type": "string", "format": "date-time" },
+    "retrieved_at": { "type": "string", "format": "date-time" },
+    "expires_at": { "type": "string", "format": "date-time" },
+    "replay_id": { "$ref": "#/$defs/identifier" },
+    "machine_type": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "elapsed_seconds": {
+      "oneOf": [
+        { "type": "integer", "minimum": 0 },
+        { "type": "null" }
+      ]
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+\\-]{0,255}$"
+    },
+    "sha40": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}
