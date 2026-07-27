@@ -297,3 +297,140 @@ def test_plan_is_immutable() -> None:
     plan = _select(_input(_fixtures()["static"]))
     with pytest.raises(FrozenInstanceError):
         plan.profile = "aggregate"  # type: ignore[misc]
+
+
+CLS_CASES = (
+    (
+        "tests/test_curriculum_pipeline_boundaries.py",
+        "python -m pytest tests/test_curriculum_pipeline_boundaries.py",
+    ),
+    (
+        "tests/test_curriculum_language_system.py",
+        "python -m pytest tests/test_curriculum_language_system.py",
+    ),
+    (
+        "tests/test_teacher_modeling_workflows.py",
+        "python -m pytest tests/test_teacher_modeling_workflows.py",
+    ),
+)
+
+
+@pytest.mark.parametrize(("path", "command"), CLS_CASES)
+def test_exact_cls_path_selects_only_its_command(path: str, command: str) -> None:
+    plan = _select(_input([path]))
+    assert plan.profile == "focused"
+    assert plan.commands == (command,)
+    assert plan.reason_codes == ("profile.focused-package",)
+    assert validate_validation_plan(plan) == ()
+
+
+@pytest.mark.parametrize(
+    "paths",
+    [
+        [CLS_CASES[0][0], CLS_CASES[1][0]],
+        [CLS_CASES[0][0], CLS_CASES[2][0]],
+        [CLS_CASES[1][0], CLS_CASES[2][0]],
+        [case[0] for case in CLS_CASES],
+    ],
+)
+def test_exact_cls_path_unions_are_deterministic(paths: list[str]) -> None:
+    expected = tuple(sorted(command for path, command in CLS_CASES if path in paths))
+    forward = _select(_input(paths))
+    reverse = _select(_input(list(reversed(paths))))
+    assert forward.profile == "focused"
+    assert forward.commands == expected
+    assert forward.reason_codes == ("profile.focused-union",)
+    assert reverse == forward
+
+
+def test_exact_path_lookalike_retains_aggregate_fallback() -> None:
+    lookalike = "tests/test_curriculum_pipeline_boundaries.py.lookalike.py"
+    plan = _select(_input([lookalike]))
+    assert plan.profile == "aggregate"
+    assert plan.commands == ("python -m pytest",)
+    assert plan.reason_codes == ("profile.aggregate-unmapped-executable",)
+
+
+def test_exact_and_prefix_surfaces_remain_distinct() -> None:
+    exact = _select(_input([CLS_CASES[0][0]]))
+    prefix = _select(_input(["tests/agent_os_issue_acceptance/test_records.py"]))
+    assert exact.commands == (CLS_CASES[0][1],)
+    assert prefix.commands == ("python -m pytest tests/agent_os_issue_acceptance",)
+
+
+def test_old_prefix_only_rule_maps_remain_valid() -> None:
+    rules = copy.deepcopy(RULES)
+    rules["focused_rules"] = [
+        {
+            "name": "legacy-prefix",
+            "prefixes": ["legacy/"],
+            "commands": ["python -m pytest legacy/tests"],
+        }
+    ]
+    plan = _select(_input(["legacy/module.py"]), rules)
+    assert plan.profile == "focused"
+    assert plan.commands == ("python -m pytest legacy/tests",)
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda rule: rule.update({"prefixes": [], "exact_paths": []}),
+        lambda rule: rule.update({"exact_paths": "not-a-list"}),
+        lambda rule: rule.update({"exact_paths": [""]}),
+        lambda rule: rule.update({"exact_paths": ["bad\x00path"]}),
+    ],
+)
+def test_malformed_matching_surfaces_fail_closed(mutator) -> None:
+    rules = copy.deepcopy(RULES)
+    rule = rules["focused_rules"][0]
+    mutator(rule)
+    plan = _select(_input(_fixtures()["focused"]), rules)
+    assert plan.profile == "manual-review"
+    assert plan.reason_codes == ("rule.ambiguous",)
+
+
+def test_same_path_with_different_command_sets_fails_closed() -> None:
+    rules = copy.deepcopy(RULES)
+    rules["focused_rules"].extend(
+        [
+            {
+                "name": "conflicting-exact-owner",
+                "exact_paths": [CLS_CASES[0][0]],
+                "commands": ["python -m pytest tests/other.py"],
+            }
+        ]
+    )
+    plan = _select(_input([CLS_CASES[0][0]]), rules)
+    assert plan.profile == "manual-review"
+    assert plan.commands == ()
+    assert plan.reason_codes == ("rule.ambiguous",)
+
+
+def test_same_path_duplicate_ownership_with_same_commands_is_stable() -> None:
+    rules = copy.deepcopy(RULES)
+    rules["focused_rules"].append(
+        {
+            "name": "equivalent-exact-owner",
+            "exact_paths": [CLS_CASES[0][0]],
+            "commands": [CLS_CASES[0][1]],
+        }
+    )
+    plan = _select(_input([CLS_CASES[0][0]]), rules)
+    assert plan.profile == "focused"
+    assert plan.commands == (CLS_CASES[0][1],)
+
+
+def test_different_paths_with_different_rules_form_bounded_union() -> None:
+    paths = [CLS_CASES[0][0], "tests/agent_os_issue_acceptance/test_records.py"]
+    plan = _select(_input(paths))
+    assert plan.profile == "focused"
+    assert plan.commands == tuple(
+        sorted(
+            (
+                CLS_CASES[0][1],
+                "python -m pytest tests/agent_os_issue_acceptance",
+            )
+        )
+    )
+    assert plan.reason_codes == ("profile.focused-union",)
