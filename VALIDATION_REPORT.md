@@ -85,13 +85,14 @@ The aggregate runner requires Python and `pytest`, runs structural validation fi
 
 Validation results are evidence only. They do not authorize writes, readiness or approval changes, ownership changes, registry edits, source-of-truth changes, production changes, GitHub label or PR-state mutation, branch-protection changes, or automatic merging.
 
-## Low-Compute Evidence
+## Low-Compute and Provenance Evidence
 
-- `agent-os-compute-evidence-summary` reports `static`, `focused`, or `aggregate` evidence for one exact plan and head.
-- `reused` and `duplicate-no-op` decisions avoid a new build; `stale-skipped` also records zero new builds.
-- Aggregate validation should normally run once per exact final head; repetition produces `warning` evidence.
-- Only one retry is permitted for the approved transient-infrastructure class; excess retries require `manual-review`.
-- Missing build ID, terminal status, machine type, or elapsed seconds remains `unavailable`, never inferred.
-- `within-policy` is clean evidence; `warning` needs attention; contradictory or excessive evidence is `manual-review`.
-- Evidence is non-authorizing; governance applies, and optional budget alerts require a separate approved handoff with verified project and billing scope—never inferred prices, credentials, IAM steps, or automatic shutdown.
-- Rollback removes the compute-evidence module, exports, tests, and this section without external cleanup.
+- `agent-os-compute-evidence-summary` reports supplied build counts, avoided work, retries, duration, and machine type without monetary estimates.
+- Reused, duplicate, and stale decisions produce zero new builds; aggregate validation should normally run once per exact final head.
+- Missing build metadata remains `unavailable`; warnings require attention and contradictory evidence requires `manual-review`.
+- `agent-os-validation-provenance-verification` accepts one normalized receipt from an approved API, signature, or attestation verifier.
+- `verified` requires exact plan, dispatch, repository, PR, SHA, provider, producer, trigger, build, freshness, trust-root, verifier, and replay bindings.
+- Unverified, stale, mismatched, unsupported, duplicated, malformed, oversized, secret-bearing, or replayed evidence fails closed.
+- Verified provenance may project into the unchanged compute-evidence record, but remains non-authoritative and grants no execution, approval, readiness, or merge authority.
+- Retrieval, credentials, provider APIs, attestation generation, workflow changes, cancellation, publication, billing, and production mutation require separate authorization.
+- Rollback removes the provenance module, schema, exports, focused tests, and these provenance bullets without external cleanup.
