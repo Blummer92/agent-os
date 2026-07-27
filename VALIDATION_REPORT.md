@@ -84,3 +84,15 @@ The aggregate runner requires Python and `pytest`, runs structural validation fi
 ## Boundaries
 
 Validation results are evidence only. They do not authorize writes, readiness or approval changes, ownership changes, registry edits, source-of-truth changes, production changes, GitHub label or PR-state mutation, branch-protection changes, or automatic merging.
+
+## Low-Compute Evidence
+
+- `agent-os-compute-evidence-summary` reports `static`, `focused`, or `aggregate` evidence for one exact plan and head.
+- `reused` and `duplicate-no-op` decisions avoid a new build; `stale-skipped` also records zero new builds.
+- Aggregate validation should normally run once per exact final head; repetition produces `warning` evidence.
+- Only one retry is permitted for the approved transient-infrastructure class; excess retries require `manual-review`.
+- Missing build ID, terminal status, machine type, or elapsed seconds remains `unavailable`, never inferred.
+- `within-policy` is clean evidence; `warning` needs attention; contradictory or excessive evidence is `manual-review`.
+- Evidence is non-authorizing; follow `00_Governance/write-authorization-policy.md` and protected-branch governance.
+- Optional budget alerts require a separate approved handoff with verified project and billing scope; this report gives no prices, credentials, IAM steps, or automatic shutdown action.
+- Rollback removes the compute-evidence module, exports, tests, and this section without external cleanup.
