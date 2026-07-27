@@ -34,25 +34,46 @@ _COMMAND_REGISTRY = MappingProxyType(
     {
         "python -m pytest": ("python", "-m", "pytest"),
         "python -m pytest tests/agent_os_issue_acceptance": (
-            "python", "-m", "pytest", "tests/agent_os_issue_acceptance"
+            "python",
+            "-m",
+            "pytest",
+            "tests/agent_os_issue_acceptance",
         ),
         "python -m pytest 08_Tooling/workflow-scheduler/tests": (
-            "python", "-m", "pytest", "08_Tooling/workflow-scheduler/tests"
+            "python",
+            "-m",
+            "pytest",
+            "08_Tooling/workflow-scheduler/tests",
         ),
         "python -m pytest 08_Tooling/notion-navigation-client/tests": (
-            "python", "-m", "pytest", "08_Tooling/notion-navigation-client/tests"
+            "python",
+            "-m",
+            "pytest",
+            "08_Tooling/notion-navigation-client/tests",
         ),
         "python -m pytest 08_Tooling/instructional-materials-coach/tests": (
-            "python", "-m", "pytest", "08_Tooling/instructional-materials-coach/tests"
+            "python",
+            "-m",
+            "pytest",
+            "08_Tooling/instructional-materials-coach/tests",
         ),
         "python -m pytest tests/test_curriculum_pipeline_boundaries.py": (
-            "python", "-m", "pytest", "tests/test_curriculum_pipeline_boundaries.py"
+            "python",
+            "-m",
+            "pytest",
+            "tests/test_curriculum_pipeline_boundaries.py",
         ),
         "python -m pytest tests/test_curriculum_language_system.py": (
-            "python", "-m", "pytest", "tests/test_curriculum_language_system.py"
+            "python",
+            "-m",
+            "pytest",
+            "tests/test_curriculum_language_system.py",
         ),
         "python -m pytest tests/test_teacher_modeling_workflows.py": (
-            "python", "-m", "pytest", "tests/test_teacher_modeling_workflows.py"
+            "python",
+            "-m",
+            "pytest",
+            "tests/test_teacher_modeling_workflows.py",
         ),
     }
 )
@@ -68,7 +89,10 @@ class CommandPlanEntry:
             raise TypeError("operation must be CommandOperation")
         if type(self.argv) is not tuple or not self.argv:
             raise TypeError("argv must be a non-empty exact tuple")
-        if not all(type(item) is str and item and len(item) <= MAX_PLAN_STRING_LENGTH for item in self.argv):
+        if not all(
+            type(item) is str and item and len(item) <= MAX_PLAN_STRING_LENGTH
+            for item in self.argv
+        ):
             raise ValueError("argv contains an invalid item")
 
 
@@ -113,15 +137,21 @@ def build_validation_command_plan(
         raise TypeError("request must be an exact ExecutionServiceRequest")
     if type(validation_plan) is not ValidationPlan:
         raise TypeError("validation_plan must be an exact ValidationPlan")
-    request_reasons = validate_execution_service_request(request, evaluated_at=evaluated_at)
+    request_reasons = validate_execution_service_request(
+        request,
+        evaluated_at=evaluated_at,
+    )
     if request_reasons:
         raise ValueError("invalid execution service request")
     plan_reasons = validate_validation_plan(validation_plan)
     if plan_reasons:
         raise ValueError("invalid validation plan")
 
-    repository = f"{request.repository_identity.owner}/{request.repository_identity.repository}"
-    if repository != validation_plan.repository:
+    request_repository = (
+        f"{request.repository_identity.owner}/"
+        f"{request.repository_identity.repository}"
+    )
+    if request_repository.casefold() != validation_plan.repository.casefold():
         raise ValueError("repository identity mismatch")
     if request.expected_sha != validation_plan.head_sha:
         raise ValueError("expected SHA does not match validation plan")
@@ -150,7 +180,7 @@ def build_validation_command_plan(
     return ValidationCommandPlan(
         schema_version=COMMAND_PLAN_SCHEMA_VERSION,
         registry_version=COMMAND_REGISTRY_VERSION,
-        repository=repository,
+        repository=validation_plan.repository,
         issue_or_handoff_identity=request.issue_or_handoff_identity,
         requested_ref=request.requested_ref,
         expected_sha=request.expected_sha,
@@ -190,7 +220,11 @@ def serialize_validation_command_plan(plan: object) -> dict[str, object]:
         "merge_authorized": False,
         "side_effects_performed": False,
     }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
     if len(encoded) > MAX_COMMAND_PLAN_SERIALIZED_BYTES:
         raise ValueError("command plan exceeds serialized size limit")
     return payload
@@ -198,6 +232,12 @@ def serialize_validation_command_plan(plan: object) -> dict[str, object]:
 
 def validation_command_plan_id(plan: object) -> str:
     payload = serialize_validation_command_plan(plan)
-    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    digest = hashlib.sha256(b"agent-os-command-plan:v1\0" + canonical).hexdigest()
+    canonical = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    digest = hashlib.sha256(
+        b"agent-os-command-plan:v1\0" + canonical
+    ).hexdigest()
     return f"command-plan:{digest}"
