@@ -25,12 +25,15 @@ from workflow_scheduler.execution.concrete_runtime_adapters import (  # noqa: E4
     ConcreteRuntimeAdapters,
     ConcreteRuntimeConfiguration,
     ConcreteRuntimeConfigurationError,
+    ConcreteRuntimeExecutionOutcome,
     build_concrete_runtime_adapters,
     run_concrete_runtime_entrypoint,
+    run_concrete_runtime_entrypoint_with_validation_evidence,
 )
 from workflow_scheduler.execution.frozen_test_validation_adapter import (  # noqa: E402
     CommandRunRequest,
     FrozenTestCommand,
+    FrozenTestValidationResult,
 )
 from workflow_scheduler.execution.git_worktree_adapter import (  # noqa: E402
     GitObservation,
@@ -492,3 +495,170 @@ def test_module_reuses_existing_process_and_runtime_lifecycles() -> None:
     assert "github" not in imports
     assert "run_bounded_posix_process" in source
     assert source.count("run_single_issue_runtime_entrypoint(") == 1
+
+
+# Bounded frozen-validation evidence return contract
+
+
+def _run_with_validation_evidence(
+    tmp_path: Path,
+    *,
+    executor_argv: tuple[str, ...] = (sys.executable, "-c", "pass"),
+    validation_argv: tuple[str, ...] = (sys.executable, "-c", "pass"),
+    executor_timeout_seconds: float = 1.0,
+    cancelled=tsp.never_cancelled,
+):
+    configuration = _configuration(
+        tmp_path,
+        executor_argv=executor_argv,
+        validation_argv=validation_argv,
+        executor_timeout_seconds=executor_timeout_seconds,
+    )
+    git_runner = ScenarioGitRunner(configuration)
+    outcome = run_concrete_runtime_entrypoint_with_validation_evidence(
+        tsp._pilot_input(),
+        configuration,
+        cancelled=cancelled,
+        git_runner=git_runner,
+        changed_paths_inspector=lambda: (),
+    )
+    return outcome, configuration, git_runner
+
+
+def test_evidence_entrypoint_returns_completed_runtime_and_exact_validation_result(
+    tmp_path: Path,
+) -> None:
+    outcome, _, git_runner = _run_with_validation_evidence(tmp_path)
+
+    assert isinstance(outcome, ConcreteRuntimeExecutionOutcome)
+    assert outcome.runtime_outcome.result.status == "completed"
+    assert isinstance(outcome.validation_result, FrozenTestValidationResult)
+    assert outcome.validation_result.attempted is True
+    assert outcome.validation_result.passed is True
+    assert outcome.validation_result.completed_tests == tsp.REQUIRED_TESTS
+    assert tuple(
+        item.outcome for item in outcome.validation_result.command_outcomes
+    ) == ("succeeded",) * len(tsp.REQUIRED_TESTS)
+    assert git_runner.added is False
+
+
+def test_evidence_entrypoint_returns_failed_command_evidence_without_retry(
+    tmp_path: Path,
+) -> None:
+    outcome, _, git_runner = _run_with_validation_evidence(
+        tmp_path,
+        validation_argv=(sys.executable, "-c", "import sys;sys.exit(1)"),
+    )
+
+    assert outcome.runtime_outcome.result.status == "failed"
+    assert outcome.validation_result is not None
+    assert outcome.validation_result.passed is False
+    assert len(outcome.validation_result.command_outcomes) == 1
+    assert outcome.validation_result.command_outcomes[0].outcome == "failed"
+    assert git_runner.added is False
+
+
+def test_evidence_entrypoint_returns_none_when_validation_was_not_reached(
+    tmp_path: Path,
+) -> None:
+    outcome, _, git_runner = _run_with_validation_evidence(
+        tmp_path,
+        executor_argv=(
+            sys.executable,
+            "-c",
+            "import time;time.sleep(2)",
+        ),
+        executor_timeout_seconds=0.05,
+    )
+
+    assert outcome.runtime_outcome.result.status == "timed-out"
+    assert outcome.validation_result is None
+    assert git_runner.added is False
+
+
+def test_evidence_entrypoint_preserves_pre_execution_cancellation(
+    tmp_path: Path,
+) -> None:
+    def cancelled(checkpoint):
+        return checkpoint == "pre-lease"
+
+    outcome, _, git_runner = _run_with_validation_evidence(
+        tmp_path,
+        cancelled=cancelled,
+    )
+
+    assert outcome.runtime_outcome.result.status == "cancelled"
+    assert outcome.validation_result is None
+    assert git_runner.calls == []
+
+
+def test_existing_entrypoint_preserves_runtime_only_return_type(
+    tmp_path: Path,
+) -> None:
+    outcome, _, _ = _run(tmp_path)
+
+    assert isinstance(outcome, module.SingleIssueRuntimeOutcome)
+    assert not isinstance(outcome, ConcreteRuntimeExecutionOutcome)
+
+
+def test_execution_outcome_wrapper_is_immutable(tmp_path: Path) -> None:
+    outcome, _, _ = _run_with_validation_evidence(tmp_path)
+
+    with pytest.raises(FrozenInstanceError):
+        outcome.validation_result = None  # type: ignore[misc]
+
+
+def test_evidence_entrypoint_returns_validator_object_without_reconstruction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configuration = _configuration(tmp_path)
+    git_runner = ScenarioGitRunner(configuration)
+    adapters = build_concrete_runtime_adapters(
+        tsp._pilot_input(),
+        configuration,
+        git_runner=git_runner,
+        changed_paths_inspector=lambda: (),
+    )
+    build_calls = 0
+
+    def return_existing_adapters(*args, **kwargs):
+        nonlocal build_calls
+        del args, kwargs
+        build_calls += 1
+        return adapters
+
+    monkeypatch.setattr(
+        module,
+        "build_concrete_runtime_adapters",
+        return_existing_adapters,
+    )
+
+    outcome = run_concrete_runtime_entrypoint_with_validation_evidence(
+        tsp._pilot_input(),
+        configuration,
+        cancelled=tsp.never_cancelled,
+    )
+
+    assert build_calls == 1
+    assert outcome.validation_result is adapters.validator.last_result
+    assert adapters.validation_runner.last_result is not None
+
+
+@pytest.mark.parametrize("error_type", [KeyboardInterrupt, SystemExit, GeneratorExit])
+def test_evidence_entrypoint_propagates_process_control_exceptions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error_type: type[BaseException],
+) -> None:
+    raising = RaisingRunner(error_type("process control"))
+    monkeypatch.setattr(
+        module,
+        "BoundPosixCommandRunner",
+        lambda configuration, cancelled=None: raising,
+    )
+
+    with pytest.raises(error_type):
+        _run_with_validation_evidence(tmp_path)
+
+    assert raising.calls == 1

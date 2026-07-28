@@ -24,6 +24,7 @@ from workflow_scheduler.execution.frozen_test_validation_adapter import (
     CommandRunRequest,
     FrozenTestCommand,
     FrozenTestValidationAdapter,
+    FrozenTestValidationResult,
 )
 from workflow_scheduler.execution.git_worktree_adapter import GitRunner, GitWorktreeAdapter
 from workflow_scheduler.execution.in_memory_lease_adapter import InMemoryLeaseAdapter
@@ -690,6 +691,46 @@ def build_concrete_runtime_adapters(
     )
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ConcreteRuntimeExecutionOutcome:
+    """Canonical runtime outcome with exact retained validation evidence."""
+
+    runtime_outcome: SingleIssueRuntimeOutcome
+    validation_result: FrozenTestValidationResult | None
+
+
+def run_concrete_runtime_entrypoint_with_validation_evidence(
+    pilot_input: SingleIssuePilotInput,
+    configuration: ConcreteRuntimeConfiguration,
+    *,
+    cancelled: CancellationProbe,
+    git_runner: GitRunner | None = None,
+    process_cancelled: ProcessCancellationCheck | None = None,
+    changed_paths_inspector: ChangedPathsInspector | None = None,
+) -> ConcreteRuntimeExecutionOutcome:
+    """Run once and return the exact validation evidence retained by the adapter."""
+
+    adapters = build_concrete_runtime_adapters(
+        pilot_input,
+        configuration,
+        git_runner=git_runner,
+        process_cancelled=process_cancelled,
+        changed_paths_inspector=changed_paths_inspector,
+    )
+    runtime_outcome = run_single_issue_runtime_entrypoint(
+        pilot_input,
+        lease=adapters.lease,
+        workspace=adapters.workspace,
+        executor=adapters.executor,
+        validator=adapters.validator,
+        cancelled=cancelled,
+    )
+    return ConcreteRuntimeExecutionOutcome(
+        runtime_outcome=runtime_outcome,
+        validation_result=adapters.validator.last_result,
+    )
+
+
 def run_concrete_runtime_entrypoint(
     pilot_input: SingleIssuePilotInput,
     configuration: ConcreteRuntimeConfiguration,
@@ -699,20 +740,13 @@ def run_concrete_runtime_entrypoint(
     process_cancelled: ProcessCancellationCheck | None = None,
     changed_paths_inspector: ChangedPathsInspector | None = None,
 ) -> SingleIssueRuntimeOutcome:
-    """Construct the bound adapters and invoke the canonical entrypoint once."""
+    """Preserve the existing runtime-only compatibility contract."""
 
-    adapters = build_concrete_runtime_adapters(
+    return run_concrete_runtime_entrypoint_with_validation_evidence(
         pilot_input,
         configuration,
+        cancelled=cancelled,
         git_runner=git_runner,
         process_cancelled=process_cancelled,
         changed_paths_inspector=changed_paths_inspector,
-    )
-    return run_single_issue_runtime_entrypoint(
-        pilot_input,
-        lease=adapters.lease,
-        workspace=adapters.workspace,
-        executor=adapters.executor,
-        validator=adapters.validator,
-        cancelled=cancelled,
-    )
+    ).runtime_outcome
