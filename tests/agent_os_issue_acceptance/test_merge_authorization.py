@@ -544,3 +544,173 @@ def test_module_has_no_external_io_or_authority_imports():
         "datetime.now", "datetime.utcnow", "merge_pull_request",
         "scheduler_execution_concurrency",
     ))
+
+
+# --- NO-GO repair: state/reason invariants and bounded diagnostics -----------
+
+BLOCKING_REASONS = [
+    ("checks.failed",), ("checks.pending",), ("checks.missing",),
+    ("approval.not-applicable",), ("evidence.malformed",),
+    ("authorization.rejected",), ("checks.failed", "review.blocked"),
+    ("review.unresolved",), ("projection.incomplete",),
+]
+
+
+@pytest.mark.parametrize("reasons", BLOCKING_REASONS)
+def test_authorized_revision_rejects_every_non_empty_reason_code_set(reasons):
+    with pytest.raises(ValueError, match="cannot carry"):
+        record_merge_authorization_decision(
+            _candidate(), state="authorized", decision_id="contradiction",
+            authorizer_id="repository-owner", decision_at=AUTHORIZED,
+            reason_codes=reasons,
+        )
+
+
+def test_valid_authorized_revision_is_exactly_empty_reasons_and_merge_authorized():
+    authorized, _ = _authorized()
+    assert authorized.state is MergeAuthorizationState.AUTHORIZED
+    assert authorized.reason_codes == ()
+    assert authorized.merge_authorized is True
+
+
+def test_pending_candidate_rejects_reason_codes():
+    candidate = _candidate()
+    assert candidate.state is MergeAuthorizationState.PENDING
+    assert candidate.reason_codes == () and candidate.merge_authorized is False
+    with pytest.raises(ValueError, match="cannot carry reason codes"):
+        replace(candidate, authorization_revision="", reason_codes=("checks.failed",))
+
+
+def test_rejected_revision_requires_at_least_one_reason():
+    with pytest.raises(ValueError, match="requires at least one reason"):
+        record_merge_authorization_decision(
+            _candidate(), state="rejected", decision_id="no-reason",
+            authorizer_id="repository-owner", decision_at=AUTHORIZED,
+        )
+    rejected = record_merge_authorization_decision(
+        _candidate(), state="rejected", decision_id="explained",
+        authorizer_id="repository-owner", decision_at=AUTHORIZED,
+        reason_codes=("checks.failed",),
+    )
+    assert rejected.reason_codes == ("checks.failed",)
+    assert rejected.merge_authorized is False
+
+
+@pytest.mark.parametrize(("state", "at", "required"), [
+    ("expired", "2026-07-26T15:05:00Z", "authorization.expired"),
+    ("invalidated", AUTHORIZED, "authorization.invalidated"),
+    ("superseded", AUTHORIZED, "authorization.superseded"),
+])
+def test_lifecycle_states_carry_only_their_required_reason(state, at, required):
+    record = record_merge_authorization_decision(
+        _candidate(), state=state, decision_id=f"to-{state}",
+        authorizer_id="repository-owner", decision_at=at,
+    )
+    assert record.state.value == state
+    assert required in record.reason_codes
+    assert record.merge_authorized is False
+
+
+def test_invalidated_preserves_revocation_and_consumed_preserves_observation():
+    invalidated = record_merge_authorization_decision(
+        _candidate(), state="invalidated", decision_id="revoke",
+        authorizer_id="repository-owner", decision_at=AUTHORIZED,
+    )
+    assert invalidated.revoked_authorization_id == invalidated.authorization_id
+    assert "authorization.invalidated" in invalidated.reason_codes
+
+    bundle = _bundle()
+    authorized, _ = _authorized(bundle)
+    _, consumed = record_merge_execution_observation(
+        authorized, _evaluate(authorized, bundle), _pr(bundle),
+        observed_merge_commit_sha=MERGE, observed_actor_id="repository-owner",
+        observed_at="2026-07-26T14:45:00Z", audit_location="audit://merge/630",
+        observed_merge_method="squash",
+    )
+    assert consumed.state is MergeAuthorizationState.CONSUMED
+    assert consumed.consumed_observation_id is not None
+    assert "authorization.consumed" in consumed.reason_codes
+    assert consumed.merge_authorized is False
+
+
+@pytest.mark.parametrize("reasons", [
+    ("authorization.expired", "authorization.consumed"),
+    ("authorization.invalidated",),
+    ("authorization.superseded",),
+    ("authorization.pending",),
+])
+def test_contradictory_lifecycle_reasons_fail_closed(reasons):
+    rejected = record_merge_authorization_decision(
+        _candidate(), state="rejected", decision_id="explained",
+        authorizer_id="repository-owner", decision_at=AUTHORIZED,
+        reason_codes=("checks.failed",),
+    )
+    with pytest.raises(ValueError):
+        replace(rejected, authorization_revision="", reason_codes=reasons)
+
+
+def test_no_non_authorized_state_reports_merge_authorized():
+    records = [_candidate()]
+    for state, at in (("rejected", AUTHORIZED), ("expired", "2026-07-26T15:05:00Z"),
+                      ("invalidated", AUTHORIZED), ("superseded", AUTHORIZED)):
+        records.append(record_merge_authorization_decision(
+            _candidate(), state=state, decision_id=f"to-{state}",
+            authorizer_id="repository-owner", decision_at=at,
+            reason_codes=("checks.failed",) if state == "rejected" else (),
+        ))
+    for record in records:
+        assert record.merge_authorized is (
+            record.state is MergeAuthorizationState.AUTHORIZED
+        )
+        assert record.merge_authorized is False
+
+
+def test_applicability_cannot_ignore_contradictory_record_local_reasons():
+    bundle = _bundle()
+    authorized, _ = _authorized(bundle)
+    assert _evaluate(authorized, bundle).merge_authorized is True
+    # Controlled hostile boundary: inject reasons past the corrected
+    # constructor without adding any production construction path.
+    object.__setattr__(authorized, "reason_codes", ("checks.failed",))
+    result = _evaluate(authorized, bundle)
+    assert result.status == "invalid" and result.merge_authorized is False
+    assert "evidence.malformed" in result.reason_codes
+    local = merge_authorization._record_local_reasons(authorized)
+    assert {"checks.failed", "evidence.malformed"} <= local
+
+
+def test_public_details_are_bounded_sanitized_and_deterministic():
+    class Hostile:
+        def __str__(self):
+            return "SENTINEL-SECRET-" + "x" * 100_000
+        __repr__ = __str__
+
+    values = ["ok", Hostile(), "SENTINEL-SECRET-" * 2_000, "ctrl\x00\x07here"]
+    details = merge_authorization._details(values)
+    assert details == merge_authorization._details(values)
+    assert details[1] == "<Hostile>"
+    assert "\x00" not in details[3] and "\x07" not in details[3]
+    assert all(len(item.encode("utf-8")) <= merge_authorization._MAX_DETAIL_BYTES
+               for item in details)
+
+    many = merge_authorization._details(f"detail-{index}" for index in range(500))
+    assert len(many) == merge_authorization._MAX_DETAILS
+    assert many[-1] == merge_authorization._DETAILS_TRUNCATED
+
+
+def test_exception_details_never_propagate_message_text():
+    try:
+        raise ValueError("token=ghp_SENTINELSECRETVALUE must not leak")
+    except ValueError as exc:
+        detail = merge_authorization._exception_detail("current-evidence", exc)
+    assert detail == "current-evidence:ValueError"
+    assert "SENTINELSECRET" not in detail
+
+    bundle = _bundle()
+    authorized, _ = _authorized(bundle)
+    object.__setattr__(authorized, "reason_codes", ("checks.failed",))
+    result = _evaluate(authorized, bundle)
+    assert all("SENTINELSECRET" not in item for item in result.details)
+    assert all(len(item.encode("utf-8")) <= merge_authorization._MAX_DETAIL_BYTES
+               for item in result.details)
+    assert len(result.details) <= merge_authorization._MAX_DETAILS

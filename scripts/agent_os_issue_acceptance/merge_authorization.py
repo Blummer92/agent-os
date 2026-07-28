@@ -45,6 +45,13 @@ _EVIDENCE_ID_RE = re.compile(r"^[a-z][a-z0-9-]{1,63}:[0-9a-f]{64}$")
 _REPOSITORY_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _MAX_TEXT_BYTES = 4096
 _MAX_ITEMS = 256
+# Public human-readable diagnostics are bounded and sanitized. Finite machine
+# reason codes remain the primary public classification; details are advisory.
+_MAX_DETAILS = 32
+_MAX_DETAIL_BYTES = 256
+_DETAIL_TRUNCATED = "[truncated]"
+_DETAILS_TRUNCATED = "details:[truncated]"
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 _CHECK_STATES = frozenset(
     {
@@ -144,6 +151,21 @@ _LIFECYCLE_REASON = {
     "consumed": "authorization.consumed",
     "superseded": "authorization.superseded",
 }
+# Reason codes that describe one authorization state exclusively. A record may
+# carry such a code only while it is in that exact state, so a terminal or
+# blocking lifecycle claim can never be attached to a different revision.
+_STATE_EXCLUSIVE_REASON = {
+    "authorization.pending": "pending",
+    "authorization.rejected": "rejected",
+    "authorization.expired": "expired",
+    "authorization.invalidated": "invalidated",
+    "authorization.consumed": "consumed",
+    "authorization.superseded": "superseded",
+}
+# States whose revisions must carry no reason code at all. An authorized
+# revision is the merge-authorizing state, so any reason code it carried would
+# contradict `merge_authorized`; a pending candidate has not been decided yet.
+_NO_REASON_STATES = frozenset({"pending", "authorized"})
 
 
 class MergeAuthorizationState(str, Enum):
@@ -404,8 +426,21 @@ class MergeAuthorizationRecord:
             raise ValueError("lifecycle reason does not match authorization state")
         if required is not None and lifecycle != {required}:
             raise ValueError(f"{self.state.value} requires only {required}")
-        if self.state is MergeAuthorizationState.PENDING and reasons:
-            raise ValueError("pending candidate cannot carry reason codes")
+        foreign = {
+            code
+            for code in reasons
+            if _STATE_EXCLUSIVE_REASON.get(code, self.state.value) != self.state.value
+        }
+        if foreign:
+            raise ValueError(
+                f"{self.state.value} cannot carry state-exclusive reasons: {sorted(foreign)}"
+            )
+        if self.state.value in _NO_REASON_STATES and reasons:
+            raise ValueError(
+                f"{self.state.value} revision cannot carry reason codes: {sorted(reasons)}"
+            )
+        if self.state is MergeAuthorizationState.REJECTED and not reasons:
+            raise ValueError("rejected revision requires at least one reason code")
         if self.state is MergeAuthorizationState.INVALIDATED:
             if self.revoked_authorization_id not in {"", self.authorization_id}:
                 raise ValueError("invalidated revision must revoke its authorization")
@@ -417,7 +452,7 @@ class MergeAuthorizationRecord:
         elif self.consumed_observation_id is not None:
             raise ValueError("consumed_observation_id requires consumed state")
         object.__setattr__(self, "reason_codes", reasons)
-        object.__setattr__(self, "details", tuple(str(item) for item in self.details))
+        object.__setattr__(self, "details", _details(self.details))
         expected_id = _authorization_id(self)
         if self.authorization_id and self.authorization_id != expected_id:
             raise ValueError("authorization_id does not match candidate content")
@@ -481,7 +516,7 @@ class MergeAuthorizationApplicabilityResult:
             raise ValueError("non-applicable result requires reason codes")
         object.__setattr__(self, "changed_bindings", changed)
         object.__setattr__(self, "reason_codes", reasons)
-        object.__setattr__(self, "details", tuple(str(item) for item in self.details))
+        object.__setattr__(self, "details", _details(self.details))
 
 
 @dataclass(frozen=True, slots=True)
@@ -681,7 +716,7 @@ def record_merge_authorization_decision(
         emergency_override_reason=current.emergency_override_reason,
         emergency_override_audit_location=current.emergency_override_audit_location,
         reason_codes=tuple(sorted(reasons)),
-        details=tuple(str(item) for item in details),
+        details=_details(details),
     )
 
 
@@ -709,7 +744,7 @@ def evaluate_merge_authorization_applicability(
             getattr(current_pull_request_evidence, "evidence_id", None),
             (),
             ("evidence.malformed",),
-            (f"pull-request-evidence:{exc}",),
+            (_exception_detail("pull-request-evidence", exc),),
         )
     if authorization_record is None:
         return _result(
@@ -737,7 +772,7 @@ def evaluate_merge_authorization_applicability(
             current_pr.evidence_id,
             (),
             (reason,),
-            (f"merge-authorization-record:{exc}",),
+            (_exception_detail("merge-authorization-record", exc),),
         )
     try:
         binding, current_reasons, current_details = _current_binding(
@@ -759,12 +794,13 @@ def evaluate_merge_authorization_applicability(
             current_pr.evidence_id,
             (),
             ("evidence.malformed",),
-            (f"current-evidence:{exc}",),
+            (_exception_detail("current-evidence", exc),),
         )
     changed = _changed_bindings(authorization.binding, binding)
     reasons = set(current_reasons)
     reasons.update(_reason_codes(invalidation_events))
     reasons.update(_binding_reasons(changed))
+    reasons.update(_record_local_reasons(authorization))
     if len(current_pr.required_checks) < len(authorization.binding.required_check_evidence):
         reasons.add("checks.missing")
     if authorization.state is MergeAuthorizationState.PENDING:
@@ -1116,6 +1152,30 @@ def _binding_reasons(changed: Iterable[str]) -> set[str]:
     return {mapping[item] for item in changed if item in mapping}
 
 
+def _record_local_reasons(record: MergeAuthorizationRecord) -> set[str]:
+    """Defense in depth: never ignore an authorization record's own reasons.
+
+    The record invariants already reject a contradictory authorized revision at
+    construction, so a well-formed record reaches this helper with consistent
+    content. A record that was reconstructed or mutated outside those
+    invariants must still fail closed rather than inherit `applicable` from
+    otherwise-clean current evidence.
+    """
+    supplied = tuple(getattr(record, "reason_codes", ()))[:_MAX_ITEMS]
+    local = {str(code) for code in supplied}
+    known = local & MERGE_AUTHORIZATION_REASON_CODES
+    state = getattr(record, "state", None)
+    state_value = state.value if isinstance(state, MergeAuthorizationState) else None
+    if local - known:
+        # An unsupported reason code cannot be republished verbatim; classify it.
+        known.add("evidence.malformed")
+    if state_value in _NO_REASON_STATES and local:
+        # An authorized or pending revision carrying any reason contradicts its
+        # own state; preserve the known reasons and classify it as malformed.
+        known.add("evidence.malformed")
+    return known
+
+
 def _status_for_reasons(reasons: Iterable[str]) -> str:
     items = set(reasons)
     if not items:
@@ -1148,7 +1208,7 @@ def _result(
         changed_bindings=tuple(changed),
         reason_codes=tuple(reasons),
         merge_authorized=status == "applicable",
-        details=tuple(details),
+        details=_details(details),
     )
 
 
@@ -1292,6 +1352,44 @@ def _strings(value: Iterable[str], name: str) -> tuple[str, ...]:
     if len(set(items)) != len(items):
         raise ValueError(f"{name} contains duplicate values")
     return tuple(sorted(items))
+
+
+def _details(values: Iterable[Any]) -> tuple[str, ...]:
+    """Bound and sanitize public human-readable diagnostics.
+
+    Caller-controlled objects and exception-derived text must not produce
+    unbounded, control-bearing, or arbitrary-representation output.
+    """
+    if isinstance(values, (str, bytes)):
+        raise TypeError("details must be an iterable of strings")
+    items: list[str] = []
+    for value in values:
+        if len(items) >= _MAX_DETAILS:
+            items[-1] = _DETAILS_TRUNCATED
+            break
+        items.append(_detail(value))
+    return tuple(items)
+
+
+def _detail(value: Any) -> str:
+    # Never invoke an arbitrary object's own representation; a hostile
+    # __str__/__repr__ can be unbounded or disclose caller-held content.
+    text = value if isinstance(value, str) else f"<{type(value).__name__}>"
+    text = _CONTROL_RE.sub(" ", text)
+    encoded = text.encode("utf-8", "replace")
+    if len(encoded) > _MAX_DETAIL_BYTES:
+        keep = _MAX_DETAIL_BYTES - len(_DETAIL_TRUNCATED.encode("ascii"))
+        text = encoded[:keep].decode("utf-8", "ignore") + _DETAIL_TRUNCATED
+    return text
+
+
+def _exception_detail(prefix: str, exc: BaseException) -> str:
+    """Classify a caught exception without propagating its message.
+
+    Exception text can carry caller-supplied values; only the bounded
+    exception type name is published.
+    """
+    return _detail(f"{prefix}:{type(exc).__name__}")
 
 
 def _reason_codes(value: Iterable[str]) -> tuple[str, ...]:
