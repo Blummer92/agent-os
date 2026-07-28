@@ -1,8 +1,8 @@
 """Structural validation for the simplified issue-lifecycle contract.
 
-Verifies that the three-level lifecycle standard, the risk-owner map, and
-the pull-request template stay consistent with the existing issue
-acceptance automation without weakening any control.
+Verifies that the three-level lifecycle standard, the Safe Implementation Lane,
+the risk-owner map, and the pull-request template stay consistent with the
+existing issue acceptance automation without weakening any control.
 """
 from __future__ import annotations
 
@@ -19,6 +19,9 @@ from scripts.agent_os_issue_acceptance.parse_pr import (
 
 ROOT = Path(__file__).resolve().parents[1]
 LIFECYCLE = ROOT / "01_Shared_Standards" / "github" / "issue-lifecycle-standard.md"
+SAFE_LANE = ROOT / "01_Shared_Standards" / "github" / "safe-implementation-lane.md"
+WRITE_POLICY = ROOT / "00_Governance" / "write-authorization-policy.md"
+GITHUB_OVERLAY = ROOT / "02_Agent_Overlays" / "github-service-agent.md"
 RISK_MAP = ROOT / "04_Registry" / "risk-owner-map.md"
 PR_TEMPLATE = ROOT / ".github" / "PULL_REQUEST_TEMPLATE.md"
 
@@ -27,6 +30,7 @@ REQUIRED_LIFECYCLE_SECTIONS = [
     "Level 1 — Roadmap issue",
     "Level 2 — Implementation issue",
     "Level 3 — Pull request",
+    "Safe Implementation Lane",
     "Child-Issue Creation Test",
     "Canonical Boilerplate By Reference",
     "Issue-Body Maintenance",
@@ -37,12 +41,29 @@ REQUIRED_LIFECYCLE_SECTIONS = [
     "Label Policy",
 ]
 
+REQUIRED_SAFE_LANE_SECTIONS = [
+    "Purpose",
+    "Eligibility",
+    "Authorization Effect",
+    "Bounded Scope Envelope",
+    "Branch Names",
+    "Operational Authorization Comments",
+    "Stop Conditions",
+    "Reporting",
+    "Version",
+]
+
 PRESERVED_CONTROL_REFERENCES = [
     "write-authorization-policy.md",
     "issue-acceptance-automation.md",
+    "safe-implementation-lane.md",
     "protected-branch-governance.md",
     "fail-closed",
 ]
+
+
+def normalized_text(path: Path) -> str:
+    return " ".join(path.read_text(encoding="utf-8").split())
 
 
 def test_lifecycle_standard_defines_required_sections() -> None:
@@ -59,6 +80,91 @@ def test_lifecycle_standard_preserves_safety_references() -> None:
     text = LIFECYCLE.read_text(encoding="utf-8")
     missing = [ref for ref in PRESERVED_CONTROL_REFERENCES if ref not in text]
     assert not missing, f"lifecycle standard dropped control references: {missing}"
+
+
+def test_safe_implementation_lane_defines_required_sections() -> None:
+    text = SAFE_LANE.read_text(encoding="utf-8")
+    missing = [
+        section
+        for section in REQUIRED_SAFE_LANE_SECTIONS
+        if not has_markdown_heading(text, section)
+    ]
+    assert not missing, f"safe implementation lane is missing sections: {missing}"
+
+
+def test_safe_lane_is_risk_tiered_and_not_readiness_authorized() -> None:
+    text = normalized_text(SAFE_LANE)
+    for phrase in (
+        "Tier 0 or Tier 1",
+        "status:ready",
+        "no-external-write",
+        "explicit implementation instruction",
+        "Tier 2",
+        "not eligible",
+    ):
+        assert phrase in text, f"safe lane is missing eligibility boundary: {phrase}"
+
+    write_policy = normalized_text(WRITE_POLICY)
+    assert "Readiness alone does not authorize implementation" in write_policy
+
+
+def test_safe_lane_authorizes_bounded_pr_work_but_not_merge() -> None:
+    text = normalized_text(SAFE_LANE)
+    for phrase in (
+        "one non-protected branch",
+        "bounded scope envelope",
+        "one draft pull request",
+        "Ready-for-Review",
+        "It does not authorize merge",
+        "issue closure",
+        "protected-setting changes",
+        "production or external writes",
+    ):
+        assert phrase in text, f"safe lane is missing authorization boundary: {phrase}"
+
+
+def test_safe_lane_defines_mechanical_support_scope_without_material_expansion() -> None:
+    text = normalized_text(SAFE_LANE)
+    for phrase in (
+        "directly corresponding tests and documentation",
+        "minimum package exports",
+        "architecture registration or classification",
+        "generated manifests or changelog entries",
+        "behaviorally subordinate",
+        "new subsystem",
+        "schema",
+        "external effect",
+    ):
+        assert phrase in text, f"safe lane is missing scope rule: {phrase}"
+
+
+def test_safe_lane_accepts_environment_assigned_branch_names() -> None:
+    text = normalized_text(SAFE_LANE)
+    assert "harness- or environment-assigned branch name" in text
+    assert "guidance, not an authorization boundary" in text
+
+
+def test_safe_lane_comments_cannot_override_durable_or_closed_authority() -> None:
+    text = normalized_text(SAFE_LANE)
+    for phrase in (
+        "issue body remains authoritative",
+        "may not broaden durable scope",
+        "reactivate a closed issue",
+        "authorize merge",
+    ):
+        assert phrase in text, f"safe lane is missing comment authority guard: {phrase}"
+
+
+def test_github_service_agent_inherits_lane_and_retains_core_controls() -> None:
+    text = normalized_text(GITHUB_OVERLAY)
+    for phrase in (
+        "safe-implementation-lane.md",
+        "Sole GitHub write owner",
+        "non-protected branch",
+        "merge, auto-merge, issue closure",
+        "separately authorized",
+    ):
+        assert phrase in text, f"GitHub Service Agent overlay is missing: {phrase}"
 
 
 def test_pr_template_satisfies_acceptance_report_headings() -> None:
