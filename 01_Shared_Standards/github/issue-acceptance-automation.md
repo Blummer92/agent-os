@@ -2,12 +2,10 @@
 ## Purpose
 Define one Agent OS contract for build-ready issues, readiness decisions, and pull
 request acceptance evidence.
-
 ## Boundary
 This standard defines contracts and report shapes only. It does not authorize
 implementation, scheduling, merge, closure, production or external writes,
 source-of-truth changes, readiness mutation, approvals, or governed-field edits.
-
 ## Canonical Lifecycle
 ```text
 idea or request
@@ -20,7 +18,6 @@ idea or request
 ChatGPT Orchestrator owns intake and routing. QA / Test Agent owns readiness and
 acceptance evidence. GitHub Service Agent is the sole repository write executor.
 Work-level contracts live in `issue-lifecycle-standard.md`.
-
 ## Issue Tiers
 - Tier 0 requires objective, owner, allowed area, validation, and completion.
 - Tier 1 adds value, scope, non-goals, likely files, tests, documentation,
@@ -28,7 +25,6 @@ Work-level contracts live in `issue-lifecycle-standard.md`.
 - Tier 2 adds source-of-truth analysis, authorization, external surfaces,
   governed fields, rollback, approvals, stop conditions, and compatibility.
 Tier selection never weakens governance or write authorization.
-
 ## Safe Implementation Lane Eligibility
 The lane in `safe-implementation-lane.md` is available only to current open Tier
 0 or Tier 1 issues with `status:ready`, GitHub as source of truth,
@@ -38,35 +34,29 @@ repository-owner implementation instruction is still required. Tier 2 and any
 cross-system, credential, workflow, production, external-write, governed-field,
 source-of-truth, irreversible, stale, blocked, closed, or conflicting work is not
 eligible.
-
 ## Documentation Impact Intake
 The canonical issue form uses these exact fields:
-- `documentation-impact`: required dropdown with `docs-required`,
-  `docs-not-required`, or `docs-needs-decision`;
-- `required-docs`: optional textarea with one repository-relative POSIX path per
-  line, using exact files or bounded directories without trailing slashes;
-- `documentation-expected-change`: optional textarea describing required
-  behavior, contract, workflow, or operator-guidance changes;
-- `documentation-exemption-reason`: optional textarea explaining why
-  documentation is not required.
+- `documentation-impact`: `docs-required`, `docs-not-required`, or
+  `docs-needs-decision`;
+- `required-docs`: repository-relative POSIX paths using exact files or bounded
+  directories without trailing slashes;
+- `documentation-expected-change`: required behavior, contract, workflow, or
+  operator-guidance changes;
+- `documentation-exemption-reason`: why documentation is not required.
 GitHub forms cannot conditionally require supporting fields. Readiness performs
-that semantic validation. Do not use absolute paths, traversal, backslashes,
-`./`, repeated or trailing separators, `**`, `?`, or bracket classes.
-
+semantic validation. Do not use absolute paths, traversal, backslashes, `./`,
+repeated or trailing separators, `**`, `?`, or bracket classes.
 ## Readiness Outcomes
 The user-facing result is exactly `ready`, `blocked`, or `needs-decision`.
 `ready` satisfies tier requirements, `blocked` has a missing or failed required
 item, and `needs-decision` requires human judgment. Readiness is evidence only.
-
 ## Prior-Scope Review Intake
-The canonical form adds a required `prior-scope-review` textarea and optional
-`refactor-evidence` textarea. Readiness adds one report-only `prior scope review`
-check requiring visible content under `Prior scope, duplicate, and supersession
-review` for every tier; refactor evidence stays conditionally required by the
-lifecycle standard, not readiness. `_No response_`, blank, quoted, fenced,
-commented, unrelated, or absent evidence fails closed to `needs-decision`; live
-links are never parsed.
-
+The canonical form adds required `prior-scope-review` and optional
+`refactor-evidence` textareas. Readiness requires visible content under `Prior
+scope, duplicate, and supersession review` for every tier; refactor evidence is
+conditionally required by lifecycle policy, not readiness. `_No response_`,
+blank, quoted, fenced, commented, unrelated, or absent evidence fails closed to
+`needs-decision`; live links are never parsed.
 ## Optional Machine-Checkable Metadata
 ```yaml
 agent_os_issue_acceptance:
@@ -86,11 +76,9 @@ agent_os_issue_acceptance:
 ```
 Metadata narrows checks; it does not replace the issue body, governance, or
 reviewer judgment.
-
 ## Pull Request Evidence
 PRs should include linked issue, summary, files changed, tests, docs, blockers,
 handoffs, risks, and an Issue Acceptance Report or manual-only explanation.
-
 ## Acceptance Report Schema
 ```text
 Issue Acceptance Report
@@ -103,7 +91,6 @@ Blockers:
 Remaining risks:
 ```
 `fail` maps to `blocked`; `manual-review` maps to `needs-decision`.
-
 ## Implementation Rules
 Reuse existing report, check, status, metadata, renderer, parser, label evidence,
 and fixture patterns. Start offline with no credentials. Workflow integration is
