@@ -1,5 +1,4 @@
 # Issue Acceptance And Readiness Standard
-
 ## Purpose
 Define one Agent OS contract for build-ready issues, readiness decisions, and pull
 request acceptance evidence.
@@ -20,8 +19,7 @@ idea or request
 ```
 ChatGPT Orchestrator owns intake and routing. QA / Test Agent owns readiness and
 acceptance evidence. GitHub Service Agent is the sole repository write executor.
-Work-level contracts for roadmap issues, implementation issues, and pull
-requests live in `issue-lifecycle-standard.md`.
+Work-level contracts live in `issue-lifecycle-standard.md`.
 
 ## Issue Tiers
 - Tier 0 requires objective, owner, allowed area, validation, and completion.
@@ -61,10 +59,13 @@ The user-facing result is exactly `ready`, `blocked`, or `needs-decision`.
 item, and `needs-decision` requires human judgment. Readiness is evidence only.
 
 ## Prior-Scope Review Intake
-The canonical form adds a required `prior-scope-review` textarea and an optional `refactor-evidence` textarea.
-Readiness adds one report-only `prior scope review` check requiring visible content under
-`Prior scope, duplicate, and supersession review` for every tier; refactor evidence stays conditionally required by the lifecycle standard, not readiness.
-`_No response_`, blank, quoted, fenced, commented, or absent evidence fails closed to `needs-decision`, mirroring the documentation-impact legacy migration; live links are never parsed.
+The canonical form adds a required `prior-scope-review` textarea and optional
+`refactor-evidence` textarea. Readiness adds one report-only `prior scope review`
+check requiring visible content under `Prior scope, duplicate, and supersession
+review` for every tier; refactor evidence stays conditionally required by the
+lifecycle standard, not readiness. `_No response_`, blank, quoted, fenced,
+commented, unrelated, or absent evidence fails closed to `needs-decision`; live
+links are never parsed.
 
 ## Optional Machine-Checkable Metadata
 ```yaml
