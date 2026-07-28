@@ -25,6 +25,21 @@
       "name": "instructional-materials-coach",
       "prefixes": ["08_Tooling/instructional-materials-coach/"],
       "commands": ["python -m pytest 08_Tooling/instructional-materials-coach/tests"]
+    },
+    {
+      "name": "curriculum-pipeline-boundaries",
+      "exact_paths": ["tests/test_curriculum_pipeline_boundaries.py"],
+      "commands": ["python -m pytest tests/test_curriculum_pipeline_boundaries.py"]
+    },
+    {
+      "name": "curriculum-language-system",
+      "exact_paths": ["tests/test_curriculum_language_system.py"],
+      "commands": ["python -m pytest tests/test_curriculum_language_system.py"]
+    },
+    {
+      "name": "teacher-modeling-workflows",
+      "exact_paths": ["tests/test_teacher_modeling_workflows.py"],
+      "commands": ["python -m pytest tests/test_teacher_modeling_workflows.py"]
     }
   ],
   "aggregate_command": "python -m pytest"

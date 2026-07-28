@@ -226,6 +226,10 @@ def _string_list(value: object) -> bool:
     return isinstance(value, list) and all(isinstance(item, str) for item in value)
 
 
+def _usable_string_list(value: object) -> bool:
+    return _string_list(value) and all(_bounded_text(item) for item in value)
+
+
 def _valid_rule_map(rules: object) -> bool:
     if not isinstance(rules, dict):
         return False
@@ -251,7 +255,13 @@ def _valid_rule_map(rules: object) -> bool:
             return False
         if not isinstance(rule.get("name"), str):
             return False
-        if not _string_list(rule.get("prefixes")):
+        prefixes = rule.get("prefixes", [])
+        exact_paths = rule.get("exact_paths", [])
+        if not _usable_string_list(prefixes):
+            return False
+        if not _usable_string_list(exact_paths):
+            return False
+        if not prefixes and not exact_paths:
             return False
         if not _string_list(rule.get("commands")):
             return False
@@ -314,13 +324,20 @@ def select_validation_plan(
     matched_commands: list[str] = []
     matched_rules: set[str] = set()
     covered: set[str] = set()
-    for rule in rules["focused_rules"]:
-        prefixes = tuple(rule["prefixes"])
-        for path in paths:
-            if path.startswith(prefixes):
-                covered.add(path)
-                matched_rules.add(rule["name"])
-                matched_commands.extend(rule["commands"])
+    for path in paths:
+        path_matches: list[tuple[str, tuple[str, ...]]] = []
+        for rule in rules["focused_rules"]:
+            prefixes = tuple(rule.get("prefixes", []))
+            exact_paths = frozenset(rule.get("exact_paths", []))
+            if path in exact_paths or (prefixes and path.startswith(prefixes)):
+                path_matches.append((rule["name"], tuple(rule["commands"])))
+        distinct_command_sets = {commands for _, commands in path_matches}
+        if len(distinct_command_sets) > 1:
+            return _plan(value, "manual-review", (), "rule.ambiguous")
+        if path_matches:
+            covered.add(path)
+            matched_rules.update(name for name, _ in path_matches)
+            matched_commands.extend(path_matches[0][1])
     if matched_commands and len(covered) == len(paths):
         commands = tuple(sorted(set(matched_commands)))
         reason = (

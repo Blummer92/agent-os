@@ -1,37 +1,20 @@
 from pathlib import Path
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[1]
-CLS2_STANDARD = (
-    ROOT / "01_Shared_Standards/instructional-design/unit-vocabulary-map-standard.md"
-)
-CLS4_STANDARD = ROOT / (
-    "01_Shared_Standards/instructional-design/"
-    "lesson-vocabulary-planner-response-standard.md"
-)
-STUDENT_STANDARD = ROOT / (
-    "01_Shared_Standards/instructional-design/student-language-standard.md"
-)
-SLIDE_DEFAULTS = ROOT / (
-    "01_Shared_Standards/instructional-design/slide-deck-defaults.md"
-)
-MATERIAL_WORKFLOWS = ROOT / (
-    "01_Shared_Standards/instructional-design/instructional-materials-workflows.md"
-)
-MATERIAL_RUBRIC = ROOT / (
-    "01_Shared_Standards/instructional-design/material-quality-rubric.md"
-)
+CLS2_STANDARD = ROOT / "01_Shared_Standards/instructional-design/unit-vocabulary-map-standard.md"
+CLS4_STANDARD = ROOT / "01_Shared_Standards/instructional-design/lesson-vocabulary-planner-response-standard.md"
+STUDENT_STANDARD = ROOT / "01_Shared_Standards/instructional-design/student-language-standard.md"
+SLIDE_DEFAULTS = ROOT / "01_Shared_Standards/instructional-design/slide-deck-defaults.md"
+MATERIAL_WORKFLOWS = ROOT / "01_Shared_Standards/instructional-design/instructional-materials-workflows.md"
+MATERIAL_RUBRIC = ROOT / "01_Shared_Standards/instructional-design/material-quality-rubric.md"
 OVERLAYS = (
     ROOT / "02_Agent_Overlays/unit-alignment-agent.md",
     ROOT / "02_Agent_Overlays/teacher-modeling-coach.md",
     ROOT / "02_Agent_Overlays/instructional-materials-coach.md",
 )
 CLS2_REF = "01_Shared_Standards/instructional-design/unit-vocabulary-map-standard.md"
-CLS4_REF = (
-    "01_Shared_Standards/instructional-design/"
-    "lesson-vocabulary-planner-response-standard.md"
-)
+CLS4_REF = "01_Shared_Standards/instructional-design/lesson-vocabulary-planner-response-standard.md"
 
 
 def read(path: Path) -> str:
@@ -59,7 +42,6 @@ def test_unit_vocabulary_map_contract_is_complete() -> None:
         "Assess This Unit?",
         "Notes",
     )
-
     for value in (*required_categories, *required_fields):
         assert value in content, f"missing CLS2 contract value: {value}"
 
@@ -109,7 +91,6 @@ def test_lesson_vocabulary_planner_contract_is_complete() -> None:
         "Instruction or Practice Evidence",
         "Notes",
     )
-
     for value in (
         *required_sections,
         *required_categories,
@@ -144,7 +125,6 @@ def test_cls4_source_order_and_fail_closed_rules_are_explicit() -> None:
     )
     positions = [content.index(phrase) for phrase in ordered_phrases]
     assert positions == sorted(positions), "CLS4 source-reading order must stay explicit"
-
     required_safety_phrases = (
         "return `needs-decision`",
         "Conflicting evidence also returns `needs-decision`",
@@ -232,7 +212,6 @@ CLS5_RULES = {
         "Graphic Design / Principles / Poster\nDesign is canonically `Split`",
     ),
 }
-
 FORBIDDEN_VALIDATION_REQUIREMENTS = (
     "live connector",
     "credential",
@@ -303,7 +282,6 @@ def test_cls_validation_rejects_missing_and_duplicate_inheritance(
     documents[overlay] = documents[overlay].replace(reference, "", 1)
     expected = f"{overlay.name} must inherit {label} exactly once"
     assert expected in validate_cls_contract(documents)
-
     documents = repository_documents()
     documents[overlay] += f"\n{reference}\n"
     assert expected in validate_cls_contract(documents)
@@ -333,3 +311,85 @@ def test_cls_validation_rejects_external_or_automation_dependencies(
 
 def test_cls_validation_allows_only_local_deterministic_inputs() -> None:
     assert validate_requirements(("repository files", "local fixtures", "pytest")) == []
+
+
+@pytest.mark.parametrize(
+    ("state", "outcome"),
+    (
+        ("Current canonical match", "`canonical-confirmed`"),
+        ("No canonical record plus one unique authorized working source", "`working-source-confirmed`"),
+        ("Canonical lookup unavailable", "Return `needs-decision`"),
+        ("Canonical lookup unverifiable", "Return `needs-decision`"),
+        ("Multiple plausible sources", "Block for source-owner resolution"),
+        ("Canonical/working-source conflict", "route to the canonical owner"),
+        ("Stale canonical pointer", "canonical owner refreshes it"),
+        ("One governed alias resolves uniquely", "resolved canonical or working-source rule"),
+        ("Alias collision", "Block for identity resolution"),
+        ("Unresolved alias", "Block for identity resolution"),
+    ),
+)
+def test_cls7_identity_states_have_deterministic_outcomes(
+    state: str, outcome: str
+) -> None:
+    matching_lines = [line for line in read(CLS2_STANDARD).splitlines() if state in line]
+    assert len(matching_lines) == 1, f"missing or duplicate CLS7 identity state: {state}"
+    assert outcome in matching_lines[0], f"missing CLS7 outcome for: {state}"
+
+
+@pytest.mark.parametrize(
+    "evidence_field",
+    (
+        "source identity",
+        "exact page, property, heading, table, or section",
+        "relevant source section",
+        "freshness evidence",
+        "provisional status",
+        "reason the source is uniquely usable",
+        "`execution_authorized: false`",
+        "authorizes no readiness, assessment",
+    ),
+)
+def test_cls7_working_source_preserves_provisional_evidence(
+    evidence_field: str,
+) -> None:
+    assert evidence_field in read(CLS2_STANDARD)
+
+
+def test_cls7_distinguishes_missing_record_from_unavailable_lookup() -> None:
+    content = read(CLS2_STANDARD)
+    assert "A missing canonical registry record is not the same state" in content
+    assert "Never infer one from the other" in content
+
+
+def test_cls7_preserves_cls4_canonical_chain() -> None:
+    content = read(CLS4_STANDARD)
+    for phrase in (
+        "`working-source-confirmed` is provisional CLS2 discovery evidence only",
+        "approved CLS2 map",
+        "CLS4 proceeds only after the canonical unit registry record and pointer resolve",
+        "returns `needs-decision`; do not build a lesson vocabulary plan",
+    ):
+        assert phrase in content, f"missing CLS4 preservation rule: {phrase}"
+
+
+def test_cls7_unit_alignment_overlay_enforces_handoff_boundary() -> None:
+    content = read(OVERLAYS[0])
+    for phrase in (
+        "Permit `working-source-confirmed` only for provisional CLS2 discovery",
+        "`execution_authorized: false`",
+        "Never treat an unavailable or unverifiable canonical lookup",
+        "Preserve the CLS4 canonical chain",
+        "without a write",
+    ):
+        assert phrase in content, f"missing Unit Alignment CLS7 boundary: {phrase}"
+
+
+def test_cls7_rejects_live_resolution_and_automatic_onboarding() -> None:
+    content = read(CLS2_STANDARD)
+    for phrase in (
+        "live resolver",
+        "connector-backed identity resolution",
+        "No automatic onboarding, registry mutation, or external write",
+        "Do not create a curriculum overlay folder",
+    ):
+        assert phrase in content, f"missing CLS7 prohibited expansion: {phrase}"
