@@ -1,0 +1,99 @@
+[
+  {
+    "name": "terminal_success",
+    "kwargs": {
+      "build_id": "build-success-1",
+      "tested_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "Blummer92/agent-os",
+      "overall_result": "success",
+      "terminal": true,
+      "source_complete": true,
+      "failed_step": "none",
+      "exit_code": 0,
+      "trigger_id": "trigger-1",
+      "invocation_id": "invocation-1",
+      "observed_at": "2026-07-28T00:00:00Z"
+    }
+  },
+  {
+    "name": "terminal_failure",
+    "kwargs": {
+      "build_id": "build-failure-1",
+      "tested_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "repository": "Blummer92/agent-os",
+      "overall_result": "failure",
+      "terminal": true,
+      "source_complete": true,
+      "failed_step": "agent-os-validation",
+      "exit_code": 1
+    }
+  },
+  {
+    "name": "timeout",
+    "kwargs": {
+      "build_id": "build-timeout-1",
+      "tested_sha": "cccccccccccccccccccccccccccccccccccccccc",
+      "repository": "Blummer92/agent-os",
+      "overall_result": "timeout",
+      "terminal": true,
+      "source_complete": true,
+      "failed_step": null,
+      "exit_code": null
+    }
+  },
+  {
+    "name": "cancelled",
+    "kwargs": {
+      "build_id": "build-cancelled-1",
+      "tested_sha": "dddddddddddddddddddddddddddddddddddddddd",
+      "repository": "Blummer92/agent-os",
+      "overall_result": "cancelled",
+      "terminal": true,
+      "source_complete": true
+    }
+  },
+  {
+    "name": "internal_error",
+    "kwargs": {
+      "build_id": "build-internal-error-1",
+      "tested_sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "repository": "Blummer92/agent-os",
+      "overall_result": "internal-error",
+      "terminal": true,
+      "source_complete": true
+    }
+  },
+  {
+    "name": "unavailable",
+    "kwargs": {
+      "build_id": "build-unavailable-1",
+      "tested_sha": "ffffffffffffffffffffffffffffffffffffffff",
+      "repository": "Blummer92/agent-os",
+      "overall_result": "unavailable",
+      "terminal": true,
+      "source_complete": false
+    }
+  },
+  {
+    "name": "pending",
+    "kwargs": {
+      "build_id": "build-pending-1",
+      "tested_sha": "1111111111111111111111111111111111111111",
+      "repository": "Blummer92/agent-os",
+      "overall_result": "pending",
+      "terminal": false,
+      "source_complete": true
+    }
+  },
+  {
+    "name": "malformed",
+    "kwargs": {
+      "build_id": "build-malformed-1",
+      "tested_sha": "2222222222222222222222222222222222222222",
+      "repository": "Blummer92/agent-os",
+      "overall_result": "malformed",
+      "terminal": false,
+      "source_complete": false
+    }
+  }
+]
