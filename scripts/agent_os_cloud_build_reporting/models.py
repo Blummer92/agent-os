@@ -16,6 +16,7 @@ CLOUD_BUILD_EVIDENCE_SCHEMA_VERSION = "1.0"
 
 MAX_FIELD_LENGTH = 512
 MAX_REASON_CODES = 32
+MAX_PR_CANDIDATES = 64
 
 _SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 _REPOSITORY_RE = re.compile(r"^[a-z0-9_.-]+/[a-z0-9_.-]+$")

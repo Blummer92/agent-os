@@ -17,6 +17,7 @@ from .core import (
 from .models import (
     CLOUD_BUILD_EVIDENCE_SCHEMA_NAME,
     CLOUD_BUILD_EVIDENCE_SCHEMA_VERSION,
+    MAX_PR_CANDIDATES,
     CloudBuildCommentProjection,
     CloudBuildEvidenceError,
     CloudBuildResultEvidence,
@@ -30,6 +31,7 @@ from .models import (
 __all__ = [
     "CLOUD_BUILD_EVIDENCE_SCHEMA_NAME",
     "CLOUD_BUILD_EVIDENCE_SCHEMA_VERSION",
+    "MAX_PR_CANDIDATES",
     "CloudBuildCommentProjection",
     "CloudBuildEvidenceError",
     "CloudBuildResultEvidence",

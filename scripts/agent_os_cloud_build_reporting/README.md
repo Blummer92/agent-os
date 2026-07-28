@@ -48,6 +48,23 @@ malformed evidence route to `skipped`, `manual-review`, or `invalid`.
 Resolution never uses issue numbers, branch names, titles, comments, or
 semantic similarity.
 
+Candidate intake is bounded by `MAX_PR_CANDIDATES` (64): at most
+`MAX_PR_CANDIDATES + 1` items are ever read from the supplied iterable, so an
+unbounded or hostile generator is never fully consumed. Exceeding the bound
+fails closed to `invalid` with the stable reason code
+`resolution.too-many-candidates`.
+
+## Secret-safe output
+
+`render_comment_projection` and `serialize_projection` route every public
+text field — `build_id`, `failed_step`, and the rendered body — through one
+bounded sanitization path. Known secret shapes (bearer tokens, GitHub-style
+tokens, AWS keys, `key=value`/`password=` assignments, signed-URL query
+parameters, sensitive credential paths) are redacted, oversized text is
+truncated, and multi-line text is treated as unrestricted log/exception
+content and replaced outright. No raw supplied value is stored unredacted in
+the projection merely because it is also redacted in the rendered body.
+
 ## Non-goals
 
 No GitHub or Cloud Build API calls, no live PR comments, no `cloudbuild.yaml`

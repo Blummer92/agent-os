@@ -524,3 +524,217 @@ def test_evidence_semantic_identity_is_bounded_tuple() -> None:
     identity = evidence_semantic_identity(evidence)
     assert isinstance(identity, tuple)
     assert len(identity) == 4
+
+
+# ---------------------------------------------------------------------------
+# NO-GO repair: secret-safe public projection and serialization (Fix 1)
+# ---------------------------------------------------------------------------
+
+SECRET_LIKE_VALUES = [
+    "Bearer sk-1234567890abcdef1234567890abcdef",
+    "token=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+    "api_key=sUpErSeCrEt1234567890",
+    "password=hunter2-super-secret-value",
+    "https://storage.googleapis.com/x?X-Goog-Signature=abc123def456",
+    "/home/user/.ssh/id_rsa",
+    "Traceback (most recent call last):\n  File \"x.py\", line 1\nValueError: boom",
+]
+
+
+@pytest.mark.parametrize("secret_value", SECRET_LIKE_VALUES)
+def test_secret_like_build_id_is_sanitized_everywhere(secret_value: str) -> None:
+    evidence = normalize_cloud_build_evidence(
+        build_id=secret_value,
+        tested_sha=SHA_A,
+        repository=REPO,
+        overall_result="success",
+        terminal=True,
+        source_complete=True,
+        failed_step="none",
+        exit_code=0,
+    )
+    result = resolve_pull_request(evidence, candidates=[_candidate()])
+    projection = render_comment_projection(evidence, result)
+    serialized = serialize_projection(projection)
+
+    assert secret_value not in projection.build_id
+    assert secret_value not in projection.rendered_body
+    assert secret_value not in serialized
+
+
+@pytest.mark.parametrize("secret_value", SECRET_LIKE_VALUES)
+def test_secret_like_failed_step_is_sanitized_everywhere(secret_value: str) -> None:
+    evidence = normalize_cloud_build_evidence(
+        build_id="build-1",
+        tested_sha=SHA_A,
+        repository=REPO,
+        overall_result="failure",
+        terminal=True,
+        source_complete=True,
+        failed_step=secret_value,
+    )
+    result = resolve_pull_request(evidence, candidates=[])
+    projection = render_comment_projection(evidence, result)
+    serialized = serialize_projection(projection)
+
+    assert secret_value not in projection.failed_step
+    assert secret_value not in projection.rendered_body
+    assert secret_value not in serialized
+
+
+def test_oversized_build_id_is_bounded_in_projection_and_serialization() -> None:
+    evidence = normalize_cloud_build_evidence(
+        build_id="b" * 500,
+        tested_sha=SHA_A,
+        repository=REPO,
+        overall_result="success",
+        terminal=True,
+        source_complete=True,
+        failed_step="none",
+        exit_code=0,
+    )
+    result = resolve_pull_request(evidence, candidates=[_candidate()])
+    projection = render_comment_projection(evidence, result)
+    serialized = serialize_projection(projection)
+
+    assert "truncated" in projection.build_id
+    assert len(projection.build_id) < 500
+    assert "truncated" in serialized
+
+
+def test_serialize_projection_never_contains_raw_supplied_secret() -> None:
+    evidence = normalize_cloud_build_evidence(
+        build_id="AKIAABCDEFGHIJKLMNOP",
+        tested_sha=SHA_A,
+        repository=REPO,
+        overall_result="failure",
+        terminal=True,
+        source_complete=True,
+        failed_step="authorization: Bearer eyJhbGciOiJIUzI1NiJ9.secretpayload",
+    )
+    result = resolve_pull_request(evidence, candidates=[])
+    projection = render_comment_projection(evidence, result)
+    serialized = serialize_projection(projection)
+
+    assert "AKIAABCDEFGHIJKLMNOP" not in serialized
+    assert "secretpayload" not in serialized
+    assert json.loads(serialized)["build_id"] == projection.build_id
+
+
+def test_repository_and_tested_sha_remain_exact_and_unredacted() -> None:
+    evidence = _success_evidence()
+    result = resolve_pull_request(evidence, candidates=[_candidate()])
+    projection = render_comment_projection(evidence, result)
+    assert projection.tested_sha == SHA_A
+    assert evidence.repository == REPO.lower()
+
+
+# ---------------------------------------------------------------------------
+# NO-GO repair: bounded PR candidate intake (Fix 2)
+# ---------------------------------------------------------------------------
+
+
+class _CountingCandidates:
+    """An effectively unbounded iterable that records items consumed."""
+
+    def __init__(self, total: int) -> None:
+        self.total = total
+        self.consumed = 0
+
+    def __iter__(self):
+        for index in range(self.total):
+            self.consumed += 1
+            yield _candidate(
+                pull_request_number=index + 1,
+                head_sha=SHA_B,
+                state=PullRequestState.CLOSED,
+                evidence_source=f"lookup-{index}",
+            )
+
+
+def test_zero_candidates_is_skipped() -> None:
+    evidence = _success_evidence()
+    result = resolve_pull_request(evidence, candidates=[])
+    assert result.status == ResolutionStatus.SKIPPED
+
+
+def test_one_candidate_resolves() -> None:
+    evidence = _success_evidence()
+    result = resolve_pull_request(evidence, candidates=[_candidate()])
+    assert result.status == ResolutionStatus.RESOLVED
+
+
+def test_exactly_maximum_candidates_is_not_rejected_for_size() -> None:
+    from scripts.agent_os_cloud_build_reporting import MAX_PR_CANDIDATES
+
+    evidence = _success_evidence()
+    candidates = [
+        _candidate(
+            pull_request_number=index + 1,
+            head_sha=SHA_B,
+            state=PullRequestState.CLOSED,
+            evidence_source=f"lookup-{index}",
+        )
+        for index in range(MAX_PR_CANDIDATES)
+    ]
+    result = resolve_pull_request(evidence, candidates=candidates)
+    assert "resolution.too-many-candidates" not in result.reason_codes
+
+
+def test_maximum_plus_one_candidates_fails_closed_with_stable_reason() -> None:
+    from scripts.agent_os_cloud_build_reporting import MAX_PR_CANDIDATES
+
+    evidence = _success_evidence()
+    candidates = [
+        _candidate(
+            pull_request_number=index + 1,
+            head_sha=SHA_B,
+            state=PullRequestState.CLOSED,
+            evidence_source=f"lookup-{index}",
+        )
+        for index in range(MAX_PR_CANDIDATES + 1)
+    ]
+    result = resolve_pull_request(evidence, candidates=candidates)
+    assert result.status == ResolutionStatus.INVALID
+    assert result.reason_codes == ("resolution.too-many-candidates",)
+    # Deterministic reason ordering: repeated calls yield the identical tuple.
+    assert resolve_pull_request(evidence, candidates=candidates).reason_codes == result.reason_codes
+
+
+def test_generator_intake_stops_consuming_past_the_bound() -> None:
+    from scripts.agent_os_cloud_build_reporting import MAX_PR_CANDIDATES
+
+    evidence = _success_evidence()
+    source = _CountingCandidates(MAX_PR_CANDIDATES + 1_000_000)
+    result = resolve_pull_request(evidence, candidates=source)
+    assert result.status == ResolutionStatus.INVALID
+    assert result.reason_codes == ("resolution.too-many-candidates",)
+    assert source.consumed == MAX_PR_CANDIDATES + 1
+
+
+def test_hostile_unbounded_iterable_does_not_hang_or_exhaust() -> None:
+    from scripts.agent_os_cloud_build_reporting import MAX_PR_CANDIDATES
+
+    def infinite():
+        index = 0
+        while True:
+            yield _candidate(
+                pull_request_number=index + 1,
+                head_sha=SHA_B,
+                state=PullRequestState.CLOSED,
+                evidence_source=f"lookup-{index}",
+            )
+            index += 1
+
+    evidence = _success_evidence()
+    result = resolve_pull_request(evidence, candidates=infinite())
+    assert result.status == ResolutionStatus.INVALID
+    assert result.reason_codes == ("resolution.too-many-candidates",)
+
+
+def test_candidate_input_list_is_not_mutated() -> None:
+    evidence = _success_evidence()
+    candidates = [_candidate(), _candidate(pull_request_number=2, head_sha=SHA_B, state=PullRequestState.CLOSED)]
+    before = list(candidates)
+    resolve_pull_request(evidence, candidates=candidates)
+    assert candidates == before

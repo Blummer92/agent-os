@@ -8,14 +8,16 @@ no input is ever mutated.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import asdict
 
 from .models import (
     CLOUD_BUILD_EVIDENCE_SCHEMA_NAME,
     CLOUD_BUILD_EVIDENCE_SCHEMA_VERSION,
+    MAX_PR_CANDIDATES,
     CloudBuildCommentProjection,
     CloudBuildEvidenceError,
     CloudBuildResultEvidence,
@@ -35,13 +37,26 @@ _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"),
     re.compile(r"AKIA[0-9A-Z]{16}"),
     re.compile(r"(?i)https?://\S*[?&](?:sig|signature|token|x-goog-signature)=\S+"),
+    # Sensitive filesystem paths (SSH/AWS/GnuPG credential material, private
+    # keys, .env files) are redacted like any other secret-bearing value.
+    re.compile(r"(?i)\S*(?:\.ssh|\.aws|\.gnupg|\.pem|\.env|id_rsa|credentials)\S*"),
 )
 
 
 def _redact_text(value: str | None) -> str:
+    """One deterministic, bounded sanitization path for all public text.
+
+    Every public projection field and every serialized value must pass
+    through here; no raw supplied text is ever stored unredacted.
+    """
     if value is None:
         return "unavailable"
     text = value
+    if "\n" in text or "\r" in text:
+        # A bounded label is never multi-line; multi-line content is treated
+        # as unrestricted log/exception output and replaced outright rather
+        # than partially redacted.
+        return "[REDACTED]"
     for pattern in _SECRET_PATTERNS:
         text = pattern.sub("[REDACTED]", text)
     if len(text) > _REDACT_TEXT_MAX_LENGTH:
@@ -91,6 +106,20 @@ def normalize_cloud_build_evidence(
     )
 
 
+def _bounded_candidates(
+    candidates: Iterable[PullRequestResolutionCandidate],
+) -> tuple[PullRequestResolutionCandidate, ...] | None:
+    """Materialize at most MAX_PR_CANDIDATES+1 items, never the full iterable.
+
+    Returns None on overflow (more than MAX_PR_CANDIDATES supplied) without
+    consuming beyond the one item needed to detect that overflow.
+    """
+    limited = tuple(itertools.islice(candidates, MAX_PR_CANDIDATES + 1))
+    if len(limited) > MAX_PR_CANDIDATES:
+        return None
+    return limited
+
+
 def resolve_pull_request(
     evidence: CloudBuildResultEvidence,
     *,
@@ -98,7 +127,14 @@ def resolve_pull_request(
     candidates: Sequence[PullRequestResolutionCandidate] = (),
 ) -> PullRequestResolutionResult:
     """Resolve PR identity only from exact repository-and-SHA evidence."""
-    candidates = tuple(candidates)
+    bounded = _bounded_candidates(candidates)
+    if bounded is None:
+        return PullRequestResolutionResult(
+            status=ResolutionStatus.INVALID,
+            pull_request_number=None,
+            reason_codes=("resolution.too-many-candidates",),
+        )
+    candidates = bounded
 
     if not evidence.source_complete:
         return PullRequestResolutionResult(
@@ -267,6 +303,10 @@ def render_comment_projection(
 ) -> CloudBuildCommentProjection:
     """Render one bounded, deterministic, secret-safe comment projection."""
     marker = compute_stable_marker(evidence)
+    # Every public field is sanitized through the same bounded path; no raw
+    # secret-bearing supplied text is stored anywhere in the projection, not
+    # even fields that also happen to be redacted again in rendered_body.
+    build_id_text = _redact_text(evidence.build_id)
     failed_step_text = "none" if evidence.failed_step == "none" else _redact_text(evidence.failed_step)
     exit_code_text = "unavailable" if evidence.exit_code is None else str(evidence.exit_code)
     reporting_status = _REPORTING_STATUS_BY_RESOLUTION[resolution.status]
@@ -277,7 +317,7 @@ def render_comment_projection(
     lines = [
         marker,
         "Cloud Build report (supplemental, non-authorizing)",
-        f"build: {_redact_text(evidence.build_id)}",
+        f"build: {build_id_text}",
         f"tested sha: {evidence.tested_sha}",
         f"result: {evidence.overall_result.value}",
         f"failed step: {failed_step_text}",
@@ -294,7 +334,7 @@ def render_comment_projection(
 
     return CloudBuildCommentProjection(
         stable_marker=marker,
-        build_id=evidence.build_id,
+        build_id=build_id_text,
         tested_sha=evidence.tested_sha,
         overall_result=evidence.overall_result.value,
         failed_step=failed_step_text,
