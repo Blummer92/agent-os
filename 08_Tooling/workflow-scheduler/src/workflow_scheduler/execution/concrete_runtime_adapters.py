@@ -4,6 +4,10 @@ This module composes only the existing lease, worktree, POSIX process,
 frozen-test validation, and runtime-entrypoint implementations. It owns no
 scheduler, retry, persistence, network, workflow, publication, or GitHub
 authority.
+
+In validation-only mode the configuration carries no executor argv and no
+``PosixProcessExecutor`` is constructed at all. The bound validation commands
+still run exactly once each through the same frozen-test validation adapter.
 """
 
 from __future__ import annotations
@@ -36,7 +40,11 @@ from workflow_scheduler.execution.posix_process_adapter import (
     run_bounded_posix_process,
 )
 from workflow_scheduler.execution.single_issue_pilot import (
+    RUNTIME_EXECUTION_MODES,
+    STANDARD_EXECUTION_MODE,
+    VALIDATION_ONLY_EXECUTION_MODE,
     CancellationProbe,
+    RuntimeExecutionMode,
     SingleIssuePilotInput,
     WorkspaceRequest,
     pilot_workspace_identity,
@@ -221,6 +229,7 @@ class ConcreteRuntimeConfiguration:
     schema_name: str
     schema_version: str
     configuration_fingerprint: str
+    execution_mode: RuntimeExecutionMode
     repository: str
     issue_number: int
     invocation_id: str
@@ -239,7 +248,9 @@ class ConcreteRuntimeConfiguration:
     repository_identity: RepositoryIdentity
     repository_root: str
     workspace_parent: str
-    executor_argv: tuple[str, ...]
+    # Executor process authority is structurally absent in validation-only
+    # mode: there is no argv, so no unbound process can be dispatched.
+    executor_argv: tuple[str, ...] | None
     executor_cwd: str
     environment_policy: Literal["isolated-path-home-c-locale"]
     executor_timeout_seconds: float
@@ -260,8 +271,9 @@ class ConcreteRuntimeConfiguration:
         repository_identity: RepositoryIdentity,
         repository_root: str | os.PathLike[str],
         workspace_parent: str | os.PathLike[str],
-        executor_argv: tuple[str, ...],
         required_test_commands: tuple[FrozenTestCommand, ...],
+        executor_argv: tuple[str, ...] | None = None,
+        execution_mode: str = STANDARD_EXECUTION_MODE,
         executor_timeout_seconds: float = 30.0,
         executor_grace_period_seconds: float = 5.0,
         executor_max_output_bytes: int = MAX_OUTPUT_BYTES,
@@ -281,6 +293,18 @@ class ConcreteRuntimeConfiguration:
             raise ConcreteRuntimeConfigurationError(
                 "repository_identity must be RepositoryIdentity"
             )
+        if execution_mode not in RUNTIME_EXECUTION_MODES:
+            raise ConcreteRuntimeConfigurationError("unsupported execution mode")
+        if execution_mode != pilot_input.execution_mode:
+            raise ConcreteRuntimeConfigurationError("execution mode drifted")
+        if execution_mode == VALIDATION_ONLY_EXECUTION_MODE:
+            if executor_argv is not None:
+                raise ConcreteRuntimeConfigurationError(
+                    "validation-only mode has no executor process authority"
+                )
+            argv: tuple[str, ...] | None = None
+        else:
+            argv = _argv(executor_argv, "executor_argv")
         evidence_identity = getattr(
             pilot_input.repository_state_evidence, "repository_identity", None
         )
@@ -310,6 +334,7 @@ class ConcreteRuntimeConfiguration:
         values = {
             "schema_name": SCHEMA_NAME,
             "schema_version": SCHEMA_VERSION,
+            "execution_mode": execution_mode,
             "repository": _text(pilot_input.repository, "repository"),
             "issue_number": pilot_input.issue_numbers[0],
             "invocation_id": _text(pilot_input.invocation_id, "invocation_id"),
@@ -344,7 +369,7 @@ class ConcreteRuntimeConfiguration:
             "repository_identity": repository_identity,
             "repository_root": root,
             "workspace_parent": parent,
-            "executor_argv": _argv(executor_argv, "executor_argv"),
+            "executor_argv": argv,
             "executor_cwd": _workspace_path(pilot_input, parent),
             "environment_policy": environment_policy,
             "executor_timeout_seconds": _positive(
@@ -403,7 +428,10 @@ class ConcreteRuntimeConfiguration:
             raise ConcreteRuntimeConfigurationError(
                 "pilot_input must be SingleIssuePilotInput"
             )
+        if self.execution_mode not in RUNTIME_EXECUTION_MODES:
+            raise ConcreteRuntimeConfigurationError("unsupported execution mode")
         expected = {
+            "execution_mode": pilot_input.execution_mode,
             "repository": pilot_input.repository,
             "issue_number": (
                 pilot_input.issue_numbers[0]
@@ -466,6 +494,7 @@ def _payload(configuration: object) -> dict[str, object]:
     scalar_names = (
         "schema_name",
         "schema_version",
+        "execution_mode",
         "repository",
         "issue_number",
         "invocation_id",
@@ -503,7 +532,11 @@ def _payload(configuration: object) -> dict[str, object]:
                 "is_fork": identity.is_fork,
                 "default_branch": identity.default_branch,
             },
-            "executor_argv": list(get("executor_argv")),
+            "executor_argv": (
+                None
+                if get("executor_argv") is None
+                else list(get("executor_argv"))
+            ),
             "required_test_commands": [
                 {"test_id": item.test_id, "argv": list(item.argv)}
                 for item in commands
@@ -630,7 +663,9 @@ class GitChangedPathsInspector(ChangedPathsInspector):
 class ConcreteRuntimeAdapters:
     lease: InMemoryLeaseAdapter
     workspace: GitWorktreeAdapter
-    executor: PosixProcessExecutor
+    # ``None`` in validation-only mode: no process executor is constructed,
+    # rather than a no-op executor standing in for one.
+    executor: PosixProcessExecutor | None
     validator: FrozenTestValidationAdapter
     validation_runner: BoundPosixCommandRunner = field(repr=False)
 
@@ -643,7 +678,7 @@ def build_concrete_runtime_adapters(
     process_cancelled: ProcessCancellationCheck | None = None,
     changed_paths_inspector: ChangedPathsInspector | None = None,
 ) -> ConcreteRuntimeAdapters:
-    """Verify one binding and construct the four merged adapters."""
+    """Verify one binding and construct the merged adapters for this mode."""
 
     configuration.verify(pilot_input)
     lease = InMemoryLeaseAdapter()
@@ -653,17 +688,19 @@ def build_concrete_runtime_adapters(
         repository_identity=configuration.repository_identity,
         runner=git_runner,
     )
-    executor = PosixProcessExecutor(
-        PosixProcessExecutorConfig(
-            argv=configuration.executor_argv,
-            timeout_seconds=configuration.executor_timeout_seconds,
-            grace_period_seconds=configuration.executor_grace_period_seconds,
-            max_output_bytes=configuration.executor_max_output_bytes,
-            cwd=configuration.executor_cwd,
-            env=_environment(configuration),
-        ),
-        cancelled=process_cancelled,
-    )
+    executor: PosixProcessExecutor | None = None
+    if configuration.execution_mode != VALIDATION_ONLY_EXECUTION_MODE:
+        executor = PosixProcessExecutor(
+            PosixProcessExecutorConfig(
+                argv=configuration.executor_argv,
+                timeout_seconds=configuration.executor_timeout_seconds,
+                grace_period_seconds=configuration.executor_grace_period_seconds,
+                max_output_bytes=configuration.executor_max_output_bytes,
+                cwd=configuration.executor_cwd,
+                env=_environment(configuration),
+            ),
+            cancelled=process_cancelled,
+        )
     validation_runner = BoundPosixCommandRunner(
         configuration, cancelled=process_cancelled
     )
