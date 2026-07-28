@@ -6,7 +6,7 @@ Define the three-level Agent OS work lifecycle and remove duplicated coordinatio
 
 ## Boundary
 
-Inherits `00_Governance/write-authorization-policy.md`, `issue-acceptance-automation.md` (tiers, readiness, acceptance evidence), and `protected-branch-governance.md`. Readiness, approval, capability, and execution authorization remain separate states; stale, blocked, invalid, or ambiguous evidence stays fail-closed.
+Inherits `00_Governance/write-authorization-policy.md`, `issue-acceptance-automation.md` (tiers, readiness, acceptance evidence), `safe-implementation-lane.md` (eligible bounded implementation), and `protected-branch-governance.md`. Readiness, approval, capability, and execution authorization remain separate states; stale, blocked, invalid, or ambiguous evidence stays fail-closed.
 
 ## Three Work Levels
 
@@ -18,11 +18,15 @@ Contains only: objective, ownership, major sequence, major dependencies, active 
 
 ### Level 2 — Implementation issue
 
-Contains: one objective, dependencies, exact allowed files, required behavior, acceptance tests, issue-specific stop conditions, authorization state, and a reference to the required final report. Canonical boilerplate is linked, not pasted. One normal implementation issue is completed by one focused PR.
+Contains: one objective, dependencies, a bounded scope envelope or exact allowed files, required behavior, acceptance tests, issue-specific stop conditions, authorization state, and a reference to the required final report. Canonical boilerplate is linked, not pasted. One normal implementation issue is completed by one focused PR.
 
 ### Level 3 — Pull request
 
 Owns implementation evidence: files changed, exact source head, tested SHA or synthetic-merge SHA, tests and results, required checks, review findings, unresolved blockers, rollback, and remaining risks. The PR does not repeat the issue specification. Exactly one open primary PR may claim an implementation issue; a superseded PR is closed with a pointer comment. Two active PRs claiming the same issue is a `needs-decision` stop.
+
+## Safe Implementation Lane
+
+Eligible Tier 0 and Tier 1 repository work may use `safe-implementation-lane.md`. The bounded lane accepts directly necessary support files and environment-assigned non-protected branch names, and may include Ready-for-Review after exact-head validation; merge and all excluded surfaces remain separately authorized.
 
 ## Child-Issue Creation Test
 
@@ -34,7 +38,7 @@ Link, do not paste: write authorization (`00_Governance/write-authorization-poli
 
 ## Issue-Body Maintenance
 
-The issue body is authoritative. When a decision changes the contract, edit the body and add one concise dated comment naming what changed and why; edit history preserves prior text. Do not leave a stale body behind contradictory comments, and do not treat comments as outranking the body.
+The issue body is authoritative for durable objective, ownership, scope, non-goals, and protected surfaces. When a durable decision changes the contract, edit the body and add one concise dated comment naming what changed and why; edit history preserves prior text. A dated operational authorization comment may activate or pause work only when the body permits that route and the comment does not broaden or contradict the durable contract. Do not leave a stale body behind contradictory comments.
 
 ## Risk Ownership
 
@@ -46,29 +50,11 @@ Close a planning issue with one dated handoff comment once its implementation-re
 
 ## Closed-Issue Authority
 
-The open issue body is authoritative while the issue is active and must be
-synchronized immediately before closure. After closure the body is immutable
-historical evidence; never rewrite a closed body or its comments. Future
-execution routing is controlled by the closed state, the closure reason, the
-latest dated final-disposition comment, and the canonical successor or duplicate
-pointer — not by any historical `status:ready`, `status:blocked`, or
-`status:needs-decision` label, which cannot reactivate a closed issue.
-`completed`, `completed/no-change`, `not planned`, `duplicate`, and `superseded`
-are distinct terminal dispositions. New related work normally opens a new issue;
-reopening requires explicit authorization and the same original objective.
+The open issue body is authoritative while the issue is active and must be synchronized immediately before closure. After closure the body is immutable historical evidence; never rewrite a closed body or its comments. Future execution routing is controlled by the closed state, the closure reason, the latest dated final-disposition comment, and the canonical successor or duplicate pointer — not by any historical `status:ready`, `status:blocked`, or `status:needs-decision` label, which cannot reactivate a closed issue. `completed`, `completed/no-change`, `not planned`, `duplicate`, and `superseded` are distinct terminal dispositions. New related work normally opens a new issue; reopening requires explicit authorization and the same original objective.
 
 ## Refactor And Consolidation Value
 
-A shared abstraction normally requires at least three behaviorally identical
-callers; fewer requires a concrete correctness or drift defect and explicit
-justification. Net nonblank logical lines are supporting evidence only after
-helper, import, test, and docs overhead, and unrelated helpers cannot be
-combined to cross a threshold. Lifecycle, mutation, cleanup, diagnostics, import
-direction, validation cost, rollback cost, and future coupling are part of the
-decision. There is no universal 40-line threshold, and no-change is a valid
-successful disposition when proof cost exceeds benefit. The optional
-`refactor-evidence` intake field applies when this policy applies; readiness
-never makes it globally mandatory.
+A shared abstraction normally requires at least three behaviorally identical callers; fewer requires a concrete correctness or drift defect and explicit justification. Net nonblank logical lines are supporting evidence only after helper, import, test, and docs overhead, and unrelated helpers cannot be combined to cross a threshold. Lifecycle, mutation, cleanup, diagnostics, import direction, validation cost, rollback cost, and future coupling are part of the decision. There is no universal 40-line threshold, and no-change is a valid successful disposition when proof cost exceeds benefit. The optional `refactor-evidence` intake field applies when this policy applies; readiness never makes it globally mandatory.
 
 ## Label Policy
 
@@ -87,4 +73,5 @@ Legacy label disposition, verified against current repository labels and `.githu
 Do not add a legacy label to a new issue. Do not claim a disposition beyond this table without repository or label-map evidence.
 
 ## Version
-0.1.0
+
+0.2.0
