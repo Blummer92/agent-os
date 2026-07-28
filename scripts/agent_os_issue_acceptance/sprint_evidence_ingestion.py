@@ -294,7 +294,10 @@ def _validation(
         docs_updated=(),
         repository_validation="unknown",
         status_checks=_status_checks(candidates),
-        cloud_build_runs=0,
+        # Bounded ingestion collects no Cloud Build evidence, so both metrics
+        # stay unknown. Reporting 0 would claim an observation this normalizer
+        # never made.
+        cloud_build_runs=None,
         builds_avoided=None,
         evidence_refs=tuple(
             sorted(
@@ -305,7 +308,14 @@ def _validation(
 
 
 def _status_checks(candidates: Sequence[object]) -> str:
-    """Aggregate check evidence. Unknown or missing never becomes passed."""
+    """Aggregate check evidence.
+
+    Unknown, missing, and unsupported evidence never becomes passed. ``passed``
+    requires every observed state to be exactly ``passing``; anything else that
+    survives the precedence rules is an unsupported provider value and fails
+    closed, matching how this module already rejects unsupported contract
+    versions and freshness values.
+    """
 
     statuses = {
         candidate.pull_request.checks_status
@@ -320,7 +330,10 @@ def _status_checks(candidates: Sequence[object]) -> str:
         return "unknown"
     if "pending" in statuses:
         return "pending"
-    return "passed"
+    if statuses == {"passing"}:
+        return "passed"
+    # Bounded diagnostic: the unsupported value is never echoed back.
+    raise ValueError("unsupported check status in provider evidence")
 
 
 def _handoff(

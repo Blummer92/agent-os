@@ -264,8 +264,10 @@ def test_missing_validation_is_never_reported_as_passing():
     evidence = _normalize().sprint_evidence
     assert evidence.validation.repository_validation == "unknown"
     assert evidence.validation.tests_run == ()
+    # Bounded ingestion collects no Cloud Build evidence, so both metrics stay
+    # unknown rather than claiming an observed zero.
     assert evidence.validation.builds_avoided is None
-    assert evidence.validation.cloud_build_runs == 0
+    assert evidence.validation.cloud_build_runs is None
 
 
 @pytest.mark.parametrize(
@@ -290,6 +292,63 @@ def test_check_aggregation_never_upgrades_unknown_to_passed(checks_status, expec
     )
     evidence = _normalize(collection).sprint_evidence
     assert evidence.validation.status_checks == expected
+
+
+def _collection_with_check_states(*states: str, freshness: str = "incomplete"):
+    candidates = tuple(
+        _candidate(
+            issue_number=100 + index,
+            freshness=freshness,
+            pull_request=_Pull(checks_status=state),
+            sources=(_Source(object_id=str(100 + index)),),
+        )
+        for index, state in enumerate(states)
+    )
+    return _collection(freshness=freshness, candidates=candidates)
+
+
+def test_unsupported_check_state_fails_closed():
+    with pytest.raises(ValueError) as error:
+        _normalize(_collection_with_check_states("bogus"))
+    assert "bogus" not in str(error.value)
+    assert str(error.value) == "unsupported check status in provider evidence"
+
+
+def test_passing_mixed_with_an_unsupported_check_state_never_becomes_passed():
+    with pytest.raises(ValueError):
+        _normalize(_collection_with_check_states("passing", "bogus"))
+
+
+@pytest.mark.parametrize("state", [None, "", "PASSING", "success", "passed"])
+def test_non_canonical_check_states_never_become_passed(state):
+    with pytest.raises(ValueError):
+        _normalize(_collection_with_check_states("passing", state))
+
+
+def test_passing_only_is_the_sole_path_to_passed():
+    evidence = _normalize(
+        _collection_with_check_states("passing", "passing", freshness="current")
+    ).sprint_evidence
+    assert evidence.validation.status_checks == "passed"
+
+
+@pytest.mark.parametrize(
+    ("states", "expected"),
+    [
+        (("failing", "passing"), "failed"),
+        (("failing", "unknown"), "failed"),
+        (("failing", "bogus"), "failed"),
+        (("unknown", "passing"), "unknown"),
+        (("unknown", "pending"), "unknown"),
+        (("unknown", "bogus"), "unknown"),
+        (("pending", "passing"), "pending"),
+        (("pending", "bogus"), "pending"),
+    ],
+)
+def test_check_state_precedence_across_lanes(states, expected):
+    evidence = _normalize(_collection_with_check_states(*states)).sprint_evidence
+    assert evidence.validation.status_checks == expected
+    assert evidence.validation.status_checks != "passed"
 
 
 def test_absent_pull_requests_report_checks_as_not_posted():
