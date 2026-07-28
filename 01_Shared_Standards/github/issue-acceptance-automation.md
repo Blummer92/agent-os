@@ -31,6 +31,16 @@ requests live in `issue-lifecycle-standard.md`.
   governed fields, rollback, approvals, stop conditions, and compatibility.
 Tier selection never weakens governance or write authorization.
 
+## Safe Implementation Lane Eligibility
+The lane in `safe-implementation-lane.md` is available only to current open Tier
+0 or Tier 1 issues with `status:ready`, GitHub as source of truth,
+`no-external-write`, one focused objective, resolved ownership, no material
+blocker, and one primary pull request. Readiness remains evidence; an explicit
+repository-owner implementation instruction is still required. Tier 2 and any
+cross-system, credential, workflow, production, external-write, governed-field,
+source-of-truth, irreversible, stale, blocked, closed, or conflicting work is not
+eligible.
+
 ## Documentation Impact Intake
 The canonical issue form uses these exact fields:
 - `documentation-impact`: required dropdown with `docs-required`,
