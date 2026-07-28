@@ -2,351 +2,390 @@ from __future__ import annotations
 
 import ast
 import inspect
-import json
 from dataclasses import FrozenInstanceError, replace
-from pathlib import Path
 
 import pytest
 
 from scripts.agent_os_remote_validation import (
-    DispatchEvidence,
-    ExpectedProvenanceIdentity,
-    NormalizedVerificationReceipt,
+    EvidenceApplicabilityProjection,
+    ExpectedEvidenceIdentity,
+    NormalizedRemoteValidationEvidence,
+    ProvenanceInputError,
     ProvenanceVerificationResult,
-    build_compute_evidence_summary,
-    compute_command_set_digest,
-    evaluate_dispatch_decision,
+    evidence_applicability_id,
+    project_evidence_applicability,
     provenance_verification_id,
+    serialize_evidence_applicability,
     serialize_provenance_verification,
-    to_supplied_compute_record,
-    validation_plan_id,
     verify_remote_validation_provenance,
 )
 from scripts.agent_os_remote_validation import provenance as provenance_module
-from scripts.agent_os_remote_validation.models import ValidationPlan
 
 HEAD_SHA = "a" * 40
 OTHER_SHA = "b" * 40
-COMMANDS = ("python -m pytest -q tests/agent_os_remote_validation",)
-SELECTOR_VERSION = "1.0.0"
-DIGEST = compute_command_set_digest(SELECTOR_VERSION, COMMANDS)
+DIGEST = "c" * 64
+PLAN_ID = "validation-plan:" + "1" * 64
+DECISION_ID = "validation-dispatch-decision:" + "2" * 64
 ROOT = "github-oidc:blummer92/agent-os"
+VERIFIER = "cloud-build-verifier:v1"
 EVALUATED_AT = "2026-07-27T18:00:00Z"
 
 
-def _plan(**overrides: object) -> ValidationPlan:
+def _evidence(**overrides: object) -> NormalizedRemoteValidationEvidence:
     values = {
-        "selector_version": SELECTOR_VERSION,
+        "schema_name": "agent-os-remote-validation-evidence",
+        "schema_version": "1.0",
+        "evidence_id": "evidence:build-666-1",
+        "source_type": "provider-api",
         "repository": "Blummer92/agent-os",
         "pull_request": 666,
-        "base_sha": "c" * 40,
         "head_sha": HEAD_SHA,
         "profile": "focused",
-        "commands": COMMANDS,
+        "selector_version": "1.0.0",
         "command_set_digest": DIGEST,
-        "reason_codes": ("profile.focused-package",),
-        "remote_build_required": True,
-    }
-    values.update(overrides)
-    return ValidationPlan(**values)
-
-
-def _decision(plan: ValidationPlan | None = None):
-    plan = plan or _plan()
-    return evaluate_dispatch_decision(
-        plan,
-        (),
-        current_pr_head_sha=plan.head_sha,
-    )
-
-
-def _expected_provenance() -> ExpectedProvenanceIdentity:
-    return ExpectedProvenanceIdentity(
-        evidence_source="cloud-build:builds.get",
-        producer_identity="service-account:validation-verifier",
-        provider="google-cloud-build",
-        provider_account="project:agent-os-validation",
-        provider_location="global",
-        trigger_identity="trigger:agent-os-pr-validation",
-    )
-
-
-def _receipt(**overrides: object) -> NormalizedVerificationReceipt:
-    plan = _plan()
-    decision = _decision(plan)
-    values = {
-        "schema_name": "agent-os-validation-provenance-receipt",
-        "schema_version": "1.0",
-        "receipt_id": "receipt:build-666-1",
-        "proof_type": "provider-api",
-        "proof_verified": True,
-        "proof_digest": "d" * 64,
-        "trust_root_id": ROOT,
-        "verifier_id": "cloud-build-verifier:v1",
-        "evidence_source": "cloud-build:builds.get",
-        "producer_identity": "service-account:validation-verifier",
-        "provider": "google-cloud-build",
-        "provider_account": "project:agent-os-validation",
-        "provider_location": "global",
-        "repository": plan.repository,
-        "pull_request": plan.pull_request,
-        "tested_sha": plan.head_sha,
-        "profile": plan.profile,
-        "selector_version": plan.selector_version,
-        "command_set_digest": plan.command_set_digest,
-        "plan_id": validation_plan_id(plan),
-        "dispatch_decision_id": decision.decision_id,
+        "plan_id": PLAN_ID,
+        "dispatch_decision_id": DECISION_ID,
         "build_id": "build-666-1",
+        "provider": "google-cloud-build",
+        "producer_identity": "service-account:validation-verifier",
         "trigger_identity": "trigger:agent-os-pr-validation",
         "terminal_status": "succeeded",
-        "evidence_created_at": "2026-07-27T17:00:00Z",
         "retrieved_at": "2026-07-27T17:05:00Z",
         "expires_at": "2026-07-27T19:00:00Z",
-        "replay_id": "delivery:build-666-1",
-        "machine_type": "e2-standard-2",
-        "elapsed_seconds": 91,
+        "verifier_id": VERIFIER,
+        "trust_root_id": ROOT,
+        "proof_verified": True,
+        "proof_digest": "d" * 64,
     }
     values.update(overrides)
-    return NormalizedVerificationReceipt(**values)
+    return NormalizedRemoteValidationEvidence(**values)
 
 
-def _verify(
-    receipt: NormalizedVerificationReceipt | None = None,
-    **overrides: object,
-) -> ProvenanceVerificationResult:
+def _expected(**overrides: object) -> ExpectedEvidenceIdentity:
     values = {
-        "validation_plan": _plan(),
-        "dispatch_decision": _decision(),
-        "supplied_receipts": (() if receipt is None else (receipt,)),
-        "current_head_sha": HEAD_SHA,
-        "expected_provenance_identity": _expected_provenance(),
+        "repository": "Blummer92/agent-os",
+        "pull_request": 666,
+        "head_sha": HEAD_SHA,
+        "plan_id": PLAN_ID,
+        "dispatch_decision_id": DECISION_ID,
+        "provider": "google-cloud-build",
+        "producer_identity": "service-account:validation-verifier",
+        "trigger_identity": "trigger:agent-os-pr-validation",
+    }
+    values.update(overrides)
+    return ExpectedEvidenceIdentity(**values)
+
+
+def _verify(evidence: tuple[NormalizedRemoteValidationEvidence, ...] | None = None, **overrides: object):
+    values = {
+        "evidence": (_evidence(),) if evidence is None else evidence,
+        "expected_identity": _expected(),
         "approved_trust_roots": (ROOT,),
-        "approved_verifiers": ("cloud-build-verifier:v1",),
-        "seen_replay_ids": (),
+        "approved_verifiers": (VERIFIER,),
         "evaluation_time": EVALUATED_AT,
+        "seen_evidence_ids": (),
     }
     values.update(overrides)
     return verify_remote_validation_provenance(**values)
 
 
-def test_verified_receipt_is_canonical_and_projects_into_unchanged_compute_contract():
-    plan = _plan()
-    decision = _decision(plan)
-    receipt = _receipt()
-    result = verify_remote_validation_provenance(
-        plan,
-        decision,
-        (receipt,),
-        current_head_sha=HEAD_SHA,
-        expected_provenance_identity=_expected_provenance(),
-        approved_trust_roots=(ROOT,),
-        approved_verifiers=("cloud-build-verifier:v1",),
-        seen_replay_ids=(),
-        evaluation_time=EVALUATED_AT,
-    )
-
-    assert result.state == "verified"
-    assert result.reason_codes == ("proof.verified",)
-    assert provenance_verification_id(result) == result.verification_id
-    assert serialize_provenance_verification(result)["state"] == "verified"
-
-    compute_record = to_supplied_compute_record(result, decision)
-    summary = build_compute_evidence_summary(plan, (compute_record,))
-    assert summary.status == "within-policy"
-    assert summary.remote_builds_triggered == 1
-    assert summary.build_ids == (receipt.build_id,)
-    assert summary.elapsed_seconds == 91
+def _applicability(evidence: tuple[NormalizedRemoteValidationEvidence, ...] | None = None, **overrides: object):
+    values = {
+        "evidence": (_evidence(),) if evidence is None else evidence,
+        "expected_identity": _expected(),
+        "evaluation_time": EVALUATED_AT,
+        "seen_evidence_ids": (),
+    }
+    values.update(overrides)
+    return project_evidence_applicability(**values)
 
 
-def test_missing_receipt_is_visibly_unverified():
+# --- exact verified identity and fresh-and-applicable evidence ---
+
+
+def test_verified_receipt_is_go_and_fresh_and_applicable():
     result = _verify()
-    assert result.state == "unverified"
-    assert result.reason_codes == ("receipt.missing",)
+    assert result.disposition == "GO"
+    assert result.trust == "verified"
+    assert result.reason_codes == ("evidence-verified",)
+    projection = _applicability()
+    assert projection.applicability == "fresh-and-applicable"
+    assert projection.reason_codes == ("evidence-fresh-and-applicable",)
+    assert projection.authorizes_check_skip is False
 
 
-def test_false_proof_flag_is_unverified_not_presence_triggered_manual_review():
-    result = _verify(_receipt(proof_verified=False))
-    assert result.state == "unverified"
-    assert result.reason_codes == ("proof.not-verified",)
+def test_verification_id_and_applicability_id_are_stable_and_serializer_agrees():
+    result = _verify()
+    assert provenance_verification_id(result) == result.verification_id
+    assert serialize_provenance_verification(result)["disposition"] == "GO"
+    projection = _applicability()
+    assert evidence_applicability_id(projection) == projection.applicability_id
+    assert serialize_evidence_applicability(projection)["applicability"] == "fresh-and-applicable"
+
+
+# --- ordinary metadata remaining unverified ---
+
+
+def test_ordinary_supplied_metadata_cannot_exceed_unverified():
+    ordinary = _evidence(
+        source_type="supplied-metadata",
+        verifier_id=None,
+        trust_root_id=None,
+        proof_verified=None,
+        proof_digest=None,
+    )
+    result = _verify((ordinary,))
+    assert result.trust == "unverified"
+    assert result.disposition == "NEEDS-DECISION"
+    assert "producer-unverified" in result.reason_codes
+
+    projection = _applicability((ordinary,))
+    assert projection.applicability == "incomplete"
+    assert "evidence-incomplete" in projection.reason_codes
+
+
+def test_unverified_proof_flag_is_needs_decision_not_identity_mismatch():
+    result = _verify((_evidence(proof_verified=False),))
+    assert result.trust == "unverified"
+    assert result.disposition == "NEEDS-DECISION"
+    assert result.reason_codes == ("signature-unverified",)
+
+
+# --- missing identity dimensions (empty evidence) ---
+
+
+def test_empty_evidence_is_unverified_and_incomplete():
+    result = _verify(())
+    assert result.trust == "unverified"
+    assert result.disposition == "NEEDS-DECISION"
+    assert result.reason_codes == ("evidence-empty",)
+    projection = _applicability(())
+    assert projection.applicability == "incomplete"
+    assert projection.reason_codes == ("evidence-empty",)
+
+
+# --- wrong repository, PR, head, plan, dispatch, build, provider, trigger, signer ---
 
 
 @pytest.mark.parametrize(
     ("field", "value", "reason"),
     [
-        ("repository", "other/repo", "identity.repository"),
-        ("pull_request", 667, "identity.pull-request"),
-        ("tested_sha", OTHER_SHA, "identity.tested-sha"),
-        ("profile", "aggregate", "identity.profile"),
-        ("selector_version", "2.0.0", "identity.selector-version"),
-        ("command_set_digest", "e" * 64, "identity.command-set-digest"),
-        ("plan_id", "validation-plan:" + "f" * 64, "identity.plan-id"),
-        (
-            "dispatch_decision_id",
-            "validation-dispatch-decision:" + "1" * 64,
-            "identity.dispatch-decision-id",
-        ),
+        ("repository", "other/repo", "repository-mismatch"),
+        ("pull_request", 667, "pull-request-mismatch"),
+        ("plan_id", "validation-plan:" + "9" * 64, "plan-mismatch"),
+        ("dispatch_decision_id", "validation-dispatch-decision:" + "8" * 64, "dispatch-mismatch"),
+        ("provider", "other-provider", "provider-mismatch"),
+        ("producer_identity", "service-account:other", "signer-mismatch"),
+        ("trigger_identity", "trigger:other", "trigger-mismatch"),
     ],
 )
 def test_exact_identity_mismatches_fail_closed(field: str, value: object, reason: str):
-    result = _verify(_receipt(**{field: value}))
-    assert result.state == "identity-mismatch"
+    result = _verify((_evidence(**{field: value}),))
+    assert result.disposition == "NO-GO"
+    assert result.trust == "identity-mismatch"
     assert reason in result.reason_codes
+    projection = _applicability((_evidence(**{field: value}),))
+    assert projection.applicability == "identity-mismatch"
+    assert reason in projection.reason_codes
 
 
-def test_moved_current_head_and_expired_receipt_are_stale():
-    moved = _verify(_receipt(), current_head_sha=OTHER_SHA)
-    expired = _verify(
-        _receipt(expires_at="2026-07-27T17:30:00Z"),
-        evaluation_time=EVALUATED_AT,
-    )
-    assert moved.state == "stale"
-    assert moved.reason_codes == ("head.stale",)
-    assert expired.state == "stale"
-    assert expired.reason_codes == ("receipt.expired",)
+def test_head_sha_mismatch_is_identity_mismatch_when_other_identity_binds():
+    result = _verify((_evidence(head_sha=OTHER_SHA),), expected_identity=_expected(head_sha=HEAD_SHA))
+    assert result.disposition == "NO-GO"
+    assert result.trust == "identity-mismatch"
+    assert result.reason_codes == ("head-sha-mismatch",)
+
+
+def test_build_id_mismatch_against_expected_build_id_fails_closed():
+    expected = _expected(build_id="build-666-1")
+    result = _verify((_evidence(build_id="build-666-9"),), expected_identity=expected)
+    assert result.disposition == "NO-GO"
+    assert result.trust == "identity-mismatch"
+    assert result.reason_codes == ("build-mismatch",)
+
+
+# --- stale, incomplete, and expired evidence ---
+
+
+def test_expired_evidence_is_no_go_and_expired():
+    result = _verify((_evidence(expires_at="2026-07-27T17:30:00Z"),))
+    assert result.disposition == "NO-GO"
+    assert result.trust == "stale"
+    assert result.reason_codes == ("evidence-expired",)
+    projection = _applicability((_evidence(expires_at="2026-07-27T17:30:00Z"),))
+    assert projection.applicability == "expired"
+
+
+def test_evaluation_before_retrieval_is_stale():
+    result = _verify(evaluation_time="2026-07-27T17:00:00Z")
+    assert result.disposition == "NO-GO"
+    assert result.trust == "stale"
+    assert result.reason_codes == ("evidence-stale",)
+    projection = _applicability(evaluation_time="2026-07-27T17:00:00Z")
+    assert projection.applicability == "stale"
+
+
+# --- replayed evidence ---
+
+
+def test_replayed_evidence_id_is_no_go_manual_review():
+    evidence = _evidence()
+    result = _verify((evidence,), seen_evidence_ids=(evidence.evidence_id,))
+    assert result.disposition == "NO-GO"
+    assert result.trust == "manual-review"
+    assert result.reason_codes == ("evidence-replayed",)
+    projection = _applicability((evidence,), seen_evidence_ids=(evidence.evidence_id,))
+    assert projection.applicability == "manual-review"
+
+
+# --- signature or attestation presence without verification ---
 
 
 @pytest.mark.parametrize(
     ("overrides", "reason"),
     [
-        ({"proof_type": "unknown-proof"}, "proof.type"),
-        ({"trust_root_id": "unknown-root"}, "proof.trust-root"),
-        ({"verifier_id": "unknown-verifier:v1"}, "proof.verifier"),
+        ({"trust_root_id": "unapproved-root"}, "producer-unverified"),
+        ({"verifier_id": "unapproved-verifier:v1"}, "producer-unverified"),
     ],
 )
-def test_unknown_proof_or_trust_root_is_unsupported(overrides: dict[str, object], reason: str):
-    result = _verify(_receipt(**overrides))
-    assert result.state == "unsupported"
-    assert result.reason_codes == (reason,)
+def test_unapproved_trust_root_or_verifier_is_producer_unverified(overrides, reason):
+    result = _verify((_evidence(**overrides),))
+    assert result.disposition == "NEEDS-DECISION"
+    assert result.trust == "unverified"
+    assert reason in result.reason_codes
 
 
-def test_replay_identifier_in_caller_supplied_seen_set_requires_manual_review():
-    receipt = _receipt()
-    result = _verify(receipt, seen_replay_ids=(receipt.replay_id,))
-    assert result.state == "manual-review"
-    assert result.reason_codes == ("receipt.replay-detected",)
+# --- contradictory or mixed evidence; duplicate evidence IDs ---
 
 
-def test_provider_identity_mismatch_fails_closed():
-    expected = replace(_expected_provenance(), provider_account="project:other")
-    result = _verify(_receipt(), expected_provenance_identity=expected)
-    assert result.state == "identity-mismatch"
-    assert result.reason_codes == ("identity.provider-account",)
+def test_mixed_evidence_across_items_is_contradictory():
+    first = _evidence()
+    second = _evidence(evidence_id="evidence:build-666-2", repository="other/repo")
+    result = _verify((first, second))
+    assert result.disposition == "NO-GO"
+    assert result.trust == "manual-review"
+    assert result.reason_codes == ("evidence-contradictory",)
 
 
-def test_duplicate_and_multiple_receipts_require_manual_review():
-    first = _receipt()
+def test_duplicate_evidence_ids_within_batch_are_input_invalid():
+    first = _evidence()
     duplicate = replace(first)
-    result = _verify(
-        supplied_receipts=(first, duplicate),
-    )
-    assert result.state == "manual-review"
-    assert "receipts.multiple" in result.reason_codes
-    assert "receipts.duplicate-receipt-id" in result.reason_codes
-    assert "receipts.duplicate-replay-id" in result.reason_codes
+    result = _verify((first, duplicate))
+    assert result.disposition == "NO-GO"
+    assert result.reason_codes == ("input-invalid",)
 
 
-def test_malformed_secret_bearing_and_oversized_receipts_require_manual_review():
-    malformed = _verify(_receipt(proof_digest="bad"))
-    secret = _verify(_receipt(evidence_source="authorization: bearer abcdefghijk"))
-    oversized = _verify(_receipt(producer_identity="x" * 5000))
-    assert malformed.state == "manual-review"
-    assert "receipt.proof-digest" in malformed.reason_codes
-    assert secret.state == "manual-review"
-    assert "receipt.evidence-source" in secret.reason_codes
-    assert oversized.state == "manual-review"
-    assert "receipt.producer-identity" in oversized.reason_codes
+def test_multiple_agreeing_non_contradictory_items_require_manual_review():
+    first = _evidence()
+    second = _evidence(evidence_id="evidence:build-666-2")
+    result = _verify((first, second))
+    assert result.disposition == "NEEDS-DECISION"
+    assert result.trust == "manual-review"
+    assert result.reason_codes == ("manual-review-required",)
 
 
-def test_timestamp_order_and_future_retrieval_require_manual_review():
-    reversed_time = _verify(
-        _receipt(
-            evidence_created_at="2026-07-27T17:10:00Z",
-            retrieved_at="2026-07-27T17:05:00Z",
+# --- empty evidence already covered above; malformed and oversized ---
+
+
+def test_malformed_and_oversized_construction_is_rejected():
+    with pytest.raises(ProvenanceInputError):
+        _evidence(head_sha="not-a-sha")
+    with pytest.raises(ProvenanceInputError):
+        _evidence(producer_identity="x" * 5000)
+    with pytest.raises(ProvenanceInputError):
+        _evidence(repository="not-owner-slash-name")
+    with pytest.raises(ProvenanceInputError):
+        _evidence(pull_request=-1)
+    with pytest.raises(ProvenanceInputError):
+        _evidence(schema_version="9.9")
+
+
+def test_secret_bearing_value_is_rejected_at_construction():
+    with pytest.raises(ProvenanceInputError):
+        _evidence(build_id="authorization: bearer abcdefghijklmnop")
+
+
+def test_partial_envelope_is_rejected_at_construction():
+    with pytest.raises(ProvenanceInputError):
+        _evidence(trust_root_id=None)
+
+
+def test_supplied_metadata_with_envelope_is_rejected_at_construction():
+    with pytest.raises(ProvenanceInputError):
+        _evidence(source_type="supplied-metadata")
+
+
+def test_proof_type_without_envelope_is_rejected_at_construction():
+    with pytest.raises(ProvenanceInputError):
+        _evidence(
+            source_type="provider-api",
+            verifier_id=None,
+            trust_root_id=None,
+            proof_verified=None,
+            proof_digest=None,
         )
-    )
-    future = _verify(
-        _receipt(retrieved_at="2026-07-27T18:30:00Z", expires_at="2026-07-27T19:00:00Z")
-    )
-    assert reversed_time.state == "manual-review"
-    assert "receipt.timestamp-order" in reversed_time.reason_codes
-    assert future.state == "manual-review"
-    assert "receipt.retrieval-in-future" in future.reason_codes
 
 
-def test_tampered_dispatch_contract_requires_manual_review():
-    decision = replace(_decision(), repository="other/repo")
-    result = _verify(dispatch_decision=decision)
-    assert result.state == "manual-review"
-    assert "decision.invalid" in result.reason_codes
-    assert "decision.repository" in result.reason_codes
+def test_unsupported_schema_version_on_verifier_is_needs_decision():
+    result = _verify(schema_version="9.9")
+    assert result.disposition == "NEEDS-DECISION"
+    assert result.trust == "manual-review"
+    assert "unsupported-version" in result.reason_codes
 
 
-def test_trust_root_order_does_not_change_result_or_semantic_id():
+# --- input-order independence ---
+
+
+def test_trust_root_and_verifier_order_does_not_change_result_or_semantic_id():
     roots_a = (ROOT, "github-attestation:blummer92/agent-os")
     roots_b = tuple(reversed(roots_a))
-    first = _verify(_receipt(), approved_trust_roots=roots_a)
-    second = _verify(_receipt(), approved_trust_roots=roots_b)
+    first = _verify(approved_trust_roots=roots_a)
+    second = _verify(approved_trust_roots=roots_b)
     assert first == second
     assert first.verification_id == second.verification_id
 
 
+# --- deterministic serialization and semantic ID; frozen models ---
+
+
 def test_result_is_frozen_non_authorizing_and_serializer_detects_tampering():
-    result = _verify(_receipt())
+    result = _verify()
     assert result.authoritative is False
     assert result.execution_authorized is False
     assert result.merge_authorized is False
     assert result.side_effects_performed is False
     with pytest.raises(FrozenInstanceError):
-        result.state = "manual-review"  # type: ignore[misc]
+        result.trust = "manual-review"  # type: ignore[misc]
     with pytest.raises(ValueError, match="ID mismatch"):
-        serialize_provenance_verification(replace(result, state="manual-review"))
+        serialize_provenance_verification(replace(result, trust="manual-review"))
 
 
-def test_compute_projection_rejects_unverified_or_mismatched_results():
-    unverified = _verify(_receipt(proof_verified=False))
-    with pytest.raises(ValueError, match="only verified"):
-        to_supplied_compute_record(unverified, _decision())
-
-    verified = _verify(_receipt())
-    other_plan = _plan(head_sha=OTHER_SHA)
-    other_decision = _decision(other_plan)
-    with pytest.raises(ValueError, match="dispatch decision ID mismatch"):
-        to_supplied_compute_record(verified, other_decision)
-
-
-def test_compute_projection_rejects_verified_reuse_as_a_new_build():
-    plan = _plan()
-    evidence = DispatchEvidence(
-        record_id="prior-success",
-        validation_plan=plan,
-        attempt=0,
-        state="succeeded",
-    )
-    reused = evaluate_dispatch_decision(
-        plan,
-        (evidence,),
-        current_pr_head_sha=plan.head_sha,
-    )
-    receipt = _receipt(dispatch_decision_id=reused.decision_id)
-    verified = _verify(receipt, dispatch_decision=reused)
-    assert verified.state == "verified"
-    with pytest.raises(ValueError, match="launch-eligible"):
-        to_supplied_compute_record(verified, reused)
+def test_applicability_projection_is_frozen_non_authorizing_and_serializer_detects_tampering():
+    projection = _applicability()
+    assert projection.authorizes_check_skip is False
+    assert projection.execution_authorized is False
+    assert projection.side_effects_performed is False
+    with pytest.raises(FrozenInstanceError):
+        projection.applicability = "manual-review"  # type: ignore[misc]
+    with pytest.raises(ValueError, match="ID mismatch"):
+        serialize_evidence_applicability(replace(projection, applicability="manual-review"))
 
 
-def test_schema_is_closed_portable_structure_only_and_matches_receipt_contract():
-    schema_path = Path(provenance_module.__file__).with_name("provenance_input.schema.json")
-    schema = json.loads(schema_path.read_text(encoding="utf-8"))
-    assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
-    assert schema["additionalProperties"] is False
-    assert "errorMessage" not in json.dumps(schema)
-    assert schema["properties"]["proof_verified"] == {"type": "boolean"}
-    assert set(schema["properties"]["proof_type"]["enum"]) == {
-        "provider-api",
-        "signed-envelope",
-        "attestation",
-    }
-    assert set(schema["required"]) == set(schema["properties"])
+def test_evidence_model_is_frozen():
+    evidence = _evidence()
+    with pytest.raises(FrozenInstanceError):
+        evidence.build_id = "other"  # type: ignore[misc]
+
+
+# --- proof that applicability does not itself authorize execution, merge, or required-check suppression ---
+
+
+def test_applicability_never_authorizes_execution_merge_or_skip_even_when_fresh():
+    projection = _applicability()
+    assert projection.applicability == "fresh-and-applicable"
+    assert projection.authorizes_check_skip is False
+    assert projection.execution_authorized is False
+    assert not hasattr(projection, "merge_authorized")
 
 
 def test_verifier_has_no_network_process_environment_filesystem_or_clock_reads():
