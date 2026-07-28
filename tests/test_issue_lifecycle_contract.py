@@ -62,6 +62,10 @@ PRESERVED_CONTROL_REFERENCES = [
 ]
 
 
+def normalized_text(path: Path) -> str:
+    return " ".join(path.read_text(encoding="utf-8").split())
+
+
 def test_lifecycle_standard_defines_required_sections() -> None:
     text = LIFECYCLE.read_text(encoding="utf-8")
     missing = [
@@ -89,7 +93,7 @@ def test_safe_implementation_lane_defines_required_sections() -> None:
 
 
 def test_safe_lane_is_risk_tiered_and_not_readiness_authorized() -> None:
-    text = SAFE_LANE.read_text(encoding="utf-8")
+    text = normalized_text(SAFE_LANE)
     for phrase in (
         "Tier 0 or Tier 1",
         "status:ready",
@@ -100,12 +104,12 @@ def test_safe_lane_is_risk_tiered_and_not_readiness_authorized() -> None:
     ):
         assert phrase in text, f"safe lane is missing eligibility boundary: {phrase}"
 
-    write_policy = WRITE_POLICY.read_text(encoding="utf-8")
+    write_policy = normalized_text(WRITE_POLICY)
     assert "Readiness alone does not authorize implementation" in write_policy
 
 
 def test_safe_lane_authorizes_bounded_pr_work_but_not_merge() -> None:
-    text = SAFE_LANE.read_text(encoding="utf-8")
+    text = normalized_text(SAFE_LANE)
     for phrase in (
         "one non-protected branch",
         "bounded scope envelope",
@@ -120,7 +124,7 @@ def test_safe_lane_authorizes_bounded_pr_work_but_not_merge() -> None:
 
 
 def test_safe_lane_defines_mechanical_support_scope_without_material_expansion() -> None:
-    text = SAFE_LANE.read_text(encoding="utf-8")
+    text = normalized_text(SAFE_LANE)
     for phrase in (
         "directly corresponding tests and documentation",
         "minimum package exports",
@@ -135,13 +139,13 @@ def test_safe_lane_defines_mechanical_support_scope_without_material_expansion()
 
 
 def test_safe_lane_accepts_environment_assigned_branch_names() -> None:
-    text = SAFE_LANE.read_text(encoding="utf-8")
+    text = normalized_text(SAFE_LANE)
     assert "harness- or environment-assigned branch name" in text
     assert "guidance, not an authorization boundary" in text
 
 
 def test_safe_lane_comments_cannot_override_durable_or_closed_authority() -> None:
-    text = SAFE_LANE.read_text(encoding="utf-8")
+    text = normalized_text(SAFE_LANE)
     for phrase in (
         "issue body remains authoritative",
         "may not broaden durable scope",
@@ -152,7 +156,7 @@ def test_safe_lane_comments_cannot_override_durable_or_closed_authority() -> Non
 
 
 def test_github_service_agent_inherits_lane_and_retains_core_controls() -> None:
-    text = GITHUB_OVERLAY.read_text(encoding="utf-8")
+    text = normalized_text(GITHUB_OVERLAY)
     for phrase in (
         "safe-implementation-lane.md",
         "Sole GitHub write owner",
