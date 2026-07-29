@@ -1,6 +1,30 @@
-# Agent OS Execution Service — WSC6B1
+# Agent OS Execution Service — WSC6B1 (package contract: WSC6B4A)
 
-WSC6B1 is the immutable, pure-local, read-only request and inspection core for a future Agent OS Execution Service. It validates a bounded request, invokes one supplied inspector snapshot at most once, verifies exact repository identities, and returns an immutable result with a redacted public projection. It does **not** execute commands or authorize later work.
+WSC6B1 is the immutable, pure-local, read-only request and inspection core for a phased Agent OS Execution Service. It validates a bounded request, invokes one supplied inspector snapshot at most once, verifies exact repository identities, and returns an immutable result with a redacted public projection. It does **not** execute commands or authorize later work in this package version.
+
+This package is phased. A later, separately authorized composition layer (tracked as #697) may consume:
+
+- an exact `ExecutionServiceRequest`;
+- an exact `ValidationCommandPlan`;
+- caller-supplied execution authorization;
+- caller-supplied Workflow Scheduler runtime configuration;
+- the canonical Workflow Scheduler validation-only runtime;
+- the exact retained `FrozenTestValidationResult`.
+
+Any later validation execution built on this contract must:
+
+- use only exact fixed argv already bound by `ValidationCommandPlan`;
+- remain local and bounded;
+- run each command at most once;
+- introduce no retry;
+- publish nothing;
+- reuse the existing Workflow Scheduler lease, worktree, validation, containment, cleanup, release, quarantine, and evidence-return lifecycle instead of creating a new one.
+
+Validation-only mode, as exposed by the current Workflow Scheduler contract this package may later consume, supplies no executor, supplies no executor argv, constructs no `PosixProcessExecutor`, and creates no no-op or synthetic executor.
+
+Execution authorization, command execution, validation success, review status, Ready-for-Review, and merge authorization are and remain separate states; no version of this package contract collapses them.
+
+This issue (WSC6B4A) changes package contract and documentation only. It adds no executable composition function, and continues to leave unsupported: AI invocation or repair prompting, retries, issue selection/scheduling/concurrency, persistence, credentials or network access, package installation, GitHub/workflow/provider mutation, deployment, merge, and production writes.
 
 ## Public capabilities and authority boundary
 
@@ -59,6 +83,6 @@ bash 07_Agent_Tests/validate-repo-structure.sh
 
 ## Deferred phases and rollback
 
-WSC6B2 covers command registry/planning. WSC6B3 covers process execution, worktree, lease, cleanup, and quarantine. Transport, hosting, authentication, credentials, persistence, deployment, and live pilots require later authorization. Do not begin those phases until WSC6B1 is reviewed and merged.
+WSC6B2 covers command registry/planning. WSC6B3 covers process execution, worktree, lease, cleanup, and quarantine. WSC6B4A (this update) establishes the truthful public package contract and version required before #697 may add governed local validation composition; it adds no executable composition itself. Transport, hosting, authentication, credentials, persistence, deployment, and live pilots require later authorization. Do not begin execution composition until this package contract is reviewed and merged and a separate implementation issue is explicitly authorized.
 
-Rollback is reverting the isolated `08_Tooling/agent-os-execution-service/` package. WSC6B1 creates no service, daemon, infrastructure, credential, workflow setting, production data, lease store, evidence store, or external state requiring separate rollback.
+Rollback is reverting the README, package metadata version, runtime version constant, changelog entry, and module-version entry changed by WSC6B4A. This package creates no service, daemon, infrastructure, credential, workflow setting, production data, lease store, evidence store, or external state requiring separate rollback.
