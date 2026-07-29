@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-os-execution-service"
-version = "0.1.0"
-description = "Immutable read-only request and inspection core for Agent OS execution service planning"
+version = "0.2.0"
+description = "Phased Agent OS execution-service package: immutable read-only request/inspection core, publishing the public contract a later, separately authorized validation-only composition layer may consume"
 requires-python = ">=3.11"
 
 [tool.setuptools]
