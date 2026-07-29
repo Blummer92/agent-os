@@ -39,6 +39,7 @@ from .request_validation import (
 __all__ = [
     "COMMAND_PLAN_SCHEMA_VERSION",
     "COMMAND_REGISTRY_VERSION",
+    "EXECUTION_COMPOSITION_SCHEMA_VERSION",
     "EXECUTION_SERVICE_FINGERPRINT_VERSION",
     "EXECUTION_SERVICE_REQUEST_SCHEMA_VERSION",
     "EXECUTION_SERVICE_RESULT_SCHEMA_VERSION",
@@ -46,6 +47,9 @@ __all__ = [
     "CommandOperation",
     "CommandPlanEntry",
     "EvidenceVisibilityPolicy",
+    "ExecutionAuthorizationEvidence",
+    "ExecutionCompositionResult",
+    "ExecutionCompositionStatus",
     "ExecutionServiceCapability",
     "ExecutionServiceInvalidationCondition",
     "ExecutionServiceReason",
@@ -58,6 +62,7 @@ __all__ = [
     "RepositoryInspector",
     "ValidationCommandPlan",
     "build_validation_command_plan",
+    "compose_and_run_validation",
     "contains_secret_marker",
     "evaluate_read_only_request",
     "execution_service_request_fingerprint",
@@ -68,3 +73,27 @@ __all__ = [
     "validate_execution_service_request",
     "validation_command_plan_id",
 ]
+
+# ``execution_composition`` depends on the Workflow Scheduler package, which
+# is not on ``sys.path`` for every consumer of this read-only-safe package
+# (for example, the request/inspection-only test suites). Its public names
+# are exposed lazily via ``__getattr__`` so importing ``agent_os_execution_service``
+# never requires ``workflow_scheduler`` to be importable; it is only required
+# when a caller actually uses the composition surface.
+_LAZY_COMPOSITION_EXPORTS = frozenset(
+    (
+        "EXECUTION_COMPOSITION_SCHEMA_VERSION",
+        "ExecutionAuthorizationEvidence",
+        "ExecutionCompositionResult",
+        "ExecutionCompositionStatus",
+        "compose_and_run_validation",
+    )
+)
+
+
+def __getattr__(name: str) -> object:
+    if name in _LAZY_COMPOSITION_EXPORTS:
+        from . import execution_composition as _execution_composition
+
+        return getattr(_execution_composition, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
