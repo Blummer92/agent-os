@@ -43,6 +43,7 @@ from workflow_scheduler.execution.single_issue_pilot import (
 from .command_planning import (
     COMMAND_PLAN_SCHEMA_VERSION,
     COMMAND_REGISTRY_VERSION,
+    CommandOperation,
     ValidationCommandPlan,
     validation_command_plan_id,
 )
@@ -52,6 +53,28 @@ from .request_validation import validate_execution_service_request
 EXECUTION_COMPOSITION_SCHEMA_VERSION = "1.0"
 
 _EXECUTABLE_PROFILES = ("focused", "aggregate")
+
+_PROFILE_OPERATIONS = {
+    "static": CommandOperation.VALIDATION_STATIC,
+    "focused": CommandOperation.VALIDATION_FOCUSED,
+    "aggregate": CommandOperation.VALIDATION_AGGREGATE,
+}
+
+# The canonical single-issue runtime proves a complete lifecycle with exactly
+# one status. A passing ``FrozenTestValidationResult`` is produced before
+# teardown, so it alone never proves that cleanup, release, containment, or
+# any other post-validation phase succeeded: only ``completed`` does.
+_COMPLETED_RUNTIME_STATUS = "completed"
+_CANCELLED_RUNTIME_STATUS = "cancelled"
+
+# Non-completed statuses whose evidence is operational -- something was left
+# behind or an adapter/bounded process failed -- rather than a decision
+# request. ``quarantined`` dominates: it is exactly the canonical signal for
+# a failed cleanup, a failed or ambiguous release, or a containment stop.
+_QUARANTINED_RUNTIME_STATUS = "quarantined"
+_INFRASTRUCTURE_RUNTIME_STATUSES = frozenset(
+    (_QUARANTINED_RUNTIME_STATUS, "failed", "timed-out")
+)
 
 
 class ExecutionCompositionStatus(str, Enum):
@@ -183,6 +206,10 @@ def _identity_mismatches(
         reasons.append("repository-mismatch")
     if request.expected_sha != command_plan.expected_sha:
         reasons.append("expected-sha-mismatch")
+    if request.requested_ref != command_plan.requested_ref:
+        reasons.append("requested-ref-mismatch")
+    if request.request_revision != command_plan.request_revision:
+        reasons.append("request-revision-mismatch")
     if (
         command_plan.schema_version != COMMAND_PLAN_SCHEMA_VERSION
         or command_plan.registry_version != COMMAND_REGISTRY_VERSION
@@ -224,10 +251,19 @@ def _identity_mismatches(
     if tuple(sorted(configuration.forbidden_paths)) != tuple(sorted(request.forbidden_paths)):
         reasons.append("configuration-forbidden-paths-mismatch")
 
+    expected_operation = _PROFILE_OPERATIONS.get(command_plan.profile)
+    if expected_operation is None or any(
+        entry.operation is not expected_operation for entry in command_plan.entries
+    ):
+        reasons.append("command-plan-operation-mismatch")
+
     if command_plan.profile in _EXECUTABLE_PROFILES:
-        plan_argv = tuple(sorted(entry.argv for entry in command_plan.entries))
+        # Ordered comparison: the command plan's own canonical order is the
+        # authorized one, so a reordering is drift rather than something this
+        # module may silently accept.
+        plan_argv = tuple(entry.argv for entry in command_plan.entries)
         required_argv = tuple(
-            sorted(item.argv for item in configuration.required_test_commands)
+            item.argv for item in configuration.required_test_commands
         )
         if not command_plan.entries or plan_argv != required_argv:
             reasons.append("command-plan-argv-mismatch")
@@ -238,6 +274,60 @@ def _identity_mismatches(
         reasons.append("configuration-pilot-input-drift")
 
     return reasons
+
+
+def _project_status(
+    *,
+    runtime_status: object,
+    profile: str,
+    validation_result: FrozenTestValidationResult | None,
+) -> tuple[ExecutionCompositionStatus, bool]:
+    """Map one canonical runtime outcome to bounded composition evidence.
+
+    A pass status is projected only when the canonical runtime reports the
+    complete lifecycle (``completed``) *and* the retained validation evidence
+    passed. A passing validation result over any other runtime status --
+    ``quarantined`` after a cleanup or release failure, ``failed``,
+    ``timed-out``, ``blocked``, ``stale``, ``needs-decision``, or an unknown
+    or malformed status -- never becomes focused or aggregate success.
+    """
+    focused = profile == "focused"
+
+    if runtime_status == _CANCELLED_RUNTIME_STATUS:
+        return ExecutionCompositionStatus.CANCELLED, True
+
+    attempted = validation_result is not None and validation_result.attempted
+    passed = attempted and bool(validation_result.passed)  # type: ignore[union-attr]
+
+    if runtime_status == _COMPLETED_RUNTIME_STATUS:
+        if not attempted:
+            # A complete lifecycle without attempted validation evidence is
+            # contradictory; it is a decision request, never a success.
+            return ExecutionCompositionStatus.MANUAL_REVIEW, True
+        if passed:
+            if focused:
+                return ExecutionCompositionStatus.FOCUSED_PASS_AGGREGATE_PENDING, True
+            return ExecutionCompositionStatus.AGGREGATE_PASS, False
+        return (
+            (ExecutionCompositionStatus.FOCUSED_FAIL, True)
+            if focused
+            else (ExecutionCompositionStatus.AGGREGATE_FAIL, False)
+        )
+
+    # The runtime did not complete. Quarantine dominates every other reading:
+    # something was left behind for a human even when the tests themselves
+    # failed, so it is never reduced to an ordinary validation failure.
+    if runtime_status == _QUARANTINED_RUNTIME_STATUS:
+        return ExecutionCompositionStatus.INFRASTRUCTURE_FAILURE, True
+    if attempted and not passed:
+        return (
+            (ExecutionCompositionStatus.FOCUSED_FAIL, True)
+            if focused
+            else (ExecutionCompositionStatus.AGGREGATE_FAIL, False)
+        )
+    if runtime_status in _INFRASTRUCTURE_RUNTIME_STATUSES:
+        return ExecutionCompositionStatus.INFRASTRUCTURE_FAILURE, True
+    return ExecutionCompositionStatus.MANUAL_REVIEW, True
 
 
 def compose_and_run_validation(
@@ -256,9 +346,11 @@ def compose_and_run_validation(
     """Revalidate identity, then delegate exactly once to the canonical entrypoint.
 
     Returns bounded, non-authorizing evidence. ``merge_authorized`` is always
-    false; a generic pass boolean is never exposed. Focused success remains
-    ``focused-pass-aggregate-pending`` with ``aggregate_pending`` true; only
-    canonical aggregate success may project ``aggregate-pass``.
+    false; a generic pass boolean is never exposed. A pass status requires
+    both a passing retained validation result and a canonical runtime status
+    of ``completed``: focused success remains
+    ``focused-pass-aggregate-pending`` with ``aggregate_pending`` true, and
+    only a completed canonical aggregate run may project ``aggregate-pass``.
     """
     if type(request) is not ExecutionServiceRequest:
         raise TypeError("request must be an exact ExecutionServiceRequest")
@@ -311,51 +403,69 @@ def compose_and_run_validation(
     except (KeyboardInterrupt, SystemExit, GeneratorExit):
         raise
     except Exception:  # noqa: BLE001 - bounded operational-boundary conversion
+        # Delegation was entered, so no evidence proves nothing was left
+        # behind. Side effects are reported conservatively as possible rather
+        # than asserted absent.
         return _fail_closed(
             request=request,
             command_plan=command_plan,
-            reasons=("infrastructure-failure:runtime-entrypoint-exception",),
+            reasons=(
+                "infrastructure-failure:runtime-entrypoint-exception",
+                "side-effects-unknown-after-delegation",
+            ),
             status=ExecutionCompositionStatus.INFRASTRUCTURE_FAILURE,
             execution_authorized=True,
-            side_effects_performed=False,
+            side_effects_performed=True,
         )
 
     if type(outcome) is not ConcreteRuntimeExecutionOutcome:
         return _fail_closed(
             request=request,
             command_plan=command_plan,
-            reasons=("infrastructure-failure:unexpected-return-shape",),
+            reasons=(
+                "infrastructure-failure:unexpected-return-shape",
+                "side-effects-unknown-after-delegation",
+            ),
             status=ExecutionCompositionStatus.INFRASTRUCTURE_FAILURE,
             execution_authorized=True,
-            side_effects_performed=False,
+            side_effects_performed=True,
         )
 
     pilot_result = outcome.runtime_outcome.result
     validation_result = outcome.validation_result
-    side_effects_performed = bool(pilot_result.lease_acquired or pilot_result.workspace_created)
+    side_effects_performed = bool(
+        pilot_result.lease_acquired
+        or pilot_result.workspace_created
+        or pilot_result.executor_called
+        or pilot_result.possible_partial_effects
+        or pilot_result.cleanup_errors
+        or pilot_result.release_errors
+    )
 
-    reason_codes = tuple(sorted(set(("runtime-status:" + pilot_result.status,) + pilot_result.reason_codes)))
+    status, aggregate_pending = _project_status(
+        runtime_status=pilot_result.status,
+        profile=command_plan.profile,
+        validation_result=validation_result,
+    )
 
-    if pilot_result.status == "cancelled":
-        status = ExecutionCompositionStatus.CANCELLED
-        aggregate_pending = True
-    elif validation_result is None or not validation_result.attempted:
-        status = ExecutionCompositionStatus.MANUAL_REVIEW
-        aggregate_pending = True
-    elif validation_result.passed:
-        if command_plan.profile == "focused":
-            status = ExecutionCompositionStatus.FOCUSED_PASS_AGGREGATE_PENDING
-            aggregate_pending = True
-        else:
-            status = ExecutionCompositionStatus.AGGREGATE_PASS
-            aggregate_pending = False
-    else:
-        if command_plan.profile == "focused":
-            status = ExecutionCompositionStatus.FOCUSED_FAIL
-            aggregate_pending = True
-        else:
-            status = ExecutionCompositionStatus.AGGREGATE_FAIL
-            aggregate_pending = False
+    # Canonical runtime evidence is preserved exactly and only added to: a
+    # withheld pass, a failed cleanup, and a failed or ambiguous release stay
+    # visible instead of being replaced by a generic success reason.
+    composition_reasons = ["runtime-status:" + pilot_result.status]
+    if pilot_result.cleanup_errors:
+        composition_reasons.append("runtime-cleanup-errors-present")
+    if pilot_result.release_errors:
+        composition_reasons.append("runtime-release-errors-present")
+    if (
+        pilot_result.status != _COMPLETED_RUNTIME_STATUS
+        and validation_result is not None
+        and validation_result.attempted
+        and validation_result.passed
+    ):
+        composition_reasons.append("runtime-incomplete:pass-withheld")
+    reason_codes = tuple(
+        sorted(set(tuple(composition_reasons) + pilot_result.reason_codes))
+    )
 
     evidence_id = _evidence_id(
         status=status,

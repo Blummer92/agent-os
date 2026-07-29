@@ -51,7 +51,11 @@ from workflow_scheduler.execution import concrete_runtime_adapters as adapters_m
 from workflow_scheduler.execution.concrete_runtime_adapters import (  # noqa: E402
     ConcreteRuntimeConfiguration,
     ConcreteRuntimeExecutionOutcome,
+    build_concrete_runtime_adapters,
     run_concrete_runtime_entrypoint_with_validation_evidence,
+)
+from workflow_scheduler.execution.single_issue_runtime import (  # noqa: E402
+    run_single_issue_runtime_entrypoint,
 )
 from workflow_scheduler.execution.frozen_test_validation_adapter import (  # noqa: E402
     FrozenTestCommand,
@@ -203,12 +207,14 @@ def _compose(
     profile: str = "focused",
     argv: tuple[str, ...] | None = None,
     execution_authorized: bool = True,
+    fail_remove: bool = False,
+    cancelled=None,
 ) -> ExecutionCompositionResult:
     request = _request()
     plan = _command_plan(request, profile=profile, argv=argv)
     authorization = _authorization(request, plan, execution_authorized=execution_authorized)
     configuration = _configuration(tmp_path, argv=argv)
-    git_runner = ScenarioGitRunner(configuration)
+    git_runner = ScenarioGitRunner(configuration, fail_remove=fail_remove)
     return compose_and_run_validation(
         request=request,
         command_plan=plan,
@@ -216,10 +222,60 @@ def _compose(
         evaluated_at=EVALUATED_AT,
         pilot_input=_pilot_input(),
         configuration=configuration,
-        cancelled=tsp.never_cancelled,
+        cancelled=cancelled or tsp.never_cancelled,
         git_runner=git_runner,
         changed_paths_inspector=lambda: (),
     )
+
+
+def _canonical_outcome_with_failing_release(
+    tmp_path: Path,
+) -> ConcreteRuntimeExecutionOutcome:
+    """Build one real canonical outcome whose lease release fails.
+
+    The concrete adapter factory always constructs its own in-memory lease, so
+    a release failure is reached through the canonical runtime entrypoint one
+    level down: the real adapters are built by
+    ``build_concrete_runtime_adapters``, the real orchestrator runs once
+    through ``run_single_issue_runtime_entrypoint``, and the returned outcome
+    carries the real ``SingleIssuePilotResult`` plus the exact
+    ``FrozenTestValidationResult`` retained by the real validator. Nothing
+    about the outcome is fabricated.
+    """
+    configuration = _configuration(tmp_path)
+    adapters = build_concrete_runtime_adapters(
+        _pilot_input(),
+        configuration,
+        git_runner=ScenarioGitRunner(configuration),
+        changed_paths_inspector=lambda: (),
+    )
+    runtime_outcome = run_single_issue_runtime_entrypoint(
+        _pilot_input(),
+        lease=tsp.FakeLease(release_error=RuntimeError("release unavailable")),
+        workspace=adapters.workspace,
+        executor=adapters.executor,
+        validator=adapters.validator,
+        cancelled=tsp.never_cancelled,
+    )
+    return ConcreteRuntimeExecutionOutcome(
+        runtime_outcome=runtime_outcome,
+        validation_result=adapters.validator.last_result,
+    )
+
+
+def _compose_with_outcome(
+    tmp_path: Path,
+    outcome: ConcreteRuntimeExecutionOutcome,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    profile: str,
+) -> ExecutionCompositionResult:
+    monkeypatch.setattr(
+        module,
+        "run_concrete_runtime_entrypoint_with_validation_evidence",
+        lambda *a, **k: outcome,
+    )
+    return _compose(tmp_path, profile=profile)
 
 
 # --------------------------------------------------------------------------
@@ -487,6 +543,86 @@ def test_expected_sha_mismatch_fails_closed(tmp_path: Path) -> None:
     assert "expected-sha-mismatch" in result.reason_codes
 
 
+def test_requested_ref_and_revision_drift_fail_closed(tmp_path: Path) -> None:
+    request = _request()
+    plan = _command_plan(request)
+    drifted = command_planning_module.ValidationCommandPlan(
+        schema_version=plan.schema_version,
+        registry_version=plan.registry_version,
+        repository=plan.repository,
+        issue_or_handoff_identity=plan.issue_or_handoff_identity,
+        requested_ref="agent/some-other-branch",
+        expected_sha=plan.expected_sha,
+        request_revision=plan.request_revision + 1,
+        request_fingerprint=plan.request_fingerprint,
+        validation_plan_id=plan.validation_plan_id,
+        validation_plan_schema_version=plan.validation_plan_schema_version,
+        selector_version=plan.selector_version,
+        profile=plan.profile,
+        command_set_digest=plan.command_set_digest,
+        entries=plan.entries,
+    )
+    configuration = _configuration(tmp_path)
+
+    result = compose_and_run_validation(
+        request=request,
+        command_plan=drifted,
+        authorization=_authorization(request, drifted),
+        evaluated_at=EVALUATED_AT,
+        pilot_input=_pilot_input(),
+        configuration=configuration,
+        cancelled=tsp.never_cancelled,
+        git_runner=ScenarioGitRunner(configuration),
+        changed_paths_inspector=lambda: (),
+    )
+
+    assert result.status is ExecutionCompositionStatus.MANUAL_REVIEW
+    assert "requested-ref-mismatch" in result.reason_codes
+    assert "request-revision-mismatch" in result.reason_codes
+    assert result.validation_result is None
+
+
+def test_command_plan_operation_drift_fails_closed(tmp_path: Path) -> None:
+    request = _request()
+    plan = _command_plan(request, profile="focused")
+    drifted = command_planning_module.ValidationCommandPlan(
+        schema_version=plan.schema_version,
+        registry_version=plan.registry_version,
+        repository=plan.repository,
+        issue_or_handoff_identity=plan.issue_or_handoff_identity,
+        requested_ref=plan.requested_ref,
+        expected_sha=plan.expected_sha,
+        request_revision=plan.request_revision,
+        request_fingerprint=plan.request_fingerprint,
+        validation_plan_id=plan.validation_plan_id,
+        validation_plan_schema_version=plan.validation_plan_schema_version,
+        selector_version=plan.selector_version,
+        profile=plan.profile,
+        command_set_digest=plan.command_set_digest,
+        entries=(
+            CommandPlanEntry(
+                operation=CommandOperation.VALIDATION_AGGREGATE, argv=_plan_argv()
+            ),
+        ),
+    )
+    configuration = _configuration(tmp_path)
+
+    result = compose_and_run_validation(
+        request=request,
+        command_plan=drifted,
+        authorization=_authorization(request, drifted),
+        evaluated_at=EVALUATED_AT,
+        pilot_input=_pilot_input(),
+        configuration=configuration,
+        cancelled=tsp.never_cancelled,
+        git_runner=ScenarioGitRunner(configuration),
+        changed_paths_inspector=lambda: (),
+    )
+
+    assert result.status is ExecutionCompositionStatus.MANUAL_REVIEW
+    assert "command-plan-operation-mismatch" in result.reason_codes
+
+
 def test_expired_request_fails_closed(tmp_path: Path) -> None:
     request = _request(expires_at="2026-07-29T15:10:00Z")
     plan = _command_plan(request)
@@ -579,12 +715,149 @@ def test_canonical_entrypoint_called_exactly_once(
     assert len(calls) == 1
 
 
-def test_result_retains_exact_validation_result_object(tmp_path: Path) -> None:
+def test_result_retains_exact_validation_result_object(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The retained result must be the *same object* the canonical adapter
+    # produced, not a rebuilt copy that merely shares its type or values.
+    captured: list[ConcreteRuntimeExecutionOutcome] = []
+    original = module.run_concrete_runtime_entrypoint_with_validation_evidence
+
+    def capturing(*args: object, **kwargs: object) -> ConcreteRuntimeExecutionOutcome:
+        outcome = original(*args, **kwargs)
+        captured.append(outcome)
+        return outcome
+
+    monkeypatch.setattr(
+        module, "run_concrete_runtime_entrypoint_with_validation_evidence", capturing
+    )
+
     result = _compose(tmp_path, profile="focused")
-    # The retained result is the exact canonical FrozenTestValidationResult
-    # produced by the reused Workflow Scheduler adapter, not a rebuilt copy.
+
+    assert len(captured) == 1
+    outcome = captured[0]
+    assert result.validation_result is outcome.validation_result
     assert type(result.validation_result).__name__ == "FrozenTestValidationResult"
     assert result.validation_result.attempted is True
+
+
+# --------------------------------------------------------------------------
+# Runtime-status projection: a pass requires a completed canonical lifecycle
+# --------------------------------------------------------------------------
+
+
+def test_aggregate_pass_requires_completed_runtime_not_only_passing_validation(
+    tmp_path: Path,
+) -> None:
+    # Real canonical run: validation passes, then worktree removal fails, so
+    # the canonical runtime quarantines. Final aggregate success must not be
+    # projected over an incomplete lifecycle.
+    result = _compose(tmp_path, profile="aggregate", fail_remove=True)
+
+    assert result.validation_result is not None
+    assert result.validation_result.passed is True
+    assert result.status is not ExecutionCompositionStatus.AGGREGATE_PASS
+    assert result.status is ExecutionCompositionStatus.INFRASTRUCTURE_FAILURE
+    assert result.aggregate_pending is True
+    assert result.merge_authorized is False
+    assert "runtime-status:quarantined" in result.reason_codes
+    assert "runtime-cleanup-errors-present" in result.reason_codes
+    assert "runtime-incomplete:pass-withheld" in result.reason_codes
+    assert "workspace.filesystem-cleanup-failed" in result.reason_codes
+    assert result.side_effects_performed is True
+
+
+def test_focused_pass_requires_completed_runtime_not_only_passing_validation(
+    tmp_path: Path,
+) -> None:
+    result = _compose(tmp_path, profile="focused", fail_remove=True)
+
+    assert result.validation_result is not None
+    assert result.validation_result.passed is True
+    assert result.status is not ExecutionCompositionStatus.FOCUSED_PASS_AGGREGATE_PENDING
+    assert result.status is ExecutionCompositionStatus.INFRASTRUCTURE_FAILURE
+    # Aggregate validation is still unproven, so it stays pending.
+    assert result.aggregate_pending is True
+    assert "runtime-status:quarantined" in result.reason_codes
+    assert "runtime-cleanup-errors-present" in result.reason_codes
+    assert "workspace.metadata-cleanup-failed" in result.reason_codes
+
+
+def test_lease_release_failure_is_never_a_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    outcome = _canonical_outcome_with_failing_release(tmp_path)
+    # Precondition: the canonical run really did pass validation and really
+    # did fail release.
+    assert outcome.validation_result is not None
+    assert outcome.validation_result.passed is True
+    assert outcome.runtime_outcome.result.release_errors
+    assert outcome.runtime_outcome.result.status == "quarantined"
+
+    result = _compose_with_outcome(tmp_path, outcome, monkeypatch, profile="aggregate")
+
+    assert result.status is ExecutionCompositionStatus.INFRASTRUCTURE_FAILURE
+    assert result.aggregate_pending is True
+    assert "runtime-release-errors-present" in result.reason_codes
+    assert "runtime-incomplete:pass-withheld" in result.reason_codes
+    assert "lease.release-failed" in result.reason_codes
+    assert result.side_effects_performed is True
+    # The exact canonical validation evidence is still retained unchanged.
+    assert result.validation_result is outcome.validation_result
+
+
+def test_quarantined_runtime_with_passing_validation_is_bounded_non_success(
+    tmp_path: Path,
+) -> None:
+    result = _compose(tmp_path, profile="aggregate", fail_remove=True)
+
+    assert result.status in {
+        ExecutionCompositionStatus.INFRASTRUCTURE_FAILURE,
+        ExecutionCompositionStatus.MANUAL_REVIEW,
+    }
+    assert result.status not in {
+        ExecutionCompositionStatus.AGGREGATE_PASS,
+        ExecutionCompositionStatus.FOCUSED_PASS_AGGREGATE_PENDING,
+    }
+    assert result.merge_authorized is False
+    # Quarantine evidence is preserved, never replaced by a success reason.
+    assert "runtime-status:quarantined" in result.reason_codes
+
+
+@pytest.mark.parametrize(
+    ("profile", "expected_status", "expected_pending"),
+    [
+        ("focused", ExecutionCompositionStatus.FOCUSED_PASS_AGGREGATE_PENDING, True),
+        ("aggregate", ExecutionCompositionStatus.AGGREGATE_PASS, False),
+    ],
+)
+def test_completed_runtime_with_passing_validation_still_succeeds(
+    tmp_path: Path,
+    profile: str,
+    expected_status: ExecutionCompositionStatus,
+    expected_pending: bool,
+) -> None:
+    result = _compose(tmp_path, profile=profile)
+
+    assert result.status is expected_status
+    assert result.aggregate_pending is expected_pending
+    assert "runtime-status:completed" in result.reason_codes
+    assert "runtime-incomplete:pass-withheld" not in result.reason_codes
+    assert "runtime-cleanup-errors-present" not in result.reason_codes
+    assert "runtime-release-errors-present" not in result.reason_codes
+
+
+def test_canonical_cancellation_maps_to_cancelled(tmp_path: Path) -> None:
+    result = _compose(
+        tmp_path, profile="aggregate", cancelled=tsp.cancel_at("pre-lease")
+    )
+
+    assert result.status is ExecutionCompositionStatus.CANCELLED
+    assert result.aggregate_pending is True
+    assert result.validation_result is None
+    assert "runtime-status:cancelled" in result.reason_codes
+    assert "cancellation.requested" in result.reason_codes
+    assert result.merge_authorized is False
 
 
 # --------------------------------------------------------------------------
