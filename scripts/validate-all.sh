@@ -79,6 +79,7 @@ normalize_focused_target() {
 
   "$PYTHON_BIN" - "$ROOT_DIR" "$candidate" <<'PY'
 from pathlib import Path
+import os
 import sys
 
 root = Path(sys.argv[1]).resolve()
@@ -98,10 +99,28 @@ if resolved.is_file():
     if resolved.suffix != ".py" or not (name.startswith("test_") or name.endswith("_test.py")):
         raise SystemExit(4)
 elif resolved.is_dir():
-    if not any(
-        path.is_file() and (path.name.startswith("test_") or path.name.endswith("_test.py"))
-        for path in resolved.rglob("*.py")
-    ):
+    if relative in (Path("."), Path("tests")):
+        raise SystemExit(7)
+
+    found_test = False
+    for current, dirnames, filenames in os.walk(resolved, followlinks=False):
+        current_path = Path(current)
+        for name in (*dirnames, *filenames):
+            entry = current_path / name
+            if entry.is_symlink():
+                raise SystemExit(8)
+        for name in filenames:
+            if not (name.startswith("test_") or name.endswith("_test.py")):
+                continue
+            path = current_path / name
+            if path.suffix != ".py":
+                continue
+            try:
+                path.resolve(strict=True).relative_to(root)
+            except (FileNotFoundError, OSError, ValueError):
+                raise SystemExit(8)
+            found_test = True
+    if not found_test:
         raise SystemExit(5)
 else:
     raise SystemExit(6)
@@ -120,6 +139,8 @@ for target in "${focused_targets[@]}"; do
     3) runner_error "focused target escapes the repository: $target" ;;
     4) runner_error "focused file is not a pytest test module: $target" ;;
     5) runner_error "focused directory contains no pytest test modules: $target" ;;
+    7) runner_error "focused target cannot represent the complete root test suite: $target" ;;
+    8) runner_error "focused directory contains a symlink or repository-escaping test path: $target" ;;
     10) runner_error "focused path must be repository-relative: $target" ;;
     11) runner_error "focused path cannot begin with '-': $target" ;;
     12) runner_error "focused path contains unsupported characters: $target" ;;
@@ -206,11 +227,18 @@ run_focused_target() {
   local target="$1"
   local suite_dir="$ROOT_DIR"
   local relative_target="$target"
+  local prefix=""
 
   case "$target" in
-    tests|tests/*) ;;
-    */tests|*/tests/*)
-      local prefix="${target%%/tests*}"
+    tests|tests/*)
+      ;;
+    */tests)
+      prefix="${target%/tests}"
+      suite_dir="$ROOT_DIR/$prefix"
+      relative_target="tests"
+      ;;
+    */tests/*)
+      prefix="${target%%/tests/*}"
       suite_dir="$ROOT_DIR/$prefix"
       relative_target="${target#"$prefix/"}"
       ;;
