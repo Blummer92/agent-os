@@ -17,6 +17,11 @@
       "commands": ["python -m pytest 08_Tooling/workflow-scheduler/tests"]
     },
     {
+      "name": "workflow-scheduler-concrete-runtime-adapters",
+      "exact_paths": ["08_Tooling/workflow-scheduler/tests/test_concrete_runtime_adapters.py"],
+      "commands": ["python -m pytest 08_Tooling/workflow-scheduler/tests/test_concrete_runtime_adapters.py"]
+    },
+    {
       "name": "navigation-registry",
       "prefixes": ["08_Tooling/notion-navigation-client/"],
       "commands": ["python -m pytest 08_Tooling/notion-navigation-client/tests"]

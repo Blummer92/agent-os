@@ -10,8 +10,13 @@ from typing import Literal
 from scripts.agent_os_remote_validation import (
     MAX_PLAN_COMMANDS,
     MAX_PLAN_STRING_LENGTH,
+    PRE_PR_PER_COMMAND_TIMEOUT_SECONDS,
+    PRE_PR_TOTAL_VALIDATION_TIMEOUT_SECONDS,
+    PRE_PR_VALIDATION_PLAN_SCHEMA_VERSION,
     VALIDATION_PLAN_SCHEMA_VERSION,
+    PrePrValidationPlan,
     ValidationPlan,
+    pre_pr_validation_plan_id,
     validate_validation_plan,
     validation_plan_id,
 )
@@ -30,6 +35,10 @@ class CommandOperation(str, Enum):
     VALIDATION_AGGREGATE = "validation.aggregate"
 
 
+# ``COMMAND_REGISTRY_VERSION`` is serialized into every command plan and therefore
+# into its identity. Allowlisting an additional exact command is purely additive,
+# so the version stays pinned and existing positive-PR command-plan payloads and
+# ``command-plan:`` identities remain byte-for-byte stable.
 _COMMAND_REGISTRY = MappingProxyType(
     {
         "python -m pytest": ("python", "-m", "pytest"),
@@ -44,6 +53,15 @@ _COMMAND_REGISTRY = MappingProxyType(
             "-m",
             "pytest",
             "08_Tooling/workflow-scheduler/tests",
+        ),
+        (
+            "python -m pytest "
+            "08_Tooling/workflow-scheduler/tests/test_concrete_runtime_adapters.py"
+        ): (
+            "python",
+            "-m",
+            "pytest",
+            "08_Tooling/workflow-scheduler/tests/test_concrete_runtime_adapters.py",
         ),
         "python -m pytest 08_Tooling/notion-navigation-client/tests": (
             "python",
@@ -135,6 +153,12 @@ def build_validation_command_plan(
 ) -> ValidationCommandPlan:
     if type(request) is not ExecutionServiceRequest:
         raise TypeError("request must be an exact ExecutionServiceRequest")
+    if type(validation_plan) is PrePrValidationPlan:
+        return _build_pre_pr_command_plan(
+            request,
+            validation_plan,
+            evaluated_at=evaluated_at,
+        )
     if type(validation_plan) is not ValidationPlan:
         raise TypeError("validation_plan must be an exact ValidationPlan")
     request_reasons = validate_execution_service_request(
@@ -192,6 +216,87 @@ def build_validation_command_plan(
         profile=validation_plan.profile,
         command_set_digest=validation_plan.command_set_digest,
         entries=entries,
+    )
+
+
+def _build_pre_pr_command_plan(
+    request: ExecutionServiceRequest,
+    plan: PrePrValidationPlan,
+    *,
+    evaluated_at: object,
+) -> ValidationCommandPlan:
+    """Bind one issue- and invocation-bound pre-PR plan to fixed registry argv.
+
+    The pre-PR branch never invents a pull-request identity: the command plan is
+    bound to the subject's issue, invocation, branch, and SHAs instead. Entry order
+    follows the subject's ordered command identities rather than argv order.
+    """
+    request_reasons = validate_execution_service_request(
+        request,
+        evaluated_at=evaluated_at,
+    )
+    if request_reasons:
+        raise ValueError("invalid execution service request")
+    if plan.per_command_timeout_seconds > PRE_PR_PER_COMMAND_TIMEOUT_SECONDS:
+        raise ValueError("pre-PR per-command timeout exceeds the ceiling")
+    if plan.total_validation_timeout_seconds > PRE_PR_TOTAL_VALIDATION_TIMEOUT_SECONDS:
+        raise ValueError("pre-PR total validation timeout exceeds the ceiling")
+    plan_identity = pre_pr_validation_plan_id(plan)
+    subject = plan.subject
+
+    request_repository = (
+        f"{request.repository_identity.owner}/"
+        f"{request.repository_identity.repository}"
+    )
+    if request_repository.casefold() != subject.repository.casefold():
+        raise ValueError("repository identity mismatch")
+    if request.issue_or_handoff_identity != f"issue:{subject.issue_number}":
+        raise ValueError("pre-PR issue identity mismatch")
+    if request.base_branch != subject.base_branch:
+        raise ValueError("pre-PR base branch mismatch")
+    if request.base_sha != subject.base_sha:
+        raise ValueError("pre-PR base SHA mismatch")
+    if request.requested_ref != subject.branch:
+        raise ValueError("pre-PR branch mismatch")
+    if request.expected_sha != subject.expected_source_sha:
+        raise ValueError("expected SHA does not match validation plan")
+    if request.allowed_paths != subject.allowed_files:
+        raise ValueError("pre-PR allowed scope mismatch")
+    if request.forbidden_paths != subject.forbidden_paths:
+        raise ValueError("pre-PR forbidden scope mismatch")
+    if request.request_fingerprint != execution_service_request_fingerprint(request):
+        raise ValueError("request fingerprint mismatch")
+    if plan.commands != subject.required_command_identities:
+        raise ValueError("pre-PR command identity drift")
+    if len(plan.commands) > MAX_PLAN_COMMANDS:
+        raise ValueError("validation command count exceeds limit")
+    if len(set(plan.commands)) != len(plan.commands):
+        raise ValueError("duplicate validation command")
+
+    built: list[CommandPlanEntry] = []
+    for command in plan.commands:
+        argv = _COMMAND_REGISTRY.get(command)
+        if argv is None:
+            raise ValueError("validation command is not allowlisted")
+        built.append(
+            CommandPlanEntry(operation=CommandOperation.VALIDATION_FOCUSED, argv=argv)
+        )
+
+    return ValidationCommandPlan(
+        schema_version=COMMAND_PLAN_SCHEMA_VERSION,
+        registry_version=COMMAND_REGISTRY_VERSION,
+        repository=subject.repository,
+        issue_or_handoff_identity=request.issue_or_handoff_identity,
+        requested_ref=request.requested_ref,
+        expected_sha=request.expected_sha,
+        request_revision=request.request_revision,
+        request_fingerprint=request.request_fingerprint,
+        validation_plan_id=plan_identity,
+        validation_plan_schema_version=PRE_PR_VALIDATION_PLAN_SCHEMA_VERSION,
+        selector_version=plan.selector_version,
+        profile=plan.profile,
+        command_set_digest=plan.command_set_digest,
+        entries=tuple(built),
     )
 
 
