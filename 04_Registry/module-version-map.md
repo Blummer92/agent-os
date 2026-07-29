@@ -22,7 +22,7 @@ versions change only when the module's standards or contract changes.
 | Teacher Modeling Coach | 0.2.0 |
 | Instructional Materials Coach | 0.3.0 |
 | Student Language Standard | 0.1.0 |
-| Workflow Scheduler | 0.8.0 |
+| Workflow Scheduler | 0.9.0 |
 | Workspace Automation Builder Tooling | 0.1.1 |
 | Agent Memory & Context Budget Manager | 0.1.0 |
 | IA4D-to-Scheduler Handoff Contract | 0.2.0 |
@@ -42,7 +42,7 @@ JSON schemas, validation fixtures, and a local-only fixture validator. It does
 not authorize live Workspace, Notion, trigger, sharing, or production writes.
 
 **Workflow Scheduler** (`08_Tooling/workflow-scheduler/`) version reflects
-fifteen shipped milestones: Phase 1 (MVP), 2A (approval engine), 2B (retry
+sixteen shipped milestones: Phase 1 (MVP), 2A (approval engine), 2B (retry
 manager), 2C (pause/resume/cancel lifecycle), 2D (task batching), 2E
 (opt-in parallel ready-list dispatch), 3A (GitHub read-only adapter), 3B
 (Notion read-only adapter), 3C (GitHub approved comment adapter), 3D
@@ -52,7 +52,12 @@ WSC3 validates supplied WSC1, IssuePlanCore, and GEX evidence and emits only
 immutable, unapproved proposal evidence. WSC5B5 adds a backward-compatible
 bounded return contract exposing the exact retained frozen-validation result
 alongside the canonical runtime outcome without rerunning validation or adding
-execution authority. It does not create tasks, approvals, queues, leases,
+execution authority. WSC5B6 adds one additive validation-only execution mode to
+that same canonical lifecycle: it reuses the existing lease, worktree,
+cancellation, validation, containment, cleanup, release, and quarantine
+contracts, dispatches no executor and constructs no process executor, and
+leaves standard-mode behavior unchanged. It does not create tasks, approvals,
+queues, leases,
 workers, dispatch state, persistence, or external I/O. See
 `08_Tooling/workflow-scheduler/docs/ARCHITECTURE.md` for implementation details.
 

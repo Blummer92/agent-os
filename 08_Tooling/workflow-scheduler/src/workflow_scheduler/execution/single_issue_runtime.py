@@ -8,6 +8,9 @@ canonical result together with a bounded, immutable local runtime observation
 packet. When the result status is ``quarantined`` it constructs local
 quarantine evidence through the existing, unmodified WSC5R public contract.
 
+In validation-only mode the executor adapter is absent by contract rather than
+substituted, so the observation records no executor adapter at all.
+
 This module performs no I/O. It defines no subprocess, Git worktree, lease
 backend, retry, queue, persistence, GitHub, workflow, or network
 implementation, and it does not import the legacy Scheduler executor, request
@@ -29,6 +32,8 @@ from workflow_scheduler.execution.quarantine_review import (
     build_quarantine_evidence_packet,
 )
 from workflow_scheduler.execution.single_issue_pilot import (
+    RUNTIME_EXECUTION_MODES,
+    VALIDATION_ONLY_EXECUTION_MODE,
     CancellationProbe,
     LeaseAdapter,
     PilotExecutor,
@@ -93,9 +98,12 @@ class RuntimeObservation:
     repository: str
     issue_numbers: tuple[int, ...]
     invocation_id: str
+    execution_mode: str
     lease_adapter_type: str
     workspace_adapter_type: str
-    executor_adapter_type: str
+    # ``None`` records that no executor adapter existed for this invocation.
+    # Validation-only mode never names an executor it did not have.
+    executor_adapter_type: str | None
     validator_adapter_type: str
     cancellation_probe_type: str
     orchestrator_invocation_count: int
@@ -113,12 +121,19 @@ class RuntimeObservation:
             raise RuntimeEntrypointError(
                 "the orchestrator must be invoked exactly once per observation"
             )
+        if self.execution_mode not in RUNTIME_EXECUTION_MODES:
+            raise RuntimeEntrypointError("unsupported runtime execution mode")
         object.__setattr__(self, "issue_numbers", tuple(self.issue_numbers))
         _bounded_text(self.repository, "repository")
         _bounded_text(self.invocation_id, "invocation_id")
         _bounded_text(self.lease_adapter_type, "lease_adapter_type")
         _bounded_text(self.workspace_adapter_type, "workspace_adapter_type")
-        _bounded_text(self.executor_adapter_type, "executor_adapter_type")
+        if self.executor_adapter_type is not None:
+            _bounded_text(self.executor_adapter_type, "executor_adapter_type")
+        elif self.execution_mode != VALIDATION_ONLY_EXECUTION_MODE:
+            raise RuntimeEntrypointError(
+                "only validation-only mode may record an absent executor adapter"
+            )
         _bounded_text(self.validator_adapter_type, "validator_adapter_type")
         _bounded_text(self.cancellation_probe_type, "cancellation_probe_type")
         _bounded_text(self.pilot_result_id, "pilot_result_id")
@@ -134,6 +149,7 @@ def _observation_payload(observation: RuntimeObservation) -> dict[str, object]:
         "repository": observation.repository,
         "issue_numbers": list(observation.issue_numbers),
         "invocation_id": observation.invocation_id,
+        "execution_mode": observation.execution_mode,
         "lease_adapter_type": observation.lease_adapter_type,
         "workspace_adapter_type": observation.workspace_adapter_type,
         "executor_adapter_type": observation.executor_adapter_type,
@@ -200,7 +216,7 @@ def run_single_issue_runtime_entrypoint(
     *,
     lease: LeaseAdapter,
     workspace: WorkspaceAdapter,
-    executor: PilotExecutor,
+    executor: PilotExecutor | None = None,
     validator: ValidationAdapter,
     cancelled: CancellationProbe,
 ) -> SingleIssueRuntimeOutcome:
@@ -213,13 +229,30 @@ def run_single_issue_runtime_entrypoint(
     non-conforming adapters before the orchestrator -- and therefore before
     any adapter method -- is ever called, and never invokes the orchestrator
     more than once.
+
+    An absent executor is accepted only when the supplied mode is exactly
+    validation-only. Standard mode still requires a protocol-conforming
+    executor, and validation-only mode refuses one: an unsupported, malformed,
+    or drifted mode fails closed here, before any adapter runs.
     """
     if not isinstance(pilot_input, SingleIssuePilotInput):
         raise RuntimeEntrypointError("pilot_input must be SingleIssuePilotInput")
 
+    mode = pilot_input.execution_mode
+    if mode not in RUNTIME_EXECUTION_MODES:
+        raise RuntimeEntrypointError("unsupported runtime execution mode")
+
     lease_type = _require_adapter(lease, LeaseAdapter, "lease")
     workspace_type = _require_adapter(workspace, WorkspaceAdapter, "workspace")
-    executor_type = _require_adapter(executor, PilotExecutor, "executor")
+    executor_type: str | None
+    if mode == VALIDATION_ONLY_EXECUTION_MODE:
+        if executor is not None:
+            raise RuntimeEntrypointError(
+                "validation-only mode must not be supplied an executor"
+            )
+        executor_type = None
+    else:
+        executor_type = _require_adapter(executor, PilotExecutor, "executor")
     validator_type = _require_adapter(validator, ValidationAdapter, "validator")
     if not callable(cancelled):
         raise RuntimeEntrypointError("cancelled must satisfy the CancellationProbe protocol")
@@ -244,6 +277,7 @@ def run_single_issue_runtime_entrypoint(
         "repository": pilot_input.repository,
         "issue_numbers": list(pilot_input.issue_numbers),
         "invocation_id": pilot_input.invocation_id,
+        "execution_mode": mode,
         "lease_adapter_type": lease_type,
         "workspace_adapter_type": workspace_type,
         "executor_adapter_type": executor_type,
