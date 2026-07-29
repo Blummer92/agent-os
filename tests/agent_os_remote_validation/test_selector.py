@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 from dataclasses import FrozenInstanceError, replace
+from itertools import permutations
 from pathlib import Path
 
 import pytest
@@ -838,3 +839,156 @@ def test_pre_pr_selection_performs_no_file_io(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(Path, "read_text", fail_read)
     plan = select_pre_pr_validation_plan(subject, RULES)
     assert plan.commands == (PILOT_COMMAND,)
+
+
+# --- Exact-over-prefix precedence semantics (#723 review H1/B2) ---------------
+#
+# The pilot path sits under the pre-existing `08_Tooling/workflow-scheduler/`
+# package prefix, so adding an exact rule for it made precedence necessary.
+# These tests pin the full consequence surface of that decision, including the
+# two selection outcomes that #723 deliberately changed.
+SCHEDULER_PACKAGE_COMMAND = "python -m pytest 08_Tooling/workflow-scheduler/tests"
+SCHEDULER_SIBLING_PATH = "08_Tooling/workflow-scheduler/src/runtime.py"
+
+
+def test_mixed_exact_and_prefix_paths_form_a_safe_superset_union() -> None:
+    """A changed-file set mixing the exact pilot path with a prefix-owned sibling.
+
+    This outcome changed with #723: at the previous head the set selected only
+    the package command with `profile.focused-package`. It now unions both
+    commands and reports `profile.focused-union`. The narrow command is fully
+    subsumed by the package command, so the union re-runs the pilot file rather
+    than skipping anything -- the change is a safe superset, never a gap.
+    """
+    paths = [PILOT_PATH, SCHEDULER_SIBLING_PATH]
+    plan = _select(_input(paths))
+    assert plan.profile == "focused"
+    assert plan.reason_codes == ("profile.focused-union",)
+    assert plan.commands == (SCHEDULER_PACKAGE_COMMAND, PILOT_COMMAND)
+    assert PILOT_COMMAND.startswith(SCHEDULER_PACKAGE_COMMAND)
+    assert plan.remote_build_required is True
+    assert validate_validation_plan(plan) == ()
+
+    assert plan.command_set_digest == compute_command_set_digest(
+        "1.0.0", (SCHEDULER_PACKAGE_COMMAND, PILOT_COMMAND)
+    )
+    assert plan.command_set_digest == (
+        "59459cb78c6b2804aebb46597472814a1d649bfb76a6b883868b2fbe4020d221"
+    )
+    assert validation_plan_id(plan) == (
+        "validation-plan:"
+        "71f0353ba0a292bb656b87deb3ec8fab9ff07b8d14f7ffbbb73a2de1f3482935"
+    )
+    assert serialize_validation_plan(plan) == serialize_validation_plan(_select(_input(paths)))
+
+
+def test_mixed_exact_and_prefix_union_ignores_changed_file_order() -> None:
+    paths = [PILOT_PATH, SCHEDULER_SIBLING_PATH, "tests/test_curriculum_language_system.py"]
+    outcomes = {_select(_input(list(order))) for order in permutations(paths)}
+    assert len(outcomes) == 1
+    only = outcomes.pop()
+    assert only.reason_codes == ("profile.focused-union",)
+    assert only.commands == tuple(sorted(only.commands))
+
+
+def test_exact_owner_masks_multiple_matching_prefix_rules() -> None:
+    rules = copy.deepcopy(RULES)
+    rules["focused_rules"].append(
+        {
+            "name": "second-scheduler-prefix-owner",
+            "prefixes": ["08_Tooling/workflow-scheduler/"],
+            "commands": ["python -m pytest tests/other.py"],
+        }
+    )
+    exact_owned = _select(_input([PILOT_PATH]), rules)
+    assert exact_owned.profile == "focused"
+    assert exact_owned.commands == (PILOT_COMMAND,)
+    assert exact_owned.reason_codes == ("profile.focused-package",)
+
+    prefix_only = _select(_input([SCHEDULER_SIBLING_PATH]), rules)
+    assert prefix_only.profile == "manual-review"
+    assert prefix_only.commands == ()
+    assert prefix_only.reason_codes == ("rule.ambiguous",)
+
+
+def test_multiple_exact_owners_still_fail_closed_as_ambiguous() -> None:
+    rules = copy.deepcopy(RULES)
+    rules["focused_rules"].append(
+        {
+            "name": "conflicting-exact-pilot-owner",
+            "exact_paths": [PILOT_PATH],
+            "commands": ["python -m pytest tests/other.py"],
+        }
+    )
+    plan = _select(_input([PILOT_PATH]), rules)
+    assert plan.profile == "manual-review"
+    assert plan.commands == ()
+    assert plan.reason_codes == ("rule.ambiguous",)
+
+
+def test_multiple_prefix_owners_without_exact_owner_fail_closed() -> None:
+    rules = copy.deepcopy(RULES)
+    rules["focused_rules"].append(
+        {
+            "name": "conflicting-notion-prefix-owner",
+            "prefixes": ["08_Tooling/notion-navigation-client/"],
+            "commands": ["python -m pytest tests/other.py"],
+        }
+    )
+    plan = _select(_input(["08_Tooling/notion-navigation-client/src/reader.py"]), rules)
+    assert plan.profile == "manual-review"
+    assert plan.commands == ()
+    assert plan.reason_codes == ("rule.ambiguous",)
+
+
+@pytest.mark.parametrize(
+    "paths",
+    [
+        [PILOT_PATH],
+        [SCHEDULER_SIBLING_PATH],
+        [PILOT_PATH, SCHEDULER_SIBLING_PATH],
+    ],
+)
+def test_precedence_is_independent_of_rule_order(paths: list[str]) -> None:
+    baseline = _select(_input(paths))
+    count = len(RULES["focused_rules"])
+    # Every rotation plus the full reversal: enough to expose any dependence on
+    # a rule's position, without paying for all `count!` orderings.
+    orders = [tuple(range(count))[offset:] + tuple(range(count))[:offset] for offset in range(count)]
+    orders.append(tuple(reversed(range(count))))
+    for order in orders:
+        rules = copy.deepcopy(RULES)
+        rules["focused_rules"] = [RULES["focused_rules"][index] for index in order]
+        assert _select(_input(paths), rules) == baseline
+
+
+# --- Boolean rejection for integer-only pre-PR fields (#723 review M3) --------
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_boolean_approval_revision_is_rejected(value: bool) -> None:
+    with pytest.raises(TypeError, match="approval_revision"):
+        _subject(approval_revision=value)
+
+
+@pytest.mark.parametrize("field", ["per_command_timeout_seconds", "total_validation_timeout_seconds"])
+@pytest.mark.parametrize("value", [True, False])
+def test_boolean_timeouts_are_rejected(field: str, value: bool) -> None:
+    subject = _subject()
+    valid = select_pre_pr_validation_plan(subject, RULES)
+    values: dict[str, object] = {
+        "selector_version": valid.selector_version,
+        "subject": subject,
+        "commands": valid.commands,
+        "command_set_digest": valid.command_set_digest,
+        "reason_codes": valid.reason_codes,
+        field: value,
+    }
+    with pytest.raises(TypeError, match=field):
+        PrePrValidationPlan(**values)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_boolean_issue_number_is_rejected(value: bool) -> None:
+    with pytest.raises(TypeError, match="issue_number"):
+        _subject(issue_number=value)

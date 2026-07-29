@@ -286,7 +286,25 @@ def _focused_matches(
     path: str,
     focused_rules: list[Any],
 ) -> list[tuple[str, tuple[str, ...]]]:
-    """Return focused owners of one path; an exact owner excludes prefix owners."""
+    """Return focused owners of one path; an exact owner excludes prefix owners.
+
+    Exact ownership intentionally outranks and *masks* every prefix owner of the
+    same path, so a narrow exact rule can live under an existing package prefix
+    without turning that path into `rule.ambiguous`. Two consequences follow, and
+    both are deliberate:
+
+    - a prefix-rule conflict is not reported for a path that has an exact owner,
+      because that conflict cannot affect the outcome for that path; a path with
+      no exact owner still fails closed to `rule.ambiguous`; and
+    - masking is per path, so a changed-file set mixing an exact-owned path with
+      prefix-owned siblings yields the union of both command sets. That union is
+      a safe superset and may contain a narrow command already subsumed by the
+      broader package command; it is not deduplicated here.
+
+    Selection stays independent of rule order and of changed-file order: matches
+    are partitioned by kind rather than by position, and the caller treats more
+    than one distinct command set for a single path as ambiguous.
+    """
     exact_matches: list[tuple[str, tuple[str, ...]]] = []
     prefix_matches: list[tuple[str, tuple[str, ...]]] = []
     for rule in focused_rules:
