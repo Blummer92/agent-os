@@ -27,7 +27,7 @@ versions change only when the module's standards or contract changes.
 | Agent Memory & Context Budget Manager | 0.1.0 |
 | IA4D-to-Scheduler Handoff Contract | 0.2.0 |
 | GitHub Issue Lifecycle Standard | 0.1.0 |
-| Agent OS Execution Service | 0.2.0 |
+| Agent OS Execution Service | 0.3.0 |
 
 **Dashboard Migration Verification**
 (`08_Tooling/dashboard-migration-verification/`) starts as a verification-only
@@ -88,7 +88,7 @@ establish freshness, authorize execution, or change Workflow Scheduler runtime.
 Future version changes require an approved standards or contract change under
 `00_Governance/standards-change-control.md`.
 
-**Agent OS Execution Service** (`08_Tooling/agent-os-execution-service/`) moved `0.1.0` -> `0.2.0` under WSC6B4A (#719), a package-contract/docs-only change establishing the public contract required before #697's governed validation composition; no executable composition function exists yet, and execution authorization, command execution, validation, review, and merge authorization stay separate. Workflow Scheduler remains `0.9.0`.
+**Agent OS Execution Service** (`08_Tooling/agent-os-execution-service/`) moved `0.2.0` -> `0.3.0` under WSC6B4 (#697): `execution_composition.py` adds `compose_and_run_validation(...)`, a thin, non-authorizing boundary that revalidates request/plan/authorization/runtime identity and delegates exactly once to the canonical Workflow Scheduler validation-only entrypoint, retaining the exact `FrozenTestValidationResult`. No second runtime, command loop, or duplicate evidence model was added; `merge_authorized` stays false; execution authorization, validation, review, and merge authorization remain separate states. Workflow Scheduler remains `0.9.0`.
 
 ## Reconciliation Notes
 
