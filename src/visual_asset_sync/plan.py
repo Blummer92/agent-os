@@ -5,8 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Sequence
 
-from .models import ExistingAssetRecord, ReconciliationEntry, ReconciliationResult, SourceAssetRecord
-from .reconcile import build_plan
+from .models import (
+    ExistingAssetRecord,
+    ReconciliationEntry,
+    ReconciliationResult,
+    SourceAssetRecord,
+)
+from .reconcile import build_plan, resolve_identity
 
 
 @dataclass(frozen=True)
@@ -55,25 +60,46 @@ def build_reconciliation_plan(
     return ReconciliationPlan(entries=entries, total_source_records=len(source_records))
 
 
+def _validate_plan_source_pair(
+    entry: ReconciliationEntry, source: SourceAssetRecord
+) -> None:
+    if entry.source_row != source.source_row:
+        raise ValueError("plan does not match the supplied source records")
+
+    if source.excluded:
+        expected_identity = None
+        expected_forced = ReconciliationResult.EXCLUDED
+    else:
+        expected_identity, expected_forced = resolve_identity(source)
+
+    if entry.identity_key != expected_identity:
+        raise ValueError("plan does not match the supplied source records")
+    if expected_forced is not None and entry.result is not expected_forced:
+        raise ValueError("plan does not match the supplied source records")
+    if expected_forced is None and entry.result in {
+        ReconciliationResult.MALFORMED_IDENTITY,
+        ReconciliationResult.EXCLUDED,
+    }:
+        raise ValueError("plan does not match the supplied source records")
+
+
 def simulate_apply(
     plan: ReconciliationPlan,
     source_records: Sequence[SourceAssetRecord],
     existing_records: Sequence[ExistingAssetRecord],
 ) -> tuple[ExistingAssetRecord, ...]:
-    """Return a new, in-memory existing-records collection with this plan's
-    CREATE_MISSING entries materialized as simulated pages.
+    """Materialize CREATE_MISSING entries in memory without external writes."""
+    if (
+        plan.total_source_records != len(source_records)
+        or len(plan.entries) != len(source_records)
+    ):
+        raise ValueError("plan and source record counts differ")
 
-    Performs no external writes. ``existing_records`` is not mutated; the
-    caller may pass the returned tuple into a second ``build_reconciliation_plan``
-    call to verify idempotent rerun behavior.
-    """
-    source_by_row = {record.source_row: record for record in source_records}
     simulated = list(existing_records)
-
-    for entry in plan.entries:
+    for entry, source in zip(plan.entries, source_records):
+        _validate_plan_source_pair(entry, source)
         if entry.result is not ReconciliationResult.CREATE_MISSING:
             continue
-        source = source_by_row[entry.source_row]
         simulated.append(
             ExistingAssetRecord(
                 page_id=f"simulated:{entry.identity_key}",
