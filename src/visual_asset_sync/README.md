@@ -8,6 +8,10 @@ This package performs **zero external writes and zero network calls**. It accept
 normalized in-memory records and returns a plan. Live Google Sheets reads, live
 Notion queries, and live Notion writes belong to separately authorized adapters.
 
+The fixture-first, read-only extraction boundary for Issue #731 is documented in
+[`SHEETS_ADAPTER.md`](SHEETS_ADAPTER.md). Live Sheet reads remain separately
+authorized and require a verified header mapping.
+
 ## Input contract
 
 `normalize_source_record` accepts an exact built-in dictionary. `source_row` is
