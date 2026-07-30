@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ast
-import os
 import subprocess
 import sys
 from dataclasses import FrozenInstanceError
@@ -35,14 +34,17 @@ def _evidence(**changes: object) -> ExecutionAuthorizationEvidence:
 
 
 def _isolated_import(code: str) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(SRC)
+    bootstrap = (
+        "import sys; "
+        f"sys.path.insert(0, {str(ROOT)!r}); "
+        f"sys.path.insert(0, {str(SRC)!r}); "
+        + code
+    )
     return subprocess.run(
-        [sys.executable, "-I", "-c", code],
+        [sys.executable, "-I", "-c", bootstrap],
         check=False,
         capture_output=True,
         text=True,
-        env=env,
     )
 
 
@@ -96,8 +98,7 @@ def test_package_export_is_exact_pure_class() -> None:
 
 def test_direct_import_does_not_load_workflow_scheduler() -> None:
     result = _isolated_import(
-        "import sys; from agent_os_execution_service.authorization import "
-        "ExecutionAuthorizationEvidence; "
+        "from agent_os_execution_service.authorization import ExecutionAuthorizationEvidence; "
         "assert not any(k == 'workflow_scheduler' or k.startswith('workflow_scheduler.') "
         "for k in sys.modules)"
     )
@@ -106,7 +107,7 @@ def test_direct_import_does_not_load_workflow_scheduler() -> None:
 
 def test_package_level_import_does_not_load_workflow_scheduler() -> None:
     result = _isolated_import(
-        "import sys; from agent_os_execution_service import ExecutionAuthorizationEvidence; "
+        "from agent_os_execution_service import ExecutionAuthorizationEvidence; "
         "assert not any(k == 'workflow_scheduler' or k.startswith('workflow_scheduler.') "
         "for k in sys.modules)"
     )
@@ -119,7 +120,9 @@ def test_composition_consumes_exact_extracted_class() -> None:
     imports = [
         node
         for node in tree.body
-        if isinstance(node, ast.ImportFrom) and node.module == "authorization"
+        if isinstance(node, ast.ImportFrom)
+        and node.level == 1
+        and node.module == "authorization"
     ]
     assert len(imports) == 1
     assert [alias.name for alias in imports[0].names] == ["ExecutionAuthorizationEvidence"]
