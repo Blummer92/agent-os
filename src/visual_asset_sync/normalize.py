@@ -4,14 +4,30 @@ from __future__ import annotations
 
 import re
 from typing import Any, Mapping
+from urllib.parse import parse_qs, urlparse
 
 from .models import ExistingAssetRecord, SourceAssetRecord
 
-# Google Drive File IDs are conventionally 25+ chars of [A-Za-z0-9_-].
-_DRIVE_URL_ID_PATTERNS = (
-    re.compile(r"/d/([-\w]{25,})"),
-    re.compile(r"[?&]id=([-\w]{25,})"),
+# Only these hosts may establish Drive identity. A `/d/<id>` path segment or an
+# `id=<id>` query parameter on any other host is not Drive identity evidence.
+SUPPORTED_DRIVE_HOSTS = frozenset({"drive.google.com", "docs.google.com"})
+
+_SUPPORTED_URL_SCHEMES = frozenset({"http", "https"})
+
+# Drive File IDs are opaque base64url-style tokens drawn from [A-Za-z0-9_-].
+# Real IDs observed in practice run roughly 25-44 characters. The bounds below
+# are deliberately wider than any known form so the rule rejects obviously
+# malformed tokens without overfitting to one exact length.
+DRIVE_FILE_ID_MIN_LENGTH = 20
+DRIVE_FILE_ID_MAX_LENGTH = 128
+_DRIVE_FILE_ID_RE = re.compile(
+    rf"^[A-Za-z0-9_-]{{{DRIVE_FILE_ID_MIN_LENGTH},{DRIVE_FILE_ID_MAX_LENGTH}}}$"
 )
+
+# `/d/<id>` appears as /file/d/<id>/view, /document/d/<id>/edit, and similar.
+# Candidates are captured loosely here and validated by `is_valid_drive_file_id`.
+_PATH_ID_RE = re.compile(r"/d/([^/]+)")
+_ID_QUERY_KEYS = ("id",)
 
 _KNOWN_EXISTING_FIELDS = {
     "page_id",
@@ -26,14 +42,65 @@ _KNOWN_EXISTING_FIELDS = {
 }
 
 
-def extract_drive_id_from_url(url: str | None) -> str | None:
-    """Return the Drive File ID embedded in a Drive URL, or None if absent."""
+def is_valid_drive_file_id(value: str | None) -> bool:
+    """Return True when ``value`` is shaped like a Google Drive File ID.
+
+    The rule is a bounded character-and-length check only: 20-128 characters
+    drawn from ``[A-Za-z0-9_-]``. It is deliberately not pinned to one exact
+    length, and it never confirms that the file exists.
+    """
+    if not value:
+        return False
+    return bool(_DRIVE_FILE_ID_RE.match(value))
+
+
+def extract_drive_id_candidates(url: str | None) -> tuple[str, ...]:
+    """Return every distinct Drive File ID candidate carried by ``url``.
+
+    Candidates come only from a supported Google Drive or Google Docs host
+    (see ``SUPPORTED_DRIVE_HOSTS``) reached over http/https, parsed with
+    ``urlparse`` rather than substring matching. A `/d/<id>` path segment or an
+    `id=<id>` query parameter on any other host contributes nothing. Order is
+    first-seen: path segments before query parameters.
+    """
     if not url:
-        return None
-    for pattern in _DRIVE_URL_ID_PATTERNS:
-        match = pattern.search(url)
-        if match:
-            return match.group(1)
+        return ()
+    try:
+        parsed = urlparse(url.strip())
+        host = (parsed.hostname or "").lower()
+    except ValueError:
+        return ()
+    if parsed.scheme.lower() not in _SUPPORTED_URL_SCHEMES:
+        return ()
+    if host not in SUPPORTED_DRIVE_HOSTS:
+        return ()
+
+    candidates: list[str] = []
+    for match in _PATH_ID_RE.finditer(parsed.path):
+        _add_candidate(candidates, match.group(1))
+    query = parse_qs(parsed.query)
+    for key in _ID_QUERY_KEYS:
+        for value in query.get(key, ()):
+            _add_candidate(candidates, value)
+    return tuple(candidates)
+
+
+def _add_candidate(candidates: list[str], value: str) -> None:
+    if is_valid_drive_file_id(value) and value not in candidates:
+        candidates.append(value)
+
+
+def extract_drive_id_from_url(url: str | None) -> str | None:
+    """Return the single unambiguous Drive File ID carried by ``url``.
+
+    Returns None when the URL is not a supported Google Drive/Docs URL, when it
+    carries no valid File ID, or when it carries more than one distinct
+    candidate ID. Ambiguous URL identity is never silently resolved to the
+    first candidate.
+    """
+    candidates = extract_drive_id_candidates(url)
+    if len(candidates) == 1:
+        return candidates[0]
     return None
 
 

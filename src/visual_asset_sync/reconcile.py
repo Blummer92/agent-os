@@ -9,7 +9,11 @@ from __future__ import annotations
 from typing import Sequence
 
 from .models import ExistingAssetRecord, ReconciliationEntry, ReconciliationResult, SourceAssetRecord
-from .normalize import extract_drive_id_from_url
+from .normalize import (
+    extract_drive_id_candidates,
+    extract_drive_id_from_url,
+    is_valid_drive_file_id,
+)
 
 
 def resolve_identity(
@@ -20,27 +24,42 @@ def resolve_identity(
     forced_result is None when identity resolution succeeded and normal
     matching should proceed; otherwise it is the terminal classification for
     this record (MALFORMED_IDENTITY or CONTRADICTORY_RECORD).
+
+    A valid explicit ``drive_file_id`` is primary. URL fallback applies only
+    when no explicit ID is present, and only when the URL carries exactly one
+    distinct valid candidate ID. A malformed explicit ID is MALFORMED_IDENTITY
+    rather than CONTRADICTORY_RECORD: contradiction requires a valid explicit
+    ID to disagree with valid URL-derived evidence.
     """
-    has_id = bool(record.drive_file_id)
-    has_url = bool(record.drive_url)
+    url_candidates = extract_drive_id_candidates(record.drive_url)
 
-    if not has_id and not has_url:
-        return None, ReconciliationResult.MALFORMED_IDENTITY
-
-    url_id = extract_drive_id_from_url(record.drive_url) if has_url else None
-
-    if has_url and url_id is None and not has_id:
-        # A URL was supplied but no File ID could be extracted, and there is
-        # no File ID to fall back on.
-        return None, ReconciliationResult.MALFORMED_IDENTITY
-
-    if has_id and url_id is not None and url_id != record.drive_file_id:
-        return None, ReconciliationResult.CONTRADICTORY_RECORD
-
-    if has_id:
+    if record.drive_file_id:
+        if not is_valid_drive_file_id(record.drive_file_id):
+            return None, ReconciliationResult.MALFORMED_IDENTITY
+        if any(candidate != record.drive_file_id for candidate in url_candidates):
+            return None, ReconciliationResult.CONTRADICTORY_RECORD
         return record.drive_file_id, None
 
-    return url_id, None
+    if len(url_candidates) == 1:
+        return url_candidates[0], None
+
+    # No identity at all, an unsupported or unparseable URL, or an ambiguous
+    # URL carrying more than one distinct candidate ID.
+    return None, ReconciliationResult.MALFORMED_IDENTITY
+
+
+def existing_identity_key(record: ExistingAssetRecord) -> str | None:
+    """Identity key for an existing record, or None when it has no valid one.
+
+    Mirrors source-side precedence: a valid explicit ``drive_file_id`` wins,
+    otherwise an unambiguous URL-derived ID is used. Records with no valid
+    identity are simply not indexed, so they can never be matched.
+    """
+    if record.drive_file_id:
+        if is_valid_drive_file_id(record.drive_file_id):
+            return record.drive_file_id
+        return None
+    return extract_drive_id_from_url(record.drive_url)
 
 
 def build_plan(
@@ -50,7 +69,7 @@ def build_plan(
     """Classify every source record. Order mirrors ``source_records``."""
     existing_by_id: dict[str, list[ExistingAssetRecord]] = {}
     for existing in existing_records:
-        key = existing.drive_file_id or extract_drive_id_from_url(existing.drive_url)
+        key = existing_identity_key(existing)
         if key:
             existing_by_id.setdefault(key, []).append(existing)
 
@@ -124,7 +143,7 @@ def _reason_for(result: ReconciliationResult) -> str:
         ReconciliationResult.UPDATE_EXISTING: "Exact Drive File ID matched one existing record.",
         ReconciliationResult.CREATE_MISSING: "No existing record matches this identity.",
         ReconciliationResult.DUPLICATE_ID: "Identity matches more than one record.",
-        ReconciliationResult.MALFORMED_IDENTITY: "No usable Drive File ID or Drive URL identity was found.",
+        ReconciliationResult.MALFORMED_IDENTITY: "No single usable Drive File ID or Drive URL identity was found.",
         ReconciliationResult.CONTRADICTORY_RECORD: "Drive File ID and Drive URL identity disagree.",
         ReconciliationResult.EXCLUDED: "Record is marked excluded from synchronization.",
     }[result]
