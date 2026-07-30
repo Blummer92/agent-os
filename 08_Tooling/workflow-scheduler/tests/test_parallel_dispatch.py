@@ -19,16 +19,33 @@ from workflow_scheduler.repository import SQLiteRepository
 
 
 class ConcurrencyTrackingAdapter(TaskAdapter):
-    """Test double: records how many executions were in flight at once,
-    and each task's [start, end) window, without relying on wall-clock
-    timing comparisons in assertions (only used to force overlap)."""
+    """Test double that records overlap and per-task execution windows.
 
-    def __init__(self, hold_seconds: float = 0.05):
+    Most tests use ``hold_seconds`` to create a simple overlap window. Tests
+    that require deterministic overlap proof may instead provide
+    ``synchronize_task_ids``; those tasks must all enter the adapter before
+    any of them may continue.
+    """
+
+    def __init__(
+        self,
+        hold_seconds: float = 0.05,
+        synchronize_task_ids=None,
+        synchronization_timeout_seconds: float = 2.0,
+    ):
         self.hold_seconds = hold_seconds
+        self.synchronize_task_ids = set(synchronize_task_ids or ())
+        self.synchronization_timeout_seconds = synchronization_timeout_seconds
+        self._synchronization_barrier = (
+            threading.Barrier(len(self.synchronize_task_ids))
+            if self.synchronize_task_ids
+            else None
+        )
         self._state_lock = threading.Lock()
         self._in_flight = 0
         self.max_in_flight = 0
         self.windows: Dict[str, tuple] = {}
+        self.synchronized_task_ids: set[str] = set()
 
     def execute(self, task: Task) -> Dict[str, Any]:
         with self._state_lock:
@@ -36,7 +53,24 @@ class ConcurrencyTrackingAdapter(TaskAdapter):
             self.max_in_flight = max(self.max_in_flight, self._in_flight)
         start = time.monotonic()
         try:
-            time.sleep(self.hold_seconds)
+            if task.id in self.synchronize_task_ids:
+                try:
+                    self._synchronization_barrier.wait(
+                        timeout=self.synchronization_timeout_seconds
+                    )
+                except threading.BrokenBarrierError:
+                    return {
+                        "success": False,
+                        "error": (
+                            "Timed out waiting for synchronized tasks to enter "
+                            f"the adapter: {sorted(self.synchronize_task_ids)}"
+                        ),
+                        "is_transient": False,
+                    }
+                with self._state_lock:
+                    self.synchronized_task_ids.add(task.id)
+            if self.hold_seconds:
+                time.sleep(self.hold_seconds)
             return {"success": True, "error": None, "output": {"task_id": task.id}}
         finally:
             end = time.monotonic()
@@ -283,7 +317,10 @@ class TestRunWorkflowParallelDispatch:
         task -- the downstream task must not start until both roots finish,
         even though the roots themselves ran concurrently."""
         cli = WorkflowSchedulerCLI(db_path=str(tmp_path / "test.db"), max_workers=4)
-        adapter = ConcurrencyTrackingAdapter(hold_seconds=0.05)
+        adapter = ConcurrencyTrackingAdapter(
+            hold_seconds=0,
+            synchronize_task_ids={"root-a", "root-b"},
+        )
         cli.executor.adapter = adapter
 
         yaml_path = _write_workflow_yaml(
@@ -301,10 +338,12 @@ class TestRunWorkflowParallelDispatch:
 
         assert result["status"] == "pass"
         assert result["completed"] == 3
+        assert adapter.synchronized_task_ids == {"root-a", "root-b"}
         assert adapter.windows["root-a"][1] <= adapter.windows["downstream"][0]
         assert adapter.windows["root-b"][1] <= adapter.windows["downstream"][0]
-        # The two roots were dispatched in the same pass -- prove that pass
-        # actually ran them concurrently, not just "correctly ordered".
+        # The barrier releases only after both roots enter the adapter, so a
+        # sequential implementation times out and fails instead of passing by
+        # chance because of thread scheduling.
         assert adapter.max_in_flight > 1
 
     def test_approval_gated_task_alongside_parallel_siblings(self, tmp_path):
