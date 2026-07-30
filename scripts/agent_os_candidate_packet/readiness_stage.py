@@ -29,6 +29,7 @@ from scripts.agent_os_issue_acceptance.readiness import evaluate_issue_readiness
 from .source_stage import resolve_issue_snapshot
 from .stage_models import (
     DependencyEvidence,
+    DependencyIdentityEvidence,
     EvidenceStatus,
     IssueReadinessStageRequest,
     IssueReadinessStageResult,
@@ -59,6 +60,8 @@ def prepare_issue_readiness(
     request: IssueReadinessStageRequest,
     issue_reader: IssueSourceReader,
     repository_reader: RepositoryEvidenceReader,
+    *,
+    dependency_identity_evidence: DependencyIdentityEvidence | None = None,
 ) -> IssueReadinessStageResult:
     """Resolve one exact issue snapshot and its canonical readiness evidence.
 
@@ -67,11 +70,24 @@ def prepare_issue_readiness(
     unresolved or ambiguous input produces an explicit ``needs-decision``,
     ``blocked``, ``source-failure``, or ``incomplete-evidence`` result; this
     function never infers a boolean from missing or ambiguous evidence.
+
+    ``dependency_identity_evidence`` is the only way canonical dependency
+    identities enter a stage result. It must already be structured; this
+    function never derives identities from ``snapshot.body``, ``Depends on:``
+    text, reason codes, evidence details, comments, PR text, or labels. A caller
+    that omits it gets explicit fail-closed ``unavailable`` identity evidence,
+    which is distinct from a structured source reporting no dependencies.
     """
     if not isinstance(request, IssueReadinessStageRequest):
         raise TypeError("request must be an IssueReadinessStageRequest")
     if repository_reader is None:
         raise TypeError("repository_reader is required")
+    if dependency_identity_evidence is not None and not isinstance(
+        dependency_identity_evidence, DependencyIdentityEvidence
+    ):
+        raise TypeError(
+            "dependency_identity_evidence must be a DependencyIdentityEvidence"
+        )
 
     source_result = resolve_issue_snapshot(
         request.repository,
@@ -206,6 +222,7 @@ def prepare_issue_readiness(
         issueplan_current_state_evidence=issueplan_evidence,
         readiness_result=readiness_result,
         reason_codes=tuple(reason_codes),
+        dependency_identity_evidence=dependency_identity_evidence,
     )
 
 

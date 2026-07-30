@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal, Mapping, Protocol
@@ -28,7 +29,7 @@ from scripts.agent_os_issue_acceptance.issueplan_current_state import (
 )
 from scripts.agent_os_issue_acceptance.readiness import ReadinessOutcome, ReadinessResult
 
-STAGE_SCHEMA_VERSION = "1.0"
+STAGE_SCHEMA_VERSION = "1.1"
 
 
 class IssueReadStatus(str, Enum):
@@ -95,6 +96,139 @@ class ValidationEvidence:
             raise TypeError("status must be an EvidenceStatus")
         object.__setattr__(self, "reason_codes", tuple(self.reason_codes))
         object.__setattr__(self, "details", tuple(self.details))
+
+
+class DependencyIdentityStatus(str, Enum):
+    """Whether canonical dependency identities were supplied, and resolved.
+
+    ``resolved`` and ``absent`` are positive findings from a structured source.
+    ``unresolved`` and ``unavailable`` are fail-closed findings: neither ever
+    asserts a dependency-identity set.
+    """
+
+    RESOLVED = "resolved"
+    UNRESOLVED = "unresolved"
+    ABSENT = "absent"
+    UNAVAILABLE = "unavailable"
+
+
+DEPENDENCY_IDENTITY_NOT_SUPPLIED_REASON = "dependency-identity.not-supplied"
+DEPENDENCY_IDENTITY_DUPLICATE_COLLAPSED_REASON = (
+    "dependency-identity.duplicate-collapsed"
+)
+
+
+def _evidence_string(value: object, field_name: str) -> str:
+    """Validate one non-empty, control-character-free evidence string."""
+    if isinstance(value, bool):
+        raise TypeError(f"{field_name} must not contain boolean values")
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must contain only strings")
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"{field_name} must not contain empty values")
+    if any(character < " " or character == "\x7f" for character in normalized):
+        raise ValueError(f"{field_name} must not contain control characters")
+    return normalized
+
+
+def _evidence_strings(values: object, field_name: str) -> tuple[str, ...]:
+    """Validate a string tuple, preserving supplied order and multiplicity."""
+    if values is None:
+        return ()
+    if isinstance(values, (str, bytes, Mapping)) or not isinstance(values, Iterable):
+        raise TypeError(f"{field_name} must be an iterable of strings")
+    return tuple(_evidence_string(value, field_name) for value in values)
+
+
+def _identity_sequence(
+    values: object, field_name: str
+) -> tuple[tuple[str, ...], bool]:
+    """Return deterministically ordered unique identities plus a duplicate flag."""
+    normalized = _evidence_strings(values, field_name)
+    unique = tuple(sorted(set(normalized)))
+    return unique, len(unique) != len(normalized)
+
+
+@dataclass(frozen=True, slots=True)
+class DependencyIdentityEvidence:
+    """Immutable canonical dependency-identity evidence for one issue.
+
+    Identities are only ever supplied explicitly by a caller that already holds
+    them in structured form. Nothing here parses issue prose, ``Depends on:``
+    text, comments, PR titles or bodies, labels, reason codes, or diagnostic
+    details to obtain them, and no repository-wide graph guess is ever made. A
+    caller without structured identities produces ``absent`` or ``unavailable``
+    evidence instead of inventing one.
+
+    ``dependency_ids`` is deterministically ordered and carries no duplicates.
+    Only ``resolved`` evidence may assert identities at all; every other status
+    keeps the tuple empty so a partial set can never read as a complete one.
+    """
+
+    status: DependencyIdentityStatus
+    dependency_ids: tuple[str, ...] = field(default_factory=tuple)
+    provenance: tuple[str, ...] = field(default_factory=tuple)
+    reason_codes: tuple[str, ...] = field(default_factory=tuple)
+    execution_authorized: Literal[False] = field(default=False, init=False)
+    side_effects_performed: Literal[False] = field(default=False, init=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.status, DependencyIdentityStatus):
+            raise TypeError("status must be a DependencyIdentityStatus")
+
+        identities, collapsed = _identity_sequence(
+            self.dependency_ids, "dependency_ids"
+        )
+        reason_codes = set(_evidence_strings(self.reason_codes, "reason_codes"))
+        if collapsed:
+            reason_codes.add(DEPENDENCY_IDENTITY_DUPLICATE_COLLAPSED_REASON)
+        object.__setattr__(self, "dependency_ids", identities)
+        object.__setattr__(
+            self, "provenance", _evidence_strings(self.provenance, "provenance")
+        )
+        object.__setattr__(self, "reason_codes", tuple(sorted(reason_codes)))
+
+        if self.status == DependencyIdentityStatus.RESOLVED:
+            if not self.dependency_ids:
+                raise ValueError(
+                    "resolved dependency identity evidence requires at least one "
+                    "dependency id"
+                )
+            if not self.provenance:
+                raise ValueError(
+                    "resolved dependency identity evidence requires provenance"
+                )
+        elif self.dependency_ids:
+            raise ValueError(
+                f"{self.status.value} dependency identity evidence must not carry "
+                "dependency ids"
+            )
+
+        if self.status == DependencyIdentityStatus.ABSENT and not self.provenance:
+            raise ValueError(
+                "absent dependency identity evidence requires provenance proving "
+                "the structured source reported no dependencies"
+            )
+        if (
+            self.status
+            in {
+                DependencyIdentityStatus.UNRESOLVED,
+                DependencyIdentityStatus.UNAVAILABLE,
+            }
+            and not self.reason_codes
+        ):
+            raise ValueError(
+                f"{self.status.value} dependency identity evidence requires at "
+                "least one reason code"
+            )
+
+
+DEPENDENCY_IDENTITY_NOT_SUPPLIED = DependencyIdentityEvidence(
+    status=DependencyIdentityStatus.UNAVAILABLE,
+    reason_codes=(DEPENDENCY_IDENTITY_NOT_SUPPLIED_REASON,),
+)
+"""Canonical fail-closed evidence for a caller that supplied no identities."""
 
 
 class IssueSourceReader(Protocol):
@@ -214,6 +348,7 @@ class IssueReadinessStageResult:
     readiness_result: ReadinessResult | None
     reason_codes: tuple[str, ...] = field(default_factory=tuple)
     details: tuple[str, ...] = field(default_factory=tuple)
+    dependency_identity_evidence: DependencyIdentityEvidence | None = None
     execution_authorized: Literal[False] = field(default=False, init=False)
     side_effects_performed: Literal[False] = field(default=False, init=False)
 
@@ -247,6 +382,25 @@ class IssueReadinessStageResult:
             expected = _READINESS_OUTCOME_MAP[self.readiness_result.outcome]
             if expected != self.status:
                 raise ValueError("status must match the readiness outcome")
+        if resolved:
+            identity_evidence = self.dependency_identity_evidence
+            if identity_evidence is None:
+                # A caller that supplied no structured identities fails closed to
+                # explicit unavailable evidence -- never to a guess or a silent
+                # empty set that would read as "no dependencies".
+                identity_evidence = DEPENDENCY_IDENTITY_NOT_SUPPLIED
+            elif not isinstance(identity_evidence, DependencyIdentityEvidence):
+                raise TypeError(
+                    "dependency_identity_evidence must be a "
+                    "DependencyIdentityEvidence"
+                )
+            object.__setattr__(
+                self, "dependency_identity_evidence", identity_evidence
+            )
+        elif self.dependency_identity_evidence is not None:
+            raise ValueError(
+                "unresolved statuses must not carry dependency identity evidence"
+            )
         object.__setattr__(self, "reason_codes", tuple(sorted(set(self.reason_codes))))
         object.__setattr__(self, "details", tuple(self.details))
 
@@ -260,6 +414,93 @@ def canonical_bytes(payload: Any) -> bytes:
     return json.dumps(
         payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
+
+
+_DEPENDENCY_IDENTITY_PAYLOAD_KEYS = frozenset(
+    {
+        "status",
+        "dependency_ids",
+        "provenance",
+        "reason_codes",
+        "execution_authorized",
+        "side_effects_performed",
+    }
+)
+
+_STAGE_RESULT_PAYLOAD_KEYS = frozenset(
+    {
+        "schema_version",
+        "status",
+        "snapshot",
+        "issueplan_current_state_evidence",
+        "readiness_result",
+        "reason_codes",
+        "details",
+        "dependency_identity_evidence",
+        "execution_authorized",
+        "side_effects_performed",
+    }
+)
+
+
+def _require_exact_payload_keys(
+    payload: object, keys: frozenset[str], label: str
+) -> Mapping[str, Any]:
+    """Closed-schema key check, mirroring the AcceptanceReport transport rule."""
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"{label} must be a mapping")
+    supplied = set(payload)
+    missing = sorted(keys - supplied)
+    if missing:
+        raise ValueError(f"{label} is missing field(s): " + ", ".join(missing))
+    unsupported = sorted(supplied - keys)
+    if unsupported:
+        raise ValueError(f"{label} has unsupported field(s): " + ", ".join(unsupported))
+    return payload
+
+
+def _payload_list(value: object, label: str) -> list[Any]:
+    if not isinstance(value, list):
+        raise ValueError(f"{label} must be a list")
+    return value
+
+
+def dependency_identity_evidence_to_dict(
+    evidence: DependencyIdentityEvidence,
+) -> dict[str, Any]:
+    return {
+        "status": evidence.status.value,
+        "dependency_ids": list(evidence.dependency_ids),
+        "provenance": list(evidence.provenance),
+        "reason_codes": list(evidence.reason_codes),
+        "execution_authorized": False,
+        "side_effects_performed": False,
+    }
+
+
+def dependency_identity_evidence_from_dict(
+    payload: Mapping[str, Any],
+) -> DependencyIdentityEvidence:
+    """Reconstruct dependency-identity evidence, failing closed on any drift."""
+    label = "dependency identity evidence"
+    _require_exact_payload_keys(payload, _DEPENDENCY_IDENTITY_PAYLOAD_KEYS, label)
+    if payload["execution_authorized"] is not False:
+        raise ValueError("execution_authorized must be false")
+    if payload["side_effects_performed"] is not False:
+        raise ValueError("side_effects_performed must be false")
+    raw_status = payload["status"]
+    if not isinstance(raw_status, str) or isinstance(raw_status, bool):
+        raise ValueError(f"{label} status must be a string")
+    try:
+        status = DependencyIdentityStatus(raw_status)
+    except ValueError as error:
+        raise ValueError(f"{label} has an unsupported status") from error
+    return DependencyIdentityEvidence(
+        status=status,
+        dependency_ids=_payload_list(payload["dependency_ids"], "dependency_ids"),
+        provenance=_payload_list(payload["provenance"], "provenance"),
+        reason_codes=_payload_list(payload["reason_codes"], "reason_codes"),
+    )
 
 
 def issue_snapshot_to_dict(snapshot: IssueSnapshot) -> dict[str, Any]:
@@ -430,6 +671,13 @@ def issue_readiness_stage_result_to_dict(
         ),
         "reason_codes": list(result.reason_codes),
         "details": list(result.details),
+        "dependency_identity_evidence": (
+            None
+            if result.dependency_identity_evidence is None
+            else dependency_identity_evidence_to_dict(
+                result.dependency_identity_evidence
+            )
+        ),
         "execution_authorized": False,
         "side_effects_performed": False,
     }
@@ -438,15 +686,28 @@ def issue_readiness_stage_result_to_dict(
 def issue_readiness_stage_result_from_dict(
     payload: Mapping[str, Any],
 ) -> IssueReadinessStageResult:
+    """Reconstruct one stage result, rejecting legacy and unknown-field payloads.
+
+    Schema ``1.0`` payloads predate canonical dependency-identity evidence and
+    are rejected outright by the version check rather than being reinterpreted:
+    a legacy payload cannot prove whether identities were absent or merely
+    never captured, so accepting one would silently invent that distinction.
+    """
+    if not isinstance(payload, Mapping):
+        raise ValueError("readiness stage result must be a mapping")
     if payload.get("schema_version") != STAGE_SCHEMA_VERSION:
         raise ValueError("unsupported stage schema_version")
-    if payload.get("execution_authorized") is not False:
+    _require_exact_payload_keys(
+        payload, _STAGE_RESULT_PAYLOAD_KEYS, "readiness stage result"
+    )
+    if payload["execution_authorized"] is not False:
         raise ValueError("execution_authorized must be false")
-    if payload.get("side_effects_performed") is not False:
+    if payload["side_effects_performed"] is not False:
         raise ValueError("side_effects_performed must be false")
-    snapshot = payload.get("snapshot")
-    evidence = payload.get("issueplan_current_state_evidence")
-    readiness = payload.get("readiness_result")
+    snapshot = payload["snapshot"]
+    evidence = payload["issueplan_current_state_evidence"]
+    readiness = payload["readiness_result"]
+    identity_evidence = payload["dependency_identity_evidence"]
     return IssueReadinessStageResult(
         status=IssueReadinessStageStatus(payload["status"]),
         snapshot=None if snapshot is None else issue_snapshot_from_dict(snapshot),
@@ -458,6 +719,11 @@ def issue_readiness_stage_result_from_dict(
         readiness_result=(
             None if readiness is None else readiness_result_from_dict(readiness)
         ),
-        reason_codes=tuple(payload.get("reason_codes", [])),
-        details=tuple(payload.get("details", [])),
+        reason_codes=tuple(_payload_list(payload["reason_codes"], "reason_codes")),
+        details=tuple(_payload_list(payload["details"], "details")),
+        dependency_identity_evidence=(
+            None
+            if identity_evidence is None
+            else dependency_identity_evidence_from_dict(identity_evidence)
+        ),
     )

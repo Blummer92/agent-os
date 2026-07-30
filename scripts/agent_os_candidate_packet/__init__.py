@@ -15,8 +15,13 @@ from scripts.agent_os_issue_acceptance.acceptance_report_transport import (
 from .readiness_stage import prepare_issue_readiness
 from .source_stage import resolve_issue_snapshot
 from .stage_models import (
+    DEPENDENCY_IDENTITY_DUPLICATE_COLLAPSED_REASON,
+    DEPENDENCY_IDENTITY_NOT_SUPPLIED,
+    DEPENDENCY_IDENTITY_NOT_SUPPLIED_REASON,
     STAGE_SCHEMA_VERSION,
     DependencyEvidence,
+    DependencyIdentityEvidence,
+    DependencyIdentityStatus,
     EvidenceStatus,
     IssueReadinessStageRequest,
     IssueReadinessStageResult,
@@ -29,6 +34,8 @@ from .stage_models import (
     IssueSourceStageStatus,
     RepositoryEvidenceReader,
     ValidationEvidence,
+    dependency_identity_evidence_from_dict,
+    dependency_identity_evidence_to_dict,
     issue_readiness_stage_result_from_dict,
     issue_readiness_stage_result_to_dict,
     issue_snapshot_from_dict,
@@ -40,8 +47,13 @@ from .stage_models import (
 )
 
 __all__ = [
+    "DEPENDENCY_IDENTITY_DUPLICATE_COLLAPSED_REASON",
+    "DEPENDENCY_IDENTITY_NOT_SUPPLIED",
+    "DEPENDENCY_IDENTITY_NOT_SUPPLIED_REASON",
     "STAGE_SCHEMA_VERSION",
     "DependencyEvidence",
+    "DependencyIdentityEvidence",
+    "DependencyIdentityStatus",
     "EvidenceStatus",
     "IssueReadResult",
     "IssueReadStatus",
@@ -56,6 +68,8 @@ __all__ = [
     "ValidationEvidence",
     "acceptance_report_from_payload",
     "acceptance_report_to_payload",
+    "dependency_identity_evidence_from_dict",
+    "dependency_identity_evidence_to_dict",
     "issue_readiness_stage_result_from_dict",
     "issue_readiness_stage_result_to_dict",
     "issue_snapshot_from_dict",

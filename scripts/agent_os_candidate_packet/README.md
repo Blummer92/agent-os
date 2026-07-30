@@ -13,7 +13,9 @@ from scripts.agent_os_candidate_packet import (
     prepare_issue_readiness,
 )
 
-result = prepare_issue_readiness(request, issue_reader, repository_reader)
+result = prepare_issue_readiness(
+    request, issue_reader, repository_reader, dependency_identity_evidence=None
+)
 ```
 
 `issue_reader` and `repository_reader` are injected, read-only dependencies
@@ -58,6 +60,33 @@ Unresolved statuses must carry none of them.
 
 `execution_authorized` and `side_effects_performed` are fixed `False` on
 every result. This stage never authorizes execution and performs no writes.
+
+## Dependency identity evidence
+
+`DependencyIdentityEvidence` (#776) is this boundary's canonical record of
+*which* dependencies an issue has. Status-only `DependencyEvidence` is
+unchanged. `DependencyIdentityStatus`:
+
+- `resolved` -- a structured source supplied canonical identities;
+- `unresolved` -- dependencies declared, identities not resolved;
+- `absent` -- a structured source reported none; `unavailable` -- no source.
+
+Only `resolved` may carry `dependency_ids`, so a partial set never reads as
+complete. Identities are stripped, deduplicated, and sorted deterministically;
+a collapsed duplicate records `dependency-identity.duplicate-collapsed` to keep
+provenance truthful. Empty, whitespace-only, control-character, non-string, and
+Boolean identities are rejected; `provenance` keeps its order and multiplicity.
+
+`prepare_issue_readiness(..., dependency_identity_evidence=...)` is the only way
+identities enter a stage result; the caller must already hold them structured.
+Nothing here derives an identity from issue prose, `Depends on:` text, comments,
+PR text, labels, reason codes, evidence details, or a repository-wide guess. A
+caller supplying nothing gets `unavailable` (`dependency-identity.not-supplied`);
+resolved statuses always carry evidence, unresolved statuses never do.
+
+`STAGE_SCHEMA_VERSION` is `1.1`; schema `1.0` payloads are rejected, not
+reinterpreted, since a legacy payload cannot prove whether identities were
+absent or never captured. Both payloads are closed schemas and fail closed.
 
 ## Round trip
 
