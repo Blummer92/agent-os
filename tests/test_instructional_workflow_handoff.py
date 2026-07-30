@@ -267,36 +267,46 @@ def test_status_mapping_is_not_substring_driven() -> None:
         assert caught.value.reason_code == "handoff-invalid"
 
 
-def test_material_reason_namespace_is_syntax_only() -> None:
-    assert validate_reason_code("material-unsupported-artifact-type") == "material-unsupported-artifact-type"
-    assert validate_reason_code("material-missing-owner-evidence") == "material-missing-owner-evidence"
+DOMAIN_REASON_CODES = (
+    "material-unsupported-artifact-type",
+    "artifact-invalid-lifecycle",
+    "asset-unresolved-privacy-risk",
+    "template-unverified-permission",
+    "destination-ambiguous-identity",
+    "quality-answer-revealing-content",
+)
+
+
+@pytest.mark.parametrize("reason_code", DOMAIN_REASON_CODES)
+def test_domain_reason_namespaces_are_syntax_only(reason_code: str) -> None:
+    assert validate_reason_code(reason_code) == reason_code
 
     result = ValidationResult(
         status=ValidationStatus.INVALID,
         record=None,
-        reason_codes=("material-unsupported-artifact-type",),
+        reason_codes=(reason_code,),
     )
-    assert result.reason_codes == ("material-unsupported-artifact-type",)
+    assert result.reason_codes == (reason_code,)
     assert result.authority == AuthorityEvidence()
 
     with pytest.raises(ContractValidationError) as caught:
-        resolve_status(("material-unsupported-artifact-type",))
+        resolve_status((reason_code,))
     assert caught.value.reason_code == "handoff-invalid"
 
 
 @pytest.mark.parametrize(
     "reason_code",
     [
-        "material",
-        "material-",
-        "Material-invalid",
-        "material invalid",
-        "material-invalid\n",
-        "material-" + "x" * 120,
-        "artifact-invalid",
+        "artifact",
+        "asset-",
+        "Template-invalid",
+        "destination invalid",
+        "quality-invalid\n",
+        "artifact-" + "x" * 120,
+        "reuse-invalid",
     ],
 )
-def test_material_reason_namespace_rejects_malformed_and_unsupported_values(
+def test_domain_reason_namespaces_reject_malformed_and_unsupported_values(
     reason_code: str,
 ) -> None:
     with pytest.raises((ContractValidationError, ValueError)):
@@ -315,25 +325,31 @@ def test_material_reason_namespace_rejects_malformed_and_unsupported_values(
         "dependency-invalid",
         "routing-invalid",
         "manual-review-inspection",
+        "material-invalid",
+        "artifact-invalid",
+        "asset-invalid",
+        "template-invalid",
+        "destination-invalid",
+        "quality-invalid",
     ],
 )
-def test_existing_reason_namespaces_remain_accepted(reason_code: str) -> None:
+def test_existing_and_new_reason_namespaces_remain_accepted(reason_code: str) -> None:
     assert validate_reason_code(reason_code) == reason_code
 
 
-def test_material_reason_ordering_and_duplicate_rejection_remain_canonical() -> None:
+def test_domain_reason_ordering_and_duplicate_rejection_remain_canonical() -> None:
     result = ValidationResult(
         status=ValidationStatus.INVALID,
         record=None,
-        reason_codes=("material-zeta", "material-alpha"),
+        reason_codes=("quality-zeta", "artifact-alpha", "asset-beta"),
     )
-    assert result.reason_codes == ("material-alpha", "material-zeta")
+    assert result.reason_codes == ("artifact-alpha", "asset-beta", "quality-zeta")
 
     with pytest.raises(ContractValidationError) as caught:
         ValidationResult(
             status=ValidationStatus.INVALID,
             record=None,
-            reason_codes=("material-alpha", "material-alpha"),
+            reason_codes=("asset-alpha", "asset-alpha"),
         )
     assert caught.value.reason_code == "handoff-duplicate"
 
