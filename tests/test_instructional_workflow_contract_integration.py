@@ -146,9 +146,11 @@ def test_unsupported_executor_routes_safely() -> None:
 
 
 def test_duplicate_identity_fails_closed() -> None:
-    first = fixture("valid_artifact_manifest.json")
-    result = planner(fixture("valid_material_requirement.json"), [first, copy.deepcopy(first)])
-    assert result.status is ValidationStatus.MANUAL_REVIEW_REQUIRED
+    value = fixture("valid_artifact_manifest.json")
+    value["assets"].append(copy.deepcopy(value["assets"][0]))
+    result = manifest_module.validate_artifact_manifest(value)
+    assert result.status is ValidationStatus.INVALID
+    assert "asset-duplicate-id" in result.reason_codes
 
 
 def test_sparse_evidence_routes_safely() -> None:
