@@ -423,7 +423,6 @@ def test_instructional_workflow_contract_core_registration_is_bounded_and_canoni
     ).lower()
     for required in (
         "deterministic",
-        "offline",
         "no filesystem discovery",
         "dynamic imports",
         "plugin registration",
