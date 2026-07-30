@@ -51,7 +51,7 @@ FORBIDDEN_IMPORT_PREFIXES = (
 _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 _VERSION_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 _REASON_RE = re.compile(
-    r"^(?:source|identity|ownership|readiness|authority|handoff|dependency|routing|manual-review|material)-[a-z0-9][a-z0-9._-]{0,110}$"
+    r"^(?:source|identity|ownership|readiness|authority|handoff|dependency|routing|manual-review|material|artifact|asset|template|destination|quality)-[a-z0-9][a-z0-9._-]{0,110}$"
 )
 _DEPENDENCY_KEY_RE = re.compile(
     r"^[a-z0-9][a-z0-9_-]*(?:\.[a-z0-9][a-z0-9_-]*)+$"
