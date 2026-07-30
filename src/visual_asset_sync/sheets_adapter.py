@@ -14,6 +14,7 @@ MAX_ROWS_PER_REQUEST = 10_000
 MAX_SPREADSHEET_ID_LENGTH = 512
 MAX_WORKSHEET_NAME_LENGTH = 256
 _COLUMN_RE = re.compile(r"^[A-Z]{1,3}$")
+_READ_FAILURE = object()
 
 SOURCE_TEXT_FIELDS = (
     "drive_file_id",
@@ -30,7 +31,6 @@ SOURCE_TEXT_FIELDS = (
     "format_decision_notes",
 )
 ALLOWED_TARGET_FIELDS = frozenset((*SOURCE_TEXT_FIELDS, "excluded"))
-REQUIRED_TARGET_FIELDS = frozenset(SOURCE_TEXT_FIELDS)
 
 
 class SheetAdapterError(Exception):
@@ -122,26 +122,32 @@ class GoogleSheetsValuesReader:
         self._service = service
 
     def fetch_values(self, request: SheetReadRequest) -> list[list[Any]]:
-        try:
-            response = (
-                self._service.spreadsheets()
-                .values()
-                .get(
-                    spreadsheetId=request.spreadsheet_id,
-                    range=request.a1_range,
-                    majorDimension="ROWS",
-                    valueRenderOption="FORMATTED_VALUE",
-                    dateTimeRenderOption="FORMATTED_STRING",
-                )
-                .execute()
-            )
-        except Exception as exc:
-            raise SheetReadError("Google Sheets read failed") from exc
-
+        response = _execute_values_get(self._service, request)
+        if response is _READ_FAILURE:
+            raise SheetReadError("Google Sheets read failed")
         if type(response) is not dict:
             raise SheetReadError("Google Sheets response must be an exact dictionary")
         values = response.get("values", [])
         return _require_exact_rows(values)
+
+
+def _execute_values_get(service: Any, request: SheetReadRequest) -> Any:
+    """Execute one read while containing external exception context."""
+    try:
+        return (
+            service.spreadsheets()
+            .values()
+            .get(
+                spreadsheetId=request.spreadsheet_id,
+                range=request.a1_range,
+                majorDimension="ROWS",
+                valueRenderOption="FORMATTED_VALUE",
+                dateTimeRenderOption="FORMATTED_STRING",
+            )
+            .execute()
+        )
+    except Exception:
+        return _READ_FAILURE
 
 
 def extract_source_records(
@@ -180,8 +186,6 @@ def map_sheet_values(
     configured_headers = set(configured.values())
     if not configured_headers.issubset(index_by_header):
         raise SheetSchemaError("sheet is missing configured headers")
-    if set(headers) != configured_headers:
-        raise SheetSchemaError("sheet contains unexpected headers")
 
     records: list[SourceAssetRecord] = []
     for offset, row in enumerate(rows[1:], start=1):
@@ -191,7 +195,11 @@ def map_sheet_values(
         if len(row) > len(headers) and not _is_blank_row(row[len(headers) :]):
             raise SheetRowError("sheet row contains cells beyond the header")
 
-        raw: dict[str, Any] = {"source_row": f"{sheet_row}"}
+        raw: dict[str, Any] = {
+            "source_row": f"{sheet_row}",
+            **{field: None for field in SOURCE_TEXT_FIELDS},
+            "excluded": False,
+        }
         for target_field, source_header in configured.items():
             index = index_by_header[source_header]
             cell = row[index] if index < len(row) else None
@@ -199,8 +207,6 @@ def map_sheet_values(
                 raw[target_field] = _parse_excluded(cell)
             else:
                 raw[target_field] = _text_cell(cell, target_field)
-        if "excluded" not in configured:
-            raw["excluded"] = False
 
         try:
             records.append(normalize_source_record(raw))
@@ -213,6 +219,8 @@ def map_sheet_values(
 def _validate_header_map(header_map: dict[str, str]) -> dict[str, str]:
     if type(header_map) is not dict:
         raise TypeError("header_map must be an exact dictionary")
+    if not header_map:
+        raise SheetSchemaError("header_map must configure at least one target field")
 
     normalized: dict[str, str] = {}
     for target_field, source_header in header_map.items():
@@ -227,8 +235,6 @@ def _validate_header_map(header_map: dict[str, str]) -> dict[str, str]:
             raise SheetSchemaError("header_map values must not be empty")
         normalized[target_field] = header
 
-    if not REQUIRED_TARGET_FIELDS.issubset(normalized):
-        raise SheetSchemaError("header_map is missing required target fields")
     if len(set(normalized.values())) != len(normalized):
         raise SheetSchemaError("header_map assigns one header more than once")
     return normalized
