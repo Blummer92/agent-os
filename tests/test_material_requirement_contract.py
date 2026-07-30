@@ -7,10 +7,20 @@ from pathlib import Path
 import pytest
 
 import instructional_workflow_contracts.material_requirement as material_module
-from instructional_workflow_contracts import AuthorityEvidence, ValidationStatus, canonical_size
+from instructional_workflow_contracts import (
+    AuthorityEvidence,
+    ContractValidationError,
+    ValidationStatus,
+    canonical_json_bytes,
+    canonical_size,
+)
 from instructional_workflow_contracts.material_requirement import (
     COMPLETENESS_STATES,
     MAX_ASSETS,
+    MAX_BLOCKERS,
+    MAX_INPUT_BYTES,
+    MAX_REASONS,
+    MAX_REFERENCES,
     MAX_REQUIRED_SECTIONS,
     MAX_RESULT_BYTES,
     MAX_TEMPLATES,
@@ -20,7 +30,7 @@ from instructional_workflow_contracts.material_requirement import (
 )
 
 
-def _owned_ref(stable_id: str, owner: str) -> dict[str, object]:
+def _ref(stable_id: str, owner: str) -> dict[str, object]:
     return {
         "stable_id": stable_id,
         "owner": owner,
@@ -43,12 +53,9 @@ def valid_requirement() -> dict[str, object]:
             "created_by": "instructional-materials-coach",
             "source_fingerprint": "0" * 64,
         },
-        "artifact": {
-            "artifact_type": "worksheet",
-            "subject_metadata": "content-domain-neutral",
-        },
+        "artifact": {"artifact_type": "worksheet", "subject_metadata": "neutral"},
         "instructional": {
-            "purpose": "Provide bounded guided practice.",
+            "purpose": "Provide guided practice.",
             "audience": "students",
             "required_sections": ["directions", "practice"],
         },
@@ -59,46 +66,40 @@ def valid_requirement() -> dict[str, object]:
             "fingerprint": "b" * 64,
         },
         "learning_evidence": {
-            "learning_objective_ref": _owned_ref("objective-1", "unit-alignment-agent"),
-            "success_criteria_ref": _owned_ref("criteria-1", "unit-alignment-agent"),
-            "evidence_target_ref": _owned_ref("evidence-1", "unit-alignment-agent"),
+            "learning_objective_ref": _ref("objective-1", "unit-alignment-agent"),
+            "success_criteria_ref": _ref("criteria-1", "unit-alignment-agent"),
+            "evidence_target_ref": _ref("evidence-1", "unit-alignment-agent"),
             "alignment_owner": "unit-alignment-agent",
         },
         "modeling": {
-            "modeling_readiness_ref": _owned_ref("modeling-1", "teacher-modeling-coach"),
-            "materials_extract_ref": _owned_ref("extract-1", "teacher-modeling-coach"),
+            "modeling_readiness_ref": _ref("modeling-1", "teacher-modeling-coach"),
+            "materials_extract_ref": _ref("extract-1", "teacher-modeling-coach"),
             "modeling_owner": "teacher-modeling-coach",
         },
         "requirements": {
-            "vocabulary_references": [
-                _owned_ref("vocabulary-1", "unit-alignment-agent")
-            ],
+            "vocabulary_references": [_ref("vocabulary-1", "unit-alignment-agent")],
             "accessibility_requirements": ["keyboard-readable", "plain-language"],
             "content_requirements": ["cite-supplied-sources"],
             "classroom_use_requirements": ["teacher-review-before-use"],
         },
-        "assets": [
-            {
-                "asset_id": "asset-1",
-                "stable_ref": "asset-ref-1",
-                "access_state": "verified",
-                "permission_state": "permission-documented",
-                "provenance_state": "confirmed",
-            }
-        ],
-        "templates": [
-            {
-                "template_id": "template-1",
-                "stable_ref": "template-ref-1",
-                "access_state": "verified",
-                "permission_state": "cleared-internal",
-            }
-        ],
+        "assets": [{
+            "asset_id": "asset-1",
+            "stable_ref": "asset-ref-1",
+            "access_state": "verified",
+            "permission_state": "permission-documented",
+            "provenance_state": "confirmed",
+        }],
+        "templates": [{
+            "template_id": "template-1",
+            "stable_ref": "template-ref-1",
+            "access_state": "verified",
+            "permission_state": "cleared-internal",
+        }],
         "destination": {
             "destination_id": "destination-1",
             "destination_class": "approved-google-drive-folder",
             "verification_state": "verified",
-            "exact_reference": "drive-folder-reference-evidence",
+            "exact_reference": "approved-folder-reference-evidence",
         },
         "ai_review": {
             "ai_assisted_generation_permitted": True,
@@ -107,7 +108,7 @@ def valid_requirement() -> dict[str, object]:
             "nondiscrimination_review_required": True,
         },
         "provenance": {
-            "citation_expectations": "Cite supplied sources and retained asset evidence.",
+            "citation_expectations": "Cite supplied sources.",
             "provenance_state": "confirmed",
             "copyright_state": "permission-documented",
             "license_state": "licensed",
@@ -119,11 +120,7 @@ def valid_requirement() -> dict[str, object]:
             "raw_student_work": False,
             "permanent_learner_profile": False,
         },
-        "completeness": {
-            "state": "ready-for-planning",
-            "blockers": [],
-            "reason_codes": [],
-        },
+        "completeness": {"state": "ready-for-planning", "blockers": [], "reason_codes": []},
         "authority": {
             "execution_authorized": False,
             "external_write_authorized": False,
@@ -132,19 +129,29 @@ def valid_requirement() -> dict[str, object]:
             "side_effects_performed": False,
         },
     }
-    value["identity"]["source_fingerprint"] = (  # type: ignore[index]
-        material_requirement_source_fingerprint(value)
-    )
+    _refresh(value)
     return value
 
 
-def _refresh_fingerprint(value: dict[str, object]) -> None:
+def _refresh(value: dict[str, object]) -> None:
     value["identity"]["source_fingerprint"] = (  # type: ignore[index]
         material_requirement_source_fingerprint(value)
     )
 
 
-def test_valid_requirement_is_deterministic_immutable_and_authority_false() -> None:
+def _result(value: dict[str, object]):
+    _refresh(value)
+    return validate_material_requirement(value)
+
+
+def _set(value: dict[str, object], path: tuple[str, ...], replacement: object) -> None:
+    target: object = value
+    for key in path[:-1]:
+        target = target[key]  # type: ignore[index]
+    target[path[-1]] = replacement  # type: ignore[index]
+
+
+def test_valid_is_deterministic_immutable_bounded_and_authority_false() -> None:
     supplied = valid_requirement()
     before = copy.deepcopy(supplied)
     first = validate_material_requirement(supplied)
@@ -152,271 +159,235 @@ def test_valid_requirement_is_deterministic_immutable_and_authority_false() -> N
     assert first.status is ValidationStatus.VALID
     assert first.record is not None and second.record is not None
     assert first.record.fingerprint == second.record.fingerprint
-    assert first.authority == AuthorityEvidence()
-    assert first.record.authority == AuthorityEvidence()
-    assert first.record.to_dict()["authority"]["side_effects_performed"] is False
-    assert canonical_size(first.record.to_dict()) <= MAX_RESULT_BYTES
-    assert supplied == before
-
-
-@pytest.mark.parametrize("artifact_type", sorted(SUPPORTED_ARTIFACT_TYPES))
-def test_every_supported_artifact_type_is_valid(artifact_type: str) -> None:
-    value = valid_requirement()
-    value["artifact"]["artifact_type"] = artifact_type  # type: ignore[index]
-    _refresh_fingerprint(value)
-    assert validate_material_requirement(value).status is ValidationStatus.VALID
-
-
-def test_unsupported_artifact_type_fails_with_finite_reason() -> None:
-    value = valid_requirement()
-    value["artifact"]["artifact_type"] = "interactive-hologram"  # type: ignore[index]
-    _refresh_fingerprint(value)
-    result = validate_material_requirement(value)
-    assert result.status is ValidationStatus.INVALID
-    assert result.reason_codes == ("material-unsupported-artifact-type",)
-
-
-@pytest.mark.parametrize(
-    ("path", "replacement"),
-    [
-        (("learning_evidence", "alignment_owner"), "qa-test-agent"),
-        (("learning_evidence", "learning_objective_ref", "owner"), "qa-test-agent"),
-        (("modeling", "modeling_owner"), "unit-alignment-agent"),
-        (("modeling", "materials_extract_ref", "owner"), "unit-alignment-agent"),
-    ],
-)
-def test_missing_or_conflicting_owner_evidence_fails(
-    path: tuple[str, ...], replacement: str
-) -> None:
-    value = valid_requirement()
-    target: object = value
-    for key in path[:-1]:
-        target = target[key]  # type: ignore[index]
-    target[path[-1]] = replacement  # type: ignore[index]
-    _refresh_fingerprint(value)
-    result = validate_material_requirement(value)
-    assert "material-missing-owner-evidence" in result.reason_codes
-
-
-def test_incompatible_handoff_version_and_malformed_fingerprint_fail() -> None:
-    wrong_version = valid_requirement()
-    wrong_version["handoff_reference"]["contract_version"] = (  # type: ignore[index]
-        "future-handoff-v2"
-    )
-    _refresh_fingerprint(wrong_version)
-    assert "material-incompatible-handoff" in validate_material_requirement(
-        wrong_version
-    ).reason_codes
-
-    bad_fingerprint = valid_requirement()
-    bad_fingerprint["handoff_reference"]["fingerprint"] = "not-a-sha"  # type: ignore[index]
-    _refresh_fingerprint(bad_fingerprint)
-    assert validate_material_requirement(bad_fingerprint).status is ValidationStatus.INVALID
-
-
-def test_incompatible_source_fingerprint_fails() -> None:
-    value = valid_requirement()
-    value["identity"]["source_fingerprint"] = "f" * 64  # type: ignore[index]
-    result = validate_material_requirement(value)
-    assert result.reason_codes == ("material-incompatible-fingerprint",)
-
-
-def test_duplicate_asset_and_template_ids_fail() -> None:
-    duplicate_asset = valid_requirement()
-    duplicate_asset["assets"].append(  # type: ignore[union-attr]
-        copy.deepcopy(duplicate_asset["assets"][0])  # type: ignore[index]
-    )
-    _refresh_fingerprint(duplicate_asset)
-    assert "material-duplicate-asset" in validate_material_requirement(
-        duplicate_asset
-    ).reason_codes
-
-    duplicate_template = valid_requirement()
-    duplicate_template["templates"].append(  # type: ignore[union-attr]
-        copy.deepcopy(duplicate_template["templates"][0])  # type: ignore[index]
-    )
-    _refresh_fingerprint(duplicate_template)
-    assert "material-duplicate-template" in validate_material_requirement(
-        duplicate_template
-    ).reason_codes
-
-
-def test_unverified_asset_template_and_destination_fail_closed() -> None:
-    asset = valid_requirement()
-    asset["assets"][0]["access_state"] = "unverified"  # type: ignore[index]
-    _refresh_fingerprint(asset)
-    assert "material-unverified-asset" in validate_material_requirement(asset).reason_codes
-
-    template = valid_requirement()
-    template["templates"][0]["access_state"] = "denied"  # type: ignore[index]
-    _refresh_fingerprint(template)
-    assert "material-unverified-template" in validate_material_requirement(
-        template
-    ).reason_codes
-
-    destination = valid_requirement()
-    destination["destination"]["verification_state"] = "ambiguous"  # type: ignore[index]
-    _refresh_fingerprint(destination)
-    assert "material-ambiguous-destination" in validate_material_requirement(
-        destination
-    ).reason_codes
-
-
-def test_ai_review_provenance_permission_and_prohibited_data_failures() -> None:
-    owner = valid_requirement()
-    owner["ai_review"]["human_review_owner"] = "unregistered-owner"  # type: ignore[index]
-    _refresh_fingerprint(owner)
-    assert "material-ai-review-owner-missing" in validate_material_requirement(
-        owner
-    ).reason_codes
-
-    provenance = valid_requirement()
-    provenance["provenance"]["license_state"] = "unclear"  # type: ignore[index]
-    _refresh_fingerprint(provenance)
-    assert "material-provenance-incomplete" in validate_material_requirement(
-        provenance
-    ).reason_codes
-
-    permission = valid_requirement()
-    permission["assets"][0]["permission_state"] = "restricted"  # type: ignore[index]
-    _refresh_fingerprint(permission)
-    assert "material-permission-incomplete" in validate_material_requirement(
-        permission
-    ).reason_codes
-
-    prohibited = valid_requirement()
-    prohibited["prohibited_data"]["student_identifying_data"] = True  # type: ignore[index]
-    _refresh_fingerprint(prohibited)
-    assert "material-prohibited-data" in validate_material_requirement(
-        prohibited
-    ).reason_codes
-
-
-@pytest.mark.parametrize("state", sorted(COMPLETENESS_STATES))
-def test_completeness_is_validated_but_never_grants_authority(state: str) -> None:
-    value = valid_requirement()
-    value["completeness"]["state"] = state  # type: ignore[index]
-    value["completeness"]["blockers"] = (  # type: ignore[index]
-        ["material-incomplete"] if state == "blocked" else []
-    )
-    value["completeness"]["reason_codes"] = (  # type: ignore[index]
-        ["material-incomplete"]
-        if state in {"incomplete", "manual-review-required"}
-        else []
-    )
-    _refresh_fingerprint(value)
-    result = validate_material_requirement(value)
-    assert result.status is ValidationStatus.VALID
-    assert result.authority == AuthorityEvidence()
-    assert result.record is not None
-    assert result.record.to_dict()["authority"] == {
+    assert first.authority == first.record.authority == AuthorityEvidence()
+    assert first.record.to_dict()["authority"] == {
         "execution_authorized": False,
         "external_write_authorized": False,
         "production_authorized": False,
         "publication_authorized": False,
         "side_effects_performed": False,
     }
+    assert canonical_size(first.record.to_dict()) <= MAX_RESULT_BYTES
+    assert supplied == before
 
 
-def test_caller_cannot_set_any_authority_true() -> None:
-    for key in (
-        "execution_authorized",
-        "external_write_authorized",
-        "production_authorized",
-        "publication_authorized",
-        "side_effects_performed",
+@pytest.mark.parametrize("artifact_type", sorted(SUPPORTED_ARTIFACT_TYPES))
+def test_supported_artifact_types(artifact_type: str) -> None:
+    value = valid_requirement()
+    _set(value, ("artifact", "artifact_type"), artifact_type)
+    assert _result(value).status is ValidationStatus.VALID
+
+
+def test_unsupported_artifact_is_finite() -> None:
+    value = valid_requirement()
+    _set(value, ("artifact", "artifact_type"), "interactive-hologram")
+    assert _result(value).reason_codes == ("material-unsupported-artifact-type",)
+
+
+@pytest.mark.parametrize(
+    ("path", "replacement", "reason"),
+    [
+        (("learning_evidence", "alignment_owner"), "qa-test-agent", "material-missing-owner-evidence"),
+        (("learning_evidence", "learning_objective_ref", "owner"), "qa-test-agent", "material-missing-owner-evidence"),
+        (("learning_evidence", "success_criteria_ref", "owner"), "qa-test-agent", "material-missing-owner-evidence"),
+        (("learning_evidence", "evidence_target_ref", "owner"), "qa-test-agent", "material-missing-owner-evidence"),
+        (("modeling", "modeling_owner"), "unit-alignment-agent", "material-missing-owner-evidence"),
+        (("modeling", "materials_extract_ref", "owner"), "unit-alignment-agent", "material-missing-owner-evidence"),
+        (("handoff_reference", "contract_version"), "future-v2", "material-incompatible-handoff"),
+        (("destination", "verification_state"), "ambiguous", "material-ambiguous-destination"),
+        (("assets", "0", "access_state"), "unverified", "material-unverified-asset"),
+        (("templates", "0", "access_state"), "denied", "material-unverified-template"),
+        (("ai_review", "human_review_owner"), "unknown-owner", "material-ai-review-owner-missing"),
+        (("provenance", "license_state"), "unclear", "material-provenance-incomplete"),
+        (("assets", "0", "permission_state"), "restricted", "material-permission-incomplete"),
+        (("prohibited_data", "student_identifying_data"), True, "material-prohibited-data"),
+    ],
+)
+def test_domain_failures(path: tuple[str, ...], replacement: object, reason: str) -> None:
+    value = valid_requirement()
+    target: object = value
+    for key in path[:-1]:
+        target = target[int(key)] if key.isdigit() else target[key]  # type: ignore[index]
+    target[path[-1]] = replacement  # type: ignore[index]
+    assert reason in _result(value).reason_codes
+
+
+def test_handoff_and_source_fingerprints_fail_closed() -> None:
+    malformed = valid_requirement()
+    _set(malformed, ("handoff_reference", "fingerprint"), "not-a-sha")
+    assert _result(malformed).status is ValidationStatus.INVALID
+    incompatible = valid_requirement()
+    incompatible["identity"]["source_fingerprint"] = "f" * 64  # type: ignore[index]
+    assert validate_material_requirement(incompatible).reason_codes == (
+        "material-incompatible-fingerprint",
+    )
+
+
+def test_duplicate_asset_template_and_reference_fail() -> None:
+    for key, reason in (
+        ("assets", "material-duplicate-asset"),
+        ("templates", "material-duplicate-template"),
     ):
         value = valid_requirement()
+        value[key].append(copy.deepcopy(value[key][0]))  # type: ignore[index,union-attr]
+        assert reason in _result(value).reason_codes
+    value = valid_requirement()
+    refs = value["requirements"]["vocabulary_references"]  # type: ignore[index]
+    refs.append(copy.deepcopy(refs[0]))  # type: ignore[index,union-attr]
+    assert "material-duplicate-reference" in _result(value).reason_codes
+
+
+@pytest.mark.parametrize("state", sorted(COMPLETENESS_STATES))
+def test_completeness_never_grants_authority(state: str) -> None:
+    value = valid_requirement()
+    value["completeness"] = {
+        "state": state,
+        "blockers": ["material-incomplete"] if state == "blocked" else [],
+        "reason_codes": ["material-incomplete"]
+        if state in {"incomplete", "manual-review-required"}
+        else [],
+    }
+    result = _result(value)
+    assert result.status is ValidationStatus.VALID
+    assert result.record is not None
+    assert result.authority == result.record.authority == AuthorityEvidence()
+
+
+def test_authority_fields_cannot_be_true() -> None:
+    for key in valid_requirement()["authority"]:  # type: ignore[union-attr]
+        value = valid_requirement()
         value["authority"][key] = True  # type: ignore[index]
-        _refresh_fingerprint(value)
-        assert "authority-invalid" in validate_material_requirement(value).reason_codes
+        assert "authority-invalid" in _result(value).reason_codes
 
 
-def test_exact_asset_template_and_section_bounds_and_one_over() -> None:
+def test_exact_asset_template_and_section_bounds() -> None:
     assets = valid_requirement()
-    assets["assets"] = [
-        {
-            "asset_id": f"asset-{index}",
-            "stable_ref": f"asset-ref-{index}",
-            "access_state": "verified",
-            "permission_state": "permission-documented",
-            "provenance_state": "confirmed",
-        }
-        for index in range(MAX_ASSETS)
-    ]
-    _refresh_fingerprint(assets)
-    assert validate_material_requirement(assets).status is ValidationStatus.VALID
-    assets["assets"].append(  # type: ignore[union-attr]
-        {
-            "asset_id": "asset-over",
-            "stable_ref": "asset-ref-over",
-            "access_state": "verified",
-            "permission_state": "permission-documented",
-            "provenance_state": "confirmed",
-        }
-    )
-    _refresh_fingerprint(assets)
-    assert "handoff-oversized" in validate_material_requirement(assets).reason_codes
+    assets["assets"] = [{
+        "asset_id": f"asset-{index}", "stable_ref": f"asset-ref-{index}",
+        "access_state": "verified", "permission_state": "permission-documented",
+        "provenance_state": "confirmed",
+    } for index in range(MAX_ASSETS)]
+    assert _result(assets).status is ValidationStatus.VALID
+    assets["assets"].append({  # type: ignore[union-attr]
+        "asset_id": "asset-over", "stable_ref": "asset-ref-over",
+        "access_state": "verified", "permission_state": "permission-documented",
+        "provenance_state": "confirmed",
+    })
+    assert "handoff-oversized" in _result(assets).reason_codes
 
     templates = valid_requirement()
-    templates["templates"] = [
-        {
-            "template_id": f"template-{index}",
-            "stable_ref": f"template-ref-{index}",
-            "access_state": "verified",
-            "permission_state": "cleared-internal",
-        }
-        for index in range(MAX_TEMPLATES)
-    ]
-    _refresh_fingerprint(templates)
-    assert validate_material_requirement(templates).status is ValidationStatus.VALID
-    templates["templates"].append(  # type: ignore[union-attr]
-        {
-            "template_id": "template-over",
-            "stable_ref": "template-ref-over",
-            "access_state": "verified",
-            "permission_state": "cleared-internal",
-        }
-    )
-    _refresh_fingerprint(templates)
-    assert "handoff-oversized" in validate_material_requirement(templates).reason_codes
+    templates["templates"] = [{
+        "template_id": f"template-{index}", "stable_ref": f"template-ref-{index}",
+        "access_state": "verified", "permission_state": "cleared-internal",
+    } for index in range(MAX_TEMPLATES)]
+    assert _result(templates).status is ValidationStatus.VALID
+    templates["templates"].append({  # type: ignore[union-attr]
+        "template_id": "template-over", "stable_ref": "template-ref-over",
+        "access_state": "verified", "permission_state": "cleared-internal",
+    })
+    assert "handoff-oversized" in _result(templates).reason_codes
 
     sections = valid_requirement()
     sections["instructional"]["required_sections"] = [  # type: ignore[index]
         f"section-{index}" for index in range(MAX_REQUIRED_SECTIONS)
     ]
-    _refresh_fingerprint(sections)
-    assert validate_material_requirement(sections).status is ValidationStatus.VALID
-    sections["instructional"]["required_sections"].append(  # type: ignore[index,union-attr]
-        "section-over"
+    assert _result(sections).status is ValidationStatus.VALID
+    sections["instructional"]["required_sections"].append("over")  # type: ignore[index,union-attr]
+    assert "handoff-oversized" in _result(sections).reason_codes
+
+
+def _fit_input(target: int) -> dict[str, object]:
+    value: dict[str, object] = {"identity": {"source_fingerprint": "0" * 64}, "padding": []}
+    padding = value["padding"]
+    while len(canonical_json_bytes(value)) < target:
+        current = len(canonical_json_bytes(value))
+        prefix = f"item-{len(padding):03d}-"  # type: ignore[arg-type]
+        padding.append(prefix + "x" * max(1, min(512 - len(prefix), target - current)))  # type: ignore[union-attr]
+        overshoot = len(canonical_json_bytes(value)) - target
+        if overshoot > 0:
+            padding[-1] = padding[-1][:-overshoot]  # type: ignore[index]
+    assert len(canonical_json_bytes(value)) == target
+    return value
+
+
+def _fit_result(value: dict[str, object], target: int) -> None:
+    items = value["requirements"]["content_requirements"] = []  # type: ignore[index]
+    while canonical_size(value) < target:
+        _refresh(value)
+        current = canonical_size(value)
+        prefix = f"content-{len(items):02d}-"  # type: ignore[arg-type]
+        items.append(prefix + "x" * max(1, min(512 - len(prefix), target - current)))  # type: ignore[union-attr]
+        _refresh(value)
+        overshoot = canonical_size(value) - target
+        if overshoot > 0:
+            items[-1] = items[-1][:-overshoot]  # type: ignore[index]
+    _refresh(value)
+    assert canonical_size(value) == target
+
+
+def test_exact_input_and_result_byte_bounds_and_one_over() -> None:
+    payload = _fit_input(MAX_INPUT_BYTES)
+    assert material_requirement_source_fingerprint(payload)
+    payload["padding"][-1] += "x"  # type: ignore[index]
+    with pytest.raises(ContractValidationError) as caught:
+        material_requirement_source_fingerprint(payload)
+    assert caught.value.reason_code == "handoff-oversized"
+
+    value = valid_requirement()
+    _fit_result(value, MAX_RESULT_BYTES)
+    assert validate_material_requirement(value).status is ValidationStatus.VALID
+    value["requirements"]["content_requirements"][-1] += "x"  # type: ignore[index]
+    assert "handoff-oversized" in _result(value).reason_codes
+
+
+def test_reference_reason_and_blocker_bounds_and_one_over() -> None:
+    references = valid_requirement()
+    references["assets"] = []
+    references["templates"] = []
+    references["requirements"]["vocabulary_references"] = [  # type: ignore[index]
+        _ref(f"r-{index}", "qa-test-agent") for index in range(MAX_REFERENCES - 5)
+    ]
+    exact = _result(references)
+    assert exact.details == ("result exceeds 12 KiB",)
+    references["requirements"]["vocabulary_references"].append(  # type: ignore[index,union-attr]
+        _ref("r-over", "qa-test-agent")
     )
-    _refresh_fingerprint(sections)
-    assert "handoff-oversized" in validate_material_requirement(sections).reason_codes
+    assert _result(references).details == ("references exceed bound",)
+
+    for state, field, maximum in (
+        ("blocked", "blockers", MAX_BLOCKERS),
+        ("incomplete", "reason_codes", MAX_REASONS),
+    ):
+        value = valid_requirement()
+        value["completeness"] = {
+            "state": state,
+            "blockers": [f"material-blocker-{i}" for i in range(maximum)]
+            if field == "blockers" else [],
+            "reason_codes": [f"material-reason-{i}" for i in range(maximum)]
+            if field == "reason_codes" else [],
+        }
+        assert _result(value).status is ValidationStatus.VALID
+        value["completeness"][field].append(f"material-{field}-over")  # type: ignore[index,union-attr]
+        assert "handoff-oversized" in _result(value).reason_codes
 
 
 class HostileMapping(dict):
     def __iter__(self):
-        raise AssertionError("custom mapping iteration executed")
+        raise AssertionError("custom iteration executed")
 
 
 class HostileString(str):
     pass
 
 
-def test_hostile_custom_objects_fail_without_invoking_behavior() -> None:
+def test_hostile_and_unknown_values_fail_closed() -> None:
     assert validate_material_requirement(HostileMapping()).status is ValidationStatus.INVALID
     value = valid_requirement()
     value["identity"]["requirement_id"] = HostileString("requirement-1")  # type: ignore[index]
-    result = validate_material_requirement(value)
-    assert result.status is ValidationStatus.INVALID
-    assert "handoff-wrong-type" in result.reason_codes
-
-
-def test_unknown_fields_fail_closed() -> None:
-    value = valid_requirement()
-    value["extra"] = {}
-    _refresh_fingerprint(value)
-    assert "material-unknown-field" in validate_material_requirement(value).reason_codes
+    assert "handoff-wrong-type" in validate_material_requirement(value).reason_codes
+    unknown = valid_requirement()
+    unknown["extra"] = {}
+    assert "material-unknown-field" in _result(unknown).reason_codes
 
 
 def test_shared_cw5a_helpers_are_used(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -436,57 +407,28 @@ def test_shared_cw5a_helpers_are_used(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(material_module, "validate_and_normalize_json", normalize_spy)
     monkeypatch.setattr(material_module, "sha256_hex", fingerprint_spy)
     assert validate_material_requirement(value).status is ValidationStatus.VALID
-    assert calls["normalize"] >= 2
-    assert calls["fingerprint"] >= 2
+    assert calls["normalize"] >= 2 and calls["fingerprint"] >= 2
 
 
-def test_module_does_not_duplicate_cw5a_mechanics_or_import_side_effects() -> None:
-    path = (
-        Path(__file__).parents[1]
-        / "src"
-        / "instructional_workflow_contracts"
-        / "material_requirement.py"
-    )
+def test_no_duplicate_cw5a_mechanics_or_import_side_effects() -> None:
+    path = Path(__file__).parents[1] / "src/instructional_workflow_contracts/material_requirement.py"
     tree = ast.parse(path.read_text(encoding="utf-8"))
     imports: set[str] = set()
-    class_names: set[str] = set()
+    classes: set[str] = set()
+    functions: set[str] = set()
     calls: set[str] = set()
-    function_names: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             imports.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
             imports.add(node.module or "")
         elif isinstance(node, ast.ClassDef):
-            class_names.add(node.name)
+            classes.add(node.name)
         elif isinstance(node, ast.FunctionDef):
-            function_names.add(node.name)
+            functions.add(node.name)
         elif isinstance(node, ast.Call):
-            calls.add(
-                node.func.id
-                if isinstance(node.func, ast.Name)
-                else node.func.attr
-                if isinstance(node.func, ast.Attribute)
-                else ""
-            )
+            calls.add(node.func.id if isinstance(node.func, ast.Name) else node.func.attr if isinstance(node.func, ast.Attribute) else "")
     assert imports <= {"__future__", "typing", "common"}
-    assert class_names.isdisjoint(
-        {"AuthorityEvidence", "ValidationResult", "ValidationStatus", "ValidatedRecord"}
-    )
-    assert function_names.isdisjoint(
-        {"canonical_json_bytes", "canonical_size", "sha256_hex", "freeze_json"}
-    )
-    assert calls.isdisjoint(
-        {
-            "open",
-            "getenv",
-            "Popen",
-            "run",
-            "system",
-            "basicConfig",
-            "register",
-            "import_module",
-            "eval",
-            "exec",
-        }
-    )
+    assert classes.isdisjoint({"AuthorityEvidence", "ValidationResult", "ValidationStatus", "ValidatedRecord"})
+    assert functions.isdisjoint({"canonical_json_bytes", "canonical_size", "sha256_hex", "freeze_json"})
+    assert calls.isdisjoint({"open", "getenv", "Popen", "run", "system", "basicConfig", "register", "import_module", "eval", "exec"})
