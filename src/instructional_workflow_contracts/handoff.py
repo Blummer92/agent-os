@@ -11,10 +11,8 @@ from .common import (
     MAX_REFERENCES,
     MAX_REASONS,
     MAX_RESULT_BYTES,
-    AuthorityEvidence,
     ContractReference,
     ContractValidationError,
-    FrozenObject,
     ValidatedRecord,
     ValidationResult,
     ValidationStatus,
@@ -174,10 +172,17 @@ _STAGE_FIELDS = {
     ),
 }
 
+_SOURCE_STATUS_POLICY = {
+    "confirmed": (None, None, False, False),
+    "provisional": ("source-provisional", None, False, True),
+    "conflicting": (None, "source-conflicting", False, False),
+    "unavailable": ("source-unavailable", None, False, True),
+    "stale": ("source-stale", None, True, False),
+}
+
 
 def validate_curriculum_handoff(value: object) -> ValidationResult:
     """Validate, normalize, and reconstruct one bounded handoff envelope."""
-
     try:
         normalized = validate_and_normalize_json(value)
         if type(normalized) is not dict:
@@ -205,7 +210,7 @@ def validate_curriculum_handoff(value: object) -> ValidationResult:
         _validate_routing(routing)
         _validate_dependencies(dependencies)
         _validate_stage(stage)
-        _validate_audit(audit)
+        _validate_audit(audit, identity["record_revision"])
         _validate_ownership(source, alignment, routing, stage)
 
         normalized = _normalize_semantic_sets(normalized)
@@ -224,23 +229,29 @@ def validate_curriculum_handoff(value: object) -> ValidationResult:
             payload=freeze_json(normalized),
         )
 
-        reason_codes = tuple(routing["reason_codes"])
-        blockers = tuple(routing["blockers"])
+        reason_codes = list(routing["reason_codes"])
+        blockers = list(routing["blockers"])
         manual_review = bool(routing["manual_review_reasons"]) or dependencies[
             "human_review_required"
         ]
-        stale = source["evidence_status"] == "stale"
+        state_reason, state_blocker, stale, state_manual = _SOURCE_STATUS_POLICY[
+            source["evidence_status"]
+        ]
+        if state_reason is not None and state_reason not in reason_codes:
+            reason_codes.append(state_reason)
+        if state_blocker is not None and state_blocker not in blockers:
+            blockers.append(state_blocker)
         status = resolve_status(
-            reason_codes,
-            blockers,
+            tuple(reason_codes),
+            tuple(blockers),
             stale=stale,
-            manual_review=manual_review,
+            manual_review=manual_review or state_manual,
         )
         return ValidationResult(
             status=status,
             record=record,
-            reason_codes=reason_codes,
-            blockers=blockers,
+            reason_codes=tuple(reason_codes),
+            blockers=tuple(blockers),
             details=(),
         )
     except ContractValidationError as exc:
@@ -339,20 +350,18 @@ def _validate_source(value: dict[str, Any]) -> None:
     validate_text(value["exact_location"], "exact_location")
     if value["source_confidence"] not in {"low", "medium", "high"}:
         raise ContractValidationError("source-invalid", "source_confidence is unsupported")
-    if value["evidence_status"] not in {
-        "confirmed",
-        "provisional",
-        "conflicting",
-        "unavailable",
-        "stale",
-    }:
+    if value["evidence_status"] not in _SOURCE_STATUS_POLICY:
         raise ContractValidationError("source-invalid", "evidence_status is unsupported")
-    validate_timestamp(value["freshness_checked_at"], "freshness_checked_at")
+    freshness = validate_timestamp(value["freshness_checked_at"], "freshness_checked_at")
     if validate_algorithm(value["fingerprint_algorithm"]) != FINGERPRINT_ALGORITHM:
         raise ContractValidationError("handoff-invalid", "fingerprint algorithm is unsupported")
     validate_sha256(value["source_fingerprint"], "source_fingerprint")
     _validate_owner(value["produced_by"], "produced_by")
-    validate_timestamp(value["created_at"], "created_at")
+    created = validate_timestamp(value["created_at"], "created_at")
+    if created > freshness:
+        raise ContractValidationError(
+            "source-invalid", "freshness evidence cannot predate source creation"
+        )
 
 
 def _validate_alignment(value: dict[str, Any]) -> None:
@@ -442,9 +451,9 @@ def _validate_routing(value: dict[str, Any]) -> None:
     canonical_reason_codes(value["blockers"], MAX_BLOCKERS)
     canonical_reason_codes(value["reason_codes"], MAX_REASONS)
     manual = canonical_reason_codes(value["manual_review_reasons"], MAX_REASONS)
-    if any(not item.startswith("manual-review-") for item in manual):
+    if any(item != "manual-review-inspection" for item in manual):
         raise ContractValidationError(
-            "routing-invalid", "manual-review reasons must use the manual-review namespace"
+            "routing-invalid", "manual-review reasons must use the governed vocabulary"
         )
     canonical_strings(
         value["required_handoff_artifacts"],
@@ -544,7 +553,7 @@ def _validate_stage(value: dict[str, Any]) -> None:
         )
 
 
-def _validate_audit(value: dict[str, Any]) -> None:
+def _validate_audit(value: dict[str, Any], record_revision: int) -> None:
     _require_exact_fields(value, frozenset({"entries"}), "audit")
     entries = value["entries"]
     if type(entries) is not list:
@@ -562,7 +571,11 @@ def _validate_audit(value: dict[str, Any]) -> None:
         _validate_owner(entry["owner"], "audit owner")
         validate_stable_id(entry["action"], "audit action")
         validate_timestamp(entry["created_at"], "audit created_at")
-        validate_revision(entry["record_revision"])
+        revision = validate_revision(entry["record_revision"])
+        if revision != record_revision:
+            raise ContractValidationError(
+                "identity-invalid", "audit entry revision must match the handoff revision"
+            )
 
 
 def _validate_ownership(
@@ -668,7 +681,6 @@ __all__ = [
     "ORDER_INSENSITIVE_FIELDS",
     "TOP_LEVEL_FIELDS",
     "validate_curriculum_handoff",
-    "AuthorityEvidence",
     "ValidationResult",
     "ValidationStatus",
 ]
