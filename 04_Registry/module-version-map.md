@@ -22,11 +22,12 @@ versions change only when the module's standards or contract changes.
 | Teacher Modeling Coach | 0.2.0 |
 | Instructional Materials Coach | 0.3.0 |
 | Student Language Standard | 0.1.0 |
-| Workflow Scheduler | 0.8.0 |
+| Workflow Scheduler | 0.9.0 |
 | Workspace Automation Builder Tooling | 0.1.1 |
 | Agent Memory & Context Budget Manager | 0.1.0 |
 | IA4D-to-Scheduler Handoff Contract | 0.2.0 |
 | GitHub Issue Lifecycle Standard | 0.1.0 |
+| Agent OS Execution Service | 0.4.0 |
 
 **Dashboard Migration Verification**
 (`08_Tooling/dashboard-migration-verification/`) starts as a verification-only
@@ -42,7 +43,7 @@ JSON schemas, validation fixtures, and a local-only fixture validator. It does
 not authorize live Workspace, Notion, trigger, sharing, or production writes.
 
 **Workflow Scheduler** (`08_Tooling/workflow-scheduler/`) version reflects
-fifteen shipped milestones: Phase 1 (MVP), 2A (approval engine), 2B (retry
+sixteen shipped milestones: Phase 1 (MVP), 2A (approval engine), 2B (retry
 manager), 2C (pause/resume/cancel lifecycle), 2D (task batching), 2E
 (opt-in parallel ready-list dispatch), 3A (GitHub read-only adapter), 3B
 (Notion read-only adapter), 3C (GitHub approved comment adapter), 3D
@@ -52,7 +53,12 @@ WSC3 validates supplied WSC1, IssuePlanCore, and GEX evidence and emits only
 immutable, unapproved proposal evidence. WSC5B5 adds a backward-compatible
 bounded return contract exposing the exact retained frozen-validation result
 alongside the canonical runtime outcome without rerunning validation or adding
-execution authority. It does not create tasks, approvals, queues, leases,
+execution authority. WSC5B6 adds one additive validation-only execution mode to
+that same canonical lifecycle: it reuses the existing lease, worktree,
+cancellation, validation, containment, cleanup, release, and quarantine
+contracts, dispatches no executor and constructs no process executor, and
+leaves standard-mode behavior unchanged. It does not create tasks, approvals,
+queues, leases,
 workers, dispatch state, persistence, or external I/O. See
 `08_Tooling/workflow-scheduler/docs/ARCHITECTURE.md` for implementation details.
 
@@ -81,6 +87,10 @@ performs pure local serialization, digesting, and validation only; it does not
 establish freshness, authorize execution, or change Workflow Scheduler runtime.
 Future version changes require an approved standards or contract change under
 `00_Governance/standards-change-control.md`.
+
+**Agent OS Execution Service** (`08_Tooling/agent-os-execution-service/`) moved `0.3.0` -> `0.4.0` under PILOT-VALIDATION (#723): `command_planning.py` allowlists one additional exact command and adds one explicit exact-type pre-PR branch that binds the immutable `PrePrValidationSubject` and additive `PrePrValidationPlan` from `scripts/agent_os_remote_validation/models.py` to an `ExecutionServiceRequest` for validation-only candidate #726, without fabricating a pull request. Positive-PR validation-plan and command-plan payloads and identities are unchanged, and `COMMAND_REGISTRY_VERSION` stays `1.0` because allowlisting a command is additive. Planning stays pure-local and non-authorizing: `execution_authorized`, `merge_authorized`, and `side_effects_performed` remain false, the 30-second per-command and 300-second total validation ceilings are enforced, #726 was not executed, and Scheduler concurrency remains `0`. Workflow Scheduler remains `0.9.0`.
+
+**Agent OS Execution Service** moved `0.2.0` -> `0.3.0` under WSC6B4 (#697): `execution_composition.py` adds `compose_and_run_validation(...)`, a thin, non-authorizing boundary that revalidates request/plan/authorization/runtime identity and delegates exactly once to the canonical Workflow Scheduler validation-only entrypoint, retaining the exact `FrozenTestValidationResult`. No second runtime, command loop, or duplicate evidence model was added; `merge_authorized` stays false; execution authorization, validation, review, and merge authorization remain separate states. Workflow Scheduler remains `0.9.0`.
 
 ## Reconciliation Notes
 

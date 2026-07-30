@@ -33,6 +33,8 @@ from workflow_scheduler.execution.quarantine_review import (  # noqa: E402
     QuarantineEvidencePacket,
 )
 from workflow_scheduler.execution.single_issue_pilot import (  # noqa: E402
+    STANDARD_EXECUTION_MODE,
+    VALIDATION_ONLY_EXECUTION_MODE,
     PilotLeaseGrant,
     SingleIssuePilotInput,
     SingleIssuePilotResult,
@@ -637,3 +639,212 @@ def test_oversized_observation_does_not_introduce_quarantine_recovery() -> None:
     source = inspect.getsource(runtime_module)
     for forbidden_token in ("append_review_event", "ReviewEvent", "recovery", "rollback"):
         assert forbidden_token not in source
+
+
+# --------------------------------------------------------------------------
+# Additive validation-only execution mode (#707)
+# --------------------------------------------------------------------------
+
+
+def _validation_only_input(**changes):
+    values: dict[str, object] = {
+        "execution_mode": VALIDATION_ONLY_EXECUTION_MODE
+    }
+    values.update(changes)
+    return tsp._pilot_input(**values)
+
+
+def _validation_only_entrypoint(pilot_input=None, **adapters) -> SingleIssueRuntimeOutcome:
+    """Invoke the entrypoint with no executor argument at all."""
+    return run_single_issue_runtime_entrypoint(
+        pilot_input if pilot_input is not None else _validation_only_input(),
+        lease=adapters.pop("lease", None) or tsp.FakeLease(),
+        workspace=adapters.pop("workspace", None) or tsp.FakeWorkspace(),
+        validator=adapters.pop("validator", None) or tsp.FakeValidator(),
+        cancelled=adapters.pop("cancelled", None) or tsp.never_cancelled,
+    )
+
+
+def test_validation_only_runs_the_orchestrator_exactly_once(monkeypatch) -> None:
+    calls = []
+    original = runtime_module.run_single_issue_pilot
+
+    def counting(*args, **kwargs):
+        calls.append(kwargs.get("executor", "missing"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(runtime_module, "run_single_issue_pilot", counting)
+
+    outcome = _validation_only_entrypoint()
+
+    assert calls == [None]
+    assert outcome.observation.orchestrator_invocation_count == 1
+    assert outcome.result.status == "completed"
+
+
+def test_validation_only_observation_records_no_executor_adapter() -> None:
+    lease, workspace, validator = (
+        tsp.FakeLease(),
+        tsp.FakeWorkspace(),
+        tsp.FakeValidator(),
+    )
+    outcome = _validation_only_entrypoint(
+        lease=lease, workspace=workspace, validator=validator
+    )
+
+    assert outcome.observation.execution_mode == VALIDATION_ONLY_EXECUTION_MODE
+    assert outcome.observation.executor_adapter_type is None
+    assert outcome.observation.validator_adapter_type == "FakeValidator"
+    assert outcome.result.execution_mode == VALIDATION_ONLY_EXECUTION_MODE
+    assert outcome.result.executor_dispatch_attempts == 0
+    assert outcome.result.executor_called is False
+    assert outcome.result.executor_started is False
+    assert outcome.result.termination_confirmed is False
+    assert outcome.result.validation_attempts == 1
+    assert len(validator.calls) == 1
+    assert len(lease.release_calls) == 1
+    assert len(workspace.cleanup_calls) == 1
+
+
+def test_standard_mode_observation_still_names_its_executor() -> None:
+    outcome = _entrypoint()
+    assert outcome.observation.execution_mode == STANDARD_EXECUTION_MODE
+    assert outcome.observation.executor_adapter_type == "FakeExecutor"
+
+
+def test_validation_only_rejects_a_supplied_executor_before_any_adapter() -> None:
+    lease, workspace, executor, validator = (
+        tsp.FakeLease(),
+        tsp.FakeWorkspace(),
+        tsp.FakeExecutor(),
+        tsp.FakeValidator(),
+    )
+    with pytest.raises(RuntimeEntrypointError, match="validation-only"):
+        run_single_issue_runtime_entrypoint(
+            _validation_only_input(),
+            lease=lease,
+            workspace=workspace,
+            executor=executor,
+            validator=validator,
+            cancelled=tsp.never_cancelled,
+        )
+    assert lease.acquire_calls == []
+    assert workspace.create_calls == []
+    assert executor.calls == []
+    assert validator.calls == []
+
+
+def test_standard_mode_still_rejects_a_missing_executor() -> None:
+    lease, workspace, validator = (
+        tsp.FakeLease(),
+        tsp.FakeWorkspace(),
+        tsp.FakeValidator(),
+    )
+    with pytest.raises(RuntimeEntrypointError):
+        run_single_issue_runtime_entrypoint(
+            tsp._pilot_input(),
+            lease=lease,
+            workspace=workspace,
+            validator=validator,
+            cancelled=tsp.never_cancelled,
+        )
+    assert lease.acquire_calls == []
+    assert workspace.create_calls == []
+    assert validator.calls == []
+
+
+def test_standard_mode_still_rejects_a_non_conforming_executor() -> None:
+    lease, validator = tsp.FakeLease(), tsp.FakeValidator()
+    with pytest.raises(RuntimeEntrypointError):
+        run_single_issue_runtime_entrypoint(
+            tsp._pilot_input(),
+            lease=lease,
+            workspace=tsp.FakeWorkspace(),
+            executor=object(),  # type: ignore[arg-type]
+            validator=validator,
+            cancelled=tsp.never_cancelled,
+        )
+    assert lease.acquire_calls == []
+    assert validator.calls == []
+
+
+def test_drifted_execution_mode_fails_before_any_adapter() -> None:
+    pilot_input = tsp._pilot_input()
+    object.__setattr__(pilot_input, "execution_mode", "dry-run")
+    lease, workspace, executor, validator = (
+        tsp.FakeLease(),
+        tsp.FakeWorkspace(),
+        tsp.FakeExecutor(),
+        tsp.FakeValidator(),
+    )
+    with pytest.raises(RuntimeEntrypointError, match="execution mode"):
+        run_single_issue_runtime_entrypoint(
+            pilot_input,
+            lease=lease,
+            workspace=workspace,
+            executor=executor,
+            validator=validator,
+            cancelled=tsp.never_cancelled,
+        )
+    assert lease.acquire_calls == []
+    assert workspace.create_calls == []
+    assert executor.calls == []
+    assert validator.calls == []
+
+
+def test_validation_only_observation_is_deterministic_and_tamper_evident() -> None:
+    first = _validation_only_entrypoint()
+    second = _validation_only_entrypoint()
+    standard = _entrypoint()
+
+    assert first.observation.observation_id == second.observation.observation_id
+    assert first.observation.observation_id != standard.observation.observation_id
+    assert serialize_runtime_observation(first.observation)["execution_mode"] == (
+        VALIDATION_ONLY_EXECUTION_MODE
+    )
+    with pytest.raises(RuntimeEntrypointError):
+        serialize_runtime_observation(
+            replace(first.observation, execution_mode=STANDARD_EXECUTION_MODE)
+        )
+
+
+def test_only_validation_only_may_record_an_absent_executor_adapter() -> None:
+    outcome = _validation_only_entrypoint()
+    with pytest.raises(RuntimeEntrypointError):
+        replace(outcome.observation, execution_mode=STANDARD_EXECUTION_MODE)
+    with pytest.raises(RuntimeEntrypointError):
+        replace(outcome.observation, execution_mode="dry-run")
+
+
+def test_validation_only_quarantine_uses_the_existing_evidence_contract() -> None:
+    outcome = _validation_only_entrypoint(lease=_quarantined_lease())
+
+    assert outcome.result.status == "quarantined"
+    assert isinstance(outcome.quarantine_evidence, QuarantineEvidencePacket)
+    assert outcome.observation.quarantine_evidence_built is True
+    assert outcome.quarantine_evidence.result_id == outcome.result.result_id
+    assert outcome.result.executor_dispatch_attempts == 0
+
+
+def test_validation_only_returns_the_canonical_pilot_result_unchanged() -> None:
+    direct = tsp._run_validation_only()
+    outcome = _validation_only_entrypoint()
+
+    assert isinstance(outcome.result, SingleIssuePilotResult)
+    assert outcome.result.result_id == direct.result_id
+    with pytest.raises(FrozenInstanceError):
+        outcome.result.status = "blocked"  # type: ignore[misc]
+
+
+def test_no_second_runner_or_no_op_executor_exists_in_the_runtime() -> None:
+    source = inspect.getsource(runtime_module)
+    for forbidden_token in (
+        "NoOpExecutor",
+        "NullExecutor",
+        "RetryManager(",
+        "Queue(",
+        "Thread(",
+    ):
+        assert forbidden_token not in source
+    # Exactly one orchestrator call site serves both modes.
+    assert source.count("result = run_single_issue_pilot(") == 1

@@ -14,6 +14,13 @@ functions). This module defines no competing projection, approval, repository
 state, serializer, digest, reason-code, validation, executor framework, or
 concurrency system.
 
+One canonical lifecycle serves both supported execution modes. ``standard``
+dispatches the approved executor exactly once and is unchanged. The additive
+``validation-only`` mode reuses the same lease, workspace, cancellation,
+validation, containment, cleanup, and release steps but dispatches no executor
+at all, and records that absence truthfully instead of any synthetic process
+observation.
+
 Every terminal path is fail-closed: ``completed`` is returned only when every
 success invariant is independently proven, and any unproven termination,
 unresolved workspace, failed cleanup, or ambiguous release escalates to
@@ -103,6 +110,20 @@ PilotPhase = Literal[
 ]
 
 ExecutorOutcome = Literal["succeeded", "failed", "cancelled", "timed-out"]
+
+# The one canonical lifecycle runs in exactly one of two explicit modes.
+# ``standard`` keeps the original behavior unchanged. ``validation-only``
+# reuses every other step of the same lifecycle but dispatches no executor at
+# all: no process is started, so there is no post-executor change evidence and
+# no termination to confirm.
+RuntimeExecutionMode = Literal["standard", "validation-only"]
+
+STANDARD_EXECUTION_MODE: RuntimeExecutionMode = "standard"
+VALIDATION_ONLY_EXECUTION_MODE: RuntimeExecutionMode = "validation-only"
+
+RUNTIME_EXECUTION_MODES: frozenset[str] = frozenset(
+    {STANDARD_EXECUTION_MODE, VALIDATION_ONLY_EXECUTION_MODE}
+)
 
 CancellationCheckpoint = Literal[
     "pre-lease",
@@ -512,6 +533,7 @@ class SingleIssuePilotInput:
     """Immutable, fully supplied input for exactly one single-issue pilot."""
 
     schema_version: str = SINGLE_ISSUE_PILOT_SCHEMA_VERSION
+    execution_mode: RuntimeExecutionMode = STANDARD_EXECUTION_MODE
     issue_numbers: tuple[int, ...]
     requested_concurrency: int
     repository: str
@@ -546,6 +568,8 @@ class SingleIssuePilotInput:
     invalidation_events: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        if self.execution_mode not in RUNTIME_EXECUTION_MODES:
+            raise ValueError("unsupported single-issue pilot execution mode")
         object.__setattr__(self, "issue_numbers", tuple(self.issue_numbers))
         object.__setattr__(
             self,
@@ -586,6 +610,7 @@ class SingleIssuePilotResult:
 
     schema_name: str
     schema_version: str
+    execution_mode: RuntimeExecutionMode = STANDARD_EXECUTION_MODE
     result_id: str
     phase: PilotPhase
     primary_status: PilotStatus
@@ -732,6 +757,7 @@ def _result_payload(result: SingleIssuePilotResult) -> dict[str, object]:
     return {
         "schema_name": result.schema_name,
         "schema_version": result.schema_version,
+        "execution_mode": result.execution_mode,
         "phase": result.phase,
         "primary_status": result.primary_status,
         "status": result.status,
@@ -795,15 +821,39 @@ def _result_payload(result: SingleIssuePilotResult) -> dict[str, object]:
     }
 
 
+def _executor_completion_invariants_hold(result: SingleIssuePilotResult) -> bool:
+    """Report whether the executor evidence proves completion for this mode.
+
+    Standard completion still requires exactly one dispatched executor that
+    started and whose termination was confirmed. Validation-only completion
+    requires the opposite proof: nothing was dispatched, called, or started,
+    and no termination was confirmed. An absent executor is explicit governed
+    behavior, never a synthetic successful process observation, so a
+    validation-only result claiming termination confirmation is not complete.
+    """
+    if result.execution_mode == VALIDATION_ONLY_EXECUTION_MODE:
+        return (
+            result.executor_dispatch_attempts == 0
+            and not result.executor_called
+            and not result.executor_started
+            and not result.termination_confirmed
+        )
+    return (
+        result.executor_dispatch_attempts == 1
+        and result.executor_called
+        and result.executor_started
+        and result.termination_confirmed
+    )
+
+
 def _completed_invariants_hold(result: SingleIssuePilotResult) -> bool:
     return (
         result.primary_status == "completed"
         and len(result.issue_numbers) == 1
-        and result.executor_called
-        and result.executor_started
-        and result.executor_dispatch_attempts == 1
+        # An unsupported mode is never a proven mode, so it never completes.
+        and result.execution_mode in RUNTIME_EXECUTION_MODES
+        and _executor_completion_invariants_hold(result)
         and not result.cancellation_requested
-        and result.termination_confirmed
         and not result.possible_partial_effects
         and result.lease_acquired
         and result.lease_released
@@ -925,13 +975,24 @@ def run_single_issue_pilot(
     *,
     lease: LeaseAdapter,
     workspace: WorkspaceAdapter,
-    executor: PilotExecutor,
+    executor: PilotExecutor | None = None,
     validator: ValidationAdapter,
     cancelled: CancellationProbe,
 ) -> SingleIssuePilotResult:
-    """Run exactly one approved issue through one bounded, fail-closed lifecycle."""
+    """Run exactly one approved issue through one bounded, fail-closed lifecycle.
+
+    ``pilot_input.execution_mode`` selects the mode of that one lifecycle. An
+    absent executor is accepted only in validation-only mode, and an executor
+    supplied in validation-only mode is refused before any adapter is touched:
+    the mode never silently gains or loses execution authority.
+    """
     if not isinstance(pilot_input, SingleIssuePilotInput):
         raise TypeError("pilot_input must be SingleIssuePilotInput")
+    if pilot_input.execution_mode == VALIDATION_ONLY_EXECUTION_MODE:
+        if executor is not None:
+            raise TypeError("validation-only mode must not be given an executor")
+    elif executor is None:
+        raise TypeError("standard mode requires a pilot executor")
 
     state = _PilotState(pilot_input=pilot_input)
     lifecycle_hard_stop: BaseException | None = None
@@ -998,7 +1059,7 @@ def _drive_lifecycle(
     *,
     lease_adapter: LeaseAdapter,
     workspace_adapter: WorkspaceAdapter,
-    executor: PilotExecutor,
+    executor: PilotExecutor | None,
     validator: ValidationAdapter,
     cancelled: CancellationProbe,
 ) -> None:
@@ -1015,8 +1076,15 @@ def _drive_lifecycle(
     _inspect_workspace(state, workspace_adapter)
     _check_cancellation(state, "post-workspace", "workspace-inspection", cancelled)
     _check_cancellation(state, "pre-executor", "pre-execution-cancellation", cancelled)
-    _dispatch_executor(state, executor)
-    _check_changed_paths(state, "post-execution-path-check", state.changed_paths)
+    if state.pilot_input.execution_mode != VALIDATION_ONLY_EXECUTION_MODE:
+        # Validation-only mode branches here and only here: no executor is
+        # dispatched and no process is started, so there is also no
+        # post-executor change evidence to contain. Every other step of this
+        # one lifecycle -- lease, workspace, cancellation, validation,
+        # post-validation containment, cleanup, and release -- is shared.
+        assert executor is not None  # guaranteed by the entry-point mode check
+        _dispatch_executor(state, executor)
+        _check_changed_paths(state, "post-execution-path-check", state.changed_paths)
     _run_validation(state, validator)
     _check_changed_paths(state, "post-validation-path-check", state.changed_paths)
 
@@ -1035,6 +1103,12 @@ def _validate_input(state: _PilotState) -> None:
             "needs-decision",
             reasons=("contract.unsupported",),
             detail="pilot-input:schema-version",
+        )
+    if supplied.execution_mode not in RUNTIME_EXECUTION_MODES:
+        raise state.stop(
+            "needs-decision",
+            reasons=("contract.unsupported",),
+            detail=f"pilot-input:execution-mode:{supplied.execution_mode!r}",
         )
 
     issues = supplied.issue_numbers
@@ -2243,6 +2317,7 @@ def _build_result(state: _PilotState) -> SingleIssuePilotResult:
     fields: dict[str, object] = {
         "schema_name": SINGLE_ISSUE_PILOT_SCHEMA_NAME,
         "schema_version": SINGLE_ISSUE_PILOT_SCHEMA_VERSION,
+        "execution_mode": supplied.execution_mode,
         "result_id": "",
         "phase": state.phase,
         "primary_status": state.primary_status,

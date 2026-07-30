@@ -45,6 +45,9 @@ from workflow_scheduler.execution.in_memory_lease_adapter import (  # noqa: E402
 from workflow_scheduler.execution.posix_process_adapter import (  # noqa: E402
     PosixProcessExecutor,
 )
+from workflow_scheduler.execution.single_issue_pilot import (  # noqa: E402
+    VALIDATION_ONLY_EXECUTION_MODE,
+)
 
 MODULE_PATH = (
     SCHEDULER_SRC
@@ -662,3 +665,414 @@ def test_evidence_entrypoint_propagates_process_control_exceptions(
         _run_with_validation_evidence(tmp_path)
 
     assert raising.calls == 1
+
+
+# Additive validation-only execution mode (#707)
+
+
+def _validation_only_input(**changes):
+    values: dict[str, object] = {
+        "execution_mode": VALIDATION_ONLY_EXECUTION_MODE
+    }
+    values.update(changes)
+    return tsp._pilot_input(**values)
+
+
+def _validation_only_configuration(
+    tmp_path: Path,
+    *,
+    validation_argv: tuple[str, ...] = (sys.executable, "-c", "pass"),
+) -> ConcreteRuntimeConfiguration:
+    root = tmp_path / "repository"
+    parent = tmp_path / "worktrees"
+    root.mkdir()
+    parent.mkdir()
+    return ConcreteRuntimeConfiguration.bind(
+        _validation_only_input(),
+        repository_identity=tsp._identity(),
+        repository_root=str(root),
+        workspace_parent=str(parent),
+        required_test_commands=_commands(validation_argv),
+        execution_mode=VALIDATION_ONLY_EXECUTION_MODE,
+        executor_grace_period_seconds=0.05,
+        validation_per_command_timeout_seconds=1.0,
+        validation_total_timeout_seconds=5.0,
+    )
+
+
+class CountingBoundRunner(BoundPosixCommandRunner):
+    """Real bound runner that also records every test id it was asked to run."""
+
+    def __init__(self, configuration, *, cancelled=None) -> None:
+        super().__init__(configuration, cancelled=cancelled)
+        self.requested: list[str] = []
+
+    def run(self, request):
+        self.requested.append(request.test_id)
+        return super().run(request)
+
+
+def _run_validation_only(
+    tmp_path: Path,
+    *,
+    validation_argv: tuple[str, ...] = (sys.executable, "-c", "pass"),
+    cancelled=tsp.never_cancelled,
+    changed_paths_inspector=lambda: (),
+):
+    configuration = _validation_only_configuration(
+        tmp_path, validation_argv=validation_argv
+    )
+    git_runner = ScenarioGitRunner(configuration)
+    outcome = run_concrete_runtime_entrypoint_with_validation_evidence(
+        _validation_only_input(),
+        configuration,
+        cancelled=cancelled,
+        git_runner=git_runner,
+        changed_paths_inspector=changed_paths_inspector,
+    )
+    return outcome, configuration, git_runner
+
+
+def test_validation_only_configuration_has_no_executor_process_authority(
+    tmp_path: Path,
+) -> None:
+    configuration = _validation_only_configuration(tmp_path)
+
+    assert configuration.execution_mode == VALIDATION_ONLY_EXECUTION_MODE
+    assert configuration.executor_argv is None
+    # The workspace path stays bound: only process authority is absent, and
+    # ``verify`` recomputes that path from the packet.
+    assert configuration.executor_cwd.startswith(configuration.workspace_parent)
+    assert configuration.required_test_commands == _commands(
+        (sys.executable, "-c", "pass")
+    )
+    configuration.verify(_validation_only_input())
+
+
+def test_validation_only_binding_rejects_supplied_executor_argv(
+    tmp_path: Path,
+) -> None:
+    root, parent = tmp_path / "root", tmp_path / "parent"
+    root.mkdir()
+    parent.mkdir()
+    with pytest.raises(ConcreteRuntimeConfigurationError, match="executor process"):
+        ConcreteRuntimeConfiguration.bind(
+            _validation_only_input(),
+            repository_identity=tsp._identity(),
+            repository_root=str(root),
+            workspace_parent=str(parent),
+            executor_argv=(sys.executable, "-c", "pass"),
+            required_test_commands=_commands((sys.executable, "-c", "pass")),
+            execution_mode=VALIDATION_ONLY_EXECUTION_MODE,
+        )
+
+
+def test_standard_binding_still_requires_executor_argv(tmp_path: Path) -> None:
+    root, parent = tmp_path / "root", tmp_path / "parent"
+    root.mkdir()
+    parent.mkdir()
+    with pytest.raises(ConcreteRuntimeConfigurationError):
+        ConcreteRuntimeConfiguration.bind(
+            tsp._pilot_input(),
+            repository_identity=tsp._identity(),
+            repository_root=str(root),
+            workspace_parent=str(parent),
+            required_test_commands=_commands((sys.executable, "-c", "pass")),
+        )
+
+
+@pytest.mark.parametrize(
+    ("pilot_input_factory", "mode"),
+    [
+        (lambda: tsp._pilot_input(), VALIDATION_ONLY_EXECUTION_MODE),
+        (lambda: _validation_only_input(), "standard"),
+    ],
+)
+def test_configuration_mode_must_match_the_pilot_input_mode(
+    tmp_path: Path, pilot_input_factory, mode
+) -> None:
+    root, parent = tmp_path / "root", tmp_path / "parent"
+    root.mkdir()
+    parent.mkdir()
+    with pytest.raises(ConcreteRuntimeConfigurationError, match="execution mode"):
+        ConcreteRuntimeConfiguration.bind(
+            pilot_input_factory(),
+            repository_identity=tsp._identity(),
+            repository_root=str(root),
+            workspace_parent=str(parent),
+            executor_argv=(
+                None if mode == VALIDATION_ONLY_EXECUTION_MODE
+                else (sys.executable, "-c", "pass")
+            ),
+            required_test_commands=_commands((sys.executable, "-c", "pass")),
+            execution_mode=mode,
+        )
+
+
+def test_unsupported_configuration_mode_fails_closed(tmp_path: Path) -> None:
+    root, parent = tmp_path / "root", tmp_path / "parent"
+    root.mkdir()
+    parent.mkdir()
+    with pytest.raises(ConcreteRuntimeConfigurationError, match="execution mode"):
+        ConcreteRuntimeConfiguration.bind(
+            tsp._pilot_input(),
+            repository_identity=tsp._identity(),
+            repository_root=str(root),
+            workspace_parent=str(parent),
+            executor_argv=(sys.executable, "-c", "pass"),
+            required_test_commands=_commands((sys.executable, "-c", "pass")),
+            execution_mode="dry-run",
+        )
+
+
+def test_mode_drift_between_configuration_and_packet_fails_closed(
+    tmp_path: Path,
+) -> None:
+    standard = _configuration(tmp_path)
+    with pytest.raises(ConcreteRuntimeConfigurationError, match="execution_mode"):
+        standard.verify(_validation_only_input())
+
+
+def test_configuration_fingerprint_binds_the_execution_mode(
+    tmp_path: Path,
+) -> None:
+    standard_root = tmp_path / "standard"
+    validation_only_root = tmp_path / "validation-only"
+    standard_root.mkdir()
+    validation_only_root.mkdir()
+    standard = _configuration(standard_root)
+    validation_only = _validation_only_configuration(validation_only_root)
+
+    assert (
+        standard.configuration_fingerprint
+        != validation_only.configuration_fingerprint
+    )
+    with pytest.raises(ConcreteRuntimeConfigurationError):
+        replace(validation_only, execution_mode="standard")
+
+
+def test_validation_only_builder_constructs_no_process_executor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configuration = _validation_only_configuration(tmp_path)
+
+    def forbidden(*args, **kwargs):
+        del args, kwargs
+        raise AssertionError("PosixProcessExecutor must not be constructed")
+
+    monkeypatch.setattr(module, "PosixProcessExecutor", forbidden)
+
+    adapters = build_concrete_runtime_adapters(
+        _validation_only_input(),
+        configuration,
+        git_runner=ScenarioGitRunner(configuration),
+        changed_paths_inspector=lambda: (),
+    )
+
+    assert isinstance(adapters, ConcreteRuntimeAdapters)
+    assert adapters.executor is None
+    assert isinstance(adapters.lease, InMemoryLeaseAdapter)
+    assert isinstance(adapters.workspace, GitWorktreeAdapter)
+    assert isinstance(adapters.validator, module.FrozenTestValidationAdapter)
+
+
+def test_standard_builder_still_constructs_the_process_executor(
+    tmp_path: Path,
+) -> None:
+    configuration = _configuration(tmp_path)
+    adapters = build_concrete_runtime_adapters(
+        tsp._pilot_input(),
+        configuration,
+        git_runner=ScenarioGitRunner(configuration),
+        changed_paths_inspector=lambda: (),
+    )
+    assert isinstance(adapters.executor, PosixProcessExecutor)
+
+
+def test_validation_only_all_concrete_completed_path(tmp_path: Path) -> None:
+    outcome, _, git_runner = _run_validation_only(tmp_path)
+    result = outcome.runtime_outcome.result
+
+    assert result.status == "completed"
+    assert result.execution_mode == VALIDATION_ONLY_EXECUTION_MODE
+    assert result.executor_dispatch_attempts == 0
+    assert result.executor_called is False
+    assert result.executor_started is False
+    assert result.termination_confirmed is False
+    assert result.possible_partial_effects is False
+    assert result.validation_attempts == 1
+    assert result.validation_attempted is True
+    assert result.validation_passed is True
+    assert result.workspace_cleanup_attempts == 1
+    assert result.lease_release_attempts == 1
+    assert outcome.runtime_outcome.observation.executor_adapter_type is None
+    assert git_runner.added is False
+
+
+def test_validation_only_returns_the_exact_retained_validator_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configuration = _validation_only_configuration(tmp_path)
+    git_runner = ScenarioGitRunner(configuration)
+    adapters = build_concrete_runtime_adapters(
+        _validation_only_input(),
+        configuration,
+        git_runner=git_runner,
+        changed_paths_inspector=lambda: (),
+    )
+
+    def return_existing_adapters(*args, **kwargs):
+        del args, kwargs
+        return adapters
+
+    monkeypatch.setattr(
+        module, "build_concrete_runtime_adapters", return_existing_adapters
+    )
+
+    outcome = run_concrete_runtime_entrypoint_with_validation_evidence(
+        _validation_only_input(),
+        configuration,
+        cancelled=tsp.never_cancelled,
+    )
+
+    assert isinstance(outcome.validation_result, FrozenTestValidationResult)
+    assert outcome.validation_result is adapters.validator.last_result
+    assert outcome.validation_result.passed is True
+    assert outcome.validation_result.completed_tests == tsp.REQUIRED_TESTS
+
+
+def test_validation_only_runs_every_bound_command_at_most_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runners: list[CountingBoundRunner] = []
+
+    def build_counting_runner(configuration, cancelled=None):
+        runner = CountingBoundRunner(configuration, cancelled=cancelled)
+        runners.append(runner)
+        return runner
+
+    monkeypatch.setattr(module, "BoundPosixCommandRunner", build_counting_runner)
+
+    outcome, _, _ = _run_validation_only(tmp_path)
+
+    assert len(runners) == 1
+    requested = runners[0].requested
+    assert requested == list(tsp.REQUIRED_TESTS)
+    assert len(set(requested)) == len(requested)
+    assert outcome.runtime_outcome.result.validation_attempts == 1
+    assert len(outcome.validation_result.command_outcomes) == len(tsp.REQUIRED_TESTS)
+    assert tuple(
+        item.outcome for item in outcome.validation_result.command_outcomes
+    ) == ("succeeded",) * len(tsp.REQUIRED_TESTS)
+
+
+def test_validation_only_has_no_duplicate_command_across_roles(
+    tmp_path: Path,
+) -> None:
+    configuration = _validation_only_configuration(tmp_path)
+    test_ids = tuple(item.test_id for item in configuration.required_test_commands)
+
+    # There is no executor argv at all, so no command can be dispatched twice
+    # under two different roles, and each required test is bound exactly once.
+    assert configuration.executor_argv is None
+    assert test_ids == tuple(tsp.REQUIRED_TESTS)
+    assert len(set(test_ids)) == len(test_ids)
+
+
+def test_validation_only_failed_validation_keeps_bounded_command_evidence(
+    tmp_path: Path,
+) -> None:
+    outcome, _, git_runner = _run_validation_only(
+        tmp_path, validation_argv=(sys.executable, "-c", "import sys;sys.exit(1)")
+    )
+
+    assert outcome.runtime_outcome.result.status == "failed"
+    assert "validation.failed" in outcome.runtime_outcome.result.reason_codes
+    assert outcome.validation_result is not None
+    assert outcome.validation_result.passed is False
+    assert len(outcome.validation_result.command_outcomes) == 1
+    assert outcome.validation_result.command_outcomes[0].outcome == "failed"
+    assert outcome.runtime_outcome.result.executor_dispatch_attempts == 0
+    assert git_runner.added is False
+
+
+def test_validation_only_returns_none_when_validation_was_not_reached(
+    tmp_path: Path,
+) -> None:
+    def cancelled(checkpoint):
+        return checkpoint == "post-workspace"
+
+    outcome, _, _ = _run_validation_only(tmp_path, cancelled=cancelled)
+
+    assert outcome.runtime_outcome.result.status == "cancelled"
+    assert outcome.validation_result is None
+    assert outcome.runtime_outcome.result.executor_dispatch_attempts == 0
+
+
+def test_validation_only_preserves_pre_lease_cancellation(tmp_path: Path) -> None:
+    def cancelled(checkpoint):
+        return checkpoint == "pre-lease"
+
+    outcome, _, git_runner = _run_validation_only(tmp_path, cancelled=cancelled)
+
+    assert outcome.runtime_outcome.result.status == "cancelled"
+    assert outcome.validation_result is None
+    assert git_runner.calls == []
+
+
+def test_validation_only_ordinary_runner_failure_stays_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raising = RaisingRunner(KeyError("SECRET-src/private-token.py"))
+    monkeypatch.setattr(
+        module,
+        "BoundPosixCommandRunner",
+        lambda configuration, cancelled=None: raising,
+    )
+    outcome, _, git_runner = _run_validation_only(tmp_path)
+
+    assert outcome.runtime_outcome.result.status == "failed"
+    assert "validation.failed" in outcome.runtime_outcome.result.reason_codes
+    assert raising.calls == 1
+    assert git_runner.added is False
+
+
+@pytest.mark.parametrize("error_type", [KeyboardInterrupt, SystemExit, GeneratorExit])
+def test_validation_only_propagates_process_control_exceptions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_type: type[BaseException]
+) -> None:
+    raising = RaisingRunner(error_type("process control"))
+    monkeypatch.setattr(
+        module,
+        "BoundPosixCommandRunner",
+        lambda configuration, cancelled=None: raising,
+    )
+    with pytest.raises(error_type):
+        _run_validation_only(tmp_path)
+    assert raising.calls == 1
+
+
+def test_validation_only_quarantined_cleanup_path(tmp_path: Path) -> None:
+    configuration = _validation_only_configuration(tmp_path)
+    git_runner = ScenarioGitRunner(configuration, fail_remove=True)
+    outcome = run_concrete_runtime_entrypoint_with_validation_evidence(
+        _validation_only_input(),
+        configuration,
+        cancelled=tsp.never_cancelled,
+        git_runner=git_runner,
+        changed_paths_inspector=lambda: (),
+    )
+
+    assert outcome.runtime_outcome.result.status == "quarantined"
+    assert outcome.runtime_outcome.quarantine_evidence is not None
+    assert outcome.runtime_outcome.result.workspace_cleanup_attempts == 1
+    assert outcome.runtime_outcome.result.lease_release_attempts == 1
+    assert git_runner.added is True
+
+
+def test_no_no_op_executor_or_second_lifecycle_in_the_adapter_layer() -> None:
+    source = MODULE_PATH.read_text(encoding="utf-8")
+    for forbidden_token in ("NoOpExecutor", "NullExecutor", "RetryManager"):
+        assert forbidden_token not in source
+    assert source.count("PosixProcessExecutor(") == 1
+    assert source.count("run_single_issue_runtime_entrypoint(") == 1

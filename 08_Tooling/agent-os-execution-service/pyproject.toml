@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-os-execution-service"
-version = "0.1.0"
-description = "Immutable read-only request and inspection core for Agent OS execution service planning"
+version = "0.4.0"
+description = "Agent OS execution-service package: immutable read-only request/inspection core, deterministic positive-PR and pre-PR validation command planning, plus a governed, non-authorizing validation-execution composition boundary over the canonical Workflow Scheduler validation-only runtime"
 requires-python = ">=3.11"
 
 [tool.setuptools]
