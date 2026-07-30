@@ -8,14 +8,17 @@ from pathlib import Path
 
 import pytest
 
-from agent_os_execution_service import ExecutionAuthorizationEvidence
-from agent_os_execution_service.authorization import (
-    ExecutionAuthorizationEvidence as DirectExecutionAuthorizationEvidence,
-)
-
 ROOT = Path(__file__).resolve().parents[3]
 SRC = ROOT / "08_Tooling/agent-os-execution-service/src"
 PACKAGE = SRC / "agent_os_execution_service"
+for path in (ROOT, SRC):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
+
+from agent_os_execution_service import ExecutionAuthorizationEvidence  # noqa: E402
+from agent_os_execution_service.authorization import (  # noqa: E402
+    ExecutionAuthorizationEvidence as DirectExecutionAuthorizationEvidence,
+)
 
 
 def _evidence(**changes: object) -> ExecutionAuthorizationEvidence:
