@@ -1,0 +1,73 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+
+language: "en-US"
+early_access: false
+
+reviews:
+  # CodeRabbit's schema currently supports "chill" and "assertive" profiles.
+  # Use chill as the balanced baseline, then add focused path instructions below.
+  profile: "chill"
+  request_changes_workflow: false
+  high_level_summary: true
+  high_level_summary_in_walkthrough: true
+  review_status: true
+  review_details: true
+  collapse_walkthrough: true
+  changed_files_summary: true
+  sequence_diagrams: true
+  estimate_code_review_effort: true
+  assess_linked_issues: true
+  related_issues: true
+  commit_status: true
+  fail_commit_status: false
+  poem: false
+  in_progress_fortune: false
+
+  auto_review:
+    enabled: true
+    drafts: true
+    auto_incremental_review: true
+
+  path_instructions:
+    - path: ".github/**"
+      instructions: |
+        Prioritize correctness, least-privilege permissions, security, and governance compliance.
+        Flag unintended write permissions, secret exposure, unsafe triggers, bypasses of protected-branch controls,
+        changes to required checks without explicit authorization, and automation that can merge, approve, close,
+        deploy, or mutate governed state. Verify that workflow behavior matches repository documentation.
+        Avoid comments limited to formatting or personal style preferences.
+
+    - path: "scripts/**"
+      instructions: |
+        Prioritize functional correctness, bounded side effects, explicit error handling, deterministic behavior,
+        backward compatibility, and testability. Flag network, filesystem, subprocess, or external-system writes
+        that are not clearly authorized. Check that failures are fail-closed where governance requires it and that
+        public behavior is documented. Avoid cosmetic-only suggestions.
+
+    - path: "tests/**"
+      instructions: |
+        Verify that tests cover changed behavior, regressions, edge cases, failure paths, and governance stop
+        conditions. Flag tests that can pass without exercising the intended behavior, depend unnecessarily on
+        live services, or weaken existing assertions. Prefer fixture-first, deterministic, offline coverage.
+        Do not request extra tests solely to increase line coverage.
+
+    - path: "**/*.md"
+      instructions: |
+        Check factual accuracy, internal consistency, source-of-truth ownership, links and paths, version and
+        status claims, and alignment with the implementation. Flag duplicated policy text when a canonical shared
+        standard should be referenced instead. Confirm that implementation or review reports include files changed,
+        tests run, docs updated, unresolved blockers, handoff recommendations, and remaining risks.
+        De-emphasize grammar or formatting comments unless they affect meaning or usability.
+
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "AGENTS.md"
+      - "00_Governance/**/*.md"
+      - "01_Shared_Standards/**/*.md"
+      - "02_Agent_Overlays/**/*.md"
+      - "04_Registry/**/*.md"
+
+chat:
+  auto_reply: false
