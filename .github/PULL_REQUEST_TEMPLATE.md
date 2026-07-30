@@ -17,11 +17,14 @@ Closes #
 ## Tests run
 
 <!--
-Include commands, results, and the exact tested head SHA or
-synthetic-merge SHA. Required before merge:
+Include commands, results, and the exact tested SHA classification.
+Use the canonical runner once for aggregate validation. When the issue
+identifies focused tests, prefer passing them through --focused:
 
-bash 07_Agent_Tests/validate-repo-structure.sh
-./scripts/validate-all.sh
+./scripts/validate-all.sh --focused tests/test_example.py --focused-maxfail 1
+
+Report local branch-head SHA and pull-request synthetic-merge SHA separately.
+Do not describe pull_request GITHUB_SHA as the branch head.
 -->
 
 ## Docs updated
