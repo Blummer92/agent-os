@@ -1,36 +1,24 @@
-"""Deterministic identity resolution and per-record classification.
-
-Pure functions only. No network calls, no external writes, no mutation of
-caller-supplied collections.
-"""
+"""Deterministic identity resolution and per-record classification."""
 
 from __future__ import annotations
 
 from typing import Sequence
 
-from .models import ExistingAssetRecord, ReconciliationEntry, ReconciliationResult, SourceAssetRecord
-from .normalize import (
-    extract_drive_id_candidates,
-    extract_drive_id_from_url,
-    is_valid_drive_file_id,
+from .models import (
+    ExistingAssetRecord,
+    ReconciliationEntry,
+    ReconciliationResult,
+    SourceAssetRecord,
 )
+from .normalize import extract_drive_id_candidates, is_valid_drive_file_id
+
+_EXISTING_CONTRADICTION_REASON = "Existing record identity evidence is contradictory."
 
 
 def resolve_identity(
     record: SourceAssetRecord,
 ) -> tuple[str | None, ReconciliationResult | None]:
-    """Return (identity_key, forced_result).
-
-    forced_result is None when identity resolution succeeded and normal
-    matching should proceed; otherwise it is the terminal classification for
-    this record (MALFORMED_IDENTITY or CONTRADICTORY_RECORD).
-
-    A valid explicit ``drive_file_id`` is primary. URL fallback applies only
-    when no explicit ID is present, and only when the URL carries exactly one
-    distinct valid candidate ID. A malformed explicit ID is MALFORMED_IDENTITY
-    rather than CONTRADICTORY_RECORD: contradiction requires a valid explicit
-    ID to disagree with valid URL-derived evidence.
-    """
+    """Return the source identity and any terminal source classification."""
     url_candidates = extract_drive_id_candidates(record.drive_url)
 
     if record.drive_file_id:
@@ -43,37 +31,66 @@ def resolve_identity(
     if len(url_candidates) == 1:
         return url_candidates[0], None
 
-    # No identity at all, an unsupported or unparseable URL, or an ambiguous
-    # URL carrying more than one distinct candidate ID.
     return None, ReconciliationResult.MALFORMED_IDENTITY
 
 
-def existing_identity_key(record: ExistingAssetRecord) -> str | None:
-    """Identity key for an existing record, or None when it has no valid one.
+def existing_identity_evidence(
+    record: ExistingAssetRecord,
+) -> tuple[str | None, tuple[str, ...]]:
+    """Return (valid identity, contradictory candidate identities)."""
+    url_candidates = extract_drive_id_candidates(record.drive_url)
 
-    Mirrors source-side precedence: a valid explicit ``drive_file_id`` wins,
-    otherwise an unambiguous URL-derived ID is used. Records with no valid
-    identity are simply not indexed, so they can never be matched.
-    """
     if record.drive_file_id:
-        if is_valid_drive_file_id(record.drive_file_id):
-            return record.drive_file_id
+        if not is_valid_drive_file_id(record.drive_file_id):
+            return None, ()
+        conflicts = tuple(
+            sorted(
+                {record.drive_file_id, *url_candidates}
+                if any(
+                    candidate != record.drive_file_id
+                    for candidate in url_candidates
+                )
+                else ()
+            )
+        )
+        if conflicts:
+            return None, conflicts
+        return record.drive_file_id, ()
+
+    if len(url_candidates) == 1:
+        return url_candidates[0], ()
+    if len(url_candidates) > 1:
+        return None, tuple(sorted(url_candidates))
+    return None, ()
+
+
+def existing_identity_key(record: ExistingAssetRecord) -> str | None:
+    """Return only a non-contradictory existing-record identity."""
+    identity_key, contradictions = existing_identity_evidence(record)
+    if contradictions:
         return None
-    return extract_drive_id_from_url(record.drive_url)
+    return identity_key
 
 
 def build_plan(
     source_records: Sequence[SourceAssetRecord],
     existing_records: Sequence[ExistingAssetRecord],
 ) -> list[ReconciliationEntry]:
-    """Classify every source record. Order mirrors ``source_records``."""
+    """Classify every source record. Output order mirrors source_records."""
     existing_by_id: dict[str, list[ExistingAssetRecord]] = {}
+    contradictory_by_id: dict[str, set[str]] = {}
     for existing in existing_records:
-        key = existing_identity_key(existing)
+        key, contradictory_keys = existing_identity_evidence(existing)
         if key:
             existing_by_id.setdefault(key, []).append(existing)
+        for contradictory_key in contradictory_keys:
+            contradictory_by_id.setdefault(contradictory_key, set()).add(
+                existing.page_id
+            )
 
-    resolved: list[tuple[SourceAssetRecord, str | None, ReconciliationResult | None]] = []
+    resolved: list[
+        tuple[SourceAssetRecord, str | None, ReconciliationResult | None]
+    ] = []
     source_identity_counts: dict[str, int] = {}
     for record in source_records:
         if record.excluded:
@@ -82,7 +99,9 @@ def build_plan(
         identity_key, forced_result = resolve_identity(record)
         resolved.append((record, identity_key, forced_result))
         if forced_result is None and identity_key is not None:
-            source_identity_counts[identity_key] = source_identity_counts.get(identity_key, 0) + 1
+            source_identity_counts[identity_key] = (
+                source_identity_counts.get(identity_key, 0) + 1
+            )
 
     entries: list[ReconciliationEntry] = []
     for record, identity_key, forced_result in resolved:
@@ -98,15 +117,32 @@ def build_plan(
             continue
 
         matches = existing_by_id.get(identity_key, [])
-        is_source_duplicate = source_identity_counts.get(identity_key, 0) > 1
+        contradictory_pages = contradictory_by_id.get(identity_key, set())
+        if contradictory_pages:
+            relevant_pages = sorted(
+                contradictory_pages | {match.page_id for match in matches}
+            )
+            entries.append(
+                ReconciliationEntry(
+                    source_row=record.source_row,
+                    result=ReconciliationResult.CONTRADICTORY_RECORD,
+                    identity_key=identity_key,
+                    matched_page_ids=tuple(relevant_pages),
+                    reason=_EXISTING_CONTRADICTION_REASON,
+                )
+            )
+            continue
 
+        is_source_duplicate = source_identity_counts.get(identity_key, 0) > 1
         if len(matches) > 1 or is_source_duplicate:
             entries.append(
                 ReconciliationEntry(
                     source_row=record.source_row,
                     result=ReconciliationResult.DUPLICATE_ID,
                     identity_key=identity_key,
-                    matched_page_ids=tuple(match.page_id for match in matches),
+                    matched_page_ids=tuple(
+                        sorted(match.page_id for match in matches)
+                    ),
                     reason=_reason_for(ReconciliationResult.DUPLICATE_ID),
                 )
             )
@@ -140,10 +176,22 @@ def build_plan(
 
 def _reason_for(result: ReconciliationResult) -> str:
     return {
-        ReconciliationResult.UPDATE_EXISTING: "Exact Drive File ID matched one existing record.",
-        ReconciliationResult.CREATE_MISSING: "No existing record matches this identity.",
-        ReconciliationResult.DUPLICATE_ID: "Identity matches more than one record.",
-        ReconciliationResult.MALFORMED_IDENTITY: "No single usable Drive File ID or Drive URL identity was found.",
-        ReconciliationResult.CONTRADICTORY_RECORD: "Drive File ID and Drive URL identity disagree.",
-        ReconciliationResult.EXCLUDED: "Record is marked excluded from synchronization.",
+        ReconciliationResult.UPDATE_EXISTING: (
+            "Exact Drive File ID matched one existing record."
+        ),
+        ReconciliationResult.CREATE_MISSING: (
+            "No existing record matches this identity."
+        ),
+        ReconciliationResult.DUPLICATE_ID: (
+            "Identity matches more than one record."
+        ),
+        ReconciliationResult.MALFORMED_IDENTITY: (
+            "No single usable Drive File ID or Drive URL identity was found."
+        ),
+        ReconciliationResult.CONTRADICTORY_RECORD: (
+            "Drive File ID and Drive URL identity disagree."
+        ),
+        ReconciliationResult.EXCLUDED: (
+            "Record is marked excluded from synchronization."
+        ),
     }[result]
