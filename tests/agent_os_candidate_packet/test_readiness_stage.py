@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import pytest
+
 from scripts.agent_os_candidate_packet.readiness_stage import prepare_issue_readiness
 from scripts.agent_os_candidate_packet.stage_models import (
     DependencyEvidence,
     EvidenceStatus,
     IssueReadinessStageRequest,
+    IssueReadinessStageResult,
     IssueReadinessStageStatus,
     IssueReadResult,
     IssueReadStatus,
@@ -215,6 +218,55 @@ def test_full_acceptance_report_round_trip_no_drift() -> None:
     assert reconstructed.issueplan_current_state_evidence == result.issueplan_current_state_evidence
     assert reconstructed.execution_authorized is False
     assert reconstructed.side_effects_performed is False
+
+
+def test_resolved_result_requires_issueplan_current_state_evidence() -> None:
+    baseline = prepare_issue_readiness(_request(), _FakeIssueReader(), _FakeRepositoryReader())
+    for status in (
+        IssueReadinessStageStatus.READY,
+        IssueReadinessStageStatus.BLOCKED,
+        IssueReadinessStageStatus.NEEDS_DECISION,
+    ):
+        with pytest.raises(ValueError):
+            IssueReadinessStageResult(
+                status=status,
+                snapshot=baseline.snapshot,
+                issueplan_current_state_evidence=None,
+                readiness_result=baseline.readiness_result,
+            )
+
+
+def test_unresolved_result_must_not_carry_issueplan_current_state_evidence() -> None:
+    baseline = prepare_issue_readiness(_request(), _FakeIssueReader(), _FakeRepositoryReader())
+    for status in (
+        IssueReadinessStageStatus.SOURCE_FAILURE,
+        IssueReadinessStageStatus.INCOMPLETE_EVIDENCE,
+    ):
+        with pytest.raises(ValueError):
+            IssueReadinessStageResult(
+                status=status,
+                snapshot=None,
+                issueplan_current_state_evidence=baseline.issueplan_current_state_evidence,
+                readiness_result=None,
+            )
+
+
+def test_issueplan_evidence_survives_round_trip_and_cannot_be_dropped() -> None:
+    result = prepare_issue_readiness(_request(), _FakeIssueReader(), _FakeRepositoryReader())
+    payload = issue_readiness_stage_result_to_dict(result)
+    assert payload["issueplan_current_state_evidence"] is not None
+
+    reconstructed = issue_readiness_stage_result_from_dict(payload)
+    assert (
+        reconstructed.issueplan_current_state_evidence
+        == result.issueplan_current_state_evidence
+    )
+    assert issue_readiness_stage_result_to_dict(reconstructed) == payload
+
+    stripped = dict(payload)
+    stripped["issueplan_current_state_evidence"] = None
+    with pytest.raises(ValueError):
+        issue_readiness_stage_result_from_dict(stripped)
 
 
 def test_no_write_capable_dependency_reachable() -> None:

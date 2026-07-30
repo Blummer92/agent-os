@@ -7,6 +7,11 @@ writes and no network calls itself; ``issue_reader`` and ``repository_reader``
 are injected read-only dependencies supplied by the caller.
 """
 
+from scripts.agent_os_issue_acceptance.acceptance_report_transport import (
+    acceptance_report_from_payload,
+    acceptance_report_to_payload,
+)
+
 from .readiness_stage import prepare_issue_readiness
 from .source_stage import resolve_issue_snapshot
 from .stage_models import (
@@ -24,8 +29,6 @@ from .stage_models import (
     IssueSourceStageStatus,
     RepositoryEvidenceReader,
     ValidationEvidence,
-    acceptance_report_from_dict,
-    acceptance_report_to_dict,
     issue_readiness_stage_result_from_dict,
     issue_readiness_stage_result_to_dict,
     issue_snapshot_from_dict,
@@ -51,8 +54,8 @@ __all__ = [
     "IssueSourceStageStatus",
     "RepositoryEvidenceReader",
     "ValidationEvidence",
-    "acceptance_report_from_dict",
-    "acceptance_report_to_dict",
+    "acceptance_report_from_payload",
+    "acceptance_report_to_payload",
     "issue_readiness_stage_result_from_dict",
     "issue_readiness_stage_result_to_dict",
     "issue_snapshot_from_dict",

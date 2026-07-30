@@ -2,9 +2,12 @@
 
 This module defines only data shapes (requests, evidence wrappers, results)
 plus their canonical serialize/deserialize helpers. It does not reimplement
-scanning, IssuePlan current-state projection, or readiness evaluation --
-those live in ``scripts.agent_os_issue_acceptance`` and are reused as-is by
-``readiness_stage.py``.
+scanning, IssuePlan current-state projection, readiness evaluation, or
+AcceptanceReport serialization -- those live in
+``scripts.agent_os_issue_acceptance`` and are reused as-is. AcceptanceReport
+payloads specifically are owned by
+``acceptance_report_transport.acceptance_report_to_payload`` /
+``acceptance_report_from_payload``; this module holds no second serializer.
 """
 
 from __future__ import annotations
@@ -15,16 +18,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal, Mapping, Protocol
 
+from scripts.agent_os_issue_acceptance.acceptance_report_transport import (
+    acceptance_report_from_payload,
+    acceptance_report_to_payload,
+)
 from scripts.agent_os_issue_acceptance.issueplan_current_state import (
     IssuePlanCurrentStateEvidence,
     IssuePlanSourceSnapshot,
-)
-from scripts.agent_os_issue_acceptance.models import (
-    AcceptanceReport,
-    CheckResult,
-    LinkedIssueCandidate,
-    LinkedIssueParseResult,
-    Status,
 )
 from scripts.agent_os_issue_acceptance.readiness import ReadinessOutcome, ReadinessResult
 
@@ -225,10 +225,24 @@ class IssueReadinessStageResult:
             IssueReadinessStageStatus.BLOCKED,
             IssueReadinessStageStatus.NEEDS_DECISION,
         }
-        if resolved and (self.snapshot is None or self.readiness_result is None):
-            raise ValueError("resolved statuses require a snapshot and readiness result")
-        if not resolved and (self.snapshot is not None or self.readiness_result is not None):
-            raise ValueError("unresolved statuses must not carry snapshot/readiness evidence")
+        if resolved and (
+            self.snapshot is None
+            or self.issueplan_current_state_evidence is None
+            or self.readiness_result is None
+        ):
+            raise ValueError(
+                "resolved statuses require a snapshot, IssuePlan current-state "
+                "evidence, and a readiness result"
+            )
+        if not resolved and (
+            self.snapshot is not None
+            or self.issueplan_current_state_evidence is not None
+            or self.readiness_result is not None
+        ):
+            raise ValueError(
+                "unresolved statuses must not carry snapshot, IssuePlan "
+                "current-state, or readiness evidence"
+            )
         if resolved and self.readiness_result is not None:
             expected = _READINESS_OUTCOME_MAP[self.readiness_result.outcome]
             if expected != self.status:
@@ -276,128 +290,17 @@ def issue_snapshot_from_dict(payload: Mapping[str, Any]) -> IssueSnapshot:
     )
 
 
-def _check_result_to_dict(check: CheckResult) -> dict[str, Any]:
-    return {
-        "name": check.name,
-        "status": check.status.value,
-        "message": check.message,
-        "evidence": list(check.evidence),
-    }
-
-
-def _check_result_from_dict(payload: Mapping[str, Any]) -> CheckResult:
-    return CheckResult(
-        name=payload["name"],
-        status=Status(payload["status"]),
-        message=payload["message"],
-        evidence=list(payload.get("evidence", [])),
-    )
-
-
-def _linked_issue_candidate_to_dict(candidate: LinkedIssueCandidate) -> dict[str, Any]:
-    return {
-        "issue_number": candidate.issue_number,
-        "repository": candidate.repository,
-        "keyword": candidate.keyword,
-        "source": candidate.source,
-        "position": candidate.position,
-        "raw_target": candidate.raw_target,
-        "explicit": candidate.explicit,
-    }
-
-
-def _linked_issue_candidate_from_dict(payload: Mapping[str, Any]) -> LinkedIssueCandidate:
-    return LinkedIssueCandidate(**payload)
-
-
-def _linked_issue_result_to_dict(
-    result: LinkedIssueParseResult | None,
-) -> dict[str, Any] | None:
-    if result is None:
-        return None
-    return {
-        "status": result.status.value,
-        "issue_number": result.issue_number,
-        "repository": result.repository,
-        "explicit_candidates": [
-            _linked_issue_candidate_to_dict(item) for item in result.explicit_candidates
-        ],
-        "bare_references": [
-            _linked_issue_candidate_to_dict(item) for item in result.bare_references
-        ],
-        "reasons": list(result.reasons),
-    }
-
-
-def _linked_issue_result_from_dict(
-    payload: Mapping[str, Any] | None,
-) -> LinkedIssueParseResult | None:
-    if payload is None:
-        return None
-    from scripts.agent_os_issue_acceptance.models import LinkedIssueParseStatus
-
-    return LinkedIssueParseResult(
-        status=LinkedIssueParseStatus(payload["status"]),
-        issue_number=payload.get("issue_number"),
-        repository=payload.get("repository"),
-        explicit_candidates=[
-            _linked_issue_candidate_from_dict(item)
-            for item in payload.get("explicit_candidates", [])
-        ],
-        bare_references=[
-            _linked_issue_candidate_from_dict(item)
-            for item in payload.get("bare_references", [])
-        ],
-        reasons=list(payload.get("reasons", [])),
-    )
-
-
-def acceptance_report_to_dict(report: AcceptanceReport) -> dict[str, Any]:
-    return {
-        "linked_issue": report.linked_issue,
-        "overall_status": report.overall_status.value,
-        "checks": [_check_result_to_dict(item) for item in report.checks],
-        "linked_issue_result": _linked_issue_result_to_dict(report.linked_issue_result),
-        "manual_review_items": list(report.manual_review_items),
-        "evidence": list(report.evidence),
-        "blockers": list(report.blockers),
-        "remaining_risks": list(report.remaining_risks),
-        "informational_checks": [
-            _check_result_to_dict(item) for item in report.informational_checks
-        ],
-    }
-
-
-def acceptance_report_from_dict(payload: Mapping[str, Any]) -> AcceptanceReport:
-    return AcceptanceReport(
-        linked_issue=payload["linked_issue"],
-        overall_status=Status(payload["overall_status"]),
-        checks=[_check_result_from_dict(item) for item in payload["checks"]],
-        linked_issue_result=_linked_issue_result_from_dict(
-            payload.get("linked_issue_result")
-        ),
-        manual_review_items=list(payload.get("manual_review_items", [])),
-        evidence=list(payload.get("evidence", [])),
-        blockers=list(payload.get("blockers", [])),
-        remaining_risks=list(payload.get("remaining_risks", [])),
-        informational_checks=tuple(
-            _check_result_from_dict(item)
-            for item in payload.get("informational_checks", [])
-        ),
-    )
-
-
 def readiness_result_to_dict(result: ReadinessResult) -> dict[str, Any]:
     return {
         "outcome": result.outcome.value,
-        "report": acceptance_report_to_dict(result.report),
+        "report": acceptance_report_to_payload(result.report),
     }
 
 
 def readiness_result_from_dict(payload: Mapping[str, Any]) -> ReadinessResult:
     return ReadinessResult(
         outcome=ReadinessOutcome(payload["outcome"]),
-        report=acceptance_report_from_dict(payload["report"]),
+        report=acceptance_report_from_payload(payload["report"]),
     )
 
 

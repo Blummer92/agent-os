@@ -1,8 +1,12 @@
 import hashlib
 import json
 
+import pytest
+
 from scripts.agent_os_issue_acceptance.acceptance_report_transport import (
     AcceptanceReportTransport,
+    acceptance_report_from_payload,
+    acceptance_report_to_payload,
     build_acceptance_report_transport,
     canonical_json_bytes,
 )
@@ -10,7 +14,14 @@ from scripts.agent_os_issue_acceptance.issueplan_current_state import (
     build_issueplan_current_state_evidence,
 )
 from scripts.agent_os_issue_acceptance.issueplan_scanner import SourceEnvelope, scan_issueplan_source
-from scripts.agent_os_issue_acceptance.models import AcceptanceReport, Status
+from scripts.agent_os_issue_acceptance.models import (
+    AcceptanceReport,
+    CheckResult,
+    LinkedIssueCandidate,
+    LinkedIssueParseResult,
+    LinkedIssueParseStatus,
+    Status,
+)
 
 
 def _build_expected_evidence_id(
@@ -256,3 +267,153 @@ def test_transport_envelope_is_bounded_and_canonical():
     payload = transport.to_envelope()
     assert len(canonical_json_bytes(payload)) <= 64 * 1024
     assert json.loads(json.dumps(payload, sort_keys=True, separators=(",", ":"))) == payload
+
+
+# --------------------------------------------------------------------------
+# Canonical AcceptanceReport payload ownership (#750 review finding 3).
+# This module is the single owner of AcceptanceReport payload shape; the
+# candidate-packet stage reuses these helpers instead of a second serializer.
+# --------------------------------------------------------------------------
+
+
+def _build_rich_report() -> AcceptanceReport:
+    candidate = LinkedIssueCandidate(
+        issue_number=750,
+        repository="Blummer92/agent-os",
+        keyword="Refs",
+        source="pr_body",
+        position=12,
+        raw_target="Blummer92/agent-os#750",
+        explicit=True,
+    )
+    bare = LinkedIssueCandidate(
+        issue_number=749,
+        repository=None,
+        keyword=None,
+        source="issue_body",
+        position=3,
+        raw_target="#749",
+        explicit=False,
+    )
+    return AcceptanceReport(
+        linked_issue=750,
+        overall_status=Status.MANUAL_REVIEW,
+        checks=[
+            CheckResult("scope", Status.PASS, "allowlist respected", ["files=7"]),
+            CheckResult("docs", Status.MANUAL_REVIEW, "needs a human", []),
+        ],
+        linked_issue_result=LinkedIssueParseResult(
+            status=LinkedIssueParseStatus.RESOLVED,
+            issue_number=750,
+            repository="Blummer92/agent-os",
+            explicit_candidates=[candidate],
+            bare_references=[bare],
+            reasons=["explicit reference found"],
+        ),
+        manual_review_items=["confirm doc impact"],
+        evidence=["19 focused tests passed"],
+        blockers=["awaiting review"],
+        remaining_risks=["baseline aggregate failure"],
+        informational_checks=(
+            CheckResult("reuse", Status.PASS, "canonical reuse verified", ["reuse=ok"]),
+        ),
+    )
+
+
+def test_acceptance_report_payload_round_trip_preserves_every_field():
+    report = _build_rich_report()
+    payload = acceptance_report_to_payload(report)
+    reconstructed = acceptance_report_from_payload(payload)
+
+    assert reconstructed == report
+    assert acceptance_report_to_payload(reconstructed) == payload
+    assert isinstance(reconstructed.informational_checks, tuple)
+    assert canonical_json_bytes(
+        acceptance_report_to_payload(reconstructed)
+    ) == canonical_json_bytes(payload)
+
+
+def test_acceptance_report_payload_round_trip_handles_minimal_report():
+    report = AcceptanceReport(linked_issue=None, overall_status=Status.PASS, checks=[])
+    payload = acceptance_report_to_payload(report)
+    assert acceptance_report_from_payload(payload) == report
+
+
+def test_acceptance_report_from_payload_rejects_unsupported_field():
+    payload = acceptance_report_to_payload(_build_rich_report())
+    payload["unexpected"] = "value"
+    with pytest.raises(ValueError, match="unsupported field"):
+        acceptance_report_from_payload(payload)
+
+
+def test_acceptance_report_from_payload_rejects_missing_field():
+    payload = acceptance_report_to_payload(_build_rich_report())
+    del payload["blockers"]
+    with pytest.raises(ValueError, match="missing field"):
+        acceptance_report_from_payload(payload)
+
+
+def test_acceptance_report_from_payload_rejects_boolean_linked_issue():
+    payload = acceptance_report_to_payload(_build_rich_report())
+    payload["linked_issue"] = True
+    with pytest.raises(ValueError, match="linked_issue must be an int"):
+        acceptance_report_from_payload(payload)
+
+
+def test_acceptance_report_from_payload_rejects_unsupported_status():
+    payload = acceptance_report_to_payload(_build_rich_report())
+    payload["overall_status"] = "not-a-status"
+    with pytest.raises(ValueError, match="unsupported value"):
+        acceptance_report_from_payload(payload)
+
+
+def test_acceptance_report_from_payload_rejects_malformed_collections():
+    payload = acceptance_report_to_payload(_build_rich_report())
+    payload["checks"] = {"name": "scope"}
+    with pytest.raises(ValueError, match="checks must be a list"):
+        acceptance_report_from_payload(payload)
+
+    payload = acceptance_report_to_payload(_build_rich_report())
+    payload["evidence"] = ["ok", 5]
+    with pytest.raises(ValueError, match="only strings"):
+        acceptance_report_from_payload(payload)
+
+    payload = acceptance_report_to_payload(_build_rich_report())
+    payload["checks"][0]["status"] = "bogus"
+    with pytest.raises(ValueError, match="unsupported value"):
+        acceptance_report_from_payload(payload)
+
+
+def test_acceptance_report_from_payload_rejects_non_mapping():
+    with pytest.raises(ValueError, match="must be a mapping"):
+        acceptance_report_from_payload(["not", "a", "mapping"])
+
+
+def test_acceptance_report_from_payload_rejects_malformed_candidate():
+    payload = acceptance_report_to_payload(_build_rich_report())
+    del payload["linked_issue_result"]["explicit_candidates"][0]["raw_target"]
+    with pytest.raises(ValueError, match="missing field"):
+        acceptance_report_from_payload(payload)
+
+
+def test_transport_report_sha256_uses_the_canonical_payload():
+    report = _build_rich_report()
+    transport = build_acceptance_report_transport(
+        report=report,
+        repository="Blummer92/agent-os",
+        issue_number=750,
+        issue_body="Issue body",
+        issue_body_sha256=hashlib.sha256(b"Issue body").hexdigest(),
+        pr_number=765,
+        pr_head_sha="pr-head-sha",
+        evaluator_sha="evaluator-sha",
+        workflow_run_id="12345",
+        workflow_run_attempt=1,
+        observed_at="2026-07-23T00:00:00Z",
+        fresh_issue_body="Issue body",
+        fresh_pr_head_sha="pr-head-sha",
+    )
+    expected = hashlib.sha256(
+        canonical_json_bytes(acceptance_report_to_payload(report))
+    ).hexdigest()
+    assert transport.report_sha256 == expected

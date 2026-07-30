@@ -45,6 +45,10 @@ def resolve_issue_snapshot(
     """
     if issue_reader is None:
         raise TypeError("issue_reader is required")
+    # A bool is an int subclass, so `True == 1` would silently accept issue 1
+    # for a requested issue of `True`. Reject it before any comparison.
+    if isinstance(issue_number, bool) or not isinstance(issue_number, int):
+        raise TypeError("issue_number must be an int")
 
     try:
         result = issue_reader.read_issue(repository, issue_number)
@@ -88,6 +92,28 @@ def resolve_issue_snapshot(
             snapshot=None,
             reason_codes=("source.missing-fields",),
             details=tuple(f"missing={name}" for name in missing),
+        )
+
+    # The source revision below is computed from the returned item. If the
+    # reader returned a different issue than the one requested, that revision
+    # would be bound to an identity the public snapshot does not describe, so
+    # verify exact issue-number equality first and fail closed on mismatch.
+    returned_number = item["number"]
+    if isinstance(returned_number, bool) or not isinstance(returned_number, int):
+        return IssueSourceStageResult(
+            status=IssueSourceStageStatus.INCOMPLETE_EVIDENCE,
+            snapshot=None,
+            reason_codes=("source.malformed-issue-number",),
+        )
+    if returned_number != issue_number:
+        return IssueSourceStageResult(
+            status=IssueSourceStageStatus.SOURCE_FAILURE,
+            snapshot=None,
+            reason_codes=("source.issue-number-mismatch",),
+            details=(
+                f"requested={issue_number}",
+                f"returned={returned_number}",
+            ),
         )
 
     try:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from scripts.agent_os_candidate_packet.source_stage import resolve_issue_snapshot
 from scripts.agent_os_candidate_packet.stage_models import (
     IssueReadResult,
@@ -125,6 +127,73 @@ def test_source_movement_changes_source_revision() -> None:
     assert result_a.snapshot is not None
     assert result_b.snapshot is not None
     assert result_a.snapshot.source_revision != result_b.snapshot.source_revision
+
+
+def test_matching_issue_number_resolves() -> None:
+    reader = _FakeReader(IssueReadResult(status=IssueReadStatus.OK, item=dict(_BASE_ITEM)))
+    result = resolve_issue_snapshot(
+        "blummer92/agent-os", 750, reader, retrieved_at="2026-07-30T00:00:00Z"
+    )
+    assert result.status == IssueSourceStageStatus.RESOLVED
+    assert result.snapshot is not None
+    assert result.snapshot.issue_number == 750
+    assert result.reason_codes == ()
+
+
+def test_mismatched_issue_number_fails_closed_without_snapshot() -> None:
+    wrong_item = dict(_BASE_ITEM)
+    wrong_item["number"] = 751
+    reader = _FakeReader(IssueReadResult(status=IssueReadStatus.OK, item=wrong_item))
+    result = resolve_issue_snapshot(
+        "blummer92/agent-os", 750, reader, retrieved_at="2026-07-30T00:00:00Z"
+    )
+    assert result.status == IssueSourceStageStatus.SOURCE_FAILURE
+    assert result.snapshot is None
+    assert "source.issue-number-mismatch" in result.reason_codes
+    assert "requested=750" in result.details
+    assert "returned=751" in result.details
+    assert result.execution_authorized is False
+    assert result.side_effects_performed is False
+
+
+def test_boolean_issue_number_is_rejected_before_comparison() -> None:
+    # `True == 1` in Python, so a boolean request must never be able to match
+    # issue 1 by coercion.
+    one_item = dict(_BASE_ITEM)
+    one_item["number"] = 1
+    reader = _FakeReader(IssueReadResult(status=IssueReadStatus.OK, item=one_item))
+    with pytest.raises(TypeError):
+        resolve_issue_snapshot(
+            "blummer92/agent-os", True, reader, retrieved_at="2026-07-30T00:00:00Z"
+        )
+
+
+def test_malformed_returned_issue_number_fails_closed() -> None:
+    for malformed in ("750", 750.0, None, True):
+        malformed_item = dict(_BASE_ITEM)
+        malformed_item["number"] = malformed
+        reader = _FakeReader(
+            IssueReadResult(status=IssueReadStatus.OK, item=malformed_item)
+        )
+        result = resolve_issue_snapshot(
+            "blummer92/agent-os", 750, reader, retrieved_at="2026-07-30T00:00:00Z"
+        )
+        assert result.status == IssueSourceStageStatus.INCOMPLETE_EVIDENCE, malformed
+        assert result.snapshot is None
+        assert "source.malformed-issue-number" in result.reason_codes
+
+
+def test_mismatch_is_detected_before_source_revision_binding() -> None:
+    # A mismatched issue must not produce a revision bound to the wrong
+    # identity, even when the returned item is otherwise well formed.
+    wrong_item = dict(_BASE_ITEM)
+    wrong_item["number"] = 999
+    reader = _FakeReader(IssueReadResult(status=IssueReadStatus.OK, item=wrong_item))
+    result = resolve_issue_snapshot(
+        "blummer92/agent-os", 750, reader, retrieved_at="2026-07-30T00:00:00Z"
+    )
+    assert result.snapshot is None
+    assert result.reason_codes == ("source.issue-number-mismatch",)
 
 
 def test_issue_reader_protocol_has_no_write_method() -> None:
