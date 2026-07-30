@@ -19,6 +19,7 @@ MAX_REASONS = 32
 MAX_REFERENCES = 64
 MAX_NESTING_DEPTH = 8
 MAX_DETAIL_LENGTH = 500
+MAX_JSON_ITEMS = 4096
 
 FINGERPRINT_ALGORITHM = "sha256"
 SUPPORTED_STATUSES = (
@@ -57,7 +58,7 @@ _DEPENDENCY_KEY_RE = re.compile(
 )
 _ALGORITHM_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,31}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+_TIMESTAMP_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$")
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 _UNSAFE_TEXT_RE = re.compile(
     r"(?:<script\b|javascript:|\$\{\{|\{\{\s*secrets\.|__import__\s*\(|(?:eval|exec)\s*\(|os\.system\s*\()",
@@ -66,6 +67,37 @@ _UNSAFE_TEXT_RE = re.compile(
 _SECRET_KEY_RE = re.compile(
     r"(?:^|[_-])(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|passwd|secret|client[_-]?secret|private[_-]?key|credential|oauth)(?:$|[_-])",
     re.IGNORECASE,
+)
+
+_INVALID_REASON_CODES = frozenset(
+    {
+        "authority-invalid",
+        "authority-secret-field",
+        "dependency-invalid",
+        "dependency-wrong-type",
+        "handoff-duplicate",
+        "handoff-invalid",
+        "handoff-oversized",
+        "handoff-unknown-field",
+        "handoff-version-unsupported",
+        "handoff-wrong-type",
+        "identity-duplicate",
+        "identity-invalid",
+        "ownership-owner-conflict",
+        "routing-invalid",
+        "source-invalid",
+    }
+)
+_BLOCKED_REASON_CODES = frozenset({"routing-blocked-dependency", "source-conflicting"})
+_STALE_REASON_CODES = frozenset({"source-stale"})
+_MANUAL_REVIEW_REASON_CODES = frozenset(
+    {"manual-review-inspection", "source-provisional", "source-unavailable"}
+)
+_KNOWN_REASON_CODES = (
+    _INVALID_REASON_CODES
+    | _BLOCKED_REASON_CODES
+    | _STALE_REASON_CODES
+    | _MANUAL_REVIEW_REASON_CODES
 )
 
 
@@ -127,7 +159,7 @@ class ValidatedRecord:
     fingerprint_algorithm: str
     fingerprint: str
     payload: FrozenObject
-    authority: AuthorityEvidence = field(default_factory=AuthorityEvidence)
+    authority: AuthorityEvidence = field(default_factory=AuthorityEvidence, init=False)
 
     def __post_init__(self) -> None:
         validate_version(self.contract_version)
@@ -137,6 +169,8 @@ class ValidatedRecord:
         validate_sha256(self.fingerprint, "record fingerprint")
         if type(self.payload) is not FrozenObject:
             raise TypeError("payload must be FrozenObject")
+        if type(self.authority) is not AuthorityEvidence:
+            raise TypeError("authority must be internal AuthorityEvidence")
         if canonical_size(self.payload) > MAX_RESULT_BYTES:
             raise ValueError("validated record exceeds result-size bound")
 
@@ -154,23 +188,44 @@ class ValidationResult:
     reason_codes: tuple[str, ...] = ()
     blockers: tuple[str, ...] = ()
     details: tuple[str, ...] = ()
-    authority: AuthorityEvidence = field(default_factory=AuthorityEvidence)
+    authority: AuthorityEvidence = field(default_factory=AuthorityEvidence, init=False)
 
     def __post_init__(self) -> None:
         if type(self.status) is not ValidationStatus:
             raise TypeError("status must be ValidationStatus")
+        if self.record is not None and type(self.record) is not ValidatedRecord:
+            raise TypeError("record must be ValidatedRecord or None")
+        if type(self.reason_codes) is not tuple:
+            raise TypeError("reason_codes must be an exact tuple")
+        if type(self.blockers) is not tuple:
+            raise TypeError("blockers must be an exact tuple")
+        if type(self.details) is not tuple:
+            raise TypeError("details must be an exact tuple")
+        if len(self.details) > MAX_REASONS:
+            raise ValueError("details exceed the collection bound")
         reasons = canonical_reason_codes(self.reason_codes, MAX_REASONS)
         blockers = canonical_reason_codes(self.blockers, MAX_BLOCKERS)
-        details = tuple(sanitize_detail(item) for item in self.details[:MAX_REASONS])
+        details = tuple(sanitize_detail(item) for item in self.details)
         object.__setattr__(self, "reason_codes", reasons)
         object.__setattr__(self, "blockers", blockers)
         object.__setattr__(self, "details", details)
-        if self.status is ValidationStatus.INVALID and self.record is not None:
-            raise ValueError("invalid results cannot include a validated record")
-        if self.status is ValidationStatus.VALID and (reasons or blockers):
-            raise ValueError("valid results cannot include reasons or blockers")
-        if self.status is ValidationStatus.BLOCKED and not blockers:
-            raise ValueError("blocked results require blockers")
+
+        if self.status is ValidationStatus.VALID:
+            if self.record is None:
+                raise ValueError("valid results require a validated record")
+            if reasons or blockers:
+                raise ValueError("valid results cannot include reasons or blockers")
+        elif self.status is ValidationStatus.INVALID:
+            if self.record is not None:
+                raise ValueError("invalid results cannot include a validated record")
+            if not reasons:
+                raise ValueError("invalid results require a reason code")
+        else:
+            if self.record is None:
+                raise ValueError("validated non-valid results require a record")
+            if self.status is ValidationStatus.BLOCKED and not blockers:
+                raise ValueError("blocked results require blockers")
+
         result_payload = {
             "status": self.status.value,
             "reason_codes": list(reasons),
@@ -246,10 +301,21 @@ def validate_sha256(value: object, name: str) -> str:
     return text
 
 
+def _is_leap_year(year: int) -> bool:
+    return year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+
+
 def validate_timestamp(value: object, name: str) -> str:
     text = validate_text(value, name, max_length=20)
-    if not _TIMESTAMP_RE.fullmatch(text):
+    match = _TIMESTAMP_RE.fullmatch(text)
+    if match is None:
         raise ContractValidationError("handoff-invalid", f"{name} must use YYYY-MM-DDTHH:MM:SSZ")
+    year, month, day, hour, minute, second = (int(part) for part in match.groups())
+    days = (31, 29 if _is_leap_year(year) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
+    if year < 1 or not 1 <= month <= 12 or not 1 <= day <= days[month - 1]:
+        raise ContractValidationError("handoff-invalid", f"{name} is not a real UTC timestamp")
+    if hour > 23 or minute > 59 or second > 59:
+        raise ContractValidationError("handoff-invalid", f"{name} is not a real UTC timestamp")
     return text
 
 
@@ -257,40 +323,93 @@ def is_secret_like_key(key: object) -> bool:
     return type(key) is str and bool(_SECRET_KEY_RE.search(key))
 
 
+@dataclass(slots=True)
+class _NormalizationBudget:
+    remaining_bytes: int
+    remaining_items: int = MAX_JSON_ITEMS
+
+    def consume_bytes(self, size: int) -> None:
+        self.remaining_bytes -= size
+        if self.remaining_bytes < 0:
+            raise ContractValidationError("handoff-oversized", "input exceeds the total serialized-size bound")
+
+    def consume_item(self) -> None:
+        self.remaining_items -= 1
+        if self.remaining_items < 0:
+            raise ContractValidationError("handoff-oversized", "input exceeds the item-count bound")
+
+
 def validate_and_normalize_json(value: object, *, max_bytes: int = MAX_INPUT_BYTES) -> Any:
-    normalized = _normalize_json(value, path="$", depth=0)
-    if len(_canonical_json_bytes_unchecked(normalized)) > max_bytes:
-        raise ContractValidationError("handoff-oversized", "input exceeds the total serialized-size bound")
-    return normalized
+    if type(max_bytes) is not int or max_bytes < 1:
+        raise TypeError("max_bytes must be a positive built-in integer")
+    budget = _NormalizationBudget(max_bytes)
+    return _normalize_json(value, path="$", depth=0, budget=budget)
 
 
-def _normalize_json(value: object, *, path: str, depth: int) -> Any:
+def _encoded_scalar_size(value: object) -> int:
+    return len(
+        json.dumps(
+            value,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+    )
+
+
+def _normalize_json(
+    value: object,
+    *,
+    path: str,
+    depth: int,
+    budget: _NormalizationBudget,
+) -> Any:
     if depth > MAX_NESTING_DEPTH:
         raise ContractValidationError("handoff-oversized", "input exceeds the nesting-depth bound")
+    budget.consume_item()
     if value is None or type(value) is bool or type(value) is int:
+        budget.consume_bytes(_encoded_scalar_size(value))
         return value
     if type(value) is float:
         if not math.isfinite(value):
             raise ContractValidationError("handoff-invalid", f"{path} contains a non-finite float")
+        budget.consume_bytes(_encoded_scalar_size(value))
         return value
     if type(value) is str:
-        return validate_text(value, path)
+        text = validate_text(value, path)
+        budget.consume_bytes(_encoded_scalar_size(text))
+        return text
     if type(value) is list:
-        return [
-            _normalize_json(item, path=f"{path}[{index}]", depth=depth + 1)
-            for index, item in enumerate(value)
-        ]
+        if len(value) > MAX_JSON_ITEMS:
+            raise ContractValidationError("handoff-oversized", "input exceeds the item-count bound")
+        budget.consume_bytes(2)
+        normalized_list: list[Any] = []
+        for index, item in enumerate(value):
+            if index:
+                budget.consume_bytes(1)
+            normalized_list.append(
+                _normalize_json(item, path=f"{path}[{index}]", depth=depth + 1, budget=budget)
+            )
+        return normalized_list
     if type(value) is dict:
+        if len(value) > MAX_JSON_ITEMS:
+            raise ContractValidationError("handoff-oversized", "input exceeds the item-count bound")
         keys = list(value.keys())
         if any(type(key) is not str for key in keys):
             raise ContractValidationError("handoff-wrong-type", f"{path} keys must be built-in strings")
-        normalized: dict[str, Any] = {}
-        for key in sorted(keys):
+        budget.consume_bytes(2)
+        normalized_dict: dict[str, Any] = {}
+        for index, key in enumerate(sorted(keys)):
+            if index:
+                budget.consume_bytes(1)
             validate_text(key, f"{path} key", max_length=128)
             if is_secret_like_key(key):
                 raise ContractValidationError("authority-secret-field", f"{path} contains a secret-like key")
-            normalized[key] = _normalize_json(value[key], path=f"{path}.{key}", depth=depth + 1)
-        return normalized
+            budget.consume_bytes(_encoded_scalar_size(key) + 1)
+            normalized_dict[key] = _normalize_json(
+                value[key], path=f"{path}.{key}", depth=depth + 1, budget=budget
+            )
+        return normalized_dict
     raise ContractValidationError(
         "handoff-wrong-type",
         f"{path} must use exact built-in JSON-compatible types",
@@ -298,11 +417,7 @@ def _normalize_json(value: object, *, path: str, depth: int) -> Any:
 
 
 def canonical_json_bytes(value: object) -> bytes:
-    built_in = (
-        thaw_json(value)
-        if type(value) in {FrozenObject, FrozenArray}
-        else _normalize_json(value, path="$", depth=0)
-    )
+    built_in = thaw_json(value) if type(value) in {FrozenObject, FrozenArray} else validate_and_normalize_json(value)
     return _canonical_json_bytes_unchecked(built_in)
 
 
@@ -392,28 +507,15 @@ def resolve_status(
 ) -> ValidationStatus:
     reasons = canonical_reason_codes(reason_codes, MAX_REASONS)
     blocker_codes = canonical_reason_codes(blockers, MAX_BLOCKERS)
-    if any(_is_invalid_reason(code) for code in (*reasons, *blocker_codes)):
+    unknown = (set(reasons) | set(blocker_codes)) - _KNOWN_REASON_CODES
+    if unknown:
+        raise ContractValidationError("handoff-invalid", "reason code has no governed status mapping")
+    if set(reasons) & _INVALID_REASON_CODES or set(blocker_codes) & _INVALID_REASON_CODES:
         return ValidationStatus.INVALID
-    if blocker_codes or any("blocked" in code or "conflict" in code for code in reasons):
+    if blocker_codes or set(reasons) & _BLOCKED_REASON_CODES:
         return ValidationStatus.BLOCKED
-    if stale or any("stale" in code for code in reasons):
+    if stale or set(reasons) & _STALE_REASON_CODES:
         return ValidationStatus.STALE
-    if manual_review or any(code.startswith("manual-review-") for code in reasons):
+    if manual_review or set(reasons) & _MANUAL_REVIEW_REASON_CODES:
         return ValidationStatus.MANUAL_REVIEW_REQUIRED
     return ValidationStatus.VALID
-
-
-def _is_invalid_reason(code: str) -> bool:
-    return any(
-        token in code
-        for token in (
-            "invalid",
-            "malformed",
-            "unsupported",
-            "unknown-field",
-            "wrong-type",
-            "duplicate",
-            "secret-field",
-            "oversized",
-        )
-    )
