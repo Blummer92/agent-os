@@ -20,16 +20,11 @@ _RECOGNIZED_DECISIONS = frozenset(
     {"docs-required", "docs-not-required", "docs-needs-decision"}
 )
 _COVERAGE_STATES = ("pass", "warn", "fail", "manual-review", "missing")
-_INCOMPLETE_CODES = frozenset(
+_REPORT_IDENTITY_MISMATCH = "acceptance-report-identity-mismatch"
+_ADVISORY_REVIEW_MARKERS = frozenset(
     {
-        "source-partial",
-        "source-inaccessible",
-        "source-stale",
-        "source-unsupported",
-        "pagination-unknown",
-        "source-state-mismatch",
-        "metadata-duplicated-identical",
-        "metadata-conflicting",
+        "ownership_verification=human-review-required",
+        "semantic_relevance_verification=human-review-required",
     }
 )
 _DISCLAIMER = (
@@ -156,8 +151,13 @@ def build_documentation_observation(
     source_complete = scan_result.complete
     for source_record in scan_result.records:
         report = acceptance_reports.get(source_record.issue_number)
-        if report is not None and not isinstance(report, AcceptanceReport):
-            raise TypeError("acceptance_reports values must be AcceptanceReport values")
+        report_identity_mismatch = False
+        if report is not None:
+            if not isinstance(report, AcceptanceReport):
+                raise TypeError("acceptance_reports values must be AcceptanceReport values")
+            if report.linked_issue != source_record.issue_number:
+                report = None
+                report_identity_mismatch = True
         metadata = project_issue_metadata(
             scan_issue_metadata(
                 source_record.body,
@@ -171,11 +171,15 @@ def build_documentation_observation(
                 expected_revision=source_record.source_revision,
             )
         )
-        source_codes = set(_metadata_reason_codes(metadata.manual_review))
+        scanner_codes = _metadata_reason_codes(metadata.manual_review)
+        source_codes = set(scanner_codes)
         required_docs, path_invalid = _normalized_required_docs(metadata.required_docs)
         if path_invalid:
             source_codes.add("required-doc-invalid")
-        incomplete_codes = source_codes & _INCOMPLETE_CODES
+        incomplete_codes = set(scanner_codes)
+        if report_identity_mismatch:
+            source_codes.add(_REPORT_IDENTITY_MISMATCH)
+            incomplete_codes.add(_REPORT_IDENTITY_MISMATCH)
         if incomplete_codes:
             source_complete = False
             retrieval_codes.extend(sorted(incomplete_codes))
@@ -326,6 +330,10 @@ def _metrics(observation: DocumentationObservation) -> DocumentationMetrics:
     recognized = sum(row.decision in _RECOGNIZED_DECISIONS for row in records)
     required = [row for row in records if row.decision == "docs-required"]
     advisory_records = sum(bool(row.advisory_markers) for row in records)
+    advisory_review_records = sum(
+        bool(set(row.advisory_markers) & _ADVISORY_REVIEW_MARKERS)
+        for row in records
+    )
     return DocumentationMetrics(
         documentation_decision_coverage=_rate(recognized, len(records)),
         required_documentation_declaration_coverage=_rate(
@@ -357,7 +365,7 @@ def _metrics(observation: DocumentationObservation) -> DocumentationMetrics:
                     for row in required
                 ),
             ),
-            CountEntry("advisory-review", advisory_records),
+            CountEntry("advisory-review", advisory_review_records),
             CountEntry("incomplete-source", 0 if observation.complete else 1),
         ),
     )
