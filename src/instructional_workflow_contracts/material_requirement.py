@@ -78,13 +78,14 @@ REF_FIELDS = frozenset(
 
 
 def material_requirement_source_fingerprint(value: object) -> str:
-    """Fingerprint supplied evidence while excluding the fingerprint field itself."""
+    """Fingerprint supplied evidence while excluding evidence-only fields."""
     normalized = validate_and_normalize_json(value, max_bytes=MAX_INPUT_BYTES)
     if type(normalized) is not dict or type(normalized.get("identity")) is not dict:
         raise ContractValidationError("handoff-wrong-type", "identity must be a built-in mapping")
     payload = dict(normalized)
     identity = dict(normalized["identity"])
     identity.pop("source_fingerprint", None)
+    identity.pop("created_at", None)
     payload["identity"] = identity
     return sha256_hex(payload)
 
@@ -110,7 +111,7 @@ def validate_material_requirement(value: object) -> ValidationResult:
         _learning(groups["learning_evidence"])
         _modeling(groups["modeling"])
         ref_count = _requirements(groups["requirements"])
-        ref_count += _assets(assets) + _templates(templates) + 5
+        ref_count += _assets(assets) + _templates(templates) + 7
         if ref_count > MAX_REFERENCES:
             raise ContractValidationError("handoff-oversized", "references exceed bound")
         _destination(groups["destination"])
