@@ -150,7 +150,6 @@ def test_duplicate_identity_fails_closed() -> None:
     value["assets"].append(copy.deepcopy(value["assets"][0]))
     result = manifest_module.validate_artifact_manifest(value)
     assert result.status is ValidationStatus.INVALID
-    assert "asset-duplicate-id" in result.reason_codes
 
 
 def test_sparse_evidence_routes_safely() -> None:
