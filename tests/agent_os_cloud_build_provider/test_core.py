@@ -76,7 +76,7 @@ def _request(*, expires_at="2026-07-31T00:00:00Z"):
     )
 
 
-def _plan(*, remote_build_required=True):
+def _plan():
     return ValidationPlan(
         selector_version=SELECTOR_VERSION,
         repository="Blummer92/agent-os",
@@ -87,7 +87,7 @@ def _plan(*, remote_build_required=True):
         commands=(COMMAND,),
         command_set_digest=DIGEST,
         reason_codes=("profile.aggregate-configuration",),
-        remote_build_required=remote_build_required,
+        remote_build_required=True,
     )
 
 
@@ -148,9 +148,9 @@ def _authorization(request, command_plan, *, granted=True):
     )
 
 
-def _inputs(*, remote_build_required=True):
+def _inputs():
     request = _request()
-    plan = _plan(remote_build_required=remote_build_required)
+    plan = _plan()
     command_plan = _command_plan(request, plan)
     dispatch = evaluate_dispatch_decision(plan, (), current_pr_head_sha=SHA)
     return (
@@ -181,6 +181,7 @@ def test_valid_invocation_is_deterministic_and_non_authorizing_for_merge():
     assert left.merge_authorized is False
     assert left.invocation.merge_authorized is False
     assert left.invocation.side_effects_performed is False
+    assert left.invocation.authorization_id == "authorization:804"
     assert cloud_build_provider_invocation_id(left.invocation) == left.invocation_id
     assert cloud_build_provider_result_id(left) == left.result_id
 
@@ -188,8 +189,15 @@ def test_valid_invocation_is_deterministic_and_non_authorizing_for_merge():
 def test_configuration_is_bounded_secret_safe_and_digest_pinned():
     with pytest.raises(ValueError):
         replace(_configuration(), builder_image_identity="python:3.11")
-    with pytest.raises(ValueError):
-        replace(_configuration(), evidence_destination_identity="token=secret-value")
+    for secret_like in (
+        "Authorization: Bearer abcdefgh",
+        "Bearer abcdefgh",
+        "token=secret-value",
+        "password=secret-value",
+        "secret=secret-value",
+    ):
+        with pytest.raises(ValueError):
+            replace(_configuration(), evidence_destination_identity=secret_like)
     with pytest.raises(TypeError):
         replace(_configuration(), max_output_bytes=True)
 
@@ -247,14 +255,29 @@ def test_identity_and_authorization_drift_fails_closed(mutation, reason):
 
 
 def test_non_launch_dispatch_creates_no_invocation():
+    request = _request()
+    plan = _plan()
+    command_plan = _command_plan(request, plan)
+    dispatch = evaluate_dispatch_decision(
+        plan,
+        (),
+        current_pr_head_sha="c" * 40,
+    )
     result = prepare_cloud_build_provider_invocation(
-        *_inputs(remote_build_required=False),
+        request,
+        command_plan,
+        dispatch,
+        _authorization(request, command_plan),
+        _configuration(),
         resolved_sha=SHA,
         evaluated_at="2026-07-30T20:00:00Z",
     )
-    assert result.status in {ProviderStatus.SKIPPED, ProviderStatus.MANUAL_REVIEW}
+    assert dispatch.status == "stale-skipped"
+    assert result.status is ProviderStatus.SKIPPED
     assert ProviderReason.DISPATCH_NON_LAUNCH in result.reason_codes
     assert result.invocation is None
+    assert result.merge_authorized is False
+    assert result.side_effect_state is ProviderSideEffectState.NONE
 
 
 @pytest.mark.parametrize(
