@@ -1,0 +1,419 @@
+"""Pure MaterialRequirement validation built on the CW5A core."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from .common import (
+    FINGERPRINT_ALGORITHM,
+    ContractValidationError,
+    ValidatedRecord,
+    ValidationResult,
+    ValidationStatus,
+    canonical_reason_codes,
+    canonical_size,
+    canonical_strings,
+    freeze_json,
+    sanitize_detail,
+    sha256_hex,
+    validate_and_normalize_json,
+    validate_revision,
+    validate_sha256,
+    validate_stable_id,
+    validate_text,
+    validate_timestamp,
+    validate_version,
+)
+
+CONTRACT_ID = "curriculum-material-requirement-v1"
+HANDOFF_CONTRACT_ID = "curriculum-workflow-handoff-v1"
+MAX_INPUT_BYTES = 48 * 1024
+MAX_RESULT_BYTES = 12 * 1024
+MAX_ASSETS = 32
+MAX_TEMPLATES = 8
+MAX_REFERENCES = 64
+MAX_REQUIRED_SECTIONS = 32
+MAX_BLOCKERS = 32
+MAX_REASONS = 32
+MAX_DOMAIN_ITEMS = 32
+
+SUPPORTED_ARTIFACT_TYPES = frozenset(
+    {
+        "slide-deck", "worksheet", "guided-notes", "handout", "rubric",
+        "assessment", "exit-ticket", "teacher-guide", "image-library",
+        "exemplar-set", "critique-set", "portfolio-material",
+        "unsupported-manual-review",
+    }
+)
+SUPPORTED_AUDIENCES = frozenset({"students", "teachers", "students-and-teachers"})
+COMPLETENESS_STATES = frozenset(
+    {
+        "draft", "incomplete", "blocked", "manual-review-required",
+        "ready-for-planning", "ready-for-approved-production-request", "superseded",
+    }
+)
+CANONICAL_OWNERS = frozenset(
+    {
+        "agent-orchestrator", "unit-alignment-agent", "teacher-modeling-coach",
+        "instructional-materials-coach", "qa-test-agent",
+    }
+)
+CLEARED_STATES = frozenset(
+    {"confirmed", "cleared-internal", "licensed", "public-domain", "permission-documented"}
+)
+DESTINATION_CLASSES = frozenset(
+    {"approved-google-drive-folder", "local-reference", "manual-review"}
+)
+TOP_LEVEL_FIELDS = frozenset(
+    {
+        "identity", "artifact", "instructional", "handoff_reference",
+        "learning_evidence", "modeling", "requirements", "assets", "templates",
+        "destination", "ai_review", "provenance", "prohibited_data",
+        "completeness", "authority",
+    }
+)
+REF_FIELDS = frozenset(
+    {"stable_id", "owner", "contract_version", "record_revision", "fingerprint"}
+)
+
+
+def material_requirement_source_fingerprint(value: object) -> str:
+    """Fingerprint supplied evidence while excluding the fingerprint field itself."""
+    normalized = validate_and_normalize_json(value, max_bytes=MAX_INPUT_BYTES)
+    if type(normalized) is not dict or type(normalized.get("identity")) is not dict:
+        raise ContractValidationError("handoff-wrong-type", "identity must be a built-in mapping")
+    payload = dict(normalized)
+    identity = dict(normalized["identity"])
+    identity.pop("source_fingerprint", None)
+    payload["identity"] = identity
+    return sha256_hex(payload)
+
+
+def validate_material_requirement(value: object) -> ValidationResult:
+    """Validate and reconstruct one bounded MaterialRequirement record."""
+    try:
+        data = validate_and_normalize_json(value, max_bytes=MAX_INPUT_BYTES)
+        if type(data) is not dict:
+            raise ContractValidationError("handoff-wrong-type", "requirement must be a mapping")
+        _fields(data, TOP_LEVEL_FIELDS, "requirement")
+        groups = {
+            name: _mapping(data[name], name)
+            for name in TOP_LEVEL_FIELDS - {"assets", "templates"}
+        }
+        assets = _list(data["assets"], "assets")
+        templates = _list(data["templates"], "templates")
+
+        _identity(groups["identity"], data)
+        _artifact(groups["artifact"])
+        _instructional(groups["instructional"])
+        _handoff(groups["handoff_reference"])
+        _learning(groups["learning_evidence"])
+        _modeling(groups["modeling"])
+        ref_count = _requirements(groups["requirements"])
+        ref_count += _assets(assets) + _templates(templates) + 5
+        if ref_count > MAX_REFERENCES:
+            raise ContractValidationError("handoff-oversized", "references exceed bound")
+        _destination(groups["destination"])
+        _ai_review(groups["ai_review"])
+        _provenance(groups["provenance"])
+        _all_false(groups["prohibited_data"], "material-prohibited-data")
+        _completeness(groups["completeness"])
+        _all_false(groups["authority"], "authority-invalid")
+
+        data["instructional"]["required_sections"] = list(
+            _text_list(groups["instructional"]["required_sections"], "required sections", MAX_REQUIRED_SECTIONS)
+        )
+        req = groups["requirements"]
+        data["requirements"]["vocabulary_references"] = sorted(
+            req["vocabulary_references"], key=lambda item: item["stable_id"]
+        )
+        for key in (
+            "accessibility_requirements", "content_requirements",
+            "classroom_use_requirements",
+        ):
+            data["requirements"][key] = list(_text_list(req[key], key, MAX_DOMAIN_ITEMS))
+        data["assets"] = sorted(assets, key=lambda item: item["asset_id"])
+        data["templates"] = sorted(templates, key=lambda item: item["template_id"])
+        complete = groups["completeness"]
+        data["completeness"]["blockers"] = list(
+            canonical_reason_codes(complete["blockers"], MAX_BLOCKERS)
+        )
+        data["completeness"]["reason_codes"] = list(
+            canonical_reason_codes(complete["reason_codes"], MAX_REASONS)
+        )
+        if canonical_size(data) > MAX_RESULT_BYTES:
+            raise ContractValidationError("handoff-oversized", "result exceeds 12 KiB")
+        identity = groups["identity"]
+        record = ValidatedRecord(
+            contract_version=identity["contract_version"],
+            record_id=identity["requirement_id"],
+            record_revision=identity["record_revision"],
+            fingerprint_algorithm=FINGERPRINT_ALGORITHM,
+            fingerprint=sha256_hex(data),
+            payload=freeze_json(data),
+        )
+        return ValidationResult(status=ValidationStatus.VALID, record=record)
+    except ContractValidationError as exc:
+        return _invalid(exc.reason_code, exc.detail)
+    except (TypeError, ValueError) as exc:
+        return _invalid("material-invalid", sanitize_detail(str(exc)))
+
+
+def _invalid(reason: str, detail: str) -> ValidationResult:
+    return ValidationResult(
+        status=ValidationStatus.INVALID,
+        record=None,
+        reason_codes=(reason,),
+        details=(sanitize_detail(detail),),
+    )
+
+
+def _mapping(value: object, name: str) -> dict[str, Any]:
+    if type(value) is not dict:
+        raise ContractValidationError("handoff-wrong-type", f"{name} must be a mapping")
+    return value
+
+
+def _list(value: object, name: str) -> list[Any]:
+    if type(value) is not list:
+        raise ContractValidationError("handoff-wrong-type", f"{name} must be a list")
+    return value
+
+
+def _fields(value: dict[str, Any], expected: frozenset[str], name: str) -> None:
+    actual = set(value)
+    if expected - actual:
+        raise ContractValidationError("material-missing-required-field", f"{name} is incomplete")
+    if actual - expected:
+        raise ContractValidationError("material-unknown-field", f"{name} has unknown fields")
+
+
+def _text(value: object) -> str:
+    return validate_text(value, "material value")
+
+
+def _text_list(value: object, name: str, maximum: int) -> tuple[str, ...]:
+    return canonical_strings(
+        value, name=name, maximum=maximum, validator=_text, allow_empty=False
+    )
+
+
+def _identity(value: dict[str, Any], full: dict[str, Any]) -> None:
+    _fields(
+        value,
+        frozenset(
+            {
+                "contract_version", "requirement_id", "record_revision", "course_ref",
+                "unit_ref", "lesson_ref", "created_at", "created_by", "source_fingerprint",
+            }
+        ),
+        "identity",
+    )
+    if validate_version(value["contract_version"]) != CONTRACT_ID:
+        raise ContractValidationError("material-contract-version-unsupported", "unsupported version")
+    for key in ("requirement_id", "course_ref", "unit_ref", "lesson_ref"):
+        validate_stable_id(value[key], key)
+    validate_revision(value["record_revision"])
+    validate_timestamp(value["created_at"], "created_at")
+    if value["created_by"] != "instructional-materials-coach":
+        raise ContractValidationError("material-missing-owner-evidence", "wrong creator owner")
+    validate_sha256(value["source_fingerprint"], "source_fingerprint")
+    if value["source_fingerprint"] != material_requirement_source_fingerprint(full):
+        raise ContractValidationError("material-incompatible-fingerprint", "fingerprint mismatch")
+
+
+def _artifact(value: dict[str, Any]) -> None:
+    _fields(value, frozenset({"artifact_type", "subject_metadata"}), "artifact")
+    if validate_text(value["artifact_type"], "artifact_type", max_length=64) not in SUPPORTED_ARTIFACT_TYPES:
+        raise ContractValidationError("material-unsupported-artifact-type", "unsupported artifact")
+    validate_text(value["subject_metadata"], "subject_metadata")
+
+
+def _instructional(value: dict[str, Any]) -> None:
+    _fields(value, frozenset({"purpose", "audience", "required_sections"}), "instructional")
+    validate_text(value["purpose"], "purpose")
+    if validate_text(value["audience"], "audience", max_length=64) not in SUPPORTED_AUDIENCES:
+        raise ContractValidationError("material-invalid-audience", "unsupported audience")
+    _text_list(value["required_sections"], "required sections", MAX_REQUIRED_SECTIONS)
+
+
+def _handoff(value: dict[str, Any]) -> None:
+    _fields(
+        value,
+        frozenset({"handoff_id", "contract_version", "record_revision", "fingerprint"}),
+        "handoff_reference",
+    )
+    validate_stable_id(value["handoff_id"], "handoff_id")
+    if validate_version(value["contract_version"]) != HANDOFF_CONTRACT_ID:
+        raise ContractValidationError("material-incompatible-handoff", "incompatible handoff")
+    validate_revision(value["record_revision"])
+    validate_sha256(value["fingerprint"], "handoff fingerprint")
+
+
+def _reference(value: object, name: str, owner: str | None = None) -> None:
+    ref = _mapping(value, name)
+    _fields(ref, REF_FIELDS, name)
+    validate_stable_id(ref["stable_id"], f"{name} stable_id")
+    actual_owner = validate_stable_id(ref["owner"], f"{name} owner")
+    if actual_owner not in CANONICAL_OWNERS or (owner is not None and actual_owner != owner):
+        raise ContractValidationError("material-missing-owner-evidence", f"{name} owner conflict")
+    validate_version(ref["contract_version"])
+    validate_revision(ref["record_revision"])
+    validate_sha256(ref["fingerprint"], f"{name} fingerprint")
+
+
+def _learning(value: dict[str, Any]) -> None:
+    keys = frozenset(
+        {"learning_objective_ref", "success_criteria_ref", "evidence_target_ref", "alignment_owner"}
+    )
+    _fields(value, keys, "learning_evidence")
+    if value["alignment_owner"] != "unit-alignment-agent":
+        raise ContractValidationError("material-missing-owner-evidence", "alignment owner conflict")
+    for key in keys - {"alignment_owner"}:
+        _reference(value[key], key, "unit-alignment-agent")
+
+
+def _modeling(value: dict[str, Any]) -> None:
+    keys = frozenset({"modeling_readiness_ref", "materials_extract_ref", "modeling_owner"})
+    _fields(value, keys, "modeling")
+    if value["modeling_owner"] != "teacher-modeling-coach":
+        raise ContractValidationError("material-missing-owner-evidence", "modeling owner conflict")
+    for key in keys - {"modeling_owner"}:
+        _reference(value[key], key, "teacher-modeling-coach")
+
+
+def _requirements(value: dict[str, Any]) -> int:
+    keys = frozenset(
+        {
+            "vocabulary_references", "accessibility_requirements",
+            "content_requirements", "classroom_use_requirements",
+        }
+    )
+    _fields(value, keys, "requirements")
+    refs = _list(value["vocabulary_references"], "vocabulary_references")
+    if len(refs) > MAX_REFERENCES:
+        raise ContractValidationError("handoff-oversized", "too many references")
+    seen: set[str] = set()
+    for ref in refs:
+        _reference(ref, "vocabulary reference")
+        stable_id = ref["stable_id"]
+        if stable_id in seen:
+            raise ContractValidationError("material-duplicate-reference", "duplicate reference")
+        seen.add(stable_id)
+    for key in keys - {"vocabulary_references"}:
+        _text_list(value[key], key, MAX_DOMAIN_ITEMS)
+    return len(refs)
+
+
+def _assets(values: list[Any]) -> int:
+    if len(values) > MAX_ASSETS:
+        raise ContractValidationError("handoff-oversized", "too many assets")
+    seen: set[str] = set()
+    fields = frozenset(
+        {"asset_id", "stable_ref", "access_state", "permission_state", "provenance_state"}
+    )
+    for raw in values:
+        value = _mapping(raw, "asset")
+        _fields(value, fields, "asset")
+        asset_id = validate_stable_id(value["asset_id"], "asset_id")
+        if asset_id in seen:
+            raise ContractValidationError("material-duplicate-asset", "duplicate asset")
+        seen.add(asset_id)
+        validate_stable_id(value["stable_ref"], "asset stable_ref")
+        if value["access_state"] != "verified":
+            raise ContractValidationError("material-unverified-asset", "unverified asset")
+        if value["permission_state"] not in CLEARED_STATES:
+            raise ContractValidationError("material-permission-incomplete", "asset permission")
+        if value["provenance_state"] not in CLEARED_STATES:
+            raise ContractValidationError("material-provenance-incomplete", "asset provenance")
+    return len(values)
+
+
+def _templates(values: list[Any]) -> int:
+    if len(values) > MAX_TEMPLATES:
+        raise ContractValidationError("handoff-oversized", "too many templates")
+    seen: set[str] = set()
+    fields = frozenset({"template_id", "stable_ref", "access_state", "permission_state"})
+    for raw in values:
+        value = _mapping(raw, "template")
+        _fields(value, fields, "template")
+        template_id = validate_stable_id(value["template_id"], "template_id")
+        if template_id in seen:
+            raise ContractValidationError("material-duplicate-template", "duplicate template")
+        seen.add(template_id)
+        validate_stable_id(value["stable_ref"], "template stable_ref")
+        if value["access_state"] != "verified":
+            raise ContractValidationError("material-unverified-template", "unverified template")
+        if value["permission_state"] not in CLEARED_STATES:
+            raise ContractValidationError("material-permission-incomplete", "template permission")
+    return len(values)
+
+
+def _destination(value: dict[str, Any]) -> None:
+    _fields(
+        value,
+        frozenset({"destination_id", "destination_class", "verification_state", "exact_reference"}),
+        "destination",
+    )
+    validate_stable_id(value["destination_id"], "destination_id")
+    if value["destination_class"] not in DESTINATION_CLASSES or value["verification_state"] != "verified":
+        raise ContractValidationError("material-ambiguous-destination", "ambiguous destination")
+    validate_text(value["exact_reference"], "destination exact_reference")
+
+
+def _ai_review(value: dict[str, Any]) -> None:
+    bools = {
+        "ai_assisted_generation_permitted", "accessibility_review_required",
+        "nondiscrimination_review_required",
+    }
+    _fields(value, frozenset(bools | {"human_review_owner"}), "ai_review")
+    if any(type(value[key]) is not bool for key in bools):
+        raise ContractValidationError("handoff-wrong-type", "AI review flags must be booleans")
+    if validate_stable_id(value["human_review_owner"], "human_review_owner") not in CANONICAL_OWNERS:
+        raise ContractValidationError("material-ai-review-owner-missing", "unsupported reviewer")
+
+
+def _provenance(value: dict[str, Any]) -> None:
+    states = {
+        "provenance_state", "copyright_state", "license_state", "asset_permission_state"
+    }
+    _fields(value, frozenset(states | {"citation_expectations"}), "provenance")
+    validate_text(value["citation_expectations"], "citation_expectations")
+    if any(value[key] not in CLEARED_STATES for key in states):
+        raise ContractValidationError("material-provenance-incomplete", "provenance incomplete")
+
+
+def _all_false(value: dict[str, Any], reason: str) -> None:
+    expected = (
+        frozenset(
+            {
+                "student_identifying_data", "protected_attributes",
+                "raw_student_work", "permanent_learner_profile",
+            }
+        )
+        if reason == "material-prohibited-data"
+        else frozenset(
+            {
+                "execution_authorized", "external_write_authorized",
+                "production_authorized", "publication_authorized", "side_effects_performed",
+            }
+        )
+    )
+    _fields(value, expected, "protected boundary")
+    if any(type(item) is not bool or item is not False for item in value.values()):
+        raise ContractValidationError(reason, "all boundary values must be false")
+
+
+def _completeness(value: dict[str, Any]) -> None:
+    _fields(value, frozenset({"state", "blockers", "reason_codes"}), "completeness")
+    state = validate_text(value["state"], "completeness state", max_length=64)
+    if state not in COMPLETENESS_STATES:
+        raise ContractValidationError("material-invalid-completeness-state", "bad state")
+    blockers = canonical_reason_codes(value["blockers"], MAX_BLOCKERS)
+    reasons = canonical_reason_codes(value["reason_codes"], MAX_REASONS)
+    if state == "blocked" and not blockers:
+        raise ContractValidationError("material-incomplete", "blocked state needs blockers")
+    if state in {"incomplete", "manual-review-required"} and not reasons:
+        raise ContractValidationError("material-incomplete", "state needs reasons")
+    if state.startswith("ready-") and blockers:
+        raise ContractValidationError("material-incomplete", "ready state has blockers")
