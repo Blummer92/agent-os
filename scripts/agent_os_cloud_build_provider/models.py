@@ -25,7 +25,8 @@ _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,511}$", re.ASCII)
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", re.ASCII)
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 _SECRET_RE = re.compile(
-    r"(?i)(authorization\s*:|bearer\s+[A-Za-z0-9._-]{8,}|"
+    r"(?i)(authorization\s*:\s*[A-Za-z][A-Za-z0-9._-]*\s+"
+    r"[A-Za-z0-9._~+/-]{4,}=*|bearer\s+[A-Za-z0-9._-]{8,}|"
     r"(?:token|password|secret|api[_-]?key|private[_-]?key)\s*[:=])"
 )
 _DIGEST_IDENTITY_RE = re.compile(r"^[A-Za-z0-9._:/@+-]+@sha256:[0-9a-f]{64}$", re.ASCII)
