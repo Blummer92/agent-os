@@ -212,6 +212,15 @@ def test_domain_failures(path: tuple[str, ...], replacement: object, reason: str
     assert reason in _result(value).reason_codes
 
 
+def test_created_at_is_evidence_only_for_source_fingerprint() -> None:
+    first = valid_requirement()
+    second = copy.deepcopy(first)
+    second["identity"]["created_at"] = "2026-07-30T01:00:00Z"  # type: ignore[index]
+    assert material_requirement_source_fingerprint(first) == (
+        material_requirement_source_fingerprint(second)
+    )
+
+
 def test_handoff_and_source_fingerprints_fail_closed() -> None:
     malformed = valid_requirement()
     _set(malformed, ("handoff_reference", "fingerprint"), "not-a-sha")
@@ -345,7 +354,7 @@ def test_reference_reason_and_blocker_bounds_and_one_over() -> None:
     references["assets"] = []
     references["templates"] = []
     references["requirements"]["vocabulary_references"] = [  # type: ignore[index]
-        _ref(f"r-{index}", "qa-test-agent") for index in range(MAX_REFERENCES - 5)
+        _ref(f"r-{index}", "qa-test-agent") for index in range(MAX_REFERENCES - 7)
     ]
     exact = _result(references)
     assert exact.details == ("result exceeds 12 KiB",)
