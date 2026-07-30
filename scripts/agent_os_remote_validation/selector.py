@@ -11,8 +11,22 @@ from .models import (
     MAX_PLAN_REASON_CODES,
     MAX_PLAN_SERIALIZED_BYTES,
     MAX_PLAN_STRING_LENGTH,
+    MAX_PRE_PR_SERIALIZED_BYTES,
+    PRE_PR_BASE_BRANCH,
+    PRE_PR_EXECUTION_MODE,
+    PRE_PR_PER_COMMAND_TIMEOUT_SECONDS,
+    PRE_PR_PROFILE,
+    PRE_PR_REPOSITORY,
+    PRE_PR_TOTAL_VALIDATION_TIMEOUT_SECONDS,
+    PRE_PR_VALIDATION_PLAN_SCHEMA_NAME,
+    PRE_PR_VALIDATION_PLAN_SCHEMA_VERSION,
+    PRE_PR_VALIDATION_SUBJECT_SCHEMA_NAME,
+    PRE_PR_VALIDATION_SUBJECT_SCHEMA_VERSION,
+    PROTECTED_PRE_PR_REFS,
     VALIDATION_PLAN_SCHEMA_NAME,
     VALIDATION_PLAN_SCHEMA_VERSION,
+    PrePrValidationPlan,
+    PrePrValidationSubject,
     SelectionInput,
     ValidationPlan,
     ValidationProfile,
@@ -268,6 +282,41 @@ def _valid_rule_map(rules: object) -> bool:
     return True
 
 
+def _focused_matches(
+    path: str,
+    focused_rules: list[Any],
+) -> list[tuple[str, tuple[str, ...]]]:
+    """Return focused owners of one path; an exact owner excludes prefix owners.
+
+    Exact ownership intentionally outranks and *masks* every prefix owner of the
+    same path, so a narrow exact rule can live under an existing package prefix
+    without turning that path into `rule.ambiguous`. Two consequences follow, and
+    both are deliberate:
+
+    - a prefix-rule conflict is not reported for a path that has an exact owner,
+      because that conflict cannot affect the outcome for that path; a path with
+      no exact owner still fails closed to `rule.ambiguous`; and
+    - masking is per path, so a changed-file set mixing an exact-owned path with
+      prefix-owned siblings yields the union of both command sets. That union is
+      a safe superset and may contain a narrow command already subsumed by the
+      broader package command; it is not deduplicated here.
+
+    Selection stays independent of rule order and of changed-file order: matches
+    are partitioned by kind rather than by position, and the caller treats more
+    than one distinct command set for a single path as ambiguous.
+    """
+    exact_matches: list[tuple[str, tuple[str, ...]]] = []
+    prefix_matches: list[tuple[str, tuple[str, ...]]] = []
+    for rule in focused_rules:
+        owner = (rule["name"], tuple(rule["commands"]))
+        prefixes = tuple(rule.get("prefixes", []))
+        if path in frozenset(rule.get("exact_paths", [])):
+            exact_matches.append(owner)
+        elif prefixes and path.startswith(prefixes):
+            prefix_matches.append(owner)
+    return exact_matches or prefix_matches
+
+
 def select_validation_plan(
     value: SelectionInput,
     rules: dict[str, Any],
@@ -325,12 +374,7 @@ def select_validation_plan(
     matched_rules: set[str] = set()
     covered: set[str] = set()
     for path in paths:
-        path_matches: list[tuple[str, tuple[str, ...]]] = []
-        for rule in rules["focused_rules"]:
-            prefixes = tuple(rule.get("prefixes", []))
-            exact_paths = frozenset(rule.get("exact_paths", []))
-            if path in exact_paths or (prefixes and path.startswith(prefixes)):
-                path_matches.append((rule["name"], tuple(rule["commands"])))
+        path_matches = _focused_matches(path, rules["focused_rules"])
         distinct_command_sets = {commands for _, commands in path_matches}
         if len(distinct_command_sets) > 1:
             return _plan(value, "manual-review", (), "rule.ambiguous")
@@ -356,3 +400,181 @@ def select_validation_plan(
             "profile.aggregate-unmapped-executable",
         )
     return _plan(value, "manual-review", (), "rule.ambiguous")
+
+
+def _verify_pre_pr_subject(subject: object) -> PrePrValidationSubject:
+    """Re-verify one supplied pre-PR subject's frozen bindings before planning."""
+    if type(subject) is not PrePrValidationSubject:
+        raise TypeError("subject must be an exact PrePrValidationSubject")
+    if subject.schema_name != PRE_PR_VALIDATION_SUBJECT_SCHEMA_NAME:
+        raise ValueError("pre-PR subject schema name drift")
+    if subject.schema_version != PRE_PR_VALIDATION_SUBJECT_SCHEMA_VERSION:
+        raise ValueError("pre-PR subject schema version drift")
+    if subject.repository != PRE_PR_REPOSITORY:
+        raise ValueError("pre-PR repository drift")
+    if subject.base_branch != PRE_PR_BASE_BRANCH:
+        raise ValueError("pre-PR base branch drift")
+    if subject.execution_mode != PRE_PR_EXECUTION_MODE:
+        raise ValueError("pre-PR execution mode mismatch")
+    if (
+        subject.branch.casefold() in PROTECTED_PRE_PR_REFS
+        or subject.branch == subject.base_branch
+    ):
+        raise ValueError("pre-PR branch drift")
+    if not _SHA.fullmatch(subject.base_sha) or not _SHA.fullmatch(subject.expected_source_sha):
+        raise ValueError("pre-PR SHA drift")
+    if subject.tested_sha != subject.expected_source_sha:
+        raise ValueError("pre-PR tested SHA drift")
+    return subject
+
+
+def select_pre_pr_validation_plan(
+    subject: object,
+    rules: dict[str, Any],
+) -> PrePrValidationPlan:
+    """Return one deterministic pre-PR plan without file, network, or process I/O.
+
+    Unlike positive-PR selection, an unusable rule map, uncovered path, ambiguous
+    owner, aggregate fallback, or command-identity drift fails closed by raising
+    instead of degrading to a manual-review plan.
+    """
+    value = _verify_pre_pr_subject(subject)
+    if not _valid_rule_map(rules):
+        raise ValueError("pre-PR rule map is not usable")
+    selector_version = rules["selector_version"]
+    if not _SELECTOR_VERSION.fullmatch(selector_version):
+        raise ValueError("pre-PR selector version is unsupported")
+    if rules["repository"] != value.repository:
+        raise ValueError("pre-PR repository drift")
+
+    aggregate_paths = frozenset(rules["aggregate_paths"])
+    aggregate_prefixes = tuple(rules["aggregate_prefixes"])
+    matched_rules: set[str] = set()
+    matched_commands: set[str] = set()
+    for path in value.allowed_files:
+        if path in aggregate_paths or path.startswith(aggregate_prefixes):
+            raise ValueError("pre-PR scope requires focused coverage")
+        path_matches = _focused_matches(path, rules["focused_rules"])
+        if not path_matches:
+            raise ValueError("pre-PR scope has partial focused coverage")
+        if len({commands for _, commands in path_matches}) > 1:
+            raise ValueError("pre-PR scope has ambiguous focused coverage")
+        matched_rules.update(name for name, _ in path_matches)
+        matched_commands.update(path_matches[0][1])
+
+    if matched_commands != set(value.required_command_identities):
+        raise ValueError("pre-PR command identity drift")
+    commands = value.required_command_identities
+    reason = (
+        "profile.focused-package" if len(matched_rules) == 1 else "profile.focused-union"
+    )
+    return PrePrValidationPlan(
+        selector_version=selector_version,
+        subject=value,
+        commands=commands,
+        command_set_digest=compute_command_set_digest(selector_version, commands),
+        reason_codes=(reason,),
+    )
+
+
+def serialize_pre_pr_validation_subject(subject: object) -> dict[str, object]:
+    """Return deterministic canonical JSON-compatible pre-PR subject data."""
+    value = _verify_pre_pr_subject(subject)
+    return {
+        "schema_name": value.schema_name,
+        "schema_version": value.schema_version,
+        "repository": value.repository,
+        "issue_number": value.issue_number,
+        "invocation_id": value.invocation_id,
+        "base_branch": value.base_branch,
+        "base_sha": value.base_sha,
+        "branch": value.branch,
+        "expected_source_sha": value.expected_source_sha,
+        "tested_sha": value.tested_sha,
+        "allowed_files": list(value.allowed_files),
+        "forbidden_paths": list(value.forbidden_paths),
+        "required_command_identities": list(value.required_command_identities),
+        "approval_id": value.approval_id,
+        "approval_revision": value.approval_revision,
+        "projection_id": value.projection_id,
+        "implementation_contract_fingerprint": value.implementation_contract_fingerprint,
+        "execution_mode": value.execution_mode,
+    }
+
+
+def pre_pr_validation_subject_id(subject: object) -> str:
+    """Return a domain-separated semantic identity for one valid pre-PR subject."""
+    canonical = _canonical_bytes(serialize_pre_pr_validation_subject(subject))
+    digest = hashlib.sha256(
+        b"agent-os-pre-pr-validation-subject:v1\0" + canonical
+    ).hexdigest()
+    return f"pre-pr-validation-subject:{digest}"
+
+
+def serialize_pre_pr_validation_plan(plan: object) -> dict[str, object]:
+    """Return deterministic canonical JSON-compatible pre-PR plan data."""
+    if type(plan) is not PrePrValidationPlan:
+        raise TypeError("plan must be an exact PrePrValidationPlan")
+    if plan.schema_name != PRE_PR_VALIDATION_PLAN_SCHEMA_NAME:
+        raise ValueError("invalid pre-PR validation plan: schema name drift")
+    if plan.schema_version != PRE_PR_VALIDATION_PLAN_SCHEMA_VERSION:
+        raise ValueError("invalid pre-PR validation plan: schema version drift")
+    if plan.profile != PRE_PR_PROFILE:
+        raise ValueError("invalid pre-PR validation plan: profile drift")
+    subject = _verify_pre_pr_subject(plan.subject)
+    if plan.commands != subject.required_command_identities:
+        raise ValueError("invalid pre-PR validation plan: command identity drift")
+    if plan.command_set_digest != compute_command_set_digest(
+        plan.selector_version, plan.commands
+    ):
+        raise ValueError("invalid pre-PR validation plan: command digest drift")
+    if any(
+        reason not in _PROFILE_REASONS[PRE_PR_PROFILE] for reason in plan.reason_codes
+    ):
+        raise ValueError("invalid pre-PR validation plan: reason code drift")
+    if (
+        plan.per_command_timeout_seconds > PRE_PR_PER_COMMAND_TIMEOUT_SECONDS
+        or plan.total_validation_timeout_seconds > PRE_PR_TOTAL_VALIDATION_TIMEOUT_SECONDS
+    ):
+        raise ValueError("invalid pre-PR validation plan: timeout ceiling exceeded")
+    if (
+        plan.remote_build_required is not False
+        or plan.execution_authorized is not False
+        or plan.merge_authorized is not False
+        or plan.side_effects_performed is not False
+    ):
+        raise ValueError("invalid pre-PR validation plan: non-authorizing invariant broken")
+
+    payload: dict[str, object] = {
+        "schema_name": plan.schema_name,
+        "schema_version": plan.schema_version,
+        "selector_version": plan.selector_version,
+        "subject": serialize_pre_pr_validation_subject(subject),
+        "subject_id": pre_pr_validation_subject_id(subject),
+        "profile": plan.profile,
+        "commands": list(plan.commands),
+        "command_set_digest": plan.command_set_digest,
+        "reason_codes": list(plan.reason_codes),
+        "per_command_timeout_seconds": plan.per_command_timeout_seconds,
+        "total_validation_timeout_seconds": plan.total_validation_timeout_seconds,
+        "remote_build_required": False,
+        "execution_authorized": False,
+        "merge_authorized": False,
+        "side_effects_performed": False,
+    }
+    if len(_canonical_bytes(payload)) > MAX_PRE_PR_SERIALIZED_BYTES:
+        raise ValueError("pre-PR validation plan exceeds canonical size limit")
+    return payload
+
+
+def pre_pr_validation_plan_id(plan: object) -> str:
+    """Return a domain-separated semantic identity for one valid pre-PR plan."""
+    canonical = _canonical_bytes(serialize_pre_pr_validation_plan(plan))
+    digest = hashlib.sha256(b"agent-os-pre-pr-validation-plan:v1\0" + canonical).hexdigest()
+    return f"pre-pr-validation-plan:{digest}"
+
+
+def _canonical_bytes(payload: dict[str, object]) -> bytes:
+    return json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
