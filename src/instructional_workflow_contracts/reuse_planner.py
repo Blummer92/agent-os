@@ -216,22 +216,22 @@ def _validated_payload(
     return payload
 
 
-def _impact_map(value: object) -> dict[str, tuple[str, ...]]:
+def _impact_map(value: object) -> dict[str, list[str]]:
     normalized = validate_and_normalize_json(value, max_bytes=64 * 1024)
     if type(normalized) is not dict:
         raise ContractValidationError("handoff-wrong-type", "impact_map must be a built-in mapping")
     if len(normalized) > MAX_DEPENDENCY_KEYS:
         raise ContractValidationError("handoff-oversized", "impact_map exceeds 128 dependency keys")
-    result: dict[str, tuple[str, ...]] = {}
+    result: dict[str, list[str]] = {}
     for raw_key, raw_sections in normalized.items():
         key = validate_dependency_key(raw_key)
-        result[key] = canonical_strings(
+        result[key] = list(canonical_strings(
             raw_sections,
             name="impact sections",
             maximum=MAX_IMPACTED_SECTIONS,
             validator=lambda item: validate_stable_id(item, "impact section"),
             allow_empty=False,
-        )
+        ))
     return dict(sorted(result.items()))
 
 
@@ -377,7 +377,7 @@ def _plan_id(
     requirement: dict[str, Any],
     ranked: list[dict[str, Any]],
     changed: tuple[str, ...],
-    impact_map: dict[str, tuple[str, ...]],
+    impact_map: dict[str, list[str]],
     supported_executor: bool,
 ) -> str:
     digest = sha256_hex(
