@@ -352,7 +352,7 @@ def test_live_registry_is_deterministic_with_provenance():
     repo_root = Path(__file__).resolve().parents[3]
     report = validate_registry(repo_root)
     assert report.provenance is not None
-    assert report.capabilities_checked == 13
+    assert report.capabilities_checked == 14
     assert serialize_validation_report(report) == serialize_validation_report(validate_registry(repo_root))
     # RC4 provenance equals the discovery snapshot provenance.
     reader = RegistryReader()
@@ -365,3 +365,90 @@ def test_rc4_does_not_import_readiness_modules():
     source = Path(validation_module.__file__).read_text(encoding="utf-8")
     assert "readiness" not in source
     assert "issue_acceptance" not in source
+
+
+# --- instructional workflow contract core registration (#786) --------------
+
+
+def _live_capability_record(capability_id: str) -> dict:
+    repo_root = Path(__file__).resolve().parents[3]
+    document = yaml.safe_load((repo_root / "04_Registry" / "reusable-capabilities.yml").read_text(encoding="utf-8"))
+    matches = [cap for cap in document["capabilities"] if cap["capability_id"] == capability_id]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def test_instructional_workflow_contract_core_registration_is_bounded_and_canonical():
+    repo_root = Path(__file__).resolve().parents[3]
+    cap = _live_capability_record("instructional-workflow-contract-core")
+
+    assert cap["name"] == "Instructional Workflow Contract Core"
+    assert cap["status"] == "active"
+    assert cap["owner_agent"] == "Integration Manager"
+    assert cap["supporting_agents"] == ["QA / Test Agent"]
+
+    canonical_paths = [
+        "src/instructional_workflow_contracts/common.py",
+        "src/instructional_workflow_contracts/handoff.py",
+        "src/instructional_workflow_contracts/__init__.py",
+    ]
+    tests = [
+        "tests/test_instructional_workflow_handoff.py",
+        "tests/test_material_requirement_contract.py",
+        "tests/test_artifact_manifest_contract.py",
+        "tests/test_instructional_artifact_reuse_planner.py",
+        "tests/test_instructional_workflow_contract_integration.py",
+        "tests/test_instructional_evidence_teacher_summary.py",
+    ]
+    consumers = [
+        "src/instructional_workflow_contracts/handoff.py",
+        "src/instructional_workflow_contracts/material_requirement.py",
+        "src/instructional_workflow_contracts/artifact_manifest.py",
+        "src/instructional_workflow_contracts/reuse_planner.py",
+        "src/instructional_evidence_intake/interpreter.py",
+    ]
+
+    assert cap["canonical_paths"] == canonical_paths
+    assert cap["tests"] == tests
+    assert cap["known_consumers"] == consumers
+    assert len(cap["known_consumers"]) >= 3
+    assert len(cap["known_consumers"]) == len(set(cap["known_consumers"]))
+    assert all((repo_root / path).is_file() for path in canonical_paths + tests + consumers)
+
+    text = " ".join(
+        [cap["summary"], cap["reuse_guidance"]]
+        + cap["side_effects"]
+        + cap["invariants"]
+        + cap["compatibility"]
+    ).lower()
+    for required in (
+        "deterministic",
+        "no filesystem discovery",
+        "dynamic imports",
+        "plugin registration",
+        "network calls",
+        "execution authority",
+        "external-write authority",
+        "production",
+        "publication",
+        "classroom-use",
+        "grading",
+        "readiness-mutation",
+        "routing",
+        "ocr",
+        "model-execution",
+        "future consumers",
+        "rollback",
+    ):
+        assert required in text
+
+
+def test_instructional_workflow_contract_registration_preserves_fail_closed_structure(tmp_path):
+    duplicate = _build(tmp_path / "duplicate", [_default_cap(), _default_cap()])
+    assert validate_registry(duplicate).severity is ValidationSeverity.FAIL
+
+    unknown = _build(tmp_path / "unknown", [_default_cap(unsupported_field="not allowed")])
+    assert validate_registry(unknown).severity is ValidationSeverity.FAIL
+
+    missing = _build(tmp_path / "missing", [_default_cap(canonical_paths=["src/pkg/missing.py"])])
+    assert validate_registry(missing).severity is ValidationSeverity.FAIL

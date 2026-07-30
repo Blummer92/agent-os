@@ -31,6 +31,7 @@ REQUIRED_FIELDS = {
 }
 APPROVED_CAPABILITY_STATUSES = {
     "approval-applicability-evidence": "experimental",
+    "instructional-workflow-contract-core": "active",
     "issue-acceptance-report": "active",
     "issue-batch-graph": "experimental",
     "issue-batch-identity-collision-check": "experimental",
