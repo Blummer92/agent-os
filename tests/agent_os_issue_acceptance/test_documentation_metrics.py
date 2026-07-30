@@ -27,6 +27,7 @@ from scripts.agent_os_issue_acceptance.issue_scanner import (
 from scripts.agent_os_issue_acceptance.models import (
     AcceptanceReport,
     CheckResult,
+    IssueMetadata,
     Status,
 )
 
@@ -239,6 +240,66 @@ def test_changed_file_distribution_reuses_existing_required_docs_check() -> None
     }
 
 
+@pytest.mark.parametrize("linked_issue", [2, None])
+def test_report_identity_mismatch_is_ignored_and_forces_incomplete(
+    linked_issue: int | None,
+) -> None:
+    supplied = AcceptanceReport(
+        linked_issue=linked_issue,
+        overall_status=Status.PASS,
+        checks=[CheckResult("required docs", Status.PASS, "wrong identity")],
+        evidence=[
+            "documentation_advisory=present",
+            "ownership_verification=human-review-required",
+        ],
+    )
+    observation = _observation(
+        (_record(1, "docs-required", ("docs/a.md",)),), {1: supplied}
+    )
+    row = observation.records[0]
+    assert row.coverage_status == "missing"
+    assert row.advisory_markers == ()
+    assert "acceptance-report-identity-mismatch" in row.source_reason_codes
+    assert observation.complete is False
+    assert _counts(observation.retrieval_distribution)[
+        "acceptance-report-identity-mismatch"
+    ] == 1
+    assert build_documentation_metrics_report(observation).complete is False
+
+
+@pytest.mark.parametrize(
+    "reason_code",
+    [
+        "metadata-malformed",
+        "profile-version-unsupported",
+        "unknown-governed-field",
+        "identity-finding-present",
+        "unresolved-candidate-set",
+    ],
+)
+def test_every_scanner_manual_review_reason_forces_incomplete(
+    monkeypatch, reason_code: str
+) -> None:
+    projected = replace(
+        IssueMetadata.empty(),
+        manual_review=[f"issueplan-scanner:{reason_code}"],
+    )
+    monkeypatch.setattr(metrics_module, "project_issue_metadata", lambda _: projected)
+
+    observation = _observation((_record(1),))
+    assert observation.complete is False
+    assert reason_code in observation.records[0].source_reason_codes
+    assert _counts(observation.retrieval_distribution)[reason_code] == 1
+
+
+def test_missing_metadata_remains_coverage_gap_not_scanner_failure() -> None:
+    observation = _observation((_record(1, None),))
+    row = observation.records[0]
+    assert row.decision == "missing"
+    assert row.source_reason_codes == ()
+    assert observation.complete is True
+
+
 def test_advisory_burden_counts_bounded_markers_without_changing_status() -> None:
     report = _report(1, Status.PASS, advisory=True)
     observation = _observation(
@@ -249,6 +310,26 @@ def test_advisory_burden_counts_bounded_markers_without_changing_status() -> Non
     )
     assert burden == {"advisory-marker-count": 4, "records-with-advisory": 1}
     assert observation.records[0].coverage_status == "pass"
+
+
+def test_presence_and_non_authority_markers_do_not_create_review_demand() -> None:
+    report = AcceptanceReport(
+        linked_issue=1,
+        overall_status=Status.PASS,
+        checks=[CheckResult("required docs", Status.PASS, "existing canonical result")],
+        evidence=[
+            "documentation_advisory=present",
+            "authorization=advisory-only-not-readiness-write-or-merge",
+        ],
+    )
+    metrics = build_documentation_metrics_report(
+        _observation((_record(1, "docs-required", ("docs/a.md",)),), {1: report})
+    ).metrics
+    assert _counts(metrics.advisory_review_burden) == {
+        "advisory-marker-count": 2,
+        "records-with-advisory": 1,
+    }
+    assert _counts(metrics.operator_review_demand_counts)["advisory-review"] == 0
 
 
 def test_retrieval_incompleteness_remains_visible_and_forces_complete_false() -> None:
