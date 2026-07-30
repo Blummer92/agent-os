@@ -107,6 +107,9 @@ def prepare_cloud_build_provider_invocation(
         decision_id = ""
         reasons.add(ProviderReason.DISPATCH_INVALID)
 
+    if reasons:
+        return _result(status=ProviderResultStatus.MANUAL_REVIEW, reasons=reasons)
+
     launch_eligible = dispatch_decision.status == "launch-eligible" and dispatch_decision.launch_recommended is True
     if not launch_eligible:
         return _result(status=ProviderResultStatus.SKIPPED, reasons={ProviderReason.DISPATCH_NOT_LAUNCH_ELIGIBLE})
