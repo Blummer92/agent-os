@@ -292,6 +292,36 @@ def test_unsupported_and_malformed_property_values_fail_closed():
         read_existing_assets(FakeReader([_page_response([base])]), NotionReadRequest("x"), {"asset_title": "Title"})
 
 
+def test_rate_limit_error_enforces_global_delay_ceiling_without_calls():
+    assert NotionRateLimitError(300).retry_after == 300.0
+    assert NotionRateLimitError(300.0).retry_after == 300.0
+
+    reader_calls = []
+    sleep_calls = []
+    reader = InjectedNotionDataSourceReader(lambda **kwargs: reader_calls.append(kwargs))
+
+    with pytest.raises(ValueError) as caught:
+        NotionRateLimitError(300.1)
+
+    assert str(caught.value) == "retry_after is outside the supported range"
+    assert "300.1" not in str(caught.value)
+    assert reader_calls == []
+    assert sleep_calls == []
+    assert reader is not None
+
+
+@pytest.mark.parametrize("retry_after", [True, object()])
+def test_rate_limit_error_rejects_non_exact_numbers(retry_after):
+    with pytest.raises(TypeError, match="exact number"):
+        NotionRateLimitError(retry_after)
+
+
+@pytest.mark.parametrize("retry_after", [-1, float("inf"), float("nan")])
+def test_rate_limit_error_rejects_invalid_numeric_values(retry_after):
+    with pytest.raises(ValueError, match="outside the supported range"):
+        NotionRateLimitError(retry_after)
+
+
 def test_rate_limit_retries_use_exact_delays_and_reset_per_page():
     fixture = _fixture()
     reader = FakeReader(
