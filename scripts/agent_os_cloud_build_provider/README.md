@@ -1,8 +1,8 @@
 # Agent OS Cloud Build Provider Core
 
-This package defines the pure-local, deterministic contract between existing Agent OS execution evidence and a future connected Cloud Build adapter.
+This package defines the pure-local, deterministic contract between existing Agent OS execution evidence and Cloud Build, plus one injected adapter that submits, observes, and reconciles against that contract.
 
-It does not call Google Cloud, GitHub, the network, the filesystem, the clock, the environment, subprocesses, credentials, or any external system. All identities, times, authorization evidence, dispatch evidence, and provider observations are supplied explicitly by the caller.
+The core (`core.py`, `models.py`) does not call Google Cloud, GitHub, the network, the filesystem, the clock, the environment, subprocesses, credentials, or any external system. All identities, times, authorization evidence, dispatch evidence, and provider observations are supplied explicitly by the caller. The adapter (`adapter.py`, #805) performs no such call itself either: every Cloud Build submission, observation, and reconciliation is delegated to one caller-injected `CloudBuildProviderClient` implementation, never a Google SDK import in this package.
 
 ## Placement and dependency direction
 
@@ -65,9 +65,15 @@ Once the observation's identity is safely proven against the invocation, an unkn
 
 Complete terminal observations are normalized through the existing #685 `CloudBuildResultEvidence` contract. This package does not create a second terminal Cloud Build evidence model and never fabricates a build ID, tested SHA, failed step, exit code, source completeness, or success state.
 
+## Injected adapter (#805)
+
+`CloudBuildProviderAdapter` consumes one exact accepted `CloudBuildProviderInvocation` and an injected `CloudBuildProviderClient` (a small `Protocol` with `submit`, `observe`, and `reconcile` methods only -- no `cancel`). Before any client call it recomputes the invocation's semantic ID and confirms the injected `CloudBuildProviderConfiguration`'s fingerprint matches the one bound into the invocation; a wrong type, a drifted invocation, or a configuration mismatch submits zero times and is projected through `project_cloud_build_provider_result` with `side_effect_state=none`.
+
+Each adapter instance submits at most once and transports only identities already bound into the invocation and its bound configuration, tagging the request's `provider_metadata` with the invocation ID. A confirmed submission is polled through `observe` for a bounded number of attempts and projected through `project_cloud_build_provider_result`, the same #685-backed projection the core uses. A clean `denied` outcome is a proven pre-build failure (`side_effect_state=none`, `provider.permission-denied`) that `project_cloud_build_provider_result` cannot itself produce, so the adapter constructs that one result shape directly instead of inventing a new reason code. A raised exception, a malformed response, or an explicit `ambiguous` outcome from `submit` never re-submits; it calls `reconcile` exactly once, and only an exact single matching build ID is trusted -- zero or multiple matches stay `status=unknown`/`side_effect_state=unknown`, which is never automatically retried. Every adapter-produced result keeps `merge_authorized=false`, and every private diagnostic exposed on the adapter (`last_diagnostic`, `poll_attempts`) is bounded and control/secret-stripped; raw exception messages are never included, only the exception's type name.
+
 ## No-SDK and no-I/O boundary
 
-The pure core performs no network access, filesystem access, environment inspection, clock reads, subprocess execution, dynamic imports, Google SDK use, GitHub client use, credential access, provider calls, persistence, or external writes. Every caller-supplied UTC timestamp, including `CloudBuildProviderObservation.observed_at`, is validated by strict parse-and-round-trip against the canonical format, not by regex shape alone, so a calendar- or clock-impossible value is rejected without ever reading the host clock.
+The pure core performs no network access, filesystem access, environment inspection, clock reads, subprocess execution, dynamic imports, Google SDK use, GitHub client use, credential access, provider calls, persistence, or external writes. Every caller-supplied UTC timestamp, including `CloudBuildProviderObservation.observed_at`, is validated by strict parse-and-round-trip against the canonical format, not by regex shape alone, so a calendar- or clock-impossible value is rejected without ever reading the host clock. The adapter performs no GitHub write, command planning, Workflow Scheduler lifecycle management, deployment, IAM mutation, credential installation, or other workflow operation of its own; it also never reads the host clock, relying instead on client-supplied `observed_at` evidence for every observation it builds.
 
 ## Authority boundaries
 
@@ -82,10 +88,10 @@ Validation success does not authorize Ready-for-Review, merge, issue closure, pr
 - #520: duration, compute, cost, and concurrency conclusions
 - #685: terminal Cloud Build evidence normalization
 - #686 and #687: PR reporting and external activation
-- #805: future injected connected provider adapter
+- #805: injected connected provider adapter (`adapter.py`, this package)
 - #806: future external activation
 - #803: temporary-gateway retirement after replacement proof
 
 ## Rollback
 
-Remove this package, its focused tests, fixtures, and this README. Existing Execution Service, remote validation, Workflow Scheduler, Cloud Build reporting, GitHub reporting, Cloud resources, and the temporary gateway remain unchanged.
+Remove this package, its focused tests, fixtures, and this README. Existing Execution Service, remote validation, Workflow Scheduler, Cloud Build reporting, GitHub reporting, Cloud resources, and the temporary gateway remain unchanged. Removing only `adapter.py`, its exports, and `test_adapter.py` leaves the pure #804 core intact.
