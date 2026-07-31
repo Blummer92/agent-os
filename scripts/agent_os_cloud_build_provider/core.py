@@ -10,6 +10,7 @@ from agent_os_execution_service import (
     ValidationCommandPlan,
     execution_service_request_fingerprint,
     validate_execution_service_request,
+    validate_validation_command_plan,
     validation_command_plan_id,
 )
 from scripts.agent_os_cloud_build_reporting import OverallResult, normalize_cloud_build_evidence
@@ -31,6 +32,10 @@ from .models import (
 )
 
 _SHA40_RE = re.compile(r"^[0-9a-f]{40}$", re.ASCII)
+# The standard positive-PR command-plan schema only. Pre-PR command plans
+# (``pre-pr-validation-plan:``) are a distinct, non-launching workflow and
+# are never eligible for a Cloud Build provider invocation.
+_STANDARD_VALIDATION_PLAN_ID_PREFIX = "validation-plan:"
 _PROFILE_OPERATION = {
     "static": "validation.static",
     "focused": "validation.focused",
@@ -94,11 +99,31 @@ def prepare_cloud_build_provider_invocation(
     if request.request_fingerprint != execution_service_request_fingerprint(request):
         reasons.add(ProviderReason.REQUEST_FINGERPRINT_MISMATCH)
 
-    try:
-        computed_plan_id = validation_command_plan_id(command_plan)
-    except (TypeError, ValueError):
-        computed_plan_id = None
+    # The public command-plan validator runs before any command_plan field
+    # access or ID derivation below. ValidationCommandPlan performs no field
+    # validation of its own (no ``__post_init__``), so a malformed field
+    # value on an otherwise exact-type plan would otherwise reach an
+    # unguarded ``.casefold()``/comparison and raise instead of failing
+    # closed to a bounded manual-review result. This also enforces
+    # canonical registry argv membership, so no arbitrary argv can reach an
+    # accepted invocation below.
+    command_plan_reasons = validate_validation_command_plan(command_plan)
+    if command_plan_reasons:
         reasons.add(ProviderReason.COMMAND_PLAN_INVALID)
+        return _result(
+            status=ProviderStatus.MANUAL_REVIEW,
+            reasons=reasons,
+            execution_authorized=False,
+        )
+    if not command_plan.validation_plan_id.startswith(_STANDARD_VALIDATION_PLAN_ID_PREFIX):
+        reasons.add(ProviderReason.COMMAND_PLAN_UNSUPPORTED_SCHEMA)
+        return _result(
+            status=ProviderStatus.MANUAL_REVIEW,
+            reasons=reasons,
+            execution_authorized=False,
+        )
+
+    computed_plan_id = validation_command_plan_id(command_plan)
 
     request_repository = f"{request.repository_identity.owner}/{request.repository_identity.repository}"
     if request_repository.casefold() != command_plan.repository.casefold():
@@ -243,6 +268,24 @@ def project_cloud_build_provider_result(
             tested_sha=observation.tested_sha,
             execution_authorized=True,
             side_effect_state=observation.side_effect_state,
+        )
+
+    # An unknown side effect dominates every status projection below it: once
+    # the identities above are safely proven to match, an observation that
+    # cannot confirm what happened provider-side must never be overridden by
+    # a specific terminal_status (working, success, failure, ...). No
+    # terminal evidence is normalized or returned here, and the reason is a
+    # single bounded enum value.
+    if observation.side_effect_state is ProviderSideEffectState.UNKNOWN:
+        return _result(
+            status=ProviderStatus.UNKNOWN,
+            reasons={ProviderReason.OBSERVATION_UNKNOWN},
+            invocation=invocation,
+            invocation_id=invocation.invocation_id,
+            build_id=observation.build_id,
+            tested_sha=observation.tested_sha,
+            execution_authorized=True,
+            side_effect_state=ProviderSideEffectState.UNKNOWN,
         )
 
     if observation.terminal_status is ProviderObservationStatus.WORKING:

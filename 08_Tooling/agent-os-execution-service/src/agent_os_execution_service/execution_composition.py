@@ -45,6 +45,7 @@ from .command_planning import (
     COMMAND_REGISTRY_VERSION,
     CommandOperation,
     ValidationCommandPlan,
+    validate_validation_command_plan,
     validation_command_plan_id,
 )
 from .models import ExecutionServiceRequest, parse_canonical_utc
@@ -75,6 +76,15 @@ _QUARANTINED_RUNTIME_STATUS = "quarantined"
 _INFRASTRUCTURE_RUNTIME_STATUSES = frozenset(
     (_QUARANTINED_RUNTIME_STATUS, "failed", "timed-out")
 )
+
+# A canonical command-plan ID is a domain-separated SHA-256 digest that
+# ``validation_command_plan_id`` derives from an already-valid plan -- it
+# raises instead for a plan the public command-plan validator rejects. This
+# module must never call it on such a plan, and never fabricates or pretends
+# to possess a canonical ID in its place: this bounded, unambiguously
+# noncanonical placeholder (it does not match ``command-plan:<sha256>``) is
+# used instead, so it can never be confused with a real identity.
+_INVALID_COMMAND_PLAN_ID = "command-plan:invalid"
 
 
 class ExecutionCompositionStatus(str, Enum):
@@ -177,6 +187,59 @@ def _fail_closed(
         aggregate_pending=True,
         execution_authorized=execution_authorized,
         side_effects_performed=side_effects_performed,
+        reason_codes=tuple(sorted(set(reasons))),
+        evidence_id=evidence_id,
+    )
+
+
+def _safe_plan_text(value: object) -> str:
+    """Return one bounded, non-empty string, or ``"unavailable"`` for anything else.
+
+    ``ValidationCommandPlan`` performs no field validation of its own, so an
+    exact-type instance the public validator has already rejected may still
+    carry a non-string value on any field. This never raises regardless.
+    """
+    return value if type(value) is str and value else "unavailable"
+
+
+def _invalid_command_plan_result(
+    *,
+    request: ExecutionServiceRequest,
+    command_plan: ValidationCommandPlan,
+    validator_reasons: tuple[str, ...],
+) -> ExecutionCompositionResult:
+    """Bounded manual-review evidence for one exact-type but invalid command plan.
+
+    ``validation_command_plan_id`` raises for a plan the public command-plan
+    validator rejects, and both ``_identity_mismatches`` and ``_fail_closed``
+    call it unconditionally with no surrounding try/except -- so neither may
+    be used once a plan is known to be invalid. This function never calls
+    ``validation_command_plan_id``, never accesses a command-plan field
+    without a type guard, never executes the runtime, and never derives or
+    pretends to possess a canonical command-plan ID for the invalid plan: it
+    always uses the bounded, unambiguously noncanonical
+    ``_INVALID_COMMAND_PLAN_ID`` placeholder instead.
+    """
+    profile = _safe_plan_text(command_plan.profile)
+    reasons = ("command-plan-invalid",) + tuple(validator_reasons)
+    evidence_id = _evidence_id(
+        status=ExecutionCompositionStatus.MANUAL_REVIEW,
+        profile=profile,
+        request_fingerprint=request.request_fingerprint,
+        command_plan_id=_INVALID_COMMAND_PLAN_ID,
+        reasons=list(reasons),
+    )
+    return ExecutionCompositionResult(
+        request_fingerprint=request.request_fingerprint,
+        command_plan_id=_INVALID_COMMAND_PLAN_ID,
+        repository=_safe_plan_text(command_plan.repository),
+        expected_sha=_safe_plan_text(command_plan.expected_sha),
+        profile=profile,
+        status=ExecutionCompositionStatus.MANUAL_REVIEW,
+        validation_result=None,
+        aggregate_pending=True,
+        execution_authorized=False,
+        side_effects_performed=False,
         reason_codes=tuple(sorted(set(reasons))),
         evidence_id=evidence_id,
     )
@@ -362,6 +425,23 @@ def compose_and_run_validation(
         raise TypeError("pilot_input must be SingleIssuePilotInput")
     if not isinstance(configuration, ConcreteRuntimeConfiguration):
         raise TypeError("configuration must be ConcreteRuntimeConfiguration")
+
+    # The public command-plan validator runs before any command-plan
+    # serialization, ID derivation, or field access below.
+    # ValidationCommandPlan performs no field validation of its own, and
+    # validation_command_plan_id raises for a plan this validator rejects --
+    # both _identity_mismatches (an unconditional identity cross-check) and
+    # _fail_closed (an unconditional evidence-ID derivation) call it with no
+    # surrounding try/except, so an invalid exact-type command_plan must be
+    # caught here first, to fail closed to bounded manual-review evidence
+    # instead of raising or reaching the runtime.
+    command_plan_reasons = validate_validation_command_plan(command_plan)
+    if command_plan_reasons:
+        return _invalid_command_plan_result(
+            request=request,
+            command_plan=command_plan,
+            validator_reasons=command_plan_reasons,
+        )
 
     mismatches = _identity_mismatches(
         request=request,

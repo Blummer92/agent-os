@@ -242,9 +242,20 @@ def evaluate_dispatch_decision(
 
 
 def serialize_dispatch_decision(decision: DispatchDecision) -> dict[str, object]:
-    """Return canonical decision data after verifying its semantic identity."""
+    """Return canonical decision data after verifying its semantic identity.
+
+    ``dispatch_identity`` is never trusted as stored: it is independently
+    recomputed from the decision's own ``repository``, ``head_sha``,
+    ``profile``, ``selector_version``, ``command_set_digest``, and
+    ``plan_id`` and compared against the stored value before ``decision_id``
+    is even considered. A caller that changes ``dispatch_identity`` and
+    recomputes ``decision_id`` to match still fails here, because the
+    recomputed identity no longer agrees with those six source fields.
+    """
     if not isinstance(decision, DispatchDecision):
         raise TypeError("decision must be DispatchDecision")
+    if _independent_dispatch_identity(decision) != decision.dispatch_identity:
+        raise ValueError("validation dispatch identity mismatch")
     payload = _decision_payload(decision)
     expected = "validation-dispatch-decision:" + _semantic_digest(
         "agent-os-validation-dispatch-decision:v1", payload
@@ -256,6 +267,40 @@ def serialize_dispatch_decision(decision: DispatchDecision) -> dict[str, object]
     if len(_canonical_bytes(serialized)) > MAX_DISPATCH_SERIALIZED_BYTES:
         raise ValueError("validation dispatch decision exceeds canonical size limit")
     return serialized
+
+
+def _independent_dispatch_identity(decision: DispatchDecision) -> str | None:
+    """Recompute ``dispatch_identity`` from its six declared source fields.
+
+    A decision with no plan carries ``dispatch_identity=None`` alongside
+    ``None`` for every source field; that all-or-nothing shape is the only
+    case this function returns ``None`` for. Any partial mix of ``None`` and
+    populated source fields returns a sentinel that can never equal a real
+    identity, so it fails the equality check in the caller instead of
+    silently passing through ``_identity`` with a hashed ``None``.
+    """
+    fields = (
+        decision.repository,
+        decision.head_sha,
+        decision.profile,
+        decision.selector_version,
+        decision.command_set_digest,
+        decision.plan_id,
+    )
+    if all(field is None for field in fields):
+        return None
+    if any(field is None for field in fields):
+        return "validation-dispatch:incomplete-source-fields"
+    if not all(isinstance(field, str) for field in fields):
+        return "validation-dispatch:non-string-source-fields"
+    return _identity(
+        repository=decision.repository,
+        head_sha=decision.head_sha,
+        profile=decision.profile,
+        selector_version=decision.selector_version,
+        command_set_digest=decision.command_set_digest,
+        plan_id=decision.plan_id,
+    )
 
 
 def dispatch_decision_id(decision: DispatchDecision) -> str:

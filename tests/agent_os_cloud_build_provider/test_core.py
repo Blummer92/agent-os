@@ -19,6 +19,7 @@ from agent_os_execution_service import (
 from scripts.agent_os_cloud_build_provider import (
     CloudBuildProviderConfiguration,
     CloudBuildProviderObservation,
+    CloudBuildProviderResult,
     ProviderObservationStatus,
     ProviderReason,
     ProviderSideEffectState,
@@ -358,6 +359,194 @@ def test_observation_mismatch_and_incomplete_result_do_not_fabricate_evidence():
     assert unavailable.build_id is None
     assert unavailable.tested_sha is None
     assert unavailable.normalized_cloud_build_evidence is None
+
+
+# --- #804 corrections: command-plan validation, dominance, coherence ----------
+
+
+def test_malformed_command_plan_field_fails_closed_instead_of_raising():
+    """A field type ``ValidationCommandPlan`` never validates itself (it has
+    no ``__post_init__``) must never reach an unguarded ``.casefold()``.
+    """
+    request, command_plan, dispatch, authorization, configuration = _inputs()
+    tampered = replace(command_plan, repository=12345)  # type: ignore[arg-type]
+    result = prepare_cloud_build_provider_invocation(
+        request,
+        tampered,
+        dispatch,
+        authorization,
+        configuration,
+        resolved_sha=SHA,
+        evaluated_at="2026-07-30T20:00:00Z",
+    )
+    assert result.status is ProviderStatus.MANUAL_REVIEW
+    assert ProviderReason.COMMAND_PLAN_INVALID in result.reason_codes
+    assert result.invocation is None
+    assert result.merge_authorized is False
+
+
+def test_unregistered_argv_never_reaches_an_accepted_invocation():
+    request, command_plan, dispatch, authorization, configuration = _inputs()
+    rogue_entries = (
+        CommandPlanEntry(
+            operation=CommandOperation.VALIDATION_AGGREGATE, argv=("rm", "-rf", "/")
+        ),
+    )
+    tampered = replace(command_plan, entries=rogue_entries)
+    result = prepare_cloud_build_provider_invocation(
+        request,
+        tampered,
+        dispatch,
+        authorization,
+        configuration,
+        resolved_sha=SHA,
+        evaluated_at="2026-07-30T20:00:00Z",
+    )
+    assert result.status is ProviderStatus.MANUAL_REVIEW
+    assert ProviderReason.COMMAND_PLAN_INVALID in result.reason_codes
+    assert result.invocation is None
+
+
+def test_pre_pr_schema_command_plan_is_rejected():
+    request, command_plan, dispatch, authorization, configuration = _inputs()
+    pre_pr_shaped = replace(
+        command_plan,
+        validation_plan_id="pre-pr-validation-plan:" + "a" * 64,
+        validation_plan_schema_version="1.0",
+        profile="focused",
+        entries=(
+            CommandPlanEntry(
+                operation=CommandOperation.VALIDATION_FOCUSED,
+                argv=(
+                    "python",
+                    "-m",
+                    "pytest",
+                    "08_Tooling/notion-navigation-client/tests",
+                ),
+            ),
+        ),
+    )
+    dispatch = replace(dispatch, profile="focused")
+    authorization = replace(
+        authorization, command_plan_id=validation_command_plan_id(pre_pr_shaped)
+    )
+    result = prepare_cloud_build_provider_invocation(
+        request,
+        pre_pr_shaped,
+        dispatch,
+        authorization,
+        configuration,
+        resolved_sha=SHA,
+        evaluated_at="2026-07-30T20:00:00Z",
+    )
+    assert result.status is ProviderStatus.MANUAL_REVIEW
+    assert ProviderReason.COMMAND_PLAN_UNSUPPORTED_SCHEMA in result.reason_codes
+    assert result.invocation is None
+
+
+def test_unknown_side_effect_dominates_a_successful_terminal_status():
+    invocation = _accepted().invocation
+    observation = CloudBuildProviderObservation(
+        invocation_id=invocation.invocation_id,
+        build_id="build:804",
+        repository=invocation.repository,
+        tested_sha=invocation.resolved_sha,
+        terminal_status=ProviderObservationStatus.SUCCESS,
+        failed_step="none",
+        exit_code=0,
+        observed_at="2026-07-30T20:10:00Z",
+        source_complete=True,
+        side_effect_state=ProviderSideEffectState.UNKNOWN,
+    )
+    result = project_cloud_build_provider_result(invocation, observation)
+    assert result.status is ProviderStatus.UNKNOWN
+    assert result.side_effect_state is ProviderSideEffectState.UNKNOWN
+    assert result.normalized_cloud_build_evidence is None
+    assert result.reason_codes == (ProviderReason.OBSERVATION_UNKNOWN,)
+    assert result.merge_authorized is False
+
+
+def test_invocation_rejects_argv_identity_that_does_not_match_its_entries():
+    invocation = _accepted().invocation
+    with pytest.raises(ValueError, match="fixed_argv_identities"):
+        replace(invocation, fixed_argv_identities=("0" * 64,))
+
+
+def test_result_rejects_contradictory_direct_construction():
+    accepted = _accepted()
+    with pytest.raises(ValueError, match="cannot carry build evidence"):
+        replace(accepted, build_id="build:804")
+    with pytest.raises(ValueError, match="agree with whether an invocation is carried"):
+        replace(accepted, execution_authorized=False)
+    with pytest.raises(ValueError, match="unavailable, unknown, and terminal"):
+        replace(
+            accepted,
+            status=ProviderStatus.UNKNOWN,
+            invocation=None,
+            invocation_id=None,
+            execution_authorized=False,
+            side_effect_state=ProviderSideEffectState.UNKNOWN,
+        )
+    manual_review = prepare_cloud_build_provider_invocation(
+        *_inputs(), resolved_sha="f" * 40, evaluated_at="2026-07-30T20:00:00Z"
+    )
+    assert manual_review.status is ProviderStatus.MANUAL_REVIEW
+    with pytest.raises(ValueError, match="unknown result requires"):
+        replace(
+            manual_review,
+            status=ProviderStatus.UNKNOWN,
+            invocation=accepted.invocation,
+            invocation_id=accepted.invocation_id,
+            execution_authorized=True,
+            side_effect_state=ProviderSideEffectState.CONFIRMED,
+        )
+
+
+def test_result_merge_authorized_is_immutable():
+    accepted = _accepted()
+    with pytest.raises(TypeError):
+        CloudBuildProviderResult(
+            schema_version=accepted.schema_version,
+            status=accepted.status,
+            invocation=accepted.invocation,
+            invocation_id=accepted.invocation_id,
+            build_id=None,
+            tested_sha=None,
+            reason_codes=accepted.reason_codes,
+            normalized_cloud_build_evidence=None,
+            execution_authorized=True,
+            side_effect_state=accepted.side_effect_state,
+            merge_authorized=True,  # type: ignore[call-arg]
+        )
+
+
+@pytest.mark.parametrize(
+    "bad_timestamp",
+    [
+        "2026-02-30T00:00:00Z",  # impossible calendar date
+        "2026-01-01T25:00:00Z",  # impossible hour
+        "2026-01-01T00:61:00Z",  # impossible minute
+        "2026-1-1T00:00:00Z",  # not zero-padded
+        "not-a-timestamp",
+    ],
+)
+def test_observation_rejects_impossible_or_malformed_timestamps_without_reading_the_clock(
+    bad_timestamp,
+):
+    invocation = _accepted().invocation
+    with pytest.raises(ValueError, match="canonical UTC"):
+        CloudBuildProviderObservation(
+            invocation_id=invocation.invocation_id,
+            build_id="build:804",
+            repository=invocation.repository,
+            tested_sha=invocation.resolved_sha,
+            terminal_status=ProviderObservationStatus.SUCCESS,
+            failed_step="none",
+            exit_code=0,
+            observed_at=bad_timestamp,
+            source_complete=True,
+            side_effect_state=ProviderSideEffectState.CONFIRMED,
+        )
 
 
 def test_public_surface_has_no_shell_sdk_or_io_capability():

@@ -22,14 +22,17 @@ from agent_os_execution_service import (
     COMMAND_PLAN_SCHEMA_VERSION,
     COMMAND_REGISTRY_VERSION,
     CommandOperation,
+    CommandPlanEntry,
     EvidenceVisibilityPolicy,
     ExecutionServiceCapability,
     ExecutionServiceInvalidationCondition,
     ExecutionServiceRequest,
     build_validation_command_plan,
     serialize_validation_command_plan,
+    validate_validation_command_plan,
     validation_command_plan_id,
 )
+from agent_os_execution_service import command_planning as command_planning_module
 
 A = "a" * 40
 B = "b" * 40
@@ -439,3 +442,233 @@ def test_pre_pr_command_plan_is_immutable() -> None:
     )
     with pytest.raises(FrozenInstanceError):
         value.profile = "aggregate"  # type: ignore[misc]
+
+
+# --- validate_validation_command_plan (#804) -----------------------------------
+
+
+def _valid_plan():
+    return build_validation_command_plan(request(), plan(), evaluated_at=EVALUATED_AT)
+
+
+def _valid_pre_pr_plan():
+    return build_validation_command_plan(
+        pre_pr_request(), pre_pr_plan(), evaluated_at=PILOT_EVALUATED_AT
+    )
+
+
+def _tampered(value, **overrides: object):
+    tampered = copy.deepcopy(value)
+    for name, field_value in overrides.items():
+        object.__setattr__(tampered, name, field_value)
+    return tampered
+
+
+def test_validator_accepts_valid_builder_produced_plans_of_both_schemas() -> None:
+    assert validate_validation_command_plan(_valid_plan()) == ()
+    assert validate_validation_command_plan(_valid_pre_pr_plan()) == ()
+    assert validate_validation_command_plan(
+        build_validation_command_plan(
+            request(), plan(profile="static", commands=(), reason_codes=("profile.documentation-static",)),
+            evaluated_at=EVALUATED_AT,
+        )
+    ) == ()
+
+
+def test_validator_never_raises_and_is_total_on_non_plan_input() -> None:
+    for garbage in (object(), None, "plan", 1, [], {}, ()):
+        assert validate_validation_command_plan(garbage) == ("command-plan.invalid-type",)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"repository": 1},
+        {"entries": "not-a-tuple"},
+        {"entries": (1, 2)},
+        {"request_revision": True},
+        {"request_revision": "1"},
+        {"execution_authorized": True},
+        {"merge_authorized": True},
+        {"side_effects_performed": True},
+    ],
+)
+def test_validator_never_raises_on_malformed_runtime_fields(overrides: dict) -> None:
+    tampered = _tampered(_valid_plan(), **overrides)
+    assert validate_validation_command_plan(tampered) == ("command-plan.malformed-runtime",)
+
+
+def test_validator_rejects_schema_and_registry_version_drift() -> None:
+    assert "command-plan.schema-version" in validate_validation_command_plan(
+        _tampered(_valid_plan(), schema_version="9.9")
+    )
+    assert "command-plan.registry-version" in validate_validation_command_plan(
+        _tampered(_valid_plan(), registry_version="9.9")
+    )
+
+
+@pytest.mark.parametrize("bad_revision", [0, -1])
+def test_validator_rejects_non_positive_revision(bad_revision: int) -> None:
+    assert "command-plan.request-revision" in validate_validation_command_plan(
+        _tampered(_valid_plan(), request_revision=bad_revision)
+    )
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"repository": ""},
+        {"issue_or_handoff_identity": ""},
+        {"requested_ref": ""},
+        {"request_fingerprint": ""},
+        {"selector_version": ""},
+        {"command_set_digest": ""},
+        {"repository": "x" * 5000},
+        {"expected_sha": "not-a-sha"},
+        {"request_fingerprint": "not-hex64"},
+        {"command_set_digest": "not-hex64"},
+    ],
+)
+def test_validator_rejects_unbounded_or_malformed_identity_fields(overrides: dict) -> None:
+    assert "command-plan.identity-bounds" in validate_validation_command_plan(
+        _tampered(_valid_plan(), **overrides)
+    )
+
+
+def test_validator_rejects_validation_plan_schema_drift() -> None:
+    valid = _valid_plan()
+    assert "command-plan.validation-plan-schema" in validate_validation_command_plan(
+        _tampered(valid, validation_plan_schema_version="9.9")
+    )
+    assert "command-plan.validation-plan-schema" in validate_validation_command_plan(
+        _tampered(valid, validation_plan_id="not-a-recognized-plan-id")
+    )
+    pre_pr_valid = _valid_pre_pr_plan()
+    assert "command-plan.validation-plan-schema" in validate_validation_command_plan(
+        _tampered(pre_pr_valid, validation_plan_schema_version="9.9")
+    )
+
+
+def test_validator_rejects_profile_operation_mismatch() -> None:
+    valid = _valid_plan()
+    assert "command-plan.profile-operation-mismatch" in validate_validation_command_plan(
+        _tampered(valid, profile="manual-review")
+    )
+    mismatched_entries = tuple(
+        _tampered(entry, operation=CommandOperation.VALIDATION_AGGREGATE)
+        for entry in valid.entries
+    )
+    assert "command-plan.profile-operation-mismatch" in validate_validation_command_plan(
+        _tampered(valid, entries=mismatched_entries)
+    )
+
+
+def test_validator_rejects_static_plans_with_entries() -> None:
+    static = build_validation_command_plan(
+        request(),
+        plan(profile="static", commands=(), reason_codes=("profile.documentation-static",)),
+        evaluated_at=EVALUATED_AT,
+    )
+    executable = _valid_plan()
+    assert "command-plan.static-not-empty" in validate_validation_command_plan(
+        _tampered(static, entries=executable.entries)
+    )
+
+
+def test_validator_rejects_executable_plans_with_no_entries() -> None:
+    assert "command-plan.executable-empty" in validate_validation_command_plan(
+        _tampered(_valid_plan(), entries=())
+    )
+
+
+def test_validator_rejects_argv_not_in_the_registry() -> None:
+    valid = _valid_plan()
+    rogue = CommandPlanEntry(
+        operation=valid.entries[0].operation, argv=("rm", "-rf", "/")
+    )
+    assert "command-plan.argv-not-registered" in validate_validation_command_plan(
+        _tampered(valid, entries=(rogue,))
+    )
+
+
+def test_validator_rejects_duplicate_argv() -> None:
+    valid = _valid_plan()
+    duplicated = valid.entries + valid.entries
+    assert "command-plan.duplicate-argv" in validate_validation_command_plan(
+        _tampered(valid, entries=duplicated)
+    )
+
+
+def test_validator_rejects_out_of_order_entries_for_positive_pr_plans() -> None:
+    aggregate = build_validation_command_plan(
+        request(),
+        plan(
+            profile="aggregate",
+            commands=("python -m pytest", "python -m pytest tests/agent_os_issue_acceptance"),
+            reason_codes=("profile.aggregate-configuration",),
+        ),
+        evaluated_at=EVALUATED_AT,
+    )
+    assert validate_validation_command_plan(aggregate) == ()
+    reversed_entries = tuple(reversed(aggregate.entries))
+    assert reversed_entries != aggregate.entries
+    assert "command-plan.ordering" in validate_validation_command_plan(
+        _tampered(aggregate, entries=reversed_entries)
+    )
+
+
+def test_validator_does_not_enforce_argv_ordering_for_pre_pr_plans() -> None:
+    pre_pr_valid = _valid_pre_pr_plan()
+    assert validate_validation_command_plan(pre_pr_valid) == ()
+    assert not pre_pr_valid.validation_plan_id.startswith("validation-plan:")
+
+
+def test_validator_rejects_oversized_serialization(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(command_planning_module, "MAX_COMMAND_PLAN_SERIALIZED_BYTES", 1)
+    assert "command-plan.serialized-size" in validate_validation_command_plan(_valid_plan())
+
+
+def test_validator_does_not_expose_or_mutate_the_private_registry() -> None:
+    assert not hasattr(command_planning_module, "COMMAND_REGISTRY")
+    assert "_COMMAND_REGISTRY" not in getattr(command_planning_module, "__all__", ())
+    before = dict(command_planning_module._COMMAND_REGISTRY)
+    validate_validation_command_plan(_valid_plan())
+    assert dict(command_planning_module._COMMAND_REGISTRY) == before
+    assert command_planning_module.COMMAND_REGISTRY_VERSION == "1.0"
+
+
+def test_serialize_and_id_reject_every_validator_reason_with_no_argv_exemption() -> None:
+    valid = _valid_plan()
+    rogue = CommandPlanEntry(operation=valid.entries[0].operation, argv=("curl", "evil.example"))
+    tampered = _tampered(valid, entries=(rogue,))
+    reasons = validate_validation_command_plan(tampered)
+    assert "command-plan.argv-not-registered" in reasons
+    with pytest.raises(ValueError, match="command-plan.argv-not-registered"):
+        serialize_validation_command_plan(tampered)
+    with pytest.raises(ValueError, match="command-plan.argv-not-registered"):
+        validation_command_plan_id(tampered)
+
+
+def test_serialize_and_id_reject_operation_mismatch_with_no_exemption() -> None:
+    valid = _valid_plan()
+    mismatched_entries = tuple(
+        _tampered(entry, operation=CommandOperation.VALIDATION_AGGREGATE)
+        for entry in valid.entries
+    )
+    tampered = _tampered(valid, entries=mismatched_entries)
+    with pytest.raises(ValueError, match="command-plan.profile-operation-mismatch"):
+        serialize_validation_command_plan(tampered)
+    with pytest.raises(ValueError, match="command-plan.profile-operation-mismatch"):
+        validation_command_plan_id(tampered)
+
+
+def test_serialize_and_id_still_succeed_byte_for_byte_for_valid_plans() -> None:
+    valid = _valid_plan()
+    assert serialize_validation_command_plan(valid) == serialize_validation_command_plan(valid)
+    assert validation_command_plan_id(valid) == POSITIVE_PR_COMMAND_PLAN_ID
+    pre_pr_valid = _valid_pre_pr_plan()
+    assert validate_validation_command_plan(pre_pr_valid) == ()
+    assert validation_command_plan_id(pre_pr_valid) == (
+        "command-plan:"
+        "9d3e5032e1fc46f233b79ad6be3767bc507304d015a6ebebc974c5e747f3e835"
+    )

@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Literal
 
@@ -30,6 +31,9 @@ _SECRET_RE = re.compile(
     r"(?:token|password|secret|api[_-]?key|private[_-]?key)\s*[:=])"
 )
 _DIGEST_IDENTITY_RE = re.compile(r"^[A-Za-z0-9._:/@+-]+@sha256:[0-9a-f]{64}$", re.ASCII)
+_TIMESTAMP_RE = re.compile(
+    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$", re.ASCII
+)
 
 
 class ProviderStatus(str, Enum):
@@ -70,6 +74,7 @@ class ProviderReason(str, Enum):
     REQUEST_EXPIRED = "request.expired"
     REQUEST_FINGERPRINT_MISMATCH = "request.fingerprint-mismatch"
     COMMAND_PLAN_INVALID = "command-plan.invalid"
+    COMMAND_PLAN_UNSUPPORTED_SCHEMA = "command-plan.unsupported-schema"
     COMMAND_PLAN_ID_MISMATCH = "command-plan.id-mismatch"
     COMMAND_PLAN_REQUEST_MISMATCH = "command-plan.request-mismatch"
     COMMAND_PLAN_VALIDATION_PLAN_MISMATCH = "command-plan.validation-plan-mismatch"
@@ -225,10 +230,17 @@ class CloudBuildProviderInvocation:
         if not all(type(item) is ProviderCommandEntry for item in self.fixed_command_entries):
             raise TypeError("fixed_command_entries must contain exact ProviderCommandEntry values")
         _exact_tuple("fixed_argv_identities", self.fixed_argv_identities)
-        if len(self.fixed_argv_identities) != len(self.fixed_command_entries):
-            raise ValueError("argv identities must align with command entries")
-        for identity in self.fixed_argv_identities:
-            _sha256("fixed argv identity", identity)
+        # Recomputed, never trusted as supplied: a caller cannot pair a real
+        # command entry with a forged or stale argv identity, because the
+        # only accepted value is the one independently derived from that
+        # exact entry via ``argv_identity``.
+        recomputed_argv_identities = tuple(
+            argv_identity(entry) for entry in self.fixed_command_entries
+        )
+        if self.fixed_argv_identities != recomputed_argv_identities:
+            raise ValueError(
+                "fixed_argv_identities must be the recomputed identity of each command entry"
+            )
         computed = cloud_build_provider_invocation_id(self)
         if self.invocation_id:
             _bounded_identity("invocation_id", self.invocation_id)
@@ -315,6 +327,44 @@ class CloudBuildProviderResult:
             raise TypeError("execution_authorized must be an exact boolean")
         if type(self.side_effect_state) is not ProviderSideEffectState:
             raise TypeError("side_effect_state must be ProviderSideEffectState")
+
+        # Status coherence: a caller cannot directly construct a result whose
+        # status contradicts its invocation, evidence, or side-effect state.
+        if self.execution_authorized != (self.invocation is not None):
+            raise ValueError(
+                "execution_authorized must agree with whether an invocation is carried"
+            )
+        if self.invocation is not None and self.invocation_id != self.invocation.invocation_id:
+            raise ValueError("invocation_id must match the carried invocation")
+        if self.status is ProviderStatus.ACCEPTED and (
+            self.build_id is not None
+            or self.tested_sha is not None
+            or self.normalized_cloud_build_evidence is not None
+        ):
+            raise ValueError("an accepted result cannot carry build evidence yet")
+        if self.status is ProviderStatus.TERMINAL:
+            if (
+                self.normalized_cloud_build_evidence is None
+                or self.build_id is None
+                or self.tested_sha is None
+            ):
+                raise ValueError("a terminal result requires complete build evidence")
+        elif self.normalized_cloud_build_evidence is not None:
+            raise ValueError("only a terminal result may carry normalized build evidence")
+        if (
+            self.status is ProviderStatus.UNKNOWN
+            and self.side_effect_state is not ProviderSideEffectState.UNKNOWN
+        ):
+            raise ValueError("an unknown result requires an unknown side-effect state")
+        if (
+            self.status
+            in (ProviderStatus.UNAVAILABLE, ProviderStatus.UNKNOWN, ProviderStatus.TERMINAL)
+            and self.invocation is None
+        ):
+            raise ValueError(
+                "unavailable, unknown, and terminal results require a carried invocation"
+            )
+
         computed = cloud_build_provider_result_id(self)
         if self.result_id:
             _bounded_identity("result_id", self.result_id)
@@ -512,5 +562,18 @@ def _sha256(name: str, value: object) -> None:
 
 
 def _canonical_utc(name: str, value: object) -> None:
-    if type(value) is not str or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z", value):
+    """Strictly parse-and-round-trip one canonical UTC timestamp.
+
+    A regex alone accepts calendar-impossible values like ``2026-02-30`` or
+    clock-impossible values like ``25:61:00``; ``strptime`` rejects both, and
+    the round trip back through ``strftime`` rejects any input that is not
+    already in its own canonical form. Never reads the host clock.
+    """
+    if type(value) is not str or not _TIMESTAMP_RE.fullmatch(value):
+        raise ValueError(f"{name} must be canonical UTC seconds")
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        raise ValueError(f"{name} must be canonical UTC seconds") from None
+    if parsed.strftime("%Y-%m-%dT%H:%M:%SZ") != value:
         raise ValueError(f"{name} must be canonical UTC seconds")

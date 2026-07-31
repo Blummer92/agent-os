@@ -37,9 +37,11 @@ An accepted invocation requires agreement across repository, requested ref, expe
 
 The resolved SHA must equal the expected SHA before invocation acceptance.
 
+`prepare_cloud_build_provider_invocation` (#804) calls the public `validate_validation_command_plan` before touching any command-plan field or deriving an ID: `ValidationCommandPlan` performs no field validation of its own, so an exact-type plan with a malformed field would otherwise reach an unguarded comparison and raise. A malformed plan, or one whose `validation_plan_id` is not the standard positive-PR `validation-plan:` schema (pre-PR candidate plans are a distinct, non-launching workflow), fails closed to a bounded manual-review result instead. `dispatch_identity` is likewise never trusted as supplied: the dispatch-guard boundary independently recomputes it from repository, head SHA, profile, selector version, command-set digest, and validation-plan ID before a decision ID is accepted, so changing `dispatch_identity` and recomputing a self-consistent decision ID around it still fails.
+
 ## Fixed commands only
 
-The provider copies exact `CommandPlanEntry` values from the canonical `ValidationCommandPlan`. It exposes no shell string, shell parser, arbitrary command builder, or caller-supplied argv surface. Each exact entry receives a deterministic domain-separated argv identity.
+The provider copies exact `CommandPlanEntry` values from the canonical `ValidationCommandPlan`, which the command-plan validator has already confirmed uses only argv drawn from the existing command registry. It exposes no shell string, shell parser, arbitrary command builder, or caller-supplied argv surface. Each exact entry receives a deterministic domain-separated argv identity, and `CloudBuildProviderInvocation` recomputes that identity from its own `fixed_command_entries` rather than trusting a supplied `fixed_argv_identities` value, so a real entry can never be paired with a forged or stale identity.
 
 ## Status and reason vocabulary
 
@@ -57,13 +59,15 @@ Issue #369 remains the sole owner of launch eligibility, duplicate suppression, 
 
 An unknown provider-side effect is explicit and non-retryable. A retry requires external reconciliation, a fresh exact #369 decision, and therefore a new invocation identity.
 
+Once the observation's identity is safely proven against the invocation, an unknown side-effect state dominates every other status this package could otherwise project: it always yields `status=unknown`, never a `working`/`success`/`failure`/... projection, with no terminal evidence, a single bounded reason, and `merge_authorized=false`. `CloudBuildProviderResult` enforces this and related status/evidence/invocation coherence in its own constructor, so a contradictory result (an `accepted` status carrying build evidence, a `terminal` status without complete evidence, or an `unknown` status without an unknown side-effect state) cannot be constructed directly, not only produced through the normal entry points.
+
 ## Terminal evidence
 
 Complete terminal observations are normalized through the existing #685 `CloudBuildResultEvidence` contract. This package does not create a second terminal Cloud Build evidence model and never fabricates a build ID, tested SHA, failed step, exit code, source completeness, or success state.
 
 ## No-SDK and no-I/O boundary
 
-The pure core performs no network access, filesystem access, environment inspection, clock reads, subprocess execution, dynamic imports, Google SDK use, GitHub client use, credential access, provider calls, persistence, or external writes.
+The pure core performs no network access, filesystem access, environment inspection, clock reads, subprocess execution, dynamic imports, Google SDK use, GitHub client use, credential access, provider calls, persistence, or external writes. Every caller-supplied UTC timestamp, including `CloudBuildProviderObservation.observed_at`, is validated by strict parse-and-round-trip against the canonical format, not by regex shape alone, so a calendar- or clock-impossible value is rejected without ever reading the host clock.
 
 ## Authority boundaries
 

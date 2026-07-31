@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
@@ -27,6 +28,13 @@ from .request_validation import validate_execution_service_request
 COMMAND_PLAN_SCHEMA_VERSION = "1.0"
 COMMAND_REGISTRY_VERSION = "1.0"
 MAX_COMMAND_PLAN_SERIALIZED_BYTES = 32_768
+
+_SHA40_RE = re.compile(r"^[0-9a-f]{40}$", re.ASCII)
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$", re.ASCII)
+_VALIDATION_PLAN_ID_RE = re.compile(r"^validation-plan:[0-9a-f]{64}$", re.ASCII)
+_PRE_PR_VALIDATION_PLAN_ID_RE = re.compile(
+    r"^pre-pr-validation-plan:[0-9a-f]{64}$", re.ASCII
+)
 
 
 class CommandOperation(str, Enum):
@@ -135,14 +143,26 @@ class ValidationCommandPlan:
     side_effects_performed: Literal[False] = field(default=False, init=False)
 
 
+# Keyed by profile name so both the builder and the validator agree on exactly
+# one operation per profile without duplicating the mapping.
+_PROFILE_OPERATIONS = MappingProxyType(
+    {
+        "static": CommandOperation.VALIDATION_STATIC,
+        "focused": CommandOperation.VALIDATION_FOCUSED,
+        "aggregate": CommandOperation.VALIDATION_AGGREGATE,
+    }
+)
+
+# Derived once from the private registry so argv membership can be checked
+# without exposing, duplicating, or mutating the registry itself.
+_REGISTRY_ARGV_VALUES = frozenset(_COMMAND_REGISTRY.values())
+
+
 def _operation_for(profile: str) -> CommandOperation:
-    if profile == "static":
-        return CommandOperation.VALIDATION_STATIC
-    if profile == "focused":
-        return CommandOperation.VALIDATION_FOCUSED
-    if profile == "aggregate":
-        return CommandOperation.VALIDATION_AGGREGATE
-    raise ValueError("manual-review plans cannot produce command plans")
+    operation = _PROFILE_OPERATIONS.get(profile)
+    if operation is None:
+        raise ValueError("manual-review plans cannot produce command plans")
+    return operation
 
 
 def build_validation_command_plan(
@@ -300,10 +320,135 @@ def _build_pre_pr_command_plan(
     )
 
 
-def serialize_validation_command_plan(plan: object) -> dict[str, object]:
+def _runtime_safe_command_plan(plan: ValidationCommandPlan) -> bool:
+    """Return whether every field has the exact runtime type this validator trusts.
+
+    Short-circuits before any risky access: ``entries`` is confirmed to be a
+    tuple before it is ever iterated, and every item is confirmed to be an
+    exact ``CommandPlanEntry`` (itself construction-validated) before its
+    ``operation``/``argv`` are read anywhere else in this module.
+    """
+    return (
+        type(plan.schema_version) is str
+        and type(plan.registry_version) is str
+        and type(plan.repository) is str
+        and type(plan.issue_or_handoff_identity) is str
+        and type(plan.requested_ref) is str
+        and type(plan.expected_sha) is str
+        and type(plan.request_revision) is int
+        and not isinstance(plan.request_revision, bool)
+        and type(plan.request_fingerprint) is str
+        and type(plan.validation_plan_id) is str
+        and type(plan.validation_plan_schema_version) is str
+        and type(plan.selector_version) is str
+        and type(plan.profile) is str
+        and type(plan.command_set_digest) is str
+        and type(plan.entries) is tuple
+        and all(type(item) is CommandPlanEntry for item in plan.entries)
+        and plan.execution_authorized is False
+        and plan.merge_authorized is False
+        and plan.side_effects_performed is False
+    )
+
+
+def _validation_plan_schema_reason(plan: ValidationCommandPlan) -> str | None:
+    if _VALIDATION_PLAN_ID_RE.fullmatch(plan.validation_plan_id):
+        if plan.validation_plan_schema_version != VALIDATION_PLAN_SCHEMA_VERSION:
+            return "command-plan.validation-plan-schema"
+        return None
+    if _PRE_PR_VALIDATION_PLAN_ID_RE.fullmatch(plan.validation_plan_id):
+        if plan.validation_plan_schema_version != PRE_PR_VALIDATION_PLAN_SCHEMA_VERSION:
+            return "command-plan.validation-plan-schema"
+        return None
+    return "command-plan.validation-plan-schema"
+
+
+def _bounded_identity_text(value: str) -> bool:
+    return bool(value) and len(value) <= MAX_PLAN_STRING_LENGTH
+
+
+def validate_validation_command_plan(plan: object) -> tuple[str, ...]:
+    """Validate one command plan without I/O, mutation, or ever raising.
+
+    Returns a sorted tuple of bounded reason codes; an empty tuple means the
+    plan satisfies every check below. This is the single source of truth
+    ``serialize_validation_command_plan`` and ``validation_command_plan_id``
+    defer to -- neither function accepts a plan this validator rejects, and
+    neither carves out an exemption for unregistered argv or a profile/
+    operation mismatch. Argv membership is checked against the existing
+    private ``_COMMAND_REGISTRY`` in this module; the registry itself is
+    never exposed, copied, mutated, or version-bumped by this function.
+    """
     if type(plan) is not ValidationCommandPlan:
-        raise TypeError("plan must be an exact ValidationCommandPlan")
-    payload: dict[str, object] = {
+        return ("command-plan.invalid-type",)
+    if not _runtime_safe_command_plan(plan):
+        return ("command-plan.malformed-runtime",)
+
+    reasons: set[str] = set()
+    if plan.schema_version != COMMAND_PLAN_SCHEMA_VERSION:
+        reasons.add("command-plan.schema-version")
+    if plan.registry_version != COMMAND_REGISTRY_VERSION:
+        reasons.add("command-plan.registry-version")
+    if plan.request_revision <= 0:
+        reasons.add("command-plan.request-revision")
+
+    for value in (
+        plan.repository,
+        plan.issue_or_handoff_identity,
+        plan.requested_ref,
+        plan.request_fingerprint,
+        plan.validation_plan_id,
+        plan.selector_version,
+        plan.command_set_digest,
+    ):
+        if not _bounded_identity_text(value):
+            reasons.add("command-plan.identity-bounds")
+            break
+    if not _SHA40_RE.fullmatch(plan.expected_sha):
+        reasons.add("command-plan.identity-bounds")
+    if not _SHA256_RE.fullmatch(plan.request_fingerprint):
+        reasons.add("command-plan.identity-bounds")
+    if not _SHA256_RE.fullmatch(plan.command_set_digest):
+        reasons.add("command-plan.identity-bounds")
+
+    schema_reason = _validation_plan_schema_reason(plan)
+    if schema_reason is not None:
+        reasons.add(schema_reason)
+
+    expected_operation = _PROFILE_OPERATIONS.get(plan.profile)
+    if expected_operation is None:
+        reasons.add("command-plan.profile-operation-mismatch")
+    elif any(entry.operation is not expected_operation for entry in plan.entries):
+        reasons.add("command-plan.profile-operation-mismatch")
+
+    if plan.profile == "static" and plan.entries:
+        reasons.add("command-plan.static-not-empty")
+    if plan.profile in ("focused", "aggregate") and not plan.entries:
+        reasons.add("command-plan.executable-empty")
+
+    argvs = tuple(entry.argv for entry in plan.entries)
+    if any(argv not in _REGISTRY_ARGV_VALUES for argv in argvs):
+        reasons.add("command-plan.argv-not-registered")
+    if len(set(argvs)) != len(argvs):
+        reasons.add("command-plan.duplicate-argv")
+    if _VALIDATION_PLAN_ID_RE.fullmatch(plan.validation_plan_id) and argvs != tuple(
+        sorted(argvs)
+    ):
+        reasons.add("command-plan.ordering")
+
+    encoded = json.dumps(
+        _command_plan_payload(plan),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    if len(encoded) > MAX_COMMAND_PLAN_SERIALIZED_BYTES:
+        reasons.add("command-plan.serialized-size")
+
+    return tuple(sorted(reasons))
+
+
+def _command_plan_payload(plan: ValidationCommandPlan) -> dict[str, object]:
+    return {
         "schema_version": plan.schema_version,
         "registry_version": plan.registry_version,
         "repository": plan.repository,
@@ -325,14 +470,17 @@ def serialize_validation_command_plan(plan: object) -> dict[str, object]:
         "merge_authorized": False,
         "side_effects_performed": False,
     }
-    encoded = json.dumps(
-        payload,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    if len(encoded) > MAX_COMMAND_PLAN_SERIALIZED_BYTES:
-        raise ValueError("command plan exceeds serialized size limit")
-    return payload
+
+
+def serialize_validation_command_plan(plan: object) -> dict[str, object]:
+    if type(plan) is not ValidationCommandPlan:
+        raise TypeError("plan must be an exact ValidationCommandPlan")
+    reasons = validate_validation_command_plan(plan)
+    if reasons:
+        raise ValueError(
+            "invalid validation command plan: " + ",".join(reasons)
+        )
+    return _command_plan_payload(plan)
 
 
 def validation_command_plan_id(plan: object) -> str:
