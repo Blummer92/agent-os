@@ -161,6 +161,14 @@ def _configuration():
     )
 
 
+def _configuration_variant():
+    return replace(
+        _configuration(),
+        evidence_destination_identity="gs://agent-os-evidence/other-runs",
+        configuration_fingerprint="",
+    )
+
+
 def _authorization(request, command_plan, *, granted=True):
     return ExecutionAuthorizationEvidence(
         authorization_id="authorization:805",
@@ -740,3 +748,180 @@ def test_adapter_never_calls_client_outside_injected_protocol_methods():
     assert len(client.submit_calls) == 1
     assert len(client.observe_calls) == 1
     assert len(client.reconcile_calls) == 0
+
+
+# --- PR #818 review Finding 1: configuration-fingerprint drift is untested. ---
+def test_configuration_fingerprint_drift_submits_zero_times():
+    configuration_a = _configuration()
+    invocation = _invocation(configuration=configuration_a)
+    configuration_b = _configuration_variant()
+    assert configuration_b.configuration_fingerprint != configuration_a.configuration_fingerprint
+
+    client = FakeCloudBuildClient()
+    result = _adapter(client, configuration=configuration_b).run(invocation)
+
+    assert client.submit_calls == []
+    assert client.observe_calls == []
+    assert client.reconcile_calls == []
+    assert result.side_effect_state is ProviderSideEffectState.NONE
+    assert result.merge_authorized is False
+    assert result.invocation is None
+    assert result.execution_authorized is False
+
+
+# --- PR #818 review Finding 2: post-submission exception/malformed-response
+# paths in observe() and reconcile(), and the submit()-malformed-outcome and
+# _safe_observation fail-closed fallback, were untested. ---
+def test_malformed_submit_outcome_reconciles_and_fails_closed_without_retry():
+    invocation = _invocation()
+    hostile = "not-a-real-submission-outcome token=abc123-should-not-leak"
+    client = FakeCloudBuildClient(
+        submit_result=hostile,
+        reconcile_result=CloudBuildReconciliationOutcome(matches=(), observed_at=OBSERVED_AT),
+    )
+    adapter = _adapter(client)
+    result = adapter.run(invocation)
+
+    assert len(client.submit_calls) == 1
+    assert len(client.reconcile_calls) == 1
+    assert result.status is ProviderStatus.UNKNOWN
+    assert result.side_effect_state is ProviderSideEffectState.UNKNOWN
+    assert hostile not in adapter.last_diagnostic
+    assert "abc123-should-not-leak" not in repr(result)
+
+    with pytest.raises(RuntimeError):
+        adapter.run(invocation)
+    assert len(client.submit_calls) == 1
+
+
+def test_reconciliation_exception_after_ambiguous_submission_returns_unknown_without_retry():
+    invocation = _invocation()
+    client = FakeCloudBuildClient(
+        submit_result=CloudBuildSubmissionOutcome(kind="ambiguous", observed_at=OBSERVED_AT),
+        reconcile_error=RuntimeError("token=super-secret-reconcile-value from /etc/private/creds"),
+    )
+    adapter = _adapter(client)
+    result = adapter.run(invocation)
+
+    assert len(client.submit_calls) == 1
+    assert len(client.reconcile_calls) == 1
+    assert result.status is ProviderStatus.UNKNOWN
+    assert result.side_effect_state is ProviderSideEffectState.UNKNOWN
+    assert "super-secret-reconcile-value" not in adapter.last_diagnostic
+    assert "/etc/private/creds" not in adapter.last_diagnostic
+
+    with pytest.raises(RuntimeError):
+        adapter.run(invocation)
+    assert len(client.submit_calls) == 1
+    assert len(client.reconcile_calls) == 1
+
+
+def test_malformed_reconciliation_outcome_stays_unknown_without_retry():
+    invocation = _invocation()
+    client = FakeCloudBuildClient(
+        submit_result=CloudBuildSubmissionOutcome(kind="ambiguous", observed_at=OBSERVED_AT),
+        reconcile_result={"matches": ["build-x"]},
+    )
+    adapter = _adapter(client)
+    result = adapter.run(invocation)
+
+    assert len(client.submit_calls) == 1
+    assert len(client.reconcile_calls) == 1
+    assert result.status is ProviderStatus.UNKNOWN
+    assert result.side_effect_state is ProviderSideEffectState.UNKNOWN
+    assert result.build_id is None
+
+    with pytest.raises(RuntimeError):
+        adapter.run(invocation)
+    assert len(client.submit_calls) == 1
+
+
+def test_observation_exception_after_confirmed_build_returns_unknown_without_retry():
+    invocation = _invocation()
+    client = FakeCloudBuildClient(
+        submit_result=CloudBuildSubmissionOutcome(kind="confirmed", build_id="build-1", observed_at=OBSERVED_AT),
+        observe_error=RuntimeError("token=super-secret-observe-value from /etc/private/creds"),
+    )
+    adapter = _adapter(client)
+    result = adapter.run(invocation)
+
+    assert len(client.submit_calls) == 1
+    assert result.status is ProviderStatus.UNKNOWN
+    assert result.side_effect_state is ProviderSideEffectState.UNKNOWN
+    assert "super-secret-observe-value" not in adapter.last_diagnostic
+    assert "/etc/private/creds" not in adapter.last_diagnostic
+
+    with pytest.raises(RuntimeError):
+        adapter.run(invocation)
+    assert len(client.submit_calls) == 1
+
+
+def test_malformed_observation_outcome_fails_closed_without_retry():
+    invocation = _invocation()
+    client = FakeCloudBuildClient(
+        submit_result=CloudBuildSubmissionOutcome(kind="confirmed", build_id="build-1", observed_at=OBSERVED_AT),
+        observe_results=[object()],
+    )
+    adapter = _adapter(client)
+    result = adapter.run(invocation)
+
+    assert len(client.submit_calls) == 1
+    assert len(client.observe_calls) == 1
+    assert result.status is ProviderStatus.UNKNOWN
+    assert result.side_effect_state is ProviderSideEffectState.UNKNOWN
+
+    with pytest.raises(RuntimeError):
+        adapter.run(invocation)
+    assert len(client.submit_calls) == 1
+
+
+def test_safe_observation_fallback_rejects_invalid_tested_sha_format():
+    invocation = _invocation()
+    hostile = "not-a-real-sha-value"
+    client = FakeCloudBuildClient(
+        submit_result=CloudBuildSubmissionOutcome(kind="confirmed", build_id="build-1", observed_at=OBSERVED_AT),
+        observe_results=[
+            CloudBuildObservationOutcome(
+                kind="success",
+                tested_sha=hostile,
+                failed_step="none",
+                exit_code=0,
+                observed_at=OBSERVED_AT_LATER,
+                source_complete=True,
+            )
+        ],
+    )
+    result = _adapter(client).run(invocation)
+
+    assert result.status is ProviderStatus.UNKNOWN
+    assert result.side_effect_state is ProviderSideEffectState.UNKNOWN
+    assert result.build_id is None
+    assert result.tested_sha is None
+    assert result.normalized_cloud_build_evidence is None
+    assert hostile not in repr(result)
+
+
+def test_safe_observation_fallback_rejects_hostile_failed_step_value():
+    invocation = _invocation()
+    hostile = "token=super-secret-step-value"
+    client = FakeCloudBuildClient(
+        submit_result=CloudBuildSubmissionOutcome(kind="confirmed", build_id="build-1", observed_at=OBSERVED_AT),
+        observe_results=[
+            CloudBuildObservationOutcome(
+                kind="failure",
+                tested_sha=SHA,
+                failed_step=hostile,
+                exit_code=1,
+                observed_at=OBSERVED_AT_LATER,
+                source_complete=True,
+            )
+        ],
+    )
+    result = _adapter(client).run(invocation)
+
+    assert result.status is ProviderStatus.UNKNOWN
+    assert result.side_effect_state is ProviderSideEffectState.UNKNOWN
+    assert result.build_id is None
+    assert result.tested_sha is None
+    assert result.normalized_cloud_build_evidence is None
+    assert hostile not in repr(result)
