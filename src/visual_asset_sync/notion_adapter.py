@@ -78,18 +78,13 @@ class NotionReadRequest:
             raise NotionConfigurationError("data_source_id must not be empty")
         if len(data_source_id) > MAX_DATA_SOURCE_ID_LENGTH:
             raise NotionConfigurationError("data_source_id exceeds the length limit")
-
         if type(self.notion_version) is not str:
             raise NotionConfigurationError("notion_version must be an exact string")
         if self.notion_version != SUPPORTED_NOTION_VERSION:
             raise NotionConfigurationError("notion_version is not supported")
-
         _require_integer(self.page_size, "page_size", minimum=1, maximum=100)
         _require_integer(
-            self.maximum_pages,
-            "maximum_pages",
-            minimum=1,
-            maximum=MAX_PAGES_LIMIT,
+            self.maximum_pages, "maximum_pages", minimum=1, maximum=MAX_PAGES_LIMIT
         )
         _require_integer(
             self.maximum_records,
@@ -185,10 +180,12 @@ def read_existing_assets(
     request: NotionReadRequest,
     property_mapping: dict[str, str],
     *,
+    required_fields: frozenset[str] = frozenset(),
     sleep: Callable[[float], None] = time.sleep,
 ) -> tuple[ExistingAssetRecord, ...]:
     """Read, validate, and normalize one bounded Notion collection."""
     mapping = _validate_mapping(property_mapping)
+    required = _validate_required_fields(required_fields, mapping)
     cursor: str | None = None
     seen_cursors: set[str] = set()
     records: list[ExistingAssetRecord] = []
@@ -202,8 +199,7 @@ def read_existing_assets(
         results, has_more, next_cursor = _validate_page(response)
         if len(records) + len(results) > request.maximum_records:
             raise NotionPaginationError("maximum record count reached")
-        records.extend(_map_page(page, mapping) for page in results)
-
+        records.extend(_map_page(page, mapping, required) for page in results)
         if not has_more:
             return tuple(records)
         assert next_cursor is not None
@@ -267,14 +263,20 @@ def _validate_page(response: Any) -> tuple[list[dict[str, Any]], bool, str | Non
 
 def _validate_mapping(mapping: Any) -> dict[str, str]:
     if type(mapping) is not dict or not mapping:
-        raise NotionConfigurationError("property_mapping must be a non-empty exact dictionary")
+        raise NotionConfigurationError(
+            "property_mapping must be a non-empty exact dictionary"
+        )
     validated: dict[str, str] = {}
     used_properties: set[str] = set()
     for field, property_name in mapping.items():
         if type(field) is not str or field not in _ALLOWED_FIELDS:
-            raise NotionConfigurationError("property_mapping contains an unsupported field")
+            raise NotionConfigurationError(
+                "property_mapping contains an unsupported field"
+            )
         if type(property_name) is not str or not property_name.strip():
-            raise NotionConfigurationError("property names must be non-empty exact strings")
+            raise NotionConfigurationError(
+                "property names must be non-empty exact strings"
+            )
         normalized = property_name.strip()
         if normalized in used_properties:
             raise NotionConfigurationError("property_mapping reuses a property name")
@@ -283,7 +285,24 @@ def _validate_mapping(mapping: Any) -> dict[str, str]:
     return validated
 
 
-def _map_page(page: dict[str, Any], mapping: dict[str, str]) -> ExistingAssetRecord:
+def _validate_required_fields(
+    required_fields: Any, mapping: dict[str, str]
+) -> frozenset[str]:
+    if type(required_fields) is not frozenset:
+        raise NotionConfigurationError("required_fields must be an exact frozenset")
+    for field in required_fields:
+        if type(field) is not str or field not in mapping:
+            raise NotionConfigurationError(
+                "required_fields must reference configured target fields"
+            )
+    return required_fields
+
+
+def _map_page(
+    page: dict[str, Any],
+    mapping: dict[str, str],
+    required_fields: frozenset[str],
+) -> ExistingAssetRecord:
     page_id = page.get("id")
     page_url = page.get("url")
     properties = page.get("properties")
@@ -298,27 +317,30 @@ def _map_page(page: dict[str, Any], mapping: dict[str, str]) -> ExistingAssetRec
     mapped_names = set(mapping.values())
     for field, property_name in mapping.items():
         if property_name not in properties:
-            raise NotionRecordError("required mapped property is missing")
+            if field in required_fields:
+                raise NotionRecordError("required mapped property is missing")
+            raw[field] = None
+            continue
         raw[field] = _extract_property(properties[property_name])
 
-    extra_fields: dict[str, Any] = {}
     for property_name, value in properties.items():
         if type(property_name) is not str:
             raise NotionRecordError("Notion property names must be exact strings")
         if property_name not in mapped_names:
-            extra_fields[property_name] = _extract_property(value)
-    raw.update(extra_fields)
+            raw[property_name] = _extract_property(value)
     try:
         return normalize_existing_record(raw)
     except (TypeError, ValueError):
-        raise NotionRecordError("Notion record does not satisfy the planner contract") from None
+        raise NotionRecordError(
+            "Notion record does not satisfy the planner contract"
+        ) from None
 
 
 def _extract_property(value: Any) -> Any:
     if type(value) is not dict:
         raise NotionRecordError("Notion property must be an exact dictionary")
     property_type = value.get("type")
-    if property_type == "title" or property_type == "rich_text":
+    if property_type in {"title", "rich_text"}:
         items = value.get(property_type)
         if type(items) is not list:
             raise NotionRecordError("Notion text property is malformed")
