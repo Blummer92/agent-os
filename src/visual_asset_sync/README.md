@@ -4,9 +4,14 @@ Deterministic, offline, dry-run reconciliation planner for moving reviewed icon
 assets from the `Approved Use Review` Google Sheet into the Notion Visual Asset
 Library. See Issue #693.
 
-This package performs **zero external writes and zero network calls**. It accepts
-normalized in-memory records and returns a plan. Live Google Sheets reads, live
-Notion queries, and live Notion writes belong to separately authorized adapters.
+The reconciliation planner core performs **zero network calls and zero external
+writes**. Related optional Google Sheets and Notion adapters may perform only
+separately authorized bounded reads. No component performs an external write.
+Live credentials, targets, smoke testing, and production synchronization remain
+separately authorized.
+
+The fixture-first Notion read boundary for Issue #735 is documented in
+[`NOTION_ADAPTER.md`](NOTION_ADAPTER.md).
 
 ## Input contract
 
@@ -86,5 +91,6 @@ updates, so a repeated dry run does not propose duplicate creates.
 `zero_write_confirmed` remain true for planner-produced output.
 
 The planner does not prove live Drive existence, read Google Sheets or Notion,
-measure real duplicate rates, or perform end-to-end synchronization. Those
-integration behaviors remain deferred and separately authorized.
+measure real duplicate rates, or perform end-to-end synchronization. Optional
+read adapters remain separately authorized, and all external writes remain
+excluded.
