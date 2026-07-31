@@ -35,6 +35,7 @@ _VALIDATION_PLAN_ID_RE = re.compile(r"^validation-plan:[0-9a-f]{64}$", re.ASCII)
 _PRE_PR_VALIDATION_PLAN_ID_RE = re.compile(
     r"^pre-pr-validation-plan:[0-9a-f]{64}$", re.ASCII
 )
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
 class CommandOperation(str, Enum):
@@ -320,13 +321,41 @@ def _build_pre_pr_command_plan(
     )
 
 
+def _runtime_safe_command_plan_entry(entry: object) -> bool:
+    """Return whether one command-plan entry has every exact runtime type and
+    bound this module trusts before it is ever used for registry membership,
+    hashing, tuple comparison, set construction, sorting, or serialization.
+
+    ``CommandPlanEntry.__post_init__`` only validates at construction time, so
+    an exact-type instance reached through ``object.__setattr__`` tampering
+    can still carry a non-tuple ``argv``, a non-``CommandOperation``
+    ``operation``, or an argv element outside the bounds construction would
+    have enforced. Every such shape is rejected here first.
+    """
+    if type(entry) is not CommandPlanEntry:
+        return False
+    if type(entry.operation) is not CommandOperation:
+        return False
+    if type(entry.argv) is not tuple:
+        return False
+    if not entry.argv or len(entry.argv) > MAX_PLAN_COMMANDS:
+        return False
+    for item in entry.argv:
+        if type(item) is not str or not item or len(item) > MAX_PLAN_STRING_LENGTH:
+            return False
+        if _CONTROL_CHAR_RE.search(item) is not None:
+            return False
+    return True
+
+
 def _runtime_safe_command_plan(plan: ValidationCommandPlan) -> bool:
     """Return whether every field has the exact runtime type this validator trusts.
 
     Short-circuits before any risky access: ``entries`` is confirmed to be a
     tuple before it is ever iterated, and every item is confirmed to be an
-    exact ``CommandPlanEntry`` (itself construction-validated) before its
-    ``operation``/``argv`` are read anywhere else in this module.
+    exact ``CommandPlanEntry`` with a defensively revalidated ``operation``
+    and ``argv`` (see ``_runtime_safe_command_plan_entry``) before either is
+    read anywhere else in this module.
     """
     return (
         type(plan.schema_version) is str
@@ -344,7 +373,7 @@ def _runtime_safe_command_plan(plan: ValidationCommandPlan) -> bool:
         and type(plan.profile) is str
         and type(plan.command_set_digest) is str
         and type(plan.entries) is tuple
-        and all(type(item) is CommandPlanEntry for item in plan.entries)
+        and all(_runtime_safe_command_plan_entry(item) for item in plan.entries)
         and plan.execution_authorized is False
         and plan.merge_authorized is False
         and plan.side_effects_performed is False

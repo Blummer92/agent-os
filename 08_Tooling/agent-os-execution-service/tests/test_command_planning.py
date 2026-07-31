@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from scripts.agent_os_execution_capabilities import RepositoryIdentity
 from scripts.agent_os_remote_validation import (
+    MAX_PLAN_STRING_LENGTH,
     PRE_PR_VALIDATION_PLAN_SCHEMA_VERSION,
     PrePrValidationPlan,
     PrePrValidationSubject,
@@ -496,6 +497,66 @@ def test_validator_never_raises_and_is_total_on_non_plan_input() -> None:
 def test_validator_never_raises_on_malformed_runtime_fields(overrides: dict) -> None:
     tampered = _tampered(_valid_plan(), **overrides)
     assert validate_validation_command_plan(tampered) == ("command-plan.malformed-runtime",)
+
+
+def test_validator_never_raises_on_object_setattr_tampered_entries() -> None:
+    """A ``CommandPlanEntry`` is frozen, but ``__post_init__`` only runs at
+    construction time -- ``object.__setattr__`` can still tamper an
+    already-constructed exact-type entry's ``operation``/``argv`` after the
+    fact. Each case below previously reached unguarded registry-membership
+    (``argv not in _REGISTRY_ARGV_VALUES``, hashing an unhashable ``list``),
+    ordering (``sorted``), or JSON-serialization code and raised instead of
+    returning a bounded reason; the validator must be total for all of them.
+    """
+    valid = _valid_plan()
+    entry = valid.entries[0]
+
+    list_argv = _tampered(valid, entries=(_tampered(entry, argv=list(entry.argv)),))
+    assert validate_validation_command_plan(list_argv) == ("command-plan.malformed-runtime",)
+
+    non_string_argv_item = _tampered(
+        valid, entries=(_tampered(entry, argv=entry.argv[:-1] + (object(),)),)
+    )
+    assert validate_validation_command_plan(non_string_argv_item) == (
+        "command-plan.malformed-runtime",
+    )
+
+    invalid_operation = _tampered(
+        valid, entries=(_tampered(entry, operation="validation.focused"),)
+    )
+    assert validate_validation_command_plan(invalid_operation) == (
+        "command-plan.malformed-runtime",
+    )
+
+    control_character_argv = _tampered(
+        valid, entries=(_tampered(entry, argv=entry.argv[:-1] + ("bad\x07arg",)),)
+    )
+    assert validate_validation_command_plan(control_character_argv) == (
+        "command-plan.malformed-runtime",
+    )
+
+    oversized_argv = _tampered(
+        valid,
+        entries=(
+            _tampered(
+                entry, argv=entry.argv[:-1] + ("x" * (MAX_PLAN_STRING_LENGTH + 1),)
+            ),
+        ),
+    )
+    assert validate_validation_command_plan(oversized_argv) == (
+        "command-plan.malformed-runtime",
+    )
+
+
+def test_serialize_and_id_reject_tampered_entries_cleanly() -> None:
+    valid = _valid_plan()
+    entry = valid.entries[0]
+    tampered = _tampered(valid, entries=(_tampered(entry, argv=list(entry.argv)),))
+
+    with pytest.raises(ValueError, match="command-plan.malformed-runtime"):
+        serialize_validation_command_plan(tampered)
+    with pytest.raises(ValueError, match="command-plan.malformed-runtime"):
+        validation_command_plan_id(tampered)
 
 
 def test_validator_rejects_schema_and_registry_version_drift() -> None:

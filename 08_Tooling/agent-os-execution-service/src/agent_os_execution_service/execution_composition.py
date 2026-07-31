@@ -22,9 +22,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal
+
+from scripts.agent_os_remote_validation import MAX_PLAN_STRING_LENGTH
 
 from workflow_scheduler.execution.concrete_runtime_adapters import (
     ConcreteRuntimeConfiguration,
@@ -85,6 +88,11 @@ _INFRASTRUCTURE_RUNTIME_STATUSES = frozenset(
 # noncanonical placeholder (it does not match ``command-plan:<sha256>``) is
 # used instead, so it can never be confused with a real identity.
 _INVALID_COMMAND_PLAN_ID = "command-plan:invalid"
+
+# Mirrors the control-character class the shared validation models reject
+# elsewhere in this codebase (tab/newline/carriage-return excluded, every
+# other C0 control and DEL rejected).
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
 class ExecutionCompositionStatus(str, Enum):
@@ -193,13 +201,23 @@ def _fail_closed(
 
 
 def _safe_plan_text(value: object) -> str:
-    """Return one bounded, non-empty string, or ``"unavailable"`` for anything else.
+    """Return the supplied value only if it is bounded-safe text, else
+    ``"unavailable"``.
 
     ``ValidationCommandPlan`` performs no field validation of its own, so an
     exact-type instance the public validator has already rejected may still
-    carry a non-string value on any field. This never raises regardless.
+    carry a non-string, oversized, or control-character value on any field.
+    This never raises regardless, and never reflects such a value into
+    ``ExecutionCompositionResult`` or evidence hashing unchanged.
     """
-    return value if type(value) is str and value else "unavailable"
+    if (
+        type(value) is str
+        and value
+        and len(value) <= MAX_PLAN_STRING_LENGTH
+        and _CONTROL_CHAR_RE.search(value) is None
+    ):
+        return value
+    return "unavailable"
 
 
 def _invalid_command_plan_result(

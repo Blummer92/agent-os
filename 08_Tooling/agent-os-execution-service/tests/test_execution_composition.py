@@ -21,6 +21,7 @@ import test_single_issue_pilot as tsp  # noqa: E402
 from test_concrete_runtime_adapters import ScenarioGitRunner  # noqa: E402
 
 from scripts.agent_os_execution_capabilities import RepositoryIdentity  # noqa: E402
+from scripts.agent_os_remote_validation import MAX_PLAN_STRING_LENGTH  # noqa: E402
 
 from agent_os_execution_service import command_planning as command_planning_module  # noqa: E402
 from agent_os_execution_service import request_validation as request_validation_module  # noqa: E402
@@ -838,6 +839,137 @@ def test_malformed_command_plan_field_fails_closed_without_raising(
     assert "command-plan.malformed-runtime" in result.reason_codes
     assert result.repository == "unavailable"
     assert result.command_plan_id == module._INVALID_COMMAND_PLAN_ID
+
+
+def test_tampered_command_plan_entry_argv_fails_closed_without_raising(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``CommandPlanEntry`` tampered via ``object.__setattr__`` to carry a
+    non-tuple ``argv`` (#804 finding 1) fails the command plan closed to
+    bounded manual-review evidence -- never raising out of the public
+    command-plan validator's frozenset-membership check, and never reaching
+    the runtime entrypoint.
+    """
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("no entrypoint call is expected for an invalid command plan")
+
+    monkeypatch.setattr(module, "run_concrete_runtime_entrypoint_with_validation_evidence", forbidden)
+
+    request = _request()
+    plan = _command_plan(request, profile="focused")
+    authorization = _authorization(request, plan)
+    entry = plan.entries[0]
+    object.__setattr__(entry, "argv", list(entry.argv))  # type: ignore[arg-type]
+
+    reasons = command_planning_module.validate_validation_command_plan(plan)
+    assert reasons == ("command-plan.malformed-runtime",)
+
+    configuration = _configuration(tmp_path)
+    result = compose_and_run_validation(
+        request=request,
+        command_plan=plan,
+        authorization=authorization,
+        evaluated_at=EVALUATED_AT,
+        pilot_input=_pilot_input(),
+        configuration=configuration,
+        cancelled=tsp.never_cancelled,
+        git_runner=ScenarioGitRunner(configuration),
+        changed_paths_inspector=lambda: (),
+    )
+
+    assert result.status is ExecutionCompositionStatus.MANUAL_REVIEW
+    assert "command-plan-invalid" in result.reason_codes
+    assert "command-plan.malformed-runtime" in result.reason_codes
+    assert result.validation_result is None
+    assert result.execution_authorized is False
+    assert result.side_effects_performed is False
+    assert result.merge_authorized is False
+    assert result.command_plan_id == module._INVALID_COMMAND_PLAN_ID
+
+
+_OVERSIZED_PLAN_TEXT = "y" * (MAX_PLAN_STRING_LENGTH + 1)
+_CONTROL_CHARACTER_PLAN_TEXT = "bad\x07text"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("repository", _OVERSIZED_PLAN_TEXT),
+        ("profile", _OVERSIZED_PLAN_TEXT),
+        ("expected_sha", _OVERSIZED_PLAN_TEXT),
+        ("repository", _CONTROL_CHARACTER_PLAN_TEXT),
+        ("profile", _CONTROL_CHARACTER_PLAN_TEXT),
+        ("expected_sha", _CONTROL_CHARACTER_PLAN_TEXT),
+        ("repository", 12345),
+        ("profile", 12345),
+        ("expected_sha", 12345),
+    ],
+)
+def test_unsafe_command_plan_scalar_text_becomes_unavailable_in_invalid_plan_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, value: object
+) -> None:
+    """An invalid ``ValidationCommandPlan`` carrying oversized, control-
+    character, or non-string scalar text on ``repository``/``profile``/
+    ``expected_sha`` (#804 finding 2) never reflects that raw value into
+    ``ExecutionCompositionResult`` or the evidence hash: ``_safe_plan_text``
+    bounds it to ``"unavailable"`` instead.
+    """
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("no entrypoint call is expected for an invalid command plan")
+
+    monkeypatch.setattr(module, "run_concrete_runtime_entrypoint_with_validation_evidence", forbidden)
+
+    request = _request()
+    plan = _command_plan(request, profile="focused")
+    tampered = command_planning_module.ValidationCommandPlan(
+        schema_version=plan.schema_version,
+        registry_version=plan.registry_version,
+        repository=plan.repository,
+        issue_or_handoff_identity=plan.issue_or_handoff_identity,
+        requested_ref=plan.requested_ref,
+        expected_sha=plan.expected_sha,
+        request_revision=plan.request_revision,
+        request_fingerprint=plan.request_fingerprint,
+        validation_plan_id=plan.validation_plan_id,
+        validation_plan_schema_version=plan.validation_plan_schema_version,
+        selector_version=plan.selector_version,
+        profile=plan.profile,
+        command_set_digest=plan.command_set_digest,
+        entries=plan.entries,
+    )
+    # A bounded control-character repository alone would not trip any
+    # existing validator reason (identity-bounds only checks length), so
+    # schema_version drift forces the invalid-plan path independently of the
+    # field under test.
+    object.__setattr__(tampered, "schema_version", "9.9")  # type: ignore[arg-type]
+    object.__setattr__(tampered, field, value)  # type: ignore[arg-type]
+
+    reasons = command_planning_module.validate_validation_command_plan(tampered)
+    assert reasons
+    configuration = _configuration(tmp_path)
+
+    result = compose_and_run_validation(
+        request=request,
+        command_plan=tampered,
+        authorization=_authorization(request, plan),
+        evaluated_at=EVALUATED_AT,
+        pilot_input=_pilot_input(),
+        configuration=configuration,
+        cancelled=tsp.never_cancelled,
+        git_runner=ScenarioGitRunner(configuration),
+        changed_paths_inspector=lambda: (),
+    )
+
+    assert result.status is ExecutionCompositionStatus.MANUAL_REVIEW
+    assert "command-plan-invalid" in result.reason_codes
+    assert result.validation_result is None
+    assert result.execution_authorized is False
+    assert result.side_effects_performed is False
+    assert result.merge_authorized is False
+    assert result.command_plan_id == module._INVALID_COMMAND_PLAN_ID
+    assert getattr(result, field) == "unavailable"
 
 
 def test_expired_request_fails_closed(tmp_path: Path) -> None:
