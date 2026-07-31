@@ -542,8 +542,23 @@ def test_reconciliation_ambiguous_match_counts_stay_unknown(matches):
 
 # 14. unsupported cancellation.
 def test_client_protocol_exposes_no_cancellation_capability():
+    # Inspect the protocol's own class namespace directly rather than a
+    # private typing.Protocol implementation detail (``__protocol_attrs__``
+    # is a typing-internal cache whose presence and exact name are not
+    # portable across supported Python versions -- it is absent on the
+    # CI-pinned Python 3.11 and present on Python 3.12). Declared methods
+    # are ordinary callables in ``vars(cls)``; every typing/ABC-generated
+    # member (``_is_protocol``, ``__protocol_attrs__``,
+    # ``__abstractmethods__``, ``_abc_impl``, ...) is underscore-prefixed,
+    # so filtering those out yields exactly the methods this protocol
+    # declares, independent of Python version or typing implementation.
+    declared_methods = {
+        name
+        for name, member in vars(CloudBuildProviderClient).items()
+        if not name.startswith("_") and callable(member)
+    }
+    assert declared_methods == {"submit", "observe", "reconcile"}
     assert not hasattr(CloudBuildProviderClient, "cancel")
-    assert set(CloudBuildProviderClient.__protocol_attrs__) == {"submit", "observe", "reconcile"}
 
 
 def test_cancelled_observation_is_relayed_without_adapter_initiated_cancellation():
