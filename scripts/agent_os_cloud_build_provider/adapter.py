@@ -46,15 +46,19 @@ _FALLBACK_OBSERVED_AT = "1970-01-01T00:00:00Z"
 
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 # The token/password/secret/api-key/private-key alternative consumes the
-# assigned value (``\s*\S+``) rather than stopping at the ``:``/``=``
-# delimiter: a redaction regex that only matches the label leaves the
-# credential value itself un-redacted in the substituted output, unlike a
-# pure detect-and-reject use (see ``models._SECRET_RE``, which only needs
-# to detect a match, not consume the whole secret).
+# assigned value rather than stopping at the ``:``/``=`` delimiter: a
+# redaction regex that only matches the label leaves the credential value
+# itself un-redacted in the substituted output, unlike a pure
+# detect-and-reject use (see ``models._SECRET_RE``, which only needs to
+# detect a match, not consume the whole secret). The value alternatives try
+# a quoted string (double- or single-, with escape support) before falling
+# back to a bare non-whitespace run, so a quoted value containing spaces is
+# still fully consumed rather than truncated at its first internal space.
 _SECRET_RE = re.compile(
     r"(?i)(authorization\s*:\s*[A-Za-z][A-Za-z0-9._-]*\s+"
     r"[A-Za-z0-9._~+/-]{4,}=*|bearer\s+[A-Za-z0-9._-]{8,}|"
-    r"(?:token|password|secret|api[_-]?key|private[_-]?key)\s*[:=]\s*\S+)"
+    r"(?:token|password|secret|api[_-]?key|private[_-]?key)\s*[:=]\s*"
+    r"(?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|\S+))"
 )
 
 SubmissionOutcomeKind = Literal["confirmed", "denied", "unavailable", "internal-error", "ambiguous"]

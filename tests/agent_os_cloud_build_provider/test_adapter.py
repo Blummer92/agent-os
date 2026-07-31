@@ -623,7 +623,7 @@ def test_raised_exception_diagnostics_never_include_exception_message():
     assert "/etc/private/creds" not in adapter.last_diagnostic
 
 
-def _run_with_diagnostic(diagnostic):
+def _run_with_diagnostic(diagnostic: str) -> tuple[CloudBuildProviderAdapter, CloudBuildProviderResult]:
     invocation = _invocation()
     client = FakeCloudBuildClient(
         submit_result=CloudBuildSubmissionOutcome(kind="confirmed", build_id="build-1", observed_at=OBSERVED_AT),
@@ -638,7 +638,7 @@ def _run_with_diagnostic(diagnostic):
 # label+delimiter-only match previously left the assigned credential value
 # fully intact in the substituted output.
 @pytest.mark.parametrize(
-    "diagnostic, secret_value",
+    ("diagnostic", "secret_value"),
     [
         ("token=super-secret-value", "super-secret-value"),
         ("token: super-secret-value", "super-secret-value"),
@@ -651,6 +651,8 @@ def _run_with_diagnostic(diagnostic):
         ("private-key=secret-material", "secret-material"),
         ("Authorization: Bearer abcd1234efgh5678", "abcd1234efgh5678"),
         ("bearer abcd1234efgh5678", "abcd1234efgh5678"),
+        ('password="secret value with spaces"', "secret value with spaces"),
+        ("token='another secret value'", "another secret value"),
     ],
 )
 def test_every_credential_assignment_form_is_fully_redacted(diagnostic, secret_value):
@@ -708,8 +710,18 @@ def test_malformed_confirmed_outcome_with_missing_build_id_fails_closed():
         submit_result=tampered,
         reconcile_result=CloudBuildReconciliationOutcome(matches=(), observed_at=OBSERVED_AT),
     )
-    result = _adapter(client).run(invocation)
+    adapter = _adapter(client)
+    result = adapter.run(invocation)
 
+    # ``tampered`` is a genuine CloudBuildSubmissionOutcome instance (only a
+    # field was mutated after construction), so the pre-existing
+    # malformed-outcome-*type* guard (``type(outcome) is not
+    # CloudBuildSubmissionOutcome``) cannot be the one that fired here --
+    # only the new internal-consistency guard checks ``kind``/``build_id``
+    # on an outcome of the correct type. ``last_diagnostic`` is not asserted
+    # here: ``_reconcile`` legitimately overwrites it with its own step's
+    # diagnostic afterward, by the same "most recent step" design already
+    # used for every other multi-step path in this adapter.
     assert client.observe_calls == []
     assert len(client.reconcile_calls) == 1
     assert result.status is ProviderStatus.UNKNOWN
@@ -725,9 +737,11 @@ def test_malformed_confirmed_outcome_with_empty_build_id_fails_closed():
         submit_result=tampered,
         reconcile_result=CloudBuildReconciliationOutcome(matches=(), observed_at=OBSERVED_AT),
     )
-    result = _adapter(client).run(invocation)
+    adapter = _adapter(client)
+    result = adapter.run(invocation)
 
     assert client.observe_calls == []
+    assert len(client.reconcile_calls) == 1
     assert result.status is ProviderStatus.UNKNOWN
     assert result.side_effect_state is ProviderSideEffectState.UNKNOWN
 
