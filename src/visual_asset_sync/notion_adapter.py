@@ -234,6 +234,7 @@ def _query_with_retry(
             sleep(error.retry_after)
             total_delay = new_total
             retries += 1
+            continue
         except NotionAdapterError:
             raise
         except Exception:

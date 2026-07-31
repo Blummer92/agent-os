@@ -270,7 +270,7 @@ def test_required_property_missing_fails_closed():
 
 @pytest.mark.parametrize(
     "mapping,required",
-    [({}, frozenset()), ({"unknown": "Title"}, frozenset()), ({"asset_title": "X", "drive_url": "X"}, frozenset()), ({"asset_title": "Title"}, {"asset_title"}), ({"asset_title": "Title"}, frozenset({"drive_url"}))),
+    [({}, frozenset()), ({"unknown": "Title"}, frozenset()), ({"asset_title": "X", "drive_url": "X"}, frozenset()), ({"asset_title": "Title"}, {"asset_title"}), ({"asset_title": "Title"}, frozenset({"drive_url"})),
     ],
 )
 def test_mapping_configuration_fails_closed(mapping, required):
