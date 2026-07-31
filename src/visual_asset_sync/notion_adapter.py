@@ -139,8 +139,12 @@ class NotionRateLimitError(Exception):
         if type(retry_after) not in {int, float}:
             raise TypeError("retry_after must be an exact number")
         delay = float(retry_after)
-        if not math.isfinite(delay) or delay < 0:
-            raise ValueError("retry_after must be finite and non-negative")
+        if (
+            not math.isfinite(delay)
+            or delay < 0
+            or delay > MAX_TOTAL_RETRY_DELAY
+        ):
+            raise ValueError("retry_after is outside the supported range")
         super().__init__("notion request was rate limited")
         self.retry_after = delay
 
