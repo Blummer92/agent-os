@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import os
 import re
@@ -170,6 +171,7 @@ class _Binding:
     branch_ref: str
     lock_reason: str
     cleanup_attempted: bool = False
+    detached: bool = False
 
 
 def _text(value: object, name: str, maximum: int = MAX_TEXT_BYTES) -> str:
@@ -407,9 +409,18 @@ class GitWorktreeAdapter:
             )
         return _parse_porcelain(result.stdout)
 
+    def _preparation_identity(self, request: WorkspacePreparationRequest) -> str:
+        """Stable identity for the logical preparation request."""
+        # Must be stable across revision changes for the same logical request.
+        return "prep-workspace:" + hashlib.sha256(
+            f"agent-os-prep-v1:{request.repository.lower()}:{request.workspace_request_id}".encode(
+                "utf-8"
+            )
+        ).hexdigest()
+
     def _bind_preparation(
         self, request: WorkspacePreparationRequest
-    ) -> tuple[str, str, str]:
+    ) -> tuple[str, str, str, str]:
         if not isinstance(request, WorkspacePreparationRequest):
             raise TypeError("request must be WorkspacePreparationRequest")
         expected_repo = f"{self._identity.owner}/{self._identity.repository}".lower()
@@ -417,19 +428,23 @@ class GitWorktreeAdapter:
             raise GitWorktreeAdapterError("repository identity mismatch")
         ref = _text(request.requested_ref, "requested_ref")
         if ref.startswith("refs/"):
-            raise GitWorktreeAdapterError("requested_ref must use the canonical short name")
+            raise GitWorktreeAdapterError(
+                "requested_ref must use the canonical short name"
+            )
         if not _SHA40.fullmatch(request.expected_revision):
-            raise GitWorktreeAdapterError("expected_revision must be a full lowercase SHA")
+            raise GitWorktreeAdapterError(
+                "expected_revision must be a full lowercase SHA"
+            )
         if request.mode not in ("branch", "tag", "detached-sha"):
             raise GitWorktreeAdapterError("invalid preparation mode")
+        if request.mode == "detached-sha":
+            if not _SHA40.fullmatch(ref):
+                raise GitWorktreeAdapterError(
+                    "detached-sha mode requires a full lowercase 40-character SHA as requested_ref"
+                )
         _text(request.workspace_request_id, "workspace_request_id")
-        dummy = WorkspaceRequest(
-            workspace_request_id=request.workspace_request_id,
-            repository=request.repository,
-            branch=request.requested_ref,
-            expected_revision=request.expected_revision,
-        )
-        identity = pilot_workspace_identity(dummy)
+
+        identity = self._preparation_identity(request)
         suffix = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
         path = os.path.normpath(os.path.join(self._parent, f"agent-os-prep-{suffix}"))
         if not os.path.isabs(path) or path != os.path.abspath(path):
@@ -439,7 +454,14 @@ class GitWorktreeAdapter:
             raise GitWorktreeAdapterError("path escape detected")
         if os.path.islink(path) or os.path.islink(os.path.dirname(path)):
             raise GitWorktreeAdapterError("symlink detected in worktree path")
-        return identity, path, ref
+
+        if request.mode == "branch":
+            resolve_ref = f"refs/heads/{ref}"
+        elif request.mode == "tag":
+            resolve_ref = f"refs/tags/{ref}"
+        else:
+            resolve_ref = ref
+        return identity, path, ref, resolve_ref
 
     def prepare(
         self, request: WorkspacePreparationRequest
@@ -447,56 +469,31 @@ class GitWorktreeAdapter:
         if self._create_attempted:
             raise RuntimeError("worktree creation may be attempted at most once")
         self._create_attempted = True
-        auth = {
-            "repository_implementation_authorized": False,
-            "execution_authorized": False,
-            "github_writes_authorized": False,
-            "merge_authorized": False,
-        }
+
+        side_effect_state = "no-creation-attempted"
+        reason = ""
         try:
-            identity, path, requested_ref = self._bind_preparation(request)
+            identity, path, requested_ref, resolve_ref = self._bind_preparation(request)
         except (GitWorktreeAdapterError, TypeError, ValueError) as exc:
             return WorkspacePreparationResult(
                 outcome="blocked",
                 workspace_identity="",
-                repository=request.repository,
-                requested_ref=request.requested_ref,
+                repository=getattr(request, "repository", ""),
+                requested_ref=getattr(request, "requested_ref", ""),
                 resolved_ref="",
                 exact_sha="",
-                mode=request.mode,
+                mode=getattr(request, "mode", "branch"),
                 path="",
                 clean=False,
                 reused=False,
                 locked=False,
                 reason=_reason(exc),
+                side_effect_state=side_effect_state,
             )
 
-        if request.mode == "branch":
-            resolve_ref = f"refs/heads/{requested_ref}"
-            checkout_ref = requested_ref
-        elif request.mode == "tag":
-            resolve_ref = f"refs/tags/{requested_ref}"
-            checkout_ref = requested_ref
-        else:
-            if not _SHA40.fullmatch(requested_ref):
-                return WorkspacePreparationResult(
-                    outcome="blocked",
-                    workspace_identity=identity,
-                    repository=request.repository,
-                    requested_ref=requested_ref,
-                    resolved_ref="",
-                    exact_sha="",
-                    mode=request.mode,
-                    path=path,
-                    clean=False,
-                    reused=False,
-                    locked=False,
-                    reason="detached-sha mode requires a full lowercase 40-character SHA",
-                )
-            resolve_ref = requested_ref
-            checkout_ref = requested_ref
-
-        resolved = self._run("-C", self._root, "rev-parse", "--verify", f"{resolve_ref}^{{commit}}")
+        resolved = self._run(
+            "-C", self._root, "rev-parse", "--verify", f"{resolve_ref}^{{commit}}"
+        )
         actual_sha = resolved.stdout.strip() if resolved.succeeded else ""
         if not resolved.succeeded or not _SHA40.fullmatch(actual_sha):
             return WorkspacePreparationResult(
@@ -504,7 +501,7 @@ class GitWorktreeAdapter:
                 workspace_identity=identity,
                 repository=request.repository,
                 requested_ref=requested_ref,
-                resolved_ref="",
+                resolved_ref=resolve_ref,
                 exact_sha="",
                 mode=request.mode,
                 path=path,
@@ -512,6 +509,7 @@ class GitWorktreeAdapter:
                 reused=False,
                 locked=False,
                 reason="could not resolve ref to an exact commit",
+                side_effect_state=side_effect_state,
             )
         if actual_sha != request.expected_revision:
             return WorkspacePreparationResult(
@@ -527,6 +525,7 @@ class GitWorktreeAdapter:
                 reused=False,
                 locked=False,
                 reason="revision mismatch or tag movement detected",
+                side_effect_state=side_effect_state,
             )
 
         try:
@@ -545,19 +544,66 @@ class GitWorktreeAdapter:
                 reused=False,
                 locked=False,
                 reason=_reason(exc),
+                side_effect_state=side_effect_state,
             )
 
         lock_reason = _reason(f"agent-os:{identity}")
-        existing = next((r for r in records if r.path == path), None)
-        if existing:
+        existing_by_path = next((r for r in records if r.path == path), None)
+        existing_by_identity = next(
+            (r for r in records if r.lock_reason == lock_reason), None
+        )
+
+        if existing_by_identity and existing_by_identity.path != path:
+            return WorkspacePreparationResult(
+                outcome="blocked",
+                workspace_identity=identity,
+                repository=request.repository,
+                requested_ref=requested_ref,
+                resolved_ref=resolve_ref,
+                exact_sha=actual_sha,
+                mode=request.mode,
+                path=path,
+                clean=False,
+                reused=False,
+                locked=True,
+                reason=f"identity conflict: lock owned by path {existing_by_identity.path}",
+                side_effect_state=side_effect_state,
+            )
+
+        if existing_by_path and existing_by_path.lock_reason != lock_reason:
+            return WorkspacePreparationResult(
+                outcome="blocked",
+                workspace_identity=identity,
+                repository=request.repository,
+                requested_ref=requested_ref,
+                resolved_ref=resolve_ref,
+                exact_sha=actual_sha,
+                mode=request.mode,
+                path=path,
+                clean=False,
+                reused=False,
+                locked=existing_by_path.locked,
+                reason="path conflict: existing worktree has different lock ownership",
+                side_effect_state=side_effect_state,
+            )
+
+        if existing_by_path:
+            existing = existing_by_path
             mode_match = (request.mode == "branch" and not existing.detached) or (
                 request.mode in ("tag", "detached-sha") and existing.detached
             )
             head_match = existing.head == actual_sha
             ref_match = request.mode != "branch" or existing.branch == resolve_ref
-            lock_match = existing.locked and existing.lock_reason == lock_reason
-            if mode_match and head_match and ref_match and lock_match and not existing.prunable:
-                status = self._run("-C", path, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+            if (
+                mode_match
+                and head_match
+                and ref_match
+                and existing.locked
+                and not existing.prunable
+            ):
+                status = self._run(
+                    "-C", path, "status", "--porcelain=v1", "-z", "--untracked-files=all"
+                )
                 clean = status.succeeded and status.stdout == ""
                 if clean:
                     self._binding = _Binding(
@@ -571,20 +617,34 @@ class GitWorktreeAdapter:
                         path=path,
                         branch_ref=resolve_ref if request.mode == "branch" else "",
                         lock_reason=lock_reason,
+                        detached=request.mode != "branch",
                     )
-                    return WorkspacePreparationResult(
-                        outcome="already-prepared",
-                        workspace_identity=identity,
-                        repository=request.repository,
-                        requested_ref=requested_ref,
-                        resolved_ref=resolve_ref,
-                        exact_sha=actual_sha,
-                        mode=request.mode,
-                        path=path,
-                        clean=True,
-                        reused=True,
-                        locked=True,
-                    )
+                    try:
+                        valid = self._canonical_valid(
+                            self._binding, _branch_name(existing.branch), actual_sha, True
+                        )
+                    except (TypeError, ValueError, RuntimeError) as exc:
+                        valid = False
+                        reason = f"canonical validation failed: {type(exc).__name__}"
+                    else:
+                        reason = "" if valid else "canonical validation failed"
+
+                    if valid:
+                        return WorkspacePreparationResult(
+                            outcome="already-prepared",
+                            workspace_identity=identity,
+                            repository=request.repository,
+                            requested_ref=requested_ref,
+                            resolved_ref=resolve_ref,
+                            exact_sha=actual_sha,
+                            mode=request.mode,
+                            path=path,
+                            clean=True,
+                            reused=True,
+                            locked=True,
+                            side_effect_state="verified-reused",
+                        )
+                    self._binding = None
             return WorkspacePreparationResult(
                 outcome="blocked",
                 workspace_identity=identity,
@@ -597,7 +657,8 @@ class GitWorktreeAdapter:
                 clean=False,
                 reused=False,
                 locked=existing.locked,
-                reason="path collision, dirty state, or metadata conflict",
+                reason=reason or "path collision, dirty state, or metadata conflict",
+                side_effect_state=side_effect_state,
             )
 
         if request.mode == "branch" and any(r.branch == resolve_ref for r in records):
@@ -614,14 +675,69 @@ class GitWorktreeAdapter:
                 reused=False,
                 locked=False,
                 reason="branch is already claimed by another worktree",
+                side_effect_state=side_effect_state,
             )
 
-        add_args = ["-C", self._root, "worktree", "add", "--lock", "--reason", lock_reason]
+        if os.path.lexists(path):
+            return WorkspacePreparationResult(
+                outcome="blocked",
+                workspace_identity=identity,
+                repository=request.repository,
+                requested_ref=requested_ref,
+                resolved_ref=resolve_ref,
+                exact_sha=actual_sha,
+                mode=request.mode,
+                path=path,
+                clean=False,
+                reused=False,
+                locked=False,
+                reason="path exists on disk but is not a registered worktree",
+                side_effect_state=side_effect_state,
+            )
+
+        side_effect_state = "creation-attempted-no-workspace"
+        add_args = [
+            "-C",
+            self._root,
+            "worktree",
+            "add",
+            "--lock",
+            "--reason",
+            lock_reason,
+        ]
         if request.mode != "branch":
             add_args.append("--detach")
-        add_args.extend([path, checkout_ref])
+            checkout_target = actual_sha
+        else:
+            checkout_target = requested_ref
+        add_args.extend([path, checkout_target])
+
         added = self._run(*add_args)
+        path_exists = os.path.lexists(path)
+        metadata_exists = False
+        try:
+            metadata_exists = any(r.path == path for r in self._records())
+        except GitWorktreeAdapterError:
+            metadata_exists = True
+
+        if path_exists or metadata_exists:
+            side_effect_state = "partial-creation-observed"
+
         if not added.succeeded:
+            if side_effect_state == "partial-creation-observed":
+                self._binding = _Binding(
+                    request=WorkspaceRequest(
+                        workspace_request_id=request.workspace_request_id,
+                        repository=request.repository,
+                        branch=requested_ref,
+                        expected_revision=actual_sha,
+                    ),
+                    identity=identity,
+                    path=path,
+                    branch_ref=resolve_ref if request.mode == "branch" else "",
+                    lock_reason=lock_reason,
+                    detached=request.mode != "branch",
+                )
             return WorkspacePreparationResult(
                 outcome="unavailable",
                 workspace_identity=identity,
@@ -635,22 +751,97 @@ class GitWorktreeAdapter:
                 reused=False,
                 locked=False,
                 reason=_reason(added.reason or "worktree addition failed"),
+                side_effect_state=side_effect_state,
             )
 
-        self._binding = _Binding(
-            request=WorkspaceRequest(
-                workspace_request_id=request.workspace_request_id,
-                repository=request.repository,
-                branch=requested_ref,
-                expected_revision=actual_sha,
-            ),
-            identity=identity,
-            path=path,
-            branch_ref=resolve_ref if request.mode == "branch" else "",
-            lock_reason=lock_reason,
-        )
+        # Post-creation verification
+        try:
+            final_records = self._records()
+        except GitWorktreeAdapterError as exc:
+            fail_reason = f"post-creation metadata check failed: {exc}"
+            record = None
+        else:
+            record = next((r for r in final_records if r.path == path), None)
+            fail_reason = ""
+            if not record:
+                fail_reason = "worktree metadata missing after creation"
+            elif record.head != actual_sha:
+                fail_reason = f"HEAD mismatch: expected {actual_sha}, found {record.head}"
+            elif request.mode == "branch" and (
+                record.detached or record.branch != resolve_ref
+            ):
+                fail_reason = f"branch mismatch: expected {resolve_ref}, found {record.branch}"
+            elif request.mode != "branch" and not record.detached:
+                fail_reason = "worktree is not detached as expected"
+            elif not (record.locked and record.lock_reason == lock_reason):
+                fail_reason = "worktree lock mismatch or missing"
+            elif record.prunable:
+                fail_reason = "worktree is prunable"
+
+        if not fail_reason:
+            status = self._run(
+                "-C", path, "status", "--porcelain=v1", "-z", "--untracked-files=all"
+            )
+            if not (status.succeeded and status.stdout == ""):
+                fail_reason = "worktree is dirty after creation"
+
+        if not fail_reason:
+            self._binding = _Binding(
+                request=WorkspaceRequest(
+                    workspace_request_id=request.workspace_request_id,
+                    repository=request.repository,
+                    branch=requested_ref,
+                    expected_revision=actual_sha,
+                ),
+                identity=identity,
+                path=path,
+                branch_ref=resolve_ref if request.mode == "branch" else "",
+                lock_reason=lock_reason,
+                detached=request.mode != "branch",
+            )
+            try:
+                valid = self._canonical_valid(
+                    self._binding, _branch_name(record.branch), actual_sha, True
+                )
+            except (TypeError, ValueError, RuntimeError) as exc:
+                valid = False
+                fail_reason = f"canonical validation failed: {type(exc).__name__}"
+            else:
+                fail_reason = "" if valid else "canonical validation failed"
+
+            if valid:
+                return WorkspacePreparationResult(
+                    outcome="prepared",
+                    workspace_identity=identity,
+                    repository=request.repository,
+                    requested_ref=requested_ref,
+                    resolved_ref=resolve_ref,
+                    exact_sha=actual_sha,
+                    mode=request.mode,
+                    path=path,
+                    clean=True,
+                    reused=False,
+                    locked=True,
+                    side_effect_state="verified-prepared",
+                )
+            self._binding = None
+
+        if side_effect_state == "partial-creation-observed" and not self._binding:
+            self._binding = _Binding(
+                request=WorkspaceRequest(
+                    workspace_request_id=request.workspace_request_id,
+                    repository=request.repository,
+                    branch=requested_ref,
+                    expected_revision=actual_sha,
+                ),
+                identity=identity,
+                path=path,
+                branch_ref=resolve_ref if request.mode == "branch" else "",
+                lock_reason=lock_reason,
+                detached=request.mode != "branch",
+            )
         return WorkspacePreparationResult(
-            outcome="prepared",
+            outcome="unavailable",
             workspace_identity=identity,
             repository=request.repository,
             requested_ref=requested_ref,
@@ -658,9 +849,11 @@ class GitWorktreeAdapter:
             exact_sha=actual_sha,
             mode=request.mode,
             path=path,
-            clean=True,
+            clean=False,
             reused=False,
-            locked=True,
+            locked=bool(record and record.locked),
+            reason=fail_reason or "post-creation verification failed",
+            side_effect_state=side_effect_state,
         )
 
     def _bind_request(self, request: WorkspaceRequest) -> tuple[str, str, str]:
@@ -764,6 +957,7 @@ class GitWorktreeAdapter:
             path=path,
             branch_ref=branch_ref,
             lock_reason=lock_reason,
+            detached=False,
         )
         return WorkspaceHandle(
             created=True,
@@ -802,7 +996,9 @@ class GitWorktreeAdapter:
             proposed_pr_sha=None,
             synthetic_merge_sha=None,
             external_build_sha=None,
-            evidence_type=RepositoryEvidenceType.BRANCH_HEAD,
+            evidence_type=RepositoryEvidenceType.BASE_SHA
+            if binding.detached
+            else RepositoryEvidenceType.BRANCH_HEAD,
             contract_fingerprint=hashlib.sha256(
                 binding.identity.encode("utf-8")
             ).hexdigest(),
@@ -816,7 +1012,7 @@ class GitWorktreeAdapter:
             expected_repository=self._identity,
             expected_base_ref=binding.request.branch,
             expected_base_sha=binding.request.expected_revision,
-            expected_head_ref=binding.request.branch,
+            expected_head_ref=None if binding.detached else binding.request.branch,
             expected_head_sha=binding.request.expected_revision,
             expected_requested_sha=binding.request.expected_revision,
         )
@@ -880,16 +1076,16 @@ class GitWorktreeAdapter:
         checks = (
             (not status.succeeded, "Git status inspection failed"),
             (not exists, "worktree filesystem path is missing"),
-            (record.detached, "worktree is detached"),
+            (record.detached != binding.detached, "worktree detachment mismatch"),
             (record.bare, "worktree is bare"),
-            (record.branch != binding.branch_ref, "worktree branch drifted"),
+            (not binding.detached and record.branch != binding.branch_ref, "worktree branch drifted"),
             (
                 record.head != binding.request.expected_revision,
                 "worktree revision drifted",
             ),
             (record.prunable, "worktree metadata is prunable"),
             (not locked_expected, "worktree lock ownership drifted"),
-            (reused, "worktree branch is reused"),
+            (not binding.detached and reused, "worktree branch is reused"),
         )
         reasons = [reason for failed, reason in checks if failed]
         try:

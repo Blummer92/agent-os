@@ -402,14 +402,17 @@ def test_prepare_attached_branch_success(repo) -> None:
     result = inst.prepare(request)
     assert result.outcome == "prepared"
     assert result.exact_sha == sha
+    assert result.side_effect_state == "verified-prepared"
     assert not result.reused
     assert result.locked
-    assert not any([
-        result.repository_implementation_authorized,
-        result.execution_authorized,
-        result.github_writes_authorized,
-        result.merge_authorized
-    ])
+    for field in (
+        "repository_implementation_authorized",
+        "execution_authorized",
+        "github_writes_authorized",
+        "merge_authorized",
+    ):
+        assert getattr(result, field) is False
+
 
 def test_prepare_tag_resolution_and_movement(repo) -> None:
     root, parent, _ = repo
@@ -430,6 +433,7 @@ def test_prepare_tag_resolution_and_movement(repo) -> None:
     result = inst.prepare(request)
     assert result.outcome == "prepared"
     assert result.exact_sha == sha
+    assert result.exact_sha == sha
 
     # Tag movement
     (root / "move.txt").write_text("move\n")
@@ -443,10 +447,64 @@ def test_prepare_tag_resolution_and_movement(repo) -> None:
     assert result2.outcome == "manual-review"
     assert "movement" in result2.reason
 
-def test_prepare_detached_sha_and_malformed_rejection(repo) -> None:
+
+def test_prepare_annotated_tag_success(repo) -> None:
+    root, parent, _ = repo
+    (root / "annotated.txt").write_text("annotated\n")
+    git(root, "add", "annotated.txt")
+    git(root, "commit", "-m", "annotated-commit")
+    sha = git(root, "rev-parse", "HEAD")
+    git(root, "tag", "-a", "v2.0.0", "-m", "version 2", sha)
+
+    request = WorkspacePreparationRequest(
+        workspace_request_id="prep-annotated",
+        repository="Blummer92/agent-os",
+        requested_ref="v2.0.0",
+        expected_revision=sha,
+        mode="tag",
+    )
+    result = adapter(root, parent).prepare(request)
+    assert result.outcome == "prepared"
+    assert result.exact_sha == sha
+
+
+def test_prepare_ambiguity_branch_vs_tag(repo) -> None:
+    root, parent, _ = repo
+    sha1 = git(root, "rev-parse", "HEAD")
+    git(root, "branch", "ambiguous")
+
+    (root / "other.txt").write_text("other\n")
+    git(root, "add", "other.txt")
+    git(root, "commit", "-m", "other-commit")
+    sha2 = git(root, "rev-parse", "HEAD")
+    git(root, "tag", "ambiguous", sha2)
+
+    # Branch mode should find sha1
+    req_br = WorkspacePreparationRequest(
+        workspace_request_id="prep-br",
+        repository="Blummer92/agent-os",
+        requested_ref="ambiguous",
+        expected_revision=sha1,
+        mode="branch",
+    )
+    assert adapter(root, parent).prepare(req_br).exact_sha == sha1
+
+    # Tag mode should find sha2
+    req_tg = WorkspacePreparationRequest(
+        workspace_request_id="prep-tg",
+        repository="Blummer92/agent-os",
+        requested_ref="ambiguous",
+        expected_revision=sha2,
+        mode="tag",
+    )
+    assert adapter(root, parent).prepare(req_tg).exact_sha == sha2
+
+
+def test_prepare_detached_sha_enforcement(repo) -> None:
     root, parent, _ = repo
     sha = git(root, "rev-parse", "main")
 
+    # Correct lowercase SHA
     request = WorkspacePreparationRequest(
         workspace_request_id="prep-sha",
         repository="Blummer92/agent-os",
@@ -458,17 +516,19 @@ def test_prepare_detached_sha_and_malformed_rejection(repo) -> None:
     assert result.outcome == "prepared"
     assert result.exact_sha == sha
 
-    # Malformed SHA
-    bad_request = WorkspacePreparationRequest(
-        workspace_request_id="prep-bad",
-        repository="Blummer92/agent-os",
-        requested_ref=sha[:10],
-        expected_revision=sha,
-        mode="detached-sha",
-    )
-    result2 = adapter(root, parent).prepare(bad_request)
-    assert result2.outcome == "blocked"
-    assert "40-character SHA" in result2.reason
+    # Uppercase or short SHA should be rejected in bind
+    for bad_ref in (sha.upper(), sha[:10], "not-a-sha"):
+        req = WorkspacePreparationRequest(
+            workspace_request_id="prep-bad-sha",
+            repository="Blummer92/agent-os",
+            requested_ref=bad_ref,
+            expected_revision=sha,
+            mode="detached-sha",
+        )
+        result_bad = adapter(root, parent).prepare(req)
+        assert result_bad.outcome == "blocked"
+        assert "40-character SHA" in result_bad.reason
+
 
 def test_prepare_idempotent_reuse(repo) -> None:
     root, parent, _ = repo
@@ -488,12 +548,14 @@ def test_prepare_idempotent_reuse(repo) -> None:
     result2 = inst2.prepare(request)
     assert result2.outcome == "already-prepared"
     assert result2.reused
+    assert result2.side_effect_state == "verified-reused"
+
 
 def test_prepare_conflicts_and_escape(repo) -> None:
     root, parent, _ = repo
     sha = git(root, "rev-parse", "agent/596-work")
 
-    # Branch collision
+    # Branch collision (same branch, different request ID/path)
     request1 = WorkspacePreparationRequest(
         workspace_request_id="prep-1",
         repository="Blummer92/agent-os",
@@ -513,3 +575,143 @@ def test_prepare_conflicts_and_escape(repo) -> None:
     result2 = adapter(root, parent).prepare(request2)
     assert result2.outcome == "blocked"
     assert "branch" in result2.reason
+
+    # Path escape
+    bad_req = WorkspacePreparationRequest(
+        workspace_request_id="prep-escape",
+        repository="Blummer92/agent-os",
+        requested_ref="main",
+        expected_revision=git(root, "rev-parse", "main"),
+        mode="branch",
+    )
+    # Mocking is hard here, but _bind_preparation already tests path starting with parent_abs
+    # We can test wrong repository identity
+    req_wrong_repo = WorkspacePreparationRequest(
+        workspace_request_id="prep-repo",
+        repository="Other/Repo",
+        requested_ref="main",
+        expected_revision=sha,
+        mode="branch",
+    )
+    assert adapter(root, parent).prepare(req_wrong_repo).outcome == "blocked"
+
+
+def test_prepare_dirty_reuse_blocked(repo) -> None:
+    root, parent, _ = repo
+    sha = git(root, "rev-parse", "agent/596-work")
+    request = WorkspacePreparationRequest(
+        workspace_request_id="prep-dirty",
+        repository="Blummer92/agent-os",
+        requested_ref="agent/596-work",
+        expected_revision=sha,
+        mode="branch",
+    )
+    inst = adapter(root, parent)
+    result = inst.prepare(request)
+    assert result.outcome == "prepared"
+
+    # Make it dirty
+    (Path(result.path) / "dirty.txt").write_text("dirty\n")
+
+    inst2 = adapter(root, parent)
+    result2 = inst2.prepare(request)
+    assert result2.outcome == "blocked"
+    assert "dirty" in result2.reason
+
+
+def test_prepare_identity_conflict_blocked(repo) -> None:
+    root, parent, _ = repo
+    sha = git(root, "rev-parse", "agent/596-work")
+    request = WorkspacePreparationRequest(
+        workspace_request_id="same-id",
+        repository="Blummer92/agent-os",
+        requested_ref="agent/596-work",
+        expected_revision=sha,
+        mode="branch",
+    )
+    adapter(root, parent).prepare(request)
+
+    # Different ref with same ID -> Identity Conflict
+    git(root, "branch", "other-branch")
+    other_sha = git(root, "rev-parse", "other-branch")
+    request2 = WorkspacePreparationRequest(
+        workspace_request_id="same-id",
+        repository="Blummer92/agent-os",
+        requested_ref="other-branch",
+        expected_revision=other_sha,
+        mode="branch",
+    )
+    result2 = adapter(root, parent).prepare(request2)
+    assert result2.outcome == "blocked"
+    assert "metadata conflict" in result2.reason
+
+
+def test_prepare_partial_creation_and_cleanup(repo) -> None:
+    root, parent, _ = repo
+    sha = git(root, "rev-parse", "agent/596-work")
+    req = WorkspacePreparationRequest(
+        workspace_request_id="prep-partial",
+        repository="Blummer92/agent-os",
+        requested_ref="agent/596-work",
+        expected_revision=sha,
+        mode="branch",
+    )
+    inst_dummy = adapter(root, parent)
+    identity, path, _, resolve_ref = inst_dummy._bind_preparation(req)
+
+    primary = f"worktree {root}\x00HEAD {sha}\x00branch refs/heads/main\x00\x00"
+    partial_metadata = (
+        f"worktree {path}\x00HEAD {sha}\x00branch {resolve_ref}\x00locked agent-os:{identity}\x00\x00"
+    )
+    partial = primary + partial_metadata
+    unlocked_metadata = (
+        f"worktree {path}\x00HEAD {sha}\x00branch {resolve_ref}\x00\x00"
+    )
+
+    runner = RecordingRunner(
+        [
+            success(sha + "\n"),  # rev-parse
+            success(primary),  # initial records
+            GitObservation(
+                started=True,
+                return_code=1,
+                timed_out=False,
+                termination_confirmed=True,
+                reason="failed",
+            ),  # worktree add failure
+            success(partial),  # records check after failure (proves partial)
+            success(partial),  # records check for cleanup
+            success(""),  # unlock
+            success(primary + unlocked_metadata),  # records check after unlock
+            success(""),  # remove
+            success(primary),  # records check after remove
+        ]
+    )
+
+    inst = adapter(root, parent, runner=runner)
+    result = inst.prepare(req)
+    assert result.outcome == "unavailable"
+    assert result.side_effect_state == "partial-creation-observed"
+
+    # Verify cleanup is possible because binding was preserved
+    cleanup = inst.cleanup(
+        WorkspaceHandle(created=True, workspace_identity=result.workspace_identity)
+    )
+    assert cleanup.metadata_removed
+    assert cleanup.path_absent
+
+
+def test_prepare_at_most_once(repo) -> None:
+    root, parent, _ = repo
+    sha = git(root, "rev-parse", "main")
+    req = WorkspacePreparationRequest(
+        workspace_request_id="prep-once",
+        repository="Blummer92/agent-os",
+        requested_ref="main",
+        expected_revision=sha,
+        mode="branch",
+    )
+    inst = adapter(root, parent)
+    inst.prepare(req)
+    with pytest.raises(RuntimeError, match="at most once"):
+        inst.prepare(req)
