@@ -428,3 +428,69 @@ def test_module_has_no_external_io_execution_environment_or_clock_imports() -> N
 def test_default_result_fits_declared_size_limit() -> None:
     encoded = repr(serialize_dispatch_decision(_evaluate())).encode("utf-8")
     assert len(encoded) < MAX_DISPATCH_SERIALIZED_BYTES
+
+
+# --- dispatch_identity independent verification (#804) -------------------------
+
+
+def test_dispatch_identity_is_independently_verified_from_its_source_fields() -> None:
+    plan = _plan()
+    result = _evaluate(plan)
+    assert result.dispatch_identity == validation_dispatch_identity(plan)
+    assert serialize_dispatch_decision(result)["dispatch_identity"] == (
+        validation_dispatch_identity(plan)
+    )
+
+
+def test_changing_dispatch_identity_and_recomputing_decision_id_still_fails() -> None:
+    """A self-consistent forged pair -- new dispatch_identity, decision_id
+    recomputed to match it -- must still fail, because dispatch_identity no
+    longer agrees with the six declared source fields it is derived from.
+    """
+    plan = _plan()
+    result = _evaluate(plan)
+    forged_identity = validation_dispatch_identity(replace(plan, head_sha="c" * 40))
+    assert forged_identity != result.dispatch_identity
+    forged = replace(result, dispatch_identity=forged_identity)
+    forged_payload = guard_module._decision_payload(forged)
+    forged_decision_id = "validation-dispatch-decision:" + guard_module._semantic_digest(
+        "agent-os-validation-dispatch-decision:v1", forged_payload
+    )
+    forged = replace(forged, decision_id=forged_decision_id)
+    # The forged decision_id is internally self-consistent with the payload,
+    # proving the attack only succeeds if dispatch_identity is trusted as-is.
+    assert forged.decision_id == forged_decision_id
+    with pytest.raises(ValueError, match="dispatch identity mismatch"):
+        serialize_dispatch_decision(forged)
+    with pytest.raises(ValueError, match="dispatch identity mismatch"):
+        dispatch_decision_id(forged)
+
+
+def test_dispatch_identity_source_field_tampering_fails_independently_of_decision_id() -> None:
+    plan = _plan()
+    result = _evaluate(plan)
+    for field, value in (
+        ("repository", "Other/agent-os"),
+        ("head_sha", "c" * 40),
+        ("profile", "aggregate"),
+        ("selector_version", "9.9.9"),
+        ("command_set_digest", "0" * 64),
+        ("plan_id", "validation-plan:" + "0" * 64),
+    ):
+        tampered = replace(result, **{field: value})
+        with pytest.raises(ValueError, match="dispatch identity mismatch"):
+            serialize_dispatch_decision(tampered)
+
+
+def test_dispatch_identity_partial_null_source_fields_fail_closed() -> None:
+    result = _evaluate()
+    tampered = replace(result, repository=None)
+    with pytest.raises(ValueError, match="dispatch identity mismatch"):
+        serialize_dispatch_decision(tampered)
+
+
+def test_manual_review_decision_with_no_plan_has_no_dispatch_identity() -> None:
+    result = _evaluate(plan={"bad": True})
+    assert result.status == "manual-review"
+    assert result.dispatch_identity is None
+    assert serialize_dispatch_decision(result)["dispatch_identity"] is None
