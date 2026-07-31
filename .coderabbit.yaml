@@ -18,6 +18,7 @@ reviews:
   estimate_code_review_effort: true
   assess_linked_issues: true
   related_issues: true
+  # Keep review progress visible without making CodeRabbit a blocking required check.
   review_progress: true
   fail_commit_status: false
   poem: false
