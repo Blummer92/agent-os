@@ -623,6 +623,132 @@ def test_raised_exception_diagnostics_never_include_exception_message():
     assert "/etc/private/creds" not in adapter.last_diagnostic
 
 
+def _run_with_diagnostic(diagnostic):
+    invocation = _invocation()
+    client = FakeCloudBuildClient(
+        submit_result=CloudBuildSubmissionOutcome(kind="confirmed", build_id="build-1", observed_at=OBSERVED_AT),
+        observe_results=[CloudBuildObservationOutcome(kind="working", observed_at=OBSERVED_AT, diagnostic=diagnostic)],
+    )
+    adapter = _adapter(client, max_poll_attempts=1)
+    result = adapter.run(invocation)
+    return adapter, result
+
+
+# Finding 1 (credential-redaction defect) regression coverage: the
+# label+delimiter-only match previously left the assigned credential value
+# fully intact in the substituted output.
+@pytest.mark.parametrize(
+    "diagnostic, secret_value",
+    [
+        ("token=super-secret-value", "super-secret-value"),
+        ("token: super-secret-value", "super-secret-value"),
+        ("password=my-actual-password-123", "my-actual-password-123"),
+        ("password: my-actual-password-123", "my-actual-password-123"),
+        ("secret=abc123secretvalue", "abc123secretvalue"),
+        ("api_key=AKIAABCDEF1234567890", "AKIAABCDEF1234567890"),
+        ("api-key=AKIAABCDEF1234567890", "AKIAABCDEF1234567890"),
+        ("private_key=secret-material", "secret-material"),
+        ("private-key=secret-material", "secret-material"),
+        ("Authorization: Bearer abcd1234efgh5678", "abcd1234efgh5678"),
+        ("bearer abcd1234efgh5678", "abcd1234efgh5678"),
+    ],
+)
+def test_every_credential_assignment_form_is_fully_redacted(diagnostic, secret_value):
+    adapter, result = _run_with_diagnostic(diagnostic)
+    assert secret_value not in adapter.last_diagnostic
+    assert secret_value not in repr(result)
+    assert "[redacted]" in adapter.last_diagnostic
+
+
+def test_redaction_preserves_bounded_useful_surrounding_text():
+    diagnostic = "build failed during step: token=abc123xyz extra context after"
+    adapter, _ = _run_with_diagnostic(diagnostic)
+    assert "abc123xyz" not in adapter.last_diagnostic
+    assert adapter.last_diagnostic.startswith("build failed during step:")
+    assert adapter.last_diagnostic.endswith("extra context after")
+    assert "[redacted]" in adapter.last_diagnostic
+
+
+def test_multiple_credentials_in_one_diagnostic_are_all_redacted():
+    diagnostic = "token=aaa111secret and password=bbb222secret both leak"
+    adapter, _ = _run_with_diagnostic(diagnostic)
+    assert "aaa111secret" not in adapter.last_diagnostic
+    assert "bbb222secret" not in adapter.last_diagnostic
+    assert adapter.last_diagnostic.count("[redacted]") == 2
+    assert adapter.last_diagnostic == "[redacted] and [redacted] both leak"
+
+
+def test_control_characters_and_oversized_values_do_not_bypass_redaction():
+    diagnostic = "token=" + "s3cr3t\x07\x01value" + ("x" * 2000)
+    adapter, _ = _run_with_diagnostic(diagnostic)
+    assert "s3cr3t" not in adapter.last_diagnostic
+    assert "value" not in adapter.last_diagnostic
+    assert "\x07" not in adapter.last_diagnostic
+    assert "\x01" not in adapter.last_diagnostic
+    assert len(adapter.last_diagnostic) <= 512
+
+
+def test_authorization_bearer_value_is_fully_redacted():
+    diagnostic = "Authorization: Bearer abcd1234efgh5678 trailing text"
+    adapter, _ = _run_with_diagnostic(diagnostic)
+    assert "abcd1234efgh5678" not in adapter.last_diagnostic
+    assert "Bearer" not in adapter.last_diagnostic
+    assert adapter.last_diagnostic.endswith("trailing text")
+
+
+# Finding 2 (assert-dependent correctness) regression coverage: a
+# post-construction-tampered "confirmed" outcome with an invalid build_id
+# must fail closed on an explicit runtime check, never on ``assert`` (which
+# is stripped under ``python -O``), and must never reach an observation call.
+def test_malformed_confirmed_outcome_with_missing_build_id_fails_closed():
+    invocation = _invocation()
+    tampered = CloudBuildSubmissionOutcome(kind="confirmed", build_id="build-1", observed_at=OBSERVED_AT)
+    object.__setattr__(tampered, "build_id", None)
+    client = FakeCloudBuildClient(
+        submit_result=tampered,
+        reconcile_result=CloudBuildReconciliationOutcome(matches=(), observed_at=OBSERVED_AT),
+    )
+    result = _adapter(client).run(invocation)
+
+    assert client.observe_calls == []
+    assert len(client.reconcile_calls) == 1
+    assert result.status is ProviderStatus.UNKNOWN
+    assert result.side_effect_state is ProviderSideEffectState.UNKNOWN
+    assert result.merge_authorized is False
+
+
+def test_malformed_confirmed_outcome_with_empty_build_id_fails_closed():
+    invocation = _invocation()
+    tampered = CloudBuildSubmissionOutcome(kind="confirmed", build_id="build-1", observed_at=OBSERVED_AT)
+    object.__setattr__(tampered, "build_id", "")
+    client = FakeCloudBuildClient(
+        submit_result=tampered,
+        reconcile_result=CloudBuildReconciliationOutcome(matches=(), observed_at=OBSERVED_AT),
+    )
+    result = _adapter(client).run(invocation)
+
+    assert client.observe_calls == []
+    assert result.status is ProviderStatus.UNKNOWN
+    assert result.side_effect_state is ProviderSideEffectState.UNKNOWN
+
+
+def test_malformed_confirmed_outcome_submits_once_and_does_not_retry():
+    invocation = _invocation()
+    tampered = CloudBuildSubmissionOutcome(kind="confirmed", build_id="build-1", observed_at=OBSERVED_AT)
+    object.__setattr__(tampered, "build_id", None)
+    client = FakeCloudBuildClient(
+        submit_result=tampered,
+        reconcile_result=CloudBuildReconciliationOutcome(matches=(), observed_at=OBSERVED_AT),
+    )
+    adapter = _adapter(client)
+    adapter.run(invocation)
+
+    assert len(client.submit_calls) == 1
+    with pytest.raises(RuntimeError):
+        adapter.run(invocation)
+    assert len(client.submit_calls) == 1
+
+
 # 17. bounded poll count and diagnostics.
 def test_poll_count_is_bounded():
     invocation = _invocation()

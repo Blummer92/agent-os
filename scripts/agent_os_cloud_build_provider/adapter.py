@@ -45,10 +45,16 @@ MAX_RECONCILIATION_MATCHES_INSPECTED = 8
 _FALLBACK_OBSERVED_AT = "1970-01-01T00:00:00Z"
 
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+# The token/password/secret/api-key/private-key alternative consumes the
+# assigned value (``\s*\S+``) rather than stopping at the ``:``/``=``
+# delimiter: a redaction regex that only matches the label leaves the
+# credential value itself un-redacted in the substituted output, unlike a
+# pure detect-and-reject use (see ``models._SECRET_RE``, which only needs
+# to detect a match, not consume the whole secret).
 _SECRET_RE = re.compile(
     r"(?i)(authorization\s*:\s*[A-Za-z][A-Za-z0-9._-]*\s+"
     r"[A-Za-z0-9._~+/-]{4,}=*|bearer\s+[A-Za-z0-9._-]{8,}|"
-    r"(?:token|password|secret|api[_-]?key|private[_-]?key)\s*[:=])"
+    r"(?:token|password|secret|api[_-]?key|private[_-]?key)\s*[:=]\s*\S+)"
 )
 
 SubmissionOutcomeKind = Literal["confirmed", "denied", "unavailable", "internal-error", "ambiguous"]
@@ -406,7 +412,18 @@ class CloudBuildProviderAdapter:
         if outcome.kind in ("unavailable", "internal-error"):
             return self._proven_unsuccessful_result(invocation, outcome.kind, outcome.observed_at)
 
-        assert outcome.kind == "confirmed" and outcome.build_id is not None
+        # Fail closed on a runtime check, not ``assert``: assertions are
+        # stripped under ``python -O``, and a "confirmed" outcome whose
+        # ``build_id`` was tampered with after construction (bypassing its
+        # own frozen-dataclass invariant) must never reach an observation
+        # call with an invalid build ID. Routed through the same bounded
+        # reconciliation path as a malformed outcome, so it is never
+        # resubmitted and, absent an exact recoverable match, resolves to
+        # a bounded unknown result.
+        if outcome.kind != "confirmed" or type(outcome.build_id) is not str or not outcome.build_id:
+            self._last_diagnostic = "submission outcome was internally inconsistent"
+            return self._reconcile(invocation)
+
         observation = self._observe_to_terminal(invocation, outcome.build_id)
         return project_cloud_build_provider_result(invocation, observation)
 
