@@ -1,5 +1,6 @@
 """Immutable, read-only Agent OS execution-service contracts."""
 
+from .authorization import ExecutionAuthorizationEvidence
 from .command_planning import (
     COMMAND_PLAN_SCHEMA_VERSION,
     COMMAND_REGISTRY_VERSION,
@@ -74,16 +75,13 @@ __all__ = [
     "validation_command_plan_id",
 ]
 
-# ``execution_composition`` depends on the Workflow Scheduler package, which
-# is not on ``sys.path`` for every consumer of this read-only-safe package
-# (for example, the request/inspection-only test suites). Its public names
-# are exposed lazily via ``__getattr__`` so importing ``agent_os_execution_service``
-# never requires ``workflow_scheduler`` to be importable; it is only required
-# when a caller actually uses the composition surface.
+# Runtime composition still depends on Workflow Scheduler, which is not on
+# ``sys.path`` for every consumer. Only the runtime-composition names remain
+# lazy. The authorization evidence contract is imported eagerly from the pure
+# module above so package-level authorization imports never load Scheduler.
 _LAZY_COMPOSITION_EXPORTS = frozenset(
     (
         "EXECUTION_COMPOSITION_SCHEMA_VERSION",
-        "ExecutionAuthorizationEvidence",
         "ExecutionCompositionResult",
         "ExecutionCompositionStatus",
         "compose_and_run_validation",
