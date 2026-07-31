@@ -7,7 +7,7 @@ import math
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Mapping, Protocol, runtime_checkable
+from typing import Mapping, Protocol, runtime_checkable, Literal
 
 from scripts.agent_os_execution_capabilities.models import (
     CAPABILITY_EVIDENCE_SCHEMA_NAME,
@@ -44,6 +44,42 @@ _FIELDS = frozenset(
 
 class GitWorktreeAdapterError(ValueError):
     pass
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class WorkspacePreparationRequest:
+    """Bounded request for an immutable workspace preparation."""
+
+    workspace_request_id: str
+    repository: str
+    requested_ref: str
+    expected_revision: str
+    mode: Literal["branch", "tag", "detached-sha"]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class WorkspacePreparationResult:
+    """Deterministic evidence of a bounded workspace preparation."""
+
+    outcome: Literal[
+        "prepared", "already-prepared", "manual-review", "blocked", "unavailable"
+    ]
+    workspace_identity: str
+    repository: str
+    requested_ref: str
+    resolved_ref: str
+    exact_sha: str
+    mode: Literal["branch", "tag", "detached-sha"]
+    path: str
+    clean: bool
+    reused: bool
+    locked: bool
+    side_effect_state: str = ""
+    reason: str = ""
+    repository_implementation_authorized: bool = field(default=False, init=False)
+    execution_authorized: bool = field(default=False, init=False)
+    github_writes_authorized: bool = field(default=False, init=False)
+    merge_authorized: bool = field(default=False, init=False)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -370,6 +406,262 @@ class GitWorktreeAdapter:
                 _reason(result.reason or "Git inspection failed")
             )
         return _parse_porcelain(result.stdout)
+
+    def _bind_preparation(
+        self, request: WorkspacePreparationRequest
+    ) -> tuple[str, str, str]:
+        if not isinstance(request, WorkspacePreparationRequest):
+            raise TypeError("request must be WorkspacePreparationRequest")
+        expected_repo = f"{self._identity.owner}/{self._identity.repository}".lower()
+        if _text(request.repository, "repository").lower() != expected_repo:
+            raise GitWorktreeAdapterError("repository identity mismatch")
+        ref = _text(request.requested_ref, "requested_ref")
+        if ref.startswith("refs/"):
+            raise GitWorktreeAdapterError("requested_ref must use the canonical short name")
+        if not _SHA40.fullmatch(request.expected_revision):
+            raise GitWorktreeAdapterError("expected_revision must be a full lowercase SHA")
+        if request.mode not in ("branch", "tag", "detached-sha"):
+            raise GitWorktreeAdapterError("invalid preparation mode")
+        _text(request.workspace_request_id, "workspace_request_id")
+        dummy = WorkspaceRequest(
+            workspace_request_id=request.workspace_request_id,
+            repository=request.repository,
+            branch=request.requested_ref,
+            expected_revision=request.expected_revision,
+        )
+        identity = pilot_workspace_identity(dummy)
+        suffix = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+        path = os.path.normpath(os.path.join(self._parent, f"agent-os-prep-{suffix}"))
+        if not os.path.isabs(path) or path != os.path.abspath(path):
+            raise GitWorktreeAdapterError("path is not absolute and normalized")
+        parent_abs = os.path.abspath(self._parent)
+        if not path.startswith(parent_abs + os.sep):
+            raise GitWorktreeAdapterError("path escape detected")
+        if os.path.islink(path) or os.path.islink(os.path.dirname(path)):
+            raise GitWorktreeAdapterError("symlink detected in worktree path")
+        return identity, path, ref
+
+    def prepare(
+        self, request: WorkspacePreparationRequest
+    ) -> WorkspacePreparationResult:
+        if self._create_attempted:
+            raise RuntimeError("worktree creation may be attempted at most once")
+        self._create_attempted = True
+        auth = {
+            "repository_implementation_authorized": False,
+            "execution_authorized": False,
+            "github_writes_authorized": False,
+            "merge_authorized": False,
+        }
+        try:
+            identity, path, requested_ref = self._bind_preparation(request)
+        except (GitWorktreeAdapterError, TypeError, ValueError) as exc:
+            return WorkspacePreparationResult(
+                outcome="blocked",
+                workspace_identity="",
+                repository=request.repository,
+                requested_ref=request.requested_ref,
+                resolved_ref="",
+                exact_sha="",
+                mode=request.mode,
+                path="",
+                clean=False,
+                reused=False,
+                locked=False,
+                reason=_reason(exc),
+            )
+
+        if request.mode == "branch":
+            resolve_ref = f"refs/heads/{requested_ref}"
+            checkout_ref = requested_ref
+        elif request.mode == "tag":
+            resolve_ref = f"refs/tags/{requested_ref}"
+            checkout_ref = requested_ref
+        else:
+            if not _SHA40.fullmatch(requested_ref):
+                return WorkspacePreparationResult(
+                    outcome="blocked",
+                    workspace_identity=identity,
+                    repository=request.repository,
+                    requested_ref=requested_ref,
+                    resolved_ref="",
+                    exact_sha="",
+                    mode=request.mode,
+                    path=path,
+                    clean=False,
+                    reused=False,
+                    locked=False,
+                    reason="detached-sha mode requires a full lowercase 40-character SHA",
+                )
+            resolve_ref = requested_ref
+            checkout_ref = requested_ref
+
+        resolved = self._run("-C", self._root, "rev-parse", "--verify", f"{resolve_ref}^{{commit}}")
+        actual_sha = resolved.stdout.strip() if resolved.succeeded else ""
+        if not resolved.succeeded or not _SHA40.fullmatch(actual_sha):
+            return WorkspacePreparationResult(
+                outcome="unavailable",
+                workspace_identity=identity,
+                repository=request.repository,
+                requested_ref=requested_ref,
+                resolved_ref="",
+                exact_sha="",
+                mode=request.mode,
+                path=path,
+                clean=False,
+                reused=False,
+                locked=False,
+                reason="could not resolve ref to an exact commit",
+            )
+        if actual_sha != request.expected_revision:
+            return WorkspacePreparationResult(
+                outcome="manual-review",
+                workspace_identity=identity,
+                repository=request.repository,
+                requested_ref=requested_ref,
+                resolved_ref=resolve_ref,
+                exact_sha=actual_sha,
+                mode=request.mode,
+                path=path,
+                clean=False,
+                reused=False,
+                locked=False,
+                reason="revision mismatch or tag movement detected",
+            )
+
+        try:
+            records = self._records()
+        except GitWorktreeAdapterError as exc:
+            return WorkspacePreparationResult(
+                outcome="unavailable",
+                workspace_identity=identity,
+                repository=request.repository,
+                requested_ref=requested_ref,
+                resolved_ref=resolve_ref,
+                exact_sha=actual_sha,
+                mode=request.mode,
+                path=path,
+                clean=False,
+                reused=False,
+                locked=False,
+                reason=_reason(exc),
+            )
+
+        lock_reason = _reason(f"agent-os:{identity}")
+        existing = next((r for r in records if r.path == path), None)
+        if existing:
+            mode_match = (request.mode == "branch" and not existing.detached) or (
+                request.mode in ("tag", "detached-sha") and existing.detached
+            )
+            head_match = existing.head == actual_sha
+            ref_match = request.mode != "branch" or existing.branch == resolve_ref
+            lock_match = existing.locked and existing.lock_reason == lock_reason
+            if mode_match and head_match and ref_match and lock_match and not existing.prunable:
+                status = self._run("-C", path, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+                clean = status.succeeded and status.stdout == ""
+                if clean:
+                    self._binding = _Binding(
+                        request=WorkspaceRequest(
+                            workspace_request_id=request.workspace_request_id,
+                            repository=request.repository,
+                            branch=requested_ref,
+                            expected_revision=actual_sha,
+                        ),
+                        identity=identity,
+                        path=path,
+                        branch_ref=resolve_ref if request.mode == "branch" else "",
+                        lock_reason=lock_reason,
+                    )
+                    return WorkspacePreparationResult(
+                        outcome="already-prepared",
+                        workspace_identity=identity,
+                        repository=request.repository,
+                        requested_ref=requested_ref,
+                        resolved_ref=resolve_ref,
+                        exact_sha=actual_sha,
+                        mode=request.mode,
+                        path=path,
+                        clean=True,
+                        reused=True,
+                        locked=True,
+                    )
+            return WorkspacePreparationResult(
+                outcome="blocked",
+                workspace_identity=identity,
+                repository=request.repository,
+                requested_ref=requested_ref,
+                resolved_ref=resolve_ref,
+                exact_sha=actual_sha,
+                mode=request.mode,
+                path=path,
+                clean=False,
+                reused=False,
+                locked=existing.locked,
+                reason="path collision, dirty state, or metadata conflict",
+            )
+
+        if request.mode == "branch" and any(r.branch == resolve_ref for r in records):
+            return WorkspacePreparationResult(
+                outcome="blocked",
+                workspace_identity=identity,
+                repository=request.repository,
+                requested_ref=requested_ref,
+                resolved_ref=resolve_ref,
+                exact_sha=actual_sha,
+                mode=request.mode,
+                path=path,
+                clean=False,
+                reused=False,
+                locked=False,
+                reason="branch is already claimed by another worktree",
+            )
+
+        add_args = ["-C", self._root, "worktree", "add", "--lock", "--reason", lock_reason]
+        if request.mode != "branch":
+            add_args.append("--detach")
+        add_args.extend([path, checkout_ref])
+        added = self._run(*add_args)
+        if not added.succeeded:
+            return WorkspacePreparationResult(
+                outcome="unavailable",
+                workspace_identity=identity,
+                repository=request.repository,
+                requested_ref=requested_ref,
+                resolved_ref=resolve_ref,
+                exact_sha=actual_sha,
+                mode=request.mode,
+                path=path,
+                clean=False,
+                reused=False,
+                locked=False,
+                reason=_reason(added.reason or "worktree addition failed"),
+            )
+
+        self._binding = _Binding(
+            request=WorkspaceRequest(
+                workspace_request_id=request.workspace_request_id,
+                repository=request.repository,
+                branch=requested_ref,
+                expected_revision=actual_sha,
+            ),
+            identity=identity,
+            path=path,
+            branch_ref=resolve_ref if request.mode == "branch" else "",
+            lock_reason=lock_reason,
+        )
+        return WorkspacePreparationResult(
+            outcome="prepared",
+            workspace_identity=identity,
+            repository=request.repository,
+            requested_ref=requested_ref,
+            resolved_ref=resolve_ref,
+            exact_sha=actual_sha,
+            mode=request.mode,
+            path=path,
+            clean=True,
+            reused=False,
+            locked=True,
+        )
 
     def _bind_request(self, request: WorkspaceRequest) -> tuple[str, str, str]:
         if not isinstance(request, WorkspaceRequest):

@@ -14,6 +14,7 @@ from workflow_scheduler.execution.git_worktree_adapter import (
     GitObservation,
     GitWorktreeAdapter,
     GitWorktreeAdapterError,
+    WorkspacePreparationRequest,
 )
 from workflow_scheduler.execution.single_issue_pilot import (
     WorkspaceAdapter,
@@ -386,3 +387,129 @@ def test_architecture_boundaries_and_no_force_or_prune() -> None:
     assert '"--force"' not in source
     assert "shell=True" not in source
     assert "workflow_dispatch" not in source
+
+def test_prepare_attached_branch_success(repo) -> None:
+    root, parent, _ = repo
+    sha = git(root, "rev-parse", "agent/596-work")
+    request = WorkspacePreparationRequest(
+        workspace_request_id="prep-596",
+        repository="Blummer92/agent-os",
+        requested_ref="agent/596-work",
+        expected_revision=sha,
+        mode="branch",
+    )
+    inst = adapter(root, parent)
+    result = inst.prepare(request)
+    assert result.outcome == "prepared"
+    assert result.exact_sha == sha
+    assert not result.reused
+    assert result.locked
+    assert not any([
+        result.repository_implementation_authorized,
+        result.execution_authorized,
+        result.github_writes_authorized,
+        result.merge_authorized
+    ])
+
+def test_prepare_tag_resolution_and_movement(repo) -> None:
+    root, parent, _ = repo
+    (root / "tag.txt").write_text("tag\n")
+    git(root, "add", "tag.txt")
+    git(root, "commit", "-m", "tag-commit")
+    sha = git(root, "rev-parse", "HEAD")
+    git(root, "tag", "v1.0.0", sha)
+
+    request = WorkspacePreparationRequest(
+        workspace_request_id="prep-tag",
+        repository="Blummer92/agent-os",
+        requested_ref="v1.0.0",
+        expected_revision=sha,
+        mode="tag",
+    )
+    inst = adapter(root, parent)
+    result = inst.prepare(request)
+    assert result.outcome == "prepared"
+    assert result.exact_sha == sha
+
+    # Tag movement
+    (root / "move.txt").write_text("move\n")
+    git(root, "add", "move.txt")
+    git(root, "commit", "-m", "move-commit")
+    new_sha = git(root, "rev-parse", "HEAD")
+    git(root, "tag", "-f", "v1.0.0", new_sha)
+
+    inst2 = adapter(root, parent)
+    result2 = inst2.prepare(request)
+    assert result2.outcome == "manual-review"
+    assert "movement" in result2.reason
+
+def test_prepare_detached_sha_and_malformed_rejection(repo) -> None:
+    root, parent, _ = repo
+    sha = git(root, "rev-parse", "main")
+
+    request = WorkspacePreparationRequest(
+        workspace_request_id="prep-sha",
+        repository="Blummer92/agent-os",
+        requested_ref=sha,
+        expected_revision=sha,
+        mode="detached-sha",
+    )
+    result = adapter(root, parent).prepare(request)
+    assert result.outcome == "prepared"
+    assert result.exact_sha == sha
+
+    # Malformed SHA
+    bad_request = WorkspacePreparationRequest(
+        workspace_request_id="prep-bad",
+        repository="Blummer92/agent-os",
+        requested_ref=sha[:10],
+        expected_revision=sha,
+        mode="detached-sha",
+    )
+    result2 = adapter(root, parent).prepare(bad_request)
+    assert result2.outcome == "blocked"
+    assert "40-character SHA" in result2.reason
+
+def test_prepare_idempotent_reuse(repo) -> None:
+    root, parent, _ = repo
+    sha = git(root, "rev-parse", "agent/596-work")
+    request = WorkspacePreparationRequest(
+        workspace_request_id="prep-idempotent",
+        repository="Blummer92/agent-os",
+        requested_ref="agent/596-work",
+        expected_revision=sha,
+        mode="branch",
+    )
+    inst = adapter(root, parent)
+    result1 = inst.prepare(request)
+    assert result1.outcome == "prepared"
+
+    inst2 = adapter(root, parent)
+    result2 = inst2.prepare(request)
+    assert result2.outcome == "already-prepared"
+    assert result2.reused
+
+def test_prepare_conflicts_and_escape(repo) -> None:
+    root, parent, _ = repo
+    sha = git(root, "rev-parse", "agent/596-work")
+
+    # Branch collision
+    request1 = WorkspacePreparationRequest(
+        workspace_request_id="prep-1",
+        repository="Blummer92/agent-os",
+        requested_ref="agent/596-work",
+        expected_revision=sha,
+        mode="branch",
+    )
+    adapter(root, parent).prepare(request1)
+
+    request2 = WorkspacePreparationRequest(
+        workspace_request_id="prep-2",
+        repository="Blummer92/agent-os",
+        requested_ref="agent/596-work",
+        expected_revision=sha,
+        mode="branch",
+    )
+    result2 = adapter(root, parent).prepare(request2)
+    assert result2.outcome == "blocked"
+    assert "branch" in result2.reason
