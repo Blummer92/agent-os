@@ -3,7 +3,8 @@
 import pytest
 
 from workflow_scheduler.governance import StopConditionChecker
-from workflow_scheduler.models import Task, TaskMode
+from workflow_scheduler.models import ApprovalDecision, ApprovalRequest, Task, TaskMode
+from workflow_scheduler.repository import SQLiteRepository
 
 
 class TestStopConditions:
@@ -240,3 +241,107 @@ class TestStopConditions:
         assert "ambiguous_target" in result.blockers
         assert "approval_engine_deferred" in result.blockers
         assert len(result.blockers) >= 2
+
+
+class TestApprovalAwareHelpers:
+    """Tests for the approval-engine-aware individual stop condition helpers."""
+
+    @staticmethod
+    def _task(task_id: str = "task-1", **overrides) -> Task:
+        defaults = dict(
+            id=task_id,
+            workflow_id="workflow-1",
+            type="test",
+            owner="system",
+            action="write:governed_system",
+            idempotency_key=f"key-{task_id}",
+        )
+        defaults.update(overrides)
+        return Task(**defaults)
+
+    @staticmethod
+    def _repo_with_decision(task: Task, decision: ApprovalDecision) -> SQLiteRepository:
+        """Persist an approval request for a task at the given decision state."""
+        repository = SQLiteRepository(":memory:")
+        repository.create_approval_request(
+            ApprovalRequest(
+                id=f"approval-{task.id}",
+                task_id=task.id,
+                requested_by=task.owner,
+                decision=ApprovalDecision.PENDING,
+            )
+        )
+        if decision != ApprovalDecision.PENDING:
+            repository.update_approval_decision(
+                task_id=task.id, decision=decision, approver="approver-1"
+            )
+        return repository
+
+    def test_approval_required_blocks_without_an_approval_store(self):
+        """No source_of_truth_db means no approval on record, so the task stays blocked."""
+        task = self._task(approval_required=True)
+
+        result = StopConditionChecker.check_approval_required(task)
+
+        assert result.is_blocked is True
+        assert result.blockers == [StopConditionChecker.APPROVAL_ENGINE_DEFERRED]
+
+    def test_approval_required_cleared_by_approved_decision(self):
+        """An APPROVED record is the only thing that clears the block."""
+        task = self._task(approval_required=True)
+        repository = self._repo_with_decision(task, ApprovalDecision.APPROVED)
+
+        result = StopConditionChecker.check_approval_required(task, source_of_truth_db=repository)
+
+        assert result.is_blocked is False
+
+    @pytest.mark.parametrize(
+        "decision", [ApprovalDecision.PENDING, ApprovalDecision.REJECTED]
+    )
+    def test_approval_required_still_blocked_when_not_approved(self, decision):
+        """A pending or rejected decision does not clear the block."""
+        task = self._task(approval_required=True)
+        repository = self._repo_with_decision(task, decision)
+
+        result = StopConditionChecker.check_approval_required(task, source_of_truth_db=repository)
+
+        assert result.is_blocked is True
+        assert result.blockers == [StopConditionChecker.APPROVAL_ENGINE_DEFERRED]
+
+    def test_production_mode_helper_blocks_production_task_mode(self):
+        """TaskMode.PRODUCTION blocks even when the production_ready flag is unset."""
+        task = self._task(mode=TaskMode.PRODUCTION)
+
+        result = StopConditionChecker.check_production_mode(task)
+
+        assert result.is_blocked is True
+        assert result.blockers == [StopConditionChecker.APPROVAL_ENGINE_DEFERRED]
+
+    def test_production_mode_cleared_by_approved_decision(self):
+        """An APPROVED record clears the production block."""
+        task = self._task(production_ready=True)
+        repository = self._repo_with_decision(task, ApprovalDecision.APPROVED)
+
+        result = StopConditionChecker.check_production_mode(task, source_of_truth_db=repository)
+
+        assert result.is_blocked is False
+
+    def test_helpers_tolerate_db_without_approval_lookup(self):
+        """A source_of_truth_db predating the approval engine is treated as no approval."""
+
+        class LegacyDB:
+            def has_conflict(self, task_id: str) -> bool:
+                return False
+
+        task = self._task(approval_required=True)
+
+        result = StopConditionChecker.check_approval_required(task, source_of_truth_db=LegacyDB())
+
+        assert result.is_blocked is True
+
+    def test_ungoverned_task_is_not_blocked(self):
+        """A task that needs no approval passes both helpers untouched."""
+        task = self._task()
+
+        assert StopConditionChecker.check_approval_required(task).is_blocked is False
+        assert StopConditionChecker.check_production_mode(task).is_blocked is False

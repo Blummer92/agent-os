@@ -22,7 +22,7 @@ versions change only when the module's standards or contract changes.
 | Teacher Modeling Coach | 0.2.0 |
 | Instructional Materials Coach | 0.3.0 |
 | Student Language Standard | 0.1.0 |
-| Workflow Scheduler | 0.9.0 |
+| Workflow Scheduler | 0.9.1 |
 | Workspace Automation Builder Tooling | 0.1.1 |
 | Agent Memory & Context Budget Manager | 0.1.0 |
 | IA4D-to-Scheduler Handoff Contract | 0.2.0 |
