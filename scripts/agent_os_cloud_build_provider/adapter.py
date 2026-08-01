@@ -19,8 +19,10 @@ if a retry is warranted, a fresh accepted invocation from #804.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Literal, Mapping, Protocol, runtime_checkable
+from types import MappingProxyType
+from typing import Literal, Protocol, runtime_checkable
 
 from .core import project_cloud_build_provider_result
 from .models import (
@@ -130,11 +132,21 @@ class CloudBuildSubmissionRequest:
             self.provider_metadata.get("invocation_id"), str
         ):
             raise ValueError("provider_metadata must carry exactly one string invocation_id entry")
+        # Defense-in-depth only: `_submission_request` always passes a fresh
+        # literal, so no in-repo path depends on this, but a caller-supplied
+        # mapping must not be mutable after construction either.
+        object.__setattr__(self, "provider_metadata", MappingProxyType(dict(self.provider_metadata)))
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CloudBuildSubmissionOutcome:
-    """One caller-supplied outcome of exactly one submission attempt."""
+    """One caller-supplied outcome of exactly one submission attempt.
+
+    For ``unavailable`` and ``internal-error``, the injected client must have
+    already proven that no build was created before reporting either kind;
+    if that cannot be proven, the client must report ``ambiguous`` instead so
+    the adapter reconciles rather than trusting an unproven ``side_effect_state=none``.
+    """
 
     kind: SubmissionOutcomeKind
     build_id: str | None = None
@@ -232,7 +244,15 @@ class CloudBuildProviderClient(Protocol):
 
     def submit(self, request: CloudBuildSubmissionRequest) -> CloudBuildSubmissionOutcome: ...
 
-    def observe(self, request: CloudBuildObservationRequest) -> CloudBuildObservationOutcome: ...
+    def observe(self, request: CloudBuildObservationRequest) -> CloudBuildObservationOutcome:
+        """Return the current state of one confirmed build for one poll attempt.
+
+        This adapter never sleeps or reads the clock between calls: it issues
+        up to ``max_poll_attempts`` calls back to back. The injected client
+        owns any pacing or blocking between polls (e.g. waiting for the
+        provider to make progress) before returning.
+        """
+        ...
 
     def reconcile(self, request: CloudBuildReconciliationRequest) -> CloudBuildReconciliationOutcome: ...
 

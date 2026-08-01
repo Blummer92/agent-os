@@ -1,27 +1,12 @@
 import ast
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-import sys
 
 import pytest
 
+# Source-directory sys.path bootstrap lives in this test package's
+# conftest.py, which pytest imports before collecting this module.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-
-_TOOLING_SOURCE_DIRS = (
-    _REPO_ROOT
-    / "08_Tooling"
-    / "agent-os-execution-service"
-    / "src",
-    _REPO_ROOT
-    / "08_Tooling"
-    / "workflow-scheduler"
-    / "src",
-)
-
-for source_dir in reversed(_TOOLING_SOURCE_DIRS):
-    source_text = str(source_dir)
-    if source_text not in sys.path:
-        sys.path.insert(0, source_text)
 
 from agent_os_execution_service import (
     COMMAND_PLAN_SCHEMA_VERSION,
@@ -37,6 +22,7 @@ from agent_os_execution_service import (
     validation_command_plan_id,
 )
 from scripts.agent_os_cloud_build_provider import (
+    MAX_DIAGNOSTIC_LENGTH,
     CloudBuildObservationOutcome,
     CloudBuildObservationRequest,
     CloudBuildProviderAdapter,
@@ -162,11 +148,19 @@ def _configuration():
 
 
 def _configuration_variant():
-    return replace(
+    # ``configuration_fingerprint=""`` is a construction-time hint only:
+    # ``CloudBuildProviderConfiguration.__post_init__`` unconditionally
+    # recomputes the fingerprint from the other fields regardless of the
+    # supplied value. Assert the recomputed fingerprint is non-empty so this
+    # fixture proves its own drift from ``_configuration()`` rather than
+    # relying on `""` happening to differ from any real fingerprint.
+    variant = replace(
         _configuration(),
         evidence_destination_identity="gs://agent-os-evidence/other-runs",
         configuration_fingerprint="",
     )
+    assert variant.configuration_fingerprint != ""
+    return variant
 
 
 def _authorization(request, command_plan, *, granted=True):
@@ -241,6 +235,12 @@ class FakeCloudBuildClient:
         self.observe_calls.append(request)
         if self._observe_error is not None:
             raise self._observe_error
+        # An unconfigured fixture must fail loudly, not raise IndexError:
+        # the adapter's own exception handling would otherwise turn a test
+        # author's forgotten ``observe_results`` into a legitimate-looking
+        # UNKNOWN result, hiding the misconfiguration instead of failing it.
+        if not self._observe_results:
+            raise AssertionError("FakeCloudBuildClient.observe() called with no observe_results configured")
         index = len(self.observe_calls) - 1
         if index < len(self._observe_results):
             return self._observe_results[index]
@@ -259,6 +259,40 @@ def _adapter(client, *, configuration=None, max_poll_attempts=8):
         configuration=configuration or _configuration(),
         max_poll_attempts=max_poll_attempts,
     )
+
+
+# 1b. constructor rejects a client that does not satisfy the Protocol.
+def test_constructor_rejects_non_protocol_conforming_client():
+    class NotAClient:
+        pass
+
+    with pytest.raises(TypeError):
+        CloudBuildProviderAdapter(client=NotAClient(), configuration=_configuration())
+
+
+# 1c. constructor rejects a non-exact CloudBuildProviderConfiguration.
+def test_constructor_rejects_non_exact_configuration():
+    class ConfigurationSubclass(CloudBuildProviderConfiguration):
+        pass
+
+    subclassed = ConfigurationSubclass(**{
+        field: getattr(_configuration(), field)
+        for field in (
+            "project_id",
+            "location",
+            "runtime_service_account_identity",
+            "build_service_account_identity",
+            "build_definition_identity",
+            "builder_image_identity",
+            "validator_dependency_identity",
+            "evidence_destination_identity",
+            "max_build_timeout_seconds",
+            "max_output_bytes",
+            "max_diagnostic_bytes",
+        )
+    })
+    with pytest.raises(TypeError):
+        CloudBuildProviderAdapter(client=FakeCloudBuildClient(), configuration=subclassed)
 
 
 # 1. valid invocation submits exactly once.
@@ -294,7 +328,8 @@ def test_invalid_or_drifted_invocation_submits_zero_times(bad_kind):
         assert invocation.invocation_id != cloud_build_provider_invocation_id(invocation)
 
     client = FakeCloudBuildClient()
-    result = _adapter(client).run(invocation)
+    adapter = _adapter(client)
+    result = adapter.run(invocation)
     assert client.submit_calls == []
     assert client.observe_calls == []
     assert client.reconcile_calls == []
@@ -302,6 +337,13 @@ def test_invalid_or_drifted_invocation_submits_zero_times(bad_kind):
     assert ProviderReason.INPUT_INVALID_TYPE in result.reason_codes
     assert result.invocation is None
     assert result.execution_authorized is False
+    # The two branches share a public result shape but are rejected by
+    # different guards; assert the private diagnostic to prove which one
+    # actually fired instead of only checking the shared public outcome.
+    if bad_kind == "wrong-type":
+        assert adapter.last_diagnostic == "invocation was not an exact CloudBuildProviderInvocation"
+    else:
+        assert adapter.last_diagnostic == "invocation semantic ID did not match its own recomputed identity"
 
 
 # 3. bound configuration and command identities are transported exactly.
@@ -608,7 +650,7 @@ def test_hostile_diagnostics_are_sanitized_and_bounded():
     assert "Bearer" not in adapter.last_diagnostic
     assert "\x07" not in adapter.last_diagnostic
     assert "\x01" not in adapter.last_diagnostic
-    assert len(adapter.last_diagnostic) <= 512
+    assert len(adapter.last_diagnostic) <= MAX_DIAGNOSTIC_LENGTH
 
 
 def test_raised_exception_diagnostics_never_include_exception_message():
@@ -687,7 +729,7 @@ def test_control_characters_and_oversized_values_do_not_bypass_redaction():
     assert "value" not in adapter.last_diagnostic
     assert "\x07" not in adapter.last_diagnostic
     assert "\x01" not in adapter.last_diagnostic
-    assert len(adapter.last_diagnostic) <= 512
+    assert len(adapter.last_diagnostic) <= MAX_DIAGNOSTIC_LENGTH
 
 
 def test_authorization_bearer_value_is_fully_redacted():
@@ -869,7 +911,7 @@ def test_all_result_paths_keep_merge_authorized_false():
 def test_adapter_module_imports_no_live_io_or_sdk():
     source_path = _REPO_ROOT / "scripts" / "agent_os_cloud_build_provider" / "adapter.py"
     tree = ast.parse(source_path.read_text())
-    allowed_absolute = {"__future__", "re", "dataclasses", "typing"}
+    allowed_absolute = {"__future__", "re", "collections", "dataclasses", "types", "typing"}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
