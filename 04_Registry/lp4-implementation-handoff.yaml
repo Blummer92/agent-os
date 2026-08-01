@@ -1,0 +1,282 @@
+registry_name: lp4-implementation-handoff
+contract_version: "1.0"
+record_revision: 1
+normative_standard: 05_Roadmap/lp4-implementation-handoff.md
+target_issue: 649
+parent_roadmap: 709
+handoff_state: prepared-not-authorized
+implementation_authorized: false
+required_main_sha: null
+required_main_sha_status: pending-lp-contract-merge
+gates:
+  - id: lp-contracts-merged-to-main
+    normative_id: gate-lp-contracts-merged
+    satisfied: false
+    owner: Repository owner
+    detail: LP3 and LP15 contract files exist only on branch claude/finalize-issues-governance-yxu11u at commit 2491ed1; main is at 797429e and does not contain them
+  - id: issue-text-reconciled
+    normative_id: gate-issue-text-corrected
+    satisfied: false
+    owner: Unit Alignment Agent
+    detail: three requirements in the 649 body contradict the ratified contracts
+  - id: cw5a-accepts-lp-reason-namespace
+    normative_id: gate-cw5a-reason-namespace
+    satisfied: false
+    owner: Integration Manager
+    detail: CW5A validate_reason_code rejects every lp-* code, so CW5A reason reuse and LP15 emission cannot both be satisfied today
+  - id: owner-authorization
+    normative_id: gate-owner-authorization
+    satisfied: false
+    owner: Google Workspace Automation Engineer
+    detail: explicit authorization of this handoff is required before a branch exists
+contract_sources:
+  - id: lp3-pacing-handoff-contract
+    normative_id: source-lp3-handoff-contract
+    kind: repository-file
+    registry: 04_Registry/lp-pacing-handoff-contract.yaml
+    contract_version: "1.0"
+    record_revision: 1
+    standards:
+      - 01_Shared_Standards/instructional-design/lp-pacing-handoff-contract.md
+      - 01_Shared_Standards/instructional-design/lp-pacing-handoff-adaptation.md
+      - 01_Shared_Standards/instructional-design/lp-pacing-handoff-cases.md
+  - id: lp15-reason-code-catalog
+    normative_id: source-lp15-reason-catalog
+    kind: repository-file
+    registry: 04_Registry/lp-reason-code-catalog.yaml
+    contract_version: "1.0"
+    record_revision: 1
+    standards:
+      - 01_Shared_Standards/instructional-design/lp-reason-code-catalog.md
+  - id: lp12-authority-state-registry
+    normative_id: source-lp12-authority-registry
+    kind: repository-file
+    registry: 04_Registry/lp-authority-state-registry.yaml
+    contract_version: "1.0"
+    record_revision: 1
+    standards:
+      - 01_Shared_Standards/instructional-design/lp-authority-state-registry.md
+  - id: issue-ratified-standards
+    normative_id: source-issue-ratified-standards
+    kind: issue-ratification
+    registry: null
+    contract_version: null
+    record_revision: null
+    standards: []
+issue_ratified_references:
+  - id: lp1
+    issue: 646
+    scope: pacing and time-compression policy
+  - id: lp2
+    issue: 647
+    scope: lesson-run evidence and comparability schema
+  - id: lp5
+    issue: 650
+    scope: mixed-class compacting and advanced-pathway policy
+  - id: lp10
+    issue: 664
+    scope: privacy, retention, suppression, and disclosure controls
+  - id: lp11
+    issue: 665
+    scope: calibration, validated envelopes, promotion, drift, and suspension
+  - id: lp14
+    issue: 710
+    scope: observation and measurement-quality protocol
+module_versions:
+  instructional_design_standards: 0.7.0
+cw5a_reuse:
+  source_issue: 672
+  source_state: closed-completed
+  package: src/instructional_workflow_contracts
+  modules:
+    - src/instructional_workflow_contracts/__init__.py
+    - src/instructional_workflow_contracts/common.py
+    - src/instructional_workflow_contracts/handoff.py
+  normative_id: reuse-cw5a-public-surface
+  consumed_symbols:
+    - concern: json-compatible-input-validation
+      symbols:
+        - validate_and_normalize_json
+        - ContractValidationError
+    - concern: recursive-size-and-depth-bounds
+      symbols:
+        - canonical_size
+        - MAX_INPUT_BYTES
+        - MAX_RESULT_BYTES
+        - MAX_NESTING_DEPTH
+        - MAX_STRING_LENGTH
+        - MAX_REASONS
+        - MAX_REFERENCES
+    - concern: deterministic-normalization
+      symbols:
+        - freeze_json
+        - thaw_json
+    - concern: canonical-serialization
+      symbols:
+        - canonical_json_bytes
+    - concern: fingerprints
+      symbols:
+        - sha256_hex
+        - FINGERPRINT_ALGORITHM
+    - concern: stable-identifiers-versions-revisions
+      symbols:
+        - validate_stable_id
+        - validate_version
+        - validate_revision
+        - validate_dependency_key
+    - concern: shared-result-and-reference-models
+      symbols:
+        - ValidationResult
+        - ValidationStatus
+        - ValidatedRecord
+        - ContractReference
+        - resolve_status
+    - concern: immutable-authority-evidence
+      symbols:
+        - AuthorityEvidence
+    - concern: sanitized-bounded-details
+      symbols:
+        - MAX_DETAIL_LENGTH
+    - concern: forbidden-import-policy
+      symbols:
+        - FORBIDDEN_IMPORT_PREFIXES
+prohibited_reimplementation:
+  - value: json-value-parser-or-type-checker
+    normative_id: reuse-no-second-core
+  - value: recursive-bounds-engine
+    normative_id: reuse-no-second-core
+  - value: canonical-serializer
+    normative_id: reuse-no-second-core
+  - value: fingerprint-helper
+    normative_id: reuse-no-second-core
+  - value: identifier-or-version-validator
+    normative_id: reuse-no-second-core
+  - value: result-status-or-authority-model
+    normative_id: reuse-no-second-core
+  - value: import-firewall
+    normative_id: reuse-no-second-core
+interface_gaps:
+  - id: lp-reason-namespace-rejected
+    normative_id: reuse-interface-gap-handoff
+    symbol: validate_reason_code
+    module: src/instructional_workflow_contracts/common.py
+    requirement: LP4 must emit LP15 lp-* semantic reasons while reusing CW5A reason mechanics
+    observed: all 56 LP15 codes are rejected; the accepted prefix set does not include lp
+    smallest_sufficient_change: admit the lp namespace in the CW5A reason pattern, or expose a namespace-parameterised reason validator
+    resolution_owner: Integration Manager
+    resolved_in_this_handoff: false
+file_allowlist:
+  - path: src/instructional_pacing/__init__.py
+    purpose: explicit re-exports only, no import-time behaviour
+  - path: src/instructional_pacing/packet.py
+    purpose: LP3 packet admission, fail-closed defaults, and non-authority evidence
+  - path: src/instructional_pacing/comparability.py
+    purpose: LP2 comparable-run filtering and LP14 observation-quality exclusion
+  - path: src/instructional_pacing/diagnosis.py
+    purpose: the six LP3 demand and uncertainty dimensions, reported separately
+  - path: src/instructional_pacing/evaluator.py
+    purpose: deterministic timing ranges, confidence, classification, and LP15 reasons
+  - path: tests/test_lp4_pacing_evaluator.py
+    purpose: focused domain, adversarial, and reuse-boundary tests
+  - path: tests/fixtures/instructional_pacing/__init__.py
+    purpose: synthetic cross-domain fixture package
+conformance_requirements:
+  - id: six-diagnosis-dimensions
+    normative_id: conformance-six-dimensions
+    derived_from: lp3-pacing-handoff-contract
+    registry_key: diagnosis_dimensions
+    count_basis: all
+    expected_count: 6
+  - id: complete-non-authority-set
+    normative_id: conformance-non-authority-fields
+    derived_from: lp3-pacing-handoff-contract
+    registry_key: packet_fields
+    count_basis: non-authority
+    expected_count: 10
+  - id: fail-closed-defaults
+    normative_id: conformance-fail-closed-defaults
+    derived_from: lp3-pacing-handoff-contract
+    registry_key: packet_fields
+    count_basis: non-null-default
+    expected_count: 17
+  - id: lp12-vocabulary-only
+    normative_id: conformance-lp12-vocabulary
+    derived_from: lp12-authority-state-registry
+    registry_key: namespaces
+    count_basis: all
+    expected_count: 3
+  - id: lp15-reasons-only
+    normative_id: conformance-lp15-reasons-only
+    derived_from: lp15-reason-code-catalog
+    registry_key: codes
+    count_basis: active
+    expected_count: 54
+scope_rules:
+  - value: allowlist-is-exhaustive
+    normative_id: scope-file-allowlist
+  - value: supplied-evidence-only
+    normative_id: scope-supplied-evidence-only
+  - value: pure-local-deterministic-offline
+    normative_id: scope-pure-local-offline
+validation_commands:
+  - phase: focused
+    normative_id: validation-focused
+    command: PYTHONPATH=src python -m pytest tests/test_lp4_pacing_evaluator.py -q
+  - phase: focused-fail-fast
+    normative_id: validation-focused
+    command: PYTHONPATH=src python -m pytest tests/test_lp4_pacing_evaluator.py -q --maxfail=1
+  - phase: contract-conformance
+    normative_id: validation-reuse-and-import-isolation
+    command: PYTHONPATH=src python -m pytest tests/test_lp_pacing_handoff_contract.py tests/test_lp_reason_code_catalog.py tests/test_lp4_implementation_handoff.py -q
+  - phase: reuse-and-import-isolation
+    normative_id: validation-reuse-and-import-isolation
+    command: PYTHONPATH=src python -m pytest tests/test_lp4_pacing_evaluator.py -q -k "reuse or import or side_effect"
+  - phase: structural
+    normative_id: validation-structural-and-aggregate
+    command: bash 07_Agent_Tests/validate-repo-structure.sh
+  - phase: aggregate
+    normative_id: validation-structural-and-aggregate
+    command: ./scripts/validate-all.sh
+exact_head_evidence:
+  normative_id: validation-exact-head-evidence
+  required_fields:
+    - value: branch-head-sha-tested-locally
+    - value: pull-request-synthetic-merge-sha
+    - value: workflow-run-ids-and-event-types
+    - value: workflow-conclusions
+    - value: whether-tests-were-rerun-after-the-final-change
+  github_sha_may_be_labelled_branch_head: false
+delivery:
+  normative_id: delivery-branch-and-draft-pr
+  branch_prefix: agent/649-
+  one_branch_only: true
+  draft_pull_request: true
+  final_report_standard: 01_Shared_Standards/global-engineering/final-report-standard.md
+  final_report_required_before_review: true
+issue_text_corrections:
+  - id: demand-dimension-count
+    location: 649 objective and acceptance criteria
+    current_text: five demand dimensions, omitting language_and_representation_load
+    ratified_contract: six dimensions in 04_Registry/lp-pacing-handoff-contract.yaml
+    decision: six is canonical
+    consequence_if_uncorrected: LP4 cannot emit lp-demand-language-representation-dominant for a dimension it does not compute
+  - id: non-authority-field-set
+    location: 649 required non-authority evidence block
+    current_text: report_only plus six authorization flags
+    ratified_contract: report_only plus nine authorization flags
+    decision: adopt the ratified ten-field set
+    consequence_if_uncorrected: automatic_placement_authorized, route_assignment_authorized, and production_authorized would be absent from results
+  - id: unnamed-packet-fields
+    location: 649 pacing classification output list
+    current_text: eight ratified packet fields are never named
+    ratified_contract: changed_formats, split_plan, routing_recommendation, next_owner_recommendation, teacher_decision, what_supported, what_remains_unmeasured, record_revision
+    decision: adopt the ratified packet field list
+    consequence_if_uncorrected: results would omit fields LP3 requires for owner handoff and evidence reach
+non_authority_confirmation:
+  normative_id: delivery-no-external-system
+  external_system_access: false
+  network_access: false
+  credential_use: false
+  model_invocation: false
+  real_student_data: false
+  fixtures_are_synthetic: true
