@@ -47,6 +47,7 @@ authority to write.
 ## Authentication Model
 
 Supported models include read-only, read/write, service account, OAuth, API key,
+`entra_id_oauth`, `entra_sso`, `api_key_plugin_vault`, `provider_oauth_reference`,
 and future approved models. Read/write capability does not grant write
 authorization. Credentials are owned by the connected system owner or approved
 service owner, not by the registry.
@@ -121,9 +122,13 @@ compatible.
 ## Supported Connector Families
 
 The framework supports Notion, Google Drive, GitHub, Gmail, Google Calendar,
-Canvas LMS, Adobe, Figma, and future connectors through the same contract. Each
-connector maps its native resources into the shared Resource Contract and
-reports system-specific limits through adapter_metadata.
+Canvas LMS, Adobe, Figma, Microsoft Copilot / external-client bridge, and future
+connectors through the same contract. Each connector maps its native resources
+into the shared Resource Contract and reports system-specific limits through
+adapter_metadata. See
+`01_Shared_Standards/navigation/microsoft-copilot-connector-family.md` for the
+Microsoft Copilot / external-client bridge family's integration-pattern
+vocabulary and selected path.
 
 ## Validation Against Navigation Registry
 
@@ -137,4 +142,4 @@ supplies discovery, validation, health, permissions, and drift evidence.
 
 ## Version
 
-0.1.0
+0.2.0
