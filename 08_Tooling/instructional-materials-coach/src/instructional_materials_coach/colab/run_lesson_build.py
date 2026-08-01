@@ -8,15 +8,19 @@ its `ALLOW_WRITE` gate, run by a human after review.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import yaml
+
+if TYPE_CHECKING:  # avoid importing the SDK when the extra is absent
+    from google.genai import types
 
 from ..content_schema import LessonDraft
 from ..genai_client import (
     DEFAULT_GEMINI_MODEL,
     GenerationContext,
     build_genai_client,
+    parse_response,
     render_pedagogical_instructions,
 )
 from .bootstrap import GEMINI_API_KEY, get_secret, resolve_repo_root
@@ -30,10 +34,14 @@ def draft_lesson(
     api_key: Optional[str] = None,
     repo_root: Optional[str] = None,
     model: str = DEFAULT_GEMINI_MODEL,
-    tools: Optional[list[Callable]] = None,
+    tools: Optional[list["types.Tool"]] = None,
     client: Any = None,
 ) -> LessonDraft:
-    """Generate one draft lesson. `client` is injectable for testing."""
+    """Generate one draft lesson.
+
+    `tools` takes SDK `Tool` objects from `ToolRegistry.sdk_tools()` -- inert
+    declarations, never callables. `client` is injectable for testing.
+    """
     root = resolve_repo_root(repo_root)
     system_instruction = render_pedagogical_instructions(root)
 
@@ -47,13 +55,8 @@ def draft_lesson(
         tools=tools,
     ).run(active_client)
 
-    parsed = getattr(response, "parsed", None)
-    if not isinstance(parsed, LessonDraft):
-        raise ValueError(
-            "Model response did not parse into LessonDraft. Treat as a failed draft, "
-            "not as partial content."
-        )
-    return parsed
+    # Typed, fails closed on every malformed/truncated/blocked/ambiguous case.
+    return parse_response(response, LessonDraft)
 
 
 def write_draft(draft: LessonDraft, out_path: str | Path) -> Path:

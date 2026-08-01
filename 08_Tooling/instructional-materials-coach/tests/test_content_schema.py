@@ -54,6 +54,17 @@ def test_malformed_slide_is_rejected():
         LessonDraft(**{**VALID, "slides": [{"heading": "no index"}]})
 
 
+def test_unexpected_field_is_rejected():
+    """Explicit policy: an extra field means the model misread the contract."""
+    with pytest.raises(ValidationError):
+        LessonDraft(**{**VALID, "readiness": "approved"})
+
+
+def test_unexpected_slide_field_is_rejected():
+    with pytest.raises(ValidationError):
+        LessonDraft(**{**VALID, "slides": [{"index": 1, "approved_by": "nobody"}]})
+
+
 def test_slide_defaults_allow_a_bare_index():
     slide = SlideDraft(index=3)
     assert slide.heading == "" and slide.bullets == []

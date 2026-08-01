@@ -12,13 +12,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .content_spec import LessonContent, content_from_dict
+
+# Explicit policy: an unexpected field is a signal the model misunderstood the
+# contract, so reject it rather than silently dropping it (pydantic's default).
+STRICT_FIELDS = ConfigDict(extra="forbid")
 
 
 class SlideDraft(BaseModel):
     """One slide. Mirrors the dicts `content_spec` expects in `slides`."""
+
+    model_config = STRICT_FIELDS
 
     index: int = Field(description="1-based slide position in the deck.")
     heading: str = Field(default="", description="Slide heading. Empty means no heading.")
@@ -31,6 +37,8 @@ class LessonDraft(BaseModel):
     Field names match `content_spec.LessonContent` exactly and are checked by
     the drift test. Draft content only -- never an approved artifact.
     """
+
+    model_config = STRICT_FIELDS
 
     title: str = Field(description="Lesson title.")
     objectives: list[str] = Field(description="Student-facing learning objectives.")
