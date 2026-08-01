@@ -14,17 +14,15 @@ tests/
 
 ## Running Tests
 
-```bash
-pip install -r ../requirements-dev.txt
+Run these commands from the repository root. A virtual environment is recommended. Installing only `pytest` is insufficient: `validate-all.sh` checks the existing environment but does not install it. PyGithub comes from `requirements-dev.txt`, and the reusable registry must be installed editable so root tests can import it.
 
-pytest                      # Run all tests
-pytest -v                   # Verbose
-pytest -m unit               # Only unit tests
-pytest -m integration        # Only integration tests
-pytest --cov                 # With coverage
-pytest --cov --cov-report=html  # HTML coverage report
-pytest -x                    # Stop on first failure
-pytest -n auto                # Parallel
+```bash
+python -m pip install -r requirements-dev.txt
+python -m pip install -r 08_Tooling/workflow-scheduler/requirements.txt
+python -m pip install -e "./08_Tooling/instructional-materials-coach[test]"
+python -m pip install -e "./08_Tooling/notion-navigation-client[test]"
+python -m pip install -e "./08_Tooling/reusable-capability-registry[test]"
+./scripts/validate-all.sh
 ```
 
 ## Test Standards
@@ -63,16 +61,7 @@ requests, and on manual trigger -- see
 
 ## Common Issues
 
-```bash
-# Ensure pytest finds the tests
-pytest --collect-only
-
-# Verify conftest.py is in tests/ and defines the fixture
-grep "def fixture_name" tests/conftest.py
-
-# Install dev dependencies if pytest/plugins are missing
-pip install -r requirements-dev.txt
-```
+Use the complete repository-root setup above before diagnosing collection errors. Do not skip or weaken validation to compensate for missing packages.
 
 ## Extending the Test Suite
 
