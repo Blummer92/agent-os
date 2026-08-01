@@ -12,6 +12,8 @@ Read these files in order before implementation planning.
 3. `navigation-registry-data-model.md` — canonical entities, fields, and states.
 4. `connector-adapter-framework.md` — connector interface contract.
 5. `workspace-discovery-service.md` — discovery and repair recommendations.
+6. `microsoft-copilot-connector-family.md` — external-client integration
+   pattern vocabulary and the selected client-contract path.
 
 ## Canonical Authority Map
 
@@ -29,6 +31,7 @@ Read these files in order before implementation planning.
 | Connector health and errors | `connector-adapter-framework.md` |
 | Discovery workflow | `workspace-discovery-service.md` |
 | Drift and repair recommendations | `workspace-discovery-service.md` |
+| External-client integration patterns | `microsoft-copilot-connector-family.md` |
 
 ## Conformance Rules
 
