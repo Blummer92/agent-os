@@ -9,6 +9,7 @@ steps:
         python -m pip install -r requirements-dev.txt
         python -m pip install -r 08_Tooling/workflow-scheduler/requirements.txt
         python -m pip install -e "./08_Tooling/instructional-materials-coach[test]"
+        python -m pip install -e "./08_Tooling/instructional-materials-coach[genai]"
         python -m pip install -e "./08_Tooling/notion-navigation-client[test]"
         python -m pip install -e "./08_Tooling/reusable-capability-registry[test]"
         ./scripts/validate-all.sh

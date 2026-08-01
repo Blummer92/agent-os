@@ -12,6 +12,10 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=7.0"]
+# Gemini drafting path only. Kept out of `dependencies` and out of the root
+# requirements so offline validation still passes without these installed;
+# tests that need them skip via pytest.importorskip.
+genai = ["google-genai>=1.0", "pydantic>=2.7"]
 
 [project.scripts]
 imc-build = "instructional_materials_coach.cli:main"
