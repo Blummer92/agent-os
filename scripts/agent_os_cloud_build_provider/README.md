@@ -69,7 +69,10 @@ Complete terminal observations are normalized through the existing #685 `CloudBu
 
 `CloudBuildProviderAdapter` consumes one exact accepted `CloudBuildProviderInvocation` and an injected `CloudBuildProviderClient` (a small `Protocol` with `submit`, `observe`, and `reconcile` methods only -- no `cancel`). Before any client call it recomputes the invocation's semantic ID and confirms the injected `CloudBuildProviderConfiguration`'s fingerprint matches the one bound into the invocation; a wrong type, a drifted invocation, or a configuration mismatch submits zero times and is projected through `project_cloud_build_provider_result` with `side_effect_state=none`.
 
-Each adapter instance submits at most once and transports only identities already bound into the invocation and its bound configuration, tagging the request's `provider_metadata` with the invocation ID. A confirmed submission is polled through `observe` for a bounded number of attempts and projected through `project_cloud_build_provider_result`, the same #685-backed projection the core uses. A clean `denied` outcome is a proven pre-build failure (`side_effect_state=none`, `provider.permission-denied`) that `project_cloud_build_provider_result` cannot itself produce, so the adapter constructs that one result shape directly instead of inventing a new reason code. A raised exception, a malformed response, or an explicit `ambiguous` outcome from `submit` never re-submits; it calls `reconcile` exactly once, and only an exact single matching build ID is trusted -- zero or multiple matches stay `status=unknown`/`side_effect_state=unknown`, which is never automatically retried. Every adapter-produced result keeps `merge_authorized=false`, and every private diagnostic exposed on the adapter (`last_diagnostic`, `poll_attempts`) is bounded and control/secret-stripped; raw exception messages are never included, only the exception's type name.
+- At-most-once submission and identity transport: each adapter instance submits at most once and transports only identities already bound into the invocation and its bound configuration, tagging the request's `provider_metadata` with the invocation ID.
+- Bounded polling: a confirmed submission is polled through `observe` for a bounded number of attempts and projected through `project_cloud_build_provider_result`, the same #685-backed projection the core uses. The adapter never sleeps or reads the clock between polls -- the injected client owns pacing between calls.
+- `denied` shape and diagnostic/`merge_authorized` guarantees: a clean `denied` outcome is a proven pre-build failure (`side_effect_state=none`, `provider.permission-denied`) that `project_cloud_build_provider_result` cannot itself produce, so the adapter constructs that one result shape directly; every adapter-produced result keeps `merge_authorized=false`, and every private diagnostic exposed on the adapter (`last_diagnostic`, `poll_attempts`) is bounded and control/secret-stripped, with raw exception messages never included, only the exception's type name.
+- Reconciliation matching: a raised exception, a malformed response, or an explicit `ambiguous` outcome from `submit` never re-submits; it calls `reconcile` exactly once, and only an exact single matching build ID is trusted -- zero or multiple matches stay `status=unknown`/`side_effect_state=unknown`, which is never automatically retried.
 
 ## No-SDK and no-I/O boundary
 
@@ -83,8 +86,7 @@ Validation success does not authorize Ready-for-Review, merge, issue closure, pr
 
 ## Related owners
 
-- #330: Workflow Scheduler execution and concurrency governance
-- #369: dispatch identity and duplicate/stale/retry recommendation
+- #330: Workflow Scheduler execution and concurrency governance; #369: dispatch identity and duplicate/stale/retry recommendation
 - #520: duration, compute, cost, and concurrency conclusions
 - #685: terminal Cloud Build evidence normalization
 - #686 and #687: PR reporting and external activation
