@@ -87,7 +87,6 @@ bash 07_Agent_Tests/validate-repo-structure.sh
 ./scripts/validate-all.sh
 ```
 Known environment failures must be reproduced on clean `main` rather than weakening validation.
-
 ## Rollback
 
 Rollback removes:
