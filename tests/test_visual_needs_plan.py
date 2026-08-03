@@ -219,6 +219,7 @@ def test_manual_review_sentinel_material_type_never_authorizes_roles() -> None:
     assert result.record is not None
     payload = result.record.to_dict()
     assert payload["outcome"] == "manual-review-required"
+    assert payload["source_visual_decision"] == "visuals-required"
     assert payload["required_roles"] == []
     assert payload["optional_roles"] == []
     assert payload["maximum_visual_count"] == 0
