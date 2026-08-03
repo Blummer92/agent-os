@@ -1,0 +1,1413 @@
+registry_name: lp-reason-code-catalog
+contract_version: '1.0'
+record_revision: 1
+normative_standard: 01_Shared_Standards/instructional-design/lp-reason-code-catalog.md
+authority_state_registry: 04_Registry/lp-authority-state-registry.yaml
+handoff_contract: 04_Registry/lp-pacing-handoff-contract.yaml
+bounds:
+  reason_codes_per_result:
+    maximum: 16
+  required_evidence_per_code:
+    maximum: 4
+  prohibited_implications_per_code:
+    maximum: 10
+semantic_owners:
+- id: unit-alignment-agent
+  role: Unit Alignment Agent
+- id: qa-test-agent
+  role: QA / Test Agent
+- id: integration-manager
+  role: Integration Manager
+result_families:
+- value: pacing-assessment
+- value: evidence-assessment
+- value: pathway-plan
+- value: observation-record
+- value: privacy-disposition
+- value: calibration-record
+prohibited_implication_vocabulary:
+- value: gate-advancement
+- value: grading
+- value: learner-classification
+- value: mastery
+- value: placement
+- value: production
+- value: readiness
+- value: external-write
+required_evidence_vocabulary:
+- value: adaptation-record
+- value: calibration-record
+- value: evidence-summary
+- value: instructional-function-list
+- value: lesson-run-evidence
+- value: objective-reference
+- value: observation-record
+- value: pathway-brief
+- value: record-under-review
+- value: supplied-planning-context
+normative_references:
+- id: lp1-pacing-and-time-compression-policy
+  reference: 'LP1 / #646'
+- id: lp2-lesson-run-evidence-and-comparability
+  reference: 'LP2 / #647'
+- id: lp3-pacing-handoff-contract
+  reference: 01_Shared_Standards/instructional-design/lp-pacing-handoff-contract.md
+- id: lp5-compacting-and-advanced-pathway-policy
+  reference: 'LP5 / #650'
+- id: lp10-privacy-retention-and-disclosure-controls
+  reference: 'LP10 / #664'
+- id: lp11-calibration-promotion-drift-and-suspension
+  reference: 'LP11 / #665'
+- id: lp14-observation-and-measurement-quality-protocol
+  reference: 'LP14 / #710'
+families:
+- id: pacing-feasibility
+  normative_id: family-pacing-feasibility
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp1-pacing-and-time-compression-policy
+  authorized_producers:
+  - unit-alignment-agent
+  authorized_consumers:
+  - teacher-modeling-coach
+  - instructional-materials-coach
+  - qa-test-agent
+  allowed_result_families:
+  - pacing-assessment
+- id: evidence-comparability
+  normative_id: family-evidence-comparability
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp2-lesson-run-evidence-and-comparability
+  authorized_producers:
+  - unit-alignment-agent
+  - qa-test-agent
+  authorized_consumers:
+  - unit-alignment-agent
+  - teacher-modeling-coach
+  - qa-test-agent
+  allowed_result_families:
+  - evidence-assessment
+  - pacing-assessment
+- id: demand-diagnosis
+  normative_id: family-demand-diagnosis
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp3-pacing-handoff-contract
+  authorized_producers:
+  - unit-alignment-agent
+  authorized_consumers:
+  - teacher-modeling-coach
+  - instructional-materials-coach
+  allowed_result_families:
+  - pacing-assessment
+- id: mixed-class-pathways
+  normative_id: family-mixed-class-pathways
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp5-compacting-and-advanced-pathway-policy
+  authorized_producers:
+  - unit-alignment-agent
+  authorized_consumers:
+  - teacher-modeling-coach
+  - instructional-materials-coach
+  - qa-test-agent
+  allowed_result_families:
+  - pathway-plan
+- id: observation-quality
+  normative_id: family-observation-quality
+  semantic_owner: qa-test-agent
+  normative_reference: lp14-observation-and-measurement-quality-protocol
+  authorized_producers:
+  - qa-test-agent
+  authorized_consumers:
+  - unit-alignment-agent
+  - teacher-modeling-coach
+  allowed_result_families:
+  - observation-record
+  - evidence-assessment
+- id: privacy-and-disclosure
+  normative_id: family-privacy-and-disclosure
+  semantic_owner: integration-manager
+  normative_reference: lp10-privacy-retention-and-disclosure-controls
+  authorized_producers:
+  - integration-manager
+  - qa-test-agent
+  authorized_consumers:
+  - unit-alignment-agent
+  - teacher-modeling-coach
+  - instructional-materials-coach
+  - qa-test-agent
+  allowed_result_families:
+  - privacy-disposition
+- id: calibration-and-lifecycle
+  normative_id: family-calibration-and-lifecycle
+  semantic_owner: qa-test-agent
+  normative_reference: lp11-calibration-promotion-drift-and-suspension
+  authorized_producers:
+  - qa-test-agent
+  authorized_consumers:
+  - unit-alignment-agent
+  - integration-manager
+  allowed_result_families:
+  - calibration-record
+naming_rules:
+- value: lowercase-lp-namespace
+  normative_id: naming-lowercase-namespace
+- value: one-cause-one-code
+  normative_id: naming-one-cause-one-code
+- value: no-synonyms
+  normative_id: naming-no-synonyms
+- value: no-mutable-detail
+  normative_id: naming-no-mutable-detail
+- value: details-are-separate-evidence
+  normative_id: naming-details-are-separate
+record_rules:
+- value: required-record-fields
+  normative_id: record-required-fields
+ownership_rules:
+- value: single-semantic-owner
+  normative_id: ownership-single-semantic-owner
+- value: reference-not-redefine
+  normative_id: ownership-reference-not-redefine
+- value: declared-producers-and-consumers
+  normative_id: ownership-producers-and-consumers
+result_rules:
+- value: multiple-reasons-per-result
+  normative_id: result-multiple-reasons
+- value: reason-is-not-classification
+  normative_id: result-reason-is-not-classification
+- value: reason-is-not-gate
+  normative_id: result-reason-is-not-gate
+- value: manual-review-is-evidence
+  normative_id: result-manual-review-is-evidence
+- value: fail-closed-routing
+  normative_id: result-fail-closed-routing
+diagnosis_rules:
+- value: never-labels-a-learner
+  normative_id: diagnosis-never-labels-a-learner
+exclusions:
+- value: generic-mechanics-delegated
+  normative_id: excluded-generic-mechanics
+- value: severity-and-presentation-excluded
+  normative_id: excluded-severity-and-presentation
+deprecation_rules:
+- value: reuse-lp9-compatibility-policy
+  normative_id: deprecation-reuse-lp9
+- value: deprecated-without-replacement
+  normative_id: deprecation-without-replacement
+codes:
+- code: lp-pacing-time-budget-missing
+  family: pacing-feasibility
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp1-pacing-and-time-compression-policy
+  summary: No usable time budget was supplied for the assessed scope.
+  trigger: Period minutes or available lesson minutes is absent, non-positive, or not interpretable.
+  required_evidence:
+  - supplied-planning-context
+  allowed_result_families:
+  - pacing-assessment
+  manual_review_required: true
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-pacing-instruction-time-insufficient
+  family: pacing-feasibility
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp1-pacing-and-time-compression-policy
+  summary: Available instruction time cannot hold the required instructional functions.
+  trigger: The unadapted expected range exceeds available lesson minutes after the ordered adaptation hierarchy is applied.
+  required_evidence:
+  - supplied-planning-context
+  - instructional-function-list
+  allowed_result_families:
+  - pacing-assessment
+  manual_review_required: false
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-pacing-required-function-removed
+  family: pacing-feasibility
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp1-pacing-and-time-compression-policy
+  summary: A protected instructional function was removed to fit the period.
+  trigger: Modeling, accessibility support, safety, formative evidence, feedback, correction, or revision is absent from preserved functions without an explicit continuation or split plan.
+  required_evidence:
+  - instructional-function-list
+  - adaptation-record
+  allowed_result_families:
+  - pacing-assessment
+  manual_review_required: true
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-pacing-operational-time-omitted
+  family: pacing-feasibility
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp1-pacing-and-time-compression-policy
+  summary: Setup, transition, gate, queue, transfer, or cleanup time was not accounted for.
+  trigger: Operational time is unstated while the plan requires equipment, movement, gates, or transfer.
+  required_evidence:
+  - supplied-planning-context
+  allowed_result_families:
+  - pacing-assessment
+  manual_review_required: false
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-pacing-split-required
+  family: pacing-feasibility
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp1-pacing-and-time-compression-policy
+  summary: The task requires an explicit split rather than further compression.
+  trigger: The required learning cycle cannot complete in one period without removing a protected function.
+  required_evidence:
+  - supplied-planning-context
+  - instructional-function-list
+  allowed_result_families:
+  - pacing-assessment
+  manual_review_required: false
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-pacing-continuation-unresolved
+  family: pacing-feasibility
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp1-pacing-and-time-compression-policy
+  summary: A split or continuation was proposed without a defined continuation plan.
+  trigger: A split point exists while the continuation period, re-entry, or carry-over evidence is undefined.
+  required_evidence:
+  - adaptation-record
+  allowed_result_families:
+  - pacing-assessment
+  manual_review_required: true
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-pacing-uncertainty-too-high
+  family: pacing-feasibility
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp1-pacing-and-time-compression-policy
+  summary: Evidence uncertainty is too high for any bounded pacing conclusion.
+  trigger: Evidence uncertainty is high and no dimension carries usable direct or context evidence.
+  required_evidence:
+  - evidence-summary
+  allowed_result_families:
+  - pacing-assessment
+  manual_review_required: true
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-evidence-comparable-runs-insufficient
+  family: evidence-comparability
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp2-lesson-run-evidence-and-comparability
+  summary: Too few comparable lesson runs support a bounded conclusion.
+  trigger: The count of runs meeting the comparability contract is below the supplied minimum.
+  required_evidence:
+  - lesson-run-evidence
+  allowed_result_families:
+  - evidence-assessment
+  - pacing-assessment
+  manual_review_required: false
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - mastery
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-evidence-objective-match-weak
+  family: evidence-comparability
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp2-lesson-run-evidence-and-comparability
+  summary: Prior evidence matches the current objective only weakly.
+  trigger: The evidence objective reference differs from the assessed objective beyond the declared match rule.
+  required_evidence:
+  - lesson-run-evidence
+  - objective-reference
+  allowed_result_families:
+  - evidence-assessment
+  - pacing-assessment
+  manual_review_required: false
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - mastery
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-evidence-work-mode-incompatible
+  family: evidence-comparability
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp2-lesson-run-evidence-and-comparability
+  summary: The prior work mode or implementation stage is not comparable to the assessed task.
+  trigger: Work mode or implementation stage differs in a way the comparability contract excludes.
+  required_evidence:
+  - lesson-run-evidence
+  allowed_result_families:
+  - evidence-assessment
+  - pacing-assessment
+  manual_review_required: false
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - mastery
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-evidence-run-interrupted-or-sparse
+  family: evidence-comparability
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp2-lesson-run-evidence-and-comparability
+  summary: The referenced run was interrupted or its record is too sparse to use.
+  trigger: Required checkpoints are missing or the run was truncated by an unplanned interruption.
+  required_evidence:
+  - lesson-run-evidence
+  allowed_result_families:
+  - evidence-assessment
+  - pacing-assessment
+  manual_review_required: false
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-evidence-active-elapsed-time-conflict
+  family: evidence-comparability
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp2-lesson-run-evidence-and-comparability
+  summary: Recorded active time and elapsed time contradict each other.
+  trigger: Active time exceeds elapsed time, or their difference is unexplained by recorded operational categories.
+  required_evidence:
+  - lesson-run-evidence
+  allowed_result_families:
+  - evidence-assessment
+  - pacing-assessment
+  manual_review_required: true
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-evidence-learning-quality-unavailable
+  family: evidence-comparability
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp2-lesson-run-evidence-and-comparability
+  summary: No learning-quality evidence accompanies the timing evidence.
+  trigger: Timing evidence exists while objective evidence, checks for understanding, or revision evidence is absent.
+  required_evidence:
+  - lesson-run-evidence
+  allowed_result_families:
+  - evidence-assessment
+  - pacing-assessment
+  manual_review_required: false
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - mastery
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-evidence-support-or-revision-incomplete
+  family: evidence-comparability
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp2-lesson-run-evidence-and-comparability
+  summary: Support or revision evidence is incomplete for the referenced run.
+  trigger: Support given or correction and revision performed is unrecorded where the contract requires it.
+  required_evidence:
+  - lesson-run-evidence
+  allowed_result_families:
+  - evidence-assessment
+  - pacing-assessment
+  manual_review_required: false
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-evidence-prior-contradiction
+  family: evidence-comparability
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp2-lesson-run-evidence-and-comparability
+  summary: Supplied evidence contradicts an earlier retained finding.
+  trigger: Two retained records disagree on the same dimension for the same objective and scope.
+  required_evidence:
+  - lesson-run-evidence
+  allowed_result_families:
+  - evidence-assessment
+  - pacing-assessment
+  manual_review_required: true
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-demand-instructional-dominant
+  family: demand-diagnosis
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp3-pacing-handoff-contract
+  summary: Instructional demand is the dominant driver of required time.
+  trigger: Novelty, interacting concepts or procedures, strategy selection, or prerequisite structure accounts for most estimated time.
+  required_evidence:
+  - supplied-planning-context
+  allowed_result_families:
+  - pacing-assessment
+  manual_review_required: false
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - learner-classification
+  - mastery
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-demand-learner-familiarity-uncertain
+  family: demand-diagnosis
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp3-pacing-handoff-contract
+  summary: Task-specific prior opportunity and familiarity cannot be determined from supplied evidence.
+  trigger: No comparable prior opportunity is recorded for the assessed task.
+  required_evidence:
+  - evidence-summary
+  allowed_result_families:
+  - pacing-assessment
+  manual_review_required: false
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - learner-classification
+  - mastery
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-demand-language-representation-dominant
+  family: demand-diagnosis
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp3-pacing-handoff-contract
+  summary: Vocabulary, implicit information, or representation change dominates required time.
+  trigger: Language and representation load accounts for most estimated time.
+  required_evidence:
+  - supplied-planning-context
+  allowed_result_families:
+  - pacing-assessment
+  manual_review_required: false
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - learner-classification
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-demand-material-induced-dominant
+  family: demand-diagnosis
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp3-pacing-handoff-contract
+  summary: Unclear, redundant, inaccessible, fragmented, or overburdened materials dominate required time.
+  trigger: Material-induced load accounts for most estimated time and is addressable without changing the objective.
+  required_evidence:
+  - supplied-planning-context
+  allowed_result_families:
+  - pacing-assessment
+  manual_review_required: false
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - learner-classification
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-demand-operational-dominant
+  family: demand-diagnosis
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp3-pacing-handoff-contract
+  summary: Setup, devices, movement, gates, queues, transfer, or cleanup dominates required time.
+  trigger: Operational load accounts for most estimated time.
+  required_evidence:
+  - supplied-planning-context
+  allowed_result_families:
+  - pacing-assessment
+  manual_review_required: false
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - learner-classification
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-demand-evidence-uncertainty-dominant
+  family: demand-diagnosis
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp3-pacing-handoff-contract
+  summary: Evidence uncertainty dominates and no single demand dimension can be named.
+  trigger: No dimension carries enough usable evidence to be identified as dominant.
+  required_evidence:
+  - evidence-summary
+  allowed_result_families:
+  - pacing-assessment
+  manual_review_required: true
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - learner-classification
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-pathway-objective-mastery-evidence-missing
+  family: mixed-class-pathways
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp5-compacting-and-advanced-pathway-policy
+  summary: No objective-specific evidence supports compacting the named work.
+  trigger: A compacted route is proposed without objective-specific evidence for the work it removes.
+  required_evidence:
+  - objective-reference
+  - evidence-summary
+  allowed_result_families:
+  - pathway-plan
+  manual_review_required: true
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - learner-classification
+  - mastery
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-pathway-speed-only-eligibility
+  family: mixed-class-pathways
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp5-compacting-and-advanced-pathway-policy
+  summary: Eligibility rests on completion speed alone.
+  trigger: The only stated basis for a compacted route is finishing earlier than peers.
+  required_evidence:
+  - evidence-summary
+  allowed_result_families:
+  - pathway-plan
+  manual_review_required: true
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - learner-classification
+  - mastery
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-pathway-mastered-work-unidentified
+  family: mixed-class-pathways
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp5-compacting-and-advanced-pathway-policy
+  summary: The exact work proposed for removal or reduction is not identified.
+  trigger: A compacted route states released minutes without naming the specific work removed.
+  required_evidence:
+  - pathway-brief
+  allowed_result_families:
+  - pathway-plan
+  manual_review_required: false
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - mastery
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-pathway-added-volume-not-compacting
+  family: mixed-class-pathways
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp5-compacting-and-advanced-pathway-policy
+  summary: Additional work is presented as compacting.
+  trigger: The proposed route adds volume without replacing or reducing identified mastered work.
+  required_evidence:
+  - pathway-brief
+  allowed_result_families:
+  - pathway-plan
+  manual_review_required: false
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-pathway-advanced-dimension-absent
+  family: mixed-class-pathways
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp5-compacting-and-advanced-pathway-policy
+  summary: The advanced route names no meaningful advanced dimension or success criteria.
+  trigger: Replacement work is proposed without advanced dimensions or advanced success criteria.
+  required_evidence:
+  - pathway-brief
+  allowed_result_families:
+  - pathway-plan
+  manual_review_required: false
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-pathway-extension-unrelated
+  family: mixed-class-pathways
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp5-compacting-and-advanced-pathway-policy
+  summary: The proposed extension is unrelated to the shared concept.
+  trigger: Replacement work does not connect to the shared concept or the common synthesis.
+  required_evidence:
+  - pathway-brief
+  - objective-reference
+  allowed_result_families:
+  - pathway-plan
+  manual_review_required: false
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-pathway-fixed-grouping-attempted
+  family: mixed-class-pathways
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp5-compacting-and-advanced-pathway-policy
+  summary: The proposal creates a fixed or permanent grouping.
+  trigger: Grouping is stated as durable, or no re-entry and regrouping condition is defined.
+  required_evidence:
+  - pathway-brief
+  allowed_result_families:
+  - pathway-plan
+  manual_review_required: true
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - learner-classification
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-pathway-accessibility-or-reentry-unresolved
+  family: mixed-class-pathways
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp5-compacting-and-advanced-pathway-policy
+  summary: Accessibility support or re-entry into the core route is unresolved.
+  trigger: A route omits accessibility support or does not define how a learner returns to the core route.
+  required_evidence:
+  - pathway-brief
+  allowed_result_families:
+  - pathway-plan
+  manual_review_required: true
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-pathway-automatic-placement-attempted
+  family: mixed-class-pathways
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp5-compacting-and-advanced-pathway-policy
+  summary: The proposal attempts automatic placement or infers a protected characteristic.
+  trigger: A route brief assigns a learner, or derives eligibility from a protected or inferred attribute.
+  required_evidence:
+  - pathway-brief
+  allowed_result_families:
+  - pathway-plan
+  manual_review_required: true
+  privacy_sensitive: true
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - learner-classification
+  - mastery
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-observation-checkpoint-missing
+  family: observation-quality
+  semantic_owner: qa-test-agent
+  normative_reference: lp14-observation-and-measurement-quality-protocol
+  summary: A required observation checkpoint was not recorded.
+  trigger: A checkpoint defined by the observation protocol has no record for the run.
+  required_evidence:
+  - observation-record
+  allowed_result_families:
+  - observation-record
+  - evidence-assessment
+  manual_review_required: false
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-observation-recorded-too-late
+  family: observation-quality
+  semantic_owner: qa-test-agent
+  normative_reference: lp14-observation-and-measurement-quality-protocol
+  summary: The observation was recorded outside its timeliness window.
+  trigger: The recording time exceeds the protocol's timeliness bound for the checkpoint.
+  required_evidence:
+  - observation-record
+  allowed_result_families:
+  - observation-record
+  - evidence-assessment
+  manual_review_required: false
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-observation-observer-disagreement
+  family: observation-quality
+  semantic_owner: qa-test-agent
+  normative_reference: lp14-observation-and-measurement-quality-protocol
+  summary: Independent observers disagree beyond the agreement threshold.
+  trigger: Two or more observer records for the same checkpoint differ beyond the declared agreement bound.
+  required_evidence:
+  - observation-record
+  allowed_result_families:
+  - observation-record
+  - evidence-assessment
+  manual_review_required: true
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-observation-category-overlap-unresolved
+  family: observation-quality
+  semantic_owner: qa-test-agent
+  normative_reference: lp14-observation-and-measurement-quality-protocol
+  summary: Observation categories overlap in a way that makes the record ambiguous.
+  trigger: One observed segment is assigned to categories the protocol declares mutually exclusive.
+  required_evidence:
+  - observation-record
+  allowed_result_families:
+  - observation-record
+  - evidence-assessment
+  manual_review_required: true
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-observation-aggregate-counts-contradictory
+  family: observation-quality
+  semantic_owner: qa-test-agent
+  normative_reference: lp14-observation-and-measurement-quality-protocol
+  summary: Aggregate counts in the record contradict each other.
+  trigger: Component counts do not reconcile with the recorded totals for the same run.
+  required_evidence:
+  - observation-record
+  allowed_result_families:
+  - observation-record
+  - evidence-assessment
+  manual_review_required: true
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-observation-burden-limit-exceeded
+  family: observation-quality
+  semantic_owner: qa-test-agent
+  normative_reference: lp14-observation-and-measurement-quality-protocol
+  summary: Collecting the observation exceeded the approved teacher burden budget.
+  trigger: Recorded collection effort exceeds the protocol's burden bound.
+  required_evidence:
+  - observation-record
+  allowed_result_families:
+  - observation-record
+  - evidence-assessment
+  manual_review_required: false
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-observation-confidence-too-low
+  family: observation-quality
+  semantic_owner: qa-test-agent
+  normative_reference: lp14-observation-and-measurement-quality-protocol
+  summary: Observation confidence is below the usable threshold.
+  trigger: The observer's recorded confidence is below the protocol's minimum for the checkpoint.
+  required_evidence:
+  - observation-record
+  allowed_result_families:
+  - observation-record
+  - evidence-assessment
+  manual_review_required: false
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-privacy-direct-identifier-present
+  family: privacy-and-disclosure
+  semantic_owner: integration-manager
+  normative_reference: lp10-privacy-retention-and-disclosure-controls
+  summary: A direct identifier is present in a record that must not carry one.
+  trigger: A name, student identifier, contact value, or equivalent direct identifier appears in the record.
+  required_evidence:
+  - record-under-review
+  allowed_result_families:
+  - privacy-disposition
+  manual_review_required: true
+  privacy_sensitive: true
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-privacy-indirect-identification-risk
+  family: privacy-and-disclosure
+  semantic_owner: integration-manager
+  normative_reference: lp10-privacy-retention-and-disclosure-controls
+  summary: Combined attributes create an indirect identification risk.
+  trigger: The attribute combination could single out an individual within the recorded scope.
+  required_evidence:
+  - record-under-review
+  allowed_result_families:
+  - privacy-disposition
+  manual_review_required: true
+  privacy_sensitive: true
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-privacy-small-cell-suppression-required
+  family: privacy-and-disclosure
+  semantic_owner: integration-manager
+  normative_reference: lp10-privacy-retention-and-disclosure-controls
+  summary: A reported cell is too small to disclose without suppression or review.
+  trigger: A group count falls below the approved small-cell threshold.
+  required_evidence:
+  - record-under-review
+  allowed_result_families:
+  - privacy-disposition
+  manual_review_required: true
+  privacy_sensitive: true
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-privacy-linkage-risk
+  family: privacy-and-disclosure
+  semantic_owner: integration-manager
+  normative_reference: lp10-privacy-retention-and-disclosure-controls
+  summary: The record can be linked to another record to re-identify an individual.
+  trigger: A relation, export, view, or join path reconstructs individual-level detail.
+  required_evidence:
+  - record-under-review
+  allowed_result_families:
+  - privacy-disposition
+  manual_review_required: true
+  privacy_sensitive: true
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-privacy-purpose-limitation-violated
+  family: privacy-and-disclosure
+  semantic_owner: integration-manager
+  normative_reference: lp10-privacy-retention-and-disclosure-controls
+  summary: The proposed use falls outside the purpose the record was collected for.
+  trigger: The requested use is not among the approved purposes recorded with the data.
+  required_evidence:
+  - record-under-review
+  allowed_result_families:
+  - privacy-disposition
+  manual_review_required: true
+  privacy_sensitive: true
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-privacy-retention-expired
+  family: privacy-and-disclosure
+  semantic_owner: integration-manager
+  normative_reference: lp10-privacy-retention-and-disclosure-controls
+  summary: The record is past its approved retention period.
+  trigger: The retention date recorded with the data has passed.
+  required_evidence:
+  - record-under-review
+  allowed_result_families:
+  - privacy-disposition
+  manual_review_required: false
+  privacy_sensitive: true
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-privacy-destination-unapproved
+  family: privacy-and-disclosure
+  semantic_owner: integration-manager
+  normative_reference: lp10-privacy-retention-and-disclosure-controls
+  summary: The proposed destination is not an approved destination for this record.
+  trigger: The requested destination is absent from the approved destination allowlist.
+  required_evidence:
+  - record-under-review
+  allowed_result_families:
+  - privacy-disposition
+  manual_review_required: true
+  privacy_sensitive: true
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-privacy-narrative-note-disclosure-risk
+  family: privacy-and-disclosure
+  semantic_owner: integration-manager
+  normative_reference: lp10-privacy-retention-and-disclosure-controls
+  summary: A free-text note carries disclosure risk.
+  trigger: An unbounded or narrative note contains identifying, sensitive, or re-identifying detail.
+  required_evidence:
+  - record-under-review
+  allowed_result_families:
+  - privacy-disposition
+  manual_review_required: true
+  privacy_sensitive: true
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-calibration-shadow-mode-only
+  family: calibration-and-lifecycle
+  semantic_owner: qa-test-agent
+  normative_reference: lp11-calibration-promotion-drift-and-suspension
+  summary: The record may be observed in shadow mode only.
+  trigger: The lifecycle state is shadow and no promotion decision has been recorded.
+  required_evidence:
+  - calibration-record
+  allowed_result_families:
+  - calibration-record
+  manual_review_required: false
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-calibration-evidence-or-diversity-insufficient
+  family: calibration-and-lifecycle
+  semantic_owner: qa-test-agent
+  normative_reference: lp11-calibration-promotion-drift-and-suspension
+  summary: Calibration evidence or context diversity is below the required minimum.
+  trigger: Recorded calibration cases or distinct contexts fall below the declared minimum.
+  required_evidence:
+  - calibration-record
+  allowed_result_families:
+  - calibration-record
+  manual_review_required: false
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-calibration-interval-undercoverage
+  family: calibration-and-lifecycle
+  semantic_owner: qa-test-agent
+  normative_reference: lp11-calibration-promotion-drift-and-suspension
+  summary: Estimated intervals cover observed outcomes less often than required.
+  trigger: Observed coverage of the stated interval is below the declared target.
+  required_evidence:
+  - calibration-record
+  allowed_result_families:
+  - calibration-record
+  manual_review_required: false
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-calibration-underestimation-risk
+  family: calibration-and-lifecycle
+  semantic_owner: qa-test-agent
+  normative_reference: lp11-calibration-promotion-drift-and-suspension
+  summary: Estimates are biased toward underestimating required time.
+  trigger: Recorded residuals are asymmetric beyond the declared underestimation bound.
+  required_evidence:
+  - calibration-record
+  allowed_result_families:
+  - calibration-record
+  manual_review_required: false
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-calibration-drift-detected
+  family: calibration-and-lifecycle
+  semantic_owner: qa-test-agent
+  normative_reference: lp11-calibration-promotion-drift-and-suspension
+  summary: Calibration has drifted outside its validated envelope.
+  trigger: Recent calibration evidence departs from the validated envelope beyond the declared bound.
+  required_evidence:
+  - calibration-record
+  allowed_result_families:
+  - calibration-record
+  manual_review_required: true
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-calibration-teacher-disagreement-elevated
+  family: calibration-and-lifecycle
+  semantic_owner: qa-test-agent
+  normative_reference: lp11-calibration-promotion-drift-and-suspension
+  summary: Teacher disagreement with advisory output is elevated.
+  trigger: Recorded teacher rejections exceed the declared disagreement bound.
+  required_evidence:
+  - calibration-record
+  allowed_result_families:
+  - calibration-record
+  manual_review_required: true
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-calibration-guardrail-failed
+  family: calibration-and-lifecycle
+  semantic_owner: qa-test-agent
+  normative_reference: lp11-calibration-promotion-drift-and-suspension
+  summary: A learning-quality or accessibility guardrail failed during calibration.
+  trigger: A declared guardrail check returned a failing result for the calibrated scope.
+  required_evidence:
+  - calibration-record
+  allowed_result_families:
+  - calibration-record
+  manual_review_required: true
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-calibration-promotion-blocked
+  family: calibration-and-lifecycle
+  semantic_owner: qa-test-agent
+  normative_reference: lp11-calibration-promotion-drift-and-suspension
+  summary: Promotion beyond the current lifecycle state is blocked.
+  trigger: One or more promotion prerequisites recorded under LP11 is unmet.
+  required_evidence:
+  - calibration-record
+  allowed_result_families:
+  - calibration-record
+  manual_review_required: false
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-calibration-suspension-required
+  family: calibration-and-lifecycle
+  semantic_owner: qa-test-agent
+  normative_reference: lp11-calibration-promotion-drift-and-suspension
+  summary: Advisory use must be suspended pending recalibration.
+  trigger: A suspension condition recorded under LP11 is met.
+  required_evidence:
+  - calibration-record
+  allowed_result_families:
+  - calibration-record
+  manual_review_required: true
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: false
+  replacement_code: null
+- code: lp-pacing-not-enough-time
+  family: pacing-feasibility
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp1-pacing-and-time-compression-policy
+  summary: Superseded by the specific insufficient-instruction-time cause.
+  trigger: Retained only to interpret historical records.
+  required_evidence:
+  - supplied-planning-context
+  allowed_result_families:
+  - pacing-assessment
+  manual_review_required: true
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: true
+  replacement_code: lp-pacing-instruction-time-insufficient
+- code: lp-evidence-bad-data
+  family: evidence-comparability
+  semantic_owner: unit-alignment-agent
+  normative_reference: lp2-lesson-run-evidence-and-comparability
+  summary: 'Retired: too generic to identify one stable domain cause.'
+  trigger: Retained only to interpret historical records.
+  required_evidence:
+  - lesson-run-evidence
+  allowed_result_families:
+  - evidence-assessment
+  - pacing-assessment
+  manual_review_required: true
+  privacy_sensitive: false
+  prohibited_implications:
+  - external-write
+  - gate-advancement
+  - grading
+  - placement
+  - production
+  - readiness
+  deprecated: true
+  replacement_code: null
