@@ -43,49 +43,6 @@ jobs:
           python -m pip install -e "./08_Tooling/notion-navigation-client[test]"
           python -m pip install -e "./08_Tooling/reusable-capability-registry[test]"
 
-      - name: Instrument aggregate validation integrity checks
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path("scripts/validate-all.sh")
-          text = path.read_text(encoding="utf-8")
-          function_anchor = "run_check() {\n"
-          command_anchor = '  (cd "$workdir" && "$@")\n  local code=$?\n'
-          diagnostic = r'''diagnostic_integrity() {
-            local phase="$1"
-            local check_name="$2"
-            local target="src/instructional_workflow_contracts/material_requirement.py"
-
-            echo "::group::MATERIAL REQUIREMENT INTEGRITY | $phase | $check_name"
-            printf 'sha1sum: '
-            sha1sum "$target" || true
-            printf 'git-hash-object: '
-            git hash-object "$target" || true
-            printf 'git-index-blob: '
-            git rev-parse "HEAD:$target" || true
-            stat "$target" || true
-            git status --short -- "$target" || true
-            git diff --no-ext-diff -- "$target" || true
-            echo "::endgroup::"
-          }
-
-          '''
-          if function_anchor not in text:
-              raise SystemExit("run_check anchor not found")
-          if command_anchor not in text:
-              raise SystemExit("run_check command anchor not found")
-          text = text.replace(function_anchor, diagnostic + function_anchor, 1)
-          replacement = (
-              '  diagnostic_integrity "BEFORE" "$name"\n'
-              '  (cd "$workdir" && "$@")\n'
-              '  local code=$?\n'
-              '  diagnostic_integrity "AFTER" "$name"\n'
-          )
-          text = text.replace(command_anchor, replacement, 1)
-          path.write_text(text, encoding="utf-8")
-          PY
-
       - name: Run aggregate validation
         run: ./scripts/validate-all.sh
 
