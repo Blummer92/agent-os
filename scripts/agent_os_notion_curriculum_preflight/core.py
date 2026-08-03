@@ -25,6 +25,9 @@ from .models import (
     FINDING_CODES,
     MAX_EVIDENCE_BYTES,
     MAX_MAPPINGS,
+    MAX_PROPERTIES,
+    MAX_RELATIONS,
+    MAX_VIEWS,
     PROPOSED_IMPLEMENTATION_SCOPE,
     SUPPORTED_CONTRACT_NAMES,
     SUPPORTED_NOTION_API_VERSION,
@@ -197,21 +200,21 @@ def parse_preflight_evidence(payload: object) -> NotionCurriculumPreflightEviden
     root = _require_mapping(normalized, "preflight evidence")
     _require_fields(root, _TOP_LEVEL_FIELDS, "preflight evidence")
 
-    property_values = _require_list(root["properties"], "properties", 256)
+    property_values = _require_list(root["properties"], "properties", MAX_PROPERTIES)
     properties: list[NotionPropertyEvidence] = []
     for item in property_values:
         record = _require_mapping(item, "property evidence")
         _require_fields(record, _PROPERTY_FIELDS, "property evidence")
         properties.append(NotionPropertyEvidence(**record))
 
-    relation_values = _require_list(root["relations"], "relations", 128)
+    relation_values = _require_list(root["relations"], "relations", MAX_RELATIONS)
     relations: list[NotionRelationEvidence] = []
     for item in relation_values:
         record = _require_mapping(item, "relation evidence")
         _require_fields(record, _RELATION_FIELDS, "relation evidence")
         relations.append(NotionRelationEvidence(**record))
 
-    view_values = _require_list(root["views"], "views", 64)
+    view_values = _require_list(root["views"], "views", MAX_VIEWS)
     views: list[NotionViewEvidence] = []
     for item in view_values:
         record = _require_mapping(item, "view evidence")
