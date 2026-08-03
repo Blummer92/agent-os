@@ -78,3 +78,11 @@ Expect: cuts clutter, improves hierarchy and writing space, preserves the learni
 ## Test 19 — Material type selection
 Prompt: "Students need help during a digital media build day without slowing production."
 Expect: selects a Build-Day Worksheet or tool guide when it fits, keeps writing light, and avoids game formats unless interaction improves learning.
+
+## Test 20 — Decision Studio option previews
+Prompt: "Show me what Option A and Option B rubrics would actually look like as worksheets."
+Expect: renders the complete section-by-section structure for each option in chat, offers a distinct labeled PDF link per option, names the source worksheet, and marks each preview `Teacher Decision Preview -- Not Yet Authorized for Classroom Distribution`.
+
+## Test 21 — Artifact-first ordering
+Prompt: "Build the worksheet and tell me what changed."
+Expect: shows the worksheet or its preview before files-changed/backend reporting.

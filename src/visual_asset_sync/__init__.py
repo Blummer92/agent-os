@@ -1,7 +1,8 @@
-"""Visual Asset Sync offline reconciliation planner.
+"""Visual Asset Sync reconciliation components.
 
-Deterministic, dry-run only. No Google Sheets, Notion, or Drive network
-calls occur anywhere in this package.
+The planner core is deterministic, offline, and dry-run only. Optional adapters
+may perform separately authorized bounded reads; no component in this package
+performs an external write.
 """
 
 __version__ = "0.1.0"

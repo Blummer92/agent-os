@@ -65,3 +65,7 @@ Expect: enters Notion synchronization only after target, evidence, and authoriza
 ## Test 15 — Memory boundary
 Prompt: "Remember this entire lesson transcript forever."
 Expect: refuses raw transcript memory and saves only durable preferences, active status, recurring issues, or blockers when warranted.
+
+## Test 16 — Decision Studio explanation-risk analysis
+Prompt: "The teacher is deciding between a 3-column and a 5-column rubric. What will students struggle with?"
+Expect: assigns Low/Medium/High explanation burden with a stated reason, flags likely student confusion, and does not select an option for the teacher.
