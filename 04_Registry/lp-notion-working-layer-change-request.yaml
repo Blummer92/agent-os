@@ -1,0 +1,485 @@
+registry_name: lp-notion-working-layer-change-request
+contract_version: "1.0"
+record_revision: 1
+normative_standard: 01_Shared_Standards/notion/lp-notion-working-layer-standard.md
+handoff_contract: 04_Registry/lp-pacing-handoff-contract.yaml
+reason_code_catalog: 04_Registry/lp-reason-code-catalog.yaml
+authority_state_registry: 04_Registry/lp-authority-state-registry.yaml
+change_request_state: proposed-not-authorized
+live_change_authorized: false
+inspection:
+  mode: read-only
+  scope: schema-and-view-configuration-only
+  records_read: false
+  student_data_read: false
+exact_targets:
+  - id: unit-readiness-workspace
+    kind: page
+    title: Unit Readiness Workspace
+    notion_id: 3717ac78-3131-816b-840c-f2bf4e049555
+    data_source_url: null
+    role: parent-workspace
+    exists: true
+  - id: unit-alignment-readiness-dashboard
+    kind: database
+    title: Unit Alignment and Readiness Dashboard
+    notion_id: c057a650-f74f-4a1a-b342-90af994baaaa
+    data_source_url: collection://3a8afe82-6f27-4797-bb79-77312130d1f9
+    role: unit-summary-layer
+    exists: true
+  - id: unit-alignment-tracker
+    kind: database
+    title: Unit Alignment Tracker
+    notion_id: 36f7ac78-3131-80c8-95f2-d4335fbfde2a
+    data_source_url: collection://36f7ac78-3131-8097-b334-000b212bf27d
+    role: historical-alignment-artifacts
+    exists: true
+  - id: lesson-pacing-and-pathways
+    kind: database
+    title: Lesson Pacing and Pathways
+    notion_id: null
+    data_source_url: null
+    role: supporting-planning-data-source
+    exists: false
+  - id: lesson-run-log
+    kind: database
+    title: Lesson Run Log
+    notion_id: null
+    data_source_url: null
+    role: aggregate-lesson-run-evidence
+    exists: false
+vocabularies:
+  authority_classes:
+    - value: advisory
+    - value: display-only
+    - value: planning
+    - value: evidence
+  privacy_classes:
+    - value: none
+    - value: aggregate-deidentified
+    - value: lp10-restricted
+  retention_classes:
+    - value: planning-cycle
+    - value: review-window
+    - value: lp10-governed
+  permitted_writers:
+    - value: teacher
+    - value: unit-alignment-agent
+    - value: integration-manager
+    - value: display-only-mirror
+observed_properties:
+  - target: unit-alignment-readiness-dashboard
+    property: Cognitive Load Risk
+    finding: single-select risk label that cannot represent the six separated dimensions
+    reuse_decision: do-not-reuse
+    normative_id: projection-separate-diagnosis-fields
+  - target: unit-alignment-readiness-dashboard
+    property: Alignment Confidence
+    finding: owned by unit alignment and already scoped to alignment, not pacing
+    reuse_decision: do-not-reuse
+    normative_id: authority-required-property-map
+  - target: unit-alignment-readiness-dashboard
+    property: Human Review Needed
+    finding: semantics and writer match the manual-review requirement exactly
+    reuse_decision: reuse
+    normative_id: authority-required-property-map
+  - target: unit-alignment-readiness-dashboard
+    property: Last Reviewed
+    finding: existing review date; pacing needs its own review date to avoid overwriting alignment review
+    reuse_decision: do-not-reuse
+    normative_id: authority-required-property-map
+  - target: unit-alignment-readiness-dashboard
+    property: Unit Generation Approval
+    finding: canonical unit-approval gate owned outside the pacing lane
+    reuse_decision: mirror-display-only
+    normative_id: authority-display-only-gates
+  - target: unit-alignment-readiness-dashboard
+    property: Modeling Feasibility Gate
+    finding: existing owner gate whose `Not reviewed` option must map to a visible NOT_EVALUATED display, never to cleared
+    reuse_decision: mirror-display-only
+    normative_id: authority-not-evaluated-visible
+  - target: unit-alignment-readiness-dashboard
+    property: Planning Gate Status
+    finding: carries the approval-sounding literal `Ready for teacher modeling handoff`
+    reuse_decision: historical-display-only
+    normative_id: migration-legacy-status-literals
+  - target: unit-alignment-readiness-dashboard
+    property: Single Next Owner
+    finding: existing next-owner routing property; the pacing recommendation must not overwrite it
+    reuse_decision: do-not-reuse
+    normative_id: authority-no-gate-advancement
+  - target: unit-alignment-readiness-dashboard
+    property: Student Evidence Coach Dashboard
+    finding: relation to the Notion-side governance ownership label recorded in the governance baseline; it has no GitHub overlay and no LP property is written through it
+    reuse_decision: do-not-reuse
+    normative_id: migration-notion-side-ownership-label
+  - target: unit-alignment-tracker
+    property: Differentiation updated
+    finding: status property with Not started / In progress / Done, recording past editing activity rather than pathway evidence
+    reuse_decision: historical-display-only
+    normative_id: migration-historical-differentiation
+  - target: unit-alignment-tracker
+    property: Status
+    finding: unscoped status literal including `Ready to teach`
+    reuse_decision: historical-display-only
+    normative_id: migration-legacy-status-literals
+proposed_properties:
+  - target: unit-alignment-readiness-dashboard
+    name: Pacing Feasibility — Advisory
+    semantic_owner: Unit Alignment Agent
+    canonical_source: lp-pacing-handoff-contract
+    purpose: display the advisory pacing outcome for the unit
+    permitted_writer: unit-alignment-agent
+    authority_class: advisory
+    privacy_class: none
+    retention_class: planning-cycle
+    missing_behaviour: display NOT_EVALUATED
+    prohibited_implication: gate-advancement
+    normative_id: display-advisory-labelled
+  - target: unit-alignment-readiness-dashboard
+    name: Pacing Confidence
+    semantic_owner: Unit Alignment Agent
+    canonical_source: lp-pacing-handoff-contract
+    purpose: display bounded confidence for the advisory outcome
+    permitted_writer: unit-alignment-agent
+    authority_class: evidence
+    privacy_class: none
+    retention_class: planning-cycle
+    missing_behaviour: display NOT_EVALUATED
+    prohibited_implication: readiness
+    normative_id: authority-required-property-map
+  - target: unit-alignment-readiness-dashboard
+    name: Pacing Review Date
+    semantic_owner: Unit Alignment Agent
+    canonical_source: lp-pacing-handoff-contract
+    purpose: record when the pacing assessment was last reviewed
+    permitted_writer: unit-alignment-agent
+    authority_class: evidence
+    privacy_class: none
+    retention_class: review-window
+    missing_behaviour: display blank and treat the assessment as unreviewed
+    prohibited_implication: gate-advancement
+    normative_id: retention-expiry-and-suppression
+  - target: unit-alignment-readiness-dashboard
+    name: Pacing Schema Version
+    semantic_owner: Integration Manager
+    canonical_source: lp-pacing-handoff-contract
+    purpose: record the governing GitHub contract version
+    permitted_writer: unit-alignment-agent
+    authority_class: evidence
+    privacy_class: none
+    retention_class: planning-cycle
+    missing_behaviour: suppress the record as unversioned
+    prohibited_implication: gate-advancement
+    normative_id: sot-github-canonical
+  - target: unit-alignment-readiness-dashboard
+    name: LP Planning Record
+    semantic_owner: Unit Alignment Agent
+    canonical_source: lesson-pacing-and-pathways
+    purpose: relate the unit to its supporting planning records
+    permitted_writer: unit-alignment-agent
+    authority_class: planning
+    privacy_class: none
+    retention_class: planning-cycle
+    missing_behaviour: display empty
+    prohibited_implication: readiness
+    normative_id: architecture-no-detailed-evidence-in-summary
+  - target: unit-alignment-readiness-dashboard
+    name: Main Time Driver — Advisory
+    semantic_owner: Unit Alignment Agent
+    canonical_source: lp-pacing-handoff-contract
+    purpose: name the dominant time driver without combining dimensions
+    permitted_writer: unit-alignment-agent
+    authority_class: advisory
+    privacy_class: none
+    retention_class: planning-cycle
+    missing_behaviour: display NOT_EVALUATED
+    prohibited_implication: learner-classification
+    normative_id: display-no-combined-rollup
+  - target: unit-alignment-readiness-dashboard
+    name: Next Owner Recommendation
+    semantic_owner: Unit Alignment Agent
+    canonical_source: lp-pacing-handoff-contract
+    purpose: display the routing recommendation without altering Single Next Owner
+    permitted_writer: unit-alignment-agent
+    authority_class: advisory
+    privacy_class: none
+    retention_class: planning-cycle
+    missing_behaviour: display NOT_EVALUATED
+    prohibited_implication: gate-advancement
+    normative_id: display-owner-named-on-gate
+  - target: unit-alignment-readiness-dashboard
+    name: Pathway Brief Available — Advisory
+    semantic_owner: Unit Alignment Agent
+    canonical_source: lesson-pacing-and-pathways
+    purpose: indicate that route briefs exist for review
+    permitted_writer: unit-alignment-agent
+    authority_class: advisory
+    privacy_class: none
+    retention_class: planning-cycle
+    missing_behaviour: display NOT_EVALUATED
+    prohibited_implication: placement
+    normative_id: projection-pathway-briefs-only
+  - target: lesson-pacing-and-pathways
+    name: Difficulty Diagnosis — Six Dimensions
+    semantic_owner: Unit Alignment Agent
+    canonical_source: lp-pacing-handoff-contract
+    purpose: hold the six separated dimensions as six distinct properties
+    permitted_writer: unit-alignment-agent
+    authority_class: advisory
+    privacy_class: none
+    retention_class: planning-cycle
+    missing_behaviour: display NOT_EVALUATED per dimension
+    prohibited_implication: learner-classification
+    normative_id: architecture-supporting-data-source
+  - target: lesson-pacing-and-pathways
+    name: Instructional Function Preservation
+    semantic_owner: Teacher Modeling Coach
+    canonical_source: lp-pacing-handoff-adaptation
+    purpose: record preserved, compressed, changed, deferred functions and the split plan
+    permitted_writer: teacher
+    authority_class: planning
+    privacy_class: none
+    retention_class: planning-cycle
+    missing_behaviour: display blank
+    prohibited_implication: gate-advancement
+    normative_id: sot-notion-working-layer
+  - target: lesson-pacing-and-pathways
+    name: Evidence Summary — Bounded
+    semantic_owner: Integration Manager
+    canonical_source: eia1-evidence-intake-contract
+    purpose: display a bounded evidence summary with its disposition and limits
+    permitted_writer: integration-manager
+    authority_class: evidence
+    privacy_class: lp10-restricted
+    retention_class: lp10-governed
+    missing_behaviour: display not-supplied
+    prohibited_implication: mastery
+    normative_id: eia-summary-only-projection
+  - target: lesson-pacing-and-pathways
+    name: Evidence Review State
+    semantic_owner: Integration Manager
+    canonical_source: eia1-evidence-intake-contract
+    purpose: display teacher review state distinctly from acceptance
+    permitted_writer: teacher
+    authority_class: evidence
+    privacy_class: lp10-restricted
+    retention_class: lp10-governed
+    missing_behaviour: display not-reviewed
+    prohibited_implication: readiness
+    normative_id: eia-visible-review-and-staleness
+  - target: lesson-pacing-and-pathways
+    name: What Supported / What Remains Unmeasured
+    semantic_owner: Unit Alignment Agent
+    canonical_source: lp-pacing-handoff-contract
+    purpose: expose evidence reach instead of one overall score
+    permitted_writer: unit-alignment-agent
+    authority_class: evidence
+    privacy_class: aggregate-deidentified
+    retention_class: review-window
+    missing_behaviour: display blank
+    prohibited_implication: mastery
+    normative_id: eia-what-supported-and-unmeasured
+  - target: lesson-run-log
+    name: Aggregate Run Summary
+    semantic_owner: Unit Alignment Agent
+    canonical_source: lp-pacing-handoff-contract
+    purpose: hold one aggregate, de-identified record per planned run
+    permitted_writer: teacher
+    authority_class: evidence
+    privacy_class: aggregate-deidentified
+    retention_class: lp10-governed
+    missing_behaviour: display blank
+    prohibited_implication: learner-classification
+    normative_id: architecture-lesson-run-log
+proposed_views:
+  - target: lesson-pacing-and-pathways
+    name: Pacing Review Needed
+  - target: lesson-pacing-and-pathways
+    name: Pacing Assessment Complete
+  - target: lesson-pacing-and-pathways
+    name: Modeling Review Candidate — Not Approved
+  - target: lesson-pacing-and-pathways
+    name: Manual Review Required
+  - target: lesson-pacing-and-pathways
+    name: Timing Split Recommended
+  - target: lesson-pacing-and-pathways
+    name: Low-Confidence Estimates
+  - target: lesson-pacing-and-pathways
+    name: Pathway Brief Review
+  - target: lesson-pacing-and-pathways
+    name: Pilot / Early-Use Records
+  - target: lesson-run-log
+    name: Records Missing Comparable Evidence
+  - target: lesson-pacing-and-pathways
+    name: Evidence Summary Review Required
+prohibited_data:
+  - value: raw-scans-or-page-images
+  - value: cropped-answer-regions
+  - value: handwriting-samples
+  - value: full-recognized-responses-or-transcripts
+  - value: answer-level-or-learner-level-histories
+  - value: student-names-or-identifiers
+  - value: diagnoses-or-protected-characteristics
+  - value: row-per-student-records
+  - value: permanent-ability-labels
+  - value: model-internals-or-embeddings
+  - value: opaque-similarity-percentage
+  - value: continuous-telemetry
+pilot_records:
+  - id: blind-photography-launch
+    minimum_fields: 9
+    provisional_timing_range_required: true
+    route_briefs_required: false
+    synthetic_evidence_summary: optional
+  - id: composition-three-shot-planning
+    minimum_fields: 9
+    provisional_timing_range_required: true
+    route_briefs_required: true
+    synthetic_evidence_summary: optional
+  - id: production-cycles-watch-check-fix
+    minimum_fields: 11
+    provisional_timing_range_required: true
+    route_briefs_required: true
+    synthetic_evidence_summary: optional
+operational_plan:
+  preflight:
+    - value: confirm exact target identifiers against the live workspace
+    - value: confirm no property in the allowlist already exists with conflicting semantics
+    - value: confirm LP10 retention, access, deletion, and incident rules are approved
+    - value: confirm accessibility review is complete
+  verification:
+    - value: confirm every created property carries its full authority map
+    - value: confirm no formula, rollup, or automation reads a pacing value into a gate
+    - value: confirm NOT_EVALUATED renders distinctly from blank, blocked, and cleared
+    - value: confirm no prohibited data can be reconstructed through relations, exports, or views
+  rollback:
+    - value: remove created properties, relations, views, forms, and templates in reverse order
+    - value: delete created records and confirm deletion
+    - value: leave every pre-existing property and historical literal unchanged
+  incident:
+    - value: suspend the projection and route to the Integration Manager
+    - value: preserve evidence and record the incident before any corrective write
+non_authority_guarantees:
+  - value: no property advances Unit Generation Approval
+  - value: no property advances a modeling handoff gate
+  - value: no property advances Production Authorized
+  - value: no property assigns a grade, a learner route, or a placement
+  - value: no property changes a success criterion
+  - value: no view or rollup combines owner states into one status
+source_of_truth_rules:
+  - value: github-remains-canonical
+    normative_id: sot-github-canonical
+  - value: notion-is-a-working-layer
+    normative_id: sot-notion-working-layer
+  - value: no-competing-readiness-owner
+    normative_id: sot-no-competing-readiness-owner
+authority_rules:
+  - value: every-property-declares-its-authority-map
+    normative_id: authority-required-property-map
+  - value: nothing-advances-a-gate
+    normative_id: authority-no-gate-advancement
+  - value: gates-are-mirrored-display-only
+    normative_id: authority-display-only-gates
+  - value: not-evaluated-stays-visible
+    normative_id: authority-not-evaluated-visible
+architecture_rules:
+  - value: bounded-unit-summary-layer
+    normative_id: architecture-unit-summary-layer
+  - value: one-supporting-planning-data-source
+    normative_id: architecture-supporting-data-source
+  - value: one-aggregate-lesson-run-pattern
+    normative_id: architecture-lesson-run-log
+  - value: detail-stays-out-of-the-summary
+    normative_id: architecture-no-detailed-evidence-in-summary
+projection_rules:
+  - value: six-dimensions-stay-separate
+    normative_id: projection-separate-diagnosis-fields
+  - value: pathway-briefs-only
+    normative_id: projection-pathway-briefs-only
+  - value: no-learner-rows
+    normative_id: projection-no-learner-rows
+evidence_projection_rules:
+  - value: summary-only-projection
+    normative_id: eia-summary-only-projection
+  - value: prohibited-artifacts-never-projected
+    normative_id: eia-prohibited-artifacts
+  - value: no-direct-engine-connection
+    normative_id: eia-no-direct-engine-connection
+  - value: confidence-is-not-correctness
+    normative_id: eia-confidence-is-not-correctness
+  - value: review-and-staleness-stay-visible
+    normative_id: eia-visible-review-and-staleness
+  - value: reach-not-score
+    normative_id: eia-what-supported-and-unmeasured
+display_rules:
+  - value: no-colour-only-meaning
+    normative_id: display-no-colour-only-meaning
+  - value: advisory-is-labelled
+    normative_id: display-advisory-labelled
+  - value: gates-name-their-owner
+    normative_id: display-owner-named-on-gate
+  - value: no-combined-rollup
+    normative_id: display-no-combined-rollup
+  - value: accessibility-review-required
+    normative_id: display-accessibility-review
+retention_rules:
+  - value: lp10-owns-retention-policy
+    normative_id: retention-lp10-owned
+  - value: expiry-and-suppression
+    normative_id: retention-expiry-and-suppression
+  - value: deletion-and-supersession-defined
+    normative_id: retention-deletion-and-supersession
+migration_rules:
+  - value: differentiation-updated-stays-historical
+    normative_id: migration-historical-differentiation
+  - value: legacy-status-literals-stay-historical
+    normative_id: migration-legacy-status-literals
+  - value: notion-side-ownership-label-is-preserved
+    normative_id: migration-notion-side-ownership-label
+pilot_rules:
+  - value: shadow-mode-only
+    normative_id: pilot-shadow-mode-only
+  - value: three-lesson-scope
+    normative_id: pilot-three-lesson-scope
+  - value: no-real-artifacts
+    normative_id: pilot-no-real-artifacts
+change_request_rules:
+  - value: exact-target-named
+    normative_id: change-request-exact-target
+  - value: exact-allowlist
+    normative_id: change-request-allowlist
+  - value: preflight-verification-rollback-incident
+    normative_id: change-request-preflight-and-rollback
+  - value: unresolved-decisions-block-the-change
+    normative_id: change-request-unresolved-decisions
+retired_patterns:
+  - value: approval-sounding-view-names
+    normative_id: retired-view-names
+  - value: approval-styling-for-advisory-values
+    normative_id: retired-approval-styling
+  - value: scan-and-transcript-properties
+    normative_id: retired-scan-properties
+  - value: score-and-rollup-properties
+    normative_id: retired-score-properties
+unresolved_decisions:
+  - id: lp10-local-privacy-rules
+    question: exact local privacy thresholds, retention schedules, access roles, deletion behaviour, and incident routes
+    owner: Integration Manager
+    blocks_live_change: true
+  - id: lp11-shadow-mode-thresholds
+    question: exact calibration thresholds and validated context envelopes for shadow-mode use
+    owner: QA / Test Agent
+    blocks_live_change: true
+  - id: new-data-source-creation
+    question: whether the supporting planning data source and lesson-run log are created as new databases or as views on an existing one
+    owner: Integration Manager
+    blocks_live_change: true
+  - id: notion-write-mode-authorization
+    question: governed Notion write-mode decision recorded under issue 393
+    owner: Integration Manager
+    blocks_live_change: true
+  - id: teacher-burden-budget
+    question: acceptable teacher time budget for populating the planning record and lesson-run log
+    owner: Unit Alignment Agent
+    blocks_live_change: true
