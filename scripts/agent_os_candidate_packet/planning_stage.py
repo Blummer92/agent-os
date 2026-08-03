@@ -39,7 +39,7 @@ from .stage_models import (
 )
 
 _OPTIONAL_GOVERNED_FIELD_STATES = frozenset(
-    {"absent", "null", "intentionally-omitted", "unavailable"}
+    {"absent", "null", "intentionally-omitted"}
 )
 
 
@@ -154,7 +154,7 @@ def prepare_planning_handoff(
         node_id=f"issue-{snapshot.issue_number}",
         readiness=node_readiness,
         readiness_evidence=(
-            *readiness_stage_result.reason_codes,
+            *sorted(stage_reasons),
             f"issueplan-evidence:{issueplan.evidence_id}",
         ),
         owner=owner,
@@ -197,18 +197,13 @@ def prepare_planning_handoff(
         "execution_authorized": False,
         "created_at": created_at,
     }
+    handoff_fields = {
+        name: value
+        for name, value in without_digest.items()
+        if name not in {"planning_scope", "execution_authorized"}
+    }
     handoff = SchedulerPlanningHandoff(
-        contract_version=without_digest["contract_version"],
-        planning_result_version=without_digest["planning_result_version"],
-        evaluator_commit_sha=evaluator_sha,
-        repository=snapshot.repository,
-        base_branch=issueplan.base_branch,
-        evaluated_repository_sha=issueplan.evaluated_repository_sha,
-        supplied_node_ids=planning_result.supplied_node_ids,
-        graph_digest=graph_digest,
-        planning_result_digest=planning_result_digest,
-        cohort_summaries=cohort_summaries,
-        created_at=created_at,
+        **handoff_fields,
         handoff_digest=compute_handoff_digest(without_digest),
     )
     serialized = serialize_scheduler_planning_handoff(handoff)
