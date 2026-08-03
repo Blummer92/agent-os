@@ -9,6 +9,7 @@ from .command_planning import (
     ValidationCommandPlan,
     build_validation_command_plan,
     serialize_validation_command_plan,
+    validate_validation_command_plan,
     validation_command_plan_id,
 )
 from .models import (
@@ -72,6 +73,7 @@ __all__ = [
     "redact_public_text",
     "serialize_validation_command_plan",
     "validate_execution_service_request",
+    "validate_validation_command_plan",
     "validation_command_plan_id",
 ]
 

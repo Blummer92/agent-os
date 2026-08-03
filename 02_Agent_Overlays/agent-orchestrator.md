@@ -15,6 +15,7 @@ See `_common-overlay-rules.md` plus:
 
 - `01_Shared_Standards/instructional-design/orchestration-rules.md`
 - `01_Shared_Standards/instructional-design/production-gates-and-compute.md`
+- `01_Shared_Standards/instructional-design/artifact-first-response-standard.md`
 
 ## Owned Systems
 
@@ -37,8 +38,11 @@ or permission settings, and downstream agent outputs without owner approval.
 
 ## Version
 
-0.1.0
+0.1.1
 
 ## Changelog
 
+- 0.1.1 inherits the artifact-first response standard (#821): routed
+  classroom-material work leads with the requested artifact before
+  routing/mode reporting.
 - 0.1.0 initial overlay.

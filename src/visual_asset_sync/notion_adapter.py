@@ -332,6 +332,10 @@ def _map_page(
         if type(property_name) is not str:
             raise NotionRecordError("Notion property names must be exact strings")
         if property_name not in mapped_names:
+            if property_name in raw:
+                raise NotionRecordError(
+                    "Notion property name collides with a reserved or mapped field"
+                )
             raw[property_name] = _extract_property(value)
     try:
         return normalize_existing_record(raw)

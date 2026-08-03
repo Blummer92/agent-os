@@ -441,3 +441,347 @@ def test_no_duplicate_cw5a_mechanics_or_import_side_effects() -> None:
     assert classes.isdisjoint({"AuthorityEvidence", "ValidationResult", "ValidationStatus", "ValidatedRecord"})
     assert functions.isdisjoint({"canonical_json_bytes", "canonical_size", "sha256_hex", "freeze_json"})
     assert calls.isdisjoint({"open", "getenv", "Popen", "run", "system", "basicConfig", "register", "import_module", "eval", "exec"})
+
+
+# Issue #850 v2 coverage
+
+def valid_v2_requirement(
+    decision: str = "visuals-required",
+) -> dict[str, object]:
+    value = valid_requirement()
+    value["identity"]["contract_version"] = (  # type: ignore[index]
+        material_module.V2_CONTRACT_ID
+    )
+
+    if decision == "visuals-required":
+        value["visual_direction"] = {
+            "decision": decision,
+            "maximum_visual_count": 2,
+            "roles": [
+                {
+                    "role_type": "worked-example",
+                    "requirement_state": "required",
+                    "instructional_purpose": (
+                        "Show students a completed example."
+                    ),
+                    "intended_placement": "example-adjacent",
+                    "orientation": "landscape",
+                },
+                {
+                    "role_type": "comparison",
+                    "requirement_state": "optional",
+                    "instructional_purpose": (
+                        "Compare effective and ineffective choices."
+                    ),
+                    "intended_placement": "section",
+                    "orientation": "square",
+                },
+            ],
+        }
+    else:
+        value["visual_direction"] = {
+            "decision": decision,
+            "maximum_visual_count": 0,
+            "roles": [],
+        }
+
+    _refresh(value)
+    return value
+
+
+def test_v1_remains_valid_without_visual_direction() -> None:
+    value = valid_requirement()
+    result = validate_material_requirement(value)
+
+    assert result.status is ValidationStatus.VALID
+    assert result.record is not None
+    assert result.record.contract_version == material_module.V1_CONTRACT_ID
+    assert "visual_direction" not in result.record.to_dict()
+
+
+def test_v1_rejects_visual_direction() -> None:
+    value = valid_requirement()
+    value["visual_direction"] = {
+        "decision": "no-visuals",
+        "maximum_visual_count": 0,
+        "roles": [],
+    }
+
+    result = _result(value)
+
+    assert result.status is ValidationStatus.INVALID
+    assert result.reason_codes == ("material-unknown-field",)
+
+
+def test_v2_requires_visual_direction() -> None:
+    value = valid_requirement()
+    value["identity"]["contract_version"] = (  # type: ignore[index]
+        material_module.V2_CONTRACT_ID
+    )
+
+    result = _result(value)
+
+    assert result.status is ValidationStatus.INVALID
+    assert result.reason_codes == (
+        "material-missing-required-field",
+    )
+
+
+@pytest.mark.parametrize(
+    "decision",
+    ["unspecified", "no-visuals", "visuals-required"],
+)
+def test_v2_supported_decisions(decision: str) -> None:
+    value = valid_v2_requirement(decision)
+    result = validate_material_requirement(value)
+
+    assert result.status is ValidationStatus.VALID
+    assert result.record is not None
+    assert result.record.contract_version == material_module.V2_CONTRACT_ID
+    assert result.record.to_dict()["visual_direction"]["decision"] == decision
+    assert result.authority == result.record.authority == AuthorityEvidence()
+
+
+def test_v2_roles_are_deterministic() -> None:
+    value = valid_v2_requirement()
+    value["visual_direction"]["roles"].reverse()  # type: ignore[index,union-attr]
+    _refresh(value)
+
+    first = validate_material_requirement(value)
+    second = validate_material_requirement(copy.deepcopy(value))
+
+    assert first.status is ValidationStatus.VALID
+    assert first.record is not None
+    assert second.record is not None
+    assert first.record.fingerprint == second.record.fingerprint
+
+    roles = first.record.to_dict()["visual_direction"]["roles"]
+    assert [
+        (role["requirement_state"], role["role_type"])
+        for role in roles
+    ] == [
+        ("required", "worked-example"),
+        ("optional", "comparison"),
+    ]
+
+
+def test_unsupported_material_version_fails_closed() -> None:
+    value = valid_requirement()
+    value["identity"]["contract_version"] = (  # type: ignore[index]
+        "curriculum-material-requirement-v3"
+    )
+
+    result = _result(value)
+
+    assert result.status is ValidationStatus.INVALID
+    assert result.reason_codes == (
+        "material-contract-version-unsupported",
+    )
+
+
+@pytest.mark.parametrize(
+    "direction",
+    [
+        {
+            "decision": "no-visuals",
+            "maximum_visual_count": 1,
+            "roles": [],
+        },
+        {
+            "decision": "no-visuals",
+            "maximum_visual_count": 1,
+            "roles": [
+                {
+                    "role_type": "worked-example",
+                    "requirement_state": "required",
+                    "instructional_purpose": "Show an example.",
+                    "intended_placement": "section",
+                    "orientation": "square",
+                }
+            ],
+        },
+        {
+            "decision": "visuals-required",
+            "maximum_visual_count": 0,
+            "roles": [],
+        },
+        {
+            "decision": "visuals-required",
+            "maximum_visual_count": 1,
+            "roles": [
+                {
+                    "role_type": "comparison",
+                    "requirement_state": "optional",
+                    "instructional_purpose": "Support comparison.",
+                    "intended_placement": "section",
+                    "orientation": "square",
+                }
+            ],
+        },
+    ],
+)
+def test_v2_rejects_inconsistent_decisions(
+    direction: dict[str, object],
+) -> None:
+    value = valid_v2_requirement()
+    value["visual_direction"] = direction
+
+    result = _result(value)
+
+    assert result.status is ValidationStatus.INVALID
+    assert result.reason_codes == (
+        "material-invalid-visual-direction",
+    )
+
+
+@pytest.mark.parametrize(
+    ("maximum", "reason"),
+    [
+        (-1, "material-invalid-visual-direction"),
+        (9, "material-invalid-visual-direction"),
+        (True, "handoff-wrong-type"),
+        (1.0, "handoff-wrong-type"),
+        ("2", "handoff-wrong-type"),
+    ],
+)
+def test_v2_rejects_invalid_maximum_visual_count(
+    maximum: object,
+    reason: str,
+) -> None:
+    value = valid_v2_requirement()
+    value["visual_direction"]["maximum_visual_count"] = maximum  # type: ignore[index]
+
+    result = _result(value)
+
+    assert result.status is ValidationStatus.INVALID
+    assert result.reason_codes == (reason,)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("role_type", "decorative"),
+        ("requirement_state", "recommended"),
+        ("orientation", "panoramic"),
+        ("intended_placement", "absolute-coordinate"),
+    ],
+)
+def test_v2_rejects_unsupported_role_values(
+    field: str,
+    replacement: str,
+) -> None:
+    value = valid_v2_requirement()
+    role = value["visual_direction"]["roles"][0]  # type: ignore[index]
+    role[field] = replacement
+
+    result = _result(value)
+
+    assert result.status is ValidationStatus.INVALID
+    assert result.reason_codes == (
+        "material-invalid-visual-direction",
+    )
+
+
+def test_v2_rejects_unsupported_decision() -> None:
+    value = valid_v2_requirement()
+    value["visual_direction"]["decision"] = "recommended"  # type: ignore[index]
+
+    result = _result(value)
+
+    assert result.status is ValidationStatus.INVALID
+    assert result.reason_codes == (
+        "material-invalid-visual-direction",
+    )
+
+
+def test_v2_rejects_unknown_visual_fields() -> None:
+    direction = valid_v2_requirement()
+    direction["visual_direction"]["style"] = "flat"  # type: ignore[index]
+    assert _result(direction).reason_codes == (
+        "material-unknown-field",
+    )
+
+    role = valid_v2_requirement()
+    role["visual_direction"]["roles"][0]["palette"] = "bright"  # type: ignore[index]
+    assert _result(role).reason_codes == (
+        "material-unknown-field",
+    )
+
+
+def test_v2_rejects_duplicate_visual_roles() -> None:
+    value = valid_v2_requirement()
+    roles = value["visual_direction"]["roles"]  # type: ignore[index]
+    roles.append(copy.deepcopy(roles[0]))  # type: ignore[index,union-attr]
+    value["visual_direction"]["maximum_visual_count"] = 3  # type: ignore[index]
+
+    result = _result(value)
+
+    assert result.status is ValidationStatus.INVALID
+    assert result.reason_codes == (
+        "material-duplicate-visual-role",
+    )
+
+
+def test_v2_rejects_role_count_above_maximum() -> None:
+    value = valid_v2_requirement()
+    value["visual_direction"]["maximum_visual_count"] = 1  # type: ignore[index]
+
+    result = _result(value)
+
+    assert result.status is ValidationStatus.INVALID
+    assert result.reason_codes == (
+        "material-invalid-visual-direction",
+    )
+
+
+def test_v2_fingerprints_bind_visual_direction() -> None:
+    first = valid_v2_requirement()
+    second = copy.deepcopy(first)
+    second["visual_direction"]["roles"][0][  # type: ignore[index]
+        "instructional_purpose"
+    ] = "Show students a revised completed example."
+    _refresh(second)
+
+    assert material_requirement_source_fingerprint(first) != (
+        material_requirement_source_fingerprint(second)
+    )
+
+    first_result = validate_material_requirement(first)
+    second_result = validate_material_requirement(second)
+
+    assert first_result.record is not None
+    assert second_result.record is not None
+    assert first_result.record.fingerprint != second_result.record.fingerprint
+
+
+def test_v2_does_not_infer_visuals_from_prose() -> None:
+    value = valid_v2_requirement("unspecified")
+    value["instructional"]["purpose"] = (  # type: ignore[index]
+        "Create an engaging visual worked example."
+    )
+    _refresh(value)
+
+    result = validate_material_requirement(value)
+
+    assert result.status is ValidationStatus.VALID
+    assert result.record is not None
+    assert result.record.to_dict()["visual_direction"] == {
+        "decision": "unspecified",
+        "maximum_visual_count": 0,
+        "roles": [],
+    }
+
+def test_v2_rejects_conflicting_requirement_states_for_same_role() -> None:
+    value = valid_v2_requirement()
+    roles = value["visual_direction"]["roles"]  # type: ignore[index]
+    conflicting = copy.deepcopy(roles[0])  # type: ignore[index]
+    conflicting["requirement_state"] = "optional"
+    roles.append(conflicting)  # type: ignore[union-attr]
+    value["visual_direction"]["maximum_visual_count"] = 3  # type: ignore[index]
+
+    result = _result(value)
+
+    assert result.status is ValidationStatus.INVALID
+    assert result.reason_codes == (
+        "material-duplicate-visual-role",
+    )

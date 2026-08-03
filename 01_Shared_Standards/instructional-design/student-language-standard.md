@@ -51,6 +51,19 @@ evidence. Keep teacher language, student language, material safety, and assessme
 eligibility independent. Only confirmed vocabulary marked material-safe may flow
 to student-facing materials. Assessment requires explicit instruction or practice.
 
+## Rubric Language Requirements
+
+Student-facing rubrics are a mandatory application of this standard.
+
+1. Criteria and performance levels use first-person language ("My idea is clear") instead of teacher-observer phrasing ("The student demonstrates...", "The audience can tell...").
+2. Teacher-facing scoring notes and calibration guidance stay separate from the student-facing rubric.
+3. A final-assessment response shows the complete rubric and total scoring model, not only a rotating or changed row.
+4. State each criterion's weight and the total possible score; preserve and show stable rows alongside any rotating row.
+5. Rubric language stays accurate to the approved evidence and must not oversimplify the learning target.
+6. A beginning-performance score points toward another attempt or a specific next step when revision is permitted.
+
+Example: teacher-facing "The student watched, checked the taught move, and made one specific fix" becomes student-facing "I watched my video, found one problem, and made a change that helped." Teacher wording may stay in the scoring guide.
+
 ## Pipeline Rule
 
 1. **Teacher Modeling Coach** creates all 4 artifact types in student voice
@@ -63,4 +76,11 @@ to student-facing materials. Assessment requires explicit instruction or practic
 
 ## Version
 
-0.2.0
+0.3.0
+
+## Changelog
+
+- 0.3.0 added Rubric Language Requirements (#822): first-person student
+  rubric language, separated teacher scoring guidance, complete-rubric and
+  weighting visibility, and next-step guidance on beginning scores.
+- 0.2.0 initial student-language artifact and pipeline rules.

@@ -8,8 +8,8 @@ Score each category from 1 to 4.
 - 4 = Exemplary
 
 A material should not ship below 3 on instructional alignment, teacher modeling
-support, accessibility, student-language authenticity, vocabulary integration,
-or digital media throughline.
+support, accessibility, student-language authenticity, rubric completeness &
+weighting, vocabulary integration, or digital media throughline.
 
 | Category | 3 means |
 |---|---|
@@ -21,6 +21,7 @@ or digital media throughline.
 | Accessibility/UDL | Alt text, contrast, and multiple representations are present. |
 | 9th-grade readability | Grade-level rigor with clear vocabulary support. |
 | Student language authenticity | Slide text comes from modeling outputs or approved student frames; student voice is exploratory, peer-focused, evidence-based; never teacher directives. |
+| Rubric completeness & weighting | Rubric criteria use first-person student language per `student-language-standard.md`; the complete rubric, weighting, and total score are visible, not only a rotating or changed row. |
 | Vocabulary integration | Uses confirmed vocabulary, preserves teacher/student separation, honors `Slide/Worksheet Safe?`, and assesses only after explicit instruction or practice. |
 | Digital media throughline | Shows creator choices shaping audience interpretation. |
 | Student independence | Scaffold level matches student readiness. |
@@ -55,4 +56,10 @@ or a gate violation is discovered.
 
 ## Version
 
-0.2.0
+0.3.0
+
+## Changelog
+
+- 0.3.0 added the Rubric completeness & weighting row (#822) as a required
+  ship gate.
+- 0.2.0 initial rubric, QA heuristics, feedback, and revision rules.
