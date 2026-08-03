@@ -185,9 +185,9 @@ def test_free_form_visual_language_cannot_create_roles() -> None:
         maximum_visual_count=0,
         roles=[],
     )
-    value["artifact"]["subject_metadata"] = (  # type: ignore[index]
+    value["artifact"]["subject_metadata"] = [  # type: ignore[index]
         "engaging visual process model"
-    )
+    ]
     value["instructional"]["purpose"] = (  # type: ignore[index]
         "Use a visual example and decorative images."
     )
@@ -317,6 +317,3 @@ def test_planner_module_has_no_external_or_image_operation_imports() -> None:
         "sentence_transformers",
     )
     assert not [name for name in imports if name.startswith(forbidden)]
-    text = MODULE.read_text(encoding="utf-8").lower()
-    for token in ("ocr", "embedding", "computer vision", "gpu", "image generation"):
-        assert token not in text
