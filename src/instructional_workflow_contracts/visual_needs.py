@@ -69,12 +69,9 @@ def plan_visual_needs(requirement: object) -> ValidationResult:
         maximum_visual_count = 0
         normalized_roles: list[dict[str, Any]] = []
         reason_codes: tuple[str, ...] = ()
+        visual_direction: dict[str, Any] | None = None
 
-        if material_type not in SUPPORTED_MATERIAL_TYPES:
-            reason_codes = (_MANUAL_UNSUPPORTED_MATERIAL,)
-        elif source.contract_version == V1_CONTRACT_ID:
-            reason_codes = (_MANUAL_V1,)
-        elif source.contract_version == V2_CONTRACT_ID:
+        if source.contract_version == V2_CONTRACT_ID:
             visual_direction = _mapping(
                 source_payload.get("visual_direction"),
                 "visual_direction",
@@ -84,6 +81,13 @@ def plan_visual_needs(requirement: object) -> ValidationResult:
                 "visual decision",
                 max_length=64,
             )
+
+        if material_type not in SUPPORTED_MATERIAL_TYPES:
+            reason_codes = (_MANUAL_UNSUPPORTED_MATERIAL,)
+        elif source.contract_version == V1_CONTRACT_ID:
+            reason_codes = (_MANUAL_V1,)
+        elif source.contract_version == V2_CONTRACT_ID:
+            assert visual_direction is not None
             maximum_visual_count = _visual_count(
                 visual_direction.get("maximum_visual_count")
             )
