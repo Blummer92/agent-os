@@ -23,7 +23,7 @@ COMPONENT_BLOBS = {
     "__init__.py": "584b2b4eb9159f0a04fa22d553c8ab532562bc01",
     "common.py": "2f9c51858a5d2534e35e07c7b4b727fe0165f79f",
     "handoff.py": "b24ea84b89f7e0b67e6f3989b23aacb303c1b509",
-    "material_requirement.py": "95f817122fec2ea4327a4a5a08cc35e2988d157d",
+    "material_requirement.py": "b256a348a3756c93c3d265ecb771395397545851",
     "artifact_manifest.py": "e95133db5e5f32b9bba7be8b4bc862398e26e94f",
     "reuse_planner.py": "7a28ac490873c659aab44f3621b58d3dd4b770bc",
 }

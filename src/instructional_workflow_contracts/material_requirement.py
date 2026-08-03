@@ -338,6 +338,17 @@ def _visual_role_sort_key(value: dict[str, Any]) -> tuple[object, ...]:
     )
 
 
+def _visual_role_semantic_key(
+    value: dict[str, Any],
+) -> tuple[object, ...]:
+    return (
+        value["role_type"],
+        value["instructional_purpose"],
+        value["intended_placement"],
+        value["orientation"],
+    )
+
+
 def _visual_direction(value: dict[str, Any]) -> list[dict[str, Any]]:
     _fields(
         value,
@@ -438,7 +449,7 @@ def _visual_direction(value: dict[str, Any]) -> list[dict[str, Any]]:
             "intended_placement": placement,
             "orientation": orientation,
         }
-        semantic_key = _visual_role_sort_key(normalized_role)
+        semantic_key = _visual_role_semantic_key(normalized_role)
         if semantic_key in seen:
             raise ContractValidationError(
                 "material-duplicate-visual-role",

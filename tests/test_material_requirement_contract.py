@@ -770,3 +770,18 @@ def test_v2_does_not_infer_visuals_from_prose() -> None:
         "maximum_visual_count": 0,
         "roles": [],
     }
+
+def test_v2_rejects_conflicting_requirement_states_for_same_role() -> None:
+    value = valid_v2_requirement()
+    roles = value["visual_direction"]["roles"]  # type: ignore[index]
+    conflicting = copy.deepcopy(roles[0])  # type: ignore[index]
+    conflicting["requirement_state"] = "optional"
+    roles.append(conflicting)  # type: ignore[union-attr]
+    value["visual_direction"]["maximum_visual_count"] = 3  # type: ignore[index]
+
+    result = _result(value)
+
+    assert result.status is ValidationStatus.INVALID
+    assert result.reason_codes == (
+        "material-duplicate-visual-role",
+    )
