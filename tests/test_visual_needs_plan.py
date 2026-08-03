@@ -185,13 +185,16 @@ def test_free_form_visual_language_cannot_create_roles() -> None:
         maximum_visual_count=0,
         roles=[],
     )
-    value["artifact"]["subject_metadata"] = [  # type: ignore[index]
+    value["artifact"]["subject_metadata"] = (  # type: ignore[index]
         "engaging visual process model"
-    ]
+    )
     value["instructional"]["purpose"] = (  # type: ignore[index]
         "Use a visual example and decorative images."
     )
     refresh(value)
+
+    upstream = validate_material_requirement(copy.deepcopy(value))
+    assert upstream.status is ValidationStatus.VALID
 
     result = visual_module.plan_visual_needs(value)
 
