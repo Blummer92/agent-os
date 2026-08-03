@@ -39,9 +39,9 @@ Use `--format json` for stable machine-readable report fields.
 | Batch graph, conflict checks, extensions, and planning | `batch_graph.py`, `batch_checks.py`, `batch_extensions.py`, `batch_planning.py`, related check modules |
 | Scheduler planning-handoff contracts | `scheduler_handoff.py` |
 | IssuePlan current-state evidence | `issueplan_current_state.py` |
+| Canonical issue operational-state projection | `issue_operational_state.py` |
 | Approval records and approved-execution projection | `approval_records.py`, `approved_execution_projection.py` |
 | Reporting | `acceptance_report_transport.py`, `documentation_advisory.py`, `documentation_gap_report.py`, `documentation_metrics.py`, `sprint_dashboard.py` |
-
 `documentation_metrics.py` is bounded, pure-local, supplied-evidence-only, deterministic, report-only, non-scheduling, non-retaining, and non-authoritative; this map creates no API or physical split.
 
 ## Permitted dependency direction
@@ -49,11 +49,11 @@ Use `--format json` for stable machine-readable report fields.
 IssuePlan scanner -> acceptance/readiness and current-state evidence
 acceptance primitives -> batch graph/planning -> Scheduler handoff
 current-state + handoff + repository evidence -> approvals -> execution projection
+current-state + approval, merge, lifecycle, claim, validation evidence -> operational state -> mode/queue projections
 Sprint reporting -> supplied immutable evidence only
 Workflow Scheduler runtime -> stable public contracts only
 ```
 Production modules must not reverse these directions. Scanner or retrieval code must not import planning, approval, projection, reporting, or Workflow Scheduler runtime code. Acceptance and readiness code must not import planning or Scheduler contracts. Planning must not create Scheduler tasks or execution state. Reporting must not mutate readiness, planning, approvals, Scheduler state, or canonical evidence. Compatibility code must not become a second parser or authority.
-
 ## Canonical IssuePlan scanning
 `issueplan_scanner.py` is the only acceptance-block candidate discovery and YAML parsing implementation. It preserves source identity, revision, multiplicity, malformed candidates, unknown governed fields, profile compatibility, and identity findings.
 
@@ -61,6 +61,8 @@ Production modules must not reverse these directions. Scanner or retrieval code 
 
 Scanner validity, readiness, labels, and approvals never authorize execution.
 
+## Canonical issue operational state
+`issue_operational_state.py` implements the pure, content-addressed `agent-os-issue-operational-state/1.0` projection over supplied IssuePlan, approval, merge-authorization, lifecycle-admission, claim, validation, and freshness evidence. It preserves readiness and every authority dimension separately, never re-evaluates upstream records, performs no I/O or execution, uses strict deterministic JSON and domain-separated identity, and fails closed on missing, stale, conflicting, unsupported, duplicate, or tampered evidence; downstream mode and queue evaluators may consume it but may not reconstruct authority.
 ## Linked-issue parsing
 A linked issue resolves only when exactly one unique same-repository target is introduced by a supported closing keyword: `close`, `closes`, `closed`, `fix`, `fixes`, `fixed`, `resolve`, `resolves`, or `resolved`. Optional colon and whitespace forms are supported.
 
