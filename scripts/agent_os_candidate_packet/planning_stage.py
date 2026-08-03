@@ -38,6 +38,10 @@ from .stage_models import (
     IssueReadinessStageStatus,
 )
 
+_OPTIONAL_GOVERNED_FIELD_STATES = frozenset(
+    {"absent", "null", "intentionally-omitted", "unavailable"}
+)
+
 
 class PlanningHandoffStageStatus(str, Enum):
     READY = "ready"
@@ -116,11 +120,15 @@ def prepare_planning_handoff(
     if issueplan.repository != snapshot.repository:
         return _invalid(("repository-binding-mismatch",))
 
-    governed = {
-        name: value
-        for name, state, value in issueplan.source_snapshot.governed_fields
-        if state == "present" and value is not None
-    }
+    try:
+        owner = _decode_governed_text(
+            issueplan.source_snapshot.governed_fields, "owner_agent"
+        )
+        source_of_truth = _decode_governed_text(
+            issueplan.source_snapshot.governed_fields, "source_of_truth"
+        )
+    except ValueError as error:
+        return _invalid((str(error),))
 
     node_readiness = readiness.outcome
     dependency_ids: tuple[str, ...]
@@ -149,8 +157,8 @@ def prepare_planning_handoff(
             *readiness_stage_result.reason_codes,
             f"issueplan-evidence:{issueplan.evidence_id}",
         ),
-        owner=governed.get("owner_agent"),
-        source_of_truth=governed.get("source_of_truth"),
+        owner=owner,
+        source_of_truth=source_of_truth,
         affected_paths=issueplan.allowed_files,
         forbidden_paths=issueplan.forbidden_paths,
         dependency_ids=dependency_ids,
@@ -278,6 +286,38 @@ def reconstruct_scheduler_planning_handoff(
         handoff_digest=raw["handoff_digest"],
     )
     return handoff
+
+
+def _decode_governed_text(
+    governed_fields: tuple[tuple[str, str, str | None], ...], field_name: str
+) -> str | None:
+    """Decode one canonical JSON string at the planning consumption boundary."""
+    match = next(
+        (item for item in governed_fields if item[0] == field_name),
+        None,
+    )
+    if match is None:
+        return None
+
+    _, state, canonical_value = match
+    if state in _OPTIONAL_GOVERNED_FIELD_STATES:
+        return None
+    if state != "present":
+        raise ValueError(f"{field_name}-governed-value-{state}")
+    if canonical_value is None:
+        raise ValueError(f"{field_name}-governed-value-missing")
+
+    try:
+        decoded = json.loads(canonical_value)
+    except (json.JSONDecodeError, TypeError) as error:
+        raise ValueError(f"{field_name}-governed-value-malformed") from error
+    if not isinstance(decoded, str):
+        raise ValueError(f"{field_name}-governed-value-not-string")
+    if not decoded.strip():
+        raise ValueError(f"{field_name}-governed-value-empty")
+    if any(ord(character) < 32 or ord(character) == 127 for character in decoded):
+        raise ValueError(f"{field_name}-governed-value-control-character")
+    return decoded
 
 
 def _stage_status(
