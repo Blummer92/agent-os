@@ -68,18 +68,17 @@ def _no_dependencies():
     )
 
 
+def _ready_planning_result():
+    return prepare_planning_handoff(
+        _readiness(dependency_identity=_no_dependencies()),
+        evaluator_sha=_SHA,
+        created_at=_CREATED_AT,
+    )
+
+
 def test_ready_result_builds_complete_deterministic_handoff() -> None:
-    identity = _no_dependencies()
-    first = prepare_planning_handoff(
-        _readiness(dependency_identity=identity),
-        evaluator_sha=_SHA,
-        created_at=_CREATED_AT,
-    )
-    second = prepare_planning_handoff(
-        _readiness(dependency_identity=identity),
-        evaluator_sha=_SHA,
-        created_at=_CREATED_AT,
-    )
+    first = _ready_planning_result()
+    second = _ready_planning_result()
 
     assert first.status.value == "ready"
     assert first.node is not None
@@ -124,6 +123,27 @@ def test_governed_values_preserve_interior_quotes_and_unicode() -> None:
     assert result.side_effects_performed is False
 
 
+@pytest.mark.parametrize("state", ["absent", "null", "intentionally-omitted"])
+def test_optional_governed_owner_states_decode_to_none(state) -> None:
+    readiness = _replace_governed_field(
+        _readiness(dependency_identity=_no_dependencies()),
+        "owner_agent",
+        state,
+        "null" if state == "null" else None,
+    )
+
+    result = prepare_planning_handoff(
+        readiness,
+        evaluator_sha=_SHA,
+        created_at=_CREATED_AT,
+    )
+
+    assert result.status.value == "ready"
+    assert result.node.owner is None
+    assert result.execution_authorized is False
+    assert result.side_effects_performed is False
+
+
 @pytest.mark.parametrize(
     ("state", "canonical_value", "reason"),
     [
@@ -132,6 +152,7 @@ def test_governed_values_preserve_interior_quotes_and_unicode() -> None:
         ("present", '""', "owner_agent-governed-value-empty"),
         ("ambiguous", None, "owner_agent-governed-value-ambiguous"),
         ("malformed", None, "owner_agent-governed-value-malformed"),
+        ("unavailable", None, "owner_agent-governed-value-unavailable"),
     ],
 )
 def test_invalid_governed_owner_fails_closed(state, canonical_value, reason) -> None:
@@ -160,7 +181,7 @@ def test_invalid_governed_owner_fails_closed(state, canonical_value, reason) -> 
     assert result.side_effects_performed is False
 
 
-def test_missing_dependency_identity_preserves_needs_decision() -> None:
+def test_missing_dependency_identity_preserves_needs_decision_and_evidence() -> None:
     result = prepare_planning_handoff(
         _readiness(),
         evaluator_sha=_SHA,
@@ -169,6 +190,8 @@ def test_missing_dependency_identity_preserves_needs_decision() -> None:
 
     assert result.status.value == "needs-decision"
     assert "dependency-identity-incomplete" in result.reason_codes
+    assert "dependency-identity-incomplete" in result.node.readiness_evidence
+    assert "dependency-identity.not-supplied" in result.node.readiness_evidence
     assert result.planning_result.overall_classification.value == "needs-decision"
     assert result.wsc3_suppliable is True
     assert result.execution_authorized is False
@@ -197,11 +220,7 @@ def test_blocked_readiness_remains_blocked() -> None:
 
 
 def test_serialized_handoff_reconstructs_without_drift() -> None:
-    result = prepare_planning_handoff(
-        _readiness(dependency_identity=_no_dependencies()),
-        evaluator_sha=_SHA,
-        created_at=_CREATED_AT,
-    )
+    result = _ready_planning_result()
 
     reconstructed = reconstruct_scheduler_planning_handoff(
         result.serialized_handoff
@@ -209,6 +228,25 @@ def test_serialized_handoff_reconstructs_without_drift() -> None:
 
     assert reconstructed == result.handoff
     assert reconstructed.handoff_digest == result.handoff.handoff_digest
+
+
+def test_reconstruction_rejects_invalid_utf8() -> None:
+    with pytest.raises(ValueError, match="canonical UTF-8 JSON"):
+        reconstruct_scheduler_planning_handoff(b"\xff")
+
+
+def test_reconstruction_rejects_non_mapping_json() -> None:
+    with pytest.raises(ValueError, match="must be a mapping"):
+        reconstruct_scheduler_planning_handoff("[]")
+
+
+def test_reconstruction_rejects_tampered_handoff_digest() -> None:
+    result = _ready_planning_result()
+    payload = json.loads(result.serialized_handoff)
+    payload["handoff_digest"] = "0" * 64
+
+    with pytest.raises(ValueError, match="invalid SchedulerPlanningHandoff"):
+        reconstruct_scheduler_planning_handoff(payload)
 
 
 def test_missing_repository_binding_fails_closed() -> None:
