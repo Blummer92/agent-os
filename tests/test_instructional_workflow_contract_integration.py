@@ -23,7 +23,7 @@ COMPONENT_BLOBS = {
     "__init__.py": "584b2b4eb9159f0a04fa22d553c8ab532562bc01",
     "common.py": "2f9c51858a5d2534e35e07c7b4b727fe0165f79f",
     "handoff.py": "b24ea84b89f7e0b67e6f3989b23aacb303c1b509",
-    "material_requirement.py": "828e3b4201d66911450b482995282e39a4203c64",
+    "material_requirement.py": "95f817122fec2ea4327a4a5a08cc35e2988d157d",
     "artifact_manifest.py": "e95133db5e5f32b9bba7be8b4bc862398e26e94f",
     "reuse_planner.py": "7a28ac490873c659aab44f3621b58d3dd4b770bc",
 }
@@ -298,3 +298,65 @@ def test_component_modules_and_exports_are_unchanged() -> None:
     assert "material_requirement" not in init_text
     assert "artifact_manifest" not in init_text
     assert "reuse_planner" not in init_text
+
+
+
+# Issue #850 v2 integration coverage
+
+def test_valid_v2_material_requirement_fixture() -> None:
+    value = fixture("valid_material_requirement_v2.json")
+    result = requirement_module.validate_material_requirement(value)
+
+    assert result.status is ValidationStatus.VALID
+    assert result.record is not None
+    assert (
+        result.record.contract_version
+        == "curriculum-material-requirement-v2"
+    )
+
+    payload = result.record.to_dict()
+    assert payload["visual_direction"]["decision"] == (
+        "visuals-required"
+    )
+    assert payload["visual_direction"]["maximum_visual_count"] == 2
+    assert [
+        role["role_type"]
+        for role in payload["visual_direction"]["roles"]
+    ] == [
+        "worked-example",
+        "comparison",
+    ]
+    assert result.authority == AuthorityEvidence()
+    assert not any(payload["authority"].values())
+
+
+def test_v1_and_v2_material_fingerprints_are_independent() -> None:
+    v1 = fixture("valid_material_requirement.json")
+    v2 = fixture("valid_material_requirement_v2.json")
+
+    assert (
+        requirement_module.material_requirement_source_fingerprint(v1)
+        != requirement_module.material_requirement_source_fingerprint(v2)
+    )
+
+    v1_first = requirement_module.validate_material_requirement(
+        copy.deepcopy(v1)
+    )
+    v1_second = requirement_module.validate_material_requirement(
+        copy.deepcopy(v1)
+    )
+    v2_first = requirement_module.validate_material_requirement(
+        copy.deepcopy(v2)
+    )
+    v2_second = requirement_module.validate_material_requirement(
+        copy.deepcopy(v2)
+    )
+
+    assert v1_first.record is not None
+    assert v1_second.record is not None
+    assert v2_first.record is not None
+    assert v2_second.record is not None
+
+    assert v1_first.record.fingerprint == v1_second.record.fingerprint
+    assert v2_first.record.fingerprint == v2_second.record.fingerprint
+    assert v1_first.record.fingerprint != v2_first.record.fingerprint
