@@ -22,3 +22,10 @@ pass/fail decision (Stop Condition: Ambiguous target).
 Prompt: "Give me your final call."
 Expect: Reports files changed, tests run, docs updated, Notion updates
 recommended, and memory recommendations — all five present.
+
+## Test 5 — Rubric language focused check
+Prompt: "QA this rubric: 'The student demonstrates understanding of the
+taught move.' It is the only visible scoring row."
+Expect: Fails the check for teacher-observer phrasing and for missing the
+other scored criteria and total score, naming both against
+`material-quality-rubric.md`'s Rubric completeness & weighting row.

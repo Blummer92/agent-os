@@ -21,6 +21,7 @@ import test_single_issue_pilot as tsp  # noqa: E402
 from test_concrete_runtime_adapters import ScenarioGitRunner  # noqa: E402
 
 from scripts.agent_os_execution_capabilities import RepositoryIdentity  # noqa: E402
+from scripts.agent_os_remote_validation import MAX_PLAN_STRING_LENGTH  # noqa: E402
 
 from agent_os_execution_service import command_planning as command_planning_module  # noqa: E402
 from agent_os_execution_service import request_validation as request_validation_module  # noqa: E402
@@ -114,7 +115,31 @@ def _request(**changes: object) -> ExecutionServiceRequest:
 
 
 def _plan_argv() -> tuple[str, ...]:
-    return (sys.executable, "-c", "pass")
+    """The canonical, registry-recognized argv every ``ValidationCommandPlan``
+    entry in this file uses.
+
+    ``execution_composition._identity_mismatches`` unconditionally calls
+    ``validation_command_plan_id(command_plan)`` -- with no surrounding
+    try/except -- to cross-check the supplied authorization. Since #804,
+    that call runs the public command-plan validator and raises for any
+    entry argv that is not a member of the private command registry, so
+    every ``ValidationCommandPlan`` this file builds must use only
+    registry-real argv, not an arbitrary executable one-liner.
+    """
+    return command_planning_module._COMMAND_REGISTRY["python -m pytest"]
+
+
+_SECONDARY_REGISTRY_ARGV = command_planning_module._COMMAND_REGISTRY[
+    "python -m pytest tests/agent_os_issue_acceptance"
+]
+
+# Arbitrary executable argv belongs only here, at the runtime-configuration /
+# adapter layer: passed to ``ConcreteRuntimeConfiguration.required_test_commands``
+# for a real subprocess run built directly through the real adapters (see
+# ``_canonical_outcome`` below), never through a ``ValidationCommandPlan``
+# entry passed to ``compose_and_run_validation``.
+_PASSING_ADAPTER_ARGV = (sys.executable, "-c", "pass")
+_FAILING_ADAPTER_ARGV = (sys.executable, "-c", "import sys; sys.exit(1)")
 
 
 def _command_plan(
@@ -228,30 +253,35 @@ def _compose(
     )
 
 
-def _canonical_outcome_with_failing_release(
+def _canonical_outcome(
     tmp_path: Path,
+    *,
+    argv: tuple[str, ...],
+    lease: object | None = None,
+    fail_remove: bool = False,
 ) -> ConcreteRuntimeExecutionOutcome:
-    """Build one real canonical outcome whose lease release fails.
+    """Build one real canonical outcome directly through the real adapters.
 
-    The concrete adapter factory always constructs its own in-memory lease, so
-    a release failure is reached through the canonical runtime entrypoint one
-    level down: the real adapters are built by
-    ``build_concrete_runtime_adapters``, the real orchestrator runs once
-    through ``run_single_issue_runtime_entrypoint``, and the returned outcome
-    carries the real ``SingleIssuePilotResult`` plus the exact
+    This is the runtime-configuration / adapter layer: it never goes through
+    ``compose_and_run_validation`` or its command-plan identity check, so an
+    arbitrary executable ``argv`` (never a registry command) belongs here.
+    The real adapters are built by ``build_concrete_runtime_adapters``, the
+    real orchestrator runs once through
+    ``run_single_issue_runtime_entrypoint``, and the returned outcome carries
+    the real ``SingleIssuePilotResult`` plus the exact
     ``FrozenTestValidationResult`` retained by the real validator. Nothing
     about the outcome is fabricated.
     """
-    configuration = _configuration(tmp_path)
+    configuration = _configuration(tmp_path, argv=argv)
     adapters = build_concrete_runtime_adapters(
         _pilot_input(),
         configuration,
-        git_runner=ScenarioGitRunner(configuration),
+        git_runner=ScenarioGitRunner(configuration, fail_remove=fail_remove),
         changed_paths_inspector=lambda: (),
     )
     runtime_outcome = run_single_issue_runtime_entrypoint(
         _pilot_input(),
-        lease=tsp.FakeLease(release_error=RuntimeError("release unavailable")),
+        lease=lease or tsp.FakeLease(),
         workspace=adapters.workspace,
         executor=adapters.executor,
         validator=adapters.validator,
@@ -260,6 +290,31 @@ def _canonical_outcome_with_failing_release(
     return ConcreteRuntimeExecutionOutcome(
         runtime_outcome=runtime_outcome,
         validation_result=adapters.validator.last_result,
+    )
+
+
+def _canonical_passing_outcome(
+    tmp_path: Path, *, fail_remove: bool = False
+) -> ConcreteRuntimeExecutionOutcome:
+    return _canonical_outcome(
+        tmp_path, argv=_PASSING_ADAPTER_ARGV, fail_remove=fail_remove
+    )
+
+
+def _canonical_failing_outcome(tmp_path: Path) -> ConcreteRuntimeExecutionOutcome:
+    return _canonical_outcome(tmp_path, argv=_FAILING_ADAPTER_ARGV)
+
+
+def _canonical_outcome_with_failing_release(
+    tmp_path: Path,
+) -> ConcreteRuntimeExecutionOutcome:
+    """One real canonical outcome with passing validation whose lease release
+    fails -- reached through the canonical runtime entrypoint one level down.
+    """
+    return _canonical_outcome(
+        tmp_path,
+        argv=_PASSING_ADAPTER_ARGV,
+        lease=tsp.FakeLease(release_error=RuntimeError("release unavailable")),
     )
 
 
@@ -283,8 +338,15 @@ def _compose_with_outcome(
 # --------------------------------------------------------------------------
 
 
-def test_focused_pass_uses_real_current_main_and_retains_exact_result(tmp_path: Path) -> None:
-    result = _compose(tmp_path, profile="focused")
+def test_focused_pass_uses_real_current_main_and_retains_exact_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The ValidationCommandPlan compose_and_run_validation checks (built by
+    # _compose via _compose_with_outcome) uses canonical registry argv; the
+    # real pass/fail outcome is built separately, at the runtime-configuration
+    # / adapter layer, with its own arbitrary executable argv.
+    outcome = _canonical_passing_outcome(tmp_path)
+    result = _compose_with_outcome(tmp_path, outcome, monkeypatch, profile="focused")
 
     assert result.status is ExecutionCompositionStatus.FOCUSED_PASS_AGGREGATE_PENDING
     assert result.aggregate_pending is True
@@ -296,26 +358,33 @@ def test_focused_pass_uses_real_current_main_and_retains_exact_result(tmp_path: 
     assert result.validation_result.completed_tests == tsp.REQUIRED_TESTS
 
 
-def test_aggregate_pass_projects_final_success(tmp_path: Path) -> None:
-    result = _compose(tmp_path, profile="aggregate")
+def test_aggregate_pass_projects_final_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    outcome = _canonical_passing_outcome(tmp_path)
+    result = _compose_with_outcome(tmp_path, outcome, monkeypatch, profile="aggregate")
 
     assert result.status is ExecutionCompositionStatus.AGGREGATE_PASS
     assert result.aggregate_pending is False
     assert result.merge_authorized is False
 
 
-def test_focused_fail_preserves_aggregate_pending(tmp_path: Path) -> None:
-    failing = (sys.executable, "-c", "import sys; sys.exit(1)")
-    result = _compose(tmp_path, profile="focused", argv=failing)
+def test_focused_fail_preserves_aggregate_pending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    outcome = _canonical_failing_outcome(tmp_path)
+    result = _compose_with_outcome(tmp_path, outcome, monkeypatch, profile="focused")
 
     assert result.status is ExecutionCompositionStatus.FOCUSED_FAIL
     assert result.aggregate_pending is True
     assert result.validation_result.passed is False
 
 
-def test_aggregate_fail_is_not_focused_pending(tmp_path: Path) -> None:
-    failing = (sys.executable, "-c", "import sys; sys.exit(1)")
-    result = _compose(tmp_path, profile="aggregate", argv=failing)
+def test_aggregate_fail_is_not_focused_pending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    outcome = _canonical_failing_outcome(tmp_path)
+    result = _compose_with_outcome(tmp_path, outcome, monkeypatch, profile="aggregate")
 
     assert result.status is ExecutionCompositionStatus.AGGREGATE_FAIL
     assert result.aggregate_pending is False
@@ -440,7 +509,7 @@ def test_expired_authorization_fails_closed(tmp_path: Path) -> None:
 def test_authorization_plan_id_mismatch_fails_closed(tmp_path: Path) -> None:
     request = _request()
     plan = _command_plan(request)
-    other_plan = _command_plan(request, argv=(sys.executable, "-c", "print(1)"))
+    other_plan = _command_plan(request, argv=_SECONDARY_REGISTRY_ARGV)
     authorization = _authorization(request, other_plan)
     configuration = _configuration(tmp_path)
 
@@ -461,10 +530,13 @@ def test_authorization_plan_id_mismatch_fails_closed(tmp_path: Path) -> None:
 
 
 def test_argv_mismatch_between_plan_and_configuration_fails_closed(tmp_path: Path) -> None:
+    # The plan carries canonical registry argv; the configuration is
+    # deliberately bound to a different, arbitrary adapter-layer argv, which
+    # ConcreteRuntimeConfiguration never requires to be a registry command.
     request = _request()
-    plan = _command_plan(request, argv=(sys.executable, "-c", "pass"))
+    plan = _command_plan(request)
     authorization = _authorization(request, plan)
-    configuration = _configuration(tmp_path, argv=(sys.executable, "-c", "print(2)"))
+    configuration = _configuration(tmp_path, argv=_PASSING_ADAPTER_ARGV)
 
     result = compose_and_run_validation(
         request=request,
@@ -582,7 +654,24 @@ def test_requested_ref_and_revision_drift_fail_closed(tmp_path: Path) -> None:
     assert result.validation_result is None
 
 
-def test_command_plan_operation_drift_fails_closed(tmp_path: Path) -> None:
+def test_command_plan_operation_drift_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An operation/profile-mismatched command plan fails closed to bounded
+    manual-review evidence without ever reaching the runtime entrypoint.
+
+    ``compose_and_run_validation`` calls the public command-plan validator
+    before ``_identity_mismatches`` or ``_fail_closed`` ever touch the plan,
+    so this is caught -- and reported with a stable reason code derived from
+    that validator -- before either of those functions' unconditional
+    ``validation_command_plan_id`` calls would otherwise raise.
+    """
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("no entrypoint call is expected for an invalid command plan")
+
+    monkeypatch.setattr(module, "run_concrete_runtime_entrypoint_with_validation_evidence", forbidden)
+
     request = _request()
     plan = _command_plan(request, profile="focused")
     drifted = command_planning_module.ValidationCommandPlan(
@@ -605,12 +694,15 @@ def test_command_plan_operation_drift_fails_closed(tmp_path: Path) -> None:
             ),
         ),
     )
+    assert command_planning_module.validate_validation_command_plan(drifted) == (
+        "command-plan.profile-operation-mismatch",
+    )
     configuration = _configuration(tmp_path)
 
     result = compose_and_run_validation(
         request=request,
         command_plan=drifted,
-        authorization=_authorization(request, drifted),
+        authorization=_authorization(request, plan),
         evaluated_at=EVALUATED_AT,
         pilot_input=_pilot_input(),
         configuration=configuration,
@@ -620,7 +712,264 @@ def test_command_plan_operation_drift_fails_closed(tmp_path: Path) -> None:
     )
 
     assert result.status is ExecutionCompositionStatus.MANUAL_REVIEW
-    assert "command-plan-operation-mismatch" in result.reason_codes
+    assert "command-plan-invalid" in result.reason_codes
+    assert "command-plan.profile-operation-mismatch" in result.reason_codes
+    assert result.validation_result is None
+    assert result.execution_authorized is False
+    assert result.side_effects_performed is False
+    assert result.merge_authorized is False
+    assert result.command_plan_id == module._INVALID_COMMAND_PLAN_ID
+
+
+def test_arbitrary_argv_command_plan_fails_closed_without_runtime_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A command plan whose argv is not a member of the canonical registry
+    fails closed to bounded manual-review evidence without ever reaching the
+    runtime entrypoint, and without a fabricated canonical command-plan ID.
+    """
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("no entrypoint call is expected for an invalid command plan")
+
+    monkeypatch.setattr(module, "run_concrete_runtime_entrypoint_with_validation_evidence", forbidden)
+
+    request = _request()
+    plan = _command_plan(request, profile="focused")
+    rogue = command_planning_module.ValidationCommandPlan(
+        schema_version=plan.schema_version,
+        registry_version=plan.registry_version,
+        repository=plan.repository,
+        issue_or_handoff_identity=plan.issue_or_handoff_identity,
+        requested_ref=plan.requested_ref,
+        expected_sha=plan.expected_sha,
+        request_revision=plan.request_revision,
+        request_fingerprint=plan.request_fingerprint,
+        validation_plan_id=plan.validation_plan_id,
+        validation_plan_schema_version=plan.validation_plan_schema_version,
+        selector_version=plan.selector_version,
+        profile=plan.profile,
+        command_set_digest=plan.command_set_digest,
+        entries=(
+            CommandPlanEntry(
+                operation=CommandOperation.VALIDATION_FOCUSED,
+                argv=("rm", "-rf", "/"),
+            ),
+        ),
+    )
+    assert command_planning_module.validate_validation_command_plan(rogue) == (
+        "command-plan.argv-not-registered",
+    )
+    configuration = _configuration(tmp_path)
+
+    result = compose_and_run_validation(
+        request=request,
+        command_plan=rogue,
+        authorization=_authorization(request, plan),
+        evaluated_at=EVALUATED_AT,
+        pilot_input=_pilot_input(),
+        configuration=configuration,
+        cancelled=tsp.never_cancelled,
+        git_runner=ScenarioGitRunner(configuration),
+        changed_paths_inspector=lambda: (),
+    )
+
+    assert result.status is ExecutionCompositionStatus.MANUAL_REVIEW
+    assert "command-plan-invalid" in result.reason_codes
+    assert "command-plan.argv-not-registered" in result.reason_codes
+    assert result.validation_result is None
+    assert result.execution_authorized is False
+    assert result.side_effects_performed is False
+    assert result.merge_authorized is False
+    assert result.command_plan_id == module._INVALID_COMMAND_PLAN_ID
+
+
+def test_malformed_command_plan_field_fails_closed_without_raising(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An exact-type ``ValidationCommandPlan`` with a malformed field (it
+    performs no field validation of its own) fails closed to bounded
+    manual-review evidence instead of raising ``AttributeError`` out of
+    ``_identity_mismatches``'s unguarded ``command_plan.repository.casefold()``.
+    """
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("no entrypoint call is expected for an invalid command plan")
+
+    monkeypatch.setattr(module, "run_concrete_runtime_entrypoint_with_validation_evidence", forbidden)
+
+    request = _request()
+    plan = _command_plan(request, profile="focused")
+    tampered = command_planning_module.ValidationCommandPlan(
+        schema_version=plan.schema_version,
+        registry_version=plan.registry_version,
+        repository=plan.repository,
+        issue_or_handoff_identity=plan.issue_or_handoff_identity,
+        requested_ref=plan.requested_ref,
+        expected_sha=plan.expected_sha,
+        request_revision=plan.request_revision,
+        request_fingerprint=plan.request_fingerprint,
+        validation_plan_id=plan.validation_plan_id,
+        validation_plan_schema_version=plan.validation_plan_schema_version,
+        selector_version=plan.selector_version,
+        profile=plan.profile,
+        command_set_digest=plan.command_set_digest,
+        entries=plan.entries,
+    )
+    object.__setattr__(tampered, "repository", 12345)  # type: ignore[arg-type]
+    assert "command-plan.malformed-runtime" in (
+        command_planning_module.validate_validation_command_plan(tampered)
+    )
+    configuration = _configuration(tmp_path)
+
+    result = compose_and_run_validation(
+        request=request,
+        command_plan=tampered,
+        authorization=_authorization(request, plan),
+        evaluated_at=EVALUATED_AT,
+        pilot_input=_pilot_input(),
+        configuration=configuration,
+        cancelled=tsp.never_cancelled,
+        git_runner=ScenarioGitRunner(configuration),
+        changed_paths_inspector=lambda: (),
+    )
+
+    assert result.status is ExecutionCompositionStatus.MANUAL_REVIEW
+    assert "command-plan-invalid" in result.reason_codes
+    assert "command-plan.malformed-runtime" in result.reason_codes
+    assert result.repository == "unavailable"
+    assert result.command_plan_id == module._INVALID_COMMAND_PLAN_ID
+
+
+def test_tampered_command_plan_entry_argv_fails_closed_without_raising(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``CommandPlanEntry`` tampered via ``object.__setattr__`` to carry a
+    non-tuple ``argv`` (#804 finding 1) fails the command plan closed to
+    bounded manual-review evidence -- never raising out of the public
+    command-plan validator's frozenset-membership check, and never reaching
+    the runtime entrypoint.
+    """
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("no entrypoint call is expected for an invalid command plan")
+
+    monkeypatch.setattr(module, "run_concrete_runtime_entrypoint_with_validation_evidence", forbidden)
+
+    request = _request()
+    plan = _command_plan(request, profile="focused")
+    authorization = _authorization(request, plan)
+    entry = plan.entries[0]
+    object.__setattr__(entry, "argv", list(entry.argv))  # type: ignore[arg-type]
+
+    reasons = command_planning_module.validate_validation_command_plan(plan)
+    assert reasons == ("command-plan.malformed-runtime",)
+
+    configuration = _configuration(tmp_path)
+    result = compose_and_run_validation(
+        request=request,
+        command_plan=plan,
+        authorization=authorization,
+        evaluated_at=EVALUATED_AT,
+        pilot_input=_pilot_input(),
+        configuration=configuration,
+        cancelled=tsp.never_cancelled,
+        git_runner=ScenarioGitRunner(configuration),
+        changed_paths_inspector=lambda: (),
+    )
+
+    assert result.status is ExecutionCompositionStatus.MANUAL_REVIEW
+    assert "command-plan-invalid" in result.reason_codes
+    assert "command-plan.malformed-runtime" in result.reason_codes
+    assert result.validation_result is None
+    assert result.execution_authorized is False
+    assert result.side_effects_performed is False
+    assert result.merge_authorized is False
+    assert result.command_plan_id == module._INVALID_COMMAND_PLAN_ID
+
+
+_OVERSIZED_PLAN_TEXT = "y" * (MAX_PLAN_STRING_LENGTH + 1)
+_CONTROL_CHARACTER_PLAN_TEXT = "bad\x07text"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("repository", _OVERSIZED_PLAN_TEXT),
+        ("profile", _OVERSIZED_PLAN_TEXT),
+        ("expected_sha", _OVERSIZED_PLAN_TEXT),
+        ("repository", _CONTROL_CHARACTER_PLAN_TEXT),
+        ("profile", _CONTROL_CHARACTER_PLAN_TEXT),
+        ("expected_sha", _CONTROL_CHARACTER_PLAN_TEXT),
+        ("repository", 12345),
+        ("profile", 12345),
+        ("expected_sha", 12345),
+    ],
+)
+def test_unsafe_command_plan_scalar_text_becomes_unavailable_in_invalid_plan_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, value: object
+) -> None:
+    """An invalid ``ValidationCommandPlan`` carrying oversized, control-
+    character, or non-string scalar text on ``repository``/``profile``/
+    ``expected_sha`` (#804 finding 2) never reflects that raw value into
+    ``ExecutionCompositionResult`` or the evidence hash: ``_safe_plan_text``
+    bounds it to ``"unavailable"`` instead.
+    """
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("no entrypoint call is expected for an invalid command plan")
+
+    monkeypatch.setattr(module, "run_concrete_runtime_entrypoint_with_validation_evidence", forbidden)
+
+    request = _request()
+    plan = _command_plan(request, profile="focused")
+    tampered = command_planning_module.ValidationCommandPlan(
+        schema_version=plan.schema_version,
+        registry_version=plan.registry_version,
+        repository=plan.repository,
+        issue_or_handoff_identity=plan.issue_or_handoff_identity,
+        requested_ref=plan.requested_ref,
+        expected_sha=plan.expected_sha,
+        request_revision=plan.request_revision,
+        request_fingerprint=plan.request_fingerprint,
+        validation_plan_id=plan.validation_plan_id,
+        validation_plan_schema_version=plan.validation_plan_schema_version,
+        selector_version=plan.selector_version,
+        profile=plan.profile,
+        command_set_digest=plan.command_set_digest,
+        entries=plan.entries,
+    )
+    # A bounded control-character repository alone would not trip any
+    # existing validator reason (identity-bounds only checks length), so
+    # schema_version drift forces the invalid-plan path independently of the
+    # field under test.
+    object.__setattr__(tampered, "schema_version", "9.9")  # type: ignore[arg-type]
+    object.__setattr__(tampered, field, value)  # type: ignore[arg-type]
+
+    reasons = command_planning_module.validate_validation_command_plan(tampered)
+    assert reasons
+    configuration = _configuration(tmp_path)
+
+    result = compose_and_run_validation(
+        request=request,
+        command_plan=tampered,
+        authorization=_authorization(request, plan),
+        evaluated_at=EVALUATED_AT,
+        pilot_input=_pilot_input(),
+        configuration=configuration,
+        cancelled=tsp.never_cancelled,
+        git_runner=ScenarioGitRunner(configuration),
+        changed_paths_inspector=lambda: (),
+    )
+
+    assert result.status is ExecutionCompositionStatus.MANUAL_REVIEW
+    assert "command-plan-invalid" in result.reason_codes
+    assert result.validation_result is None
+    assert result.execution_authorized is False
+    assert result.side_effects_performed is False
+    assert result.merge_authorized is False
+    assert result.command_plan_id == module._INVALID_COMMAND_PLAN_ID
+    assert getattr(result, field) == "unavailable"
 
 
 def test_expired_request_fails_closed(tmp_path: Path) -> None:
@@ -747,12 +1096,13 @@ def test_result_retains_exact_validation_result_object(
 
 
 def test_aggregate_pass_requires_completed_runtime_not_only_passing_validation(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Real canonical run: validation passes, then worktree removal fails, so
     # the canonical runtime quarantines. Final aggregate success must not be
     # projected over an incomplete lifecycle.
-    result = _compose(tmp_path, profile="aggregate", fail_remove=True)
+    outcome = _canonical_passing_outcome(tmp_path, fail_remove=True)
+    result = _compose_with_outcome(tmp_path, outcome, monkeypatch, profile="aggregate")
 
     assert result.validation_result is not None
     assert result.validation_result.passed is True
@@ -768,9 +1118,10 @@ def test_aggregate_pass_requires_completed_runtime_not_only_passing_validation(
 
 
 def test_focused_pass_requires_completed_runtime_not_only_passing_validation(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    result = _compose(tmp_path, profile="focused", fail_remove=True)
+    outcome = _canonical_passing_outcome(tmp_path, fail_remove=True)
+    result = _compose_with_outcome(tmp_path, outcome, monkeypatch, profile="focused")
 
     assert result.validation_result is not None
     assert result.validation_result.passed is True
@@ -807,9 +1158,10 @@ def test_lease_release_failure_is_never_a_pass(
 
 
 def test_quarantined_runtime_with_passing_validation_is_bounded_non_success(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    result = _compose(tmp_path, profile="aggregate", fail_remove=True)
+    outcome = _canonical_passing_outcome(tmp_path, fail_remove=True)
+    result = _compose_with_outcome(tmp_path, outcome, monkeypatch, profile="aggregate")
 
     assert result.status in {
         ExecutionCompositionStatus.INFRASTRUCTURE_FAILURE,
@@ -833,11 +1185,13 @@ def test_quarantined_runtime_with_passing_validation_is_bounded_non_success(
 )
 def test_completed_runtime_with_passing_validation_still_succeeds(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     profile: str,
     expected_status: ExecutionCompositionStatus,
     expected_pending: bool,
 ) -> None:
-    result = _compose(tmp_path, profile=profile)
+    outcome = _canonical_passing_outcome(tmp_path)
+    result = _compose_with_outcome(tmp_path, outcome, monkeypatch, profile=profile)
 
     assert result.status is expected_status
     assert result.aggregate_pending is expected_pending

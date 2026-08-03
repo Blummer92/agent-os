@@ -13,6 +13,12 @@ from scripts.agent_os_issue_acceptance.acceptance_report_transport import (
 )
 
 from .readiness_stage import prepare_issue_readiness
+from .planning_stage import (
+    PlanningHandoffStageResult,
+    PlanningHandoffStageStatus,
+    prepare_planning_handoff,
+    reconstruct_scheduler_planning_handoff,
+)
 from .source_stage import resolve_issue_snapshot
 from .stage_models import (
     DEPENDENCY_IDENTITY_DUPLICATE_COLLAPSED_REASON,
@@ -51,6 +57,8 @@ __all__ = [
     "DEPENDENCY_IDENTITY_NOT_SUPPLIED",
     "DEPENDENCY_IDENTITY_NOT_SUPPLIED_REASON",
     "STAGE_SCHEMA_VERSION",
+    "PlanningHandoffStageResult",
+    "PlanningHandoffStageStatus",
     "DependencyEvidence",
     "DependencyIdentityEvidence",
     "DependencyIdentityStatus",
@@ -77,6 +85,8 @@ __all__ = [
     "issueplan_current_state_evidence_from_dict",
     "issueplan_current_state_evidence_to_dict",
     "prepare_issue_readiness",
+    "prepare_planning_handoff",
+    "reconstruct_scheduler_planning_handoff",
     "readiness_result_from_dict",
     "readiness_result_to_dict",
     "resolve_issue_snapshot",

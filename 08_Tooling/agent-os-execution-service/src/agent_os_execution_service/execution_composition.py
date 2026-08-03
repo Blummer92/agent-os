@@ -22,9 +22,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal
+
+from scripts.agent_os_remote_validation import MAX_PLAN_STRING_LENGTH
 
 from workflow_scheduler.execution.concrete_runtime_adapters import (
     ConcreteRuntimeConfiguration,
@@ -40,11 +43,13 @@ from workflow_scheduler.execution.single_issue_pilot import (
     SingleIssuePilotInput,
 )
 
+from .authorization import ExecutionAuthorizationEvidence
 from .command_planning import (
     COMMAND_PLAN_SCHEMA_VERSION,
     COMMAND_REGISTRY_VERSION,
     CommandOperation,
     ValidationCommandPlan,
+    validate_validation_command_plan,
     validation_command_plan_id,
 )
 from .models import ExecutionServiceRequest, parse_canonical_utc
@@ -60,21 +65,26 @@ _PROFILE_OPERATIONS = {
     "aggregate": CommandOperation.VALIDATION_AGGREGATE,
 }
 
-# The canonical single-issue runtime proves a complete lifecycle with exactly
-# one status. A passing ``FrozenTestValidationResult`` is produced before
-# teardown, so it alone never proves that cleanup, release, containment, or
-# any other post-validation phase succeeded: only ``completed`` does.
 _COMPLETED_RUNTIME_STATUS = "completed"
 _CANCELLED_RUNTIME_STATUS = "cancelled"
-
-# Non-completed statuses whose evidence is operational -- something was left
-# behind or an adapter/bounded process failed -- rather than a decision
-# request. ``quarantined`` dominates: it is exactly the canonical signal for
-# a failed cleanup, a failed or ambiguous release, or a containment stop.
 _QUARANTINED_RUNTIME_STATUS = "quarantined"
 _INFRASTRUCTURE_RUNTIME_STATUSES = frozenset(
     (_QUARANTINED_RUNTIME_STATUS, "failed", "timed-out")
 )
+
+# A canonical command-plan ID is a domain-separated SHA-256 digest that
+# ``validation_command_plan_id`` derives from an already-valid plan -- it
+# raises instead for a plan the public command-plan validator rejects. This
+# module must never call it on such a plan, and never fabricates or pretends
+# to possess a canonical ID in its place: this bounded, unambiguously
+# noncanonical placeholder (it does not match ``command-plan:<sha256>``) is
+# used instead, so it can never be confused with a real identity.
+_INVALID_COMMAND_PLAN_ID = "command-plan:invalid"
+
+# Mirrors the control-character class the shared validation models reject
+# elsewhere in this codebase (tab/newline/carriage-return excluded, every
+# other C0 control and DEL rejected).
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
 class ExecutionCompositionStatus(str, Enum):
@@ -85,36 +95,6 @@ class ExecutionCompositionStatus(str, Enum):
     MANUAL_REVIEW = "manual-review"
     CANCELLED = "cancelled"
     INFRASTRUCTURE_FAILURE = "infrastructure-failure"
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class ExecutionAuthorizationEvidence:
-    """Explicit, caller-supplied authorization binding one plan to one SHA."""
-
-    authorization_id: str
-    request_fingerprint: str
-    command_plan_id: str
-    repository: str
-    expected_sha: str
-    authorized_at: str
-    expires_at: str
-    execution_authorized: bool
-    side_effects_performed: Literal[False] = field(default=False, init=False)
-
-    def __post_init__(self) -> None:
-        for name in (
-            "authorization_id",
-            "request_fingerprint",
-            "command_plan_id",
-            "repository",
-            "expected_sha",
-        ):
-            if type(getattr(self, name)) is not str or not getattr(self, name):
-                raise TypeError(f"{name} must be a non-empty exact string")
-        if type(self.execution_authorized) is not bool:
-            raise TypeError("execution_authorized must be an exact boolean")
-        parse_canonical_utc(self.authorized_at)
-        parse_canonical_utc(self.expires_at)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -137,7 +117,9 @@ class ExecutionCompositionResult:
     evidence_id: str
 
 
-def _evidence_id(*, status: ExecutionCompositionStatus, profile: str, **fields: object) -> str:
+def _evidence_id(
+    *, status: ExecutionCompositionStatus, profile: str, **fields: object
+) -> str:
     payload = {
         "domain": "agent-os-execution-composition-evidence",
         "schema_version": EXECUTION_COMPOSITION_SCHEMA_VERSION,
@@ -177,6 +159,69 @@ def _fail_closed(
         aggregate_pending=True,
         execution_authorized=execution_authorized,
         side_effects_performed=side_effects_performed,
+        reason_codes=tuple(sorted(set(reasons))),
+        evidence_id=evidence_id,
+    )
+
+
+def _safe_plan_text(value: object) -> str:
+    """Return the supplied value only if it is bounded-safe text, else
+    ``"unavailable"``.
+
+    ``ValidationCommandPlan`` performs no field validation of its own, so an
+    exact-type instance the public validator has already rejected may still
+    carry a non-string, oversized, or control-character value on any field.
+    This never raises regardless, and never reflects such a value into
+    ``ExecutionCompositionResult`` or evidence hashing unchanged.
+    """
+    if (
+        type(value) is str
+        and value
+        and len(value) <= MAX_PLAN_STRING_LENGTH
+        and _CONTROL_CHAR_RE.search(value) is None
+    ):
+        return value
+    return "unavailable"
+
+
+def _invalid_command_plan_result(
+    *,
+    request: ExecutionServiceRequest,
+    command_plan: ValidationCommandPlan,
+    validator_reasons: tuple[str, ...],
+) -> ExecutionCompositionResult:
+    """Bounded manual-review evidence for one exact-type but invalid command plan.
+
+    ``validation_command_plan_id`` raises for a plan the public command-plan
+    validator rejects, and both ``_identity_mismatches`` and ``_fail_closed``
+    call it unconditionally with no surrounding try/except -- so neither may
+    be used once a plan is known to be invalid. This function never calls
+    ``validation_command_plan_id``, never accesses a command-plan field
+    without a type guard, never executes the runtime, and never derives or
+    pretends to possess a canonical command-plan ID for the invalid plan: it
+    always uses the bounded, unambiguously noncanonical
+    ``_INVALID_COMMAND_PLAN_ID`` placeholder instead.
+    """
+    profile = _safe_plan_text(command_plan.profile)
+    reasons = ("command-plan-invalid",) + tuple(validator_reasons)
+    evidence_id = _evidence_id(
+        status=ExecutionCompositionStatus.MANUAL_REVIEW,
+        profile=profile,
+        request_fingerprint=request.request_fingerprint,
+        command_plan_id=_INVALID_COMMAND_PLAN_ID,
+        reasons=list(reasons),
+    )
+    return ExecutionCompositionResult(
+        request_fingerprint=request.request_fingerprint,
+        command_plan_id=_INVALID_COMMAND_PLAN_ID,
+        repository=_safe_plan_text(command_plan.repository),
+        expected_sha=_safe_plan_text(command_plan.expected_sha),
+        profile=profile,
+        status=ExecutionCompositionStatus.MANUAL_REVIEW,
+        validation_result=None,
+        aggregate_pending=True,
+        execution_authorized=False,
+        side_effects_performed=False,
         reason_codes=tuple(sorted(set(reasons))),
         evidence_id=evidence_id,
     )
@@ -258,9 +303,6 @@ def _identity_mismatches(
         reasons.append("command-plan-operation-mismatch")
 
     if command_plan.profile in _EXECUTABLE_PROFILES:
-        # Ordered comparison: the command plan's own canonical order is the
-        # authorized one, so a reordering is drift rather than something this
-        # module may silently accept.
         plan_argv = tuple(entry.argv for entry in command_plan.entries)
         required_argv = tuple(
             item.argv for item in configuration.required_test_commands
@@ -282,15 +324,6 @@ def _project_status(
     profile: str,
     validation_result: FrozenTestValidationResult | None,
 ) -> tuple[ExecutionCompositionStatus, bool]:
-    """Map one canonical runtime outcome to bounded composition evidence.
-
-    A pass status is projected only when the canonical runtime reports the
-    complete lifecycle (``completed``) *and* the retained validation evidence
-    passed. A passing validation result over any other runtime status --
-    ``quarantined`` after a cleanup or release failure, ``failed``,
-    ``timed-out``, ``blocked``, ``stale``, ``needs-decision``, or an unknown
-    or malformed status -- never becomes focused or aggregate success.
-    """
     focused = profile == "focused"
 
     if runtime_status == _CANCELLED_RUNTIME_STATUS:
@@ -301,8 +334,6 @@ def _project_status(
 
     if runtime_status == _COMPLETED_RUNTIME_STATUS:
         if not attempted:
-            # A complete lifecycle without attempted validation evidence is
-            # contradictory; it is a decision request, never a success.
             return ExecutionCompositionStatus.MANUAL_REVIEW, True
         if passed:
             if focused:
@@ -314,9 +345,6 @@ def _project_status(
             else (ExecutionCompositionStatus.AGGREGATE_FAIL, False)
         )
 
-    # The runtime did not complete. Quarantine dominates every other reading:
-    # something was left behind for a human even when the tests themselves
-    # failed, so it is never reduced to an ordinary validation failure.
     if runtime_status == _QUARANTINED_RUNTIME_STATUS:
         return ExecutionCompositionStatus.INFRASTRUCTURE_FAILURE, True
     if attempted and not passed:
@@ -343,15 +371,7 @@ def compose_and_run_validation(
     process_cancelled: object | None = None,
     changed_paths_inspector: object | None = None,
 ) -> ExecutionCompositionResult:
-    """Revalidate identity, then delegate exactly once to the canonical entrypoint.
-
-    Returns bounded, non-authorizing evidence. ``merge_authorized`` is always
-    false; a generic pass boolean is never exposed. A pass status requires
-    both a passing retained validation result and a canonical runtime status
-    of ``completed``: focused success remains
-    ``focused-pass-aggregate-pending`` with ``aggregate_pending`` true, and
-    only a completed canonical aggregate run may project ``aggregate-pass``.
-    """
+    """Revalidate identity, then delegate exactly once to the canonical entrypoint."""
     if type(request) is not ExecutionServiceRequest:
         raise TypeError("request must be an exact ExecutionServiceRequest")
     if type(command_plan) is not ValidationCommandPlan:
@@ -362,6 +382,23 @@ def compose_and_run_validation(
         raise TypeError("pilot_input must be SingleIssuePilotInput")
     if not isinstance(configuration, ConcreteRuntimeConfiguration):
         raise TypeError("configuration must be ConcreteRuntimeConfiguration")
+
+    # The public command-plan validator runs before any command-plan
+    # serialization, ID derivation, or field access below.
+    # ValidationCommandPlan performs no field validation of its own, and
+    # validation_command_plan_id raises for a plan this validator rejects --
+    # both _identity_mismatches (an unconditional identity cross-check) and
+    # _fail_closed (an unconditional evidence-ID derivation) call it with no
+    # surrounding try/except, so an invalid exact-type command_plan must be
+    # caught here first, to fail closed to bounded manual-review evidence
+    # instead of raising or reaching the runtime.
+    command_plan_reasons = validate_validation_command_plan(command_plan)
+    if command_plan_reasons:
+        return _invalid_command_plan_result(
+            request=request,
+            command_plan=command_plan,
+            validator_reasons=command_plan_reasons,
+        )
 
     mismatches = _identity_mismatches(
         request=request,
@@ -386,11 +423,6 @@ def compose_and_run_validation(
             execution_authorized=authorization.execution_authorized,
         )
 
-    # Delegate exactly once through the canonical validation-evidence
-    # entrypoint. All process execution, worktree creation, lease handling,
-    # changed-path inspection, cleanup, release, and quarantine are owned by
-    # the reused Workflow Scheduler lifecycle; this module performs none of
-    # them directly.
     try:
         outcome = run_concrete_runtime_entrypoint_with_validation_evidence(
             pilot_input,
@@ -402,10 +434,7 @@ def compose_and_run_validation(
         )
     except (KeyboardInterrupt, SystemExit, GeneratorExit):
         raise
-    except Exception:  # noqa: BLE001 - bounded operational-boundary conversion
-        # Delegation was entered, so no evidence proves nothing was left
-        # behind. Side effects are reported conservatively as possible rather
-        # than asserted absent.
+    except Exception:  # noqa: BLE001
         return _fail_closed(
             request=request,
             command_plan=command_plan,
@@ -448,9 +477,6 @@ def compose_and_run_validation(
         validation_result=validation_result,
     )
 
-    # Canonical runtime evidence is preserved exactly and only added to: a
-    # withheld pass, a failed cleanup, and a failed or ambiguous release stay
-    # visible instead of being replaced by a generic success reason.
     composition_reasons = ["runtime-status:" + pilot_result.status]
     if pilot_result.cleanup_errors:
         composition_reasons.append("runtime-cleanup-errors-present")

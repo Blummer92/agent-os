@@ -15,6 +15,7 @@ See `_common-overlay-rules.md` plus:
 - `01_Shared_Standards/instructional-design/unit-vocabulary-map-standard.md`
 - `01_Shared_Standards/instructional-design/lesson-vocabulary-planner-response-standard.md`
 - `01_Shared_Standards/instructional-design/production-gates-and-compute.md`
+- `01_Shared_Standards/instructional-design/teacher-decision-studio-standard.md`
 
 ## Owned Systems
 Teacher modeling documentation, think-aloud scripts, teacher-talk revisions, modeling sequence plans, misconception-response moves, student-language modeling artifacts, modeling audit reports, and modeling-readiness handoffs.
@@ -43,9 +44,12 @@ Lesson goal, immediate student task, key modeling moment, teacher says, teacher 
 - Do not create a new packet, schema, cache, router, database, or service.
 
 ## Version
-0.4.0
+0.4.1
 
 ## Changelog
+- 0.4.1 inherits the Teacher Decision Studio standard; owns explanation-risk
+  and student-understanding analysis for rubric/assessment consultation
+  (#823), never selecting or authorizing a rubric option.
 - 0.4.0 adds the CLS8 play-by-play rehearsal view and bounded non-authorizing Materials extract.
 - 0.3.2 inherits the Lesson Vocabulary Planner response standard and preserves evidence and assessment decisions.
 - 0.3.1 inherits the Unit Vocabulary Map standard and preserves its approved vocabulary decisions.

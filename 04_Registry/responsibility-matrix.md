@@ -18,3 +18,6 @@
 | Reusable capability registry Python reader implementation | Google Workspace Automation Engineer | Integration Manager; QA / Test Agent |
 | Lesson modeling and teacher-talk coaching | Teacher Modeling Coach | Unit Alignment Agent; Instructional Materials Coach |
 | Slide deck & worksheet generation | Instructional Materials Coach | Python Development Overlay |
+| Artifact-first response ordering | ChatGPT Orchestrator | Agent Orchestrator; Instructional Materials Coach; QA / Test Agent |
+| Teacher Decision Studio consultation | ChatGPT Orchestrator | Teacher Modeling Coach; Instructional Materials Coach |
+| Rubric-language QA | QA / Test Agent | Instructional Materials Coach |

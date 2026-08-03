@@ -42,6 +42,9 @@ think-aloud method, component breakdown, visual anchors, and error analysis.
 - `learning-science-rules.md` — classroom design rules for materials
 - `production-gates-and-compute.md` — hard-stop gates and efficiency rules
 - `material-quality-rubric.md` — QA contract for slides and worksheets
+- `artifact-first-response-standard.md` — response ordering for classroom-material requests
+- `teacher-decision-studio-standard.md` — table-first rubric/assessment consultation protocol
+- `teacher-decision-studio-previews-standard.md` — per-option worksheet and PDF preview rules
 
 ## Core Rule
 
@@ -51,4 +54,4 @@ fields, standards, and output keys.
 
 ## Version
 
-0.5.0
+0.6.0
