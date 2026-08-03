@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
+
+import pytest
 
 from scripts.agent_os_candidate_packet.planning_stage import (
     prepare_planning_handoff,
@@ -40,11 +43,33 @@ def _readiness(*, dependency=None, dependency_identity=None):
     )
 
 
-def test_ready_result_builds_complete_deterministic_handoff() -> None:
-    identity = DependencyIdentityEvidence(
+def _replace_governed_field(result, field_name, state, canonical_value):
+    evidence = result.issueplan_current_state_evidence
+    snapshot = evidence.source_snapshot
+    fields = tuple(
+        (name, state, canonical_value) if name == field_name else (name, old_state, value)
+        for name, old_state, value in snapshot.governed_fields
+    )
+    if not any(name == field_name for name, _, _ in fields):
+        fields = (*fields, (field_name, state, canonical_value))
+    return replace(
+        result,
+        issueplan_current_state_evidence=replace(
+            evidence,
+            source_snapshot=replace(snapshot, governed_fields=fields),
+        ),
+    )
+
+
+def _no_dependencies():
+    return DependencyIdentityEvidence(
         status=DependencyIdentityStatus.ABSENT,
         provenance=("fixture:no-dependencies",),
     )
+
+
+def test_ready_result_builds_complete_deterministic_handoff() -> None:
+    identity = _no_dependencies()
     first = prepare_planning_handoff(
         _readiness(dependency_identity=identity),
         evaluator_sha=_SHA,
@@ -58,6 +83,8 @@ def test_ready_result_builds_complete_deterministic_handoff() -> None:
 
     assert first.status.value == "ready"
     assert first.node is not None
+    assert first.node.owner == "candidate-packet-agent"
+    assert first.node.source_of_truth == "scripts/agent_os_candidate_packet/"
     assert first.graph is not None
     assert first.planning_result is not None
     assert first.handoff is not None
@@ -67,6 +94,70 @@ def test_ready_result_builds_complete_deterministic_handoff() -> None:
     assert first.handoff.handoff_digest == second.handoff.handoff_digest
     assert first.execution_authorized is False
     assert first.side_effects_performed is False
+
+
+def test_governed_values_preserve_interior_quotes_and_unicode() -> None:
+    readiness = _readiness(dependency_identity=_no_dependencies())
+    readiness = _replace_governed_field(
+        readiness,
+        "owner_agent",
+        "present",
+        json.dumps('Team "Alpha" – 東京', ensure_ascii=False),
+    )
+    readiness = _replace_governed_field(
+        readiness,
+        "source_of_truth",
+        "present",
+        json.dumps("docs/Équipe/", ensure_ascii=False),
+    )
+
+    result = prepare_planning_handoff(
+        readiness,
+        evaluator_sha=_SHA,
+        created_at=_CREATED_AT,
+    )
+
+    assert result.status.value == "ready"
+    assert result.node.owner == 'Team "Alpha" – 東京'
+    assert result.node.source_of_truth == "docs/Équipe/"
+    assert result.execution_authorized is False
+    assert result.side_effects_performed is False
+
+
+@pytest.mark.parametrize(
+    ("state", "canonical_value", "reason"),
+    [
+        ("present", "not-json", "owner_agent-governed-value-malformed"),
+        ("present", "123", "owner_agent-governed-value-not-string"),
+        ("present", '""', "owner_agent-governed-value-empty"),
+        ("ambiguous", None, "owner_agent-governed-value-ambiguous"),
+        ("malformed", None, "owner_agent-governed-value-malformed"),
+    ],
+)
+def test_invalid_governed_owner_fails_closed(state, canonical_value, reason) -> None:
+    readiness = _replace_governed_field(
+        _readiness(dependency_identity=_no_dependencies()),
+        "owner_agent",
+        state,
+        canonical_value,
+    )
+
+    result = prepare_planning_handoff(
+        readiness,
+        evaluator_sha=_SHA,
+        created_at=_CREATED_AT,
+    )
+
+    assert result.status.value == "invalid-input"
+    assert result.reason_codes == (reason,)
+    assert result.node is None
+    assert result.graph is None
+    assert result.planning_result is None
+    assert result.handoff is None
+    assert result.serialized_handoff is None
+    assert result.wsc3_suppliable is False
+    assert result.execution_authorized is False
+    assert result.side_effects_performed is False
 
 
 def test_missing_dependency_identity_preserves_needs_decision() -> None:
@@ -89,14 +180,10 @@ def test_blocked_readiness_remains_blocked() -> None:
         EvidenceStatus.RESOLVED_BLOCKED,
         reason_codes=("dependency.explicitly-blocked",),
     )
-    identity = DependencyIdentityEvidence(
-        status=DependencyIdentityStatus.ABSENT,
-        provenance=("fixture:no-dependencies",),
-    )
     result = prepare_planning_handoff(
         _readiness(
             dependency=dependency,
-            dependency_identity=identity,
+            dependency_identity=_no_dependencies(),
         ),
         evaluator_sha=_SHA,
         created_at=_CREATED_AT,
@@ -110,12 +197,8 @@ def test_blocked_readiness_remains_blocked() -> None:
 
 
 def test_serialized_handoff_reconstructs_without_drift() -> None:
-    identity = DependencyIdentityEvidence(
-        status=DependencyIdentityStatus.ABSENT,
-        provenance=("fixture:no-dependencies",),
-    )
     result = prepare_planning_handoff(
-        _readiness(dependency_identity=identity),
+        _readiness(dependency_identity=_no_dependencies()),
         evaluator_sha=_SHA,
         created_at=_CREATED_AT,
     )
