@@ -86,7 +86,6 @@ PYTHONPATH=src python3 -m pytest tests/test_material_requirement_contract.py tes
 bash 07_Agent_Tests/validate-repo-structure.sh
 ./scripts/validate-all.sh
 ```
-
 Known environment failures must be reproduced on clean `main` rather than weakening validation.
 
 ## Rollback
