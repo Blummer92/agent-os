@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 
@@ -156,6 +157,36 @@ def test_valid_fixture_maps_and_preserves_extra_fields():
     assert record.review_date == "2026-07-30"
     assert record.extra_fields["Teacher Visible"] is True
     assert record.extra_fields["Revision Count"] == 2
+
+
+def test_unmapped_property_name_collision_fails_closed():
+    fixture = _fixture()
+    page = copy.deepcopy(fixture["pages"][0])
+    page["properties"]["drive_file_id"] = {
+        "type": "rich_text",
+        "rich_text": [{"plain_text": "conflicting-identity"}],
+    }
+    with pytest.raises(NotionRecordError, match="collides"):
+        read_existing_assets(
+            FakeReader([_page_response([page])]),
+            NotionReadRequest("source"),
+            fixture["mapping"],
+        )
+
+
+def test_unmapped_unsupported_property_fails_closed():
+    fixture = _fixture()
+    page = copy.deepcopy(fixture["pages"][0])
+    page["properties"]["Unmapped Formula"] = {
+        "type": "formula",
+        "formula": {"type": "string", "string": "unsupported"},
+    }
+    with pytest.raises(NotionRecordError, match="unsupported"):
+        read_existing_assets(
+            FakeReader([_page_response([page])]),
+            NotionReadRequest("source"),
+            fixture["mapping"],
+        )
 
 
 def test_multiple_pages_preserve_order_and_forward_opaque_cursor():
