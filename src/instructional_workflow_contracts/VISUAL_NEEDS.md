@@ -39,42 +39,31 @@ Every plan preserves:
 
 - stable plan ID;
 - source requirement ID, revision, exact contract version, and validated fingerprint;
-- material type;
-- exact outcome;
-- source visual decision when v2 supplies one;
-- ordered required and optional roles;
-- stable role IDs;
+- material type and exact outcome;
+- source visual decision when v2 supplies one, including sentinel plans;
+- ordered required and optional roles with stable role IDs;
 - instructional purpose, placement, orientation, and requirement state for each role;
-- a stable reference from each role to the material-level accessibility requirements;
-- accessibility requirements;
-- maximum visual count;
-- cognitive-load ceiling equal to the governed maximum visual count;
-- manual-review state and canonical reason codes;
-- deterministic fingerprint;
-- an all-false authority block.
+- a stable reference from each role to material-level accessibility requirements;
+- accessibility requirements, maximum visual count, and matching cognitive-load ceiling;
+- manual-review state, canonical reason codes, deterministic fingerprint, and an all-false authority block.
 
-The planner supports all validated material types except the explicit `unsupported-manual-review` sentinel. The source contract bounds visual roles and the maximum visual count to eight. Optional roles remain optional.
+The planner supports all validated material types except the explicit `unsupported-manual-review` sentinel. The source contract bounds visual roles and the maximum visual count to eight. Optional roles remain optional, and sentinel plans never authorize roles.
 
 ## Determinism and bounds
 
 The planner reuses shared normalization, fingerprinting, immutable payload, validation-result, reason-code, and authority mechanics. The result must fit the shared 16 KiB validated-record limit.
 
-Stable role IDs bind the source requirement fingerprint and the complete governed role evidence. Stable plan IDs bind the source requirement identity and fingerprint, outcome, decision, roles, accessibility evidence, reason codes, and visual-count ceiling.
+Stable role IDs bind the source requirement fingerprint and complete governed role evidence. Stable plan IDs bind source identity and fingerprint, outcome, decision, roles, accessibility evidence, reason codes, and the visual-count ceiling.
 
 ## Authority and side effects
 
 Every authority value remains false. The planner performs:
 
-- zero network calls;
-- zero Notion or Google Drive calls;
-- zero model calls;
-- zero image generation or image analysis;
-- zero OCR, embedding, vector-search, computer-vision, or GPU work;
-- zero filesystem writes;
-- zero background work;
-- zero production, publication, approval, readiness, or classroom-material mutation.
+- zero network, Notion, or Google Drive calls;
+- zero model, image-generation, image-analysis, OCR, embedding, vector-search, computer-vision, or GPU work;
+- zero filesystem writes, background work, production, publication, approval, readiness, or classroom-material mutation.
 
-A `visuals-required` result defines needs only. It does not prove that an approved asset exists and does not authorize retrieval. Issue #849 may consume only a valid `visuals-required` plan.
+A `visuals-required` result defines needs only. It does not prove an approved asset exists or authorize retrieval. Issue #849 may consume only a valid `visuals-required` plan.
 
 ## Offline validation
 
@@ -86,14 +75,9 @@ PYTHONPATH=src python3 -m pytest tests/test_material_requirement_contract.py tes
 bash 07_Agent_Tests/validate-repo-structure.sh
 ./scripts/validate-all.sh
 ```
+
 Known environment failures must be reproduced on clean `main` rather than weakening validation.
+
 ## Rollback
 
-Rollback removes:
-
-- `src/instructional_workflow_contracts/visual_needs.py`;
-- `src/instructional_workflow_contracts/VISUAL_NEEDS.md`;
-- the focused test module;
-- the synthetic visual-needs fixture.
-
-No Notion, Drive, credential, production, asset, or classroom-artifact cleanup is required because this planner performs no external read or write.
+Rollback removes the planner module, focused documentation, test module, and synthetic fixture. No Notion, Drive, credential, production, asset, or classroom-artifact cleanup is required because the planner performs no external read or write.
