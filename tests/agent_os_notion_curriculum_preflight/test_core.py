@@ -67,13 +67,24 @@ def test_parse_reconstructs_frozen_slotted_records_without_mutating_input():
 
 def test_input_order_independence_and_byte_for_byte_serialization():
     first = valid_payload()
-    second = valid_payload()
+    missing_relation = copy.deepcopy(first["relations"][0])
+    missing_relation["property_id"] = None
+    missing_relation["target_data_source_id"] = "notion-data-source-missing"
+    first["relations"].append(missing_relation)
+    second_view = copy.deepcopy(first["views"][0])
+    second_view["view_id"] = "view-curriculum-gallery"
+    second_view["view_type"] = "gallery"
+    first["views"].append(second_view)
+
+    second = copy.deepcopy(first)
     second["properties"].reverse()
     second["relations"].reverse()
     second["views"].reverse()
     second["contract_mappings"].reverse()
     report_a = evaluate(first)
     report_b = evaluate(second)
+    assert report_a.status is PreflightStatus.BLOCKED
+    assert "notion-property-id-missing" in report_a.blockers
     assert report_a.evidence_fingerprint == report_b.evidence_fingerprint
     assert serialize_preflight_report(report_a) == serialize_preflight_report(report_b)
     assert serialize_preflight_report(report_a).encode("utf-8") == serialize_preflight_report(
