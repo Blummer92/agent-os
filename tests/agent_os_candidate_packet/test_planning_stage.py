@@ -6,6 +6,7 @@ from dataclasses import replace
 import pytest
 
 from scripts.agent_os_candidate_packet.planning_stage import (
+    PlanningHandoffStageResult,
     prepare_planning_handoff,
     reconstruct_scheduler_planning_handoff,
 )
@@ -68,7 +69,7 @@ def _no_dependencies():
     )
 
 
-def _ready_planning_result():
+def _ready_planning_result() -> PlanningHandoffStageResult:
     return prepare_planning_handoff(
         _readiness(dependency_identity=_no_dependencies()),
         evaluator_sha=_SHA,
@@ -138,8 +139,11 @@ def test_optional_governed_owner_states_decode_to_none(state) -> None:
         created_at=_CREATED_AT,
     )
 
-    assert result.status.value == "ready"
+    assert result.status.value == "needs-decision"
     assert result.node.owner is None
+    assert result.planning_result.overall_classification.value == "needs-decision"
+    assert "missing-owner" in result.planning_result.cohorts[0].reason_codes
+    assert result.wsc3_suppliable is True
     assert result.execution_authorized is False
     assert result.side_effects_performed is False
 
