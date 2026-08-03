@@ -577,7 +577,7 @@ class NotionCurriculumPreflightEvidence:
                 sorted(
                     relations,
                     key=lambda item: (
-                        item.property_id,
+                        item.property_id or "",
                         item.source_data_source_id,
                         item.target_data_source_id,
                     ),
