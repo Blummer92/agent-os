@@ -1,0 +1,210 @@
+{
+  "artifact_manifest": {
+    "artifact": {
+      "artifact_type": "worksheet",
+      "mime_type": "application/pdf"
+    },
+    "assets": [
+      {
+        "asset_id": "asset-1",
+        "canonical_asset_ref": null,
+        "comparison_evidence": "supplied comparison evidence",
+        "confidence": 1.0,
+        "content_findings": [],
+        "content_fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "context_preservation_complete": true,
+        "correction_requirement": null,
+        "direct_use_status": "student-ready",
+        "disposition": "canonical",
+        "duplicate_group_id": null,
+        "duplicate_relationship": "unique",
+        "perceptual_match_evidence": null,
+        "preserved_context_flags": [],
+        "privacy_mitigation": "none",
+        "privacy_observations": [],
+        "privacy_resolved": true,
+        "repair_source_status": "not-needed",
+        "replacement_required": false,
+        "required_context_flags": [],
+        "residual_privacy_risk": false,
+        "rights_basis": "permission-evidence",
+        "rights_classification": "permission-documented",
+        "stable_ref": "asset-ref-1",
+        "transformations": [],
+        "warning_signals": []
+      }
+    ],
+    "authority": {
+      "execution_authorized": false,
+      "external_write_authorized": false,
+      "production_authorized": false,
+      "publication_authorized": false,
+      "side_effects_performed": false
+    },
+    "custom_properties": {
+      "contract_version": "curriculum-artifact-manifest-v1",
+      "idempotency_key": "fce72f357425951bacea3c73f3d446f3b9b8b4584648181033aed8a863eb346c",
+      "manifest_id": "manifest-1",
+      "requirement_id": "requirement-1"
+    },
+    "duplicates": {
+      "candidates": [],
+      "selected_candidate_ref": null
+    },
+    "external_identity": {
+      "access_state": "verified",
+      "drive_id": "drive-1",
+      "exact_reference": "drive:file-1",
+      "external_revision": "drive-revision-1",
+      "file_id": "file-1",
+      "last_verified_at": "2026-07-30T00:00:00Z",
+      "modified_time": "2026-07-30T00:00:00Z",
+      "parent_folder_ref": "folder-1",
+      "provider": "google-drive",
+      "resource_key": "resource-1",
+      "resource_key_required": true,
+      "trashed": false,
+      "verification_scope": "shared-drive",
+      "web_view_link": "https://example.invalid/file-1"
+    },
+    "identity": {
+      "contract_version": "curriculum-artifact-manifest-v1",
+      "created_at": "2026-07-30T00:00:00Z",
+      "manifest_id": "manifest-1",
+      "modified_at": "2026-07-30T00:00:00Z",
+      "record_revision": 1,
+      "source_fingerprint": "07da027c8ffa65d64601d940e30f1b915b7503d163a226a3325378f5c9184cc8",
+      "verified_at": "2026-07-30T00:00:00Z"
+    },
+    "lineage": {
+      "predecessor_ref": null,
+      "revisions": [],
+      "successor_ref": null,
+      "supersession_reason": null
+    },
+    "operation": {
+      "approved_request_id": null,
+      "approved_scope": null,
+      "current_file_ref": null,
+      "discovery_evidence": [
+        "supplied provider/file identity"
+      ],
+      "idempotency_key": "fce72f357425951bacea3c73f3d446f3b9b8b4584648181033aed8a863eb346c",
+      "kind": "discover-existing",
+      "template_permission_state": null,
+      "template_ref": null
+    },
+    "quality_rows": [
+      {
+        "reason_codes": [],
+        "row_id": "quality-1",
+        "state": "pass"
+      }
+    ],
+    "references": [
+      {
+        "fingerprint": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "kind": "material-requirement",
+        "reference_id": "reference-1",
+        "stable_ref": "requirement-1"
+      }
+    ],
+    "requirement_reference": {
+      "contract_version": "curriculum-material-requirement-v1",
+      "fingerprint": "11c0b79d3727d14640f5cf95761ac86de8f1d8b3af13acacc87740c8030f0b8b",
+      "record_revision": 1,
+      "requirement_id": "requirement-1"
+    },
+    "source_snapshot": {
+      "dependency_fingerprint": "ce5067a8de7bcbad31b1eb9a05c886c33a3a0b0ac199f28f5b299bcd4687a798",
+      "dependency_keys": [
+        "material.requirement",
+        "source.unit"
+      ],
+      "dependency_values": {
+        "material.requirement": "requirement-1",
+        "source.unit": "unit-1"
+      },
+      "handoff_id": "handoff-1",
+      "source_changed": false,
+      "source_fingerprint": "221cbad861531ec9c178e3ea7bb45911cbf24241291e65cfd0c8ad3b16c776cd"
+    },
+    "statuses": {
+      "classroom_readiness": "ready",
+      "production_state": "not-authorized",
+      "publication_state": "not-published",
+      "quality_state": "pass",
+      "sharing_state": "private-observed",
+      "teacher_approval": "approved"
+    }
+  },
+  "compatibility_evidence": {
+    "accessibility": {
+      "description_reference": "accessibility-record-1",
+      "description_state": "alt-text-present",
+      "review_state": "pass"
+    },
+    "approved_use": {
+      "material_types": [
+        "worksheet"
+      ],
+      "role_types": [
+        "worked-example"
+      ],
+      "state": "approved"
+    },
+    "asset_reference": {
+      "asset_id": "asset-1",
+      "content_fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "stable_ref": "asset-ref-1"
+    },
+    "authority": {
+      "execution_authorized": false,
+      "external_write_authorized": false,
+      "production_authorized": false,
+      "publication_authorized": false,
+      "side_effects_performed": false
+    },
+    "contract_version": "curriculum-visual-asset-compatibility-v1",
+    "freshness": {
+      "compatibility_verified_at": "2026-07-30T00:00:00Z",
+      "manifest_fingerprint": "ceb8e59cfa9f8e41ad671ef4d2e90c0d675af9adb2dda1dc60396d46ab49c00b",
+      "manifest_record_revision": 1,
+      "manifest_verified_at": "2026-07-30T00:00:00Z",
+      "stale": false
+    },
+    "library_reference": {
+      "drive_file_id": "file-1",
+      "page_id": "page-1"
+    },
+    "manifest_reference": {
+      "external_file_id": "file-1",
+      "fingerprint": "ceb8e59cfa9f8e41ad671ef4d2e90c0d675af9adb2dda1dc60396d46ab49c00b",
+      "manifest_id": "manifest-1",
+      "record_revision": 1,
+      "verified_at": "2026-07-30T00:00:00Z"
+    },
+    "orientation": {
+      "aspect_state": "exact",
+      "orientation": "landscape"
+    },
+    "purpose": {
+      "decorative_only": false,
+      "role_types": [
+        "worked-example"
+      ]
+    }
+  },
+  "library_record": {
+    "approved_use": null,
+    "asset_title": null,
+    "asset_type": "image",
+    "drive_file_id": "file-1",
+    "drive_url": null,
+    "extra_fields": {},
+    "human_review_status": "approved",
+    "page_id": "page-1",
+    "page_url": null,
+    "review_date": "2026-07-30"
+  }
+}
