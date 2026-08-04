@@ -103,7 +103,7 @@ def test_multiple_exact_asset_matches_are_invalid() -> None:
 
     assert result.status is ValidationStatus.INVALID
     assert payload is None
-    assert result.reason_codes
+    assert result.reason_codes == ("asset-duplicate-id",)
 
 
 def test_library_and_manifest_drive_identity_must_match() -> None:
@@ -315,13 +315,41 @@ def test_manifest_reference_revision_and_fingerprint_must_match() -> None:
     revision["compatibility_evidence"]["manifest_reference"][  # type: ignore[index]
         "record_revision"
     ] = 2
-    assert classify(revision)[0].status is ValidationStatus.INVALID
+    revision_result, revision_payload = classify(revision)
+    assert revision_result.status is ValidationStatus.INVALID
+    assert revision_payload is None
+    assert revision_result.reason_codes == ("identity-invalid",)
 
     fingerprint = fixture()
     fingerprint["compatibility_evidence"]["manifest_reference"][  # type: ignore[index]
         "fingerprint"
     ] = "f" * 64
-    assert classify(fingerprint)[0].status is ValidationStatus.INVALID
+    fingerprint_result, fingerprint_payload = classify(fingerprint)
+    assert fingerprint_result.status is ValidationStatus.INVALID
+    assert fingerprint_payload is None
+    assert fingerprint_result.reason_codes == ("identity-invalid",)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("manifest_record_revision", 2),
+        ("manifest_fingerprint", "f" * 64),
+        ("manifest_verified_at", "2026-08-03T00:00:00Z"),
+    ],
+)
+def test_freshness_manifest_identity_must_match(
+    field: str,
+    replacement: object,
+) -> None:
+    value = fixture()
+    value["compatibility_evidence"]["freshness"][field] = replacement  # type: ignore[index]
+
+    result, payload = classify(value)
+
+    assert result.status is ValidationStatus.INVALID
+    assert payload is None
+    assert result.reason_codes == ("identity-invalid",)
 
 
 def test_authority_values_cannot_be_true() -> None:
