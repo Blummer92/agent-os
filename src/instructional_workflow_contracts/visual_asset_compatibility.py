@@ -346,7 +346,13 @@ def validate_visual_asset_compatibility_evidence(
             library,
             manifest,
         )
-        matched_asset = _match_asset(asset_reference, manifest)
+        matched_asset = _match_asset(
+            asset_reference,
+            manifest,
+            include_projection_metadata=(
+                contract_version == V2_CONTRACT_ID
+            ),
+        )
 
         classification, reasons = _classification(
             matched_asset=matched_asset,
@@ -941,6 +947,8 @@ def _bind_library_reference(
 def _match_asset(
     reference: dict[str, Any],
     manifest: dict[str, Any],
+    *,
+    include_projection_metadata: bool = False,
 ) -> dict[str, Any] | None:
     asset_id = validate_stable_id(
         reference["asset_id"],
@@ -971,7 +979,7 @@ def _match_asset(
         return None
 
     asset = matches[0]
-    return {
+    projection = {
         "asset_id": asset["asset_id"],
         "stable_ref": asset["stable_ref"],
         "content_fingerprint": asset["content_fingerprint"],
@@ -979,6 +987,21 @@ def _match_asset(
         "disposition": asset["disposition"],
         "canonical_asset_ref": asset["canonical_asset_ref"],
     }
+    if include_projection_metadata:
+        projection.update(
+            {
+                "duplicate_group_id": asset["duplicate_group_id"],
+                "required_context_flags": asset["required_context_flags"],
+                "preserved_context_flags": asset["preserved_context_flags"],
+                "context_preservation_complete": asset[
+                    "context_preservation_complete"
+                ],
+                "direct_use_status": asset["direct_use_status"],
+                "repair_source_status": asset["repair_source_status"],
+                "replacement_required": asset["replacement_required"],
+            }
+        )
+    return projection
 
 
 def _classification(

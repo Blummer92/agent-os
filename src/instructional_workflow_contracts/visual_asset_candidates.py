@@ -21,12 +21,17 @@ from .common import (
     validate_text,
 )
 from .visual_asset_compatibility import (
-    CONTRACT_ID as COMPATIBILITY_CONTRACT_ID,
+    V1_CONTRACT_ID as V1_COMPATIBILITY_CONTRACT_ID,
+    V2_CONTRACT_ID as V2_COMPATIBILITY_CONTRACT_ID,
     validate_visual_asset_compatibility_evidence,
 )
 from .visual_needs import CONTRACT_ID as VISUAL_NEEDS_CONTRACT_ID
 
-CONTRACT_ID = "curriculum-visual-asset-candidates-v1"
+V1_CONTRACT_ID = "curriculum-visual-asset-candidates-v1"
+V2_CONTRACT_ID = "curriculum-visual-asset-candidates-v2"
+
+# Existing callers remain explicitly bound to the v1 projection.
+CONTRACT_ID = V1_CONTRACT_ID
 MAX_CANDIDATES = 32
 MAX_SOURCE_REVISION_LENGTH = 256
 
@@ -36,6 +41,7 @@ def filter_approved_visual_candidates(
     candidates: object,
     *,
     source_revision: object,
+    contract_version: object = CONTRACT_ID,
 ) -> ValidationResult:
     """Return bounded eligible, rejected, and manual-review candidate groups."""
     try:
@@ -47,6 +53,14 @@ def filter_approved_visual_candidates(
                 "visual-needs plan must require visuals",
             )
 
+        selected_contract_version = _candidate_contract_version(
+            contract_version
+        )
+        expected_compatibility_version = (
+            V1_COMPATIBILITY_CONTRACT_ID
+            if selected_contract_version == V1_CONTRACT_ID
+            else V2_COMPATIBILITY_CONTRACT_ID
+        )
         revision = validate_text(
             source_revision,
             "source_revision",
@@ -69,17 +83,33 @@ def filter_approved_visual_candidates(
 
         for candidate in raw_candidates:
             result = validate_visual_asset_compatibility_evidence(candidate)
-            entry = _candidate_entry(result)
             if result.record is None:
-                rejected.append(entry)
+                rejected.append(
+                    _candidate_entry(
+                        result,
+                        contract_version=selected_contract_version,
+                    )
+                )
                 continue
 
             payload = result.record.to_dict()
-            if result.record.contract_version != COMPATIBILITY_CONTRACT_ID:
-                entry["reason_codes"] = ["visual-candidate-contract-incompatible"]
+            if result.record.contract_version != expected_compatibility_version:
+                entry = _candidate_entry(
+                    result,
+                    contract_version=selected_contract_version,
+                    include_projection=False,
+                )
+                entry["classification"] = "invalid"
+                entry["reason_codes"] = [
+                    "visual-candidate-contract-incompatible"
+                ]
                 rejected.append(entry)
                 continue
 
+            entry = _candidate_entry(
+                result,
+                contract_version=selected_contract_version,
+            )
             classification = payload["classification"]
             if classification == "hard-rejection":
                 rejected.append(entry)
@@ -112,8 +142,9 @@ def filter_approved_visual_candidates(
         manual_review.sort(key=key)
 
         payload = {
-            "contract_version": CONTRACT_ID,
+            "contract_version": selected_contract_version,
             "candidate_set_id": _candidate_set_id(
+                contract_version=selected_contract_version,
                 plan=plan,
                 source_revision=revision,
                 eligible=eligible,
@@ -152,7 +183,7 @@ def filter_approved_visual_candidates(
                 "visual candidate result exceeds the shared result-size bound",
             )
         record = ValidatedRecord(
-            contract_version=CONTRACT_ID,
+            contract_version=selected_contract_version,
             record_id=normalized["candidate_set_id"],
             record_revision=1,
             fingerprint_algorithm=FINGERPRINT_ALGORITHM,
@@ -247,25 +278,84 @@ def _candidate_list(value: object) -> list[object]:
     return value
 
 
-def _candidate_entry(result: ValidationResult) -> dict[str, Any]:
+def _candidate_contract_version(value: object) -> str:
+    version = validate_text(
+        value,
+        "candidate contract_version",
+        max_length=64,
+    )
+    if version not in {V1_CONTRACT_ID, V2_CONTRACT_ID}:
+        raise ContractValidationError(
+            "handoff-version-unsupported",
+            "visual candidate contract version is unsupported",
+        )
+    return version
+
+
+def _candidate_entry(
+    result: ValidationResult,
+    *,
+    contract_version: str,
+    include_projection: bool = True,
+) -> dict[str, Any]:
+    if contract_version == V1_CONTRACT_ID:
+        if result.record is None:
+            return {
+                "compatibility_id": None,
+                "fingerprint": None,
+                "classification": "invalid",
+                "reason_codes": list(result.reason_codes),
+                "asset_reference": None,
+                "library_reference": None,
+            }
+        payload = result.record.to_dict()
+        return {
+            "compatibility_id": result.record.record_id,
+            "fingerprint": result.record.fingerprint,
+            "classification": payload["classification"],
+            "reason_codes": list(payload["reason_codes"]),
+            "asset_reference": payload["asset_reference"],
+            "library_reference": payload["library_reference"],
+        }
+
     if result.record is None:
         return {
+            "compatibility_contract_version": None,
             "compatibility_id": None,
+            "compatibility_record_revision": None,
             "fingerprint": None,
             "classification": "invalid",
             "reason_codes": list(result.reason_codes),
-            "asset_reference": None,
-            "library_reference": None,
         }
+
     payload = result.record.to_dict()
-    return {
+    entry: dict[str, Any] = {
+        "compatibility_contract_version": result.record.contract_version,
         "compatibility_id": result.record.record_id,
+        "compatibility_record_revision": result.record.record_revision,
         "fingerprint": result.record.fingerprint,
         "classification": payload["classification"],
         "reason_codes": list(payload["reason_codes"]),
-        "asset_reference": payload["asset_reference"],
-        "library_reference": payload["library_reference"],
     }
+    if not include_projection:
+        return entry
+
+    entry.update(
+        {
+            "manifest_reference": payload["manifest_reference"],
+            "asset_reference": payload["asset_reference"],
+            "library_reference": payload["library_reference"],
+            "purpose": payload["purpose"],
+            "approved_use": payload["approved_use"],
+            "orientation": payload["orientation"],
+            "accessibility": payload["accessibility"],
+            "freshness": payload["freshness"],
+            "matched_asset": payload["matched_asset"],
+            "cohesion_profile": payload["cohesion_profile"],
+            "authority": payload["authority"],
+        }
+    )
+    return entry
 
 
 def _plan_mismatch_reasons(
@@ -295,6 +385,7 @@ def _plan_mismatch_reasons(
 
 def _candidate_set_id(
     *,
+    contract_version: str,
     plan: ValidatedRecord,
     source_revision: str,
     eligible: list[dict[str, Any]],
@@ -302,7 +393,7 @@ def _candidate_set_id(
     manual_review: list[dict[str, Any]],
 ) -> str:
     identity = {
-        "contract_version": CONTRACT_ID,
+        "contract_version": contract_version,
         "plan_id": plan.record_id,
         "plan_revision": plan.record_revision,
         "plan_fingerprint": plan.fingerprint,
