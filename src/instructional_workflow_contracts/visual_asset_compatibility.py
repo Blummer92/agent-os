@@ -32,10 +32,117 @@ from .common import (
 from .material_requirement import VISUAL_ORIENTATIONS, VISUAL_ROLE_TYPES
 
 
-CONTRACT_ID = "curriculum-visual-asset-compatibility-v1"
+V1_CONTRACT_ID = "curriculum-visual-asset-compatibility-v1"
+V2_CONTRACT_ID = "curriculum-visual-asset-compatibility-v2"
+
+# Existing consumers remain explicitly bound to v1.
+CONTRACT_ID = V1_CONTRACT_ID
+
 MAX_INPUT_BYTES = 64 * 1024
 MAX_ROLE_TYPES = 10
 MAX_MATERIAL_TYPES = 16
+MAX_COHESION_RATING = 5
+
+VISUAL_STYLE_FAMILIES = frozenset(
+    {
+        "instructional",
+        "documentary",
+        "editorial",
+        "technical",
+        "interface",
+        "unspecified",
+    }
+)
+COHESION_MEDIA = frozenset(
+    {
+        "digital",
+        "photographic",
+        "vector",
+        "raster",
+        "screen-capture",
+        "mixed-media",
+        "unspecified",
+    }
+)
+REPRESENTATION_CLASSES = frozenset(
+    {
+        "illustration",
+        "photography",
+        "diagram",
+        "interface-capture",
+        "unspecified",
+    }
+)
+PALETTE_FAMILIES = frozenset(
+    {
+        "full-color",
+        "limited-color",
+        "monochrome",
+        "grayscale",
+        "unspecified",
+    }
+)
+LINE_TREATMENTS = frozenset(
+    {
+        "none",
+        "clean",
+        "technical",
+        "organic",
+        "sketch",
+        "unspecified",
+    }
+)
+RENDERING_STYLES = frozenset(
+    {
+        "flat",
+        "realistic",
+        "simplified",
+        "annotated",
+        "wireframe",
+        "unspecified",
+    }
+)
+PERSPECTIVES = frozenset(
+    {
+        "front",
+        "three-quarter",
+        "top-down",
+        "isometric",
+        "orthographic",
+        "mixed",
+        "unspecified",
+    }
+)
+BACKGROUND_TREATMENTS = frozenset(
+    {
+        "transparent",
+        "plain",
+        "isolated",
+        "contextual",
+        "interface",
+        "unspecified",
+    }
+)
+AUDIENCE_COMPATIBILITY_STATES = frozenset(
+    {
+        "approved",
+        "rejected",
+        "not-assessed",
+        "pending",
+        "manual-review-required",
+        "unspecified",
+    }
+)
+COHESION_VALUE_FIELDS = (
+    "visual_style_family",
+    "medium",
+    "representation_class",
+    "palette_family",
+    "line_treatment",
+    "rendering_style",
+    "perspective",
+    "background_treatment",
+)
 
 ACCESSIBILITY_REVIEW_STATES = frozenset(
     {
@@ -80,7 +187,7 @@ TOP_LEVEL_FIELDS = frozenset(
         "compatibility_evidence",
     }
 )
-EVIDENCE_FIELDS = frozenset(
+V1_EVIDENCE_FIELDS = frozenset(
     {
         "contract_version",
         "manifest_reference",
@@ -92,6 +199,38 @@ EVIDENCE_FIELDS = frozenset(
         "approved_use",
         "freshness",
         "authority",
+    }
+)
+V2_EVIDENCE_FIELDS = frozenset(
+    set(V1_EVIDENCE_FIELDS) | {"cohesion_profile"}
+)
+
+# Backward-compatible alias for current v1 consumers.
+EVIDENCE_FIELDS = V1_EVIDENCE_FIELDS
+
+COHESION_PROFILE_FIELDS = frozenset(
+    {
+        "visual_style_family",
+        "medium",
+        "representation_class",
+        "palette_family",
+        "line_treatment",
+        "rendering_style",
+        "perspective",
+        "background_treatment",
+        "complexity_rating",
+        "cognitive_load_rating",
+        "audience_compatibility",
+    }
+)
+AUDIENCE_COMPATIBILITY_FIELDS = frozenset(
+    {
+        "state",
+        "reviewer_ref",
+        "reviewed_at",
+        "evidence_reference",
+        "stale",
+        "contradictory",
     }
 )
 
@@ -109,18 +248,32 @@ def validate_visual_asset_compatibility_evidence(
             envelope["compatibility_evidence"],
             "compatibility_evidence",
         )
-        _fields(evidence, EVIDENCE_FIELDS, "compatibility_evidence")
+        if "contract_version" not in evidence:
+            raise ContractValidationError(
+                "handoff-unknown-field",
+                "compatibility evidence fields are not exact",
+            )
 
         contract_version = validate_text(
             evidence["contract_version"],
             "compatibility contract_version",
             max_length=64,
         )
-        if contract_version != CONTRACT_ID:
+        if contract_version == V1_CONTRACT_ID:
+            evidence_fields = V1_EVIDENCE_FIELDS
+        elif contract_version == V2_CONTRACT_ID:
+            evidence_fields = V2_EVIDENCE_FIELDS
+        else:
             raise ContractValidationError(
                 "handoff-version-unsupported",
                 "visual compatibility contract version is unsupported",
             )
+
+        _fields(
+            evidence,
+            evidence_fields,
+            "compatibility_evidence",
+        )
 
         manifest_reference = _mapping(
             evidence["manifest_reference"],
@@ -171,6 +324,11 @@ def validate_visual_asset_compatibility_evidence(
         orientation = _orientation(evidence["orientation"])
         approved_use = _approved_use(evidence["approved_use"])
         freshness = _freshness(evidence["freshness"])
+        cohesion_profile = (
+            _cohesion_profile(evidence["cohesion_profile"])
+            if contract_version == V2_CONTRACT_ID
+            else None
+        )
         authority = _authority(evidence["authority"])
 
         _bind_manifest_reference(
@@ -197,19 +355,27 @@ def validate_visual_asset_compatibility_evidence(
             orientation=orientation,
             approved_use=approved_use,
             freshness=freshness,
+            cohesion_profile=cohesion_profile,
         )
 
+        compatibility_parts = {
+            "manifest_reference": manifest_reference,
+            "asset_reference": asset_reference,
+            "library_reference": library_reference,
+            "purpose": purpose,
+            "accessibility": accessibility,
+            "orientation": orientation,
+            "approved_use": approved_use,
+            "freshness": freshness,
+        }
+        if cohesion_profile is not None:
+            compatibility_parts["cohesion_profile"] = cohesion_profile
+
         normalized_payload = {
-            "contract_version": CONTRACT_ID,
+            "contract_version": contract_version,
             "compatibility_id": _compatibility_id(
-                manifest_reference=manifest_reference,
-                asset_reference=asset_reference,
-                library_reference=library_reference,
-                purpose=purpose,
-                accessibility=accessibility,
-                orientation=orientation,
-                approved_use=approved_use,
-                freshness=freshness,
+                contract_version=contract_version,
+                **compatibility_parts,
             ),
             "classification": classification,
             "reason_codes": list(reasons),
@@ -224,6 +390,8 @@ def validate_visual_asset_compatibility_evidence(
             "matched_asset": matched_asset,
             "authority": authority,
         }
+        if cohesion_profile is not None:
+            normalized_payload["cohesion_profile"] = cohesion_profile
         normalized_payload = validate_and_normalize_json(
             normalized_payload,
             max_bytes=MAX_RESULT_BYTES,
@@ -240,7 +408,7 @@ def validate_visual_asset_compatibility_evidence(
             )
 
         record = ValidatedRecord(
-            contract_version=CONTRACT_ID,
+            contract_version=contract_version,
             record_id=normalized_payload["compatibility_id"],
             record_revision=1,
             fingerprint_algorithm=FINGERPRINT_ALGORITHM,
@@ -539,6 +707,134 @@ def _freshness(value: object) -> dict[str, Any]:
     }
 
 
+def _cohesion_profile(value: object) -> dict[str, Any]:
+    data = _mapping(value, "cohesion_profile")
+    _fields(data, COHESION_PROFILE_FIELDS, "cohesion_profile")
+
+    return {
+        "visual_style_family": _enum(
+            data["visual_style_family"],
+            "cohesion visual_style_family",
+            VISUAL_STYLE_FAMILIES,
+        ),
+        "medium": _enum(
+            data["medium"],
+            "cohesion medium",
+            COHESION_MEDIA,
+        ),
+        "representation_class": _enum(
+            data["representation_class"],
+            "cohesion representation_class",
+            REPRESENTATION_CLASSES,
+        ),
+        "palette_family": _enum(
+            data["palette_family"],
+            "cohesion palette_family",
+            PALETTE_FAMILIES,
+        ),
+        "line_treatment": _enum(
+            data["line_treatment"],
+            "cohesion line_treatment",
+            LINE_TREATMENTS,
+        ),
+        "rendering_style": _enum(
+            data["rendering_style"],
+            "cohesion rendering_style",
+            RENDERING_STYLES,
+        ),
+        "perspective": _enum(
+            data["perspective"],
+            "cohesion perspective",
+            PERSPECTIVES,
+        ),
+        "background_treatment": _enum(
+            data["background_treatment"],
+            "cohesion background_treatment",
+            BACKGROUND_TREATMENTS,
+        ),
+        "complexity_rating": _cohesion_rating(
+            data["complexity_rating"],
+            "cohesion complexity_rating",
+        ),
+        "cognitive_load_rating": _cohesion_rating(
+            data["cognitive_load_rating"],
+            "cohesion cognitive_load_rating",
+        ),
+        "audience_compatibility": _audience_compatibility(
+            data["audience_compatibility"]
+        ),
+    }
+
+
+def _cohesion_rating(value: object, name: str) -> int:
+    if (
+        type(value) is not int
+        or value < 1
+        or value > MAX_COHESION_RATING
+    ):
+        raise ContractValidationError(
+            "asset-cohesion-rating-invalid",
+            f"{name} must be a built-in integer from 1 to "
+            f"{MAX_COHESION_RATING}",
+        )
+    return value
+
+
+def _audience_compatibility(value: object) -> dict[str, Any]:
+    data = _mapping(value, "audience_compatibility")
+    _fields(
+        data,
+        AUDIENCE_COMPATIBILITY_FIELDS,
+        "audience_compatibility",
+    )
+
+    reviewer_ref = data["reviewer_ref"]
+    if reviewer_ref is not None:
+        reviewer_ref = validate_stable_id(
+            reviewer_ref,
+            "audience reviewer_ref",
+        )
+
+    reviewed_at = data["reviewed_at"]
+    if reviewed_at is not None:
+        reviewed_at = validate_timestamp(
+            reviewed_at,
+            "audience reviewed_at",
+        )
+
+    evidence_reference = data["evidence_reference"]
+    if evidence_reference is not None:
+        evidence_reference = validate_stable_id(
+            evidence_reference,
+            "audience evidence_reference",
+        )
+
+    if type(data["stale"]) is not bool:
+        raise ContractValidationError(
+            "handoff-wrong-type",
+            "audience stale must be a built-in boolean",
+        )
+
+    if type(data["contradictory"]) is not bool:
+        raise ContractValidationError(
+            "handoff-wrong-type",
+            "audience contradictory must be a built-in boolean",
+        )
+
+    return {
+        "state": _enum(
+            data["state"],
+            "audience compatibility state",
+            AUDIENCE_COMPATIBILITY_STATES,
+        ),
+        "reviewer_ref": reviewer_ref,
+        "reviewed_at": reviewed_at,
+        "evidence_reference": evidence_reference,
+        "stale": data["stale"],
+        "contradictory": data["contradictory"],
+    }
+
+
 def _authority(value: object) -> dict[str, bool]:
     data = _mapping(value, "authority")
     expected = frozenset(
@@ -693,6 +989,7 @@ def _classification(
     orientation: dict[str, Any],
     approved_use: dict[str, Any],
     freshness: dict[str, Any],
+    cohesion_profile: dict[str, Any] | None,
 ) -> tuple[str, tuple[str, ...]]:
     rejected: set[str] = set()
     manual: set[str] = set()
@@ -739,6 +1036,61 @@ def _classification(
     if freshness["stale"]:
         manual.add("manual-review-asset-compatibility-stale")
 
+    if cohesion_profile is not None:
+        if any(
+            cohesion_profile[field] == "unspecified"
+            for field in COHESION_VALUE_FIELDS
+        ):
+            manual.add(
+                "manual-review-asset-cohesion-unspecified"
+            )
+
+        if (
+            cohesion_profile["representation_class"]
+            == "interface-capture"
+            and cohesion_profile["medium"] != "screen-capture"
+        ):
+            rejected.add(
+                "asset-cohesion-representation-medium-conflict"
+            )
+
+        audience = cohesion_profile["audience_compatibility"]
+        attributable = all(
+            audience[field] is not None
+            for field in (
+                "reviewer_ref",
+                "reviewed_at",
+                "evidence_reference",
+            )
+        )
+
+        if audience["contradictory"]:
+            manual.add(
+                "manual-review-asset-audience-contradictory"
+            )
+        elif audience["stale"]:
+            manual.add(
+                "manual-review-asset-audience-stale"
+            )
+        elif audience["state"] == "rejected":
+            if attributable:
+                rejected.add(
+                    "asset-audience-incompatible"
+                )
+            else:
+                manual.add(
+                    "manual-review-asset-audience-unattributed"
+                )
+        elif audience["state"] == "approved":
+            if not attributable:
+                manual.add(
+                    "manual-review-asset-audience-unattributed"
+                )
+        else:
+            manual.add(
+                "manual-review-asset-audience"
+            )
+
     if rejected:
         return "hard-rejection", tuple(sorted(rejected))
     if manual:
@@ -747,11 +1099,13 @@ def _classification(
 
 
 def _compatibility_id(
+    *,
+    contract_version: str,
     **parts: object,
 ) -> str:
     return "visual-compatibility-" + sha256_hex(
         {
-            "contract_version": CONTRACT_ID,
+            "contract_version": contract_version,
             **parts,
         }
     )[:24]
