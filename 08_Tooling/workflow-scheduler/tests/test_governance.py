@@ -1,7 +1,5 @@
 """Tests for governance stop conditions."""
 
-from typing import object
-
 import pytest
 
 from workflow_scheduler.governance import StopConditionChecker
