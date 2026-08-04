@@ -62,3 +62,9 @@ Default backoff is 2s then 4s (three attempts total). The delay list is the
 whole configuration, so there is no unreachable cap constant. Tests inject
 `VERIFY_REPO_STATE_RETRY_DELAYS` to exercise bounded retries without sleeping
 for real backoff durations.
+
+`VERIFY_REPO_STATE_RETRY_DELAYS` is the canonical repository-state retry
+configuration for the repository, not a per-script variable.
+`scripts/prepare-issue-worktree.sh` reuses it verbatim — same variable, same
+default schedule, same fetch-only scope — rather than defining a second retry
+framework. Changing the schedule here changes it for both commands.

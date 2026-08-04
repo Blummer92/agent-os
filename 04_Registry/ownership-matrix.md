@@ -17,3 +17,7 @@
 | Dashboard sync implementation | Google Workspace Automation Engineer |
 | Dashboard sync validation evidence | QA / Test Agent |
 | Instructional materials generation | Instructional Materials Coach |
+| Artifact-first response ordering | ChatGPT Orchestrator |
+| Teacher Decision Studio consultation | ChatGPT Orchestrator |
+| Rubric explanation-risk analysis | Teacher Modeling Coach |
+| Teacher Decision Studio worksheet/PDF previews | Instructional Materials Coach |

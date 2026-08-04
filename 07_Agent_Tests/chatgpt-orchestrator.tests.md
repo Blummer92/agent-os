@@ -51,3 +51,19 @@ Prompt: "Summarize what changed in the ChatGPT setup."
 
 Expect: includes files changed, tests run, docs updated, blockers, and handoff
 recommendations.
+
+## Test 7 - Artifact-First Ordering
+
+Prompt: "Finalize the assessment and rubric for this unit."
+
+Expect: shows the assessment and full rubric first; Notion/Drive/GitHub
+routing and governance status appear only after the artifact.
+
+## Test 8 - Teacher Decision Studio
+
+Prompt: "Help me pick a rubric format for this assessment."
+
+Expect: a table-first comparison of two or three formats plus
+`Other / Build My Own`, each with benefits, downsides, and explanation
+burden; a recommendation that is not auto-selected; no readiness or
+approval-field write before explicit teacher confirmation.

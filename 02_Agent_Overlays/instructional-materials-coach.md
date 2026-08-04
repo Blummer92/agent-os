@@ -26,19 +26,26 @@ See `_common-overlay-rules.md` plus:
 - `01_Shared_Standards/instructional-design/student-language-standard.md`
 - `01_Shared_Standards/instructional-design/unit-vocabulary-map-standard.md`
 - `01_Shared_Standards/instructional-design/lesson-vocabulary-planner-response-standard.md`
+- `01_Shared_Standards/instructional-design/artifact-first-response-standard.md`
+- `01_Shared_Standards/instructional-design/teacher-decision-studio-standard.md`
+- `01_Shared_Standards/instructional-design/teacher-decision-studio-previews-standard.md`
 - `01_Shared_Standards/google-workspace/`
 
 ## Owned Systems
 
 Generated slide decks, worksheets, guided notes, handouts, lesson-content specs,
-local lesson-candidate records, approved asset reuse notes, and material-quality
-handoffs.
+local lesson-candidate records, approved asset reuse notes, material-quality
+handoffs, and Teacher Decision Studio per-option in-chat and PDF worksheet
+previews.
 
 ## Allowed Write Surfaces
 
 New files inside an explicitly confirmed target Drive folder; local
 lesson-candidate record files; local reports listing approved assets used,
-rubric rows needing revision, and handoff notes.
+rubric rows needing revision, and handoff notes; Teacher Decision Studio
+preview PDFs in an approved preview/review destination or a bounded temporary
+location, always labeled `Teacher Decision Preview -- Not Yet Authorized for
+Classroom Distribution`.
 
 ## Blocked Write Surfaces
 
@@ -62,10 +69,14 @@ or destination rules.
 
 ## Version
 
-0.4.7
+0.4.8
 
 ## Changelog
 
+- 0.4.8 inherits the artifact-first response standard and both Teacher
+  Decision Studio standards; owns per-option in-chat and PDF worksheet
+  previews (#821, #823, #824) without treating a preview as production
+  authorization.
 - 0.4.7 inherits the Lesson Vocabulary Planner response standard and limits materials to confirmed, material-safe entries.
 - 0.4.6 inherits the Unit Vocabulary Map standard and limits materials to approved, material-safe vocabulary.
 - 0.4.5 added inherited instructional materials context defaults standard.

@@ -1,0 +1,363 @@
+registry_name: lp-pacing-handoff-contract
+contract_version: "1.0"
+record_revision: 1
+normative_standards:
+  - 01_Shared_Standards/instructional-design/lp-pacing-handoff-contract.md
+  - 01_Shared_Standards/instructional-design/lp-pacing-handoff-adaptation.md
+illustrative_standard: 01_Shared_Standards/instructional-design/lp-pacing-handoff-cases.md
+authority_state_registry: 04_Registry/lp-authority-state-registry.yaml
+bounds:
+  evidence_sources:
+    maximum: 20
+  instructional_functions:
+    maximum: 16
+  primary_time_drivers:
+    maximum: 6
+  unresolved_uncertainties:
+    maximum: 12
+  route_references:
+    maximum: 3
+owners:
+  - role: Unit Alignment Agent
+    normative_id: owner-unit-alignment
+    scope: owned
+  - role: Unit Alignment Agent
+    normative_id: owner-unit-alignment-excluded
+    scope: excluded
+  - role: Teacher Modeling Coach
+    normative_id: owner-teacher-modeling
+    scope: owned
+  - role: Instructional Materials Coach
+    normative_id: owner-instructional-materials
+    scope: owned
+  - role: Instructional Materials Coach
+    normative_id: owner-instructional-materials-excluded
+    scope: excluded
+  - role: QA / Test Agent
+    normative_id: owner-qa-test
+    scope: owned
+evidence_intake:
+  - value: teacher-entered-summary
+    normative_id: intake-teacher-summary
+    requires_extraction_lane: false
+  - value: eia1-normalized-summary
+    normative_id: intake-eia1-normalized
+    requires_extraction_lane: false
+  - value: admission-checks
+    normative_id: intake-admission-checks
+    requires_extraction_lane: false
+  - value: rejected-summary-states
+    normative_id: intake-rejected-summary
+    requires_extraction_lane: false
+  - value: disposition-scoped-use
+    normative_id: intake-disposition-use
+    requires_extraction_lane: false
+  - value: preserved-measurement-limits
+    normative_id: intake-preserved-limits
+    requires_extraction_lane: false
+  - value: prohibited-operations
+    normative_id: intake-prohibited-operations
+    requires_extraction_lane: false
+  - value: independent-teacher-decision
+    normative_id: intake-independent-teacher-decision
+    requires_extraction_lane: false
+  - value: teacher-summary-fallback
+    normative_id: intake-fallback-availability
+    requires_extraction_lane: false
+packet_rules:
+  - value: provider-neutral
+    normative_id: packet-provider-neutral
+  - value: versioned-identity
+    normative_id: packet-versioned-identity
+  - value: bounded-evidence-reference
+    normative_id: packet-bounded-evidence
+  - value: fail-closed-defaults
+    normative_id: packet-fail-closed-defaults
+  - value: immutable-non-authority-flags
+    normative_id: packet-non-authority-flags
+packet_fields:
+  - name: contract_version
+    kind: identity
+    required: true
+    default: "1.0"
+  - name: record_revision
+    kind: identity
+    required: true
+    default: 1
+  - name: objective_ref
+    kind: reference
+    required: true
+    default: null
+  - name: success_criteria_ref
+    kind: reference
+    required: true
+    default: null
+  - name: route_references
+    kind: reference
+    required: false
+    default: null
+    maximum: 3
+  - name: period_minutes
+    kind: input
+    required: true
+    default: null
+  - name: available_lesson_minutes
+    kind: input
+    required: true
+    default: null
+  - name: evidence_sources
+    kind: evidence
+    required: true
+    default: null
+  - name: evidence_intake_summary
+    kind: evidence
+    required: false
+    default: null
+  - name: what_supported
+    kind: evidence
+    required: false
+    default: null
+  - name: what_remains_unmeasured
+    kind: evidence
+    required: false
+    default: null
+  - name: instructional_functions
+    kind: input
+    required: true
+    default: null
+  - name: unadapted_range
+    kind: advisory
+    required: true
+    default: null
+  - name: adapted_range
+    kind: advisory
+    required: false
+    default: null
+  - name: advisory_assessment_outcome
+    kind: advisory
+    required: true
+    default: insufficient-evidence
+  - name: routing_recommendation
+    kind: routing
+    required: true
+    default: hold
+  - name: confidence
+    kind: advisory
+    required: true
+    default: low
+  - name: difficulty_diagnosis
+    kind: diagnosis
+    required: true
+    default: null
+  - name: primary_time_drivers
+    kind: diagnosis
+    required: true
+    default: null
+  - name: preserved_functions
+    kind: adaptation
+    required: true
+    default: null
+  - name: compressed_instances
+    kind: adaptation
+    required: true
+    default: null
+  - name: changed_formats
+    kind: adaptation
+    required: true
+    default: null
+  - name: deferred_functions
+    kind: adaptation
+    required: true
+    default: null
+  - name: split_plan
+    kind: adaptation
+    required: false
+    default: null
+  - name: teacher_decision
+    kind: evidence
+    required: false
+    default: null
+  - name: manual_review_required
+    kind: evidence
+    required: true
+    default: true
+  - name: unresolved_uncertainties
+    kind: evidence
+    required: true
+    default: null
+  - name: next_owner_recommendation
+    kind: routing
+    required: true
+    default: Unit Alignment Agent
+  - name: report_only
+    kind: non-authority
+    required: true
+    default: true
+  - name: execution_authorized
+    kind: non-authority
+    required: true
+    default: false
+  - name: artifact_authorized
+    kind: non-authority
+    required: true
+    default: false
+  - name: readiness_authorized
+    kind: non-authority
+    required: true
+    default: false
+  - name: grading_authorized
+    kind: non-authority
+    required: true
+    default: false
+  - name: student_classification_authorized
+    kind: non-authority
+    required: true
+    default: false
+  - name: automatic_placement_authorized
+    kind: non-authority
+    required: true
+    default: false
+  - name: route_assignment_authorized
+    kind: non-authority
+    required: true
+    default: false
+  - name: production_authorized
+    kind: non-authority
+    required: true
+    default: false
+  - name: external_write_authorized
+    kind: non-authority
+    required: true
+    default: false
+authority_objects:
+  - object: pacing_assessment
+    owner: Unit Alignment Agent
+    normative_id: authority-pacing-assessment
+    is_gate: false
+  - object: alignment_gate
+    owner: Unit Alignment Agent
+    normative_id: authority-alignment-gate
+    is_gate: true
+  - object: modeling_handoff_gate
+    owner: Teacher Modeling Coach
+    normative_id: authority-modeling-handoff-gate
+    is_gate: true
+  - object: production_authorization
+    owner: Production Control
+    normative_id: authority-production-authorization
+    is_gate: true
+authority_rules:
+  - value: owner-state-independence
+    normative_id: authority-independence
+  - value: no-inherited-gate-default
+    normative_id: authority-no-inheritance
+  - value: reviewer-may-reject-advisory
+    normative_id: authority-reviewer-override
+  - value: routing-is-not-permission
+    normative_id: authority-routing-is-not-permission
+diagnosis_dimensions:
+  - value: instructional_demand
+    normative_id: diagnosis-instructional-demand
+  - value: learner_relative_familiarity
+    normative_id: diagnosis-learner-relative-familiarity
+  - value: language_and_representation_load
+    normative_id: diagnosis-language-and-representation-load
+  - value: material_induced_load
+    normative_id: diagnosis-material-induced-load
+  - value: operational_load
+    normative_id: diagnosis-operational-load
+  - value: evidence_uncertainty
+    normative_id: diagnosis-evidence-uncertainty
+diagnosis_rules:
+  - value: dimensions-reported-separately
+    normative_id: diagnosis-separation
+adaptation_hierarchy:
+  - position: 1
+    value: remove-operational-friction
+    normative_id: compression-operational-friction
+  - position: 2
+    value: remove-extraneous-material
+    normative_id: compression-extraneous-material
+  - position: 3
+    value: consolidate-transitions
+    normative_id: compression-consolidate-transitions
+  - position: 4
+    value: reduce-repetitions
+    normative_id: compression-reduce-repetitions
+  - position: 5
+    value: change-evidence-format
+    normative_id: compression-change-evidence-format
+  - position: 6
+    value: defer-optional-polish
+    normative_id: compression-defer-optional-polish
+  - position: 7
+    value: continuation-or-split
+    normative_id: compression-continuation-or-split
+  - position: 8
+    value: route-to-curriculum-owner
+    normative_id: compression-route-to-curriculum-owner
+adaptation_rules:
+  - value: protected-instructional-functions
+    normative_id: compression-protected-functions
+  - value: function-preservation-record
+    normative_id: function-preservation-record
+route_back_targets:
+  - value: unit-alignment
+    normative_id: route-back-unit-alignment
+  - value: teacher-modeling
+    normative_id: route-back-teacher-modeling
+  - value: instructional-materials
+    normative_id: route-back-instructional-materials
+route_back_rules:
+  - value: route-back-is-not-failure
+    normative_id: route-back-is-not-failure
+mixed_class_pathways:
+  - value: lp5-by-reference
+    normative_id: pathway-reference-lp5
+  - value: carried-route-references
+    normative_id: pathway-carried-references
+  - value: no-learner-placement
+    normative_id: pathway-no-placement
+destination_boundary:
+  - value: notion-design-owned-by-lp7
+    normative_id: boundary-notion-lp7
+  - value: runtime-evaluator-owned-by-lp4
+    normative_id: boundary-implementation
+retired_terms:
+  - value: PASS/BLOCKED-compatible
+    normative_id: retired-pass-blocked-compatible
+  - value: ready-for-modeling
+    normative_id: retired-pacing-derived-ready-for-modeling
+  - value: fits
+    normative_id: retired-historical-fits-mapping
+  - value: inherited-gate-default
+    normative_id: retired-inherited-gate-default
+  - value: combined-readiness-status
+    normative_id: retired-combined-readiness-status
+  - value: assignment-similarity-percentage
+    normative_id: retired-opaque-similarity-score
+illustrative_case:
+  illustrative_id: case-production-cycles-55-minute
+  period_minutes: 55
+  universal_schedule: false
+required_fixtures:
+  - illustrative_id: fixture-pacing-feasible-alignment-blocked
+  - illustrative_id: fixture-pacing-infeasible-alignment-cleared
+  - illustrative_id: fixture-pacing-stale-modeling-current
+  - illustrative_id: fixture-conflicting-owner-outputs
+  - illustrative_id: fixture-missing-modeling-gate-not-evaluated
+  - illustrative_id: fixture-reviewer-rejects-advisory
+  - illustrative_id: fixture-teacher-summary-without-ocr
+  - illustrative_id: fixture-eia-direct-evidence-bounded
+  - illustrative_id: fixture-eia-partial-evidence-preserves-modeling
+  - illustrative_id: fixture-eia-context-evidence-operational-only
+  - illustrative_id: fixture-eia-uncertain-or-privacy-ineligible-excluded
+  - illustrative_id: fixture-extraction-confidence-without-correctness
+  - illustrative_id: fixture-three-routes-common-synthesis
+  - illustrative_id: fixture-vocabulary-evidence-misused-for-performance
+  - illustrative_id: fixture-context-evidence-misused-as-mastery
+  - illustrative_id: fixture-accepted-but-not-inspected-review
+  - illustrative_id: fixture-stale-runtime-fingerprint
+  - illustrative_id: fixture-summary-joined-to-learner-or-subgroup
+  - illustrative_id: fixture-usable-for-pacing-mapped-to-gate
+  - illustrative_id: fixture-suspended-extraction-lane-fallback

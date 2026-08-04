@@ -4,9 +4,18 @@ Deterministic, offline, dry-run reconciliation planner for moving reviewed icon
 assets from the `Approved Use Review` Google Sheet into the Notion Visual Asset
 Library. See Issue #693.
 
-This package performs **zero external writes and zero network calls**. It accepts
-normalized in-memory records and returns a plan. Live Google Sheets reads, live
-Notion queries, and live Notion writes belong to separately authorized adapters.
+The planner core performs **zero network calls and zero external writes**.
+Optional Google Sheets and Notion adapters may perform only separately
+authorized bounded reads. No component performs an external write. Live
+credentials, targets, smoke testing, and production synchronization remain
+separately authorized.
+
+Adapter contracts:
+
+- [`SHEETS_ADAPTER.md`](SHEETS_ADAPTER.md) — fixture-first Google Sheets values
+  extraction for Issue #731.
+- [`NOTION_ADAPTER.md`](NOTION_ADAPTER.md) — fixture-first Notion data-source
+  extraction for Issue #735.
 
 ## Input contract
 
@@ -56,8 +65,6 @@ file exists or points to the intended asset.
 
 ## Result types
 
-Every source record receives exactly one result:
-
 | Result | Meaning |
 |---|---|
 | `UPDATE_EXISTING` | Identity matches one valid existing record. |
@@ -70,14 +77,12 @@ Every source record receives exactly one result:
 ## Idempotency and simulation
 
 `build_reconciliation_plan` is a pure function whose output order mirrors the
-source-record order. `simulate_apply` pairs plan entries and source records
-positionally, verifies row and identity agreement, and materializes only
-`CREATE_MISSING` entries in memory. Duplicate row labels are preserved rather
-than collapsed through a dictionary. Count, order, or identity mismatches fail
-closed with fixed diagnostics.
+source-record order. `simulate_apply` verifies row and identity agreement and
+materializes only `CREATE_MISSING` entries in memory. Count, order, or identity
+mismatches fail closed with fixed diagnostics.
 
-Passing the simulated records into a second plan reclassifies prior creates as
-updates, so a repeated dry run does not propose duplicate creates.
+Passing simulated records into a second plan reclassifies prior creates as
+updates, so repeated dry runs do not propose duplicate creates.
 
 ## Reporting and boundaries
 
@@ -86,5 +91,6 @@ updates, so a repeated dry run does not propose duplicate creates.
 `zero_write_confirmed` remain true for planner-produced output.
 
 The planner does not prove live Drive existence, read Google Sheets or Notion,
-measure real duplicate rates, or perform end-to-end synchronization. Those
-integration behaviors remain deferred and separately authorized.
+measure real duplicate rates, or perform end-to-end synchronization. Optional
+read adapters remain separately authorized, and all external writes remain
+excluded.
