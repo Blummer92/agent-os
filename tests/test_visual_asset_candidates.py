@@ -7,6 +7,9 @@ from pathlib import Path
 import pytest
 
 from instructional_workflow_contracts import ValidationStatus
+from instructional_workflow_contracts.material_requirement import (
+    material_requirement_source_fingerprint,
+)
 from instructional_workflow_contracts.visual_asset_candidates import (
     MAX_CANDIDATES,
     filter_approved_visual_candidates,
@@ -205,6 +208,9 @@ def test_non_actionable_plan_is_rejected() -> None:
         "maximum_visual_count": 0,
         "roles": [],
     }
+    requirement["identity"]["source_fingerprint"] = (  # type: ignore[index]
+        material_requirement_source_fingerprint(requirement)
+    )
     plan = plan_visual_needs(requirement)
     assert plan.record is not None
 
@@ -215,7 +221,7 @@ def test_non_actionable_plan_is_rejected() -> None:
     )
 
     assert result.status is ValidationStatus.INVALID
-    assert result.reason_codes == ("visual-candidates-plan-not-actionable",)
+    assert result.reason_codes == ("asset-candidates-plan-not-actionable",)
 
 
 def test_plain_plan_mapping_is_not_trusted() -> None:
@@ -225,4 +231,4 @@ def test_plain_plan_mapping_is_not_trusted() -> None:
         source_revision="visual-library-snapshot-v1",
     )
     assert result.status is ValidationStatus.INVALID
-    assert result.reason_codes == ("visual-candidates-invalid-plan",)
+    assert result.reason_codes == ("asset-candidates-invalid-plan",)
