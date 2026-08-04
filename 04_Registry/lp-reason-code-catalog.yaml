@@ -587,6 +587,7 @@ codes:
   - gate-advancement
   - grading
   - learner-classification
+  - mastery
   - placement
   - production
   - readiness
@@ -609,6 +610,7 @@ codes:
   - gate-advancement
   - grading
   - learner-classification
+  - mastery
   - placement
   - production
   - readiness
@@ -631,6 +633,7 @@ codes:
   - gate-advancement
   - grading
   - learner-classification
+  - mastery
   - placement
   - production
   - readiness
@@ -653,6 +656,7 @@ codes:
   - gate-advancement
   - grading
   - learner-classification
+  - mastery
   - placement
   - production
   - readiness

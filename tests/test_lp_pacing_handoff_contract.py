@@ -146,6 +146,19 @@ def _validate_contract(document: dict) -> None:
     names = [field["name"] for field in document["packet_fields"]]
     assert len(names) == len(set(names))
 
+    route_references = next(
+        field for field in document["packet_fields"]
+        if field["name"] == "route_references"
+    )
+    assert route_references == {
+        "name": "route_references",
+        "kind": "reference",
+        "required": False,
+        "default": None,
+        "maximum": document["bounds"]["route_references"]["maximum"],
+    }
+    assert route_references["maximum"] == 3
+
     assert tuple(item["value"] for item in document["diagnosis_dimensions"]) == DIAGNOSIS_DIMENSIONS
 
     positions = [step["position"] for step in document["adaptation_hierarchy"]]
@@ -228,6 +241,19 @@ def test_hostile_yaml_documents_fail_closed(old: str, new: str) -> None:
         _validate_contract(load_yaml_text(text))
 
 
+def test_route_references_rejects_four_entries() -> None:
+    base = read_text(REGISTRY_PATH)
+    text = base.replace(
+        "    maximum: 3\n  - name: period_minutes",
+        "    maximum: 4\n  - name: period_minutes",
+        1,
+    )
+    assert text != base, "route-reference mutation did not apply"
+
+    with pytest.raises(AssertionError):
+        _validate_contract(load_yaml_text(text))
+
+
 @pytest.mark.parametrize(
     ("old", "new"),
     [
@@ -265,9 +291,24 @@ def test_authority_and_fail_closed_violations_are_rejected(old: str, new: str) -
         _validate_contract(load_yaml_text(text))
 
 
-def test_missing_owner_decision_resolves_only_to_not_evaluated() -> None:
-    supplied: dict[str, str] = {}
-    assert supplied.get("modeling_handoff_gate", "NOT_EVALUATED") == "NOT_EVALUATED"
+def test_missing_owner_decision_preserves_canonical_not_evaluated() -> None:
+    authority = load_registry(AUTHORITY_REGISTRY_PATH)
+    document = _registry()
+
+    gate_states = [record["value"] for record in authority["gate_states"]]
+    assert gate_states.count("NOT_EVALUATED") == 1
+    assert authority["gate_states"][0] == {
+        "value": "NOT_EVALUATED",
+        "normative_id": "gate-not-evaluated",
+    }
+
+    authority_rules = {record["value"] for record in document["authority_rules"]}
+    assert "no-inherited-gate-default" in authority_rules
+
+    fixture_ids = {
+        record["illustrative_id"] for record in document["required_fixtures"]
+    }
+    assert "fixture-missing-modeling-gate-not-evaluated" in fixture_ids
 
 
 def test_teacher_summary_path_never_requires_the_extraction_lane() -> None:

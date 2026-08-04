@@ -27,7 +27,7 @@ EXACT_TYPES = (dict, list, str, int, bool, type(None))
 FORBIDDEN_GOVERNED_KEYS = frozenset({"status", "ready", "approved", "authorized"})
 MAX_NESTING_DEPTH = 20
 
-_ANCHOR_RE = re.compile(r"^### ([a-z0-9]+(?:-[a-z0-9]+)*)$", flags=re.MULTILINE)
+_ANCHOR_RE = re.compile(r"^#{2,3} ([a-z0-9]+(?:-[a-z0-9]+)*)$", flags=re.MULTILINE)
 _YAML_ANCHOR_RE = re.compile(r"(^|\s)(?:&|\*)[A-Za-z0-9_-]+")
 _YAML_MERGE_RE = re.compile(r"(^|\s)<<\s*:", flags=re.MULTILINE)
 _YAML_TAG_RE = re.compile(r"(^|\s)![A-Za-z]")
@@ -131,34 +131,20 @@ def assert_normative_ids_match_anchors(document: dict, relative_paths: Iterable[
     assert not unreferenced, f"Markdown anchor never referenced by the registry: {unreferenced}"
 
 
-def assert_no_forbidden_governed_keys(
-    document: Any,
-    *,
-    exempt_container_keys: frozenset[str] = frozenset(),
-    _exempt: bool = False,
-) -> None:
+def assert_no_forbidden_governed_keys(document: Any) -> None:
     """Reject generic ``status``/``ready``/``approved``/``authorized`` keys.
 
-    ``exempt_container_keys`` names containers whose subtree preserves historical
-    literals (for example ``legacy_aliases``) and is therefore allowed to carry
-    them as display-only evidence.
+    Historical literals remain valid as values, but no container disables
+    governed-key validation for its descendants.
     """
     if type(document) is dict:
         for key, nested in document.items():
-            if key in FORBIDDEN_GOVERNED_KEYS and not _exempt:
+            if key in FORBIDDEN_GOVERNED_KEYS:
                 raise AssertionError(f"forbidden governed key: {key}")
-            assert_no_forbidden_governed_keys(
-                nested,
-                exempt_container_keys=exempt_container_keys,
-                _exempt=_exempt or key in exempt_container_keys,
-            )
+            assert_no_forbidden_governed_keys(nested)
     elif type(document) is list:
         for nested in document:
-            assert_no_forbidden_governed_keys(
-                nested,
-                exempt_container_keys=exempt_container_keys,
-                _exempt=_exempt,
-            )
+            assert_no_forbidden_governed_keys(nested)
 
 
 def assert_canonical_serialization_is_stable(document: dict) -> None:

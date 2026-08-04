@@ -214,13 +214,32 @@ def test_result_bound_matches_the_authority_registry() -> None:
 
 
 def test_demand_diagnosis_references_the_handoff_contract_dimensions() -> None:
-    """LP15 names causes for the same six dimensions LP3 separates."""
+    """LP15 names one cause code for each LP3 diagnosis dimension."""
     handoff = load_registry(HANDOFF_REGISTRY_PATH)
-    dimensions = {item["value"].replace("_", "-") for item in handoff["diagnosis_dimensions"]}
-    demand_codes = [
-        record["code"] for record in _registry()["codes"] if record["family"] == "demand-diagnosis"
-    ]
-    assert len(demand_codes) == len(dimensions)
+    dimensions = {
+        item["value"].replace("_", "-")
+        for item in handoff["diagnosis_dimensions"]
+    }
+    demand_codes = {
+        record["code"]
+        for record in _registry()["codes"]
+        if record["family"] == "demand-diagnosis"
+    }
+
+    dimension_to_code = {
+        "instructional-demand": "lp-demand-instructional-dominant",
+        "learner-relative-familiarity": "lp-demand-learner-familiarity-uncertain",
+        "language-and-representation-load": (
+            "lp-demand-language-representation-dominant"
+        ),
+        "material-induced-load": "lp-demand-material-induced-dominant",
+        "operational-load": "lp-demand-operational-dominant",
+        "evidence-uncertainty": "lp-demand-evidence-uncertainty-dominant",
+    }
+
+    assert set(dimension_to_code) == dimensions
+    assert set(dimension_to_code.values()) == demand_codes
+    assert len(dimension_to_code.values()) == len(set(dimension_to_code.values()))
 
 
 def test_no_code_labels_a_learner() -> None:

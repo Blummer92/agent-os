@@ -92,6 +92,11 @@ packet_fields:
     kind: reference
     required: true
     default: null
+  - name: route_references
+    kind: reference
+    required: false
+    default: null
+    maximum: 3
   - name: period_minutes
     kind: input
     required: true

@@ -135,7 +135,11 @@ proposed_properties:
     authority_class: advisory
     privacy_class: none
     retention_class: planning-cycle
+    schema_reference: lp7-property-pacing-feasibility-advisory
     missing_behaviour: display NOT_EVALUATED
+    stale_behaviour: display stale and require manual review
+    conflicting_behaviour: display conflicting and require manual review
+    not_evaluated_behaviour: display NOT_EVALUATED
     prohibited_implication: gate-advancement
     normative_id: display-advisory-labelled
   - target: unit-alignment-readiness-dashboard
@@ -147,7 +151,11 @@ proposed_properties:
     authority_class: evidence
     privacy_class: none
     retention_class: planning-cycle
+    schema_reference: lp7-property-pacing-confidence
     missing_behaviour: display NOT_EVALUATED
+    stale_behaviour: display stale and require manual review
+    conflicting_behaviour: display conflicting and require manual review
+    not_evaluated_behaviour: display NOT_EVALUATED
     prohibited_implication: readiness
     normative_id: authority-required-property-map
   - target: unit-alignment-readiness-dashboard
@@ -159,7 +167,11 @@ proposed_properties:
     authority_class: evidence
     privacy_class: none
     retention_class: review-window
+    schema_reference: lp7-property-pacing-review-date
     missing_behaviour: display blank and treat the assessment as unreviewed
+    stale_behaviour: display stale and require manual review
+    conflicting_behaviour: display conflicting and require manual review
+    not_evaluated_behaviour: display NOT_EVALUATED
     prohibited_implication: gate-advancement
     normative_id: retention-expiry-and-suppression
   - target: unit-alignment-readiness-dashboard
@@ -171,7 +183,11 @@ proposed_properties:
     authority_class: evidence
     privacy_class: none
     retention_class: planning-cycle
+    schema_reference: lp7-property-pacing-schema-version
     missing_behaviour: suppress the record as unversioned
+    stale_behaviour: display stale and require manual review
+    conflicting_behaviour: display conflicting and require manual review
+    not_evaluated_behaviour: display NOT_EVALUATED
     prohibited_implication: gate-advancement
     normative_id: sot-github-canonical
   - target: unit-alignment-readiness-dashboard
@@ -183,7 +199,11 @@ proposed_properties:
     authority_class: planning
     privacy_class: none
     retention_class: planning-cycle
+    schema_reference: lp7-property-lp-planning-record
     missing_behaviour: display empty
+    stale_behaviour: display stale and require manual review
+    conflicting_behaviour: display conflicting and require manual review
+    not_evaluated_behaviour: display NOT_EVALUATED
     prohibited_implication: readiness
     normative_id: architecture-no-detailed-evidence-in-summary
   - target: unit-alignment-readiness-dashboard
@@ -195,7 +215,11 @@ proposed_properties:
     authority_class: advisory
     privacy_class: none
     retention_class: planning-cycle
+    schema_reference: lp7-property-main-time-driver-advisory
     missing_behaviour: display NOT_EVALUATED
+    stale_behaviour: display stale and require manual review
+    conflicting_behaviour: display conflicting and require manual review
+    not_evaluated_behaviour: display NOT_EVALUATED
     prohibited_implication: learner-classification
     normative_id: display-no-combined-rollup
   - target: unit-alignment-readiness-dashboard
@@ -207,7 +231,11 @@ proposed_properties:
     authority_class: advisory
     privacy_class: none
     retention_class: planning-cycle
+    schema_reference: lp7-property-next-owner-recommendation
     missing_behaviour: display NOT_EVALUATED
+    stale_behaviour: display stale and require manual review
+    conflicting_behaviour: display conflicting and require manual review
+    not_evaluated_behaviour: display NOT_EVALUATED
     prohibited_implication: gate-advancement
     normative_id: display-owner-named-on-gate
   - target: unit-alignment-readiness-dashboard
@@ -219,19 +247,107 @@ proposed_properties:
     authority_class: advisory
     privacy_class: none
     retention_class: planning-cycle
+    schema_reference: lp7-property-pathway-brief-available-advisory
     missing_behaviour: display NOT_EVALUATED
+    stale_behaviour: display stale and require manual review
+    conflicting_behaviour: display conflicting and require manual review
+    not_evaluated_behaviour: display NOT_EVALUATED
     prohibited_implication: placement
     normative_id: projection-pathway-briefs-only
   - target: lesson-pacing-and-pathways
-    name: Difficulty Diagnosis — Six Dimensions
+    name: Instructional Demand — Advisory
     semantic_owner: Unit Alignment Agent
     canonical_source: lp-pacing-handoff-contract
-    purpose: hold the six separated dimensions as six distinct properties
+    purpose: display the instructional-demand diagnosis dimension separately
     permitted_writer: unit-alignment-agent
     authority_class: advisory
     privacy_class: none
     retention_class: planning-cycle
-    missing_behaviour: display NOT_EVALUATED per dimension
+    schema_reference: lp7-property-instructional-demand
+    missing_behaviour: display NOT_EVALUATED
+    stale_behaviour: display stale and require manual review
+    conflicting_behaviour: display conflicting and require manual review
+    not_evaluated_behaviour: display NOT_EVALUATED
+    prohibited_implication: learner-classification
+    normative_id: architecture-supporting-data-source
+  - target: lesson-pacing-and-pathways
+    name: Learner Relative Familiarity — Advisory
+    semantic_owner: Unit Alignment Agent
+    canonical_source: lp-pacing-handoff-contract
+    purpose: display the learner-relative-familiarity diagnosis dimension separately
+    permitted_writer: unit-alignment-agent
+    authority_class: advisory
+    privacy_class: none
+    retention_class: planning-cycle
+    schema_reference: lp7-property-learner-relative-familiarity
+    missing_behaviour: display NOT_EVALUATED
+    stale_behaviour: display stale and require manual review
+    conflicting_behaviour: display conflicting and require manual review
+    not_evaluated_behaviour: display NOT_EVALUATED
+    prohibited_implication: learner-classification
+    normative_id: architecture-supporting-data-source
+  - target: lesson-pacing-and-pathways
+    name: Language and Representation Load — Advisory
+    semantic_owner: Unit Alignment Agent
+    canonical_source: lp-pacing-handoff-contract
+    purpose: display the language-and-representation-load diagnosis dimension separately
+    permitted_writer: unit-alignment-agent
+    authority_class: advisory
+    privacy_class: none
+    retention_class: planning-cycle
+    schema_reference: lp7-property-language-and-representation-load
+    missing_behaviour: display NOT_EVALUATED
+    stale_behaviour: display stale and require manual review
+    conflicting_behaviour: display conflicting and require manual review
+    not_evaluated_behaviour: display NOT_EVALUATED
+    prohibited_implication: learner-classification
+    normative_id: architecture-supporting-data-source
+  - target: lesson-pacing-and-pathways
+    name: Material-Induced Load — Advisory
+    semantic_owner: Unit Alignment Agent
+    canonical_source: lp-pacing-handoff-contract
+    purpose: display the material-induced-load diagnosis dimension separately
+    permitted_writer: unit-alignment-agent
+    authority_class: advisory
+    privacy_class: none
+    retention_class: planning-cycle
+    schema_reference: lp7-property-material-induced-load
+    missing_behaviour: display NOT_EVALUATED
+    stale_behaviour: display stale and require manual review
+    conflicting_behaviour: display conflicting and require manual review
+    not_evaluated_behaviour: display NOT_EVALUATED
+    prohibited_implication: learner-classification
+    normative_id: architecture-supporting-data-source
+  - target: lesson-pacing-and-pathways
+    name: Operational Load — Advisory
+    semantic_owner: Unit Alignment Agent
+    canonical_source: lp-pacing-handoff-contract
+    purpose: display the operational-load diagnosis dimension separately
+    permitted_writer: unit-alignment-agent
+    authority_class: advisory
+    privacy_class: none
+    retention_class: planning-cycle
+    schema_reference: lp7-property-operational-load
+    missing_behaviour: display NOT_EVALUATED
+    stale_behaviour: display stale and require manual review
+    conflicting_behaviour: display conflicting and require manual review
+    not_evaluated_behaviour: display NOT_EVALUATED
+    prohibited_implication: learner-classification
+    normative_id: architecture-supporting-data-source
+  - target: lesson-pacing-and-pathways
+    name: Evidence Uncertainty — Advisory
+    semantic_owner: Unit Alignment Agent
+    canonical_source: lp-pacing-handoff-contract
+    purpose: display the evidence-uncertainty diagnosis dimension separately
+    permitted_writer: unit-alignment-agent
+    authority_class: advisory
+    privacy_class: none
+    retention_class: planning-cycle
+    schema_reference: lp7-property-evidence-uncertainty
+    missing_behaviour: display NOT_EVALUATED
+    stale_behaviour: display stale and require manual review
+    conflicting_behaviour: display conflicting and require manual review
+    not_evaluated_behaviour: display NOT_EVALUATED
     prohibited_implication: learner-classification
     normative_id: architecture-supporting-data-source
   - target: lesson-pacing-and-pathways
@@ -243,7 +359,11 @@ proposed_properties:
     authority_class: planning
     privacy_class: none
     retention_class: planning-cycle
+    schema_reference: lp7-property-instructional-function-preservation
     missing_behaviour: display blank
+    stale_behaviour: display stale and require manual review
+    conflicting_behaviour: display conflicting and require manual review
+    not_evaluated_behaviour: display NOT_EVALUATED
     prohibited_implication: gate-advancement
     normative_id: sot-notion-working-layer
   - target: lesson-pacing-and-pathways
@@ -255,7 +375,11 @@ proposed_properties:
     authority_class: evidence
     privacy_class: lp10-restricted
     retention_class: lp10-governed
+    schema_reference: lp7-property-evidence-summary-bounded
     missing_behaviour: display not-supplied
+    stale_behaviour: display stale and require manual review
+    conflicting_behaviour: display conflicting and require manual review
+    not_evaluated_behaviour: display NOT_EVALUATED
     prohibited_implication: mastery
     normative_id: eia-summary-only-projection
   - target: lesson-pacing-and-pathways
@@ -267,7 +391,11 @@ proposed_properties:
     authority_class: evidence
     privacy_class: lp10-restricted
     retention_class: lp10-governed
+    schema_reference: lp7-property-evidence-review-state
     missing_behaviour: display not-reviewed
+    stale_behaviour: display stale and require manual review
+    conflicting_behaviour: display conflicting and require manual review
+    not_evaluated_behaviour: display NOT_EVALUATED
     prohibited_implication: readiness
     normative_id: eia-visible-review-and-staleness
   - target: lesson-pacing-and-pathways
@@ -279,7 +407,11 @@ proposed_properties:
     authority_class: evidence
     privacy_class: aggregate-deidentified
     retention_class: review-window
+    schema_reference: lp7-property-what-supported-what-remains-unmeasured
     missing_behaviour: display blank
+    stale_behaviour: display stale and require manual review
+    conflicting_behaviour: display conflicting and require manual review
+    not_evaluated_behaviour: display NOT_EVALUATED
     prohibited_implication: mastery
     normative_id: eia-what-supported-and-unmeasured
   - target: lesson-run-log
@@ -291,7 +423,11 @@ proposed_properties:
     authority_class: evidence
     privacy_class: aggregate-deidentified
     retention_class: lp10-governed
+    schema_reference: lp7-property-aggregate-run-summary
     missing_behaviour: display blank
+    stale_behaviour: display stale and require manual review
+    conflicting_behaviour: display conflicting and require manual review
+    not_evaluated_behaviour: display NOT_EVALUATED
     prohibited_implication: learner-classification
     normative_id: architecture-lesson-run-log
 proposed_views:
@@ -334,16 +470,73 @@ pilot_records:
     provisional_timing_range_required: true
     route_briefs_required: false
     synthetic_evidence_summary: optional
+    diagnostic_dimensions:
+      - instructional_demand
+      - learner_relative_familiarity
+      - language_and_representation_load
+      - material_induced_load
+      - operational_load
+      - evidence_uncertainty
+    manual_review_questions:
+      - which estimate remains uncertain
+      - which owner decision remains unresolved
+    post_lesson_aggregate_evidence:
+      - planned-versus-actual-duration
+      - aggregate-route-usefulness
+    usefulness_criteria:
+      - supports a bounded pacing adjustment
+      - preserves independent owner authority
+    rollback_deletion_expectations:
+      - delete the synthetic pilot record after review
+      - preserve no learner-level or raw artifact data
   - id: composition-three-shot-planning
     minimum_fields: 9
     provisional_timing_range_required: true
     route_briefs_required: true
     synthetic_evidence_summary: optional
+    diagnostic_dimensions:
+      - instructional_demand
+      - learner_relative_familiarity
+      - language_and_representation_load
+      - material_induced_load
+      - operational_load
+      - evidence_uncertainty
+    manual_review_questions:
+      - which estimate remains uncertain
+      - which owner decision remains unresolved
+    post_lesson_aggregate_evidence:
+      - planned-versus-actual-duration
+      - aggregate-route-usefulness
+    usefulness_criteria:
+      - supports a bounded pacing adjustment
+      - preserves independent owner authority
+    rollback_deletion_expectations:
+      - delete the synthetic pilot record after review
+      - preserve no learner-level or raw artifact data
   - id: production-cycles-watch-check-fix
     minimum_fields: 11
     provisional_timing_range_required: true
     route_briefs_required: true
     synthetic_evidence_summary: optional
+    diagnostic_dimensions:
+      - instructional_demand
+      - learner_relative_familiarity
+      - language_and_representation_load
+      - material_induced_load
+      - operational_load
+      - evidence_uncertainty
+    manual_review_questions:
+      - which estimate remains uncertain
+      - which owner decision remains unresolved
+    post_lesson_aggregate_evidence:
+      - planned-versus-actual-duration
+      - aggregate-route-usefulness
+    usefulness_criteria:
+      - supports a bounded pacing adjustment
+      - preserves independent owner authority
+    rollback_deletion_expectations:
+      - delete the synthetic pilot record after review
+      - preserve no learner-level or raw artifact data
 operational_plan:
   preflight:
     - value: confirm exact target identifiers against the live workspace

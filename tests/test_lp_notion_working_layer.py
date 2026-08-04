@@ -70,7 +70,11 @@ PROPERTY_MAP_KEYS = (
     "authority_class",
     "privacy_class",
     "retention_class",
+    "schema_reference",
     "missing_behaviour",
+    "stale_behaviour",
+    "conflicting_behaviour",
+    "not_evaluated_behaviour",
     "prohibited_implication",
     "normative_id",
 )
@@ -127,6 +131,7 @@ def _validate_contract(document: dict) -> None:
     assert type(document["pilot_execution_authorized"]) is bool
     assert type(document["shadow_mode_only"]) is bool
     assert document["inspection"]["mode"] == "read-only"
+    assert document["inspection"]["scope"] == "schema-and-view-configuration-only"
     assert document["inspection"]["records_read"] is False
     assert document["inspection"]["student_data_read"] is False
 
@@ -160,11 +165,67 @@ def _validate_contract(document: dict) -> None:
         assert record["privacy_class"] in privacy_classes
         assert record["retention_class"] in retention_classes
         assert record["permitted_writer"] in writers
+        assert record["schema_reference"], f"{name} names no schema reference"
         assert record["missing_behaviour"], f"{name} does not define missing behaviour"
+        assert record["stale_behaviour"], f"{name} does not define stale behaviour"
+        assert record["conflicting_behaviour"], (
+            f"{name} does not define conflicting behaviour"
+        )
+        assert record["not_evaluated_behaviour"], (
+            f"{name} does not define NOT_EVALUATED behaviour"
+        )
         assert record["prohibited_implication"], f"{name} names no prohibited implication"
 
     for view in document["proposed_views"]:
         assert view["target"] in target_ids
+
+    diagnosis_names = {
+        record["name"]
+        for record in proposed
+        if record["target"] == "lesson-pacing-and-pathways"
+    }
+    required_diagnosis_names = {
+        "Instructional Demand — Advisory",
+        "Learner Relative Familiarity — Advisory",
+        "Language and Representation Load — Advisory",
+        "Material-Induced Load — Advisory",
+        "Operational Load — Advisory",
+        "Evidence Uncertainty — Advisory",
+    }
+    assert required_diagnosis_names <= diagnosis_names
+    assert "Difficulty Diagnosis — Six Dimensions" not in diagnosis_names
+
+    pilot_keys = (
+        "id",
+        "minimum_fields",
+        "provisional_timing_range_required",
+        "route_briefs_required",
+        "synthetic_evidence_summary",
+        "diagnostic_dimensions",
+        "manual_review_questions",
+        "post_lesson_aggregate_evidence",
+        "usefulness_criteria",
+        "rollback_deletion_expectations",
+    )
+    expected_dimensions = {
+        "instructional_demand",
+        "learner_relative_familiarity",
+        "language_and_representation_load",
+        "material_induced_load",
+        "operational_load",
+        "evidence_uncertainty",
+    }
+
+    assert len(document["pilot_records"]) == 3
+    for record in document["pilot_records"]:
+        assert tuple(record) == pilot_keys
+        assert record["provisional_timing_range_required"] is True
+        assert record["minimum_fields"] >= 1
+        assert set(record["diagnostic_dimensions"]) == expected_dimensions
+        assert record["manual_review_questions"]
+        assert record["post_lesson_aggregate_evidence"]
+        assert record["usefulness_criteria"]
+        assert record["rollback_deletion_expectations"]
 
     for phase in OPERATIONAL_PHASES:
         assert document["operational_plan"][phase], f"{phase} plan is empty"
@@ -203,9 +264,12 @@ def test_prohibited_data_covers_every_named_artifact_class() -> None:
         "full-recognized-responses-or-transcripts",
         "answer-level-or-learner-level-histories",
         "student-names-or-identifiers",
+        "diagnoses-or-protected-characteristics",
         "row-per-student-records",
         "permanent-ability-labels",
+        "model-internals-or-embeddings",
         "opaque-similarity-percentage",
+        "continuous-telemetry",
     }
     assert required <= prohibited
 
@@ -231,11 +295,61 @@ def test_display_only_mirrors_are_never_written_by_the_pacing_lane() -> None:
         assert record["property"] not in proposed_names
 
 
+def test_diagnosis_dimensions_are_six_separate_properties() -> None:
+    names = {
+        record["name"]
+        for record in _registry()["proposed_properties"]
+        if record["target"] == "lesson-pacing-and-pathways"
+    }
+
+    required = {
+        "Instructional Demand — Advisory",
+        "Learner Relative Familiarity — Advisory",
+        "Language and Representation Load — Advisory",
+        "Material-Induced Load — Advisory",
+        "Operational Load — Advisory",
+        "Evidence Uncertainty — Advisory",
+    }
+
+    assert required <= names
+    assert "Difficulty Diagnosis — Six Dimensions" not in names
+
+
 def test_pilot_covers_three_lesson_patterns() -> None:
     records = _registry()["pilot_records"]
     assert len(records) == 3
-    assert all(record["provisional_timing_range_required"] is True for record in records)
-    assert all(record["minimum_fields"] >= 1 for record in records)
+
+    required_keys = (
+        "id",
+        "minimum_fields",
+        "provisional_timing_range_required",
+        "route_briefs_required",
+        "synthetic_evidence_summary",
+        "diagnostic_dimensions",
+        "manual_review_questions",
+        "post_lesson_aggregate_evidence",
+        "usefulness_criteria",
+        "rollback_deletion_expectations",
+    )
+
+    expected_dimensions = {
+        "instructional_demand",
+        "learner_relative_familiarity",
+        "language_and_representation_load",
+        "material_induced_load",
+        "operational_load",
+        "evidence_uncertainty",
+    }
+
+    for record in records:
+        assert tuple(record) == required_keys
+        assert record["provisional_timing_range_required"] is True
+        assert record["minimum_fields"] >= 1
+        assert set(record["diagnostic_dimensions"]) == expected_dimensions
+        assert record["manual_review_questions"]
+        assert record["post_lesson_aggregate_evidence"]
+        assert record["usefulness_criteria"]
+        assert record["rollback_deletion_expectations"]
 
 
 @pytest.mark.parametrize(
@@ -265,9 +379,32 @@ def test_hostile_yaml_documents_fail_closed(old: str, new: str) -> None:
         # An unresolved decision downgraded so it no longer blocks.
         ("    blocks_live_change: true", "    blocks_live_change: false"),
         # A proposed property losing part of its authority map.
-        ("    privacy_class: none\n    retention_class: planning-cycle\n    missing_behaviour: display NOT_EVALUATED\n", "    privacy_class: none\n    retention_class: planning-cycle\n"),
+        (
+            "    schema_reference: lp7-property-pacing-feasibility-advisory\n"
+            "    missing_behaviour: display NOT_EVALUATED\n"
+            "    stale_behaviour: display stale and require manual review\n"
+            "    conflicting_behaviour: display conflicting and require manual review\n"
+            "    not_evaluated_behaviour: display NOT_EVALUATED\n",
+            "",
+        ),
         # Read-only inspection widened to records.
         ("  records_read: false", "  records_read: true"),
+        # Six distinct diagnosis properties collapsed back into one aggregate.
+        (
+            "    name: Instructional Demand — Advisory",
+            "    name: Difficulty Diagnosis — Six Dimensions",
+        ),
+        # A pilot record loses an explicit per-record requirement.
+        (
+            "    manual_review_questions:\n"
+            "      - which estimate remains uncertain\n"
+            "      - which owner decision remains unresolved\n",
+            "",
+        ),
+        (
+            "  scope: schema-and-view-configuration-only",
+            "  scope: records-and-content",
+        ),
     ],
 )
 def test_authorization_and_completeness_violations_are_rejected(old: str, new: str) -> None:

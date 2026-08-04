@@ -70,7 +70,7 @@ a governed field without explicit teacher confirmation.
 
 **LP Pacing Handoff Contract**
 (`01_Shared_Standards/instructional-design/lp-pacing-handoff-contract.md`,
-`lp-pacing-handoff-adaptation.md`, `lp-pacing-handoff-cases.md`, and
+`01_Shared_Standards/instructional-design/lp-pacing-handoff-adaptation.md`, `01_Shared_Standards/instructional-design/lp-pacing-handoff-cases.md`, and
 `04_Registry/lp-pacing-handoff-contract.yaml`, #648) defines the provider-neutral
 pacing handoff packet, owner-state independence, the six-dimension diagnosis, and
 the ordered adaptation hierarchy. It authorizes no runtime evaluator, OCR,

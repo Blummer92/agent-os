@@ -90,7 +90,16 @@ def _validate_contract(document: dict) -> None:
     assert len(all_namespace_values) == len(set(all_namespace_values))
     assert not set(namespace_values["advisory_assessment_outcomes"]) & set(GATE_STATES)
 
+    legacy_alias_keys = (
+        "value",
+        "normative_id",
+        "display_only",
+        "authority_advancing",
+        "migration_review_required",
+        "preserve_original_literal",
+    )
     for alias in document["legacy_aliases"]:
+        assert tuple(alias) == legacy_alias_keys
         assert alias["display_only"] is True
         assert alias["authority_advancing"] is False
         assert alias["migration_review_required"] is True
@@ -98,7 +107,7 @@ def _validate_contract(document: dict) -> None:
     for evidence in document["non_authority_evidence"]:
         assert evidence["authority_advancing"] is False
 
-    assert_no_forbidden_governed_keys(document, exempt_container_keys=frozenset({"legacy_aliases"}))
+    assert_no_forbidden_governed_keys(document)
 
 
 def test_registry_and_markdown_are_consistent() -> None:
@@ -149,6 +158,22 @@ def test_generic_governed_status_key_is_rejected() -> None:
         "registry_name: lp-authority-state-registry\nstatus: ready",
         1,
     )
+    with pytest.raises(AssertionError):
+        _validate_contract(load_yaml_text(text))
+
+
+def test_unexpected_governed_key_inside_legacy_aliases_fails_closed() -> None:
+    base = REGISTRY_PATH.read_text(encoding="utf-8")
+    text = base.replace(
+        "    display_only: true\n"
+        "    authority_advancing: false\n",
+        "    display_only: true\n"
+        "    authorized: true\n"
+        "    authority_advancing: false\n",
+        1,
+    )
+    assert text != base, "legacy-alias mutation did not apply"
+
     with pytest.raises(AssertionError):
         _validate_contract(load_yaml_text(text))
 
