@@ -70,6 +70,7 @@ PROPERTY_MAP_KEYS = (
     "authority_class",
     "privacy_class",
     "retention_class",
+    "unusable_state_suppression",
     "schema_reference",
     "missing_behaviour",
     "stale_behaviour",
@@ -165,6 +166,34 @@ def _validate_contract(document: dict) -> None:
         assert record["privacy_class"] in privacy_classes
         assert record["retention_class"] in retention_classes
         assert record["permitted_writer"] in writers
+
+        if name in {"Evidence Summary — Bounded", "Aggregate Run Summary"}:
+            suppression = record["unusable_state_suppression"]
+            assert tuple(suppression) == (
+                "stale",
+                "suspended",
+                "wrong-version",
+                "wrong-runtime",
+                "privacy-blocked",
+                "deletion-pending",
+            )
+
+            for state in suppression:
+                rule = suppression[state]
+                assert tuple(rule) == (
+                    "suppress_from",
+                    "manual_review_required",
+                )
+                assert tuple(rule["suppress_from"]) == (
+                    "views",
+                    "exports",
+                    "joins",
+                    "caches",
+                )
+                assert rule["manual_review_required"] is True
+        else:
+            assert record["unusable_state_suppression"] is None
+
         assert record["schema_reference"], f"{name} names no schema reference"
         assert record["missing_behaviour"], f"{name} does not define missing behaviour"
         assert record["stale_behaviour"], f"{name} does not define stale behaviour"
@@ -272,6 +301,39 @@ def test_prohibited_data_covers_every_named_artifact_class() -> None:
         "continuous-telemetry",
     }
     assert required <= prohibited
+
+
+def test_summary_properties_suppress_every_unusable_state() -> None:
+    records = {
+        record["name"]: record
+        for record in _registry()["proposed_properties"]
+    }
+
+    required_states = {
+        "stale",
+        "suspended",
+        "wrong-version",
+        "wrong-runtime",
+        "privacy-blocked",
+        "deletion-pending",
+    }
+    required_destinations = {
+        "views",
+        "exports",
+        "joins",
+        "caches",
+    }
+
+    for name in (
+        "Evidence Summary — Bounded",
+        "Aggregate Run Summary",
+    ):
+        suppression = records[name]["unusable_state_suppression"]
+        assert set(suppression) == required_states
+
+        for state in required_states:
+            assert set(suppression[state]["suppress_from"]) == required_destinations
+            assert suppression[state]["manual_review_required"] is True
 
 
 def test_restricted_evidence_is_governed_by_lp10_retention() -> None:
@@ -389,6 +451,27 @@ def test_hostile_yaml_documents_fail_closed(old: str, new: str) -> None:
         ),
         # Read-only inspection widened to records.
         ("  records_read: false", "  records_read: true"),
+        # A summary property loses one required unusable state.
+        (
+            "      deletion-pending:\n"
+            "        suppress_from:\n"
+            "          - views\n"
+            "          - exports\n"
+            "          - joins\n"
+            "          - caches\n"
+            "        manual_review_required: true\n",
+            "",
+        ),
+        # A summary property loses one required suppression destination.
+        (
+            "          - views\n"
+            "          - exports\n"
+            "          - joins\n"
+            "          - caches\n",
+            "          - views\n"
+            "          - exports\n"
+            "          - joins\n",
+        ),
         # Six distinct diagnosis properties collapsed back into one aggregate.
         (
             "    name: Instructional Demand — Advisory",

@@ -135,6 +135,7 @@ proposed_properties:
     authority_class: advisory
     privacy_class: none
     retention_class: planning-cycle
+    unusable_state_suppression: null
     schema_reference: lp7-property-pacing-feasibility-advisory
     missing_behaviour: display NOT_EVALUATED
     stale_behaviour: display stale and require manual review
@@ -151,6 +152,7 @@ proposed_properties:
     authority_class: evidence
     privacy_class: none
     retention_class: planning-cycle
+    unusable_state_suppression: null
     schema_reference: lp7-property-pacing-confidence
     missing_behaviour: display NOT_EVALUATED
     stale_behaviour: display stale and require manual review
@@ -167,6 +169,7 @@ proposed_properties:
     authority_class: evidence
     privacy_class: none
     retention_class: review-window
+    unusable_state_suppression: null
     schema_reference: lp7-property-pacing-review-date
     missing_behaviour: display blank and treat the assessment as unreviewed
     stale_behaviour: display stale and require manual review
@@ -183,6 +186,7 @@ proposed_properties:
     authority_class: evidence
     privacy_class: none
     retention_class: planning-cycle
+    unusable_state_suppression: null
     schema_reference: lp7-property-pacing-schema-version
     missing_behaviour: suppress the record as unversioned
     stale_behaviour: display stale and require manual review
@@ -199,6 +203,7 @@ proposed_properties:
     authority_class: planning
     privacy_class: none
     retention_class: planning-cycle
+    unusable_state_suppression: null
     schema_reference: lp7-property-lp-planning-record
     missing_behaviour: display empty
     stale_behaviour: display stale and require manual review
@@ -215,6 +220,7 @@ proposed_properties:
     authority_class: advisory
     privacy_class: none
     retention_class: planning-cycle
+    unusable_state_suppression: null
     schema_reference: lp7-property-main-time-driver-advisory
     missing_behaviour: display NOT_EVALUATED
     stale_behaviour: display stale and require manual review
@@ -231,6 +237,7 @@ proposed_properties:
     authority_class: advisory
     privacy_class: none
     retention_class: planning-cycle
+    unusable_state_suppression: null
     schema_reference: lp7-property-next-owner-recommendation
     missing_behaviour: display NOT_EVALUATED
     stale_behaviour: display stale and require manual review
@@ -247,6 +254,7 @@ proposed_properties:
     authority_class: advisory
     privacy_class: none
     retention_class: planning-cycle
+    unusable_state_suppression: null
     schema_reference: lp7-property-pathway-brief-available-advisory
     missing_behaviour: display NOT_EVALUATED
     stale_behaviour: display stale and require manual review
@@ -263,6 +271,7 @@ proposed_properties:
     authority_class: advisory
     privacy_class: none
     retention_class: planning-cycle
+    unusable_state_suppression: null
     schema_reference: lp7-property-instructional-demand
     missing_behaviour: display NOT_EVALUATED
     stale_behaviour: display stale and require manual review
@@ -279,6 +288,7 @@ proposed_properties:
     authority_class: advisory
     privacy_class: none
     retention_class: planning-cycle
+    unusable_state_suppression: null
     schema_reference: lp7-property-learner-relative-familiarity
     missing_behaviour: display NOT_EVALUATED
     stale_behaviour: display stale and require manual review
@@ -295,6 +305,7 @@ proposed_properties:
     authority_class: advisory
     privacy_class: none
     retention_class: planning-cycle
+    unusable_state_suppression: null
     schema_reference: lp7-property-language-and-representation-load
     missing_behaviour: display NOT_EVALUATED
     stale_behaviour: display stale and require manual review
@@ -311,6 +322,7 @@ proposed_properties:
     authority_class: advisory
     privacy_class: none
     retention_class: planning-cycle
+    unusable_state_suppression: null
     schema_reference: lp7-property-material-induced-load
     missing_behaviour: display NOT_EVALUATED
     stale_behaviour: display stale and require manual review
@@ -327,6 +339,7 @@ proposed_properties:
     authority_class: advisory
     privacy_class: none
     retention_class: planning-cycle
+    unusable_state_suppression: null
     schema_reference: lp7-property-operational-load
     missing_behaviour: display NOT_EVALUATED
     stale_behaviour: display stale and require manual review
@@ -343,6 +356,7 @@ proposed_properties:
     authority_class: advisory
     privacy_class: none
     retention_class: planning-cycle
+    unusable_state_suppression: null
     schema_reference: lp7-property-evidence-uncertainty
     missing_behaviour: display NOT_EVALUATED
     stale_behaviour: display stale and require manual review
@@ -359,6 +373,7 @@ proposed_properties:
     authority_class: planning
     privacy_class: none
     retention_class: planning-cycle
+    unusable_state_suppression: null
     schema_reference: lp7-property-instructional-function-preservation
     missing_behaviour: display blank
     stale_behaviour: display stale and require manual review
@@ -375,6 +390,49 @@ proposed_properties:
     authority_class: evidence
     privacy_class: lp10-restricted
     retention_class: lp10-governed
+    unusable_state_suppression:
+      stale:
+        suppress_from:
+          - views
+          - exports
+          - joins
+          - caches
+        manual_review_required: true
+      suspended:
+        suppress_from:
+          - views
+          - exports
+          - joins
+          - caches
+        manual_review_required: true
+      wrong-version:
+        suppress_from:
+          - views
+          - exports
+          - joins
+          - caches
+        manual_review_required: true
+      wrong-runtime:
+        suppress_from:
+          - views
+          - exports
+          - joins
+          - caches
+        manual_review_required: true
+      privacy-blocked:
+        suppress_from:
+          - views
+          - exports
+          - joins
+          - caches
+        manual_review_required: true
+      deletion-pending:
+        suppress_from:
+          - views
+          - exports
+          - joins
+          - caches
+        manual_review_required: true
     schema_reference: lp7-property-evidence-summary-bounded
     missing_behaviour: display not-supplied
     stale_behaviour: display stale and require manual review
@@ -391,6 +449,7 @@ proposed_properties:
     authority_class: evidence
     privacy_class: lp10-restricted
     retention_class: lp10-governed
+    unusable_state_suppression: null
     schema_reference: lp7-property-evidence-review-state
     missing_behaviour: display not-reviewed
     stale_behaviour: display stale and require manual review
@@ -407,6 +466,7 @@ proposed_properties:
     authority_class: evidence
     privacy_class: aggregate-deidentified
     retention_class: review-window
+    unusable_state_suppression: null
     schema_reference: lp7-property-what-supported-what-remains-unmeasured
     missing_behaviour: display blank
     stale_behaviour: display stale and require manual review
@@ -423,6 +483,49 @@ proposed_properties:
     authority_class: evidence
     privacy_class: aggregate-deidentified
     retention_class: lp10-governed
+    unusable_state_suppression:
+      stale:
+        suppress_from:
+          - views
+          - exports
+          - joins
+          - caches
+        manual_review_required: true
+      suspended:
+        suppress_from:
+          - views
+          - exports
+          - joins
+          - caches
+        manual_review_required: true
+      wrong-version:
+        suppress_from:
+          - views
+          - exports
+          - joins
+          - caches
+        manual_review_required: true
+      wrong-runtime:
+        suppress_from:
+          - views
+          - exports
+          - joins
+          - caches
+        manual_review_required: true
+      privacy-blocked:
+        suppress_from:
+          - views
+          - exports
+          - joins
+          - caches
+        manual_review_required: true
+      deletion-pending:
+        suppress_from:
+          - views
+          - exports
+          - joins
+          - caches
+        manual_review_required: true
     schema_reference: lp7-property-aggregate-run-summary
     missing_behaviour: display blank
     stale_behaviour: display stale and require manual review
