@@ -50,7 +50,7 @@ not authorize live Workspace, Notion, trigger, sharing, or production writes.
 **Workflow Scheduler**, **Agent Memory & Context Budget Manager**,
 **IA4D-to-Scheduler Handoff Contract**, and **Agent OS Execution Service**
 extended descriptions moved to `04_Registry/module-version-map-details.md` to
-keep this index under the line-limit. Workflow Scheduler remains `0.9.0`;
+keep this index under the line-limit. Workflow Scheduler remains `0.9.1`;
 Agent OS Execution Service remains `0.4.0`.
 
 **Artifact-First Response Standard**
@@ -88,10 +88,6 @@ version, serialization, and authority mechanics stay with LP9, LP12, and CW5A.
 bounded Notion working-layer design and the exact-target Change Request. The
 Change Request is recorded as proposed and not authorized; six unresolved
 decisions block any live change.
-
-See `04_Registry/module-version-map-details.md` for extended descriptions of
-Workflow Scheduler, Agent Memory & Context Budget Manager, IA4D-to-Scheduler
-Handoff Contract, and Agent OS Execution Service.
 
 ## Reconciliation Notes
 
