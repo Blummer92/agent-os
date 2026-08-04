@@ -178,6 +178,11 @@ def validate_visual_asset_compatibility_evidence(
             manifest_record,
             manifest,
         )
+        _bind_freshness(
+            freshness,
+            manifest_record,
+            manifest,
+        )
         _bind_library_reference(
             library_reference,
             library,
@@ -587,6 +592,28 @@ def _bind_manifest_reference(
         raise ContractValidationError(
             "identity-invalid",
             "manifest external file identity is contradictory",
+        )
+
+
+def _bind_freshness(
+    freshness: dict[str, Any],
+    record: ValidatedRecord,
+    manifest: dict[str, Any],
+) -> None:
+    if freshness["manifest_record_revision"] != record.record_revision:
+        raise ContractValidationError(
+            "identity-invalid",
+            "freshness manifest revision does not match validated manifest",
+        )
+    if freshness["manifest_fingerprint"] != record.fingerprint:
+        raise ContractValidationError(
+            "identity-invalid",
+            "freshness manifest fingerprint does not match validated manifest",
+        )
+    if freshness["manifest_verified_at"] != manifest["identity"]["verified_at"]:
+        raise ContractValidationError(
+            "identity-invalid",
+            "freshness manifest verification timestamp is contradictory",
         )
 
 
