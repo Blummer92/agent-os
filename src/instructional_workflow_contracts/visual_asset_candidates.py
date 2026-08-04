@@ -100,11 +100,13 @@ def filter_approved_visual_candidates(
             else:
                 eligible.append(entry)
 
-        key = lambda item: (
-            item.get("compatibility_id") or "",
-            item.get("fingerprint") or "",
-            tuple(item["reason_codes"]),
-        )
+        def key(item: dict[str, Any]) -> tuple[object, ...]:
+            return (
+                item.get("compatibility_id") or "",
+                item.get("fingerprint") or "",
+                tuple(item["reason_codes"]),
+            )
+
         eligible.sort(key=key)
         rejected.sort(key=key)
         manual_review.sort(key=key)
@@ -139,7 +141,12 @@ def filter_approved_visual_candidates(
             },
         }
         normalized = validate_and_normalize_json(payload, max_bytes=MAX_RESULT_BYTES)
-        if type(normalized) is not dict or canonical_size(normalized) > MAX_RESULT_BYTES:
+        if type(normalized) is not dict:
+            raise ContractValidationError(
+                "asset-candidates-invalid",
+                "visual candidate result must be a built-in mapping",
+            )
+        if canonical_size(normalized) > MAX_RESULT_BYTES:
             raise ContractValidationError(
                 "handoff-oversized",
                 "visual candidate result exceeds the shared result-size bound",
@@ -217,6 +224,12 @@ def _plan_record(value: object) -> ValidatedRecord:
             "asset-candidates-invalid-plan",
             "visual-needs roles must be built-in lists",
         )
+    for role in [*payload["required_roles"], *payload["optional_roles"]]:
+        if type(role) is not dict or "role_type" not in role or "orientation" not in role:
+            raise ContractValidationError(
+                "asset-candidates-invalid-plan",
+                "visual-needs role entries must declare role_type and orientation",
+            )
     return supplied
 
 
@@ -241,6 +254,8 @@ def _candidate_entry(result: ValidationResult) -> dict[str, Any]:
             "fingerprint": None,
             "classification": "invalid",
             "reason_codes": list(result.reason_codes),
+            "asset_reference": None,
+            "library_reference": None,
         }
     payload = result.record.to_dict()
     return {
