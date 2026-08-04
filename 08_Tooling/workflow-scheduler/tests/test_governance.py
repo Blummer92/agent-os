@@ -1,5 +1,7 @@
 """Tests for governance stop conditions."""
 
+from typing import object
+
 import pytest
 
 from workflow_scheduler.governance import StopConditionChecker
@@ -247,15 +249,15 @@ class TestApprovalAwareHelpers:
     """Tests for the approval-engine-aware individual stop condition helpers."""
 
     @staticmethod
-    def _task(task_id: str = "task-1", **overrides) -> Task:
-        defaults = dict(
-            id=task_id,
-            workflow_id="workflow-1",
-            type="test",
-            owner="system",
-            action="write:governed_system",
-            idempotency_key=f"key-{task_id}",
-        )
+    def _task(task_id: str = "task-1", **overrides: object) -> Task:
+        defaults = {
+            "id": task_id,
+            "workflow_id": "workflow-1",
+            "type": "test",
+            "owner": "system",
+            "action": "write:governed_system",
+            "idempotency_key": f"key-{task_id}",
+        }
         defaults.update(overrides)
         return Task(**defaults)
 
@@ -298,7 +300,9 @@ class TestApprovalAwareHelpers:
     @pytest.mark.parametrize(
         "decision", [ApprovalDecision.PENDING, ApprovalDecision.REJECTED]
     )
-    def test_approval_required_still_blocked_when_not_approved(self, decision):
+    def test_approval_required_still_blocked_when_not_approved(
+        self, decision: ApprovalDecision
+    ):
         """A pending or rejected decision does not clear the block."""
         task = self._task(approval_required=True)
         repository = self._repo_with_decision(task, decision)
@@ -330,7 +334,7 @@ class TestApprovalAwareHelpers:
         """A source_of_truth_db predating the approval engine is treated as no approval."""
 
         class LegacyDB:
-            def has_conflict(self, task_id: str) -> bool:
+            def has_conflict(self, _task_id: str) -> bool:
                 return False
 
         task = self._task(approval_required=True)
