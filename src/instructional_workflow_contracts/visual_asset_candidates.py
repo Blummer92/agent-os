@@ -43,7 +43,7 @@ def filter_approved_visual_candidates(
         plan_payload = plan.to_dict()
         if plan_payload["outcome"] != "visuals-required":
             raise ContractValidationError(
-                "visual-candidates-plan-not-actionable",
+                "asset-candidates-plan-not-actionable",
                 "visual-needs plan must require visuals",
             )
 
@@ -163,7 +163,7 @@ def filter_approved_visual_candidates(
     except ContractValidationError as exc:
         return _invalid(exc.reason_code, exc.detail)
     except (KeyError, TypeError, ValueError) as exc:
-        return _invalid("visual-candidates-invalid", sanitize_detail(str(exc)))
+        return _invalid("asset-candidates-invalid", sanitize_detail(str(exc)))
 
 
 def _plan_record(value: object) -> ValidatedRecord:
@@ -171,7 +171,7 @@ def _plan_record(value: object) -> ValidatedRecord:
     if type(value) is ValidationResult:
         if value.status is not ValidationStatus.VALID or value.record is None:
             raise ContractValidationError(
-                "visual-candidates-invalid-plan",
+                "asset-candidates-invalid-plan",
                 "visual-needs result must be valid and contain a record",
             )
         supplied = value.record
@@ -179,13 +179,13 @@ def _plan_record(value: object) -> ValidatedRecord:
         supplied = value
     else:
         raise ContractValidationError(
-            "visual-candidates-invalid-plan",
+            "asset-candidates-invalid-plan",
             "visual-needs plan must be validated evidence",
         )
 
     if supplied.contract_version != VISUAL_NEEDS_CONTRACT_ID:
         raise ContractValidationError(
-            "visual-candidates-incompatible-plan",
+            "asset-candidates-incompatible-plan",
             "visual-needs contract version is incompatible",
         )
     payload = supplied.to_dict()
@@ -197,24 +197,24 @@ def _plan_record(value: object) -> ValidatedRecord:
     }
     if set(payload) != expected:
         raise ContractValidationError(
-            "visual-candidates-invalid-plan",
+            "asset-candidates-invalid-plan",
             "visual-needs plan fields are not exact",
         )
     validate_stable_id(payload["plan_id"], "visual-needs plan_id")
     if payload["plan_id"] != supplied.record_id:
         raise ContractValidationError(
-            "visual-candidates-invalid-plan",
+            "asset-candidates-invalid-plan",
             "visual-needs plan identity does not match its validated record",
         )
     validate_revision(supplied.record_revision)
     if sha256_hex(payload) != supplied.fingerprint:
         raise ContractValidationError(
-            "visual-candidates-invalid-plan",
+            "asset-candidates-invalid-plan",
             "visual-needs plan fingerprint does not reconstruct exactly",
         )
     if type(payload["required_roles"]) is not list or type(payload["optional_roles"]) is not list:
         raise ContractValidationError(
-            "visual-candidates-invalid-plan",
+            "asset-candidates-invalid-plan",
             "visual-needs roles must be built-in lists",
         )
     return supplied
