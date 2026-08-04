@@ -326,7 +326,9 @@ class AuthorityProjection:
             "needs-decision": AuthorizationState.NEEDS_DECISION,
             "blocked": AuthorizationState.NOT_AUTHORIZED,
             "invalid": AuthorizationState.NOT_AUTHORIZED,
-        }[result.status]
+        }.get(result.status)
+        if state is None:
+            raise ValueError(f"unsupported approval applicability status: {result.status!r}")
         return cls(
             state=state,
             evidence_id=result.approval_revision or result.approval_id,
@@ -349,7 +351,9 @@ class AuthorityProjection:
             "blocked": AuthorizationState.NOT_AUTHORIZED,
             "invalid": AuthorizationState.NOT_AUTHORIZED,
             "consumed": AuthorizationState.NOT_AUTHORIZED,
-        }[result.status]
+        }.get(result.status)
+        if state is None:
+            raise ValueError(f"unsupported merge authorization status: {result.status!r}")
         return cls(
             state=state,
             evidence_id=result.authorization_revision or result.authorization_id,
@@ -370,7 +374,9 @@ class AuthorityProjection:
             AdmissionStatus.STALE: AuthorizationState.STALE,
             AdmissionStatus.BLOCKED: AuthorizationState.NOT_AUTHORIZED,
             AdmissionStatus.INVALID: AuthorizationState.NOT_AUTHORIZED,
-        }[result.status]
+        }.get(result.status)
+        if state is None:
+            raise ValueError(f"unsupported lifecycle admission status: {result.status!r}")
         return cls(state=state, evidence_id=result.result_id)
 
     @classmethod
@@ -855,6 +861,8 @@ def deserialize_issue_operational_state(serialized: object) -> IssueOperationalS
         payload = json.loads(serialized)
     except json.JSONDecodeError as exc:
         raise ValueError("serialized state is not valid JSON") from exc
+    except RecursionError as exc:
+        raise ValueError("serialized state is nested too deeply") from exc
     if type(payload) is not dict:
         raise TypeError("serialized state must contain an exact JSON object")
 

@@ -244,7 +244,7 @@ def test_incomplete_or_unsupported_source_fails_closed(source_state, outcome, re
     assert reason in state.blocker_codes
 
 
-def test_duplicate_primary_claims_are_conflicting():
+def test_competing_primary_claims_are_conflicting():
     state = build_issue_operational_state(
         evidence(
             primary_claims=(
@@ -262,17 +262,29 @@ def test_duplicate_primary_claims_are_conflicting():
     assert "claim.multiple-primary" in state.reason_codes
 
 
-def test_merged_pr_with_open_issue_requires_reconciliation():
+def test_merged_primary_claim_with_open_issue_requires_reconciliation():
     state = build_issue_operational_state(
-        evidence(
-            lifecycle_stage=LifecycleStage.MERGED,
-            primary_claims=(claim(state="merged"),),
-        )
+        evidence(primary_claims=(claim(state="merged"),))
     )
 
     assert state.outcome is OperationalOutcome.NEEDS_DECISION
     assert state.reconciliation_required is True
     assert state.primary_pr_state is PrimaryPrState.MERGED
+    assert "reconciliation.merged-pr-open-issue" in state.blocker_codes
+
+
+def test_merged_lifecycle_stage_with_open_issue_requires_reconciliation():
+    state = build_issue_operational_state(
+        evidence(
+            lifecycle_stage=LifecycleStage.MERGED,
+            primary_claims=(),
+        )
+    )
+
+    assert state.outcome is OperationalOutcome.NEEDS_DECISION
+    assert state.reconciliation_required is True
+    assert state.claim_state is ClaimState.NONE
+    assert state.primary_pr_state is PrimaryPrState.NONE
     assert "reconciliation.merged-pr-open-issue" in state.blocker_codes
 
 
@@ -307,7 +319,12 @@ def test_deterministic_order_digest_and_round_trip():
     restored = deserialize_issue_operational_state(serialized)
     assert restored == first
     assert serialize_issue_operational_state(restored) == serialized
-    assert serialized == json.dumps(first.to_dict(), sort_keys=True, separators=(",", ":"))
+    assert serialized == json.dumps(
+        first.to_dict(),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
 
 
 def test_tampered_state_id_is_rejected():
@@ -404,3 +421,33 @@ def test_no_builder_generates_time_or_performs_side_effects():
     assert state.observed_at == "2026-01-02T03:04:05Z"
     assert state.side_effects_performed is False
     assert state.to_dict()["side_effects_performed"] is False
+
+
+
+def test_non_gating_stale_authority_makes_operational_state_stale():
+    state = build_issue_operational_state(
+        evidence(
+            closure_authorization=authority(AuthorizationState.STALE),
+        )
+    )
+
+    assert state.outcome is OperationalOutcome.STALE
+    assert (
+        state.implementation_authorization.state
+        is AuthorizationState.AUTHORIZED
+    )
+    assert state.closure_authorization.state is AuthorizationState.STALE
+    assert "authorization.closure-stale" in state.reason_codes
+
+
+def test_excessively_nested_serialized_payload_fails_with_value_error(monkeypatch):
+    def raise_recursion_error(_serialized):
+        raise RecursionError("too deeply nested")
+
+    monkeypatch.setattr(
+        "scripts.agent_os_issue_acceptance.issue_operational_state.json.loads",
+        raise_recursion_error,
+    )
+
+    with pytest.raises(ValueError, match="nested too deeply"):
+        deserialize_issue_operational_state("{}")
