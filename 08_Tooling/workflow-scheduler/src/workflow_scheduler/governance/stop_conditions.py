@@ -1,9 +1,16 @@
 """Governance stop conditions for task execution."""
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional, Protocol, cast
 
-from workflow_scheduler.models import ApprovalDecision, Task, TaskMode
+from workflow_scheduler.models import ApprovalDecision, ApprovalRequest, Task, TaskMode
+
+
+class ApprovalStore(Protocol):
+    """Structural approval lookup contract used by governance checks."""
+
+    def get_approval_request(self, task_id: str) -> ApprovalRequest | None:
+        """Return the latest approval request for a task, when available."""
 
 
 @dataclass
@@ -42,7 +49,9 @@ class StopConditionChecker:
         )
 
     @staticmethod
-    def _lookup_approval(task_id: str, source_of_truth_db: Optional[Any]) -> Optional[Any]:
+    def _lookup_approval(
+        task_id: str, source_of_truth_db: object | None
+    ) -> ApprovalRequest | None:
         """Return the most recent ApprovalRequest for a task, or None.
 
         Tolerates a source_of_truth_db that predates the approval engine (or a
@@ -53,13 +62,14 @@ class StopConditionChecker:
             return None
 
         getter = getattr(source_of_truth_db, "get_approval_request", None)
-        if getter is None:
+        if not callable(getter):
             return None
 
-        return getter(task_id)
+        store = cast(ApprovalStore, source_of_truth_db)
+        return store.get_approval_request(task_id)
 
     @staticmethod
-    def _is_approved(task_id: str, source_of_truth_db: Optional[Any]) -> bool:
+    def _is_approved(task_id: str, source_of_truth_db: object | None) -> bool:
         """Return True only when an explicit APPROVED record exists for the task.
 
         Absence of a record is never approval: with no approval store wired in,
@@ -71,8 +81,8 @@ class StopConditionChecker:
     @staticmethod
     def check_all_stop_conditions(
         task: Task,
-        ownership_registry: Optional[Dict[str, Any]] = None,
-        source_of_truth_db: Optional[Any] = None,
+        ownership_registry: Optional[Dict[str, object]] = None,
+        source_of_truth_db: object | None = None,
     ) -> StopConditionResult:
         """Check all stop conditions for a task.
 
@@ -102,14 +112,20 @@ class StopConditionChecker:
         # Stop Condition 3: Missing Authorization
         # If ownership registry is provided, check write authorization
         if ownership_registry:
-            owned_systems = ownership_registry.get(task.owner, {}).get("owned_systems", [])
+            owner_record = ownership_registry.get(task.owner, {})
+            owned_systems = (
+                owner_record.get("owned_systems", [])
+                if isinstance(owner_record, dict)
+                else []
+            )
             if task.action not in owned_systems and not task.action.startswith("read:"):
                 blockers.append(StopConditionChecker.MISSING_AUTHORIZATION)
 
         # Stop Condition 4: Conflicting Source-of-Truth
         # If source_of_truth_db is provided, check for conflicts
         if source_of_truth_db:
-            if hasattr(source_of_truth_db, "has_conflict") and source_of_truth_db.has_conflict(task.id):
+            has_conflict = getattr(source_of_truth_db, "has_conflict", None)
+            if callable(has_conflict) and has_conflict(task.id):
                 blockers.append(StopConditionChecker.CONFLICTING_SOURCE_OF_TRUTH)
 
         # Stop Condition 5: Governed Field Risk
@@ -128,7 +144,7 @@ class StopConditionChecker:
 
     @staticmethod
     def check_approval_required(
-        task: Task, source_of_truth_db: Optional[Any] = None
+        task: Task, source_of_truth_db: object | None = None
     ) -> StopConditionResult:
         """Check the approval_required flag against the approval engine.
 
@@ -148,7 +164,7 @@ class StopConditionChecker:
 
     @staticmethod
     def check_production_mode(
-        task: Task, source_of_truth_db: Optional[Any] = None
+        task: Task, source_of_truth_db: object | None = None
     ) -> StopConditionResult:
         """Check production targeting against the approval engine.
 
