@@ -7,6 +7,8 @@ reason_code_catalog: 04_Registry/lp-reason-code-catalog.yaml
 authority_state_registry: 04_Registry/lp-authority-state-registry.yaml
 change_request_state: proposed-not-authorized
 live_change_authorized: false
+pilot_execution_authorized: false
+shadow_mode_only: true
 inspection:
   mode: read-only
   scope: schema-and-view-configuration-only

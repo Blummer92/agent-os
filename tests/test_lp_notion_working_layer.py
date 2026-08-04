@@ -34,6 +34,8 @@ TOP_LEVEL_KEYS = (
     "authority_state_registry",
     "change_request_state",
     "live_change_authorized",
+    "pilot_execution_authorized",
+    "shadow_mode_only",
     "inspection",
     "exact_targets",
     "vocabularies",
@@ -119,6 +121,11 @@ def _validate_contract(document: dict) -> None:
     # LP7 designs; it never authorizes.
     assert document["change_request_state"] == "proposed-not-authorized"
     assert document["live_change_authorized"] is False
+    assert document["pilot_execution_authorized"] is False
+    assert document["shadow_mode_only"] is True
+    assert type(document["live_change_authorized"]) is bool
+    assert type(document["pilot_execution_authorized"]) is bool
+    assert type(document["shadow_mode_only"]) is bool
     assert document["inspection"]["mode"] == "read-only"
     assert document["inspection"]["records_read"] is False
     assert document["inspection"]["student_data_read"] is False
@@ -252,6 +259,8 @@ def test_hostile_yaml_documents_fail_closed(old: str, new: str) -> None:
     [
         # The Change Request quietly authorizing itself.
         ("live_change_authorized: false", "live_change_authorized: true"),
+        ("pilot_execution_authorized: false", "pilot_execution_authorized: true"),
+        ("shadow_mode_only: true", "shadow_mode_only: false"),
         ("change_request_state: proposed-not-authorized", "change_request_state: authorized"),
         # An unresolved decision downgraded so it no longer blocks.
         ("    blocks_live_change: true", "    blocks_live_change: false"),
