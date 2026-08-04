@@ -103,7 +103,7 @@ def test_multiple_exact_asset_matches_are_invalid() -> None:
 
     assert result.status is ValidationStatus.INVALID
     assert payload is None
-    assert result.reason_codes == ("asset-duplicate-id",)
+    assert result.reason_codes == ("asset-compatibility-invalid-manifest",)
 
 
 def test_library_and_manifest_drive_identity_must_match() -> None:
