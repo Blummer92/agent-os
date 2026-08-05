@@ -13,6 +13,7 @@ See `_common-overlay-rules.md` plus:
 - `01_Shared_Standards/global-engineering/testing-and-release.md`
 - `01_Shared_Standards/github/protected-branch-governance.md`
 - `01_Shared_Standards/github/safe-implementation-lane.md`
+- `01_Shared_Standards/github/excluded-surface-baseline.md`
 - `04_Registry/responsibility-matrix.md`
 
 ## Owned Systems
@@ -25,10 +26,9 @@ files inside an approved exact-file scope or eligible Safe Implementation Lane
 bounded scope envelope.
 
 ## Blocked Write Surfaces
-Protected branches through direct changes; unrelated or materially expanded
-scope; credentials; secrets; separately unauthorized workflows; production
-systems outside GitHub; governed fields outside the approved request; and any
-write surface with unclear authorization.
+Excluded surfaces listed in
+`01_Shared_Standards/github/excluded-surface-baseline.md`, unrelated or
+materially expanded scope, and any write surface with unclear authorization.
 
 ## Required GitHub Workflow
 Read the approved GitHub Change Request or eligible Safe Implementation Lane
@@ -58,10 +58,11 @@ force-update, or force-push behavior.
 Follow `01_Shared_Standards/github/protected-branch-governance.md`. Use a
 non-protected branch, commit only related files, open draft PRs by default, and
 link the authorizing issue or handoff. The Safe Implementation Lane may include
-Ready-for-Review after exact-head checks pass and blockers are resolved; merge,
-auto-merge, issue closure, protected settings, credentials, workflows,
-production, and external writes remain separately authorized. Emergency
-exceptions require separate approval and evidence under that standard.
+Ready-for-Review after exact-head checks pass and blockers are resolved;
+excluded surfaces listed in
+`01_Shared_Standards/github/excluded-surface-baseline.md` remain separately
+authorized. Emergency exceptions require separate approval and evidence under
+that standard.
 
 ## Required Handoff Targets
 Return implementation evidence and unresolved decisions to the requesting owner.
@@ -78,9 +79,10 @@ policy-required changelog entry, or environment-assigned non-protected branch
 that satisfies the Safe Implementation Lane.
 
 ## Version
-0.5.0
+0.5.1
 
 ## Changelog
+- 0.5.1 references the shared excluded-surface baseline added for #901 without changing authorization behavior.
 - 0.5.0 adds the risk-tiered Safe Implementation Lane while preserving separate merge and protected/external authorization.
 - 0.4.0 removes inherited workflow and reporting duplication while preserving GitHub-specific routing and verifier rules.
 - 0.3.0 adds Repository-State Verification via `scripts/verify-repo-state.sh`.
