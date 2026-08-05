@@ -33,6 +33,7 @@ versions change only when the module's standards or contract changes.
 | LP Pacing Handoff Contract | 0.1.0 |
 | LP Reason Code Catalog | 0.1.0 |
 | LP Notion Working Layer | 0.1.0 |
+| Agent OS Codespaces Profile | 0.1.0 |
 
 **Dashboard Migration Verification**
 (`08_Tooling/dashboard-migration-verification/`) starts as a verification-only
@@ -88,6 +89,9 @@ version, serialization, and authority mechanics stay with LP9, LP12, and CW5A.
 bounded Notion working-layer design and the exact-target Change Request. The
 Change Request is recorded as proposed and not authorized; six unresolved
 decisions block any live change.
+
+**Agent OS Codespaces Profile** (`.devcontainer/`, #891) is the first
+persistent 2-core Codespaces profile; reuses worktree/repo-state contracts and grants no merge, closure, workflow, or external authority.
 
 ## Reconciliation Notes
 
