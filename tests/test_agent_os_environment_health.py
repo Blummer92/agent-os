@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -71,6 +72,31 @@ def _write_stub(bin_dir: Path, name: str, body: str) -> None:
     script = bin_dir / name
     script.write_text(f"#!/usr/bin/env bash\n{body}\n", encoding="utf-8")
     script.chmod(script.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def _bin_without_gh(tmp_path: Path) -> Path:
+    """A PATH directory providing `git` and `pip` but definitively not `gh`.
+
+    A test asserting missing-tool behavior must *control* tool availability
+    rather than inherit it: GitHub-hosted runners ship `gh` preinstalled
+    while many local sandboxes do not, so reading the ambient PATH makes the
+    outcome host-dependent. Filtering PATH entries is not enough either --
+    `gh`, `git`, and `pip` commonly share `/usr/bin`, so dropping that entry
+    would remove `git` too. Symlinking the tools we want into a private
+    directory is what makes the absence of `gh` deterministic.
+    """
+    bin_dir = tmp_path / "bin-without-gh"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    for tool in ("git", "pip"):
+        resolved = shutil.which(tool)
+        assert resolved is not None, f"{tool} is required to run this test"
+        link = bin_dir / tool
+        if not link.exists():
+            link.symlink_to(resolved)
+    # Guard the guarantee itself, so a farm that ever leaks `gh` fails loudly
+    # here instead of silently re-passing the host-dependent assertion.
+    assert shutil.which("gh", path=str(bin_dir)) is None
+    return bin_dir
 
 
 @pytest.fixture
@@ -155,8 +181,8 @@ def test_ordinary_primary_checkout_passes_checkout_identity(repo: Path) -> None:
 # --- tooling ------------------------------------------------------------
 
 
-def test_tooling_check_fails_closed_when_gh_missing(repo: Path) -> None:
-    env = _env(repo.parent)
+def test_tooling_check_fails_closed_when_gh_missing(repo: Path, tmp_path: Path) -> None:
+    env = _env(repo.parent, PATH=str(_bin_without_gh(tmp_path)))
     result = run_cli(repo, env=env)
     payload = json.loads(result.stdout)
     tooling = next(c for c in payload["checks"] if c["name"] == "tooling")
@@ -228,8 +254,10 @@ def test_github_auth_capability_reports_env_source_without_leaking_token(repo: P
     assert fake_token not in result.stderr
 
 
-def test_github_auth_capability_fails_closed_with_no_token_and_no_gh(repo: Path) -> None:
-    env = _env(repo.parent)
+def test_github_auth_capability_fails_closed_with_no_token_and_no_gh(
+    repo: Path, tmp_path: Path
+) -> None:
+    env = _env(repo.parent, PATH=str(_bin_without_gh(tmp_path)))
     result = run_cli(repo, env=env)
     payload = json.loads(result.stdout)
     auth = next(c for c in payload["checks"] if c["name"] == "github-auth-capability")
