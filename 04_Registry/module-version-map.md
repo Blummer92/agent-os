@@ -33,6 +33,7 @@ versions change only when the module's standards or contract changes.
 | LP Pacing Handoff Contract | 0.1.0 |
 | LP Reason Code Catalog | 0.1.0 |
 | LP Notion Working Layer | 0.1.0 |
+| Agent OS Codespaces Profile | 0.1.0 |
 | Execution Checkpoint Contract | 0.1.0 |
 
 **Dashboard Migration Verification**
@@ -90,8 +91,7 @@ bounded Notion working-layer design and the exact-target Change Request. The
 Change Request is recorded as proposed and not authorized; six unresolved
 decisions block any live change.
 
-**Execution Checkpoint Contract** (`scripts/agent_os_execution_checkpoint/`,
-#895, design approved in #858) is the pure-local checkpoint record, content-addressed identity, append-only store, and resume planner; every authority field stays false.
+**Execution Checkpoint Contract** (`scripts/agent_os_execution_checkpoint/`, #895, design approved in #858) is the pure-local checkpoint record, content-addressed identity, append-only store, and resume planner; every authority field stays false.
 
 ## Reconciliation Notes
 
