@@ -42,6 +42,8 @@ The explicit target is `[HOST/]OWNER/REPOSITORY`; it is never inferred from git,
 - `gh auth status --active --hostname HOST` without token display;
 - matching, non-archived repository metadata with issues enabled.
 
+Before confirmation, text and JSON show the bounded account identity, exact
+version, hashed executable basename, and required/optional capability decisions.
 A stable operation identity binds target, title/body identity, labels, validation,
 and command semantics for repeat detection. A separate fresh confirmation
 fingerprint also binds invocation ID, account, capabilities, and executable path.
@@ -54,6 +56,8 @@ gh issue create --repo=TARGET --title=TITLE --body-file=- --label=LABEL...
 ```
 
 The argv is immutable; user values use `--flag=value`; the UTF-8 body uses stdin.
+Confirmed success requires matching expected/written byte counts, successful
+writer completion, and no write or close error; body content is never evidence.
 The runner uses `shell=False`, bounded timeout and concurrent bounded capture,
 terminates timed-out/interrupted children, and performs no retry, auth refresh,
 account switch, scope escalation, or temporary-file baseline. Unsupported
@@ -62,9 +66,10 @@ assignees, milestones, types, relationships, projects, and recovery are blocked.
 ## Mutation and recovery
 
 Mutation states are `not-attempted`, `uncertain`, and `confirmed`. Only exit zero
-plus exactly one HTTPS issue URL matching the explicit target and containing no
-query or fragment sets `mutation_performed=true`. Duplicate URLs, no URL,
-wrong-target output, nonzero exit, timeout, or interruption remain uncertain,
+plus complete stdin delivery and exactly one canonical HTTPS issue URL sets
+`mutation_performed=true`. Userinfo, ports, encoded ambiguity, leading-zero
+numbers, duplicate URLs, no URL, wrong-target output, nonzero exit, incomplete
+stdin, timeout, or interruption remain uncertain,
 include `mutation-uncertain`, preserve recovery evidence, and disable retry.
 
 | Exit | Meaning |
@@ -87,6 +92,8 @@ include `mutation-uncertain`, preserve recovery evidence, and disable retry.
 Diagnostics redact token formats, authorization values, credential assignments,
 private keys, credential URLs, ANSI/control sequences, submitted title/body/
 labels, and excess output. Confirmation displays digests and counts, not raw
-content. #605 must reuse `issue_create.py` identity, runner, confirmation,
-redaction, executor, and parser; it must not create a parallel live path.
+content. Public success URLs are reconstructed from the validated target and
+canonical issue number rather than copied from process output. #605 must reuse
+`issue_create.py` identity, runner, confirmation, redaction, executor, and parser;
+it must not create a parallel live path.
 Passing tests do not authorize a live create or merge.

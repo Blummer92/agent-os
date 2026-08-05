@@ -64,6 +64,7 @@ class IssueCreateReasonCode(str, Enum):
     COMMAND_FAILED = "command-failed"
     COMMAND_TIMEOUT = "command-timeout"
     COMMAND_INTERRUPTED = "command-interrupted"
+    STDIN_DELIVERY_INCOMPLETE = "stdin-delivery-incomplete"
     MALFORMED_SUCCESS_OUTPUT = "malformed-success-output"
     WRONG_TARGET_SUCCESS_OUTPUT = "wrong-target-success-output"
     MUTATION_UNCERTAIN = "mutation-uncertain"
@@ -143,6 +144,9 @@ class GhCapabilities:
     active_account: str
     repository_url: str
     executable_path: str
+    executable_identity: str
+    required_capability_decision: str
+    optional_metadata_decision: str
     fingerprint: str
 
 
@@ -175,6 +179,10 @@ class IssueCreateProcessResult:
     stderr: str = ""
     timed_out: bool = False
     interrupted: bool = False
+    stdin_bytes_expected: int | None = None
+    stdin_bytes_written: int | None = None
+    stdin_delivery_completed: bool | None = None
+    stdin_error: str = ""
 
 
 @dataclass(frozen=True)
@@ -203,8 +211,16 @@ class IssueCreateAdapterResult:
     validation_status: str
     validation_reason_codes: tuple[str, ...]
     account_identity: str | None = None
+    gh_version: str | None = None
+    gh_executable_identity: str | None = None
+    required_capability_decision: str | None = None
+    optional_metadata_decision: str | None = None
     capability_fingerprint: str | None = None
     command_plan_digest: str | None = None
+    stdin_bytes_expected: int | None = None
+    stdin_bytes_written: int | None = None
+    stdin_delivery_completed: bool | None = None
+    stdin_error: str = ""
 
 
 class GhRunner(Protocol):
@@ -263,6 +279,12 @@ class SubprocessGhRunner:
         timeout: float = _DEFAULT_TIMEOUT,
     ) -> IssueCreateProcessResult:
         env = _bounded_environment()
+        stdin_payload = input_text.encode("utf-8") if input_text is not None else b""
+        stdin_state: dict[str, object] = {
+            "written": 0,
+            "completed": False,
+            "error": "",
+        }
         process: subprocess.Popen[bytes] | None = None
         stdout_capture = _BoundedCapture()
         stderr_capture = _BoundedCapture()
@@ -279,24 +301,37 @@ class SubprocessGhRunner:
             assert process.stdout is not None
             assert process.stderr is not None
             stdout_thread = threading.Thread(
-                target=stdout_capture.drain, args=(process.stdout,), daemon=True
+                target=stdout_capture.drain, args=(process.stdout,)
             )
             stderr_thread = threading.Thread(
-                target=stderr_capture.drain, args=(process.stderr,), daemon=True
+                target=stderr_capture.drain, args=(process.stderr,)
             )
             stdout_thread.start()
             stderr_thread.start()
 
             def write_stdin() -> None:
                 try:
-                    if input_text is not None:
-                        process.stdin.write(input_text.encode("utf-8"))
-                except BrokenPipeError:
-                    pass
+                    while int(stdin_state["written"]) < len(stdin_payload):
+                        offset = int(stdin_state["written"])
+                        count = process.stdin.write(stdin_payload[offset:])
+                        if count is None or count <= 0:
+                            raise OSError("stdin write made no progress")
+                        stdin_state["written"] = offset + count
+                    process.stdin.flush()
+                except Exception as exc:
+                    stdin_state["error"] = _bounded_exception_identity(exc)
                 finally:
-                    process.stdin.close()
+                    try:
+                        process.stdin.close()
+                    except Exception as exc:
+                        if not stdin_state["error"]:
+                            stdin_state["error"] = _bounded_exception_identity(exc)
+                    stdin_state["completed"] = (
+                        not stdin_state["error"]
+                        and int(stdin_state["written"]) == len(stdin_payload)
+                    )
 
-            stdin_thread = threading.Thread(target=write_stdin, daemon=True)
+            stdin_thread = threading.Thread(target=write_stdin)
             stdin_thread.start()
             try:
                 returncode = process.wait(timeout=min(timeout, self.timeout))
@@ -321,12 +356,23 @@ class SubprocessGhRunner:
                 stderr=stderr_capture.text(),
                 timed_out=timed_out,
                 interrupted=interrupted,
+                stdin_bytes_expected=len(stdin_payload),
+                stdin_bytes_written=int(stdin_state["written"]),
+                stdin_delivery_completed=bool(stdin_state["completed"]),
+                stdin_error=str(stdin_state["error"]),
             )
         except OSError as exc:
             if process is not None and process.poll() is None:
                 process.kill()
                 process.wait()
-            return IssueCreateProcessResult(returncode=None, stderr=str(exc))
+            return IssueCreateProcessResult(
+                returncode=None,
+                stderr=str(exc),
+                stdin_bytes_expected=len(stdin_payload),
+                stdin_bytes_written=int(stdin_state["written"]),
+                stdin_delivery_completed=False,
+                stdin_error=_bounded_exception_identity(exc),
+            )
 
 
 def sanitize_diagnostic_text(
@@ -587,6 +633,10 @@ def execute_issue_creation(
         command_plan_digest=_sha256(
             json.dumps(list(_semantic_argv(plan.argv)), separators=(",", ":"))
         ),
+        stdin_bytes_expected=process.stdin_bytes_expected,
+        stdin_bytes_written=process.stdin_bytes_written,
+        stdin_delivery_completed=process.stdin_delivery_completed,
+        stdin_error=process.stdin_error,
     )
     if process.timed_out:
         return _result(
@@ -609,6 +659,14 @@ def execute_issue_creation(
             request,
             IssueCreateReasonCode.COMMAND_FAILED,
             IssueCreateExitCode.COMMAND_FAILURE,
+            mutation=MutationState.UNCERTAIN,
+            **common,
+        )
+    if not _stdin_delivery_is_complete(process, plan.body_bytes):
+        return _result(
+            request,
+            IssueCreateReasonCode.STDIN_DELIVERY_INCOMPLETE,
+            IssueCreateExitCode.UNCERTAIN,
             mutation=MutationState.UNCERTAIN,
             **common,
         )
@@ -667,8 +725,17 @@ def render_issue_create_result(result: IssueCreateAdapterResult) -> str:
         f"Mutation state: {result.mutation_state.value}",
         f"Mutation performed: {_yes_no(result.mutation_performed)}",
         f"Retry allowed: {_yes_no(result.retry_allowed)}",
+        f"Authenticated account: {result.account_identity or 'none'}",
+        f"GitHub CLI version: {result.gh_version or 'none'}",
+        f"GitHub CLI executable: {result.gh_executable_identity or 'none'}",
+        f"Required capability: {result.required_capability_decision or 'none'}",
+        f"Optional metadata: {result.optional_metadata_decision or 'none'}",
         f"Operation identity: {result.operation_identity or 'none'}",
         f"Operation fingerprint: {result.operation_fingerprint or 'none'}",
+        f"Stdin bytes expected: {_optional_number(result.stdin_bytes_expected)}",
+        f"Stdin bytes written: {_optional_number(result.stdin_bytes_written)}",
+        f"Stdin delivery completed: {_optional_yes_no(result.stdin_delivery_completed)}",
+        f"Stdin error: {result.stdin_error or 'none'}",
         f"Created issue: {result.created_issue_url or 'none'}",
         "Recovery evidence:",
         *(f"- {item}" for item in result.recovery_evidence or ("none",)),
@@ -794,18 +861,29 @@ def _probe_capabilities(
         "account": accounts[0],
         "repository_url": metadata["url"],
         "executable_path": executable,
+        "executable_identity": _bounded_executable_identity(executable),
         "required_flags": _REQUIRED_CREATE_FLAGS,
+        "required_capability_decision": "supported: "
+        + ",".join(_REQUIRED_CREATE_FLAGS),
+        "optional_metadata_decision": "none-requested",
     }
     fingerprint = _sha256(
         json.dumps(capability_payload, sort_keys=True, separators=(",", ":"))
     )
     return (
         GhCapabilities(
-            capability_payload["version"],
-            accounts[0],
-            metadata["url"],
-            executable,
-            fingerprint,
+            version=capability_payload["version"],
+            active_account=accounts[0],
+            repository_url=metadata["url"],
+            executable_path=executable,
+            executable_identity=capability_payload["executable_identity"],
+            required_capability_decision=capability_payload[
+                "required_capability_decision"
+            ],
+            optional_metadata_decision=capability_payload[
+                "optional_metadata_decision"
+            ],
+            fingerprint=fingerprint,
         ),
         None,
     )
@@ -823,25 +901,41 @@ def _parse_created_issue(
     if len(candidates) != 1:
         return None
     url = candidates[0]
-    parsed = urlparse(url)
-    parts = parsed.path.strip("/").split("/")
-    if (
-        parsed.scheme != "https"
-        or parsed.query
-        or parsed.fragment
-        or len(parts) != 4
-        or parts[2].casefold() != "issues"
-    ):
+    if any(ord(char) < 33 or ord(char) > 126 for char in url):
+        return None
+    if "%" in url or "\\" in url:
+        return None
+    try:
+        parsed = urlparse(url)
+        parsed_port = parsed.port
+    except ValueError:
         return None
     if (
-        (parsed.hostname or "").casefold() != target.host.casefold()
-        or [part.casefold() for part in parts[:2]]
+        parsed.scheme != "https"
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed_port is not None
+        or not parsed.netloc
+        or parsed.query
+        or parsed.fragment
+        or parsed.params
+    ):
+        return None
+    match = re.fullmatch(r"/([^/]+)/([^/]+)/issues/([1-9][0-9]*)", parsed.path)
+    if match is None:
+        return None
+    owner, repository, number_text = match.groups()
+    if (
+        parsed.netloc.casefold() != target.host.casefold()
+        or [owner.casefold(), repository.casefold()]
         != [target.owner.casefold(), target.repository.casefold()]
     ):
         return "wrong-target"
-    if not parts[3].isdigit() or int(parts[3]) <= 0:
-        return None
-    return url, int(parts[3])
+    number = int(number_text)
+    canonical_url = (
+        f"https://{target.host}/{target.owner}/{target.repository}/issues/{number}"
+    )
+    return canonical_url, number
 
 
 def _result(
@@ -864,6 +958,10 @@ def _result(
     created_url: str | None = None,
     created_number: int | None = None,
     command_plan_digest: str | None = None,
+    stdin_bytes_expected: int | None = None,
+    stdin_bytes_written: int | None = None,
+    stdin_delivery_completed: bool | None = None,
+    stdin_error: str = "",
 ) -> IssueCreateAdapterResult:
     uncertain = mutation == MutationState.UNCERTAIN
     reason_codes = (
@@ -907,8 +1005,28 @@ def _result(
             code.value for code in request.validation.reason_codes
         ),
         account_identity=capability.active_account if capability else None,
+        gh_version=capability.version if capability else None,
+        gh_executable_identity=(
+            capability.executable_identity if capability else None
+        ),
+        required_capability_decision=(
+            capability.required_capability_decision if capability else None
+        ),
+        optional_metadata_decision=(
+            capability.optional_metadata_decision
+            if capability
+            else (
+                f"unsupported-requested-count={len(request.optional_metadata)}"
+                if request.optional_metadata
+                else None
+            )
+        ),
         capability_fingerprint=capability.fingerprint if capability else None,
         command_plan_digest=command_plan_digest,
+        stdin_bytes_expected=stdin_bytes_expected,
+        stdin_bytes_written=stdin_bytes_written,
+        stdin_delivery_completed=stdin_delivery_completed,
+        stdin_error=sanitize_diagnostic_text(stdin_error, limit=256),
     )
 
 
@@ -942,6 +1060,29 @@ def _semantic_argv(argv: Sequence[str]) -> tuple[str, ...]:
     if not argv:
         return ()
     return ("gh", *tuple(argv)[1:])
+
+
+def _stdin_delivery_is_complete(
+    process: IssueCreateProcessResult,
+    expected_body_bytes: int,
+) -> bool:
+    return (
+        process.stdin_bytes_expected == expected_body_bytes
+        and process.stdin_bytes_written == expected_body_bytes
+        and process.stdin_delivery_completed is True
+        and not process.stdin_error
+    )
+
+
+def _bounded_executable_identity(path: str) -> str:
+    basename = os.path.basename(path) or "gh"
+    safe_basename = re.sub(r"[^A-Za-z0-9._-]", "_", basename)[:64] or "gh"
+    return f"{safe_basename} sha256={_sha256(path)[:16]}"
+
+
+def _bounded_exception_identity(exc: BaseException) -> str:
+    errno = getattr(exc, "errno", None)
+    return type(exc).__name__ + (f" errno={errno}" if errno is not None else "")
 
 
 def _resolve_executable(runner: GhRunner) -> str | None:
@@ -1030,3 +1171,11 @@ def _coerce_text(value: object) -> str:
 
 def _yes_no(value: bool) -> str:
     return "yes" if value else "no"
+
+
+def _optional_yes_no(value: bool | None) -> str:
+    return "unknown" if value is None else _yes_no(value)
+
+
+def _optional_number(value: int | None) -> str:
+    return "unknown" if value is None else str(value)

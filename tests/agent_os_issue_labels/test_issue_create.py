@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from scripts.agent_os_issue_acceptance.models import Status
+from scripts.agent_os_issue_labels import issue_create as issue_create_module
 from scripts.agent_os_issue_labels import issue_create_cli
 from scripts.agent_os_issue_labels.draft import IssueDraftInput, build_issue_draft
 from scripts.agent_os_issue_labels.issue_create import (
@@ -82,8 +83,68 @@ class Runner:
         if key in defaults:
             return defaults[key]
         if "--body-file=-" in key:
-            return self.create
+            expected = len((input_text or "").encode("utf-8"))
+            updates = {}
+            if self.create.stdin_bytes_expected is None:
+                updates["stdin_bytes_expected"] = expected
+            if self.create.stdin_bytes_written is None:
+                updates["stdin_bytes_written"] = expected
+            if self.create.stdin_delivery_completed is None:
+                updates["stdin_delivery_completed"] = not self.create.stdin_error
+            return replace(self.create, **updates)
         raise AssertionError(key)
+
+
+class _ByteStream:
+    def __init__(self, data=b""):
+        self.data = bytearray(data)
+
+    def read(self, size=-1):
+        if not self.data:
+            return b""
+        if size < 0:
+            size = len(self.data)
+        value = bytes(self.data[:size])
+        del self.data[:size]
+        return value
+
+
+class _Stdin:
+    def __init__(self, actions, *, close_error=None):
+        self.actions = list(actions)
+        self.close_error = close_error
+
+    def write(self, value):
+        action = self.actions.pop(0) if self.actions else len(value)
+        if isinstance(action, BaseException):
+            raise action
+        return min(int(action), len(value))
+
+    def flush(self):
+        return None
+
+    def close(self):
+        if self.close_error is not None:
+            raise self.close_error
+
+
+class _Process:
+    def __init__(self, stdin):
+        self.stdin = stdin
+        self.stdout = _ByteStream(
+            b"https://github.com/Blummer92/agent-os/issues/700\n"
+        )
+        self.stderr = _ByteStream()
+        self.returncode = 0
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+    def kill(self):
+        self.returncode = -9
+
+    def poll(self):
+        return self.returncode
 
 
 class Confirm:
@@ -248,6 +309,92 @@ def test_success_parsing_precedes_sensitive_output_redaction():
     assert "[REDACTED]" in result.sanitized_stdout
 
 
+def test_success_url_is_reconstructed_from_validated_target():
+    raw = "https://GITHUB.COM/blummer92/AGENT-OS/issues/700"
+    result = execute_issue_creation(
+        request(), Runner(create=IssueCreateProcessResult(0, raw + "\n", "")), Confirm()
+    )
+    assert result.reason_code == IssueCreateReasonCode.CREATE_CONFIRMED
+    assert result.created_issue_url == (
+        "https://github.com/Blummer92/agent-os/issues/700"
+    )
+
+
+@pytest.mark.parametrize(
+    "url",
+    (
+        "https://user@github.com/Blummer92/agent-os/issues/700",
+        "https://user:password@github.com/Blummer92/agent-os/issues/700",
+        "https://github.com:443/Blummer92/agent-os/issues/700",
+        "https://github.com%2f@evil.example/Blummer92/agent-os/issues/700",
+        "https://github.com/Blummer92/agent-os/issues/%37%30%30",
+        "https://github.com/Blummer92/agent-os/issues/0700",
+        "https://github.com/Blummer92/agent-os/issues/700\x00",
+    ),
+)
+def test_noncanonical_success_urls_are_uncertain_and_not_exposed(url):
+    result = execute_issue_creation(
+        request(), Runner(create=IssueCreateProcessResult(0, url + "\n", "")), Confirm()
+    )
+    assert result.reason_code == IssueCreateReasonCode.MALFORMED_SUCCESS_OUTPUT
+    assert result.mutation_state == MutationState.UNCERTAIN
+    assert result.created_issue_url is None
+    assert "user:password@" not in render_issue_create_result(result)
+
+
+def test_zero_exit_valid_url_with_incomplete_stdin_is_uncertain():
+    expected = len(validation().draft.body.encode("utf-8"))
+    process = IssueCreateProcessResult(
+        0,
+        "https://github.com/Blummer92/agent-os/issues/700\n",
+        "",
+        stdin_bytes_expected=expected,
+        stdin_bytes_written=expected - 1,
+        stdin_delivery_completed=False,
+        stdin_error="BrokenPipeError",
+    )
+    result = execute_issue_creation(request(), Runner(create=process), Confirm())
+    assert result.reason_code == IssueCreateReasonCode.STDIN_DELIVERY_INCOMPLETE
+    assert IssueCreateReasonCode.MUTATION_UNCERTAIN in result.reason_codes
+    assert result.stdin_bytes_expected == expected
+    assert result.stdin_bytes_written == expected - 1
+    assert result.stdin_delivery_completed is False
+    combined = render_issue_create_result(result) + json.dumps(
+        issue_create_result_to_dict(result)
+    )
+    assert validation().draft.body not in combined
+    assert not result.retry_allowed
+
+
+@pytest.mark.parametrize(
+    "actions, close_error, expected_written, completed, error_type",
+    (
+        ((6,), None, 6, True, ""),
+        ((BrokenPipeError(),), None, 0, False, "BrokenPipeError"),
+        ((2, BrokenPipeError()), None, 2, False, "BrokenPipeError"),
+        ((OSError(5, "write failed"),), None, 0, False, "OSError"),
+        ((6,), OSError(5, "close failed"), 6, False, "OSError"),
+    ),
+)
+def test_subprocess_runner_records_stdin_delivery(
+    monkeypatch, actions, close_error, expected_written, completed, error_type
+):
+    stdin = _Stdin(actions, close_error=close_error)
+    monkeypatch.setattr(issue_create_module.shutil, "which", lambda _: "/opt/bin/gh")
+    monkeypatch.setattr(
+        issue_create_module.subprocess,
+        "Popen",
+        lambda *args, **kwargs: _Process(stdin),
+    )
+    result = SubprocessGhRunner().run(
+        ("/opt/bin/gh", "issue", "create"), input_text="abcdef"
+    )
+    assert result.stdin_bytes_expected == 6
+    assert result.stdin_bytes_written == expected_written
+    assert result.stdin_delivery_completed is completed
+    assert error_type in result.stdin_error
+
+
 @pytest.mark.parametrize(
     "process, reason, code",
     (
@@ -350,6 +497,37 @@ def test_redaction_unicode_cli_static(monkeypatch, capsys, tmp_path):
         "--issue-form", str(FORM), "--label-map", str(MAP), "--format", "json",
     ]) == IssueCreateExitCode.CONFIRMATION
     assert creates(cli_runner) == []
+    cli_payload = json.loads(capsys.readouterr().out)
+    assert cli_payload["account_identity"] == "tester"
+    assert cli_payload["gh_version"] == "gh version 2.80.0"
+    assert cli_payload["gh_executable_identity"].startswith("gh sha256=")
+    assert cli_payload["required_capability_decision"].startswith("supported:")
+    assert cli_payload["optional_metadata_decision"] == "none-requested"
+
+    private_runner = Runner(executable="/secret/private/tools/gh")
+    private_plan, private_error = plan_issue_creation(
+        request(result=protected), private_runner
+    )
+    assert private_error is None
+    monkeypatch.setattr("builtins.input", lambda _: "cancel")
+    confirmation = issue_create_cli._PromptConfirmation().confirm(private_plan)
+    assert confirmation is not None and not confirmation.confirmed
+    prompt_output = capsys.readouterr().err
+    for expected in (
+        "Authenticated account: tester",
+        "GitHub CLI version: gh version 2.80.0",
+        "GitHub CLI executable: gh sha256=",
+        "Required capability: supported:",
+        "Optional metadata: none-requested",
+    ):
+        assert expected in prompt_output
+    for sensitive in (
+        "/secret/private/tools/gh",
+        "private title",
+        "private body",
+        "private-label",
+    ):
+        assert sensitive not in prompt_output
     source = inspect.getsource(SubprocessGhRunner.run)
     module = Path(inspect.getsourcefile(SubprocessGhRunner)).read_text(encoding="utf-8")
     assert "subprocess.Popen" in source and "shell=False" in source

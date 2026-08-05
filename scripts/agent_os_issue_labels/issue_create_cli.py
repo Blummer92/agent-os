@@ -39,6 +39,23 @@ class _NoConfirmation:
 class _PromptConfirmation:
     def confirm(self, plan: IssueCreateCommandPlan) -> IssueCreateConfirmation | None:
         print(f"Target: {plan.target.canonical}", file=sys.stderr)
+        print(
+            f"Authenticated account: {plan.capability.active_account}",
+            file=sys.stderr,
+        )
+        print(f"GitHub CLI version: {plan.capability.version}", file=sys.stderr)
+        print(
+            f"GitHub CLI executable: {plan.capability.executable_identity}",
+            file=sys.stderr,
+        )
+        print(
+            f"Required capability: {plan.capability.required_capability_decision}",
+            file=sys.stderr,
+        )
+        print(
+            f"Optional metadata: {plan.capability.optional_metadata_decision}",
+            file=sys.stderr,
+        )
         print(f"Operation identity: {plan.operation_identity}", file=sys.stderr)
         print(f"Title: sha256={_digest_from_plan(plan, '--title=')}", file=sys.stderr)
         print(f"Body: sha256={plan.body_digest} bytes={plan.body_bytes}", file=sys.stderr)
