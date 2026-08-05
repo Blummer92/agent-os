@@ -56,6 +56,17 @@ Every file path listed in an alias must exist in the repository. Missing paths b
 | Files to read in order | 1. `AGENTS.md`<br>2. `00_Governance/ownership-and-source-of-truth.md`<br>3. `00_Governance/write-authorization-policy.md`<br>4. `02_Agent_Overlays/github-service-agent.md`<br>5. `03_Templates/prompts/github-change-request.md` |
 | Stop condition | Stop after the handoff includes target repository, branch, files, owner, permissions needed, acceptance criteria, validation evidence, risks, and blockers. The handoff does not authorize non-GitHub agents to write to GitHub. |
 
+### @github-lean-start
+
+| Field | Value |
+|---|---|
+| Alias | `@github-lean-start` |
+| Purpose | Used for ordinary Tier 0 / Tier 1 GitHub work where the lean reading path is enough to confirm source of truth, owner, write boundary, and excluded surfaces. |
+| Owner | GitHub Service Agent |
+| Source of truth | GitHub Agent OS governance files |
+| Files to read in order | 1. `AGENTS.md`<br>2. `00_Governance/write-authorization-policy.md`<br>3. `01_Shared_Standards/github/safe-implementation-lane.md`<br>4. `02_Agent_Overlays/github-service-agent.md`<br>5. `01_Shared_Standards/github/excluded-surface-baseline.md` |
+| Stop condition | Stop after the issue owner, source of truth, write boundary, bounded scope, and excluded surfaces are clear. This alias is a lookup aid only and never grants write authority or replaces live verification. |
+
 ### @classroom-artifact-routing
 
 | Field | Value |
