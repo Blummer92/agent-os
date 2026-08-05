@@ -91,12 +91,7 @@ bounded Notion working-layer design and the exact-target Change Request. The
 Change Request is recorded as proposed and not authorized; six unresolved
 decisions block any live change.
 
-**Execution Checkpoint Contract** (`scripts/agent_os_execution_checkpoint/`,
-#895, design approved in #858) is the pure-local checkpoint record, content-addressed identity, append-only store, and resume planner; every authority field stays false.
-
-**Agent OS Codespaces Profile** (`.devcontainer/`, #891) is the first
-persistent 2-core Codespaces profile; it reuses existing worktree and
-repository-state contracts and grants no merge, closure, workflow, or external authority.
+**Execution Checkpoint Contract** (`scripts/agent_os_execution_checkpoint/`, #895, design approved in #858) is the pure-local checkpoint record, content-addressed identity, append-only store, and resume planner; every authority field stays false.
 
 ## Reconciliation Notes
 
