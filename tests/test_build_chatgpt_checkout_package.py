@@ -377,6 +377,39 @@ def test_head_drift_between_preparation_and_packaging_is_rejected(clone: Path, t
     assert temp_archives(tmp_path) == []
 
 
+def test_drift_control_refuses_an_operator_supplied_worktree(clone: Path, tmp_path: Path, origin: Path):
+    # The control may only write to a disposable worktree this run created. An
+    # operator-supplied root survives cleanup, so a moved HEAD would outlive the
+    # run — an unbounded side effect on a directory the command must not alter.
+    worktree_root = tmp_path / "operator-root"
+    prep = subprocess.run(
+        ["bash", str(ROOT / "scripts" / "prepare-issue-worktree.sh"),
+         "--issue", "881", "--repository", repository_identity(origin), "--ref", "main",
+         "--worktree-root", str(worktree_root)],
+        cwd=clone, text=True, capture_output=True, env=_env(tmp_path),
+    )
+    assert prep.returncode == EXIT_OK, prep.stderr
+    worktree_path = worktree_root / "issue-881"
+    head_before = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=worktree_path, text=True,
+        capture_output=True, env=_env(tmp_path),
+    ).stdout.strip()
+
+    output = tmp_path / "pkg-drift-supplied.zip"
+    result = run(
+        clone, tmp_path, "--ref", "main", "--output", str(output),
+        worktree_root=worktree_root, origin=origin, test_action="drift-head",
+    )
+    assert result.returncode == EXIT_USAGE, result.stderr
+    assert evidence(result)["status"] == "blocked"
+    head_after = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=worktree_path, text=True,
+        capture_output=True, env=_env(tmp_path),
+    ).stdout.strip()
+    assert head_after == head_before
+    assert not output.exists()
+
+
 # 13. line endings and host paths are not silently transformed ----------------
 
 def test_line_endings_are_preserved(clone: Path, tmp_path: Path, origin: Path):

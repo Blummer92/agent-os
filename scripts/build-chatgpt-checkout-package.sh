@@ -342,6 +342,11 @@ record_side_effect "worktree-prepared"
 [ -d "$WORKTREE_PATH" ] || finish "$EXIT_WORKTREE" unavailable "prepared worktree path is missing: $WORKTREE_PATH"
 
 if [ "$TEST_ACTION" = "drift-head" ]; then
+  # Only a disposable worktree this run created may be written to. An
+  # operator-supplied root is preserved by cleanup, so a moved HEAD would
+  # outlive the run -- exactly the unbounded side effect this command forbids.
+  [ "$WORKTREE_ROOT_PROVIDED" -eq 0 ] ||
+    finish "$EXIT_USAGE" blocked "test-only control refuses to move an operator-supplied worktree HEAD"
   log "test-only control: moving prepared worktree HEAD back one commit before exact-head verification"
   git -C "$WORKTREE_PATH" checkout --quiet --detach HEAD~1 >/dev/null 2>&1 ||
     finish "$EXIT_EVIDENCE" unavailable "test-only control could not move the prepared worktree HEAD"
