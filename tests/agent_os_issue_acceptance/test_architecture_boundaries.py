@@ -65,6 +65,11 @@ DOMAIN_RULES: tuple[tuple[str, frozenset[str], tuple[str, ...]], ...] = (
         (),
     ),
     (
+        "mode",
+        frozenset({"operating_mode"}),
+        (),
+    ),
+    (
         "reporting",
         frozenset(
             {
@@ -88,14 +93,18 @@ DOMAIN_RULES: tuple[tuple[str, frozenset[str], tuple[str, ...]], ...] = (
 
 # The direction follows the merged #464 contract. Reporting is an output domain and
 # may consume supplied immutable upstream evidence; upstream domains may not import it.
+# Mode sits downstream of approval: it consumes canonical approval-domain contracts
+# (the IssueOperationalState projection) and must not import reporting, and no domain
+# upstream of it may import mode.
 FORBIDDEN_DOMAIN_IMPORTS = {
-    "scanner": frozenset({"planning", "handoff", "approval", "reporting"}),
-    "retrieval": frozenset({"planning", "handoff", "approval", "reporting"}),
-    "acceptance": frozenset({"planning", "handoff", "approval", "reporting"}),
-    "planning": frozenset({"handoff", "approval", "reporting"}),
-    "handoff": frozenset({"approval", "reporting"}),
-    "current_state": frozenset({"approval", "reporting"}),
-    "approval": frozenset({"reporting"}),
+    "scanner": frozenset({"planning", "handoff", "approval", "mode", "reporting"}),
+    "retrieval": frozenset({"planning", "handoff", "approval", "mode", "reporting"}),
+    "acceptance": frozenset({"planning", "handoff", "approval", "mode", "reporting"}),
+    "planning": frozenset({"handoff", "approval", "mode", "reporting"}),
+    "handoff": frozenset({"approval", "mode", "reporting"}),
+    "current_state": frozenset({"approval", "mode", "reporting"}),
+    "approval": frozenset({"mode", "reporting"}),
+    "mode": frozenset({"reporting"}),
     "reporting": frozenset(),
 }
 
