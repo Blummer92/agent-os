@@ -90,6 +90,7 @@ def make_checkpoint(
     invocation_id: str = "inv-1",
     execution_id: str = EXECUTION_ID,
     evidence_hashes: tuple[tuple[str, str], ...] = (),
+    recorded_at: str = EVALUATED_AT,
 ) -> ExecutionCheckpoint:
     b = bindings or base_bindings()
     is_mutating = stage in (
@@ -126,7 +127,7 @@ def make_checkpoint(
         invalidation_state=invalidation_state,
         supersession_state=supersession_state,
         lifecycle_state=LifecycleState.ACTIVE,
-        recorded_at=EVALUATED_AT,
+        recorded_at=recorded_at,
         actor_id="github-service-agent",
         mutation_intent_id=mutation_intent_id,
         pre_read_digest=HEX64 if is_mutating and status is StageStatus.PASSED else None,
@@ -298,6 +299,40 @@ def test_classification_manual_review_for_uncertain_outcome_never_blindly_retrie
     decision = next(d for d in plan.stage_decisions if d.stage is CheckpointStage.PREFLIGHT_COMPLETE)
     assert decision.classification is StageClassification.MANUAL_REVIEW
     assert decision.evidence_checkpoint_id == cp1.checkpoint_id
+
+
+def test_uncertain_record_outranks_matching_passed_record() -> None:
+    passed = make_checkpoint(
+        CheckpointStage.PREFLIGHT_COMPLETE,
+        LifecycleStage.PLANNING,
+        invocation_id="inv-passed",
+        recorded_at="2026-08-05T12:00:00Z",
+    )
+    uncertain = make_checkpoint(
+        CheckpointStage.PREFLIGHT_COMPLETE,
+        LifecycleStage.PLANNING,
+        status=StageStatus.UNCERTAIN,
+        invocation_id="inv-uncertain",
+        recorded_at="2026-08-05T13:00:00Z",
+    )
+    assert passed.reuse_key == uncertain.reuse_key
+
+    plan = plan_resume(
+        repository=REPOSITORY,
+        issue_number=ISSUE_NUMBER,
+        execution_id=EXECUTION_ID,
+        evaluated_at=EVALUATED_AT,
+        current_bindings=base_bindings(),
+        stored_checkpoints=(passed, uncertain),
+    )
+    decision = next(
+        item
+        for item in plan.stage_decisions
+        if item.stage is CheckpointStage.PREFLIGHT_COMPLETE
+    )
+
+    assert decision.classification is StageClassification.MANUAL_REVIEW
+    assert decision.evidence_checkpoint_id == uncertain.checkpoint_id
 
 
 def test_matching_passed_checkpoints_from_separate_invocations_are_reusable() -> None:

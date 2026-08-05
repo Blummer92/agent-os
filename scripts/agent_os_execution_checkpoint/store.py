@@ -133,25 +133,21 @@ def _reject_symlink(path: Path) -> None:
         raise CheckpointStoreUnavailable(f"refusing a symlinked store path: {path}")
 
 
-def _atomic_write(directory: Path, filename: str, payload: bytes) -> Path:
-    """Write payload to directory/filename atomically via temp-then-rename.
+def _atomic_write(
+    directory: Path, filename: str, payload: bytes
+) -> tuple[Path, bool]:
+    """Publish content atomically without ever overwriting an existing record.
 
-    If the destination already exists with identical bytes, this is a
-    no-op success (idempotent duplicate). If it exists with *different*
-    bytes, raises ``CheckpointStoreIntegrityConflict`` rather than
-    silently overwriting -- content-addressed filenames should never
-    legitimately disagree with their own content.
+    ``tempfile.mkstemp`` creates the temporary file with exclusive ``O_EXCL``
+    semantics. ``os.link`` then publishes that completed file atomically and
+    fails if the content-addressed destination already exists.
+
+    Returns ``(path, already_present)``. Identical existing bytes are an
+    idempotent success; different existing bytes are an integrity conflict.
     """
 
     final_path = directory / filename
     _reject_symlink(final_path)
-    if final_path.exists():
-        existing = final_path.read_bytes()
-        if existing == payload:
-            return final_path
-        raise CheckpointStoreIntegrityConflict(
-            f"content-addressed path already holds different content: {final_path}"
-        )
 
     descriptor = None
     temp_name = None
@@ -164,16 +160,36 @@ def _atomic_write(directory: Path, filename: str, payload: bytes) -> Path:
             handle.flush()
             os.fsync(handle.fileno())
         descriptor = None
-        os.replace(temp_name, os.fspath(final_path))
-        temp_name = None
-    except OSError as exc:
-        raise CheckpointStoreUnavailable(f"unable to write {final_path}") from exc
+
+        try:
+            os.link(temp_name, os.fspath(final_path))
+        except FileExistsError:
+            _reject_symlink(final_path)
+            try:
+                existing = final_path.read_bytes()
+            except OSError as exc:
+                raise CheckpointStoreUnavailable(
+                    f"unable to verify existing content at {final_path}"
+                ) from exc
+            if existing == payload:
+                return final_path, True
+            raise CheckpointStoreIntegrityConflict(
+                f"content-addressed path already holds different content: {final_path}"
+            )
+        except OSError as exc:
+            raise CheckpointStoreUnavailable(
+                f"unable to publish {final_path}"
+            ) from exc
+
+        return final_path, False
     finally:
         if descriptor is not None:
             os.close(descriptor)
-        if temp_name is not None and os.path.exists(temp_name):
-            os.remove(temp_name)
-    return final_path
+        if temp_name is not None:
+            try:
+                os.remove(temp_name)
+            except FileNotFoundError:
+                pass
 
 
 def _ensure_dir(path: Path) -> None:
@@ -220,15 +236,15 @@ def append_checkpoint(store_root: Path | str, checkpoint: ExecutionCheckpoint) -
     if len(payload) > MAX_SERIALIZED_BYTES:
         raise CheckpointStoreCapacityExceeded("checkpoint exceeds the per-record size bound")
 
-    already_present = (checkpoints_dir / filename).exists()
-    if not already_present:
+    destination_existed_before_write = (checkpoints_dir / filename).exists()
+    if not destination_existed_before_write:
         count, total_bytes = _existing_records_footprint(checkpoints_dir)
         if count + 1 > MAX_RECORDS_PER_ISSUE or total_bytes + len(payload) > MAX_BYTES_PER_ISSUE:
             raise CheckpointStoreCapacityExceeded(
                 f"issue {checkpoint.issue_number} checkpoint store is at capacity"
             )
 
-    path = _atomic_write(checkpoints_dir, filename, payload)
+    path, already_present = _atomic_write(checkpoints_dir, filename, payload)
 
     try:
         _write_head(issue_dir, checkpoint.checkpoint_id)
@@ -243,14 +259,38 @@ def append_checkpoint(store_root: Path | str, checkpoint: ExecutionCheckpoint) -
 
 
 def _write_head(issue_dir: Path, checkpoint_id: str) -> None:
+    """Best-effort atomic update of the reconstructable mutable HEAD hint."""
+
     _ensure_dir(issue_dir)
     payload = (checkpoint_id + "\n").encode("utf-8")
-    _atomic_write(issue_dir, "HEAD.tmp-target", payload)
-    # HEAD itself is a plain mutable pointer (not content-addressed), so it
-    # is written directly rather than through the content-addressed helper.
     head_path = _head_path(issue_dir)
     _reject_symlink(head_path)
-    (issue_dir / "HEAD.tmp-target").replace(head_path)
+
+    descriptor = None
+    temp_name = None
+    try:
+        descriptor, temp_name = tempfile.mkstemp(
+            dir=os.fspath(issue_dir), prefix=".tmp-head-"
+        )
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        descriptor = None
+        os.replace(temp_name, os.fspath(head_path))
+        temp_name = None
+    except OSError as exc:
+        raise CheckpointStoreUnavailable(
+            f"unable to write {head_path}"
+        ) from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if temp_name is not None:
+            try:
+                os.remove(temp_name)
+            except FileNotFoundError:
+                pass
 
 
 def read_head(store_root: Path | str, issue_number: int) -> str | None:
@@ -291,7 +331,8 @@ def write_quarantine_record(
     quarantine_id = domain_digest(QUARANTINE_DOMAIN, record)
     payload = canonical_json_bytes({**record, "quarantine_id": quarantine_id})
     filename = f"{quarantine_id.rsplit(':', 1)[-1]}.json"
-    return _atomic_write(quarantine_dir, filename, payload)
+    path, _already_present = _atomic_write(quarantine_dir, filename, payload)
+    return path
 
 
 def _checkpoint_id_from_filename(path: Path) -> str | None:
@@ -548,10 +589,29 @@ def load_checkpoints(store_root: Path | str, issue_number: int) -> LoadResult:
 
 
 def _load_quarantined_ids(issue_dir: Path) -> frozenset[str]:
+    """Load quarantine facts fail-closed, including content-address validation."""
+
     quarantine_dir = _quarantine_dir(issue_dir)
     if not quarantine_dir.exists():
         return frozenset()
+
+    try:
+        expected_issue_number = int(issue_dir.name.removeprefix("issue-"))
+    except ValueError as exc:
+        raise CheckpointStoreUnavailable(
+            f"invalid issue store directory {issue_dir}"
+        ) from exc
+
+    expected_keys = {
+        "schema",
+        "schema_version",
+        "issue_number",
+        "checkpoint_id",
+        "reason",
+        "quarantine_id",
+    }
     ids: set[str] = set()
+
     for entry in quarantine_dir.iterdir():
         if not (entry.is_file() and entry.suffix == ".json"):
             continue
@@ -559,11 +619,65 @@ def _load_quarantined_ids(issue_dir: Path) -> frozenset[str]:
             import json
 
             record = json.loads(entry.read_bytes().decode("utf-8"))
-        except (OSError, ValueError):
-            continue
-        checkpoint_id = record.get("checkpoint_id") if isinstance(record, dict) else None
-        if isinstance(checkpoint_id, str):
+        except (OSError, ValueError) as exc:
+            raise CheckpointStoreUnavailable(
+                f"unable to read quarantine record {entry}"
+            ) from exc
+
+        if not isinstance(record, dict) or set(record) != expected_keys:
+            raise CheckpointStoreUnavailable(
+                f"invalid quarantine record structure in {entry}"
+            )
+        if (
+            record["schema"] != "agent-os.execution-checkpoint.quarantine"
+            or record["schema_version"] != "1.0"
+            or type(record["issue_number"]) is not int
+            or record["issue_number"] != expected_issue_number
+            or not isinstance(record["reason"], str)
+            or len(record["reason"]) > 256
+            or not isinstance(record["quarantine_id"], str)
+        ):
+            raise CheckpointStoreUnavailable(
+                f"invalid quarantine record values in {entry}"
+            )
+
+        checkpoint_id = record["checkpoint_id"]
+        if checkpoint_id is not None:
+            prefix = "agent-os.execution-checkpoint:"
+            digest = (
+                checkpoint_id.removeprefix(prefix)
+                if isinstance(checkpoint_id, str)
+                else ""
+            )
+            if (
+                not isinstance(checkpoint_id, str)
+                or not checkpoint_id.startswith(prefix)
+                or len(digest) != 64
+                or any(char not in "0123456789abcdef" for char in digest)
+            ):
+                raise CheckpointStoreUnavailable(
+                    f"invalid quarantined checkpoint id in {entry}"
+                )
+
+        identity_payload = {
+            key: value
+            for key, value in record.items()
+            if key != "quarantine_id"
+        }
+        expected_quarantine_id = domain_digest(
+            QUARANTINE_DOMAIN, identity_payload
+        )
+        if (
+            record["quarantine_id"] != expected_quarantine_id
+            or entry.stem != expected_quarantine_id.rsplit(":", 1)[-1]
+        ):
+            raise CheckpointStoreUnavailable(
+                f"quarantine record identity mismatch in {entry}"
+            )
+
+        if checkpoint_id is not None:
             ids.add(checkpoint_id)
+
     return frozenset(ids)
 
 

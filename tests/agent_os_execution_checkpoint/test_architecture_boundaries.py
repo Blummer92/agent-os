@@ -103,19 +103,41 @@ def test_only_authorized_sibling_packages_are_imported() -> None:
         for module_name in _imported_module_names(path):
             if not module_name.startswith("scripts."):
                 continue
-            assert module_name.startswith("scripts.agent_os_issue_acceptance") or module_name.startswith(
-                "scripts.agent_os_execution_checkpoint"
-            ), f"{path.name} imports unauthorized sibling package {module_name!r}"
+            authorized = (
+                module_name == "scripts.agent_os_issue_acceptance"
+                or module_name.startswith("scripts.agent_os_issue_acceptance.")
+                or module_name == "scripts.agent_os_execution_checkpoint"
+                or module_name.startswith("scripts.agent_os_execution_checkpoint.")
+            )
+            assert authorized, (
+                f"{path.name} imports unauthorized sibling package {module_name!r}"
+            )
 
 
 def test_no_dunder_import_or_importlib_indirection_hides_a_forbidden_module() -> None:
     for path in _module_source_files():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported = tuple(alias.name for alias in node.names)
+                assert not any(
+                    name == "importlib" or name.startswith("importlib.")
+                    for name in imported
+                ), f"{path.name} imports importlib for dynamic import indirection"
+
+            if isinstance(node, ast.ImportFrom):
+                module = node.module or ""
+                assert not (
+                    module == "importlib" or module.startswith("importlib.")
+                ), f"{path.name} imports from importlib for dynamic import indirection"
+
             if isinstance(node, ast.Call):
                 func = node.func
                 name = getattr(func, "id", None) or getattr(func, "attr", None)
                 assert name != "__import__", f"{path.name} calls __import__ directly"
+                assert name != "import_module", (
+                    f"{path.name} calls import_module for dynamic import indirection"
+                )
 
 
 def test_module_bodies_contain_no_direct_subprocess_or_os_system_calls() -> None:

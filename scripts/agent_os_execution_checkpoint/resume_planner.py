@@ -110,8 +110,8 @@ def authority_ceiling_from_decision(decision: AgentOperatingModeDecision) -> Aut
 def authority_permits_stage(stage: CheckpointStage, ceiling: AuthorityCeiling | None) -> bool:
     """Whether the supplied ceiling reaches this stage's canonical lifecycle stage.
 
-    Fails closed: a missing ceiling (no authority evidence supplied) never
-    permits any stage beyond planning.
+    Fails closed: a missing ceiling (no authority evidence supplied)
+    permits no stage, including planning.
     """
 
     if ceiling is None:
@@ -262,6 +262,23 @@ def _classify_single_stage(
             "matching evidence has been quarantined",
         )
 
+    uncertain = tuple(
+        c for c in candidates if c.stage_status is StageStatus.UNCERTAIN
+    )
+    if uncertain:
+        selected = max(
+            uncertain,
+            key=lambda checkpoint: (
+                checkpoint.recorded_at,
+                checkpoint.checkpoint_id,
+            ),
+        )
+        return (
+            StageClassification.MANUAL_REVIEW,
+            selected.checkpoint_id,
+            "matching outcome is uncertain; uncertain evidence is never overridden or blindly retried",
+        )
+
     passed = tuple(c for c in candidates if c.stage_status is StageStatus.PASSED)
     # A record the store itself already marked non-current (invalidated or
     # superseded) is never reusable, regardless of whether its bindings
@@ -290,14 +307,6 @@ def _classify_single_stage(
             StageClassification.REUSABLE,
             selected.checkpoint_id,
             "latest valid, non-invalidated interchangeable evidence found",
-        )
-
-    uncertain = tuple(c for c in candidates if c.stage_status is StageStatus.UNCERTAIN)
-    if uncertain:
-        return (
-            StageClassification.MANUAL_REVIEW,
-            uncertain[0].checkpoint_id,
-            "prior outcome is uncertain; an uncertain non-idempotent operation is never blindly retried",
         )
 
     if passed and not live_valid:
@@ -345,7 +354,7 @@ def plan_resume(
     ``quarantined_checkpoint_ids`` must already have been loaded by
     ``store.load_checkpoints``, and ``store_available`` must reflect
     ``store.store_is_available`` (or an equivalent caller-side check).
-    Never blindly retries: a stage whose most recent outcome is uncertain
+    Never blindly retries: a stage with any matching uncertain outcome
     always resolves to ``manual-review``, never a fresh classification of
     ``reusable`` or a silent rerun.
     """

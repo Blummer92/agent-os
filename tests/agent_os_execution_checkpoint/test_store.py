@@ -416,3 +416,97 @@ def test_append_rejects_symlinked_issue_directory(tmp_path: Path) -> None:
 
     with pytest.raises(store.CheckpointStoreUnavailable):
         store.append_checkpoint(root, make_checkpoint())
+
+
+def test_head_failure_leaves_no_residue_and_later_append_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "agent-os-checkpoints"
+    first = make_checkpoint()
+    second = make_mutating(parent_id=first.checkpoint_id)
+
+    real_replace = store.os.replace
+    failed_once = False
+
+    def fail_first_head_replace(source: object, destination: object) -> None:
+        nonlocal failed_once
+        if not failed_once and Path(destination).name == "HEAD":
+            failed_once = True
+            raise OSError("simulated HEAD replacement failure")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(store.os, "replace", fail_first_head_replace)
+
+    first_outcome = store.append_checkpoint(root, first)
+    assert first_outcome.already_present is False
+    issue_dir = store.issue_store_dir(root, 895)
+    assert not tuple(issue_dir.glob(".tmp-head-*"))
+
+    second_outcome = store.append_checkpoint(root, second)
+    assert second_outcome.already_present is False
+    assert store.read_head(root, 895) == second.checkpoint_id
+    assert not tuple(issue_dir.glob(".tmp-head-*"))
+
+
+def test_corrupt_quarantine_record_fails_closed(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "agent-os-checkpoints"
+    checkpoint = make_checkpoint()
+    store.append_checkpoint(root, checkpoint)
+    quarantine_path = store.write_quarantine_record(
+        root,
+        895,
+        checkpoint.checkpoint_id,
+        "manual quarantine for testing",
+    )
+    quarantine_path.write_bytes(b"{not valid json")
+
+    with pytest.raises(store.CheckpointStoreUnavailable):
+        store.load_checkpoints(root, 895)
+
+
+def test_concurrent_identical_publish_is_idempotent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "agent-os-checkpoints"
+    checkpoint = make_checkpoint()
+    payload = store.serialize_checkpoint(checkpoint)
+    injected = False
+
+    def competing_identical_publish(source: object, destination: object) -> None:
+        nonlocal injected
+        assert not injected
+        injected = True
+        Path(destination).write_bytes(payload)
+        raise FileExistsError("simulated concurrent identical writer")
+
+    monkeypatch.setattr(store.os, "link", competing_identical_publish)
+
+    outcome = store.append_checkpoint(root, checkpoint)
+
+    assert outcome.already_present is True
+    assert outcome.path.read_bytes() == payload
+
+
+def test_concurrent_different_publish_never_overwrites_existing_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "agent-os-checkpoints"
+    checkpoint = make_checkpoint()
+    competing_payload = b"competing writer content"
+    published_path: Path | None = None
+
+    def competing_different_publish(source: object, destination: object) -> None:
+        nonlocal published_path
+        published_path = Path(destination)
+        published_path.write_bytes(competing_payload)
+        raise FileExistsError("simulated concurrent different writer")
+
+    monkeypatch.setattr(store.os, "link", competing_different_publish)
+
+    with pytest.raises(store.CheckpointStoreIntegrityConflict):
+        store.append_checkpoint(root, checkpoint)
+
+    assert published_path is not None
+    assert published_path.read_bytes() == competing_payload
