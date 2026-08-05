@@ -29,7 +29,7 @@ COMMAND_PLAN_ID = f"command-plan:{HEX64}"
 
 def make_checkpoint(**overrides: object) -> ExecutionCheckpoint:
     fields: dict[str, object] = {
-        "schema_name": "agent-os-execution-checkpoint",
+        "schema": "agent-os.execution-checkpoint",
         "schema_version": "1.0",
         "repository": "Blummer92/agent-os",
         "issue_number": 895,
@@ -176,14 +176,50 @@ def test_passed_mutating_stage_requires_mutation_intent_id() -> None:
         )
 
 
-def test_passed_mutating_stage_accepts_mutation_intent_id() -> None:
+def test_passed_mutating_stage_requires_pre_read_digest() -> None:
+    with pytest.raises(ValueError):
+        make_checkpoint(
+            checkpoint_stage=CheckpointStage.IMPLEMENTATION_COMPLETE,
+            lifecycle_stage=LifecycleStage.IMPLEMENTATION,
+            stage_status=StageStatus.PASSED,
+            mutation_intent_id=f"agent-os.mutation-intent:{HEX64}",
+            pre_read_digest=None,
+            post_write_digest=HEX64,
+        )
+
+
+def test_passed_mutating_stage_requires_post_write_digest() -> None:
+    with pytest.raises(ValueError):
+        make_checkpoint(
+            checkpoint_stage=CheckpointStage.IMPLEMENTATION_COMPLETE,
+            lifecycle_stage=LifecycleStage.IMPLEMENTATION,
+            stage_status=StageStatus.PASSED,
+            mutation_intent_id=f"agent-os.mutation-intent:{HEX64}",
+            pre_read_digest=HEX64,
+            post_write_digest=None,
+        )
+
+
+def test_passed_mutating_stage_accepts_complete_mutation_evidence() -> None:
     checkpoint = make_checkpoint(
         checkpoint_stage=CheckpointStage.IMPLEMENTATION_COMPLETE,
         lifecycle_stage=LifecycleStage.IMPLEMENTATION,
         stage_status=StageStatus.PASSED,
         mutation_intent_id=f"agent-os.mutation-intent:{HEX64}",
+        pre_read_digest=HEX64,
+        post_write_digest=HEX64,
     )
     assert checkpoint.mutation_intent_id is not None
+
+
+def test_uncertain_mutating_stage_requires_mutation_intent_id() -> None:
+    with pytest.raises(ValueError):
+        make_checkpoint(
+            checkpoint_stage=CheckpointStage.IMPLEMENTATION_COMPLETE,
+            lifecycle_stage=LifecycleStage.IMPLEMENTATION,
+            stage_status=StageStatus.UNCERTAIN,
+            mutation_intent_id=None,
+        )
 
 
 def test_superseded_requires_supersession_state() -> None:
@@ -206,6 +242,8 @@ def test_parent_checkpoint_id_links_a_child_and_affects_its_identity() -> None:
         lifecycle_stage=LifecycleStage.IMPLEMENTATION,
         stage_status=StageStatus.PASSED,
         mutation_intent_id=f"agent-os.mutation-intent:{HEX64}",
+        pre_read_digest=HEX64,
+        post_write_digest=HEX64,
         parent_checkpoint_id=parent.checkpoint_id,
     )
     assert child.parent_checkpoint_id == parent.checkpoint_id
@@ -214,6 +252,8 @@ def test_parent_checkpoint_id_links_a_child_and_affects_its_identity() -> None:
         lifecycle_stage=LifecycleStage.IMPLEMENTATION,
         stage_status=StageStatus.PASSED,
         mutation_intent_id=f"agent-os.mutation-intent:{HEX64}",
+        pre_read_digest=HEX64,
+        post_write_digest=HEX64,
         parent_checkpoint_id=None,
     )
     assert child.checkpoint_id != orphan.checkpoint_id

@@ -275,18 +275,21 @@ def _classify_single_stage(
         if not is_stage_invalidated(stage, triggers):
             live_valid.append(candidate)
 
-    distinct_valid_ids = {c.checkpoint_id for c in live_valid}
-    if len(distinct_valid_ids) > 1:
-        return (
-            StageClassification.MANUAL_REVIEW,
-            None,
-            "multiple conflicting passed checkpoints match this stage",
-        )
     if live_valid:
+        # Equal reuse_key plus passed evidence is interchangeable across
+        # invocations. Select the latest deterministically instead of
+        # treating repeated successful evidence as a conflict.
+        selected = max(
+            live_valid,
+            key=lambda checkpoint: (
+                checkpoint.recorded_at,
+                checkpoint.checkpoint_id,
+            ),
+        )
         return (
             StageClassification.REUSABLE,
-            live_valid[0].checkpoint_id,
-            "valid, non-invalidated evidence found",
+            selected.checkpoint_id,
+            "latest valid, non-invalidated interchangeable evidence found",
         )
 
     uncertain = tuple(c for c in candidates if c.stage_status is StageStatus.UNCERTAIN)

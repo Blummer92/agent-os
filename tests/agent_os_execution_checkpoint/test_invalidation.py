@@ -238,7 +238,7 @@ def test_identical_bindings_produce_no_triggers_except_extras() -> None:
 
 def _checkpoint_with_evidence(evidence_hashes: tuple[tuple[str, str], ...]) -> ExecutionCheckpoint:
     return ExecutionCheckpoint(
-        schema_name="agent-os-execution-checkpoint",
+        schema="agent-os.execution-checkpoint",
         schema_version="1.0",
         repository="Blummer92/agent-os",
         issue_number=895,

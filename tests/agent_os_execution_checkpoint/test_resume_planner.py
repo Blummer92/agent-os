@@ -92,8 +92,17 @@ def make_checkpoint(
     evidence_hashes: tuple[tuple[str, str], ...] = (),
 ) -> ExecutionCheckpoint:
     b = bindings or base_bindings()
+    is_mutating = stage in (
+        CheckpointStage.IMPLEMENTATION_COMPLETE,
+        CheckpointStage.COMMITTED,
+        CheckpointStage.PUSHED,
+        CheckpointStage.DRAFT_PR_OPENED,
+        CheckpointStage.MERGED,
+        CheckpointStage.ISSUE_CLOSED,
+    )
+
     return ExecutionCheckpoint(
-        schema_name="agent-os-execution-checkpoint",
+        schema="agent-os.execution-checkpoint",
         schema_version="1.0",
         repository=REPOSITORY,
         issue_number=ISSUE_NUMBER,
@@ -120,6 +129,8 @@ def make_checkpoint(
         recorded_at=EVALUATED_AT,
         actor_id="github-service-agent",
         mutation_intent_id=mutation_intent_id,
+        pre_read_digest=HEX64 if is_mutating and status is StageStatus.PASSED else None,
+        post_write_digest=HEX64 if is_mutating and status is StageStatus.PASSED else None,
     )
 
 
@@ -289,19 +300,40 @@ def test_classification_manual_review_for_uncertain_outcome_never_blindly_retrie
     assert decision.evidence_checkpoint_id == cp1.checkpoint_id
 
 
-def test_classification_manual_review_for_conflicting_passed_checkpoints() -> None:
-    cp1 = make_checkpoint(CheckpointStage.PREFLIGHT_COMPLETE, LifecycleStage.PLANNING, invocation_id="inv-1")
+def test_matching_passed_checkpoints_from_separate_invocations_are_reusable() -> None:
+    cp1 = make_checkpoint(
+        CheckpointStage.PREFLIGHT_COMPLETE,
+        LifecycleStage.PLANNING,
+        invocation_id="inv-1",
+    )
     cp2 = make_checkpoint(
-        CheckpointStage.PREFLIGHT_COMPLETE, LifecycleStage.PLANNING, invocation_id="inv-2",
+        CheckpointStage.PREFLIGHT_COMPLETE,
+        LifecycleStage.PLANNING,
+        invocation_id="inv-2",
         evidence_hashes=(("distinguishing_marker", HEX64),),
     )
     assert cp1.checkpoint_id != cp2.checkpoint_id
     assert cp1.reuse_key == cp2.reuse_key
+
     plan = plan_resume(
-        repository=REPOSITORY, issue_number=ISSUE_NUMBER, execution_id=EXECUTION_ID,
-        evaluated_at=EVALUATED_AT, current_bindings=base_bindings(), stored_checkpoints=(cp1, cp2),
+        repository=REPOSITORY,
+        issue_number=ISSUE_NUMBER,
+        execution_id=EXECUTION_ID,
+        evaluated_at=EVALUATED_AT,
+        current_bindings=base_bindings(),
+        stored_checkpoints=(cp1, cp2),
     )
-    assert decisions_by_stage(plan)[CheckpointStage.PREFLIGHT_COMPLETE] is StageClassification.MANUAL_REVIEW
+
+    decision = next(
+        item
+        for item in plan.stage_decisions
+        if item.stage is CheckpointStage.PREFLIGHT_COMPLETE
+    )
+    assert decision.classification is StageClassification.REUSABLE
+    assert decision.evidence_checkpoint_id == max(
+        cp1.checkpoint_id,
+        cp2.checkpoint_id,
+    )
 
 
 def test_classification_quarantined() -> None:

@@ -18,7 +18,7 @@ from scripts.agent_os_execution_checkpoint import (
 
 ## Record schema (`models.py`)
 
-`ExecutionCheckpoint` (frozen, `schema=agent-os-execution-checkpoint`, `v1.0`):
+`ExecutionCheckpoint` (frozen, `schema=agent-os.execution-checkpoint`, `v1.0`):
 Identity (`checkpoint_id`, `parent_checkpoint_id`, `reuse_key`); Binding
 (`repository`, `issue_number`, `invocation_id`, `execution_id`, `branch`,
 `worktree_fingerprint`/`worktree_role`, `environment_fingerprint`,

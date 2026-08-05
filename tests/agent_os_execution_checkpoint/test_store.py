@@ -29,7 +29,7 @@ COMMAND_PLAN_ID = f"command-plan:{HEX64}"
 
 def make_checkpoint(**overrides: object) -> ExecutionCheckpoint:
     fields: dict[str, object] = {
-        "schema_name": "agent-os-execution-checkpoint",
+        "schema": "agent-os.execution-checkpoint",
         "schema_version": "1.0",
         "repository": "Blummer92/agent-os",
         "issue_number": 895,
@@ -59,20 +59,31 @@ def make_checkpoint(**overrides: object) -> ExecutionCheckpoint:
     return ExecutionCheckpoint(**fields)
 
 
-def make_mutating(parent_id: str | None = None) -> ExecutionCheckpoint:
+def make_mutating(
+    parent_id: str | None = None,
+    *,
+    stage: CheckpointStage = CheckpointStage.IMPLEMENTATION_COMPLETE,
+    lifecycle: LifecycleStage = LifecycleStage.IMPLEMENTATION,
+    execution_id: str = "exe-1",
+    invocation_id: str = "inv-1",
+) -> ExecutionCheckpoint:
     intent = compute_mutation_intent_id(
         repository="Blummer92/agent-os",
         issue_number=895,
-        execution_id="exe-1",
-        checkpoint_stage="implementation-complete",
+        execution_id=execution_id,
+        checkpoint_stage=stage.value,
         target_ref="agent/895-execution-checkpoint",
         content_digest=HEX64,
         parent_checkpoint_id=parent_id,
     )
     return make_checkpoint(
-        checkpoint_stage=CheckpointStage.IMPLEMENTATION_COMPLETE,
-        lifecycle_stage=LifecycleStage.IMPLEMENTATION,
+        checkpoint_stage=stage,
+        lifecycle_stage=lifecycle,
+        execution_id=execution_id,
+        invocation_id=invocation_id,
         mutation_intent_id=intent,
+        pre_read_digest=HEX64,
+        post_write_digest=HEX64,
         parent_checkpoint_id=parent_id,
     )
 
@@ -184,6 +195,128 @@ def test_descendant_of_quarantined_checkpoint_is_also_quarantined(tmp_path: Path
     reasons = {q.checkpoint_id: q.reason for q in result.quarantined if q.checkpoint_id}
     assert "descendant of a quarantined checkpoint" in reasons.get(cp2.checkpoint_id, "")
     assert reasons.get(cp1.checkpoint_id) == "previously quarantined"
+
+
+
+def test_missing_parent_is_quarantined(tmp_path: Path) -> None:
+    root = tmp_path / "agent-os-checkpoints"
+    missing = f"agent-os.execution-checkpoint:{'f' * 64}"
+    child = make_mutating(parent_id=missing)
+    store.append_checkpoint(root, child)
+
+    result = store.load_checkpoints(root, 895)
+
+    assert result.valid == ()
+    assert child.checkpoint_id in result.quarantined_checkpoint_ids
+    assert any("missing parent" in item.reason for item in result.quarantined)
+
+
+def test_cross_execution_parent_is_quarantined(tmp_path: Path) -> None:
+    root = tmp_path / "agent-os-checkpoints"
+    parent = make_checkpoint()
+    child = make_mutating(
+        parent_id=parent.checkpoint_id,
+        execution_id="exe-2",
+        invocation_id="inv-2",
+    )
+    store.append_checkpoint(root, parent)
+    store.append_checkpoint(root, child)
+
+    result = store.load_checkpoints(root, 895)
+
+    assert tuple(item.checkpoint for item in result.valid) == (parent,)
+    assert child.checkpoint_id in result.quarantined_checkpoint_ids
+    assert any("different execution_id" in item.reason for item in result.quarantined)
+
+
+def test_reordered_stage_is_quarantined(tmp_path: Path) -> None:
+    root = tmp_path / "agent-os-checkpoints"
+    parent = make_mutating(
+        stage=CheckpointStage.COMMITTED,
+        lifecycle=LifecycleStage.IMPLEMENTATION,
+    )
+    child = make_mutating(
+        parent_id=parent.checkpoint_id,
+        stage=CheckpointStage.IMPLEMENTATION_COMPLETE,
+        lifecycle=LifecycleStage.IMPLEMENTATION,
+        invocation_id="inv-2",
+    )
+    store.append_checkpoint(root, parent)
+    store.append_checkpoint(root, child)
+
+    result = store.load_checkpoints(root, 895)
+
+    assert tuple(item.checkpoint for item in result.valid) == (parent,)
+    assert child.checkpoint_id in result.quarantined_checkpoint_ids
+    assert any("stage order" in item.reason for item in result.quarantined)
+
+
+def test_forked_chain_children_are_quarantined(tmp_path: Path) -> None:
+    root = tmp_path / "agent-os-checkpoints"
+    parent = make_checkpoint()
+    child_a = make_mutating(
+        parent_id=parent.checkpoint_id,
+        invocation_id="inv-a",
+    )
+    child_b = make_mutating(
+        parent_id=parent.checkpoint_id,
+        invocation_id="inv-b",
+    )
+    store.append_checkpoint(root, parent)
+    store.append_checkpoint(root, child_a)
+    store.append_checkpoint(root, child_b)
+
+    result = store.load_checkpoints(root, 895)
+
+    assert tuple(item.checkpoint for item in result.valid) == (parent,)
+    assert child_a.checkpoint_id in result.quarantined_checkpoint_ids
+    assert child_b.checkpoint_id in result.quarantined_checkpoint_ids
+    assert sum(
+        "forked execution chain" in item.reason
+        for item in result.quarantined
+    ) == 2
+
+
+def test_multiple_genesis_records_for_one_execution_are_quarantined(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "agent-os-checkpoints"
+    first = make_checkpoint(invocation_id="inv-a")
+    second = make_checkpoint(invocation_id="inv-b")
+    store.append_checkpoint(root, first)
+    store.append_checkpoint(root, second)
+
+    result = store.load_checkpoints(root, 895)
+
+    assert result.valid == ()
+    assert first.checkpoint_id in result.quarantined_checkpoint_ids
+    assert second.checkpoint_id in result.quarantined_checkpoint_ids
+
+
+def test_tampered_parent_quarantines_valid_descendant(tmp_path: Path) -> None:
+    root = tmp_path / "agent-os-checkpoints"
+    parent = make_checkpoint()
+    child = make_mutating(parent_id=parent.checkpoint_id)
+    store.append_checkpoint(root, parent)
+    store.append_checkpoint(root, child)
+
+    parent_path = (
+        store.issue_store_dir(root, 895)
+        / "checkpoints"
+        / store._filename_for_checkpoint_id(parent.checkpoint_id)
+    )
+    parent_path.write_bytes(
+        parent_path.read_bytes().replace(
+            b'"stage_status":"passed"',
+            b'"stage_status":"failed"',
+        )
+    )
+
+    result = store.load_checkpoints(root, 895)
+
+    assert result.valid == ()
+    assert parent.checkpoint_id in result.quarantined_checkpoint_ids
+    assert child.checkpoint_id in result.quarantined_checkpoint_ids
 
 
 def test_write_quarantine_record_is_additive_and_original_untouched(tmp_path: Path) -> None:

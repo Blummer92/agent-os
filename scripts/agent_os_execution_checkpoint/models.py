@@ -17,7 +17,7 @@ from scripts.agent_os_issue_acceptance.issue_operational_state import LifecycleS
 
 from .identity import canonical_json_bytes, compute_checkpoint_id, compute_reuse_key
 
-CHECKPOINT_SCHEMA_NAME = "agent-os-execution-checkpoint"
+CHECKPOINT_SCHEMA_NAME = "agent-os.execution-checkpoint"
 CHECKPOINT_SCHEMA_VERSION = "1.0"
 
 MAX_SERIALIZED_BYTES = 64 * 1024
@@ -303,7 +303,7 @@ class ExecutionCheckpoint:
     authority fields are always ``False``.
     """
 
-    schema_name: Literal["agent-os-execution-checkpoint"]
+    schema: Literal["agent-os.execution-checkpoint"]
     schema_version: Literal["1.0"]
     repository: str
     issue_number: int
@@ -346,7 +346,7 @@ class ExecutionCheckpoint:
 
     def __post_init__(self) -> None:
         if (
-            self.schema_name != CHECKPOINT_SCHEMA_NAME
+            self.schema != CHECKPOINT_SCHEMA_NAME
             or self.schema_version != CHECKPOINT_SCHEMA_VERSION
         ):
             raise ValueError("unsupported execution-checkpoint schema")
@@ -384,12 +384,30 @@ class ExecutionCheckpoint:
         kind = STAGE_KIND_MAP[CheckpointStage(self.checkpoint_stage)]
         if kind is StageKind.READ_ONLY and self.mutation_intent_id is not None:
             raise ValueError("mutation_intent_id must be null for a read-only stage")
+
+        if (
+            kind is not StageKind.READ_ONLY
+            and self.stage_status in (StageStatus.PASSED, StageStatus.UNCERTAIN)
+            and self.mutation_intent_id is None
+        ):
+            raise ValueError(
+                "a passed or uncertain mutating stage requires mutation_intent_id"
+            )
+
         if (
             kind is not StageKind.READ_ONLY
             and self.stage_status is StageStatus.PASSED
-            and self.mutation_intent_id is None
+            and self.pre_read_digest is None
         ):
-            raise ValueError("a passed mutating stage requires mutation_intent_id")
+            raise ValueError("a passed mutating stage requires pre_read_digest")
+
+        if (
+            kind is not StageKind.READ_ONLY
+            and self.stage_status is StageStatus.PASSED
+            and self.post_write_digest is None
+        ):
+            raise ValueError("a passed mutating stage requires post_write_digest")
+
         if self.mutation_intent_id is not None:
             _sha256_id(self.mutation_intent_id, "mutation_intent_id")
 
@@ -453,7 +471,7 @@ class ExecutionCheckpoint:
         """
 
         return {
-            "schema_name": self.schema_name,
+            "schema": self.schema,
             "schema_version": self.schema_version,
             "parent_checkpoint_id": self.parent_checkpoint_id,
             "repository": self.repository,
@@ -523,7 +541,7 @@ class ExecutionCheckpoint:
 
 _CHECKPOINT_DICT_KEYS = frozenset(
     {
-        "schema_name",
+        "schema",
         "schema_version",
         "parent_checkpoint_id",
         "repository",
@@ -605,7 +623,7 @@ def checkpoint_from_dict(payload: object) -> ExecutionCheckpoint:
     )
 
     return ExecutionCheckpoint(
-        schema_name=payload["schema_name"],
+        schema=payload["schema"],
         schema_version=payload["schema_version"],
         parent_checkpoint_id=payload["parent_checkpoint_id"],
         repository=payload["repository"],

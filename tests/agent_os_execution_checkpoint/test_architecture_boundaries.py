@@ -213,7 +213,7 @@ def test_plan_resume_and_checkpoint_construction_are_pure_no_git_or_network(
     sha40 = "7d01ad36d7f9c9cba41c9fee62a562b7689c2fbe"
     hex64 = hashlib.sha256(b"x").hexdigest()
     checkpoint = ExecutionCheckpoint(
-        schema_name="agent-os-execution-checkpoint",
+        schema="agent-os.execution-checkpoint",
         schema_version="1.0",
         repository="Blummer92/agent-os",
         issue_number=895,

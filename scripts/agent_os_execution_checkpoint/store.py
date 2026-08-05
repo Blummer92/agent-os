@@ -19,8 +19,10 @@ from pathlib import Path
 
 from .identity import canonical_json_bytes, domain_digest
 from .models import (
+    CANONICAL_STAGE_ORDER,
     MAX_SERIALIZED_BYTES,
     ExecutionCheckpoint,
+    InvalidationState,
     checkpoint_from_dict,
     deserialize_checkpoint,
     serialize_checkpoint,
@@ -292,15 +294,19 @@ def write_quarantine_record(
     return _atomic_write(quarantine_dir, filename, payload)
 
 
-def load_checkpoints(store_root: Path | str, issue_number: int) -> LoadResult:
-    """Load, verify, and reconstruct every record for one issue.
+def _checkpoint_id_from_filename(path: Path) -> str | None:
+    """Recover the content-addressed id represented by a checkpoint filename."""
 
-    Every stored file is independently verified: its content must parse,
-    its schema must validate, and its embedded ``checkpoint_id`` must equal
-    the filename's hex suffix (recomputed from content, not trusted from
-    the name). A file failing any of these is reported in ``quarantined``,
-    never raised -- one bad record never blocks reading the rest.
-    """
+    if path.suffix != ".json":
+        return None
+    digest = path.stem
+    if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+        return None
+    return f"agent-os.execution-checkpoint:{digest}"
+
+
+def load_checkpoints(store_root: Path | str, issue_number: int) -> LoadResult:
+    """Load and verify every checkpoint and its complete parent chain."""
 
     issue_dir = issue_store_dir(Path(store_root), issue_number)
     _reject_symlink(issue_dir)
@@ -309,29 +315,52 @@ def load_checkpoints(store_root: Path | str, issue_number: int) -> LoadResult:
         return LoadResult(valid=(), quarantined=(), quarantined_checkpoint_ids=frozenset())
 
     already_quarantined = _load_quarantined_ids(issue_dir)
-
+    quarantined_ids: set[str] = set(already_quarantined)
     valid: list[LoadedCheckpoint] = []
     quarantined: list[QuarantinedEntry] = []
+
     for entry in sorted(checkpoints_dir.iterdir()):
         if not (entry.is_file() and entry.suffix == ".json"):
             continue
+
+        filename_id = _checkpoint_id_from_filename(entry)
+
         try:
             payload = entry.read_bytes()
         except OSError as exc:
+            if filename_id is not None:
+                quarantined_ids.add(filename_id)
             quarantined.append(
-                QuarantinedEntry(checkpoint_id=None, path=entry, reason=f"unreadable: {exc}")
+                QuarantinedEntry(
+                    checkpoint_id=filename_id,
+                    path=entry,
+                    reason=f"unreadable: {exc}",
+                )
             )
             continue
+
         try:
             checkpoint = deserialize_checkpoint(payload)
         except (TypeError, ValueError) as exc:
+            # The filename is content-addressed and preserves the original
+            # identifier even when tampering makes the embedded record fail
+            # validation. Descendants may therefore still be identified.
+            if filename_id is not None:
+                quarantined_ids.add(filename_id)
             quarantined.append(
-                QuarantinedEntry(checkpoint_id=None, path=entry, reason=f"invalid: {exc}")
+                QuarantinedEntry(
+                    checkpoint_id=filename_id,
+                    path=entry,
+                    reason=f"invalid: {exc}",
+                )
             )
             continue
 
         expected_filename = _filename_for_checkpoint_id(checkpoint.checkpoint_id)
         if entry.name != expected_filename:
+            quarantined_ids.add(checkpoint.checkpoint_id)
+            if filename_id is not None:
+                quarantined_ids.add(filename_id)
             quarantined.append(
                 QuarantinedEntry(
                     checkpoint_id=checkpoint.checkpoint_id,
@@ -342,6 +371,7 @@ def load_checkpoints(store_root: Path | str, issue_number: int) -> LoadResult:
             continue
 
         if checkpoint.checkpoint_id in already_quarantined:
+            quarantined_ids.add(checkpoint.checkpoint_id)
             quarantined.append(
                 QuarantinedEntry(
                     checkpoint_id=checkpoint.checkpoint_id,
@@ -353,33 +383,162 @@ def load_checkpoints(store_root: Path | str, issue_number: int) -> LoadResult:
 
         valid.append(LoadedCheckpoint(checkpoint=checkpoint, path=entry))
 
-    quarantined_ids = frozenset(
-        entry.checkpoint_id for entry in quarantined if entry.checkpoint_id is not None
-    ) | already_quarantined
+    stage_index = {
+        stage: index for index, stage in enumerate(CANONICAL_STAGE_ORDER)
+    }
+    remaining = list(valid)
 
-    # Any record whose parent_checkpoint_id is quarantined is itself
-    # quarantined (descendant quarantine), applied to a fixed point so
-    # multi-generation chains are fully caught.
-    remaining = valid
-    changed = True
-    while changed:
-        changed = False
+    while True:
+        to_quarantine: dict[str, str] = {}
+        by_id = {
+            item.checkpoint.checkpoint_id: item
+            for item in remaining
+        }
+
+        # Validate every direct parent relationship.
+        for item in remaining:
+            checkpoint = item.checkpoint
+            parent_id = checkpoint.parent_checkpoint_id
+            if parent_id is None:
+                continue
+
+            if parent_id in quarantined_ids:
+                to_quarantine[checkpoint.checkpoint_id] = (
+                    "descendant of a quarantined checkpoint"
+                )
+                continue
+
+            parent = by_id.get(parent_id)
+            if parent is None:
+                to_quarantine[checkpoint.checkpoint_id] = (
+                    "missing parent checkpoint"
+                )
+                continue
+
+            if parent.checkpoint.execution_id != checkpoint.execution_id:
+                to_quarantine[checkpoint.checkpoint_id] = (
+                    "parent belongs to a different execution_id"
+                )
+                continue
+
+            parent_stage = stage_index[parent.checkpoint.checkpoint_stage]
+            child_stage = stage_index[checkpoint.checkpoint_stage]
+            if (
+                child_stage < parent_stage
+                and checkpoint.invalidation_state
+                is not InvalidationState.INVALIDATED
+            ):
+                to_quarantine[checkpoint.checkpoint_id] = (
+                    "checkpoint stage order moves backward without invalidation"
+                )
+
+        # Remove direct failures before checking whole-chain shape.
+        if not to_quarantine:
+            by_execution: dict[str, list[LoadedCheckpoint]] = {}
+            for item in remaining:
+                by_execution.setdefault(
+                    item.checkpoint.execution_id, []
+                ).append(item)
+
+            for execution_items in by_execution.values():
+                roots = [
+                    item
+                    for item in execution_items
+                    if item.checkpoint.parent_checkpoint_id is None
+                ]
+
+                if len(roots) != 1:
+                    for item in execution_items:
+                        to_quarantine[item.checkpoint.checkpoint_id] = (
+                            "execution chain must contain exactly one genesis checkpoint"
+                        )
+                    continue
+
+                children: dict[str, list[LoadedCheckpoint]] = {}
+                for item in execution_items:
+                    parent_id = item.checkpoint.parent_checkpoint_id
+                    if parent_id is not None:
+                        children.setdefault(parent_id, []).append(item)
+
+                fork_found = False
+                for siblings in children.values():
+                    if len(siblings) > 1:
+                        fork_found = True
+                        for child in siblings:
+                            to_quarantine[child.checkpoint.checkpoint_id] = (
+                                "forked execution chain"
+                            )
+
+                if fork_found:
+                    continue
+
+                # Prove every accepted record is reachable from the one
+                # genesis record through one linear predecessor chain.
+                visited: set[str] = set()
+                current: LoadedCheckpoint | None = roots[0]
+                while current is not None:
+                    current_id = current.checkpoint.checkpoint_id
+                    if current_id in visited:
+                        break
+                    visited.add(current_id)
+                    next_items = children.get(current_id, [])
+                    current = next_items[0] if next_items else None
+
+                for item in execution_items:
+                    if item.checkpoint.checkpoint_id not in visited:
+                        to_quarantine[item.checkpoint.checkpoint_id] = (
+                            "execution chain is disconnected or cyclic"
+                        )
+
+        if not to_quarantine:
+            break
+
         kept: list[LoadedCheckpoint] = []
         for item in remaining:
-            parent = item.checkpoint.parent_checkpoint_id
-            if parent is not None and parent in quarantined_ids:
-                quarantined.append(
-                    QuarantinedEntry(
-                        checkpoint_id=item.checkpoint.checkpoint_id,
-                        path=item.path,
-                        reason="descendant of a quarantined checkpoint",
-                    )
-                )
-                quarantined_ids = quarantined_ids | {item.checkpoint.checkpoint_id}
-                changed = True
-            else:
+            checkpoint_id = item.checkpoint.checkpoint_id
+            reason = to_quarantine.get(checkpoint_id)
+            if reason is None:
                 kept.append(item)
+                continue
+
+            quarantined_ids.add(checkpoint_id)
+            quarantined.append(
+                QuarantinedEntry(
+                    checkpoint_id=checkpoint_id,
+                    path=item.path,
+                    reason=reason,
+                )
+            )
         remaining = kept
+
+    # Return each execution in deterministic parent-chain order.
+    final_by_id = {
+        item.checkpoint.checkpoint_id: item
+        for item in remaining
+    }
+    depth_cache: dict[str, int] = {}
+
+    def chain_depth(item: LoadedCheckpoint) -> int:
+        checkpoint_id = item.checkpoint.checkpoint_id
+        if checkpoint_id in depth_cache:
+            return depth_cache[checkpoint_id]
+
+        parent_id = item.checkpoint.parent_checkpoint_id
+        if parent_id is None:
+            depth = 0
+        else:
+            depth = chain_depth(final_by_id[parent_id]) + 1
+
+        depth_cache[checkpoint_id] = depth
+        return depth
+
+    remaining.sort(
+        key=lambda item: (
+            item.checkpoint.execution_id,
+            chain_depth(item),
+            item.checkpoint.checkpoint_id,
+        )
+    )
 
     return LoadResult(
         valid=tuple(remaining),
