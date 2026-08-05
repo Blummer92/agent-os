@@ -414,6 +414,25 @@ def test_substitution_disallowed_globally_blocks_replacement():
     )
     assert result.replacement_records == ()
     assert 901 not in result.selected_lanes
+    assert "replacement.blocked-substitution-disabled" in result.reason_codes
+    assert "replacement.blocked-exact-required-not-substituted" not in result.reason_codes
+
+
+def test_no_eligible_replacement_available():
+    blocked = candidate(
+        901,
+        substitutable=True,
+        state_changes={"implementation_authorization": authority(AuthorizationState.NOT_AUTHORIZED)},
+    )
+    result = select(
+        candidates=(blocked,),
+        explicit_request_order=(901,),
+        substitution_allowed=True,
+        requested_lane_count=1,
+    )
+    assert result.selected_lanes == ()
+    assert result.replacement_records == ()
+    assert "replacement.blocked-no-eligible-replacement" in result.reason_codes
 
 
 # ---------------------------------------------------------------------------
@@ -483,6 +502,28 @@ def test_unsupported_version_fails_closed():
     result = select(candidates=(candidate(901),))
     payload = json.loads(serialize_executable_lane_selection(result))
     payload["schema_version"] = "9.9"
+    with pytest.raises(ValueError):
+        deserialize_executable_lane_selection(json.dumps(payload))
+
+
+def test_tampered_replacement_record_references_fail_closed():
+    result = select(candidates=(candidate(901),))
+    payload = json.loads(serialize_executable_lane_selection(result))
+    payload["replacement_records"] = [
+        {
+            "displaced_issue_number": 999,
+            "replacement_issue_number": 901,
+            "reason_code": "replacement.blocked-preferred-substituted",
+        }
+    ]
+    with pytest.raises(ValueError):
+        deserialize_executable_lane_selection(json.dumps(payload))
+
+
+def test_tampered_rank_evidence_duplicate_rank_fails_closed():
+    result = select(candidates=(candidate(901), candidate(902)))
+    payload = json.loads(serialize_executable_lane_selection(result))
+    payload["rank_evidence"][1]["rank"] = payload["rank_evidence"][0]["rank"]
     with pytest.raises(ValueError):
         deserialize_executable_lane_selection(json.dumps(payload))
 

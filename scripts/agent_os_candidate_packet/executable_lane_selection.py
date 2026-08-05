@@ -70,6 +70,8 @@ REASON_CODES = frozenset(
         "duplicate-claim.multiple-primary",
         "replacement.blocked-preferred-substituted",
         "replacement.blocked-exact-required-not-substituted",
+        "replacement.blocked-substitution-disabled",
+        "replacement.blocked-no-eligible-replacement",
     }
 )
 
@@ -432,6 +434,13 @@ class ExecutableLaneSelection:
             type(v) is not ReplacementRecord for v in self.replacement_records
         ):
             raise TypeError("replacement_records must be an exact tuple of ReplacementRecord")
+        supplied_set = set(self.supplied_issue_numbers)
+        for record in self.replacement_records:
+            if (
+                record.displaced_issue_number not in supplied_set
+                or record.replacement_issue_number not in supplied_set
+            ):
+                raise ValueError("replacement_records references an unsupplied issue")
 
         if type(self.rank_evidence) is not tuple or any(
             type(v) is not RankEvidence for v in self.rank_evidence
@@ -440,6 +449,8 @@ class ExecutableLaneSelection:
         ranked_numbers = tuple(sorted(r.issue_number for r in self.rank_evidence))
         if ranked_numbers != self.supplied_issue_numbers:
             raise ValueError("rank_evidence must rank every supplied issue exactly once")
+        if sorted(r.rank for r in self.rank_evidence) != list(range(1, len(self.rank_evidence) + 1)):
+            raise ValueError("rank_evidence ranks must be a contiguous 1..N sequence")
 
         if type(self.duplicate_claim_findings) is not tuple or any(
             type(v) is not DuplicateClaimFinding for v in self.duplicate_claim_findings
@@ -664,9 +675,13 @@ def select_executable_lanes(
             continue
 
         candidate = by_number[issue_number]
-        if substitution_allowed and candidate.substitutable:
+        used.add(issue_number)
+        if not substitution_allowed:
+            top_level_reasons.add("replacement.blocked-substitution-disabled")
+        elif not candidate.substitutable:
+            top_level_reasons.add("replacement.blocked-exact-required-not-substituted")
+        else:
             replacement = _next_eligible_independent()
-            used.add(issue_number)
             if replacement is not None:
                 selected.append(replacement)
                 used.add(replacement)
@@ -678,9 +693,8 @@ def select_executable_lanes(
                     )
                 )
                 top_level_reasons.add("replacement.blocked-preferred-substituted")
-        else:
-            used.add(issue_number)
-            top_level_reasons.add("replacement.blocked-exact-required-not-substituted")
+            else:
+                top_level_reasons.add("replacement.blocked-no-eligible-replacement")
 
     for candidate in sorted_candidates:
         if len(selected) >= requested_lane_count:

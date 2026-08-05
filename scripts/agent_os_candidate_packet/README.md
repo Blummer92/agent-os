@@ -25,60 +25,52 @@ result = prepare_issue_readiness(
 ## Reuse, not reimplementation
 
 This package composes, and never replaces:
+`scripts.agent_os_github_issue_provider.revision` (source-revision binding),
+`scripts.agent_os_issue_acceptance.issueplan_scanner.scan_issueplan_source`,
+`scripts.agent_os_issue_acceptance.issueplan_current_state`
+`.build_issueplan_current_state_evidence`,
+`scripts.agent_os_issue_acceptance.readiness.evaluate_issue_readiness_with_labels`,
+and `scripts.agent_os_issue_acceptance.acceptance_report_transport`
+`.acceptance_report_to_payload` / `.acceptance_report_from_payload`.
 
-- `scripts.agent_os_github_issue_provider.revision` for source-revision binding.
-- `scripts.agent_os_issue_acceptance.issueplan_scanner.scan_issueplan_source`.
-- `scripts.agent_os_issue_acceptance.issueplan_current_state`
-  `.build_issueplan_current_state_evidence`.
-- `scripts.agent_os_issue_acceptance.readiness`
-  `.evaluate_issue_readiness_with_labels`.
-- `scripts.agent_os_issue_acceptance.acceptance_report_transport`
-  `.acceptance_report_to_payload` / `.acceptance_report_from_payload`.
-
-## Exact issue identity
+## Outcomes
 
 `resolve_issue_snapshot` fails closed with `source.issue-number-mismatch` if
 the returned item's `number` differs from the requested `issue_number`, and
 with `source.malformed-issue-number` for a non-integer returned number.
-
-## Outcomes
-
 `IssueReadinessStageResult.status` is one of: `ready`, `blocked`,
 `needs-decision`, `source-failure`, `incomplete-evidence`, kept distinct so a
 source failure never masquerades as a readiness outcome. Every resolved
-status requires all of `snapshot`, `issueplan_current_state_evidence`, and
+status requires `snapshot`, `issueplan_current_state_evidence`, and
 `readiness_result`; unresolved statuses carry none. `execution_authorized`
-and `side_effects_performed` are fixed `False` on every result.
+and `side_effects_performed` are fixed `False`.
 
 ## Dependency identity evidence
 
 `DependencyIdentityEvidence` (#776) is this boundary's canonical record of
-*which* dependencies an issue has. `DependencyIdentityStatus`: `resolved`
-(structured source supplied canonical identities), `unresolved` (declared,
-not resolved), `absent` (structured source reported none), `unavailable` (no
-source). Only `resolved` carries `dependency_ids`, deduplicated and sorted;
-a collapsed duplicate records `dependency-identity.duplicate-collapsed`.
-`prepare_issue_readiness(..., dependency_identity_evidence=...)` is the only
-entry point; nothing here derives an identity from prose or a repository-wide
-guess. `STAGE_SCHEMA_VERSION` is `1.1`; schema `1.0` is rejected outright.
+*which* dependencies an issue has: `resolved` (structured identities
+supplied), `unresolved` (declared, not resolved), `absent` (none reported),
+`unavailable` (no source). Only `resolved` carries `dependency_ids`,
+deduplicated and sorted. `prepare_issue_readiness(...,
+dependency_identity_evidence=...)` is the only entry point; nothing derives
+an identity from prose or a repository-wide guess. `STAGE_SCHEMA_VERSION` is
+`1.1`; schema `1.0` is rejected outright.
 
 ## Round trip
 
 `issue_readiness_stage_result_to_dict` / `_from_dict` in `stage_models.py`
-serialize and reconstruct every field with no semantic drift. Malformed
-payloads fail closed rather than reconstructing partially.
-
-Registry admission (module-version-map, ownership-matrix) is explicitly
-deferred to the final integration issue and is out of scope here.
+serialize and reconstruct every field with no semantic drift; malformed
+payloads fail closed. Registry admission is deferred to the final
+integration issue.
 
 ## Executable lane selection (AOS-QUEUE2, #864)
 
 `executable_lane_selection.py` implements `agent-os-executable-lane-selection`
 `1.0`: a pure, deterministic selector over supplied canonical
 `IssueOperationalState` (#862) and `AgentOperatingModeDecision` (#863)
-records, reached via `select_executable_lanes(campaign_id=..., requested_lane_count=1..3,
-substitution_allowed=..., explicit_request_order=..., candidates=(CandidateIssueEvidence(...), ...))`.
-It performs no execution or mutation.
+records, via `select_executable_lanes(campaign_id=..., requested_lane_count=1..3,
+substitution_allowed=..., explicit_request_order=..., candidates=(...))`.
+Performs no execution or mutation.
 
 Every issue receives exactly one descriptive queue: `ready-for-implementation`,
 `ready-for-review`, `waiting-for-authorization`, `waiting-for-dependency`,
@@ -89,11 +81,19 @@ reconciliation work, then planning-only; waiting/terminal issues stay visible
 but never consume a lane. Ties break on explicit request position, then
 ascending dependency depth, then ascending issue number.
 
-Replacement applies only to explicitly requested issues in a blocked queue:
-with `substitution_allowed=True` and the candidate's own `substitutable=True`,
-the next eligible `ready-for-implementation` issue fills the slot and records
-a `ReplacementRecord`; `substitutable=False` is never silently replaced.
-Multiple active primary claims classify `needs-reconciliation` and are always
+Replacement applies only to an explicitly requested issue in a blocked
+queue, one finite `reason_codes` entry per outcome:
+
+- eligible substitute found: fills the slot, records a `ReplacementRecord`
+  (`replacement.blocked-preferred-substituted`);
+- `substitutable=False`: never silently replaced
+  (`replacement.blocked-exact-required-not-substituted`);
+- `substitution_allowed=False`: blocked globally, no record
+  (`replacement.blocked-substitution-disabled`);
+- no eligible `ready-for-implementation` issue remains: slot stays empty
+  (`replacement.blocked-no-eligible-replacement`).
+
+Multiple active primary claims classify `needs-reconciliation`, always
 excluded from selection. The result embeds only the source
-`state_id`/`decision_id` identities. `execution_authorized` and
+`state_id`/`decision_id` identities; `execution_authorized` and
 `side_effects_performed` are always `False`.
