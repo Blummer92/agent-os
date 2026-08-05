@@ -156,7 +156,7 @@ if [ ! -f "$alias_registry" ]; then
 else
   while IFS= read -r p; do
     [ -z "$p" ] && continue
-    [ -e "$p" ] || { echo "Navigation alias references missing path: $p"; alias_refs_missing=1; }
+    [ -f "$p" ] || { echo "Navigation alias references missing path: $p"; alias_refs_missing=1; }
   done < <(grep -oE '`[A-Za-z0-9_./-]+\.md`' "$alias_registry" | tr -d '`' | sort -u)
 fi
 check "All Navigation Alias Registry Markdown paths exist" "$alias_refs_missing"
@@ -177,7 +177,7 @@ if [ ! -f "$baseline_file" ]; then
 else
   for f in "${baseline_dependents[@]}"; do
     [ -f "$f" ] || { echo "Baseline dependent missing: $f"; baseline_refs_missing=1; continue; }
-    grep -q "$baseline_file" "$f" || { echo "Baseline dependent missing reference: $f"; baseline_refs_missing=1; }
+    grep -Fq -- "$baseline_file" "$f" || { echo "Baseline dependent missing reference: $f"; baseline_refs_missing=1; }
   done
 fi
 check "Lean governance baseline references are aligned" "$baseline_refs_missing"
