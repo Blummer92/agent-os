@@ -39,7 +39,7 @@ Use `--format json` for stable machine-readable report fields.
 | Batch graph, conflict checks, extensions, and planning | `batch_graph.py`, `batch_checks.py`, `batch_extensions.py`, `batch_planning.py`, related check modules |
 | Scheduler planning-handoff contracts | `scheduler_handoff.py` |
 | IssuePlan current-state evidence | `issueplan_current_state.py` |
-| Canonical issue operational-state projection | `issue_operational_state.py` |
+| Canonical issue operational-state projection and operating-mode decision | `issue_operational_state.py`, `operating_mode.py` |
 | Approval records and approved-execution projection | `approval_records.py`, `approved_execution_projection.py` |
 | Reporting | `acceptance_report_transport.py`, `documentation_advisory.py`, `documentation_gap_report.py`, `documentation_metrics.py`, `sprint_dashboard.py` |
 
@@ -65,7 +65,7 @@ Scanner validity, readiness, labels, and approvals never authorize execution.
 
 ## Canonical issue operational state
 
-`issue_operational_state.py` implements the pure, content-addressed `agent-os-issue-operational-state/1.0` projection over supplied IssuePlan, approval, merge-authorization, lifecycle-admission, claim, validation, and freshness evidence. It preserves readiness and every authority dimension separately, never re-evaluates upstream records, performs no I/O or execution, uses strict deterministic JSON and domain-separated identity, and fails closed on missing, stale, conflicting, unsupported, duplicate, or tampered evidence; downstream mode and queue evaluators may consume it but may not reconstruct authority.
+`issue_operational_state.py` implements the pure, content-addressed `agent-os-issue-operational-state/1.0` projection over supplied IssuePlan, approval, merge-authorization, lifecycle-admission, claim, validation, and freshness evidence. It preserves readiness and every authority dimension separately, never re-evaluates upstream records, performs no I/O or execution, uses strict deterministic JSON and domain-separated identity, and fails closed on missing, stale, conflicting, unsupported, duplicate, or tampered evidence; downstream mode and queue evaluators may consume it but may not reconstruct authority. `operating_mode.py` is the first such consumer: the pure `agent-os-operating-mode-decision/1.0` evaluator intersects a requested mode ceiling (`planning`, `build`, `draft-pr`, `review`, `release`) with a supplied `IssueOperationalState` and caller-verified `EnvironmentCapabilityEvidence`, walking `implementation -> draft-pr -> review -> merged -> closed` one authorization/environment gate at a time and stopping at the first unmet one; an omitted or unrecognized mode -- including `complete`, `finish`, or `do everything` -- always defaults to `planning` and never implies `release`. It is not exported from `__init__.py` per the direct-import policy below, and `tests/agent_os_issue_acceptance/test_architecture_boundaries.py`'s domain map does not yet classify it, which is a known, separately authorized gap (see `CHANGELOG.md`).
 
 ## Linked-issue parsing
 A linked issue resolves only when exactly one unique same-repository target is introduced by a supported closing keyword: `close`, `closes`, `closed`, `fix`, `fixes`, `fixed`, `resolve`, `resolves`, or `resolved`. Optional colon and whitespace forms are supported.
