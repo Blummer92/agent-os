@@ -16,6 +16,7 @@ not authorize implementation.
 That instruction may cover one non-protected branch, the bounded scope envelope,
 corresponding offline tests and documentation, one draft pull request, and
 Ready-for-Review after required exact-head validation passes with no blockers.
-Merge, issue closure, protected settings, credentials, workflows, governed
-fields, production, external writes, source-of-truth changes, and irreversible
-actions remain separately authorized.
+
+Excluded surfaces listed in
+`01_Shared_Standards/github/excluded-surface-baseline.md` remain separately
+authorized.
