@@ -39,6 +39,7 @@ SUBPROCESS_TIMEOUT_SECONDS = 5
 _CREDENTIAL_PATTERNS = tuple(
     re.compile(p)
     for p in (
+        r"https?://[^/\s:@]+:[^@\s/]+@",
         r"gh[oprsu]_[A-Za-z0-9]{20,}",
         r"github_pat_[A-Za-z0-9_]{20,}",
         r"sk-[A-Za-z0-9]{20,}",
@@ -281,8 +282,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.check == "repository-identity":
         result = check_repository_identity(repo_root)
-        print(json.dumps(result, sort_keys=True))
-        return 0 if result["passed"] else 1
+        redacted_result, credential_found = _redact(result)
+        if credential_found:
+            redacted_result["passed"] = False
+        print(json.dumps(redacted_result, sort_keys=True))
+        return 0 if redacted_result["passed"] else 1
 
     evidence = build_evidence(repo_root, network_mode, args.min_free_mb)
     print(json.dumps(evidence, sort_keys=True, indent=2))
