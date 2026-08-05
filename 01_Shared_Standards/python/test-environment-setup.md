@@ -5,6 +5,10 @@ Consistent test environment setup ensures tests run reliably locally, in CI/CD, 
 
 ## Local Development Setup
 
+### Agent OS repository note
+
+Agent OS aggregate validation also requires editable tooling packages. Installing only `pytest` or only root test extras is insufficient. Use the canonical, directly runnable sequence in `tests/README.md`, and keep local setup aligned with GitHub Actions and Cloud Build.
+
 ### 1. Create Virtual Environment
 ```bash
 # Create virtual environment

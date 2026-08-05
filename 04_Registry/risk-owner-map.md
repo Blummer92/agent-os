@@ -9,7 +9,7 @@ file is registry data only and authorizes nothing.
 |---|---|---|---|---|
 | Approval replay after governed input movement | #398 | #330, future WSC4+ | Content-bound approval records with deterministic invalidation | open |
 | Branch, base, and tested-SHA drift | #330 | all implementation PRs | Exact final-head validation before merge | partially mitigated |
-| Connected evidence incompleteness | #376 | #375, #379, future WSC5+ | Fail-closed pagination and permission evidence | open |
+| Connected evidence incompleteness | #738 | #376 completed via PR #688; #375, #379, future WSC5+ | Remaining connected read-only smoke only; `execution_authorized=false`; no GitHub mutation authority; broader branch/base/head/tested-SHA drift remains with #330 | open |
 | Validation-policy and Cloud Build drift | #240 | #368, #369, #370 | Results bound to the exact tested SHA | open |
 | Workspace, lease, and active-work collision | #330 | future WSC5-WSC7 | Isolated workspace and one lease per issue | open |
 | Acceptance-parser compatibility drift | #358 | #398, readiness consumers | Canonical scanner convergence | open |

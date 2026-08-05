@@ -534,3 +534,75 @@ capabilities:
     compatibility:
       - Existing package-facade exports remain supported compatibility surfaces.
       - New consumers should prefer direct-module imports.
+
+  - capability_id: instructional-workflow-contract-core
+    name: Instructional Workflow Contract Core
+    summary: Provides deterministic immutable validation, authority, normalization, canonical serialization, fingerprinting, and curriculum handoff contract mechanics for local instructional planning evidence.
+    status: active
+    canonical_paths:
+      - src/instructional_workflow_contracts/common.py
+      - src/instructional_workflow_contracts/handoff.py
+      - src/instructional_workflow_contracts/__init__.py
+    public_interfaces:
+      - instructional_workflow_contracts:AuthorityEvidence
+      - instructional_workflow_contracts:ContractReference
+      - instructional_workflow_contracts:ContractValidationError
+      - instructional_workflow_contracts:ValidatedRecord
+      - instructional_workflow_contracts:ValidationResult
+      - instructional_workflow_contracts:ValidationStatus
+      - instructional_workflow_contracts:canonical_json_bytes
+      - instructional_workflow_contracts:canonical_size
+      - instructional_workflow_contracts:freeze_json
+      - instructional_workflow_contracts:resolve_status
+      - instructional_workflow_contracts:sha256_hex
+      - instructional_workflow_contracts:validate_and_normalize_json
+      - instructional_workflow_contracts:validate_curriculum_handoff
+      - instructional_workflow_contracts:validate_dependency_key
+      - instructional_workflow_contracts:validate_reason_code
+      - instructional_workflow_contracts:validate_revision
+      - instructional_workflow_contracts:validate_stable_id
+      - instructional_workflow_contracts:validate_version
+    owner_agent: Integration Manager
+    supporting_agents:
+      - QA / Test Agent
+    known_consumers:
+      - src/instructional_workflow_contracts/handoff.py
+      - src/instructional_workflow_contracts/material_requirement.py
+      - src/instructional_workflow_contracts/artifact_manifest.py
+      - src/instructional_workflow_contracts/reuse_planner.py
+      - src/instructional_evidence_intake/interpreter.py
+    tests:
+      - tests/test_instructional_workflow_handoff.py
+      - tests/test_material_requirement_contract.py
+      - tests/test_artifact_manifest_contract.py
+      - tests/test_instructional_artifact_reuse_planner.py
+      - tests/test_instructional_workflow_contract_integration.py
+      - tests/test_instructional_evidence_teacher_summary.py
+    keywords:
+      - instructional-workflow
+      - immutable-contracts
+      - deterministic-validation
+      - canonical-serialization
+      - authority-boundary
+    reuse_guidance: Reuse these pure local mechanics for bounded instructional validation and planning contracts; every consumer requires its own approval and must preserve execution_authorized=false and side_effects_performed=false.
+    side_effects:
+      - Validates and normalizes caller-supplied in-memory evidence.
+      - Computes deterministic canonical bytes, sizes, stable fingerprints, and immutable result records.
+      - Performs no filesystem discovery, dynamic imports, plugin registration, network calls, connected-system access, credentials access, runtime orchestration, production action, publication, classroom action, or external write.
+    inputs:
+      - Bounded caller-supplied JSON-like evidence and explicit contract metadata.
+    outputs:
+      - Immutable validation, authority, reference, and handoff evidence.
+    invariants:
+      - Registration grants validation and planning evidence only, never execution authority.
+      - execution_authorized and side_effects_performed remain false.
+      - No production, publication, classroom-use, grading, mastery, learner-classification, placement, routing, readiness-mutation, pacing-execution, OCR, model-execution, connected-system, or external-write authority is granted.
+      - Registration does not automatically approve future consumers.
+      - Direct-module domain imports remain intentional while the package facade remains a supported compatibility surface.
+    failure_modes:
+      - Malformed, oversized, unsupported, unknown, stale, contradictory, or incomplete supplied evidence
+      - Unsupported contract version, revision, identifier, dependency key, reason code, or authority state
+      - Canonical serialization or fingerprint mismatch
+    compatibility:
+      - Lifecycle status is active under registry version 0.1.0.
+      - Rollback is a repository revert of the registration PR; no external cleanup is required.

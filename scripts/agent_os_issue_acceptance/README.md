@@ -18,8 +18,7 @@ Transport behavior is intentionally strict:
 The workflow stays read-only and job-summary-only. It publishes a report summary and never mutates issues, pull requests, labels, readiness state, or external systems.
 
 ## Documentation ownership and relevance advisory
-The optional `--documentation-advisory` flag attaches bounded DOC5 evidence before transport hashing by reusing the canonical `IssueMetadata` projection and existing `required docs` check; the workflow enables it while remaining read-only and job-summary-only.
-The adapter reports only a bounded declared-owner token, documentation-path count, existing coverage status, and expected-change presence. Ownership, relevance, sufficiency, and authorization remain human-review decisions; it never parses registries, infers path ownership, scores quality, changes acceptance/readiness/checks/blockers/exit codes/merge eligibility, or writes externally. Omitting the flag preserves legacy output byte-for-byte, and `docs-not-required` returns a fresh value-equivalent report without advisory evidence.
+The optional `--documentation-advisory` flag attaches bounded DOC5 evidence before transport hashing by reusing the canonical `IssueMetadata` projection and existing `required docs` check; the workflow enables it while remaining read-only and job-summary-only. The adapter reports only a bounded declared-owner token, documentation-path count, existing coverage status, and expected-change presence. Ownership, relevance, sufficiency, and authorization remain human-review decisions; it never parses registries, infers path ownership, scores quality, changes acceptance/readiness/checks/blockers/exit codes/merge eligibility, or writes externally. Omitting the flag preserves legacy output byte-for-byte, and `docs-not-required` returns a fresh value-equivalent report without advisory evidence.
 
 ## Local acceptance usage
 ```bash
@@ -40,16 +39,18 @@ Use `--format json` for stable machine-readable report fields.
 | Batch graph, conflict checks, extensions, and planning | `batch_graph.py`, `batch_checks.py`, `batch_extensions.py`, `batch_planning.py`, related check modules |
 | Scheduler planning-handoff contracts | `scheduler_handoff.py` |
 | IssuePlan current-state evidence | `issueplan_current_state.py` |
+| Canonical issue operational-state projection and operating-mode decision | `issue_operational_state.py`, `operating_mode.py` |
 | Approval records and approved-execution projection | `approval_records.py`, `approved_execution_projection.py` |
-| Sprint governance and reporting | `sprint_dashboard.py` |
+| Reporting | `acceptance_report_transport.py`, `documentation_advisory.py`, `documentation_gap_report.py`, `documentation_metrics.py`, `sprint_dashboard.py` |
 
-This map documents the current package; it does not create new APIs or authorize a physical split.
+`documentation_metrics.py` is bounded, pure-local, supplied-evidence-only, deterministic, report-only, non-scheduling, non-retaining, and non-authoritative; this map creates no API or physical split.
 
 ## Permitted dependency direction
 ```text
 IssuePlan scanner -> acceptance/readiness and current-state evidence
 acceptance primitives -> batch graph/planning -> Scheduler handoff
 current-state + handoff + repository evidence -> approvals -> execution projection
+current-state + approval, merge, lifecycle, claim, validation evidence -> operational state -> mode/queue projections
 Sprint reporting -> supplied immutable evidence only
 Workflow Scheduler runtime -> stable public contracts only
 ```
@@ -61,6 +62,10 @@ Production modules must not reverse these directions. Scanner or retrieval code 
 `parse_issue_metadata()` is a temporary lossy compatibility facade. It calls the canonical scanner and contains no parser of its own. Removal requires a separately governed API migration after all callers consume scanner results directly.
 
 Scanner validity, readiness, labels, and approvals never authorize execution.
+
+## Canonical issue operational state
+
+`issue_operational_state.py` implements the pure, content-addressed `agent-os-issue-operational-state/1.0` projection over supplied IssuePlan, approval, merge-authorization, lifecycle-admission, claim, validation, and freshness evidence. It preserves readiness and every authority dimension separately, never re-evaluates upstream records, performs no I/O or execution, uses strict deterministic JSON and domain-separated identity, and fails closed on missing, stale, conflicting, unsupported, duplicate, or tampered evidence; downstream mode and queue evaluators may consume it but may not reconstruct authority. `operating_mode.py` is the first such consumer: the pure `agent-os-operating-mode-decision/1.0` evaluator intersects a requested mode ceiling (`planning`, `build`, `draft-pr`, `review`, `release`) with a supplied `IssueOperationalState` and caller-verified `EnvironmentCapabilityEvidence`, walking `implementation -> draft-pr -> review -> merged -> closed` one authorization/environment gate at a time and stopping at the first unmet one; an omitted or unrecognized mode -- including `complete`, `finish`, or `do everything` -- always defaults to `planning` and never implies `release`. It is not exported from `__init__.py` per the direct-import policy below, and `tests/agent_os_issue_acceptance/test_architecture_boundaries.py`'s domain map classifies it in its own exact `mode` domain, downstream of `approval` (whose canonical projection contracts it consumes) and upstream of `reporting`, which it must not import.
 
 ## Linked-issue parsing
 A linked issue resolves only when exactly one unique same-repository target is introduced by a supported closing keyword: `close`, `closes`, `closed`, `fix`, `fixes`, `fixed`, `resolve`, `resolves`, or `resolved`. Optional colon and whitespace forms are supported.
@@ -76,7 +81,6 @@ Facade growth is not justified by convenience alone. Private helpers and specula
 
 ## Physical-split threshold
 A later package split requires current evidence of at least one of: circular dependency pressure, conflicting ownership, incompatible release requirements, repeated unrelated facade changes, inability to test or distribute a domain independently, or independently versioned operational consumers. Directory size or visual cleanliness is not sufficient.
-
 ## Metadata and issue scanning
 `metadata_validation.py` evaluates MD2A fixture evidence offline and report-only. It never edits issues, labels, readiness fields, workflows, or external systems.
 
@@ -87,12 +91,9 @@ A later package split requires current evidence of at least one of: circular dep
 External execution belongs to a separately approved connected caller. That caller must supply the repository, requested state, retrieval timestamp, complete page reader, and its own credential and permission boundary.
 
 This package does not provide network transport or a concrete live GitHub reader; GitHub authentication, token loading, credential lookup, or authorization headers; a connected scanner CLI or subprocess wrapper; issue or label mutation; automatic report posting; or Workflow Scheduler execution behavior.
-
 ## Informational reuse evidence (optional adapter)
 - `reuse_readiness.py` (RC5B / #470 under the #248 contract) attaches caller-supplied RC3 `DiscoveryResult` and corrected-RC4 `ValidationReport` evidence to a `ReadinessResult` as a strictly informational layer. Informational evidence never changes `ReadinessOutcome`, `overall_status`, ordinary checks, blockers, ordinary manual-review items, or `exit_code_for()`; it is carried only in `AcceptanceReport.informational_checks`, rendered in a separate section that is omitted when empty (legacy output stays byte-for-byte identical). Provenance is compared using caller-supplied `RegistryProvenance` values only (strict, version-aware); missing, mismatched, unsupported, failing, contradicted, conflicting, or malformed evidence suppresses positive reuse guidance while leaving base readiness unchanged.
 - It is the sole cross-package boundary, never reads the registry or invokes `RegistryReader`/discovery/validation orchestration, and is not exported from `__init__.py`; `readiness.py` stays independent, so base readiness imports and runs without the reusable-capability package installed. No reuse evidence authorizes implementation, writes, readiness changes, or merge, and the adapter performs no registry, issue, label, readiness, workflow, Scheduler, credential, production, or external mutation.
-
 ## Workflow and write boundary
 Metadata validation and scanning remain offline and report-only. Connected retrieval consumes caller-supplied readers and preserves provenance. The package does not authorize issue, label, readiness, workflow, Scheduler, credential, production, or external-system writes.
-
 Outcome meaning remains governed by `01_Shared_Standards/github/issue-acceptance-automation.md`. Package boundaries and facade decisions are governed by issue #464 and the applicable Agent OS governance standards.

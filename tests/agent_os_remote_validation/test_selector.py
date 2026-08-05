@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 from dataclasses import FrozenInstanceError, replace
+from itertools import permutations
 from pathlib import Path
 
 import pytest
@@ -10,10 +11,19 @@ import pytest
 from scripts.agent_os_remote_validation import (
     MAX_PLAN_COMMANDS,
     MAX_PLAN_STRING_LENGTH,
+    PRE_PR_PER_COMMAND_TIMEOUT_SECONDS,
+    PRE_PR_TOTAL_VALIDATION_TIMEOUT_SECONDS,
+    PrePrValidationPlan,
+    PrePrValidationSubject,
     SelectionInput,
     compute_command_set_digest,
     load_rule_map,
+    pre_pr_validation_plan_id,
+    pre_pr_validation_subject_id,
+    select_pre_pr_validation_plan,
     select_validation_plan,
+    serialize_pre_pr_validation_plan,
+    serialize_pre_pr_validation_subject,
     serialize_validation_plan,
     validate_validation_plan,
     validation_plan_id,
@@ -297,3 +307,688 @@ def test_plan_is_immutable() -> None:
     plan = _select(_input(_fixtures()["static"]))
     with pytest.raises(FrozenInstanceError):
         plan.profile = "aggregate"  # type: ignore[misc]
+
+
+CLS_CASES = (
+    (
+        "tests/test_curriculum_pipeline_boundaries.py",
+        "python -m pytest tests/test_curriculum_pipeline_boundaries.py",
+    ),
+    (
+        "tests/test_curriculum_language_system.py",
+        "python -m pytest tests/test_curriculum_language_system.py",
+    ),
+    (
+        "tests/test_teacher_modeling_workflows.py",
+        "python -m pytest tests/test_teacher_modeling_workflows.py",
+    ),
+)
+
+
+@pytest.mark.parametrize(("path", "command"), CLS_CASES)
+def test_exact_cls_path_selects_only_its_command(path: str, command: str) -> None:
+    plan = _select(_input([path]))
+    assert plan.profile == "focused"
+    assert plan.commands == (command,)
+    assert plan.reason_codes == ("profile.focused-package",)
+    assert validate_validation_plan(plan) == ()
+
+
+@pytest.mark.parametrize(
+    "paths",
+    [
+        [CLS_CASES[0][0], CLS_CASES[1][0]],
+        [CLS_CASES[0][0], CLS_CASES[2][0]],
+        [CLS_CASES[1][0], CLS_CASES[2][0]],
+        [case[0] for case in CLS_CASES],
+    ],
+)
+def test_exact_cls_path_unions_are_deterministic(paths: list[str]) -> None:
+    expected = tuple(sorted(command for path, command in CLS_CASES if path in paths))
+    forward = _select(_input(paths))
+    reverse = _select(_input(list(reversed(paths))))
+    assert forward.profile == "focused"
+    assert forward.commands == expected
+    assert forward.reason_codes == ("profile.focused-union",)
+    assert reverse == forward
+
+
+def test_exact_path_lookalike_retains_aggregate_fallback() -> None:
+    lookalike = "tests/test_curriculum_pipeline_boundaries.py.lookalike.py"
+    plan = _select(_input([lookalike]))
+    assert plan.profile == "aggregate"
+    assert plan.commands == ("python -m pytest",)
+    assert plan.reason_codes == ("profile.aggregate-unmapped-executable",)
+
+
+def test_exact_and_prefix_surfaces_remain_distinct() -> None:
+    exact = _select(_input([CLS_CASES[0][0]]))
+    prefix = _select(_input(["tests/agent_os_issue_acceptance/test_records.py"]))
+    assert exact.commands == (CLS_CASES[0][1],)
+    assert prefix.commands == ("python -m pytest tests/agent_os_issue_acceptance",)
+
+
+def test_old_prefix_only_rule_maps_remain_valid() -> None:
+    rules = copy.deepcopy(RULES)
+    rules["focused_rules"] = [
+        {
+            "name": "legacy-prefix",
+            "prefixes": ["legacy/"],
+            "commands": ["python -m pytest legacy/tests"],
+        }
+    ]
+    plan = _select(_input(["legacy/module.py"]), rules)
+    assert plan.profile == "focused"
+    assert plan.commands == ("python -m pytest legacy/tests",)
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda rule: rule.update({"prefixes": [], "exact_paths": []}),
+        lambda rule: rule.update({"exact_paths": "not-a-list"}),
+        lambda rule: rule.update({"exact_paths": [""]}),
+        lambda rule: rule.update({"exact_paths": ["bad\x00path"]}),
+    ],
+)
+def test_malformed_matching_surfaces_fail_closed(mutator) -> None:
+    rules = copy.deepcopy(RULES)
+    rule = rules["focused_rules"][0]
+    mutator(rule)
+    plan = _select(_input(_fixtures()["focused"]), rules)
+    assert plan.profile == "manual-review"
+    assert plan.reason_codes == ("rule.ambiguous",)
+
+
+def test_same_path_with_different_command_sets_fails_closed() -> None:
+    rules = copy.deepcopy(RULES)
+    rules["focused_rules"].extend(
+        [
+            {
+                "name": "conflicting-exact-owner",
+                "exact_paths": [CLS_CASES[0][0]],
+                "commands": ["python -m pytest tests/other.py"],
+            }
+        ]
+    )
+    plan = _select(_input([CLS_CASES[0][0]]), rules)
+    assert plan.profile == "manual-review"
+    assert plan.commands == ()
+    assert plan.reason_codes == ("rule.ambiguous",)
+
+
+def test_same_path_duplicate_ownership_with_same_commands_is_stable() -> None:
+    rules = copy.deepcopy(RULES)
+    rules["focused_rules"].append(
+        {
+            "name": "equivalent-exact-owner",
+            "exact_paths": [CLS_CASES[0][0]],
+            "commands": [CLS_CASES[0][1]],
+        }
+    )
+    plan = _select(_input([CLS_CASES[0][0]]), rules)
+    assert plan.profile == "focused"
+    assert plan.commands == (CLS_CASES[0][1],)
+
+
+def test_different_paths_with_different_rules_form_bounded_union() -> None:
+    paths = [CLS_CASES[0][0], "tests/agent_os_issue_acceptance/test_records.py"]
+    plan = _select(_input(paths))
+    assert plan.profile == "focused"
+    assert plan.commands == tuple(
+        sorted(
+            (
+                CLS_CASES[0][1],
+                "python -m pytest tests/agent_os_issue_acceptance",
+            )
+        )
+    )
+    assert plan.reason_codes == ("profile.focused-union",)
+
+
+# --- Positive-PR characterization (#723 regression guard) ---------------------
+#
+# These golden values were captured from the pre-#723 selector. They pin the
+# exact profile, command set, reason code, command-set digest, and semantic
+# `validation-plan:` identity for every shipped selection surface so the
+# additive pre-PR contract cannot silently change positive-PR behavior.
+POSITIVE_PR_GOLDEN = {
+    "static": (
+        "static",
+        (),
+        ("profile.documentation-static",),
+        "9715a2ba3b1b7c2ad8ea0a7d4eed78cd572d7161ca5b9115dc7f41ce69d1ccc6",
+        "validation-plan:"
+        "577d0214ac14911fd06f7f7c6293c35e54865ce5abcb741bf46343ff872c2546",
+    ),
+    "focused": (
+        "focused",
+        ("python -m pytest tests/agent_os_issue_acceptance",),
+        ("profile.focused-package",),
+        "500ab081d9fd660f55429483dece9c170a7a942248fb7a4d1443c32b457cf3b5",
+        "validation-plan:"
+        "ce62f16c71f7d87524796bb3852f7979ffce689421339dc2ac4da9d872280efe",
+    ),
+    "aggregate": (
+        "aggregate",
+        ("python -m pytest",),
+        ("profile.aggregate-configuration",),
+        "e05f8317cfacd9ba8ebec4a2141aba7aa8437e15b0ae56c64d3280fb1a9526e2",
+        "validation-plan:"
+        "3872524b39655f6690455391dc66b5600a6990f5bb00fd508d04df16a4c8977c",
+    ),
+    "unknown_executable": (
+        "aggregate",
+        ("python -m pytest",),
+        ("profile.aggregate-unmapped-executable",),
+        "e05f8317cfacd9ba8ebec4a2141aba7aa8437e15b0ae56c64d3280fb1a9526e2",
+        "validation-plan:"
+        "515c31935690d46cec98ca20757087ac584107ef74412db44aba432f19339770",
+    ),
+    "ambiguous": (
+        "manual-review",
+        (),
+        ("rule.ambiguous",),
+        "unavailable",
+        "validation-plan:"
+        "22006c2c9df13ebf862332af354746bf771bdfeaeed3dabcf62c929e710101c0",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(POSITIVE_PR_GOLDEN))
+def test_positive_pr_selection_and_identity_are_unchanged(case: str) -> None:
+    profile, commands, reasons, digest, identity = POSITIVE_PR_GOLDEN[case]
+    plan = _select(_input(_fixtures()[case]))
+    assert plan.profile == profile
+    assert plan.commands == commands
+    assert plan.reason_codes == reasons
+    assert plan.command_set_digest == digest
+    assert validate_validation_plan(plan) == ()
+    assert validation_plan_id(plan) == identity
+
+
+def test_positive_pr_focused_payload_is_byte_stable() -> None:
+    plan = _select(_input(_fixtures()["focused"]))
+    payload = serialize_validation_plan(plan)
+    assert json.dumps(payload, sort_keys=True, separators=(",", ":")) == (
+        '{"base_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
+        '"command_set_digest":'
+        '"500ab081d9fd660f55429483dece9c170a7a942248fb7a4d1443c32b457cf3b5",'
+        '"commands":["python -m pytest tests/agent_os_issue_acceptance"],'
+        '"execution_authorized":false,'
+        '"head_sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",'
+        '"profile":"focused","pull_request":368,'
+        '"reason_codes":["profile.focused-package"],'
+        '"remote_build_required":true,"repository":"Blummer92/agent-os",'
+        '"schema_name":"agent-os-validation-plan","schema_version":"1.0",'
+        '"selector_version":"1.0.0","side_effects_performed":false}'
+    )
+
+
+def test_unrelated_scheduler_paths_keep_the_package_rule() -> None:
+    plan = _select(_input(["08_Tooling/workflow-scheduler/src/runtime.py"]))
+    assert plan.profile == "focused"
+    assert plan.commands == ("python -m pytest 08_Tooling/workflow-scheduler/tests",)
+    assert validation_plan_id(plan) == (
+        "validation-plan:"
+        "6a4cd85d9acab71dee7a4baf3b6b9fa45328551b9e4c597dddbdf7b300f9aaef"
+    )
+
+
+# --- Pre-PR validation subject and plan (#723 / candidate #726) ---------------
+
+PILOT_COMMAND = (
+    "python -m pytest "
+    "08_Tooling/workflow-scheduler/tests/test_concrete_runtime_adapters.py"
+)
+PILOT_PATH = "08_Tooling/workflow-scheduler/tests/test_concrete_runtime_adapters.py"
+PILOT_SHA = "df2d7d61db66d0835ed4ca6c9ec6d3fdcf85f465"
+PILOT_FORBIDDEN = (".github/workflows", "cloudbuild.yaml", "scripts/validate-all.sh")
+
+
+def _subject(**overrides: object) -> PrePrValidationSubject:
+    values: dict[str, object] = {
+        "invocation_id": "invocation:726:0001",
+        "base_sha": PILOT_SHA,
+        "branch": "agent/723-pre-pr-validation-planning",
+        "expected_source_sha": PILOT_SHA,
+        "tested_sha": PILOT_SHA,
+        "allowed_files": (PILOT_PATH,),
+        "forbidden_paths": PILOT_FORBIDDEN,
+        "required_command_identities": (PILOT_COMMAND,),
+        "approval_id": "approval:398:0001",
+        "approval_revision": 1,
+        "projection_id": "projection:407:0001",
+        "implementation_contract_fingerprint": "c" * 64,
+    }
+    values.update(overrides)
+    return PrePrValidationSubject(**values)  # type: ignore[arg-type]
+
+
+def test_exact_pilot_rule_owns_its_path_over_the_package_prefix() -> None:
+    plan = _select(_input([PILOT_PATH]))
+    assert plan.profile == "focused"
+    assert plan.commands == (PILOT_COMMAND,)
+    assert plan.reason_codes == ("profile.focused-package",)
+    assert validate_validation_plan(plan) == ()
+
+
+def test_valid_pre_pr_subject_binds_candidate_726() -> None:
+    subject = _subject()
+    assert subject.schema_name == "agent-os-pre-pr-validation-subject"
+    assert subject.schema_version == "1.0"
+    assert subject.repository == "Blummer92/agent-os"
+    assert subject.issue_number == 726
+    assert subject.base_branch == "main"
+    assert subject.execution_mode == "validation-only"
+    payload = serialize_pre_pr_validation_subject(subject)
+    assert "pull_request" not in payload
+    assert payload["required_command_identities"] == [PILOT_COMMAND]
+    assert pre_pr_validation_subject_id(subject).startswith(
+        "pre-pr-validation-subject:"
+    )
+
+
+def test_pre_pr_plan_is_deterministic_and_non_authorizing() -> None:
+    subject = _subject()
+    first = select_pre_pr_validation_plan(subject, RULES)
+    second = select_pre_pr_validation_plan(subject, RULES)
+    assert first == second
+    assert first.profile == "focused"
+    assert first.commands == (PILOT_COMMAND,)
+    assert first.reason_codes == ("profile.focused-package",)
+    assert first.selector_version == "1.0.0"
+    assert first.command_set_digest == compute_command_set_digest(
+        "1.0.0", (PILOT_COMMAND,)
+    )
+    assert first.per_command_timeout_seconds == PRE_PR_PER_COMMAND_TIMEOUT_SECONDS
+    assert first.total_validation_timeout_seconds == (
+        PRE_PR_TOTAL_VALIDATION_TIMEOUT_SECONDS
+    )
+    payload = serialize_pre_pr_validation_plan(first)
+    assert payload["remote_build_required"] is False
+    assert payload["execution_authorized"] is False
+    assert payload["merge_authorized"] is False
+    assert payload["side_effects_performed"] is False
+    assert payload["subject_id"] == pre_pr_validation_subject_id(subject)
+    assert json.dumps(payload, sort_keys=True, separators=(",", ":")) == json.dumps(
+        serialize_pre_pr_validation_plan(second), sort_keys=True, separators=(",", ":")
+    )
+
+
+def test_pre_pr_identity_is_domain_separated_and_stable() -> None:
+    plan = select_pre_pr_validation_plan(_subject(), RULES)
+    identity = pre_pr_validation_plan_id(plan)
+    assert identity == pre_pr_validation_plan_id(plan)
+    assert identity.startswith("pre-pr-validation-plan:")
+    assert identity == (
+        "pre-pr-validation-plan:"
+        "4198425ecf4f50d3ce2fc24caf0a2c9c5505357e0f8449bfe8dd61265e743199"
+    )
+
+
+def test_pre_pr_semantic_change_changes_plan_id() -> None:
+    original = select_pre_pr_validation_plan(_subject(), RULES)
+    changed = select_pre_pr_validation_plan(
+        _subject(invocation_id="invocation:726:0002"), RULES
+    )
+    assert pre_pr_validation_plan_id(original) != pre_pr_validation_plan_id(changed)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "error"),
+    [
+        ({"issue_number": 725}, ValueError),
+        ({"issue_number": 0}, TypeError),
+        ({"issue_number": True}, TypeError),
+        ({"issue_number": "726"}, TypeError),
+        ({"invocation_id": ""}, ValueError),
+        ({"invocation_id": "-leading-dash"}, ValueError),
+        ({"invocation_id": "has space"}, ValueError),
+        ({"invocation_id": None}, TypeError),
+        ({"approval_id": "bad\x00id"}, ValueError),
+        ({"approval_revision": 0}, TypeError),
+        ({"approval_revision": 1.0}, TypeError),
+        ({"projection_id": None}, TypeError),
+        ({"implementation_contract_fingerprint": "c" * 63}, ValueError),
+        ({"implementation_contract_fingerprint": "C" * 64}, ValueError),
+        ({"base_sha": "d" * 39}, ValueError),
+        ({"base_sha": PILOT_SHA.upper()}, ValueError),
+        ({"expected_source_sha": None}, TypeError),
+    ],
+)
+def test_invalid_pre_pr_identifiers_fail_closed(
+    overrides: dict[str, object],
+    error: type[Exception],
+) -> None:
+    with pytest.raises(error):
+        _subject(**overrides)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"tested_sha": "e" * 40},
+        {"branch": "main"},
+        {"branch": "Main"},
+        {"branch": "master"},
+        {"branch": "refs/heads/../main"},
+        {"branch": "agent/bad branch"},
+        {"base_branch": "develop"},
+        {"repository": "other/repo"},
+        {"execution_mode": "standard"},
+        {"schema_version": "2.0"},
+    ],
+)
+def test_pre_pr_identity_drift_fails_closed_at_construction(
+    overrides: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError):
+        _subject(**overrides)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("repository", "other/repo"),
+        ("branch", "main"),
+        ("tested_sha", "e" * 40),
+        ("expected_source_sha", "not-a-sha"),
+        ("base_branch", "develop"),
+        ("execution_mode", "standard"),
+    ],
+)
+def test_pre_pr_selector_rechecks_bypassed_bindings(field: str, value: str) -> None:
+    subject = _subject()
+    object.__setattr__(subject, field, value)
+    with pytest.raises(ValueError):
+        select_pre_pr_validation_plan(subject, RULES)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"allowed_files": ()},
+        {"allowed_files": (PILOT_PATH, "00_Governance")},
+        {"allowed_files": (PILOT_PATH, PILOT_PATH)},
+        {"allowed_files": ("b.py", "a.py")},
+        {"allowed_files": ("08_Tooling", PILOT_PATH)},
+        {"allowed_files": ("/absolute/path.py",)},
+        {"allowed_files": ("../escape.py",)},
+        {"allowed_files": ("bad\x00path.py",)},
+        {"allowed_files": [PILOT_PATH]},
+        {"forbidden_paths": ()},
+        {"forbidden_paths": ("cloudbuild.yaml", ".github/workflows")},
+        {"forbidden_paths": ("08_Tooling",)},
+        {"required_command_identities": ()},
+        {"required_command_identities": (PILOT_COMMAND, PILOT_COMMAND)},
+        {"required_command_identities": ("echo\x00unsafe",)},
+        {"required_command_identities": [PILOT_COMMAND]},
+    ],
+)
+def test_pre_pr_canonical_tuples_fail_closed(overrides: dict[str, object]) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        _subject(**overrides)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "error"),
+    [
+        ({"per_command_timeout_seconds": 31}, ValueError),
+        ({"total_validation_timeout_seconds": 301}, ValueError),
+        ({"per_command_timeout_seconds": 0}, TypeError),
+        ({"total_validation_timeout_seconds": -1}, TypeError),
+        ({"per_command_timeout_seconds": 30.0}, TypeError),
+        (
+            {"per_command_timeout_seconds": 30, "total_validation_timeout_seconds": 10},
+            ValueError,
+        ),
+    ],
+)
+def test_pre_pr_timeout_ceilings_are_enforced(
+    overrides: dict[str, object],
+    error: type[Exception],
+) -> None:
+    subject = _subject()
+    valid = select_pre_pr_validation_plan(subject, RULES)
+    values: dict[str, object] = {
+        "selector_version": valid.selector_version,
+        "subject": subject,
+        "commands": valid.commands,
+        "command_set_digest": valid.command_set_digest,
+        "reason_codes": valid.reason_codes,
+    }
+    values.update(overrides)
+    with pytest.raises(error):
+        PrePrValidationPlan(**values)  # type: ignore[arg-type]
+
+
+def test_pre_pr_selector_fails_closed_on_scope_and_command_drift() -> None:
+    with pytest.raises(ValueError, match="partial focused coverage"):
+        select_pre_pr_validation_plan(
+            _subject(allowed_files=(PILOT_PATH, "assets/example.bin")), RULES
+        )
+    with pytest.raises(ValueError, match="focused coverage"):
+        select_pre_pr_validation_plan(
+            _subject(allowed_files=("pyproject.toml",)), RULES
+        )
+    with pytest.raises(ValueError, match="command identity drift"):
+        select_pre_pr_validation_plan(
+            _subject(required_command_identities=("python -m pytest",)), RULES
+        )
+    with pytest.raises(ValueError, match="rule map is not usable"):
+        select_pre_pr_validation_plan(_subject(), {"bad": "map"})
+    with pytest.raises(ValueError, match="repository drift"):
+        rules = copy.deepcopy(RULES)
+        rules["repository"] = "other/repo"
+        select_pre_pr_validation_plan(_subject(), rules)
+    with pytest.raises(TypeError, match="exact PrePrValidationSubject"):
+        select_pre_pr_validation_plan(object(), RULES)
+
+
+def test_pre_pr_ambiguous_ownership_fails_closed() -> None:
+    rules = copy.deepcopy(RULES)
+    rules["focused_rules"].append(
+        {
+            "name": "conflicting-pilot-owner",
+            "exact_paths": [PILOT_PATH],
+            "commands": ["python -m pytest tests/other.py"],
+        }
+    )
+    with pytest.raises(ValueError, match="ambiguous focused coverage"):
+        select_pre_pr_validation_plan(_subject(), rules)
+
+
+def test_pre_pr_plan_serialization_rejects_bypassed_invariants() -> None:
+    plan = select_pre_pr_validation_plan(_subject(), RULES)
+    for field, value in (
+        ("execution_authorized", True),
+        ("merge_authorized", True),
+        ("side_effects_performed", True),
+        ("remote_build_required", True),
+        ("profile", "aggregate"),
+        ("command_set_digest", "0" * 64),
+        ("reason_codes", ("rule.ambiguous",)),
+        ("per_command_timeout_seconds", 31),
+    ):
+        mutated = select_pre_pr_validation_plan(_subject(), RULES)
+        object.__setattr__(mutated, field, value)
+        with pytest.raises(ValueError, match="invalid pre-PR validation plan"):
+            serialize_pre_pr_validation_plan(mutated)
+        with pytest.raises(ValueError, match="invalid pre-PR validation plan"):
+            pre_pr_validation_plan_id(mutated)
+    with pytest.raises(TypeError, match="exact PrePrValidationPlan"):
+        serialize_pre_pr_validation_plan(plan.subject)
+
+
+def test_pre_pr_plan_and_subject_are_immutable() -> None:
+    plan = select_pre_pr_validation_plan(_subject(), RULES)
+    with pytest.raises(FrozenInstanceError):
+        plan.profile = "aggregate"  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
+        plan.subject.branch = "main"  # type: ignore[misc]
+
+
+def test_pre_pr_selection_performs_no_file_io(monkeypatch: pytest.MonkeyPatch) -> None:
+    subject = _subject()
+
+    def fail_read(*args: object, **kwargs: object) -> str:
+        raise AssertionError("pre-PR selection attempted file I/O")
+
+    monkeypatch.setattr(Path, "read_text", fail_read)
+    plan = select_pre_pr_validation_plan(subject, RULES)
+    assert plan.commands == (PILOT_COMMAND,)
+
+
+# --- Exact-over-prefix precedence semantics (#723 review H1/B2) ---------------
+#
+# The pilot path sits under the pre-existing `08_Tooling/workflow-scheduler/`
+# package prefix, so adding an exact rule for it made precedence necessary.
+# These tests pin the full consequence surface of that decision, including the
+# two selection outcomes that #723 deliberately changed.
+SCHEDULER_PACKAGE_COMMAND = "python -m pytest 08_Tooling/workflow-scheduler/tests"
+SCHEDULER_SIBLING_PATH = "08_Tooling/workflow-scheduler/src/runtime.py"
+
+
+def test_mixed_exact_and_prefix_paths_form_a_safe_superset_union() -> None:
+    """A changed-file set mixing the exact pilot path with a prefix-owned sibling.
+
+    This outcome changed with #723: at the previous head the set selected only
+    the package command with `profile.focused-package`. It now unions both
+    commands and reports `profile.focused-union`. The narrow command is fully
+    subsumed by the package command, so the union re-runs the pilot file rather
+    than skipping anything -- the change is a safe superset, never a gap.
+    """
+    paths = [PILOT_PATH, SCHEDULER_SIBLING_PATH]
+    plan = _select(_input(paths))
+    assert plan.profile == "focused"
+    assert plan.reason_codes == ("profile.focused-union",)
+    assert plan.commands == (SCHEDULER_PACKAGE_COMMAND, PILOT_COMMAND)
+    assert PILOT_COMMAND.startswith(SCHEDULER_PACKAGE_COMMAND)
+    assert plan.remote_build_required is True
+    assert validate_validation_plan(plan) == ()
+
+    assert plan.command_set_digest == compute_command_set_digest(
+        "1.0.0", (SCHEDULER_PACKAGE_COMMAND, PILOT_COMMAND)
+    )
+    assert plan.command_set_digest == (
+        "59459cb78c6b2804aebb46597472814a1d649bfb76a6b883868b2fbe4020d221"
+    )
+    assert validation_plan_id(plan) == (
+        "validation-plan:"
+        "71f0353ba0a292bb656b87deb3ec8fab9ff07b8d14f7ffbbb73a2de1f3482935"
+    )
+    assert serialize_validation_plan(plan) == serialize_validation_plan(_select(_input(paths)))
+
+
+def test_mixed_exact_and_prefix_union_ignores_changed_file_order() -> None:
+    paths = [PILOT_PATH, SCHEDULER_SIBLING_PATH, "tests/test_curriculum_language_system.py"]
+    outcomes = {_select(_input(list(order))) for order in permutations(paths)}
+    assert len(outcomes) == 1
+    only = outcomes.pop()
+    assert only.reason_codes == ("profile.focused-union",)
+    assert only.commands == tuple(sorted(only.commands))
+
+
+def test_exact_owner_masks_multiple_matching_prefix_rules() -> None:
+    rules = copy.deepcopy(RULES)
+    rules["focused_rules"].append(
+        {
+            "name": "second-scheduler-prefix-owner",
+            "prefixes": ["08_Tooling/workflow-scheduler/"],
+            "commands": ["python -m pytest tests/other.py"],
+        }
+    )
+    exact_owned = _select(_input([PILOT_PATH]), rules)
+    assert exact_owned.profile == "focused"
+    assert exact_owned.commands == (PILOT_COMMAND,)
+    assert exact_owned.reason_codes == ("profile.focused-package",)
+
+    prefix_only = _select(_input([SCHEDULER_SIBLING_PATH]), rules)
+    assert prefix_only.profile == "manual-review"
+    assert prefix_only.commands == ()
+    assert prefix_only.reason_codes == ("rule.ambiguous",)
+
+
+def test_multiple_exact_owners_still_fail_closed_as_ambiguous() -> None:
+    rules = copy.deepcopy(RULES)
+    rules["focused_rules"].append(
+        {
+            "name": "conflicting-exact-pilot-owner",
+            "exact_paths": [PILOT_PATH],
+            "commands": ["python -m pytest tests/other.py"],
+        }
+    )
+    plan = _select(_input([PILOT_PATH]), rules)
+    assert plan.profile == "manual-review"
+    assert plan.commands == ()
+    assert plan.reason_codes == ("rule.ambiguous",)
+
+
+def test_multiple_prefix_owners_without_exact_owner_fail_closed() -> None:
+    rules = copy.deepcopy(RULES)
+    rules["focused_rules"].append(
+        {
+            "name": "conflicting-notion-prefix-owner",
+            "prefixes": ["08_Tooling/notion-navigation-client/"],
+            "commands": ["python -m pytest tests/other.py"],
+        }
+    )
+    plan = _select(_input(["08_Tooling/notion-navigation-client/src/reader.py"]), rules)
+    assert plan.profile == "manual-review"
+    assert plan.commands == ()
+    assert plan.reason_codes == ("rule.ambiguous",)
+
+
+@pytest.mark.parametrize(
+    "paths",
+    [
+        [PILOT_PATH],
+        [SCHEDULER_SIBLING_PATH],
+        [PILOT_PATH, SCHEDULER_SIBLING_PATH],
+    ],
+)
+def test_precedence_is_independent_of_rule_order(paths: list[str]) -> None:
+    baseline = _select(_input(paths))
+    count = len(RULES["focused_rules"])
+    # Every rotation plus the full reversal: enough to expose any dependence on
+    # a rule's position, without paying for all `count!` orderings.
+    orders = [tuple(range(count))[offset:] + tuple(range(count))[:offset] for offset in range(count)]
+    orders.append(tuple(reversed(range(count))))
+    for order in orders:
+        rules = copy.deepcopy(RULES)
+        rules["focused_rules"] = [RULES["focused_rules"][index] for index in order]
+        assert _select(_input(paths), rules) == baseline
+
+
+# --- Boolean rejection for integer-only pre-PR fields (#723 review M3) --------
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_boolean_approval_revision_is_rejected(value: bool) -> None:
+    with pytest.raises(TypeError, match="approval_revision"):
+        _subject(approval_revision=value)
+
+
+@pytest.mark.parametrize("field", ["per_command_timeout_seconds", "total_validation_timeout_seconds"])
+@pytest.mark.parametrize("value", [True, False])
+def test_boolean_timeouts_are_rejected(field: str, value: bool) -> None:
+    subject = _subject()
+    valid = select_pre_pr_validation_plan(subject, RULES)
+    values: dict[str, object] = {
+        "selector_version": valid.selector_version,
+        "subject": subject,
+        "commands": valid.commands,
+        "command_set_digest": valid.command_set_digest,
+        "reason_codes": valid.reason_codes,
+        field: value,
+    }
+    with pytest.raises(TypeError, match=field):
+        PrePrValidationPlan(**values)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_boolean_issue_number_is_rejected(value: bool) -> None:
+    with pytest.raises(TypeError, match="issue_number"):
+        _subject(issue_number=value)

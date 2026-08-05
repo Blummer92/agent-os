@@ -187,9 +187,10 @@ if result.is_blocked:
     print(f"Blocked: {result.blockers}")
     print(f"Reason: {result.reason}")
 
-# Individual checks
-result = StopConditionChecker.check_approval_required(task)
-result = StopConditionChecker.check_production_mode(task)
+# Individual checks. Pass source_of_truth_db to let a recorded APPROVED
+# decision clear the block; omit it and the governed task stays blocked.
+result = StopConditionChecker.check_approval_required(task, source_of_truth_db=database)
+result = StopConditionChecker.check_production_mode(task, source_of_truth_db=database)
 ```
 
 **Blockers**:

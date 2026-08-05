@@ -4,11 +4,18 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any, Literal, Mapping
 
 from .issueplan_current_state import build_issueplan_current_state_evidence
 from .issueplan_scanner import SourceEnvelope, scan_issueplan_source
-from .models import AcceptanceReport, CheckResult, LinkedIssueCandidate, LinkedIssueParseResult, Status
+from .models import (
+    AcceptanceReport,
+    CheckResult,
+    LinkedIssueCandidate,
+    LinkedIssueParseResult,
+    LinkedIssueParseStatus,
+    Status,
+)
 
 CONTRACT_VERSION = "agent-os-acceptance-report-transport/v1"
 SUPPORTED_CONTRACT_VERSIONS = {CONTRACT_VERSION}
@@ -117,7 +124,15 @@ def _resolve_issue_body_sha256(issue_body: str, issue_body_sha256: str | None) -
     return issue_body_sha256 or computed
 
 
-def _report_payload(report: AcceptanceReport) -> dict[str, Any]:
+def acceptance_report_to_payload(report: AcceptanceReport) -> dict[str, Any]:
+    """Serialize an ``AcceptanceReport`` to its canonical payload.
+
+    This module owns AcceptanceReport payload shape for the whole repository.
+    Consumers that need a round-trippable report (for example the
+    candidate-packet stage under #750) must reuse this helper and
+    :func:`acceptance_report_from_payload` rather than maintaining a second
+    serializer.
+    """
     return {
         "linked_issue": report.linked_issue,
         "overall_status": report.overall_status.value,
@@ -176,6 +191,212 @@ def _report_payload(report: AcceptanceReport) -> dict[str, Any]:
             for check in report.informational_checks
         ],
     }
+
+
+_REPORT_PAYLOAD_KEYS = frozenset(
+    {
+        "linked_issue",
+        "overall_status",
+        "checks",
+        "linked_issue_result",
+        "manual_review_items",
+        "evidence",
+        "blockers",
+        "remaining_risks",
+        "informational_checks",
+    }
+)
+_CHECK_PAYLOAD_KEYS = frozenset({"name", "status", "message", "evidence"})
+_CANDIDATE_PAYLOAD_KEYS = frozenset(
+    {
+        "issue_number",
+        "repository",
+        "keyword",
+        "source",
+        "position",
+        "raw_target",
+        "explicit",
+    }
+)
+_LINKED_ISSUE_RESULT_PAYLOAD_KEYS = frozenset(
+    {
+        "status",
+        "issue_number",
+        "repository",
+        "explicit_candidates",
+        "bare_references",
+        "reasons",
+    }
+)
+
+
+def _require_mapping(value: Any, label: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{label} must be a mapping")
+    return value
+
+
+def _require_exact_keys(payload: Mapping[str, Any], allowed: frozenset[str], label: str) -> None:
+    keys = set(payload)
+    missing = sorted(allowed - keys)
+    if missing:
+        raise ValueError(f"{label} is missing field(s): " + ", ".join(missing))
+    unsupported = sorted(keys - allowed)
+    if unsupported:
+        raise ValueError(f"{label} has unsupported field(s): " + ", ".join(unsupported))
+
+
+def _require_list(value: Any, label: str) -> list[Any]:
+    if not isinstance(value, list):
+        raise ValueError(f"{label} must be a list")
+    return value
+
+
+def _require_str_list(value: Any, label: str) -> list[str]:
+    items = _require_list(value, label)
+    if not all(isinstance(item, str) for item in items):
+        raise ValueError(f"{label} must contain only strings")
+    return list(items)
+
+
+def _require_str(value: Any, label: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{label} must be a string")
+    return value
+
+
+def _require_optional_str(value: Any, label: str) -> str | None:
+    if value is None:
+        return None
+    return _require_str(value, label)
+
+
+def _require_int(value: Any, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{label} must be an int")
+    return value
+
+
+def _require_optional_int(value: Any, label: str) -> int | None:
+    if value is None:
+        return None
+    return _require_int(value, label)
+
+
+def _require_bool(value: Any, label: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{label} must be a bool")
+    return value
+
+
+def _enum_from_payload(enum_cls: Any, value: Any, label: str) -> Any:
+    try:
+        return enum_cls(value)
+    except ValueError as error:
+        raise ValueError(f"{label} has an unsupported value") from error
+
+
+def _check_result_from_payload(payload: Any, label: str) -> CheckResult:
+    mapping = _require_mapping(payload, label)
+    _require_exact_keys(mapping, _CHECK_PAYLOAD_KEYS, label)
+    return CheckResult(
+        name=_require_str(mapping["name"], f"{label}.name"),
+        status=_enum_from_payload(Status, mapping["status"], f"{label}.status"),
+        message=_require_str(mapping["message"], f"{label}.message"),
+        evidence=_require_str_list(mapping["evidence"], f"{label}.evidence"),
+    )
+
+
+def _linked_issue_candidate_from_payload(payload: Any, label: str) -> LinkedIssueCandidate:
+    mapping = _require_mapping(payload, label)
+    _require_exact_keys(mapping, _CANDIDATE_PAYLOAD_KEYS, label)
+    return LinkedIssueCandidate(
+        issue_number=_require_int(mapping["issue_number"], f"{label}.issue_number"),
+        repository=_require_optional_str(mapping["repository"], f"{label}.repository"),
+        keyword=_require_optional_str(mapping["keyword"], f"{label}.keyword"),
+        source=_require_str(mapping["source"], f"{label}.source"),
+        position=_require_int(mapping["position"], f"{label}.position"),
+        raw_target=_require_str(mapping["raw_target"], f"{label}.raw_target"),
+        explicit=_require_bool(mapping["explicit"], f"{label}.explicit"),
+    )
+
+
+def _linked_issue_result_from_payload(payload: Any) -> LinkedIssueParseResult | None:
+    if payload is None:
+        return None
+    label = "linked_issue_result"
+    mapping = _require_mapping(payload, label)
+    _require_exact_keys(mapping, _LINKED_ISSUE_RESULT_PAYLOAD_KEYS, label)
+    return LinkedIssueParseResult(
+        status=_enum_from_payload(
+            LinkedIssueParseStatus, mapping["status"], f"{label}.status"
+        ),
+        issue_number=_require_optional_int(
+            mapping["issue_number"], f"{label}.issue_number"
+        ),
+        repository=_require_optional_str(mapping["repository"], f"{label}.repository"),
+        explicit_candidates=[
+            _linked_issue_candidate_from_payload(
+                item, f"{label}.explicit_candidates[{index}]"
+            )
+            for index, item in enumerate(
+                _require_list(
+                    mapping["explicit_candidates"], f"{label}.explicit_candidates"
+                )
+            )
+        ],
+        bare_references=[
+            _linked_issue_candidate_from_payload(
+                item, f"{label}.bare_references[{index}]"
+            )
+            for index, item in enumerate(
+                _require_list(mapping["bare_references"], f"{label}.bare_references")
+            )
+        ],
+        reasons=_require_str_list(mapping["reasons"], f"{label}.reasons"),
+    )
+
+
+def acceptance_report_from_payload(payload: Mapping[str, Any]) -> AcceptanceReport:
+    """Reconstruct an ``AcceptanceReport`` from its canonical payload.
+
+    Fails closed on a malformed payload: the schema is closed, so a missing or
+    unsupported field, a wrong type, a boolean supplied where an int is
+    required, or an unsupported enum value raises ``ValueError`` rather than
+    producing a partially reconstructed report. Round-tripping through
+    :func:`acceptance_report_to_payload` preserves every field, ordering, and
+    type exactly.
+    """
+    label = "acceptance report payload"
+    mapping = _require_mapping(payload, label)
+    _require_exact_keys(mapping, _REPORT_PAYLOAD_KEYS, label)
+    return AcceptanceReport(
+        linked_issue=_require_optional_int(mapping["linked_issue"], "linked_issue"),
+        overall_status=_enum_from_payload(
+            Status, mapping["overall_status"], "overall_status"
+        ),
+        checks=[
+            _check_result_from_payload(item, f"checks[{index}]")
+            for index, item in enumerate(_require_list(mapping["checks"], "checks"))
+        ],
+        linked_issue_result=_linked_issue_result_from_payload(
+            mapping["linked_issue_result"]
+        ),
+        manual_review_items=_require_str_list(
+            mapping["manual_review_items"], "manual_review_items"
+        ),
+        evidence=_require_str_list(mapping["evidence"], "evidence"),
+        blockers=_require_str_list(mapping["blockers"], "blockers"),
+        remaining_risks=_require_str_list(
+            mapping["remaining_risks"], "remaining_risks"
+        ),
+        informational_checks=tuple(
+            _check_result_from_payload(item, f"informational_checks[{index}]")
+            for index, item in enumerate(
+                _require_list(mapping["informational_checks"], "informational_checks")
+            )
+        ),
+    )
 
 
 def build_acceptance_report_transport(
@@ -267,7 +488,9 @@ def build_acceptance_report_transport(
         "reason_codes": list(reason_codes),
         "execution_authorized": False,
     }
-    report_sha256 = hashlib.sha256(canonical_json_bytes(_report_payload(report))).hexdigest()
+    report_sha256 = hashlib.sha256(
+        canonical_json_bytes(acceptance_report_to_payload(report))
+    ).hexdigest()
     envelope["report_sha256"] = report_sha256
     if len(canonical_json_bytes(envelope)) > MAX_ENVELOPE_BYTES:
         raise ValueError("transport envelope exceeds 64 KiB limit")

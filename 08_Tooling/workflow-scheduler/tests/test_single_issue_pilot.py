@@ -68,6 +68,8 @@ from scripts.agent_os_remote_validation.selector import (  # noqa: E402
 )
 from workflow_scheduler.execution import single_issue_pilot as pilot_module  # noqa: E402
 from workflow_scheduler.execution.single_issue_pilot import (  # noqa: E402
+    STANDARD_EXECUTION_MODE,
+    VALIDATION_ONLY_EXECUTION_MODE,
     PilotExecutionObservation,
     PilotExecutionRequest,
     PilotLeaseGrant,
@@ -2152,3 +2154,382 @@ def test_module_reuses_only_canonical_upstream_apis() -> None:
         "typing",
         "workflow_scheduler",
     }
+
+
+# --------------------------------------------------------------------------
+# Additive validation-only execution mode (#707)
+# --------------------------------------------------------------------------
+
+
+def _validation_only_input(**changes) -> SingleIssuePilotInput:
+    values: dict[str, object] = {"execution_mode": VALIDATION_ONLY_EXECUTION_MODE}
+    values.update(changes)
+    return _pilot_input(**values)
+
+
+def _run_validation_only(pilot_input=None, **adapters) -> SingleIssuePilotResult:
+    """Run the one canonical lifecycle in validation-only mode.
+
+    No executor is supplied at all: the mode makes executor authority absent
+    rather than substituting a no-op adapter for a real one.
+    """
+    return run_single_issue_pilot(
+        pilot_input if pilot_input is not None else _validation_only_input(),
+        lease=adapters.pop("lease", None) or FakeLease(),
+        workspace=adapters.pop("workspace", None) or FakeWorkspace(),
+        validator=adapters.pop("validator", None) or FakeValidator(),
+        cancelled=adapters.pop("cancelled", None) or never_cancelled,
+    )
+
+
+def test_omitted_execution_mode_defaults_to_standard_behavior() -> None:
+    supplied = _pilot_input()
+    assert supplied.execution_mode == STANDARD_EXECUTION_MODE
+
+    executor = FakeExecutor()
+    result = _run(supplied, executor=executor)
+
+    assert result.execution_mode == STANDARD_EXECUTION_MODE
+    assert result.status == "completed"
+    assert result.executor_dispatch_attempts == 1
+    assert result.executor_called is True
+    assert result.executor_started is True
+    assert result.termination_confirmed is True
+    assert len(executor.calls) == 1
+
+
+def test_validation_only_completes_without_dispatching_any_executor() -> None:
+    lease, workspace, validator = FakeLease(), FakeWorkspace(), FakeValidator()
+
+    result = _run_validation_only(lease=lease, workspace=workspace, validator=validator)
+
+    assert result.status == "completed"
+    assert result.primary_status == "completed"
+    assert result.execution_mode == VALIDATION_ONLY_EXECUTION_MODE
+    assert result.executor_dispatch_attempts == 0
+    assert result.executor_called is False
+    assert result.executor_started is False
+    assert result.validation_attempts == 1
+    assert result.validation_attempted is True
+    assert result.validation_passed is True
+    assert result.possible_partial_effects is False
+    assert result.completed_tests == REQUIRED_TESTS
+    assert result.reason_codes == ()
+    assert result.primary_error is None
+    assert len(lease.acquire_calls) == 1
+    assert len(lease.release_calls) == 1
+    assert len(workspace.create_calls) == 1
+    assert len(workspace.inspect_calls) == 1
+    assert len(workspace.cleanup_calls) == 1
+    assert len(validator.calls) == 1
+
+
+def test_validation_only_never_claims_executor_termination_confirmation() -> None:
+    result = _run_validation_only()
+
+    assert result.termination_confirmed is False
+    # A completed validation-only result may not be rewritten into one that
+    # claims a confirmed process termination that never happened.
+    with pytest.raises(ValueError, match="success invariant"):
+        replace(result, termination_confirmed=True)
+
+
+@pytest.mark.parametrize(
+    "forged",
+    [
+        {"executor_called": True},
+        {"executor_started": True},
+        {"executor_dispatch_attempts": 1},
+    ],
+)
+def test_validation_only_completion_cannot_forge_executor_evidence(forged) -> None:
+    result = _run_validation_only()
+    with pytest.raises(ValueError, match="success invariant"):
+        replace(result, **forged)
+
+
+@pytest.mark.parametrize(
+    "forged",
+    [
+        {"executor_called": False},
+        {"executor_started": False},
+        {"executor_dispatch_attempts": 0},
+        {"termination_confirmed": False},
+    ],
+)
+def test_standard_completion_still_requires_executor_evidence(forged) -> None:
+    result = _run()
+    with pytest.raises(ValueError, match="success invariant"):
+        replace(result, **forged)
+
+
+def test_validation_only_runs_the_bound_validation_exactly_once() -> None:
+    validator = FakeValidator()
+    result = _run_validation_only(validator=validator)
+
+    assert len(validator.calls) == 1
+    assert validator.calls[0].plan_id == validation_plan_id(PLAN)
+    assert validator.calls[0].required_tests == REQUIRED_TESTS
+    assert result.validation_attempts == 1
+
+
+def test_validation_only_refuses_a_supplied_executor() -> None:
+    executor = FakeExecutor()
+    with pytest.raises(TypeError, match="validation-only"):
+        run_single_issue_pilot(
+            _validation_only_input(),
+            lease=FakeLease(),
+            workspace=FakeWorkspace(),
+            executor=executor,
+            validator=FakeValidator(),
+            cancelled=never_cancelled,
+        )
+    assert executor.calls == []
+
+
+def test_standard_mode_still_requires_a_supplied_executor() -> None:
+    lease, workspace, validator = FakeLease(), FakeWorkspace(), FakeValidator()
+    with pytest.raises(TypeError, match="standard mode"):
+        run_single_issue_pilot(
+            _pilot_input(),
+            lease=lease,
+            workspace=workspace,
+            validator=validator,
+            cancelled=never_cancelled,
+        )
+    assert lease.acquire_calls == []
+    assert workspace.create_calls == []
+    assert validator.calls == []
+
+
+def test_unsupported_execution_mode_is_rejected_at_input_construction() -> None:
+    with pytest.raises(ValueError, match="execution mode"):
+        _pilot_input(execution_mode="dry-run")
+
+
+def test_drifted_execution_mode_needs_decision_before_any_adapter() -> None:
+    supplied = _pilot_input()
+    object.__setattr__(supplied, "execution_mode", "dry-run")
+    lease, workspace, validator = FakeLease(), FakeWorkspace(), FakeValidator()
+    executor = FakeExecutor()
+
+    result = _run(
+        supplied,
+        lease=lease,
+        workspace=workspace,
+        executor=executor,
+        validator=validator,
+    )
+
+    assert result.status == "needs-decision"
+    assert "contract.unsupported" in result.reason_codes
+    assert result.phase == "input-validation"
+    assert lease.acquire_calls == []
+    assert workspace.create_calls == []
+    assert executor.calls == []
+    assert validator.calls == []
+
+
+@pytest.mark.parametrize(
+    "checkpoint", ["pre-lease", "post-lease", "post-workspace", "pre-executor"]
+)
+def test_validation_only_preserves_every_cancellation_checkpoint(checkpoint) -> None:
+    lease, workspace, validator = FakeLease(), FakeWorkspace(), FakeValidator()
+    result = _run_validation_only(
+        lease=lease,
+        workspace=workspace,
+        validator=validator,
+        cancelled=cancel_at(checkpoint),
+    )
+
+    assert result.status == "cancelled"
+    assert result.cancellation_requested is True
+    assert result.executor_dispatch_attempts == 0
+    assert validator.calls == []
+    if checkpoint == "pre-lease":
+        assert lease.acquire_calls == []
+        assert workspace.create_calls == []
+    else:
+        assert len(lease.acquire_calls) == 1
+        assert len(lease.release_calls) == 1
+
+
+def test_validation_only_cancellation_during_validation_is_preserved() -> None:
+    validator = FakeValidator(
+        observation=PilotValidationObservation(
+            attempted=True, passed=False, reason="cancelled during validation"
+        )
+    )
+    lease = FakeLease()
+    result = _run_validation_only(lease=lease, validator=validator)
+
+    assert result.status == "failed"
+    assert "validation.failed" in result.reason_codes
+    assert result.executor_dispatch_attempts == 0
+    assert len(lease.release_calls) == 1
+
+
+def test_validation_only_validation_failure_stays_explicit() -> None:
+    result = _run_validation_only(
+        validator=FakeValidator(
+            observation=PilotValidationObservation(
+                attempted=True, passed=False, reason="required tests failed"
+            )
+        )
+    )
+    assert result.status == "failed"
+    assert result.primary_error == "required tests failed"
+    assert result.validation_attempts == 1
+
+
+def test_validation_only_missing_required_test_is_failed() -> None:
+    result = _run_validation_only(
+        validator=FakeValidator(
+            observation=PilotValidationObservation(
+                attempted=True, passed=True, completed_tests=()
+            )
+        )
+    )
+    assert result.status == "failed"
+    assert "validation.required-tests-missing" in result.reason_codes
+
+
+def test_validation_only_validation_error_is_failed() -> None:
+    result = _run_validation_only(validator=FakeValidator(error=RuntimeError("boom")))
+    assert result.status == "failed"
+    assert "validation.error" in result.reason_codes
+
+
+def test_validation_only_unsupported_observation_needs_decision() -> None:
+    result = _run_validation_only(validator=FakeValidator(observation=object()))
+    assert result.status == "needs-decision"
+    assert "validation.error" in result.reason_codes
+
+
+@pytest.mark.parametrize(
+    ("changed", "reason"),
+    [
+        ((".github/workflows/ci.yml",), "changed-paths.forbidden"),
+        (("src/unapproved.py",), "changed-paths.out-of-allowlist"),
+    ],
+)
+def test_validation_only_still_contains_changed_paths_after_validation(
+    changed, reason
+) -> None:
+    result = _run_validation_only(
+        validator=FakeValidator(
+            observation=PilotValidationObservation(
+                attempted=True,
+                passed=True,
+                completed_tests=REQUIRED_TESTS,
+                changed_paths=changed,
+            )
+        )
+    )
+    assert result.status == "quarantined"
+    assert reason in result.reason_codes
+    assert result.phase == "post-validation-path-check"
+    assert result.executor_dispatch_attempts == 0
+
+
+def test_validation_only_workspace_rejection_blocks_before_validation() -> None:
+    validator = FakeValidator()
+    result = _run_validation_only(
+        workspace=FakeWorkspace(inspection=_inspection(clean=False)),
+        validator=validator,
+    )
+    assert result.status == "blocked"
+    assert "workspace.dirty" in result.reason_codes
+    assert validator.calls == []
+
+
+def test_validation_only_cleanup_failure_is_quarantined() -> None:
+    result = _run_validation_only(
+        workspace=FakeWorkspace(
+            cleanup=WorkspaceCleanup(filesystem_removed=False, metadata_removed=True)
+        )
+    )
+    assert result.status == "quarantined"
+    assert "workspace.filesystem-cleanup-failed" in result.reason_codes
+    assert result.workspace_cleanup_attempts == 1
+
+
+def test_validation_only_release_failure_is_quarantined() -> None:
+    result = _run_validation_only(lease=FakeLease(release_error=RuntimeError("no")))
+    assert result.status == "quarantined"
+    assert result.lease_release_attempts == 1
+    assert result.release_errors
+
+
+@pytest.mark.parametrize("error_type", [KeyboardInterrupt, SystemExit, GeneratorExit])
+def test_validation_only_process_termination_propagates_after_teardown(
+    error_type,
+) -> None:
+    lease, workspace = FakeLease(), FakeWorkspace()
+
+    class TerminatingValidator(FakeValidator):
+        def validate(self, request):
+            self.calls.append(request)
+            raise error_type("process control")
+
+    with pytest.raises(error_type):
+        _run_validation_only(
+            lease=lease, workspace=workspace, validator=TerminatingValidator()
+        )
+
+    assert len(workspace.cleanup_calls) == 1
+    assert len(lease.release_calls) == 1
+
+
+def test_validation_only_result_identity_is_deterministic_and_mode_bound() -> None:
+    first = _run_validation_only()
+    second = _run_validation_only()
+    standard = _run()
+
+    assert first.result_id == second.result_id
+    assert single_issue_pilot_result_id(first) == first.result_id
+    serialized = serialize_single_issue_pilot_result(first)
+    assert serialized["execution_mode"] == VALIDATION_ONLY_EXECUTION_MODE
+    assert serialized["executor_dispatch_attempts"] == 0
+    assert serialized["executor_called"] is False
+    assert serialized["executor_started"] is False
+    # The mode is part of the canonical identity, so the two modes can never
+    # share a result ID.
+    assert first.result_id != standard.result_id
+    # Re-labelling a completed validation-only result as standard cannot even
+    # be constructed: it would claim executor evidence that does not exist.
+    with pytest.raises(ValueError, match="success invariant"):
+        replace(first, execution_mode=STANDARD_EXECUTION_MODE)
+    # On a non-completed result the mode is still bound into the identity, so
+    # re-labelling it is detected as tampering.
+    failed = _run_validation_only(
+        validator=FakeValidator(
+            observation=PilotValidationObservation(attempted=True, passed=False)
+        )
+    )
+    with pytest.raises(ValueError, match="result ID mismatch"):
+        serialize_single_issue_pilot_result(
+            replace(failed, execution_mode=STANDARD_EXECUTION_MODE)
+        )
+
+
+def test_validation_only_carries_no_false_authority_and_never_retries() -> None:
+    result = _run_validation_only()
+
+    assert result.authoritative is False
+    assert result.execution_authorized is False
+    assert result.merge_authorized is False
+    assert result.side_effects_authorized is False
+    assert result.retry_attempted is False
+
+
+def test_no_no_op_executor_or_second_lifecycle_exists() -> None:
+    source = inspect.getsource(pilot_module)
+    for forbidden_token in ("NoOpExecutor", "NullExecutor", "_drive_validation"):
+        assert forbidden_token not in source
+    # One lifecycle driver and one executor-dispatch step, for both modes.
+    assert source.count("def _drive_lifecycle(") == 1
+    assert source.count("def _dispatch_executor(") == 1
+    assert source.count("_dispatch_executor(state, executor)") == 1
+    assert source.count("def _run_validation(") == 1
+    assert source.count("_run_validation(state, validator)") == 1

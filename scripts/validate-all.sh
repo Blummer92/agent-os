@@ -1,31 +1,162 @@
 #!/usr/bin/env bash
-# Aggregate local validation runner for Agent OS.
-# Run from the repository root: ./scripts/validate-all.sh
+# Canonical local validation runner for Agent OS.
+# Run from the repository root: ./scripts/validate-all.sh [--focused PATH ...] [--focused-maxfail N]
 
 set -u
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR" || exit 2
 
+runner_error() {
+  echo "Runner error: $1" >&2
+  exit 2
+}
+
+focused_targets=()
+focused_maxfail=""
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --focused)
+      [ "$#" -ge 2 ] || runner_error "--focused requires a path."
+      [ -n "$2" ] || runner_error "--focused path cannot be empty."
+      focused_targets+=("$2")
+      shift 2
+      ;;
+    --focused-maxfail)
+      [ "$#" -ge 2 ] || runner_error "--focused-maxfail requires a positive integer."
+      [ -z "$focused_maxfail" ] || runner_error "--focused-maxfail may be supplied only once."
+      focused_maxfail="$2"
+      shift 2
+      ;;
+    --*)
+      runner_error "unsupported option: $1"
+      ;;
+    *)
+      runner_error "unexpected positional argument: $1"
+      ;;
+  esac
+done
+
+if [ -n "$focused_maxfail" ]; then
+  case "$focused_maxfail" in
+    *[!0-9]*|'') runner_error "--focused-maxfail must be a positive integer." ;;
+  esac
+  if [ "${#focused_maxfail}" -gt 3 ]; then
+    runner_error "--focused-maxfail must be between 1 and 100."
+  fi
+  if [ "$focused_maxfail" -lt 1 ] || [ "$focused_maxfail" -gt 100 ]; then
+    runner_error "--focused-maxfail must be between 1 and 100."
+  fi
+  [ "${#focused_targets[@]}" -gt 0 ] || runner_error "--focused-maxfail requires at least one --focused target."
+fi
+
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   if command -v python >/dev/null 2>&1; then
     PYTHON_BIN="python"
   else
-    echo "Runner error: python3 or python is required." >&2
-    exit 2
+    runner_error "python3 or python is required."
   fi
 fi
 
 if ! "$PYTHON_BIN" -m pytest --version >/dev/null 2>&1; then
-  echo "Runner error: pytest is required. Install development test dependencies before running validation." >&2
-  exit 2
+  runner_error "pytest is required. Install development test dependencies before running validation."
 fi
+
+normalize_focused_target() {
+  local candidate="$1"
+
+  case "$candidate" in
+    /*) return 10 ;;
+    -*) return 11 ;;
+    *[!A-Za-z0-9._/-]*) return 12 ;;
+  esac
+
+  case "/$candidate/" in
+    */../*) return 13 ;;
+  esac
+
+  "$PYTHON_BIN" - "$ROOT_DIR" "$candidate" <<'PY'
+from pathlib import Path
+import os
+import sys
+
+root = Path(sys.argv[1]).resolve()
+candidate = root / sys.argv[2]
+try:
+    resolved = candidate.resolve(strict=True)
+except (FileNotFoundError, OSError):
+    raise SystemExit(2)
+
+try:
+    relative = resolved.relative_to(root)
+except ValueError:
+    raise SystemExit(3)
+
+if resolved.is_file():
+    name = resolved.name
+    if resolved.suffix != ".py" or not (name.startswith("test_") or name.endswith("_test.py")):
+        raise SystemExit(4)
+elif resolved.is_dir():
+    if relative in (Path("."), Path("tests")):
+        raise SystemExit(7)
+
+    found_test = False
+    for current, dirnames, filenames in os.walk(resolved, followlinks=False):
+        current_path = Path(current)
+        for name in (*dirnames, *filenames):
+            entry = current_path / name
+            if entry.is_symlink():
+                raise SystemExit(8)
+        for name in filenames:
+            if not (name.startswith("test_") or name.endswith("_test.py")):
+                continue
+            path = current_path / name
+            if path.suffix != ".py":
+                continue
+            try:
+                path.resolve(strict=True).relative_to(root)
+            except (FileNotFoundError, OSError, ValueError):
+                raise SystemExit(8)
+            found_test = True
+    if not found_test:
+        raise SystemExit(5)
+else:
+    raise SystemExit(6)
+
+print(relative.as_posix())
+PY
+}
+
+normalized_focused_targets=()
+for target in "${focused_targets[@]}"; do
+  normalized="$(normalize_focused_target "$target")"
+  code=$?
+  case "$code" in
+    0) ;;
+    2) runner_error "focused target does not exist: $target" ;;
+    3) runner_error "focused target escapes the repository: $target" ;;
+    4) runner_error "focused file is not a pytest test module: $target" ;;
+    5) runner_error "focused directory contains no pytest test modules: $target" ;;
+    7) runner_error "focused target cannot represent the complete root test suite: $target" ;;
+    8) runner_error "focused directory contains a symlink or repository-escaping test path: $target" ;;
+    10) runner_error "focused path must be repository-relative: $target" ;;
+    11) runner_error "focused path cannot begin with '-': $target" ;;
+    12) runner_error "focused path contains unsupported characters: $target" ;;
+    13) runner_error "focused path cannot contain '..': $target" ;;
+    *) runner_error "focused target is invalid: $target" ;;
+  esac
+
+  for existing in "${normalized_focused_targets[@]}"; do
+    [ "$existing" != "$normalized" ] || runner_error "duplicate focused target: $normalized"
+  done
+  normalized_focused_targets+=("$normalized")
+done
 
 STRUCTURAL_SCRIPT="07_Agent_Tests/validate-repo-structure.sh"
 if [ ! -f "$STRUCTURAL_SCRIPT" ]; then
-  echo "Runner error: missing structural validation script: $STRUCTURAL_SCRIPT" >&2
-  exit 2
+  runner_error "missing structural validation script: $STRUCTURAL_SCRIPT"
 fi
 
 commands_executed=()
@@ -45,12 +176,8 @@ record_failure() {
 
 python_path_separator() {
   case "$(uname -s 2>/dev/null)" in
-    MINGW*|MSYS*|CYGWIN*)
-      printf ';'
-      ;;
-    *)
-      printf ':'
-      ;;
+    MINGW*|MSYS*|CYGWIN*) printf ';' ;;
+    *) printf ':' ;;
   esac
 }
 
@@ -81,7 +208,6 @@ run_check() {
   shift 3
 
   commands_executed+=("$command_text")
-
   echo
   echo "==> $name"
   echo "    $command_text"
@@ -94,6 +220,55 @@ run_check() {
   else
     check_results+=("FAIL|$name|$command_text|$code")
     record_failure "$name" "$command_text" "$code"
+  fi
+}
+
+run_focused_target() {
+  local target="$1"
+  local suite_dir="$ROOT_DIR"
+  local relative_target="$target"
+  local prefix=""
+
+  case "$target" in
+    tests|tests/*)
+      ;;
+    */tests)
+      prefix="${target%/tests}"
+      suite_dir="$ROOT_DIR/$prefix"
+      relative_target="tests"
+      ;;
+    */tests/*)
+      prefix="${target%%/tests/*}"
+      suite_dir="$ROOT_DIR/$prefix"
+      relative_target="${target#"$prefix/"}"
+      ;;
+  esac
+
+  local command=("$PYTHON_BIN" -m pytest "$relative_target" -q)
+  local display="cd ${suite_dir#"$ROOT_DIR"/} && $PYTHON_BIN -m pytest $relative_target -q"
+  if [ "$suite_dir" = "$ROOT_DIR" ]; then
+    display="$PYTHON_BIN -m pytest $relative_target -q"
+  fi
+  if [ -n "$focused_maxfail" ]; then
+    command+=("--maxfail=$focused_maxfail")
+    display+=" --maxfail=$focused_maxfail"
+  fi
+
+  if [ -d "$suite_dir/src" ]; then
+    local pythonpath_value
+    pythonpath_value="$(python_path_with_src "$suite_dir/src")"
+    local focused_display="$display"
+    if [ "$suite_dir" = "$ROOT_DIR" ]; then
+      focused_display="PYTHONPATH=src $display"
+    else
+      focused_display="cd ${suite_dir#"$ROOT_DIR"/} && PYTHONPATH=src $PYTHON_BIN -m pytest $relative_target -q"
+      if [ -n "$focused_maxfail" ]; then
+        focused_display+=" --maxfail=$focused_maxfail"
+      fi
+    fi
+    run_check "focused: $target" "$suite_dir" "$focused_display" env PYTHONPATH="$pythonpath_value" "${command[@]}"
+  else
+    run_check "focused: $target" "$suite_dir" "$display" "${command[@]}"
   fi
 }
 
@@ -112,25 +287,21 @@ run_pytest_suite() {
     local pythonpath_value
     src_dir="$(cd "$suite_dir" && pwd)/src"
     pythonpath_value="$(python_path_with_src "$src_dir")"
-    commands_executed+=("$display")
-
-    echo
-    echo "==> $suite_name"
-    echo "    $display"
-
-    (cd "$suite_dir" && PYTHONPATH="$pythonpath_value" "$PYTHON_BIN" -m pytest tests)
-    local code=$?
-
-    if [ "$code" -eq 0 ]; then
-      check_results+=("PASS|$suite_name|$display|$code")
-    else
-      check_results+=("FAIL|$suite_name|$display|$code")
-      record_failure "$suite_name" "$display" "$code"
-    fi
+    run_check "$suite_name" "$suite_dir" "$display" env PYTHONPATH="$pythonpath_value" "$PYTHON_BIN" -m pytest tests
   else
     run_check "$suite_name" "$suite_dir" "cd $suite_dir && $PYTHON_BIN -m pytest tests" "$PYTHON_BIN" -m pytest tests
   fi
 }
+
+echo "AGGREGATE VALIDATION START"
+echo "Repository: $ROOT_DIR"
+echo "Python: $PYTHON_BIN"
+
+for target in "${normalized_focused_targets[@]}"; do
+  run_focused_target "$target"
+done
+
+run_check "structural validation" "$ROOT_DIR" "bash $STRUCTURAL_SCRIPT" bash "$STRUCTURAL_SCRIPT"
 
 mapfile -t test_dirs < <(
   find . -type d -name tests \
@@ -147,15 +318,8 @@ mapfile -t test_dirs < <(
 )
 
 if [ "${#test_dirs[@]}" -eq 0 ]; then
-  echo "Runner error: no pytest test directories discovered." >&2
-  exit 2
+  runner_error "no pytest test directories discovered."
 fi
-
-echo "AGGREGATE VALIDATION START"
-echo "Repository: $ROOT_DIR"
-echo "Python: $PYTHON_BIN"
-
-run_check "structural validation" "$ROOT_DIR" "bash $STRUCTURAL_SCRIPT" bash "$STRUCTURAL_SCRIPT"
 
 for test_dir in "${test_dirs[@]}"; do
   suite_dir="$(dirname "$test_dir")"
@@ -165,7 +329,6 @@ for test_dir in "${test_dirs[@]}"; do
   else
     suite_name="${suite_dir#./}"
   fi
-
   run_pytest_suite "$suite_dir" "$suite_name"
 done
 

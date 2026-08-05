@@ -1,0 +1,55 @@
+{
+  "source_revision": "visual-library-snapshot-v1:2026-07-30T00:00:00Z",
+  "cases": [
+    {
+      "name": "eligible",
+      "mutation": null,
+      "expected_group": "eligible"
+    },
+    {
+      "name": "role-mismatch",
+      "mutation": {
+        "path": ["compatibility_evidence", "purpose", "role_types"],
+        "value": ["teacher-model"]
+      },
+      "expected_group": "rejected",
+      "expected_reason": "visual-candidate-role-mismatch"
+    },
+    {
+      "name": "material-mismatch",
+      "mutation": {
+        "path": ["compatibility_evidence", "approved_use", "material_types"],
+        "value": ["slide-deck"]
+      },
+      "expected_group": "rejected",
+      "expected_reason": "visual-candidate-material-mismatch"
+    },
+    {
+      "name": "orientation-mismatch",
+      "mutation": {
+        "path": ["compatibility_evidence", "orientation", "orientation"],
+        "value": "portrait"
+      },
+      "expected_group": "rejected",
+      "expected_reason": "visual-candidate-orientation-mismatch"
+    },
+    {
+      "name": "manual-review",
+      "mutation": {
+        "path": ["compatibility_evidence", "freshness", "stale"],
+        "value": true
+      },
+      "expected_group": "manual_review",
+      "expected_reason": "manual-review-asset-compatibility-stale"
+    },
+    {
+      "name": "hard-rejection",
+      "mutation": {
+        "path": ["compatibility_evidence", "accessibility", "review_state"],
+        "value": "fail"
+      },
+      "expected_group": "rejected",
+      "expected_reason": "asset-accessibility-failed"
+    }
+  ]
+}
