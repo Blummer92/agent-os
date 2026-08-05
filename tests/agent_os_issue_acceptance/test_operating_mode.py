@@ -506,11 +506,43 @@ def test_byte_stable_round_trip():
 # --- authority preservation and side effects ---------------------------------
 
 
-def test_authority_never_broadened():
-    operational_state = state(merge_authorization=authority(AuthorizationState.NOT_AUTHORIZED))
+AUTHORITY_FIELDS = (
+    "implementation_authorization",
+    "ready_for_review_authorization",
+    "execution_authorization",
+    "merge_authorization",
+    "closure_authorization",
+    "external_write_authorization",
+)
+
+
+@pytest.mark.parametrize("field", AUTHORITY_FIELDS)
+def test_authority_never_broadened(field):
+    operational_state = state(**{field: authority(AuthorizationState.NOT_AUTHORIZED)})
     decision = evaluate_operating_mode_decision(operational_state, "release", environment())
-    assert decision.merge_authorization.state is AuthorizationState.NOT_AUTHORIZED
-    assert decision.merge_authorization == operational_state.merge_authorization.effective()
+    assert getattr(decision, field).state is AuthorizationState.NOT_AUTHORIZED
+    for projected in AUTHORITY_FIELDS:
+        assert getattr(decision, projected) == getattr(operational_state, projected).effective()
+
+
+@pytest.mark.parametrize("field", AUTHORITY_FIELDS)
+@pytest.mark.parametrize(
+    "mode", ["planning", "build", "draft-pr", "review", "release", None, "banana"]
+)
+def test_authority_preserved_for_stale_binding(field, mode):
+    operational_state = state(
+        **{
+            field: authority(
+                AuthorizationState.AUTHORIZED,
+                bound_base_sha=BASE_SHA,
+                observed_base_sha=MOVED_BASE_SHA,
+            )
+        }
+    )
+    decision = evaluate_operating_mode_decision(operational_state, mode, environment())
+    assert getattr(decision, field).state is AuthorizationState.STALE
+    for projected in AUTHORITY_FIELDS:
+        assert getattr(decision, projected) == getattr(operational_state, projected).effective()
 
 
 @pytest.mark.parametrize(
