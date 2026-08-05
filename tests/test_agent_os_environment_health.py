@@ -322,6 +322,79 @@ def test_build_evidence_fails_closed_when_a_check_emits_credential_material(
     assert "github_pat_11ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" not in dumped
 
 
+# --- --check repository-identity credential redaction (#892 review) --------
+
+CREDENTIAL_BEARING_EXPECTED_REMOTE = (
+    "https://example-user:example-secret@github.com/Blummer92/agent-os.git"
+)
+CREDENTIAL_BEARING_WRONG_REMOTE = (
+    "https://example-user:example-secret@github.com/Someone-Else/other-repo.git"
+)
+
+
+def test_check_repository_identity_cli_sanitizes_credential_bearing_expected_remote(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "credential-expected-repo"
+    _init_repo(target, CREDENTIAL_BEARING_EXPECTED_REMOTE, _env(tmp_path))
+    result = run_cli(target, "--check", "repository-identity")
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["passed"] is True
+    assert payload["detail"]["actual"] == "Blummer92/agent-os"
+    for secret in ("example-user", "example-secret", CREDENTIAL_BEARING_EXPECTED_REMOTE):
+        assert secret not in result.stdout
+        assert secret not in result.stderr
+
+
+def test_check_repository_identity_cli_reports_sanitized_identity_not_a_false_pass(
+    tmp_path: Path,
+) -> None:
+    """A credential-bearing *expected* remote must resolve to the exact
+    sanitized owner/repo pair -- never to a raw, credential-bearing string
+    that merely happens to satisfy a loose truthiness check."""
+    target = tmp_path / "credential-expected-repo-strict"
+    _init_repo(target, CREDENTIAL_BEARING_EXPECTED_REMOTE, _env(tmp_path))
+    result = run_cli(target, "--check", "repository-identity")
+    payload = json.loads(result.stdout)
+    assert payload == {
+        "name": "repository-identity",
+        "passed": True,
+        "detail": {"expected": health.EXPECTED_REPOSITORY, "actual": "Blummer92/agent-os"},
+    }
+
+
+def test_check_repository_identity_cli_passes_for_ordinary_credential_free_remote(
+    repo: Path,
+) -> None:
+    result = run_cli(repo, "--check", "repository-identity")
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["passed"] is True
+    assert payload["detail"]["actual"] == "Blummer92/agent-os"
+
+
+def test_check_repository_identity_cli_fails_closed_for_credential_bearing_wrong_remote(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "credential-wrong-repo"
+    _init_repo(target, CREDENTIAL_BEARING_WRONG_REMOTE, _env(tmp_path))
+    result = run_cli(target, "--check", "repository-identity")
+    assert result.returncode == 1
+    payload = json.loads(result.stdout)
+    assert payload["passed"] is False
+    for secret in ("example-user", "example-secret", CREDENTIAL_BEARING_WRONG_REMOTE):
+        assert secret not in result.stdout
+        assert secret not in result.stderr
+
+
+def test_redact_masks_https_userinfo_credentials() -> None:
+    tainted = {"note": "see https://example-user:example-secret@example.com/x/y"}
+    redacted, found = health._redact(tainted)
+    assert found is True
+    assert redacted["note"] == "[REDACTED]"
+
+
 # --- usage / malformed state --------------------------------------------
 
 
