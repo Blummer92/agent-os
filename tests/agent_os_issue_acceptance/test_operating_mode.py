@@ -122,7 +122,8 @@ def test_explicit_build_mode():
     )
     assert decision.outcome is OperatingModeOutcome.BUILT
     assert decision.maximum_permitted_stage is LifecycleStage.IMPLEMENTATION
-    assert decision.next_permitted_action == "push-and-open-draft-pr"
+    assert decision.next_permitted_action == "build"
+    assert "push-and-open-draft-pr" in decision.prohibited_actions
 
 
 def test_explicit_draft_pr_mode():
@@ -147,7 +148,7 @@ def test_explicit_release_mode():
     )
     assert decision.outcome is OperatingModeOutcome.RELEASED
     assert decision.maximum_permitted_stage is LifecycleStage.CLOSED
-    assert decision.next_permitted_action == "none"
+    assert decision.next_permitted_action == "merge"
     assert decision.prohibited_actions == ()
 
 
@@ -236,6 +237,96 @@ def test_build_for_terminal_state():
     assert "state.terminal" in decision.blocker_codes
 
 
+# --- permitted/prohibited action invariant -----------------------------------
+
+
+DEGRADED_STATES = (
+    ({"readiness": ReadinessState.BLOCKED}, OperatingModeOutcome.BLOCKED),
+    ({"freshness_state": FreshnessState.STALE}, OperatingModeOutcome.BLOCKED),
+    (
+        {
+            "issue_state": IssueState.CLOSED,
+            "lifecycle_stage": LifecycleStage.CLOSED,
+            "terminal_disposition": TerminalDisposition.COMPLETED,
+        },
+        OperatingModeOutcome.BLOCKED,
+    ),
+    ({"lifecycle_stage": LifecycleStage.MERGED}, OperatingModeOutcome.NEEDS_DECISION),
+)
+
+
+@pytest.mark.parametrize(
+    "mode", ["planning", "build", "draft-pr", "review", "release", None, "banana"]
+)
+@pytest.mark.parametrize(
+    "state_changes",
+    [
+        {},
+        {"lifecycle_stage": LifecycleStage.IMPLEMENTATION},
+        {"lifecycle_stage": LifecycleStage.DRAFT_PR},
+        {"lifecycle_stage": LifecycleStage.REVIEW},
+        {"implementation_authorization": authority(AuthorizationState.NOT_AUTHORIZED)},
+        {"ready_for_review_authorization": authority(AuthorizationState.NOT_AUTHORIZED)},
+        {"merge_authorization": authority(AuthorizationState.NOT_AUTHORIZED)},
+        {"closure_authorization": authority(AuthorizationState.NOT_AUTHORIZED)},
+    ]
+    + [changes for changes, _ in DEGRADED_STATES],
+)
+@pytest.mark.parametrize(
+    "environment_changes",
+    [
+        {},
+        {"push_state": EnvironmentCapabilityState.NOT_VERIFIED},
+        {
+            "local_execution_state": EnvironmentCapabilityState.NOT_VERIFIED,
+            "push_state": EnvironmentCapabilityState.NOT_VERIFIED,
+        },
+    ],
+)
+def test_next_permitted_action_is_never_prohibited(mode, state_changes, environment_changes):
+    decision = evaluate_operating_mode_decision(
+        state(**state_changes), mode, environment(**environment_changes)
+    )
+    assert decision.next_permitted_action not in decision.prohibited_actions
+
+
+def test_next_permitted_action_never_exceeds_the_permitted_ceiling():
+    decision = evaluate_operating_mode_decision(
+        state(lifecycle_stage=LifecycleStage.PLANNING), "build", environment()
+    )
+    assert decision.maximum_permitted_stage is LifecycleStage.IMPLEMENTATION
+    assert decision.next_permitted_action == "build"
+    assert decision.prohibited_actions == (
+        "close-issue",
+        "flip-ready-for-review",
+        "merge",
+        "push-and-open-draft-pr",
+    )
+
+
+def test_next_permitted_action_is_none_when_progress_reaches_the_ceiling():
+    decision = evaluate_operating_mode_decision(
+        state(lifecycle_stage=LifecycleStage.IMPLEMENTATION), "build", environment()
+    )
+    assert decision.maximum_permitted_stage is LifecycleStage.IMPLEMENTATION
+    assert decision.next_permitted_action == "none"
+
+
+# --- degraded operational states ---------------------------------------------
+
+
+@pytest.mark.parametrize("mode", ["planning", None, "banana", "complete"])
+@pytest.mark.parametrize("state_changes,expected", DEGRADED_STATES)
+def test_degraded_state_never_reports_planned(mode, state_changes, expected):
+    decision = evaluate_operating_mode_decision(state(**state_changes), mode, environment())
+    assert decision.requested_mode is RequestedMode.PLANNING
+    assert decision.outcome is not OperatingModeOutcome.PLANNED
+    assert decision.outcome is expected
+    assert decision.maximum_permitted_stage is LifecycleStage.PLANNING
+    assert decision.next_permitted_action == "resolve-issue-state"
+    assert decision.blocker_codes
+
+
 # --- mode defaulting and compatibility phrases -------------------------------
 
 
@@ -260,7 +351,7 @@ def test_compatibility_phrases_never_imply_release(phrase):
     )
     assert decision.requested_mode is RequestedMode.PLANNING
     assert decision.effective_mode is RequestedMode.PLANNING
-    assert decision.outcome is OperatingModeOutcome.PLANNED
+    assert decision.outcome is OperatingModeOutcome.NEEDS_DECISION
     assert decision.maximum_permitted_stage is LifecycleStage.PLANNING
     assert "compatibility.legacy-phrase-ignored" in decision.blocker_codes
 

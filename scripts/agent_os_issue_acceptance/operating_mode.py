@@ -628,11 +628,21 @@ def _advance_stages(
     return _done()
 
 
-def _next_permitted_action(stage_reached: LifecycleStage) -> str:
-    index = _STAGE_INDEX[stage_reached]
-    if index == len(_STAGE_ORDER) - 1:
+def _next_permitted_action(
+    stage_reached: LifecycleStage, highest_completed_stage: LifecycleStage
+) -> str:
+    """Return the single transition still permitted, anchored on real progress.
+
+    The candidate is the transition out of `highest_completed_stage`, capped by
+    `stage_reached` (the maximum permitted stage). Anchoring on the ceiling
+    itself would name the first transition *beyond* it -- exactly the action
+    `_prohibited_actions` forbids -- so a permitted action is returned only when
+    it lands at or below the ceiling, and `"none"` otherwise.
+    """
+    next_index = _STAGE_INDEX[highest_completed_stage] + 1
+    if next_index > _STAGE_INDEX[stage_reached]:
         return "none"
-    return _TRANSITION_ACTION[_STAGE_ORDER[index + 1]]
+    return _TRANSITION_ACTION[_STAGE_ORDER[next_index]]
 
 
 def _prohibited_actions(stage_reached: LifecycleStage) -> tuple[str, ...]:
@@ -698,9 +708,7 @@ def evaluate_operating_mode_decision(
         state_reason = _STATE_OUTCOME_REASON[operational_state.outcome]
         reasons.add(state_reason)
         blockers.add(state_reason)
-        if resolved_mode is RequestedMode.PLANNING:
-            outcome = OperatingModeOutcome.PLANNED
-        elif operational_state.outcome is OperationalOutcome.NEEDS_DECISION:
+        if operational_state.outcome is OperationalOutcome.NEEDS_DECISION:
             outcome = OperatingModeOutcome.NEEDS_DECISION
         else:
             outcome = OperatingModeOutcome.BLOCKED
@@ -733,7 +741,9 @@ def evaluate_operating_mode_decision(
         next_action = "resolve-issue-state"
         prohibited = _prohibited_actions(LifecycleStage.PLANNING)
     else:
-        next_action = _next_permitted_action(stage_reached)
+        next_action = _next_permitted_action(
+            stage_reached, operational_state.lifecycle_stage
+        )
         prohibited = _prohibited_actions(stage_reached)
 
     supplied_authorization_evidence_ids = tuple(
