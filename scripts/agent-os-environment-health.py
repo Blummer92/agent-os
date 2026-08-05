@@ -96,9 +96,14 @@ def _canonicalize_repository_remote(origin_url: str) -> str | None:
             parsed = urlsplit(remote)
         except ValueError:
             return None
-        if parsed.scheme not in {"https", "ssh"} or parsed.hostname != "github.com":
+        try:
+            hostname = parsed.hostname
+            port = parsed.port
+        except ValueError:
             return None
-        if parsed.port not in {None, 22, 443}:
+        if parsed.scheme not in {"https", "ssh"} or hostname != "github.com":
+            return None
+        if port not in {None, 22, 443}:
             return None
         owner_repo = parsed.path.lstrip("/")
 

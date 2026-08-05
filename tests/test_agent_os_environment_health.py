@@ -395,6 +395,24 @@ def test_redact_masks_https_userinfo_credentials() -> None:
     assert redacted["note"] == "[REDACTED]"
 
 
+def test_check_repository_identity_cli_fails_closed_for_malformed_port(
+    tmp_path: Path,
+) -> None:
+    remote = "https://github.com:not-a-port/Blummer92/agent-os.git"
+    target = tmp_path / "malformed-port-repo"
+    _init_repo(target, remote, _env(tmp_path))
+
+    result = run_cli(target, "--check", "repository-identity")
+
+    assert result.returncode == 1
+    assert "Traceback" not in result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["passed"] is False
+    assert payload["detail"]["actual"] is None
+    assert remote not in result.stdout
+    assert remote not in result.stderr
+
+
 # --- usage / malformed state --------------------------------------------
 
 
