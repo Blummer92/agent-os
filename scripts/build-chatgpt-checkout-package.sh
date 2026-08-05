@@ -9,6 +9,10 @@
 # canonical fetch-retry contract from scripts/verify-repo-state-contract.md
 # (issue #621).
 #
+# Packaged paths, modes, and bytes are read from the selected commit object,
+# never from the mutable worktree, so the manifest SHA and the archive contents
+# always describe the same commit.
+#
 # It never commits, pushes, opens/edits a PR, merges, closes issues, modifies
 # labels, invokes providers, or performs any other GitHub-lifecycle or
 # external-system write. Every authority field in its evidence is false.
@@ -34,6 +38,7 @@ readonly SCHEMA_VERSION="1"
 readonly COMMAND_VERSION="build-chatgpt-checkout-package.v1"
 readonly PACKAGE_FORMAT="zip"
 readonly MAX_REASON_CHARS=200
+readonly MANIFEST_ENTRY_NAME="agent-os-chatgpt-package-manifest.json"
 
 # Tracked files matching these patterns are excluded even though Git tracked
 # them, as defense in depth against credentials or transient artifacts that
@@ -50,21 +55,6 @@ readonly SCRIPT_DIR
 readonly PREPARE_SCRIPT="$SCRIPT_DIR/prepare-issue-worktree.sh"
 
 log() { printf 'build-chatgpt-checkout-package: %s\n' "$*" >&2; }
-
-sanitize() {
-  printf '%s' "$1" | tr -d '[:cntrl:]"\\' | cut -c "1-$MAX_REASON_CHARS"
-}
-
-json_array() {
-  local first=1 item
-  printf '['
-  for item in "$@"; do
-    [ "$first" -eq 1 ] || printf ', '
-    printf '"%s"' "$item"
-    first=0
-  done
-  printf ']'
-}
 
 # --- Evidence state ----------------------------------------------------------
 
@@ -94,8 +84,10 @@ record_side_effect() { SIDE_EFFECTS+=("$1"); }
 #     command's to delete, clean or dirty.
 #   - A disposable worktree this command created is removed only when
 #     ownership is established (its path lives under the disposable root
-#     this run created) and it is clean. A dirty or unowned disposable
-#     worktree is preserved and reported on stderr rather than discarded.
+#     this run created) and it is verifiably clean, including untracked
+#     files. Anything else -- tracked changes, untracked data, an unreadable
+#     status, or a refused removal -- preserves the worktree and reports it
+#     on stderr rather than discarding data this command did not create.
 cleanup_worktree() {
   if [ "$WORKTREE_ROOT_PROVIDED" -eq 1 ]; then
     log "cleanup: preserved operator-supplied worktree root (not this command's to remove): $WORKTREE_ROOT"
@@ -116,17 +108,19 @@ cleanup_worktree() {
     return 0
   fi
   local dirty status
-  dirty="$(git -C "$WORKTREE_PATH" status --porcelain --untracked-files=no 2>/dev/null)"
+  dirty="$(git -C "$WORKTREE_PATH" status --porcelain 2>/dev/null)"
   status=$?
   if [ "$status" -ne 0 ]; then
     log "cleanup: unable to verify disposable worktree cleanliness; preserved without removal: $WORKTREE_PATH"
     return 0
   fi
   if [ -n "$dirty" ]; then
-    log "cleanup: disposable worktree has uncommitted tracked changes; preserved without removal: $WORKTREE_PATH"
+    log "cleanup: disposable worktree has uncommitted or untracked changes; preserved without removal: $WORKTREE_PATH"
     return 0
   fi
-  if git worktree remove --force "$WORKTREE_PATH" >/dev/null 2>&1; then
+  # No --force: Git re-checks for modified or untracked files and refuses,
+  # so anything appearing after the status check above still survives.
+  if git worktree remove "$WORKTREE_PATH" >/dev/null 2>&1; then
     rmdir "$WORKTREE_ROOT" >/dev/null 2>&1
     log "cleanup: disposable worktree removed: $WORKTREE_PATH"
   else
@@ -143,42 +137,65 @@ if [ "${BUILD_CHATGPT_PACKAGE_TEST_ONLY:-0}" = "1" ]; then
   return 0 2>/dev/null || exit 0
 fi
 
+# Every controlled outcome, success or failure, leaves exactly one complete
+# JSON object on stdout and nothing else. Values reach the serializer through
+# argv -- never through string interpolation into JSON syntax -- so a
+# repository, ref, SHA, output path, worktree path, base ref, status, or
+# reason containing quotes, backslashes, newlines, or shell metacharacters is
+# escaped by json.dumps instead of corrupting the document.
 finish() {
-  local code="$1" status="$2" reason
-  reason="$(sanitize "$3")"
+  local code="$1" status="$2" reason="$3"
 
-  local issue_json="null"
-  case "$ISSUE" in
-    ''|*[!0-9]*) : ;;
-    *) issue_json="$ISSUE" ;;
-  esac
+  python3 - "$SCHEMA" "$SCHEMA_VERSION" "$status" "$REPOSITORY" "$ISSUE" \
+    "$REQUESTED_REF" "$RESOLVED_REF" "$RESOLVED_SHA" "$BASE_REF" "$BASE_SHA" \
+    "$CHECKOUT_MODE" "$WORKING_TREE_CLEAN" "$PACKAGE_FORMAT" \
+    "$INCLUDED_GIT_METADATA" "$FILE_COUNT" "$ARCHIVE_SHA256" "$COMMAND_VERSION" \
+    "$OUTPUT" "$reason" "$MAX_REASON_CHARS" \
+    ${SIDE_EFFECTS[@]+"${SIDE_EFFECTS[@]}"} <<'PYEOF'
+import json
+import sys
 
-  printf '{\n'
-  printf '  "schema_name": "%s",\n' "$SCHEMA"
-  printf '  "schema_version": "%s",\n' "$SCHEMA_VERSION"
-  printf '  "status": "%s",\n' "$status"
-  printf '  "repository": "%s",\n' "$REPOSITORY"
-  printf '  "issue_number": %s,\n' "$issue_json"
-  printf '  "requested_ref": "%s",\n' "$REQUESTED_REF"
-  printf '  "resolved_ref": "%s",\n' "$RESOLVED_REF"
-  printf '  "resolved_sha": "%s",\n' "$RESOLVED_SHA"
-  printf '  "base_ref": "%s",\n' "$BASE_REF"
-  printf '  "base_sha": "%s",\n' "$BASE_SHA"
-  printf '  "checkout_mode": "%s",\n' "$CHECKOUT_MODE"
-  printf '  "working_tree_clean": %s,\n' "$WORKING_TREE_CLEAN"
-  printf '  "package_format": "%s",\n' "$PACKAGE_FORMAT"
-  printf '  "included_git_metadata": %s,\n' "$INCLUDED_GIT_METADATA"
-  printf '  "file_count": %s,\n' "$FILE_COUNT"
-  printf '  "archive_sha256": "%s",\n' "$ARCHIVE_SHA256"
-  printf '  "created_by_command_version": "%s",\n' "$COMMAND_VERSION"
-  printf '  "side_effects_performed": %s,\n' "$(json_array "${SIDE_EFFECTS[@]:-}")"
-  printf '  "implementation_authorized": false,\n'
-  printf '  "execution_authorized": false,\n'
-  printf '  "github_writes_authorized": false,\n'
-  printf '  "merge_authorized": false,\n'
-  printf '  "output_path": "%s",\n' "$OUTPUT"
-  printf '  "reason": "%s"\n' "$reason"
-  printf '}\n'
+(schema, schema_version, status, repository, issue, requested_ref, resolved_ref,
+ resolved_sha, base_ref, base_sha, checkout_mode, working_tree_clean,
+ package_format, included_git_metadata, file_count, archive_sha256,
+ command_version, output_path, reason, max_reason_chars,
+ *side_effects) = sys.argv[1:]
+
+
+def bounded(text, limit):
+    """Drop control characters and cap length. Quotes and backslashes are kept
+    verbatim: escaping them is the serializer's job, not a lossy pre-pass's."""
+    return "".join(ch for ch in text if ch >= " " and ch != "\x7f")[:limit]
+
+
+evidence = {
+    "schema_name": schema,
+    "schema_version": schema_version,
+    "status": status,
+    "repository": repository,
+    "issue_number": int(issue) if issue.isdigit() else None,
+    "requested_ref": requested_ref,
+    "resolved_ref": resolved_ref,
+    "resolved_sha": resolved_sha,
+    "base_ref": base_ref,
+    "base_sha": base_sha,
+    "checkout_mode": checkout_mode,
+    "working_tree_clean": working_tree_clean == "true",
+    "package_format": package_format,
+    "included_git_metadata": included_git_metadata == "true",
+    "file_count": int(file_count) if file_count.isdigit() else 0,
+    "archive_sha256": archive_sha256,
+    "created_by_command_version": command_version,
+    "side_effects_performed": side_effects,
+    "implementation_authorized": False,
+    "execution_authorized": False,
+    "github_writes_authorized": False,
+    "merge_authorized": False,
+    "output_path": output_path,
+    "reason": bounded(reason, int(max_reason_chars)),
+}
+sys.stdout.write(json.dumps(evidence, indent=2) + "\n")
+PYEOF
 
   log "STATUS=$status ref=${REQUESTED_REF:-none} sha=${RESOLVED_SHA:-none} output=${OUTPUT:-none}"
   log "reason: $reason"
@@ -201,7 +218,8 @@ Options:
   --repository <owner/name> Expected repository identity of origin. Required.
   --issue <n>               Agent OS issue number. Required.
   --ref <ref>               Branch, tag, or exact 40-char commit SHA. Required.
-  --output <path>           Absolute output .zip path. Must not already exist.
+  --output <path>           Absolute output .zip path. Published atomically and
+                            never replaced: any existing destination fails.
   --worktree-root <path>    Reuse an existing prepared worktree root instead of
                             a disposable one. Advanced/testing use.
   --base-ref <branch>       Base branch for base_ref/base_sha evidence.
@@ -211,7 +229,7 @@ Options:
 Statuses: built | blocked | unavailable | manual-review
 Exit codes: 0 built, 2 usage, 3 dirty, 4 fetch, 5 ref missing,
 6 worktree, 7 conflict, 8 base ref, 9 evidence, 10 output collision,
-11 tracked symlink rejected.
+11 unsupported tracked Git mode (symlink, gitlink, or unknown).
 USAGE
 }
 
@@ -248,12 +266,27 @@ case "$OUTPUT" in
   *.zip) : ;;
   *) finish "$EXIT_USAGE" blocked "--output must end in .zip: $OUTPUT" ;;
 esac
-[ ! -e "$OUTPUT" ] ||
-  finish "$EXIT_OUTPUT" blocked \
-    "--output already exists; no replacement mode is authorized: $OUTPUT"
 
+# No destination-existence pre-check is consulted here: it would be a race
+# against the later write, and it reads a dangling symlink as "absent".
+# Collision is decided by the exclusive, no-replace publication below.
 output_dir="$(dirname "$OUTPUT")"
 [ -d "$output_dir" ] || finish "$EXIT_USAGE" blocked "--output parent directory does not exist: $output_dir"
+
+# Bounded test-only integrity controls. Both are inert unless this explicit
+# guard is set, and only the two predefined action names below are accepted --
+# no command, path, or argument is ever taken from the environment. They exist
+# so the drift and archive-verification regression tests execute the real
+# production branches instead of standing in for them.
+TEST_ACTION=""
+if [ "${BUILD_CHATGPT_PACKAGE_TEST_HOOKS:-0}" = "1" ]; then
+  case "${BUILD_CHATGPT_PACKAGE_TEST_ACTION:-}" in
+    '') : ;;
+    drift-head|tamper-archive) TEST_ACTION="$BUILD_CHATGPT_PACKAGE_TEST_ACTION" ;;
+    *) finish "$EXIT_USAGE" blocked "unsupported test-only action requested" ;;
+  esac
+fi
+readonly TEST_ACTION
 
 [ -x "$PREPARE_SCRIPT" ] || [ -f "$PREPARE_SCRIPT" ] ||
   finish "$EXIT_EVIDENCE" unavailable "reused checkout-preparation script is missing: $PREPARE_SCRIPT"
@@ -308,6 +341,12 @@ record_side_effect "worktree-prepared"
 
 [ -d "$WORKTREE_PATH" ] || finish "$EXIT_WORKTREE" unavailable "prepared worktree path is missing: $WORKTREE_PATH"
 
+if [ "$TEST_ACTION" = "drift-head" ]; then
+  log "test-only control: moving prepared worktree HEAD back one commit before exact-head verification"
+  git -C "$WORKTREE_PATH" checkout --quiet --detach HEAD~1 >/dev/null 2>&1 ||
+    finish "$EXIT_EVIDENCE" unavailable "test-only control could not move the prepared worktree HEAD"
+fi
+
 actual_head="$(git -C "$WORKTREE_PATH" rev-parse HEAD 2>/dev/null)" ||
   finish "$EXIT_EVIDENCE" unavailable "unable to read HEAD of prepared worktree"
 [ "$actual_head" = "$RESOLVED_SHA" ] ||
@@ -333,180 +372,296 @@ BUILD_OUTPUT="$(python3 - "$WORKTREE_PATH" "$OUTPUT" "$SCHEMA" "$SCHEMA_VERSION"
     "$REPOSITORY" "$ISSUE" "$REQUESTED_REF" "$RESOLVED_REF" "$RESOLVED_SHA" \
     "$BASE_REF" "$BASE_SHA" "$CHECKOUT_MODE" "$WORKING_TREE_CLEAN" \
     "$PACKAGE_FORMAT" "$INCLUDED_GIT_METADATA" "$COMMAND_VERSION" \
-    "${EXCLUDE_PATTERNS[@]}" <<'PYEOF'
+    "$TEST_ACTION" "${EXCLUDE_PATTERNS[@]}" <<'PYEOF'
 import fnmatch
 import hashlib
 import json
+import os
 import subprocess
 import sys
+import tempfile
 import zipfile
 
 (worktree, output, schema, schema_version, repository, issue, requested_ref,
  resolved_ref, resolved_sha, base_ref, base_sha, checkout_mode,
  working_tree_clean, package_format, included_git_metadata,
- command_version, *exclude_patterns) = sys.argv[1:]
+ command_version, test_action, *exclude_patterns) = sys.argv[1:]
 
-MODE_CATEGORY = {
-    "100644": "file",
-    "100755": "executable",
-    "120000": "symlink",
-    "160000": "gitlink",
-}
+MANIFEST_ENTRY = "agent-os-chatgpt-package-manifest.json"
+
+# Internal exit codes. The caller maps each back onto the command's documented
+# exit codes; no new command-level exit code is introduced.
+FAILED = 1
+MODE_REJECTED = 3
+OUTPUT_COLLISION = 4
+RESERVED_PATH = 5
+
+# Only these two Git modes describe a regular file that can be packaged.
+# Everything else -- symlinks, gitlinks/submodules, and any mode Git may report
+# in future -- is rejected before any read, so a symlink is never dereferenced
+# and a gitlink directory is never opened as a file.
+MODE_CATEGORY = {"100644": "file", "100755": "executable"}
+MODE_KIND = {"120000": "symlink", "160000": "gitlink"}
 UNIX_MODE = {"file": 0o644, "executable": 0o755}
+FIXED_DATE_TIME = (1980, 1, 1, 0, 0, 0)
 
-# Tracked files only, with their Git mode: this is exactly what Git considers
-# "in the repository" at this commit, so untracked local caches, editor
-# state, and ignored credentials are excluded by construction rather than
-# re-derived here. `ls-files -s` reports mode without ever resolving a
-# symlink's target, so no tracked symlink is dereferenced by this scan.
-raw = subprocess.run(
-    ["git", "-C", worktree, "ls-files", "-s", "-z"],
-    check=True, capture_output=True,
-).stdout.split(b"\0")
-tracked = []
-for entry in raw:
-    if not entry:
-        continue
-    meta, path_bytes = entry.split(b"\t", 1)
-    mode = meta.split()[0].decode("ascii")
-    tracked.append((path_bytes.decode("utf-8"), MODE_CATEGORY.get(mode, "unknown")))
 
-def is_excluded(path):
-    return any(fnmatch.fnmatch(path, pat) for pat in exclude_patterns)
+def fail(message, code=FAILED):
+    print(f"build-chatgpt-checkout-package: {message}", file=sys.stderr)
+    sys.exit(code)
 
-included = sorted((p, cat) for p, cat in tracked if not is_excluded(p))
-excluded = sorted(p for p, _cat in tracked if is_excluded(p))
-for path in excluded:
-    print(f"build-chatgpt-checkout-package: excluding tracked path {path}", file=sys.stderr)
 
-# Tracked symlinks are rejected outright rather than dereferenced or
-# silently dropped: their target may resolve outside the worktree, and
-# reading through them would not be "the repository at this commit".
-symlinks = [p for p, cat in included if cat == "symlink"]
-if symlinks:
-    print(json.dumps({"error": "tracked_symlink_rejected", "paths": symlinks}))
-    sys.exit(3)
+def git(*args):
+    return subprocess.run(["git", "-C", worktree, *args], capture_output=True)
 
-# Deterministic semantic digest over [canonical_path, mode_category,
-# byte_size, sha256(content)] for every included file, independent of ZIP
-# compression/timestamp/host details (determinism boundary: see
-# scripts/build-chatgpt-checkout-package.md). manifest.json is excluded from
-# its own digest to avoid a circular self-reference.
-digest = hashlib.sha256()
-sizes = {}
-for path, category in included:
-    with open(f"{worktree}/{path}", "rb") as fh:
-        data = fh.read()
-    file_sha = hashlib.sha256(data).hexdigest()
-    sizes[path] = len(data)
+
+def write_entry(zf, path, category, data):
+    info = zipfile.ZipInfo(path, date_time=FIXED_DATE_TIME)
+    info.compress_type = zipfile.ZIP_DEFLATED
+    info.external_attr = UNIX_MODE[category] << 16
+    zf.writestr(info, data)
+
+
+def digest_entry(digest, path, category, data):
+    """One [canonical_path, mode_category, byte_size, sha256(content)] tuple."""
     digest.update(path.encode("utf-8"))
     digest.update(b"\0")
     digest.update(category.encode("utf-8"))
     digest.update(b"\0")
     digest.update(str(len(data)).encode("utf-8"))
     digest.update(b"\0")
-    digest.update(file_sha.encode("utf-8"))
+    digest.update(hashlib.sha256(data).hexdigest().encode("utf-8"))
     digest.update(b"\n")
-archive_sha256 = digest.hexdigest()
 
-manifest = {
-    "schema_name": schema,
-    "schema_version": schema_version,
-    "repository": repository,
-    "issue_number": int(issue),
-    "requested_ref": requested_ref,
-    "resolved_ref": resolved_ref,
-    "resolved_sha": resolved_sha,
-    "base_ref": base_ref,
-    "base_sha": base_sha,
-    "checkout_mode": checkout_mode,
-    "working_tree_clean": working_tree_clean == "true",
-    "package_format": package_format,
-    "included_git_metadata": included_git_metadata == "true",
-    "file_count": len(included),
-    "archive_sha256": archive_sha256,
-    "created_by_command_version": command_version,
-    "side_effects_performed": ["worktree-prepared", "archive-written"],
-    "implementation_authorized": False,
-    "execution_authorized": False,
-    "github_writes_authorized": False,
-    "merge_authorized": False,
-}
-manifest_bytes = json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8") + b"\n"
 
-FIXED_DATE_TIME = (1980, 1, 1, 0, 0, 0)
+# --- The selected commit object, not the worktree, is authoritative --------
+# Re-verify that RESOLVED_SHA still names a commit, then take every packaged
+# path, mode, and byte from that object. Nothing below reads a worktree file,
+# so a tracked file edited after the clean-state check above can neither reach
+# the archive nor change the digest the manifest records.
+head = git("rev-parse", "--verify", "--quiet", f"{resolved_sha}^{{commit}}")
+if head.returncode != 0 or head.stdout.decode("ascii", "replace").strip() != resolved_sha:
+    fail(f"resolved commit is not present as a commit object: {resolved_sha}")
 
-def write_entry(zf, path, category, data):
-    info = zipfile.ZipInfo(path, date_time=FIXED_DATE_TIME)
-    info.compress_type = zipfile.ZIP_DEFLATED
-    info.external_attr = (UNIX_MODE[category] << 16)
-    zf.writestr(info, data)
+# `ls-tree` walks the commit's own tree. `ls-files` would report the index of a
+# mutable worktree instead, and no mode here is resolved through a symlink.
+listing = git("ls-tree", "-r", "-z", "--full-tree", resolved_sha)
+if listing.returncode != 0:
+    fail(f"unable to enumerate the tree of {resolved_sha}")
 
-included_paths = [p for p, _cat in included]
-category_by_path = dict(included)
+tracked = []
+for record in listing.stdout.split(b"\0"):
+    if not record:
+        continue
+    meta, path_bytes = record.split(b"\t", 1)
+    mode, _obj_type, oid = meta.decode("ascii").split()
+    tracked.append((path_bytes.decode("utf-8"), mode, oid))
 
-with zipfile.ZipFile(output, "w", allowZip64=True) as zf:
-    for path, category in included:
-        with open(f"{worktree}/{path}", "rb") as fh:
-            write_entry(zf, path, category, fh.read())
-    write_entry(zf, "agent-os-chatgpt-package-manifest.json", "file", manifest_bytes)
+# Mode inspection precedes exclusion filtering, so an unsupported entry is
+# rejected even when its path matches an exclusion pattern -- a tracked symlink
+# is never silently dropped where the contract says it must be refused.
+rejected = [
+    {"path": path, "mode": mode, "kind": MODE_KIND.get(mode, "unsupported-mode")}
+    for path, mode, _oid in tracked
+    if mode not in MODE_CATEGORY
+]
+if rejected:
+    print(json.dumps({"error": "tracked_mode_rejected", "entries": rejected}))
+    sys.exit(MODE_REJECTED)
 
-# Verify the completed archive before reporting success: reopen it, and
-# confirm entry count and recomputed semantic digest match the manifest.
-with zipfile.ZipFile(output) as zf:
-    bad = zf.testzip()
-    if bad is not None:
-        print(f"corrupt entry in archive: {bad}", file=sys.stderr)
-        sys.exit(1)
-    names = set(zf.namelist())
-    expected = set(included_paths) | {"agent-os-chatgpt-package-manifest.json"}
-    if names != expected:
-        print("archive contents do not match the intended file set", file=sys.stderr)
-        sys.exit(1)
-    with zf.open("agent-os-chatgpt-package-manifest.json") as fh:
-        stored_manifest = json.load(fh)
-    if stored_manifest != manifest:
-        print("stored manifest does not match computed manifest", file=sys.stderr)
-        sys.exit(1)
-    verify_digest = hashlib.sha256()
-    for path in sorted(included_paths):
-        with zf.open(path) as fh:
-            data = fh.read()
-        file_sha = hashlib.sha256(data).hexdigest()
-        category = category_by_path[path]
-        verify_digest.update(path.encode("utf-8"))
-        verify_digest.update(b"\0")
-        verify_digest.update(category.encode("utf-8"))
-        verify_digest.update(b"\0")
-        verify_digest.update(str(len(data)).encode("utf-8"))
-        verify_digest.update(b"\0")
-        verify_digest.update(file_sha.encode("utf-8"))
-        verify_digest.update(b"\n")
-    if verify_digest.hexdigest() != archive_sha256:
-        print("post-write archive digest does not match recorded archive_sha256", file=sys.stderr)
-        sys.exit(1)
+
+def is_excluded(path):
+    return any(fnmatch.fnmatch(path, pat) for pat in exclude_patterns)
+
+
+included = sorted(
+    (path, MODE_CATEGORY[mode], oid)
+    for path, mode, oid in tracked
+    if not is_excluded(path)
+)
+for path in sorted(p for p, _m, _o in tracked if is_excluded(p)):
+    print(f"build-chatgpt-checkout-package: excluding tracked path {path}", file=sys.stderr)
+
+# The generated manifest owns this archive pathname. A commit tracking it would
+# produce two ZIP entries with the same name -- which ZIP permits and consumers
+# resolve inconsistently.
+if any(path == MANIFEST_ENTRY for path, _c, _o in included):
+    fail(f"selected commit tracks the reserved manifest pathname: {MANIFEST_ENTRY}", RESERVED_PATH)
+
+included_paths = [path for path, _c, _o in included]
+category_by_path = {path: category for path, category, _o in included}
+
+# One `cat-file --batch` process serves every blob read. Requests and responses
+# are interleaved one object at a time, so neither pipe can fill while the other
+# side waits, regardless of how many files the commit tracks.
+batch = subprocess.Popen(
+    ["git", "-C", worktree, "cat-file", "--batch"],
+    stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+)
+
+
+def read_blob(oid):
+    batch.stdin.write(oid.encode("ascii") + b"\n")
+    batch.stdin.flush()
+    header = batch.stdout.readline().split()
+    if len(header) != 3 or header[1] != b"blob":
+        fail(f"object {oid} is not a readable blob in {resolved_sha}")
+    size = int(header[2])
+    data = batch.stdout.read(size)
+    batch.stdout.read(1)
+    if len(data) != size:
+        fail(f"short read for blob {oid} in {resolved_sha}")
+    return data
+
+
+def tamper_temporary_archive(path):
+    """Test-only control: rewrite the temporary archive with one payload entry's
+    bytes changed, keeping every CRC valid so zipfile's own integrity check
+    still passes. What must catch this is the production reopen-and-recompute
+    verification below."""
+    with zipfile.ZipFile(path) as zf:
+        entries = [(info, zf.read(info.filename)) for info in zf.infolist()]
+    changed = False
+    with zipfile.ZipFile(path, "w", allowZip64=True) as zf:
+        for info, data in entries:
+            if not changed and info.filename != MANIFEST_ENTRY:
+                data += b"tampered-by-test-control\n"
+                changed = True
+            zf.writestr(info, data)
+    print("build-chatgpt-checkout-package: test-only control tampered with the "
+          "temporary archive", file=sys.stderr)
+
+
+def verify_archive(path, manifest, archive_sha256):
+    """Reopen the finished archive and re-derive everything its manifest claims."""
+    with zipfile.ZipFile(path) as zf:
+        bad = zf.testzip()
+        if bad is not None:
+            fail(f"corrupt entry in archive: {bad}")
+        names = zf.namelist()
+        if len(names) != len(set(names)):
+            fail("archive contains duplicate entry names")
+        if set(names) != set(included_paths) | {MANIFEST_ENTRY}:
+            fail("archive contents do not match the intended file set")
+        with zf.open(MANIFEST_ENTRY) as fh:
+            stored_manifest = json.load(fh)
+        if stored_manifest != manifest:
+            fail("stored manifest does not match computed manifest")
+        verify_digest = hashlib.sha256()
+        for entry_path in sorted(included_paths):
+            digest_entry(
+                verify_digest, entry_path, category_by_path[entry_path], zf.read(entry_path)
+            )
+        if verify_digest.hexdigest() != archive_sha256:
+            fail("post-write archive digest does not match recorded archive_sha256")
+
+
+# --- Write privately, verify, then publish with no chance of replacement ---
+# The archive is built under a private 0600 temporary name in the destination
+# directory and only then linked into place. os.link() never follows or
+# overwrites its destination, so an existing file, directory, symlink, or
+# dangling symlink fails with EEXIST and a symlink's target is left untouched.
+tmp_fd, tmp_path = tempfile.mkstemp(
+    dir=os.path.dirname(output) or ".",
+    prefix=".agent-os-chatgpt-package.",
+    suffix=".zip.tmp",
+)
+os.close(tmp_fd)
+
+try:
+    os.chmod(tmp_path, 0o600)
+
+    # Each blob is read exactly once and feeds both the digest and the archive
+    # entry, so the manifest SHA and the packaged bytes cannot describe
+    # different content.
+    digest = hashlib.sha256()
+    with zipfile.ZipFile(tmp_path, "w", allowZip64=True) as zf:
+        for path, category, oid in included:
+            data = read_blob(oid)
+            digest_entry(digest, path, category, data)
+            write_entry(zf, path, category, data)
+        archive_sha256 = digest.hexdigest()
+
+        manifest = {
+            "schema_name": schema,
+            "schema_version": schema_version,
+            "repository": repository,
+            "issue_number": int(issue),
+            "requested_ref": requested_ref,
+            "resolved_ref": resolved_ref,
+            "resolved_sha": resolved_sha,
+            "base_ref": base_ref,
+            "base_sha": base_sha,
+            "checkout_mode": checkout_mode,
+            "working_tree_clean": working_tree_clean == "true",
+            "package_format": package_format,
+            "included_git_metadata": included_git_metadata == "true",
+            "file_count": len(included),
+            "archive_sha256": archive_sha256,
+            "created_by_command_version": command_version,
+            "side_effects_performed": ["worktree-prepared", "archive-written"],
+            "implementation_authorized": False,
+            "execution_authorized": False,
+            "github_writes_authorized": False,
+            "merge_authorized": False,
+        }
+        manifest_bytes = json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+        write_entry(zf, MANIFEST_ENTRY, "file", manifest_bytes)
+
+    batch.stdin.close()
+    batch.wait()
+
+    if test_action == "tamper-archive":
+        tamper_temporary_archive(tmp_path)
+
+    verify_archive(tmp_path, manifest, archive_sha256)
+
+    try:
+        os.link(tmp_path, output)
+    except FileExistsError:
+        print(json.dumps({"error": "output_exists", "path": output}))
+        sys.exit(OUTPUT_COLLISION)
+    except OSError as exc:
+        fail(f"unable to publish the archive to {output}: {exc.strerror}")
+finally:
+    # Drops the temporary name after a successful link, and leaves nothing
+    # behind on any controlled failure.
+    if os.path.lexists(tmp_path):
+        os.unlink(tmp_path)
 
 print(json.dumps({"file_count": len(included), "archive_sha256": archive_sha256}))
 PYEOF
 )"
 build_exit=$?
 
-if [ "$build_exit" -eq 3 ]; then
-  symlink_paths="$(printf '%s' "$BUILD_OUTPUT" | python3 -c '
+case "$build_exit" in
+  0) : ;;
+  3)
+    mode_summary="$(printf '%s' "$BUILD_OUTPUT" | python3 -c '
 import json, sys
 try:
     data = json.load(sys.stdin)
 except Exception:
     data = {}
-print(", ".join(data.get("paths", [])))
+print(", ".join(
+    "{path} ({kind}, mode {mode})".format(**entry) for entry in data.get("entries", [])
+))
 ' 2>/dev/null)"
-  finish "$EXIT_SYMLINK" blocked \
-    "tracked symlink(s) rejected without dereferencing: $symlink_paths"
-fi
-
-if [ "$build_exit" -ne 0 ]; then
-  finish "$EXIT_EVIDENCE" unavailable "packaging or archive verification failed: see stderr above"
-fi
+    finish "$EXIT_SYMLINK" blocked \
+      "tracked entries rejected without dereferencing: $mode_summary"
+    ;;
+  4)
+    finish "$EXIT_OUTPUT" blocked \
+      "--output already exists; no replacement mode is authorized: $OUTPUT"
+    ;;
+  5)
+    finish "$EXIT_EVIDENCE" blocked \
+      "selected commit tracks the reserved manifest pathname $MANIFEST_ENTRY_NAME"
+    ;;
+  *)
+    finish "$EXIT_EVIDENCE" unavailable "packaging or archive verification failed: see stderr above"
+    ;;
+esac
 
 FILE_COUNT="$(printf '%s' "$BUILD_OUTPUT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["file_count"])')"
 ARCHIVE_SHA256="$(printf '%s' "$BUILD_OUTPUT" | python3 -c 'import json,sys; print(json.load(sys.stdin)["archive_sha256"])')"
