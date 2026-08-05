@@ -437,11 +437,19 @@ def test_candidate_versions_do_not_convert_compatibility_records() -> None:
 
 
 @pytest.mark.parametrize(
-    "contract_version",
-    [None, 2, "curriculum-visual-asset-candidates-v3"],
+    ("contract_version", "expected_reason"),
+    [
+        (None, "handoff-wrong-type"),
+        (2, "handoff-wrong-type"),
+        (
+            "curriculum-visual-asset-candidates-v3",
+            "handoff-version-unsupported",
+        ),
+    ],
 )
 def test_candidate_contract_version_fails_closed(
     contract_version: object,
+    expected_reason: str,
 ) -> None:
     result = filter_approved_visual_candidates(
         _plan(),
@@ -452,10 +460,7 @@ def test_candidate_contract_version_fails_closed(
 
     assert result.status is ValidationStatus.INVALID
     assert result.record is None
-    assert result.reason_codes in {
-        ("handoff-wrong-type",),
-        ("handoff-version-unsupported",),
-    }
+    assert result.reason_codes == (expected_reason,)
 
 
 def test_v2_fixture_cases_route_to_expected_groups() -> None:
@@ -480,6 +485,12 @@ def test_v2_fixture_cases_route_to_expected_groups() -> None:
         payload = result.record.to_dict()
         group = case["expected_group"]
         assert len(payload[group]) == 1, case["name"]
+        if group == "manual_review":
+            assert result.status is ValidationStatus.MANUAL_REVIEW_REQUIRED, (
+                case["name"]
+            )
+        else:
+            assert result.status is ValidationStatus.VALID, case["name"]
         if "expected_reason" in case:
             assert case["expected_reason"] in payload[group][0][
                 "reason_codes"
@@ -511,6 +522,33 @@ def test_v2_candidate_order_does_not_change_identity() -> None:
     assert forward.record.record_id == reverse.record.record_id
     assert forward.record.fingerprint == reverse.record.fingerprint
     assert forward.record.to_dict() == reverse.record.to_dict()
+
+
+def test_v2_same_reason_invalid_envelopes_are_order_independent() -> None:
+    first_invalid = "not-a-visual-candidate-envelope"
+    second_invalid = 12345
+
+    forward = filter_approved_visual_candidates(
+        _plan(),
+        [first_invalid, second_invalid],
+        source_revision="visual-library-snapshot-v2",
+        contract_version=V2_CONTRACT_ID,
+    )
+    reverse = filter_approved_visual_candidates(
+        _plan(),
+        [second_invalid, first_invalid],
+        source_revision="visual-library-snapshot-v2",
+        contract_version=V2_CONTRACT_ID,
+    )
+
+    assert forward.record is not None
+    assert reverse.record is not None
+    forward_payload = forward.record.to_dict()
+    reverse_payload = reverse.record.to_dict()
+    assert len(forward_payload["rejected"]) == 2
+    assert forward.record.record_id == reverse.record.record_id
+    assert forward.record.fingerprint == reverse.record.fingerprint
+    assert forward_payload == reverse_payload
 
 
 def test_v2_invalid_candidate_does_not_corrupt_valid_sibling() -> None:

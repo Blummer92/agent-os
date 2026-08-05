@@ -135,6 +135,7 @@ def filter_approved_visual_candidates(
                 item.get("compatibility_id") or "",
                 item.get("fingerprint") or "",
                 tuple(item["reason_codes"]),
+                sha256_hex(item),
             )
 
         eligible.sort(key=key)
