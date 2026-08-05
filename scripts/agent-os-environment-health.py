@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 SCHEMA = "agent-os.environment-health.v1"
 PROFILE_ID = "agent-os-codespaces-v1"
@@ -32,6 +33,7 @@ REQUIRED_VALIDATION_COMMANDS = (
 )
 DEFAULT_MIN_FREE_MB = 500
 SUBPROCESS_TIMEOUT_SECONDS = 5
+_REPOSITORY_COMPONENT = re.compile(r"[A-Za-z0-9_.-]+")
 
 # Bounded prohibited-credential patterns. This scans only the evidence this
 # script is about to emit -- it is not a repository-wide secret scanner and
@@ -50,8 +52,6 @@ _CREDENTIAL_PATTERNS = tuple(
     )
 )
 
-# All authority fields stay false; only a separate canonical authorization
-# contract may change them, matching prepare-issue-worktree.sh's convention.
 _AUTHORITY_FIELDS = {
     "repository_implementation_authorized": False,
     "execution_authorized": False,
@@ -81,14 +81,38 @@ def _run(cmd: list[str], cwd: Path | None = None) -> tuple[bool, str]:
     return True, (result.stdout or "").strip().splitlines()[0] if result.stdout.strip() else ""
 
 
+def _canonicalize_repository_remote(origin_url: str) -> str | None:
+    """Return only a validated GitHub owner/repository identity or ``None``."""
+    remote = origin_url.strip()
+    if not remote or any(character.isspace() for character in remote):
+        return None
+
+    owner_repo: str | None = None
+    scp_match = re.fullmatch(r"[^@/:\s]+@github\.com:([^?#]+)(?:[?#].*)?", remote)
+    if scp_match:
+        owner_repo = scp_match.group(1)
+    else:
+        try:
+            parsed = urlsplit(remote)
+        except ValueError:
+            return None
+        if parsed.scheme not in {"https", "ssh"} or parsed.hostname != "github.com":
+            return None
+        if parsed.port not in {None, 22, 443}:
+            return None
+        owner_repo = parsed.path.lstrip("/")
+
+    if owner_repo.endswith(".git"):
+        owner_repo = owner_repo[:-4]
+    parts = owner_repo.split("/")
+    if len(parts) != 2 or not all(_REPOSITORY_COMPONENT.fullmatch(part) for part in parts):
+        return None
+    return f"{parts[0]}/{parts[1]}"
+
+
 def check_repository_identity(repo_root: Path) -> dict:
     ok, origin_url = _run(["git", "remote", "get-url", "origin"], cwd=repo_root)
-    actual = None
-    if ok:
-        stripped = origin_url.strip()
-        stripped = stripped[:-4] if stripped.endswith(".git") else stripped
-        match = re.search(r"[:/]([^/:]+/[^/:]+)$", stripped)
-        actual = match.group(1) if match else stripped
+    actual = _canonicalize_repository_remote(origin_url) if ok else None
     matches = ok and actual == EXPECTED_REPOSITORY
     return {
         "name": "repository-identity",
@@ -110,11 +134,6 @@ def check_checkout_identity(repo_root: Path) -> dict:
     )
     looks_like_issue_worktree_path = bool(re.fullmatch(r"issue-\d+", repo_root.name))
     worktree_role = "issue-worktree" if is_linked_worktree else "primary"
-
-    # Fail closed only when the *primary* (non-linked) checkout has been
-    # renamed to impersonate the reserved `issue-<n>` worktree naming
-    # convention from scripts/prepare-issue-worktree-contract.md -- a real
-    # linked worktree at that path is the expected, passing case.
     primary_not_reused = not (worktree_role == "primary" and looks_like_issue_worktree_path)
 
     passed = sha_ok and branch_ok and git_dir_ok and common_dir_ok and primary_not_reused
