@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import zipfile
 
@@ -36,6 +37,7 @@ EXIT_CONFLICT = 7
 EXIT_BASE = 8
 EXIT_EVIDENCE = 9
 EXIT_OUTPUT = 10
+EXIT_SYMLINK = 11
 
 MANIFEST_KEYS = [
     "schema_name",
@@ -426,14 +428,98 @@ def test_tampered_archive_is_detectable_against_its_manifest(clone: Path, tmp_pa
         contents = {name: zf.read(name) for name in zf.namelist()}
     contents["a.txt"] = b"tampered\n"
 
+    # Recompute the [canonical_path, mode_category, byte_size, sha256] digest
+    # the script itself uses; tampering must change it.
     digest = hashlib.sha256()
     for path in sorted(n for n in contents if n != MANIFEST_ENTRY_NAME):
-        file_sha = hashlib.sha256(contents[path]).hexdigest()
+        data_bytes = contents[path]
+        file_sha = hashlib.sha256(data_bytes).hexdigest()
         digest.update(path.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(b"file")
+        digest.update(b"\0")
+        digest.update(str(len(data_bytes)).encode("utf-8"))
         digest.update(b"\0")
         digest.update(file_sha.encode("utf-8"))
         digest.update(b"\n")
     assert digest.hexdigest() != data["archive_sha256"]
+
+
+# Regression: tracked symlinks are rejected, never dereferenced -------------
+
+def test_tracked_symlink_pointing_outside_worktree_is_rejected(clone: Path, tmp_path: Path, origin: Path):
+    outside_target = tmp_path / "outside-secret.txt"
+    outside_target.write_text("outside the worktree\n", encoding="utf-8")
+    link_path = clone / "link-outside"
+    link_path.symlink_to(outside_target)
+    git(clone, "add", "link-outside")
+    git(clone, "commit", "-m", "add tracked symlink pointing outside the worktree")
+    git(clone, "push", "origin", "main")
+
+    output = tmp_path / "pkg-symlink.zip"
+    result = run(clone, tmp_path, "--ref", "main", "--output", str(output), origin=origin)
+    assert result.returncode == EXIT_SYMLINK, result.stderr
+    data = evidence(result)
+    assert data["status"] == "blocked"
+    assert "link-outside" in data["reason"]
+    assert "symlink" in data["reason"]
+    assert not output.exists()
+
+
+# Regression: disposable worktree cleanup policy -----------------------------
+
+def test_clean_disposable_worktree_is_removed_after_a_normal_run(clone: Path, tmp_path: Path, origin: Path):
+    output = tmp_path / "pkg-cleanup-clean.zip"
+    result = run(clone, tmp_path, "--ref", "main", "--output", str(output), origin=origin)
+    assert result.returncode == EXIT_OK, result.stderr
+
+    match = re.search(r"cleanup: disposable worktree removed: (\S+)", result.stderr)
+    assert match, result.stderr
+    removed_path = Path(match.group(1))
+    assert not removed_path.exists()
+    assert not removed_path.parent.exists()
+
+
+def test_supplied_worktree_root_is_never_removed(clone: Path, tmp_path: Path, origin: Path):
+    worktree_root = tmp_path / "operator-supplied-root"
+    output = tmp_path / "pkg-cleanup-supplied.zip"
+    result = run(clone, tmp_path, "--ref", "main", "--output", str(output), worktree_root=worktree_root, origin=origin)
+    assert result.returncode == EXIT_OK, result.stderr
+    assert "preserved operator-supplied worktree root" in result.stderr
+    assert (worktree_root / "issue-881").is_dir()
+    assert (worktree_root / "issue-881" / "a.txt").exists()
+
+
+def test_dirty_disposable_worktree_is_preserved_not_deleted(clone: Path, tmp_path: Path, origin: Path):
+    # A disposable worktree can only be dirty at cleanup time in a scenario
+    # this command itself cannot reach in one invocation (it fails closed on
+    # dirty state before ever reaching cleanup); exercise cleanup_worktree()
+    # directly, the same defense-in-depth path the script's own trap runs.
+    disposable_root = tmp_path / "disposable-root"
+    worktree_path = disposable_root / "issue-881"
+    subprocess.run(
+        ["git", "worktree", "add", "--quiet", "--detach", str(worktree_path), "HEAD"],
+        cwd=clone, check=True, capture_output=True, env=_env(tmp_path),
+    )
+    (worktree_path / "a.txt").write_text("dirty\n", encoding="utf-8")
+
+    script_snippet = f"""
+set -uo pipefail
+export BUILD_CHATGPT_PACKAGE_TEST_ONLY=1
+source {SCRIPT}
+WORKTREE_ROOT_PROVIDED=0
+WORKTREE_ROOT={disposable_root}
+WORKTREE_PATH={worktree_path}
+cleanup_worktree
+"""
+    result = subprocess.run(
+        ["bash", "-c", script_snippet],
+        cwd=clone, text=True, capture_output=True, env=_env(tmp_path),
+    )
+    assert result.returncode == 0, result.stderr
+    assert "preserved without removal" in result.stderr
+    assert worktree_path.exists()
+    assert (worktree_path / "a.txt").read_text(encoding="utf-8") == "dirty\n"
 
 
 # 18 & 19. no lifecycle mutation occurs; all authority fields stay false ------

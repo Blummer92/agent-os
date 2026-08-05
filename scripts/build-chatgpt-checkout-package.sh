@@ -27,6 +27,7 @@ readonly EXIT_CONFLICT=7
 readonly EXIT_BASE=8
 readonly EXIT_EVIDENCE=9
 readonly EXIT_OUTPUT=10
+readonly EXIT_SYMLINK=11
 
 readonly SCHEMA="agent-os.chatgpt-checkout-package.v1"
 readonly SCHEMA_VERSION="1"
@@ -88,13 +89,59 @@ WORKTREE_PATH=""
 
 record_side_effect() { SIDE_EFFECTS+=("$1"); }
 
+# Cleanup policy:
+#   - An operator-supplied --worktree-root is never removed: it is not this
+#     command's to delete, clean or dirty.
+#   - A disposable worktree this command created is removed only when
+#     ownership is established (its path lives under the disposable root
+#     this run created) and it is clean. A dirty or unowned disposable
+#     worktree is preserved and reported on stderr rather than discarded.
 cleanup_worktree() {
-  [ "$WORKTREE_ROOT_PROVIDED" -eq 0 ] || return 0
-  [ -n "$WORKTREE_PATH" ] && git worktree remove --force "$WORKTREE_PATH" >/dev/null 2>&1
-  [ -n "$WORKTREE_ROOT" ] && rmdir "$WORKTREE_ROOT" >/dev/null 2>&1
-  true
+  if [ "$WORKTREE_ROOT_PROVIDED" -eq 1 ]; then
+    log "cleanup: preserved operator-supplied worktree root (not this command's to remove): $WORKTREE_ROOT"
+    return 0
+  fi
+  if [ -z "$WORKTREE_PATH" ] || [ -z "$WORKTREE_ROOT" ]; then
+    return 0
+  fi
+  case "$WORKTREE_PATH" in
+    "$WORKTREE_ROOT"/*) : ;;
+    *)
+      log "cleanup: worktree path is not under the disposable root this run created; preserved without removal: $WORKTREE_PATH"
+      return 0
+      ;;
+  esac
+  if [ ! -d "$WORKTREE_PATH" ]; then
+    rmdir "$WORKTREE_ROOT" >/dev/null 2>&1
+    return 0
+  fi
+  local dirty status
+  dirty="$(git -C "$WORKTREE_PATH" status --porcelain --untracked-files=no 2>/dev/null)"
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    log "cleanup: unable to verify disposable worktree cleanliness; preserved without removal: $WORKTREE_PATH"
+    return 0
+  fi
+  if [ -n "$dirty" ]; then
+    log "cleanup: disposable worktree has uncommitted tracked changes; preserved without removal: $WORKTREE_PATH"
+    return 0
+  fi
+  if git worktree remove --force "$WORKTREE_PATH" >/dev/null 2>&1; then
+    rmdir "$WORKTREE_ROOT" >/dev/null 2>&1
+    log "cleanup: disposable worktree removed: $WORKTREE_PATH"
+  else
+    log "cleanup: disposable worktree removal failed; preserved: $WORKTREE_PATH"
+  fi
 }
 trap cleanup_worktree EXIT
+
+# Test-only hook: sourcing this file (rather than executing it) with
+# BUILD_CHATGPT_PACKAGE_TEST_ONLY=1 stops here, before any argument parsing
+# or side effects, so tests can exercise cleanup_worktree() directly against
+# controlled WORKTREE_PATH/WORKTREE_ROOT/WORKTREE_ROOT_PROVIDED values.
+if [ "${BUILD_CHATGPT_PACKAGE_TEST_ONLY:-0}" = "1" ]; then
+  return 0 2>/dev/null || exit 0
+fi
 
 finish() {
   local code="$1" status="$2" reason
@@ -163,7 +210,8 @@ Options:
 
 Statuses: built | blocked | unavailable | manual-review
 Exit codes: 0 built, 2 usage, 3 dirty, 4 fetch, 5 ref missing,
-6 worktree, 7 conflict, 8 base ref, 9 evidence, 10 output collision.
+6 worktree, 7 conflict, 8 base ref, 9 evidence, 10 output collision,
+11 tracked symlink rejected.
 USAGE
 }
 
@@ -298,35 +346,64 @@ import zipfile
  working_tree_clean, package_format, included_git_metadata,
  command_version, *exclude_patterns) = sys.argv[1:]
 
-# Tracked files only: this is exactly what Git considers "in the repository"
-# at this commit, so untracked local caches, editor state, and ignored
-# credentials are excluded by construction rather than re-derived here.
-tracked = subprocess.run(
-    ["git", "-C", worktree, "ls-files", "-z"],
+MODE_CATEGORY = {
+    "100644": "file",
+    "100755": "executable",
+    "120000": "symlink",
+    "160000": "gitlink",
+}
+UNIX_MODE = {"file": 0o644, "executable": 0o755}
+
+# Tracked files only, with their Git mode: this is exactly what Git considers
+# "in the repository" at this commit, so untracked local caches, editor
+# state, and ignored credentials are excluded by construction rather than
+# re-derived here. `ls-files -s` reports mode without ever resolving a
+# symlink's target, so no tracked symlink is dereferenced by this scan.
+raw = subprocess.run(
+    ["git", "-C", worktree, "ls-files", "-s", "-z"],
     check=True, capture_output=True,
-).stdout.decode("utf-8").split("\0")
-tracked = [p for p in tracked if p]
+).stdout.split(b"\0")
+tracked = []
+for entry in raw:
+    if not entry:
+        continue
+    meta, path_bytes = entry.split(b"\t", 1)
+    mode = meta.split()[0].decode("ascii")
+    tracked.append((path_bytes.decode("utf-8"), MODE_CATEGORY.get(mode, "unknown")))
 
 def is_excluded(path):
     return any(fnmatch.fnmatch(path, pat) for pat in exclude_patterns)
 
-included = sorted(p for p in tracked if not is_excluded(p))
-excluded = sorted(p for p in tracked if is_excluded(p))
+included = sorted((p, cat) for p, cat in tracked if not is_excluded(p))
+excluded = sorted(p for p, _cat in tracked if is_excluded(p))
 for path in excluded:
     print(f"build-chatgpt-checkout-package: excluding tracked path {path}", file=sys.stderr)
 
-# Deterministic semantic digest over canonical entry paths and content,
-# independent of ZIP compression/timestamp/host details (determinism
-# boundary: see scripts/build-chatgpt-checkout-package.md). manifest.json is
-# excluded from its own digest to avoid a circular self-reference.
+# Tracked symlinks are rejected outright rather than dereferenced or
+# silently dropped: their target may resolve outside the worktree, and
+# reading through them would not be "the repository at this commit".
+symlinks = [p for p, cat in included if cat == "symlink"]
+if symlinks:
+    print(json.dumps({"error": "tracked_symlink_rejected", "paths": symlinks}))
+    sys.exit(3)
+
+# Deterministic semantic digest over [canonical_path, mode_category,
+# byte_size, sha256(content)] for every included file, independent of ZIP
+# compression/timestamp/host details (determinism boundary: see
+# scripts/build-chatgpt-checkout-package.md). manifest.json is excluded from
+# its own digest to avoid a circular self-reference.
 digest = hashlib.sha256()
-entries = []
-for path in included:
+sizes = {}
+for path, category in included:
     with open(f"{worktree}/{path}", "rb") as fh:
         data = fh.read()
     file_sha = hashlib.sha256(data).hexdigest()
-    entries.append((path, len(data), file_sha))
+    sizes[path] = len(data)
     digest.update(path.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(category.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(str(len(data)).encode("utf-8"))
     digest.update(b"\0")
     digest.update(file_sha.encode("utf-8"))
     digest.update(b"\n")
@@ -359,17 +436,20 @@ manifest_bytes = json.dumps(manifest, indent=2, sort_keys=True).encode("utf-8") 
 
 FIXED_DATE_TIME = (1980, 1, 1, 0, 0, 0)
 
-def write_entry(zf, path, data):
+def write_entry(zf, path, category, data):
     info = zipfile.ZipInfo(path, date_time=FIXED_DATE_TIME)
     info.compress_type = zipfile.ZIP_DEFLATED
-    info.external_attr = (0o644 << 16)
+    info.external_attr = (UNIX_MODE[category] << 16)
     zf.writestr(info, data)
 
+included_paths = [p for p, _cat in included]
+category_by_path = dict(included)
+
 with zipfile.ZipFile(output, "w", allowZip64=True) as zf:
-    for path in included:
+    for path, category in included:
         with open(f"{worktree}/{path}", "rb") as fh:
-            write_entry(zf, path, fh.read())
-    write_entry(zf, "agent-os-chatgpt-package-manifest.json", manifest_bytes)
+            write_entry(zf, path, category, fh.read())
+    write_entry(zf, "agent-os-chatgpt-package-manifest.json", "file", manifest_bytes)
 
 # Verify the completed archive before reporting success: reopen it, and
 # confirm entry count and recomputed semantic digest match the manifest.
@@ -379,7 +459,7 @@ with zipfile.ZipFile(output) as zf:
         print(f"corrupt entry in archive: {bad}", file=sys.stderr)
         sys.exit(1)
     names = set(zf.namelist())
-    expected = set(included) | {"agent-os-chatgpt-package-manifest.json"}
+    expected = set(included_paths) | {"agent-os-chatgpt-package-manifest.json"}
     if names != expected:
         print("archive contents do not match the intended file set", file=sys.stderr)
         sys.exit(1)
@@ -389,11 +469,16 @@ with zipfile.ZipFile(output) as zf:
         print("stored manifest does not match computed manifest", file=sys.stderr)
         sys.exit(1)
     verify_digest = hashlib.sha256()
-    for path in included:
+    for path in sorted(included_paths):
         with zf.open(path) as fh:
             data = fh.read()
         file_sha = hashlib.sha256(data).hexdigest()
+        category = category_by_path[path]
         verify_digest.update(path.encode("utf-8"))
+        verify_digest.update(b"\0")
+        verify_digest.update(category.encode("utf-8"))
+        verify_digest.update(b"\0")
+        verify_digest.update(str(len(data)).encode("utf-8"))
         verify_digest.update(b"\0")
         verify_digest.update(file_sha.encode("utf-8"))
         verify_digest.update(b"\n")
@@ -405,6 +490,19 @@ print(json.dumps({"file_count": len(included), "archive_sha256": archive_sha256}
 PYEOF
 )"
 build_exit=$?
+
+if [ "$build_exit" -eq 3 ]; then
+  symlink_paths="$(printf '%s' "$BUILD_OUTPUT" | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    data = {}
+print(", ".join(data.get("paths", [])))
+' 2>/dev/null)"
+  finish "$EXIT_SYMLINK" blocked \
+    "tracked symlink(s) rejected without dereferencing: $symlink_paths"
+fi
 
 if [ "$build_exit" -ne 0 ]; then
   finish "$EXIT_EVIDENCE" unavailable "packaging or archive verification failed: see stderr above"
