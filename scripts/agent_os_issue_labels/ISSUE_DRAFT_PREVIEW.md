@@ -1,93 +1,99 @@
-# Issue Draft Preview and Validation
+# Issue Draft Validation and GitHub Creation Adapter
 
-## Purpose
-
-Render structured input through the canonical Agent OS issue form and apply
-deterministic offline validation. No network request, subprocess, issue creation,
-label change, or other mutation occurs.
-
-## Command
+## Offline validation
 
 ```bash
 python -m scripts.agent_os_issue_labels.draft_cli \
   --input tests/fixtures/agent_os_issue_labels/draft_minimum_valid.json
 ```
 
-Use `--input -` for stdin and `--format json` for machine output. Repeat
-`--available-label` only for a complete local label set. Repeat
-`--candidate-summary` for local advisory duplicate evidence.
-
-## Immutable result
-
-Text and JSON derive from one `IssueDraftValidationResult` containing status,
-ordered reason codes, `format_valid`, `submission_eligible`, parser/schema/
-duplicate evidence, a normalized report, `write_authorized=false`, and
-`mutation_performed=false`.
+The offline path renders through the canonical form, emits deterministic text or
+JSON, performs no write, and preserves:
 
 ```text
 valid preview != readiness != approval != write authorization
-```
-
-## Reason codes
-
-| Code | Outcome |
-|---|---|
-| `eligible-valid` | pass |
-| `eligible-warning` | warning |
-| `missing-required-evidence` | manual review |
-| `malformed-structured-input` | failure |
-| `unknown-or-unsupported-value` | manual review |
-| `duplicate-raw-or-canonical-field` | manual review |
-| `unavailable-label` | manual review |
-| `conflicting-owner-evidence` | manual review |
-| `unsafe-external-write-request` | failure |
-| `parser-round-trip-ambiguity` | manual review |
-| `unsupported-or-drifted-issue-form-schema` | manual review |
-| `duplicate-local-candidate-advisory` | warning |
-
-## Exit codes
-
-| Exit | Symbol | Meaning |
-|---:|---|---|
-| `0` | `ELIGIBLE_SUCCESS` | eligible success |
-| `10` | `ELIGIBLE_WARNING` | eligible warning |
-| `20` | `MANUAL_REVIEW` | human decision required |
-| `30` | `VALIDATION_FAILURE` | hard validation failure |
-| `64` | `INVALID_INPUT_OR_USAGE` | invalid input or usage |
-
-Manual review is non-zero. Future #602 outcomes use separate codes.
-
-## Fail-closed evidence
-
-`parse_issue_form_body()` remains the only Markdown parser. Source values,
-rendered Markdown, and parsed output are compared. Canonical-looking `###`
-headings, duplicate headings, missing/unexpected fields, or changed values emit
-`parser-round-trip-ambiguity` and block submission eligibility.
-
-The local form is checked for unsupported controls, attributes, validation
-shapes, malformed or duplicate options, duplicate raw/canonical IDs, duplicate
-labels, malformed body entries, and unsupported top-level keys. Drift routes to
-manual review and never edits the form.
-
-Duplicate evidence uses only supplied local summaries and normalized exact-title
-matching. It is advisory and performs no search or issue mutation.
-
-## Write boundary and #602 handoff
-
-Every result preserves:
-
-```text
 write_authorized=false
 mutation_performed=false
 ```
 
-Validation, readiness, and passing checks remain evidence only. #602 may consume
-only a merged result with `submission_eligible=true`, must reuse these reason and
-exit contracts, and must add its separately reviewed confirmation and command
-boundary. #601 does not submit an issue.
+Offline exits remain `0` eligible, `10` warning, `20` manual review, `30`
+validation failure, and `64` invalid input. Parser ambiguity, schema drift,
+missing evidence, unsafe requests, and unknown values remain fail-closed.
 
-## Validation
+## GitHub CLI adapter
 
-Run focused draft and validation tests, checker and planner regressions, Python
-compilation, `bash 07_Agent_Tests/validate-repo-structure.sh`, and
-`./scripts/validate-all.sh`.
+```bash
+python -m scripts.agent_os_issue_labels.issue_create_cli \
+  --input draft.json --target Blummer92/agent-os
+```
+
+Without `--execute`, the command performs read-only capability, authentication,
+and target checks and returns confirmation-needed evidence. `--execute` requires
+one exact fresh confirmation. Only `submission_eligible=true` may plan; warnings
+require exact acknowledgement. Authentication and access never authorize writes.
+
+## Identity, target, and capability
+
+The explicit target is `[HOST/]OWNER/REPOSITORY`; it is never inferred from git,
+`GH_REPO`, `GH_HOST`, prior commands, or authentication. Read-only probes verify:
+
+- one resolved `gh` executable and bounded version evidence;
+- exact required create flags; version text is informational;
+- `gh auth status --active --hostname HOST` without token display;
+- matching, non-archived repository metadata with issues enabled.
+
+Before confirmation, text and JSON show the bounded account identity, exact
+version, sanitized executable basename plus a digest of its full path, and required/optional capability decisions.
+A stable operation identity binds target, title/body identity, labels, validation,
+and command semantics for repeat detection. A separate fresh confirmation
+fingerprint also binds invocation ID, account, capabilities, and executable path.
+Changing either operation or execution evidence invalidates confirmation.
+
+## Process boundary
+
+```text
+gh issue create --repo=TARGET --title=TITLE --body-file=- --label=LABEL...
+```
+
+The argv is immutable; user values use `--flag=value`; the UTF-8 body uses stdin.
+Confirmed success requires matching expected/written byte counts, successful
+writer completion, and no write or close error; body content is never evidence.
+The runner uses `shell=False`, bounded timeout and concurrent bounded capture,
+terminates timed-out/interrupted children, and performs no retry, auth refresh,
+account switch, scope escalation, or temporary-file baseline. Unsupported
+assignees, milestones, types, relationships, projects, and recovery are blocked.
+
+## Mutation and recovery
+
+Mutation states are `not-attempted`, `uncertain`, and `confirmed`. Only exit zero
+plus complete stdin delivery and exactly one canonical HTTPS issue URL sets
+`mutation_performed=true`. Userinfo, ports, encoded ambiguity, leading-zero
+numbers, duplicate URLs, no URL, wrong-target output, nonzero exit, incomplete
+stdin, timeout, or interruption remain uncertain,
+include `mutation-uncertain`, preserve recovery evidence, and disable retry.
+
+| Exit | Meaning |
+|---:|---|
+| `0` | confirmed issue creation |
+| `70` | confirmation missing/cancelled/stale or warning rejected |
+| `71` | `gh` unavailable |
+| `72` | capability unsupported |
+| `73` | authentication/account failure |
+| `74` | target invalid or mismatched |
+| `75` | authorization absent or optional metadata unsupported |
+| `76` | command failure |
+| `77` | timeout or interruption |
+| `78` | malformed success output |
+| `79` | wrong-target or uncertain mutation |
+| `80` | repeated stable operation identity |
+
+## Evidence safety and #605
+
+Diagnostics redact token formats, authorization values, credential assignments,
+private keys, credential URLs, ANSI/control sequences, submitted title/body/
+labels, and excess output. Confirmation displays digests and counts, not raw
+content. Public success URLs are reconstructed from the validated target and
+canonical issue number rather than copied from process output. #605 must reuse
+`issue_create.py` identity, runner, confirmation, redaction, executor, and parser;
+it must not create a parallel live path.
+Passing tests do not authorize a live create or merge.

@@ -34,6 +34,7 @@ versions change only when the module's standards or contract changes.
 | LP Reason Code Catalog | 0.1.0 |
 | LP Notion Working Layer | 0.1.0 |
 | Agent OS Codespaces Profile | 0.1.0 |
+| Execution Checkpoint Contract | 0.1.0 |
 
 **Dashboard Migration Verification**
 (`08_Tooling/dashboard-migration-verification/`) starts as a verification-only
@@ -90,8 +91,12 @@ bounded Notion working-layer design and the exact-target Change Request. The
 Change Request is recorded as proposed and not authorized; six unresolved
 decisions block any live change.
 
+**Execution Checkpoint Contract** (`scripts/agent_os_execution_checkpoint/`,
+#895, design approved in #858) is the pure-local checkpoint record, content-addressed identity, append-only store, and resume planner; every authority field stays false.
+
 **Agent OS Codespaces Profile** (`.devcontainer/`, #891) is the first
-persistent 2-core Codespaces profile; reuses worktree/repo-state contracts and grants no merge, closure, workflow, or external authority.
+persistent 2-core Codespaces profile; it reuses existing worktree and
+repository-state contracts and grants no merge, closure, workflow, or external authority.
 
 ## Reconciliation Notes
 

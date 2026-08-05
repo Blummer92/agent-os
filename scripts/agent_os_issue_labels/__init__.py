@@ -1,4 +1,4 @@
-"""Offline Agent OS issue draft, validation, label checker, and application planner."""
+"""Offline issue drafting, validation, and explicit GitHub issue creation adapters."""
 
 from .checker import evaluate_issue_labels
 from .draft import (
@@ -7,6 +7,28 @@ from .draft import (
     build_issue_draft,
     draft_result_to_dict,
     render_draft_preview,
+)
+from .issue_create import (
+    ConfirmationProvider,
+    GhCapabilities,
+    GhRunner,
+    GitHubRepositoryTarget,
+    IssueCreateAdapterResult,
+    IssueCreateCommandPlan,
+    IssueCreateConfirmation,
+    IssueCreateExitCode,
+    IssueCreateProcessResult,
+    IssueCreateReasonCode,
+    IssueCreateRequest,
+    MutationState,
+    SubprocessGhRunner,
+    build_issue_create_argv,
+    build_operation_fingerprint,
+    execute_issue_creation,
+    issue_create_result_to_dict,
+    plan_issue_creation,
+    render_issue_create_result,
+    sanitize_diagnostic_text,
 )
 from .planner import LabelApplicationPlan, plan_label_application
 from .validation import (
@@ -20,18 +42,38 @@ from .validation import (
 )
 
 __all__ = [
+    "ConfirmationProvider",
     "DraftExitCode",
     "DraftReasonCode",
+    "GhCapabilities",
+    "GhRunner",
+    "GitHubRepositoryTarget",
+    "IssueCreateAdapterResult",
+    "IssueCreateCommandPlan",
+    "IssueCreateConfirmation",
+    "IssueCreateExitCode",
+    "IssueCreateProcessResult",
+    "IssueCreateReasonCode",
+    "IssueCreateRequest",
     "IssueDraftInput",
     "IssueDraftResult",
     "IssueDraftValidationResult",
     "LabelApplicationPlan",
+    "MutationState",
+    "SubprocessGhRunner",
+    "build_issue_create_argv",
     "build_issue_draft",
+    "build_operation_fingerprint",
     "draft_result_to_dict",
     "evaluate_issue_labels",
+    "execute_issue_creation",
+    "issue_create_result_to_dict",
+    "plan_issue_creation",
     "plan_label_application",
     "render_draft_preview",
+    "render_issue_create_result",
     "render_validation_preview",
+    "sanitize_diagnostic_text",
     "validate_issue_draft",
     "validation_exit_code",
     "validation_result_to_dict",
