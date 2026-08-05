@@ -43,7 +43,7 @@ The explicit target is `[HOST/]OWNER/REPOSITORY`; it is never inferred from git,
 - matching, non-archived repository metadata with issues enabled.
 
 Before confirmation, text and JSON show the bounded account identity, exact
-version, hashed executable basename, and required/optional capability decisions.
+version, sanitized executable basename plus a digest of its full path, and required/optional capability decisions.
 A stable operation identity binds target, title/body identity, labels, validation,
 and command semantics for repeat detection. A separate fresh confirmation
 fingerprint also binds invocation ID, account, capabilities, and executable path.

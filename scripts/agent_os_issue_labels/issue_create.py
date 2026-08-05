@@ -831,6 +831,12 @@ def _probe_capabilities(
             IssueCreateReasonCode.TARGET_INVALID_OR_AMBIGUOUS,
             IssueCreateExitCode.TARGET,
         )
+    if not isinstance(metadata, Mapping):
+        return None, _result(
+            request,
+            IssueCreateReasonCode.TARGET_INVALID_OR_AMBIGUOUS,
+            IssueCreateExitCode.TARGET,
+        )
     if (
         str(metadata.get("nameWithOwner") or "").casefold()
         != request.target.name_with_owner.casefold()

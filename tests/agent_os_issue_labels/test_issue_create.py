@@ -450,6 +450,19 @@ def test_repository_metadata(payload):
     assert failure.reason_code == IssueCreateReasonCode.TARGET_MISMATCHED
 
 
+@pytest.mark.parametrize("raw_payload", ("[]", "\"scalar\"", "null"))
+def test_repository_metadata_non_object_fails_closed(raw_payload):
+    command = (
+        "gh", "repo", "view", "github.com/Blummer92/agent-os", "--json",
+        "nameWithOwner,url,hasIssuesEnabled,isArchived",
+    )
+    runner = Runner(overrides={command: IssueCreateProcessResult(0, raw_payload, "")})
+    plan, failure = plan_issue_creation(request(), runner)
+    assert plan is None
+    assert failure.reason_code == IssueCreateReasonCode.TARGET_INVALID_OR_AMBIGUOUS
+    assert creates(runner) == []
+
+
 def test_redaction_unicode_cli_static(monkeypatch, capsys, tmp_path):
     secret = "github_pat_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
     base = validation()
