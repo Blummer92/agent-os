@@ -33,6 +33,7 @@ versions change only when the module's standards or contract changes.
 | LP Pacing Handoff Contract | 0.1.0 |
 | LP Reason Code Catalog | 0.1.0 |
 | LP Notion Working Layer | 0.1.0 |
+| Issue Quality Taxonomy | 0.1.0 |
 
 **Dashboard Migration Verification**
 (`08_Tooling/dashboard-migration-verification/`) starts as a verification-only
