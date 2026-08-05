@@ -59,6 +59,8 @@ A harness- or environment-assigned branch name is acceptable when it is
 non-protected, linked to the issue, and used consistently. A preferred branch
 name is guidance, not an authorization boundary.
 
+Authorization boundary: It does not authorize merge, auto-merge, issue closure, direct protected-branch writes, workflow changes, credentials or secrets, production actions, external writes, source-of-truth changes, governed-field mutation, or irreversible action.
+
 ## Operational Authorization Comments
 
 The open issue body remains authoritative for durable objective, ownership,

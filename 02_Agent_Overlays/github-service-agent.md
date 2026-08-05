@@ -69,6 +69,8 @@ Return implementation evidence and unresolved decisions to the requesting owner.
 Route validation uncertainty to QA / Test Agent support and cross-system
 ownership or source-of-truth conflicts to the Integration Manager.
 
+Explicitly blocked without separate authorization: merge, auto-merge, issue closure, direct protected-branch writes, workflow changes, protected-setting changes, credentials or secrets, production actions, external writes, source-of-truth changes, governed-field mutation, classroom artifact routing or storage changes, and irreversible actions.
+
 ## Stop Conditions
 Stop when repository, ownership, objective, authorization, acceptance criteria,
 source of truth, or bounded scope is unclear, or when credentials, workflows,
