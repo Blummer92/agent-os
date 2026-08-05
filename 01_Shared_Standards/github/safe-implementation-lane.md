@@ -33,10 +33,9 @@ For an eligible issue, the explicit implementation instruction authorizes:
 - Ready-for-Review after required exact-head validation passes and no blocker or
   unresolved blocking review conversation remains.
 
-It does not authorize merge, auto-merge, issue closure, direct protected-branch
-writes, protected-setting changes, credentials, secrets, workflows, production
-or external writes, persistence, governed-field mutation, or source-of-truth
-changes.
+Excluded surfaces listed in
+`01_Shared_Standards/github/excluded-surface-baseline.md` remain separately
+unauthorized unless explicitly approved through the governing path.
 
 ## Bounded Scope Envelope
 
@@ -59,6 +58,8 @@ Those are material changes and require `needs-decision`.
 A harness- or environment-assigned branch name is acceptable when it is
 non-protected, linked to the issue, and used consistently. A preferred branch
 name is guidance, not an authorization boundary.
+
+Authorization boundary: It does not authorize merge, auto-merge, issue closure, protected-setting changes, or production or external writes; every other surface listed in `01_Shared_Standards/github/excluded-surface-baseline.md` remains separately unauthorized unless explicitly approved through the governing path.
 
 ## Operational Authorization Comments
 

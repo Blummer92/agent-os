@@ -147,6 +147,41 @@ if [ -f "$map_meta" ]; then
 fi
 check "All Documentation Dependency Map metadata paths exist" "$map_refs_missing"
 
+# 8. Every Markdown file path listed in the Navigation Alias Registry exists.
+alias_registry="04_Registry/navigation-alias-registry.md"
+alias_refs_missing=0
+if [ ! -f "$alias_registry" ]; then
+  echo "Navigation Alias Registry missing: $alias_registry"
+  alias_refs_missing=1
+else
+  while IFS= read -r p; do
+    [ -z "$p" ] && continue
+    [ -f "$p" ] || { echo "Navigation alias references missing path: $p"; alias_refs_missing=1; }
+  done < <(grep -oE '`[A-Za-z0-9_./-]+\.md`' "$alias_registry" | tr -d '`' | sort -u)
+fi
+check "All Navigation Alias Registry Markdown paths exist" "$alias_refs_missing"
+
+# 9. The lean governance excluded-surface baseline stays referenced by its dependents.
+baseline_file="01_Shared_Standards/github/excluded-surface-baseline.md"
+baseline_refs_missing=0
+baseline_dependents=(
+  "00_Governance/write-authorization-policy.md"
+  "01_Shared_Standards/github/safe-implementation-lane.md"
+  "02_Agent_Overlays/github-service-agent.md"
+  "03_Templates/prompts/tier0-tier1-issue.md"
+  "04_Registry/navigation-alias-registry.md"
+)
+if [ ! -f "$baseline_file" ]; then
+  echo "Excluded-surface baseline missing: $baseline_file"
+  baseline_refs_missing=1
+else
+  for f in "${baseline_dependents[@]}"; do
+    [ -f "$f" ] || { echo "Baseline dependent missing: $f"; baseline_refs_missing=1; continue; }
+    grep -Fq -- "$baseline_file" "$f" || { echo "Baseline dependent missing reference: $f"; baseline_refs_missing=1; }
+  done
+fi
+check "Lean governance baseline references are aligned" "$baseline_refs_missing"
+
 echo
 echo "Results: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
