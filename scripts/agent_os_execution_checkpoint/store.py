@@ -175,7 +175,7 @@ def _atomic_write(
                 return final_path, True
             raise CheckpointStoreIntegrityConflict(
                 f"content-addressed path already holds different content: {final_path}"
-            )
+            ) from None
         except OSError as exc:
             raise CheckpointStoreUnavailable(
                 f"unable to publish {final_path}"

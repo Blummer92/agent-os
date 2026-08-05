@@ -173,6 +173,9 @@ def test_lifecycle_state_tampering_is_quarantined(tmp_path: Path) -> None:
     result = store.load_checkpoints(root, 895)
     assert result.valid == ()
     assert checkpoint.checkpoint_id in result.quarantined_checkpoint_ids
+    assert [entry.reason for entry in result.quarantined] == [
+        "invalid: checkpoint_id does not match checkpoint content"
+    ]
 
 
 def test_filename_hex_mismatch_is_quarantined(tmp_path: Path) -> None:
