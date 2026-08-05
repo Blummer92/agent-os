@@ -36,9 +36,9 @@ unbounded logs -- enforced by validation, not convention.
 Byte-exact canonical JSON, reused verbatim from ADR-0002 details-01b
 (`sort_keys=True, separators=(",", ":"), ensure_ascii=False`). SHA-256,
 domain-separated (`agent-os.execution-checkpoint:<hex>`). Semantic identity
-covers every Binding/Stage/Evidence/State field; `recorded_at`, `actor_id`,
-`diagnostic_refs` are **observational only** and excluded (mirrors ADR-0002
-details-02's timestamp-semantics rule). `reuse_key` excludes
+covers every Binding/Stage/Evidence/State field, including `lifecycle_state`;
+`recorded_at`, `actor_id`, and `diagnostic_refs` are **observational only** and
+excluded (mirrors ADR-0002 details-02's timestamp-semantics rule). `reuse_key` excludes
 `invocation_id`/`execution_id`, so identical evidence from separate
 invocations is recognized as interchangeable.
 

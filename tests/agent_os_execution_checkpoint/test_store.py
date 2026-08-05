@@ -154,6 +154,27 @@ def test_tampered_record_is_quarantined_not_raised(tmp_path: Path) -> None:
     assert "invalid" in result.quarantined[0].reason
 
 
+def test_lifecycle_state_tampering_is_quarantined(tmp_path: Path) -> None:
+    root = tmp_path / "agent-os-checkpoints"
+    checkpoint = make_checkpoint()
+    store.append_checkpoint(root, checkpoint)
+
+    path = next(
+        (store.issue_store_dir(root, 895) / "checkpoints").glob("*.json")
+    )
+    original = path.read_bytes()
+    tampered = original.replace(
+        b'"lifecycle_state":"active"',
+        b'"lifecycle_state":"interrupted"',
+    )
+    assert tampered != original
+    path.write_bytes(tampered)
+
+    result = store.load_checkpoints(root, 895)
+    assert result.valid == ()
+    assert checkpoint.checkpoint_id in result.quarantined_checkpoint_ids
+
+
 def test_filename_hex_mismatch_is_quarantined(tmp_path: Path) -> None:
     root = tmp_path / "agent-os-checkpoints"
     cp1 = make_checkpoint()

@@ -499,6 +499,7 @@ class ExecutionCheckpoint:
             "authorization_snapshot_id": self.authorization_snapshot_id,
             "invalidation_state": self.invalidation_state.value,
             "supersession_state": self.supersession_state,
+            "lifecycle_state": self.lifecycle_state.value,
         }
 
     def _reuse_payload(self) -> dict[str, object]:
@@ -526,7 +527,6 @@ class ExecutionCheckpoint:
         payload = self._identity_payload()
         payload["checkpoint_id"] = self.checkpoint_id
         payload["reuse_key"] = self.reuse_key
-        payload["lifecycle_state"] = self.lifecycle_state.value
         payload["recorded_at"] = self.recorded_at
         payload["actor_id"] = self.actor_id
         payload["diagnostic_refs"] = list(self.diagnostic_refs)

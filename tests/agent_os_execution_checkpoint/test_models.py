@@ -110,6 +110,12 @@ def test_diagnostic_refs_are_observational_and_excluded_from_identity() -> None:
     assert a.checkpoint_id == b.checkpoint_id
 
 
+def test_lifecycle_state_is_semantic_and_changes_checkpoint_id() -> None:
+    active = make_checkpoint(lifecycle_state=LifecycleState.ACTIVE)
+    interrupted = make_checkpoint(lifecycle_state=LifecycleState.INTERRUPTED)
+    assert active.checkpoint_id != interrupted.checkpoint_id
+
+
 def test_evidence_hashes_change_checkpoint_id() -> None:
     a = make_checkpoint(evidence_hashes=())
     b = make_checkpoint(evidence_hashes=(("validate_all_stdout", HEX64),))
