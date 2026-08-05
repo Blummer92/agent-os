@@ -15,6 +15,10 @@ start_epoch=$(date +%s)
 echo "Verifying repository identity before installing anything..."
 python3 scripts/agent-os-environment-health.py --check repository-identity
 
+# Dependency installation may contact configured package indexes. This is a
+# bounded bootstrap operation, not OS-level egress enforcement. The
+# AGENT_OS_NETWORK_MODE=local-only value controls Agent OS application behavior;
+# network availability does not grant GitHub or external-system write authority.
 echo "Installing declared development and validation dependencies..."
 python -m pip install -r requirements-dev.txt
 python -m pip install -e "./08_Tooling/instructional-materials-coach[test]"
