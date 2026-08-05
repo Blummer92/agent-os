@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -98,14 +97,11 @@ def test_post_create_script_calls_environment_health_check() -> None:
 
 
 def test_environment_health_script_compiles() -> None:
-    result = subprocess.run(
-        [sys.executable, "-m", "compileall", "-q", str(HEALTH_SCRIPT)],
-        cwd=ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
+    compile(
+        HEALTH_SCRIPT.read_text(encoding="utf-8"),
+        str(HEALTH_SCRIPT),
+        "exec",
     )
-    assert result.returncode == 0, result.stderr
 
 
 def test_environment_health_script_does_not_reimplement_worktree_management() -> None:

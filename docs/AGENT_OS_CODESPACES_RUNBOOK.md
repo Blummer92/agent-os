@@ -32,12 +32,16 @@ output is redacted and the run fails closed.
 
 ## Network modes
 
-- **`local-only`** (default, `AGENT_OS_NETWORK_MODE`): repository files, Git
-  inspection, installed dependencies, local tests/validation. No GitHub or
-  other provider access.
-- **`github-connected`**: bounded GitHub fetch/branch/push/Draft-PR/metadata
-  operations, only when separately authorized through the GitHub Service
-  Agent overlay. No automatic mode switching.
+- **`local-only`** (default, `AGENT_OS_NETWORK_MODE`): an Agent OS
+  application-level operating mode, not a firewall — it does not prevent
+  network access, and the Codespace may still reach configured package
+  indexes during bootstrap. No GitHub or external-system operation is
+  automatically authorized in this mode.
+- **`github-connected`**: permits only bounded GitHub fetch/branch/push/
+  Draft-PR/metadata operations, only when separately authorized through the
+  GitHub Service Agent overlay; no automatic mode switching. Neither mode
+  grants merge, issue-closure, production, credential, or external-write
+  authority.
 
 ## Issue-worktree preparation (#807, reused)
 
@@ -70,10 +74,9 @@ scans its own evidence for prohibited credential patterns before printing.
 
 ## Cost, idle timeout, and retention (operator actions)
 
-Repository code cannot set personal Codespaces billing controls. The
-operator must independently set: idle timeout ≤ 30 minutes, one primary
-Agent OS Codespace at a time, no prebuilds, stopped-environment retention
-≤ 30 days. Review retained evidence after 14 days.
+Repository code cannot set personal Codespaces billing controls. The operator must independently set: idle timeout ≤ 30 minutes, one primary Agent OS
+Codespace at a time, no prebuilds, stopped-environment retention ≤ 30 days;
+review retained evidence after 14 days.
 
 ## Cleanup and rollback
 
