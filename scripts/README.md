@@ -49,6 +49,10 @@ pytest suite.
 ./scripts/validate-all.sh
 ```
 
+## agent_os_github_git_objects
+
+Bounded local Git Database adapter for Issue #920. It reads exact commit/tree/blob identities, plans a deterministic operation fingerprint, requires explicit matching confirmation, validates an unattached commit before ref movement, and updates only a non-protected branch with `force=false`. Tests use injected fakes; live execution requires separate authorization. See `scripts/agent_os_github_git_objects/README.md`.
+
 ## protected_branch_push_guard.py
 
 Local advisory guard against pushes to protected branches, installed as a
