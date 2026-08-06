@@ -37,64 +37,60 @@ versions change only when the module's standards or contract changes.
 | Execution Checkpoint Contract | 0.1.0 |
 
 **Dashboard Migration Verification**
-(`08_Tooling/dashboard-migration-verification/`) starts as a verification-only
-migration evidence toolkit for dashboard registry examples, placeholder snapshots,
-dependency graphs, conservative validation results, and human-readable reports. It
-never authorizes live Notion, Workspace, trigger, sharing, source-of-truth, or
-production dashboard writes. Standard packaging metadata was completed by D2 (#123).
+(`08_Tooling/dashboard-migration-verification/`) is a verification-only toolkit
+for dashboard registry examples, placeholder snapshots, dependency graphs,
+validation results, and reports. It authorizes no live Notion, Workspace,
+sharing, source-of-truth, or production write. Packaging was completed by D2
+(Issue #123).
 
 **Workspace Automation Builder Tooling**
 (`08_Tooling/workspace-automation-builder/`) includes an Apps Script safety
-bridge, offline test suite, sync safety docs, sanitized sample handoff fixture,
-JSON schemas, validation fixtures, and a local-only fixture validator. It does
-not authorize live Workspace, Notion, trigger, sharing, or production writes.
+bridge, offline tests, sync safety docs, sanitized fixtures, JSON schemas, and a
+local-only validator. It authorizes no live Workspace, Notion, trigger, sharing,
+or production write.
 
 **Workflow Scheduler**, **Agent Memory & Context Budget Manager**,
-**IA4D-to-Scheduler Handoff Contract**, and **Agent OS Execution Service**
-extended descriptions moved to `04_Registry/module-version-map-details.md` to
-keep this index under the line-limit. Workflow Scheduler remains `0.9.1`;
-Agent OS Execution Service is `0.5.0`.
+**IA4D-to-Scheduler Handoff Contract**, and **Agent OS Execution Service** have
+extended descriptions in `04_Registry/module-version-map-details.md`. Workflow
+Scheduler is `0.9.1`; Agent OS Execution Service is `0.5.0`.
 
 **Artifact-First Response Standard**
 (`01_Shared_Standards/instructional-design/artifact-first-response-standard.md`,
-#821) requires classroom-material responses to lead with the requested
-artifact, preview, or content specification before backend routing and
-governance reporting, while preserving all existing gate, ownership, and
-stop-condition behavior.
+Issue #821) requires classroom-material responses to lead with the requested
+artifact, preview, or content specification while preserving existing gates,
+ownership, and stop conditions.
 
 **Teacher Decision Studio Standard**
 (`01_Shared_Standards/instructional-design/teacher-decision-studio-standard.md`
-plus `teacher-decision-studio-previews-standard.md`, #823/#824) defines a
-table-first rubric/assessment consultation protocol -- comparison table,
-format catalog, explanation-risk analysis, and per-option in-chat and PDF
-worksheet previews -- that recommends without auto-approving and never writes
-a governed field without explicit teacher confirmation.
+plus `teacher-decision-studio-previews-standard.md`, Issues #823 and #824)
+defines table-first rubric consultation, format comparison, explanation-risk
+analysis, and in-chat/PDF previews. It recommends without auto-approving and
+never writes a governed field without explicit teacher confirmation.
 
 **LP Pacing Handoff Contract**
 (`01_Shared_Standards/instructional-design/lp-pacing-handoff-contract.md`,
-`01_Shared_Standards/instructional-design/lp-pacing-handoff-adaptation.md`, `01_Shared_Standards/instructional-design/lp-pacing-handoff-cases.md`, and
-`04_Registry/lp-pacing-handoff-contract.yaml`, #648) defines the provider-neutral
-pacing handoff packet, owner-state independence, the six-dimension diagnosis, and
-the ordered adaptation hierarchy. It authorizes no runtime evaluator, OCR,
+`lp-pacing-handoff-adaptation.md`, `lp-pacing-handoff-cases.md`, and
+`04_Registry/lp-pacing-handoff-contract.yaml`, Issue #648) defines a
+provider-neutral pacing packet, independent authority dimensions, diagnosis,
+and ordered adaptation hierarchy. It authorizes no runtime evaluator, OCR,
 classroom data, external write, or gate advancement.
 
 **LP Reason Code Catalog**
 (`01_Shared_Standards/instructional-design/lp-reason-code-catalog.md` and
-`04_Registry/lp-reason-code-catalog.yaml`, #711) holds the finite `lp-*` semantic
-reason catalog and its producer/consumer ownership map. Generic parsing, bounds,
-version, serialization, and authority mechanics stay with LP9, LP12, and CW5A.
+`04_Registry/lp-reason-code-catalog.yaml`, Issue #711) owns the finite `lp-*`
+semantic catalog and producer/consumer ownership map. Generic parsing, bounds,
+version, serialization, and authority mechanics remain with LP9, LP12, and CW5A.
 
 **LP Notion Working Layer**
 (`01_Shared_Standards/notion/lp-notion-working-layer-standard.md` and
-`04_Registry/lp-notion-working-layer-change-request.yaml`, #652) defines the
-bounded Notion working-layer design and the exact-target Change Request. The
-Change Request is recorded as proposed and not authorized; six unresolved
-decisions block any live change.
+`04_Registry/lp-notion-working-layer-change-request.yaml`, Issue #652) defines
+the bounded working-layer design and exact-target Change Request. The request is
+proposed, not authorized; six unresolved decisions block live change.
 
-**Execution Checkpoint Contract** (`scripts/agent_os_execution_checkpoint/`, #895, design approved in #858) is the pure-local checkpoint record, content-addressed identity, append-only store, and resume planner; every authority field stays false.
+**Execution Checkpoint Contract**
+(`scripts/agent_os_execution_checkpoint/`, Issue #895; design approved in
+Issue #858) is the pure-local checkpoint record, content-addressed append-only
+store, and resume planner; every authority field remains false.
 
-## Reconciliation Notes
-
-A3 reviewed this map against visible repository evidence only. Any runtime status
-not directly supported by files or validation evidence remains intentionally
-unstated rather than inferred.
+Reconciliation notes are retained in
+`04_Registry/module-version-map-details.md`.

@@ -2,7 +2,7 @@
 
 The module selects an execution surface and builds immutable handoff evidence.
 It performs no filesystem, process, network, GitHub, provider, credential,
-workflow, runner, persistence, or external-system operation.
+workflow, runner, persistence, clock-read, or external-system operation.
 """
 
 from __future__ import annotations
@@ -25,15 +25,32 @@ MAX_PATHS = 256
 MAX_PATH_LENGTH = 512
 MAX_EVIDENCE_ITEMS = 64
 
+__all__ = [
+    "EXECUTOR_ROUTING_SCHEMA_VERSION",
+    "ExecutorRoute",
+    "ExecutorRouteReason",
+    "ExecutorCapability",
+    "ExecutorRouteDecision",
+    "ExecutorHandoff",
+    "select_executor_route",
+    "build_executor_handoff",
+    "serialize_executor_route_decision",
+    "executor_route_decision_id",
+    "executor_handoff_id",
+]
+
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,255}$", re.ASCII)
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", re.ASCII)
 _SHA40_RE = re.compile(r"^[0-9a-f]{40}$", re.ASCII)
 _TIMESTAMP_RE = re.compile(
-    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$", re.ASCII
+    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
+    re.ASCII,
 )
 
 
 class ExecutorRoute(str, Enum):
+    """Closed vocabulary of execution surfaces selected by the router."""
+
     CHATGPT_CONNECTOR_NATIVE = "chatgpt-connector-native"
     CHATGPT_GOVERNED_RUNNER = "chatgpt-governed-runner"
     EXTERNAL_CODING_AGENT_FALLBACK = "external-coding-agent-fallback"
@@ -41,6 +58,8 @@ class ExecutorRoute(str, Enum):
 
 
 class ExecutorCapability(str, Enum):
+    """Finite routing-only vocabulary for runtime capability requirements."""
+
     CHECKOUT = "checkout"
     ISOLATED_WORKTREE = "isolated-worktree"
     DEPENDENCY_INSTALLATION = "dependency-installation"
@@ -56,6 +75,8 @@ class ExecutorCapability(str, Enum):
 
 
 class ExecutorRouteReason(str, Enum):
+    """Finite reason codes explaining deterministic route selection."""
+
     CONNECTOR_SUFFICIENT = "connector-sufficient"
     RUNTIME_CAPABILITY_REQUIRED = "runtime-capability-required"
     GOVERNED_RUNNER_CAPABLE = "governed-runner-capable"
@@ -86,7 +107,6 @@ _ROUTE_ORDER = (
     ExecutorRoute.EXTERNAL_CODING_AGENT_FALLBACK,
     ExecutorRoute.HUMAN_DECISION_REQUIRED,
 )
-
 _HUMAN_FLAG_REASONS = (
     ("authority_ambiguous", ExecutorRouteReason.AUTHORITY_AMBIGUOUS),
     ("ownership_ambiguous", ExecutorRouteReason.OWNERSHIP_AMBIGUOUS),
@@ -101,13 +121,18 @@ _HUMAN_FLAG_REASONS = (
         ExecutorRouteReason.IRREVERSIBLE_OR_UNCERTAIN_MUTATION,
     ),
 )
-
 _VALIDATION_CAPABILITIES = frozenset(
     {
         ExecutorCapability.COMPILE_OR_LINT,
         ExecutorCapability.TEST_EXECUTION,
         ExecutorCapability.EXACT_HEAD_VALIDATION,
     }
+)
+_AUTHORITY_FIELDS = (
+    "execution_authorized",
+    "github_writes_authorized",
+    "external_writes_authorized",
+    "merge_authorized",
 )
 
 
@@ -117,7 +142,11 @@ def _exact_bool(name: str, value: object) -> bool:
     return value
 
 
-def _exact_string(name: str, value: object, maximum: int = MAX_IDENTIFIER_LENGTH) -> str:
+def _exact_string(
+    name: str,
+    value: object,
+    maximum: int = MAX_IDENTIFIER_LENGTH,
+) -> str:
     if type(value) is not str:
         raise TypeError(f"{name} must be an exact string")
     if not value or len(value.encode("utf-8")) > maximum:
@@ -125,7 +154,12 @@ def _exact_string(name: str, value: object, maximum: int = MAX_IDENTIFIER_LENGTH
     return value
 
 
-def _identifier(name: str, value: object | None, *, required: bool = False) -> str | None:
+def _identifier(
+    name: str,
+    value: object | None,
+    *,
+    required: bool = False,
+) -> str | None:
     if value is None:
         if required:
             raise ValueError(f"{name} is required")
@@ -147,13 +181,20 @@ def _timestamp(name: str, value: object) -> datetime:
     text = _exact_string(name, value, 20)
     if not _TIMESTAMP_RE.fullmatch(text):
         raise ValueError(f"{name} must be canonical UTC seconds ending in Z")
-    parsed = datetime.strptime(text, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    parsed = datetime.strptime(text, "%Y-%m-%dT%H:%M:%SZ").replace(
+        tzinfo=timezone.utc
+    )
     if parsed.strftime("%Y-%m-%dT%H:%M:%SZ") != text:
         raise ValueError(f"{name} is not canonical")
     return parsed
 
 
-def _enum_tuple(name: str, value: object, enum_type: type[Enum], maximum: int) -> tuple:
+def _enum_tuple(
+    name: str,
+    value: object,
+    enum_type: type[Enum],
+    maximum: int,
+) -> tuple:
     if type(value) is not tuple:
         raise TypeError(f"{name} must be an exact tuple")
     if len(value) > maximum:
@@ -166,7 +207,11 @@ def _enum_tuple(name: str, value: object, enum_type: type[Enum], maximum: int) -
     return value
 
 
-def _string_tuple(name: str, value: object, maximum: int = MAX_EVIDENCE_ITEMS) -> tuple[str, ...]:
+def _string_tuple(
+    name: str,
+    value: object,
+    maximum: int = MAX_EVIDENCE_ITEMS,
+) -> tuple[str, ...]:
     if type(value) is not tuple:
         raise TypeError(f"{name} must be an exact tuple")
     if len(value) > maximum:
@@ -197,11 +242,18 @@ def _path_tuple(name: str, value: object) -> tuple[str, ...]:
 
 
 def _paths_overlap(left: str, right: str) -> bool:
-    return left == right or left.startswith(right + "/") or right.startswith(left + "/")
+    return left == right or left.startswith(right + "/") or right.startswith(
+        left + "/"
+    )
 
 
 def _canonical_json(payload: object) -> str:
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
 
 
 def _digest(domain: str, payload: object) -> str:
@@ -209,6 +261,13 @@ def _digest(domain: str, payload: object) -> str:
         "utf-8"
     )
     return f"{domain}:{hashlib.sha256(material).hexdigest()}"
+
+
+def _list_field(payload: dict[str, object], name: str) -> list[object]:
+    value = payload[name]
+    if type(value) is not list:
+        raise TypeError(f"{name} must be an exact array")
+    return value
 
 
 def _expected_route(
@@ -219,7 +278,11 @@ def _expected_route(
     external_fallback_available: bool,
     external_fallback_explicitly_permitted: bool,
     human_flags: dict[str, bool],
-) -> tuple[ExecutorRoute, tuple[ExecutorRouteReason, ...], tuple[ExecutorRoute, ...]]:
+) -> tuple[
+    ExecutorRoute,
+    tuple[ExecutorRouteReason, ...],
+    tuple[ExecutorRoute, ...],
+]:
     human_reasons = tuple(
         reason for name, reason in _HUMAN_FLAG_REASONS if human_flags[name]
     )
@@ -229,7 +292,6 @@ def _expected_route(
             tuple(sorted(human_reasons, key=lambda item: item.value)),
             _ROUTE_ORDER[:-1],
         )
-
     if not required_capabilities:
         return (
             ExecutorRoute.CHATGPT_CONNECTOR_NATIVE,
@@ -291,8 +353,14 @@ def _expected_route(
     )
 
 
+def _authority_is_present(value: object) -> bool:
+    return any(getattr(value, name) for name in _AUTHORITY_FIELDS)
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ExecutorRouteDecision:
+    """Immutable, content-addressed decision selecting one execution surface."""
+
     schema_version: str
     repository: str
     issue_or_handoff_identity: str
@@ -342,9 +410,15 @@ class ExecutorRouteDecision:
             raise ValueError("schema_version is unsupported")
         _repository(self.repository)
         _identifier(
-            "issue_or_handoff_identity", self.issue_or_handoff_identity, required=True
+            "issue_or_handoff_identity",
+            self.issue_or_handoff_identity,
+            required=True,
         )
-        _exact_string("requested_operation", self.requested_operation, MAX_OPERATION_LENGTH)
+        _exact_string(
+            "requested_operation",
+            self.requested_operation,
+            MAX_OPERATION_LENGTH,
+        )
         _enum_tuple(
             "required_capabilities",
             self.required_capabilities,
@@ -370,23 +444,24 @@ class ExecutorRouteDecision:
             "evidence_stale",
             "evidence_contradictory",
             "irreversible_or_uncertain_mutation",
-            "execution_authorized",
-            "github_writes_authorized",
-            "external_writes_authorized",
-            "merge_authorized",
+            *_AUTHORITY_FIELDS,
         ):
             _exact_bool(name, getattr(self, name))
         if type(self.selected_route) is not ExecutorRoute:
             raise TypeError("selected_route must be an exact ExecutorRoute")
         _enum_tuple(
-            "route_reasons", self.route_reasons, ExecutorRouteReason, MAX_REASONS
+            "route_reasons",
+            self.route_reasons,
+            ExecutorRouteReason,
+            MAX_REASONS,
         )
-        if type(self.rejected_lower_cost_routes) is not tuple or not all(
-            type(item) is ExecutorRoute for item in self.rejected_lower_cost_routes
-        ):
-            raise TypeError(
-                "rejected_lower_cost_routes must contain exact ExecutorRoute values"
-            )
+        _enum_tuple(
+            "rejected_lower_cost_routes",
+            self.rejected_lower_cost_routes,
+            ExecutorRoute,
+            len(_ROUTE_ORDER),
+        )
+
         human_flags = {
             name: getattr(self, name) for name, _ in _HUMAN_FLAG_REASONS
         }
@@ -395,7 +470,9 @@ class ExecutorRouteDecision:
             governed_runner_capabilities=self.governed_runner_capabilities,
             governed_runner_available=self.governed_runner_available,
             external_fallback_available=self.external_fallback_available,
-            external_fallback_explicitly_permitted=self.external_fallback_explicitly_permitted,
+            external_fallback_explicitly_permitted=(
+                self.external_fallback_explicitly_permitted
+            ),
             human_flags=human_flags,
         )
         if self.selected_route is not expected_route:
@@ -435,14 +512,7 @@ class ExecutorRouteDecision:
         ):
             if getattr(self, name) is None:
                 raise ValueError(f"{name} is required for every route decision")
-        if any(
-            (
-                self.execution_authorized,
-                self.github_writes_authorized,
-                self.external_writes_authorized,
-                self.merge_authorized,
-            )
-        ) and self.authorization_id_or_none is None:
+        if _authority_is_present(self) and self.authorization_id_or_none is None:
             raise ValueError(
                 "authorization_id_or_none is required when authority is supplied"
             )
@@ -470,14 +540,12 @@ class ExecutorRouteDecision:
                 "workflow_runtime_identity_or_none",
             ):
                 if getattr(self, name) is None:
-                    raise ValueError(f"{name} is required for governed-runner routing")
-        if self.selected_route is ExecutorRoute.HUMAN_DECISION_REQUIRED and any(
-            (
-                self.execution_authorized,
-                self.github_writes_authorized,
-                self.external_writes_authorized,
-                self.merge_authorized,
-            )
+                    raise ValueError(
+                        f"{name} is required for governed-runner routing"
+                    )
+        if (
+            self.selected_route is ExecutorRoute.HUMAN_DECISION_REQUIRED
+            and _authority_is_present(self)
         ):
             raise ValueError(
                 "human-decision routes must reduce authority fields to false"
@@ -500,15 +568,17 @@ class ExecutorRouteDecision:
         object.__setattr__(self, "decision_id", computed)
 
     def to_dict(self) -> dict[str, object]:
+        """Return the complete canonical JSON-compatible decision object."""
+
         return _decision_payload(self, include_id=True)
 
     @classmethod
     def from_dict(cls, payload: object) -> "ExecutorRouteDecision":
+        """Validate and deserialize one strict decision object."""
+
         if type(payload) is not dict:
             raise TypeError("route decision must be an exact object")
-        expected = {item.name for item in fields(cls)} | {
-            "side_effects_performed"
-        }
+        expected = {item.name for item in fields(cls)}
         if set(payload) != expected:
             raise ValueError("route decision contains unknown or missing fields")
         if payload["side_effects_performed"] is not False:
@@ -516,27 +586,32 @@ class ExecutorRouteDecision:
         values = dict(payload)
         values.pop("side_effects_performed")
         values["required_capabilities"] = tuple(
-            ExecutorCapability(item) for item in values["required_capabilities"]
+            ExecutorCapability(item)
+            for item in _list_field(values, "required_capabilities")
         )
         values["governed_runner_capabilities"] = tuple(
             ExecutorCapability(item)
-            for item in values["governed_runner_capabilities"]
+            for item in _list_field(values, "governed_runner_capabilities")
         )
         values["selected_route"] = ExecutorRoute(values["selected_route"])
         values["route_reasons"] = tuple(
-            ExecutorRouteReason(item) for item in values["route_reasons"]
+            ExecutorRouteReason(item)
+            for item in _list_field(values, "route_reasons")
         )
         values["rejected_lower_cost_routes"] = tuple(
-            ExecutorRoute(item) for item in values["rejected_lower_cost_routes"]
+            ExecutorRoute(item)
+            for item in _list_field(values, "rejected_lower_cost_routes")
         )
         values["invalidation_conditions"] = tuple(
-            values["invalidation_conditions"]
+            _list_field(values, "invalidation_conditions")
         )
         return cls(**values)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ExecutorHandoff:
+    """Immutable handoff for governed-runner or explicit fallback execution."""
+
     schema_version: str
     route_decision_id: str
     destination_route: ExecutorRoute
@@ -567,6 +642,8 @@ class ExecutorHandoff:
         if self.schema_version != EXECUTOR_ROUTING_SCHEMA_VERSION:
             raise ValueError("schema_version is unsupported")
         _identifier("route_decision_id", self.route_decision_id, required=True)
+        if type(self.destination_route) is not ExecutorRoute:
+            raise TypeError("destination_route must be an exact ExecutorRoute")
         if self.destination_route not in {
             ExecutorRoute.CHATGPT_GOVERNED_RUNNER,
             ExecutorRoute.EXTERNAL_CODING_AGENT_FALLBACK,
@@ -576,9 +653,15 @@ class ExecutorHandoff:
             )
         _repository(self.repository)
         _identifier(
-            "issue_or_handoff_identity", self.issue_or_handoff_identity, required=True
+            "issue_or_handoff_identity",
+            self.issue_or_handoff_identity,
+            required=True,
         )
-        _exact_string("requested_operation", self.requested_operation, MAX_OPERATION_LENGTH)
+        _exact_string(
+            "requested_operation",
+            self.requested_operation,
+            MAX_OPERATION_LENGTH,
+        )
         if self.source_ref_or_none is not None:
             _identifier("source_ref_or_none", self.source_ref_or_none)
         if self.source_sha_or_none is not None:
@@ -612,13 +695,21 @@ class ExecutorHandoff:
             _identifier(name, getattr(self, name))
         _string_tuple("required_return_evidence", self.required_return_evidence)
         _string_tuple("stop_conditions", self.stop_conditions)
-        for name in (
-            "execution_authorized",
-            "github_writes_authorized",
-            "external_writes_authorized",
-            "merge_authorized",
-        ):
+        for name in _AUTHORITY_FIELDS:
             _exact_bool(name, getattr(self, name))
+        if _authority_is_present(self) and self.authorization_id_or_none is None:
+            raise ValueError(
+                "authorization_id_or_none is required when authority is supplied"
+            )
+        if ExecutorCapability.CHECKPOINTED_RESUME in frozenset(
+            self.required_capabilities
+        ) and (
+            self.checkpoint_id_or_none is None
+            or self.resume_plan_id_or_none is None
+        ):
+            raise ValueError(
+                "checkpoint and resume identities are required for checkpointed resume"
+            )
         computed = executor_handoff_id(self)
         if self.handoff_id:
             _identifier("handoff_id", self.handoff_id, required=True)
@@ -627,15 +718,17 @@ class ExecutorHandoff:
         object.__setattr__(self, "handoff_id", computed)
 
     def to_dict(self) -> dict[str, object]:
+        """Return the complete canonical JSON-compatible handoff object."""
+
         return _handoff_payload(self, include_id=True)
 
     @classmethod
     def from_dict(cls, payload: object) -> "ExecutorHandoff":
+        """Validate and deserialize one strict executor handoff object."""
+
         if type(payload) is not dict:
             raise TypeError("executor handoff must be an exact object")
-        expected = {item.name for item in fields(cls)} | {
-            "side_effects_performed"
-        }
+        expected = {item.name for item in fields(cls)}
         if set(payload) != expected:
             raise ValueError("executor handoff contains unknown or missing fields")
         if payload["side_effects_performed"] is not False:
@@ -644,7 +737,8 @@ class ExecutorHandoff:
         values.pop("side_effects_performed")
         values["destination_route"] = ExecutorRoute(values["destination_route"])
         values["required_capabilities"] = tuple(
-            ExecutorCapability(item) for item in values["required_capabilities"]
+            ExecutorCapability(item)
+            for item in _list_field(values, "required_capabilities")
         )
         for name in (
             "allowed_paths",
@@ -652,27 +746,29 @@ class ExecutorHandoff:
             "required_return_evidence",
             "stop_conditions",
         ):
-            values[name] = tuple(values[name])
+            values[name] = tuple(_list_field(values, name))
         return cls(**values)
 
 
 def _decision_payload(
-    value: ExecutorRouteDecision, *, include_id: bool
+    value: ExecutorRouteDecision,
+    *,
+    include_id: bool,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "schema_version": value.schema_version,
         "repository": value.repository,
         "issue_or_handoff_identity": value.issue_or_handoff_identity,
         "requested_operation": value.requested_operation,
-        "required_capabilities": [
-            item.value for item in value.required_capabilities
-        ],
+        "required_capabilities": [item.value for item in value.required_capabilities],
         "governed_runner_capabilities": [
             item.value for item in value.governed_runner_capabilities
         ],
         "governed_runner_available": value.governed_runner_available,
         "external_fallback_available": value.external_fallback_available,
-        "external_fallback_explicitly_permitted": value.external_fallback_explicitly_permitted,
+        "external_fallback_explicitly_permitted": (
+            value.external_fallback_explicitly_permitted
+        ),
         "selected_route": value.selected_route.value,
         "route_reasons": [item.value for item in value.route_reasons],
         "rejected_lower_cost_routes": [
@@ -686,20 +782,38 @@ def _decision_payload(
         "excluded_surface_involved": value.excluded_surface_involved,
         "evidence_stale": value.evidence_stale,
         "evidence_contradictory": value.evidence_contradictory,
-        "irreversible_or_uncertain_mutation": value.irreversible_or_uncertain_mutation,
-        "execution_service_request_fingerprint_or_none": value.execution_service_request_fingerprint_or_none,
+        "irreversible_or_uncertain_mutation": (
+            value.irreversible_or_uncertain_mutation
+        ),
+        "execution_service_request_fingerprint_or_none": (
+            value.execution_service_request_fingerprint_or_none
+        ),
         "authorization_id_or_none": value.authorization_id_or_none,
-        "validation_command_plan_id_or_none": value.validation_command_plan_id_or_none,
-        "operating_mode_decision_id_or_none": value.operating_mode_decision_id_or_none,
-        "executable_lane_selection_id_or_none": value.executable_lane_selection_id_or_none,
-        "repository_state_evidence_id_or_none": value.repository_state_evidence_id_or_none,
-        "worktree_preparation_evidence_id_or_none": value.worktree_preparation_evidence_id_or_none,
+        "validation_command_plan_id_or_none": (
+            value.validation_command_plan_id_or_none
+        ),
+        "operating_mode_decision_id_or_none": (
+            value.operating_mode_decision_id_or_none
+        ),
+        "executable_lane_selection_id_or_none": (
+            value.executable_lane_selection_id_or_none
+        ),
+        "repository_state_evidence_id_or_none": (
+            value.repository_state_evidence_id_or_none
+        ),
+        "worktree_preparation_evidence_id_or_none": (
+            value.worktree_preparation_evidence_id_or_none
+        ),
         "exact_head_package_id_or_none": value.exact_head_package_id_or_none,
         "environment_profile_id_or_none": value.environment_profile_id_or_none,
-        "environment_health_evidence_id_or_none": value.environment_health_evidence_id_or_none,
+        "environment_health_evidence_id_or_none": (
+            value.environment_health_evidence_id_or_none
+        ),
         "checkpoint_id_or_none": value.checkpoint_id_or_none,
         "resume_plan_id_or_none": value.resume_plan_id_or_none,
-        "workflow_runtime_identity_or_none": value.workflow_runtime_identity_or_none,
+        "workflow_runtime_identity_or_none": (
+            value.workflow_runtime_identity_or_none
+        ),
         "execution_authorized": value.execution_authorized,
         "github_writes_authorized": value.github_writes_authorized,
         "external_writes_authorized": value.external_writes_authorized,
@@ -715,7 +829,9 @@ def _decision_payload(
 
 
 def _handoff_payload(
-    value: ExecutorHandoff, *, include_id: bool
+    value: ExecutorHandoff,
+    *,
+    include_id: bool,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "schema_version": value.schema_version,
@@ -726,14 +842,16 @@ def _handoff_payload(
         "requested_operation": value.requested_operation,
         "source_ref_or_none": value.source_ref_or_none,
         "source_sha_or_none": value.source_sha_or_none,
-        "required_capabilities": [
-            item.value for item in value.required_capabilities
-        ],
+        "required_capabilities": [item.value for item in value.required_capabilities],
         "allowed_paths": list(value.allowed_paths),
         "forbidden_paths": list(value.forbidden_paths),
-        "execution_service_request_fingerprint_or_none": value.execution_service_request_fingerprint_or_none,
+        "execution_service_request_fingerprint_or_none": (
+            value.execution_service_request_fingerprint_or_none
+        ),
         "authorization_id_or_none": value.authorization_id_or_none,
-        "validation_command_plan_id_or_none": value.validation_command_plan_id_or_none,
+        "validation_command_plan_id_or_none": (
+            value.validation_command_plan_id_or_none
+        ),
         "checkpoint_id_or_none": value.checkpoint_id_or_none,
         "resume_plan_id_or_none": value.resume_plan_id_or_none,
         "environment_profile_id_or_none": value.environment_profile_id_or_none,
@@ -751,16 +869,30 @@ def _handoff_payload(
 
 
 def executor_route_decision_id(value: ExecutorRouteDecision) -> str:
+    """Return the deterministic content identity for a route decision."""
+
+    if type(value) is not ExecutorRouteDecision:
+        raise TypeError("value must be an exact ExecutorRouteDecision")
     return _digest(
-        "executor-route-decision", _decision_payload(value, include_id=False)
+        "executor-route-decision",
+        _decision_payload(value, include_id=False),
     )
 
 
 def executor_handoff_id(value: ExecutorHandoff) -> str:
-    return _digest("executor-handoff", _handoff_payload(value, include_id=False))
+    """Return the deterministic content identity for an executor handoff."""
+
+    if type(value) is not ExecutorHandoff:
+        raise TypeError("value must be an exact ExecutorHandoff")
+    return _digest(
+        "executor-handoff",
+        _handoff_payload(value, include_id=False),
+    )
 
 
 def serialize_executor_route_decision(value: ExecutorRouteDecision) -> str:
+    """Serialize one exact route decision as canonical JSON."""
+
     if type(value) is not ExecutorRouteDecision:
         raise TypeError("value must be an exact ExecutorRouteDecision")
     return _canonical_json(value.to_dict())
@@ -806,6 +938,8 @@ def select_executor_route(
     external_writes_authorized: bool = False,
     merge_authorized: bool = False,
 ) -> ExecutorRouteDecision:
+    """Select one deterministic route without executing or authorizing work."""
+
     _enum_tuple(
         "required_capabilities",
         required_capabilities,
@@ -818,28 +952,12 @@ def select_executor_route(
         ExecutorCapability,
         MAX_CAPABILITIES,
     )
-    for name, value in (
-        ("governed_runner_available", governed_runner_available),
-        ("external_fallback_available", external_fallback_available),
-        (
-            "external_fallback_explicitly_permitted",
-            external_fallback_explicitly_permitted,
+    boolean_values = {
+        "governed_runner_available": governed_runner_available,
+        "external_fallback_available": external_fallback_available,
+        "external_fallback_explicitly_permitted": (
+            external_fallback_explicitly_permitted
         ),
-        ("authority_ambiguous", authority_ambiguous),
-        ("ownership_ambiguous", ownership_ambiguous),
-        ("source_of_truth_ambiguous", source_of_truth_ambiguous),
-        ("target_ambiguous", target_ambiguous),
-        ("scope_ambiguous", scope_ambiguous),
-        ("excluded_surface_involved", excluded_surface_involved),
-        ("evidence_stale", evidence_stale),
-        ("evidence_contradictory", evidence_contradictory),
-        (
-            "irreversible_or_uncertain_mutation",
-            irreversible_or_uncertain_mutation,
-        ),
-    ):
-        _exact_bool(name, value)
-    human_flags = {
         "authority_ambiguous": authority_ambiguous,
         "ownership_ambiguous": ownership_ambiguous,
         "source_of_truth_ambiguous": source_of_truth_ambiguous,
@@ -849,13 +967,24 @@ def select_executor_route(
         "evidence_stale": evidence_stale,
         "evidence_contradictory": evidence_contradictory,
         "irreversible_or_uncertain_mutation": irreversible_or_uncertain_mutation,
+        "execution_authorized": execution_authorized,
+        "github_writes_authorized": github_writes_authorized,
+        "external_writes_authorized": external_writes_authorized,
+        "merge_authorized": merge_authorized,
+    }
+    for name, value in boolean_values.items():
+        _exact_bool(name, value)
+    human_flags = {
+        name: boolean_values[name] for name, _ in _HUMAN_FLAG_REASONS
     }
     route, reasons, rejected = _expected_route(
         required_capabilities=required_capabilities,
         governed_runner_capabilities=governed_runner_capabilities,
         governed_runner_available=governed_runner_available,
         external_fallback_available=external_fallback_available,
-        external_fallback_explicitly_permitted=external_fallback_explicitly_permitted,
+        external_fallback_explicitly_permitted=(
+            external_fallback_explicitly_permitted
+        ),
         human_flags=human_flags,
     )
     if route is ExecutorRoute.HUMAN_DECISION_REQUIRED:
@@ -872,7 +1001,9 @@ def select_executor_route(
         governed_runner_capabilities=governed_runner_capabilities,
         governed_runner_available=governed_runner_available,
         external_fallback_available=external_fallback_available,
-        external_fallback_explicitly_permitted=external_fallback_explicitly_permitted,
+        external_fallback_explicitly_permitted=(
+            external_fallback_explicitly_permitted
+        ),
         selected_route=route,
         route_reasons=reasons,
         rejected_lower_cost_routes=rejected,
@@ -885,16 +1016,26 @@ def select_executor_route(
         evidence_stale=evidence_stale,
         evidence_contradictory=evidence_contradictory,
         irreversible_or_uncertain_mutation=irreversible_or_uncertain_mutation,
-        execution_service_request_fingerprint_or_none=execution_service_request_fingerprint_or_none,
+        execution_service_request_fingerprint_or_none=(
+            execution_service_request_fingerprint_or_none
+        ),
         authorization_id_or_none=authorization_id_or_none,
         validation_command_plan_id_or_none=validation_command_plan_id_or_none,
         operating_mode_decision_id_or_none=operating_mode_decision_id_or_none,
-        executable_lane_selection_id_or_none=executable_lane_selection_id_or_none,
-        repository_state_evidence_id_or_none=repository_state_evidence_id_or_none,
-        worktree_preparation_evidence_id_or_none=worktree_preparation_evidence_id_or_none,
+        executable_lane_selection_id_or_none=(
+            executable_lane_selection_id_or_none
+        ),
+        repository_state_evidence_id_or_none=(
+            repository_state_evidence_id_or_none
+        ),
+        worktree_preparation_evidence_id_or_none=(
+            worktree_preparation_evidence_id_or_none
+        ),
         exact_head_package_id_or_none=exact_head_package_id_or_none,
         environment_profile_id_or_none=environment_profile_id_or_none,
-        environment_health_evidence_id_or_none=environment_health_evidence_id_or_none,
+        environment_health_evidence_id_or_none=(
+            environment_health_evidence_id_or_none
+        ),
         checkpoint_id_or_none=checkpoint_id_or_none,
         resume_plan_id_or_none=resume_plan_id_or_none,
         workflow_runtime_identity_or_none=workflow_runtime_identity_or_none,
@@ -921,6 +1062,8 @@ def build_executor_handoff(
     resume_plan_id_or_none: str | None = None,
     environment_profile_id_or_none: str | None = None,
 ) -> ExecutorHandoff:
+    """Build a bound handoff for a governed-runner or fallback decision."""
+
     if type(decision) is not ExecutorRouteDecision:
         raise TypeError("decision must be an exact ExecutorRouteDecision")
     if decision.selected_route not in {
@@ -959,9 +1102,13 @@ def build_executor_handoff(
         required_capabilities=decision.required_capabilities,
         allowed_paths=allowed_paths,
         forbidden_paths=forbidden_paths,
-        execution_service_request_fingerprint_or_none=decision.execution_service_request_fingerprint_or_none,
+        execution_service_request_fingerprint_or_none=(
+            decision.execution_service_request_fingerprint_or_none
+        ),
         authorization_id_or_none=decision.authorization_id_or_none,
-        validation_command_plan_id_or_none=decision.validation_command_plan_id_or_none,
+        validation_command_plan_id_or_none=(
+            decision.validation_command_plan_id_or_none
+        ),
         checkpoint_id_or_none=decision.checkpoint_id_or_none,
         resume_plan_id_or_none=decision.resume_plan_id_or_none,
         environment_profile_id_or_none=decision.environment_profile_id_or_none,
