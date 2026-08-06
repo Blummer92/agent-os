@@ -61,9 +61,11 @@ python -m scripts.agent_os_github_git_objects.cli execute \
 
 Both JSON inputs are closed schema. Stdout is stable JSON; bounded diagnostics go to stderr. The CLI has no `--force`, raw endpoint, merge, issue, PR, workflow, or settings option.
 
+Exit codes: `0` for a ready plan or a completed ref update; `2` for a blocked plan; `3` for a blocked or uncertain execution; `4` for an unexpected internal error.
+
 ## Rollback
 
-Remove this package, its tests, the `scripts/README.md` entry, and the #920 changelog entry. Historical Git objects and commits are not rewritten. Any unattached objects remain audit evidence and must never be silently attached to another ref.
+Remove this package, its tests, and the `scripts/README.md` entry. Historical Git objects and commits are not rewritten. Any unattached objects remain audit evidence and must never be silently attached to another ref.
 
 ## Limitations
 

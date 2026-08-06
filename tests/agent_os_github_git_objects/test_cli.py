@@ -113,6 +113,42 @@ def test_execute_cli_requires_matching_confirmation(tmp_path, monkeypatch, capsy
     assert output["force_used"] is False
 
 
+def test_execute_cli_rejects_mismatched_confirmation(tmp_path, monkeypatch, capsys) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    confirmation_path = tmp_path / "confirmation.json"
+    manifest_path.write_text(json.dumps(manifest()), encoding="utf-8")
+    confirmation_path.write_text(
+        json.dumps(
+            {
+                "invocation_id": "issue-917-publication",
+                "operation_fingerprint": "a" * 64,
+                "repository": REPOSITORY,
+                "branch": "agent/917-two-phase-planning-binding",
+                "expected_head_sha": HEAD,
+                "confirmed": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    transport = FakeTransport()
+    monkeypatch.setattr(cli, "_transport_from_environment", lambda: transport)
+    assert (
+        cli.main(
+            [
+                "execute",
+                "--manifest",
+                str(manifest_path),
+                "--confirmation-file",
+                str(confirmation_path),
+            ]
+        )
+        != 0
+    )
+    output = json.loads(capsys.readouterr().out)
+    assert output["reason"] == AtomicCommitReason.CONFIRMATION_MISMATCHED.value
+    assert not any(call[0].startswith("create_") or call[0] == "update_ref" for call in transport.calls)
+
+
 def test_cli_does_not_expose_force_endpoint_or_auth_setup_flags() -> None:
     help_text = cli.build_parser().format_help()
     assert "--force" not in help_text

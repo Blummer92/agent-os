@@ -114,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as error:
         diagnostic = _sanitize_diagnostic(str(error))
         print(f"error:{type(error).__name__}:{diagnostic[:512]}", file=sys.stderr)
-        return 2
+        return 4
 
 
 def _sanitize_diagnostic(value: str) -> str:

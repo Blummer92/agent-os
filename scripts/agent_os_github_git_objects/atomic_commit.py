@@ -278,6 +278,7 @@ def execute_atomic_commit_from_blobs(
                 execution_attempted=True,
                 ref_update_attempted=True,
                 mutation_state=MutationState.UNCERTAIN,
+                unattached=(created_tree, created_commit),
                 diagnostic="post-update branch head does not match created commit",
             )
         return AtomicCommitResult(

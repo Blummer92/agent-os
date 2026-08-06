@@ -421,6 +421,7 @@ def test_post_update_mismatch_is_uncertain() -> None:
     assert result.reason is AtomicCommitReason.POST_UPDATE_MISMATCH
     assert result.status is AtomicCommitStatus.UNCERTAIN
     assert result.mutation_state is MutationState.UNCERTAIN
+    assert len(result.unattached_objects) == 2
 
 
 def test_transport_interface_has_no_unrelated_mutation_surface() -> None:
