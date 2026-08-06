@@ -27,7 +27,7 @@ versions change only when the module's standards or contract changes.
 | Agent Memory & Context Budget Manager | 0.1.0 |
 | IA4D-to-Scheduler Handoff Contract | 0.2.0 |
 | GitHub Issue Lifecycle Standard | 0.1.0 |
-| Agent OS Execution Service | 0.4.0 |
+| Agent OS Execution Service | 0.5.0 |
 | Artifact-First Response Standard | 0.1.0 |
 | Teacher Decision Studio Standard | 0.1.0 |
 | LP Pacing Handoff Contract | 0.1.0 |
@@ -53,7 +53,7 @@ not authorize live Workspace, Notion, trigger, sharing, or production writes.
 **IA4D-to-Scheduler Handoff Contract**, and **Agent OS Execution Service**
 extended descriptions moved to `04_Registry/module-version-map-details.md` to
 keep this index under the line-limit. Workflow Scheduler remains `0.9.1`;
-Agent OS Execution Service remains `0.4.0`.
+Agent OS Execution Service is `0.5.0`.
 
 **Artifact-First Response Standard**
 (`01_Shared_Standards/instructional-design/artifact-first-response-standard.md`,
