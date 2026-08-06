@@ -46,7 +46,7 @@ external-system operation, and every result it produces carries
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from enum import Enum
 from typing import Any, Literal
 
@@ -69,28 +69,17 @@ from .repository_stage import (
     prepare_repository_state_evidence,
 )
 
+WSC3_STATUS_UNMAPPED = "wsc3-status-unmapped"
+"""WSC3 returned a status this coordinator cannot classify."""
+
 _REPOSITORY_IDENTITY_MISMATCH = "repo.identity-mismatch"
 
+_COHORT_PAYLOAD_KEYS = frozenset({"node_ids", "classification", "reason_codes"})
+
+# Derived from the canonical dataclass so a new WSC3 field cannot silently drop
+# out of the serialized shape.
 _DRAFT_TASK_PROPOSAL_PAYLOAD_KEYS = frozenset(
-    {
-        "proposal_version",
-        "proposal_id",
-        "handoff_digest",
-        "graph_digest",
-        "planning_result_digest",
-        "repository",
-        "base_branch",
-        "evaluated_repository_sha",
-        "evaluator_commit_sha",
-        "supplied_node_ids",
-        "cohort_summaries",
-        "issueplan_current_state_evidence_id",
-        "repository_state_evidence_id",
-        "created_at",
-        "eligibility_status",
-        "authorization_status",
-        "execution_authorized",
-    }
+    item.name for item in fields(DraftTaskProposal)
 )
 
 
@@ -265,7 +254,16 @@ def prepare_repository_and_proposal(
         evidence,
         created_at=created_at,
     )
-    status = _WSC3_STATUS_MAP[proposal_result.status]
+    status = _WSC3_STATUS_MAP.get(proposal_result.status)
+    if status is None:
+        # WSC3 constrains its own status vocabulary, but it is another package:
+        # a status added there must still land as one deterministic fail-closed
+        # result here, never an escaping exception.
+        return _result(
+            RepositoryProposalStageStatus.INVALID,
+            repository_stage,
+            (WSC3_STATUS_UNMAPPED, *planning_reasons),
+        )
     return RepositoryProposalStageResult(
         status=status,
         repository_stage=repository_stage,
@@ -338,6 +336,14 @@ def draft_task_proposal_from_dict(payload: Mapping[str, Any]) -> DraftTaskPropos
     cohorts = payload["cohort_summaries"]
     if not isinstance(cohorts, list):
         raise ValueError("cohort_summaries must be a list")
+    for item in cohorts:
+        if not isinstance(item, Mapping):
+            raise ValueError("each cohort summary must be a mapping")
+        missing_keys = sorted(_COHORT_PAYLOAD_KEYS - set(item))
+        if missing_keys:
+            raise ValueError(
+                "cohort summary is missing field(s): " + ", ".join(missing_keys)
+            )
     return DraftTaskProposal(
         proposal_version=payload["proposal_version"],
         proposal_id=payload["proposal_id"],
@@ -368,12 +374,15 @@ def draft_task_proposal_from_dict(payload: Mapping[str, Any]) -> DraftTaskPropos
 def _repository_matches_handoff(
     evidence: RepositoryStateEvidence, handoff: SchedulerPlanningHandoff
 ) -> bool:
-    """Check the one binding only the handoff can state: ``owner/repository``."""
+    """Check the one binding only the handoff can state: ``owner/repository``.
+
+    Both sides are normalized here rather than relying on ``RepositoryIdentity``
+    already lowercasing its own fields, so this binding cannot start rejecting
+    every observation if that upstream normalization ever changes.
+    """
     identity = evidence.repository_identity
-    return (
-        f"{identity.owner}/{identity.repository}"
-        == handoff.repository.strip().lower()
-    )
+    observed = f"{identity.owner}/{identity.repository}".strip().lower()
+    return observed == handoff.repository.strip().lower()
 
 
 def _result(

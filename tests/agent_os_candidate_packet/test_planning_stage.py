@@ -392,7 +392,7 @@ def test_preserved_evidence_leaves_handoff_bytes_and_digests_untouched() -> None
     assert swapped.status is first.status
 
 
-def test_pre_752_positional_callers_remain_supported() -> None:
+def test_pre_752_positional_callers_still_bind() -> None:
     legacy = PlanningHandoffStageResult(
         PlanningHandoffStageStatus.INVALID_INPUT,
         None,
@@ -409,6 +409,47 @@ def test_pre_752_positional_callers_remain_supported() -> None:
     assert legacy.reason_codes == ("legacy-caller",)
     assert legacy.execution_authorized is False
     assert legacy.side_effects_performed is False
+
+
+def test_a_complete_result_built_positionally_now_requires_the_evidence() -> None:
+    """The one shape #752 does change, asserted rather than left implicit.
+
+    A pre-#752 caller assembling a *complete* result by hand gets the new field
+    defaulted to None and is rejected -- the same invariant every other
+    canonical object on this result already carries. `prepare_planning_handoff`
+    supplies it, so only direct constructor use is affected.
+    """
+    ready = _ready_planning_result()
+
+    with pytest.raises(ValueError, match="every canonical object"):
+        PlanningHandoffStageResult(
+            ready.status,
+            ready.node,
+            ready.graph,
+            ready.planning_result,
+            ready.handoff,
+            ready.serialized_handoff,
+            ready.handoff_validation,
+            ready.wsc3_suppliable,
+            ready.reason_codes,
+        )
+
+    # Supplying it positionally as the tenth argument is accepted.
+    rebuilt = PlanningHandoffStageResult(
+        ready.status,
+        ready.node,
+        ready.graph,
+        ready.planning_result,
+        ready.handoff,
+        ready.serialized_handoff,
+        ready.handoff_validation,
+        ready.wsc3_suppliable,
+        ready.reason_codes,
+        ready.issueplan_current_state_evidence,
+    )
+    assert rebuilt.issueplan_current_state_evidence is (
+        ready.issueplan_current_state_evidence
+    )
 
 
 def test_evidence_field_rejects_a_foreign_object() -> None:

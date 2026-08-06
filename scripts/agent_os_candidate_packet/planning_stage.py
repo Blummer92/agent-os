@@ -65,8 +65,16 @@ class PlanningHandoffStageResult:
     reconstructs, normalizes, or duplicates it, and handoff bytes, digests, and
     classifications are unaffected by its presence.
 
-    It is a trailing keyword field with a default, so existing positional and
-    keyword callers keep working unchanged.
+    Compatibility, stated precisely: the field is trailing with a default, so
+    every existing positional and keyword call site still *binds*. An
+    invalid-input result built the pre-#752 way is unchanged. Direct
+    construction of a *complete* result, however, now requires the evidence,
+    exactly as it already requires ``node``, ``graph``, ``planning_result``,
+    ``handoff``, ``serialized_handoff``, and ``handoff_validation``: exempting
+    only this field would let a complete result ship without the object WSC3
+    needs. ``prepare_planning_handoff(...)`` supplies it, so callers that use
+    the constructor directly to assemble a complete result are the only ones
+    affected.
     """
 
     status: PlanningHandoffStageStatus

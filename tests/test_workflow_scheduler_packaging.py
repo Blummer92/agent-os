@@ -75,6 +75,19 @@ def _fresh_import_of_target() -> None:
     importlib.import_module("workflow_scheduler.planning.draft_ingestion")
 
 
+def _cold_import_of_allowlisted_importer() -> None:
+    """Import the allowlisted importer first, from a fully cold cache.
+
+    Importing Workflow Scheduler first would leave it warm and prove nothing
+    about the direction that could actually cycle, so both package prefixes are
+    evicted and `proposal_stage` is what pulls Workflow Scheduler back in.
+    """
+    for module_name in TARGET_MODULES:
+        _drop_from_sys_modules(module_name)
+    _drop_from_sys_modules("scripts")
+    importlib.import_module("scripts.agent_os_candidate_packet.proposal_stage")
+
+
 def test_root_import_resolves_to_canonical_package_tree() -> None:
     _fresh_import_of_target()
 
@@ -184,14 +197,41 @@ def _workflow_scheduler_imports(path: Path) -> list[tuple[str, str | None]]:
 
 
 def _imports_prefix(path: Path, prefix: str) -> bool:
+    """Detect an import of `prefix`, including `from <parent> import <member>`."""
     for node in ast.walk(_parse(path)):
         if isinstance(node, ast.Import):
             if any(_is_prefixed(alias.name, prefix) for alias in node.names):
                 return True
         elif isinstance(node, ast.ImportFrom) and not node.level:
-            if _is_prefixed(node.module or "", prefix):
+            module = node.module or ""
+            if _is_prefixed(module, prefix):
+                return True
+            # `from scripts import agent_os_candidate_packet` names the target
+            # as a member, not as the module.
+            if any(
+                _is_prefixed(f"{module}.{alias.name}", prefix) for alias in node.names
+            ):
                 return True
     return False
+
+
+def _loader_aliases(tree: ast.Module) -> set[str]:
+    """Local names bound to an import-machinery entry point, aliases included.
+
+    `from importlib import import_module as load` must not launder a call to
+    `load(...)` past the loader check.
+    """
+    aliases: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and not node.level:
+            for alias in node.names:
+                if alias.name in PROHIBITED_LOADER_CALLS:
+                    aliases.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname and alias.name in PROHIBITED_LOADER_CALLS:
+                    aliases.add(alias.asname)
+    return aliases
 
 
 def test_only_the_allowlisted_scripts_module_imports_workflow_scheduler() -> None:
@@ -226,7 +266,9 @@ def test_candidate_packet_uses_no_private_path_loader_or_syspath_workaround() ->
     offending: list[str] = []
     for path in _python_sources(CANDIDATE_PACKET_ROOT):
         name = path.relative_to(ROOT).as_posix()
-        for node in ast.walk(_parse(path)):
+        tree = _parse(path)
+        prohibited_calls = PROHIBITED_LOADER_CALLS | _loader_aliases(tree)
+        for node in ast.walk(tree):
             modules: list[str] = []
             if isinstance(node, ast.Import):
                 modules = [alias.name for alias in node.names]
@@ -252,7 +294,7 @@ def test_candidate_packet_uses_no_private_path_loader_or_syspath_workaround() ->
                     if isinstance(function, ast.Name)
                     else ""
                 )
-                if called in PROHIBITED_LOADER_CALLS:
+                if called in prohibited_calls:
                     offending.append(f"{name}: import-machinery call {called!r}")
             if isinstance(node, ast.Constant) and isinstance(node.value, str):
                 if "PYTHONPATH" in node.value:
@@ -271,5 +313,4 @@ def test_no_circular_import_between_scripts_and_workflow_scheduler() -> None:
     ]
     assert offending == []
 
-    _fresh_import_of_target()
-    importlib.import_module("scripts.agent_os_candidate_packet.proposal_stage")
+    _cold_import_of_allowlisted_importer()

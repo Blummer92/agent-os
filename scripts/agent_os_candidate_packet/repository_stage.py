@@ -66,6 +66,9 @@ from scripts.agent_os_execution_capabilities import (
 REPOSITORY_OBSERVATION_REJECTED = "repository-observation-rejected"
 """The observation could not form canonical evidence at all."""
 
+REPOSITORY_OUTCOME_UNMAPPED = "repository-outcome-unmapped"
+"""The canonical validator returned an outcome this stage cannot classify."""
+
 _REQUIRED_OBSERVATION_TEXT = (
     "producer_adapter",
     "producer_adapter_version",
@@ -250,8 +253,20 @@ def prepare_repository_state_evidence(
         expected_contract_fingerprint=expected_contract_fingerprint,
         expected_pr_sha=expected_pr_sha,
     )
+    try:
+        status = RepositoryStageStatus(validation.outcome)
+    except ValueError:
+        # The canonical validator constrains its own outcome vocabulary, but it
+        # is another package: an outcome added there must still land as one
+        # deterministic fail-closed result here, never an escaping exception.
+        return RepositoryStageResult(
+            status=RepositoryStageStatus.INVALID,
+            evidence=None,
+            validation=None,
+            reason_codes=(REPOSITORY_OUTCOME_UNMAPPED, *validation.reason_codes),
+        )
     return RepositoryStageResult(
-        status=RepositoryStageStatus(validation.outcome),
+        status=status,
         evidence=evidence,
         validation=validation,
         reason_codes=validation.reason_codes,

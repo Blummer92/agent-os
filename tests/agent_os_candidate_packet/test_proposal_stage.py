@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import dataclasses
 import inspect
 import json
 from dataclasses import replace
@@ -10,12 +11,15 @@ from pathlib import Path
 
 import pytest
 
+from workflow_scheduler.planning.draft_ingestion import DraftTaskProposal
+
 from scripts.agent_os_candidate_packet import proposal_stage
 from scripts.agent_os_candidate_packet.planning_stage import (
     PlanningHandoffStageStatus,
     prepare_planning_handoff,
 )
 from scripts.agent_os_candidate_packet.proposal_stage import (
+    WSC3_STATUS_UNMAPPED,
     RepositoryProposalStageResult,
     RepositoryProposalStageStatus,
     draft_task_proposal_from_dict,
@@ -473,6 +477,32 @@ def test_issueplan_evidence_with_a_broken_identity_returns_invalid() -> None:
     assert result.proposal is None
 
 
+def test_an_unmappable_wsc3_status_fails_closed(monkeypatch) -> None:
+    """A status added by WSC3 must not escape as a KeyError.
+
+    WSC3 constrains its own vocabulary, so the result is forced past that
+    invariant to prove this coordinator still returns one deterministic result.
+    """
+    real = proposal_stage.build_draft_task_proposals
+    planning = _planning()
+
+    def _unmapped(handoff, issueplan, repository, *, created_at):
+        result = real(handoff, issueplan, repository, created_at=created_at)
+        object.__setattr__(result, "status", "some-future-status")
+        object.__setattr__(result, "proposals", ())
+        return result
+
+    monkeypatch.setattr(proposal_stage, "build_draft_task_proposals", _unmapped)
+
+    result = _prepare(planning)
+
+    assert result.status is RepositoryProposalStageStatus.INVALID
+    assert WSC3_STATUS_UNMAPPED in result.reason_codes
+    assert result.proposal is None
+    assert result.repository_state_evidence is not None
+    assert result.execution_authorized is False
+
+
 def test_wsc3_reason_codes_are_carried_through_unchanged() -> None:
     result = _prepare()
 
@@ -498,6 +528,30 @@ def test_proposal_round_trips_without_drift() -> None:
     assert draft_task_proposal_to_dict(rebuilt) == payload
     assert rebuilt.execution_authorized is False
     assert rebuilt.authorization_status == "not-evaluated"
+
+
+def test_proposal_serializer_shape_cannot_drift_from_the_dataclass() -> None:
+    """`to_dict` emits exactly the fields `from_dict` requires."""
+    payload = draft_task_proposal_to_dict(_prepare().proposal)
+
+    assert set(payload) == {
+        item.name for item in dataclasses.fields(DraftTaskProposal)
+    }
+
+
+def test_proposal_round_trip_rejects_malformed_cohort_summaries() -> None:
+    payload = draft_task_proposal_to_dict(_prepare().proposal)
+
+    with pytest.raises(ValueError, match="cohort summary must be a mapping"):
+        draft_task_proposal_from_dict({**payload, "cohort_summaries": ["nope"]})
+
+    incomplete = [dict(payload["cohort_summaries"][0])]
+    incomplete[0].pop("classification")
+    with pytest.raises(ValueError, match="cohort summary is missing field"):
+        draft_task_proposal_from_dict({**payload, "cohort_summaries": incomplete})
+
+    with pytest.raises(ValueError, match="cohort_summaries must be a list"):
+        draft_task_proposal_from_dict({**payload, "cohort_summaries": {}})
 
 
 def test_proposal_round_trip_rejects_a_tampered_identity() -> None:
@@ -635,11 +689,43 @@ _PROHIBITED_MODULES = frozenset(
     }
 )
 
-_PROHIBITED_CALLS = frozenset({"open", "system", "run", "Popen", "connect", "write"})
+_PROHIBITED_CALLS = frozenset(
+    {
+        "open",
+        "system",
+        "run",
+        "Popen",
+        "call",
+        "check_output",
+        "check_call",
+        "connect",
+        "send",
+        "sendall",
+        "urlopen",
+        "request",
+        "write",
+        "writelines",
+        "write_text",
+        "write_bytes",
+        "mkdir",
+        "makedirs",
+        "unlink",
+        "remove",
+        "rmtree",
+        "rename",
+        "chmod",
+    }
+)
 
 
 def test_coordinator_reaches_no_io_execution_or_persistence_surface() -> None:
-    """Static proof of the read-only, no-side-effect boundary."""
+    """Static proof of the read-only, no-side-effect boundary.
+
+    Scope is this module only: it does not follow imports, so it proves this
+    file reaches no I/O surface directly, not that its whole dependency tree is
+    I/O-free. The package-level boundary is covered separately by
+    `tests/test_workflow_scheduler_packaging.py`.
+    """
     source = Path(inspect.getfile(proposal_stage)).read_text(encoding="utf-8")
     tree = ast.parse(source)
 

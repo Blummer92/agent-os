@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import dataclasses
 import inspect
 import json
 from dataclasses import replace
@@ -13,6 +14,7 @@ import pytest
 from scripts.agent_os_candidate_packet import repository_stage
 from scripts.agent_os_candidate_packet.repository_stage import (
     REPOSITORY_OBSERVATION_REJECTED,
+    REPOSITORY_OUTCOME_UNMAPPED,
     RepositoryObservation,
     RepositoryStageResult,
     RepositoryStageStatus,
@@ -23,6 +25,7 @@ from scripts.agent_os_candidate_packet.repository_stage import (
 from scripts.agent_os_execution_capabilities import (
     RepositoryEvidenceType,
     RepositoryIdentity,
+    RepositoryStateEvidence,
     WorktreeState,
 )
 
@@ -300,6 +303,8 @@ def test_fork_upstream_mismatch_is_distinct_from_identity_mismatch() -> None:
 
     assert result.status is RepositoryStageStatus.STALE
     assert "repo.fork-upstream-mismatch" in result.reason_codes
+    # Distinct means exactly one of the two is reported, never both.
+    assert "repo.identity-mismatch" not in result.reason_codes
 
 
 def test_contract_fingerprint_mismatch_is_reported() -> None:
@@ -405,6 +410,22 @@ def test_round_trip_preserves_optional_sha_absence() -> None:
     assert rebuilt.requested_ref is None
     assert rebuilt.requested_sha is None
     assert rebuilt == original
+
+
+def test_serializer_shape_cannot_drift_from_the_canonical_dataclass() -> None:
+    """`to_dict` emits exactly the fields `from_dict` requires.
+
+    `from_dict` derives its key set from `RepositoryStateEvidence`, so without
+    this a new canonical field would be silently dropped by `to_dict` and only
+    surface later as a confusing missing-field error.
+    """
+    payload = repository_state_evidence_to_dict(
+        prepare_repository_state_evidence(_observation()).evidence
+    )
+
+    assert set(payload) == {
+        item.name for item in dataclasses.fields(RepositoryStateEvidence)
+    }
 
 
 def test_round_trip_rejects_a_tampered_identity() -> None:
@@ -518,6 +539,27 @@ def test_prepare_rejects_a_non_observation_input() -> None:
         prepare_repository_state_evidence({"head_sha": _HEAD_SHA})
 
 
+def test_an_unmappable_validator_outcome_fails_closed(monkeypatch) -> None:
+    """An outcome added by the canonical validator must not escape as an error.
+
+    The validator constrains its own vocabulary, so the result is forced past
+    that invariant to prove this stage still returns one deterministic result.
+    """
+    real = prepare_repository_state_evidence(_observation()).validation
+    object.__setattr__(real, "outcome", "some-future-outcome")
+    monkeypatch.setattr(
+        repository_stage, "validate_repository_state_evidence", lambda *a, **k: real
+    )
+
+    result = prepare_repository_state_evidence(_observation())
+
+    assert result.status is RepositoryStageStatus.INVALID
+    assert REPOSITORY_OUTCOME_UNMAPPED in result.reason_codes
+    assert result.evidence is None
+    assert result.validation is None
+    assert result.execution_authorized is False
+
+
 # --------------------------------------------------------------------------
 # No authority escalation and no side effects.
 # --------------------------------------------------------------------------
@@ -584,11 +626,43 @@ _PROHIBITED_MODULES = frozenset(
     }
 )
 
-_PROHIBITED_CALLS = frozenset({"open", "system", "run", "Popen", "connect", "write"})
+_PROHIBITED_CALLS = frozenset(
+    {
+        "open",
+        "system",
+        "run",
+        "Popen",
+        "call",
+        "check_output",
+        "check_call",
+        "connect",
+        "send",
+        "sendall",
+        "urlopen",
+        "request",
+        "write",
+        "writelines",
+        "write_text",
+        "write_bytes",
+        "mkdir",
+        "makedirs",
+        "unlink",
+        "remove",
+        "rmtree",
+        "rename",
+        "chmod",
+    }
+)
 
 
 def test_repository_stage_reaches_no_io_or_execution_surface() -> None:
-    """Static proof of the read-only boundary this stage claims."""
+    """Static proof of the read-only boundary this stage claims.
+
+    Scope is this module only: it does not follow imports, so it proves this
+    file reaches no I/O surface directly, not that its whole dependency tree is
+    I/O-free. The package-level boundary is covered separately by
+    `tests/test_workflow_scheduler_packaging.py`.
+    """
     source = Path(inspect.getfile(repository_stage)).read_text(encoding="utf-8")
     tree = ast.parse(source)
 
