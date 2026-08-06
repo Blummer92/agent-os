@@ -7,7 +7,7 @@ COMMON_OVERLAY = Path("02_Agent_Overlays/_common-overlay-rules.md")
 OVERLAY_DIR = Path("02_Agent_Overlays")
 
 BASELINE_MODULES = {
-    "Global Engineering": "0.2.0",
+    "Global Engineering": "0.3.0",
     "Read-Only Default": "0.1.0",
     "Source-of-Truth Checks": "0.1.0",
 }
@@ -162,3 +162,45 @@ def test_every_canonical_agent_overlay_inherits_common_rules() -> None:
         assert overlay.exists(), f"missing overlay for {agent}: {overlay}"
         content = overlay.read_text(encoding="utf-8")
         assert "See `_common-overlay-rules.md` plus:" in content, agent
+
+
+GLOBAL_ENGINEERING = Path("01_Shared_Standards/global-engineering/README.md")
+
+
+def test_mobile_terminal_command_ux_is_inherited_from_global_engineering() -> None:
+    content = GLOBAL_ENGINEERING.read_text(encoding="utf-8")
+    required_phrases = (
+        "Mobile Terminal And Cloud Shell UX",
+        "brief natural-language explanation immediately before the command",
+        "one copy-and-paste command whenever practical",
+        "dependent shell operations with `&&`",
+        "or an equivalently fail-closed construction",
+        "missing repository directory",
+        "wrong working directory",
+        "missing local branch",
+        "remote branch fetch",
+        "inactive virtual environment",
+        "optional tool authentication",
+        "narrow mobile displays",
+        "shell prompts",
+        "terminal output",
+        "heredoc continuation prompts",
+        "incomplete heredocs",
+        "Python source directly as Bash commands",
+        "Use multiple commands only when operator input is required between steps",
+        "repository verification",
+        "protected-branch",
+        "stop-condition safeguards",
+        "separate authorization is required",
+        "potentially destructive operation requires inspection first",
+    )
+    for phrase in required_phrases:
+        assert phrase in content
+
+
+def test_mobile_terminal_command_ux_is_not_duplicated_in_agent_overlays() -> None:
+    marker = "Mobile Terminal And Cloud Shell UX"
+    for overlay in OVERLAY_DIR.glob("*.md"):
+        if overlay.name == "_common-overlay-rules.md":
+            continue
+        assert marker not in overlay.read_text(encoding="utf-8"), overlay

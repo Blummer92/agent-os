@@ -22,6 +22,24 @@ evidence format, stderr logging contract, exit codes, and retry behavior are in
 
 Tests: `tests/test_verify_repo_state.py`.
 
+## build-chatgpt-checkout-package.sh
+
+Builds one deterministic, exact-head ZIP for offline ChatGPT code-execution
+validation, from an explicitly supplied branch, tag, or exact commit SHA. It
+reuses `scripts/prepare-issue-worktree.sh` for all checkout/fetch/worktree
+behavior rather than duplicating it.
+
+```bash
+scripts/build-chatgpt-checkout-package.sh \
+  --repository <owner/name> --issue <n> --ref <branch|tag|sha40> \
+  --output <absolute .zip path>
+```
+
+Syntax, manifest fields, exclusions, and the determinism boundary are
+documented in `scripts/build-chatgpt-checkout-package.md`.
+
+Tests: `tests/test_build_chatgpt_checkout_package.py`.
+
 ## validate-all.sh
 
 Aggregate local validation runner: structural validation plus every discovered
