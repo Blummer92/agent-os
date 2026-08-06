@@ -12,7 +12,7 @@ Inputs are bounded as follows:
 
 - `visual_needs_plan`: validated `curriculum-visual-needs-plan-v1` `ValidationResult` or `ValidatedRecord` with exact `visuals-required` outcome; contract version, plan ID, revision, and fingerprint must reconstruct exactly.
 - `candidates`: built-in list of at most 32 compatibility envelopes, each revalidated independently.
-- `source_revision`: nonempty caller-supplied source-snapshot identity, at most 256 characters.
+- `source_revision`: nonempty caller-supplied source-snapshot identity, at most `MAX_SOURCE_REVISION_LENGTH` (`256`) characters.
 - `contract_version`: exact candidate projection version; defaults to v1.
 
 Plain plan mappings, `no-visual-needed`, and `manual-review-required` plans fail closed.
@@ -31,7 +31,7 @@ Plan mismatches use `visual-candidate-role-mismatch`, `visual-candidate-material
 
 The result preserves plan contract version, plan ID, plan revision, and plan fingerprint. `candidate_set_id` is deterministic and SHA-256-derived from the selected candidate contract, exact plan identity, exact `source_revision`, and fully ordered `eligible`, `rejected`, and `manual_review` groups. The validated result fingerprint covers the complete normalized result.
 
-Input order does not affect semantic output. Groups sort by compatibility ID, compatibility fingerprint, and reason codes. Changing source revision, version, plan identity, evidence, classification, reasons, or projected fields changes the candidate-set identity or fingerprint.
+Input order does not affect semantic output. Groups sort by compatibility ID, compatibility fingerprint, reason codes, and canonical `sha256_hex(item)` as the total-order tie-breaker. Changing source revision, version, plan identity, evidence, classification, reasons, or projected fields changes the candidate-set identity or fingerprint.
 
 ## V1 projection
 
