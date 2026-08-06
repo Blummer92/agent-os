@@ -33,6 +33,16 @@ reported in the pull request. Material architecture, ownership, schema,
 compatibility, workflow, credential, persistence, protected-setting, production,
 or external-effect changes require a new decision.
 
+## Pattern + Docs Freshness Gate
+State:
+- existing pattern checked, or `none found`;
+- reusable capability registry relevance checked, or `not applicable`;
+- canonical implementation path;
+- tests expected to prove the pattern or behavior;
+- docs expected to change;
+- docs intentionally unchanged, with bounded reason;
+- changelog, module-version, and registry review expected.
+
 ## Proposed Content Or Patch
 Paste the exact proposed content, patch, or implementation instructions.
 
@@ -47,6 +57,8 @@ not an authorization boundary.
 - Shared rules stay in shared standards.
 - Agent-specific rules stay in overlays.
 - Registry ownership and routing stay in registry files.
+- Pattern + Docs Freshness Gate is completed or explicitly marked not applicable
+  with a bounded reason.
 - Required exact-head validation passes.
 - No blocker or blocking review conversation remains before Ready-for-Review.
 
