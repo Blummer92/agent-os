@@ -20,7 +20,7 @@ versions change only when the module's standards or contract changes.
 | Agent Orchestrator | 0.1.0 |
 | Unit Alignment Agent | 0.3.0 |
 | Teacher Modeling Coach | 0.2.0 |
-| Instructional Materials Coach | 0.3.0 |
+| Instructional Materials Coach | 0.4.0 |
 | Student Language Standard | 0.3.0 |
 | Workflow Scheduler | 0.9.1 |
 | Workspace Automation Builder Tooling | 0.1.1 |
@@ -54,6 +54,12 @@ not authorize live Workspace, Notion, trigger, sharing, or production writes.
 extended descriptions moved to `04_Registry/module-version-map-details.md` to
 keep this index under the line-limit. Workflow Scheduler remains `0.9.1`;
 Agent OS Execution Service remains `0.4.0`.
+
+**Instructional Materials Coach**
+version `0.4.0` adds the explicit opt-in
+`curriculum-visual-asset-compatibility-v2` and
+`curriculum-visual-asset-candidates-v2` contracts while preserving the existing
+v1 mappings, defaults, identities, and non-authorizing behavior (#871).
 
 **Artifact-First Response Standard**
 (`01_Shared_Standards/instructional-design/artifact-first-response-standard.md`,
