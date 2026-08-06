@@ -20,7 +20,7 @@ versions change only when the module's standards or contract changes.
 | Agent Orchestrator | 0.1.0 |
 | Unit Alignment Agent | 0.3.0 |
 | Teacher Modeling Coach | 0.2.0 |
-| Instructional Materials Coach | 0.3.0 |
+| Instructional Materials Coach | 0.4.0 |
 | Student Language Standard | 0.3.0 |
 | Workflow Scheduler | 0.9.1 |
 | Workspace Automation Builder Tooling | 0.1.1 |
@@ -36,15 +36,13 @@ versions change only when the module's standards or contract changes.
 | Agent OS Codespaces Profile | 0.1.0 |
 | Execution Checkpoint Contract | 0.1.0 |
 
-**Dashboard Migration Verification**
-(`08_Tooling/dashboard-migration-verification/`) starts as a verification-only
+**Dashboard Migration Verification** (`08_Tooling/dashboard-migration-verification/`) starts as a verification-only
 migration evidence toolkit for dashboard registry examples, placeholder snapshots,
 dependency graphs, conservative validation results, and human-readable reports. It
 never authorizes live Notion, Workspace, trigger, sharing, source-of-truth, or
 production dashboard writes. Standard packaging metadata was completed by D2 (#123).
 
-**Workspace Automation Builder Tooling**
-(`08_Tooling/workspace-automation-builder/`) includes an Apps Script safety
+**Workspace Automation Builder Tooling** (`08_Tooling/workspace-automation-builder/`) includes an Apps Script safety
 bridge, offline test suite, sync safety docs, sanitized sample handoff fixture,
 JSON schemas, validation fixtures, and a local-only fixture validator. It does
 not authorize live Workspace, Notion, trigger, sharing, or production writes.
@@ -55,8 +53,9 @@ extended descriptions moved to `04_Registry/module-version-map-details.md` to
 keep this index under the line-limit. Workflow Scheduler remains `0.9.1`;
 Agent OS Execution Service remains `0.4.0`.
 
-**Artifact-First Response Standard**
-(`01_Shared_Standards/instructional-design/artifact-first-response-standard.md`,
+**Instructional Materials Coach** `0.4.0` adds `curriculum-visual-asset-compatibility-v2` (`src/instructional_workflow_contracts/VISUAL_ASSET_COMPATIBILITY.md`, `src/instructional_workflow_contracts/visual_asset_compatibility.py`) and `curriculum-visual-asset-candidates-v2` (`src/instructional_workflow_contracts/VISUAL_ASSET_CANDIDATES.md`, `src/instructional_workflow_contracts/visual_asset_candidates.py`); v1 mappings, defaults, identities, and non-authorizing behavior remain preserved (#871).
+
+**Artifact-First Response Standard** (`01_Shared_Standards/instructional-design/artifact-first-response-standard.md`,
 #821) requires classroom-material responses to lead with the requested
 artifact, preview, or content specification before backend routing and
 governance reporting, while preserving all existing gate, ownership, and
