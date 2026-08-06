@@ -12,6 +12,20 @@ from scripts.agent_os_issue_acceptance.acceptance_report_transport import (
     acceptance_report_to_payload,
 )
 
+from .executable_lane_selection import (
+    EXECUTABLE_LANE_SELECTION_SCHEMA_NAME,
+    EXECUTABLE_LANE_SELECTION_SCHEMA_VERSION,
+    CandidateIssueEvidence,
+    DuplicateClaimFinding,
+    ExecutableLaneSelection,
+    Queue,
+    QueueClassification,
+    RankEvidence,
+    ReplacementRecord,
+    deserialize_executable_lane_selection,
+    select_executable_lanes,
+    serialize_executable_lane_selection,
+)
 from .readiness_stage import prepare_issue_readiness
 from .planning_stage import (
     PlanningHandoffStageResult,
@@ -56,9 +70,18 @@ __all__ = [
     "DEPENDENCY_IDENTITY_DUPLICATE_COLLAPSED_REASON",
     "DEPENDENCY_IDENTITY_NOT_SUPPLIED",
     "DEPENDENCY_IDENTITY_NOT_SUPPLIED_REASON",
+    "EXECUTABLE_LANE_SELECTION_SCHEMA_NAME",
+    "EXECUTABLE_LANE_SELECTION_SCHEMA_VERSION",
     "STAGE_SCHEMA_VERSION",
+    "CandidateIssueEvidence",
+    "DuplicateClaimFinding",
+    "ExecutableLaneSelection",
     "PlanningHandoffStageResult",
     "PlanningHandoffStageStatus",
+    "Queue",
+    "QueueClassification",
+    "RankEvidence",
+    "ReplacementRecord",
     "DependencyEvidence",
     "DependencyIdentityEvidence",
     "DependencyIdentityStatus",
@@ -78,6 +101,7 @@ __all__ = [
     "acceptance_report_to_payload",
     "dependency_identity_evidence_from_dict",
     "dependency_identity_evidence_to_dict",
+    "deserialize_executable_lane_selection",
     "issue_readiness_stage_result_from_dict",
     "issue_readiness_stage_result_to_dict",
     "issue_snapshot_from_dict",
@@ -90,4 +114,6 @@ __all__ = [
     "readiness_result_from_dict",
     "readiness_result_to_dict",
     "resolve_issue_snapshot",
+    "select_executable_lanes",
+    "serialize_executable_lane_selection",
 ]
