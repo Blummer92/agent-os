@@ -18,6 +18,9 @@ from scripts.agent_os_issue_acceptance.batch_planning import (
     PlanningClassification,
     evaluate_batch_plan,
 )
+from scripts.agent_os_issue_acceptance.issueplan_current_state import (
+    IssuePlanCurrentStateEvidence,
+)
 from scripts.agent_os_issue_acceptance.readiness import ReadinessOutcome
 from scripts.agent_os_issue_acceptance.scheduler_handoff import (
     HandoffCohort,
@@ -52,6 +55,20 @@ class PlanningHandoffStageStatus(str, Enum):
 
 @dataclass(frozen=True, slots=True)
 class PlanningHandoffStageResult:
+    """One planning-stage outcome plus the evidence a downstream stage needs.
+
+    ``issueplan_current_state_evidence`` retains the exact canonical
+    ``IssuePlanCurrentStateEvidence`` object this stage already consumed, so a
+    downstream consumer (AOS-AUTO1C, #752) can forward it to WSC3 without
+    rebuilding it from an evidence ID, node provenance, digest, or another
+    partial representation. It is the same object, not a copy: nothing here
+    reconstructs, normalizes, or duplicates it, and handoff bytes, digests, and
+    classifications are unaffected by its presence.
+
+    It is a trailing keyword field with a default, so existing positional and
+    keyword callers keep working unchanged.
+    """
+
     status: PlanningHandoffStageStatus
     node: IssueBatchNode | None
     graph: IssueBatchGraph | None
@@ -61,6 +78,7 @@ class PlanningHandoffStageResult:
     handoff_validation: HandoffValidationResult | None
     wsc3_suppliable: bool
     reason_codes: tuple[str, ...] = field(default_factory=tuple)
+    issueplan_current_state_evidence: IssuePlanCurrentStateEvidence | None = None
     execution_authorized: Literal[False] = field(default=False, init=False)
     side_effects_performed: Literal[False] = field(default=False, init=False)
 
@@ -75,11 +93,19 @@ class PlanningHandoffStageResult:
             self.handoff,
             self.serialized_handoff,
             self.handoff_validation,
+            self.issueplan_current_state_evidence,
         )
         if complete and any(value is None for value in values):
             raise ValueError("complete planning results require every canonical object")
         if not complete and any(value is not None for value in values):
             raise ValueError("invalid-input results must not carry partial objects")
+        if self.issueplan_current_state_evidence is not None and not isinstance(
+            self.issueplan_current_state_evidence, IssuePlanCurrentStateEvidence
+        ):
+            raise TypeError(
+                "issueplan_current_state_evidence must be an "
+                "IssuePlanCurrentStateEvidence"
+            )
         object.__setattr__(
             self, "reason_codes", tuple(sorted(set(self.reason_codes)))
         )
@@ -229,6 +255,8 @@ def prepare_planning_handoff(
         handoff_validation=validation,
         wsc3_suppliable=True,
         reason_codes=tuple(stage_reasons),
+        # The exact object consumed above -- not a rebuilt equivalent.
+        issueplan_current_state_evidence=issueplan,
     )
 
 
@@ -339,4 +367,5 @@ def _invalid(reason_codes: tuple[str, ...]) -> PlanningHandoffStageResult:
         handoff_validation=None,
         wsc3_suppliable=False,
         reason_codes=reason_codes,
+        issueplan_current_state_evidence=None,
     )

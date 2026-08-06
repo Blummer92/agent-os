@@ -5,6 +5,12 @@ src/workflow_scheduler) is importable from the repository root through the
 standard editable-package install declared in `requirements-dev.txt`, with no
 sys.path mutation, no duplicate installed module path, no import-time side
 effects, and no circular import against `scripts/**`.
+
+Issue #752 replaced the original blanket prohibition on every `scripts/**`
+import of `workflow_scheduler` with the strict allowlist below. Exactly one
+importer, one module, and three public symbols are permitted; everything else
+still fails. This is not a general licence for `scripts/** ->
+workflow_scheduler` dependencies.
 """
 
 from __future__ import annotations
@@ -25,11 +31,34 @@ CANONICAL_PACKAGE_ROOT = (
     ROOT / "08_Tooling" / "workflow-scheduler" / "src" / "workflow_scheduler"
 ).resolve()
 SCRIPTS_ROOT = ROOT / "scripts"
+CANDIDATE_PACKET_ROOT = SCRIPTS_ROOT / "agent_os_candidate_packet"
 
 TARGET_MODULES = (
     "workflow_scheduler",
     "workflow_scheduler.planning",
     "workflow_scheduler.planning.draft_ingestion",
+)
+
+# The complete #752 dependency-boundary allowlist.
+ALLOWED_IMPORTER = CANDIDATE_PACKET_ROOT / "proposal_stage.py"
+ALLOWED_MODULE = "workflow_scheduler.planning.draft_ingestion"
+ALLOWED_SYMBOLS = frozenset(
+    {"DraftTaskProposal", "DraftTaskProposalResult", "build_draft_task_proposals"}
+)
+
+# Loader and import-machinery entry points that would let candidate-packet code
+# reach Workflow Scheduler around the declared package boundary.
+PROHIBITED_LOADER_CALLS = frozenset(
+    {
+        "__import__",
+        "import_module",
+        "spec_from_file_location",
+        "module_from_spec",
+        "SourceFileLoader",
+        "load_source",
+        "load_module",
+        "exec_module",
+    }
 )
 
 
@@ -119,28 +148,128 @@ def test_import_performs_no_subprocess_network_or_filesystem_write(monkeypatch) 
     _fresh_import_of_target()
 
 
-def _imports_workflow_scheduler(path: Path) -> bool:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    for node in ast.walk(tree):
+def _python_sources(root: Path) -> list[Path]:
+    return sorted(
+        path for path in root.rglob("*.py") if "__pycache__" not in path.parts
+    )
+
+
+def _parse(path: Path) -> ast.Module:
+    return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+
+def _is_prefixed(module: str, prefix: str) -> bool:
+    return module == prefix or module.startswith(prefix + ".")
+
+
+def _workflow_scheduler_imports(path: Path) -> list[tuple[str, str | None]]:
+    """Return every `workflow_scheduler` import in `path` as (module, symbol).
+
+    `symbol` is None for a plain `import workflow_scheduler...` statement, which
+    binds the package itself rather than a named public symbol.
+    """
+    found: list[tuple[str, str | None]] = []
+    for node in ast.walk(_parse(path)):
         if isinstance(node, ast.Import):
-            if any(
-                alias.name == "workflow_scheduler" or alias.name.startswith("workflow_scheduler.")
+            found.extend(
+                (alias.name, None)
                 for alias in node.names
-            ):
-                return True
-        elif isinstance(node, ast.ImportFrom):
+                if _is_prefixed(alias.name, "workflow_scheduler")
+            )
+        elif isinstance(node, ast.ImportFrom) and not node.level:
             module = node.module or ""
-            if module == "workflow_scheduler" or module.startswith("workflow_scheduler."):
+            if _is_prefixed(module, "workflow_scheduler"):
+                found.extend((module, alias.name) for alias in node.names)
+    return found
+
+
+def _imports_prefix(path: Path, prefix: str) -> bool:
+    for node in ast.walk(_parse(path)):
+        if isinstance(node, ast.Import):
+            if any(_is_prefixed(alias.name, prefix) for alias in node.names):
+                return True
+        elif isinstance(node, ast.ImportFrom) and not node.level:
+            if _is_prefixed(node.module or "", prefix):
                 return True
     return False
 
 
-def test_no_circular_import_between_scripts_and_workflow_scheduler() -> None:
-    _fresh_import_of_target()
-
+def test_only_the_allowlisted_scripts_module_imports_workflow_scheduler() -> None:
     offending = [
-        path
-        for path in SCRIPTS_ROOT.rglob("*.py")
-        if "__pycache__" not in path.parts and _imports_workflow_scheduler(path)
+        path.relative_to(ROOT).as_posix()
+        for path in _python_sources(SCRIPTS_ROOT)
+        if path != ALLOWED_IMPORTER and _workflow_scheduler_imports(path)
     ]
     assert offending == []
+
+    # The allowlist entry exists only to serve the governed #752 WSC3 call. If
+    # that call is ever removed, the exception must be removed with it.
+    assert _workflow_scheduler_imports(ALLOWED_IMPORTER)
+
+
+def test_allowlisted_importer_uses_only_the_permitted_module_and_symbols() -> None:
+    imports = _workflow_scheduler_imports(ALLOWED_IMPORTER)
+
+    assert {module for module, _ in imports} == {ALLOWED_MODULE}
+    symbols = {symbol for _, symbol in imports}
+    assert None not in symbols, "binding the package itself is not permitted"
+    assert symbols <= ALLOWED_SYMBOLS
+
+
+def test_candidate_packet_uses_no_private_path_loader_or_syspath_workaround() -> None:
+    """No candidate-packet module may route around the declared boundary.
+
+    Only absolute imports are inspected for private paths: an underscore-named
+    module reached through a package's public name is a boundary workaround,
+    while an intra-package relative import is ordinary Python.
+    """
+    offending: list[str] = []
+    for path in _python_sources(CANDIDATE_PACKET_ROOT):
+        name = path.relative_to(ROOT).as_posix()
+        for node in ast.walk(_parse(path)):
+            modules: list[str] = []
+            if isinstance(node, ast.Import):
+                modules = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and not node.level:
+                modules = [node.module or ""]
+            for module in modules:
+                if any(
+                    part.startswith("_") and part != "__future__"
+                    for part in module.split(".")
+                    if part
+                ):
+                    offending.append(f"{name}: private import path {module!r}")
+
+            if isinstance(node, ast.Attribute) and node.attr == "path":
+                if isinstance(node.value, ast.Name) and node.value.id == "sys":
+                    offending.append(f"{name}: sys.path access")
+            if isinstance(node, ast.Call):
+                function = node.func
+                called = (
+                    function.attr
+                    if isinstance(function, ast.Attribute)
+                    else function.id
+                    if isinstance(function, ast.Name)
+                    else ""
+                )
+                if called in PROHIBITED_LOADER_CALLS:
+                    offending.append(f"{name}: import-machinery call {called!r}")
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                if "PYTHONPATH" in node.value:
+                    offending.append(f"{name}: PYTHONPATH workaround")
+
+    assert offending == []
+
+
+def test_no_circular_import_between_scripts_and_workflow_scheduler() -> None:
+    """Workflow Scheduler must never import back into the one package that
+    imports it, and the allowlisted importer must load from a cold cache."""
+    offending = [
+        path.relative_to(ROOT).as_posix()
+        for path in _python_sources(CANONICAL_PACKAGE_ROOT)
+        if _imports_prefix(path, "scripts.agent_os_candidate_packet")
+    ]
+    assert offending == []
+
+    _fresh_import_of_target()
+    importlib.import_module("scripts.agent_os_candidate_packet.proposal_stage")
