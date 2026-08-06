@@ -13,6 +13,8 @@ import ast
 import builtins
 import importlib
 import importlib.util
+import io
+import os
 import socket
 import subprocess
 import sys
@@ -80,17 +82,39 @@ def test_import_performs_no_subprocess_network_or_filesystem_write(monkeypatch) 
     def _deny_socket(*args, **kwargs):
         raise AssertionError("workflow_scheduler import must not open a network socket")
 
-    real_open = builtins.open
+    real_builtin_open = builtins.open
+    real_io_open = io.open
+    real_os_open = os.open
 
-    def _deny_write_open(file, mode="r", *args, **kwargs):
+    def _deny_write_mode(file, mode="r", *args, _real_open, **kwargs):
         if any(flag in mode for flag in ("w", "a", "x", "+")):
             raise AssertionError(f"workflow_scheduler import must not write to {file!r}")
-        return real_open(file, mode, *args, **kwargs)
+        return _real_open(file, mode, *args, **kwargs)
+
+    def _deny_os_write(file, flags, *args, **kwargs):
+        write_flags = os.O_WRONLY | os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_TRUNC
+        if flags & write_flags:
+            raise AssertionError(f"workflow_scheduler import must not write to {file!r}")
+        return real_os_open(file, flags, *args, **kwargs)
 
     monkeypatch.setattr(subprocess, "Popen", _deny_subprocess)
     monkeypatch.setattr(subprocess, "run", _deny_subprocess)
     monkeypatch.setattr(socket, "socket", _deny_socket)
-    monkeypatch.setattr(builtins, "open", _deny_write_open)
+    monkeypatch.setattr(
+        builtins,
+        "open",
+        lambda file, mode="r", *args, **kwargs: _deny_write_mode(
+            file, mode, *args, _real_open=real_builtin_open, **kwargs
+        ),
+    )
+    monkeypatch.setattr(
+        io,
+        "open",
+        lambda file, mode="r", *args, **kwargs: _deny_write_mode(
+            file, mode, *args, _real_open=real_io_open, **kwargs
+        ),
+    )
+    monkeypatch.setattr(os, "open", _deny_os_write)
 
     _fresh_import_of_target()
 
