@@ -357,10 +357,22 @@ class PostPrStateAuditResult:
         )
         if self.alternate_issue is not None and self.recommended_issue is None:
             raise ValueError("alternate_issue requires recommended_issue")
+        if self.alternate_issue is not None and self.alternate_issue == self.recommended_issue:
+            raise ValueError("alternate_issue must differ from recommended_issue")
         if self.outcome is RecommendationOutcome.HUMAN_DECISION and self.recommended_issue is not None:
             raise ValueError("human_decision outcome must not carry a recommended_issue")
         if self.outcome is RecommendationOutcome.NEXT_ISSUE and self.recommended_issue is None:
             raise ValueError("next_issue outcome requires a recommended_issue")
+        if (
+            self.terminal_state is TerminalPrState.REVIEW_COMPLETE
+            and self.outcome is not RecommendationOutcome.HUMAN_DECISION
+        ):
+            raise ValueError("review-complete requires a human_decision outcome")
+        if (
+            self.terminal_state in (TerminalPrState.BLOCKED, TerminalPrState.CLOSED_UNMERGED)
+            and self.alternate_issue is not None
+        ):
+            raise ValueError("only merged results can carry an alternate_issue")
         if self.recommended_executor_route is not None:
             _enum(self.recommended_executor_route, ExecutorRoute, "recommended_executor_route")
         _required_text(self.rationale, "rationale")

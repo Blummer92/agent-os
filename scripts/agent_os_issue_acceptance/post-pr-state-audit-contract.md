@@ -62,10 +62,16 @@ echoed from supplied evidence. The compact formatted report is ordinarily
 12-18 lines and always contains one next issue, one blocker, and one next
 action line.
 
+## Implementation & Verification
+
+- Implementation: `scripts/agent_os_issue_acceptance/post_pr_state_audit.py`
+- Focused verification: `tests/agent_os_issue_acceptance/test_post_pr_state_audit.py`
+- Architecture classification: `tests/agent_os_issue_acceptance/test_architecture_boundaries.py`
+
 ## Side Effects
 
-None. The contract performs no network, GitHub, filesystem, subprocess,
-environment, credential, Scheduler, lifecycle, or external-system operation.
+None. See the Contract section above for the canonical no-I/O and
+no-mutation rule.
 
 ## Version
 
