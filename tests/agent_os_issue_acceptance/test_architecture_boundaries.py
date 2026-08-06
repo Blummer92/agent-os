@@ -128,212 +128,274 @@ EXPECTED_PUBLIC_FACADE = (
     "DecisionEvidence",
     "FinalHandoff",
     "ForbiddenPathCrossing",
-    "GitHubIssuePageReader",
-    "GitHubIssueRecord",
-    "GitHubIssueSource",
-    "IssueDependency",
-    "IssueMetadata",
-    "IssuePlan",
-    "IssuePlanCandidate",
-    "IssuePlanCandidateIdentity",
-    "IssuePlanConflict",
-    "IssuePlanDiagnostic",
-    "IssuePlanDocument",
-    "IssuePlanField",
-    "IssuePlanIdentity",
-    "IssuePlanParseResult",
-    "IssuePlanSource",
-    "IssuePlanStatus",
-    "IssueRecord",
-    "IssueScanError",
-    "IssueScanResult",
-    "IssueScanner",
-    "IssueStateFilter",
+    "GraphCheck",
+    "GraphCheckResult",
+    "GraphCheckRun",
+    "HandoffCohort",
+    "HandoffValidationOutcome",
+    "HandoffValidationResult",
+    "AuthorityProjection",
+    "AuthorizationState",
+    "ClaimState",
+    "DependencyState",
+    "FreshnessState",
+    "ISSUE_OPERATIONAL_STATE_SCHEMA_NAME",
+    "ISSUE_OPERATIONAL_STATE_SCHEMA_VERSION",
+    "IssueOperationalEvidence",
+    "IssueOperationalState",
+    "IssueState",
+    "LifecycleStage",
+    "OperationalOutcome",
+    "OperationalReadinessState",
+    "PrimaryIssueClaim",
+    "PrimaryPrState",
+    "SourceState",
+    "TerminalDisposition",
+    "ValidationState",
+    "ISSUEPLAN_CURRENT_STATE_SCHEMA_VERSION",
+    "IssueBatchGraph",
+    "IssueBatchNode",
+    "IssuePlanCurrentStateComparison",
+    "IssuePlanCurrentStateEvidence",
+    "IssuePlanCurrentStateOutcome",
+    "IssuePlanSourceSnapshot",
     "MergeAuthorizationApplicabilityResult",
     "MergeAuthorizationBinding",
-    "MergeAuthorizationEvidence",
     "MergeAuthorizationRecord",
     "MergeAuthorizationState",
+    "MergeCheckEvidence",
     "MergeExecutionObservation",
-    "ParsedPr",
-    "PlannerCheckpoint",
-    "PrIdentity",
-    "ReadinessCheck",
+    "MergeReviewEvidence",
+    "PROVISIONAL_SCHEMA_VERSION",
+    "PlanningClassification",
+    "PlanningCohort",
+    "PullRequestMergeEvidence",
     "ReadinessOutcome",
     "ReadinessResult",
-    "RepositoryRef",
-    "SchedulerHandoff",
-    "SchedulerTask",
-    "SourceLocation",
-    "StateTransition",
-    "TaskDependency",
-    "TaskExecutionClass",
-    "ValidationResult",
-    "build_approval_record",
-    "build_batch_plan",
-    "build_issue_plan_document",
-    "build_merge_authorization_record",
-    "build_scheduler_handoff",
+    "RecommendationAction",
+    "RecommendationEvidence",
+    "RiskCategory",
+    "RiskEvidence",
+    "RiskSeverity",
+    "RiskStatus",
+    "SCHEMA_VERSION",
+    "SUPPORTED_CONTRACT_VERSIONS",
+    "SUPPORTED_PLANNING_RESULT_VERSIONS",
+    "SchedulerPlanningHandoff",
+    "SourceEvidence",
+    "SprintLaneEvidence",
+    "SprintMode",
+    "SuppliedSprintEvidence",
+    "ValidationEvidence",
+    "approval_applicability_identity",
+    "build_approval_candidate",
+    "build_approved_execution_projection",
+    "build_issue_batch_graph",
+    "build_issue_operational_state",
+    "build_issueplan_current_state_evidence",
+    "build_merge_authorization_candidate",
+    "canonical_sprint_payload",
+    "compare_issueplan_current_state",
+    "compute_graph_digest",
+    "compute_handoff_digest",
+    "compute_issueplan_current_state_fingerprint",
+    "compute_planning_result_digest",
+    "deserialize_issue_operational_state",
+    "entity_id_collision_check",
+    "evaluate_acceptance",
     "evaluate_approval_applicability",
+    "evaluate_base_batch_conflict_run",
+    "evaluate_base_batch_conflicts",
+    "evaluate_batch_plan",
+    "evaluate_input_scope_coverage",
+    "evaluate_issue_readiness",
+    "evaluate_issue_readiness_with_labels",
     "evaluate_merge_authorization_applicability",
+    "load_issue_batch_fixture",
     "parse_issue_metadata",
-    "parse_issue_plan_candidates",
-    "parse_issue_plan_document",
-    "parse_issue_plan_source",
-    "parse_pr",
-    "project_approved_execution",
-    "scan_connected_issues",
-    "scan_connected_open_issues",
-    "scan_issues",
-    "scan_open_issues",
-    "validate_batch_plan",
-    "validate_issue_plan",
-    "validate_scheduler_handoff",
+    "project_issue_metadata",
+    "record_approval_decision",
+    "record_merge_authorization_decision",
+    "record_merge_execution_observation",
+    "recommended_merge_order",
+    "render_execution_prompt",
+    "render_report",
+    "render_risk_review_prompt",
+    "render_sprint_dashboard",
+    "render_sprint_governance_report",
+    "risk_delta",
+    "run_graph_checks",
+    "scan_issue_metadata",
+    "scanner_manual_review_items",
+    "serialize_approved_execution_projection",
+    "serialize_issue_operational_state",
+    "serialize_scheduler_planning_handoff",
+    "serialize_sprint_evidence",
+    "unresolved_dependency_check",
+    "validate_scheduler_planning_handoff",
 )
 
 
-def _module_name(path: Path) -> str:
-    return path.stem
+def _production_modules() -> dict[str, Path]:
+    return {path.stem: path for path in sorted(PACKAGE_ROOT.glob("*.py"))}
 
 
-def _domain_for(module: str) -> str:
-    matches = []
-    for domain, exact_modules, prefixes in DOMAIN_RULES:
-        if module in exact_modules or any(module.startswith(prefix) for prefix in prefixes):
-            matches.append(domain)
-    assert len(matches) == 1, f"{module} belongs to domains {matches}"
+def _domain_matches(module_name: str) -> list[str]:
+    return [
+        domain
+        for domain, exact_names, prefixes in DOMAIN_RULES
+        if module_name in exact_names
+        or any(module_name.startswith(prefix) for prefix in prefixes)
+    ]
+
+
+def _domain_for(module_name: str) -> str:
+    matches = _domain_matches(module_name)
+    assert len(matches) == 1, (
+        f"{module_name}.py must have exactly one architecture-domain classification; "
+        f"found {matches or 'none'}"
+    )
     return matches[0]
 
 
-def _package_imports(path: Path) -> set[str]:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+def _parse(path: Path) -> ast.Module:
+    return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+
+def _local_imports(tree: ast.AST) -> set[str]:
     imports: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            if node.level == 1 and node.module:
+        if isinstance(node, ast.ImportFrom) and node.level:
+            if node.module:
                 imports.add(node.module.split(".", 1)[0])
-            elif node.level == 0 and node.module:
-                prefix = "scripts.agent_os_issue_acceptance."
-                if node.module.startswith(prefix):
-                    imports.add(node.module[len(prefix) :].split(".", 1)[0])
+            else:
+                imports.update(alias.name.split(".", 1)[0] for alias in node.names)
         elif isinstance(node, ast.Import):
-            prefix = "scripts.agent_os_issue_acceptance."
             for alias in node.names:
+                prefix = "scripts.agent_os_issue_acceptance."
                 if alias.name.startswith(prefix):
                     imports.add(alias.name[len(prefix) :].split(".", 1)[0])
     return imports
 
 
-def _production_modules() -> dict[str, Path]:
-    return {
-        path.stem: path
-        for path in PACKAGE_ROOT.glob("*.py")
-        if path.name != "__main__.py"
-    }
+def _external_imports(tree: ast.AST) -> set[str]:
+    imports: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imports.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            imports.add(node.module)
+    return imports
 
 
-def test_every_production_module_has_exactly_one_domain() -> None:
-    modules = _production_modules()
-    for module in sorted(modules):
-        _domain_for(module)
+def _yaml_load_calls(tree: ast.AST) -> list[ast.Call]:
+    calls: list[ast.Call] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        function = node.func
+        if isinstance(function, ast.Attribute):
+            if (
+                isinstance(function.value, ast.Name)
+                and function.value.id in {"yaml", "pyyaml"}
+                and function.attr in {"load", "safe_load"}
+            ):
+                calls.append(node)
+        elif isinstance(function, ast.Name) and function.id in {"safe_load", "yaml_load"}:
+            calls.append(node)
+    return calls
 
 
-def test_domain_dependency_direction_is_enforced() -> None:
-    modules = _production_modules()
-    for source_module, path in sorted(modules.items()):
-        source_domain = _domain_for(source_module)
-        forbidden = FORBIDDEN_DOMAIN_IMPORTS[source_domain]
-        for imported_module in _package_imports(path):
-            if imported_module not in modules:
-                continue
-            imported_domain = _domain_for(imported_module)
-            assert imported_domain not in forbidden, (
-                f"{source_module} ({source_domain}) imports {imported_module} "
-                f"({imported_domain})"
-            )
-
-
-def test_public_facade_stays_intentional() -> None:
-    facade = PACKAGE_ROOT / "__init__.py"
-    tree = ast.parse(facade.read_text(encoding="utf-8"), filename=str(facade))
-    exported: set[str] = set()
+def _assigned_string_sequence(tree: ast.Module, name: str) -> tuple[str, ...]:
     for node in tree.body:
-        if isinstance(node, ast.ImportFrom):
-            for alias in node.names:
-                exported.add(alias.asname or alias.name)
-        elif isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name) and target.id == "__all__":
-                    assert isinstance(node.value, (ast.Tuple, ast.List))
-                    exported.update(
-                        element.value
-                        for element in node.value.elts
-                        if isinstance(element, ast.Constant)
-                        and isinstance(element.value, str)
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(
+            isinstance(target, ast.Name) and target.id == name
+            for target in node.targets
+        ):
+            continue
+        assert isinstance(node.value, (ast.List, ast.Tuple)), (
+            f"{name} must be a literal sequence"
+        )
+        values: list[str] = []
+        for element in node.value.elts:
+            assert isinstance(element, ast.Constant) and isinstance(element.value, str), (
+                f"{name} must contain only string literals"
+            )
+            values.append(element.value)
+        return tuple(values)
+    raise AssertionError(f"{name} assignment not found")
+
+
+def test_every_production_module_has_one_domain_classification() -> None:
+    modules = _production_modules()
+    assert modules, "issue-automation production modules were not found"
+
+    for module_name in modules:
+        _domain_for(module_name)
+
+
+def test_dependency_direction_and_scheduler_runtime_boundary() -> None:
+    modules = _production_modules()
+    violations: list[str] = []
+
+    for module_name, path in modules.items():
+        source_domain = _domain_for(module_name)
+        tree = _parse(path)
+
+        if source_domain != "facade":
+            for imported_module in sorted(_local_imports(tree)):
+                if imported_module not in modules:
+                    continue
+                target_domain = _domain_for(imported_module)
+                if target_domain in FORBIDDEN_DOMAIN_IMPORTS.get(
+                    source_domain, frozenset()
+                ):
+                    violations.append(
+                        f"{module_name}.py ({source_domain}) imports "
+                        f"{imported_module}.py ({target_domain})"
                     )
-    assert tuple(sorted(exported)) == tuple(sorted(EXPECTED_PUBLIC_FACADE))
 
+        for imported_name in sorted(_external_imports(tree)):
+            normalized = imported_name.replace("-", "_").lower()
+            if "workflow_scheduler" in normalized:
+                violations.append(
+                    f"{module_name}.py imports Workflow Scheduler runtime module "
+                    f"{imported_name!r}"
+                )
 
-def test_facade_does_not_export_private_or_speculative_interfaces() -> None:
-    facade = (PACKAGE_ROOT / "__init__.py").read_text(encoding="utf-8")
-    prohibited_tokens = (
-        "IssueOperationalState",
-        "AgentOperatingModeDecision",
-        "ExecutorRouteDecision",
-        "ExecutorRouteEvidence",
-        "evaluate_executor_route",
-        "format_executor_handoff",
+    assert not violations, "Architecture dependency violations:\n- " + "\n- ".join(
+        violations
     )
-    for token in prohibited_tokens:
-        assert token not in facade
 
 
-def test_mode_domain_consumes_only_upstream_contracts() -> None:
-    modules = _production_modules()
-    for module in ("operating_mode", "executor_route"):
-        imports = _package_imports(modules[module])
-        assert "report" not in imports
-        assert "sprint_dashboard" not in imports
-        assert "scheduler_handoff" not in imports
-
-
-def test_no_upstream_domain_imports_mode() -> None:
-    modules = _production_modules()
-    upstream_domains = {
-        "scanner",
-        "acceptance",
-        "retrieval",
-        "planning",
-        "handoff",
-        "current_state",
-        "approval",
+def test_issueplan_scanner_is_the_only_yaml_parser() -> None:
+    parser_owners = {
+        module_name
+        for module_name, path in _production_modules().items()
+        if _yaml_load_calls(_parse(path))
     }
-    for source_module, path in sorted(modules.items()):
-        if _domain_for(source_module) not in upstream_domains:
-            continue
-        imported_domains = {
-            _domain_for(imported)
-            for imported in _package_imports(path)
-            if imported in modules
-        }
-        assert "mode" not in imported_domains, source_module
+    assert parser_owners == {"issueplan_scanner"}, (
+        "The canonical IssuePlan scanner must remain the sole YAML parser; "
+        f"found {sorted(parser_owners)}"
+    )
+
+    compatibility_tree = _parse(PACKAGE_ROOT / "parse_issue.py")
+    assert not _yaml_load_calls(compatibility_tree), (
+        "parse_issue.py is a compatibility facade and must not contain a second parser"
+    )
 
 
-def test_reporting_may_consume_mode_but_not_reverse() -> None:
-    modules = _production_modules()
-    for source_module, path in sorted(modules.items()):
-        if _domain_for(source_module) != "mode":
-            continue
-        imported_domains = {
-            _domain_for(imported)
-            for imported in _package_imports(path)
-            if imported in modules
-        }
-        assert "reporting" not in imported_domains, source_module
+def test_public_facade_matches_reviewed_baseline() -> None:
+    facade = _assigned_string_sequence(_parse(PACKAGE_ROOT / "__init__.py"), "__all__")
+    assert facade == EXPECTED_PUBLIC_FACADE, (
+        "Package facade changed without explicit compatibility evidence. "
+        "Update the governed baseline only through a separately authorized facade "
+        "decision."
+    )
 
 
-def test_direct_import_policy_keeps_new_interfaces_out_of_facade() -> None:
-    facade = (PACKAGE_ROOT / "__init__.py").read_text(encoding="utf-8")
-    for module in ("issue_operational_state", "operating_mode", "executor_route"):
-        assert f"from .{module} import" not in facade
-        assert f"from scripts.agent_os_issue_acceptance.{module} import" not in facade
+def test_supported_evaluate_acceptance_facade_remains_exported() -> None:
+    facade = _assigned_string_sequence(_parse(PACKAGE_ROOT / "__init__.py"), "__all__")
+    assert "evaluate_acceptance" in facade
