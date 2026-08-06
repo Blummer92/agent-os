@@ -317,33 +317,34 @@ def draft_task_proposal_from_dict(payload: Mapping[str, Any]) -> DraftTaskPropos
     ``proposal_id`` is carried through and re-verified by ``DraftTaskProposal``
     itself, so a tampered payload is rejected rather than re-signed.
     """
-    label = "draft task proposal"
-    if not isinstance(payload, Mapping):
-        raise ValueError(f"{label} must be a mapping")
-    supplied = set(payload)
-    missing = sorted(_DRAFT_TASK_PROPOSAL_PAYLOAD_KEYS - supplied)
-    if missing:
-        raise ValueError(f"{label} is missing field(s): " + ", ".join(missing))
-    unsupported = sorted(supplied - _DRAFT_TASK_PROPOSAL_PAYLOAD_KEYS)
-    if unsupported:
-        raise ValueError(f"{label} has unsupported field(s): " + ", ".join(unsupported))
+    _require_exact_keys(
+        payload, _DRAFT_TASK_PROPOSAL_PAYLOAD_KEYS, "draft task proposal"
+    )
     if payload["execution_authorized"] is not False:
         raise ValueError("execution_authorized must be false")
     if payload["eligibility_status"] != "eligible":
         raise ValueError("a serialized proposal is always eligible")
     if payload["authorization_status"] != "not-evaluated":
         raise ValueError("authorization_status must remain not-evaluated")
+    supplied_node_ids = _string_list(payload["supplied_node_ids"], "supplied_node_ids")
     cohorts = payload["cohort_summaries"]
     if not isinstance(cohorts, list):
         raise ValueError("cohort_summaries must be a list")
+    parsed_cohorts = []
     for item in cohorts:
-        if not isinstance(item, Mapping):
-            raise ValueError("each cohort summary must be a mapping")
-        missing_keys = sorted(_COHORT_PAYLOAD_KEYS - set(item))
-        if missing_keys:
-            raise ValueError(
-                "cohort summary is missing field(s): " + ", ".join(missing_keys)
+        _require_exact_keys(item, _COHORT_PAYLOAD_KEYS, "cohort summary")
+        classification = item["classification"]
+        if not isinstance(classification, str):
+            raise ValueError("cohort summary classification must be a string")
+        parsed_cohorts.append(
+            HandoffCohort(
+                node_ids=_string_list(item["node_ids"], "cohort summary node_ids"),
+                classification=classification,
+                reason_codes=_string_list(
+                    item["reason_codes"], "cohort summary reason_codes"
+                ),
             )
+        )
     return DraftTaskProposal(
         proposal_version=payload["proposal_version"],
         proposal_id=payload["proposal_id"],
@@ -354,21 +355,50 @@ def draft_task_proposal_from_dict(payload: Mapping[str, Any]) -> DraftTaskPropos
         base_branch=payload["base_branch"],
         evaluated_repository_sha=payload["evaluated_repository_sha"],
         evaluator_commit_sha=payload["evaluator_commit_sha"],
-        supplied_node_ids=tuple(payload["supplied_node_ids"]),
-        cohort_summaries=tuple(
-            HandoffCohort(
-                node_ids=tuple(item["node_ids"]),
-                classification=item["classification"],
-                reason_codes=tuple(item["reason_codes"]),
-            )
-            for item in cohorts
-        ),
+        supplied_node_ids=supplied_node_ids,
+        cohort_summaries=tuple(parsed_cohorts),
         issueplan_current_state_evidence_id=payload[
             "issueplan_current_state_evidence_id"
         ],
         repository_state_evidence_id=payload["repository_state_evidence_id"],
         created_at=payload["created_at"],
     )
+
+
+def _require_exact_keys(
+    payload: object, keys: frozenset[str], label: str
+) -> Mapping[str, Any]:
+    """Closed-schema key check: reject both missing and unsupported fields.
+
+    Applied at every level of the payload, nested cohort summaries included. A
+    field this deserializer does not know about is rejected rather than
+    accepted and silently dropped on re-serialization.
+    """
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"{label} must be a mapping")
+    supplied = set(payload)
+    missing = sorted(keys - supplied)
+    if missing:
+        raise ValueError(f"{label} is missing field(s): " + ", ".join(missing))
+    unsupported = sorted(supplied - keys)
+    if unsupported:
+        raise ValueError(f"{label} has unsupported field(s): " + ", ".join(unsupported))
+    return payload
+
+
+def _string_list(value: object, label: str) -> tuple[str, ...]:
+    """Require a list of strings, never something merely iterable.
+
+    A bare string is iterable, so ``tuple("issue-750")`` would silently become
+    a tuple of single characters that can still satisfy the downstream
+    uniqueness and coverage checks. Strings, tuples, and mappings are all
+    rejected so a malformed payload cannot be coerced into a plausible identity.
+    """
+    if not isinstance(value, list):
+        raise ValueError(f"{label} must be a list of strings")
+    if not all(isinstance(item, str) for item in value):
+        raise ValueError(f"{label} must contain only strings")
+    return tuple(value)
 
 
 def _repository_matches_handoff(

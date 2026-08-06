@@ -554,6 +554,82 @@ def test_proposal_round_trip_rejects_malformed_cohort_summaries() -> None:
         draft_task_proposal_from_dict({**payload, "cohort_summaries": {}})
 
 
+def _with_cohort(payload, **changes):
+    cohort = {**payload["cohort_summaries"][0], **changes}
+    return {**payload, "cohort_summaries": [cohort]}
+
+
+def test_nested_cohort_schema_is_closed() -> None:
+    """An unsupported nested field is rejected, never accepted and dropped.
+
+    Accepting it would let `to_dict(from_dict(payload))` differ from `payload`
+    while `proposal_id` still verified, because nested extras are outside
+    proposal identity.
+    """
+    payload = draft_task_proposal_to_dict(_prepare().proposal)
+
+    with pytest.raises(ValueError, match="cohort summary has unsupported field"):
+        draft_task_proposal_from_dict(_with_cohort(payload, smuggled="x"))
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("node_ids", "issue-750", "node_ids must be a list of strings"),
+        ("node_ids", ("issue-750",), "node_ids must be a list of strings"),
+        ("node_ids", {"issue-750": 1}, "node_ids must be a list of strings"),
+        ("node_ids", ["issue-750", 7], "node_ids must contain only strings"),
+        ("reason_codes", "covered", "reason_codes must be a list of strings"),
+        ("reason_codes", ("covered",), "reason_codes must be a list of strings"),
+        ("reason_codes", ["covered", None], "reason_codes must contain only strings"),
+    ],
+)
+def test_cohort_list_fields_reject_non_string_lists(field, value, message) -> None:
+    payload = draft_task_proposal_to_dict(_prepare().proposal)
+
+    with pytest.raises(ValueError, match=message):
+        draft_task_proposal_from_dict(_with_cohort(payload, **{field: value}))
+
+
+def test_cohort_classification_must_be_a_string() -> None:
+    payload = draft_task_proposal_to_dict(_prepare().proposal)
+
+    with pytest.raises(ValueError, match="classification must be a string"):
+        draft_task_proposal_from_dict(_with_cohort(payload, classification=7))
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ("issue-750", "supplied_node_ids must be a list of strings"),
+        (("issue-750",), "supplied_node_ids must be a list of strings"),
+        ({"issue-750": 1}, "supplied_node_ids must be a list of strings"),
+        (["issue-750", 7], "supplied_node_ids must contain only strings"),
+    ],
+)
+def test_supplied_node_ids_rejects_non_string_lists(value, message) -> None:
+    payload = draft_task_proposal_to_dict(_prepare().proposal)
+
+    with pytest.raises(ValueError, match=message):
+        draft_task_proposal_from_dict({**payload, "supplied_node_ids": value})
+
+
+def test_a_unique_character_string_is_no_longer_coerced() -> None:
+    """The case downstream invariants could not catch.
+
+    ``tuple("abc")`` yields three unique non-empty strings, so uniqueness and
+    cohort coverage both pass. Only an explicit type check rejects it.
+    """
+    payload = draft_task_proposal_to_dict(_prepare().proposal)
+    coerced = {
+        **_with_cohort(payload, node_ids="abc"),
+        "supplied_node_ids": "abc",
+    }
+
+    with pytest.raises(ValueError, match="must be a list of strings"):
+        draft_task_proposal_from_dict(coerced)
+
+
 def test_proposal_round_trip_rejects_a_tampered_identity() -> None:
     payload = draft_task_proposal_to_dict(_prepare().proposal)
     payload["evaluated_repository_sha"] = _OTHER_SHA
