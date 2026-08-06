@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import FrozenInstanceError
 
 import pytest
@@ -10,6 +12,7 @@ from scripts.agent_os_github_git_objects.atomic_commit import (
 )
 from scripts.agent_os_github_git_objects.models import (
     AtomicCommitConfirmation,
+    AtomicCommitPlan,
     AtomicCommitReason,
     AtomicCommitRequest,
     AtomicCommitStatus,
@@ -122,6 +125,75 @@ class FakeTransport:
         return GitRefSnapshot(repository, branch, commit_sha)
 
 
+def _derive(kind: str, *parts: object) -> str:
+    """Content-addressed stand-in for real Git object hashing (40 lowercase hex)."""
+    canonical = json.dumps([kind, *parts], sort_keys=True, separators=(",", ":"))
+    return hashlib.sha1(canonical.encode("utf-8")).hexdigest()
+
+
+class DeterministicTransport:
+    """Offline transport deriving tree/commit identities from content alone.
+
+    Unlike ``FakeTransport`` it returns canned SHAs for nothing: the derived
+    tree SHA is a pure function of the exact base tree and the ordered entries
+    it is asked to create, so equivalent semantic inputs are provably
+    equivalent tree operations rather than merely equal fingerprints.
+    """
+
+    def __init__(self) -> None:
+        self.refs = {BRANCH: HEAD}
+        self.tree_requests: list[tuple[str, tuple[tuple[str, str, str, str], ...]]] = []
+        self.ref_updates: list[tuple[str, str]] = []
+        self.trees: dict[str, tuple[GitTreeEntry, ...]] = {}
+        self.commit_trees: dict[str, str] = {}
+
+    def get_ref(self, repository: str, branch: str) -> GitRefSnapshot:
+        return GitRefSnapshot(repository, branch, self.refs[branch])
+
+    def get_commit(self, repository: str, commit_sha: str) -> GitCommitSnapshot:
+        return GitCommitSnapshot(commit_sha, PARENT_TREE, (PARENT,))
+
+    def get_tree(self, repository: str, tree_sha: str, *, recursive: bool = False):
+        return GitTreeSnapshot(tree_sha, self.trees.get(tree_sha, ()), False)
+
+    def get_blob(self, repository: str, blob_sha: str) -> GitBlobSnapshot:
+        return GitBlobSnapshot(blob_sha, 1, "none")
+
+    def create_tree(self, repository: str, *, base_tree_sha: str, entries):
+        shape = tuple(
+            (entry.path, entry.mode, entry.type, entry.sha) for entry in entries
+        )
+        self.tree_requests.append((base_tree_sha, shape))
+        derived = _derive("tree", base_tree_sha, shape)
+        self.trees[derived] = tuple(entries)
+        return derived
+
+    def create_commit(self, repository: str, *, tree_sha: str, parent_sha: str, message: str):
+        derived = _derive("commit", tree_sha, parent_sha, message)
+        self.commit_trees[derived] = tree_sha
+        return derived
+
+    def compare(self, repository: str, *, base_sha: str, head_sha: str) -> GitCompareSnapshot:
+        entries = self.trees[self.commit_trees[head_sha]]
+        return GitCompareSnapshot(
+            status="ahead",
+            ahead_by=1,
+            behind_by=0,
+            total_commits=1,
+            changed_files=tuple(
+                GitChangedFile(entry.path, "modified", entry.sha) for entry in entries
+            ),
+            additions=len(entries),
+            deletions=0,
+        )
+
+    def update_ref(self, repository: str, *, branch: str, commit_sha: str, force: bool = False):
+        assert force is False
+        self.ref_updates.append((branch, commit_sha))
+        self.refs[branch] = commit_sha
+        return GitRefSnapshot(repository, branch, commit_sha)
+
+
 def request(**overrides) -> AtomicCommitRequest:
     values = dict(
         repository=REPOSITORY,
@@ -180,7 +252,8 @@ def test_917_fixture_uses_exact_parent_tree_blobs_and_non_force_ref_update() -> 
     assert result.workflow_mutation_authorized is False
 
     blob_calls = [call[2] for call in transport.calls if call[0] == "get_blob"]
-    assert blob_calls == [PRODUCTION_BLOB, TEST_BLOB]
+    # Verified once while planning and independently again before any write.
+    assert blob_calls == [PRODUCTION_BLOB, TEST_BLOB, PRODUCTION_BLOB, TEST_BLOB]
     assert WRONG_BLOB not in blob_calls
     tree_calls = [call for call in transport.calls if call[0] == "create_tree"]
     commit_calls = [call for call in transport.calls if call[0] == "create_commit"]
@@ -199,13 +272,103 @@ def test_917_fixture_uses_exact_parent_tree_blobs_and_non_force_ref_update() -> 
     assert transport.calls[update_index][-1] is False
 
 
-def test_repeated_semantic_plan_is_deterministic() -> None:
-    first_transport = FakeTransport()
-    second_transport = FakeTransport()
-    first, _ = prepare_atomic_commit_from_blobs(request(), first_transport)
-    second, _ = prepare_atomic_commit_from_blobs(request(), second_transport)
-    assert first is not None and second is not None
-    assert first.operation_fingerprint == second.operation_fingerprint
+def test_equivalent_inputs_derive_identical_tree_operations() -> None:
+    ordered = (
+        GitTreeEntry(PRODUCTION_PATH, "100644", "blob", PRODUCTION_BLOB),
+        GitTreeEntry(TEST_PATH, "100644", "blob", TEST_BLOB),
+    )
+    runs = []
+    for entries, allowed_paths in (
+        (ordered, (PRODUCTION_PATH, TEST_PATH)),
+        (tuple(reversed(ordered)), (TEST_PATH, PRODUCTION_PATH)),
+    ):
+        transport = DeterministicTransport()
+        plan, planned = prepare_atomic_commit_from_blobs(
+            request(entries=entries, allowed_paths=allowed_paths), transport
+        )
+        assert plan is not None
+        assert planned.reason is AtomicCommitReason.PLAN_READY
+        result = execute_atomic_commit_from_blobs(plan, confirmation(plan), transport)
+        assert result.status is AtomicCommitStatus.REF_UPDATED
+        runs.append((transport, plan, result))
+
+    (first, first_plan, first_result), (second, second_plan, second_result) = runs
+
+    # Exact base tree and identical ordered tree entries were submitted.
+    assert first.tree_requests == second.tree_requests
+    assert len(first.tree_requests) == 1
+    assert first.tree_requests[0][0] == PARENT_TREE == first_plan.parent_tree_sha
+    assert first.tree_requests[0][1] == (
+        (PRODUCTION_PATH, "100644", "blob", PRODUCTION_BLOB),
+        (TEST_PATH, "100644", "blob", TEST_BLOB),
+    )
+
+    # Identical derived tree, commit, and fingerprint.
+    assert first_result.created_tree_sha == second_result.created_tree_sha
+    assert first_result.created_commit_sha == second_result.created_commit_sha
+    assert first_plan.operation_fingerprint == second_plan.operation_fingerprint
+    assert first.trees[first_result.created_tree_sha] == second.trees[
+        second_result.created_tree_sha
+    ]
+
+    # Exactly one ref movement, on the requested branch, to the derived commit.
+    assert first.ref_updates == second.ref_updates
+    assert first.ref_updates == [(BRANCH, first_result.created_commit_sha)]
+    assert first.refs == {BRANCH: first_result.created_commit_sha}
+
+
+def test_prepared_plan_success_path_still_updates_ref() -> None:
+    transport, plan = prepared()
+    result = execute_atomic_commit_from_blobs(plan, confirmation(plan), transport)
+    assert result.status is AtomicCommitStatus.REF_UPDATED
+    assert result.mutation_state is MutationState.CONFIRMED
+    assert result.parent_tree_sha == PARENT_TREE
+    assert result.unattached_objects == ()
+
+
+def test_plan_with_unrelated_parent_tree_performs_zero_writes() -> None:
+    transport, plan = prepared()
+    forged = AtomicCommitPlan(plan.request, "a" * 40, plan.operation_fingerprint)
+    result = execute_atomic_commit_from_blobs(forged, confirmation(forged), transport)
+    assert result.reason is AtomicCommitReason.PLAN_PROVENANCE_MISMATCH
+    assert result.status is AtomicCommitStatus.BLOCKED
+    assert result.mutation_state is MutationState.NOT_ATTEMPTED
+    assert result.unattached_objects == ()
+    assert not any(
+        call[0].startswith("create_") or call[0] == "update_ref" for call in transport.calls
+    )
+
+
+def test_plan_with_forged_fingerprint_performs_zero_writes() -> None:
+    transport, plan = prepared()
+    forged = AtomicCommitPlan(plan.request, plan.parent_tree_sha, "b" * 64)
+    result = execute_atomic_commit_from_blobs(forged, confirmation(forged), transport)
+    assert result.reason is AtomicCommitReason.PLAN_PROVENANCE_MISMATCH
+    assert result.mutation_state is MutationState.NOT_ATTEMPTED
+    assert not any(
+        call[0].startswith("create_") or call[0] == "update_ref" for call in transport.calls
+    )
+
+
+def test_plan_whose_blob_evidence_no_longer_verifies_performs_zero_writes() -> None:
+    transport, plan = prepared()
+    transport.blobs.remove(TEST_BLOB)
+    result = execute_atomic_commit_from_blobs(plan, confirmation(plan), transport)
+    assert result.reason is AtomicCommitReason.BLOB_MISSING_OR_MISMATCHED
+    assert result.mutation_state is MutationState.NOT_ATTEMPTED
+    assert not any(
+        call[0].startswith("create_") or call[0] == "update_ref" for call in transport.calls
+    )
+
+
+def test_plan_bound_to_moved_head_performs_zero_writes() -> None:
+    transport, plan = prepared()
+    transport.head = "6" * 40
+    result = execute_atomic_commit_from_blobs(plan, confirmation(plan), transport)
+    assert result.reason is AtomicCommitReason.CONCURRENCY_STOP
+    assert not any(
+        call[0].startswith("create_") or call[0] == "update_ref" for call in transport.calls
+    )
 
 
 def test_request_and_result_are_immutable() -> None:

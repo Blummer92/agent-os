@@ -206,6 +206,7 @@ class AtomicCommitReason(str, Enum):
     CONFIRMATION_MISSING = "confirmation-missing"
     CONFIRMATION_CANCELLED = "confirmation-cancelled"
     CONFIRMATION_MISMATCHED = "confirmation-mismatched"
+    PLAN_PROVENANCE_MISMATCH = "plan-provenance-mismatch"
     REPEAT_INVOCATION = "repeat-invocation"
     CONCURRENCY_STOP = "concurrency-stop"
     TREE_CREATE_FAILED = "tree-create-failed"

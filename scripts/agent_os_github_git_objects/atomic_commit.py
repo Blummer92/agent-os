@@ -12,6 +12,7 @@ from .models import (
     AtomicCommitRequest,
     AtomicCommitResult,
     AtomicCommitStatus,
+    GitRefSnapshot,
     MutationState,
 )
 from .transport import GitHubGitObjectTransport, GitObjectTransportError
@@ -23,55 +24,37 @@ def prepare_atomic_commit_from_blobs(
 ) -> tuple[AtomicCommitPlan | None, AtomicCommitResult]:
     try:
         ref = transport.get_ref(request.repository, request.branch)
-        if ref.commit_sha != request.expected_head_sha:
+        parent_tree_sha, failure, diagnostic = _verify_head_evidence(request, transport, ref)
+        if failure is not None:
             return None, _blocked(
-                AtomicCommitReason.INITIAL_HEAD_MISMATCH,
+                failure,
                 starting=ref.commit_sha,
-                diagnostic="branch head does not match expected head",
+                parent_tree=parent_tree_sha,
+                diagnostic=diagnostic,
             )
-        commit = transport.get_commit(request.repository, request.expected_head_sha)
-        if commit.sha != request.expected_head_sha or len(commit.parent_shas) != 1:
+        if parent_tree_sha is None:
             return None, _blocked(
                 AtomicCommitReason.COMMIT_SHAPE_UNSUPPORTED,
                 starting=ref.commit_sha,
-                diagnostic="head commit must be an ordinary single-parent commit",
+                diagnostic="parent tree could not be verified",
             )
-        for entry in request.entries:
-            try:
-                blob = transport.get_blob(request.repository, entry.sha)
-            except GitObjectTransportError as error:
-                if error.kind in {"not-found", "malformed-response"}:
-                    return None, _blocked(
-                        AtomicCommitReason.BLOB_MISSING_OR_MISMATCHED,
-                        starting=ref.commit_sha,
-                        parent_tree=commit.tree_sha,
-                        diagnostic=f"blob unavailable for {entry.path}",
-                    )
-                raise
-            if blob.sha != entry.sha:
-                return None, _blocked(
-                    AtomicCommitReason.BLOB_MISSING_OR_MISMATCHED,
-                    starting=ref.commit_sha,
-                    parent_tree=commit.tree_sha,
-                    diagnostic=f"blob identity mismatch for {entry.path}",
-                )
-        fingerprint = _operation_fingerprint(request, commit.tree_sha)
+        fingerprint = _operation_fingerprint(request, parent_tree_sha)
         if fingerprint in request.prior_fingerprints:
             return None, _blocked(
                 AtomicCommitReason.REPEAT_INVOCATION,
                 starting=ref.commit_sha,
-                parent_tree=commit.tree_sha,
+                parent_tree=parent_tree_sha,
                 fingerprint=fingerprint,
                 diagnostic="operation fingerprint already completed",
             )
-        plan = AtomicCommitPlan(request, commit.tree_sha, fingerprint)
+        plan = AtomicCommitPlan(request, parent_tree_sha, fingerprint)
         return plan, AtomicCommitResult(
             status=AtomicCommitStatus.PLANNED,
             reason=AtomicCommitReason.PLAN_READY,
             operation_fingerprint=fingerprint,
             starting_branch_sha=ref.commit_sha,
             ending_branch_sha=ref.commit_sha,
-            parent_tree_sha=commit.tree_sha,
+            parent_tree_sha=parent_tree_sha,
             created_tree_sha=None,
             created_commit_sha=None,
             confirmation_requested=True,
@@ -120,16 +103,17 @@ def execute_atomic_commit_from_blobs(
     created_commit: str | None = None
     try:
         pre_ref = transport.get_ref(request.repository, request.branch)
-        if pre_ref.commit_sha != request.expected_head_sha:
+        failure, diagnostic = _verify_plan_provenance(plan, transport, pre_ref)
+        if failure is not None:
             return _blocked(
-                AtomicCommitReason.CONCURRENCY_STOP,
+                failure,
                 starting=pre_ref.commit_sha,
                 parent_tree=plan.parent_tree_sha,
                 fingerprint=plan.operation_fingerprint,
                 confirmation_requested=True,
                 confirmation_matched=True,
                 execution_attempted=True,
-                diagnostic="branch moved before tree creation",
+                diagnostic=diagnostic,
             )
         try:
             created_tree = transport.create_tree(
@@ -315,6 +299,80 @@ def execute_atomic_commit_from_blobs(
             unattached=unattached,
             diagnostic=f"{error.operation}:{error.kind}",
         )
+
+
+def _verify_head_evidence(
+    request: AtomicCommitRequest,
+    transport: GitHubGitObjectTransport,
+    head_ref: GitRefSnapshot,
+) -> tuple[str | None, AtomicCommitReason | None, str]:
+    """Re-read live head evidence for a request. Reads only; never writes.
+
+    Returns the verified parent tree SHA (when it could be read), the blocking
+    reason (or ``None`` when every check passed), and a bounded diagnostic.
+    """
+    if head_ref.commit_sha != request.expected_head_sha:
+        return (
+            None,
+            AtomicCommitReason.INITIAL_HEAD_MISMATCH,
+            "branch head does not match expected head",
+        )
+    commit = transport.get_commit(request.repository, request.expected_head_sha)
+    if commit.sha != request.expected_head_sha or len(commit.parent_shas) != 1:
+        return (
+            None,
+            AtomicCommitReason.COMMIT_SHAPE_UNSUPPORTED,
+            "head commit must be an ordinary single-parent commit",
+        )
+    for entry in request.entries:
+        try:
+            blob = transport.get_blob(request.repository, entry.sha)
+        except GitObjectTransportError as error:
+            if error.kind in {"not-found", "malformed-response"}:
+                return (
+                    commit.tree_sha,
+                    AtomicCommitReason.BLOB_MISSING_OR_MISMATCHED,
+                    f"blob unavailable for {entry.path}",
+                )
+            raise
+        if blob.sha != entry.sha:
+            return (
+                commit.tree_sha,
+                AtomicCommitReason.BLOB_MISSING_OR_MISMATCHED,
+                f"blob identity mismatch for {entry.path}",
+            )
+    return commit.tree_sha, None, ""
+
+
+def _verify_plan_provenance(
+    plan: AtomicCommitPlan,
+    transport: GitHubGitObjectTransport,
+    head_ref: GitRefSnapshot,
+) -> tuple[AtomicCommitReason | None, str]:
+    """Re-derive the plan from live evidence before any write is attempted.
+
+    A caller may hand ``execute_atomic_commit_from_blobs`` any structurally
+    valid ``AtomicCommitPlan``, and the confirmation only echoes fields the
+    same caller controls. So the plan's parent tree and fingerprint are proven
+    again here against the repository itself rather than trusted.
+    """
+    request = plan.request
+    parent_tree_sha, failure, diagnostic = _verify_head_evidence(request, transport, head_ref)
+    if failure is AtomicCommitReason.INITIAL_HEAD_MISMATCH:
+        return AtomicCommitReason.CONCURRENCY_STOP, "branch moved before tree creation"
+    if failure is not None:
+        return failure, diagnostic
+    if parent_tree_sha != plan.parent_tree_sha:
+        return (
+            AtomicCommitReason.PLAN_PROVENANCE_MISMATCH,
+            "plan parent tree does not match the verified head commit tree",
+        )
+    if _operation_fingerprint(request, parent_tree_sha) != plan.operation_fingerprint:
+        return (
+            AtomicCommitReason.PLAN_PROVENANCE_MISMATCH,
+            "recomputed operation fingerprint does not match the plan",
+        )
+    return None, ""
 
 
 def _operation_fingerprint(request: AtomicCommitRequest, parent_tree_sha: str) -> str:

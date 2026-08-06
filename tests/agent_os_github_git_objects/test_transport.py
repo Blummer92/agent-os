@@ -34,6 +34,28 @@ def test_get_ref_parses_exact_target() -> None:
     assert kwargs["headers"]["X-GitHub-Api-Version"] == "2026-03-10"
 
 
+@pytest.mark.parametrize(
+    "returned_ref",
+    [
+        "refs/heads/agent/other",
+        None,
+        "refs/heads/agent/test-extra",
+        "refs/heads/agent",
+        "agent/test",
+    ],
+    ids=["mismatched", "missing", "prefix-extended", "prefix-truncated", "unqualified"],
+)
+def test_get_ref_rejects_non_exact_ref_identity(returned_ref) -> None:
+    payload = {"object": {"sha": SHA}}
+    if returned_ref is not None:
+        payload["ref"] = returned_ref
+    transport, _ = transport_with(payload)
+    with pytest.raises(GitObjectTransportError) as excinfo:
+        transport.get_ref(REPO, BRANCH)
+    assert excinfo.value.operation == "get-ref"
+    assert excinfo.value.kind == "malformed-response"
+
+
 def test_get_commit_exposes_tree_and_parents() -> None:
     transport, _ = transport_with(
         {"sha": SHA, "tree": {"sha": TREE}, "parents": [{"sha": PARENT}]}
@@ -73,6 +95,20 @@ def test_get_tree_returns_only_supported_ordinary_blob_entries() -> None:
     result = transport.get_tree(REPO, TREE, recursive=True)
     assert result.entries == (GitTreeEntry("a.py", "100644", "blob", BLOB),)
     assert result.truncated is False
+
+
+def test_get_tree_rejects_mismatched_returned_tree_sha() -> None:
+    transport, _ = transport_with(
+        {
+            "sha": "e" * 40,
+            "truncated": False,
+            "tree": [{"path": "a.py", "mode": "100644", "type": "blob", "sha": BLOB}],
+        }
+    )
+    with pytest.raises(GitObjectTransportError) as excinfo:
+        transport.get_tree(REPO, TREE)
+    assert excinfo.value.operation == "get-tree"
+    assert excinfo.value.kind == "malformed-response"
 
 
 def test_get_blob_validates_size_and_identity() -> None:
@@ -133,7 +169,9 @@ def test_compare_normalizes_file_evidence_and_statistics() -> None:
 
 
 def test_update_ref_always_submits_force_false() -> None:
-    transport, client = transport_with({"object": {"sha": SHA}})
+    transport, client = transport_with(
+        {"ref": "refs/heads/agent/test", "object": {"sha": SHA}}
+    )
     result = transport.update_ref(REPO, branch=BRANCH, commit_sha=SHA, force=False)
     assert result.commit_sha == SHA
     args, kwargs = client.requester.requestJsonAndCheck.call_args
@@ -143,11 +181,46 @@ def test_update_ref_always_submits_force_false() -> None:
         transport.update_ref(REPO, branch=BRANCH, commit_sha=SHA, force=True)
 
 
+@pytest.mark.parametrize(
+    "returned_ref",
+    ["refs/heads/agent/other", None, "refs/heads/agent/test-extra"],
+    ids=["mismatched", "missing", "prefix-extended"],
+)
+def test_malformed_update_ref_identity_is_mutation_uncertain(returned_ref) -> None:
+    payload = {"object": {"sha": SHA}}
+    if returned_ref is not None:
+        payload["ref"] = returned_ref
+    transport, _ = transport_with(payload)
+    with pytest.raises(GitObjectTransportError) as excinfo:
+        transport.update_ref(REPO, branch=BRANCH, commit_sha=SHA, force=False)
+    assert excinfo.value.operation == "update-ref"
+    assert excinfo.value.kind == "malformed-success-response"
+    assert excinfo.value.mutation_state is MutationState.UNCERTAIN
+
+
+def test_encoded_slash_branch_round_trips_on_read_and_write() -> None:
+    branch = "agent/920-git-object-atomic-commit"
+    transport, client = transport_with(
+        {"ref": f"refs/heads/{branch}", "object": {"sha": SHA}}
+    )
+    assert transport.get_ref(REPO, branch).commit_sha == SHA
+    read_args, _ = client.requester.requestJsonAndCheck.call_args
+    assert read_args[1] == (
+        f"/repos/{REPO}/git/ref/heads/agent%2F920-git-object-atomic-commit"
+    )
+
+    assert transport.update_ref(REPO, branch=branch, commit_sha=SHA).commit_sha == SHA
+    write_args, _ = client.requester.requestJsonAndCheck.call_args
+    assert write_args[1] == (
+        f"/repos/{REPO}/git/refs/heads/agent%2F920-git-object-atomic-commit"
+    )
+
+
 def test_read_retries_transient_server_error_but_not_not_found() -> None:
     client = MagicMock()
     client.requester.requestJsonAndCheck.side_effect = [
         GithubException(500, {"message": "temporary"}, {}),
-        ({}, {"object": {"sha": SHA}}),
+        ({}, {"ref": "refs/heads/agent/test", "object": {"sha": SHA}}),
     ]
     transport = PyGithubGitObjectTransport(client, max_read_attempts=2)
     assert transport.get_ref(REPO, BRANCH).commit_sha == SHA

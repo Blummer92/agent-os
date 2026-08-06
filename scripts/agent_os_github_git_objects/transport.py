@@ -107,6 +107,7 @@ class PyGithubGitObjectTransport:
             "get-ref", f"/repos/{repository}/git/ref/heads/{quote(branch, safe='')}"
         )
         obj = _mapping(payload, "ref response")
+        _require_exact_ref(obj.get("ref"), branch, "get-ref")
         target = _mapping(obj.get("object"), "ref object")
         return GitRefSnapshot(repository, branch, _text(target.get("sha"), "ref sha"))
 
@@ -151,9 +152,10 @@ class PyGithubGitObjectTransport:
         truncated = obj.get("truncated", False)
         if type(truncated) is not bool:
             raise GitObjectTransportError("get-tree", "malformed-response")
-        return GitTreeSnapshot(
-            _text(obj.get("sha"), "tree sha"), tuple(entries), truncated
-        )
+        returned_sha = _text(obj.get("sha"), "tree sha")
+        if returned_sha != tree_sha:
+            raise GitObjectTransportError("get-tree", "malformed-response")
+        return GitTreeSnapshot(returned_sha, tuple(entries), truncated)
 
     def get_blob(self, repository: str, blob_sha: str) -> GitBlobSnapshot:
         repository = require_repository(repository)
@@ -298,6 +300,7 @@ class PyGithubGitObjectTransport:
         )
         try:
             obj = _mapping(payload, "ref response")
+            _require_exact_ref(obj.get("ref"), branch, "update-ref")
             target = _mapping(obj.get("object"), "ref object")
             return GitRefSnapshot(
                 repository, branch, _text(target.get("sha"), "ref sha")
@@ -353,6 +356,16 @@ class PyGithubGitObjectTransport:
             raise GitObjectTransportError(
                 operation, "mutation-uncertain", mutation_state=MutationState.UNCERTAIN
             ) from error
+
+
+def _require_exact_ref(value: Any, branch: str, operation: str) -> None:
+    """Require the response to name exactly the branch ref that was requested.
+
+    A missing, prefix-matched, or otherwise different ``ref`` is a malformed
+    response, not a usable answer about another branch.
+    """
+    if not isinstance(value, str) or value != f"refs/heads/{branch}":
+        raise GitObjectTransportError(operation, "malformed-response")
 
 
 def _mapping(value: Any, name: str) -> dict[str, Any]:

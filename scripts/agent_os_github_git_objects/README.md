@@ -23,13 +23,17 @@ There is no arbitrary URL, HTTP method, REST escape hatch, GraphQL operation, is
 
 `prepare_atomic_commit_from_blobs` performs reads only. It verifies the branch head, reads the parent commit's exact `tree_sha`, verifies every supplied blob, and produces a deterministic operation fingerprint.
 
-`execute_atomic_commit_from_blobs` requires a matching immutable confirmation. It rechecks the branch, creates one tree and one commit, validates the unattached commit's exact changed-path set and blob identities, rechecks the branch again, and updates the ref non-force.
+`execute_atomic_commit_from_blobs` requires a matching immutable confirmation. It then re-derives the plan from live repository evidence before any write: it rechecks the branch head, re-reads the expected head commit and requires its exact `tree_sha` to equal the plan's parent tree, re-verifies every blob identity, and recomputes the operation fingerprint from the request plus that verified parent tree. A plan is never trusted because it is well-formed — the confirmation only echoes caller-controlled fields, so provenance is proven against the repository itself.
 
-Missing, cancelled, stale, or mismatched confirmation performs zero writes.
+Only after that does it create one tree and one commit, validate the unattached commit's exact changed-path set and blob identities, recheck the branch again, and update the ref non-force.
+
+Missing, cancelled, stale, or mismatched confirmation performs zero writes, as does any plan whose provenance cannot be re-derived.
 
 ## Failure behavior
 
-The operation fails closed when repository identity, branch identity, SHAs, entries, confirmation, compare evidence, or concurrency state do not match the request. Objects created before a later gate fails are returned as unattached audit objects.
+The operation fails closed when repository identity, branch identity, SHAs, entries, confirmation, plan provenance, compare evidence, or concurrency state do not match the request. Objects created before a later gate fails are returned as unattached audit objects.
+
+Responses must identify exactly the object that was requested. A ref response whose `ref` is missing, prefix-matched, or names another branch, and a tree response whose `sha` is not the requested tree, are treated as malformed rather than as answers about a different object. A malformed successful ref update stays `mutation-uncertain`.
 
 Read retries are bounded to transient failures. Git tree, commit, and ref writes are never automatically retried. A dropped or ambiguous write response is returned as `mutation-uncertain`.
 
