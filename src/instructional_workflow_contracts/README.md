@@ -31,17 +31,31 @@ The planner never derives roles from free-form instructional prose or artifact t
 
 ## Visual Asset Compatibility
 
-`validate_visual_asset_compatibility_evidence` validates one exact Visual Asset Library record, one exact valid `ArtifactManifest`, and one bounded compatibility-evidence group. It distinguishes eligible evidence, hard rejection, manual review, and structurally invalid input without interpreting free-form library metadata as authority.
+`validate_visual_asset_compatibility_evidence` supports two exact versions:
 
-See `VISUAL_ASSET_COMPATIBILITY.md` for the exact envelope, classifications, fail-closed identity binding, and prohibited operations.
+- `curriculum-visual-asset-compatibility-v1`, which preserves the existing compatibility shape and behavior;
+- `curriculum-visual-asset-compatibility-v2`, which requires a complete governed `cohesion_profile` and preserves expanded matched-asset context and lifecycle metadata.
+
+Dispatch uses only the exact `compatibility_evidence.contract_version`. V1 rejects v2-only fields, v2 requires its complete profile, unsupported versions fail closed, and no automatic version conversion occurs. The validator binds one Visual Asset Library record to one exact validated manifest and asset identity; classifies evidence as eligible, hard rejection, or manual review; and returns invalid status for malformed evidence.
+
+The v2 profile preserves controlled visual style family, medium, representation class, palette family, line treatment, rendering style, perspective, background treatment, 1-through-5 complexity and cognitive-load ratings, and attributable human-reviewed audience compatibility. Required `unspecified`, stale, contradictory, pending, not-assessed, or unattributed evidence routes to manual review rather than receiving a fabricated default.
+
+See `VISUAL_ASSET_COMPATIBILITY.md` for exact vocabularies, evidence fields, ownership, classification rules, identity binding, projected manifest and asset metadata, and prohibited operations.
 
 ## Visual Asset Candidate Filter
 
-`filter_approved_visual_candidates(visual_needs_plan, candidates, *, source_revision)` consumes only a validated `visuals-required` plan and at most 32 supplied compatibility envelopes. It deterministically groups candidates as eligible, rejected, or manual review by checking governed plan role, material type, and orientation overlap.
+`filter_approved_visual_candidates(visual_needs_plan, candidates, *, source_revision, contract_version=CONTRACT_ID)` supports:
 
-The filter performs no ranking, scoring, selection, retrieval, gap detection, prompt construction, image inspection, generation, external access, or production action. `source_revision` is required and identity-bound so a changed source snapshot produces a changed candidate-set ID and fingerprint.
+- `curriculum-visual-asset-candidates-v1`, which remains the default and preserves the existing compact entry shape;
+- `curriculum-visual-asset-candidates-v2`, which must be selected explicitly and accepts only v2 compatibility evidence.
 
-See `VISUAL_ASSET_CANDIDATES.md` for the filter contract and boundaries.
+There is no automatic conversion between candidate or compatibility versions. A compatibility record from the wrong version is rejected as invalid. Both versions consume only an exactly validated `visuals-required` plan and at most 32 supplied compatibility envelopes, preserve exact plan and source-revision binding, and deterministically group candidates as eligible, rejected, or manual review.
+
+V2 preserves a compact projection of the exact validated compatibility record: compatibility identity and fingerprint, manifest verification identity, asset identity, Visual Asset Library and Drive identity, purpose and approved-use evidence, orientation and aspect state, accessibility, freshness, duplicate and canonical disposition, context and lifecycle metadata, the complete cohesion profile, and all-false authority. The filter does not reconstruct those fields later from free-form working data.
+
+The filter performs no cohesion ranking, scoring, selection, role assignment, retrieval, gap detection, prompt construction, image inspection, generation, external access, or production action. `source_revision`, the exact plan identity, selected contract version, ordered candidate groups, and projected evidence are bound into deterministic candidate-set identity and SHA-256 fingerprinting.
+
+See `VISUAL_ASSET_CANDIDATES.md` for exact v1 and v2 entry shapes, group behavior, reason-code mappings, bounds, and prohibited operations.
 
 ## Authority and downstream behavior
 
