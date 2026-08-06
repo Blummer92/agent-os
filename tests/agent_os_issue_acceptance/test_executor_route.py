@@ -216,11 +216,17 @@ def test_large_scope_is_compacted_without_failure() -> None:
 
 
 def test_identical_evidence_produces_identical_decision() -> None:
-    supplied = evidence(runtime_requirements=(RuntimeRequirement.TESTS,))
-    first = evaluate_executor_route(supplied)
-    second = evaluate_executor_route(supplied)
+    first = evaluate_executor_route(evidence(runtime_requirements=(RuntimeRequirement.TESTS,)))
+    second = evaluate_executor_route(evidence(runtime_requirements=(RuntimeRequirement.TESTS,)))
     assert first == second
     assert first.decision_id == second.decision_id
+    assert first.decision_id.startswith("executor-route-decision:")
+
+
+def test_unknown_connector_capability_fails_closed() -> None:
+    decision = evaluate_executor_route(evidence(connector_state=CapabilityState.UNKNOWN))
+    assert decision.route is ExecutorRoute.HUMAN_DECISION
+    assert "capability.connector-unknown" in decision.reason_codes
 
 
 def test_unknown_required_capability_fails_closed() -> None:

@@ -10,8 +10,13 @@ operating-mode, authorization, capability, runtime, and resume evidence.
 - `chatgpt_connector`: bounded GitHub reads and writes are sufficient.
 - `governed_runner`: checkout, tests, build, generation, runtime inspection,
   local Git, or checkpointed execution is required.
-- `external_fallback`: the owner explicitly selected an external coding surface,
-  or both ChatGPT routes are proven unavailable or insufficient.
+- `external_fallback`: the external surface is proven available, and either the
+  owner explicitly selected an external coding surface, or required runtime
+  work exists and the governed runner is proven unavailable or insufficient,
+  or the connector and the governed runner are both proven unavailable or
+  insufficient. If the owner explicitly selects the external surface while it
+  is not proven available, or a required capability is unknown, selection
+  fails closed to `human_decision` instead.
 - `human_decision`: authority, source evidence, required fields, excluded
   surfaces, or required capability evidence is ambiguous or unsafe.
 
