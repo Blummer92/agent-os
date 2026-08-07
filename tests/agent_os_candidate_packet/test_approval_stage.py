@@ -9,6 +9,9 @@ from scripts.agent_os_candidate_packet.approval_stage import (
     prepare_approval_projection,
 )
 from scripts.agent_os_issue_acceptance import ApprovalKind, ApprovalState
+from scripts.agent_os_issue_acceptance.planning_binding import (
+    compute_planning_binding_fingerprint,
+)
 from tests.agent_os_candidate_packet.test_proposal_stage import _prepare
 
 _CANDIDATE_AT = "2026-08-06T04:05:00Z"
@@ -97,13 +100,15 @@ def test_rejection_never_projects() -> None:
 
 def test_binding_drift_fails_closed_before_projection() -> None:
     upstream = _prepare()
-    drifted = replace(
-        upstream,
-        planning_binding=replace(
-            upstream.planning_binding,
-            handoff_reference="f" * 64,
-        ),
+    binding = upstream.planning_binding
+    assert binding is not None
+    changed = replace(binding, handoff_digest="f" * 64, binding_id="")
+    drifted_binding = replace(
+        changed,
+        binding_id=compute_planning_binding_fingerprint(changed),
     )
+    drifted = replace(upstream, planning_binding=drifted_binding)
+
     result = prepare_approval_projection(
         drifted,
         candidate_context=_context(),
