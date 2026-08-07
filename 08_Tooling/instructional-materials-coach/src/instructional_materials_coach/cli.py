@@ -11,7 +11,9 @@ database.
 from __future__ import annotations
 
 import argparse
+import json
 import os
+from pathlib import Path
 import sys
 
 from .content_spec import load_lesson_content
@@ -19,6 +21,7 @@ from .docs_requests import build_docs_replace_requests
 from .drive_client import build_drive_service, duplicate_template, get_credentials, get_file_link
 from .lesson_record import LEARNING_TYPES, SEVERITIES, LessonRecord, lesson_from_exception, record_lesson
 from .slides_requests import build_slides_replace_requests
+from .visual_reuse import plan_governed_visual_reuse
 from .workspace_clients import apply_docs_requests, apply_slides_requests, build_docs_service, build_slides_service
 
 DEFAULT_LESSONS_DIR = "reports/lessons"
@@ -37,6 +40,36 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     build.add_argument("--slides-template", required=True, help="File ID of the approved Slides template.")
     build.add_argument("--doc-template", required=True, help="File ID of the approved Doc template.")
     build.add_argument("--target-folder", required=True, help="Drive folder ID the new files are created in.")
+    build.add_argument(
+        "--material-requirement",
+        default="",
+        help="Path to a governed MaterialRequirement JSON record. Required before any connected build.",
+    )
+    build.add_argument(
+        "--artifact-manifests",
+        default="",
+        help="Optional path to a JSON list of supplied governed ArtifactManifest records.",
+    )
+    build.add_argument(
+        "--visual-candidates",
+        default="",
+        help="Optional path to a JSON list of supplied visual compatibility evidence.",
+    )
+    build.add_argument(
+        "--visual-source-revision",
+        default="",
+        help="Source revision binding for supplied visual candidate evidence.",
+    )
+    build.add_argument(
+        "--changed-dependency-keys",
+        default="",
+        help="Optional path to a JSON list of changed dependency keys for reuse planning.",
+    )
+    build.add_argument(
+        "--impact-map",
+        default="",
+        help="Optional path to a JSON dependency-impact mapping for reuse planning.",
+    )
     build.add_argument("--client-secret", default=os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET_PATH", ""))
     build.add_argument("--token-path", default=os.environ.get("GOOGLE_OAUTH_TOKEN_PATH", ""))
     build.add_argument(
@@ -60,6 +93,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _load_json(path: str, *, default: object) -> object:
+    if not path:
+        return default
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
@@ -67,7 +106,7 @@ def main(argv: list[str] | None = None) -> int:
         record = LessonRecord(
             lesson_learned=args.title,
             what_happened=args.what_happened,
-            what_to_do_next_time=args.what_to_do_next_time,
+            what_to_do_next_time=args.what_do_next_time if hasattr(args, "what_do_next_time") else args.what_to_do_next_time,
             guardrail=args.guardrail,
             severity=args.severity,
             learning_type=args.learning_type,
@@ -86,10 +125,31 @@ def main(argv: list[str] | None = None) -> int:
         "doc_template": args.doc_template,
         "target_folder": args.target_folder,
         "content_path": args.content,
+        "material_requirement_path": args.material_requirement,
     }
     try:
         content = load_lesson_content(args.content)
         context["content_title"] = content.title
+
+        if not args.material_requirement:
+            raise RuntimeError(
+                "Governed MaterialRequirement JSON is required before a connected build."
+            )
+        visual_plan = plan_governed_visual_reuse(
+            _load_json(args.material_requirement, default=None),
+            artifact_manifests=_load_json(args.artifact_manifests, default=[]),
+            visual_candidates=_load_json(args.visual_candidates, default=[]),
+            source_revision=args.visual_source_revision,
+            changed_dependency_keys=_load_json(args.changed_dependency_keys, default=[]),
+            impact_map=_load_json(args.impact_map, default={}),
+        )
+        context["visual_reuse_outcome"] = visual_plan.outcome
+        context["selected_asset_ids"] = list(visual_plan.selected_asset_ids)
+        if visual_plan.final_production_blocked:
+            raise RuntimeError(
+                "Governed visual reuse gate blocked final production: "
+                f"{visual_plan.outcome}; image_gap_briefs={len(visual_plan.image_gap_briefs)}"
+            )
 
         credentials = get_credentials(args.client_secret, args.token_path)
         drive_service = build_drive_service(credentials)
@@ -106,6 +166,8 @@ def main(argv: list[str] | None = None) -> int:
         apply_slides_requests(slides_service, slides_id, build_slides_replace_requests(content))
         apply_docs_requests(docs_service, doc_id, build_docs_replace_requests(content))
 
+        if visual_plan.selected_asset_ids:
+            print(f"Approved visual assets: {', '.join(visual_plan.selected_asset_ids)}")
         print(f"Slides: {get_file_link(drive_service, slides_id)}")
         print(f"Worksheet: {get_file_link(drive_service, doc_id)}")
         return 0
