@@ -237,20 +237,28 @@ def _loader_aliases(tree: ast.Module) -> set[str]:
     # loader entry point. Iterated to a fixed point so a chain such as
     # `load = importlib.import_module; load2 = load` resolves regardless of
     # declaration order, without attempting general-purpose value tracking.
+    # Annotated assignments (`load: object = importlib.import_module`) bind
+    # exactly the same way, just with a single `.target` instead of a
+    # `.targets` list, so they are folded into the same fixed-point pass.
     changed = True
     while changed:
         changed = False
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Assign):
+            if isinstance(node, ast.Assign):
+                value = node.value
+                targets = node.targets
+            elif isinstance(node, ast.AnnAssign):
+                value = node.value
+                targets = [node.target]
+            else:
                 continue
-            value = node.value
             is_loader_reference = (
                 isinstance(value, ast.Attribute)
                 and value.attr in PROHIBITED_LOADER_CALLS
             ) or (isinstance(value, ast.Name) and value.id in aliases)
             if not is_loader_reference:
                 continue
-            for target in node.targets:
+            for target in targets:
                 if isinstance(target, ast.Name) and target.id not in aliases:
                     aliases.add(target.id)
                     changed = True
@@ -510,6 +518,17 @@ def test_bypass_private_importfrom_member_is_rejected() -> None:
         "private import path 'workflow_scheduler.planning._private'" in item
         for item in offending
     )
+
+
+def test_bypass_annotated_assigned_loader_alias_is_rejected() -> None:
+    """Newly closed (#915 correction): `load: object = importlib.import_module`."""
+    tree = ast.parse(
+        "import importlib\n"
+        "load: object = importlib.import_module\n"
+        "load('workflow_scheduler._private')\n"
+    )
+    offending = _boundary_violations("synthetic", tree)
+    assert any("import-machinery call 'load'" in item for item in offending)
 
 
 def test_ordinary_allowed_imports_still_pass() -> None:
