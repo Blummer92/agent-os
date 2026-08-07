@@ -652,6 +652,22 @@ def _current_binding(
             "planning-binding-contract:mismatch",
         )
         mismatch(
+            planning_binding.repository.casefold() != proposal.repository.casefold(),
+            "source.revision-changed",
+            "planning-binding-repository:mismatch",
+        )
+        mismatch(
+            planning_binding.base_branch != proposal.base_branch,
+            "source.revision-changed",
+            "planning-binding-base-branch:mismatch",
+        )
+        mismatch(
+            planning_binding.evaluated_repository_sha
+            != proposal.evaluated_repository_sha,
+            "source.revision-changed",
+            "planning-binding-source-head:mismatch",
+        )
+        mismatch(
             planning_binding.handoff_digest != proposal.handoff_digest,
             "handoff.changed",
             "handoff:mismatch",
