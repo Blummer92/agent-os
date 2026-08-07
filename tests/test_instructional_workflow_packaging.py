@@ -92,19 +92,25 @@ def test_distribution_ownership_dependency_and_noneditable_install(tmp_path: Pat
 
     coach_metadata = _wheel_metadata(coach_wheel)
     coach_requirements = coach_metadata.get_all("Requires-Dist", [])
-    assert any(
-        requirement.lower().startswith("instructional-workflow-contracts")
+    contracts_requirements = [
+        requirement.replace(" ", "")
         for requirement in coach_requirements
-    )
+        if requirement.lower().startswith("instructional-workflow-contracts")
+    ]
+    assert len(contracts_requirements) == 1
+    assert ">=0.1.0" in contracts_requirements[0]
+    assert "<0.2.0" in contracts_requirements[0]
 
     contracts_metadata = _wheel_metadata(contracts_wheel)
-    contracts_requirements = contracts_metadata.get_all("Requires-Dist", [])
+    contracts_dependencies = contracts_metadata.get_all("Requires-Dist", [])
     assert not any(
         requirement.lower().startswith("instructional-materials-coach")
-        for requirement in contracts_requirements
+        for requirement in contracts_dependencies
     )
 
     environment = tmp_path / "installed"
+    # #944 permits inheriting preinstalled Google/PyYAML validation dependencies only.
+    # The contracts package is force-installed from its wheel and provenance-checked below.
     venv.EnvBuilder(with_pip=True, system_site_packages=True).create(environment)
     python = _venv_python(environment)
     _run(
