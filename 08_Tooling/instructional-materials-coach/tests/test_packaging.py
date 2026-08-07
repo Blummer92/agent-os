@@ -84,9 +84,11 @@ def test_distribution_ownership_dependency_and_noneditable_install(tmp_path: Pat
     root_names = _wheel_names(root_wheel)
     assert any(name.startswith("navigation_registry/") for name in root_names)
     assert not any(name.startswith("instructional_workflow_contracts/") for name in root_names)
+    assert not any(name.startswith("visual_asset_sync/") for name in root_names)
 
     contracts_names = _wheel_names(contracts_wheel)
     assert any(name.startswith("instructional_workflow_contracts/") for name in contracts_names)
+    assert any(name.startswith("visual_asset_sync/") for name in contracts_names)
     assert not any(name.startswith("navigation_registry/") for name in contracts_names)
     assert not any(name.startswith("instructional_materials_coach/") for name in contracts_names)
 
@@ -149,8 +151,11 @@ def test_distribution_ownership_dependency_and_noneditable_install(tmp_path: Pat
             (
                 "import json; "
                 "import instructional_materials_coach as coach; "
+                "import instructional_materials_coach.visual_reuse as visual_reuse; "
                 "import instructional_workflow_contracts as contracts; "
-                "print(json.dumps({'coach': coach.__file__, 'contracts': contracts.__file__}))"
+                "import visual_asset_sync; "
+                "print(json.dumps({'coach': coach.__file__, 'visual_reuse': visual_reuse.__file__, "
+                "'contracts': contracts.__file__, 'visual_asset_sync': visual_asset_sync.__file__}))"
             ),
         ],
         cwd=outside_repo,
