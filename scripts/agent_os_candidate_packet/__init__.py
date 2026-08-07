@@ -10,9 +10,11 @@ Later stages continue the same read-only pipeline: ``planning_stage``
 (AOS-AUTO1B, #751) produces the Scheduler handoff, ``repository_stage``
 (AOS-AUTO1C, #752) binds one caller-supplied repository observation into
 canonical repository-state evidence, and ``proposal_stage`` coordinates both
-into a WSC3 draft task proposal when every gate permits it. Every result in
-this package carries ``execution_authorized=False`` and
-``side_effects_performed=False``.
+into a WSC3 draft task proposal when every gate permits it. Those governed
+stage results carry ``execution_authorized=False`` and
+``side_effects_performed=False``; the Implementation Packet projection is a
+separate evidence wrapper around the existing Memory Manager packet and creates
+no execution authority.
 """
 
 from scripts.agent_os_issue_acceptance.acceptance_report_transport import (
