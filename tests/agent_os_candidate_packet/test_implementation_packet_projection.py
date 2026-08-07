@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import copy
 import hashlib
 import sys
@@ -144,7 +145,12 @@ def _readiness_stage(*, schema_version: str = ISSUEPLAN_CURRENT_STATE_SCHEMA_VER
     )
 
 
-def _operational_state(*, freshness=FreshnessState.CURRENT, claims=()):
+def _operational_state(
+    *,
+    freshness=FreshnessState.CURRENT,
+    claims=(),
+    implementation_authorization=AuthorizationState.AUTHORIZED,
+):
     evidence = IssueOperationalEvidence(
         repository=REPOSITORY,
         issue_number=ISSUE_NUMBER,
@@ -156,7 +162,7 @@ def _operational_state(*, freshness=FreshnessState.CURRENT, claims=()):
         lifecycle_stage=LifecycleStage.IMPLEMENTATION,
         terminal_disposition=TerminalDisposition.NONE,
         readiness=ReadinessState.READY,
-        implementation_authorization=_authority(AuthorizationState.AUTHORIZED),
+        implementation_authorization=_authority(implementation_authorization),
         ready_for_review_authorization=_authority(AuthorizationState.NOT_AUTHORIZED),
         execution_authorization=_authority(AuthorizationState.NOT_AUTHORIZED),
         merge_authorization=_authority(AuthorizationState.NOT_AUTHORIZED),
@@ -250,6 +256,23 @@ def test_stale_operational_evidence_is_rejected():
         _project(state=state)
 
 
+def test_bound_nonpermitting_mode_decision_is_rejected():
+    state = _operational_state(
+        implementation_authorization=AuthorizationState.NOT_AUTHORIZED
+    )
+    mode = _mode(state)
+
+    with pytest.raises(ValueError, match="does not permit implementation"):
+        project_implementation_packet(
+            _readiness_stage(),
+            state,
+            mode,
+            objective="Bounded projection",
+            acceptance_criteria=("criterion",),
+            stop_conditions=("stop",),
+        )
+
+
 def test_unknown_upstream_contract_version_fails_closed():
     stage = _readiness_stage(schema_version="99.0")
 
@@ -287,14 +310,21 @@ def test_projection_module_has_no_execution_or_network_imports():
         / "implementation_packet_projection.py"
     )
     source = module_path.read_text()
+    tree = ast.parse(source)
+    forbidden_modules = {
+        "subprocess",
+        "requests",
+        "urllib",
+        "socket",
+        "github",
+        "scheduler",
+    }
+    imported_modules = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_modules.update(alias.name.split(".")[0].lower() for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported_modules.add(node.module.split(".")[0].lower())
 
-    forbidden_imports = (
-        "import subprocess",
-        "import requests",
-        "import urllib",
-        "import socket",
-        "import github",
-        "import scheduler",
-    )
-    assert all(token not in source.lower() for token in forbidden_imports)
+    assert imported_modules.isdisjoint(forbidden_modules)
     assert "open(" not in source
