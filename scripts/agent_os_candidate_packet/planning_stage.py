@@ -18,6 +18,13 @@ from scripts.agent_os_issue_acceptance.batch_planning import (
     PlanningClassification,
     evaluate_batch_plan,
 )
+from scripts.agent_os_issue_acceptance.issueplan_current_state import (
+    IssuePlanCurrentStateEvidence,
+)
+from scripts.agent_os_issue_acceptance.planning_binding import (
+    PlanningBindingEvidence,
+    build_planning_binding_evidence,
+)
 from scripts.agent_os_issue_acceptance.readiness import ReadinessOutcome
 from scripts.agent_os_issue_acceptance.scheduler_handoff import (
     HandoffCohort,
@@ -52,6 +59,36 @@ class PlanningHandoffStageStatus(str, Enum):
 
 @dataclass(frozen=True, slots=True)
 class PlanningHandoffStageResult:
+    """One planning-stage outcome plus the evidence a downstream stage needs.
+
+    ``issueplan_current_state_evidence`` retains the exact canonical
+    ``IssuePlanCurrentStateEvidence`` object this stage already consumed, so a
+    downstream consumer (AOS-AUTO1C, #752) can forward it to WSC3 without
+    rebuilding it from an evidence ID, node provenance, digest, or another
+    partial representation. It is the same object, not a copy: nothing here
+    reconstructs, normalizes, or duplicates it, and handoff bytes, digests, and
+    classifications are unaffected by its presence.
+
+    Compatibility, stated precisely: the field is trailing with a default, so
+    every existing positional and keyword call site still *binds*. An
+    invalid-input result built the pre-#752 way is unchanged. Direct
+    construction of a *complete* result, however, now requires the evidence,
+    exactly as it already requires ``node``, ``graph``, ``planning_result``,
+    ``handoff``, ``serialized_handoff``, and ``handoff_validation``: exempting
+    only this field would let a complete result ship without the object WSC3
+    needs. ``prepare_planning_handoff(...)`` supplies it, so callers that use
+    the constructor directly to assemble a complete result are the only ones
+    affected.
+
+    ``planning_binding`` is the post-planning attestation joining that exact
+    IssuePlan identity to the graph, planning-result, and handoff digests
+    produced after the identity was fixed. It is optional: a complete result
+    built from an IssuePlan that carries no pre-planning context has nothing to
+    bind, and downstream consumers then fall back to the legacy
+    IssuePlan-reference route. Like the evidence above it is retained by
+    identity, never rebuilt.
+    """
+
     status: PlanningHandoffStageStatus
     node: IssueBatchNode | None
     graph: IssueBatchGraph | None
@@ -61,6 +98,8 @@ class PlanningHandoffStageResult:
     handoff_validation: HandoffValidationResult | None
     wsc3_suppliable: bool
     reason_codes: tuple[str, ...] = field(default_factory=tuple)
+    issueplan_current_state_evidence: IssuePlanCurrentStateEvidence | None = None
+    planning_binding: PlanningBindingEvidence | None = None
     execution_authorized: Literal[False] = field(default=False, init=False)
     side_effects_performed: Literal[False] = field(default=False, init=False)
 
@@ -75,11 +114,25 @@ class PlanningHandoffStageResult:
             self.handoff,
             self.serialized_handoff,
             self.handoff_validation,
+            self.issueplan_current_state_evidence,
         )
         if complete and any(value is None for value in values):
             raise ValueError("complete planning results require every canonical object")
         if not complete and any(value is not None for value in values):
             raise ValueError("invalid-input results must not carry partial objects")
+        if not complete and self.planning_binding is not None:
+            raise ValueError("invalid-input results must not carry partial objects")
+        if self.issueplan_current_state_evidence is not None and not isinstance(
+            self.issueplan_current_state_evidence, IssuePlanCurrentStateEvidence
+        ):
+            raise TypeError(
+                "issueplan_current_state_evidence must be an "
+                "IssuePlanCurrentStateEvidence"
+            )
+        if self.planning_binding is not None and not isinstance(
+            self.planning_binding, PlanningBindingEvidence
+        ):
+            raise TypeError("planning_binding must be a PlanningBindingEvidence")
         object.__setattr__(
             self, "reason_codes", tuple(sorted(set(self.reason_codes)))
         )
@@ -218,6 +271,19 @@ def prepare_planning_handoff(
         return _invalid(validation.reason_codes)
 
     stage_reasons.update(validation.reason_codes)
+
+    # The binding can only be built once the handoff exists, and only when the
+    # IssuePlan carries the pre-planning context it must attest to. Without that
+    # context there is nothing to bind, and the legacy route still applies.
+    planning_binding: PlanningBindingEvidence | None = None
+    if issueplan.implementation_contract_fingerprint is not None:
+        try:
+            planning_binding = build_planning_binding_evidence(
+                issueplan, handoff, created_at=created_at
+            )
+        except (TypeError, ValueError) as error:
+            return _invalid((f"planning-binding-rejected:{error}",))
+
     status = _stage_status(planning_result.overall_classification)
     return PlanningHandoffStageResult(
         status=status,
@@ -229,6 +295,9 @@ def prepare_planning_handoff(
         handoff_validation=validation,
         wsc3_suppliable=True,
         reason_codes=tuple(stage_reasons),
+        # The exact object consumed above -- not a rebuilt equivalent.
+        issueplan_current_state_evidence=issueplan,
+        planning_binding=planning_binding,
     )
 
 
@@ -339,4 +408,5 @@ def _invalid(reason_codes: tuple[str, ...]) -> PlanningHandoffStageResult:
         handoff_validation=None,
         wsc3_suppliable=False,
         reason_codes=reason_codes,
+        issueplan_current_state_evidence=None,
     )
