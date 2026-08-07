@@ -33,12 +33,8 @@ post-PR contracts. It does not replace them and creates no authority.
 
 ## Outcomes
 
-Reuse `scripts/agent_os_issue_acceptance/models.py` exactly:
-
-- `pass`
-- `warn`
-- `fail`
-- `manual-review`
+Reuse `scripts/agent_os_issue_acceptance/models.py` exactly: `pass`, `warn`,
+`fail`, and `manual-review`.
 
 Missing required content is `fail`. Missing recommended content is `warn`.
 Ambiguous or vague content is `manual-review`; checkers must not guess it into
@@ -48,15 +44,16 @@ Ambiguous or vague content is `manual-review`; checkers must not guess it into
 
 A section is missing when its heading is absent. A section is empty when it has
 no non-whitespace content. Obvious placeholder-only content such as `TBD`,
-`TODO`, `_No response_`, `N/A?`, or `placeholder` is treated as ambiguous and
-returns `manual-review` rather than being interpreted semantically.
+`TODO`, `_No response_`, `N/A?`, or `placeholder` is ambiguous and returns
+`manual-review` rather than being interpreted semantically.
 
 ## Parent And Related-Issue References
 
 `Parent` and `Related issues` are recommended context unless another canonical
 standard makes them required for a specific lane. When present, they should
 contain at least one `#<number>` issue reference. Missing recommended sections
-are `warn`; present sections without a resolvable issue reference are `warn`.
+are `warn`; present sections without a resolvable reference are `warn`;
+placeholder-only sections are `manual-review`.
 
 ## Dependencies And Blockers
 
@@ -71,11 +68,12 @@ is `manual-review`. No blocker language is `pass` for this check.
 For families where Acceptance criteria are required, a missing or empty section
 is `fail`. Placeholder-only criteria are `manual-review`.
 
-Criteria must be itemized or checklist-like and include observable completion
-language. Narrow deterministic checks may recognize concrete verbs such as
-`passes`, `returns`, `contains`, `creates`, `rejects`, `preserves`, `matches`,
-`reports`, `exists`, or `is`. When present criteria cannot be classified safely,
-return `manual-review` rather than attempting semantic judgment.
+Every criterion must be itemized or checklist-like and independently include
+observable completion language. Narrow deterministic checks may recognize
+concrete verbs such as `passes`, `returns`, `contains`, `creates`, `rejects`,
+`preserves`, `matches`, `reports`, or `exists`. If every item cannot be
+classified safely, return `manual-review` rather than attempting semantic
+judgment.
 
 When Acceptance criteria are present but no `Tests / validation` section is
 present, return `warn`; this indicates missing supporting validation evidence,
@@ -83,16 +81,12 @@ not implementation failure.
 
 ## Checker Boundary
 
-Issue-quality checkers:
-
-- accept caller-supplied local text and finite metadata only;
-- return existing `CheckResult` records;
-- are pure and deterministic;
-- perform no GitHub fetch or mutation;
-- perform no filesystem write, subprocess, environment inspection, model call,
-  network call, persistence, or external-system access;
-- do not set issue state, labels, milestones, assignees, readiness, approval,
-  merge, closure, or external-write authority.
+Issue-quality checkers accept caller-supplied local text and finite metadata,
+return existing `CheckResult` records, and are pure and deterministic. They
+perform no GitHub fetch or mutation, filesystem write, subprocess, environment
+inspection, model call, network call, persistence, or external-system access.
+They do not set issue state, labels, milestones, assignees, readiness, approval,
+merge, closure, or external-write authority.
 
 Operational state, authorization, routing, queue/lane selection, and post-PR
 recommendation remain owned by their existing canonical contracts.
