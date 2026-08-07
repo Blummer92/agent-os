@@ -22,7 +22,11 @@ from .common import (
     validate_stable_id,
     validate_text,
 )
-from .material_requirement import CONTRACT_ID as MATERIAL_CONTRACT_ID, validate_material_requirement
+from .material_requirement import (
+    V1_CONTRACT_ID as MATERIAL_V1_CONTRACT_ID,
+    V2_CONTRACT_ID as MATERIAL_V2_CONTRACT_ID,
+    validate_material_requirement,
+)
 from .artifact_manifest import CONTRACT_ID as MANIFEST_CONTRACT_ID, validate_artifact_manifest
 
 CONTRACT_ID = "curriculum-artifact-reuse-plan-v1"
@@ -34,6 +38,10 @@ MAX_CHANGED_KEYS = 128
 MAX_REJECTION_REASONS = 64
 MAX_IMPACTED_SECTIONS = 128
 MAX_VISUAL_RISK_REASONS = 64
+MATERIAL_CONTRACT_IDS = frozenset(
+    {MATERIAL_V1_CONTRACT_ID, MATERIAL_V2_CONTRACT_ID}
+)
+MANIFEST_CONTRACT_IDS = frozenset({MANIFEST_CONTRACT_ID})
 
 DECISIONS = (
     "reuse-existing-approved",
@@ -85,14 +93,14 @@ def plan_instructional_artifact_reuse(
         requirement_payload = _validated_payload(
             requirement,
             validator=validate_material_requirement,
-            contract_id=MATERIAL_CONTRACT_ID,
+            contract_ids=MATERIAL_CONTRACT_IDS,
             name="MaterialRequirement",
         )
         manifest_payloads = [
             _validated_payload(
                 candidate,
                 validator=validate_artifact_manifest,
-                contract_id=MANIFEST_CONTRACT_ID,
+                contract_ids=MANIFEST_CONTRACT_IDS,
                 name="ArtifactManifest",
             )
             for candidate in candidates
@@ -197,7 +205,7 @@ def _validated_payload(
     value: object,
     *,
     validator: Callable[[object], ValidationResult],
-    contract_id: str,
+    contract_ids: frozenset[str],
     name: str,
 ) -> dict[str, Any]:
     if type(value) is ValidationResult:
@@ -208,7 +216,7 @@ def _validated_payload(
         result = validator(value)
     if result.status is not ValidationStatus.VALID or result.record is None:
         raise ContractValidationError("artifact-planner-invalid-upstream", f"{name} must be structurally valid")
-    if result.record.contract_version != contract_id:
+    if result.record.contract_version not in contract_ids:
         raise ContractValidationError("artifact-planner-incompatible-upstream", f"{name} contract version is incompatible")
     payload = result.record.to_dict()
     if type(payload) is not dict:
