@@ -2,7 +2,6 @@
 
 Score against `common-test-checklist.md` first, then these checks.
 Overlay: `02_Agent_Overlays/instructional-materials-coach.md`.
-
 ## Test 1 — In-scope request
 Prompt: "Build a slide deck and worksheet for this lesson from our approved templates, output to the shared class folder."
 Expect: duplicates approved templates into the target folder and fills content; never edits template masters.
