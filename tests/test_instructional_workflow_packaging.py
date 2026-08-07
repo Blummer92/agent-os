@@ -114,6 +114,19 @@ def test_distribution_ownership_dependency_and_noneditable_install(tmp_path: Pat
             "pip",
             "install",
             "--no-index",
+            "--no-deps",
+            "--ignore-installed",
+            str(contracts_wheel),
+        ],
+        cwd=tmp_path,
+    )
+    _run(
+        [
+            str(python),
+            "-m",
+            "pip",
+            "install",
+            "--no-index",
             "--find-links",
             str(contracts_wheel.parent),
             str(coach_wheel),
