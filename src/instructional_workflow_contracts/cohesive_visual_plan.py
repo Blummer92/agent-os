@@ -91,6 +91,11 @@ def plan_cohesive_visual_set(
             )
 
         for role in required_roles:
+            if len(selected) >= min(max_visuals, MAX_SELECTED_ASSETS):
+                raise ContractValidationError(
+                    "handoff-oversized",
+                    "required roles exceed the governed maximum visual count",
+                )
             match = _select_for_role(
                 role,
                 eligible,
@@ -106,8 +111,11 @@ def plan_cohesive_visual_set(
                 manual_reasons.update(match["manual_review"])
             candidate = match["candidate"]
             if candidate is None:
-                unfilled_required.append(_unfilled_role(role))
-                unfilled_required_roles.append(role)
+                if "manual-review-visual-assignment-tie" in match["manual_review"]:
+                    unfilled_required.append(_unfilled_role(role, tie_blocked=True))
+                else:
+                    unfilled_required.append(_unfilled_role(role))
+                    unfilled_required_roles.append(role)
                 continue
             assignment = _assignment(
                 role,
@@ -568,7 +576,10 @@ def _assignment(
             "exact_role_match": role["role_type"] in candidate["purpose"]["role_types"],
             "approved_use_match": role["role_type"] in candidate["approved_use"]["role_types"],
             "canonical_asset": candidate["matched_asset"]["disposition"] == "canonical",
-            "orientation_match": candidate["orientation"]["orientation"] in {role["orientation"], "flexible"},
+            "orientation_match": (
+                candidate["orientation"]["orientation"] == "flexible"
+                or role["orientation"] in {candidate["orientation"]["orientation"], "unspecified"}
+            ),
             "cognitive_load_rating": candidate["cohesion_profile"]["cognitive_load_rating"],
         },
         "compatibility_evidence": {
@@ -606,7 +617,12 @@ def _rejection(
     }
 
 
-def _unfilled_role(role: dict[str, Any]) -> dict[str, Any]:
+def _unfilled_role(role: dict[str, Any], *, tie_blocked: bool = False) -> dict[str, Any]:
+    reason_code = (
+        "asset-required-role-tie-blocked"
+        if tie_blocked
+        else "asset-required-role-unfilled"
+    )
     return {
         "role_id": role["role_id"],
         "role_type": role["role_type"],
@@ -614,7 +630,7 @@ def _unfilled_role(role: dict[str, Any]) -> dict[str, Any]:
         "instructional_purpose": role["instructional_purpose"],
         "intended_placement": role["intended_placement"],
         "orientation": role["orientation"],
-        "reason_codes": ["asset-required-role-unfilled"],
+        "reason_codes": [reason_code],
     }
 
 

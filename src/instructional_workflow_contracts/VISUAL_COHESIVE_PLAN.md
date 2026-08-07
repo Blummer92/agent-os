@@ -42,13 +42,14 @@ Hard set checks run before assignment:
 
 - duplicate or equivalent selected assets are rejected;
 - cohesion conflicts are rejected across style family, medium, representation class, palette family, line treatment, rendering style, perspective, and background treatment;
-- cognitive load must remain within the governed ceiling.
+- cognitive load must remain within the governed ceiling;
+- the plan's `maximum_visual_count` bounds required-role assignment; the planner fails closed with `handoff-oversized` rather than emitting a set that exceeds the governed maximum.
 
 Scoring is bounded and integer-based. It prefers exact role and approved-use matches, canonical assets, orientation matches, and lower cognitive load. Stable tie-breaking is deterministic, but a truly equal top assignment routes to manual review instead of pretending certainty.
 
 ## Gap briefs
 
-Every unfilled required role produces exactly one vendor-neutral brief. The brief preserves role ID, role type, instructional purpose, material type, placement, orientation, approved reference asset IDs when available, draft alt text, accessibility considerations, and all-false authority.
+Every genuinely unfilled required role (no eligible candidate existed) produces exactly one vendor-neutral brief. A required role blocked by a tied top assignment is recorded with `asset-required-role-tie-blocked` instead and does not produce a gap brief, since eligible candidates existed and the role requires manual tie resolution, not a new asset. The brief preserves role ID, role type, instructional purpose, material type, placement, orientation, approved reference asset IDs when available, draft alt text, accessibility considerations, and all-false authority.
 
 When governed metadata does not support a brief field, the planner records `unspecified` rather than inventing composition, palette, perspective, line treatment, shading, dimensions, or style evidence.
 
@@ -64,8 +65,8 @@ A `complete-set` means only that the pure planner found a deterministic advisory
 
 Rollback is removal of:
 
-- `cohesive_visual_plan.py`;
-- focused tests for the cohesive visual plan;
-- this documentation file.
+- `src/instructional_workflow_contracts/cohesive_visual_plan.py`;
+- `tests/test_cohesive_visual_plan.py`;
+- `src/instructional_workflow_contracts/VISUAL_COHESIVE_PLAN.md`.
 
 No Notion repair, Drive repair, credential revocation, image cleanup, classroom-artifact cleanup, production rollback, or external-system migration is required.

@@ -6,6 +6,10 @@ import json
 from pathlib import Path
 
 from instructional_workflow_contracts import ValidationStatus
+from instructional_workflow_contracts.artifact_manifest import (
+    artifact_manifest_source_fingerprint,
+    validate_artifact_manifest,
+)
 from instructional_workflow_contracts.common import (
     FINGERPRINT_ALGORITHM,
     ValidatedRecord,
@@ -231,18 +235,52 @@ def test_equal_candidate_tie_routes_to_manual_review() -> None:
     assert result.record.to_dict()["outcome"] == "manual-review-required"
 
 
+def _alternate_raw_candidate() -> dict[str, object]:
+    raw = _load("valid_visual_asset_compatibility_v2.json")
+    manifest = raw["artifact_manifest"]  # type: ignore[index]
+    asset = manifest["assets"][0]  # type: ignore[index]
+    asset["asset_id"] = "asset-2"
+    asset["stable_ref"] = "asset-ref-2"
+    asset["content_fingerprint"] = sha256_hex({"asset": "alternate"})
+    asset["disposition"] = "alternate"
+    asset["duplicate_relationship"] = "exact-duplicate"
+    asset["canonical_asset_ref"] = "asset-ref-1"
+    manifest["identity"]["source_fingerprint"] = artifact_manifest_source_fingerprint(  # type: ignore[index]
+        manifest
+    )
+    manifest_result = validate_artifact_manifest(manifest)
+    assert manifest_result.status is ValidationStatus.VALID
+    assert manifest_result.record is not None
+    manifest_fingerprint = manifest_result.record.fingerprint
+
+    evidence = raw["compatibility_evidence"]  # type: ignore[index]
+    asset_reference = evidence["asset_reference"]  # type: ignore[index]
+    asset_reference["asset_id"] = "asset-2"
+    asset_reference["stable_ref"] = "asset-ref-2"
+    asset_reference["content_fingerprint"] = asset["content_fingerprint"]
+    evidence["manifest_reference"]["fingerprint"] = manifest_fingerprint  # type: ignore[index]
+    evidence["freshness"]["manifest_fingerprint"] = manifest_fingerprint  # type: ignore[index]
+    return raw
+
+
 def test_canonical_asset_wins_over_alternate_tie() -> None:
-    candidate_payload = _candidate_result().to_dict()
-    first = candidate_payload["eligible"][0]
-    alternate = _second_candidate_for(first, "worked-example", "landscape")
-    alternate["cohesion_profile"] = copy.deepcopy(first["cohesion_profile"])
-    alternate["matched_asset"]["disposition"] = "alternate"
-    alternate["matched_asset"]["canonical_asset_ref"] = "asset-ref-1"
-    candidate_payload["eligible"] = [alternate, first]
+    plan = _plan()
+    candidate_filter_result = filter_approved_visual_candidates(
+        plan,
+        [
+            _alternate_raw_candidate(),
+            _load("valid_visual_asset_compatibility_v2.json"),
+        ],
+        source_revision="visual-library-snapshot-v2",
+        contract_version=V2_CONTRACT_ID,
+    )
+    assert candidate_filter_result.status is ValidationStatus.VALID
+    assert candidate_filter_result.record is not None
+    assert len(candidate_filter_result.record.to_dict()["eligible"]) == 2
 
     result = plan_cohesive_visual_set(
-        _plan(),
-        _candidate_record(candidate_payload),
+        plan,
+        candidate_filter_result.record,
     )
 
     assert result.status is ValidationStatus.VALID
@@ -345,6 +383,12 @@ def test_cohesive_plan_module_has_no_prohibited_operations() -> None:
 
     prohibited_calls = {
         "open",
+        "__import__",
+        "import_module",
+        "system",
+        "popen",
+        "write_text",
+        "write_bytes",
         "rank",
         "embed",
         "ocr",
