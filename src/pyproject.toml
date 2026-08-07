@@ -11,4 +11,9 @@ dependencies = []
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["instructional_workflow_contracts", "instructional_workflow_contracts.*"]
+include = [
+    "instructional_workflow_contracts",
+    "instructional_workflow_contracts.*",
+    "visual_asset_sync",
+    "visual_asset_sync.*",
+]
