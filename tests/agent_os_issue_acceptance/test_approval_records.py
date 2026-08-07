@@ -30,11 +30,14 @@ from scripts.agent_os_issue_acceptance import (  # noqa: E402
     ApprovalKind,
     ApprovalRecord,
     ApprovalState,
+    PlanningBindingEvidence,
+    build_planning_binding_evidence,
     HandoffCohort,
     SchedulerPlanningHandoff,
     build_approval_candidate,
     build_issueplan_current_state_evidence,
     compute_handoff_digest,
+    compute_planning_binding_fingerprint,
     evaluate_approval_applicability,
     record_approval_decision,
 )
@@ -51,6 +54,7 @@ from workflow_scheduler.planning import build_draft_task_proposals  # noqa: E402
 HEAD_SHA = "a" * 40
 BASE_SHA = "b" * 40
 EVALUATOR_SHA = "d" * 40
+OTHER_SHA = "e" * 40
 GRAPH_DIGEST = "1" * 64
 PLANNING_DIGEST = "2" * 64
 CONTRACT_DIGEST = "3" * 64
@@ -703,3 +707,282 @@ def test_no_external_io_or_scheduler_runtime_imports(monkeypatch):
     assert not any(
         module.startswith("workflow_scheduler") for module in imported
     )
+
+
+# --------------------------------------------------------------------------
+# Two-phase planning binding route (#917).
+# --------------------------------------------------------------------------
+
+
+def _two_phase_inputs():
+    """Natural-pipeline shape: IssuePlan without self-references, plus binding."""
+
+    handoff = _handoff()
+    issueplan = _issueplan(
+        handoff,
+        graph_reference=None,
+        planning_result_reference=None,
+        handoff_reference=None,
+        supplied_node_ids=(),
+    )
+    repository = _repository_state(
+        head_sha=handoff.evaluated_repository_sha,
+        requested_sha=handoff.evaluated_repository_sha,
+    )
+    binding = build_planning_binding_evidence(
+        issueplan, handoff, created_at=CREATED_AT
+    )
+    result = build_draft_task_proposals(
+        handoff,
+        issueplan,
+        repository,
+        created_at=CREATED_AT,
+        planning_binding=binding,
+    )
+    assert result.status == "eligible"
+    return result.proposals[0], issueplan, repository, binding
+
+
+def test_approval_candidate_accepts_the_binding_route() -> None:
+    proposal, issueplan, repository, binding = _two_phase_inputs()
+
+    candidate = build_approval_candidate(
+        proposal,
+        issueplan,
+        repository,
+        approval_kind=ApprovalKind.IMPLEMENTATION,
+        authorizer_id="operator-1",
+        decision_id="request-917",
+        decision_at=CREATED_AT,
+        expires_at=EXPIRES_AT,
+        planning_binding=binding,
+    )
+    assert candidate.binding.proposal_id == proposal.proposal_id
+    # No new persisted field appeared on the approval binding.
+    assert not hasattr(candidate.binding, "planning_binding")
+
+
+def test_approval_candidate_without_the_binding_fails_closed() -> None:
+    """The same inputs minus the binding cannot satisfy the legacy route."""
+
+    proposal, issueplan, repository, _binding = _two_phase_inputs()
+    with pytest.raises(ValueError, match="current validated inputs"):
+        build_approval_candidate(
+            proposal,
+            issueplan,
+            repository,
+            approval_kind=ApprovalKind.IMPLEMENTATION,
+            authorizer_id="operator-1",
+            decision_id="request-917",
+            decision_at=CREATED_AT,
+            expires_at=EXPIRES_AT,
+        )
+
+
+def test_approval_applicability_accepts_the_binding_route() -> None:
+    proposal, issueplan, repository, binding = _two_phase_inputs()
+    candidate = build_approval_candidate(
+        proposal,
+        issueplan,
+        repository,
+        approval_kind=ApprovalKind.IMPLEMENTATION,
+        authorizer_id="operator-1",
+        decision_id="request-917",
+        decision_at=CREATED_AT,
+        expires_at=EXPIRES_AT,
+        planning_binding=binding,
+    )
+    approved = record_approval_decision(
+        candidate,
+        state=ApprovalState.APPROVED,
+        decision_id="decision-917",
+        authorizer_id="operator-2",
+        decision_at=CREATED_AT,
+    )
+    result = evaluate_approval_applicability(
+        approved,
+        proposal,
+        issueplan,
+        repository,
+        evaluated_at=CREATED_AT,
+        planning_binding=binding,
+    )
+    assert result.status == "applicable"
+
+
+_BINDING_SLOTS = (
+    "schema_version",
+    "binding_id",
+    "issueplan_current_state_evidence_id",
+    "repository",
+    "base_branch",
+    "evaluated_repository_sha",
+    "implementation_contract_fingerprint",
+    "handoff_contract_version",
+    "planning_result_version",
+    "graph_digest",
+    "planning_result_digest",
+    "handoff_digest",
+    "supplied_node_ids",
+    "created_at",
+    "execution_authorized",
+    "side_effects_performed",
+)
+
+
+def _self_consistent_binding(
+    binding: PlanningBindingEvidence, **overrides
+) -> PlanningBindingEvidence:
+    """Build a binding whose ``binding_id`` still matches its own content, but
+    whose overridden field(s) diverge from the proposal it is checked against.
+
+    Recomputing ``binding_id`` alone cannot catch this: the forged binding is
+    entirely self-consistent. Only an explicit field-by-field comparison
+    against the proposal's own repository/base_branch/evaluated_repository_sha
+    detects the drift.
+    """
+
+    forged = object.__new__(PlanningBindingEvidence)
+    for slot in _BINDING_SLOTS:
+        object.__setattr__(forged, slot, overrides.get(slot, getattr(binding, slot)))
+    object.__setattr__(
+        forged,
+        "binding_id",
+        "planning-binding:" + compute_planning_binding_fingerprint(forged),
+    )
+    return forged
+
+
+def _evaluate_with_binding(proposal, issueplan, repository, binding):
+    candidate = build_approval_candidate(
+        proposal,
+        issueplan,
+        repository,
+        approval_kind=ApprovalKind.IMPLEMENTATION,
+        authorizer_id="operator-1",
+        decision_id="request-917-source-identity",
+        decision_at=CREATED_AT,
+        expires_at=EXPIRES_AT,
+        planning_binding=binding,
+    )
+    approved = record_approval_decision(
+        candidate,
+        state=ApprovalState.APPROVED,
+        decision_id="decision-917-source-identity",
+        authorizer_id="operator-2",
+        decision_at=CREATED_AT,
+    )
+    return approved, candidate
+
+
+def test_approval_applicability_rejects_binding_repository_drift() -> None:
+    proposal, issueplan, repository, binding = _two_phase_inputs()
+    approved, _candidate = _evaluate_with_binding(
+        proposal, issueplan, repository, binding
+    )
+    forged = _self_consistent_binding(binding, repository="blummer92/other-repo")
+
+    result = evaluate_approval_applicability(
+        approved,
+        proposal,
+        issueplan,
+        repository,
+        evaluated_at=CREATED_AT,
+        planning_binding=forged,
+    )
+    assert result.status == "stale"
+    assert "source.revision-changed" in result.reason_codes
+    assert "planning-binding-repository:mismatch" in result.details
+
+
+def test_approval_applicability_rejects_binding_base_branch_drift() -> None:
+    proposal, issueplan, repository, binding = _two_phase_inputs()
+    approved, _candidate = _evaluate_with_binding(
+        proposal, issueplan, repository, binding
+    )
+    forged = _self_consistent_binding(binding, base_branch="release/other")
+
+    result = evaluate_approval_applicability(
+        approved,
+        proposal,
+        issueplan,
+        repository,
+        evaluated_at=CREATED_AT,
+        planning_binding=forged,
+    )
+    assert result.status == "stale"
+    assert "source.revision-changed" in result.reason_codes
+    assert "planning-binding-base-branch:mismatch" in result.details
+
+
+def test_approval_applicability_rejects_binding_evaluated_sha_drift() -> None:
+    proposal, issueplan, repository, binding = _two_phase_inputs()
+    approved, _candidate = _evaluate_with_binding(
+        proposal, issueplan, repository, binding
+    )
+    forged = _self_consistent_binding(binding, evaluated_repository_sha=OTHER_SHA)
+
+    result = evaluate_approval_applicability(
+        approved,
+        proposal,
+        issueplan,
+        repository,
+        evaluated_at=CREATED_AT,
+        planning_binding=forged,
+    )
+    assert result.status == "stale"
+    assert "source.revision-changed" in result.reason_codes
+    assert "planning-binding-source-head:mismatch" in result.details
+
+
+def test_approval_applicability_rejects_a_tampered_binding() -> None:
+    proposal, issueplan, repository, binding = _two_phase_inputs()
+    candidate = build_approval_candidate(
+        proposal,
+        issueplan,
+        repository,
+        approval_kind=ApprovalKind.IMPLEMENTATION,
+        authorizer_id="operator-1",
+        decision_id="request-917",
+        decision_at=CREATED_AT,
+        expires_at=EXPIRES_AT,
+        planning_binding=binding,
+    )
+    approved = record_approval_decision(
+        candidate,
+        state=ApprovalState.APPROVED,
+        decision_id="decision-917",
+        authorizer_id="operator-2",
+        decision_at=CREATED_AT,
+    )
+    tampered = object.__new__(PlanningBindingEvidence)
+    for slot in (
+        "schema_version",
+        "binding_id",
+        "issueplan_current_state_evidence_id",
+        "repository",
+        "base_branch",
+        "evaluated_repository_sha",
+        "implementation_contract_fingerprint",
+        "handoff_contract_version",
+        "planning_result_version",
+        "graph_digest",
+        "planning_result_digest",
+        "handoff_digest",
+        "supplied_node_ids",
+        "created_at",
+        "execution_authorized",
+        "side_effects_performed",
+    ):
+        object.__setattr__(tampered, slot, getattr(binding, slot))
+    object.__setattr__(tampered, "handoff_digest", "f" * 64)
+
+    result = evaluate_approval_applicability(
+        approved,
+        proposal,
+        issueplan,
+        repository,
+        evaluated_at=CREATED_AT,
+        planning_binding=tampered,
+    )
+    assert result.status != "applicable"
