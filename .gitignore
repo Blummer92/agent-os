@@ -34,3 +34,6 @@ Thumbs.db
 *.bak
 *.swp
 .coverage
+
+# Node dependency installs (08_Tooling capture package)
+node_modules/
