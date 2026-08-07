@@ -199,18 +199,18 @@ def _project(stage=None, state=None, **changes):
 
 
 def test_deterministic_projection_reuses_memory_manager_fingerprint():
-    first = _project()
-    second = _project()
+    stage = _readiness_stage()
+    first = _project(stage=stage)
+    second = _project(stage=stage)
 
     assert first == second
     assert first.source_identities.packet_source_fingerprint == handoff_packet_source_fingerprint(
         first.packet
     )
     assert len(first.source_identities.source_identity_fingerprint) == 64
-    assert first.packet["validation_commands"] == [
-        "python -m pytest tests/agent_os_candidate_packet/test_implementation_packet_projection.py -q",
-        "./scripts/validate-all.sh --focused tests/agent_os_candidate_packet",
-    ]
+    assert first.packet["validation_commands"] == list(
+        stage.issueplan_current_state_evidence.required_tests
+    )
 
 
 def test_order_insensitive_context_facts_are_canonicalized():
