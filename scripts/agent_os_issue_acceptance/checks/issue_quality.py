@@ -52,9 +52,11 @@ _UNBLOCK_RE = re.compile(r"\b(?:unblock|until|once|when|after)\b", re.IGNORECASE
 _PLACEHOLDER_RE = re.compile(
     r"^(?:tbd|todo|_?no response_?|n/a\?|placeholder)[.!\s]*$", re.IGNORECASE
 )
-_ITEM_RE = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)]\s+|[-*+]\s*\[[ xX]\]\s+)", re.MULTILINE)
+_ITEM_RE = re.compile(
+    r"^\s*(?:[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+)(?P<item>.+?)\s*$"
+)
 _OBSERVABLE_RE = re.compile(
-    r"\b(?:passes|returns|contains|creates|rejects|preserves|matches|reports|exists|is)\b",
+    r"\b(?:passes|returns|contains|creates|rejects|preserves|matches|reports|exists)\b",
     re.IGNORECASE,
 )
 
@@ -120,6 +122,10 @@ def check_parent_reference(issue_body: str) -> CheckResult:
     content = sections.get("parent")
     if content is None:
         return CheckResult("parent reference", Status.WARN, "No Parent section was found.")
+    if _content_status(content) == Status.MANUAL_REVIEW:
+        return CheckResult(
+            "parent reference", Status.MANUAL_REVIEW, "Parent section contains placeholder-only content."
+        )
     if not _ISSUE_REF_RE.search(content):
         return CheckResult("parent reference", Status.WARN, "Parent section contains no issue reference.")
     return CheckResult("parent reference", Status.PASS, "Parent issue reference is present.")
@@ -130,6 +136,12 @@ def check_related_references(issue_body: str) -> CheckResult:
     content = sections.get("related issues")
     if content is None:
         return CheckResult("related references", Status.WARN, "No Related issues section was found.")
+    if _content_status(content) == Status.MANUAL_REVIEW:
+        return CheckResult(
+            "related references",
+            Status.MANUAL_REVIEW,
+            "Related issues section contains placeholder-only content.",
+        )
     refs = sorted(set(_ISSUE_REF_RE.findall(content)))
     if not refs:
         return CheckResult("related references", Status.WARN, "Related issues contains no issue reference.")
@@ -161,14 +173,24 @@ def check_acceptance_criteria(issue_body: str, family: IssueFamily) -> list[Chec
         quality = CheckResult(
             "acceptance criteria", Status.MANUAL_REVIEW, "Acceptance criteria are placeholder-only."
         )
-    elif not _ITEM_RE.search(content) or not _OBSERVABLE_RE.search(content):
-        quality = CheckResult(
-            "acceptance criteria",
-            Status.MANUAL_REVIEW,
-            "Acceptance criteria are present but not deterministically testable.",
-        )
     else:
-        quality = CheckResult("acceptance criteria", Status.PASS, "Acceptance criteria are itemized and observable.")
+        criterion_lines = [line for line in content.splitlines() if line.strip()]
+        item_matches = [_ITEM_RE.fullmatch(line) for line in criterion_lines]
+        items = [match.group("item") for match in item_matches if match is not None]
+        if (
+            not criterion_lines
+            or len(items) != len(criterion_lines)
+            or any(_OBSERVABLE_RE.search(item) is None for item in items)
+        ):
+            quality = CheckResult(
+                "acceptance criteria",
+                Status.MANUAL_REVIEW,
+                "Acceptance criteria are present but not deterministically testable.",
+            )
+        else:
+            quality = CheckResult(
+                "acceptance criteria", Status.PASS, "Acceptance criteria are itemized and observable."
+            )
     validation = sections.get("tests / validation")
     support = CheckResult(
         "acceptance validation support",
