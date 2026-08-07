@@ -319,12 +319,30 @@ def test_projection_module_has_no_execution_or_network_imports():
         "github",
         "scheduler",
     }
+    forbidden_filesystem_calls = {
+        "open",
+        "read_text",
+        "read_bytes",
+        "write_text",
+        "write_bytes",
+        "exists",
+        "stat",
+        "iterdir",
+        "glob",
+        "rglob",
+    }
     imported_modules = set()
+    filesystem_calls = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             imported_modules.update(alias.name.split(".")[0].lower() for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported_modules.add(node.module.split(".")[0].lower())
+        elif isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name):
+                filesystem_calls.add(node.func.id)
+            elif isinstance(node.func, ast.Attribute):
+                filesystem_calls.add(node.func.attr)
 
     assert imported_modules.isdisjoint(forbidden_modules)
-    assert "open(" not in source
+    assert filesystem_calls.isdisjoint(forbidden_filesystem_calls)
