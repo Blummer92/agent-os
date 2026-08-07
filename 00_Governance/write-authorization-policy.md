@@ -18,10 +18,16 @@ writes only when they stay within all of these categories:
 - non-authoritative attachments; and
 - already-approved linked-view navigation updates.
 
-Before each routine write, verify the canonical or otherwise authorized agent,
-the live Notion destination, the owner database or owner page, field ownership
-when properties are involved, the source-of-truth boundary, and that the exact
-mutation remains inside this routine-write lane.
+Sensitive student or private data is excluded from this standing authorization.
+Any action involving such data requires explicit per-action approval.
+
+Before each routine write, identify the Agent OS task owner; resolve any legacy
+agent alias; verify that the executing agent is a canonical agent listed in
+`04_Registry/agent-inheritance-registry.md`; review that owner's overlay and its
+referenced standards; verify the live Notion destination, the owner database or
+owner page, field ownership when properties are involved, the source-of-truth
+boundary, audit safety, and that the exact mutation remains inside this
+routine-write lane.
 
 This standing authorization does not override a stricter agent overlay, shared
 standard, destination rule, or blocked write surface. An agent whose canonical
@@ -41,9 +47,10 @@ automation.
 
 Technical access through a Notion connector is not authorization. Unattended,
 scheduled, bulk, synchronization-driven, or inference-driven row mutation is not
-made routine by this policy. If agent identity, destination, field ownership,
-source of truth, or authorization scope is ambiguous, remain read-only and route
-the action for explicit approval.
+made routine by this policy. If task ownership, canonical agent identity or alias
+resolution, destination, field ownership, source of truth, audit safety, or
+authorization scope is missing, ambiguous, or unresolved, remain read-only and
+route the action for explicit approval.
 
 ## Safe Repository Implementation
 
