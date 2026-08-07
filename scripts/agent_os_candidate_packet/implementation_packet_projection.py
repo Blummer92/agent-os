@@ -1,29 +1,30 @@
 """Pure-local projection into the existing Agent Memory handoff packet (#934).
 
-`Implementation Packet` is a usage profile only.  This module deliberately
+`Implementation Packet` is a usage profile only. This module deliberately
 creates no packet schema, readiness model, authority record, executor, or
-persistence surface.  It verifies supplied canonical Agent OS evidence, calls
+persistence surface. It verifies supplied canonical Agent OS evidence, calls
 the existing ``agent_memory_context_manager`` public packet builder/validator,
 and returns that packet together with bounded source identities.
 
-The Memory Manager is a separately packaged ``src`` project.  Import it lazily
-so importing ``scripts.agent_os_candidate_packet`` remains side-effect free and
-does not force every candidate-packet caller to install the optional consumer
-package.  A caller that uses this projection must make the existing
-``agent_memory_context_manager`` package importable (for example by installing
-that local package or placing its ``src`` directory on ``PYTHONPATH``).
+The Memory Manager is an existing separately packaged dependency. This module
+uses only its declared public API; it defines no path-loader, runtime repository
+discovery, or private-import compatibility mechanism.
 """
 
 from __future__ import annotations
 
 import hashlib
-import importlib
 import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from agent_memory_context_manager import (
+    assert_valid_handoff_packet,
+    build_handoff_packet,
+    handoff_packet_source_fingerprint,
+)
 from scripts.agent_os_issue_acceptance.issue_operational_state import (
     FreshnessState,
     IssueState,
@@ -57,7 +58,7 @@ class ImplementationPacketSourceIdentities:
     """Bounded provenance for one projected existing handoff packet.
 
     This is evidence about the projection boundary, not a packet schema and not
-    an authority record.  ``packet`` remains the canonical Memory Manager
+    an authority record. ``packet`` remains the canonical Memory Manager
     handoff packet.
     """
 
@@ -96,12 +97,12 @@ def project_implementation_packet(
 ) -> ImplementationPacketProjection:
     """Project current supplied evidence into the existing handoff packet.
 
-    The function performs pure in-memory validation/projection only.  It never
+    The function performs pure in-memory validation/projection only. It never
     reads issue prose, calls GitHub, invokes Scheduler/provider code, launches a
     subprocess, writes the filesystem, or creates authorization.
 
     ``allowed_inspect_first`` is context guidance only and must be a strict
-    subset of the canonical upstream ``allowed_files``.  Required validation
+    subset of the canonical upstream ``allowed_files``. Required validation
     commands are copied exactly from canonical ``required_tests``; callers
     cannot substitute or weaken them here.
     """
@@ -129,7 +130,9 @@ def project_implementation_packet(
     )
     if not inspect_first:
         inspect_first = canonical_allowed[:8]
-    unauthorized_hints = tuple(path for path in inspect_first if path not in canonical_allowed)
+    unauthorized_hints = tuple(
+        path for path in inspect_first if path not in canonical_allowed
+    )
     if unauthorized_hints:
         raise ValueError(
             "allowed_inspect_first contains paths outside canonical allowed_files: "
@@ -149,12 +152,7 @@ def project_implementation_packet(
         f"{operating_mode_decision.effective_mode.value}"
     )
 
-    memory_manager = _memory_manager_module()
-    builder = memory_manager.build_handoff_packet
-    validator = memory_manager.assert_valid_handoff_packet
-    fingerprint = memory_manager.handoff_packet_source_fingerprint
-
-    packet = builder(
+    packet = build_handoff_packet(
         objective=objective_value,
         current_phase=current_phase,
         branch=branch,
@@ -169,8 +167,8 @@ def project_implementation_packet(
         stop_conditions=list(stops),
         compute_limits=None if compute_limits is None else dict(compute_limits),
     )
-    validator(packet)
-    packet_fingerprint = fingerprint(packet)
+    assert_valid_handoff_packet(packet)
+    packet_fingerprint = handoff_packet_source_fingerprint(packet)
     if not _SHA256_RE.fullmatch(packet_fingerprint):
         raise ValueError("Memory Manager returned an invalid packet source fingerprint")
 
@@ -229,7 +227,10 @@ def _validate_canonical_inputs(
         raise ValueError("IssuePlan repository does not match issue snapshot")
     if issueplan.source_snapshot.source_revision != snapshot.source_revision:
         raise ValueError("IssuePlan source revision does not match issue snapshot")
-    if issueplan.source_snapshot.scanner_result_fingerprint != issueplan.scanner_result_fingerprint:
+    if (
+        issueplan.source_snapshot.scanner_result_fingerprint
+        != issueplan.scanner_result_fingerprint
+    ):
         raise ValueError("IssuePlan scanner fingerprint binding is contradictory")
 
     if operational_state.repository != snapshot.repository:
@@ -239,7 +240,9 @@ def _validate_canonical_inputs(
     if not issueplan.evaluated_repository_sha:
         raise ValueError("IssuePlan evidence is missing evaluated_repository_sha")
     if operational_state.source_revision != issueplan.evaluated_repository_sha:
-        raise ValueError("operational-state source revision does not match evaluated repository")
+        raise ValueError(
+            "operational-state source revision does not match evaluated repository"
+        )
     if operational_state.issue_state is not IssueState.OPEN:
         raise ValueError("implementation packet requires an open issue")
     if operational_state.readiness is not ReadinessState.READY:
@@ -268,27 +271,6 @@ def _branch_and_pr(state: IssueOperationalState) -> tuple[str | None, int | None
     if pr_number is not None and state.active_branch is None:
         raise ValueError("primary PR identity is missing its active branch")
     return state.active_branch, pr_number
-
-
-def _memory_manager_module() -> Any:
-    try:
-        module = importlib.import_module("agent_memory_context_manager")
-    except ModuleNotFoundError as error:
-        raise RuntimeError(
-            "agent_memory_context_manager package is required for Implementation Packet projection"
-        ) from error
-    required = (
-        "build_handoff_packet",
-        "assert_valid_handoff_packet",
-        "handoff_packet_source_fingerprint",
-    )
-    missing = tuple(name for name in required if not callable(getattr(module, name, None)))
-    if missing:
-        raise RuntimeError(
-            "agent_memory_context_manager is missing required public API: "
-            + ", ".join(missing)
-        )
-    return module
 
 
 def _text(value: object, name: str, maximum_bytes: int) -> str:
