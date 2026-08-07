@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -32,8 +31,9 @@ from scripts.agent_os_issue_acceptance.readiness import ReadinessOutcome, Readin
 
 STAGE_SCHEMA_VERSION = "1.1"
 
-_SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
-_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_HEX_DIGITS = frozenset("0123456789abcdef")
+_SHA40_LENGTH = 40
+_SHA256_LENGTH = 64
 _FORBIDDEN_BRANCH_CHARS = frozenset("*?[")
 
 
@@ -230,9 +230,9 @@ def _branch_name(value: object) -> str:
     return branch
 
 
-def _hex_digest(value: object, field_name: str, pattern: re.Pattern[str]) -> str:
+def _hex_digest(value: object, field_name: str, length: int) -> str:
     digest = _context_string(value, field_name)
-    if not pattern.fullmatch(digest):
+    if len(digest) != length or not _HEX_DIGITS.issuperset(digest):
         raise ValueError(f"{field_name} is malformed")
     return digest
 
@@ -266,7 +266,7 @@ class IssuePlanningContext:
             _hex_digest(
                 self.evaluated_repository_sha,
                 "evaluated_repository_sha",
-                _SHA40_RE,
+                _SHA40_LENGTH,
             ),
         )
         object.__setattr__(
@@ -275,7 +275,7 @@ class IssuePlanningContext:
             _hex_digest(
                 self.implementation_contract_fingerprint,
                 "implementation_contract_fingerprint",
-                _SHA256_RE,
+                _SHA256_LENGTH,
             ),
         )
         object.__setattr__(
