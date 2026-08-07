@@ -1,4 +1,4 @@
-"""Parse lesson content YAML into text tokens plus optional approved visual references."""
+"""Parse lesson content YAML into the placeholder-token dict the request builders use."""
 from __future__ import annotations
 
 import dataclasses
@@ -8,18 +8,6 @@ from typing import Any
 import yaml
 
 REQUIRED_KEYS = ("title", "objectives", "slides", "worksheet_questions")
-VISUAL_ROLE_TYPES = {
-    "teacher-model", "worked-example", "non-example", "process-sequence", "comparison",
-    "annotated-evidence", "navigation-orientation", "accessibility-support", "repeated-reference",
-    "critique-exemplar",
-}
-
-
-@dataclasses.dataclass(frozen=True)
-class VisualReference:
-    role_type: str
-    asset_id: str
-    target_object_id: str
 
 
 @dataclasses.dataclass
@@ -28,7 +16,6 @@ class LessonContent:
     objectives: list[str]
     slides: list[dict[str, Any]]
     worksheet_questions: list[str]
-    visuals: list[VisualReference] = dataclasses.field(default_factory=list)
 
     def placeholder_tokens(self) -> dict[str, str]:
         tokens: dict[str, str] = {"title": self.title}
@@ -45,36 +32,15 @@ class LessonContent:
         return tokens
 
 
-def _visual_from_dict(value: Any) -> VisualReference:
-    if type(value) is not dict:
-        raise ValueError("visual reference must be a mapping")
-    required = {"role_type", "asset_id", "target_object_id"}
-    if set(value) != required:
-        raise ValueError("visual reference must contain exactly role_type, asset_id, target_object_id")
-    if value["role_type"] not in VISUAL_ROLE_TYPES:
-        raise ValueError("visual reference uses unsupported MaterialRequirement v2 role")
-    if any(not isinstance(value[key], str) or not value[key].strip() for key in required):
-        raise ValueError("visual reference fields must be non-empty strings")
-    return VisualReference(
-        role_type=value["role_type"].strip(),
-        asset_id=value["asset_id"].strip(),
-        target_object_id=value["target_object_id"].strip(),
-    )
-
-
 def content_from_dict(data: dict[str, Any]) -> LessonContent:
     missing = [key for key in REQUIRED_KEYS if key not in data]
     if missing:
         raise ValueError(f"Lesson content spec is missing required keys: {', '.join(missing)}")
-    visuals = data.get("visuals", [])
-    if type(visuals) is not list:
-        raise ValueError("visuals must be a list when supplied")
     return LessonContent(
         title=data["title"],
         objectives=list(data["objectives"]),
         slides=list(data["slides"]),
         worksheet_questions=list(data["worksheet_questions"]),
-        visuals=[_visual_from_dict(value) for value in visuals],
     )
 
 
