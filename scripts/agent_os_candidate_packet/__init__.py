@@ -26,11 +26,6 @@ from .executable_lane_selection import (
     select_executable_lanes,
     serialize_executable_lane_selection,
 )
-from .implementation_packet_projection import (
-    ImplementationPacketProjection,
-    ImplementationPacketSourceIdentities,
-    project_implementation_packet,
-)
 from .readiness_stage import prepare_issue_readiness
 from .planning_stage import (
     PlanningHandoffStageResult,
@@ -103,8 +98,6 @@ __all__ = [
     "CandidateIssueEvidence",
     "DuplicateClaimFinding",
     "ExecutableLaneSelection",
-    "ImplementationPacketProjection",
-    "ImplementationPacketSourceIdentities",
     "PlanningHandoffStageResult",
     "PlanningHandoffStageStatus",
     "Queue",
@@ -150,7 +143,6 @@ __all__ = [
     "prepare_planning_handoff",
     "prepare_repository_and_proposal",
     "prepare_repository_state_evidence",
-    "project_implementation_packet",
     "reconstruct_scheduler_planning_handoff",
     "readiness_result_from_dict",
     "readiness_result_to_dict",
