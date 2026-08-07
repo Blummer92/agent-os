@@ -1,0 +1,17 @@
+{
+  "name": "@agent-os/adobe-express-tutorial-capture",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12 <23"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "check": "node --check safe_recording.mjs && node --check replay_capture.mjs"
+  },
+  "dependencies": {
+    "@puppeteer/replay": "4.0.2",
+    "puppeteer": "25.3.0"
+  }
+}
