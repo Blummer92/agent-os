@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import copy
+from dataclasses import replace
 import json
 from pathlib import Path
 
@@ -54,14 +54,17 @@ def test_reuse_planner_accepts_valid_v2_without_version_conversion() -> None:
     assert repeated.record.fingerprint == result.record.fingerprint
 
 
-def test_reuse_planner_rejects_unsupported_material_requirement_version() -> None:
-    requirement = copy.deepcopy(_fixture("valid_material_requirement_v2.json"))
-    requirement["identity"]["contract_version"] = (  # type: ignore[index]
-        "curriculum-material-requirement-v999"
-    )
+def test_reuse_planner_rejects_prevalidated_unsupported_contract_version() -> None:
+    validated = validate_material_requirement(_fixture("valid_material_requirement_v2.json"))
+    assert validated.status is ValidationStatus.VALID
+    assert validated.record is not None
 
-    result = _plan(requirement)
+    unsupported = replace(
+        validated.record,
+        contract_version="curriculum-material-requirement-v999",
+    )
+    result = _plan(unsupported)
 
     assert result.status is ValidationStatus.INVALID
     assert result.record is None
-    assert result.reason_codes == ("artifact-planner-invalid-upstream",)
+    assert result.reason_codes == ("artifact-planner-incompatible-upstream",)
