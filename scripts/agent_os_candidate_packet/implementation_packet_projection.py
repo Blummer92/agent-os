@@ -26,9 +26,11 @@ from agent_memory_context_manager import (
     handoff_packet_source_fingerprint,
 )
 from scripts.agent_os_issue_acceptance.issue_operational_state import (
+    AuthorizationState,
     FreshnessState,
     IssueState,
     IssueOperationalState,
+    LifecycleStage,
     ReadinessState,
 )
 from scripts.agent_os_issue_acceptance.issueplan_current_state import (
@@ -262,6 +264,14 @@ def _validate_canonical_inputs(
         raise ValueError("operating-mode decision is not bound to operational state")
     if operating_mode_decision.side_effects_performed is not False:
         raise ValueError("operating-mode decision must be side-effect free")
+    if (
+        operating_mode_decision.implementation_authorization.state
+        is not AuthorizationState.AUTHORIZED
+        or operating_mode_decision.maximum_permitted_stage
+        is LifecycleStage.PLANNING
+        or "build" in operating_mode_decision.prohibited_actions
+    ):
+        raise ValueError("operating-mode decision does not permit implementation")
 
 
 def _branch_and_pr(state: IssueOperationalState) -> tuple[str | None, int | None]:
