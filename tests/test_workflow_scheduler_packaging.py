@@ -219,7 +219,8 @@ def _loader_aliases(tree: ast.Module) -> set[str]:
     """Local names bound to an import-machinery entry point, aliases included.
 
     `from importlib import import_module as load` must not launder a call to
-    `load(...)` past the loader check.
+    `load(...)` past the loader check, and neither may a plain assignment:
+    `load = importlib.import_module` or a further `load2 = load` chain.
     """
     aliases: set[str] = set()
     for node in ast.walk(tree):
@@ -231,6 +232,28 @@ def _loader_aliases(tree: ast.Module) -> set[str]:
             for alias in node.names:
                 if alias.asname and alias.name in PROHIBITED_LOADER_CALLS:
                     aliases.add(alias.asname)
+
+    # Second pass: plain assignments that bind a local name to an already-known
+    # loader entry point. Iterated to a fixed point so a chain such as
+    # `load = importlib.import_module; load2 = load` resolves regardless of
+    # declaration order, without attempting general-purpose value tracking.
+    changed = True
+    while changed:
+        changed = False
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            value = node.value
+            is_loader_reference = (
+                isinstance(value, ast.Attribute)
+                and value.attr in PROHIBITED_LOADER_CALLS
+            ) or (isinstance(value, ast.Name) and value.id in aliases)
+            if not is_loader_reference:
+                continue
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id not in aliases:
+                    aliases.add(target.id)
+                    changed = True
     return aliases
 
 
@@ -256,6 +279,57 @@ def test_allowlisted_importer_uses_only_the_permitted_module_and_symbols() -> No
     assert symbols <= ALLOWED_SYMBOLS
 
 
+def _boundary_violations(display_name: str, tree: ast.Module) -> list[str]:
+    """Return every packaging-boundary violation found in `tree`.
+
+    Shared by the real-tree scan below and by the direct bypass-vector
+    regression tests further down, so both exercise identical detection
+    logic rather than a parallel reimplementation that could drift.
+    """
+    offending: list[str] = []
+    prohibited_calls = PROHIBITED_LOADER_CALLS | _loader_aliases(tree)
+    for node in ast.walk(tree):
+        modules: list[str] = []
+        if isinstance(node, ast.Import):
+            modules = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom) and not node.level:
+            # Check the fully-qualified imported path, not just the parent
+            # module: `from workflow_scheduler.planning import _private`
+            # names an underscore-prefixed member even though the parent
+            # module itself has no underscore component.
+            base = node.module or ""
+            modules = [
+                f"{base}.{alias.name}" if base else alias.name
+                for alias in node.names
+            ]
+        for module in modules:
+            if any(
+                part.startswith("_") and part != "__future__"
+                for part in module.split(".")
+                if part
+            ):
+                offending.append(f"{display_name}: private import path {module!r}")
+
+        if isinstance(node, ast.Attribute) and node.attr == "path":
+            if isinstance(node.value, ast.Name) and node.value.id == "sys":
+                offending.append(f"{display_name}: sys.path access")
+        if isinstance(node, ast.Call):
+            function = node.func
+            called = (
+                function.attr
+                if isinstance(function, ast.Attribute)
+                else function.id
+                if isinstance(function, ast.Name)
+                else ""
+            )
+            if called in prohibited_calls:
+                offending.append(f"{display_name}: import-machinery call {called!r}")
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if "PYTHONPATH" in node.value:
+                offending.append(f"{display_name}: PYTHONPATH workaround")
+    return offending
+
+
 def test_candidate_packet_uses_no_private_path_loader_or_syspath_workaround() -> None:
     """No candidate-packet module may route around the declared boundary.
 
@@ -266,39 +340,7 @@ def test_candidate_packet_uses_no_private_path_loader_or_syspath_workaround() ->
     offending: list[str] = []
     for path in _python_sources(CANDIDATE_PACKET_ROOT):
         name = path.relative_to(ROOT).as_posix()
-        tree = _parse(path)
-        prohibited_calls = PROHIBITED_LOADER_CALLS | _loader_aliases(tree)
-        for node in ast.walk(tree):
-            modules: list[str] = []
-            if isinstance(node, ast.Import):
-                modules = [alias.name for alias in node.names]
-            elif isinstance(node, ast.ImportFrom) and not node.level:
-                modules = [node.module or ""]
-            for module in modules:
-                if any(
-                    part.startswith("_") and part != "__future__"
-                    for part in module.split(".")
-                    if part
-                ):
-                    offending.append(f"{name}: private import path {module!r}")
-
-            if isinstance(node, ast.Attribute) and node.attr == "path":
-                if isinstance(node.value, ast.Name) and node.value.id == "sys":
-                    offending.append(f"{name}: sys.path access")
-            if isinstance(node, ast.Call):
-                function = node.func
-                called = (
-                    function.attr
-                    if isinstance(function, ast.Attribute)
-                    else function.id
-                    if isinstance(function, ast.Name)
-                    else ""
-                )
-                if called in prohibited_calls:
-                    offending.append(f"{name}: import-machinery call {called!r}")
-            if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                if "PYTHONPATH" in node.value:
-                    offending.append(f"{name}: PYTHONPATH workaround")
+        offending.extend(_boundary_violations(name, _parse(path)))
 
     assert offending == []
 
@@ -314,3 +356,172 @@ def test_no_circular_import_between_scripts_and_workflow_scheduler() -> None:
     assert offending == []
 
     _cold_import_of_allowlisted_importer()
+
+
+# --------------------------------------------------------------------------
+# Deterministic bypass-vector regression tests.
+#
+# The structural tests above prove the boundary holds against the real
+# repository tree, but the real tree contains no bypass attempt -- so they
+# cannot, by themselves, prove a bypass would actually be *detected*. These
+# tests exercise the same detection helpers directly against synthetic
+# source, one vector at a time, so each rejection is deterministic and does
+# not depend on what happens to already be present in the codebase.
+# --------------------------------------------------------------------------
+
+
+def _module_and_symbols(source: str) -> list[tuple[str, str | None]]:
+    """`_workflow_scheduler_imports`-equivalent over in-memory source."""
+    found: list[tuple[str, str | None]] = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            found.extend(
+                (alias.name, None)
+                for alias in node.names
+                if _is_prefixed(alias.name, "workflow_scheduler")
+            )
+        elif isinstance(node, ast.ImportFrom) and not node.level:
+            module = node.module or ""
+            if _is_prefixed(module, "workflow_scheduler"):
+                found.extend((module, alias.name) for alias in node.names)
+    return found
+
+
+def test_bypass_another_importer_is_detected() -> None:
+    """Any workflow_scheduler import is detected regardless of which file it
+    is in; the real test then rejects it unless the file is the one
+    allowlisted importer."""
+    assert _module_and_symbols(
+        "from workflow_scheduler.planning.draft_ingestion import DraftTaskProposal\n"
+    )
+
+
+def test_bypass_another_scheduler_module_is_rejected() -> None:
+    imports = _module_and_symbols(
+        "from workflow_scheduler.planning import batch_planning\n"
+    )
+    assert {module for module, _ in imports} != {ALLOWED_MODULE}
+
+
+def test_bypass_another_symbol_is_rejected() -> None:
+    imports = _module_and_symbols(f"from {ALLOWED_MODULE} import OtherSymbol\n")
+    symbols = {symbol for _, symbol in imports}
+    assert not symbols <= ALLOWED_SYMBOLS
+
+
+def test_bypass_binding_the_package_is_rejected() -> None:
+    imports = _module_and_symbols(
+        "import workflow_scheduler.planning.draft_ingestion\n"
+    )
+    symbols = {symbol for _, symbol in imports}
+    assert None in symbols, "binding the package itself must be detected"
+
+
+def test_bypass_private_import_path_is_rejected() -> None:
+    tree = ast.parse("from workflow_scheduler.planning import _private\n")
+    offending = _boundary_violations("synthetic", tree)
+    assert any("private import path" in item for item in offending)
+
+
+def test_bypass_sys_path_mutation_is_rejected() -> None:
+    tree = ast.parse("import sys\nsys.path.append('/tmp')\n")
+    offending = _boundary_violations("synthetic", tree)
+    assert any("sys.path access" in item for item in offending)
+
+
+def test_bypass_filesystem_loader_is_rejected() -> None:
+    tree = ast.parse(
+        "import importlib.util\n"
+        "spec = importlib.util.spec_from_file_location('x', 'x.py')\n"
+    )
+    offending = _boundary_violations("synthetic", tree)
+    assert any("spec_from_file_location" in item for item in offending)
+
+
+def test_bypass_pythonpath_workaround_is_rejected() -> None:
+    tree = ast.parse("value = 'PYTHONPATH=/tmp'\n")
+    offending = _boundary_violations("synthetic", tree)
+    assert any("PYTHONPATH workaround" in item for item in offending)
+
+
+def test_bypass_from_import_loader_alias_laundering_is_rejected() -> None:
+    tree = ast.parse(
+        "from importlib import import_module as load\n"
+        "load('workflow_scheduler._private')\n"
+    )
+    offending = _boundary_violations("synthetic", tree)
+    assert any("import-machinery call 'load'" in item for item in offending)
+
+
+def test_bypass_importlib_module_alias_laundering_is_rejected() -> None:
+    tree = ast.parse(
+        "import importlib as il\n"
+        "il.import_module('workflow_scheduler._private')\n"
+    )
+    offending = _boundary_violations("synthetic", tree)
+    assert any("import_module" in item for item in offending)
+
+
+def test_bypass_reverse_import_as_member_is_rejected(tmp_path) -> None:
+    module_path = tmp_path / "reverse_member.py"
+    module_path.write_text(
+        "from scripts import agent_os_candidate_packet\n", encoding="utf-8"
+    )
+    assert _imports_prefix(module_path, "scripts.agent_os_candidate_packet")
+
+
+def test_bypass_reverse_import_as_module_is_rejected(tmp_path) -> None:
+    module_path = tmp_path / "reverse_module.py"
+    module_path.write_text(
+        "import scripts.agent_os_candidate_packet\n", encoding="utf-8"
+    )
+    assert _imports_prefix(module_path, "scripts.agent_os_candidate_packet")
+
+
+def test_bypass_assigned_loader_alias_is_rejected() -> None:
+    """Newly closed (#915 correction): `load = importlib.import_module`."""
+    tree = ast.parse(
+        "import importlib\n"
+        "load = importlib.import_module\n"
+        "load('workflow_scheduler._private')\n"
+    )
+    offending = _boundary_violations("synthetic", tree)
+    assert any("import-machinery call 'load'" in item for item in offending)
+
+
+def test_bypass_chained_assigned_loader_alias_is_rejected() -> None:
+    """A further `load2 = load` link must resolve too, in either order."""
+    tree = ast.parse(
+        "import importlib\n"
+        "load = importlib.import_module\n"
+        "load2 = load\n"
+        "load2('workflow_scheduler._private')\n"
+    )
+    offending = _boundary_violations("synthetic", tree)
+    assert any("import-machinery call 'load2'" in item for item in offending)
+
+
+def test_bypass_private_importfrom_member_is_rejected() -> None:
+    """Newly closed (#915 correction):
+    `from workflow_scheduler.planning import _private`."""
+    tree = ast.parse("from workflow_scheduler.planning import _private\n")
+    offending = _boundary_violations("synthetic", tree)
+    assert any(
+        "private import path 'workflow_scheduler.planning._private'" in item
+        for item in offending
+    )
+
+
+def test_ordinary_allowed_imports_still_pass() -> None:
+    """The two corrections must not flag ordinary, permitted code."""
+    tree = ast.parse(
+        "from __future__ import annotations\n"
+        "import json\n"
+        "from pathlib import Path\n"
+        "from workflow_scheduler.planning.draft_ingestion import (\n"
+        "    DraftTaskProposal,\n"
+        "    build_draft_task_proposals,\n"
+        ")\n"
+    )
+    assert _boundary_violations("synthetic", tree) == []
+    assert _loader_aliases(tree) == set()
