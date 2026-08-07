@@ -69,17 +69,6 @@ def plan_governed_visual_reuse(
             visual_needs_result=visual_needs_result,
         )
 
-    assert visual_needs_result.record is not None
-    visual_needs_payload = visual_needs_result.record.to_dict()
-    if visual_needs_payload["outcome"] == "no-visual-needed":
-        return GovernedVisualReusePlan(
-            outcome="no-visual-needed",
-            final_production_blocked=False,
-            selected_asset_ids=(),
-            material_requirement_result=requirement_result,
-            visual_needs_result=visual_needs_result,
-        )
-
     artifact_reuse_result = plan_instructional_artifact_reuse(
         requirement_result,
         [] if artifact_manifests is None else artifact_manifests,
@@ -92,6 +81,18 @@ def plan_governed_visual_reuse(
         return GovernedVisualReusePlan(
             outcome="manual-review-required",
             final_production_blocked=True,
+            selected_asset_ids=(),
+            material_requirement_result=requirement_result,
+            visual_needs_result=visual_needs_result,
+            artifact_reuse_result=artifact_reuse_result,
+        )
+
+    assert visual_needs_result.record is not None
+    visual_needs_payload = visual_needs_result.record.to_dict()
+    if visual_needs_payload["outcome"] == "no-visual-needed":
+        return GovernedVisualReusePlan(
+            outcome="no-visual-needed",
+            final_production_blocked=False,
             selected_asset_ids=(),
             material_requirement_result=requirement_result,
             visual_needs_result=visual_needs_result,
