@@ -97,3 +97,40 @@ Multiple active primary claims classify `needs-reconciliation`, always
 excluded from selection. The result embeds only the source
 `state_id`/`decision_id` identities; `execution_authorized` and
 `side_effects_performed` are always `False`.
+
+## Implementation Packet projection (#934)
+
+`implementation_packet_projection.py` is a pure-local bridge from supplied
+current canonical readiness/IssuePlan evidence, `IssueOperationalState`, and
+`AgentOperatingModeDecision` into the **existing** Agent Memory & Context
+Budget Manager handoff packet. `Implementation Packet` is only a usage/profile
+name; this package does not define a second packet schema.
+
+The projection calls the existing public Memory Manager
+`build_handoff_packet(...)`, `assert_valid_handoff_packet(...)`, and
+`handoff_packet_source_fingerprint(...)` contracts. Because Memory Manager is
+an independent `src` package, callers that use this optional projection must
+make `agent_memory_context_manager` importable (install the local package or
+include `08_Tooling/agent-memory-context-manager/src` on `PYTHONPATH`). The
+import is lazy so unrelated candidate-packet callers gain no new runtime
+dependency.
+
+`project_implementation_packet(...)` fails closed unless the supplied evidence
+is READY, open, current, repository/issue/source-revision consistent, and the
+operating-mode decision is bound to the exact operational-state identity. It
+copies canonical IssuePlan `required_tests` exactly into
+`validation_commands`, preserves forbidden paths as context guidance, and
+permits `allowed_inspect_first` only as a subset of canonical `allowed_files`.
+Context hints therefore cannot widen authorization.
+
+The returned `ImplementationPacketProjection` contains the canonical Memory
+Manager packet plus `ImplementationPacketSourceIdentities`: bounded provenance
+(repository/issue/source revision, IssuePlan evidence, evaluated repository
+SHA, operational-state ID, mode-decision ID, Memory Manager packet source
+fingerprint, and a domain-separated source-identity fingerprint). Those
+identities are evidence only; they do not create readiness, implementation,
+execution, GitHub-write, Ready-for-Review, merge, or closure authority.
+
+This projection performs no issue parsing, filesystem I/O, network access,
+GitHub mutation, subprocess execution, Scheduler dispatch, provider invocation,
+persistence, or external write.
