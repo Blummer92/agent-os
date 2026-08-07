@@ -11,6 +11,7 @@ from scripts.agent_os_candidate_packet.stage_models import (
     DependencyIdentityEvidence,
     DependencyIdentityStatus,
     EvidenceStatus,
+    IssuePlanningContext,
     IssueReadinessStageRequest,
     IssueReadinessStageResult,
     IssueReadinessStageStatus,
@@ -559,3 +560,205 @@ def test_no_write_capable_dependency_reachable() -> None:
             for member in members
         ), f"{protocol} exposes a write-shaped member: {members}"
     assert set(dir(IssueSourceReader)) & {"read_issue"} == {"read_issue"} or True
+
+
+# --------------------------------------------------------------------------
+# AOS-AUTO (#917): explicit immutable pre-planning context.
+# --------------------------------------------------------------------------
+
+
+def _planning_context(**overrides) -> IssuePlanningContext:
+    values = dict(
+        repository="Blummer92/agent-os",
+        base_branch="feature/Keep-Case",
+        evaluated_repository_sha="a" * 40,
+        implementation_contract_fingerprint="b" * 64,
+        allowed_files=("z.py", "a.py", "z.py"),
+        forbidden_paths=("private/", "secrets/", "private/"),
+        required_tests=("pytest z", "pytest a", "pytest z"),
+        provenance=("caller:issue-917", "owner:integration-manager"),
+    )
+    values.update(overrides)
+    return IssuePlanningContext(**values)
+
+
+def test_issue_planning_context_valid_construction_and_exact_text() -> None:
+    context = _planning_context()
+    assert context.repository == "Blummer92/agent-os"
+    assert context.base_branch == "feature/Keep-Case"
+    assert context.evaluated_repository_sha == "a" * 40
+    assert context.implementation_contract_fingerprint == "b" * 64
+
+
+def test_issue_planning_context_is_frozen_and_slotted() -> None:
+    from dataclasses import FrozenInstanceError
+
+    context = _planning_context()
+    assert not hasattr(context, "__dict__")
+    with pytest.raises(FrozenInstanceError):
+        context.repository = "other/repository"
+
+
+def test_issue_planning_context_scope_is_sorted_unique_and_provenance_ordered() -> None:
+    context = _planning_context()
+    assert context.allowed_files == ("a.py", "z.py")
+    assert context.forbidden_paths == ("private/", "secrets/")
+    assert context.required_tests == ("pytest a", "pytest z")
+    assert context.provenance == (
+        "caller:issue-917",
+        "owner:integration-manager",
+    )
+
+
+def test_issue_planning_context_requires_nonempty_provenance() -> None:
+    for value in ((), [], None):
+        with pytest.raises((TypeError, ValueError)):
+            _planning_context(provenance=value)
+
+
+@pytest.mark.parametrize(
+    "repository",
+    (
+        "",
+        "owner",
+        "/repository",
+        "owner/",
+        "owner/repository/extra",
+        " owner/repository",
+        "owner/repository ",
+        "owner/repo\nname",
+        True,
+        917,
+    ),
+)
+def test_issue_planning_context_rejects_malformed_repository(repository) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        _planning_context(repository=repository)
+
+
+@pytest.mark.parametrize(
+    "branch",
+    (
+        "",
+        " main",
+        "main ",
+        "refs/heads/main",
+        "bad\nbranch",
+        "bad..branch",
+        "bad~branch",
+        "bad^branch",
+        "bad*branch",
+        "bad?branch",
+        "bad[branch",
+        "feature.lock",
+        "topic/feature.lock",
+        ".feature",
+        "topic/.feature",
+        "feature/@{test",
+        "/feature",
+        "feature/",
+        "feature//test",
+        "feature.",
+        "feature\\test",
+        "-feature",
+        "feature test",
+        "feature:test",
+        "@",
+        True,
+        917,
+    ),
+)
+def test_issue_planning_context_rejects_malformed_branch(branch) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        _planning_context(base_branch=branch)
+
+
+@pytest.mark.parametrize(
+    "sha",
+    ("a" * 39, "a" * 41, "A" * 40, "g" * 40, " " + "a" * 40, True, 40),
+)
+def test_issue_planning_context_rejects_malformed_sha40(sha) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        _planning_context(evaluated_repository_sha=sha)
+
+
+@pytest.mark.parametrize(
+    "fingerprint",
+    ("b" * 63, "b" * 65, "B" * 64, "g" * 64, " " + "b" * 64, True, 64),
+)
+def test_issue_planning_context_rejects_malformed_sha256(fingerprint) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        _planning_context(implementation_contract_fingerprint=fingerprint)
+
+
+@pytest.mark.parametrize("value", ("a.py", b"a.py", {"a.py": True}, True, 917, None))
+def test_issue_planning_context_rejects_malformed_scope_containers(value) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        _planning_context(allowed_files=value)
+
+
+@pytest.mark.parametrize(
+    "member",
+    (True, 917, "", " a.py", "a.py ", "bad\npath"),
+)
+def test_issue_planning_context_rejects_malformed_scope_members(member) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        _planning_context(allowed_files=(member,))
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        "caller:issue-917",
+        b"caller:issue-917",
+        {"caller:issue-917": True},
+        {"caller:issue-917"},
+        frozenset({"caller:issue-917"}),
+        True,
+        917,
+        (True,),
+        (917,),
+        ("",),
+        (" caller:issue-917",),
+        ("caller:issue-917 ",),
+        ("bad\nsource",),
+    ),
+)
+def test_issue_planning_context_rejects_malformed_provenance(value) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        _planning_context(provenance=value)
+
+
+def test_issue_planning_context_fixed_false_fields_are_not_constructible() -> None:
+    context = _planning_context()
+    assert context.execution_authorized is False
+    assert context.side_effects_performed is False
+    with pytest.raises(TypeError):
+        _planning_context(execution_authorized=True)
+    with pytest.raises(TypeError):
+        _planning_context(side_effects_performed=True)
+
+
+def test_issue_planning_context_construction_performs_no_external_io(monkeypatch) -> None:
+    import builtins
+    import os
+    import socket
+    import subprocess
+    import time
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("external I/O was attempted")
+
+    monkeypatch.setattr(builtins, "open", forbidden)
+    monkeypatch.setattr(os, "stat", forbidden)
+    monkeypatch.setattr(os, "system", forbidden)
+    monkeypatch.setattr(subprocess, "run", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    monkeypatch.setattr(socket, "socket", forbidden)
+    monkeypatch.setattr(socket, "create_connection", forbidden)
+    monkeypatch.setattr(time, "time", forbidden)
+    monkeypatch.setattr(time, "monotonic", forbidden)
+
+    context = _planning_context()
+    assert context.execution_authorized is False
+    assert context.side_effects_performed is False

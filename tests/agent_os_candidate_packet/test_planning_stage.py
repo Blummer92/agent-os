@@ -17,7 +17,9 @@ from scripts.agent_os_candidate_packet.stage_models import (
     DependencyIdentityEvidence,
     DependencyIdentityStatus,
     EvidenceStatus,
+    IssuePlanningContext,
 )
+from scripts.agent_os_issue_acceptance.planning_binding import PlanningBindingEvidence
 from tests.agent_os_candidate_packet.test_readiness_stage import (
     _FakeIssueReader,
     _FakeRepositoryReader,
@@ -457,3 +459,96 @@ def test_evidence_field_rejects_a_foreign_object() -> None:
 
     with pytest.raises(TypeError, match="IssuePlanCurrentStateEvidence"):
         replace(ready, issueplan_current_state_evidence="issueplan-current-state:x")
+
+
+# --------------------------------------------------------------------------
+# Two-phase planning binding (#917).
+# --------------------------------------------------------------------------
+
+
+def _natural_readiness(**context_overrides):
+    """Readiness via the explicit pre-planning context -- no ``replace``."""
+
+    values = dict(
+        repository="blummer92/agent-os",
+        base_branch="main",
+        evaluated_repository_sha=_SHA,
+        implementation_contract_fingerprint="3" * 64,
+        allowed_files=("scripts/agent_os_candidate_packet",),
+        forbidden_paths=(".github/workflows",),
+        required_tests=("tests/agent_os_candidate_packet",),
+        provenance=("issue-917:planning-stage-test",),
+    )
+    values.update(context_overrides)
+    return prepare_issue_readiness(
+        _request(governed_field_names=("owner_agent", "source_of_truth")),
+        _FakeIssueReader(),
+        _FakeRepositoryReader(),
+        dependency_identity_evidence=DependencyIdentityEvidence(
+            status=DependencyIdentityStatus.ABSENT,
+            provenance=("issue-917:none",),
+        ),
+        planning_context=IssuePlanningContext(**values),
+    )
+
+
+def test_planning_creates_a_binding_from_the_projected_context() -> None:
+    result = prepare_planning_handoff(
+        _natural_readiness(), evaluator_sha="a" * 40, created_at=_CREATED_AT
+    )
+
+    assert result.status is PlanningHandoffStageStatus.READY
+    binding = result.planning_binding
+    assert isinstance(binding, PlanningBindingEvidence)
+    assert binding.graph_digest == result.handoff.graph_digest
+    assert binding.planning_result_digest == result.handoff.planning_result_digest
+    assert binding.handoff_digest == result.handoff.handoff_digest
+    assert binding.supplied_node_ids == result.handoff.supplied_node_ids
+    assert binding.issueplan_current_state_evidence_id == (
+        result.issueplan_current_state_evidence.evidence_id
+    )
+    assert binding.execution_authorized is False
+    assert binding.side_effects_performed is False
+
+
+def test_planning_binding_is_deterministic_for_equal_semantic_inputs() -> None:
+    first = prepare_planning_handoff(
+        _natural_readiness(), evaluator_sha="a" * 40, created_at=_CREATED_AT
+    )
+    second = prepare_planning_handoff(
+        _natural_readiness(), evaluator_sha="a" * 40, created_at=_CREATED_AT
+    )
+    assert first.planning_binding == second.planning_binding
+
+
+def test_legacy_result_without_context_carries_no_binding() -> None:
+    """A pre-#917 IssuePlan has nothing to bind, and that stays valid."""
+
+    ready = _ready_planning_result()
+    assert ready.status is PlanningHandoffStageStatus.READY
+    assert ready.issueplan_current_state_evidence.implementation_contract_fingerprint is None
+    assert ready.planning_binding is None
+
+
+def test_invalid_input_result_may_not_carry_a_binding() -> None:
+    natural = prepare_planning_handoff(
+        _natural_readiness(), evaluator_sha="a" * 40, created_at=_CREATED_AT
+    )
+    with pytest.raises(ValueError, match="must not carry partial objects"):
+        PlanningHandoffStageResult(
+            status=PlanningHandoffStageStatus.INVALID_INPUT,
+            node=None,
+            graph=None,
+            planning_result=None,
+            handoff=None,
+            serialized_handoff=None,
+            handoff_validation=None,
+            wsc3_suppliable=False,
+            planning_binding=natural.planning_binding,
+        )
+
+
+def test_binding_field_rejects_a_foreign_type() -> None:
+    ready = _ready_planning_result()
+    with pytest.raises(TypeError, match="PlanningBindingEvidence"):
+        replace(ready, planning_binding="planning-binding:x")

@@ -221,12 +221,19 @@ def test_the_exact_preserved_issueplan_object_reaches_wsc3(monkeypatch) -> None:
     seen: dict[str, object] = {}
     original = proposal_stage.build_draft_task_proposals
 
-    def _spy(handoff, issueplan, repository, *, created_at):
+    def _spy(handoff, issueplan, repository, *, created_at, planning_binding=None):
         seen["handoff"] = handoff
         seen["issueplan"] = issueplan
         seen["repository"] = repository
         seen["created_at"] = created_at
-        return original(handoff, issueplan, repository, created_at=created_at)
+        seen["planning_binding"] = planning_binding
+        return original(
+            handoff,
+            issueplan,
+            repository,
+            created_at=created_at,
+            planning_binding=planning_binding,
+        )
 
     monkeypatch.setattr(proposal_stage, "build_draft_task_proposals", _spy)
 
@@ -486,8 +493,14 @@ def test_an_unmappable_wsc3_status_fails_closed(monkeypatch) -> None:
     real = proposal_stage.build_draft_task_proposals
     planning = _planning()
 
-    def _unmapped(handoff, issueplan, repository, *, created_at):
-        result = real(handoff, issueplan, repository, created_at=created_at)
+    def _unmapped(handoff, issueplan, repository, *, created_at, planning_binding=None):
+        result = real(
+            handoff,
+            issueplan,
+            repository,
+            created_at=created_at,
+            planning_binding=planning_binding,
+        )
         object.__setattr__(result, "status", "some-future-status")
         object.__setattr__(result, "proposals", ())
         return result

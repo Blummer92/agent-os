@@ -31,6 +31,7 @@ from .stage_models import (
     DependencyEvidence,
     DependencyIdentityEvidence,
     EvidenceStatus,
+    IssuePlanningContext,
     IssueReadinessStageRequest,
     IssueReadinessStageResult,
     IssueReadinessStageStatus,
@@ -62,6 +63,7 @@ def prepare_issue_readiness(
     repository_reader: RepositoryEvidenceReader,
     *,
     dependency_identity_evidence: DependencyIdentityEvidence | None = None,
+    planning_context: IssuePlanningContext | None = None,
 ) -> IssueReadinessStageResult:
     """Resolve one exact issue snapshot and its canonical readiness evidence.
 
@@ -77,6 +79,21 @@ def prepare_issue_readiness(
     text, reason codes, evidence details, comments, PR text, or labels. A caller
     that omits it gets explicit fail-closed ``unavailable`` identity evidence,
     which is distinct from a structured source reporting no dependencies.
+
+    ``planning_context`` is the single authoritative pre-planning source for the
+    repository, base branch, evaluated repository SHA, implementation-contract
+    fingerprint, and authorized contract scope. It is projected into the
+    IssuePlan current-state evidence *before* that evidence's identity is
+    computed, so the identity covers the context and never has to be revised
+    afterwards. Nothing here probes Git, a worktree, a provider, or a clock to
+    obtain any of it; a caller that omits the context simply gets evidence
+    without those fields, exactly as before.
+
+    The downstream ``graph_reference``, ``planning_result_reference``, and
+    ``handoff_reference`` fields are deliberately left unset. Those artifacts do
+    not exist yet at readiness time, and their digests transitively embed this
+    evidence's own identity -- populating them here would require a hash
+    preimage. They are carried by ``PlanningBindingEvidence`` instead.
     """
     if not isinstance(request, IssueReadinessStageRequest):
         raise TypeError("request must be an IssueReadinessStageRequest")
@@ -88,6 +105,13 @@ def prepare_issue_readiness(
         raise TypeError(
             "dependency_identity_evidence must be a DependencyIdentityEvidence"
         )
+    if planning_context is not None:
+        if not isinstance(planning_context, IssuePlanningContext):
+            raise TypeError("planning_context must be an IssuePlanningContext")
+        if planning_context.repository != request.repository:
+            raise ValueError(
+                "planning_context.repository must equal request.repository"
+            )
 
     source_result = resolve_issue_snapshot(
         request.repository,
@@ -119,6 +143,18 @@ def prepare_issue_readiness(
         expected_revision=request.expected_source_revision,
     )
     scan_result = scan_issueplan_source(envelope)
+    context_projection: dict[str, object] = {}
+    if planning_context is not None:
+        context_projection = {
+            "base_branch": planning_context.base_branch,
+            "evaluated_repository_sha": planning_context.evaluated_repository_sha,
+            "implementation_contract_fingerprint": (
+                planning_context.implementation_contract_fingerprint
+            ),
+            "allowed_files": planning_context.allowed_files,
+            "forbidden_paths": planning_context.forbidden_paths,
+            "required_tests": planning_context.required_tests,
+        }
     issueplan_evidence = build_issueplan_current_state_evidence(
         envelope,
         scan_result,
@@ -126,6 +162,7 @@ def prepare_issue_readiness(
         freshness_boundary=request.freshness_boundary,
         governed_field_names=request.governed_field_names,
         repository=request.repository,
+        **context_projection,
     )
 
     extra_checks: list[CheckResult] = []

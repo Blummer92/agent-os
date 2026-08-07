@@ -253,6 +253,10 @@ def prepare_repository_and_proposal(
         issueplan,
         evidence,
         created_at=created_at,
+        # Likewise the exact binding the planning stage produced. When it is
+        # None the IssuePlan carried no pre-planning context and WSC3 falls
+        # back to its legacy reference route.
+        planning_binding=planning_stage_result.planning_binding,
     )
     status = _WSC3_STATUS_MAP.get(proposal_result.status)
     if status is None:

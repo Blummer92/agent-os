@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import Enum
@@ -30,6 +31,10 @@ from scripts.agent_os_issue_acceptance.issueplan_current_state import (
 from scripts.agent_os_issue_acceptance.readiness import ReadinessOutcome, ReadinessResult
 
 STAGE_SCHEMA_VERSION = "1.1"
+
+_SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_FORBIDDEN_BRANCH_CHARS = frozenset("*?[")
 
 
 class IssueReadStatus(str, Enum):
@@ -148,6 +153,150 @@ def _identity_sequence(
     normalized = _evidence_strings(values, field_name)
     unique = tuple(sorted(set(normalized)))
     return unique, len(unique) != len(normalized)
+
+
+def _context_strings(values: object, field_name: str) -> tuple[str, ...]:
+    """Validate exact context strings without trimming or normalization."""
+    if (
+        isinstance(values, (str, bytes, Mapping, bool))
+        or not isinstance(values, Iterable)
+    ):
+        raise TypeError(f"{field_name} must be an iterable of strings")
+
+    validated: list[str] = []
+    for value in values:
+        if isinstance(value, bool):
+            raise TypeError(f"{field_name} must not contain boolean values")
+        if not isinstance(value, str):
+            raise TypeError(f"{field_name} must contain only strings")
+        if not value or value != value.strip():
+            raise ValueError(
+                f"{field_name} must contain non-empty canonical strings"
+            )
+        if any(character < " " or character == "\x7f" for character in value):
+            raise ValueError(f"{field_name} must not contain control characters")
+        validated.append(value)
+    return tuple(validated)
+
+
+def _canonical_scope(values: object, field_name: str) -> tuple[str, ...]:
+    """Return one deterministic, duplicate-free scope tuple."""
+    return tuple(sorted(set(_context_strings(values, field_name))))
+
+
+def _context_string(value: object, field_name: str) -> str:
+    """Validate one context string without trimming or other normalization."""
+    if isinstance(value, bool):
+        raise TypeError(f"{field_name} must not be a boolean")
+    if not isinstance(value, str):
+        raise TypeError(f"{field_name} must be a string")
+    if not value or value != value.strip():
+        raise ValueError(f"{field_name} must be a non-empty canonical string")
+    if any(character < " " or character == "\x7f" for character in value):
+        raise ValueError(f"{field_name} must not contain control characters")
+    return value
+
+
+def _repository_name(value: object) -> str:
+    repository = _context_string(value, "repository")
+    if repository.count("/") != 1:
+        raise ValueError("repository must use owner/repository form")
+    owner, name = repository.split("/", 1)
+    if not owner or not name:
+        raise ValueError("repository must use owner/repository form")
+    return repository
+
+
+def _branch_name(value: object) -> str:
+    branch = _context_string(value, "base_branch")
+    components = branch.split("/")
+    if (
+        branch.startswith("refs/")
+        or branch.startswith(("/", "-"))
+        or branch.endswith(("/", "."))
+        or "//" in branch
+        or branch == "@"
+        or "@{" in branch
+        or "\\" in branch
+        or " " in branch
+        or any(character in branch for character in _FORBIDDEN_BRANCH_CHARS)
+        or any(token in branch for token in ("..", "~", "^", ":"))
+        or any(
+            component.startswith(".") or component.endswith(".lock")
+            for component in components
+        )
+    ):
+        raise ValueError("base_branch is malformed")
+    return branch
+
+
+def _hex_digest(value: object, field_name: str, pattern: re.Pattern[str]) -> str:
+    digest = _context_string(value, field_name)
+    if not pattern.fullmatch(digest):
+        raise ValueError(f"{field_name} is malformed")
+    return digest
+
+
+@dataclass(frozen=True, slots=True)
+class IssuePlanningContext:
+    """Explicit pre-planning repository and implementation-contract context.
+
+    The context is caller supplied and input-only. It never probes Git, a
+    worktree, the filesystem, a provider, or a clock. Scope collections are
+    canonicalized before readiness projects them into IssuePlan evidence.
+    """
+
+    repository: str
+    base_branch: str
+    evaluated_repository_sha: str
+    implementation_contract_fingerprint: str
+    allowed_files: tuple[str, ...] = field(default_factory=tuple)
+    forbidden_paths: tuple[str, ...] = field(default_factory=tuple)
+    required_tests: tuple[str, ...] = field(default_factory=tuple)
+    provenance: tuple[str, ...] = field(default_factory=tuple)
+    execution_authorized: Literal[False] = field(default=False, init=False)
+    side_effects_performed: Literal[False] = field(default=False, init=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "repository", _repository_name(self.repository))
+        object.__setattr__(self, "base_branch", _branch_name(self.base_branch))
+        object.__setattr__(
+            self,
+            "evaluated_repository_sha",
+            _hex_digest(
+                self.evaluated_repository_sha,
+                "evaluated_repository_sha",
+                _SHA40_RE,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "implementation_contract_fingerprint",
+            _hex_digest(
+                self.implementation_contract_fingerprint,
+                "implementation_contract_fingerprint",
+                _SHA256_RE,
+            ),
+        )
+        object.__setattr__(
+            self, "allowed_files", _canonical_scope(self.allowed_files, "allowed_files")
+        )
+        object.__setattr__(
+            self,
+            "forbidden_paths",
+            _canonical_scope(self.forbidden_paths, "forbidden_paths"),
+        )
+        object.__setattr__(
+            self,
+            "required_tests",
+            _canonical_scope(self.required_tests, "required_tests"),
+        )
+        if isinstance(self.provenance, (set, frozenset)):
+            raise TypeError("provenance must preserve caller order")
+        provenance = _context_strings(self.provenance, "provenance")
+        if not provenance:
+            raise ValueError("provenance must contain at least one value")
+        object.__setattr__(self, "provenance", provenance)
 
 
 @dataclass(frozen=True, slots=True)
