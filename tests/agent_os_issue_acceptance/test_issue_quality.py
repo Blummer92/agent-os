@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 
 from scripts.agent_os_issue_acceptance.checks import issue_quality
@@ -67,12 +68,16 @@ def test_parent_reference_cases():
     assert issue_quality.check_parent_reference(missing).status == Status.WARN
     malformed = _strong().replace("## Parent\n#163", "## Parent\nparent roadmap")
     assert issue_quality.check_parent_reference(malformed).status == Status.WARN
+    placeholder = _strong().replace("## Parent\n#163", "## Parent\nTBD")
+    assert issue_quality.check_parent_reference(placeholder).status == Status.MANUAL_REVIEW
 
 
 def test_related_reference_cases():
     assert issue_quality.check_related_references(_strong()).status == Status.PASS
     missing = _strong().replace("## Related issues\n#164\n\n", "")
     assert issue_quality.check_related_references(missing).status == Status.WARN
+    placeholder = _strong().replace("## Related issues\n#164", "## Related issues\nTBD")
+    assert issue_quality.check_related_references(placeholder).status == Status.MANUAL_REVIEW
 
 
 def test_blocker_cases():
@@ -96,6 +101,15 @@ def test_vague_acceptance_criteria_is_manual_review():
     body = _strong().replace(
         "- Checker returns pass for complete local input.\n- Checker rejects missing required sections.",
         "- Make it better.",
+    )
+    results = issue_quality.check_acceptance_criteria(body, issue_quality.IssueFamily.IMPLEMENTATION)
+    assert results[0].status == Status.MANUAL_REVIEW
+
+
+def test_each_acceptance_criterion_must_be_observable():
+    body = _strong().replace(
+        "- Checker returns pass for complete local input.\n- Checker rejects missing required sections.",
+        "- Checker returns pass for complete local input.\n- Behavior is good.",
     )
     results = issue_quality.check_acceptance_criteria(body, issue_quality.IssueFamily.IMPLEMENTATION)
     assert results[0].status == Status.MANUAL_REVIEW
@@ -127,5 +141,15 @@ def test_aggregate_is_deterministic_and_reuses_canonical_models():
 
 
 def test_checker_source_has_no_io_or_network_dependencies():
-    names = set(issue_quality.__dict__)
-    assert not names.intersection({"requests", "urllib", "socket", "subprocess", "os", "pathlib"})
+    source = Path(issue_quality.__file__).read_text()
+    tree = ast.parse(source)
+    blocked_modules = {"requests", "urllib", "socket", "subprocess", "os", "pathlib"}
+    blocked_calls = {"open", "exec", "eval", "compile", "input"}
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            assert all(alias.name.split(".")[0] not in blocked_modules for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            assert (node.module or "").split(".")[0] not in blocked_modules
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            assert node.func.id not in blocked_calls
