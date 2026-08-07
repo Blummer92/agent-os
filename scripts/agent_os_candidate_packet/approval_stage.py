@@ -46,7 +46,6 @@ class ApprovalProjectionStageStatus(str, Enum):
 @dataclass(frozen=True, slots=True)
 class ApprovalCandidateContext:
     """Explicit provenance for revision-1 pending-candidate construction only."""
-
     approval_kind: ApprovalKind
     authorizer_id: str
     decision_id: str
@@ -70,7 +69,6 @@ class ApprovalCandidateContext:
 @dataclass(frozen=True, slots=True)
 class ApprovalDecision:
     """Externally supplied immutable human decision; never inferred here."""
-
     state: ApprovalState
     decision_id: str
     authorizer_id: str
@@ -87,13 +85,9 @@ class ApprovalDecision:
             value = getattr(self, name)
             if not isinstance(value, str) or not value:
                 raise ValueError(f"{name} must be non-empty text")
-        if not isinstance(self.reason_codes, tuple) or not all(
-            isinstance(item, str) for item in self.reason_codes
-        ):
+        if not isinstance(self.reason_codes, tuple) or not all(isinstance(item, str) for item in self.reason_codes):
             raise TypeError("reason_codes must be a tuple of strings")
-        if not isinstance(self.details, tuple) or not all(
-            isinstance(item, str) for item in self.details
-        ):
+        if not isinstance(self.details, tuple) or not all(isinstance(item, str) for item in self.details):
             raise TypeError("details must be a tuple of strings")
 
 
@@ -112,25 +106,15 @@ class ApprovalProjectionStageResult:
     def __post_init__(self) -> None:
         if not isinstance(self.status, ApprovalProjectionStageStatus):
             raise TypeError("status must be an ApprovalProjectionStageStatus")
-        if self.pending_candidate is not None and not isinstance(
-            self.pending_candidate, ApprovalRecord
-        ):
+        if self.pending_candidate is not None and not isinstance(self.pending_candidate, ApprovalRecord):
             raise TypeError("pending_candidate must be an ApprovalRecord or None")
-        if self.decision_revision is not None and not isinstance(
-            self.decision_revision, ApprovalRecord
-        ):
+        if self.decision_revision is not None and not isinstance(self.decision_revision, ApprovalRecord):
             raise TypeError("decision_revision must be an ApprovalRecord or None")
-        if self.applicability is not None and not isinstance(
-            self.applicability, ApprovalApplicabilityResult
-        ):
+        if self.applicability is not None and not isinstance(self.applicability, ApprovalApplicabilityResult):
             raise TypeError("applicability must be an ApprovalApplicabilityResult or None")
-        if self.projection_result is not None and not isinstance(
-            self.projection_result, ApprovedExecutionProjectionResult
-        ):
+        if self.projection_result is not None and not isinstance(self.projection_result, ApprovedExecutionProjectionResult):
             raise TypeError("projection_result must be an ApprovedExecutionProjectionResult or None")
-        if self.projection is not None and not isinstance(
-            self.projection, ApprovedExecutionProjection
-        ):
+        if self.projection is not None and not isinstance(self.projection, ApprovedExecutionProjection):
             raise TypeError("projection must be an ApprovedExecutionProjection or None")
         if self.status is ApprovalProjectionStageStatus.COMPLETE:
             if self.projection_result is None or not self.projection_result.complete:
@@ -150,14 +134,12 @@ def prepare_approval_projection(
     evaluated_at: str,
     projected_at: str,
 ) -> ApprovalProjectionStageResult:
-    """Prepare a pending candidate and, only after an explicit decision, projection."""
     if not isinstance(repository_proposal_stage_result, RepositoryProposalStageResult):
         raise TypeError("repository_proposal_stage_result must be a RepositoryProposalStageResult")
     if not isinstance(candidate_context, ApprovalCandidateContext):
         raise TypeError("candidate_context must be an ApprovalCandidateContext")
     if approval_decision is not None and not isinstance(approval_decision, ApprovalDecision):
         raise TypeError("approval_decision must be an ApprovalDecision or None")
-
     upstream = repository_proposal_stage_result
     if upstream.status is not RepositoryProposalStageStatus.ELIGIBLE:
         return _result(ApprovalProjectionStageStatus.INVALID_INPUT, None, None, None, None, upstream.reason_codes)
@@ -166,7 +148,6 @@ def prepare_approval_projection(
     repository = upstream.repository_state_evidence
     if proposal is None or issueplan is None or repository is None:
         return _result(ApprovalProjectionStageStatus.INVALID_INPUT, None, None, None, None, ("upstream-evidence-incomplete",))
-
     try:
         candidate = build_approval_candidate(
             proposal,
@@ -182,10 +163,8 @@ def prepare_approval_projection(
         )
     except (TypeError, ValueError):
         return _result(ApprovalProjectionStageStatus.INVALID, None, None, None, None, ("approval-candidate-invalid",))
-
     if approval_decision is None:
         return _result(ApprovalProjectionStageStatus.NEEDS_DECISION, candidate, None, None, None, ("human-decision-required",))
-
     try:
         revision = record_approval_decision(
             candidate,
@@ -198,7 +177,6 @@ def prepare_approval_projection(
         )
     except (TypeError, ValueError):
         return _result(ApprovalProjectionStageStatus.INVALID, candidate, None, None, None, ("approval-decision-invalid",))
-
     applicability = evaluate_approval_applicability(
         revision,
         proposal,
@@ -207,7 +185,6 @@ def prepare_approval_projection(
         evaluated_at=evaluated_at,
         planning_binding=upstream.planning_binding,
     )
-
     lifecycle_status = {
         ApprovalState.REJECTED: ApprovalProjectionStageStatus.REJECTED,
         ApprovalState.EXPIRED: ApprovalProjectionStageStatus.EXPIRED,
@@ -216,7 +193,6 @@ def prepare_approval_projection(
     }.get(revision.state)
     if lifecycle_status is not None:
         return _result(lifecycle_status, candidate, revision, applicability, None, applicability.reason_codes)
-
     if applicability.status != "applicable":
         status = {
             "stale": ApprovalProjectionStageStatus.STALE,
@@ -225,7 +201,6 @@ def prepare_approval_projection(
             "needs-decision": ApprovalProjectionStageStatus.NEEDS_DECISION,
         }[applicability.status]
         return _result(status, candidate, revision, applicability, None, applicability.reason_codes)
-
     projection_result = build_approved_execution_projection(
         proposal,
         revision,
@@ -233,6 +208,7 @@ def prepare_approval_projection(
         issueplan,
         repository,
         projected_at=projected_at,
+        planning_binding=upstream.planning_binding,
     )
     if not projection_result.complete:
         status = {
@@ -252,14 +228,7 @@ def prepare_approval_projection(
     )
 
 
-def _result(
-    status: ApprovalProjectionStageStatus,
-    candidate: ApprovalRecord | None,
-    revision: ApprovalRecord | None,
-    applicability: ApprovalApplicabilityResult | None,
-    projection_result: ApprovedExecutionProjectionResult | None,
-    reasons: tuple[str, ...],
-) -> ApprovalProjectionStageResult:
+def _result(status, candidate, revision, applicability, projection_result, reasons):
     return ApprovalProjectionStageResult(
         status=status,
         pending_candidate=candidate,
