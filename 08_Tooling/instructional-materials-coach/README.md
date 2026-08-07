@@ -17,18 +17,7 @@ with lesson content, instead of building both by hand.
 
 ## Installation
 
-The coach consumes the repository-root `agent-os-navigation-registry`
-distribution as a normal dependency. That distribution provides the public
-`instructional_workflow_contracts` import package used for governed reuse
-planning. Install the root distribution first from a clean checkout, then the
-coach package; CI/validation should use regular installs rather than relying on
-`PYTHONPATH`, `sys.path` mutation, or editable-only behavior.
-
-    python -m pip install .
-    python -m pip install ./08_Tooling/instructional-materials-coach
-
-Editable installs may be used for local development convenience, but are not the
-packaging architecture or the CI proof.
+    pip install -e .
 
 ## Setup
 
