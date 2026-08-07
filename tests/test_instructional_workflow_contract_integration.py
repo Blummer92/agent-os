@@ -25,7 +25,7 @@ COMPONENT_BLOBS = {
     "handoff.py": "b24ea84b89f7e0b67e6f3989b23aacb303c1b509",
     "material_requirement.py": "b256a348a3756c93c3d265ecb771395397545851",
     "artifact_manifest.py": "e95133db5e5f32b9bba7be8b4bc862398e26e94f",
-    "reuse_planner.py": "7a28ac490873c659aab44f3621b58d3dd4b770bc",
+    "reuse_planner.py": "e7da9179c2a39627d84a5c2b323cc87a581d29bb",
 }
 
 

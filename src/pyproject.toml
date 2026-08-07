@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "instructional-workflow-contracts"
+version = "0.1.0"
+description = "Pure validated instructional workflow contracts for Agent OS."
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+    "instructional_workflow_contracts",
+    "instructional_workflow_contracts.*",
+    "visual_asset_sync",
+    "visual_asset_sync.*",
+]
