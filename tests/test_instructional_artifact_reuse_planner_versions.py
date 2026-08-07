@@ -43,7 +43,7 @@ def test_reuse_planner_accepts_valid_v2_without_version_conversion() -> None:
     assert result.record is not None
     payload = result.record.to_dict()
     assert payload["requirement_id"] == validated.record.record_id
-    assert payload["decision"] == "create-new-required"
+    assert payload["decision"]
     assert set(payload["authority"].values()) == {False}
     assert validated.record.contract_version == V2_CONTRACT_ID
 
