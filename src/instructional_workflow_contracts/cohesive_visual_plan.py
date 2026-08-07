@@ -74,6 +74,7 @@ def plan_cohesive_visual_set(
         rejected_assignments: list[dict[str, Any]] = []
         rejected_sets: list[dict[str, Any]] = []
         unfilled_required: list[dict[str, Any]] = []
+        unfilled_required_roles: list[dict[str, Any]] = []
         unfilled_optional: list[dict[str, Any]] = []
         manual_reasons: set[str] = set()
         total_cognitive_load = 0
@@ -106,6 +107,7 @@ def plan_cohesive_visual_set(
             candidate = match["candidate"]
             if candidate is None:
                 unfilled_required.append(_unfilled_role(role))
+                unfilled_required_roles.append(role)
                 continue
             assignment = _assignment(
                 role,
@@ -164,7 +166,7 @@ def plan_cohesive_visual_set(
                 material_type=material_type,
                 selected=selected,
             )
-            for role in unfilled_required
+            for role in unfilled_required_roles
         ]
         if len(gap_briefs) > MAX_GAP_BRIEFS:
             raise ContractValidationError(
