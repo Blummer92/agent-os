@@ -53,7 +53,10 @@ def test_exact_hash_uses_bytes_not_filename(tmp_path: Path):
     changed = bytearray(first.read_bytes())
     changed[-1] ^= 1
     second.write_bytes(changed)
+    changed_result = intake_visual_asset(second, output_dir=tmp_path / "changed")
     assert hashlib.sha256(second.read_bytes()).hexdigest() != expected
+    assert changed_result.original_sha256 != a.original_sha256
+    assert changed_result.intake_id != a.intake_id
 
 
 def test_extension_content_mismatch_is_observed(tmp_path: Path):
@@ -86,6 +89,11 @@ def test_source_byte_and_pixel_limits(tmp_path: Path):
     with pytest.raises(IntakeError) as exc:
         intake_visual_asset(source, output_dir=tmp_path / "out", policy=IntakePolicy(max_decoded_pixels=399))
     assert exc.value.code is IntakeErrorCode.PIXEL_LIMIT_EXCEEDED
+
+
+def test_policy_rejects_unsupported_formats():
+    with pytest.raises(ValueError):
+        IntakePolicy(allowed_formats=("BMP",))
 
 
 def test_multiframe_gif_rejected(tmp_path: Path):
@@ -136,6 +144,37 @@ def test_cmyk_and_transparency_normalization(tmp_path: Path):
     assert alpha_result.has_alpha
     with Image.open(alpha_result.normalized_path) as normalized:
         assert normalized.mode == "RGBA"
+
+
+def test_existing_derivative_and_symlink_are_rejected(tmp_path: Path):
+    source = tmp_path / "source.png"
+    _save(source, "PNG")
+    original_sha = hashlib.sha256(source.read_bytes()).hexdigest()
+    intake_id = f"intake-{original_sha[:24]}"
+
+    regular_out = tmp_path / "regular"
+    regular_out.mkdir()
+    existing = regular_out / f"{intake_id}.png"
+    existing.write_bytes(b"keep-me")
+    with pytest.raises(IntakeError) as exc:
+        intake_visual_asset(source, output_dir=regular_out)
+    assert exc.value.code is IntakeErrorCode.NORMALIZATION_FAILED
+    assert existing.read_bytes() == b"keep-me"
+
+    if hasattr(Path, "symlink_to"):
+        symlink_out = tmp_path / "symlink"
+        symlink_out.mkdir()
+        target = tmp_path / "target.txt"
+        target.write_bytes(b"keep-target")
+        link = symlink_out / f"{intake_id}.png"
+        try:
+            link.symlink_to(target)
+        except (OSError, NotImplementedError):
+            return
+        with pytest.raises(IntakeError) as exc:
+            intake_visual_asset(source, output_dir=symlink_out)
+        assert exc.value.code is IntakeErrorCode.NORMALIZATION_FAILED
+        assert target.read_bytes() == b"keep-target"
 
 
 def test_icc_presence_and_generated_output_name(tmp_path: Path):
