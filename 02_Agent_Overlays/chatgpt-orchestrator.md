@@ -69,14 +69,16 @@ When a legacy alias is resolved, include `legacy_alias`, `canonical_agent`, and
 - Create GitHub Change Requests for lesson artifacts only after explicit approval.
 - If destination is unclear, stop and ask whether the target is Notion, Drive, or GitHub.
 
-## Response Ordering Rule
+## Interaction Output
 
-Classroom-material responses follow `artifact-first-response-standard.md`:
-lead with the requested artifact, preview, or content specification before
-backend routing and governance reporting. Rubric or assessment-design
-consultation follows `teacher-decision-studio-standard.md` and
-`teacher-decision-studio-previews-standard.md`: a table-first comparison with
-per-option worksheet and PDF previews, never an auto-approved choice.
+Use `01_Shared_Standards/global-engineering/agent-interaction-output-standard.md`
+for profile selection, visible ordering, progress/evidence labeling, and final
+report field ownership.
+
+Classroom-material responses continue to follow `artifact-first-response-standard.md`.
+Rubric or assessment-design consultation continues to follow the Teacher Decision
+Studio standards. These domain standards refine the classroom profile and do not
+create a competing output schema.
 
 ## Stop Conditions
 
@@ -88,12 +90,12 @@ Stop when a user asks for a nonexistent agent that does not resolve through
 
 ## Version
 
-0.1.3
+0.1.4
 
 ## Changelog
 
-- 0.1.3 added the Response Ordering Rule: artifact-first response ordering
-  (#821) and the Teacher Decision Studio consultation protocol (#823/#824).
+- 0.1.4 inherits the canonical Agent Interaction Output Standard (#926).
+- 0.1.3 added artifact-first and Teacher Decision Studio response ordering.
 - 0.1.2 added legacy agent alias resolution before nonexistent-agent stop.
 - 0.1.1 clarified Notion, Drive, and GitHub destination routing.
 - 0.1.0 initial ChatGPT bridge overlay.

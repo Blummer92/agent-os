@@ -30,6 +30,7 @@ versions change only when the module's standards or contract changes.
 | Agent OS Execution Service | 0.4.0 |
 | Artifact-First Response Standard | 0.1.0 |
 | Teacher Decision Studio Standard | 0.1.0 |
+| Agent Interaction Output Standard | 0.1.0 |
 | LP Pacing Handoff Contract | 0.1.0 |
 | LP Reason Code Catalog | 0.1.0 |
 | LP Notion Working Layer | 0.1.0 |
