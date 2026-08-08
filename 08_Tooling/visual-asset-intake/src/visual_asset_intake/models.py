@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
+_SUPPORTED_FORMATS = frozenset({"JPEG", "PNG", "WEBP"})
+
 
 class IntakeState(str, Enum):
     READY_FOR_EXACT_DUPLICATE_LOOKUP = "READY_FOR_EXACT_DUPLICATE_LOOKUP"
@@ -34,6 +36,12 @@ class IntakePolicy:
     max_source_bytes: int = 25 * 1024 * 1024
     max_decoded_pixels: int = 40_000_000
     allowed_formats: tuple[str, ...] = ("JPEG", "PNG", "WEBP")
+
+    def __post_init__(self) -> None:
+        if self.max_source_bytes <= 0 or self.max_decoded_pixels <= 0:
+            raise ValueError("intake limits must be positive")
+        if not self.allowed_formats or any(value not in _SUPPORTED_FORMATS for value in self.allowed_formats):
+            raise ValueError("allowed_formats contains an unsupported raster format")
 
 
 @dataclass(frozen=True, slots=True)
