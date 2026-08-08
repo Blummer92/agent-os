@@ -4,9 +4,8 @@ import copy
 
 import pytest
 
-from instructional_workflow_contracts import (
-    AuthorityEvidence,
-    ValidationStatus,
+from instructional_workflow_contracts import AuthorityEvidence, ValidationStatus
+from instructional_workflow_contracts.conversational_unit_knowledge import (
     decide_conversational_unit_knowledge,
 )
 
