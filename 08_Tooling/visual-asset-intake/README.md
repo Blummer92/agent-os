@@ -14,7 +14,7 @@ result = intake_visual_asset("candidate.jpg", output_dir="./derived")
 
 ## Safety boundary
 
-- The original file is read only and never overwritten.
+- The original file is read-only and never overwritten.
 - The default source ceiling is 25 MiB and decoded-pixel ceiling is 40 MP.
 - SVG, GIF/animated or multi-frame images, PDF, archives, RAW, and unsupported raster formats fail closed.
 - Pillow decompression-bomb protections remain enabled.
@@ -34,3 +34,15 @@ Core runtime is Python plus Pillow. `puremagic` is omitted because Pillow decode
 ## Downstream
 
 Successful output is `READY_FOR_EXACT_DUPLICATE_LOOKUP` evidence for #953. ArtifactManifest, duplicate disposition, Visual Asset Compatibility, external identity, rights/privacy resolution, approval, and classroom readiness remain downstream owners.
+
+## References
+
+Shared ownership and downstream rules:
+- `01_Shared_Standards/instructional-design/instructional-materials-sources.md`
+- `src/instructional_workflow_contracts/VISUAL_ASSET_COMPATIBILITY.md`
+
+Implementation and verification surfaces:
+- `08_Tooling/visual-asset-intake/src/visual_asset_intake/intake.py`
+- `08_Tooling/visual-asset-intake/src/visual_asset_intake/models.py`
+- `08_Tooling/visual-asset-intake/src/visual_asset_intake/hashing.py`
+- `08_Tooling/visual-asset-intake/tests/test_intake.py`
