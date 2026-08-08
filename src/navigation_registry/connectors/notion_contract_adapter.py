@@ -255,6 +255,67 @@ class NotionContractAdapter:
             },
         )
 
+    def from_live_data_source_payload(
+        self, payload: dict[str, Any]
+    ) -> RegistryResource | ConnectorError:
+        """Normalize a live-shaped Notion Data Source payload into contract evidence."""
+
+        data_source_id = str(payload.get("id") or "")
+        if not data_source_id:
+            return _error(
+                ConnectorErrorCode.METADATA_INCOMPLETE,
+                "Live Notion data source payload is missing id.",
+                evidence={"payload_keys": sorted(payload)},
+            )
+
+        parent = payload.get("parent")
+        database_id = parent.get("database_id") if isinstance(parent, dict) else None
+        if not isinstance(database_id, str) or not database_id:
+            return _error(
+                ConnectorErrorCode.METADATA_INCOMPLETE,
+                "Live Notion data source payload is missing database parent identity.",
+                resource_id=data_source_id,
+                evidence={"parent": parent},
+            )
+        if database_id == data_source_id:
+            return _error(
+                ConnectorErrorCode.SOURCE_OF_TRUTH_CONFLICT,
+                "Notion data source and database identities must remain distinct.",
+                resource_id=data_source_id,
+                evidence={"database_id": database_id},
+            )
+
+        raw_name = payload.get("name")
+        display_name = (_plain_text(raw_name) if raw_name else "") or data_source_id
+        return RegistryResource(
+            system="notion",
+            entity_type="DataSource",
+            canonical_id=data_source_id,
+            display_name=display_name,
+            parent=database_id,
+            owner=payload.get("owner"),
+            source_of_truth=LIVE_NOTION_SOURCE,
+            verification_state="VerifiedReadOnly",
+            cache_status="LiveRead",
+            human_review_required=_live_payload_requires_review(
+                payload, display_name, data_source_id
+            ),
+            write_allowed=False,
+            metadata={
+                "evidence_source": LIVE_NOTION_SOURCE,
+                "data_source_id": data_source_id,
+                "database_id": database_id,
+                "url": payload.get("url"),
+                "archived": bool(payload.get("archived", False)),
+                "created_time": payload.get("created_time"),
+                "last_edited_time": payload.get("last_edited_time"),
+                "properties_schema_visible": bool(payload.get("properties")),
+                "properties": payload.get("properties"),
+                "write_boundary": "read-only-live-evidence",
+                "raw_payload": dict(payload),
+            },
+        )
+
     def report_health(self) -> dict[str, Any]:
         """Return adapter health without probing any external system."""
 
@@ -393,7 +454,12 @@ def _truthy(value: Any) -> bool:
 def _parent_id(parent: Any) -> str | None:
     if not isinstance(parent, dict):
         return None
-    return parent.get("database_id") or parent.get("page_id") or parent.get("workspace")
+    return (
+        parent.get("data_source_id")
+        or parent.get("database_id")
+        or parent.get("page_id")
+        or parent.get("workspace")
+    )
 
 
 def _error(
