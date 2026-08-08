@@ -97,12 +97,6 @@ class CandidateDecision:
     outbound_routes: tuple[str, ...]
 
 
-@dataclass(frozen=True, slots=True)
-class ConversationKnowledgeDecision:
-    decisions: tuple[CandidateDecision, ...]
-    authority: AuthorityEvidence = field(default_factory=AuthorityEvidence, init=False)
-
-
 TOP_LEVEL_FIELDS = frozenset({"context", "candidates", "existing_knowledge", "authority"})
 CONTEXT_FIELDS = frozenset({"current_entity_ref", "plausible_entity_refs"})
 CANDIDATE_FIELDS = frozenset(
@@ -211,10 +205,10 @@ def _disposition(
         return KnowledgeDisposition.DO_NOT_PERSIST
     if target is None or knowledge_class is KnowledgeClass.UNRESOLVED:
         return KnowledgeDisposition.NEEDS_CLARIFICATION
-    if relation is ExistingRelation.IDENTICAL:
-        return KnowledgeDisposition.UNCHANGED
     if freshness is FreshnessState.STALE and relation is not ExistingRelation.NONE:
         return KnowledgeDisposition.RECONFIRM
+    if relation is ExistingRelation.IDENTICAL:
+        return KnowledgeDisposition.UNCHANGED
     if relation is ExistingRelation.SUPERSEDES:
         return KnowledgeDisposition.CORRECTION
     if relation is ExistingRelation.CONFLICTING:
@@ -255,11 +249,15 @@ def decide_conversational_unit_knowledge(value: object) -> ValidationResult:
         _list(payload["existing_knowledge"], "existing_knowledge", MAX_EXISTING)
         candidates = _list(payload["candidates"], "candidates", MAX_CANDIDATES)
         decisions: list[CandidateDecision] = []
+        candidate_ids: set[str] = set()
 
         for raw_candidate in candidates:
             candidate = _mapping(raw_candidate, "candidate")
             _exact_fields(candidate, CANDIDATE_FIELDS, "candidate")
             candidate_id = validate_stable_id(candidate["candidate_id"], "candidate_id")
+            if candidate_id in candidate_ids:
+                raise ContractValidationError("identity-duplicate", "candidate_id must be unique")
+            candidate_ids.add(candidate_id)
             knowledge_class = _choice(candidate["knowledge_class"], KnowledgeClass, "knowledge_class")
             persistence = _choice(candidate["persistence_intent"], PersistenceIntent, "persistence_intent")
             relation = _choice(candidate["existing_relation"], ExistingRelation, "existing_relation")
