@@ -42,6 +42,27 @@ Implementation work must preserve these rules:
 - Integration Manager owns cross-system governance and routing.
 - System owners retain live-system approval authority.
 
+## Bounded Notion Intent Projection
+
+`src/navigation_registry/connectors/notion_intent_context.py` projects already
+normalized, live-read Notion page evidence into a small immutable context for
+Tasks/Issues, Decision Log/ADRs, Lessons Learned, and Reusable Patterns. The
+projection preserves Data Source identity separately from database-container
+identity, source revision, bounded references, owner/status/gate/blocker/next
+step evidence, and explicit approval/scope-change stop evidence.
+
+The projection is pure-local and relation-bounded. Callers resolve known records
+and explicit relations before any search; incomplete relations may request one
+bounded continuation step, never a recursive graph crawl. Missing canonical
+identity, stale/non-live evidence, conflicting identity, wrong types, or bound
+violations fail closed. Unknown additive metadata is ignored.
+
+The Memory Manager seam stays unchanged: the projection exposes only existing
+`objective`, `known_facts`, `prior_decisions`, and `stop_conditions` concepts.
+Fingerprints are deterministic equality evidence only. Neither the projection,
+Navigation Registry evidence, nor Memory Manager context authorizes writes,
+readiness, approval, implementation, merge, deployment, or production action.
+
 ## V1 Cleanup Notes
 
 Before declaring Version 1.0, QA should decide whether long files must be split.

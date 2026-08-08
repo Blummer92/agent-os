@@ -13,6 +13,12 @@ from .notion_contract_adapter import (
     NOTION_SEARCH_RESULT_SOURCE,
     NotionContractAdapter,
 )
+from .notion_intent_context import (
+    NotionIntentContext,
+    NotionIntentContextError,
+    NotionIntentEvidence,
+    project_notion_intent_context,
+)
 from .scheduler_notion_evidence import SchedulerNotionEvidenceAdapter
 
 __all__ = [
@@ -22,7 +28,11 @@ __all__ = [
     "LIVE_NOTION_SOURCE",
     "NOTION_SEARCH_RESULT_SOURCE",
     "NotionContractAdapter",
+    "NotionIntentContext",
+    "NotionIntentContextError",
+    "NotionIntentEvidence",
     "NotionReadOnlyConnector",
     "RegistryResource",
     "SchedulerNotionEvidenceAdapter",
+    "project_notion_intent_context",
 ]
