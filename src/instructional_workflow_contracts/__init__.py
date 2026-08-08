@@ -34,7 +34,6 @@ from .common import (
 from .conversational_unit_knowledge import (
     CONTRACT_ID as CONVERSATIONAL_UNIT_KNOWLEDGE_CONTRACT_ID,
     CandidateDecision,
-    ConversationKnowledgeDecision,
     ExistingRelation,
     FreshnessState,
     KnowledgeClass,
@@ -60,7 +59,6 @@ __all__ = [
     "CandidateDecision",
     "ContractReference",
     "ContractValidationError",
-    "ConversationKnowledgeDecision",
     "DEPRECATED_FIELD_ALIASES",
     "ExistingRelation",
     "FINGERPRINT_ALGORITHM",
