@@ -88,6 +88,16 @@ def test_images_request_is_asset_only_and_relation_first() -> None:
     assert "canonical_unit_relation" not in packet["asset_evidence"][0]
 
 
+def test_asset_without_relation_marker_is_rejected() -> None:
+    unbound = pf010()
+    unbound.pop("canonical_unit_relation")
+    packet = assemble(
+        request=request("what-images-exist", "images"),
+        asset_evidence=[unbound],
+    )
+    assert packet["asset_evidence"] == []
+
+
 def test_modeling_request_excludes_packet_and_material_evidence() -> None:
     packet = assemble(
         request=request("improve-modeling", "none"),
@@ -135,6 +145,22 @@ def test_slides_request_selects_bounded_required_categories() -> None:
     assert packet["asset_evidence"][0]["asset_id"] == "pf-010"
 
 
+def test_next_teaching_action_uses_bounded_lesson_categories() -> None:
+    packet = assemble(
+        request=request("next-teaching", "none"),
+        owner_evidence=[
+            owner("unit-1", "unit-generation-approval"),
+            owner("modeling-1", "modeling-handoff-ready"),
+            owner("packet-1", "packet-generation-gate"),
+            owner("materials-1", "instructional-materials-readiness"),
+            owner("unrelated-1", "unrelated-owner-state"),
+        ],
+    )
+    keys = {item["decision_key"] for item in packet["owner_evidence"]}
+    assert "unrelated-owner-state" not in keys
+    assert keys == set(packet["required_decision_keys"])
+
+
 def test_pf010_teacher_facing_boundary_stays_non_student_reusable() -> None:
     packet = assemble(
         request=request("make", "slides", assets=True),
@@ -176,10 +202,12 @@ def test_stale_and_unresolved_evidence_are_not_reconciled() -> None:
             owner("relation-1", "packet-generation-gate", relation_resolved=False),
         ],
     )
-    assert packet["owner_evidence"][0]["currentness"] in {"current", "stale"}
+    stale = next(item for item in packet["owner_evidence"] if item["evidence_id"] == "stale-1")
+    assert stale["currentness"] == "stale"
     result = resolve_current_curriculum_state(packet)
     assert result.record is not None
     assert result.status in {ValidationStatus.BLOCKED, ValidationStatus.MANUAL_REVIEW_REQUIRED}
+    assert "source-stale-material" in result.record.to_dict()["reason_codes"]
 
 
 def test_tomorrow_without_current_day_is_left_for_973_to_fail_closed() -> None:
