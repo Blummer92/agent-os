@@ -59,13 +59,13 @@ See `VISUAL_ASSET_CANDIDATES.md` for exact v1 and v2 entry shapes, group behavio
 
 ## Current Curriculum State
 
-`resolve_current_curriculum_state` consumes only bounded caller-supplied provider-neutral evidence and returns one deterministic `curriculum-current-state-v1` record. It does not read Notion, Drive, GitHub, files, environment variables, credentials, or models.
+`resolve_current_curriculum_state` consumes only bounded caller-supplied provider-neutral evidence with `contract_version` exactly `curriculum-current-state-evidence-v1`; other versions fail closed with `handoff-version-unsupported`. It returns one deterministic `curriculum-current-state-v1` record and does not read Notion, Drive, GitHub, files, environment variables, credentials, or models.
 
 Canonical owner evidence remains authoritative even when newer narrative, display-derived, or agent-suggested evidence disagrees. Newer narrative may surface a contradiction but cannot overwrite owner state; stale material owner evidence, conflicting owner values, or unresolved relations fail closed into reconciliation, decision, or blocked dispositions.
 
 Relative requests such as `tomorrow` require explicit current-day evidence and supplied ordered-day context. Packet order, creation time, filenames, inferred sequence, formulas, rollups, and routing suggestions are not treated as authority.
 
-Asset existence, approval for the requested use, approved reusable student-facing eligibility, and production authorization remain separate facts. The resolver does not implement #971 association behavior or #963 persistence/write proposals.
+Asset existence, approval for the requested use, approved reusable student-facing eligibility, and production authorization remain separate facts. The resolver does not implement [#971](https://github.com/Blummer92/agent-os/issues/971) association behavior or [#963](https://github.com/Blummer92/agent-os/issues/963) persistence/write proposals.
 
 All resolver execution, Notion-write, Drive-write, external-write, publication, and production authority remains false.
 
