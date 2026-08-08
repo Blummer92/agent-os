@@ -7,9 +7,11 @@ The canonical Agent OS interaction-output contract is:
 This file is test-facing compatibility guidance only. It must not define a
 separate policy source or presentation order.
 
-## Base Evidence Keys
+## Required Output Keys
 
-Governance-gated report evidence should expose the canonical base fields:
+Every governance-gated report must preserve these keys in a clearly marked
+"Output Summary" machine-checkable/report evidence section when that summary is
+required by the governing task:
 
 ```json
 {
@@ -27,11 +29,13 @@ Governance-gated report evidence should expose the canonical base fields:
 ```
 
 Profile-specific routing or GitHub implementation fields are conditional and are
-validated only when the corresponding profile is active.
+validated only when the corresponding profile is active. Visible prose may omit
+empty or irrelevant fields; the Output Summary evidence remains separate from
+profile-specific visible ordering.
 
 ## Compatibility Rules
 
-1. Base report evidence includes all canonical base keys.
+1. Output Summary evidence includes all canonical base keys.
 2. Array-valued fields remain arrays even when empty.
 3. `status` remains one of `pass`, `fail`, `blocked`, or `deferred`.
 4. `deferred` requires a real `next_owner`.
