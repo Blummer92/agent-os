@@ -8,6 +8,8 @@ from typing import Iterable
 
 from .models import AssetIntakeResult
 
+_HEX_DIGITS = frozenset("0123456789abcdef")
+
 
 class DuplicateDisposition(str, Enum):
     EXACT_EXISTING = "EXACT_EXISTING"
@@ -42,12 +44,12 @@ def reconcile_duplicate(
     candidates: Iterable[DuplicateCandidate],
 ) -> DuplicateReconciliationResult:
     """Reconcile exact/normalized duplicate evidence without assigning identity."""
-    received = tuple(candidates)
-    if any(
-        not isinstance(item.stable_identity, str) or not item.stable_identity.strip()
-        for item in received
-    ):
-        return _result(DuplicateDisposition.INVALID, None, 0, ("duplicate-candidate-invalid",))
+    try:
+        received = tuple(candidates)
+    except TypeError:
+        return _invalid()
+    if any(type(item) is not DuplicateCandidate or not _valid_candidate(item) for item in received):
+        return _invalid()
     ordered = tuple(sorted(received, key=lambda item: item.stable_identity))
 
     exact = tuple(item for item in ordered if item.original_sha256 == intake_result.original_sha256)
@@ -59,6 +61,25 @@ def reconcile_duplicate(
         return _matched(normalized, DuplicateDisposition.NORMALIZED_EXISTING, "duplicate-exact-normalized")
 
     return _result(DuplicateDisposition.NO_DUPLICATE_FOUND, None, 0, ("duplicate-no-exact-match",))
+
+
+def _valid_candidate(candidate: DuplicateCandidate) -> bool:
+    return (
+        type(candidate.stable_identity) is str
+        and bool(candidate.stable_identity.strip())
+        and _valid_sha(candidate.original_sha256)
+        and _valid_sha(candidate.normalized_sha256)
+    )
+
+
+def _valid_sha(value: str | None) -> bool:
+    return value is None or (
+        type(value) is str and len(value) == 64 and all(character in _HEX_DIGITS for character in value)
+    )
+
+
+def _invalid() -> DuplicateReconciliationResult:
+    return _result(DuplicateDisposition.INVALID, None, 0, ("duplicate-candidate-invalid",))
 
 
 def _matched(
