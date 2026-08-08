@@ -49,10 +49,7 @@ JSON schemas, validation fixtures, and a local-only fixture validator. It does
 not authorize live Workspace, Notion, trigger, sharing, or production writes.
 
 **Workflow Scheduler**, **Agent Memory & Context Budget Manager**,
-**IA4D-to-Scheduler Handoff Contract**, and **Agent OS Execution Service**
-extended descriptions moved to `04_Registry/module-version-map-details.md` to
-keep this index under the line-limit. Workflow Scheduler remains `0.9.1`;
-Agent OS Execution Service remains `0.4.0`.
+**IA4D-to-Scheduler Handoff Contract**, and **Agent OS Execution Service** extended descriptions moved to `04_Registry/module-version-map-details.md` to keep this index under the line-limit. Workflow Scheduler remains `0.9.1`; Agent OS Execution Service remains `0.4.0`.
 
 **Instructional Materials Coach** `0.4.0` adds `curriculum-visual-asset-compatibility-v2` (`src/instructional_workflow_contracts/VISUAL_ASSET_COMPATIBILITY.md`, `src/instructional_workflow_contracts/visual_asset_compatibility.py`) and `curriculum-visual-asset-candidates-v2` (`src/instructional_workflow_contracts/VISUAL_ASSET_CANDIDATES.md`, `src/instructional_workflow_contracts/visual_asset_candidates.py`); v1 mappings, defaults, identities, and non-authorizing behavior remain preserved (#871).
 
