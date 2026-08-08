@@ -112,20 +112,13 @@ def test_exif_orientation_is_baked_and_removed(tmp_path: Path):
         assert not normalized.getexif()
 
 
-def test_gps_presence_is_flagged_but_not_copied(tmp_path: Path, monkeypatch):
+def test_gps_presence_is_flagged_but_not_copied(tmp_path: Path):
     source = tmp_path / "gps.jpg"
-    _save(source, "JPEG")
-    original_getexif = Image.Image.getexif
-
-    def fake_getexif(self):
-        exif = original_getexif(self)
-        exif._ifds[34853] = {1: "N", 2: (1, 2, 3)}
-        return exif
-
-    monkeypatch.setattr(Image.Image, "getexif", fake_getexif)
+    exif = Image.Exif()
+    exif[34853] = {1: "N", 2: (1, 2, 3)}
+    _save(source, "JPEG", exif=exif)
     result = intake_visual_asset(source, output_dir=tmp_path / "out")
     assert result.gps_metadata_present
-    monkeypatch.undo()
     with Image.open(result.normalized_path) as normalized:
         assert not normalized.getexif()
 
