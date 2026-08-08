@@ -10,7 +10,8 @@ from visual_asset_intake import IntakeError, IntakeErrorCode, IntakePolicy, inta
 
 
 def _save(path: Path, fmt: str, *, mode: str = "RGB", size=(12, 8), exif=None, icc_profile=None):
-    image = Image.new(mode, size, (10, 20, 30, 128) if "A" in mode else (10, 20, 30))
+    colors = {"RGB": (10, 20, 30), "RGBA": (10, 20, 30, 128), "CMYK": (10, 20, 30, 40)}
+    image = Image.new(mode, size, colors[mode])
     kwargs = {}
     if exif is not None:
         kwargs["exif"] = exif
@@ -92,7 +93,8 @@ def test_multiframe_gif_rejected(tmp_path: Path):
     one = Image.new("RGB", (4, 4), "white")
     two = Image.new("RGB", (4, 4), "black")
     one.save(source, save_all=True, append_images=[two], format="GIF")
-    one.close(); two.close()
+    one.close()
+    two.close()
     with pytest.raises(IntakeError) as exc:
         intake_visual_asset(source, output_dir=tmp_path / "out")
     assert exc.value.code is IntakeErrorCode.UNSUPPORTED_FORMAT
@@ -144,7 +146,6 @@ def test_cmyk_and_transparency_normalization(tmp_path: Path):
 
 
 def test_icc_presence_and_generated_output_name(tmp_path: Path):
-    source = tmp_path / "../../not-used.png"
     source = tmp_path / "teacher file.png"
     _save(source, "PNG", icc_profile=b"synthetic-profile")
     result = intake_visual_asset(source, output_dir=tmp_path / "safe")
