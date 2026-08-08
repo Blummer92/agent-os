@@ -285,7 +285,8 @@ class NotionContractAdapter:
                 evidence={"database_id": database_id},
             )
 
-        display_name = _plain_text(payload.get("name")) or data_source_id
+        raw_name = payload.get("name")
+        display_name = (_plain_text(raw_name) if raw_name else "") or data_source_id
         return RegistryResource(
             system="notion",
             entity_type="DataSource",
