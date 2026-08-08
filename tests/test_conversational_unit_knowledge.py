@@ -90,7 +90,7 @@ def decision(result, index: int = 0) -> dict[str, object]:
         (candidate(existing_relation="conflicting", existing_ref="knowledge-1"), "conflict", False),
         (candidate(existing_relation="supersedes", existing_ref="knowledge-1"), "correction", True),
         (candidate(temporal_scope="semester-2026-fall"), "temporal-update", True),
-        (candidate(existing_relation="identical", existing_ref="knowledge-1", freshness="stale"), "unchanged", False),
+        (candidate(existing_relation="identical", existing_ref="knowledge-1", freshness="stale"), "reconfirm", False),
         (candidate(existing_relation="conflicting", existing_ref="knowledge-1", freshness="stale"), "reconfirm", False),
     ],
 )
@@ -100,10 +100,15 @@ def test_core_dispositions(item: dict[str, object], expected: str, has_mutation:
     assert (actual["mutation"] is not None) is has_mutation
 
 
-def test_explicit_target_override_and_ambiguous_target() -> None:
+def test_explicit_target_override_single_plausible_and_ambiguous_target() -> None:
     override = candidate(target_entity_ref="unit-typography", persistence_intent="explicit")
     actual = decision(decide_conversational_unit_knowledge(packet(override)))
     assert actual["target_entity_ref"] == "unit-typography"
+
+    single = packet(candidate(persistence_intent="explicit"), current=None)
+    single_actual = decision(decide_conversational_unit_knowledge(single))
+    assert single_actual["target_entity_ref"] == "unit-photography"
+    assert single_actual["disposition"] == "explicit-persistence"
 
     ambiguous_packet = packet(candidate(persistence_intent="explicit"), current=None)
     ambiguous_packet["context"]["plausible_entity_refs"] = ["unit-photography", "unit-typography"]  # type: ignore[index]
@@ -111,16 +116,25 @@ def test_explicit_target_override_and_ambiguous_target() -> None:
     assert ambiguous["disposition"] == "needs-clarification"
     assert ambiguous["mutation"] is None
 
+    missing = packet(candidate(persistence_intent="explicit"), current=None)
+    missing["context"]["plausible_entity_refs"] = []  # type: ignore[index]
+    missing_actual = decision(decide_conversational_unit_knowledge(missing))
+    assert missing_actual["disposition"] == "needs-clarification"
 
-def test_batch_output_supports_compact_save_proposal() -> None:
+
+def test_batch_output_supports_compact_save_proposal_and_is_candidate_local() -> None:
     items = [
         candidate(candidate_id="composition", knowledge_class="durable", value="Move composition earlier."),
-        candidate(candidate_id="photo-walk", knowledge_class="durable", value="Add a short photo walk."),
+        candidate(candidate_id="photo-walk", knowledge_class="transient", persistence_intent="none", value="Maybe walk."),
         candidate(candidate_id="exposure", knowledge_class="durable", value="Move exposure later."),
     ]
     result = payload(decide_conversational_unit_knowledge(packet(*items)))
     assert [item["candidate_id"] for item in result["decisions"]] == ["composition", "photo-walk", "exposure"]  # type: ignore[index]
-    assert all(item["mutation"] is not None for item in result["decisions"])  # type: ignore[index]
+    assert [item["disposition"] for item in result["decisions"]] == [  # type: ignore[index]
+        "propose-persistence",
+        "do-not-persist",
+        "propose-persistence",
+    ]
 
 
 def test_temporal_update_does_not_supersede_typical_value() -> None:
@@ -200,8 +214,10 @@ def test_all_authority_remains_false_and_escalation_fails_closed() -> None:
     }
     assert result.authority == AuthorityEvidence()
     mutation = output["decisions"][0]["mutation"]  # type: ignore[index]
+    assert mutation["execution_authorized"] is False
     assert mutation["external_write_authorized"] is False
     assert mutation["production_authorized"] is False
+    assert mutation["publication_authorized"] is False
 
     attack = packet(candidate())
     attack["authority"]["external_write_authorized"] = True  # type: ignore[index]
@@ -224,12 +240,38 @@ def test_determinism_order_normalization_and_input_immutability() -> None:
     assert supplied == before
 
 
-def test_malformed_and_oversized_input_fail_closed() -> None:
+def test_candidate_order_is_meaningful_and_preserved() -> None:
+    left = packet(candidate(candidate_id="first"), candidate(candidate_id="second"))
+    right = packet(candidate(candidate_id="second"), candidate(candidate_id="first"))
+    left_result = decide_conversational_unit_knowledge(left)
+    right_result = decide_conversational_unit_knowledge(right)
+    assert left_result.record is not None and right_result.record is not None
+    assert left_result.record.fingerprint != right_result.record.fingerprint
+    assert [item["candidate_id"] for item in left_result.record.to_dict()["decisions"]] == ["first", "second"]
+
+
+def test_duplicate_candidate_ids_fail_closed() -> None:
+    result = decide_conversational_unit_knowledge(packet(candidate(), candidate()))
+    assert result.status is ValidationStatus.INVALID
+    assert "identity-duplicate" in result.reason_codes
+
+
+def test_malformed_wrong_type_unsupported_and_oversized_input_fail_closed() -> None:
     malformed = packet(candidate())
     malformed["candidates"][0]["unknown"] = "field"  # type: ignore[index]
     result = decide_conversational_unit_knowledge(malformed)
     assert result.status is ValidationStatus.INVALID
     assert "handoff-unknown-field" in result.reason_codes
+
+    wrong_type = packet(candidate())
+    wrong_type["candidates"][0]["candidate_id"] = 7  # type: ignore[index]
+    assert decide_conversational_unit_knowledge(wrong_type).status is ValidationStatus.INVALID
+
+    unsupported = packet(candidate(knowledge_class="magic"))
+    assert decide_conversational_unit_knowledge(unsupported).status is ValidationStatus.INVALID
+
+    malformed_id = packet(candidate(candidate_id="bad id"))
+    assert decide_conversational_unit_knowledge(malformed_id).status is ValidationStatus.INVALID
 
     oversized = packet(candidate(value="x" * 513))
     result = decide_conversational_unit_knowledge(oversized)
