@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import io
+import os
+import stat
 import warnings
 from pathlib import Path
 
@@ -16,15 +20,26 @@ _ALPHA_MODES = {"RGBA", "LA", "PA"}
 _GPS_IFD_TAG = 34853
 
 
-def _open_checked(path: Path) -> Image.Image:
+def _open_checked(source: bytes) -> Image.Image:
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
-            return Image.open(path)
-    except (Image.DecompressionBombWarning, Image.DecompressionBombError) as exc:
+            return Image.open(io.BytesIO(source))
+    except (Image.DecompressionBombWarning, Image.DecompressionBombError):
         raise IntakeError(IntakeErrorCode.PIXEL_LIMIT_EXCEEDED, "image exceeds decoder safety limits") from None
     except (UnidentifiedImageError, OSError, ValueError):
         raise IntakeError(IntakeErrorCode.CORRUPT_IMAGE, "image cannot be decoded") from None
+
+
+def _read_snapshot(path: Path, max_source_bytes: int) -> bytes:
+    try:
+        with path.open("rb") as stream:
+            snapshot = stream.read(max_source_bytes + 1)
+    except OSError:
+        raise IntakeError(IntakeErrorCode.INVALID_PATH, "source must be a readable file") from None
+    if len(snapshot) > max_source_bytes:
+        raise IntakeError(IntakeErrorCode.INPUT_TOO_LARGE, "source exceeds configured byte limit")
+    return snapshot
 
 
 def _gps_present(exif: Image.Exif) -> bool:
@@ -38,6 +53,27 @@ def _has_alpha(image: Image.Image) -> bool:
     return image.mode in _ALPHA_MODES or "transparency" in image.info
 
 
+def _reserve_output(path: Path) -> int:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags, 0o600)
+    except (FileExistsError, OSError):
+        raise IntakeError(IntakeErrorCode.NORMALIZATION_FAILED, "normalized output already exists or is unsafe") from None
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise IntakeError(IntakeErrorCode.NORMALIZATION_FAILED, "normalized output is not a regular file")
+        return descriptor
+    except Exception:
+        os.close(descriptor)
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        raise
+
+
 def intake_visual_asset(
     source_path: str | Path,
     *,
@@ -49,15 +85,14 @@ def intake_visual_asset(
     destination = Path(output_dir)
     if not source.is_file():
         raise IntakeError(IntakeErrorCode.INVALID_PATH, "source must be an existing file")
-    source_size = source.stat().st_size
-    if source_size > policy.max_source_bytes:
-        raise IntakeError(IntakeErrorCode.INPUT_TOO_LARGE, "source exceeds configured byte limit")
 
-    original_sha = sha256_file(source)
+    snapshot = _read_snapshot(source, policy.max_source_bytes)
+    source_size = len(snapshot)
+    original_sha = hashlib.sha256(snapshot).hexdigest()
     intake_id = f"intake-{original_sha[:24]}"
     warnings_out: list[str] = []
 
-    probe = _open_checked(source)
+    probe = _open_checked(snapshot)
     try:
         detected_format = (probe.format or "").upper()
         if detected_format not in policy.allowed_formats:
@@ -82,7 +117,7 @@ def intake_visual_asset(
         probe.close()
 
     try:
-        image = _open_checked(source)
+        image = _open_checked(snapshot)
         try:
             image.load()
             normalized = ImageOps.exif_transpose(image)
@@ -94,7 +129,16 @@ def intake_visual_asset(
             normalized_path = destination / f"{intake_id}.png"
             if normalized_path.resolve() == source.resolve():
                 raise IntakeError(IntakeErrorCode.NORMALIZATION_FAILED, "normalized output cannot overwrite source")
-            normalized.save(normalized_path, format="PNG", optimize=False, compress_level=9)
+            descriptor = _reserve_output(normalized_path)
+            try:
+                with os.fdopen(descriptor, "wb") as stream:
+                    normalized.save(stream, format="PNG", optimize=False, compress_level=9)
+            except Exception:
+                try:
+                    normalized_path.unlink()
+                except OSError:
+                    pass
+                raise
         finally:
             image.close()
     except IntakeError:
