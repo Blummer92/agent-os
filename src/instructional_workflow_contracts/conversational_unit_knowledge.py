@@ -267,6 +267,16 @@ def decide_conversational_unit_knowledge(value: object) -> ValidationResult:
             existing_ref = _optional_text(candidate["existing_ref"], "existing_ref")
             if existing_ref is not None:
                 existing_ref = validate_stable_id(existing_ref, "existing_ref")
+            if relation is not ExistingRelation.NONE and existing_ref is None:
+                raise ContractValidationError(
+                    "handoff-invalid",
+                    "existing_ref is required when existing_relation is not none",
+                )
+            if relation is ExistingRelation.NONE and existing_ref is not None:
+                raise ContractValidationError(
+                    "handoff-invalid",
+                    "existing_ref requires a non-none existing_relation",
+                )
             source_reference = _reference(candidate["source_reference"])
             outbound_routes = tuple(
                 sorted(
