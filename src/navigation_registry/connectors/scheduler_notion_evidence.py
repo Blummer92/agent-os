@@ -14,7 +14,7 @@ from typing import Any, Mapping
 from .base import ConnectorError, ConnectorErrorCode, RegistryResource
 from .notion_contract_adapter import NotionContractAdapter
 
-_SUPPORTED_RESOURCE_ACTIONS = {"get_page", "get_database"}
+_SUPPORTED_RESOURCE_ACTIONS = {"get_page", "get_database", "get_data_source"}
 _SAFE_RESULT_KEYS = ("status", "message", "retry_after")
 
 
@@ -86,8 +86,10 @@ class SchedulerNotionEvidenceAdapter:
 
         if normalized_action == "get_page":
             normalized = self._contract_adapter.from_live_page_payload(output)
-        else:
+        elif normalized_action == "get_database":
             normalized = self._contract_adapter.from_live_database_payload(output)
+        else:
+            normalized = self._contract_adapter.from_live_data_source_payload(output)
 
         if isinstance(normalized, ConnectorError):
             return replace(
