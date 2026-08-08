@@ -63,6 +63,22 @@ Fingerprints are deterministic equality evidence only. Neither the projection,
 Navigation Registry evidence, nor Memory Manager context authorizes writes,
 readiness, approval, implementation, merge, deployment, or production action.
 
+## Live Curriculum Evidence Orchestration
+
+`src/navigation_registry/connectors/curriculum_evidence_orchestrator.py` consumes
+already-resolved intent and canonical unit identity, then plans request-sensitive
+reads through injected existing identity and read seams. Read plans are minimal by
+request class, and Visual Asset Library lookup is relation-first by `Canonical
+Unit`; provider-specific compact Notion IDs stay inside the provider/read seam.
+
+The orchestrator normalizes bounded owner/asset evidence for the #975 assembler,
+which then feeds the #973 current-state resolver. Malformed identity metadata,
+provider failure states, aggregate handoff overflow, and malformed asset approval
+booleans fail closed; relative-time requests do not invent current-day context.
+
+For source-of-truth, cache, ownership, and write-authority rules, inherit the
+canonical `navigation-registry-standard.md`; this README does not redefine them.
+
 ## V1 Cleanup Notes
 
 Before declaring Version 1.0, QA should decide whether long files must be split.
