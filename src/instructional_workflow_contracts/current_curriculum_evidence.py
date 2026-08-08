@@ -89,7 +89,6 @@ def assemble_current_curriculum_evidence(
         packet["current_context"] = copy.deepcopy(_mapping(current_context, "current_context"))
 
     normalized = validate_and_normalize_json(packet)
-    # Compatibility is part of this seam: malformed output must fail before a caller can route it.
     compatibility = resolve_current_curriculum_state(normalized)
     if compatibility.record is None:
         raise ContractValidationError(
@@ -158,7 +157,11 @@ def _select_assets(assets: list[dict[str, Any]], include: bool) -> list[dict[str
         relation = item.get("canonical_unit_relation")
         if relation is not None and relation is not True:
             continue
-        clean = {key: copy.deepcopy(value) for key, value in item.items() if key != "canonical_unit_relation"}
+        clean = {
+            key: copy.deepcopy(value)
+            for key, value in item.items()
+            if key != "canonical_unit_relation"
+        }
         selected.append(clean)
     return sorted(selected, key=lambda item: str(item.get("asset_id", "")))
 
@@ -182,12 +185,10 @@ def _mapping(value: object, label: str) -> dict[str, Any]:
 
 
 def _sequence(value: object, label: str, maximum: int) -> list[dict[str, Any]]:
-    normalized = validate_and_normalize_json(value)
+    source = list(value) if isinstance(value, tuple) else value
+    normalized = validate_and_normalize_json(source)
     if not isinstance(normalized, list):
-        if isinstance(value, tuple):
-            normalized = validate_and_normalize_json(list(value))
-        else:
-            raise ContractValidationError("handoff-invalid-field", f"{label} must be a list")
+        raise ContractValidationError("handoff-invalid-field", f"{label} must be a list")
     if len(normalized) > maximum:
         raise ContractValidationError("handoff-oversized", f"{label} exceeds bounded count")
     result: list[dict[str, Any]] = []
