@@ -90,9 +90,11 @@ def evidence(
             "relative_time": relative_time,
             "requires_reusable_assets": requires_assets,
         },
-        "required_decision_keys": required_keys or ["unit-generation-approval"],
+        "required_decision_keys": (
+            ["unit-generation-approval"] if required_keys is None else required_keys
+        ),
         "owner_evidence": owner_evidence if owner_evidence is not None else [owner("ua-1")],
-        "asset_evidence": assets or [],
+        "asset_evidence": [] if assets is None else assets,
     }
     if current_context is not None:
         value["current_context"] = current_context
@@ -193,6 +195,25 @@ def test_stale_packet_routing_with_newer_locked_content_reconciles() -> None:
     )
     state = payload(result)
     assert result.status is ValidationStatus.MANUAL_REVIEW_REQUIRED
+    assert "source-stale-material" in state["reason_codes"]
+
+
+def test_non_required_stale_owner_evidence_needs_reconciliation() -> None:
+    result = current_state.resolve_current_curriculum_state(
+        evidence(
+            required_keys=[],
+            owner_evidence=[
+                owner(
+                    "stale-optional-owner",
+                    decision_key="optional-owner-state",
+                    currentness="stale",
+                )
+            ],
+        )
+    )
+    state = payload(result)
+    assert result.status is ValidationStatus.MANUAL_REVIEW_REQUIRED
+    assert state["disposition"] == "needs-reconciliation"
     assert "source-stale-material" in state["reason_codes"]
 
 
@@ -304,6 +325,31 @@ def test_tomorrow_without_current_day_anchor_is_blocked() -> None:
     assert "routing-current-day-missing" in state["blockers"]
 
 
+@pytest.mark.parametrize(
+    "current_day_id, ordered_day_ids",
+    [
+        ("day-3", ["day-1", "day-2", "day-3"]),
+        ("day-9", ["day-1", "day-2"]),
+    ],
+)
+def test_tomorrow_without_resolvable_next_day_is_blocked(
+    current_day_id: str, ordered_day_ids: list[str]
+) -> None:
+    result = current_state.resolve_current_curriculum_state(
+        evidence(
+            relative_time="tomorrow",
+            current_context={
+                "current_day_id": current_day_id,
+                "ordered_day_ids": ordered_day_ids,
+            },
+        )
+    )
+    state = payload(result)
+    assert result.status is ValidationStatus.BLOCKED
+    assert state["resolved_day_id"] is None
+    assert "routing-current-day-unresolvable" in state["blockers"]
+
+
 def test_tomorrow_with_explicit_anchor_resolves_from_supplied_order() -> None:
     result = current_state.resolve_current_curriculum_state(
         evidence(
@@ -359,8 +405,12 @@ def test_unresolved_required_relation_blocks() -> None:
     result = current_state.resolve_current_curriculum_state(
         evidence(owner_evidence=[owner("ua-1", relation_resolved=False)])
     )
+    state = payload(result)
     assert result.status is ValidationStatus.BLOCKED
-    assert "dependency-owner-relation-unresolved" in payload(result)["blockers"]
+    assert "dependency-owner-relation-unresolved" in state["blockers"]
+    assert state["unresolved_teacher_decision"] == (
+        "Resolve the unresolved owner relation before downstream planning."
+    )
 
 
 @pytest.mark.parametrize("status", ["ambiguous", "archived", "split", "merged", "human-review-required"])
@@ -378,6 +428,11 @@ def test_malformed_and_unsupported_inputs_fail_closed() -> None:
     assert result.status is ValidationStatus.INVALID
     assert result.reason_codes == ("handoff-version-unsupported",)
 
+    value = evidence(owner_evidence=[owner("bad-class", classification="unsupported")])
+    result = current_state.resolve_current_curriculum_state(value)
+    assert result.status is ValidationStatus.INVALID
+    assert result.reason_codes == ("source-invalid",)
+
 
 def test_bounds_fail_closed() -> None:
     value = evidence()
@@ -390,9 +445,18 @@ def test_bounds_fail_closed() -> None:
     assert result.reason_codes == ("handoff-oversized",)
 
 
-def test_authority_escalation_attack_fails_closed() -> None:
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda value: value.update({"production_authorized": True}),
+        lambda value: value["request"].update({"execution_authorized": True}),
+        lambda value: value["owner_evidence"][0].update({"notion_write_authorized": True}),
+        lambda value: value.update({"nested": [{"authority": {"drive_write_authorized": True}}]}),
+    ],
+)
+def test_authority_escalation_attack_fails_closed(mutation) -> None:
     value = evidence()
-    value["production_authorized"] = True
+    mutation(value)
     result = current_state.resolve_current_curriculum_state(value)
     assert result.status is ValidationStatus.INVALID
     assert result.reason_codes == ("authority-escalation-attempt",)
