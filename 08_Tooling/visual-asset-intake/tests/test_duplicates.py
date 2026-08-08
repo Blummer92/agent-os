@@ -108,6 +108,15 @@ def test_invalid_candidate_is_bounded():
     assert result.matched_identity is None
 
 
+def test_non_string_candidate_identity_is_bounded_before_sorting():
+    intake = _fake_intake("a" * 64, "b" * 64)
+    malformed = DuplicateCandidate(None, original_sha256="a" * 64)  # type: ignore[arg-type]
+    valid = DuplicateCandidate("asset-a", original_sha256="a" * 64)
+    result = reconcile_duplicate(intake, [valid, malformed])
+    assert result.disposition is DuplicateDisposition.INVALID
+    assert result.matched_identity is None
+
+
 def test_result_carries_no_authority():
     intake = _fake_intake("a" * 64, "b" * 64)
     result = reconcile_duplicate(intake, [])
