@@ -5,6 +5,7 @@ import copy
 import pytest
 
 from instructional_workflow_contracts import AuthorityEvidence, ValidationStatus
+from instructional_workflow_contracts.common import MAX_STRING_LENGTH
 from instructional_workflow_contracts.conversational_unit_knowledge import (
     decide_conversational_unit_knowledge,
 )
@@ -180,6 +181,27 @@ def test_correction_supersedes_existing_reference() -> None:
     assert actual["mutation"]["supersedes_ref"] == "duration-six-weeks"  # type: ignore[index]
 
 
+@pytest.mark.parametrize(
+    ("existing_relation", "existing_ref"),
+    [
+        ("identical", None),
+        ("conflicting", None),
+        ("supersedes", None),
+        ("none", "knowledge-1"),
+    ],
+)
+def test_existing_relation_and_reference_must_be_consistent(
+    existing_relation: str,
+    existing_ref: str | None,
+) -> None:
+    result = decide_conversational_unit_knowledge(
+        packet(candidate(existing_relation=existing_relation, existing_ref=existing_ref))
+    )
+    assert result.status is ValidationStatus.INVALID
+    assert result.record is None
+    assert "handoff-invalid" in result.reason_codes
+
+
 def test_asset_requirement_is_only_routed_to_961_boundary() -> None:
     result = decide_conversational_unit_knowledge(
         packet(
@@ -200,6 +222,10 @@ def test_asset_requirement_is_only_routed_to_961_boundary() -> None:
     visual = decision(result, 1)
     assert visual["outbound_routes"] == ["issue-961"]
     assert visual["mutation"] is not None
+
+    lesson = decision(result, 0)
+    assert lesson["outbound_routes"] == []
+    assert lesson["disposition"] == "explicit-persistence"
 
 
 def test_all_authority_remains_false_and_escalation_fails_closed() -> None:
@@ -264,15 +290,22 @@ def test_malformed_wrong_type_unsupported_and_oversized_input_fail_closed() -> N
 
     wrong_type = packet(candidate())
     wrong_type["candidates"][0]["candidate_id"] = 7  # type: ignore[index]
-    assert decide_conversational_unit_knowledge(wrong_type).status is ValidationStatus.INVALID
+    wrong_type_result = decide_conversational_unit_knowledge(wrong_type)
+    assert wrong_type_result.status is ValidationStatus.INVALID
+    assert "handoff-wrong-type" in wrong_type_result.reason_codes
 
     unsupported = packet(candidate(knowledge_class="magic"))
-    assert decide_conversational_unit_knowledge(unsupported).status is ValidationStatus.INVALID
+    unsupported_result = decide_conversational_unit_knowledge(unsupported)
+    assert unsupported_result.status is ValidationStatus.INVALID
+    assert "handoff-invalid" in unsupported_result.reason_codes
 
     malformed_id = packet(candidate(candidate_id="bad id"))
-    assert decide_conversational_unit_knowledge(malformed_id).status is ValidationStatus.INVALID
+    malformed_id_result = decide_conversational_unit_knowledge(malformed_id)
+    assert malformed_id_result.status is ValidationStatus.INVALID
+    assert "identity-invalid" in malformed_id_result.reason_codes
 
-    oversized = packet(candidate(value="x" * 513))
-    result = decide_conversational_unit_knowledge(oversized)
-    assert result.status is ValidationStatus.INVALID
-    assert result.record is None
+    oversized = packet(candidate(value="x" * (MAX_STRING_LENGTH + 1)))
+    oversized_result = decide_conversational_unit_knowledge(oversized)
+    assert oversized_result.status is ValidationStatus.INVALID
+    assert oversized_result.record is None
+    assert "handoff-invalid" in oversized_result.reason_codes
