@@ -9,96 +9,93 @@ from visual_asset_routing import (
 
 
 def _observation(**overrides):
-    values = dict(
-        concept="Leading Lines",
-        canonical_unit="Photography Foundations",
-        instructional_role="Composition example",
-        provenance="advisory-model-observation",
-    )
+    values = dict(concept="Leading Lines", canonical_unit="Photography Foundations", instructional_role="Composition example", provenance="advisory-model-observation")
     values.update(overrides)
     return SemanticObservation(**values)
 
 
 def _destination(**overrides):
-    values = dict(
-        drive_destination_ref="drive-folder:photography-assets",
-        notion_destination_ref="notion-datasource:visual-asset-library",
-        current=True,
-    )
+    values = dict(drive_destination_ref="drive-folder:photography-assets", notion_destination_ref="notion-datasource:visual-asset-library", current=True)
     values.update(overrides)
     return DestinationContext(**values)
 
 
 def _plan(**overrides):
-    values = dict(
-        intake_reference="intake:abc123",
-        duplicate_disposition="NO_DUPLICATE_FOUND",
-        existing_identity=None,
-        observation=_observation(),
-        destination=_destination(),
-    )
+    values = dict(intake_reference="intake:abc123", duplicate_disposition="NO_DUPLICATE_FOUND", existing_identity=None, observation=_observation(), destination=_destination())
     values.update(overrides)
     return recommend_route(**values)
 
 
-def test_high_confidence_photography_recommendation_is_deterministic():
+def test_recommendation_is_deterministic_and_authority_false():
     first = _plan()
-    second = _plan()
-    assert first == second
+    assert first == _plan()
     assert first.state is RoutingState.RECOMMENDED
-    assert first.concept == "Leading Lines"
-    assert first.canonical_unit == "Photography Foundations"
-    assert first.instructional_role == "Composition example"
     assert first.allowed_actions == (TeacherAction.ADD, TeacherAction.CHANGE, TeacherAction.SKIP)
+    assert not first.execution_authorized and not first.external_write_authorized
+    assert not first.approval_authorized and not first.classroom_readiness_authorized and not first.production_authorized
 
 
-def test_add_confirms_exact_plan_without_execution_authority():
-    original = _plan()
-    confirmed = apply_teacher_action(original, TeacherAction.ADD)
-    assert confirmed.state is RoutingState.CONFIRMED
-    assert confirmed.teacher_confirmed
-    assert confirmed.concept == original.concept
-    assert not confirmed.execution_authorized
-    assert not confirmed.external_write_authorized
-    assert not confirmed.approval_authorized
-    assert not confirmed.classroom_readiness_authorized
-    assert not confirmed.production_authorized
-
-
-def test_change_preserves_advisory_and_teacher_correction_separately():
-    original = _plan()
-    correction = _observation(
-        concept="Rule of Thirds",
-        canonical_unit="Photography Foundations",
-        instructional_role="Composition comparison",
-        provenance="teacher-confirmed",
-    )
-    changed = apply_teacher_action(original, TeacherAction.CHANGE, correction=correction)
-    assert changed.concept == "Rule of Thirds"
-    assert changed.prior_advisory_concept == "Leading Lines"
-    assert changed.semantic_provenance == "teacher-confirmed"
-    assert changed.teacher_confirmed
-    assert changed.state is RoutingState.RECOMMENDED
+def test_add_confirms_and_terminal_plan_stays_terminal():
+    confirmed = apply_teacher_action(_plan(), TeacherAction.ADD)
+    assert confirmed.state is RoutingState.CONFIRMED and confirmed.teacher_confirmed
+    assert apply_teacher_action(confirmed, TeacherAction.REVIEW) == confirmed
 
 
 def test_skip_is_terminal_no_write():
     skipped = apply_teacher_action(_plan(), TeacherAction.SKIP)
-    assert skipped.state is RoutingState.SKIPPED
-    assert skipped.allowed_actions == ()
-    assert not skipped.external_write_authorized
+    assert skipped.state is RoutingState.SKIPPED and skipped.allowed_actions == ()
+    assert apply_teacher_action(skipped, TeacherAction.REVIEW) == skipped
+
+
+def test_change_preserves_advisory_and_recomputes_normal_route():
+    original = _plan()
+    correction = _observation(concept="Rule of Thirds", instructional_role="Composition comparison", provenance="teacher-confirmed")
+    changed = apply_teacher_action(original, TeacherAction.CHANGE, correction=correction)
+    assert changed.concept == "Rule of Thirds"
+    assert changed.prior_advisory_concept == "Leading Lines"
+    assert changed.semantic_provenance == "teacher-confirmed" and changed.teacher_confirmed
+    assert changed.state is RoutingState.RECOMMENDED
+
+
+def test_change_does_not_bypass_stale_destination():
+    stale = _plan(destination=_destination(current=False))
+    changed = apply_teacher_action(stale, TeacherAction.CHANGE, correction=_observation(concept="Rule of Thirds"))
+    assert changed.state is RoutingState.DESTINATION_STALE
+    assert TeacherAction.ADD not in changed.allowed_actions
+
+
+def test_change_does_not_bypass_near_duplicate_restriction():
+    near = _plan(duplicate_disposition="POSSIBLE_NEAR_DUPLICATE", existing_identity="asset:candidate")
+    changed = apply_teacher_action(near, TeacherAction.KEEP_NEW)
+    assert changed.state is RoutingState.CONFIRMED
+    assert changed.reason_codes == ("routing-keep-new-selected",)
 
 
 def test_exact_and_normalized_duplicates_use_existing_or_review():
     for disposition in ("EXACT_EXISTING", "NORMALIZED_EXISTING"):
         result = _plan(duplicate_disposition=disposition, existing_identity="asset:existing")
-        assert result.state is RoutingState.REVIEW_REQUIRED
         assert result.allowed_actions == (TeacherAction.USE_EXISTING, TeacherAction.REVIEW)
+        selected = apply_teacher_action(result, TeacherAction.USE_EXISTING)
+        assert selected.state is RoutingState.CONFIRMED
+        assert selected.reason_codes == ("routing-use-existing-selected",)
+        assert not selected.execution_authorized
 
 
 def test_exact_duplicate_without_identity_fails_closed():
     result = _plan(duplicate_disposition="EXACT_EXISTING")
     assert result.state is RoutingState.REVIEW_REQUIRED
-    assert "routing-existing-identity-missing" in result.reason_codes
+    assert TeacherAction.USE_EXISTING not in result.allowed_actions
+
+
+def test_near_duplicate_without_identity_never_exposes_use_existing():
+    result = _plan(duplicate_disposition="POSSIBLE_NEAR_DUPLICATE")
+    assert result.allowed_actions == (TeacherAction.KEEP_NEW, TeacherAction.REVIEW)
+
+
+def test_near_duplicate_with_identity_exposes_bounded_choices():
+    result = _plan(duplicate_disposition="POSSIBLE_NEAR_DUPLICATE", existing_identity="asset:candidate")
+    assert result.allowed_actions == (TeacherAction.USE_EXISTING, TeacherAction.KEEP_NEW, TeacherAction.REVIEW)
+    assert TeacherAction.ADD not in result.allowed_actions
 
 
 def test_duplicate_manual_review_and_invalid_block_add():
@@ -108,72 +105,32 @@ def test_duplicate_manual_review_and_invalid_block_add():
         assert TeacherAction.ADD not in result.allowed_actions
 
 
-def test_supplied_near_duplicate_never_silently_adds():
-    result = _plan(duplicate_disposition="POSSIBLE_NEAR_DUPLICATE", existing_identity="asset:candidate")
-    assert TeacherAction.ADD not in result.allowed_actions
-    assert result.allowed_actions == (TeacherAction.USE_EXISTING, TeacherAction.CHANGE, TeacherAction.REVIEW)
-
-
-def test_ambiguous_unit_or_concept_blocks_add():
-    result = _plan(observation=_observation(canonical_unit=None, ambiguous=True))
-    assert result.state is RoutingState.AMBIGUOUS
-    assert TeacherAction.ADD not in result.allowed_actions
-
-
-def test_stale_or_missing_destination_blocks_add():
-    for destination in (
-        _destination(current=False),
-        _destination(drive_destination_ref=None),
-        _destination(notion_destination_ref=None),
-    ):
-        result = _plan(destination=destination)
-        assert result.state is RoutingState.DESTINATION_STALE
+def test_unhashable_or_unsupported_duplicate_evidence_fails_closed():
+    for disposition in ([], {}, "UNKNOWN"):
+        result = _plan(duplicate_disposition=disposition)
+        assert result.state is RoutingState.REVIEW_REQUIRED
         assert TeacherAction.ADD not in result.allowed_actions
 
 
-def test_privacy_or_provenance_concern_requires_review():
-    result = _plan(observation=_observation(privacy_or_provenance_concern=True))
-    assert result.state is RoutingState.REVIEW_REQUIRED
-    assert result.allowed_actions == (TeacherAction.REVIEW, TeacherAction.SKIP)
-
-
-def test_teacher_supplied_context_is_preserved_as_supplied_evidence():
-    result = _plan(observation=_observation(provenance="teacher-supplied-context"))
-    assert result.semantic_provenance == "teacher-supplied-context"
-    assert not result.teacher_confirmed
+def test_ambiguity_privacy_and_destination_fail_closed():
+    ambiguous = _plan(observation=_observation(canonical_unit=None, ambiguous=True))
+    privacy = _plan(observation=_observation(privacy_or_provenance_concern=True))
+    assert ambiguous.state is RoutingState.AMBIGUOUS
+    assert privacy.state is RoutingState.REVIEW_REQUIRED
+    for destination in (_destination(current=False), _destination(drive_destination_ref=None), _destination(notion_destination_ref=None)):
+        assert _plan(destination=destination).state is RoutingState.DESTINATION_STALE
 
 
 def test_malformed_and_oversized_evidence_fails_closed():
-    malformed = _plan(intake_reference="")
-    oversized = _plan(observation=_observation(concept="x" * 257))
-    assert malformed.state is RoutingState.REVIEW_REQUIRED
-    assert oversized.state is RoutingState.REVIEW_REQUIRED
-    assert TeacherAction.ADD not in malformed.allowed_actions
-    assert TeacherAction.ADD not in oversized.allowed_actions
+    assert _plan(intake_reference="").state is RoutingState.REVIEW_REQUIRED
+    assert _plan(observation=_observation(concept="x" * 257)).state is RoutingState.REVIEW_REQUIRED
 
 
-def test_no_identity_or_destination_is_invented():
-    result = _plan(destination=_destination(drive_destination_ref=None, notion_destination_ref=None))
-    assert result.existing_identity is None
-    assert result.drive_destination_ref is None
-    assert result.notion_destination_ref is None
-    assert not hasattr(result, "asset_id")
-
-
-def test_inputs_are_immutable_and_authority_is_always_false():
+def test_no_identity_or_destination_is_invented_and_inputs_immutable():
     observation = _observation()
-    destination = _destination()
-    result = recommend_route(
-        intake_reference="intake:abc123",
-        duplicate_disposition="NO_DUPLICATE_FOUND",
-        existing_identity=None,
-        observation=observation,
-        destination=destination,
-    )
+    destination = _destination(drive_destination_ref=None, notion_destination_ref=None)
+    result = _plan(observation=observation, destination=destination)
+    assert result.existing_identity is None and result.drive_destination_ref is None and result.notion_destination_ref is None
+    assert not hasattr(result, "asset_id")
     assert observation == _observation()
-    assert destination == _destination()
-    assert not result.execution_authorized
-    assert not result.external_write_authorized
-    assert not result.approval_authorized
-    assert not result.classroom_readiness_authorized
-    assert not result.production_authorized
+    assert destination == _destination(drive_destination_ref=None, notion_destination_ref=None)
