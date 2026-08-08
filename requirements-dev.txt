@@ -30,3 +30,4 @@ coverage[toml]>=6.0.0
 -e ./src
 -e ./08_Tooling/agent-memory-context-manager
 -e ./08_Tooling/workflow-scheduler
+-e ./08_Tooling/visual-asset-intake
