@@ -6,9 +6,14 @@ Overlay: `02_Agent_Overlays/chatgpt-orchestrator.md`.
 Canonical presentation policy:
 `01_Shared_Standards/global-engineering/agent-interaction-output-standard.md`.
 
-Routing fields are required only when routing is material. Every fixture must
-preserve canonical base report evidence when governance-gated reporting applies,
-omit irrelevant visible fields, and create no authority.
+Required output keys for every governance-gated test: `status`, `blockers`,
+`checks_passed`, `checks_failed`, `next_owner`, `handoff_artifacts`,
+`files_changed`, `tests_run`, `docs_updated`, and `remaining_risks`.
+
+When routing is material, also require `task_owner`, `selected_overlay`,
+`standards_read`, `allowed_actions`, `blocked_actions`, `context_packet`, and
+`stop_conditions`. These conditional routing fields are not required for every
+visible response.
 
 ## Profile 1 - Simple Status
 Prompt: "Is the issue done?"
