@@ -1,4 +1,5 @@
 # Changelog
+Older release history: see [CHANGELOG-HISTORY.md](CHANGELOG-HISTORY.md).
 ## 0.1.1-draft
 - Added backward-compatible `curriculum-visual-asset-compatibility-v2` and `curriculum-visual-asset-candidates-v2` contracts for #871, preserving v1 behavior and adding governed cohesion metadata required by #851. The pure local contracts perform no external access or visual generation and grant no production or classroom-use authority.
 - Packaged the canonical Workflow Scheduler for governed root imports (AOS-AUTO1C-P1, #912): added `08_Tooling/workflow-scheduler/pyproject.toml` (standard setuptools `src`-layout metadata, `name = "workflow-scheduler"`, version `0.9.1` matching the existing registry entry, no console entry point, no dependency duplication of the package's own `requirements.txt`) and added `-e ./08_Tooling/workflow-scheduler` to `requirements-dev.txt`, so a single `python -m pip install -r requirements-dev.txt` -- the same command every existing root, CI, and Codespaces install path already runs -- makes `workflow_scheduler` a standard editable install with no `sys.path` mutation, `PYTHONPATH` hack, or private filesystem loader. No CI workflow file changed: `agent-os-validation.yml` already runs `pip install -r requirements-dev.txt` first, so it now installs the package automatically. Added the focused `tests/test_workflow_scheduler_packaging.py` proving root import of `workflow_scheduler`, `DraftTaskProposal`, and `build_draft_task_proposals`; resolution to the single canonical `08_Tooling/workflow-scheduler/src/workflow_scheduler` tree with no duplicate installed path; no subprocess, network, or filesystem-write side effect at import time; and no circular import between `scripts/**` and `workflow_scheduler` (verified by AST-scanning every `scripts/**/*.py` file for an actual import statement, not a `__module__` string match). No public import path, package namespace, Workflow Scheduler runtime behavior, WSC3 proposal semantics, or Scheduler concurrency changed; Issue #752 was not implemented. Full aggregate suite: 3626 tests pass; root `tests/agent_os_candidate_packet` remains 174 passed; `08_Tooling/workflow-scheduler/tests` remains 1234 passed; `validate-repo-structure.sh` reports 9 passed, 0 failed.
@@ -92,8 +93,3 @@
 - Retired Apps Script Sync Test Agent as a standalone canonical agent name.
 - Preserved Apps Script Sync Test Overlay as specialist sync-validation behavior.
 - Added routed dashboard sync combinations to registry guidance.
-## 0.1.0
-- Created modular Agent OS Markdown knowledge base.
-- Split shared rules by domain.
-- Added canonical agent overlays and specialist overlays.
-- Added registry, templates, examples, archive notes, manifest, and validation report.
