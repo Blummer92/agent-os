@@ -1,27 +1,17 @@
-"""AOS-AUTO1A: exact issue snapshot and readiness evidence adapter (#750).
-
-Read-only first stage of the candidate-packet pipeline. Composes the
-existing GitHub issue provider, IssuePlan scanner, IssuePlan current-state
-evidence, and readiness evaluator into one bounded stage result. Performs no
-writes and no network calls itself; ``issue_reader`` and ``repository_reader``
-are injected read-only dependencies supplied by the caller.
-
-Later stages continue the same read-only pipeline: ``planning_stage``
-(AOS-AUTO1B, #751) produces the Scheduler handoff, ``repository_stage``
-(AOS-AUTO1C, #752) binds one caller-supplied repository observation into
-canonical repository-state evidence, and ``proposal_stage`` coordinates both
-into a WSC3 draft task proposal when every gate permits it. Those governed
-stage results carry ``execution_authorized=False`` and
-``side_effects_performed=False``; the Implementation Packet projection is a
-separate evidence wrapper around the existing Memory Manager packet and creates
-no execution authority.
-"""
+"""Bounded read-only candidate-packet coordination for Agent OS."""
 
 from scripts.agent_os_issue_acceptance.acceptance_report_transport import (
     acceptance_report_from_payload,
     acceptance_report_to_payload,
 )
 
+from .approval_stage import (
+    ApprovalCandidateContext,
+    ApprovalDecision,
+    ApprovalProjectionStageResult,
+    ApprovalProjectionStageStatus,
+    prepare_approval_projection,
+)
 from .executable_lane_selection import (
     EXECUTABLE_LANE_SELECTION_SCHEMA_NAME,
     EXECUTABLE_LANE_SELECTION_SCHEMA_VERSION,
@@ -35,11 +25,6 @@ from .executable_lane_selection import (
     deserialize_executable_lane_selection,
     select_executable_lanes,
     serialize_executable_lane_selection,
-)
-from .implementation_packet_projection import (
-    ImplementationPacketProjection,
-    ImplementationPacketSourceIdentities,
-    project_implementation_packet,
 )
 from .readiness_stage import prepare_issue_readiness
 from .planning_stage import (
@@ -99,6 +84,10 @@ from .stage_models import (
 )
 
 __all__ = [
+    "ApprovalCandidateContext",
+    "ApprovalDecision",
+    "ApprovalProjectionStageResult",
+    "ApprovalProjectionStageStatus",
     "DEPENDENCY_IDENTITY_DUPLICATE_COLLAPSED_REASON",
     "DEPENDENCY_IDENTITY_NOT_SUPPLIED",
     "DEPENDENCY_IDENTITY_NOT_SUPPLIED_REASON",
@@ -109,8 +98,6 @@ __all__ = [
     "CandidateIssueEvidence",
     "DuplicateClaimFinding",
     "ExecutableLaneSelection",
-    "ImplementationPacketProjection",
-    "ImplementationPacketSourceIdentities",
     "PlanningHandoffStageResult",
     "PlanningHandoffStageStatus",
     "Queue",
@@ -151,11 +138,11 @@ __all__ = [
     "issue_snapshot_to_dict",
     "issueplan_current_state_evidence_from_dict",
     "issueplan_current_state_evidence_to_dict",
+    "prepare_approval_projection",
     "prepare_issue_readiness",
     "prepare_planning_handoff",
     "prepare_repository_and_proposal",
     "prepare_repository_state_evidence",
-    "project_implementation_packet",
     "reconstruct_scheduler_planning_handoff",
     "readiness_result_from_dict",
     "readiness_result_to_dict",
