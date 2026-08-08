@@ -42,9 +42,13 @@ def reconcile_duplicate(
     candidates: Iterable[DuplicateCandidate],
 ) -> DuplicateReconciliationResult:
     """Reconcile exact/normalized duplicate evidence without assigning identity."""
-    ordered = tuple(sorted(candidates, key=lambda item: item.stable_identity))
-    if any(not item.stable_identity for item in ordered):
+    received = tuple(candidates)
+    if any(
+        not isinstance(item.stable_identity, str) or not item.stable_identity.strip()
+        for item in received
+    ):
         return _result(DuplicateDisposition.INVALID, None, 0, ("duplicate-candidate-invalid",))
+    ordered = tuple(sorted(received, key=lambda item: item.stable_identity))
 
     exact = tuple(item for item in ordered if item.original_sha256 == intake_result.original_sha256)
     if exact:
