@@ -65,24 +65,19 @@ readiness, approval, implementation, merge, deployment, or production action.
 
 ## Live Curriculum Evidence Orchestration
 
-`src/navigation_registry/connectors/curriculum_evidence_orchestrator.py` plans and
-executes request-sensitive curriculum reads through injected existing read seams.
-It consumes already-resolved intent and canonical unit identity; it does not do
-free-form NLP, workspace crawling, credentials, retries, persistence, or writes.
+`src/navigation_registry/connectors/curriculum_evidence_orchestrator.py` consumes
+already-resolved intent and canonical unit identity, then plans request-sensitive
+reads through injected existing identity and read seams. Read plans are minimal by
+request class, and Visual Asset Library lookup is relation-first by `Canonical
+Unit`; provider-specific compact Notion IDs stay inside the provider/read seam.
 
-Read plans are minimal by request class. Known identity and explicit relations
-come before narrow queries; search is escalation only. Visual assets are queried
-relation-first by `Canonical Unit`, with provider-specific compact Notion IDs kept
-inside the provider/read seam. Cached Navigation identity is only a lookup hint;
-live identity mismatch or review-required identity fails closed.
+The orchestrator normalizes bounded owner/asset evidence for the #975 assembler,
+which then feeds the #973 current-state resolver. Malformed identity metadata,
+provider failure states, aggregate handoff overflow, and malformed asset approval
+booleans fail closed; relative-time requests do not invent current-day context.
 
-The orchestrator normalizes bounded owner/asset evidence and hands it to the #975
-current-curriculum evidence assembler, which then feeds the #973 current-state
-resolver. #980 retrieves, #975 assembles, and #973 interprets. Missing, stale,
-conflicting, inaccessible, and unresolved evidence is preserved rather than
-silently reconciled, and relative-time requests never invent current-day context.
-No part of this path grants readiness, approval, source, production, publication,
-or external-write authority.
+For source-of-truth, cache, ownership, and write-authority rules, inherit the
+canonical `navigation-registry-standard.md`; this README does not redefine them.
 
 ## V1 Cleanup Notes
 
