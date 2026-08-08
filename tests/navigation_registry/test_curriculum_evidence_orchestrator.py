@@ -170,9 +170,12 @@ def test_pf010_is_reached_by_relation_and_provider_filter_is_hidden_downstream()
     assert "deliberately-not-photography-named" not in repr(packet)
     state = resolve_current_curriculum_state(packet)
     assert state.record is not None
-    assert state.record.to_dict()["assets"]["matching_asset_exists"] is True
-    assert state.record.to_dict()["assets"]["approved_reusable_student_facing_exists"] is False
-    assert state.record.to_dict()["authority"]["production_authorized"] is False
+    record = state.record.to_dict()
+    assert record["assets"]["matching_asset_exists"] is True
+    assert record["assets"]["approved_reusable_student_facing_exists"] is False
+    assert "asset-reusable-unavailable" in record["blockers"]
+    assert record["disposition"] == "blocked"
+    assert record["authority"]["production_authorized"] is False
 
 
 def test_identity_drift_fails_closed_before_provider_read() -> None:
@@ -193,6 +196,45 @@ def test_identity_drift_fails_closed_before_provider_read() -> None:
     assert calls == []
 
 
+@pytest.mark.parametrize("review_flag", ["true", 1])
+def test_malformed_review_flag_fails_before_provider_read(review_flag: object) -> None:
+    calls = []
+
+    def malformed(source: str):
+        value = identity(source)
+        value["human_review_required"] = review_flag
+        return value
+
+    with pytest.raises(CurriculumReadError, match="malformed review flag"):
+        orchestrate_curriculum_evidence(
+            request=CurriculumReadRequest("images", "images"),
+            canonical_unit=unit(),
+            resolve_identity=malformed,
+            execute_read=fake_reader(calls),
+        )
+    assert calls == []
+
+
+@pytest.mark.parametrize("data_source_id", [1, ""])
+def test_malformed_data_source_id_fails_before_source_read(data_source_id: object) -> None:
+    calls = []
+
+    def malformed(source: str):
+        value = identity(source)
+        if source == VISUAL_ASSETS:
+            value["data_source_id"] = data_source_id
+        return value
+
+    with pytest.raises(CurriculumReadError, match="data-source identity"):
+        orchestrate_curriculum_evidence(
+            request=CurriculumReadRequest("images", "images"),
+            canonical_unit=unit(),
+            resolve_identity=malformed,
+            execute_read=fake_reader(calls),
+        )
+    assert [step.logical_source for step, _ in calls] == [CANONICAL_UNIT]
+
+
 def test_live_unit_identity_mismatch_fails_closed() -> None:
     def reader(step, payload):
         if step.logical_source == CANONICAL_UNIT:
@@ -208,20 +250,61 @@ def test_live_unit_identity_mismatch_fails_closed() -> None:
         )
 
 
-def test_missing_permission_and_stale_provider_states_are_bounded() -> None:
-    for status in ("missing", "not-found", "permission-denied", "stale", "unresolved"):
-        def reader(step, payload, status=status):
-            if step.logical_source == CANONICAL_UNIT:
-                return {"id": UNIT_PAGE}
-            return {"status": status}
+@pytest.mark.parametrize("status", ["missing", "not-found", "permission-denied", "stale", "unresolved"])
+def test_provider_failure_states_fail_closed(status: str) -> None:
+    def reader(step, payload):
+        if step.logical_source == CANONICAL_UNIT:
+            return {"id": UNIT_PAGE}
+        return {"status": status}
 
-        packet = orchestrate_curriculum_evidence(
+    with pytest.raises(CurriculumReadError, match=f"provider {status}"):
+        orchestrate_curriculum_evidence(
+            request=CurriculumReadRequest("what-is-blocking"),
+            canonical_unit=unit(),
+            resolve_identity=identity,
+            execute_read=reader,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    [
+        ("exists", "false"),
+        ("approved_for_requested_use", "false"),
+        ("approved_student_reuse", 0),
+    ],
+)
+def test_asset_boolean_fields_require_actual_booleans(field: str, bad_value: object) -> None:
+    def reader(step, payload):
+        if step.logical_source == CANONICAL_UNIT:
+            return {"id": UNIT_PAGE}
+        asset = source_records(VISUAL_ASSETS)[0]
+        asset[field] = bad_value
+        return {"results": [asset]}
+
+    with pytest.raises(CurriculumReadError, match="malformed asset boolean"):
+        orchestrate_curriculum_evidence(
             request=CurriculumReadRequest("images", "images"),
             canonical_unit=unit(),
             resolve_identity=identity,
             execute_read=reader,
         )
-        assert packet["asset_evidence"] == []
+
+
+def test_aggregate_owner_evidence_bound_fails_closed() -> None:
+    def reader(step, payload):
+        if step.logical_source == CANONICAL_UNIT:
+            return {"id": UNIT_PAGE}
+        records = [owner(f"{step.logical_source}-{index}", f"decision-{step.logical_source}-{index}") for index in range(5)]
+        return {"results": records}
+
+    with pytest.raises(CurriculumReadError, match="owner evidence exceeds handoff bound"):
+        orchestrate_curriculum_evidence(
+            request=CurriculumReadRequest("what-is-blocking"),
+            canonical_unit=unit(),
+            resolve_identity=identity,
+            execute_read=reader,
+        )
 
 
 def test_tomorrow_does_not_invent_current_context() -> None:
