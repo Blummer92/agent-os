@@ -35,6 +35,7 @@ versions change only when the module's standards or contract changes.
 | LP Notion Working Layer | 0.1.0 |
 | Agent OS Codespaces Profile | 0.1.0 |
 | Execution Checkpoint Contract | 0.1.0 |
+| Issue Quality Taxonomy | 0.1.0 |
 
 **Dashboard Migration Verification** (`08_Tooling/dashboard-migration-verification/`) starts as a verification-only
 migration evidence toolkit for dashboard registry examples, placeholder snapshots,
