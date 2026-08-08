@@ -21,6 +21,10 @@ def _intake(tmp_path: Path, *, name: str = "source.png", size=(12, 8), color=(10
     return intake_visual_asset(source, output_dir=tmp_path / f"out-{name}")
 
 
+def _intake_path(tmp_path: Path, source: Path):
+    return intake_visual_asset(source, output_dir=tmp_path / f"out-{source.name}")
+
+
 def test_exact_original_match_is_deterministic_and_filename_independent(tmp_path: Path):
     intake = _intake(tmp_path)
     candidate = DuplicateCandidate("asset-a", original_sha256=intake.original_sha256)
@@ -31,6 +35,19 @@ def test_exact_original_match_is_deterministic_and_filename_independent(tmp_path
     assert first.matched_identity == "asset-a"
     renamed = replace(intake, original_filename="renamed.png")
     assert reconcile_duplicate(renamed, [candidate]) == first
+
+
+def test_original_match_precedes_normalized_match():
+    intake = _fake_intake("a" * 64, "b" * 64)
+    result = reconcile_duplicate(
+        intake,
+        [
+            DuplicateCandidate("asset-normalized", normalized_sha256="b" * 64),
+            DuplicateCandidate("asset-original", original_sha256="a" * 64),
+        ],
+    )
+    assert result.disposition is DuplicateDisposition.EXACT_EXISTING
+    assert result.matched_identity == "asset-original"
 
 
 def test_normalized_match_reconciles_metadata_variant():
@@ -73,21 +90,47 @@ def test_conflicting_normalized_identities_require_manual_review():
     assert result.disposition is DuplicateDisposition.MANUAL_REVIEW_REQUIRED
 
 
-def test_resized_recompressed_cropped_and_similar_are_conservative(tmp_path: Path):
-    intake = _intake(tmp_path, name="base.png", size=(16, 16), color=(40, 50, 60))
-    variants = [
-        _intake(tmp_path, name="resized.png", size=(8, 8), color=(40, 50, 60)),
-        _intake(tmp_path, name="recompressed.png", size=(16, 16), color=(41, 50, 60)),
-        _intake(tmp_path, name="cropped.png", size=(12, 12), color=(40, 50, 60)),
-        _intake(tmp_path, name="similar.png", size=(16, 16), color=(40, 51, 60)),
-    ]
-    for index, variant in enumerate(variants):
-        candidate = DuplicateCandidate(
-            f"asset-{index}",
-            original_sha256=variant.original_sha256,
-            normalized_sha256=variant.normalized_sha256,
+def test_variants_derive_from_base_and_remain_conservative(tmp_path: Path):
+    base_path = tmp_path / "base.png"
+    base_image = Image.new("RGB", (24, 16), (40, 50, 60))
+    base_image.putpixel((0, 0), (200, 10, 10))
+    base_image.save(base_path, format="PNG")
+    base_image.close()
+    intake = _intake_path(tmp_path, base_path)
+
+    with Image.open(base_path) as image:
+        lossless_path = tmp_path / "lossless.bmp"
+        image.save(lossless_path, format="BMP")
+        resized_path = tmp_path / "resized.png"
+        image.resize((12, 8)).save(resized_path, format="PNG")
+        cropped_path = tmp_path / "cropped.png"
+        image.crop((0, 0, 12, 16)).save(cropped_path, format="PNG")
+        lossy_path = tmp_path / "recompressed.jpg"
+        image.save(lossy_path, format="JPEG", quality=65)
+        similar_path = tmp_path / "similar.png"
+        similar = image.copy()
+        similar.putpixel((1, 1), (40, 51, 60))
+        similar.save(similar_path, format="PNG")
+        similar.close()
+
+    # BMP is intentionally unsupported by intake, so use a PNG re-encode with changed metadata bytes.
+    with Image.open(base_path) as image:
+        lossless_path = tmp_path / "lossless.png"
+        image.save(lossless_path, format="PNG", compress_level=1)
+
+    lossless = _intake_path(tmp_path, lossless_path)
+    lossless_result = reconcile_duplicate(
+        intake,
+        [DuplicateCandidate("asset-lossless", lossless.original_sha256, lossless.normalized_sha256)],
+    )
+    assert lossless_result.disposition is DuplicateDisposition.NORMALIZED_EXISTING
+
+    for index, path in enumerate((resized_path, cropped_path, lossy_path, similar_path)):
+        variant = _intake_path(tmp_path, path)
+        result = reconcile_duplicate(
+            intake,
+            [DuplicateCandidate(f"asset-{index}", variant.original_sha256, variant.normalized_sha256)],
         )
-        result = reconcile_duplicate(intake, [candidate])
         assert result.disposition is DuplicateDisposition.NO_DUPLICATE_FOUND
 
 
@@ -101,20 +144,30 @@ def test_unrelated_image_has_no_duplicate(tmp_path: Path):
     assert result.disposition is DuplicateDisposition.NO_DUPLICATE_FOUND
 
 
-def test_invalid_candidate_is_bounded():
-    intake = _fake_intake("a" * 64, "b" * 64)
-    result = reconcile_duplicate(intake, [DuplicateCandidate("", original_sha256="a" * 64)])
-    assert result.disposition is DuplicateDisposition.INVALID
-    assert result.matched_identity is None
+def test_empty_candidates_have_no_duplicate():
+    result = reconcile_duplicate(_fake_intake("a" * 64, "b" * 64), [])
+    assert result.disposition is DuplicateDisposition.NO_DUPLICATE_FOUND
 
 
-def test_non_string_candidate_identity_is_bounded_before_sorting():
+def test_invalid_candidate_identity_is_bounded():
     intake = _fake_intake("a" * 64, "b" * 64)
     malformed = DuplicateCandidate(None, original_sha256="a" * 64)  # type: ignore[arg-type]
-    valid = DuplicateCandidate("asset-a", original_sha256="a" * 64)
-    result = reconcile_duplicate(intake, [valid, malformed])
+    result = reconcile_duplicate(intake, [DuplicateCandidate("asset-a"), malformed])
     assert result.disposition is DuplicateDisposition.INVALID
     assert result.matched_identity is None
+
+
+def test_invalid_candidate_hash_is_bounded():
+    intake = _fake_intake("a" * 64, "b" * 64)
+    for malformed_hash in ("not-a-sha", "A" * 64, 123):
+        candidate = DuplicateCandidate("asset-a", original_sha256=malformed_hash)  # type: ignore[arg-type]
+        assert reconcile_duplicate(intake, [candidate]).disposition is DuplicateDisposition.INVALID
+
+
+def test_non_candidate_input_is_bounded():
+    intake = _fake_intake("a" * 64, "b" * 64)
+    assert reconcile_duplicate(intake, [object()]).disposition is DuplicateDisposition.INVALID  # type: ignore[list-item]
+    assert reconcile_duplicate(intake, None).disposition is DuplicateDisposition.INVALID  # type: ignore[arg-type]
 
 
 def test_result_carries_no_authority():
