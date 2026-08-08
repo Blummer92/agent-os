@@ -158,9 +158,15 @@ def orchestrate_curriculum_evidence(
             _verify_live_unit(result, provider_page_id)
             continue
         if step.logical_source == VISUAL_ASSETS:
-            asset_evidence.extend(_normalize_assets(result))
+            incoming_assets = _normalize_assets(result)
+            if len(asset_evidence) + len(incoming_assets) > MAX_RESULTS:
+                raise CurriculumReadError("asset evidence exceeds handoff bound")
+            asset_evidence.extend(incoming_assets)
         else:
-            owner_evidence.extend(_normalize_owners(result))
+            incoming_owners = _normalize_owners(result)
+            if len(owner_evidence) + len(incoming_owners) > MAX_RESULTS:
+                raise CurriculumReadError("owner evidence exceeds handoff bound")
+            owner_evidence.extend(incoming_owners)
 
     packet = assemble_current_curriculum_evidence(
         request={
@@ -204,10 +210,15 @@ def _verified_identity(value: Mapping[str, object], logical_source: str) -> dict
     identity = dict(value)
     if identity.get("logical_source") != logical_source:
         raise CurriculumReadError(f"identity drift for {logical_source}")
-    if not identity.get("data_source_id") and logical_source != CANONICAL_UNIT:
-        raise CurriculumReadError(f"missing data-source identity for {logical_source}")
-    if identity.get("human_review_required") is True:
+    review_required = identity.get("human_review_required")
+    if type(review_required) is not bool:
+        raise CurriculumReadError(f"malformed review flag for {logical_source}")
+    if review_required:
         raise CurriculumReadError(f"identity requires review for {logical_source}")
+    if logical_source != CANONICAL_UNIT:
+        data_source_id = identity.get("data_source_id")
+        if not isinstance(data_source_id, str) or not data_source_id.strip():
+            raise CurriculumReadError(f"missing data-source identity for {logical_source}")
     return identity
 
 
@@ -215,11 +226,7 @@ def _normalize_result(value: object, logical_source: str) -> list[dict[str, obje
     if isinstance(value, Mapping):
         status = value.get("status")
         if status in {"missing", "not-found", "permission-denied", "stale", "unresolved"}:
-            return [{
-                "logical_source": logical_source,
-                "failure_state": status,
-                "material": True,
-            }]
+            raise CurriculumReadError(f"provider {status} for {logical_source}")
         results = value.get("results")
         if results is None:
             return [dict(value)]
@@ -240,8 +247,6 @@ def _verify_live_unit(results: list[dict[str, object]], provider_page_id: str) -
     if len(results) != 1:
         raise CurriculumReadError("canonical unit live verification must return exactly one record")
     record = results[0]
-    if record.get("failure_state"):
-        raise CurriculumReadError("canonical unit live verification failed")
     if record.get("id") != provider_page_id:
         raise CurriculumReadError("canonical unit identity mismatch")
 
@@ -250,28 +255,34 @@ def _normalize_assets(records: Iterable[Mapping[str, object]]) -> list[dict[str,
     assets: list[dict[str, object]] = []
     for raw in records:
         record = dict(raw)
-        if record.get("failure_state"):
-            continue
         asset_id = record.get("asset_id")
         if not isinstance(asset_id, str) or not asset_id:
             continue
+        exists = record.get("exists", True)
+        approved_for_requested_use = record.get("approved_for_requested_use", False)
+        approved_student_reuse = record.get("approved_student_reuse", False)
+        for field, value in (
+            ("exists", exists),
+            ("approved_for_requested_use", approved_for_requested_use),
+            ("approved_student_reuse", approved_student_reuse),
+        ):
+            if type(value) is not bool:
+                raise CurriculumReadError(f"malformed asset boolean {field}")
         assets.append({
             "asset_id": asset_id,
-            "exists": bool(record.get("exists", True)),
-            "approved_for_requested_use": bool(record.get("approved_for_requested_use", False)),
-            "approved_student_reuse": bool(record.get("approved_student_reuse", False)),
+            "exists": exists,
+            "approved_for_requested_use": approved_for_requested_use,
+            "approved_student_reuse": approved_student_reuse,
             "source_revision": record.get("source_revision", 1),
             "canonical_unit_relation": record.get("canonical_unit_relation") is True,
         })
-    return assets[:MAX_RESULTS]
+    return assets
 
 
 def _normalize_owners(records: Iterable[Mapping[str, object]]) -> list[dict[str, object]]:
     owners: list[dict[str, object]] = []
     for raw in records:
         record = dict(raw)
-        if record.get("failure_state"):
-            continue
         evidence_id = record.get("evidence_id")
         decision_key = record.get("decision_key")
         if not isinstance(evidence_id, str) or not evidence_id:
@@ -279,7 +290,7 @@ def _normalize_owners(records: Iterable[Mapping[str, object]]) -> list[dict[str,
         if not isinstance(decision_key, str) or not decision_key:
             continue
         owners.append(record)
-    return owners[:MAX_RESULTS]
+    return owners
 
 
 def _compact_notion_id(value: str) -> str:
