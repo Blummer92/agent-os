@@ -110,7 +110,11 @@ def _request_mode(action: str, artifact_type: str) -> str:
         return "slides"
     if artifact_type.lower() in {"worksheet", "worksheets"}:
         return "worksheet"
-    if artifact_type.lower() in {"lesson", "lesson-plan"} or "teach-next" in token:
+    if (
+        artifact_type.lower() in {"lesson", "lesson-plan"}
+        or "teach-next" in token
+        or "next-teaching" in token
+    ):
         return "lesson"
     return "bounded"
 
@@ -155,7 +159,7 @@ def _select_assets(assets: list[dict[str, Any]], include: bool) -> list[dict[str
     selected: list[dict[str, Any]] = []
     for item in assets:
         relation = item.get("canonical_unit_relation")
-        if relation is not None and relation is not True:
+        if relation is not True:
             continue
         clean = {
             key: copy.deepcopy(value)
