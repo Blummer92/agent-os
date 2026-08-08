@@ -93,10 +93,7 @@ def resolve_current_curriculum_state(evidence: object) -> ValidationResult:
                 blockers.add("dependency-owner-relation-unresolved")
                 next_owner = next_owner or unresolved[0]["owner"]
 
-            if key in required and not current:
-                if not stale:
-                    blockers.add("dependency-owner-evidence-missing")
-                    continue
+            if not current and stale:
                 reasons.add("source-stale-material")
                 stale_owner = max(stale, key=_freshness_key)
                 next_owner = next_owner or stale_owner["owner"]
@@ -109,6 +106,9 @@ def resolve_current_curriculum_state(evidence: object) -> ValidationResult:
                     ):
                         reasons.add("source-newer-narrative-conflict")
                         contradictions.append(_conflict("newer-narrative-vs-stale-owner", key, stale_owner, item))
+                continue
+            if key in required and not current:
+                blockers.add("dependency-owner-evidence-missing")
                 continue
             if not current:
                 continue
@@ -155,6 +155,8 @@ def resolve_current_curriculum_state(evidence: object) -> ValidationResult:
                 teacher_decision = "Resolve the missing canonical owner evidence."
             elif "asset-reusable-unavailable" in blockers:
                 teacher_decision = "Resolve reusable asset eligibility before artifact planning."
+            elif "dependency-owner-relation-unresolved" in blockers:
+                teacher_decision = "Resolve the unresolved owner relation before downstream planning."
             elif disposition == "needs-reconciliation":
                 teacher_decision = "Reconcile current owner state with contradictory or stale evidence."
             elif disposition == "needs-decision":
@@ -297,7 +299,7 @@ def _owner_item(value: object) -> dict[str, Any]:
     classification = validate_text(raw.get("classification"), "evidence classification", max_length=32)
     currentness = validate_text(raw.get("currentness"), "evidence currentness", max_length=16)
     if classification not in CLASSIFICATIONS:
-        raise ContractValidationError("ownership-owner-conflict", "evidence classification is unsupported")
+        raise ContractValidationError("source-invalid", "evidence classification is unsupported")
     if currentness not in {"current", "stale"}:
         raise ContractValidationError("source-invalid", "evidence currentness is unsupported")
     material, relation = raw.get("material"), raw.get("relation_resolved", True)
