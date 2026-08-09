@@ -60,6 +60,15 @@ def test_unconfirmed_or_stale_route_fails_before_client_call():
     assert fake.calls == []
 
 
+def test_invalid_fields_return_typed_safe_defaults():
+    result = write_asset(request(parent_folder_id=1, dry_run=1))
+    assert result.state is WriteState.PRECHECK_FAILED
+    assert result.dry_run is True
+    assert result.parent_folder_id is None
+    assert result.mime_type is None
+    assert result.content_sha256 is None
+
+
 def test_non_dry_write_requires_injected_client():
     result = write_asset(request(dry_run=False))
     assert result.state is WriteState.PRECHECK_FAILED
@@ -76,7 +85,7 @@ def test_create_requires_exact_readback_to_verify():
     assert [c[0] for c in fake.calls] == ["find", "reserve", "create", "fetch"]
 
 
-def test_retry_reconciles_existing_without_second_create():
+def test_retry_reconciles_existing_with_readback_without_second_create():
     fake = FakeDrive()
     req = request(dry_run=False)
     key = operation_key_for(req)
@@ -84,16 +93,19 @@ def test_retry_reconciles_existing_without_second_create():
     result = write_asset(req, fake)
     assert result.state is WriteState.RECONCILED_EXISTING
     assert result.file_id == "existing"
+    assert result.readback_verified is True
+    assert [c[0] for c in fake.calls] == ["find", "fetch"]
     assert all(c[0] != "create" for c in fake.calls)
 
 
-def test_timeout_after_success_reconciles_before_retry():
+def test_timeout_after_success_reconciles_then_reads_back():
     fake = FakeDrive()
     fake.raise_after_create = True
     result = write_asset(request(dry_run=False), fake)
     assert result.state is WriteState.RECONCILED_EXISTING
+    assert result.readback_verified is True
     assert [c[0] for c in fake.calls].count("create") == 1
-    assert [c[0] for c in fake.calls][-1] == "find"
+    assert [c[0] for c in fake.calls][-2:] == ["find", "fetch"]
 
 
 def test_conflicting_existing_identity_fails_closed():
