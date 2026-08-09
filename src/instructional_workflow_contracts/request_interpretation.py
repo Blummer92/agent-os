@@ -15,6 +15,7 @@ from .common import (
     ValidationResult,
     ValidationStatus,
     freeze_json,
+    is_secret_like_key,
     sha256_hex,
     validate_and_normalize_json,
     validate_revision,
@@ -37,21 +38,10 @@ ORIGINS = frozenset({"direct-user", "retrieved-content", "system", "approved-han
 SYSTEMS = frozenset({"github", "notion", "google-drive", "google-docs", "google-slides", "google-sheets", "unknown"})
 RESOURCE_KINDS = frozenset({"repository", "issue", "pull-request", "unknown"})
 REASON_CODES = frozenset({
-    "action.ambiguous",
-    "action.invalid",
-    "action.unsupported",
-    "target.missing",
-    "target.multiple",
-    "target.repository-missing",
-    "target.issue-invalid",
-    "target.pull-request-invalid",
-    "context.missing",
-    "context.stale",
-    "context.multiple-candidates",
-    "request.untrusted-source",
-    "request.conflicting-constraints",
-    "request.write-surface-unclear",
-    "request.destination-unclear",
+    "action.ambiguous", "action.invalid", "action.unsupported", "target.missing", "target.multiple",
+    "target.repository-missing", "target.issue-invalid", "target.pull-request-invalid", "context.missing",
+    "context.stale", "context.multiple-candidates", "request.untrusted-source",
+    "request.conflicting-constraints", "request.write-surface-unclear", "request.destination-unclear",
     "request.monitoring-surface-required",
 })
 
@@ -133,6 +123,8 @@ def _constraints(values: Any) -> list[dict[str, Any]]:
         item = _mapping(raw, "constraint")
         _exact(item, CONSTRAINT_FIELDS, "constraint")
         name = validate_stable_id(item["name"], "constraint.name")
+        if is_secret_like_key(name):
+            raise ContractValidationError("authority-secret-field", "constraint.name is secret-like")
         if name in seen:
             raise ContractValidationError("handoff-duplicate", "constraint names must be unique")
         seen.add(name)
@@ -145,29 +137,17 @@ def _constraints(values: Any) -> list[dict[str, Any]]:
     return sorted(normalized, key=lambda item: item["name"])
 
 
-def _semantic_reasons(origin: str, action: str, effect: str, continuation: str, target: dict[str, Any], constraints: list[dict[str, Any]]) -> set[str]:
+def _semantic_reasons(origin: str, action: str, effect: str, continuation: str, target: dict[str, Any]) -> set[str]:
     reasons: set[str] = set()
-    if origin == "retrieved-content":
-        reasons.add("request.untrusted-source")
-    if action == "unknown":
-        reasons.add("action.ambiguous")
-    if target["system"] == "unknown":
-        reasons.add("request.destination-unclear")
-    if target["resource_kind"] == "unknown":
-        reasons.add("target.missing")
-    if target["system"] == "github" and target["repository"] is None:
-        reasons.add("target.repository-missing")
-    if target["resource_kind"] in {"issue", "pull-request"} and target["resource_id"] is None:
-        reasons.add("target.missing")
-    if continuation == "continue" and target["resource_id"] is None:
-        reasons.add("context.missing")
-    if effect == "mutate" and origin not in {"direct-user", "approved-handoff"}:
-        reasons.add("request.write-surface-unclear")
-    if effect == "schedule":
-        reasons.add("request.monitoring-surface-required")
-    names = [item["name"] for item in constraints]
-    if len(names) != len(set(names)):
-        reasons.add("request.conflicting-constraints")
+    if origin == "retrieved-content": reasons.add("request.untrusted-source")
+    if action == "unknown": reasons.add("action.ambiguous")
+    if target["system"] == "unknown": reasons.add("request.destination-unclear")
+    if target["resource_kind"] == "unknown": reasons.add("target.missing")
+    if target["system"] == "github" and target["repository"] is None: reasons.add("target.repository-missing")
+    if target["resource_kind"] in {"issue", "pull-request"} and target["resource_id"] is None: reasons.add("target.missing")
+    if continuation == "continue" and target["resource_id"] is None: reasons.add("context.missing")
+    if effect == "mutate" and origin not in {"direct-user", "approved-handoff"}: reasons.add("request.write-surface-unclear")
+    if effect == "schedule": reasons.add("request.monitoring-surface-required")
     return reasons
 
 
@@ -197,46 +177,26 @@ def validate_request_interpretation(value: object) -> ValidationResult:
         if not supplied_reasons <= REASON_CODES:
             raise ContractValidationError("handoff-invalid", "reason_codes contain an unknown governed code")
         references = [_reference(item) for item in _list(payload["evidence_references"], "evidence_references", MAX_REFERENCES)]
-        computed_reasons = _semantic_reasons(origin, action, effect, continuation, target, constraints)
-        reasons = tuple(sorted(supplied_reasons | computed_reasons))
+        reasons = tuple(sorted(supplied_reasons | _semantic_reasons(origin, action, effect, continuation, target)))
         record_payload = {
-            "schema_name": SCHEMA_NAME,
-            "contract_version": CONTRACT_VERSION,
-            "record_revision": revision,
-            "observed_at": observed_at,
-            "interpreter_id": interpreter_id,
-            "raw_input_digest": raw_input_digest,
-            "instruction_origin": origin,
-            "action": action,
-            "requested_effect": effect,
-            "continuation_mode": continuation,
-            "target": target,
-            "requested_outputs": outputs,
-            "constraints": constraints,
-            "reason_codes": list(reasons),
+            "schema_name": SCHEMA_NAME, "contract_version": CONTRACT_VERSION, "record_revision": revision,
+            "observed_at": observed_at, "interpreter_id": interpreter_id, "raw_input_digest": raw_input_digest,
+            "instruction_origin": origin, "action": action, "requested_effect": effect,
+            "continuation_mode": continuation, "target": target, "requested_outputs": outputs,
+            "constraints": constraints, "reason_codes": list(reasons),
             "evidence_references": [
                 {"system": ref.system, "stable_id": ref.stable_id, "exact_location": ref.exact_location, "verification_evidence": ref.verification_evidence}
                 for ref in references
             ],
-            "side_effects_performed": False,
-            "authorization_created": False,
+            "side_effects_performed": False, "authorization_created": False,
         }
         fingerprint = sha256_hex(record_payload)
         record = ValidatedRecord(
-            contract_version=CONTRACT_VERSION,
-            record_id=f"request-{fingerprint[:24]}",
-            record_revision=revision,
-            fingerprint_algorithm=FINGERPRINT_ALGORITHM,
-            fingerprint=fingerprint,
-            payload=freeze_json(record_payload),
+            contract_version=CONTRACT_VERSION, record_id=f"request-{fingerprint[:24]}", record_revision=revision,
+            fingerprint_algorithm=FINGERPRINT_ALGORITHM, fingerprint=fingerprint, payload=freeze_json(record_payload),
         )
         if reasons:
-            return ValidationResult(
-                status=ValidationStatus.MANUAL_REVIEW_REQUIRED,
-                record=record,
-                reason_codes=(),
-                details=tuple(reasons),
-            )
+            return ValidationResult(status=ValidationStatus.MANUAL_REVIEW_REQUIRED, record=record, details=reasons)
         return ValidationResult(status=ValidationStatus.VALID, record=record)
     except ContractValidationError as exc:
         return ValidationResult(status=ValidationStatus.INVALID, record=None, reason_codes=(exc.reason_code,), details=(exc.detail,))
