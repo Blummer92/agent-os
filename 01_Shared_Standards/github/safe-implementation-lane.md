@@ -1,13 +1,11 @@
 # Safe Implementation Lane
 
 ## Purpose
-
 Reduce procedural stops for routine repository work without weakening merge,
 protected-branch, credential, production, external-write, or governed-field
 controls.
 
 ## Eligibility
-
 The lane is available only when all of these are true:
 
 - the work is Tier 0 or Tier 1;
@@ -23,7 +21,6 @@ credential, workflow, governed-field, source-of-truth, and irreversible work is
 not eligible.
 
 ## Authorization Effect
-
 For an eligible issue, the explicit implementation instruction authorizes:
 
 - one non-protected branch;
@@ -36,6 +33,16 @@ For an eligible issue, the explicit implementation instruction authorizes:
 Excluded surfaces listed in
 `01_Shared_Standards/github/excluded-surface-baseline.md` remain separately
 unauthorized unless explicitly approved through the governing path.
+
+A registered-owner transition is internal routing, not by itself a user-visible
+handoff or stop. While this authorization, source of truth, and bounded scope
+remain applicable, route to the responsible owner and continue in the same
+interaction. Ownership and authority do not transfer: GitHub Service Agent stays
+the sole repository writer and QA / Test Agent retains validation-evidence
+ownership. Already-authorized tests, docs, in-scope repair, exact-head validation,
+Draft PR maintenance, and Ready-for-Review may continue without a new user prompt.
+Conversation continuity, including `continue`, `next step`, or `keep going`, never
+authorizes a previously excluded surface.
 
 ## Bounded Scope Envelope
 
@@ -75,17 +82,17 @@ body, reactivate a closed issue, or authorize merge.
 Stop for `needs-decision` when evidence is ambiguous, stale, blocked, closed, or
 conflicting, or when work would materially change architecture, ownership,
 schema, compatibility, authority, external effects, protected settings, or the
-issue objective. Do not stop solely for a directly corresponding test,
-mechanical registration, required changelog entry, or environment-assigned
-non-protected branch.
+issue objective. Do not stop solely for a registered-owner transition, a directly
+corresponding test, in-scope repair, mechanical registration, required changelog
+entry, or environment-assigned non-protected branch.
 
 ## Reporting
 
 The pull request records the actual branch, all files changed, why each support
 file was necessary, tests and exact-head evidence, docs, blockers, handoffs,
 risks, rollback, and confirmation that merge and excluded surfaces remain
-unauthorized.
+unauthorized. Prefer one consolidated user-facing result for routine internal
+routing while preserving required handoff artifacts for owners and auditability.
 
 ## Version
-
-0.1.0
+0.2.0
