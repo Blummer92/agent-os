@@ -214,7 +214,8 @@ def test_verify_repo_state_script_remains_callable() -> None:
 
 
 def _load_health_contract() -> dict:
-    return __import__("runpy").run_path(str(HEALTH_SCRIPT))
+    namespace = __import__("runpy").run_path(str(HEALTH_SCRIPT))
+    return namespace["build_evidence"].__globals__
 
 
 def _stub_health_checks(health: dict, monkeypatch) -> None:
