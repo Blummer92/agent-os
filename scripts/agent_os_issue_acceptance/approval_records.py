@@ -20,6 +20,10 @@ from .issueplan_current_state import (
     IssuePlanCurrentStateOutcome,
     compare_issueplan_current_state,
 )
+from .planning_binding import (
+    PlanningBindingEvidence,
+    compute_planning_binding_fingerprint,
+)
 from .scheduler_handoff import HandoffCohort
 
 APPROVAL_RECORD_SCHEMA_VERSION = "1.0"
@@ -326,11 +330,13 @@ def build_approval_candidate(
     decision_at: str,
     expires_at: str | None = None,
     supersedes: ApprovalRecord | None = None,
+    planning_binding: PlanningBindingEvidence | None = None,
 ) -> ApprovalRecord:
     binding, status, reasons, details = _current_binding(
         proposal,
         issueplan_current_state_evidence,
         repository_state_evidence,
+        planning_binding,
     )
     if binding is None or status != "applicable":
         raise ValueError(
@@ -443,6 +449,7 @@ def evaluate_approval_applicability(
     *,
     evaluated_at: str,
     invalidation_events: Iterable[str] = (),
+    planning_binding: PlanningBindingEvidence | None = None,
 ) -> ApprovalApplicabilityResult:
     evaluation_time = _timestamp(evaluated_at, "evaluated_at")
     if approval_record is None:
@@ -477,6 +484,7 @@ def evaluate_approval_applicability(
         current_proposal,
         current_issueplan_evidence,
         current_repository_state_evidence,
+        planning_binding,
     )
     if binding is None:
         return _result(
@@ -531,6 +539,7 @@ def _current_binding(
     proposal: object,
     issueplan: IssuePlanCurrentStateEvidence,
     repository_state: RepositoryStateEvidence | Mapping[str, Any],
+    planning_binding: PlanningBindingEvidence | None = None,
 ) -> tuple[ApprovalBinding | None, str, tuple[str, ...], tuple[str, ...]]:
     try:
         proposal = _verified_proposal(proposal)
@@ -588,26 +597,98 @@ def _current_binding(
         "source.revision-changed",
         "source-head:mismatch",
     )
-    mismatch(
-        issueplan.handoff_reference != proposal.handoff_digest,
-        "handoff.changed",
-        "handoff:mismatch",
-    )
-    mismatch(
-        issueplan.graph_reference != proposal.graph_digest,
-        "graph.changed",
-        "graph:mismatch",
-    )
-    mismatch(
-        issueplan.planning_result_reference != proposal.planning_result_digest,
-        "graph.changed",
-        "planning-result:mismatch",
-    )
-    mismatch(
-        tuple(issueplan.supplied_node_ids) != tuple(proposal.supplied_node_ids),
-        "candidate.changed",
-        "supplied-node-ids:mismatch",
-    )
+    if planning_binding is None:
+        # Legacy route: the IssuePlan itself carries the downstream references.
+        mismatch(
+            issueplan.handoff_reference != proposal.handoff_digest,
+            "handoff.changed",
+            "handoff:mismatch",
+        )
+        mismatch(
+            issueplan.graph_reference != proposal.graph_digest,
+            "graph.changed",
+            "graph:mismatch",
+        )
+        mismatch(
+            issueplan.planning_result_reference != proposal.planning_result_digest,
+            "graph.changed",
+            "planning-result:mismatch",
+        )
+        mismatch(
+            tuple(issueplan.supplied_node_ids) != tuple(proposal.supplied_node_ids),
+            "candidate.changed",
+            "supplied-node-ids:mismatch",
+        )
+    else:
+        # Two-phase route: the binding attests to the post-planning artifacts,
+        # and its own identity is recomputed before any of it is believed.
+        if not isinstance(planning_binding, PlanningBindingEvidence):
+            return (
+                None,
+                "invalid",
+                ("projection.incomplete",),
+                ("planning-binding:type",),
+            )
+        expected_binding_id = "planning-binding:" + (
+            compute_planning_binding_fingerprint(planning_binding)
+        )
+        if planning_binding.binding_id != expected_binding_id:
+            return (
+                None,
+                "invalid",
+                ("candidate.changed",),
+                ("planning-binding:identity-mismatch",),
+            )
+        mismatch(
+            planning_binding.issueplan_current_state_evidence_id
+            != issueplan.evidence_id,
+            "candidate.changed",
+            "planning-binding-issueplan:mismatch",
+        )
+        mismatch(
+            planning_binding.implementation_contract_fingerprint
+            != issueplan.implementation_contract_fingerprint,
+            "candidate.changed",
+            "planning-binding-contract:mismatch",
+        )
+        mismatch(
+            planning_binding.repository.casefold() != proposal.repository.casefold(),
+            "source.revision-changed",
+            "planning-binding-repository:mismatch",
+        )
+        mismatch(
+            planning_binding.base_branch != proposal.base_branch,
+            "source.revision-changed",
+            "planning-binding-base-branch:mismatch",
+        )
+        mismatch(
+            planning_binding.evaluated_repository_sha
+            != proposal.evaluated_repository_sha,
+            "source.revision-changed",
+            "planning-binding-source-head:mismatch",
+        )
+        mismatch(
+            planning_binding.handoff_digest != proposal.handoff_digest,
+            "handoff.changed",
+            "handoff:mismatch",
+        )
+        mismatch(
+            planning_binding.graph_digest != proposal.graph_digest,
+            "graph.changed",
+            "graph:mismatch",
+        )
+        mismatch(
+            planning_binding.planning_result_digest
+            != proposal.planning_result_digest,
+            "graph.changed",
+            "planning-result:mismatch",
+        )
+        mismatch(
+            tuple(planning_binding.supplied_node_ids)
+            != tuple(proposal.supplied_node_ids),
+            "candidate.changed",
+            "supplied-node-ids:mismatch",
+        )
     if issueplan.implementation_contract_fingerprint is None:
         return (
             None,

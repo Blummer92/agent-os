@@ -29,6 +29,7 @@ See `_common-overlay-rules.md` plus:
 - `01_Shared_Standards/instructional-design/artifact-first-response-standard.md`
 - `01_Shared_Standards/instructional-design/teacher-decision-studio-standard.md`
 - `01_Shared_Standards/instructional-design/teacher-decision-studio-previews-standard.md`
+- `01_Shared_Standards/instructional-design/visual-asset-picker-standard.md`
 - `01_Shared_Standards/google-workspace/`
 
 ## Owned Systems
@@ -36,7 +37,9 @@ See `_common-overlay-rules.md` plus:
 Generated slide decks, worksheets, guided notes, handouts, lesson-content specs,
 local lesson-candidate records, approved asset reuse notes, material-quality
 handoffs, and Teacher Decision Studio per-option in-chat and PDF worksheet
-previews.
+previews. For reusable visuals, consume the Asset Picker's exact selected asset
+references and active constraints without independently reinterpreting the
+teacher's original selection request.
 
 ## Allowed Write Surfaces
 
@@ -69,10 +72,11 @@ or destination rules.
 
 ## Version
 
-0.4.8
+0.4.9
 
 ## Changelog
 
+- 0.4.9 inherits the Visual Asset Picker contract and consumes exact selected reusable-asset references without independent reselection (#961).
 - 0.4.8 inherits the artifact-first response standard and both Teacher
   Decision Studio standards; owns per-option in-chat and PDF worksheet
   previews (#821, #823, #824) without treating a preview as production

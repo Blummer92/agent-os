@@ -42,6 +42,43 @@ Implementation work must preserve these rules:
 - Integration Manager owns cross-system governance and routing.
 - System owners retain live-system approval authority.
 
+## Bounded Notion Intent Projection
+
+`src/navigation_registry/connectors/notion_intent_context.py` projects already
+normalized, live-read Notion page evidence into a small immutable context for
+Tasks/Issues, Decision Log/ADRs, Lessons Learned, and Reusable Patterns. The
+projection preserves Data Source identity separately from database-container
+identity, source revision, bounded references, owner/status/gate/blocker/next
+step evidence, and explicit approval/scope-change stop evidence.
+
+The projection is pure-local and relation-bounded. Callers resolve known records
+and explicit relations before any search; incomplete relations may request one
+bounded continuation step, never a recursive graph crawl. Missing canonical
+identity, stale/non-live evidence, conflicting identity, wrong types, or bound
+violations fail closed. Unknown additive metadata is ignored.
+
+The Memory Manager seam stays unchanged: the projection exposes only existing
+`objective`, `known_facts`, `prior_decisions`, and `stop_conditions` concepts.
+Fingerprints are deterministic equality evidence only. Neither the projection,
+Navigation Registry evidence, nor Memory Manager context authorizes writes,
+readiness, approval, implementation, merge, deployment, or production action.
+
+## Live Curriculum Evidence Orchestration
+
+`src/navigation_registry/connectors/curriculum_evidence_orchestrator.py` consumes
+already-resolved intent and canonical unit identity, then plans request-sensitive
+reads through injected existing identity and read seams. Read plans are minimal by
+request class, and Visual Asset Library lookup is relation-first by `Canonical
+Unit`; provider-specific compact Notion IDs stay inside the provider/read seam.
+
+The orchestrator normalizes bounded owner/asset evidence for the #975 assembler,
+which then feeds the #973 current-state resolver. Malformed identity metadata,
+provider failure states, aggregate handoff overflow, and malformed asset approval
+booleans fail closed; relative-time requests do not invent current-day context.
+
+For source-of-truth, cache, ownership, and write-authority rules, inherit the
+canonical `navigation-registry-standard.md`; this README does not redefine them.
+
 ## V1 Cleanup Notes
 
 Before declaring Version 1.0, QA should decide whether long files must be split.

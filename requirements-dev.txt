@@ -26,5 +26,8 @@ PyGithub==2.9.1
 # Coverage
 coverage[toml]>=6.0.0
 
-# Local editable packages (canonical Workflow Scheduler package boundary, #912)
+# Local editable packages (development convenience only; wheel tests prove packaging)
+-e ./src
+-e ./08_Tooling/agent-memory-context-manager
 -e ./08_Tooling/workflow-scheduler
+-e ./08_Tooling/visual-asset-intake
