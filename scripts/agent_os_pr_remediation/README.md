@@ -43,7 +43,8 @@ GitHub evidence when evaluating a live pull request.
 
 ## Output Envelope
 
-The CLI emits one deterministic envelope containing:
+For valid, identity-consistent evidence, the CLI emits one deterministic envelope
+containing:
 
 - `preflight`: exact-head, PR-state, Draft, scope, and thread-evidence checks;
 - `remediation_plan`: PRR2 findings, tasks, blockers, and compute routes; and
@@ -70,10 +71,12 @@ activation, external writes, or any other excluded surface.
 
 ## Fail-Closed Cases
 
-The CLI rejects malformed, unknown, conflicting, or oversized input. A moved
-expected head remains visible as failed preflight evidence. Stale validation,
-out-of-scope findings, incomplete evidence, conflicts, and manual decisions keep
-resolution eligibility false.
+The CLI rejects malformed, unknown, conflicting, oversized, or identity-stale
+input. In particular, if `expected_head` no longer matches the supplied PRR1
+snapshot head, the existing PRR3 identity contract rejects the pipeline before a
+resolution plan is emitted. Stale validation, out-of-scope findings, incomplete
+evidence, conflicts, and manual decisions keep resolution eligibility false when
+the supplied cross-stage identities remain valid.
 
 When evidence is stale, capture fresh PR/thread/head/file evidence through the
 GitHub Service Agent and rerun the CLI with a new local input envelope.
