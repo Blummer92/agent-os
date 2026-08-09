@@ -49,9 +49,6 @@ def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProc
     )
 
 
-# --- devcontainer.json --------------------------------------------------
-
-
 def test_devcontainer_json_is_valid_and_bounded_to_two_cores() -> None:
     payload = json.loads((DEVCONTAINER_DIR / "devcontainer.json").read_text(encoding="utf-8"))
     assert payload["hostRequirements"]["cpus"] == 2
@@ -72,9 +69,6 @@ def test_no_dockerfile_was_created() -> None:
 
 def test_no_conditional_environment_report_script_was_created() -> None:
     assert not (ROOT / "scripts" / "agent-os-environment-report.py").exists()
-
-
-# --- post-create.sh -------------------------------------------------------
 
 
 def test_post_create_script_is_executable_and_fail_closed() -> None:
@@ -98,9 +92,6 @@ def test_post_create_script_calls_environment_health_check() -> None:
     assert "requirements-dev.txt" in text
 
 
-# --- health script packaging ----------------------------------------------
-
-
 def test_environment_health_script_compiles() -> None:
     compile(HEALTH_SCRIPT.read_text(encoding="utf-8"), str(HEALTH_SCRIPT), "exec")
 
@@ -109,9 +100,6 @@ def test_environment_health_script_does_not_reimplement_worktree_management() ->
     text = HEALTH_SCRIPT.read_text(encoding="utf-8")
     for forbidden in ("git worktree add", "git clone", "git push"):
         assert forbidden not in text
-
-
-# --- #972 additive runtime evidence ---------------------------------------
 
 
 def _stub_checks(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -142,7 +130,11 @@ def _stub_checks(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         health,
         "check_process_execution",
-        lambda: {"name": "process-execution", "passed": True, "detail": {"state": "available", "mechanism": "python-subprocess"}},
+        lambda: {
+            "name": "process-execution",
+            "passed": True,
+            "detail": {"state": "available", "mechanism": "python-subprocess"},
+        },
     )
     monkeypatch.setattr(
         health,
@@ -157,7 +149,11 @@ def _stub_checks(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         health,
         "check_github_auth_capability",
-        lambda: {"name": "github-auth-capability", "passed": True, "detail": {"capable": True, "state": "authenticated", "source": "gh-cli"}},
+        lambda: {
+            "name": "github-auth-capability",
+            "passed": True,
+            "detail": {"capable": True, "state": "authenticated", "source": "gh-cli"},
+        },
     )
 
 
@@ -204,7 +200,8 @@ def test_additive_runtime_evidence_is_surface_bound_and_deterministic(
     assert health.evidence_matches_surface(first, "codespace:test-a") is True
     assert health.evidence_matches_surface(first, "codespace:test-b") is False
     assert all(value is False for value in first["authority"].values())
-    assert next(c for c in first["checks"] if c["name"] == "process-execution")["detail"]["state"] == "available"
+    process = next(c for c in first["checks"] if c["name"] == "process-execution")
+    assert process["detail"]["state"] == "available"
 
 
 def test_surface_identity_uses_codespace_name_and_fails_closed_on_invalid_value(
@@ -240,7 +237,11 @@ def test_tool_and_auth_states_fail_closed_when_runtime_evidence_is_missing(
     monkeypatch.setattr(health.shutil, "which", fake_which)
     monkeypatch.setattr(health, "_run", lambda _cmd, cwd=None: (True, "v1"))
     tooling = health.check_tooling(ROOT)
-    assert tooling["detail"]["gh"] == {"available": False, "state": "unavailable", "version": None}
+    assert tooling["detail"]["gh"] == {
+        "available": False,
+        "state": "unavailable",
+        "version": None,
+    }
     auth = health.check_github_auth_capability()
     assert auth["detail"] == {"capable": False, "state": "unknown", "source": "none"}
 
@@ -258,13 +259,56 @@ def test_version_probe_and_process_probe_failures_report_unknown(
     assert process["detail"]["state"] == "unknown"
 
 
+def test_tool_versions_are_bounded_deterministically(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(health.shutil, "which", lambda _name: "/fake/tool")
+    monkeypatch.setattr(health, "_run", lambda _cmd, cwd=None: (True, "v" * 500))
+    tooling = health.check_tooling(ROOT)
+    assert tooling["detail"]["gh"]["state"] == "available"
+    assert tooling["detail"]["gh"]["version"] == "v" * health.MAX_TOOL_VERSION_CHARS
+
+
+def test_github_auth_distinguishes_unauthenticated_and_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setattr(health.shutil, "which", lambda _name: "/fake/gh")
+    monkeypatch.setattr(
+        health.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 1, "", "not authenticated"),
+    )
+    unauthenticated = health.check_github_auth_capability()
+    assert unauthenticated["detail"] == {
+        "capable": False,
+        "state": "unauthenticated",
+        "source": "gh-cli",
+    }
+
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(args[0], health.SUBPROCESS_TIMEOUT_SECONDS)
+
+    monkeypatch.setattr(health.subprocess, "run", timeout)
+    unknown = health.check_github_auth_capability()
+    assert unknown["detail"] == {
+        "capable": False,
+        "state": "unknown",
+        "source": "gh-cli",
+    }
+
+
 def test_environment_health_core_contains_no_connector_or_application_discovery() -> None:
     text = HEALTH_SCRIPT.read_text(encoding="utf-8").lower()
-    for forbidden in ("google drive", "notion api", "chrome devtools", "connector discovery", "provider discovery"):
+    for forbidden in (
+        "google drive",
+        "notion api",
+        "chrome devtools",
+        "connector discovery",
+        "provider discovery",
+    ):
         assert forbidden not in text
-
-
-# --- runbook documentation -------------------------------------------------
 
 
 def test_runbook_exists_and_is_under_the_line_limit() -> None:
@@ -297,9 +341,6 @@ def test_runbook_documents_required_topics() -> None:
         assert phrase in text, f"runbook missing required topic: {phrase}"
 
 
-# --- registry / changelog bookkeeping --------------------------------------
-
-
 def test_module_version_map_registers_the_profile() -> None:
     text = (ROOT / "04_Registry" / "module-version-map.md").read_text(encoding="utf-8")
     assert "| Agent OS Codespaces Profile | 0.2.0 |" in text
@@ -312,34 +353,48 @@ def test_changelog_references_the_issue() -> None:
     assert "agent-os-codespaces-v1" in text
 
 
-# --- reuse proof: existing #807/repo-state contracts stay authoritative ----
-
-
 def test_prepare_issue_worktree_script_remains_callable_and_unduplicated(tmp_path: Path) -> None:
     bare = tmp_path / "origin.git"
     subprocess.run(
         ["git", "init", "--quiet", "--bare", "--initial-branch=main", str(bare)],
-        check=True, capture_output=True, env=_env(tmp_path),
+        check=True,
+        capture_output=True,
+        env=_env(tmp_path),
     )
     seed = tmp_path / "seed"
-    subprocess.run(["git", "clone", "--quiet", str(bare), str(seed)], check=True, capture_output=True, env=_env(tmp_path))
+    subprocess.run(
+        ["git", "clone", "--quiet", str(bare), str(seed)],
+        check=True,
+        capture_output=True,
+        env=_env(tmp_path),
+    )
     (seed / "base.txt").write_text("base\n", encoding="utf-8")
     _git(seed, "add", "base.txt")
     _git(seed, "commit", "-q", "-m", "base commit")
     _git(seed, "push", "-q", "--set-upstream", "origin", "main")
 
     clone = tmp_path / "clone"
-    subprocess.run(["git", "clone", "--quiet", str(bare), str(clone)], check=True, capture_output=True, env=_env(tmp_path))
+    subprocess.run(
+        ["git", "clone", "--quiet", str(bare), str(clone)],
+        check=True,
+        capture_output=True,
+        env=_env(tmp_path),
+    )
 
     worktree_root = tmp_path / "worktrees"
     repository = f"{bare.parent.name}/{bare.name[: -len('.git')]}"
     result = subprocess.run(
         [
-            "bash", str(ROOT / "scripts" / "prepare-issue-worktree.sh"),
-            "--issue", "891",
-            "--repository", repository,
-            "--ref", "main",
-            "--worktree-root", str(worktree_root),
+            "bash",
+            str(ROOT / "scripts" / "prepare-issue-worktree.sh"),
+            "--issue",
+            "891",
+            "--repository",
+            repository,
+            "--ref",
+            "main",
+            "--worktree-root",
+            str(worktree_root),
         ],
         cwd=clone,
         check=False,

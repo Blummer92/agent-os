@@ -37,6 +37,7 @@ REQUIRED_VALIDATION_COMMANDS = (
 )
 DEFAULT_MIN_FREE_MB = 500
 SUBPROCESS_TIMEOUT_SECONDS = 5
+MAX_TOOL_VERSION_CHARS = 120
 _REPOSITORY_COMPONENT = re.compile(r"[A-Za-z0-9_.-]+")
 _SURFACE_ID = re.compile(r"[A-Za-z0-9_.:-]{1,80}")
 _OBSERVED_AT = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
@@ -226,7 +227,7 @@ def check_tooling(repo_root: Path) -> dict:
         tools[name] = {
             "available": ok,
             "state": "available" if ok else "unknown",
-            "version": version if ok else None,
+            "version": version[:MAX_TOOL_VERSION_CHARS] if ok else None,
         }
         all_ok = all_ok and ok
     tools["python"] = {
