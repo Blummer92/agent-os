@@ -1,0 +1,40 @@
+{
+  "shas": {
+    "planning": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "current": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "later": "cccccccccccccccccccccccccccccccccccccccc"
+  },
+  "validation": {
+    "focused_pass": {
+      "category": "focused-tests",
+      "profile": "focused",
+      "validation_plan_id": "validation-plan:focused",
+      "command_plan_id": "command-plan:focused",
+      "execution_evidence_id": "execution-composition:focused",
+      "execution_status": "focused-pass-aggregate-pending",
+      "aggregate_pending": true,
+      "evidence_complete": true,
+      "evidence_available": true,
+      "reason_codes": ["focused-pass"]
+    },
+    "aggregate_pass": {
+      "category": "aggregate-tests",
+      "profile": "aggregate",
+      "validation_plan_id": "validation-plan:aggregate",
+      "command_plan_id": "command-plan:aggregate",
+      "execution_evidence_id": "execution-composition:aggregate",
+      "execution_status": "aggregate-pass",
+      "aggregate_pending": false,
+      "evidence_complete": true,
+      "evidence_available": true,
+      "reason_codes": ["aggregate-pass"]
+    }
+  },
+  "expected_actions": {
+    "exact_pass": "eligible-to-resolve",
+    "focused_only": "request-more-evidence",
+    "failed": "leave-open",
+    "out_of_scope": "route-out-of-scope",
+    "conflicting": "manual-decision-required"
+  }
+}

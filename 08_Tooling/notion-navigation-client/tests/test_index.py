@@ -36,6 +36,22 @@ def test_get_database_passes_through_human_review_flag():
     assert result["Human Review Needed?"] == "No"
 
 
+def test_get_database_preserves_distinct_database_and_data_source_ids():
+    index, _ = make_index()
+    result = index.get_database("Canonical Digital Media Unit Registry")
+    assert result["Database ID"] == "f7f22d33-e1ef-4932-b294-cbe39b24a39a"
+    assert result["Data Source ID"] == "c5b202aa-83d1-4cc4-9992-f98af648e461"
+    assert result["Database ID"] != result["Data Source ID"]
+    assert "Navigation aid only" in result["navigation_warning"]
+
+
+def test_get_database_preserves_missing_data_source_id_for_fail_closed_consumers():
+    index, _ = make_index()
+    result = index.get_database("DM Units")
+    assert result["Database ID"] == "ddbed54e-8043-4096-9698-ebd22f9c888e"
+    assert result["Data Source ID"] == ""
+
+
 def test_get_field_matches_live_property_name_header():
     index, _ = make_index()
     result = index.get_field("DM Units", "Generation Gate")
