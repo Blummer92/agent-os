@@ -60,11 +60,17 @@ def _exact(value: Any, expected: type, field: str) -> None:
         raise EvidenceValidationError(f"{field} must be exactly {expected.__name__}")
 
 
-def _string(value: Any, field: str, *, optional: bool = False) -> str | None:
+def _string(
+    value: Any,
+    field: str,
+    *,
+    optional: bool = False,
+    max_length: int = MAX_STRING_LENGTH,
+) -> str | None:
     if value is None and optional:
         return None
     _exact(value, str, field)
-    if not value or len(value) > MAX_STRING_LENGTH:
+    if not value or len(value) > max_length:
         raise EvidenceValidationError(f"{field} must be non-empty and within size limits")
     return value
 
@@ -185,10 +191,8 @@ def normalize_review_thread(payload: Any) -> NormalizedReviewThread:
     data = _reject_unknown(payload, _THREAD_FIELDS, "review thread")
     thread_id = _string(data.get("thread_id"), "thread_id")
     reviewer = _string(data.get("reviewer"), "reviewer")
-    body = _string(data.get("body"), "body")
+    body = _string(data.get("body"), "body", max_length=MAX_BODY_LENGTH)
     assert body is not None
-    if len(body) > MAX_BODY_LENGTH:
-        raise EvidenceValidationError("body exceeds size limit")
     _exact(data.get("top_level_comment_id"), int, "top_level_comment_id")
     comment_id = data["top_level_comment_id"]
     if comment_id <= 0:
