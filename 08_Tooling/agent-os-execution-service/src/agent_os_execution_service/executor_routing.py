@@ -701,9 +701,15 @@ class ExecutorHandoff:
             raise ValueError(
                 "authorization_id_or_none is required when authority is supplied"
             )
-        if ExecutorCapability.CHECKPOINTED_RESUME in frozenset(
-            self.required_capabilities
-        ) and (
+        required = frozenset(self.required_capabilities)
+        if (
+            required & _VALIDATION_CAPABILITIES
+            and self.validation_command_plan_id_or_none is None
+        ):
+            raise ValueError(
+                "validation_command_plan_id_or_none is required for validation capabilities"
+            )
+        if ExecutorCapability.CHECKPOINTED_RESUME in required and (
             self.checkpoint_id_or_none is None
             or self.resume_plan_id_or_none is None
         ):
