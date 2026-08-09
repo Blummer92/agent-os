@@ -1,13 +1,11 @@
 # Safe Implementation Lane
 
 ## Purpose
-
 Reduce procedural stops for routine repository work without weakening merge,
 protected-branch, credential, production, external-write, or governed-field
 controls.
 
 ## Eligibility
-
 The lane is available only when all of these are true:
 
 - the work is Tier 0 or Tier 1;
@@ -23,7 +21,6 @@ credential, workflow, governed-field, source-of-truth, and irreversible work is
 not eligible.
 
 ## Authorization Effect
-
 For an eligible issue, the explicit implementation instruction authorizes:
 
 - one non-protected branch;
@@ -37,31 +34,15 @@ Excluded surfaces listed in
 `01_Shared_Standards/github/excluded-surface-baseline.md` remain separately
 unauthorized unless explicitly approved through the governing path.
 
-## Internal Owner Routing
-
-A transition between registered Agent OS owners is internal routing, not by
-itself a user-visible handoff or stop. While the same Safe Implementation Lane
-authorization remains applicable, ChatGPT may continue the interaction through
-the responsible owners instead of returning serial copy/paste prompts.
-
-Ownership does not transfer: the GitHub Service Agent remains the sole repository
-write owner, QA / Test Agent remains the validation-evidence owner where
-applicable, and other registered owners retain their governed responsibilities.
-Internal routing creates no new authority and does not widen the issue scope.
-
-The lane may continue through directly corresponding implementation, tests,
-documentation, in-scope failure diagnosis and repair, exact-head validation,
-Draft PR maintenance, and Ready-for-Review when those actions are already covered
-by the current authorization.
-
-Conversation continuity is not authorization. Phrases such as `continue`,
-`next step`, and `keep going` may continue only actions already covered by the
-current authorization; they never authorize a previously excluded surface.
-
-Surface a user-visible stop when authorization, source of truth, bounded scope,
-or a material decision changes. Preserve internal handoff artifacts when a
-canonical owner or audit trail requires them, but prefer one consolidated
-user-facing result for successful routine work.
+A registered-owner transition is internal routing, not by itself a user-visible
+handoff or stop. While this authorization, source of truth, and bounded scope
+remain applicable, route to the responsible owner and continue in the same
+interaction. Ownership and authority do not transfer: GitHub Service Agent stays
+the sole repository writer and QA / Test Agent retains validation-evidence
+ownership. Already-authorized tests, docs, in-scope repair, exact-head validation,
+Draft PR maintenance, and Ready-for-Review may continue without a new user prompt.
+Conversation continuity, including `continue`, `next step`, or `keep going`, never
+authorizes a previously excluded surface.
 
 ## Bounded Scope Envelope
 
@@ -102,22 +83,16 @@ Stop for `needs-decision` when evidence is ambiguous, stale, blocked, closed, or
 conflicting, or when work would materially change architecture, ownership,
 schema, compatibility, authority, external effects, protected settings, or the
 issue objective. Do not stop solely for a registered-owner transition, a directly
-corresponding test, in-scope failure diagnosis or repair, mechanical registration,
-required changelog entry, or environment-assigned non-protected branch.
+corresponding test, in-scope repair, mechanical registration, required changelog
+entry, or environment-assigned non-protected branch.
 
 ## Reporting
 
 The pull request records the actual branch, all files changed, why each support
 file was necessary, tests and exact-head evidence, docs, blockers, handoffs,
 risks, rollback, and confirmation that merge and excluded surfaces remain
-unauthorized. User-facing completion should consolidate routine internal routing
-rather than require separate owner-by-owner handoff prompts.
+unauthorized. Prefer one consolidated user-facing result for routine internal
+routing while preserving required handoff artifacts for owners and auditability.
 
 ## Version
-
 0.2.0
-
-## Changelog
-
-- 0.2.0 adds continuous internal owner routing for already-authorized Safe Implementation Lane work while preserving all existing ownership, scope, and excluded-surface boundaries (#986).
-- 0.1.0 established the bounded Tier 0/1 Safe Implementation Lane.
