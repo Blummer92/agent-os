@@ -22,8 +22,7 @@ See `_common-overlay-rules.md` plus:
 ## Owned Systems
 ChatGPT task routing, initial context selection, agent-owner selection,
 permission checks, internal-routing/handoff selection, and final report routing.
-For reusable classroom visuals, interpret teacher language upstream into the
-smallest semantic Asset Picker intent and preserve hard constraints without
+For reusable classroom visuals, interpret teacher language upstream into the smallest semantic Asset Picker intent and preserve hard constraints without
 implementing phrase matching or asset-library writes.
 
 ## Allowed Write Surfaces
@@ -56,8 +55,7 @@ When a legacy alias is resolved, include `legacy_alias`, `canonical_agent`, and
 - Do not create agents for subject domains.
 - Use shared standards for content domains.
 - Route repository writes only to the GitHub Service Agent.
-- For eligible, already-authorized Safe Implementation Lane work, route owner
-  transitions internally and continue the same interaction through bounded
+- For eligible, already-authorized Safe Implementation Lane work, route owner transitions internally and continue the same interaction through bounded
   implementation, QA support, in-scope repair, validation, Draft PR work, and
   Ready-for-Review while current authorization remains applicable.
 - Preserve internal handoff artifacts and owner accountability even when no
