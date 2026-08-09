@@ -9,6 +9,9 @@ from scripts.agent_os_candidate_packet.approval_stage import (
     prepare_approval_projection,
 )
 from scripts.agent_os_issue_acceptance import ApprovalKind, ApprovalState
+from scripts.agent_os_issue_acceptance.approved_execution_projection import (
+    serialize_approved_execution_projection,
+)
 from scripts.agent_os_issue_acceptance.planning_binding import (
     compute_planning_binding_fingerprint,
 )
@@ -58,6 +61,8 @@ def test_missing_human_decision_preserves_deterministic_pending_candidate() -> N
     assert first.status is ApprovalProjectionStageStatus.NEEDS_DECISION
     assert first.pending_candidate.state is ApprovalState.PENDING
     assert first.pending_candidate.approval_id == second.pending_candidate.approval_id
+    assert first.pending_candidate.authorizer_id == "candidate-preparer"
+    assert first.pending_candidate.decision_id == "candidate-753"
     assert first.decision_revision is None
     assert first.projection is None
     assert first.execution_authorized is False
@@ -77,11 +82,39 @@ def test_explicit_human_approval_reaches_complete_projection_through_exact_bindi
     assert upstream.planning_binding is not None
     assert result.status is ApprovalProjectionStageStatus.COMPLETE
     assert result.decision_revision.state is ApprovalState.APPROVED
+    assert result.decision_revision.authorizer_id == "repository-owner"
+    assert result.decision_revision.decision_id == "human-approved-753"
+    assert result.pending_candidate.authorizer_id != result.decision_revision.authorizer_id
+    assert result.pending_candidate.decision_id != result.decision_revision.decision_id
     assert result.applicability.approval_applicable is True
     assert result.projection is result.projection_result.projection
     assert result.projection.authoritative is False
     assert result.projection.execution_authorized is False
     assert result.projection.side_effects_performed is False
+
+
+def test_complete_projection_serialization_is_deterministic() -> None:
+    first = prepare_approval_projection(
+        _prepare(),
+        candidate_context=_context(),
+        approval_decision=_decision(),
+        evaluated_at=_EVALUATED_AT,
+        projected_at=_PROJECTED_AT,
+    )
+    second = prepare_approval_projection(
+        _prepare(),
+        candidate_context=_context(),
+        approval_decision=_decision(),
+        evaluated_at=_EVALUATED_AT,
+        projected_at=_PROJECTED_AT,
+    )
+
+    assert first.status is ApprovalProjectionStageStatus.COMPLETE
+    assert second.status is ApprovalProjectionStageStatus.COMPLETE
+    assert first.projection.projection_id == second.projection.projection_id
+    assert serialize_approved_execution_projection(first.projection) == serialize_approved_execution_projection(
+        second.projection
+    )
 
 
 def test_rejection_never_projects() -> None:
@@ -94,6 +127,36 @@ def test_rejection_never_projects() -> None:
     )
 
     assert result.status is ApprovalProjectionStageStatus.REJECTED
+    assert result.projection is None
+    assert result.execution_authorized is False
+
+
+def test_expired_decision_never_projects() -> None:
+    result = prepare_approval_projection(
+        _prepare(),
+        candidate_context=_context(),
+        approval_decision=_decision(ApprovalState.EXPIRED),
+        evaluated_at=_EVALUATED_AT,
+        projected_at=_PROJECTED_AT,
+    )
+
+    assert result.status is ApprovalProjectionStageStatus.EXPIRED
+    assert result.decision_revision.state is ApprovalState.EXPIRED
+    assert result.projection is None
+    assert result.execution_authorized is False
+
+
+def test_superseded_decision_never_projects() -> None:
+    result = prepare_approval_projection(
+        _prepare(),
+        candidate_context=_context(),
+        approval_decision=_decision(ApprovalState.SUPERSEDED),
+        evaluated_at=_EVALUATED_AT,
+        projected_at=_PROJECTED_AT,
+    )
+
+    assert result.status is ApprovalProjectionStageStatus.SUPERSEDED
+    assert result.decision_revision.state is ApprovalState.SUPERSEDED
     assert result.projection is None
     assert result.execution_authorized is False
 
