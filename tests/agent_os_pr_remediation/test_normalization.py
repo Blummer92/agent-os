@@ -83,6 +83,12 @@ def test_superseded_requires_evidence():
         normalize_review_thread(payload)
 
 
+def test_body_at_configured_limit_is_accepted():
+    payload = _thread_payloads()[0]
+    payload["body"] = "x" * 100_000
+    assert len(normalize_review_thread(payload).body_fingerprint) == 64
+
+
 def test_oversized_body_fails_closed():
     payload = _thread_payloads()[0]
     payload["body"] = "x" * 100_001
