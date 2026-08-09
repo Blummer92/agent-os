@@ -14,9 +14,6 @@ from scripts.agent_os_issue_acceptance import ApprovalKind, ApprovalState
 from scripts.agent_os_issue_acceptance.approved_execution_projection import (
     serialize_approved_execution_projection,
 )
-from scripts.agent_os_issue_acceptance.planning_binding import (
-    compute_planning_binding_fingerprint,
-)
 from tests.agent_os_candidate_packet.test_proposal_stage import _prepare
 
 _CANDIDATE_AT = "2026-08-06T04:05:00Z"
@@ -24,6 +21,7 @@ _APPROVED_AT = "2026-08-06T04:10:00Z"
 _EVALUATED_AT = "2026-08-06T04:15:00Z"
 _PROJECTED_AT = "2026-08-06T04:15:00Z"
 _EXPIRES_AT = "2026-08-06T05:00:00Z"
+_EXPIRED_AT = "2026-08-06T05:00:00Z"
 
 
 def _context() -> ApprovalCandidateContext:
@@ -41,7 +39,7 @@ def _decision(state=ApprovalState.APPROVED) -> ApprovalDecision:
         state=state,
         decision_id=f"human-{state.value}-753",
         authorizer_id="repository-owner",
-        decision_at=_APPROVED_AT,
+        decision_at=_EXPIRED_AT if state is ApprovalState.EXPIRED else _APPROVED_AT,
     )
 
 
@@ -104,7 +102,7 @@ def test_human_decision_authorizer_cannot_be_inferred() -> None:
         )
 
 
-def test_explicit_human_approval_reaches_complete_projection_through_exact_binding() -> None:
+def test_explicit_human_approval_reaches_complete_projection() -> None:
     upstream = _prepare()
     result = prepare_approval_projection(
         upstream,
@@ -114,7 +112,6 @@ def test_explicit_human_approval_reaches_complete_projection_through_exact_bindi
         projected_at=_PROJECTED_AT,
     )
 
-    assert upstream.planning_binding is not None
     assert result.status is ApprovalProjectionStageStatus.COMPLETE
     assert result.decision_revision.state is ApprovalState.APPROVED
     assert result.decision_revision.authorizer_id == "repository-owner"
@@ -123,9 +120,9 @@ def test_explicit_human_approval_reaches_complete_projection_through_exact_bindi
     assert result.pending_candidate.decision_id != result.decision_revision.decision_id
     assert result.applicability.approval_applicable is True
     assert result.projection is result.projection_result.projection
-    assert result.projection.handoff_digest == upstream.planning_binding.handoff_digest
-    assert result.projection.graph_digest == upstream.planning_binding.graph_digest
-    assert result.projection.planning_result_digest == upstream.planning_binding.planning_result_digest
+    assert result.projection.handoff_digest == upstream.proposal.handoff_digest
+    assert result.projection.graph_digest == upstream.proposal.graph_digest
+    assert result.projection.planning_result_digest == upstream.proposal.planning_result_digest
     assert result.projection.authoritative is False
     assert result.projection.execution_authorized is False
     assert result.projection.side_effects_performed is False
@@ -174,8 +171,8 @@ def test_expired_decision_never_projects() -> None:
         _prepare(),
         candidate_context=_context(),
         approval_decision=_decision(ApprovalState.EXPIRED),
-        evaluated_at=_EVALUATED_AT,
-        projected_at=_PROJECTED_AT,
+        evaluated_at=_EXPIRED_AT,
+        projected_at=_EXPIRED_AT,
     )
 
     assert result.status is ApprovalProjectionStageStatus.EXPIRED
@@ -203,14 +200,12 @@ def test_superseded_decision_never_projects() -> None:
 
 def test_binding_drift_fails_closed_before_projection() -> None:
     upstream = _prepare()
-    binding = upstream.planning_binding
-    assert binding is not None
-    changed = replace(binding, handoff_digest="f" * 64, binding_id="")
-    drifted_binding = replace(
-        changed,
-        binding_id=compute_planning_binding_fingerprint(changed),
+    drifted_proposal = replace(upstream.proposal, handoff_digest="f" * 64, proposal_id="")
+    drifted = replace(
+        upstream,
+        proposal=drifted_proposal,
+        proposal_result=replace(upstream.proposal_result, proposals=(drifted_proposal,)),
     )
-    drifted = replace(upstream, planning_binding=drifted_binding)
 
     result = prepare_approval_projection(
         drifted,
