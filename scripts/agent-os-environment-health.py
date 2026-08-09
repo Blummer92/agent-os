@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Bounded, fail-closed health check for the agent-os-codespaces-v1 profile.
 
-Single-command, deterministic evidence report. Performs no retries, no
-silent runtime substitution, and no GitHub/network writes. See
+Single-command evidence report. Performs no retries, no silent runtime
+substitution, and no GitHub/network writes. See
 `docs/AGENT_OS_CODESPACES_RUNBOOK.md` for the operator-facing contract and
 `scripts/verify-repo-state-contract.md` / `scripts/prepare-issue-worktree-contract.md`
 for the repository-state and worktree contracts this check reuses rather than
@@ -13,11 +13,13 @@ Exit codes: 0 pass, 1 one or more checks failed (fail-closed), 2 usage error.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -34,6 +36,7 @@ REQUIRED_VALIDATION_COMMANDS = (
 DEFAULT_MIN_FREE_MB = 500
 SUBPROCESS_TIMEOUT_SECONDS = 5
 _REPOSITORY_COMPONENT = re.compile(r"[A-Za-z0-9_.-]+")
+_SURFACE_ID = re.compile(r"[A-Za-z0-9_.:-]{1,80}")
 
 # Bounded prohibited-credential patterns. This scans only the evidence this
 # script is about to emit -- it is not a repository-wide secret scanner and
@@ -115,6 +118,43 @@ def _canonicalize_repository_remote(origin_url: str) -> str | None:
     return f"{parts[0]}/{parts[1]}"
 
 
+def _canonical_observed_at(now: datetime | None = None) -> str:
+    value = now or datetime.now(timezone.utc)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _normalize_surface_id(value: str | None) -> str:
+    candidate = (value or PROFILE_ID).strip()
+    if not _SURFACE_ID.fullmatch(candidate):
+        raise ValueError("execution surface id must match [A-Za-z0-9_.:-]{1,80}")
+    return candidate
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _environment_evidence_id(evidence_without_id: dict) -> str:
+    material = {
+        key: value
+        for key, value in evidence_without_id.items()
+        if key not in {"observed_at", "environment_health_evidence_id"}
+    }
+    digest = hashlib.sha256(_canonical_json(material).encode("utf-8")).hexdigest()
+    return f"sha256:{digest}"
+
+
+def evidence_matches_surface(evidence: dict, execution_surface_id: str) -> bool:
+    """Fail closed when evidence belongs to a different execution surface."""
+    try:
+        expected = _normalize_surface_id(execution_surface_id)
+    except ValueError:
+        return False
+    return evidence.get("execution_surface_id") == expected
+
+
 def check_repository_identity(repo_root: Path) -> dict:
     ok, origin_url = _run(["git", "remote", "get-url", "origin"], cwd=repo_root)
     actual = _canonicalize_repository_remote(origin_url) if ok else None
@@ -160,14 +200,27 @@ def check_tooling(repo_root: Path) -> dict:
     for name in REQUIRED_TOOLS:
         path = shutil.which(name)
         if path is None:
-            tools[name] = {"available": False, "version": None}
+            tools[name] = {"available": False, "state": "unavailable", "version": None}
             all_ok = False
             continue
         ok, version = _run([name, "--version"])
-        tools[name] = {"available": ok, "version": version if ok else None}
+        state = "available" if ok else "unknown"
+        tools[name] = {"available": ok, "state": state, "version": version if ok else None}
         all_ok = all_ok and ok
-    tools["python"] = {"available": True, "version": sys.version.split()[0]}
+    tools["python"] = {
+        "available": True,
+        "state": "available",
+        "version": sys.version.split()[0],
+    }
     return {"name": "tooling", "passed": all_ok, "detail": tools}
+
+
+def check_process_execution() -> dict:
+    return {
+        "name": "process-execution",
+        "passed": True,
+        "detail": {"state": "available", "mechanism": "python-subprocess"},
+    }
 
 
 def check_disk_space(repo_root: Path, min_free_mb: int) -> dict:
@@ -193,7 +246,7 @@ def check_github_auth_capability() -> dict:
         return {
             "name": "github-auth-capability",
             "passed": True,
-            "detail": {"capable": True, "source": "env"},
+            "detail": {"capable": True, "state": "authenticated", "source": "env"},
         }
     gh_path = shutil.which("gh")
     if gh_path is not None:
@@ -205,18 +258,26 @@ def check_github_auth_capability() -> dict:
                 capture_output=True,
                 timeout=SUBPROCESS_TIMEOUT_SECONDS,
             )
-            capable = result.returncode == 0
         except (OSError, subprocess.TimeoutExpired):
-            capable = False
+            return {
+                "name": "github-auth-capability",
+                "passed": False,
+                "detail": {"capable": False, "state": "unknown", "source": "gh-cli"},
+            }
+        capable = result.returncode == 0
         return {
             "name": "github-auth-capability",
             "passed": capable,
-            "detail": {"capable": capable, "source": "gh-cli"},
+            "detail": {
+                "capable": capable,
+                "state": "authenticated" if capable else "unauthenticated",
+                "source": "gh-cli",
+            },
         }
     return {
         "name": "github-auth-capability",
         "passed": False,
-        "detail": {"capable": False, "source": "none"},
+        "detail": {"capable": False, "state": "not-applicable", "source": "none"},
     }
 
 
@@ -245,11 +306,19 @@ def _redact(value):
     return value, False
 
 
-def build_evidence(repo_root: Path, network_mode: str, min_free_mb: int) -> dict:
+def build_evidence(
+    repo_root: Path,
+    network_mode: str,
+    min_free_mb: int,
+    execution_surface_id: str | None = None,
+    observed_at: str | None = None,
+) -> dict:
+    surface_id = _normalize_surface_id(execution_surface_id)
     checks = [
         check_repository_identity(repo_root),
         check_checkout_identity(repo_root),
         check_tooling(repo_root),
+        check_process_execution(),
         check_disk_space(repo_root, min_free_mb),
         check_validation_commands(repo_root),
         check_github_auth_capability(),
@@ -258,18 +327,24 @@ def build_evidence(repo_root: Path, network_mode: str, min_free_mb: int) -> dict
     evidence = {
         "schema": SCHEMA,
         "profile_id": PROFILE_ID,
+        "execution_surface_id": surface_id,
+        "observed_at": observed_at or _canonical_observed_at(),
         "network_mode": network_mode,
         "checks": checks,
         "failures": failures,
         "authority": dict(_AUTHORITY_FIELDS),
         "status": "pass" if not failures else "fail",
     }
+    evidence["environment_health_evidence_id"] = _environment_evidence_id(evidence)
     redacted_evidence, credential_found = _redact(evidence)
     if credential_found:
         redacted_evidence["status"] = "fail"
         redacted_evidence["failures"] = list(redacted_evidence["failures"]) + [
             "prohibited-credential-material-detected"
         ]
+        redacted_evidence["environment_health_evidence_id"] = _environment_evidence_id(
+            redacted_evidence
+        )
     return redacted_evidence
 
 
@@ -281,6 +356,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         choices=("local-only", "github-connected"),
         default=None,
     )
+    parser.add_argument("--execution-surface-id", default=None)
     parser.add_argument("--min-free-mb", type=int, default=DEFAULT_MIN_FREE_MB)
     parser.add_argument("--check", choices=("repository-identity",), default=None)
     return parser.parse_args(argv)
@@ -304,6 +380,15 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"error": f"unsupported network mode: {network_mode}"}))
         return 2
 
+    execution_surface_id = args.execution_surface_id or os.environ.get(
+        "AGENT_OS_EXECUTION_SURFACE_ID", PROFILE_ID
+    )
+    try:
+        execution_surface_id = _normalize_surface_id(execution_surface_id)
+    except ValueError as exc:
+        print(json.dumps({"error": str(exc)}))
+        return 2
+
     if args.check == "repository-identity":
         result = check_repository_identity(repo_root)
         redacted_result, credential_found = _redact(result)
@@ -312,7 +397,12 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(redacted_result, sort_keys=True))
         return 0 if redacted_result["passed"] else 1
 
-    evidence = build_evidence(repo_root, network_mode, args.min_free_mb)
+    evidence = build_evidence(
+        repo_root,
+        network_mode,
+        args.min_free_mb,
+        execution_surface_id=execution_surface_id,
+    )
     print(json.dumps(evidence, sort_keys=True, indent=2))
     return 0 if evidence["status"] == "pass" else 1
 
