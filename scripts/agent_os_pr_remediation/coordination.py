@@ -23,23 +23,27 @@ MAX_FILES = 5_000
 MAX_STRING_LENGTH = 10_000
 MAX_REASON_CODES = 64
 
-VALIDATION_STATES = {
-    "validation-planned",
-    "validation-passed",
-    "validation-failed",
-    "validation-unavailable",
-    "validation-incomplete",
-    "validation-stale",
-    "final-head-mismatch",
-    "manual-review-required",
-}
-SUGGESTED_ACTIONS = {
-    "eligible-to-resolve",
-    "leave-open",
-    "request-more-evidence",
-    "route-out-of-scope",
-    "manual-decision-required",
-}
+VALIDATION_STATES = frozenset(
+    {
+        "validation-planned",
+        "validation-passed",
+        "validation-failed",
+        "validation-unavailable",
+        "validation-incomplete",
+        "validation-stale",
+        "final-head-mismatch",
+        "manual-review-required",
+    }
+)
+SUGGESTED_ACTIONS = frozenset(
+    {
+        "eligible-to-resolve",
+        "leave-open",
+        "request-more-evidence",
+        "route-out-of-scope",
+        "manual-decision-required",
+    }
+)
 VALIDATION_PROFILES = {"static", "focused", "aggregate", "manual-review"}
 UPSTREAM_EXECUTION_STATUSES = {
     "planned",
@@ -363,6 +367,8 @@ def _binding_state(
     if not binding.evidence_complete:
         reasons.append("validation-evidence-incomplete")
         return "validation-incomplete", tuple(sorted(set(reasons)))
+    if binding.profile == "manual-review":
+        return "manual-review-required", tuple(sorted(set(reasons)))
     if binding.execution_status == "planned":
         return "validation-planned", tuple(sorted(set(reasons)))
     if binding.execution_status == "focused-pass-aggregate-pending":
@@ -375,7 +381,7 @@ def _binding_state(
     if binding.execution_status in {"cancelled", "infrastructure-failure", "unavailable"}:
         reasons.append("validation-execution-unavailable")
         return "validation-unavailable", tuple(sorted(set(reasons)))
-    if binding.execution_status == "manual-review" or binding.profile == "manual-review":
+    if binding.execution_status == "manual-review":
         return "manual-review-required", tuple(sorted(set(reasons)))
     if binding.execution_status in {"static-pass", "aggregate-pass"}:
         return "validation-passed", tuple(sorted(set(reasons)))
@@ -611,7 +617,8 @@ def coordinate_resolution(
             for binding in bindings
         )
         aggregate_final_pass = any(
-            binding.profile == "aggregate"
+            binding.category in required_categories
+            and binding.profile == "aggregate"
             and _binding_state(
                 binding,
                 current_head_sha=current_head,
