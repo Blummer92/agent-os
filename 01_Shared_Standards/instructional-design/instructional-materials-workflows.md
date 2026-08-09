@@ -45,6 +45,12 @@ or image-gap work. `visuals-required` may perform one bounded Visual Asset
 Library read only when separately authorized, then filters to eligible,
 human-reviewed candidates and consumes one cohesive visual plan.
 
+For teacher-language reuse selection, inherit
+`01_Shared_Standards/instructional-design/visual-asset-picker-standard.md`.
+The Asset Picker resolves reuse-first selection and preserves selected asset
+identity/constraints; this workflow consumes that handoff without reinterpreting
+the teacher's original selection request.
+
 Reuse a suitable approved asset before proposing a new equivalent, record every
 selected approved asset ID, and do not add decorative visuals by default. Never
 infer approval or compatibility from filenames, notes, prompts, comments, or
@@ -88,4 +94,4 @@ summaries. Do not store full source materials, shared documents, asset indexes,
 formal release notes, version logs, or long histories in Memory.
 
 ## Version
-0.2.1
+0.2.2

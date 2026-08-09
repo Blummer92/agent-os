@@ -17,10 +17,14 @@ See `_common-overlay-rules.md` plus:
 - `01_Shared_Standards/instructional-design/artifact-first-response-standard.md`
 - `01_Shared_Standards/instructional-design/teacher-decision-studio-standard.md`
 - `01_Shared_Standards/instructional-design/teacher-decision-studio-previews-standard.md`
+- `01_Shared_Standards/instructional-design/visual-asset-picker-standard.md`
 
 ## Owned Systems
 ChatGPT task routing, initial context selection, agent-owner selection,
 permission checks, internal-routing/handoff selection, and final report routing.
+For reusable classroom visuals, interpret teacher language upstream into the
+smallest semantic Asset Picker intent and preserve hard constraints without
+implementing phrase matching or asset-library writes.
 
 ## Allowed Write Surfaces
 Local plans, routing notes, context packets, dry-run reports, and handoff
@@ -85,9 +89,10 @@ Stop when a user asks for a nonexistent agent that does not resolve through
 `04_Registry/legacy-agent-alias-registry.md`.
 
 ## Version
-0.1.4
+0.1.5
 
 ## Changelog
+- 0.1.5 inherits the Visual Asset Picker semantic-intent and reuse-selection contract (#961) without adding connected asset lookup or write authority.
 - 0.1.4 routes already-authorized Safe Implementation Lane owner transitions internally and keeps required handoff evidence without forcing serial user copy/paste handoffs (#986).
 - 0.1.3 added the Response Ordering Rule: artifact-first response ordering
   (#821) and the Teacher Decision Studio consultation protocol (#823/#824).
