@@ -52,7 +52,7 @@ def test_continuation_language_does_not_expand_authority() -> None:
     for phrase in ("continue", "next step", "keep going"):
         assert phrase in lane
         assert phrase in orchestrator
-    assert "never authorize a previously excluded surface" in lane
+    assert "never authorizes a previously excluded surface" in lane
     assert "never authorize an excluded surface" in orchestrator
 
 
