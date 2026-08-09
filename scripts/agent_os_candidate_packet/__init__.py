@@ -17,8 +17,6 @@ separate evidence wrapper around the existing Memory Manager packet and creates
 no execution authority.
 """
 
-from importlib import import_module
-
 from scripts.agent_os_issue_acceptance.acceptance_report_transport import (
     acceptance_report_from_payload,
     acceptance_report_to_payload,
@@ -44,6 +42,11 @@ from .executable_lane_selection import (
     deserialize_executable_lane_selection,
     select_executable_lanes,
     serialize_executable_lane_selection,
+)
+from .implementation_packet_projection import (
+    ImplementationPacketProjection,
+    ImplementationPacketSourceIdentities,
+    project_implementation_packet,
 )
 from .readiness_stage import prepare_issue_readiness
 from .planning_stage import (
@@ -101,26 +104,6 @@ from .stage_models import (
     readiness_result_from_dict,
     readiness_result_to_dict,
 )
-
-_LAZY_IMPLEMENTATION_PACKET_EXPORTS = frozenset(
-    {
-        "ImplementationPacketProjection",
-        "ImplementationPacketSourceIdentities",
-        "project_implementation_packet",
-    }
-)
-
-
-def __getattr__(name: str):
-    """Load Memory Manager-backed projection exports only when requested."""
-
-    if name not in _LAZY_IMPLEMENTATION_PACKET_EXPORTS:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    module = import_module(f"{__name__}.implementation_packet_projection")
-    value = getattr(module, name)
-    globals()[name] = value
-    return value
-
 
 __all__ = [
     "ApprovalCandidateContext",
