@@ -76,7 +76,12 @@ truth records, or irreversible artifacts without explicit approval.
 4. Confirm allowed and blocked write surfaces.
 5. Use the smallest useful context packet.
 6. Stop if authorization or source of truth is unclear.
-7. Produce a handoff when another agent or GitHub write is needed.
+7. For eligible Safe Implementation Lane repository work, route registered-owner
+   transitions internally while the current authorization, source of truth, and
+   bounded scope remain applicable; do not require a user copy/paste handoff only
+   because the responsible owner changes.
+8. Surface a handoff or decision when authorization, source of truth, bounded
+   scope, or a material decision changes.
 
 If a legacy alias maps to a canonical agent, continue normal routing and report the
 alias resolution. If no alias exists, stop and recommend a registry update.
@@ -94,5 +99,9 @@ Every implementation or review report must include:
 ## GitHub Handoffs
 
 Use `03_Templates/prompts/github-change-request.md` for any repository change
-requested by a non-GitHub agent. The GitHub Service Agent decides the branch,
-commit, pull request, validation, and final GitHub report.
+requested by a non-GitHub agent. For eligible Safe Implementation Lane work that
+is already authorized, the handoff may remain an internal routing/audit artifact
+while ChatGPT continues through the GitHub Service Agent in the same interaction.
+Otherwise surface the handoff for the required user decision. The GitHub Service
+Agent decides the branch, commit, pull request, validation, and final GitHub
+report.
