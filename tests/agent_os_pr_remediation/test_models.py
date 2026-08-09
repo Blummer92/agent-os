@@ -37,6 +37,11 @@ def test_custom_objects_are_rejected():
         canonical_json(Custom())
 
 
+def test_nested_non_string_dictionary_keys_are_rejected():
+    with pytest.raises(EvidenceValidationError):
+        canonical_json({"nested": {1: "value"}})
+
+
 def test_bool_does_not_satisfy_integer_field():
     payload = _snapshot()
     payload["pr_number"] = True
