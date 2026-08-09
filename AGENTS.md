@@ -1,13 +1,10 @@
 # AGENTS.md
-
 ## Purpose
-
 This file is the ChatGPT entry point for Agent OS: the governed knowledge base
 for agent standards, overlays, templates, registry maps, examples, tests, and
 release notes.
 
 ## Source Of Truth
-
 GitHub is the canonical source of truth for Agent OS. ChatGPT is an execution
 interface, not the source of truth.
 
@@ -15,7 +12,6 @@ Notion, Google Drive, and ChatGPT memory are secondary working surfaces unless
 a governance-approved source-of-truth change says otherwise.
 
 ## Classroom Artifact Destinations
-
 Agent OS governance, standards, overlays, registry files, templates, tests, and
 release notes default to GitHub.
 
@@ -32,7 +28,6 @@ Do not route classroom artifacts to GitHub just because Agent OS itself lives in
 GitHub.
 
 ## Start Here
-
 Before doing Agent OS work, read only the files needed for the task:
 
 Agents should consult `04_Registry/navigation-alias-registry.md` before manually searching for common Agent OS documentation paths.
@@ -45,7 +40,6 @@ Agents should consult `04_Registry/navigation-alias-registry.md` before manually
 6. any shared standards referenced by that overlay
 
 ## Agent Selection
-
 Use agents for repeatable jobs, not every subject area. Video production,
 photography, typography, color theory, graphic design, and AI learning are
 content domains unless a governed change promotes one into a real repeatable
@@ -59,7 +53,6 @@ executable agents — they resolve to canonical agents listed in
 execute.
 
 ## Access Rules
-
 Default to read-only when authorization, target, or source of truth is unclear.
 
 Only the GitHub Service Agent may write to GitHub. All non-GitHub agents must
@@ -69,30 +62,34 @@ Do not modify production systems, governed fields, sharing settings, source-of-
 truth records, or irreversible artifacts without explicit approval.
 
 ## ChatGPT Workflow
-
 1. Identify the task owner.
 2. Resolve any legacy agent aliases through `04_Registry/legacy-agent-alias-registry.md`.
 3. Read the owner overlay and referenced standards.
 4. Confirm allowed and blocked write surfaces.
 5. Use the smallest useful context packet.
 6. Stop if authorization or source of truth is unclear.
-7. Produce a handoff when another agent or GitHub write is needed.
+7. For eligible Safe Implementation Lane repository work, route registered-owner
+   transitions internally while the current authorization, source of truth, and
+   bounded scope remain applicable; do not require a user copy/paste handoff only
+   because the responsible owner changes.
+8. Surface a handoff or decision when authorization, source of truth, bounded
+   scope, or a material decision changes.
 
 If a legacy alias maps to a canonical agent, continue normal routing and report the
 alias resolution. If no alias exists, stop and recommend a registry update.
 
 ## Required Final Report
-
-Every implementation or review report must include:
-
-- files changed
-- tests run
-- docs updated
-- unresolved blockers
-- handoff recommendations
+Every implementation or review report must include files changed, tests run,
+docs updated, unresolved blockers, handoff recommendations, and remaining risks.
+For eligible Safe Implementation Lane work, also follow the `Reporting` contract
+in `01_Shared_Standards/github/safe-implementation-lane.md`: actual branch,
+exact-head evidence, rollback, and authorization/excluded-surface confirmation.
 
 ## GitHub Handoffs
-
 Use `03_Templates/prompts/github-change-request.md` for any repository change
-requested by a non-GitHub agent. The GitHub Service Agent decides the branch,
-commit, pull request, validation, and final GitHub report.
+requested by a non-GitHub agent. For eligible Safe Implementation Lane work that
+is already authorized, the handoff may remain an internal routing/audit artifact
+while ChatGPT continues through the GitHub Service Agent in the same interaction.
+Otherwise surface the handoff for the required user decision. The GitHub Service
+Agent decides the branch, commit, pull request, validation, and final GitHub
+report.

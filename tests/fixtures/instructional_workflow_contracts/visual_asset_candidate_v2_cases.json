@@ -1,0 +1,79 @@
+{
+  "contract_version": "curriculum-visual-asset-candidates-v2",
+  "source_revision": "visual-library-snapshot-v2",
+  "cases": [
+    {
+      "name": "complete governed evidence is eligible",
+      "mutation": null,
+      "expected_group": "eligible"
+    },
+    {
+      "name": "unspecified required cohesion evidence routes to manual review",
+      "mutation": {
+        "path": [
+          "compatibility_evidence",
+          "cohesion_profile",
+          "palette_family"
+        ],
+        "value": "unspecified"
+      },
+      "expected_group": "manual_review",
+      "expected_reason": "manual-review-asset-cohesion-unspecified"
+    },
+    {
+      "name": "attributable rejected audience evidence is a hard rejection",
+      "mutation": {
+        "path": [
+          "compatibility_evidence",
+          "cohesion_profile",
+          "audience_compatibility",
+          "state"
+        ],
+        "value": "rejected"
+      },
+      "expected_group": "rejected",
+      "expected_reason": "asset-audience-incompatible"
+    },
+    {
+      "name": "unsupported cohesion vocabulary is invalid",
+      "mutation": {
+        "path": [
+          "compatibility_evidence",
+          "cohesion_profile",
+          "medium"
+        ],
+        "value": "oil-painting"
+      },
+      "expected_group": "rejected",
+      "expected_reason": "asset-compatibility-invalid"
+    },
+    {
+      "name": "candidate role mismatch is a hard rejection",
+      "mutation": {
+        "path": [
+          "compatibility_evidence",
+          "purpose",
+          "role_types"
+        ],
+        "value": [
+          "non-example"
+        ]
+      },
+      "expected_group": "rejected",
+      "expected_reason": "visual-candidate-role-mismatch"
+    },
+    {
+      "name": "stale compatibility evidence routes to manual review",
+      "mutation": {
+        "path": [
+          "compatibility_evidence",
+          "freshness",
+          "stale"
+        ],
+        "value": true
+      },
+      "expected_group": "manual_review",
+      "expected_reason": "manual-review-asset-compatibility-stale"
+    }
+  ]
+}

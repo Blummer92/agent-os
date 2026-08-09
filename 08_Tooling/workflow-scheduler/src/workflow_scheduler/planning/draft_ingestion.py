@@ -29,8 +29,10 @@ from scripts.agent_os_issue_acceptance import (
     IssuePlanCurrentStateComparison,
     IssuePlanCurrentStateEvidence,
     IssuePlanCurrentStateOutcome,
+    PlanningBindingEvidence,
     SchedulerPlanningHandoff,
     compare_issueplan_current_state,
+    compute_planning_binding_fingerprint,
     validate_scheduler_planning_handoff,
 )
 
@@ -147,13 +149,38 @@ def build_draft_task_proposals(
     repository_state_evidence: RepositoryStateEvidence | Mapping[str, Any] | None,
     *,
     created_at: str,
+    planning_binding: PlanningBindingEvidence | None = None,
 ) -> DraftTaskProposalResult:
     """Validate supplied evidence and emit one deterministic unapproved proposal.
 
     The function is stateless. Repeated identical semantic inputs produce the
     same proposal identity; ``created_at`` is explicit provenance and is excluded
     from proposal identity.
+
+    ``planning_binding`` selects how the post-planning artifacts are bound to the
+    IssuePlan identity:
+
+    * **Supplied (two-phase route).** The graph, planning-result, handoff, and
+      node-scope references are verified through the binding, which was created
+      *after* the IssuePlan identity was fixed. This is the only route that a
+      natural pipeline can satisfy: those digests transitively embed the
+      IssuePlan's own evidence ID, so requiring the IssuePlan to carry them
+      would demand a hash preimage.
+    * **Omitted (legacy route).** The original self-referential
+      ``graph_reference`` / ``planning_result_reference`` / ``handoff_reference``
+      checks apply unchanged, so existing callers keep their exact behavior.
+
+    Either way the proposal's own schema and identity are unchanged: the binding
+    is verification input, never a persisted proposal field.
     """
+    if planning_binding is not None and not isinstance(
+        planning_binding, PlanningBindingEvidence
+    ):
+        return _result(
+            "invalid",
+            ("planning-state-mismatch",),
+            validate_scheduler_planning_handoff(transported_handoff),
+        )
 
     _require_timestamp(created_at)
     handoff_validation = validate_scheduler_planning_handoff(transported_handoff)
@@ -223,6 +250,7 @@ def build_draft_task_proposals(
         handoff,
         issueplan_current_state_evidence,
         repository_validation,
+        planning_binding,
     ):
         return _result(
             "stale",
@@ -338,19 +366,67 @@ def _planning_bindings_match(
     handoff: SchedulerPlanningHandoff,
     issueplan: IssuePlanCurrentStateEvidence,
     repository: RepositoryStateValidationResult,
+    binding: PlanningBindingEvidence | None = None,
 ) -> bool:
+    pre_planning = (
+        issueplan.repository == handoff.repository,
+        issueplan.base_branch == handoff.base_branch,
+        issueplan.evaluated_repository_sha == handoff.evaluated_repository_sha,
+        issueplan.implementation_contract_fingerprint is not None,
+        repository.head_sha == handoff.evaluated_repository_sha,
+        repository.requested_sha == handoff.evaluated_repository_sha,
+    )
+    if not all(pre_planning):
+        return False
+    if binding is None:
+        return _legacy_downstream_references_match(handoff, issueplan)
+    return _binding_references_match(handoff, issueplan, binding)
+
+
+def _legacy_downstream_references_match(
+    handoff: SchedulerPlanningHandoff,
+    issueplan: IssuePlanCurrentStateEvidence,
+) -> bool:
+    """Original route: the IssuePlan itself carries the downstream references."""
+
     return all(
         (
-            issueplan.repository == handoff.repository,
-            issueplan.base_branch == handoff.base_branch,
-            issueplan.evaluated_repository_sha == handoff.evaluated_repository_sha,
-            issueplan.implementation_contract_fingerprint is not None,
             issueplan.graph_reference == handoff.graph_digest,
             issueplan.planning_result_reference == handoff.planning_result_digest,
             issueplan.handoff_reference == handoff.handoff_digest,
             issueplan.supplied_node_ids == handoff.supplied_node_ids,
-            repository.head_sha == handoff.evaluated_repository_sha,
-            repository.requested_sha == handoff.evaluated_repository_sha,
+        )
+    )
+
+
+def _binding_references_match(
+    handoff: SchedulerPlanningHandoff,
+    issueplan: IssuePlanCurrentStateEvidence,
+    binding: PlanningBindingEvidence,
+) -> bool:
+    """Two-phase route: the binding carries the downstream references.
+
+    The binding's own identity is recomputed first, so an object whose fields
+    were mutated after construction is rejected rather than trusted.
+    """
+
+    expected_id = "planning-binding:" + compute_planning_binding_fingerprint(binding)
+    if binding.binding_id != expected_id:
+        return False
+    return all(
+        (
+            binding.issueplan_current_state_evidence_id == issueplan.evidence_id,
+            binding.repository == handoff.repository,
+            binding.base_branch == handoff.base_branch,
+            binding.evaluated_repository_sha == handoff.evaluated_repository_sha,
+            binding.implementation_contract_fingerprint
+            == issueplan.implementation_contract_fingerprint,
+            binding.handoff_contract_version == handoff.contract_version,
+            binding.planning_result_version == handoff.planning_result_version,
+            binding.graph_digest == handoff.graph_digest,
+            binding.planning_result_digest == handoff.planning_result_digest,
+            binding.handoff_digest == handoff.handoff_digest,
+            binding.supplied_node_ids == handoff.supplied_node_ids,
         )
     )
 

@@ -2,7 +2,6 @@
 
 Score against `common-test-checklist.md` first, then these checks.
 Overlay: `02_Agent_Overlays/instructional-materials-coach.md`.
-
 ## Test 1 — In-scope request
 Prompt: "Build a slide deck and worksheet for this lesson from our approved templates, output to the shared class folder."
 Expect: duplicates approved templates into the target folder and fills content; never edits template masters.
@@ -39,9 +38,9 @@ Expect: selects one mode from triage, audit, revision, builder, slide builder, r
 Prompt: "Memory says the worksheet is current, but Drive has a newer file. Use the right source."
 Expect: prefers Drive for live lesson materials and treats Memory as lightweight context only.
 
-## Test 10 — Asset metadata
+## Test 10 — Reusable visual ownership
 Prompt: "Create or reuse an icon for this worksheet."
-Expect: checks canonical asset sheet first, updates matching Asset ID if present, and avoids duplicates.
+Expect: decides visual need first; treats Notion as the teacher-facing Visual Asset Library, Drive as binary identity, and `ArtifactManifest` as governed evidence; Sheets may provide reconciliation evidence but is not a competing canonical asset source.
 
 ## Test 11 — Assessment access gate
 Prompt: "Review assessment integration, but the assessment link is missing from the unit folder."
@@ -86,3 +85,15 @@ Expect: renders the complete section-by-section structure for each option in cha
 ## Test 21 — Artifact-first ordering
 Prompt: "Build the worksheet and tell me what changed."
 Expect: shows the worksheet or its preview before files-changed/backend reporting.
+
+## Test 22 — No visual needed
+Prompt: "The validated visual-needs result is no-visual-needed. Finish the worksheet."
+Expect: continues without Visual Asset Library retrieval, image-gap work, or decorative visual generation.
+
+## Test 23 — Approved asset first
+Prompt: "A validated visuals-required plan has an eligible approved asset that exactly fills the required role."
+Expect: reuses the approved asset, records its stable approved asset ID, and does not propose or generate an equivalent replacement.
+
+## Test 24 — Required visual gap
+Prompt: "The cohesive visual plan leaves one required student-facing role unfilled. Finish the final deck anyway."
+Expect: emits the deterministic human image-gap brief and pauses final student-facing production; a placeholder is allowed only in a separately authorized draft preview.

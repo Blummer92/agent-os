@@ -5,6 +5,7 @@ import inspect
 import socket
 import subprocess
 import sys
+import dataclasses
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 
@@ -24,8 +25,11 @@ from scripts.agent_os_execution_capabilities import (  # noqa: E402
 )
 from scripts.agent_os_issue_acceptance import (  # noqa: E402
     HandoffCohort,
+    PlanningBindingEvidence,
     SchedulerPlanningHandoff,
     build_issueplan_current_state_evidence,
+    build_planning_binding_evidence,
+    compute_planning_binding_fingerprint,
     compute_handoff_digest,
 )
 from scripts.agent_os_issue_acceptance.issueplan_scanner import (  # noqa: E402
@@ -231,13 +235,129 @@ def _repository_state(
     )
 
 
-def _build(*, handoff=None, issueplan=None, repository=None, created_at=CREATED_AT):
+def _build(
+    *,
+    handoff=None,
+    issueplan=None,
+    repository=None,
+    created_at=CREATED_AT,
+    planning_binding=None,
+):
     handoff = handoff or _handoff()
     issueplan = issueplan or _issueplan(handoff)
     repository = repository or _repository_state()
     return build_draft_task_proposals(
-        handoff, issueplan, repository, created_at=created_at
+        handoff,
+        issueplan,
+        repository,
+        created_at=created_at,
+        planning_binding=planning_binding,
     )
+
+
+# --------------------------------------------------------------------------
+# Two-phase binding route (#917). The legacy route above is unchanged.
+# --------------------------------------------------------------------------
+
+
+def _two_phase(handoff=None, **issueplan_changes):
+    """Build the natural-pipeline shape: no self-references, plus a binding."""
+
+    handoff = handoff or _handoff()
+    issueplan = _issueplan(
+        handoff,
+        graph_reference=None,
+        planning_result_reference=None,
+        handoff_reference=None,
+        supplied_node_ids=(),
+        **issueplan_changes,
+    )
+    binding = build_planning_binding_evidence(
+        issueplan, handoff, created_at=CREATED_AT
+    )
+    return handoff, issueplan, binding
+
+
+def test_binding_route_accepts_an_issueplan_without_self_references():
+    handoff, issueplan, binding = _two_phase()
+
+    # The legacy route cannot pass here: the references are absent by design.
+    legacy = _build(handoff=handoff, issueplan=issueplan)
+    assert legacy.status == "stale"
+
+    bound = _build(handoff=handoff, issueplan=issueplan, planning_binding=binding)
+    assert bound.status == "eligible"
+    assert bound.proposals[0].issueplan_current_state_evidence_id == (
+        issueplan.evidence_id
+    )
+
+
+def test_binding_route_is_deterministic():
+    handoff, issueplan, binding = _two_phase()
+    first = _build(handoff=handoff, issueplan=issueplan, planning_binding=binding)
+    second = _build(handoff=handoff, issueplan=issueplan, planning_binding=binding)
+    assert first == second
+
+
+def test_binding_route_adds_no_persisted_proposal_field():
+    handoff, issueplan, binding = _two_phase()
+    bound = _build(handoff=handoff, issueplan=issueplan, planning_binding=binding)
+    assert set(dataclasses.asdict(bound.proposals[0])) == set(
+        dataclasses.asdict(_build().proposals[0])
+    )
+
+
+def test_tampered_binding_identity_is_rejected():
+    handoff, issueplan, binding = _two_phase()
+    tampered = object.__new__(PlanningBindingEvidence)
+    for slot in (
+        "schema_version",
+        "binding_id",
+        "issueplan_current_state_evidence_id",
+        "repository",
+        "base_branch",
+        "evaluated_repository_sha",
+        "implementation_contract_fingerprint",
+        "handoff_contract_version",
+        "planning_result_version",
+        "graph_digest",
+        "planning_result_digest",
+        "handoff_digest",
+        "supplied_node_ids",
+        "created_at",
+        "execution_authorized",
+        "side_effects_performed",
+    ):
+        object.__setattr__(tampered, slot, getattr(binding, slot))
+    object.__setattr__(tampered, "graph_digest", "f" * 64)
+
+    result = _build(handoff=handoff, issueplan=issueplan, planning_binding=tampered)
+    assert result.status == "stale"
+    assert result.proposals == ()
+
+
+def test_binding_bound_to_another_handoff_is_rejected():
+    handoff, issueplan, _binding = _two_phase()
+    other_handoff = _handoff(graph_digest="e" * 64)
+    _oh, _other_issueplan, foreign = _two_phase(other_handoff)
+    # Internally valid, but it attests to a different planning run.
+    assert foreign.binding_id == (
+        "planning-binding:" + compute_planning_binding_fingerprint(foreign)
+    )
+    assert foreign.handoff_digest != handoff.handoff_digest
+
+    result = _build(handoff=handoff, issueplan=issueplan, planning_binding=foreign)
+    assert result.status == "stale"
+    assert result.proposals == ()
+
+
+def test_binding_of_the_wrong_type_fails_closed():
+    handoff, issueplan, _binding = _two_phase()
+    result = _build(
+        handoff=handoff, issueplan=issueplan, planning_binding={"binding_id": "x"}
+    )
+    assert result.status == "invalid"
+    assert result.proposals == ()
 
 
 def test_matching_current_evidence_emits_one_unapproved_proposal():
