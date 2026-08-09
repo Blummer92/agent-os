@@ -71,7 +71,7 @@ probe fails closed to `unknown`. No token or credential value is emitted.
 ## #918 compatibility boundary
 
 Issue #918 consumes environment-health identity only as opaque upstream evidence.
-#972 does not probe capabilities for #918 and does not implement routing.
+Issue #972 does not probe capabilities for #918 and does not implement routing.
 Connector access never substitutes for required process execution, a real
 `gh` executable, or authenticated CLI evidence.
 
