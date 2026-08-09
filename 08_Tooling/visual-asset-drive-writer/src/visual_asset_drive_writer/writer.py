@@ -89,21 +89,24 @@ def write_asset(request: DriveAssetWriteRequest, client: DriveClient | None = No
     """
     reason = _validate(request)
     if reason is not None:
-        return _result(request, None, WriteState.PRECHECK_FAILED, (reason,))
+        return _result(request, None, WriteState.PRECHECK_FAILED, (reason,), request_valid=False)
 
     key = operation_key_for(request)
     if request.dry_run:
-        return _result(request, key, WriteState.DRY_RUN, ("drive-write-dry-run-valid",))
+        return _result(request, key, WriteState.DRY_RUN, ("drive-write-dry-run-valid",), request_valid=True)
     if client is None:
-        return _result(request, key, WriteState.PRECHECK_FAILED, ("drive-client-required",))
+        return _result(request, key, WriteState.PRECHECK_FAILED, ("drive-client-required",), request_valid=True)
 
     existing = client.find_by_operation_key(key)
     if len(existing) > 1:
-        return _result(request, key, WriteState.PRECHECK_FAILED, ("drive-conflicting-existing-identity",))
+        return _result(request, key, WriteState.PRECHECK_FAILED, ("drive-conflicting-existing-identity",), request_valid=True)
     if existing:
-        evidence = existing[0]
-        if not _matches(evidence, request, key):
-            return _result(request, key, WriteState.PRECHECK_FAILED, ("drive-existing-evidence-mismatch",))
+        candidate = existing[0]
+        if not _matches(candidate, request, key):
+            return _result(request, key, WriteState.PRECHECK_FAILED, ("drive-existing-evidence-mismatch",), request_valid=True)
+        evidence = client.fetch_file(candidate.file_id)
+        if evidence is None or not _matches(evidence, request, key):
+            return _result(request, key, WriteState.PRECHECK_FAILED, ("drive-existing-readback-mismatch",), file_id=candidate.file_id, request_valid=True)
         return _verified(request, key, evidence, WriteState.RECONCILED_EXISTING, external_write=False)
 
     file_id = client.reserve_file_id()
@@ -113,12 +116,14 @@ def write_asset(request: DriveAssetWriteRequest, client: DriveClient | None = No
         # A create may have succeeded despite a transport failure. Reconcile first.
         reconciled = client.find_by_operation_key(key)
         if len(reconciled) == 1 and _matches(reconciled[0], request, key):
-            return _verified(request, key, reconciled[0], WriteState.RECONCILED_EXISTING, external_write=True)
-        return _result(request, key, WriteState.AMBIGUOUS_WRITE_RESULT, ("drive-create-outcome-ambiguous",), external_write=True)
+            evidence = client.fetch_file(reconciled[0].file_id)
+            if evidence is not None and _matches(evidence, request, key):
+                return _verified(request, key, evidence, WriteState.RECONCILED_EXISTING, external_write=True)
+        return _result(request, key, WriteState.AMBIGUOUS_WRITE_RESULT, ("drive-create-outcome-ambiguous",), external_write=True, request_valid=True)
 
     evidence = client.fetch_file(file_id)
     if evidence is None or not _matches(evidence, request, key):
-        return _result(request, key, WriteState.FAILED, ("drive-readback-mismatch",), file_id=file_id, external_write=True)
+        return _result(request, key, WriteState.FAILED, ("drive-readback-mismatch",), file_id=file_id, external_write=True, request_valid=True)
     return _verified(request, key, evidence, WriteState.VERIFIED, external_write=True)
 
 
@@ -131,7 +136,7 @@ def _validate(request: object) -> str | None:
         return "drive-destination-stale"
     if not all(_text(v) for v in (request.intake_reference, request.local_reference, request.mime_type, request.parent_folder_id)):
         return "drive-required-reference-missing"
-    if len(request.content_sha256) != 64 or any(c not in "0123456789abcdefABCDEF" for c in request.content_sha256):
+    if type(request.content_sha256) is not str or len(request.content_sha256) != 64 or any(c not in "0123456789abcdefABCDEF" for c in request.content_sha256):
         return "drive-invalid-content-sha256"
     if type(request.representation) is not Representation or type(request.dry_run) is not bool:
         return "drive-invalid-request"
@@ -146,9 +151,10 @@ def _matches(evidence: DriveFileEvidence, request: DriveAssetWriteRequest, key: 
     return (type(evidence) is DriveFileEvidence and evidence.parent_folder_id == request.parent_folder_id and evidence.mime_type == request.mime_type and evidence.content_sha256.lower() == request.content_sha256.lower() and evidence.operation_key == key and _text(evidence.file_id))
 
 
-def _result(request, key, state, reasons, *, file_id=None, external_write=False):
-    valid = type(request) is DriveAssetWriteRequest
-    return DriveAssetWriteResult(key, state, request.dry_run if valid else True, file_id, request.parent_folder_id if valid else None, request.mime_type if valid else None, request.content_sha256.lower() if valid and type(request.content_sha256) is str else None, reasons, False, external_write)
+def _result(request, key, state, reasons, *, file_id=None, external_write=False, request_valid=False):
+    if request_valid:
+        return DriveAssetWriteResult(key, state, request.dry_run, file_id, request.parent_folder_id, request.mime_type, request.content_sha256.lower(), reasons, False, external_write)
+    return DriveAssetWriteResult(key, state, True, file_id, None, None, None, reasons, False, external_write)
 
 
 def _verified(request, key, evidence, state, *, external_write):
