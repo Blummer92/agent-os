@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from scripts.agent_os_issue_acceptance.models import CheckResult, Status, strongest_status
 
 from .models import EvidenceValidationError, NormalizedPRSnapshot, NormalizedReviewThread
+from .normalization import MAX_CHANGED_FILES, MAX_STRING_LENGTH, MAX_THREADS
 
 
 @dataclass(frozen=True)
@@ -17,6 +18,7 @@ class PreflightResult:
     allowed_files: tuple[str, ...]
     outside_allowed_files: tuple[str, ...] = ()
     duplicate_thread_ids: tuple[str, ...] = ()
+    duplicate_comment_ids: tuple[int, ...] = ()
     manual_review_items: tuple[str, ...] = ()
     execution_authorized: bool = False
     external_write_authorized: bool = False
@@ -35,14 +37,63 @@ def _validate_sha(value: str, field: str) -> str:
 def _allowed_files(value: object) -> tuple[str, ...]:
     if type(value) not in {list, tuple}:
         raise EvidenceValidationError("allowed_files must be a list or tuple")
+    if len(value) > MAX_CHANGED_FILES:
+        raise EvidenceValidationError("allowed_files exceeds size limit")
     result: list[str] = []
     for index, path in enumerate(value):
-        if type(path) is not str or not path:
-            raise EvidenceValidationError(f"allowed_files[{index}] must be a non-empty string")
+        if type(path) is not str or not path or len(path) > MAX_STRING_LENGTH:
+            raise EvidenceValidationError(
+                f"allowed_files[{index}] must be a non-empty string within size limits"
+            )
         result.append(path)
     if len(set(result)) != len(result):
         raise EvidenceValidationError("allowed_files contains duplicates")
     return tuple(sorted(result))
+
+
+def _duplicates(values: list[object]) -> tuple[object, ...]:
+    seen: set[object] = set()
+    duplicates: set[object] = set()
+    for value in values:
+        if value in seen:
+            duplicates.add(value)
+        else:
+            seen.add(value)
+    return tuple(sorted(duplicates))
+
+
+def _validate_review_threads(
+    review_threads: tuple[NormalizedReviewThread, ...],
+) -> None:
+    if type(review_threads) is not tuple:
+        raise EvidenceValidationError("review_threads must be a tuple of NormalizedReviewThread")
+    if len(review_threads) > MAX_THREADS:
+        raise EvidenceValidationError("review_threads exceeds size limit")
+    for index, thread in enumerate(review_threads):
+        if type(thread) is not NormalizedReviewThread:
+            raise EvidenceValidationError(
+                "review_threads must be a tuple of NormalizedReviewThread"
+            )
+        if (
+            type(thread.thread_id) is not str
+            or not thread.thread_id
+            or len(thread.thread_id) > MAX_STRING_LENGTH
+        ):
+            raise EvidenceValidationError(
+                f"review_threads[{index}].thread_id must be a non-empty string within size limits"
+            )
+        if type(thread.top_level_comment_id) is not int or thread.top_level_comment_id <= 0:
+            raise EvidenceValidationError(
+                f"review_threads[{index}].top_level_comment_id must be a positive integer"
+            )
+        if thread.path is not None and (
+            type(thread.path) is not str
+            or not thread.path
+            or len(thread.path) > MAX_STRING_LENGTH
+        ):
+            raise EvidenceValidationError(
+                f"review_threads[{index}].path must be a non-empty string within size limits"
+            )
 
 
 def preflight(
@@ -55,10 +106,7 @@ def preflight(
 ) -> PreflightResult:
     if type(snapshot) is not NormalizedPRSnapshot:
         raise EvidenceValidationError("snapshot must be NormalizedPRSnapshot")
-    if type(review_threads) is not tuple or any(
-        type(thread) is not NormalizedReviewThread for thread in review_threads
-    ):
-        raise EvidenceValidationError("review_threads must be a tuple of NormalizedReviewThread")
+    _validate_review_threads(review_threads)
     if type(draft_allowed) is not bool:
         raise EvidenceValidationError("draft_allowed must be exactly bool")
 
@@ -108,17 +156,30 @@ def preflight(
         )
     )
 
-    ids = [thread.thread_id for thread in review_threads]
-    duplicates = tuple(sorted({item for item in ids if ids.count(item) > 1}))
+    duplicate_thread_ids = tuple(
+        str(item) for item in _duplicates([thread.thread_id for thread in review_threads])
+    )
+    duplicate_comment_ids = tuple(
+        int(item)
+        for item in _duplicates([thread.top_level_comment_id for thread in review_threads])
+    )
+    identity_duplicates = bool(duplicate_thread_ids or duplicate_comment_ids)
+    identity_evidence = [f"thread_id={item}" for item in duplicate_thread_ids] + [
+        f"top_level_comment_id={item}" for item in duplicate_comment_ids
+    ]
     checks.append(
         CheckResult(
             name="thread-identities",
-            status=Status.PASS if not duplicates else Status.MANUAL_REVIEW,
-            message="thread identities are unique" if not duplicates else "duplicate thread identities supplied",
-            evidence=list(duplicates),
+            status=Status.MANUAL_REVIEW if identity_duplicates else Status.PASS,
+            message=(
+                "duplicate thread identities supplied"
+                if identity_duplicates
+                else "thread identities are unique"
+            ),
+            evidence=identity_evidence,
         )
     )
-    if duplicates:
+    if identity_duplicates:
         manual_review.append("duplicate supplied thread identities require manual review")
 
     unavailable = tuple(
@@ -141,6 +202,7 @@ def preflight(
         expected_head=expected,
         allowed_files=normalized_allowed,
         outside_allowed_files=outside,
-        duplicate_thread_ids=duplicates,
+        duplicate_thread_ids=duplicate_thread_ids,
+        duplicate_comment_ids=duplicate_comment_ids,
         manual_review_items=tuple(manual_review),
     )
