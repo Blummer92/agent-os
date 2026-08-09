@@ -2,6 +2,8 @@
 
 from dataclasses import replace
 
+import pytest
+
 from scripts.agent_os_candidate_packet.approval_stage import (
     ApprovalCandidateContext,
     ApprovalDecision,
@@ -67,6 +69,39 @@ def test_missing_human_decision_preserves_deterministic_pending_candidate() -> N
     assert first.projection is None
     assert first.execution_authorized is False
     assert first.side_effects_performed is False
+
+
+def test_candidate_preparer_cannot_self_approve() -> None:
+    result = prepare_approval_projection(
+        _prepare(),
+        candidate_context=_context(),
+        approval_decision=ApprovalDecision(
+            state=ApprovalState.APPROVED,
+            decision_id="self-approved-753",
+            authorizer_id="candidate-preparer",
+            decision_at=_APPROVED_AT,
+        ),
+        evaluated_at=_EVALUATED_AT,
+        projected_at=_PROJECTED_AT,
+    )
+
+    assert result.status is ApprovalProjectionStageStatus.INVALID
+    assert result.reason_codes == ("self-approval-forbidden",)
+    assert result.decision_revision is None
+    assert result.applicability is None
+    assert result.projection is None
+    assert result.execution_authorized is False
+    assert result.side_effects_performed is False
+
+
+def test_human_decision_authorizer_cannot_be_inferred() -> None:
+    with pytest.raises(ValueError, match="authorizer_id"):
+        ApprovalDecision(
+            state=ApprovalState.APPROVED,
+            decision_id="missing-authorizer-753",
+            authorizer_id="",
+            decision_at=_APPROVED_AT,
+        )
 
 
 def test_explicit_human_approval_reaches_complete_projection_through_exact_binding() -> None:
