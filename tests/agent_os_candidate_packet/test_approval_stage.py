@@ -88,6 +88,9 @@ def test_explicit_human_approval_reaches_complete_projection_through_exact_bindi
     assert result.pending_candidate.decision_id != result.decision_revision.decision_id
     assert result.applicability.approval_applicable is True
     assert result.projection is result.projection_result.projection
+    assert result.projection.handoff_digest == upstream.planning_binding.handoff_digest
+    assert result.projection.graph_digest == upstream.planning_binding.graph_digest
+    assert result.projection.planning_result_digest == upstream.planning_binding.planning_result_digest
     assert result.projection.authoritative is False
     assert result.projection.execution_authorized is False
     assert result.projection.side_effects_performed is False
@@ -144,6 +147,7 @@ def test_expired_decision_never_projects() -> None:
     assert result.decision_revision.state is ApprovalState.EXPIRED
     assert result.projection is None
     assert result.execution_authorized is False
+    assert result.side_effects_performed is False
 
 
 def test_superseded_decision_never_projects() -> None:
@@ -159,6 +163,7 @@ def test_superseded_decision_never_projects() -> None:
     assert result.decision_revision.state is ApprovalState.SUPERSEDED
     assert result.projection is None
     assert result.execution_authorized is False
+    assert result.side_effects_performed is False
 
 
 def test_binding_drift_fails_closed_before_projection() -> None:
