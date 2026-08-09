@@ -188,6 +188,25 @@ def test_focused_pass_with_aggregate_pending_is_not_complete_success() -> None:
     result = plan.thread_results[0]
     assert result.resolution_eligible is False
     assert result.validation_state == "validation-incomplete"
+    assert result.suggested_action == FIXTURE["expected_actions"]["focused_only"]
+    assert "aggregate-validation-pending" in result.ineligibility_reason_codes
+
+
+def test_unrelated_aggregate_pass_cannot_satisfy_required_focused_pending() -> None:
+    context = _context(candidates=[_candidate(validations=("focused-tests",))])
+    _, _, _, remediation = context
+    plan = _coordinate(
+        context=context,
+        fixes=[_fix(remediation)],
+        validations=[
+            _validation("focused_pass"),
+            _validation("aggregate_pass"),
+        ],
+    )
+    result = plan.thread_results[0]
+    assert result.required_validation_categories == ("focused-tests",)
+    assert result.resolution_eligible is False
+    assert result.validation_state == "validation-incomplete"
     assert "aggregate-validation-pending" in result.ineligibility_reason_codes
 
 
@@ -231,6 +250,28 @@ def test_planned_validation_without_focused_pending_stays_planned() -> None:
     result = plan.thread_results[0]
     assert result.resolution_eligible is False
     assert result.validation_state == "validation-planned"
+
+
+@pytest.mark.parametrize("status", ["planned", "unavailable"])
+def test_manual_review_profile_dominates_execution_status(status: str) -> None:
+    context = _context(candidates=[_candidate(validations=("aggregate-tests",))])
+    _, _, _, remediation = context
+    plan = _coordinate(
+        context=context,
+        fixes=[_fix(remediation)],
+        validations=[
+            _validation(
+                "aggregate_pass",
+                profile="manual-review",
+                execution_status=status,
+                aggregate_pending=False,
+            )
+        ],
+    )
+    result = plan.thread_results[0]
+    assert result.resolution_eligible is False
+    assert result.validation_state == "manual-review-required"
+    assert result.suggested_action == "manual-decision-required"
 
 
 def test_current_head_differing_from_tested_head_is_stale() -> None:
@@ -383,6 +424,12 @@ def test_malformed_and_oversized_inputs_fail_closed() -> None:
     bad["unexpected"] = True
     with pytest.raises(EvidenceValidationError):
         _coordinate(validations=[bad])
+    oversized = _validation(
+        "aggregate_pass",
+        reason_codes=[f"code-{index}" for index in range(65)],
+    )
+    with pytest.raises(EvidenceValidationError):
+        _coordinate(validations=[oversized])
 
 
 def test_thread_without_associated_finding_requests_more_evidence() -> None:
@@ -477,6 +524,10 @@ def test_coordination_module_has_no_external_or_mutating_execution_path() -> Non
         "urllib",
         "socket",
         "subprocess",
+        "os",
+        "pathlib",
+        "shutil",
+        "importlib",
         "github",
         "openai",
         "anthropic",
@@ -488,6 +539,11 @@ def test_coordination_module_has_no_external_or_mutating_execution_path() -> Non
         "call",
         "check_call",
         "check_output",
+        "eval",
+        "exec",
+        "__import__",
+        "write_text",
+        "write_bytes",
         "resolve_review_thread",
         "update_file",
         "create_file",
