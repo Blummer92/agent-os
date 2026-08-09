@@ -208,7 +208,7 @@ def test_failed_validation_leaves_thread_open() -> None:
     [
         ({"evidence_available": False}, "validation-unavailable"),
         ({"evidence_complete": False}, "validation-incomplete"),
-        ({"execution_status": "planned"}, "validation-planned"),
+        ({"execution_status": "planned"}, "validation-incomplete"),
     ],
 )
 def test_partial_unavailable_and_planned_validation_fail_closed(overrides, expected_state) -> None:
@@ -218,6 +218,19 @@ def test_partial_unavailable_and_planned_validation_fail_closed(overrides, expec
     result = plan.thread_results[0]
     assert result.resolution_eligible is False
     assert result.validation_state == expected_state
+
+
+def test_planned_validation_without_focused_pending_stays_planned() -> None:
+    context = _context(candidates=[_candidate(validations=("aggregate-tests",))])
+    _, _, _, remediation = context
+    plan = _coordinate(
+        context=context,
+        fixes=[_fix(remediation)],
+        validations=[_validation("aggregate_pass", execution_status="planned")],
+    )
+    result = plan.thread_results[0]
+    assert result.resolution_eligible is False
+    assert result.validation_state == "validation-planned"
 
 
 def test_current_head_differing_from_tested_head_is_stale() -> None:
