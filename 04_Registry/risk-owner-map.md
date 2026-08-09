@@ -13,7 +13,7 @@ file is registry data only and authorizes nothing.
 | Validation-policy and Cloud Build drift | #240 | #368, #369, #370 | Results bound to the exact tested SHA | open |
 | Workspace, lease, and active-work collision | #330 | future WSC5-WSC7 | Isolated workspace and one lease per issue | open |
 | Acceptance-parser compatibility drift | #358 | #398, readiness consumers | Canonical scanner convergence | open |
-| Protected-branch enforcement gap | #231 | #233, #234, #235, #236 | Layered local safeguards, future ruleset handoff | open |
+| Protected-branch enforcement gap | #231 | #233, #234, #235, #236 | Current `Protect main` ruleset retained; PRs required, force push/deletion blocked, review conversations resolved; local hooks and merge-authorization evidence remain advisory; required status checks, auto-merge, and merge queue remain disabled pending separately authorized evidence | mitigated / monitoring |
 | Documentation-impact gaps | #304 | #306, #310, #323 | Documentation-impact readiness evidence | open |
 | Issue-lifecycle authority and retired-scope revival | #543 | all issue intake and refactor/consolidation work | Immutable closed-body rule, prior-scope review, and behavioral/value evidence | mitigated / monitoring |
 
