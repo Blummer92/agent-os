@@ -79,13 +79,11 @@ If a legacy alias maps to a canonical agent, continue normal routing and report 
 alias resolution. If no alias exists, stop and recommend a registry update.
 
 ## Required Final Report
-Every implementation or review report must include:
-
-- files changed
-- tests run
-- docs updated
-- unresolved blockers
-- handoff recommendations
+Every implementation or review report must include files changed, tests run,
+docs updated, unresolved blockers, handoff recommendations, and remaining risks.
+For eligible Safe Implementation Lane work, also follow the `Reporting` contract
+in `01_Shared_Standards/github/safe-implementation-lane.md`: actual branch,
+exact-head evidence, rollback, and authorization/excluded-surface confirmation.
 
 ## GitHub Handoffs
 Use `03_Templates/prompts/github-change-request.md` for any repository change
