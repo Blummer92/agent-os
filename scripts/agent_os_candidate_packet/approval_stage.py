@@ -1,9 +1,11 @@
 """Pure-local approval preparation, applicability, and projection stage (#753).
 
 Candidate provenance and a later human approval decision are deliberately
-separate immutable inputs. This module composes the canonical #398/#407
-contracts; it creates no approval authority, execution authority, persistence,
-or external side effect.
+separate immutable inputs. Candidate provenance never confers approval; a
+later decision must name a distinct explicit authorizer. This module composes
+the canonical #398/#407 contracts; it creates no approval authority, execution
+authority, persistence, or external side effect. Any projection remains
+non-authoritative and cannot authorize execution.
 """
 
 from __future__ import annotations
@@ -165,6 +167,15 @@ def prepare_approval_projection(
         return _result(ApprovalProjectionStageStatus.INVALID, None, None, None, None, ("approval-candidate-invalid",))
     if approval_decision is None:
         return _result(ApprovalProjectionStageStatus.NEEDS_DECISION, candidate, None, None, None, ("human-decision-required",))
+    if approval_decision.authorizer_id == candidate.authorizer_id:
+        return _result(
+            ApprovalProjectionStageStatus.INVALID,
+            candidate,
+            None,
+            None,
+            None,
+            ("self-approval-forbidden",),
+        )
     try:
         revision = record_approval_decision(
             candidate,
