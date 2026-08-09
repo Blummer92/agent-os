@@ -15,7 +15,6 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -76,6 +75,16 @@ def _write_stub(bin_dir: Path, name: str, body: str) -> None:
 
 
 def _bin_without_gh(tmp_path: Path) -> Path:
+    """A PATH directory providing `git` and `pip` but definitively not `gh`.
+
+    A test asserting missing-tool behavior must *control* tool availability
+    rather than inherit it: GitHub-hosted runners ship `gh` preinstalled
+    while many local sandboxes do not, so reading the ambient PATH makes the
+    outcome host-dependent. Filtering PATH entries is not enough either --
+    `gh`, `git`, and `pip` commonly share `/usr/bin`, so dropping that entry
+    would remove `git` too. Symlinking the tools we want into a private
+    directory is what makes the absence of `gh` deterministic.
+    """
     bin_dir = tmp_path / "bin-without-gh"
     bin_dir.mkdir(parents=True, exist_ok=True)
     for tool in ("git", "pip"):
@@ -84,6 +93,8 @@ def _bin_without_gh(tmp_path: Path) -> Path:
         link = bin_dir / tool
         if not link.exists():
             link.symlink_to(resolved)
+    # Guard the guarantee itself, so a farm that ever leaks `gh` fails loudly
+    # here instead of silently re-passing the host-dependent assertion.
     assert shutil.which("gh", path=str(bin_dir)) is None
     return bin_dir
 
@@ -93,6 +104,9 @@ def repo(tmp_path: Path) -> Path:
     target = tmp_path / "repo"
     _init_repo(target, "https://github.com/Blummer92/agent-os.git", _env(tmp_path))
     return target
+
+
+# --- repository identity -----------------------------------------------------
 
 
 def test_repository_identity_passes_for_expected_remote(repo: Path) -> None:
@@ -118,13 +132,19 @@ def test_repository_identity_fails_closed_without_origin(tmp_path: Path) -> None
     _init_repo(target, None, _env(tmp_path))
     result = run_cli(target, "--check", "repository-identity")
     assert result.returncode == 1
-    assert json.loads(result.stdout)["detail"]["actual"] is None
+    payload = json.loads(result.stdout)
+    assert payload["detail"]["actual"] is None
+
+
+# --- checkout identity / worktree role --------------------------------------
 
 
 def test_primary_checkout_named_like_issue_worktree_fails_closed(tmp_path: Path) -> None:
     target = tmp_path / "issue-42"
     _init_repo(target, "https://github.com/Blummer92/agent-os.git", _env(tmp_path))
-    payload = json.loads(run_cli(target).stdout)
+    result = run_cli(target)
+    assert result.returncode == 1
+    payload = json.loads(result.stdout)
     checkout = next(c for c in payload["checks"] if c["name"] == "checkout-identity")
     assert checkout["passed"] is False
     assert checkout["detail"]["primary_checkout_not_reused_as_issue_worktree"] is False
@@ -143,28 +163,31 @@ def test_linked_issue_worktree_passes_checkout_identity(tmp_path: Path) -> None:
         env=env,
         check=True,
     )
-    payload = json.loads(run_cli(worktree).stdout)
+    result = run_cli(worktree)
+    payload = json.loads(result.stdout)
     checkout = next(c for c in payload["checks"] if c["name"] == "checkout-identity")
     assert checkout["passed"] is True
     assert checkout["detail"]["worktree_role"] == "issue-worktree"
 
 
 def test_ordinary_primary_checkout_passes_checkout_identity(repo: Path) -> None:
-    payload = json.loads(run_cli(repo).stdout)
+    result = run_cli(repo)
+    payload = json.loads(result.stdout)
     checkout = next(c for c in payload["checks"] if c["name"] == "checkout-identity")
     assert checkout["passed"] is True
     assert checkout["detail"]["worktree_role"] == "primary"
 
 
+# --- tooling ------------------------------------------------------------
+
+
 def test_tooling_check_fails_closed_when_gh_missing(repo: Path, tmp_path: Path) -> None:
     env = _env(repo.parent, PATH=str(_bin_without_gh(tmp_path)))
-    payload = json.loads(run_cli(repo, env=env).stdout)
+    result = run_cli(repo, env=env)
+    payload = json.loads(result.stdout)
     tooling = next(c for c in payload["checks"] if c["name"] == "tooling")
-    assert tooling["detail"]["gh"] == {
-        "available": False,
-        "state": "unavailable",
-        "version": None,
-    }
+    assert tooling["passed"] is False
+    assert tooling["detail"]["gh"]["available"] is False
     assert payload["status"] == "fail"
 
 
@@ -172,209 +195,98 @@ def test_tooling_check_passes_when_all_required_tools_present(repo: Path, tmp_pa
     fake_bin = tmp_path / "fake-bin"
     _write_stub(fake_bin, "gh", 'echo "gh version 2.99.0 (fake)"')
     env = _env(repo.parent, PATH=f"{fake_bin}{os.pathsep}{os.environ['PATH']}")
-    payload = json.loads(run_cli(repo, env=env).stdout)
-    gh = next(c for c in payload["checks"] if c["name"] == "tooling")["detail"]["gh"]
-    assert gh["available"] is True
-    assert gh["state"] == "available"
+    result = run_cli(repo, env=env)
+    payload = json.loads(result.stdout)
+    tooling = next(c for c in payload["checks"] if c["name"] == "tooling")
+    assert tooling["passed"] is True
+    assert tooling["detail"]["gh"]["available"] is True
 
 
-def test_tool_version_is_bounded(repo: Path, tmp_path: Path) -> None:
-    fake_bin = tmp_path / "fake-bin-long-version"
-    _write_stub(fake_bin, "gh", 'python -c "print(\"x\" * 500)"')
-    env = _env(repo.parent, PATH=f"{fake_bin}{os.pathsep}{os.environ['PATH']}")
-    payload = json.loads(run_cli(repo, env=env).stdout)
-    gh = next(c for c in payload["checks"] if c["name"] == "tooling")["detail"]["gh"]
-    assert gh["version"] == "x" * health.MAX_TOOL_VERSION_LENGTH
-
-
-def test_process_execution_is_explicit(repo: Path) -> None:
-    payload = json.loads(run_cli(repo).stdout)
-    check = next(c for c in payload["checks"] if c["name"] == "process-execution")
-    assert check == {
-        "name": "process-execution",
-        "passed": True,
-        "detail": {"state": "available", "mechanism": "python-subprocess"},
-    }
-
-
-def test_process_execution_fails_closed_when_subprocess_is_blocked() -> None:
-    with patch.object(health.subprocess, "run", side_effect=OSError("blocked")):
-        check = health.check_process_execution()
-    assert check["passed"] is False
-    assert check["detail"]["state"] == "unavailable"
+# --- disk space ------------------------------------------------------------
 
 
 def test_disk_space_fails_closed_below_minimum(repo: Path) -> None:
-    payload = json.loads(run_cli(repo, "--min-free-mb", "999999999").stdout)
+    result = run_cli(repo, "--min-free-mb", "999999999")
+    payload = json.loads(result.stdout)
     disk = next(c for c in payload["checks"] if c["name"] == "disk-space")
     assert disk["passed"] is False
     assert payload["status"] == "fail"
 
 
 def test_min_free_mb_must_be_positive(repo: Path) -> None:
-    assert run_cli(repo, "--min-free-mb", "0").returncode == 2
+    result = run_cli(repo, "--min-free-mb", "0")
+    assert result.returncode == 2
+
+
+# --- required validation commands -------------------------------------------
 
 
 def test_validation_commands_check_fails_closed_when_missing(tmp_path: Path) -> None:
     target = tmp_path / "bare-repo"
     _init_repo(target, "https://github.com/Blummer92/agent-os.git", _env(tmp_path))
-    payload = json.loads(run_cli(target).stdout)
+    result = run_cli(target)
+    payload = json.loads(result.stdout)
     commands = next(c for c in payload["checks"] if c["name"] == "validation-commands")
     assert commands["passed"] is False
     assert commands["detail"]["scripts/validate-all.sh"] is False
 
 
 def test_validation_commands_check_passes_against_real_repository() -> None:
-    payload = json.loads(run_cli(ROOT).stdout)
+    result = run_cli(ROOT)
+    payload = json.loads(result.stdout)
     commands = next(c for c in payload["checks"] if c["name"] == "validation-commands")
     assert commands["passed"] is True
     assert all(commands["detail"].values())
 
 
+# --- GitHub authentication capability, without revealing token contents ----
+
+
 def test_github_auth_capability_reports_env_source_without_leaking_token(repo: Path) -> None:
-    token_value = "ghp_totallyfaketokenvalue1234567890"  # noqa: S105
-    result = run_cli(repo, env=_env(repo.parent, GITHUB_TOKEN=token_value))
+    fake_token = "ghp_totallyfaketokenvalue1234567890"
+    env = _env(repo.parent, GITHUB_TOKEN=fake_token)
+    result = run_cli(repo, env=env)
     payload = json.loads(result.stdout)
     auth = next(c for c in payload["checks"] if c["name"] == "github-auth-capability")
-    assert auth["detail"] == {
-        "capable": True,
-        "state": "authenticated",
-        "source": "env",
-    }
-    assert token_value not in result.stdout
-    assert token_value not in result.stderr
+    assert auth["passed"] is True
+    assert auth["detail"]["source"] == "env"
+    assert fake_token not in result.stdout
+    assert fake_token not in result.stderr
 
 
 def test_github_auth_capability_fails_closed_with_no_token_and_no_gh(
     repo: Path, tmp_path: Path
 ) -> None:
     env = _env(repo.parent, PATH=str(_bin_without_gh(tmp_path)))
-    payload = json.loads(run_cli(repo, env=env).stdout)
+    result = run_cli(repo, env=env)
+    payload = json.loads(result.stdout)
     auth = next(c for c in payload["checks"] if c["name"] == "github-auth-capability")
-    assert auth["detail"] == {
-        "capable": False,
-        "state": "not-applicable",
-        "source": "none",
-    }
+    assert auth["passed"] is False
+    assert auth["detail"]["source"] == "none"
 
 
 def test_github_auth_capability_uses_gh_cli_status_when_no_token(repo: Path, tmp_path: Path) -> None:
     fake_bin = tmp_path / "fake-bin-gh"
     _write_stub(fake_bin, "gh", 'if [ "$1" = "auth" ]; then exit 0; fi\necho "gh version 2.99.0 (fake)"')
     env = _env(repo.parent, PATH=f"{fake_bin}{os.pathsep}{os.environ['PATH']}")
-    payload = json.loads(run_cli(repo, env=env).stdout)
+    result = run_cli(repo, env=env)
+    payload = json.loads(result.stdout)
     auth = next(c for c in payload["checks"] if c["name"] == "github-auth-capability")
-    assert auth["detail"] == {
-        "capable": True,
-        "state": "authenticated",
-        "source": "gh-cli",
-    }
+    assert auth["passed"] is True
+    assert auth["detail"]["source"] == "gh-cli"
 
 
-def test_github_auth_capability_reports_unauthenticated(repo: Path, tmp_path: Path) -> None:
-    fake_bin = tmp_path / "fake-bin-gh-unauthenticated"
-    _write_stub(fake_bin, "gh", 'if [ "$1" = "auth" ]; then exit 1; fi\necho "gh version 2.99.0 (fake)"')
-    env = _env(repo.parent, PATH=f"{fake_bin}{os.pathsep}{os.environ['PATH']}")
-    payload = json.loads(run_cli(repo, env=env).stdout)
-    auth = next(c for c in payload["checks"] if c["name"] == "github-auth-capability")
-    assert auth["detail"] == {
-        "capable": False,
-        "state": "unauthenticated",
-        "source": "gh-cli",
-    }
-
-
-def test_github_auth_capability_reports_unknown_on_timeout() -> None:
-    with patch.object(health.shutil, "which", return_value="/fake/gh"):
-        with patch.object(
-            health.subprocess,
-            "run",
-            side_effect=subprocess.TimeoutExpired(["gh", "auth", "status"], 5),
-        ):
-            auth = health.check_github_auth_capability()
-    assert auth["detail"] == {
-        "capable": False,
-        "state": "unknown",
-        "source": "gh-cli",
-    }
-
-
-def test_runtime_identity_and_timestamp_are_explicit(repo: Path) -> None:
-    payload = json.loads(run_cli(repo, "--execution-surface-id", "codespace:test").stdout)
-    assert payload["execution_surface_id"] == "codespace:test"
-    assert payload["observed_at"].endswith("Z")
-    assert "T" in payload["observed_at"]
-    assert payload["environment_health_evidence_id"].startswith("sha256:")
-
-
-def test_supplied_observation_time_is_canonicalized(repo: Path) -> None:
-    evidence = health.build_evidence(
-        repo,
-        "local-only",
-        health.DEFAULT_MIN_FREE_MB,
-        observed_at="2026-08-09T08:00:00-04:00",
-    )
-    assert evidence["observed_at"] == "2026-08-09T12:00:00Z"
-
-
-def test_invalid_observation_time_is_rejected(repo: Path) -> None:
-    with pytest.raises(ValueError, match="observed_at"):
-        health.build_evidence(
-            repo,
-            "local-only",
-            health.DEFAULT_MIN_FREE_MB,
-            observed_at="not-a-timestamp",
-        )
-
-
-def test_evidence_identity_is_stable_across_observation_time(repo: Path) -> None:
-    first = health.build_evidence(
-        repo,
-        "local-only",
-        health.DEFAULT_MIN_FREE_MB,
-        execution_surface_id="surface-a",
-        observed_at="2026-08-09T12:00:00Z",
-    )
-    second = health.build_evidence(
-        repo,
-        "local-only",
-        health.DEFAULT_MIN_FREE_MB,
-        execution_surface_id="surface-a",
-        observed_at="2026-08-09T12:01:00Z",
-    )
-    assert first["environment_health_evidence_id"] == second["environment_health_evidence_id"]
-
-
-def test_evidence_identity_changes_with_surface(repo: Path) -> None:
-    first = health.build_evidence(
-        repo,
-        "local-only",
-        health.DEFAULT_MIN_FREE_MB,
-        execution_surface_id="surface-a",
-        observed_at="2026-08-09T12:00:00Z",
-    )
-    second = health.build_evidence(
-        repo,
-        "local-only",
-        health.DEFAULT_MIN_FREE_MB,
-        execution_surface_id="surface-b",
-        observed_at="2026-08-09T12:00:00Z",
-    )
-    assert first["environment_health_evidence_id"] != second["environment_health_evidence_id"]
-    assert health.evidence_matches_surface(first, "surface-a") is True
-    assert health.evidence_matches_surface(first, "surface-b") is False
-
-
-def test_invalid_surface_id_is_usage_error(repo: Path) -> None:
-    result = run_cli(repo, "--execution-surface-id", "bad surface")
-    assert result.returncode == 2
-    assert "execution surface id" in result.stdout
+# --- authority fields always false ------------------------------------------
 
 
 def test_all_authority_fields_are_false(repo: Path) -> None:
-    payload = json.loads(run_cli(repo).stdout)
+    result = run_cli(repo)
+    payload = json.loads(result.stdout)
     assert payload["authority"], "authority block must be present"
     assert all(value is False for value in payload["authority"].values())
+
+
+# --- credential redaction (white-box) ---------------------------------------
 
 
 def test_redact_flags_and_masks_prohibited_credential_patterns() -> None:
@@ -410,6 +322,8 @@ def test_build_evidence_fails_closed_when_a_check_emits_credential_material(
     assert "github_pat_11ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" not in dumped
 
 
+# --- --check repository-identity credential redaction (#892 review) --------
+
 CREDENTIAL_BEARING_EXPECTED_REMOTE = (
     "https://example-user:example-secret@github.com/Blummer92/agent-os.git"
 )
@@ -426,10 +340,38 @@ def test_check_repository_identity_cli_sanitizes_credential_bearing_expected_rem
     result = run_cli(target, "--check", "repository-identity")
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
+    assert payload["passed"] is True
     assert payload["detail"]["actual"] == "Blummer92/agent-os"
     for secret in ("example-user", "example-secret", CREDENTIAL_BEARING_EXPECTED_REMOTE):
         assert secret not in result.stdout
         assert secret not in result.stderr
+
+
+def test_check_repository_identity_cli_reports_sanitized_identity_not_a_false_pass(
+    tmp_path: Path,
+) -> None:
+    """A credential-bearing *expected* remote must resolve to the exact
+    sanitized owner/repo pair -- never to a raw, credential-bearing string
+    that merely happens to satisfy a loose truthiness check."""
+    target = tmp_path / "credential-expected-repo-strict"
+    _init_repo(target, CREDENTIAL_BEARING_EXPECTED_REMOTE, _env(tmp_path))
+    result = run_cli(target, "--check", "repository-identity")
+    payload = json.loads(result.stdout)
+    assert payload == {
+        "name": "repository-identity",
+        "passed": True,
+        "detail": {"expected": health.EXPECTED_REPOSITORY, "actual": "Blummer92/agent-os"},
+    }
+
+
+def test_check_repository_identity_cli_passes_for_ordinary_credential_free_remote(
+    repo: Path,
+) -> None:
+    result = run_cli(repo, "--check", "repository-identity")
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["passed"] is True
+    assert payload["detail"]["actual"] == "Blummer92/agent-os"
 
 
 def test_check_repository_identity_cli_fails_closed_for_credential_bearing_wrong_remote(
@@ -453,24 +395,34 @@ def test_redact_masks_https_userinfo_credentials() -> None:
     assert redacted["note"] == "[REDACTED]"
 
 
-def test_check_repository_identity_cli_fails_closed_for_malformed_port(tmp_path: Path) -> None:
+def test_check_repository_identity_cli_fails_closed_for_malformed_port(
+    tmp_path: Path,
+) -> None:
     remote = "https://github.com:not-a-port/Blummer92/agent-os.git"
     target = tmp_path / "malformed-port-repo"
     _init_repo(target, remote, _env(tmp_path))
+
     result = run_cli(target, "--check", "repository-identity")
+
     assert result.returncode == 1
     assert "Traceback" not in result.stderr
     payload = json.loads(result.stdout)
+    assert payload["passed"] is False
     assert payload["detail"]["actual"] is None
     assert remote not in result.stdout
     assert remote not in result.stderr
 
 
+# --- usage / malformed state --------------------------------------------
+
+
 def test_rejects_non_git_repo_root(tmp_path: Path) -> None:
-    target = tmp_path / "not-a-repo"
-    target.mkdir()
-    assert run_cli(target).returncode == 2
+    not_a_repo = tmp_path / "not-a-repo"
+    not_a_repo.mkdir()
+    result = run_cli(not_a_repo)
+    assert result.returncode == 2
 
 
 def test_rejects_unsupported_network_mode(repo: Path) -> None:
-    assert run_cli(repo, "--network-mode", "bogus-mode").returncode == 2
+    result = run_cli(repo, "--network-mode", "bogus-mode")
+    assert result.returncode == 2

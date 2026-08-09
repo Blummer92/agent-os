@@ -1,69 +1,99 @@
 # Agent OS Codespaces Runbook — `agent-os-codespaces-v1`
 
-Operator guide for the persistent Agent OS execution profile introduced by #891 and extended by #972. Config: `.devcontainer/devcontainer.json`, `.devcontainer/post-create.sh`, `scripts/agent-os-environment-health.py`.
+Operator guide for issue #891's persistent Agent OS execution profile
+(design approved in #857), extended additively by #972. Config:
+`.devcontainer/devcontainer.json`, `.devcontainer/post-create.sh`, and
+`scripts/agent-os-environment-health.py`.
 
 ## Create the Codespace
 
-From `Blummer92/agent-os`, on `main`: GitHub UI → **Code → Codespaces → Create codespace on main**. This repo's config requests the 2-core Linux machine type; do not select a larger type without a separate decision.
+From `Blummer92/agent-os`, on `main`: GitHub UI → **Code → Codespaces →
+Create codespace on main**. This repo requests the 2-core Linux machine type
+(`hostRequirements.cpus: 2`); do not pick a larger type without a decision.
+
+## Bootstrap and dependency identity
+
+`postCreateCommand` runs `.devcontainer/post-create.sh` once. It verifies the
+repository before installing `requirements-dev.txt` and the same editable
+`08_Tooling` packages used by validation. A failing step stops fail closed;
+the Codespace remains available for inspection.
 
 ## Environment health check
 
-Run `python3 scripts/agent-os-environment-health.py` any time. It prints one bounded JSON evidence object and exits `0` only if every required check passes. The v1 profile remains compatible while exposing additive current-attempt evidence:
+Run `python3 scripts/agent-os-environment-health.py`. The existing v1 schema
+remains backward compatible and now adds current-attempt evidence:
+`execution_surface_id`, canonical UTC `observed_at`, content-addressed
+`environment_health_evidence_id`, explicit `process-execution`, tool
+`available|unavailable|unknown` states, and GitHub-auth
+`authenticated|unauthenticated|unknown|not-applicable` states. Existing
+`available` / `capable` booleans remain present.
 
-- `execution_surface_id` — bounded identity of the governed runtime surface, defaulting to `agent-os-codespaces-v1`;
-- `observed_at` — canonical UTC observation time;
-- `environment_health_evidence_id` — content-addressed SHA-256 identity of material evidence (observation time excluded so an unchanged observation retains identity);
-- explicit `process-execution` state proven by a bounded child-process check;
-- tool `state` values `available`, `unavailable`, or `unknown`, with bounded version evidence, while retaining the existing `available` boolean;
-- GitHub-auth `state` values `authenticated`, `unauthenticated`, `unknown`, or `not-applicable` while retaining the existing `capable` boolean and source.
+The evidence ID binds the complete redacted observation, including surface and
+observation time. Evidence from another surface is not current-surface proof.
+`AGENT_OS_EXECUTION_SURFACE_ID` may explicitly name the governed surface;
+Codespaces otherwise use `CODESPACE_NAME`, with a bounded opaque local fallback.
 
-Use `--execution-surface-id <id>` or `AGENT_OS_EXECUTION_SURFACE_ID` only for the current governed runtime. Evidence from a different surface is not current-surface proof and must fail closed in consumers. This is runtime evidence, not a persistent host inventory.
-
-The checker never probes ChatGPT connectors, browsers, Google Drive, Notion, or provider applications. Those capabilities belong to their owning interaction/integration surfaces. It never prints credential values; prohibited credential patterns found in its own evidence are redacted and fail closed.
+The checker observes only its governed terminal/runtime environment. It does
+not probe ChatGPT connectors, browsers, Google Drive, Notion, or application
+providers, and it never installs tools or logs in.
 
 ## Network modes
 
-- **`local-only`** (default): application-level operating mode, not a firewall. No GitHub or external-system operation is automatically authorized.
-- **`github-connected`**: permits only bounded GitHub operations when separately authorized through the GitHub Service Agent overlay. It does not create authentication or authority.
-
-Neither mode grants merge, issue closure, production, credential, or external-write authority.
+- **`local-only`** (default, `AGENT_OS_NETWORK_MODE`) is an application-level
+  mode, not a firewall. It grants no GitHub or external-system authority.
+- **`github-connected`** permits bounded GitHub operations only when separately
+  authorized through the GitHub Service Agent. It grants no merge, issue
+  closure, production, credential, or external-write authority.
 
 ## Issue-worktree preparation (#807, reused)
 
-Use `scripts/prepare-issue-worktree.sh` for isolated per-issue worktrees. The health report preserves exact checkout SHA/branch and primary-vs-issue-worktree evidence.
+Use `scripts/prepare-issue-worktree.sh` unmodified for isolated issue
+worktrees. The primary checkout cannot be reused as an issue worktree.
 
-## Stop/start and process persistence (#858 handoff)
+## Stop/start, disconnect, and process persistence
 
-Repository and worktree files on persistent Codespaces storage survive browser disconnects and stop/start cycles. Running terminal processes do not; restart them after resume. The `process-execution` check proves only that the current observation can create a bounded child process.
+Repository/worktree files survive browser disconnect and stop/start. Running
+processes do not; restart terminal processes after resume.
+
+## Validation budgets
+
+Focused validation budget: 15 min; aggregate validation: 45 min; single
+command: 20 min; retained stdout/stderr: 256 KiB each. Run
+`./scripts/validate-all.sh` for aggregate validation.
 
 ## Authentication boundaries
 
-Only existing runtime GitHub authentication is observed. Environment token presence is reported as `authenticated` / `env` without token contents. `gh auth status` may establish `authenticated` or `unauthenticated`; execution failure/timeout is `unknown`; no `gh` executable is `not-applicable`. The checker never logs in, creates credentials, or broadens network access.
+Existing environment-token presence may prove `authenticated` with source
+`env` without revealing token contents. `gh auth status` may prove
+`authenticated` or `unauthenticated`. Missing `gh` or an unobservable auth
+probe fails closed to `unknown`. No token or credential value is emitted.
 
-## Issue #918 compatibility boundary
+## #918 compatibility boundary
 
-Issue `#918` may consume `environment_health_evidence_id` as opaque upstream evidence and compare the supplied `execution_surface_id` before selecting a route. #972 does not implement executor routing. In particular, ChatGPT connector availability cannot be substituted for proof that a runtime has process execution, a `gh` executable, or authenticated CLI state.
+#918 consumes environment-health identity only as opaque upstream evidence.
+#972 does not probe capabilities for #918 and does not implement routing.
+Connector access never substitutes for required process execution, a real
+`gh` executable, or authenticated CLI evidence.
 
-## Validation
+## Cost, idle timeout, and retention (operator actions)
 
-Run the focused tests first:
-
-```bash
-python -m pytest -q tests/test_agent_os_environment_health.py
-python -m pytest -q tests/test_agent_os_environment_contract.py
-python -m compileall -q scripts/agent-os-environment-health.py
-```
-
-Then run `./scripts/validate-all.sh` and the current repository structure checks. Validation success is evidence only and creates no implementation or merge authority.
-
-## Cost, idle timeout, and retention
-
-Keep the existing 2-core profile, idle timeout and retention controls unless a separately governed decision changes them. This evidence extension does not alter Codespaces billing, retention, or machine-size policy.
+Repository code cannot set personal Codespaces billing controls. Independently
+set idle timeout ≤ 30 minutes, keep one primary Agent OS Codespace at a time,
+use no prebuilds, keep stopped-environment retention ≤ 30 days, and review
+retained evidence after 14 days.
 
 ## Cleanup and rollback
 
-Revert the #972 changes to `scripts/agent-os-environment-health.py`, focused environment-health tests, and this runbook. The extension creates no external state, schema migration, connector registration, credential, Scheduler state, or persistent environment inventory.
+Rollback is a normal repository revert of the #972 changes. Deleting branches,
+worktrees, Codespaces, or credentials remains a separate manual operator action.
+
+## Handoff to #858
+
+The profile preserves #858 stop/start persistence and process-non-persistence
+semantics; checkpoint/resume remains owned there rather than redefined here.
 
 ## Non-authorization
 
-Bootstrap and health-check success never imply implementation, execution, Ready-for-Review, merge, issue closure, production, or external-write authority. Every authority field reported by this profile remains `false`.
+Health success never implies implementation, execution, Ready-for-Review,
+merge, issue closure, production, or external-write authority. Every authority
+field reported by the profile remains `false`.

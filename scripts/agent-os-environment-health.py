@@ -15,8 +15,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -35,13 +37,10 @@ REQUIRED_VALIDATION_COMMANDS = (
 )
 DEFAULT_MIN_FREE_MB = 500
 SUBPROCESS_TIMEOUT_SECONDS = 5
-MAX_TOOL_VERSION_LENGTH = 200
 _REPOSITORY_COMPONENT = re.compile(r"[A-Za-z0-9_.-]+")
 _SURFACE_ID = re.compile(r"[A-Za-z0-9_.:-]{1,80}")
+_OBSERVED_AT = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 
-# Bounded prohibited-credential patterns. This scans only the evidence this
-# script is about to emit -- it is not a repository-wide secret scanner and
-# does not duplicate `run_secret_scanning`-style tooling.
 _CREDENTIAL_PATTERNS = tuple(
     re.compile(p)
     for p in (
@@ -81,10 +80,8 @@ def _run(cmd: list[str], cwd: Path | None = None) -> tuple[bool, str]:
     except (OSError, subprocess.TimeoutExpired) as exc:
         return False, str(exc)
     if result.returncode != 0:
-        return False, (result.stderr or result.stdout).strip()[:MAX_TOOL_VERSION_LENGTH]
-    if not result.stdout.strip():
-        return True, ""
-    return True, result.stdout.strip().splitlines()[0][:MAX_TOOL_VERSION_LENGTH]
+        return False, (result.stderr or result.stdout).strip()[:200]
+    return True, (result.stdout or "").strip().splitlines()[0] if result.stdout.strip() else ""
 
 
 def _canonicalize_repository_remote(origin_url: str) -> str | None:
@@ -121,33 +118,37 @@ def _canonicalize_repository_remote(origin_url: str) -> str | None:
     return f"{parts[0]}/{parts[1]}"
 
 
-def _canonical_observed_at(now: datetime | None = None) -> str:
-    value = now or datetime.now(timezone.utc)
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def _normalize_observed_at(value: str | None) -> str:
+def _canonical_observed_at(value: str | None = None) -> str:
     if value is None:
-        return _canonical_observed_at()
-    candidate = value.strip()
-    if len(candidate) > 64:
-        raise ValueError("observed_at must be a bounded ISO-8601 timestamp")
+        return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    if not _OBSERVED_AT.fullmatch(value):
+        raise ValueError("observed_at must be canonical UTC YYYY-MM-DDTHH:MM:SSZ")
     try:
-        parsed = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+        parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
     except ValueError as exc:
-        raise ValueError("observed_at must be a valid ISO-8601 timestamp") from exc
-    if parsed.tzinfo is None:
-        raise ValueError("observed_at must include a timezone")
-    return _canonical_observed_at(parsed)
+        raise ValueError("observed_at must be a valid UTC timestamp") from exc
+    return parsed.replace(tzinfo=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _normalize_surface_id(value: str | None) -> str:
-    candidate = (value or PROFILE_ID).strip()
+def _normalize_surface_id(value: str) -> str:
+    candidate = value.strip()
     if not _SURFACE_ID.fullmatch(candidate):
         raise ValueError("execution surface id must match [A-Za-z0-9_.:-]{1,80}")
     return candidate
+
+
+def _execution_surface_id(repo_root: Path, explicit: str | None = None) -> str:
+    if explicit:
+        return _normalize_surface_id(explicit)
+    configured = os.environ.get("AGENT_OS_EXECUTION_SURFACE_ID")
+    if configured:
+        return _normalize_surface_id(configured)
+    codespace = os.environ.get("CODESPACE_NAME")
+    if codespace:
+        return _normalize_surface_id(f"codespace:{codespace}")
+    local_material = f"{socket.gethostname()}\n{repo_root.resolve()}"
+    digest = hashlib.sha256(local_material.encode("utf-8")).hexdigest()[:24]
+    return f"local:{digest}"
 
 
 def _canonical_json(value: object) -> str:
@@ -158,14 +159,14 @@ def _environment_evidence_id(evidence_without_id: dict) -> str:
     material = {
         key: value
         for key, value in evidence_without_id.items()
-        if key not in {"observed_at", "environment_health_evidence_id"}
+        if key != "environment_health_evidence_id"
     }
-    digest = hashlib.sha256(_canonical_json(material).encode("utf-8")).hexdigest()
-    return f"sha256:{digest}"
+    payload = "agent-os.environment-health.v1\n" + _canonical_json(material)
+    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def evidence_matches_surface(evidence: dict, execution_surface_id: str) -> bool:
-    """Fail closed when evidence belongs to a different execution surface."""
+    """Return true only when supplied evidence names the expected surface."""
     try:
         expected = _normalize_surface_id(execution_surface_id)
     except ValueError:
@@ -222,44 +223,27 @@ def check_tooling(repo_root: Path) -> dict:
             all_ok = False
             continue
         ok, version = _run([name, "--version"])
-        state = "available" if ok else "unknown"
-        tools[name] = {"available": ok, "state": state, "version": version if ok else None}
+        tools[name] = {
+            "available": ok,
+            "state": "available" if ok else "unknown",
+            "version": version if ok else None,
+        }
         all_ok = all_ok and ok
     tools["python"] = {
         "available": True,
         "state": "available",
-        "version": sys.version.split()[0][:MAX_TOOL_VERSION_LENGTH],
+        "version": sys.version.split()[0],
     }
     return {"name": "tooling", "passed": all_ok, "detail": tools}
 
 
 def check_process_execution() -> dict:
-    try:
-        result = subprocess.run(
-            [sys.executable, "-c", "pass"],
-            check=False,
-            text=True,
-            capture_output=True,
-            timeout=SUBPROCESS_TIMEOUT_SECONDS,
-        )
-    except OSError:
-        return {
-            "name": "process-execution",
-            "passed": False,
-            "detail": {"state": "unavailable", "mechanism": "python-subprocess"},
-        }
-    except subprocess.TimeoutExpired:
-        return {
-            "name": "process-execution",
-            "passed": False,
-            "detail": {"state": "unknown", "mechanism": "python-subprocess"},
-        }
-    passed = result.returncode == 0
+    ok, _ = _run([sys.executable, "-c", "pass"])
     return {
         "name": "process-execution",
-        "passed": passed,
+        "passed": ok,
         "detail": {
-            "state": "available" if passed else "unavailable",
+            "state": "available" if ok else "unknown",
             "mechanism": "python-subprocess",
         },
     }
@@ -282,44 +266,41 @@ def check_validation_commands(repo_root: Path) -> dict:
 
 
 def check_github_auth_capability() -> dict:
-    import os
-
     if os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN"):
         return {
             "name": "github-auth-capability",
             "passed": True,
             "detail": {"capable": True, "state": "authenticated", "source": "env"},
         }
-    gh_path = shutil.which("gh")
-    if gh_path is not None:
-        try:
-            result = subprocess.run(
-                ["gh", "auth", "status"],
-                check=False,
-                text=True,
-                capture_output=True,
-                timeout=SUBPROCESS_TIMEOUT_SECONDS,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            return {
-                "name": "github-auth-capability",
-                "passed": False,
-                "detail": {"capable": False, "state": "unknown", "source": "gh-cli"},
-            }
-        capable = result.returncode == 0
+    if shutil.which("gh") is None:
         return {
             "name": "github-auth-capability",
-            "passed": capable,
-            "detail": {
-                "capable": capable,
-                "state": "authenticated" if capable else "unauthenticated",
-                "source": "gh-cli",
-            },
+            "passed": False,
+            "detail": {"capable": False, "state": "unknown", "source": "none"},
         }
+    try:
+        result = subprocess.run(
+            ["gh", "auth", "status"],
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=SUBPROCESS_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {
+            "name": "github-auth-capability",
+            "passed": False,
+            "detail": {"capable": False, "state": "unknown", "source": "gh-cli"},
+        }
+    capable = result.returncode == 0
     return {
         "name": "github-auth-capability",
-        "passed": False,
-        "detail": {"capable": False, "state": "not-applicable", "source": "none"},
+        "passed": capable,
+        "detail": {
+            "capable": capable,
+            "state": "authenticated" if capable else "unauthenticated",
+            "source": "gh-cli",
+        },
     }
 
 
@@ -355,8 +336,8 @@ def build_evidence(
     execution_surface_id: str | None = None,
     observed_at: str | None = None,
 ) -> dict:
-    surface_id = _normalize_surface_id(execution_surface_id)
-    canonical_observed_at = _normalize_observed_at(observed_at)
+    surface_id = _execution_surface_id(repo_root, execution_surface_id)
+    timestamp = _canonical_observed_at(observed_at)
     checks = [
         check_repository_identity(repo_root),
         check_checkout_identity(repo_root),
@@ -366,29 +347,27 @@ def build_evidence(
         check_validation_commands(repo_root),
         check_github_auth_capability(),
     ]
-    failures = [c["name"] for c in checks if not c["passed"]]
+    failures = [check["name"] for check in checks if not check["passed"]]
     evidence = {
         "schema": SCHEMA,
         "profile_id": PROFILE_ID,
         "execution_surface_id": surface_id,
-        "observed_at": canonical_observed_at,
+        "observed_at": timestamp,
         "network_mode": network_mode,
         "checks": checks,
         "failures": failures,
         "authority": dict(_AUTHORITY_FIELDS),
         "status": "pass" if not failures else "fail",
     }
-    evidence["environment_health_evidence_id"] = _environment_evidence_id(evidence)
     redacted_evidence, credential_found = _redact(evidence)
     if credential_found:
         redacted_evidence["status"] = "fail"
-        redacted_evidence["failures"] = [
-            *redacted_evidence["failures"],
-            "prohibited-credential-material-detected",
+        redacted_evidence["failures"] = list(redacted_evidence["failures"]) + [
+            "prohibited-credential-material-detected"
         ]
-        redacted_evidence["environment_health_evidence_id"] = _environment_evidence_id(
-            redacted_evidence
-        )
+    redacted_evidence["environment_health_evidence_id"] = _environment_evidence_id(
+        redacted_evidence
+    )
     return redacted_evidence
 
 
@@ -407,8 +386,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
-    import os
-
     args = parse_args(sys.argv[1:] if argv is None else argv)
     if args.min_free_mb <= 0:
         print(json.dumps({"error": "--min-free-mb must be a positive integer"}))
@@ -424,15 +401,6 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"error": f"unsupported network mode: {network_mode}"}))
         return 2
 
-    execution_surface_id = args.execution_surface_id or os.environ.get(
-        "AGENT_OS_EXECUTION_SURFACE_ID", PROFILE_ID
-    )
-    try:
-        execution_surface_id = _normalize_surface_id(execution_surface_id)
-    except ValueError as exc:
-        print(json.dumps({"error": str(exc)}))
-        return 2
-
     if args.check == "repository-identity":
         result = check_repository_identity(repo_root)
         redacted_result, credential_found = _redact(result)
@@ -441,12 +409,17 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(redacted_result, sort_keys=True))
         return 0 if redacted_result["passed"] else 1
 
-    evidence = build_evidence(
-        repo_root,
-        network_mode,
-        args.min_free_mb,
-        execution_surface_id=execution_surface_id,
-    )
+    try:
+        evidence = build_evidence(
+            repo_root,
+            network_mode,
+            args.min_free_mb,
+            execution_surface_id=args.execution_surface_id,
+        )
+    except ValueError as exc:
+        print(json.dumps({"error": str(exc)}))
+        return 2
+
     print(json.dumps(evidence, sort_keys=True, indent=2))
     return 0 if evidence["status"] == "pass" else 1
 
