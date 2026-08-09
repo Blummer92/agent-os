@@ -382,6 +382,23 @@ def test_deserialized_handoff_authority_requires_authorization_identity() -> Non
         ExecutorHandoff.from_dict(data)
 
 
+def test_validation_handoff_requires_validation_plan_identity() -> None:
+    value = handoff(runner_decision(ExecutorCapability.TEST_EXECUTION))
+    kwargs = {
+        item.name: getattr(value, item.name)
+        for item in dataclasses.fields(ExecutorHandoff)
+        if item.init
+    }
+    kwargs["validation_command_plan_id_or_none"] = None
+    kwargs["handoff_id"] = ""
+    with pytest.raises(ValueError):
+        ExecutorHandoff(**kwargs)
+    data = value.to_dict()
+    data["validation_command_plan_id_or_none"] = None
+    with pytest.raises(ValueError):
+        ExecutorHandoff.from_dict(data)
+
+
 @pytest.mark.parametrize("missing", ["checkpoint_id_or_none", "resume_plan_id_or_none"])
 def test_checkpointed_resume_handoff_requires_both_identities(missing: str) -> None:
     value = handoff(runner_decision(ExecutorCapability.CHECKPOINTED_RESUME))
