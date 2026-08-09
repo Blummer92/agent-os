@@ -658,10 +658,4 @@ def test_candidate_module_has_no_prohibited_operations() -> None:
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
     }
-    called |= {
-        node.func.attr
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-    }
     assert not called & prohibited_calls

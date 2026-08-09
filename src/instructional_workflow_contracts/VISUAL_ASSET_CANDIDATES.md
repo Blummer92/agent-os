@@ -12,7 +12,7 @@ Inputs are bounded as follows:
 
 - `visual_needs_plan`: validated `curriculum-visual-needs-plan-v1` `ValidationResult` or `ValidatedRecord` with exact `visuals-required` outcome; contract version, plan ID, revision, and fingerprint must reconstruct exactly.
 - `candidates`: built-in list of at most 32 compatibility envelopes, each revalidated independently.
-- `source_revision`: nonempty caller-supplied source-snapshot identity, at most `MAX_SOURCE_REVISION_LENGTH` (`256`) characters.
+- `source_revision`: nonempty caller-supplied source-snapshot identity, at most 256 characters.
 - `contract_version`: exact candidate projection version; defaults to v1.
 
 Plain plan mappings, `no-visual-needed`, and `manual-review-required` plans fail closed.
@@ -31,7 +31,7 @@ Plan mismatches use `visual-candidate-role-mismatch`, `visual-candidate-material
 
 The result preserves plan contract version, plan ID, plan revision, and plan fingerprint. `candidate_set_id` is deterministic and SHA-256-derived from the selected candidate contract, exact plan identity, exact `source_revision`, and fully ordered `eligible`, `rejected`, and `manual_review` groups. The validated result fingerprint covers the complete normalized result.
 
-Input order does not affect semantic output. Groups sort by compatibility ID, compatibility fingerprint, reason codes, and canonical `sha256_hex(item)` as the total-order tie-breaker. Changing source revision, version, plan identity, evidence, classification, reasons, or projected fields changes the candidate-set identity or fingerprint.
+Input order does not affect semantic output. Groups sort by compatibility ID, compatibility fingerprint, and reason codes. Changing source revision, version, plan identity, evidence, classification, reasons, or projected fields changes the candidate-set identity or fingerprint.
 
 ## V1 projection
 
@@ -49,14 +49,14 @@ Every v2 entry backed by the expected validated compatibility version preserves:
 - `matched_asset`: duplicate relationship, disposition, canonical reference, duplicate group, required/preserved context, context completeness, direct-use status, repair-source status, and replacement-required state;
 - complete governed `cohesion_profile` and exact all-false `authority`.
 
-Invalid or wrong-version v2 envelopes preserve only available compatibility-binding fields, `classification: invalid`, and reason codes. The filter never reconstructs manifest, asset, approved-use, accessibility, freshness, lifecycle, context, or cohesion evidence from working inputs. `matched_asset` carries the asset-level duplicate/disposition/direct-use/repair/replacement lifecycle evidence; manifest-level `operation`, `lineage`, and `statuses` are not projected by this contract.
+Invalid or wrong-version v2 envelopes preserve only available compatibility-binding fields, `classification: invalid`, and reason codes. The filter never reconstructs manifest, asset, approved-use, accessibility, freshness, lifecycle, context, or cohesion evidence from working inputs.
 
 ## Result, bounds, and authority
 
 The immutable result contains selected contract version, deterministic candidate-set ID, exact source revision, exact plan identity, `maximum_candidate_count: 32`, actual count, the three ordered groups, and all-false candidate-set authority. Shared serialized-size limits apply; oversized input or output fails closed instead of truncating. Any manual-review candidate produces `ValidationStatus.MANUAL_REVIEW_REQUIRED`; otherwise a structurally valid set is `ValidationStatus.VALID`.
 
-Execution, external write, production, publication, and performed-side-effect authority remain false. Contract-specific authority fields stay false; governing no-side-effect requirements remain under `00_Governance/write-authorization-policy.md` and `01_Shared_Standards/github/safe-implementation-lane.md`.
+Execution, external write, production, publication, and performed-side-effect authority remain false. The filter performs no retrieval, image inspection/decoding, OCR, embeddings, vector search, computer vision, GPU use, model invocation, prompt construction, asset generation, Notion/Drive access, filesystem write, approval/readiness mutation, publication, or production work.
 
 ## Rollback
 
-Rollback removes only additive v2 candidate projection from `src/instructional_workflow_contracts/visual_asset_candidates.py`, `src/instructional_workflow_contracts/VISUAL_ASSET_CANDIDATES.md`, `tests/fixtures/instructional_workflow_contracts/visual_asset_candidate_v2_cases.json`, and `tests/test_visual_asset_candidates.py`. Candidate v1, compatibility v1, and upstream contracts remain independently valid without migration or external cleanup.
+Rollback removes only additive v2 candidate projection, its focused fixture/tests, and this documentation. Candidate v1, compatibility v1, and upstream contracts remain independently valid without migration or external cleanup.

@@ -57,30 +57,6 @@ The filter performs no cohesion ranking, scoring, selection, role assignment, re
 
 See `VISUAL_ASSET_CANDIDATES.md` for exact v1 and v2 entry shapes, group behavior, reason-code mappings, bounds, and prohibited operations.
 
-## Current Curriculum State
-
-`resolve_current_curriculum_state` consumes only bounded caller-supplied provider-neutral evidence with `contract_version` exactly `curriculum-current-state-evidence-v1`; other versions fail closed with `handoff-version-unsupported`. It returns one deterministic `curriculum-current-state-v1` record and does not read Notion, Drive, GitHub, files, environment variables, credentials, or models.
-
-Canonical owner evidence remains authoritative even when newer narrative, display-derived, or agent-suggested evidence disagrees. Newer narrative may surface a contradiction but cannot overwrite owner state; stale material owner evidence, conflicting owner values, or unresolved relations fail closed into reconciliation, decision, or blocked dispositions.
-
-Relative requests such as `tomorrow` require explicit current-day evidence and supplied ordered-day context. Packet order, creation time, filenames, inferred sequence, formulas, rollups, and routing suggestions are not treated as authority.
-
-Asset existence, approval for the requested use, approved reusable student-facing eligibility, and production authorization remain separate facts. The resolver does not implement [#971](https://github.com/Blummer92/agent-os/issues/971) association behavior or [#963](https://github.com/Blummer92/agent-os/issues/963) persistence/write proposals.
-
-All resolver execution, Notion-write, Drive-write, external-write, publication, and production authority remains false.
-
-## Current Curriculum Evidence Assembler
-
-`assemble_current_curriculum_evidence` is the bounded provider-neutral seam between already-normalized live curriculum evidence and `resolve_current_curriculum_state`. It consumes already-interpreted request intent, canonical unit evidence, optional trusted current-day context, normalized owner evidence, and normalized relation-derived asset evidence; it emits exactly `curriculum-current-state-evidence-v1` input.
-
-Evidence selection is request-sensitive. Image discovery can assemble only canonical-unit and asset eligibility evidence; modeling requests retain modeling-owner evidence; blocker requests retain material owner evidence; slides, worksheets, and lesson requests select only their bounded owner categories. The assembler does not retrieve every curriculum surface for every request.
-
-Visual Asset Library membership must be resolved upstream through the canonical-unit relation. Provider-specific query details, including compact Notion page-ID serialization, remain outside this contract. The assembler accepts only a normalized relation marker and strips that provider-specific marker before handing asset evidence to #973, so raw SQL, Notion payloads, and provider formatting never become the current-state public contract.
-
-The assembler preserves `owner-governed`, `display-derived`, `agent-suggested`, and `teacher-entered` classifications, stale/current evidence, conflicts, unresolved relations, and missing owner evidence rather than reconciling them. #973 remains responsible for final currentness/conflict/disposition behavior. Relative-time context is never invented.
-
-The assembler performs no Notion, Drive, GitHub, filesystem, environment, credential, model, or network access; it creates no persistence or write proposal and grants no readiness, approval, source, production, publication, or external-write authority. #963 remains the owner of conversational persistence/write proposals.
-
 ## Authority and downstream behavior
 
 All retrieval, generation, production, publication, approval, readiness, and external-write authority remains false.
