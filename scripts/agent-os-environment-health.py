@@ -35,6 +35,7 @@ REQUIRED_VALIDATION_COMMANDS = (
 )
 DEFAULT_MIN_FREE_MB = 500
 SUBPROCESS_TIMEOUT_SECONDS = 5
+MAX_TOOL_VERSION_LENGTH = 200
 _REPOSITORY_COMPONENT = re.compile(r"[A-Za-z0-9_.-]+")
 _SURFACE_ID = re.compile(r"[A-Za-z0-9_.:-]{1,80}")
 
@@ -80,8 +81,10 @@ def _run(cmd: list[str], cwd: Path | None = None) -> tuple[bool, str]:
     except (OSError, subprocess.TimeoutExpired) as exc:
         return False, str(exc)
     if result.returncode != 0:
-        return False, (result.stderr or result.stdout).strip()[:200]
-    return True, (result.stdout or "").strip().splitlines()[0] if result.stdout.strip() else ""
+        return False, (result.stderr or result.stdout).strip()[:MAX_TOOL_VERSION_LENGTH]
+    if not result.stdout.strip():
+        return True, ""
+    return True, result.stdout.strip().splitlines()[0][:MAX_TOOL_VERSION_LENGTH]
 
 
 def _canonicalize_repository_remote(origin_url: str) -> str | None:
@@ -123,6 +126,21 @@ def _canonical_observed_at(now: datetime | None = None) -> str:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _normalize_observed_at(value: str | None) -> str:
+    if value is None:
+        return _canonical_observed_at()
+    candidate = value.strip()
+    if len(candidate) > 64:
+        raise ValueError("observed_at must be a bounded ISO-8601 timestamp")
+    try:
+        parsed = datetime.fromisoformat(candidate.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("observed_at must be a valid ISO-8601 timestamp") from exc
+    if parsed.tzinfo is None:
+        raise ValueError("observed_at must include a timezone")
+    return _canonical_observed_at(parsed)
 
 
 def _normalize_surface_id(value: str | None) -> str:
@@ -210,16 +228,40 @@ def check_tooling(repo_root: Path) -> dict:
     tools["python"] = {
         "available": True,
         "state": "available",
-        "version": sys.version.split()[0],
+        "version": sys.version.split()[0][:MAX_TOOL_VERSION_LENGTH],
     }
     return {"name": "tooling", "passed": all_ok, "detail": tools}
 
 
 def check_process_execution() -> dict:
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", "pass"],
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=SUBPROCESS_TIMEOUT_SECONDS,
+        )
+    except OSError:
+        return {
+            "name": "process-execution",
+            "passed": False,
+            "detail": {"state": "unavailable", "mechanism": "python-subprocess"},
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "name": "process-execution",
+            "passed": False,
+            "detail": {"state": "unknown", "mechanism": "python-subprocess"},
+        }
+    passed = result.returncode == 0
     return {
         "name": "process-execution",
-        "passed": True,
-        "detail": {"state": "available", "mechanism": "python-subprocess"},
+        "passed": passed,
+        "detail": {
+            "state": "available" if passed else "unavailable",
+            "mechanism": "python-subprocess",
+        },
     }
 
 
@@ -314,6 +356,7 @@ def build_evidence(
     observed_at: str | None = None,
 ) -> dict:
     surface_id = _normalize_surface_id(execution_surface_id)
+    canonical_observed_at = _normalize_observed_at(observed_at)
     checks = [
         check_repository_identity(repo_root),
         check_checkout_identity(repo_root),
@@ -328,7 +371,7 @@ def build_evidence(
         "schema": SCHEMA,
         "profile_id": PROFILE_ID,
         "execution_surface_id": surface_id,
-        "observed_at": observed_at or _canonical_observed_at(),
+        "observed_at": canonical_observed_at,
         "network_mode": network_mode,
         "checks": checks,
         "failures": failures,
@@ -339,8 +382,9 @@ def build_evidence(
     redacted_evidence, credential_found = _redact(evidence)
     if credential_found:
         redacted_evidence["status"] = "fail"
-        redacted_evidence["failures"] = list(redacted_evidence["failures"]) + [
-            "prohibited-credential-material-detected"
+        redacted_evidence["failures"] = [
+            *redacted_evidence["failures"],
+            "prohibited-credential-material-detected",
         ]
         redacted_evidence["environment_health_evidence_id"] = _environment_evidence_id(
             redacted_evidence
