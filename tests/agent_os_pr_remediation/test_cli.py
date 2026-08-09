@@ -63,17 +63,15 @@ def test_json_and_text_output_are_deterministic() -> None:
     assert "authority: execution=false external-write=false merge=false side-effects=false" in text
 
 
-def test_moved_expected_head_fails_closed_without_side_effect() -> None:
+def test_moved_expected_head_is_rejected_by_existing_prr3_identity_contract() -> None:
     payload = _fixture()
     payload["expected_head"] = "3333333333333333333333333333333333333333"
 
-    report = evaluate(payload)
-    thread = report["resolution_plan"]["thread_results"][0]
-
-    assert report["preflight"]["overall_status"] == "fail"
-    assert thread["resolution_eligible"] is False
-    assert "preflight-fail" in thread["ineligibility_reason_codes"]
-    _assert_authority_false(report)
+    with pytest.raises(
+        EvidenceValidationError,
+        match="preflight expected head does not match the PRR1 snapshot",
+    ):
+        evaluate(payload)
 
 
 def test_out_of_scope_finding_is_routed_not_executed() -> None:
