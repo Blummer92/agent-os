@@ -19,6 +19,18 @@ class EvidenceValidationError(ValueError):
     """Supplied evidence is malformed, conflicting, or outside the contract."""
 
 
+def _canonical_value(value: Any) -> Any:
+    if type(value) is dict:
+        if any(type(key) is not str for key in value):
+            raise EvidenceValidationError("canonical_json dictionary keys must be strings")
+        return {key: _canonical_value(item) for key, item in value.items()}
+    if type(value) in {list, tuple}:
+        return [_canonical_value(item) for item in value]
+    if type(value) in {str, int, float, bool, type(None)}:
+        return value
+    raise EvidenceValidationError("canonical_json accepts built-in JSON values only")
+
+
 def canonical_json(value: Any) -> str:
     """Serialize only built-in JSON data deterministically."""
 
@@ -26,7 +38,7 @@ def canonical_json(value: Any) -> str:
         raise EvidenceValidationError("canonical_json accepts built-in JSON values only")
     try:
         return json.dumps(
-            value,
+            _canonical_value(value),
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
