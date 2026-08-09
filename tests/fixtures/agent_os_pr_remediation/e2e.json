@@ -1,0 +1,87 @@
+{
+  "snapshot": {
+    "repository": "Blummer92/agent-os",
+    "pr_number": 1004,
+    "base_branch": "main",
+    "base_sha": "1111111111111111111111111111111111111111",
+    "head_branch": "agent/example",
+    "head_sha": "2222222222222222222222222222222222222222",
+    "state": "open",
+    "merged": false,
+    "draft": false,
+    "changed_files": ["scripts/example.py"],
+    "captured_at": "2026-08-09T18:00:00Z",
+    "source_revision": "prr4-e2e-v1"
+  },
+  "review_threads": [
+    {
+      "thread_id": "PRRT_E2E",
+      "top_level_comment_id": 401,
+      "reviewer": "reviewer-e2e",
+      "body": "Add an explicit guard for the supplied condition.",
+      "path": "scripts/example.py",
+      "line": 10,
+      "original_line": 10,
+      "side": "RIGHT",
+      "resolved": false,
+      "outdated": false,
+      "superseded": false,
+      "created_at": "2026-08-09T18:01:00Z",
+      "updated_at": "2026-08-09T18:02:00Z",
+      "reply_ids": [],
+      "supersession_evidence": []
+    }
+  ],
+  "expected_head": "2222222222222222222222222222222222222222",
+  "allowed_files": ["scripts/example.py"],
+  "draft_allowed": false,
+  "candidates": [
+    {
+      "finding_identity": "null-guard",
+      "rule_id": "RULE-E2E-1",
+      "requested_outcome": "add an explicit guard",
+      "source_thread_ids": ["PRRT_E2E"],
+      "affected_files": ["scripts/example.py"],
+      "owner": "python-development",
+      "risk": "low",
+      "requested_summary": "add one bounded null guard",
+      "proposed_validations": ["focused-tests"],
+      "evidence_basis": ["review-thread"]
+    }
+  ],
+  "failure_evidence": {
+    "record_id": "failure-e2e",
+    "status": "actionable-failure"
+  },
+  "repair_handoff": {
+    "packet_id": "handoff-e2e",
+    "status": "planning-handoff-only"
+  },
+  "changed_files": ["scripts/example.py"],
+  "finding_fixes": [
+    {
+      "finding_id": "89f1682698922c3d2911bdefffc9550db032f8c1d55c41fe6395eb0096d5d6e1",
+      "fixed": true,
+      "head_sha": "2222222222222222222222222222222222222222",
+      "evidence_id": "fix-e2e-1"
+    }
+  ],
+  "validation_evidence": [
+    {
+      "category": "focused-tests",
+      "profile": "aggregate",
+      "validation_plan_id": "validation-plan:e2e",
+      "command_plan_id": "command-plan:e2e",
+      "execution_evidence_id": "execution-composition:e2e",
+      "expected_sha": "2222222222222222222222222222222222222222",
+      "tested_sha": "2222222222222222222222222222222222222222",
+      "execution_status": "aggregate-pass",
+      "aggregate_pending": false,
+      "evidence_complete": true,
+      "evidence_available": true,
+      "reason_codes": ["aggregate-pass"]
+    }
+  ],
+  "current_head_sha": "2222222222222222222222222222222222222222",
+  "final_captured_head_sha": "2222222222222222222222222222222222222222"
+}
