@@ -415,9 +415,7 @@ def reconcile_lifecycle(e: LifecycleReconciliationInput) -> LifecycleReconciliat
             adm = _admission(e, "replace-lifecycle-labels")
             if adm is None:
                 reasons.add("authorization.lifecycle-admission-required")
-                actions.append(ReconciliationAction(ActionCategory.MANUAL_DECISION, "authorization.lifecycle-admission-required", "lifecycle-labels", ",".join(current) or "none", desired, expected_state_guards=_guards(e)))
-            else:
-                actions.append(ReconciliationAction(ActionCategory.GOVERNED_MUTATION, "lifecycle.status-label-stale", "lifecycle-labels", ",".join(current) or "none", desired, "replace-lifecycle-labels", admission_result_id=adm.result_id, expected_state_guards=_guards(e)))
+            actions.append(ReconciliationAction(ActionCategory.GOVERNED_MUTATION, "lifecycle.status-label-stale", "lifecycle-labels", ",".join(current) or "none", desired, "replace-lifecycle-labels", admission_result_id=adm.result_id if adm else None, expected_state_guards=_guards(e)))
 
     merged_open = s.issue_state is IssueState.OPEN and (s.primary_pr_state is PrimaryPrState.MERGED or (pr and pr.state is PullRequestState.MERGED))
     if merged_open:
@@ -426,15 +424,14 @@ def reconcile_lifecycle(e: LifecycleReconciliationInput) -> LifecycleReconciliat
         auth = s.closure_authorization.evidence_id if s.closure_authorization.state is AuthorizationState.AUTHORIZED else None
         if auth is None:
             reasons.add("authorization.closure-required")
-            actions.append(ReconciliationAction(ActionCategory.MANUAL_DECISION, "authorization.closure-required", "issue-state", "open", "closed", expected_state_guards=_guards(e)))
-        elif adm is None:
+        if adm is None:
             reasons.add("authorization.lifecycle-admission-required")
-            actions.append(ReconciliationAction(ActionCategory.MANUAL_DECISION, "authorization.lifecycle-admission-required", "issue-state", "open", "closed", authorization_id=auth, expected_state_guards=_guards(e)))
-        elif adm.authorization_id != auth:
+        if auth is not None and adm is not None and adm.authorization_id != auth:
             reasons.add("source.conflicting-admission-evidence")
             decision = True
         else:
-            actions.append(ReconciliationAction(ActionCategory.GOVERNED_MUTATION, "lifecycle.merged-pr-open-issue", "issue-state", "open", "closed", "close-issue", auth, adm.result_id, _guards(e)))
+            category = ActionCategory.GOVERNED_MUTATION if auth is not None and adm is not None else ActionCategory.MANUAL_DECISION
+            actions.append(ReconciliationAction(category, "lifecycle.merged-pr-open-issue", "issue-state", "open", "closed", "close-issue", auth, adm.result_id if adm else None, _guards(e)))
     if s.issue_state is IssueState.CLOSED and s.terminal_disposition is TerminalDisposition.NONE and s.primary_pr_state is not PrimaryPrState.MERGED:
         reasons.add("lifecycle.closed-without-terminal-evidence")
         decision = True
