@@ -21,6 +21,7 @@ from .approval_records import (
     evaluate_approval_applicability,
 )
 from .issueplan_current_state import IssuePlanCurrentStateEvidence
+from .planning_binding import PlanningBindingEvidence
 from .scheduler_handoff import HandoffCohort
 
 APPROVED_EXECUTION_PROJECTION_SCHEMA_VERSION = "1.0"
@@ -204,6 +205,7 @@ def build_approved_execution_projection(
     repository_state_evidence: RepositoryStateEvidence | None,
     *,
     projected_at: str,
+    planning_binding: PlanningBindingEvidence | None = None,
     schema_version: str = APPROVED_EXECUTION_PROJECTION_SCHEMA_VERSION,
 ) -> ApprovedExecutionProjectionResult:
     """Build one complete projection from supplied, reverified immutable evidence."""
@@ -214,6 +216,14 @@ def build_approved_execution_projection(
         _timestamp(projected_at, "projected_at")
     except ValueError as exc:
         return _failure("invalid", ("projection.incomplete",), (str(exc),))
+    if planning_binding is not None and not isinstance(
+        planning_binding, PlanningBindingEvidence
+    ):
+        return _failure(
+            "invalid",
+            ("projection.incomplete",),
+            ("planning-binding:invalid-type",),
+        )
     if approval_record is None:
         return _failure(
             "needs-decision",
@@ -246,6 +256,7 @@ def build_approved_execution_projection(
             issueplan_current_state_evidence,
             repository_state_evidence,
             evaluated_at=projected_at,
+            planning_binding=planning_binding,
         )
     except (TypeError, ValueError) as exc:
         reason = (

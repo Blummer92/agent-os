@@ -22,6 +22,13 @@ from scripts.agent_os_issue_acceptance.acceptance_report_transport import (
     acceptance_report_to_payload,
 )
 
+from .approval_stage import (
+    ApprovalCandidateContext,
+    ApprovalDecision,
+    ApprovalProjectionStageResult,
+    ApprovalProjectionStageStatus,
+    prepare_approval_projection,
+)
 from .executable_lane_selection import (
     EXECUTABLE_LANE_SELECTION_SCHEMA_NAME,
     EXECUTABLE_LANE_SELECTION_SCHEMA_VERSION,
@@ -99,6 +106,10 @@ from .stage_models import (
 )
 
 __all__ = [
+    "ApprovalCandidateContext",
+    "ApprovalDecision",
+    "ApprovalProjectionStageResult",
+    "ApprovalProjectionStageStatus",
     "DEPENDENCY_IDENTITY_DUPLICATE_COLLAPSED_REASON",
     "DEPENDENCY_IDENTITY_NOT_SUPPLIED",
     "DEPENDENCY_IDENTITY_NOT_SUPPLIED_REASON",
@@ -151,6 +162,7 @@ __all__ = [
     "issue_snapshot_to_dict",
     "issueplan_current_state_evidence_from_dict",
     "issueplan_current_state_evidence_to_dict",
+    "prepare_approval_projection",
     "prepare_issue_readiness",
     "prepare_planning_handoff",
     "prepare_repository_and_proposal",
