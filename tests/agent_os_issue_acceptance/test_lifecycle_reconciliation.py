@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from scripts.agent_os_issue_acceptance.issue_operational_state import (
     AuthorityProjection,
     AuthorizationState,
@@ -79,12 +81,7 @@ def state(*, readiness=ReadinessState.READY, dependency=DependencyState.CLEAR, c
 
 
 def claim(number=997, *, value="draft", head=HEAD, branch="agent/996-lifecycle-reconciliation"):
-    return PrimaryIssueClaim(
-        pull_request_number=number,
-        branch=branch,
-        head_sha=head,
-        state=value,
-    )
+    return PrimaryIssueClaim(pull_request_number=number, branch=branch, head_sha=head, state=value)
 
 
 def pr(*, value=PullRequestState.DRAFT, head=HEAD):
@@ -93,37 +90,22 @@ def pr(*, value=PullRequestState.DRAFT, head=HEAD):
 
 def snapshot(*, status="status:ready", value="draft", merged=False, head=HEAD):
     return LifecycleStateSnapshot(
-        repository="Blummer92/agent-os",
-        issue_number=996,
+        repository="Blummer92/agent-os", issue_number=996,
         pull_request_number=997 if value != "none" else None,
-        source_head=head if value != "none" else None,
-        base_head=SOURCE,
-        pr_state=value,
-        merged=merged,
-        issue_state="open",
-        review_state="clear",
-        unresolved_threads=0,
-        lifecycle_labels=(status,),
-        observed_revision="revision-1",
+        source_head=head if value != "none" else None, base_head=SOURCE,
+        pr_state=value, merged=merged, issue_state="open", review_state="clear",
+        unresolved_threads=0, lifecycle_labels=(status,), observed_revision="revision-1",
     )
 
 
 def input_for(current_state, **changes):
-    data = {
-        "repository": "Blummer92/agent-os",
-        "issue_number": 996,
-        "operational_state": current_state,
-    }
+    data = {"repository": "Blummer92/agent-os", "issue_number": 996, "operational_state": current_state}
     data.update(changes)
     return LifecycleReconciliationInput(**data)
 
 
 def test_completed_dependency_still_projected_as_blocking_is_repaired():
-    evidence = input_for(
-        state(),
-        dependencies=(DependencyEvidence(934, DependencyDisposition.COMPLETED, "issue:934"),),
-        projections=(ProjectionEvidence(ProjectionSurface.ROADMAP, "roadmap:330", blocked_dependencies=(934,)),),
-    )
+    evidence = input_for(state(), dependencies=(DependencyEvidence(934, DependencyDisposition.COMPLETED, "issue:934"),), projections=(ProjectionEvidence(ProjectionSurface.ROADMAP, "roadmap:330", blocked_dependencies=(934,)),))
     result = reconcile_lifecycle(evidence)
     assert result.outcome is ReconciliationOutcome.REQUIRED
     assert "projection.completed-dependency-blocker" in result.reason_codes
@@ -132,14 +114,7 @@ def test_completed_dependency_still_projected_as_blocking_is_repaired():
 
 def test_active_draft_pr_overrides_stale_blocked_issue_projection():
     current = state(claims=(claim(),))
-    result = reconcile_lifecycle(
-        input_for(
-            current,
-            lifecycle_snapshot=snapshot(),
-            current_pull_request=pr(),
-            projections=(ProjectionEvidence(ProjectionSurface.ISSUE_BODY, "issue-body:996", readiness=ReadinessState.BLOCKED),),
-        )
-    )
+    result = reconcile_lifecycle(input_for(current, lifecycle_snapshot=snapshot(), current_pull_request=pr(), projections=(ProjectionEvidence(ProjectionSurface.ISSUE_BODY, "issue-body:996", readiness=ReadinessState.BLOCKED),)))
     assert result.outcome is ReconciliationOutcome.REQUIRED
     assert "projection.readiness-stale" in result.reason_codes
     assert result.actions[0].expected == "ready"
@@ -147,14 +122,7 @@ def test_active_draft_pr_overrides_stale_blocked_issue_projection():
 
 def test_old_exact_head_validation_becomes_stale_after_new_commit():
     current = state(claims=(claim(),))
-    result = reconcile_lifecycle(
-        input_for(
-            current,
-            lifecycle_snapshot=snapshot(),
-            current_pull_request=pr(),
-            exact_head_evidence=(ExactHeadEvidence("validation:old", OLD_HEAD),),
-        )
-    )
+    result = reconcile_lifecycle(input_for(current, lifecycle_snapshot=snapshot(), current_pull_request=pr(), exact_head_evidence=(ExactHeadEvidence("validation:old", OLD_HEAD),)))
     action = next(item for item in result.actions if item.reason_code == "validation.exact-head-stale")
     assert action.observed == OLD_HEAD
     assert action.expected == HEAD
@@ -163,9 +131,7 @@ def test_old_exact_head_validation_becomes_stale_after_new_commit():
 
 def test_ready_for_review_fact_does_not_grant_merge_authority():
     current = state(claims=(claim(value="ready"),))
-    result = reconcile_lifecycle(
-        input_for(current, lifecycle_snapshot=snapshot(value="ready"), current_pull_request=pr(value=PullRequestState.READY))
-    )
+    result = reconcile_lifecycle(input_for(current, lifecycle_snapshot=snapshot(value="ready"), current_pull_request=pr(value=PullRequestState.READY)))
     assert result.outcome is ReconciliationOutcome.CONSISTENT
     assert result.merge_authorization is AuthorizationState.NOT_AUTHORIZED
     assert result.side_effects_performed is False
@@ -173,9 +139,7 @@ def test_ready_for_review_fact_does_not_grant_merge_authority():
 
 def test_merged_pr_open_issue_requires_closure_authority_and_admission():
     current = state(claims=(claim(value="merged"),))
-    result = reconcile_lifecycle(
-        input_for(current, lifecycle_snapshot=snapshot(value="ready", merged=True), current_pull_request=pr(value=PullRequestState.MERGED))
-    )
+    result = reconcile_lifecycle(input_for(current, lifecycle_snapshot=snapshot(value="ready", merged=True), current_pull_request=pr(value=PullRequestState.MERGED)))
     assert result.outcome is ReconciliationOutcome.REQUIRED
     assert "lifecycle.merged-pr-open-issue" in result.reason_codes
     assert "authorization.closure-required" in result.reason_codes
@@ -188,16 +152,7 @@ def test_merged_pr_open_issue_requires_closure_authority_and_admission():
 
 def test_closed_superseded_pr_projected_active_is_projection_repair():
     current = state()
-    closed = pr(value=PullRequestState.CLOSED_SUPERSEDED)
-    no_pr_snapshot = snapshot(value="none", head=HEAD)
-    result = reconcile_lifecycle(
-        input_for(
-            current,
-            lifecycle_snapshot=no_pr_snapshot,
-            current_pull_request=closed,
-            projections=(ProjectionEvidence(ProjectionSurface.PR_DESCRIPTION, "pr-body:997", pull_request_number=997, pull_request_state=PullRequestState.READY),),
-        )
-    )
+    result = reconcile_lifecycle(input_for(current, lifecycle_snapshot=snapshot(value="none", head=HEAD), current_pull_request=pr(value=PullRequestState.CLOSED_SUPERSEDED), projections=(ProjectionEvidence(ProjectionSurface.PR_DESCRIPTION, "pr-body:997", pull_request_number=997, pull_request_state=PullRequestState.READY),)))
     assert "claim.closed-pr-projected-active" in result.reason_codes
     assert result.outcome is ReconciliationOutcome.REQUIRED
 
@@ -213,9 +168,7 @@ def test_duplicate_primary_claims_fail_closed_to_needs_decision():
 
 def test_stale_lifecycle_label_requires_existing_admission_not_inferred_authority():
     current = state(claims=(claim(),))
-    result = reconcile_lifecycle(
-        input_for(current, lifecycle_snapshot=snapshot(status="status:blocked"), current_pull_request=pr())
-    )
+    result = reconcile_lifecycle(input_for(current, lifecycle_snapshot=snapshot(status="status:blocked"), current_pull_request=pr()))
     assert "lifecycle.status-label-stale" in result.reason_codes
     assert "authorization.lifecycle-admission-required" in result.reason_codes
     action = next(item for item in result.actions if item.reason_code == "lifecycle.status-label-stale")
@@ -228,15 +181,7 @@ def test_stale_lifecycle_label_requires_existing_admission_not_inferred_authorit
 def test_matching_lifecycle_admission_is_preserved_on_recommendation():
     current = state(claims=(claim(),))
     snap = snapshot(status="status:blocked")
-    admission = LifecycleMutationAdmissionResult(
-        requested_mutation="replace-lifecycle-labels",
-        admitted=True,
-        status=AdmissionStatus.ADMITTED,
-        reason_codes=(),
-        details=(),
-        authorization_id="lifecycle-authorization:1",
-        snapshot_id=snap.snapshot_id,
-    )
+    admission = LifecycleMutationAdmissionResult(requested_mutation="replace-lifecycle-labels", admitted=True, status=AdmissionStatus.ADMITTED, reason_codes=(), details=(), authorization_id="lifecycle-authorization:1", snapshot_id=snap.snapshot_id)
     result = reconcile_lifecycle(input_for(current, lifecycle_snapshot=snap, current_pull_request=pr(), admissions=(admission,)))
     action = next(item for item in result.actions if item.reason_code == "lifecycle.status-label-stale")
     assert action.admission_result_id == admission.result_id
@@ -245,39 +190,54 @@ def test_matching_lifecycle_admission_is_preserved_on_recommendation():
 
 def test_conflicting_dependency_evidence_fails_closed():
     current = state()
-    result = reconcile_lifecycle(
-        input_for(
-            current,
-            dependencies=(
-                DependencyEvidence(934, DependencyDisposition.COMPLETED, "one"),
-                DependencyEvidence(934, DependencyDisposition.INCOMPLETE, "two"),
-            ),
-        )
-    )
+    result = reconcile_lifecycle(input_for(current, dependencies=(DependencyEvidence(934, DependencyDisposition.COMPLETED, "one"), DependencyEvidence(934, DependencyDisposition.INCOMPLETE, "two"))))
     assert result.outcome is ReconciliationOutcome.NEEDS_DECISION
     assert "source.conflicting-dependency-evidence" in result.reason_codes
 
 
 def test_merged_implementation_and_stale_roadmap_are_both_reported():
     current = state(claims=(claim(value="merged"),))
-    result = reconcile_lifecycle(
-        input_for(
-            current,
-            lifecycle_snapshot=snapshot(value="ready", merged=True),
-            current_pull_request=pr(value=PullRequestState.MERGED),
-            dependencies=(DependencyEvidence(934, DependencyDisposition.COMPLETED, "issue:934"),),
-            projections=(ProjectionEvidence(ProjectionSurface.ROADMAP, "roadmap:330", blocked_dependencies=(934,)),),
-        )
-    )
+    result = reconcile_lifecycle(input_for(current, lifecycle_snapshot=snapshot(value="ready", merged=True), current_pull_request=pr(value=PullRequestState.MERGED), dependencies=(DependencyEvidence(934, DependencyDisposition.COMPLETED, "issue:934"),), projections=(ProjectionEvidence(ProjectionSurface.ROADMAP, "roadmap:330", blocked_dependencies=(934,)),)))
     assert "projection.completed-dependency-blocker" in result.reason_codes
     assert "lifecycle.merged-pr-open-issue" in result.reason_codes
 
 
+def test_projection_and_exact_head_evidence_validate_nested_values():
+    with pytest.raises(TypeError):
+        ProjectionEvidence(ProjectionSurface.ROADMAP, "roadmap:330", readiness="ready")
+    with pytest.raises(TypeError):
+        ProjectionEvidence(ProjectionSurface.PR_DESCRIPTION, "pr:997", pull_request_state="ready")
+    with pytest.raises(ValueError):
+        ProjectionEvidence(ProjectionSurface.PR_DESCRIPTION, "pr:997", head_sha="not-a-sha")
+    with pytest.raises(ValueError):
+        ExactHeadEvidence("validation:bad", "not-a-sha")
+
+
+def test_mismatched_closure_admission_authorization_fails_closed():
+    current = state(claims=(claim(value="merged"),), closure=AuthorizationState.AUTHORIZED)
+    snap = snapshot(value="ready", merged=True)
+    admission = LifecycleMutationAdmissionResult(requested_mutation="close-issue", admitted=True, status=AdmissionStatus.ADMITTED, reason_codes=(), details=(), authorization_id="different-authorization", snapshot_id=snap.snapshot_id)
+    result = reconcile_lifecycle(input_for(current, lifecycle_snapshot=snap, current_pull_request=pr(value=PullRequestState.MERGED), admissions=(admission,)))
+    assert result.outcome is ReconciliationOutcome.NEEDS_DECISION
+    assert "source.conflicting-admission-evidence" in result.reason_codes
+    assert result.actions[0].category is ActionCategory.MANUAL_DECISION
+
+
 def test_equivalent_supplied_evidence_is_deterministic_and_authority_preserving():
-    current = state()
-    a = input_for(current, dependencies=(DependencyEvidence(935, DependencyDisposition.INCOMPLETE, "b"), DependencyEvidence(934, DependencyDisposition.COMPLETED, "a")))
-    b = input_for(current, dependencies=(DependencyEvidence(934, DependencyDisposition.COMPLETED, "a"), DependencyEvidence(935, DependencyDisposition.INCOMPLETE, "b")))
+    current = state(claims=(claim(),))
+    projections_a = (
+        ProjectionEvidence(ProjectionSurface.ROADMAP, "roadmap:330", blocked_dependencies=(934,)),
+        ProjectionEvidence(ProjectionSurface.PR_DESCRIPTION, "pr-body:997", pull_request_number=997, head_sha=OLD_HEAD),
+    )
+    projections_b = tuple(reversed(projections_a))
+    heads_a = (ExactHeadEvidence("validation:old-2", "d" * 40), ExactHeadEvidence("validation:old", OLD_HEAD))
+    heads_b = tuple(reversed(heads_a))
+    dependencies_a = (DependencyEvidence(935, DependencyDisposition.INCOMPLETE, "b"), DependencyEvidence(934, DependencyDisposition.COMPLETED, "a"))
+    dependencies_b = tuple(reversed(dependencies_a))
+    a = input_for(current, lifecycle_snapshot=snapshot(), current_pull_request=pr(), dependencies=dependencies_a, projections=projections_a, exact_head_evidence=heads_a)
+    b = input_for(current, lifecycle_snapshot=snapshot(), current_pull_request=pr(), dependencies=dependencies_b, projections=projections_b, exact_head_evidence=heads_b)
     ra, rb = reconcile_lifecycle(a), reconcile_lifecycle(b)
+    assert ra.actions
     assert a.input_id == b.input_id
     assert serialize_lifecycle_reconciliation_input(a) == serialize_lifecycle_reconciliation_input(b)
     assert ra.result_id == rb.result_id
