@@ -72,7 +72,9 @@ class NormalizedPRSnapshot:
     side_effects_performed: bool = False
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        data["changed_files"] = list(self.changed_files)
+        return data
 
     @property
     def evidence_id(self) -> str:

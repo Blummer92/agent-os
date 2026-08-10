@@ -12,6 +12,11 @@ from .coordination import (
     resolution_plan_id,
     serialize_resolution_plan,
 )
+from .evidence_assembly import (
+    EvidenceAssemblyResult,
+    GitHubEvidenceReader,
+    assemble_prr_evidence,
+)
 from .models import (
     EvidenceValidationError,
     NormalizedPRSnapshot,
@@ -38,10 +43,12 @@ from .preflight import PreflightResult, preflight
 
 __all__ = [
     "COMPUTE_ROUTES",
+    "EvidenceAssemblyResult",
     "EvidenceValidationError",
     "FINDING_CLASSIFICATIONS",
     "FindingCandidate",
     "FindingFixEvidence",
+    "GitHubEvidenceReader",
     "NormalizedPRSnapshot",
     "NormalizedReviewThread",
     "PlannedFinding",
@@ -54,6 +61,7 @@ __all__ = [
     "VALIDATION_STATES",
     "ValidationCategoryResult",
     "ValidationEvidenceBinding",
+    "assemble_prr_evidence",
     "canonical_json",
     "classify_review_thread_payload",
     "coordinate_resolution",
