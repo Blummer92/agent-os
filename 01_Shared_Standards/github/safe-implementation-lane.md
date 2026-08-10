@@ -44,6 +44,23 @@ Draft PR maintenance, and Ready-for-Review may continue without a new user promp
 Conversation continuity, including `continue`, `next step`, or `keep going`, never
 authorizes a previously excluded surface.
 
+## Validation Loop
+
+For routine Safe Implementation Lane work, use the smallest relevant focused local
+validation first. A focused pass means `aggregate-pending`; it is useful developer
+feedback but is not final validation success.
+
+Do not require a duplicate local full aggregate solely before pushing when the
+repository's clean exact-head GitHub CI will run the required full aggregate on
+the exact final pull-request head. One clean exact-head CI aggregate may satisfy
+the full-suite requirement.
+
+Expand local validation only when focused tests fail, exact-head CI reports a
+specific failure that needs diagnosis, CI is unavailable, or the governing issue
+explicitly requires broader local validation. Focused success never suppresses,
+replaces, or impersonates the required final aggregate, and Ready-for-Review still
+requires all required exact-head checks to pass.
+
 ## Bounded Scope Envelope
 
 An eligible issue may name bounded areas instead of an exhaustive file list. The
@@ -95,4 +112,8 @@ unauthorized. Prefer one consolidated user-facing result for routine internal
 routing while preserving required handoff artifacts for owners and auditability.
 
 ## Version
-0.2.0
+0.3.0
+
+## Changelog
+- 0.3.0 adds the focused-local -> authoritative exact-head aggregate validation loop without weakening final validation.
+- 0.2.0 adds continuous internal routing and consolidated reporting for already-authorized Safe Lane work.
