@@ -13,12 +13,19 @@ creates no authorization.
 
 ## Reuse boundary
 
-- `IssueOperationalState` owns current operational truth.
-- `LifecycleStateSnapshot` and lifecycle-mutation admission own exact mutation
-  preconditions and admission.
-- Existing merge authorization remains the merge-authority source.
+- `IssueOperationalState` in
+  `scripts/agent_os_issue_acceptance/issue_operational_state.py` owns current
+  operational truth.
+- `LifecycleStateSnapshot` and lifecycle-mutation admission in
+  `scripts/agent_os_issue_acceptance/lifecycle_mutation_guard.py` own exact
+  mutation preconditions and admission.
+- Existing merge authorization in
+  `scripts/agent_os_issue_acceptance/issue_operational_state.py` remains the
+  merge-authority source.
 - Post-PR audit remains downstream terminal reporting and next-work advice.
-- GitHub Service Agent remains the sole GitHub write executor.
+- The GitHub Service Agent overlay at
+  `02_Agent_Overlays/github-service-agent.md` defines the sole GitHub write
+  executor.
 
 The reconciler is only the comparison/planning seam between these contracts and
 stale issue-body, roadmap, PR-description, label, dependency, claim, and
