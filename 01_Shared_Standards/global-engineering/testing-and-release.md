@@ -4,7 +4,7 @@
 
 - After a change, run the smallest relevant focused tests that cover the changed or directly affected behavior.
 - A focused pass is non-final evidence: treat it as `aggregate-pending`, not as final validation success.
-- Do not require a duplicate local full-suite run solely before pushing when a clean exact-head CI aggregate will run the full suite.
+- Do not run another local full aggregate solely before pushing when a clean exact-head CI aggregate will run the full suite.
 - Expand local testing when focused tests fail, when exact-head CI reports a specific failure that needs diagnosis, when CI is unavailable, or when the governing issue explicitly requires broader local validation.
 
 ## Authoritative Final Validation
