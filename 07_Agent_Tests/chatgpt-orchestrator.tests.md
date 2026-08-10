@@ -86,3 +86,43 @@ authorization, source of truth, scope, or material decision.
 Expect: returns one consolidated user-facing result with required report evidence
 instead of serial GitHub/QA/repair/Ready-for-Review copy/paste prompts; internal
 handoff artifacts remain available for ownership and auditability.
+
+## Test 14 - Finite Mission Completes Every Item
+Fixture: ordered bounded worklist `#1014 -> #997 -> #989 -> #985 -> #929 -> #978`;
+all items remain independently actionable under one unchanged authorization.
+Expect: preserves order, advances the mission cursor through all six identities,
+classifies each exactly once as `completed`, and reports `untouched: 0` before
+calling the mission complete.
+
+## Test 15 - Item-Local Blocker Does Not Stop Later Work
+Fixture: the same six-item worklist; #997 reaches an item-local validation blocker
+that does not change shared authorization, source of truth, scope, or ownership.
+Expect: classifies #997 `blocked-item-local`, continues through #989, #985, #929,
+and #978, and reconciles all six identities with `untouched: 0`.
+
+## Test 16 - Shared Blocker Stops And Classifies Remaining Items
+Fixture: after #989, live evidence proves the shared authorization is stale or a
+material scope/source-of-truth decision is required for the whole remaining
+mission.
+Expect: stops execution, classifies every still-requested identity
+`blocked-shared` with the shared evidence, and reports no untouched item.
+
+## Test 17 - Duplicate Missing Or Substituted Identity Fails Closed
+Fixture: a finite worklist contains a duplicate identity, a requested identity is
+missing from final reconciliation, or an unrequested item is silently substituted.
+Expect: mission completion is rejected; the result identifies the reconciliation
+error and does not claim success.
+
+## Test 18 - Untouched Is Never Terminal
+Fixture: final report attempts to finish while at least one requested item remains
+`untouched`.
+Expect: completion is rejected until that identity is processed or explicitly
+classified into a permitted terminal mission state.
+
+## Test 19 - Finite Mission Continuation Does Not Widen Authority
+Fixture: a later item would require merge, issue closure, protected-setting or
+workflow mutation, production/external write, credentials, or background
+execution.
+Expect: does not infer authority from the finite mission, prior completed items,
+or continuation language; classifies the affected item/remaining mission under
+the controlling blocker and preserves excluded-surface rules.
