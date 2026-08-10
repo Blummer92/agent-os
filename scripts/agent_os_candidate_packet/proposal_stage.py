@@ -25,8 +25,8 @@ passes, in this order:
 3. **Repository identity binding.** The observed owner/repository must be the
    repository the handoff names. The canonical validator cannot check this on
    its own, because only the handoff carries the ``owner/repository`` string.
-4. **Planning eligibility.** ``blocked`` and ``needs-decision`` planning
-   outcomes are preserved, never re-litigated and never upgraded.
+4. **Planning eligibility.** ``blocked`` and ``needs-decision`` outcomes are
+   preserved, never re-litigated and never upgraded.
 
 WSC3 then owns the remaining verdict -- handoff/IssuePlan/repository binding
 drift, IssuePlan currency, and proposal identity -- and its status is mapped
@@ -35,7 +35,9 @@ through unchanged. This module re-derives none of it.
 The IssuePlan evidence handed to WSC3 is the exact canonical
 ``IssuePlanCurrentStateEvidence`` object preserved by the planning stage. It
 is never rebuilt from an evidence ID, node provenance, a digest, handoff
-bytes, or another partial representation.
+bytes, or another partial representation. Complete stage results also retain
+that exact object plus the exact ``PlanningBindingEvidence`` object (when the
+two-phase route supplied one) so downstream #753 can reuse them by identity.
 
 This module performs no network, subprocess, Git, credential, filesystem
 write, Scheduler execution, provider, production, persistence, or
@@ -51,6 +53,10 @@ from enum import Enum
 from typing import Any, Literal
 
 from scripts.agent_os_execution_capabilities import RepositoryStateEvidence
+from scripts.agent_os_issue_acceptance.issueplan_current_state import (
+    IssuePlanCurrentStateEvidence,
+)
+from scripts.agent_os_issue_acceptance.planning_binding import PlanningBindingEvidence
 from scripts.agent_os_issue_acceptance.scheduler_handoff import (
     HandoffCohort,
     SchedulerPlanningHandoff,
@@ -76,22 +82,10 @@ _REPOSITORY_IDENTITY_MISMATCH = "repo.identity-mismatch"
 
 _COHORT_PAYLOAD_KEYS = frozenset({"node_ids", "classification", "reason_codes"})
 
-# Derived from the canonical dataclass so a new WSC3 field cannot silently drop
-# out of the serialized shape.
-_DRAFT_TASK_PROPOSAL_PAYLOAD_KEYS = frozenset(
-    item.name for item in fields(DraftTaskProposal)
-)
+_DRAFT_TASK_PROPOSAL_PAYLOAD_KEYS = frozenset(item.name for item in fields(DraftTaskProposal))
 
 
 class RepositoryProposalStageStatus(str, Enum):
-    """Distinct coordinator outcomes.
-
-    ``invalid`` is WSC3 or the canonical repository validator reporting that
-    supplied evidence is unusable; ``invalid-input`` is this coordinator
-    refusing its own arguments. They are kept apart so a rejected argument can
-    never read as rejected evidence.
-    """
-
     ELIGIBLE = "eligible"
     BLOCKED = "blocked"
     STALE = "stale"
@@ -103,17 +97,13 @@ class RepositoryProposalStageStatus(str, Enum):
 _REPOSITORY_STATUS_MAP = {
     RepositoryStageStatus.STALE: RepositoryProposalStageStatus.STALE,
     RepositoryStageStatus.BLOCKED: RepositoryProposalStageStatus.BLOCKED,
-    RepositoryStageStatus.NEEDS_DECISION: (
-        RepositoryProposalStageStatus.NEEDS_DECISION
-    ),
+    RepositoryStageStatus.NEEDS_DECISION: RepositoryProposalStageStatus.NEEDS_DECISION,
     RepositoryStageStatus.INVALID: RepositoryProposalStageStatus.INVALID,
 }
 
 _PLANNING_STATUS_MAP = {
     PlanningHandoffStageStatus.BLOCKED: RepositoryProposalStageStatus.BLOCKED,
-    PlanningHandoffStageStatus.NEEDS_DECISION: (
-        RepositoryProposalStageStatus.NEEDS_DECISION
-    ),
+    PlanningHandoffStageStatus.NEEDS_DECISION: RepositoryProposalStageStatus.NEEDS_DECISION,
 }
 
 _WSC3_STATUS_MAP = {
@@ -131,8 +121,9 @@ class RepositoryProposalStageResult:
 
     ``proposal`` is the single proposal inside ``proposal_result`` when the
     stage is eligible -- the same object, surfaced for convenience, never a
-    copy. No caller has to reassemble a proposal or a repository-evidence
-    identity by hand.
+    copy. ``issueplan_current_state_evidence`` and ``planning_binding`` retain
+    the exact upstream canonical objects for downstream #753; they are not
+    reconstructed from IDs or digests.
     """
 
     status: RepositoryProposalStageStatus
@@ -141,6 +132,8 @@ class RepositoryProposalStageResult:
     proposal_result: DraftTaskProposalResult | None
     proposal: DraftTaskProposal | None
     reason_codes: tuple[str, ...] = field(default_factory=tuple)
+    issueplan_current_state_evidence: IssuePlanCurrentStateEvidence | None = None
+    planning_binding: PlanningBindingEvidence | None = None
     execution_authorized: Literal[False] = field(default=False, init=False)
     side_effects_performed: Literal[False] = field(default=False, init=False)
 
@@ -152,30 +145,35 @@ class RepositoryProposalStageResult:
                 raise TypeError("repository_stage must be a RepositoryStageResult")
             if self.repository_state_evidence is not self.repository_stage.evidence:
                 raise ValueError(
-                    "repository_state_evidence must be the repository stage's own "
-                    "evidence object"
+                    "repository_state_evidence must be the repository stage's own evidence object"
                 )
         elif self.repository_state_evidence is not None:
-            raise ValueError(
-                "repository evidence cannot exist without its repository stage result"
-            )
+            raise ValueError("repository evidence cannot exist without its repository stage result")
         if self.proposal_result is not None and not isinstance(
             self.proposal_result, DraftTaskProposalResult
         ):
             raise TypeError("proposal_result must be a DraftTaskProposalResult")
+        if self.issueplan_current_state_evidence is not None and not isinstance(
+            self.issueplan_current_state_evidence, IssuePlanCurrentStateEvidence
+        ):
+            raise TypeError(
+                "issueplan_current_state_evidence must be an IssuePlanCurrentStateEvidence"
+            )
+        if self.planning_binding is not None and not isinstance(
+            self.planning_binding, PlanningBindingEvidence
+        ):
+            raise TypeError("planning_binding must be a PlanningBindingEvidence")
         eligible = self.status is RepositoryProposalStageStatus.ELIGIBLE
         if eligible:
             if self.proposal_result is None or self.proposal_result.status != "eligible":
                 raise ValueError("eligible results require an eligible WSC3 result")
             if self.proposal is not self.proposal_result.proposals[0]:
-                raise ValueError(
-                    "proposal must be the WSC3 result's own proposal object"
-                )
+                raise ValueError("proposal must be the WSC3 result's own proposal object")
+            if self.issueplan_current_state_evidence is None:
+                raise ValueError("eligible results require preserved IssuePlan evidence")
         elif self.proposal is not None:
             raise ValueError("non-eligible results cannot carry a proposal")
-        object.__setattr__(
-            self, "reason_codes", tuple(sorted(set(self.reason_codes)))
-        )
+        object.__setattr__(self, "reason_codes", tuple(sorted(set(self.reason_codes))))
 
 
 def prepare_repository_and_proposal(
@@ -184,16 +182,8 @@ def prepare_repository_and_proposal(
     *,
     created_at: str,
 ) -> RepositoryProposalStageResult:
-    """Construct canonical repository evidence and, when eligible, a proposal.
-
-    ``created_at`` is explicit provenance supplied by the caller. This stage
-    reads no clock, and WSC3 excludes it from proposal identity, so repeated
-    identical semantic inputs keep producing the same proposal identity.
-    """
     if not isinstance(planning_stage_result, PlanningHandoffStageResult):
-        raise TypeError(
-            "planning_stage_result must be a PlanningHandoffStageResult"
-        )
+        raise TypeError("planning_stage_result must be a PlanningHandoffStageResult")
     if not isinstance(repository_observation, RepositoryObservation):
         raise TypeError("repository_observation must be a RepositoryObservation")
 
@@ -230,14 +220,18 @@ def prepare_repository_and_proposal(
             _REPOSITORY_STATUS_MAP[repository_stage.status],
             repository_stage,
             (*repository_stage.reason_codes, *planning_reasons),
+            issueplan,
+            planning_stage_result.planning_binding,
         )
 
-    assert evidence is not None  # guaranteed by RepositoryStageResult
+    assert evidence is not None
     if not _repository_matches_handoff(evidence, handoff):
         return _result(
             RepositoryProposalStageStatus.STALE,
             repository_stage,
             (_REPOSITORY_IDENTITY_MISMATCH, *planning_reasons),
+            issueplan,
+            planning_stage_result.planning_binding,
         )
 
     if planning_stage_result.status is not PlanningHandoffStageStatus.READY:
@@ -245,40 +239,35 @@ def prepare_repository_and_proposal(
             _PLANNING_STATUS_MAP[planning_stage_result.status],
             repository_stage,
             planning_reasons,
+            issueplan,
+            planning_stage_result.planning_binding,
         )
 
     proposal_result = build_draft_task_proposals(
         handoff,
-        # The exact preserved canonical object -- never reconstructed here.
         issueplan,
         evidence,
         created_at=created_at,
-        # Likewise the exact binding the planning stage produced. When it is
-        # None the IssuePlan carried no pre-planning context and WSC3 falls
-        # back to its legacy reference route.
         planning_binding=planning_stage_result.planning_binding,
     )
     status = _WSC3_STATUS_MAP.get(proposal_result.status)
     if status is None:
-        # WSC3 constrains its own status vocabulary, but it is another package:
-        # a status added there must still land as one deterministic fail-closed
-        # result here, never an escaping exception.
         return _result(
             RepositoryProposalStageStatus.INVALID,
             repository_stage,
             (WSC3_STATUS_UNMAPPED, *planning_reasons),
+            issueplan,
+            planning_stage_result.planning_binding,
         )
     return RepositoryProposalStageResult(
         status=status,
         repository_stage=repository_stage,
         repository_state_evidence=evidence,
         proposal_result=proposal_result,
-        proposal=(
-            proposal_result.proposals[0]
-            if status is RepositoryProposalStageStatus.ELIGIBLE
-            else None
-        ),
+        proposal=(proposal_result.proposals[0] if status is RepositoryProposalStageStatus.ELIGIBLE else None),
         reason_codes=(*proposal_result.reason_codes, *planning_reasons),
+        issueplan_current_state_evidence=issueplan,
+        planning_binding=planning_stage_result.planning_binding,
     )
 
 
@@ -304,9 +293,7 @@ def draft_task_proposal_to_dict(proposal: DraftTaskProposal) -> dict[str, Any]:
             }
             for cohort in proposal.cohort_summaries
         ],
-        "issueplan_current_state_evidence_id": (
-            proposal.issueplan_current_state_evidence_id
-        ),
+        "issueplan_current_state_evidence_id": proposal.issueplan_current_state_evidence_id,
         "repository_state_evidence_id": proposal.repository_state_evidence_id,
         "created_at": proposal.created_at,
         "eligibility_status": proposal.eligibility_status,
@@ -316,14 +303,7 @@ def draft_task_proposal_to_dict(proposal: DraftTaskProposal) -> dict[str, Any]:
 
 
 def draft_task_proposal_from_dict(payload: Mapping[str, Any]) -> DraftTaskProposal:
-    """Reconstruct one proposal, failing closed on identity or authority drift.
-
-    ``proposal_id`` is carried through and re-verified by ``DraftTaskProposal``
-    itself, so a tampered payload is rejected rather than re-signed.
-    """
-    _require_exact_keys(
-        payload, _DRAFT_TASK_PROPOSAL_PAYLOAD_KEYS, "draft task proposal"
-    )
+    _require_exact_keys(payload, _DRAFT_TASK_PROPOSAL_PAYLOAD_KEYS, "draft task proposal")
     if payload["execution_authorized"] is not False:
         raise ValueError("execution_authorized must be false")
     if payload["eligibility_status"] != "eligible":
@@ -344,9 +324,7 @@ def draft_task_proposal_from_dict(payload: Mapping[str, Any]) -> DraftTaskPropos
             HandoffCohort(
                 node_ids=_string_list(item["node_ids"], "cohort summary node_ids"),
                 classification=classification,
-                reason_codes=_string_list(
-                    item["reason_codes"], "cohort summary reason_codes"
-                ),
+                reason_codes=_string_list(item["reason_codes"], "cohort summary reason_codes"),
             )
         )
     return DraftTaskProposal(
@@ -361,23 +339,13 @@ def draft_task_proposal_from_dict(payload: Mapping[str, Any]) -> DraftTaskPropos
         evaluator_commit_sha=payload["evaluator_commit_sha"],
         supplied_node_ids=supplied_node_ids,
         cohort_summaries=tuple(parsed_cohorts),
-        issueplan_current_state_evidence_id=payload[
-            "issueplan_current_state_evidence_id"
-        ],
+        issueplan_current_state_evidence_id=payload["issueplan_current_state_evidence_id"],
         repository_state_evidence_id=payload["repository_state_evidence_id"],
         created_at=payload["created_at"],
     )
 
 
-def _require_exact_keys(
-    payload: object, keys: frozenset[str], label: str
-) -> Mapping[str, Any]:
-    """Closed-schema key check: reject both missing and unsupported fields.
-
-    Applied at every level of the payload, nested cohort summaries included. A
-    field this deserializer does not know about is rejected rather than
-    accepted and silently dropped on re-serialization.
-    """
+def _require_exact_keys(payload: object, keys: frozenset[str], label: str) -> Mapping[str, Any]:
     if not isinstance(payload, Mapping):
         raise ValueError(f"{label} must be a mapping")
     supplied = set(payload)
@@ -391,13 +359,6 @@ def _require_exact_keys(
 
 
 def _string_list(value: object, label: str) -> tuple[str, ...]:
-    """Require a list of strings, never something merely iterable.
-
-    A bare string is iterable, so ``tuple("issue-750")`` would silently become
-    a tuple of single characters that can still satisfy the downstream
-    uniqueness and coverage checks. Strings, tuples, and mappings are all
-    rejected so a malformed payload cannot be coerced into a plausible identity.
-    """
     if not isinstance(value, list):
         raise ValueError(f"{label} must be a list of strings")
     if not all(isinstance(item, str) for item in value):
@@ -405,15 +366,7 @@ def _string_list(value: object, label: str) -> tuple[str, ...]:
     return tuple(value)
 
 
-def _repository_matches_handoff(
-    evidence: RepositoryStateEvidence, handoff: SchedulerPlanningHandoff
-) -> bool:
-    """Check the one binding only the handoff can state: ``owner/repository``.
-
-    Both sides are normalized here rather than relying on ``RepositoryIdentity``
-    already lowercasing its own fields, so this binding cannot start rejecting
-    every observation if that upstream normalization ever changes.
-    """
+def _repository_matches_handoff(evidence: RepositoryStateEvidence, handoff: SchedulerPlanningHandoff) -> bool:
     identity = evidence.repository_identity
     observed = f"{identity.owner}/{identity.repository}".strip().lower()
     return observed == handoff.repository.strip().lower()
@@ -423,6 +376,8 @@ def _result(
     status: RepositoryProposalStageStatus,
     repository_stage: RepositoryStageResult,
     reason_codes: tuple[str, ...],
+    issueplan: IssuePlanCurrentStateEvidence,
+    planning_binding: PlanningBindingEvidence | None,
 ) -> RepositoryProposalStageResult:
     return RepositoryProposalStageResult(
         status=status,
@@ -431,6 +386,8 @@ def _result(
         proposal_result=None,
         proposal=None,
         reason_codes=reason_codes,
+        issueplan_current_state_evidence=issueplan,
+        planning_binding=planning_binding,
     )
 
 
@@ -442,4 +399,6 @@ def _invalid_input(reason_codes: tuple[str, ...]) -> RepositoryProposalStageResu
         proposal_result=None,
         proposal=None,
         reason_codes=reason_codes,
+        issueplan_current_state_evidence=None,
+        planning_binding=None,
     )
