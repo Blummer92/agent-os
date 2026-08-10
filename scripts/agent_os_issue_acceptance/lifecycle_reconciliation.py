@@ -97,6 +97,17 @@ def _head_sha(value: object, name: str) -> str:
     return value
 
 
+def _text(value: object, name: str) -> str:
+    if type(value) is not str or not value:
+        raise TypeError(f"{name} must be a non-empty string")
+    return value
+
+
+def _optional_text(value: object, name: str) -> None:
+    if value is not None:
+        _text(value, name)
+
+
 @dataclass(frozen=True, slots=True)
 class DependencyEvidence:
     issue_number: int
@@ -226,7 +237,14 @@ class ReconciliationAction:
     def __post_init__(self) -> None:
         if self.reason_code not in REASON_CODES or type(self.category) is not ActionCategory:
             raise ValueError("invalid reconciliation action")
-        guards = tuple(sorted(set(_tuple(self.expected_state_guards, "expected_state_guards"))))
+        for name in ("surface", "observed", "expected"):
+            _text(getattr(self, name), name)
+        for name in ("required_mutation", "authorization_id", "admission_result_id"):
+            _optional_text(getattr(self, name), name)
+        guards = _tuple(self.expected_state_guards, "expected_state_guards")
+        if any(type(v) is not str or not v for v in guards):
+            raise TypeError("expected_state_guards must contain non-empty strings")
+        guards = tuple(sorted(set(guards)))
         object.__setattr__(self, "expected_state_guards", guards)
         expected = _id("lifecycle-reconciliation-action", self.payload())
         if self.action_id and self.action_id != expected:
@@ -262,10 +280,29 @@ class LifecycleReconciliationResult:
     side_effects_performed: Literal[False] = field(default=False, init=False)
 
     def __post_init__(self) -> None:
+        _text(self.repository, "repository")
+        _positive(self.issue_number, "issue_number")
+        _text(self.input_id, "input_id")
+        _text(self.operational_state_id, "operational_state_id")
+        _optional_text(self.lifecycle_snapshot_id, "lifecycle_snapshot_id")
+        if type(self.outcome) is not ReconciliationOutcome:
+            raise TypeError("invalid reconciliation outcome")
+        if self.schema_name != SCHEMA_NAME or self.schema_version != SCHEMA_VERSION:
+            raise ValueError("invalid reconciliation schema")
+        for name in (
+            "implementation_authorization", "ready_for_review_authorization",
+            "execution_authorization", "merge_authorization", "closure_authorization",
+            "external_write_authorization",
+        ):
+            if type(getattr(self, name)) is not AuthorizationState:
+                raise TypeError(f"invalid {name}")
         reasons = tuple(sorted(set(_tuple(self.reason_codes, "reason_codes"))))
-        if any(v not in REASON_CODES for v in reasons):
+        if any(type(v) is not str or v not in REASON_CODES for v in reasons):
             raise ValueError("unsupported reason code")
-        actions = tuple(sorted(_tuple(self.actions, "actions"), key=lambda v: v.action_id))
+        actions = _tuple(self.actions, "actions")
+        if any(type(v) is not ReconciliationAction for v in actions):
+            raise TypeError("invalid reconciliation actions")
+        actions = tuple(sorted(actions, key=lambda v: v.action_id))
         object.__setattr__(self, "reason_codes", reasons)
         object.__setattr__(self, "actions", actions)
         expected = _id("lifecycle-reconciliation-result", self.payload())
@@ -378,7 +415,9 @@ def reconcile_lifecycle(e: LifecycleReconciliationInput) -> LifecycleReconciliat
             adm = _admission(e, "replace-lifecycle-labels")
             if adm is None:
                 reasons.add("authorization.lifecycle-admission-required")
-            actions.append(ReconciliationAction(ActionCategory.GOVERNED_MUTATION, "lifecycle.status-label-stale", "lifecycle-labels", ",".join(current) or "none", desired, "replace-lifecycle-labels", admission_result_id=adm.result_id if adm else None, expected_state_guards=_guards(e)))
+                actions.append(ReconciliationAction(ActionCategory.MANUAL_DECISION, "authorization.lifecycle-admission-required", "lifecycle-labels", ",".join(current) or "none", desired, expected_state_guards=_guards(e)))
+            else:
+                actions.append(ReconciliationAction(ActionCategory.GOVERNED_MUTATION, "lifecycle.status-label-stale", "lifecycle-labels", ",".join(current) or "none", desired, "replace-lifecycle-labels", admission_result_id=adm.result_id, expected_state_guards=_guards(e)))
 
     merged_open = s.issue_state is IssueState.OPEN and (s.primary_pr_state is PrimaryPrState.MERGED or (pr and pr.state is PullRequestState.MERGED))
     if merged_open:
@@ -387,12 +426,15 @@ def reconcile_lifecycle(e: LifecycleReconciliationInput) -> LifecycleReconciliat
         auth = s.closure_authorization.evidence_id if s.closure_authorization.state is AuthorizationState.AUTHORIZED else None
         if auth is None:
             reasons.add("authorization.closure-required")
-        elif adm is not None and adm.authorization_id != auth:
+            actions.append(ReconciliationAction(ActionCategory.MANUAL_DECISION, "authorization.closure-required", "issue-state", "open", "closed", expected_state_guards=_guards(e)))
+        elif adm is None:
+            reasons.add("authorization.lifecycle-admission-required")
+            actions.append(ReconciliationAction(ActionCategory.MANUAL_DECISION, "authorization.lifecycle-admission-required", "issue-state", "open", "closed", authorization_id=auth, expected_state_guards=_guards(e)))
+        elif adm.authorization_id != auth:
             reasons.add("source.conflicting-admission-evidence")
             decision = True
-        if adm is None:
-            reasons.add("authorization.lifecycle-admission-required")
-        actions.append(ReconciliationAction(ActionCategory.GOVERNED_MUTATION, "lifecycle.merged-pr-open-issue", "issue-state", "open", "closed", "close-issue", auth, adm.result_id if adm else None, _guards(e)))
+        else:
+            actions.append(ReconciliationAction(ActionCategory.GOVERNED_MUTATION, "lifecycle.merged-pr-open-issue", "issue-state", "open", "closed", "close-issue", auth, adm.result_id, _guards(e)))
     if s.issue_state is IssueState.CLOSED and s.terminal_disposition is TerminalDisposition.NONE and s.primary_pr_state is not PrimaryPrState.MERGED:
         reasons.add("lifecycle.closed-without-terminal-evidence")
         decision = True
