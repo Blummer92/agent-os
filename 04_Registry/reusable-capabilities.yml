@@ -606,3 +606,66 @@ capabilities:
     compatibility:
       - Lifecycle status is active under registry version 0.1.0.
       - Rollback is a repository revert of the registration PR; no external cleanup is required.
+
+  - capability_id: pr-review-remediation
+    name: PR Review Remediation
+    summary: Evaluates caller-supplied pull-request, review-thread, scope, remediation, validation, and exact-head evidence into deterministic remediation and thread-resolution-eligibility evidence without performing writes or execution.
+    status: experimental
+    canonical_paths:
+      - scripts/agent_os_pr_remediation/__init__.py
+      - scripts/agent_os_pr_remediation/models.py
+      - scripts/agent_os_pr_remediation/normalization.py
+      - scripts/agent_os_pr_remediation/preflight.py
+      - scripts/agent_os_pr_remediation/planning.py
+      - scripts/agent_os_pr_remediation/coordination.py
+      - scripts/agent_os_pr_remediation/cli.py
+      - scripts/agent_os_pr_remediation/README.md
+    public_interfaces:
+      - scripts.agent_os_pr_remediation:normalize_pr_snapshot
+      - scripts.agent_os_pr_remediation:normalize_review_threads
+      - scripts.agent_os_pr_remediation:preflight
+      - scripts.agent_os_pr_remediation:plan_remediation
+      - scripts.agent_os_pr_remediation:coordinate_resolution
+      - scripts.agent_os_pr_remediation:serialize_resolution_plan
+      - scripts.agent_os_pr_remediation.cli:evaluate
+      - scripts.agent_os_pr_remediation.cli:render_text
+      - scripts.agent_os_pr_remediation.cli:main
+    owner_agent: Integration Manager
+    supporting_agents:
+      - GitHub Service Agent
+      - QA / Test Agent
+    known_consumers: []
+    known_consumer_exemption: Approved for PRR6 experimental admission under repository-owner authorization recorded in #1008 because PRR5 #1007 verified the stable read-only PR Review Remediation CLI through two independent exact-checkout real-PR operational pilots with deterministic no-model behavior and authority/side-effect fields false, while no non-test repository-relative consumer file currently exists.
+    tests:
+      - tests/agent_os_pr_remediation/test_models.py
+      - tests/agent_os_pr_remediation/test_normalization.py
+      - tests/agent_os_pr_remediation/test_preflight.py
+      - tests/agent_os_pr_remediation/test_planning.py
+      - tests/agent_os_pr_remediation/test_coordination.py
+      - tests/agent_os_pr_remediation/test_cli.py
+    keywords:
+      - pull-request
+      - review-remediation
+      - exact-head
+      - deterministic-planning
+      - thread-resolution-evidence
+    reuse_guidance: Use the pure-local CLI or exported component contracts only with fresh caller-supplied evidence; treat remediation and resolution eligibility as evidence, never as execution, GitHub-write, merge, or thread-mutation authority.
+    side_effects:
+      - Parses and evaluates caller-supplied local evidence only.
+      - Performs no network access, model invocation, subprocess execution, source edit, validation execution, GitHub mutation, merge, or external write.
+    inputs:
+      - Bounded pull-request, review-thread, scope, remediation, validation, and exact-head evidence.
+    outputs:
+      - Deterministic preflight, remediation-plan, compute-route, validation-state, and thread-resolution-eligibility evidence.
+    invariants:
+      - execution_authorized, external_write_authorized, merge_authorized, thread_resolved, and side_effects_performed remain false where represented.
+      - Stale, malformed, conflicting, unsupported, out-of-scope, or incomplete evidence fails closed or routes conservatively.
+      - Registry admission does not authorize remediation execution, validation execution, GitHub writes, thread resolution, merge, or issue closure.
+    failure_modes:
+      - Malformed, unknown, oversized, incomplete, or identity-stale input evidence
+      - Out-of-scope, outdated, conflicting, duplicate, already-fixed, or manual-review finding states
+      - Missing, failed, stale, incomplete, or mismatched validation evidence
+    compatibility:
+      - Lifecycle status is experimental under registry version 0.1.0.
+      - The public operator CLI contract is agent-os-pr-remediation-cli/v1.
+      - Existing PRR1-4 package interfaces remain canonical; no new runner or GitHub client is introduced.

@@ -352,7 +352,7 @@ def test_live_registry_is_deterministic_with_provenance():
     repo_root = Path(__file__).resolve().parents[3]
     report = validate_registry(repo_root)
     assert report.provenance is not None
-    assert report.capabilities_checked == 14
+    assert report.capabilities_checked == 15
     assert serialize_validation_report(report) == serialize_validation_report(validate_registry(repo_root))
     # RC4 provenance equals the discovery snapshot provenance.
     reader = RegistryReader()

@@ -42,6 +42,7 @@ APPROVED_CAPABILITY_STATUSES = {
     "issueplan-current-state-evidence": "active",
     "issueplan-metadata-scanner": "active",
     "navigation-index-reader": "active",
+    "pr-review-remediation": "experimental",
     "readonly-connector-contract": "active",
     "scheduler-planning-handoff": "active",
 }
