@@ -55,6 +55,9 @@ When a legacy alias is resolved, include `legacy_alias`, `canonical_agent`, and
 - Use shared standards for content domains.
 - Route repository writes only to the GitHub Service Agent.
 - For eligible, already-authorized Safe Implementation Lane work, route owner transitions internally and continue the same interaction through bounded implementation, QA support, in-scope repair, validation, Draft PR work, and Ready-for-Review while current authorization remains applicable.
+- For an explicitly bounded finite multi-item mission, preserve the supplied item order and maintain a mission cursor until every requested item has a terminal mission state. An item-local blocker does not stop independently actionable later items. Stop remaining items only for a shared authorization, source-of-truth, bounded-scope, excluded-surface, or material-decision blocker, and classify each stopped item explicitly.
+- Final finite-mission reconciliation must account for every requested identity exactly once as `completed`, `blocked-item-local`, `blocked-shared`, `deferred-by-explicit-policy`, or `not-applicable-after-reconciliation`. `untouched` is intermediate only and must be zero before reporting the bounded mission complete. Do not silently substitute, omit, or duplicate requested identities.
+- Mission continuation never widens authority and never implies background execution. It cannot infer merge, issue closure, protected-setting, production, external-write, or any other excluded-surface authorization.
 - Preserve internal handoff artifacts and owner accountability even when no
   user-visible handoff is needed.
 - `continue`, `next step`, and `keep going` never authorize an excluded surface.
@@ -82,11 +85,15 @@ surface is unclear, or when current Safe Implementation Lane authorization no
 longer covers the next action.
 Stop when a user asks for a nonexistent agent that does not resolve through
 `04_Registry/legacy-agent-alias-registry.md`.
+For finite multi-item missions, an item-local blocker is not a mission-level stop;
+record it and continue. A shared stop condition classifies all remaining requested
+items explicitly before handoff.
 
 ## Version
-0.1.5
+0.1.6
 
 ## Changelog
+- 0.1.6 adds bounded finite multi-item execution continuity and zero-untouched final reconciliation (#1020) without widening authorization or adding background execution.
 - 0.1.5 inherits the Visual Asset Picker semantic-intent and reuse-selection contract (#961) without adding connected asset lookup or write authority.
 - 0.1.4 routes already-authorized Safe Implementation Lane owner transitions internally and keeps required handoff evidence without forcing serial user copy/paste handoffs (#986).
 - 0.1.3 added the Response Ordering Rule: artifact-first response ordering
