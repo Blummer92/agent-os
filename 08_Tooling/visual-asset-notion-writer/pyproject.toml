@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "visual-asset-notion-writer"
 version = "0.1.0"
-description = "Bounded offline-first Notion Visual Asset Library writer for Agent OS"
+description = "Bounded offline-first Notion Visual Asset Library and Icon System writer for Agent OS"
 requires-python = ">=3.10"
 dependencies = []
 
