@@ -234,7 +234,7 @@ capabilities:
     reuse_guidance: Use only for unresolved-pair evidence and validated input_scope_covered decisions over the supplied graph; never claim repository-wide completeness or execution eligibility.
     side_effects:
       - Reads only the supplied immutable IssueBatchGraph and GraphCheckRun.
-      - Performs no network calls, repository searches, relationship mutation, or external write.
+      - Performs no network calls, repository searches, relationship mutation, or external writes.
     invariants:
       - Every coverage result declares coverage_scope=supplied-graph-only.
       - Failed graph checks prevent a coverage pass.
@@ -398,130 +398,214 @@ capabilities:
     public_interfaces:
       - scripts.agent_os_issue_acceptance.scheduler_handoff:HandoffCohort
       - scripts.agent_os_issue_acceptance.scheduler_handoff:SchedulerPlanningHandoff
-      - scripts.agent_os_issue_acceptance.scheduler_handoff:build_scheduler_planning_handoff
-      - scripts.agent_os_issue_acceptance.scheduler_handoff:validate_scheduler_planning_handoff
+      - scripts.agent_os_issue_acceptance.scheduler_handoff:HandoffValidationOutcome
+      - scripts.agent_os_issue_acceptance.scheduler_handoff:HandoffValidationResult
+      - scripts.agent_os_issue_acceptance.scheduler_handoff:compute_graph_digest
+      - scripts.agent_os_issue_acceptance.scheduler_handoff:compute_planning_result_digest
+      - scripts.agent_os_issue_acceptance.scheduler_handoff:compute_handoff_digest
       - scripts.agent_os_issue_acceptance.scheduler_handoff:serialize_scheduler_planning_handoff
+      - scripts.agent_os_issue_acceptance.scheduler_handoff:validate_scheduler_planning_handoff
     owner_agent: Integration Manager
     supporting_agents:
       - QA / Test Agent
-    known_consumers: []
-    known_consumer_exemption: Approved because the contract is validated as the terminal repository planning handoff and currently has no non-test downstream Scheduler consumer.
+    known_consumers:
+      - 08_Tooling/workflow-scheduler/src/workflow_scheduler/planning/draft_ingestion.py
     tests:
       - tests/agent_os_issue_acceptance/test_scheduler_handoff.py
+      - 08_Tooling/workflow-scheduler/tests/test_draft_ingestion.py
     keywords:
       - scheduler
       - planning-handoff
-      - canonical-digest
-      - downstream-consumer
-    reuse_guidance: Build only from supplied-graph planning results, validate before downstream use, and treat the handoff as evidence rather than execution authorization.
+      - digest
+      - deterministic-serialization
+    reuse_guidance: Use the direct-module contract to create or validate supplied handoff evidence; downstream consumers must perform their own freshness and authorization checks.
     side_effects:
-      - Reads only supplied planning evidence.
-      - Performs no Scheduler task creation, queue mutation, repository search, issue mutation, or external write.
+      - Computes deterministic JSON bytes and SHA-256 digests from supplied evidence.
+      - Performs no network calls, task creation, approval storage, or external writes.
     inputs:
-      - Immutable IssueBatchGraph evidence.
-      - BatchPlanningResult evidence.
+      - Immutable IssueBatchGraph and BatchPlanningResult evidence.
     outputs:
-      - Versioned SchedulerPlanningHandoff with graph, cohort, and planning digests.
+      - Versioned SchedulerPlanningHandoff bytes and fail-closed validation evidence.
     invariants:
-      - Handoff identity and digests are deterministic.
+      - planning_scope remains supplied-graph-only.
       - execution_authorized remains false.
-      - Validation rejects unsupported versions, stale identities, or digest mismatch.
+      - Unknown fields, malformed values, or digest mismatch fail closed.
     failure_modes:
-      - Unsupported handoff version
-      - Graph identity mismatch
-      - Cohort or planning digest mismatch
-      - Incomplete or malformed planning evidence
+      - Unsupported contract or planning-result version
+      - Missing, malformed, or unknown fields
+      - Partial graph coverage
+      - Handoff digest mismatch
+      - Required external revalidation unavailable
     compatibility:
-      - Consumers should validate before use and preserve the versioned handoff boundary.
+      - The existing package facade used by Workflow Scheduler remains a supported compatibility surface.
+      - New consumers should prefer direct-module imports.
 
   - capability_id: issueplan-current-state-evidence
-    name: IssuePlan Current State Evidence
-    summary: Produces deterministic current-state lifecycle evidence from issue/PR snapshots and handoff records without mutating GitHub.
+    name: IssuePlan Current-State Evidence
+    summary: Builds immutable versioned source snapshots and compares current IssuePlan evidence against an expected implementation contract.
     status: active
     canonical_paths:
-      - scripts/agent_os_issue_acceptance/current_state.py
-      - scripts/agent_os_issue_acceptance/__init__.py
+      - scripts/agent_os_issue_acceptance/issueplan_current_state.py
     public_interfaces:
-      - scripts.agent_os_issue_acceptance.current_state:CurrentStateEvidence
-      - scripts.agent_os_issue_acceptance.current_state:derive_current_state
+      - scripts.agent_os_issue_acceptance.issueplan_current_state:IssuePlanSourceSnapshot
+      - scripts.agent_os_issue_acceptance.issueplan_current_state:IssuePlanCurrentStateEvidence
+      - scripts.agent_os_issue_acceptance.issueplan_current_state:IssuePlanCurrentStateComparison
+      - scripts.agent_os_issue_acceptance.issueplan_current_state:IssuePlanCurrentStateOutcome
+      - scripts.agent_os_issue_acceptance.issueplan_current_state:build_issueplan_current_state_evidence
+      - scripts.agent_os_issue_acceptance.issueplan_current_state:compare_issueplan_current_state
+      - scripts.agent_os_issue_acceptance.issueplan_current_state:compute_issueplan_current_state_fingerprint
     owner_agent: Integration Manager
     supporting_agents:
       - QA / Test Agent
-      - GitHub Service Agent
     known_consumers:
-      - scripts/agent_os_issue_acceptance/cli.py
+      - scripts/agent_os_issue_acceptance/approval_records.py
+      - 08_Tooling/workflow-scheduler/src/workflow_scheduler/planning/draft_ingestion.py
     tests:
-      - tests/agent_os_issue_acceptance/test_current_state.py
+      - tests/agent_os_issue_acceptance/test_issueplan_current_state.py
+      - tests/agent_os_issue_acceptance/test_approval_records.py
+      - 08_Tooling/workflow-scheduler/tests/test_draft_ingestion.py
     keywords:
       - issueplan
       - current-state
-      - lifecycle-evidence
-      - reconciliation
-    reuse_guidance: Derive current-state evidence only from supplied snapshots; never mutate lifecycle state or infer authorization from the derived evidence.
+      - freshness
+      - evidence-fingerprint
+    reuse_guidance: Build evidence only from a matching SourceEnvelope and ScanResult, supply timestamps explicitly, and compare immutable evidence before relying on an earlier implementation contract.
     side_effects:
-      - Reads caller-supplied immutable evidence only.
-      - Performs no GitHub mutation, network call, repository write, or external effect.
+      - Computes deterministic local evidence and fingerprints.
+      - Performs no live lookup, mutation, approval, or external write.
     inputs:
-      - IssueSnapshot
-      - PullRequestSnapshot
-      - PlanningHandoff evidence
+      - Supplied scanner envelope and scanner result with explicit observation metadata.
     outputs:
-      - Deterministic CurrentStateEvidence.
+      - Immutable IssuePlanCurrentStateEvidence and comparison results.
     invariants:
-      - Derived lifecycle state remains evidence only.
-      - execution_authorized and external_write_authorized remain false.
-      - Conflicting or incomplete evidence routes conservatively.
+      - Source identity must match between the envelope and scanner result.
+      - Set-like governed fields are canonicalized deterministically.
+      - execution_authorized remains false.
     failure_modes:
-      - Missing or conflicting snapshots
-      - Unsupported state combinations
-      - Stale or incomplete handoff evidence
+      - Source identity mismatch
+      - Partial, inaccessible, unsupported, stale, or ambiguous evidence
+      - Unsupported schema or field state
+      - Changed source or implementation-contract bindings
     compatibility:
-      - Current-state derivation preserves existing issue-acceptance snapshot semantics.
+      - Existing package-facade imports remain supported for current Workflow Scheduler consumers.
+      - New consumers should prefer direct-module imports.
 
-  - capability_id: issue-operational-state
-    name: Issue Operational State
-    summary: Derives deterministic issue operational-state evidence from canonical issue metadata and current-state inputs without mutating GitHub.
-    status: active
+  - capability_id: approval-applicability-evidence
+    name: Approval Applicability Evidence
+    summary: Represents immutable approval bindings and evaluates whether supplied approval evidence still applies to current repository and IssuePlan evidence.
+    status: experimental
     canonical_paths:
-      - scripts/agent_os_issue_acceptance/operational_state.py
-      - scripts/agent_os_issue_acceptance/__init__.py
+      - scripts/agent_os_issue_acceptance/approval_records.py
     public_interfaces:
-      - scripts.agent_os_issue_acceptance.operational_state:OperationalState
-      - scripts.agent_os_issue_acceptance.operational_state:OperationalStateEvidence
-      - scripts.agent_os_issue_acceptance.operational_state:derive_operational_state
+      - scripts.agent_os_issue_acceptance.approval_records:ApprovalBinding
+      - scripts.agent_os_issue_acceptance.approval_records:ApprovalRecord
+      - scripts.agent_os_issue_acceptance.approval_records:ApprovalApplicabilityResult
+      - scripts.agent_os_issue_acceptance.approval_records:evaluate_approval_applicability
     owner_agent: Integration Manager
     supporting_agents:
       - QA / Test Agent
-      - GitHub Service Agent
     known_consumers:
-      - scripts/agent_os_issue_acceptance/lifecycle_reconciliation.py
+      - scripts/agent_os_issue_acceptance/approved_execution_projection.py
     tests:
-      - tests/agent_os_issue_acceptance/test_operational_state.py
-      - tests/agent_os_issue_acceptance/test_lifecycle_reconciliation.py
+      - tests/agent_os_issue_acceptance/test_approval_records.py
+      - tests/agent_os_issue_acceptance/test_approved_execution_projection.py
     keywords:
-      - issue
-      - operational-state
-      - lifecycle
-      - reconciliation
-    reuse_guidance: Derive issue operational-state evidence from supplied canonical metadata and current-state evidence; do not mutate issue labels, bodies, PRs, or lifecycle state.
+      - approval
+      - applicability
+      - immutable-binding
+      - invalidation
+    reuse_guidance: Evaluate only caller-supplied immutable evidence and treat applicability as report evidence; this capability does not issue approval or authorize execution.
     side_effects:
-      - Reads only caller-supplied normalized evidence.
-      - Performs no GitHub mutation, network call, repository write, or external effect.
+      - Computes immutable approval and applicability evidence locally.
+      - Performs no approval persistence, repository mutation, Scheduler dispatch, or external write.
     inputs:
-      - Canonical issue metadata.
-      - CurrentStateEvidence.
+      - Supplied approval record, proposal, current IssuePlan evidence, and repository-state evidence.
     outputs:
-      - Deterministic OperationalStateEvidence.
+      - Fail-closed ApprovalApplicabilityResult evidence.
     invariants:
-      - Operational state remains evidence only.
-      - execution_authorized and external_write_authorized remain false.
-      - Conflicting or unsupported evidence routes conservatively.
+      - Approval bindings remain content-addressed and versioned.
+      - Stale, changed, expired, invalidated, or unsupported evidence fails closed.
+      - execution_authorized and side_effects_performed remain false.
     failure_modes:
-      - Missing or malformed canonical metadata
-      - Unsupported current-state combinations
-      - Conflicting or stale evidence
+      - Unsupported version or malformed binding
+      - Changed source, graph, handoff, repository, or contract evidence
+      - Expired, invalidated, or superseded approval
+      - Missing or incomplete current evidence
     compatibility:
-      - Existing issue-acceptance parsing and current-state contracts remain unchanged.
+      - Existing package-facade exports remain supported compatibility surfaces.
+      - New consumers should prefer direct-module imports.
+
+  - capability_id: instructional-workflow-contract-core
+    name: Instructional Workflow Contract Core
+    summary: Provides deterministic immutable validation, authority, normalization, canonical serialization, fingerprinting, and curriculum handoff contract mechanics for local instructional planning evidence.
+    status: active
+    canonical_paths:
+      - src/instructional_workflow_contracts/common.py
+      - src/instructional_workflow_contracts/handoff.py
+      - src/instructional_workflow_contracts/__init__.py
+    public_interfaces:
+      - instructional_workflow_contracts:AuthorityEvidence
+      - instructional_workflow_contracts:ContractReference
+      - instructional_workflow_contracts:ContractValidationError
+      - instructional_workflow_contracts:ValidatedRecord
+      - instructional_workflow_contracts:ValidationResult
+      - instructional_workflow_contracts:ValidationStatus
+      - instructional_workflow_contracts:canonical_json_bytes
+      - instructional_workflow_contracts:canonical_size
+      - instructional_workflow_contracts:freeze_json
+      - instructional_workflow_contracts:resolve_status
+      - instructional_workflow_contracts:sha256_hex
+      - instructional_workflow_contracts:validate_and_normalize_json
+      - instructional_workflow_contracts:validate_curriculum_handoff
+      - instructional_workflow_contracts:validate_dependency_key
+      - instructional_workflow_contracts:validate_reason_code
+      - instructional_workflow_contracts:validate_revision
+      - instructional_workflow_contracts:validate_stable_id
+      - instructional_workflow_contracts:validate_version
+    owner_agent: Integration Manager
+    supporting_agents:
+      - QA / Test Agent
+    known_consumers:
+      - src/instructional_workflow_contracts/handoff.py
+      - src/instructional_workflow_contracts/material_requirement.py
+      - src/instructional_workflow_contracts/artifact_manifest.py
+      - src/instructional_workflow_contracts/reuse_planner.py
+      - src/instructional_evidence_intake/interpreter.py
+    tests:
+      - tests/test_instructional_workflow_handoff.py
+      - tests/test_material_requirement_contract.py
+      - tests/test_artifact_manifest_contract.py
+      - tests/test_instructional_artifact_reuse_planner.py
+      - tests/test_instructional_workflow_contract_integration.py
+      - tests/test_instructional_evidence_teacher_summary.py
+    keywords:
+      - instructional-workflow
+      - immutable-contracts
+      - deterministic-validation
+      - canonical-serialization
+      - authority-boundary
+    reuse_guidance: Reuse these pure local mechanics for bounded instructional validation and planning contracts; every consumer requires its own approval and must preserve execution_authorized=false and side_effects_performed=false.
+    side_effects:
+      - Validates and normalizes caller-supplied in-memory evidence.
+      - Computes deterministic canonical bytes, sizes, stable fingerprints, and immutable result records.
+      - Performs no filesystem discovery, dynamic imports, plugin registration, network calls, connected-system access, credentials access, runtime orchestration, production action, publication, classroom action, or external write.
+    inputs:
+      - Bounded caller-supplied JSON-like evidence and explicit contract metadata.
+    outputs:
+      - Immutable validation, authority, reference, and handoff evidence.
+    invariants:
+      - Registration grants validation and planning evidence only, never execution authority.
+      - execution_authorized and side_effects_performed remain false.
+      - No production, publication, classroom-use, grading, mastery, learner-classification, placement, routing, readiness-mutation, pacing-execution, OCR, model-execution, connected-system, or external-write authority is granted.
+      - Registration does not automatically approve future consumers.
+      - Direct-module domain imports remain intentional while the package facade remains a supported compatibility surface.
+    failure_modes:
+      - Malformed, oversized, unsupported, unknown, stale, contradictory, or incomplete supplied evidence
+      - Unsupported contract version, revision, identifier, dependency key, reason code, or authority state
+      - Canonical serialization or fingerprint mismatch
+    compatibility:
+      - Lifecycle status is active under registry version 0.1.0.
+      - Rollback is a repository revert of the registration PR; no external cleanup is required.
 
   - capability_id: pr-review-remediation
     name: PR Review Remediation
