@@ -43,18 +43,26 @@ teacher's original selection request.
 
 ## Allowed Write Surfaces
 
-New files inside an explicitly confirmed target Drive folder; local
-lesson-candidate record files; local reports listing approved assets used,
-rubric rows needing revision, and handoff notes; Teacher Decision Studio
-preview PDFs in an approved preview/review destination or a bounded temporary
-location, always labeled `Teacher Decision Preview -- Not Yet Authorized for
-Classroom Distribution`.
+New files inside an explicitly confirmed target Drive folder; bounded revisions
+to an existing canonical classroom working file when the teacher explicitly
+requests the edit and every Teacher-Directed Revision Lane condition passes;
+local lesson-candidate record files; local reports listing approved assets used,
+rubric rows needing revision, and handoff notes; Teacher Decision Studio preview
+PDFs in an approved preview/review destination or a bounded temporary location,
+always labeled `Teacher Decision Preview -- Not Yet Authorized for Classroom
+Distribution`.
+
+A teacher-directed revision authorizes only the specified artifact edit. It does
+not authorize or imply production, readiness, approval, source authority,
+publication, sharing, or other governed state.
 
 ## Blocked Write Surfaces
 
 Template or master files; files outside the confirmed target folder; sharing or
-permission changes; Notion writes; student-facing materials when production gates
-fail; GitHub repository writes without a GitHub Change Request.
+permission changes; Notion writes; teacher-directed revisions that fail a
+Teacher-Directed Revision Lane condition; structural instructional revisions or
+new student-facing production/release when the applicable production gates fail;
+GitHub repository writes without a GitHub Change Request.
 
 ## Destination Rules
 
@@ -64,18 +72,22 @@ folder. Repository storage requires explicit approval and a GitHub Change Reques
 
 ## Required Handoff Targets
 
-Generated file links, template IDs used, content spec used, approved assets used,
-gate status, remaining rubric risks, and on failure the local lesson-candidate
-record path for human review before any Notion update. For lesson vocabulary, use
-only confirmed entries marked material-safe without changing assessment eligibility
-or destination rules.
+Generated or revised file links, template IDs used when applicable, content spec
+used, approved assets used, revision-lane or production-gate status, remaining
+rubric risks, and on failure the local lesson-candidate record path for human
+review before any Notion update. For lesson vocabulary, use only confirmed
+entries marked material-safe without changing assessment eligibility or
+destination rules.
 
 ## Version
 
-0.4.9
+0.5.0
 
 ## Changelog
 
+- 0.5.0 adds bounded teacher-directed revisions of existing canonical classroom
+  working files while keeping templates, governed state, structural revisions,
+  and new production/release behind their existing controls (#1013).
 - 0.4.9 inherits the Visual Asset Picker contract and consumes exact selected reusable-asset references without independent reselection (#961).
 - 0.4.8 inherits the artifact-first response standard and both Teacher
   Decision Studio standards; owns per-option in-chat and PDF worksheet
