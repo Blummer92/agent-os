@@ -91,6 +91,12 @@ def _positive(value: object, name: str) -> int:
     return value
 
 
+def _head_sha(value: object, name: str) -> str:
+    if type(value) is not str or len(value) != 40 or any(ch not in "0123456789abcdef" for ch in value):
+        raise ValueError(f"{name} must be lowercase SHA-1")
+    return value
+
+
 @dataclass(frozen=True, slots=True)
 class DependencyEvidence:
     issue_number: int
@@ -115,8 +121,7 @@ class PullRequestEvidence:
         _positive(self.pull_request_number, "pull_request_number")
         if type(self.state) is not PullRequestState or any(type(v) is not str or not v for v in (self.branch, self.head_sha, self.evidence_id)):
             raise TypeError("invalid pull request evidence")
-        if len(self.head_sha) != 40 or any(ch not in "0123456789abcdef" for ch in self.head_sha):
-            raise ValueError("head_sha must be lowercase SHA-1")
+        _head_sha(self.head_sha, "head_sha")
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,8 +135,16 @@ class ProjectionEvidence:
     head_sha: str | None = None
 
     def __post_init__(self) -> None:
-        if type(self.surface) is not ProjectionSurface or type(self.evidence_id) is not str:
+        if type(self.surface) is not ProjectionSurface or type(self.evidence_id) is not str or not self.evidence_id:
             raise TypeError("invalid projection evidence")
+        if self.readiness is not None and type(self.readiness) is not ReadinessState:
+            raise TypeError("invalid projection readiness")
+        if self.pull_request_number is not None:
+            _positive(self.pull_request_number, "pull_request_number")
+        if self.pull_request_state is not None and type(self.pull_request_state) is not PullRequestState:
+            raise TypeError("invalid projection pull request state")
+        if self.head_sha is not None:
+            _head_sha(self.head_sha, "head_sha")
         deps = _tuple(self.blocked_dependencies, "blocked_dependencies")
         if any(type(v) is not int or v < 1 for v in deps) or tuple(sorted(set(deps))) != deps:
             raise ValueError("blocked_dependencies must be sorted unique positive integers")
@@ -141,6 +154,11 @@ class ProjectionEvidence:
 class ExactHeadEvidence:
     evidence_id: str
     tested_head_sha: str
+
+    def __post_init__(self) -> None:
+        if type(self.evidence_id) is not str or not self.evidence_id:
+            raise TypeError("invalid exact-head evidence")
+        _head_sha(self.tested_head_sha, "tested_head_sha")
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,54 +307,68 @@ def reconcile_lifecycle(e: LifecycleReconciliationInput) -> LifecycleReconciliat
         raise TypeError("evidence must be LifecycleReconciliationInput")
     s, reasons, actions, decision = e.operational_state, set(), [], False
     if s.repository != e.repository or s.issue_number != e.issue_number:
-        reasons.add("source.identity-mismatch"); decision = True
+        reasons.add("source.identity-mismatch")
+        decision = True
     if s.freshness_state is FreshnessState.STALE or s.outcome in {OperationalOutcome.CONFLICTING, OperationalOutcome.INVALID} or s.dependency_state is DependencyState.UNKNOWN or s.readiness is ReadinessState.NEEDS_DECISION:
-        reasons.add("source.canonical-conflict"); decision = True
+        reasons.add("source.canonical-conflict")
+        decision = True
     if s.claim_state is ClaimState.CONFLICTING:
-        reasons.add("claim.multiple-primary"); decision = True
+        reasons.add("claim.multiple-primary")
+        decision = True
     snap = e.lifecycle_snapshot
     if snap and (snap.repository != e.repository or snap.issue_number != e.issue_number):
-        reasons.add("source.lifecycle-snapshot-conflict"); decision = True
+        reasons.add("source.lifecycle-snapshot-conflict")
+        decision = True
 
     deps: dict[int, DependencyDisposition] = {}
     for v in e.dependencies:
         if v.issue_number in deps and deps[v.issue_number] is not v.disposition:
-            reasons.add("source.conflicting-dependency-evidence"); decision = True
+            reasons.add("source.conflicting-dependency-evidence")
+            decision = True
         deps[v.issue_number] = v.disposition
     surfaces = [v.surface for v in e.projections]
     if len(set(surfaces)) != len(surfaces):
-        reasons.add("source.conflicting-projection-evidence"); decision = True
+        reasons.add("source.conflicting-projection-evidence")
+        decision = True
     mutations = [v.requested_mutation for v in e.admissions]
     if len(set(mutations)) != len(mutations):
-        reasons.add("source.conflicting-admission-evidence"); decision = True
+        reasons.add("source.conflicting-admission-evidence")
+        decision = True
 
     pr = e.current_pull_request
     if pr:
         expected = {PrimaryPrState.DRAFT: PullRequestState.DRAFT, PrimaryPrState.READY: PullRequestState.READY, PrimaryPrState.MERGED: PullRequestState.MERGED}.get(s.primary_pr_state)
         if (s.primary_pr_numbers and pr.pull_request_number not in s.primary_pr_numbers) or (expected and pr.state is not expected):
-            reasons.add("source.canonical-conflict"); decision = True
+            reasons.add("source.canonical-conflict")
+            decision = True
         if snap:
             snap_state = "none" if pr.state is PullRequestState.CLOSED_SUPERSEDED else ("draft" if pr.state is PullRequestState.DRAFT else "ready")
             if (snap.pull_request_number not in {None, pr.pull_request_number} or snap.source_head not in {None, pr.head_sha} or snap.pr_state != snap_state or snap.merged != (pr.state is PullRequestState.MERGED)):
-                reasons.add("source.lifecycle-snapshot-conflict"); decision = True
+                reasons.add("source.lifecycle-snapshot-conflict")
+                decision = True
 
     terminal_deps = {n for n, d in deps.items() if d is not DependencyDisposition.INCOMPLETE}
     for p in e.projections:
         stale = tuple(n for n in p.blocked_dependencies if n in terminal_deps)
         if stale:
-            reasons.add("projection.completed-dependency-blocker"); actions.append(_repair("projection.completed-dependency-blocker", p.surface.value, f"blocked={','.join(map(str, stale))}", "remove terminal blockers"))
+            reasons.add("projection.completed-dependency-blocker")
+            actions.append(_repair("projection.completed-dependency-blocker", p.surface.value, f"blocked={','.join(map(str, stale))}", "remove terminal blockers"))
         if p.readiness is not None and p.readiness is not s.readiness:
-            reasons.add("projection.readiness-stale"); actions.append(_repair("projection.readiness-stale", p.surface.value, p.readiness.value, s.readiness.value))
+            reasons.add("projection.readiness-stale")
+            actions.append(_repair("projection.readiness-stale", p.surface.value, p.readiness.value, s.readiness.value))
         if pr and p.pull_request_number == pr.pull_request_number:
             if p.head_sha and p.head_sha != pr.head_sha:
-                reasons.add("projection.pr-description-head-stale"); actions.append(_repair("projection.pr-description-head-stale", p.surface.value, p.head_sha, pr.head_sha))
+                reasons.add("projection.pr-description-head-stale")
+                actions.append(_repair("projection.pr-description-head-stale", p.surface.value, p.head_sha, pr.head_sha))
             if p.pull_request_state and p.pull_request_state is not pr.state:
                 r = "claim.closed-pr-projected-active" if pr.state is PullRequestState.CLOSED_SUPERSEDED else "projection.pr-state-stale"
-                reasons.add(r); actions.append(_repair(r, p.surface.value, p.pull_request_state.value, pr.state.value))
+                reasons.add(r)
+                actions.append(_repair(r, p.surface.value, p.pull_request_state.value, pr.state.value))
     if pr:
         for v in e.exact_head_evidence:
             if v.tested_head_sha != pr.head_sha:
-                reasons.add("validation.exact-head-stale"); actions.append(ReconciliationAction(ActionCategory.OBSERVATION, "validation.exact-head-stale", "validation", v.tested_head_sha, pr.head_sha))
+                reasons.add("validation.exact-head-stale")
+                actions.append(ReconciliationAction(ActionCategory.OBSERVATION, "validation.exact-head-stale", "validation", v.tested_head_sha, pr.head_sha))
 
     if snap and s.issue_state is IssueState.OPEN:
         desired = {ReadinessState.READY: "status:ready", ReadinessState.BLOCKED: "status:blocked", ReadinessState.NEEDS_DECISION: "status:needs-decision"}.get(s.readiness)
@@ -344,7 +376,8 @@ def reconcile_lifecycle(e: LifecycleReconciliationInput) -> LifecycleReconciliat
         if desired and current != (desired,):
             reasons.add("lifecycle.status-label-stale")
             adm = _admission(e, "replace-lifecycle-labels")
-            if adm is None: reasons.add("authorization.lifecycle-admission-required")
+            if adm is None:
+                reasons.add("authorization.lifecycle-admission-required")
             actions.append(ReconciliationAction(ActionCategory.GOVERNED_MUTATION, "lifecycle.status-label-stale", "lifecycle-labels", ",".join(current) or "none", desired, "replace-lifecycle-labels", admission_result_id=adm.result_id if adm else None, expected_state_guards=_guards(e)))
 
     merged_open = s.issue_state is IssueState.OPEN and (s.primary_pr_state is PrimaryPrState.MERGED or (pr and pr.state is PullRequestState.MERGED))
@@ -352,11 +385,17 @@ def reconcile_lifecycle(e: LifecycleReconciliationInput) -> LifecycleReconciliat
         reasons.add("lifecycle.merged-pr-open-issue")
         adm = _admission(e, "close-issue")
         auth = s.closure_authorization.evidence_id if s.closure_authorization.state is AuthorizationState.AUTHORIZED else None
-        if auth is None: reasons.add("authorization.closure-required")
-        if adm is None: reasons.add("authorization.lifecycle-admission-required")
+        if auth is None:
+            reasons.add("authorization.closure-required")
+        elif adm is not None and adm.authorization_id != auth:
+            reasons.add("source.conflicting-admission-evidence")
+            decision = True
+        if adm is None:
+            reasons.add("authorization.lifecycle-admission-required")
         actions.append(ReconciliationAction(ActionCategory.GOVERNED_MUTATION, "lifecycle.merged-pr-open-issue", "issue-state", "open", "closed", "close-issue", auth, adm.result_id if adm else None, _guards(e)))
     if s.issue_state is IssueState.CLOSED and s.terminal_disposition is TerminalDisposition.NONE and s.primary_pr_state is not PrimaryPrState.MERGED:
-        reasons.add("lifecycle.closed-without-terminal-evidence"); decision = True
+        reasons.add("lifecycle.closed-without-terminal-evidence")
+        decision = True
 
     if decision:
         controlling = next(v for v in sorted(reasons) if v.startswith("source.") or v in {"claim.multiple-primary", "lifecycle.closed-without-terminal-evidence"})
