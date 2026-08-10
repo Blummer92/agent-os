@@ -1,7 +1,5 @@
 """Focused AOS-AUTO1D approval/projection coordinator tests (#753)."""
 
-from dataclasses import replace
-
 import pytest
 
 from scripts.agent_os_candidate_packet.approval_stage import (
