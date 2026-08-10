@@ -206,7 +206,7 @@ def assemble_prr_evidence(repository: str, pr_number: int, reader: GitHubEvidenc
 
     raw_threads = _bounded_list(reader.list_review_threads(repository, pr_number), "review threads", MAX_THREADS)
     threads = [_thread_payload(item) for item in raw_threads]
-    normalized_threads = normalize_review_threads(threads)
+    normalize_review_threads(threads)
 
     raw_checks = _bounded_list(reader.list_checks(repository, initial_head), "checks", MAX_CHECKS)
     checks = [_validation_payload(item, initial_head) for item in raw_checks]
@@ -229,7 +229,7 @@ def assemble_prr_evidence(repository: str, pr_number: int, reader: GitHubEvidenc
     snapshot = normalize_pr_snapshot(_snapshot_payload(repository, pr_number, initial, sorted(files)))
     envelope = {
         "snapshot": snapshot.to_dict(),
-        "review_threads": [thread.to_dict() for thread in normalized_threads],
+        "review_threads": threads,
         "expected_head": initial_head,
         "allowed_files": list(snapshot.changed_files),
         "draft_allowed": True,
