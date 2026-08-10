@@ -4,7 +4,11 @@ import copy
 
 import pytest
 
-from scripts.agent_os_pr_remediation.evidence_assembly import assemble_prr_evidence
+from scripts.agent_os_pr_remediation.evidence_assembly import (
+    EvidenceAssemblyResult,
+    GitHubEvidenceReader,
+    assemble_prr_evidence,
+)
 from scripts.agent_os_pr_remediation.models import EvidenceValidationError, canonical_json
 from scripts.agent_os_pr_remediation.normalization import normalize_pr_snapshot, normalize_review_threads
 
@@ -144,6 +148,35 @@ def test_identical_source_evidence_is_byte_stable():
     assert first.evidence_id == second.evidence_id
 
 
+def test_validation_evidence_order_is_deterministic():
+    checks = [
+        {"name": "Zeta Check", "conclusion": "success", "tested_sha": HEAD},
+        {"name": "Alpha Check", "conclusion": "failure", "tested_sha": HEAD},
+    ]
+    first = assemble_prr_evidence("Blummer92/agent-os", 1009, FakeReader(checks=checks))
+    second = assemble_prr_evidence("Blummer92/agent-os", 1009, FakeReader(checks=list(reversed(checks))))
+    assert canonical_json(first.to_dict()) == canonical_json(second.to_dict())
+    assert first.evidence_id == second.evidence_id
+
+
+def test_authority_fields_fail_closed_on_construction():
+    for field in (
+        "execution_authorized",
+        "external_write_authorized",
+        "merge_authorized",
+        "side_effects_performed",
+    ):
+        with pytest.raises(EvidenceValidationError, match="authority fields must be false"):
+            EvidenceAssemblyResult(
+                status="assembled",
+                envelope=None,
+                initial_head_sha=HEAD,
+                final_head_sha=HEAD,
+                reason_codes=(),
+                **{field: True},
+            )
+
+
 def test_rejects_duplicate_files_and_duplicate_check_categories():
     reader = FakeReader()
     reader.list_changed_files = lambda repository, pr_number: ["a.py", "a.py"]  # type: ignore[method-assign]
@@ -169,6 +202,14 @@ def test_rejects_malformed_target_before_reader_calls():
 
 
 def test_reader_contract_has_no_mutation_methods():
-    forbidden = {"merge", "resolve", "update", "create", "delete", "push", "execute", "run_validation"}
-    public = {name for name in dir(FakeReader) if not name.startswith("_")}
-    assert forbidden.isdisjoint(public)
+    public = {
+        name
+        for name, member in GitHubEvidenceReader.__dict__.items()
+        if callable(member) and not name.startswith("_")
+    }
+    assert public == {
+        "get_pull_request",
+        "list_changed_files",
+        "list_review_threads",
+        "list_checks",
+    }
