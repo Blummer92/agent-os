@@ -34,6 +34,18 @@ class EvidenceAssemblyResult:
     merge_authorized: bool = False
     side_effects_performed: bool = False
 
+    def __post_init__(self) -> None:
+        if any(
+            value is not False
+            for value in (
+                self.execution_authorized,
+                self.external_write_authorized,
+                self.merge_authorized,
+                self.side_effects_performed,
+            )
+        ):
+            raise EvidenceValidationError("EvidenceAssemblyResult authority fields must be false")
+
     @property
     def evidence_id(self) -> str:
         return deterministic_id(self.to_dict())
@@ -200,6 +212,7 @@ def assemble_prr_evidence(repository: str, pr_number: int, reader: GitHubEvidenc
     checks = [_validation_payload(item, initial_head) for item in raw_checks]
     if len({item["category"] for item in checks}) != len(checks):
         raise EvidenceValidationError("checks contain duplicate categories")
+    checks.sort(key=lambda item: (item["category"], item["tested_sha"]))
 
     final = reader.get_pull_request(repository, pr_number)
     _exact(final, dict, "final pull request evidence")
