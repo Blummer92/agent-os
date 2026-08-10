@@ -200,15 +200,10 @@ def test_superseded_decision_never_projects() -> None:
 
 def test_binding_drift_fails_closed_before_projection() -> None:
     upstream = _prepare()
-    drifted_proposal = replace(upstream.proposal, handoff_digest="f" * 64, proposal_id="")
-    drifted = replace(
-        upstream,
-        proposal=drifted_proposal,
-        proposal_result=replace(upstream.proposal_result, proposals=(drifted_proposal,)),
-    )
+    object.__setattr__(upstream.proposal, "handoff_digest", "f" * 64)
 
     result = prepare_approval_projection(
-        drifted,
+        upstream,
         candidate_context=_context(),
         approval_decision=_decision(),
         evaluated_at=_EVALUATED_AT,
