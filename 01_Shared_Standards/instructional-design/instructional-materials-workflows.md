@@ -30,6 +30,25 @@ Rank tradeoffs in this order unless the user overrides them:
 - Make next actions obvious for students.
 - Simplify before adding more.
 
+## Revision Classification
+
+Before treating a material request as new production, classify it using
+`production-gates-and-compute.md` as teacher-directed routine revision,
+structural instructional revision, or new production/release.
+
+A direct teacher request to revise an existing canonical classroom working file
+may use the Teacher-Directed Revision Lane when every bounded-lane condition
+passes. In that lane, the explicit teacher request supplies authority for the
+specified artifact edit; it does not require `Production Authorized: Yes` merely
+to revise the existing file.
+
+That revision authority does not authorize a template/master edit, a new
+artifact, new curriculum or assessment decisions, unapproved sources or assets,
+governed-field changes, sharing/permission changes, destination changes,
+publication, release, or a readiness/approval decision. If the request crosses
+one of those boundaries, use the applicable structural-revision or
+new-production gate instead.
+
 ## Vocabulary Integration Gate
 Before adding vocabulary to a slide, worksheet, handout, or assessment, inherit
 the CLS2 and CLS4 decisions. Use only confirmed entries and preserve teacher
@@ -94,4 +113,11 @@ summaries. Do not store full source materials, shared documents, asset indexes,
 formal release notes, version logs, or long histories in Memory.
 
 ## Version
-0.2.2
+0.3.0
+
+## Changelog
+
+- 0.3.0 classifies direct teacher revisions before production gating and routes
+  qualifying existing-artifact edits through the Teacher-Directed Revision Lane
+  (#1013).
+- 0.2.2 added the current reusable-visual gate and final-delivery QA behavior.
