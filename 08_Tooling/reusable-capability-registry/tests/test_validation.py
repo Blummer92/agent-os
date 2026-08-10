@@ -97,7 +97,6 @@ def _by_code(report: ValidationReport, code: str):
 
 # --- clean, provenance, determinism ----------------------------------------
 
-
 def test_clean_fixture_is_pass_with_provenance():
     report = validate_registry(CLEAN)
     assert report.severity is ValidationSeverity.PASS
@@ -130,7 +129,6 @@ def test_provenance_matches_reader_snapshot_and_discovery(tmp_path):
 
 # --- structural / provenance failure ---------------------------------------
 
-
 def test_malformed_registry_fails_with_null_provenance(tmp_path):
     root = _build(tmp_path, [_default_cap()], files={"04_Registry/reusable-capabilities.yml": "capabilities: [oops\n"})
     report = validate_registry(root)
@@ -158,7 +156,6 @@ def test_expected_provenance_match_mismatch_and_unsupported(tmp_path):
 
 
 # --- consumer classifications ----------------------------------------------
-
 
 @pytest.mark.parametrize(
     "consumer_src,consumer_path,expected",
@@ -191,7 +188,6 @@ def test_test_listed_as_consumer_is_not_operational(tmp_path):
 
 # --- test-evidence classifications -----------------------------------------
 
-
 @pytest.mark.parametrize(
     "test_src,test_path,expected",
     [
@@ -222,7 +218,6 @@ def test_test_path_not_a_test(tmp_path):
 
 
 # --- lifecycle matrix ------------------------------------------------------
-
 
 def test_missing_interface_is_lifecycle_sensitive(tmp_path):
     # active -> fail; replaced -> warn (with a resolvable successor)
@@ -265,7 +260,6 @@ def test_successor_missing_and_resolves(tmp_path):
 
 # --- ownership & exemption -------------------------------------------------
 
-
 @pytest.mark.parametrize(
     "owner,expected",
     [
@@ -296,7 +290,6 @@ def test_owner_source_conflict(tmp_path):
     conflicted = _INHERIT + "| Integration Manager | X | other-overlay |\n"
     root = _build(tmp_path, [_default_cap()], files={"04_Registry/agent-inheritance-registry.md": conflicted})
     assert "owner.source-conflict" in _codes(validate_registry(root))
-
 
 def test_support_duplicate_and_primary_also_support(tmp_path):
     # distinct strings that resolve to the same canonical agents (the reader rejects
@@ -333,7 +326,6 @@ def test_exemption_reason_is_bounded(tmp_path):
 
 # --- scale, mutation-safety, live registry ---------------------------------
 
-
 def test_more_than_seven_records(tmp_path):
     caps = [_default_cap(capability_id=f"widget-{i:02d}") for i in range(8)]
     report = validate_registry(_build(tmp_path, caps))
@@ -352,7 +344,7 @@ def test_live_registry_is_deterministic_with_provenance():
     repo_root = Path(__file__).resolve().parents[3]
     report = validate_registry(repo_root)
     assert report.provenance is not None
-    assert report.capabilities_checked == 14
+    assert report.capabilities_checked == 15
     assert serialize_validation_report(report) == serialize_validation_report(validate_registry(repo_root))
     # RC4 provenance equals the discovery snapshot provenance.
     reader = RegistryReader()
@@ -368,7 +360,6 @@ def test_rc4_does_not_import_readiness_modules():
 
 
 # --- instructional workflow contract core registration (#786) --------------
-
 
 def _live_capability_record(capability_id: str) -> dict:
     repo_root = Path(__file__).resolve().parents[3]
