@@ -201,7 +201,7 @@ def test_test_listed_as_consumer_is_not_operational(tmp_path):
         ("# run in a comment\ny = 'run'\n", "test_pkg.py", "test.weak-text-only"),
         ("import importlib\nm = importlib.import_module('x')\n", "test_pkg.py", "test.dynamic-usage"),
         ("import pytest\n\n\n@pytest.mark.skip\ndef test_a():\n    from src.pkg.mod import run\n    run(1)\n", "test_pkg.py", "test.skipped-only"),
-        ("def test_a(:\n", "test_pkg.py", "consumer.syntax-error"),
+        ("def test_a(:\n", "test_pkg.py", "test.syntax-error"),
         ("from .helper import go\n\n\ndef test_a():\n    assert go()\n", "test_pkg.py", "test.helper-boundary-unresolved"),
     ],
 )
