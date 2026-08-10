@@ -27,7 +27,7 @@ versions change only when the module's standards or contract changes.
 | Workspace Automation Builder Tooling | 0.1.1 |
 | Agent Memory & Context Budget Manager | 0.1.0 |
 | IA4D-to-Scheduler Handoff Contract | 0.2.0 |
-| GitHub Issue Lifecycle Standard | 0.3.0 |
+| GitHub Issue Lifecycle Standard | 0.2.0 |
 | Safe Implementation Lane | 0.3.0 |
 | Agent OS Execution Service | 0.5.0 |
 | Artifact-First Response Standard | 0.1.0 |
@@ -81,7 +81,7 @@ classroom data, external write, or gate advancement.
 (`01_Shared_Standards/instructional-design/lp-reason-code-catalog.md` and
 `04_Registry/lp-reason-code-catalog.yaml`, #711) holds the finite `lp-*` semantic
 reason catalog and its producer/consumer ownership map. Generic parsing, bounds,
-version, serialization, and authority mechanics stay with LP9, LP12, and CW5A.
+version, serialization, authority mechanics stay with LP9, LP12, and CW5A.
 
 **LP Notion Working Layer**
 (`01_Shared_Standards/notion/lp-notion-working-layer-standard.md` and
