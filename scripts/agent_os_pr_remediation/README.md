@@ -2,98 +2,67 @@
 
 ## Purpose
 
-This package exposes one pure-local, read-only operator CLI that composes the
-canonical PRR1 normalization/preflight, PRR2 remediation planning, and PRR3
-validation/thread-resolution eligibility contracts.
+This package exposes pure-local, read-only contracts for PR review remediation and CI evidence recovery. It evaluates supplied evidence only: it does not fetch GitHub, edit source, execute remediation or validation, resolve threads, merge, or perform external writes.
 
-It evaluates supplied evidence only. It does not fetch GitHub, edit source,
-execute remediation or validation, invoke a model, resolve threads, merge, or
-perform any external write.
-
-## Command
+## PR Review Remediation CLI
 
 ```bash
-python -m scripts.agent_os_pr_remediation.cli \
-  --input tests/fixtures/agent_os_pr_remediation/e2e.json \
-  --format json
+python -m scripts.agent_os_pr_remediation.cli --input tests/fixtures/agent_os_pr_remediation/e2e.json --format json
 ```
 
-Use `--format text` for a concise operator summary. JSON is the canonical
-machine-readable output.
+The input composes PR snapshot/thread evidence, exact-head preflight, remediation candidates, changed-file/fix evidence, validation bindings, and final head capture. JSON output contains deterministic preflight, remediation, and resolution plans. Every authority and side-effect field remains false.
 
-## Input Envelope
+## CI Evidence Recovery Contract
 
-The JSON file supplies:
+`scripts/agent_os_pr_remediation/ci_evidence_recovery.py` plans recovery of the first actionable GitHub Actions failure without assuming `gh` or Cloud Shell. It performs no network, CLI, retry, repository, or external-system operation.
 
-- `snapshot`: PRR1 pull-request snapshot evidence;
-- `review_threads`: PRR1 review-thread evidence;
-- `expected_head`: exact head expected by preflight;
-- `allowed_files`: authorized file scope;
-- `draft_allowed`: Draft compatibility flag;
-- `candidates`: PRR2 finding-candidate payloads;
-- optional `failure_evidence` and `repair_handoff` payloads;
-- `changed_files`: final supplied implementation file evidence;
-- `finding_fixes`: exact finding-fix evidence;
-- `validation_evidence`: canonical validation bindings;
-- `current_head_sha`: current PR head supplied to PRR3; and
-- `final_captured_head_sha`: final head capture supplied to PRR3.
+Each plan binds repository, PR number, full 40-character head SHA, workflow run ID, run attempt, and optional failing job ID. Every observation carries the same identity and mismatches fail closed.
 
-Evidence provenance remains the caller's responsibility. Use fresh exact-head
-GitHub evidence when evaluating a live pull request.
+Recovery paths are:
+- structured evidence;
+- direct Actions-log access;
+- `gh` run logs;
+- failing-job logs;
+- an approved alternate environment;
+- user handoff only after governed paths are exhausted.
 
-## Output Envelope
+Machine-readable reasons distinguish CLI/auth/permission/credential/host failures, rate limits, in-progress runs, stale head or attempt, run/job log failures, incomplete log association, transient network failure, expired environments, disk exhaustion, and exhausted evidence recovery.
 
-For valid, identity-consistent evidence, the CLI emits one deterministic envelope
-containing:
+Retry behavior is bounded:
+- rate-limit and transient-network failures may retry the same path within budget;
+- other failures advance to the next untried path;
+- run-in-progress waits instead of becoming a retrieval failure;
+- whole-run failure may advance to job-level recovery;
+- incomplete step association may retain an actionable failure.
 
-- `preflight`: exact-head, PR-state, Draft, scope, and thread-evidence checks;
-- `remediation_plan`: PRR2 findings, tasks, blockers, and compute routes; and
-- `resolution_plan`: PRR3 validation states, reason codes, and suggested actions.
+Fail-closed conditions include:
+- malformed or mismatched observation identity;
+- moved exact head;
+- superseded run attempt;
+- invalid reason codes or model types;
+- duplicate recovery paths;
+- invalid retry state.
 
-Every authority and side-effect field remains false.
+Authority limits are explicit:
+- recovery may set only `evidence_usable_for_attribution`;
+- `repair_authorized` remains false;
+- `external_write_authorized` remains false;
+- `side_effects_performed` remains false;
+- attribution and repair authorization remain separate governed stages.
 
-## Interpretation
-
-`no-model` is the default compute route. `small-model-eligible`,
-`high-reasoning-required`, and `manual-decision-required` are routing evidence,
-not execution authority.
-
-Validation states include planned, passed, failed, unavailable, incomplete,
-stale, final-head mismatch, and manual-review-required. Focused success with
-aggregate validation pending is not final success.
-
-Suggested actions are `eligible-to-resolve`, `leave-open`,
-`request-more-evidence`, `route-out-of-scope`, or `manual-decision-required`.
-
-`eligible-to-resolve` is evidence only. It does not authorize or perform review
-thread resolution, source edits, merge, auto-merge, issue closure, production
-activation, external writes, or any other excluded surface.
-
-## Fail-Closed Cases
-
-The CLI rejects malformed, unknown, conflicting, oversized, or identity-stale
-input. In particular, if `expected_head` no longer matches the supplied PRR1
-snapshot head, the existing PRR3 identity contract rejects the pipeline before a
-resolution plan is emitted. Stale validation, out-of-scope findings, incomplete
-evidence, conflicts, and manual decisions keep resolution eligibility false when
-the supplied cross-stage identities remain valid.
-
-When evidence is stale, capture fresh PR/thread/head/file evidence through the
-GitHub Service Agent and rerun the CLI with a new local input envelope.
+If governed paths are exhausted without an actionable failure, the plan requires a user handoff and reports `evidence-unavailable`; it never invents a repository defect.
 
 ## GitHub Write Handoff
 
-The CLI never applies GitHub writes. Any separately authorized source change,
-thread mutation, PR update, merge, or issue lifecycle action remains owned by the
-GitHub Service Agent under the governing Agent OS authorization rules.
+Any separately authorized source change, thread mutation, PR update, merge, issue lifecycle action, credential change, or workflow change remains owned by the appropriate Agent OS owner. Recovery planning itself grants none of those authorities.
 
 ## Validation
 
-Run the focused PRR4 tests with:
+Focused tests:
 
 ```bash
-python -m pytest tests/agent_os_pr_remediation/test_cli.py
+python -m pytest tests/agent_os_pr_remediation/test_ci_evidence_recovery.py
+python -m pytest tests/agent_os_pr_remediation
 ```
 
-Repository acceptance still requires the normal exact-head aggregate validation
-and review checks on the pull request.
+Repository acceptance still requires normal exact-head aggregate validation and review checks on the pull request.
