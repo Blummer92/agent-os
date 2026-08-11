@@ -2,17 +2,22 @@ import pytest
 
 from scripts.agent_os_issue_labels.pr_planner import (
     PullRequestLabelEvidence,
+    PullRequestLabelPlan,
     managed_label_families,
     plan_matches_head,
     plan_pull_request_labels,
 )
 
 
+HEAD_SHA = "abcdef1234567890abcdef1234567890abcdef12"
+MOVED_HEAD_SHA = "1234567890abcdef1234567890abcdef12345678"
+
+
 def evidence(**changes):
     values = dict(
         repository="Blummer92/agent-os",
         pr_number=1021,
-        head_sha="abcdef1234567890",
+        head_sha=HEAD_SHA,
         draft=True,
         mergeable=True,
         conflicted=False,
@@ -97,8 +102,8 @@ def test_idempotent_when_desired_labels_are_already_present():
 
 def test_moved_head_invalidates_plan_binding():
     plan = plan_pull_request_labels(evidence())
-    assert plan_matches_head(plan, "abcdef1234567890") is True
-    assert plan_matches_head(plan, "1234567abcdef") is False
+    assert plan_matches_head(plan, HEAD_SHA) is True
+    assert plan_matches_head(plan, MOVED_HEAD_SHA) is False
 
 
 def test_managed_families_are_mutually_exclusive_and_unique():
@@ -111,3 +116,37 @@ def test_managed_families_are_mutually_exclusive_and_unique():
 def test_unknown_validation_state_fails_closed(state):
     with pytest.raises(ValueError):
         evidence(validation_state=state)
+
+
+@pytest.mark.parametrize("repository", ["owner/", "/repo", "owner/repo/extra", "ownerrepo"])
+def test_repository_requires_exact_owner_name(repository):
+    with pytest.raises(ValueError):
+        evidence(repository=repository)
+
+
+def test_head_sha_requires_full_commit_identity_and_normalizes_case():
+    with pytest.raises(ValueError):
+        evidence(head_sha="abcdef1")
+    item = evidence(head_sha=HEAD_SHA.upper())
+    assert item.head_sha == HEAD_SHA
+
+
+def test_authority_fields_cannot_be_overridden():
+    kwargs = dict(
+        repository="Blummer92/agent-os",
+        pr_number=1021,
+        head_sha=HEAD_SHA,
+        desired_managed_labels=(),
+        current_managed_labels=(),
+        labels_to_add=(),
+        labels_to_remove=(),
+        unmanaged_labels_preserved=(),
+        reason_codes=(),
+    )
+    plan = PullRequestLabelPlan(**kwargs)
+    assert plan.external_write_authorized is False
+    assert plan.side_effects_performed is False
+    with pytest.raises(TypeError):
+        PullRequestLabelPlan(**kwargs, external_write_authorized=True)
+    with pytest.raises(TypeError):
+        PullRequestLabelPlan(**kwargs, side_effects_performed=True)
