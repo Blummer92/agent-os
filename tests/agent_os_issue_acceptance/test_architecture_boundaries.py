@@ -27,6 +27,7 @@ DOMAIN_RULES: tuple[tuple[str, frozenset[str], tuple[str, ...]], ...] = (
                 "readiness",
                 "report",
                 "reuse_readiness",
+                "validation_failure_classifier",
             }
         ),
         (),
