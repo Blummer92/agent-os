@@ -239,6 +239,7 @@ def prepare_validation_stage(
             implementation_contract_fingerprint=getattr(
                 projection, "implementation_contract_fingerprint", ""
             ),
+            expected_changed_paths=candidate_runtime_inputs.expected_changed_paths,
             execution_mode="validation-only",
             candidate_bound=True,
         )
