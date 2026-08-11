@@ -39,6 +39,13 @@ from .handoff import (
     TOP_LEVEL_FIELDS,
     validate_curriculum_handoff,
 )
+from .image_intent import (
+    IMAGE_INTENT_CONTRACT_ID,
+    IMPORTED_ASSET_CONTEXT_CONTRACT_ID,
+    assemble_gemini_manual_prompt,
+    validate_image_intent,
+    validate_imported_asset_context,
+)
 
 __all__ = [
     "AuthorityEvidence",
@@ -49,6 +56,8 @@ __all__ = [
     "DEPRECATED_FIELD_ALIASES",
     "FINGERPRINT_ALGORITHM",
     "FORBIDDEN_IMPORT_PREFIXES",
+    "IMAGE_INTENT_CONTRACT_ID",
+    "IMPORTED_ASSET_CONTEXT_CONTRACT_ID",
     "MAX_BLOCKERS",
     "MAX_DEPENDENCY_KEYS",
     "MAX_DETAIL_LENGTH",
@@ -63,6 +72,7 @@ __all__ = [
     "ValidatedRecord",
     "ValidationResult",
     "ValidationStatus",
+    "assemble_gemini_manual_prompt",
     "canonical_json_bytes",
     "canonical_size",
     "freeze_json",
@@ -72,6 +82,8 @@ __all__ = [
     "validate_and_normalize_json",
     "validate_curriculum_handoff",
     "validate_dependency_key",
+    "validate_image_intent",
+    "validate_imported_asset_context",
     "validate_reason_code",
     "validate_revision",
     "validate_stable_id",
