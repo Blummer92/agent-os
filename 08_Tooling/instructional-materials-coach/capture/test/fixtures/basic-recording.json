@@ -1,0 +1,33 @@
+{
+  "title": "Synthetic Adobe Express capture fixture",
+  "steps": [
+    {
+      "type": "setViewport",
+      "width": 1440,
+      "height": 900,
+      "deviceScaleFactor": 1,
+      "isMobile": false,
+      "hasTouch": false,
+      "isLandscape": true
+    },
+    {
+      "type": "navigate",
+      "url": "https://new.express.adobe.com/test-fixture"
+    },
+    {
+      "type": "click",
+      "selectors": [["aria/Add text"]],
+      "offsetX": 24,
+      "offsetY": 12
+    },
+    {
+      "type": "change",
+      "selectors": [["aria/Text input"]],
+      "value": "Synthetic classroom-safe example"
+    },
+    {
+      "type": "waitForElement",
+      "selectors": [["aria/Animate"]]
+    }
+  ]
+}
