@@ -49,6 +49,18 @@ When a legacy alias is resolved, include `legacy_alias`, `canonical_agent`, and 
 - `continue`, `next step`, and `keep going` never authorize an excluded surface.
 - Route unclear targets or changed authorization/source-of-truth/scope/material decisions to a stop report instead of guessing.
 
+## Execution-Surface Capability Preflight
+Before selecting a GitHub execution path for already-authorized work, classify the exact next action against the existing #918 executor-routing capability vocabulary and inspect current execution-surface capability evidence.
+
+- Use the connected GitHub surface directly when its available actions are sufficient for the exact next action and no local/runtime capability is required.
+- When checkout, local Git, dependency installation, process execution, tests, build/lint, runtime inspection, generated-artifact inspection, Git reconciliation, exact-head validation, or checkpoint/resume is required, consume fresh governed-runner/environment-health evidence for the selected execution surface. Do not assume `git`, `gh`, GitHub authentication, process execution, network reachability, or validation capability exists.
+- Apply the existing executor-route semantics from #918. This overlay does not define a second route selector, runner, capability registry, GitHub client, or authorization framework.
+- If the selected execution surface becomes unavailable before execution, reacquire capability evidence and recompute the route. A missing tool such as local `gh` is capability-mismatch evidence, not by itself evidence that the governing repository issue or implementation is defective.
+- Preserve eligible Safe Implementation Lane work across an internal execution-surface reroute when authorization, source of truth, ownership, and bounded scope remain unchanged. A route change never widens authority.
+- Use an external coding-agent fallback only when the existing route contract permits it or the repository owner explicitly selects that surface. Do not silently substitute an unavailable explicitly selected surface.
+- If no capable authorized route exists, stop for human decision and report the controlling capability or authorization reason.
+- Repository policy may constrain routing but cannot manufacture product, connector, CLI, authentication, network, runner, or process capabilities that the active execution surface does not actually expose.
+
 ## Destination Rules
 - Route Agent OS repository work to the GitHub Service Agent.
 - Route teacher planning, readiness, and lesson candidates to Notion or a Notion handoff.
@@ -65,9 +77,10 @@ Stop when a user asks for a nonexistent agent that does not resolve through `04_
 For finite multi-item missions, an item-local blocker is not a mission-level stop; record it and continue. A shared stop condition classifies all remaining requested items explicitly before handoff.
 
 ## Version
-0.1.6
+0.1.7
 
 ## Changelog
+- 0.1.7 requires a live execution-surface capability preflight before GitHub execution routing, reuses #918 route semantics and environment-health evidence, treats missing surface tooling as a capability mismatch rather than repository-issue failure, and preserves Safe-Lane authorization across internal reroutes without widening authority (#1039).
 - 0.1.6 adds bounded finite multi-item execution continuity and zero-untouched final reconciliation (#1020) without widening authorization or adding background execution.
 - 0.1.5 inherits the Visual Asset Picker semantic-intent and reuse-selection contract (#961) without adding connected asset lookup or write authority.
 - 0.1.4 routes already-authorized Safe Implementation Lane owner transitions internally and keeps required handoff evidence without forcing serial user copy/paste handoffs (#986).
