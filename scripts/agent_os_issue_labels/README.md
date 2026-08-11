@@ -1,96 +1,75 @@
 # Agent OS Issue Label Checker
 
-Local, fixture-first tooling for issue taxonomy evidence and safe application
-planning.
+Local, fixture-first tooling for issue taxonomy evidence, safe application planning,
+and bounded pull-request label reconciliation.
+
+## Pull-request reconciliation
+
+`scripts/agent_os_issue_labels/pr_reconciler.py` consumes the canonical PR-label
+planner from `scripts/agent_os_issue_labels/pr_planner.py`; it does not define a
+second label-state engine.
+
+The reconciliation contract is:
+
+- read exact live PR evidence and compute the canonical managed-label plan;
+- verify every desired managed label exists in the supplied repository catalog;
+- default to dry-run and perform zero writes;
+- require separate `label_write_authorized=True` before managed-label mutation;
+- reread the exact head immediately before mutation and fail closed if it moved;
+- add only `labels_to_add` and remove only canonical managed `labels_to_remove`;
+- preserve all unmanaged, human, security, dependency, and third-party labels;
+- reread the PR after mutation and prove managed-label convergence;
+- report partial/write/readback failures without claiming synchronization;
+- continue finite batch reconciliation past item-local blockers.
+
+Managed PR labels are disposable projections only. They never authorize Ready for
+Review, merge, issue closure, review resolution, production, publication,
+protected-setting changes, credentials/IAM, or external-system writes.
+
+The executor never creates labels. If a required managed label is absent from the
+repository label catalog, reconciliation returns `managed-label-unavailable` and
+performs no mutation. Label creation remains a separately governed action.
+
+### Trigger seam
+
+Phase 1 is connector/operator driven. A caller may invoke one PR or a finite PR
+batch during normal creation/cleanup or an explicitly authorized audit. Future
+webhook, GitHub Actions, scheduled, or persistent reconciliation should call the
+same executor, but those trigger/permission surfaces require separate approval and
+are intentionally absent here.
+
+## Issue-label tooling
 
 The checker reads Agent OS issue-form output and the declarative label map,
 computes expected labels, compares them with supplied labels, and renders an
 IA-style report.
 
-## Local checker
-
-```bash
-python -m scripts.agent_os_issue_labels.cli \
-  --issue tests/agent_os_issue_labels/fixtures/issue_ready.md \
-  --labels tests/agent_os_issue_labels/fixtures/labels_ready.txt
-```
-
-## Draft preview
-The preview command renders structured JSON into the canonical issue form without
-network access or GitHub mutation.
-```bash
-python -m scripts.agent_os_issue_labels.draft_cli --input draft.json
-```
-See [ISSUE_DRAFT_PREVIEW.md](ISSUE_DRAFT_PREVIEW.md) for the input contract.
-
-## Application planner
-
-The planner is side-effect free. It consumes an issue body, current labels, and
-an explicit repository-label catalog, then reports:
-
-- metadata contract and application eligibility;
-- candidate and approved additions;
-- expected labels already present;
-- findings skipped by policy;
-- primary-owner and participation-label evidence;
-- unknown values and unavailable labels;
-- reasons requiring manual review;
-- explicit non-authorization fields.
-
-```bash
-python -m scripts.agent_os_issue_labels.plan_cli \
-  --issue tests/fixtures/agent_os_issue_labels/tiered_ready.md \
-  --labels tests/fixtures/agent_os_issue_labels/current_labels.txt \
-  --available-labels tests/fixtures/agent_os_issue_labels/available_labels.txt \
-  --issue-number 275 \
-  --event-type workflow_dispatch:manual \
-  --commit-sha local-test
-```
-
-The initial application policy can approve only missing `agent-os`. The issue
-body remains authoritative for the Primary owner. Existing `owner:*` labels are
-non-exclusive participation evidence and remain report-only until a separately
-approved taxonomy change defines writable owner semantics.
-
-Every `status:*`, phase, epic, and type finding remains report-only. Recognized
-legacy bodies remain parseable for evidence, but are not application-eligible
-and produce no approved additions. Incomplete or unknown metadata contracts
-route to manual review.
-
-Malformed metadata, unknown values, unavailable safe labels, external-write
-signals, and needs-decision values route to manual review. A manual-review plan
-contains no approved additions.
-
-Every text and JSON plan states that no mutation occurred, no write is
-authorized, L5B is not authorized, and explicit approval is still required.
+The issue application planner is side-effect free. It consumes an issue body,
+current labels, and an explicit repository-label catalog. Its initial policy can
+approve only missing `agent-os`; owner/status and other findings remain governed
+by their existing contracts.
 
 ## Read-only workflows
 
-`.github/workflows/agent-os-issue-label-report.yml` runs the checker from issue
-events and publishes its IA-style report.
-
-`.github/workflows/agent-os-issue-label-apply-dry-run.yml` reads the selected
-issue and repository-label catalog, calls the application planner, and publishes
-an auditable dry-run summary. It supports opened, edited, reopened, and manual
-dispatch events, uses read-only permissions, and has per-issue concurrency.
-
-Neither workflow applies, removes, or replaces labels.
+Existing issue-label workflows remain read-only. No workflow is added or modified
+for PR-label reconciliation.
 
 ## Validation
 
-Changes must pass the executable `Agent OS Validation Gate`, which runs repository
-structure validation and `scripts/validate-all.sh` against the pull-request merge
-result. Focused planner tests and Python compilation remain required evidence,
-but they do not replace aggregate validation.
+Focused PR reconciliation tests:
 
-## Acceptance-report integration
+```bash
+python -m pytest tests/agent_os_issue_labels/test_pr_reconciler.py
+python -m pytest tests/agent_os_issue_labels
+```
 
-Label findings use the existing IA2 `AcceptanceReport` model. They are evidence
-only and do not authorize merge, readiness changes, approval changes,
-source-of-truth changes, issue closure, or future live label behavior.
+Repository acceptance still requires the executable `Agent OS Validation Gate`,
+including repository structure validation and the authoritative exact-head
+aggregate, plus required PR review checks.
 
 ## Boundary
 
-The checker, draft preview, and planner perform no GitHub API writes and touch no
-external systems. Live issue creation and additive label application remain
-separately approved follow-ups.
+Repository implementation does not itself authorize a live label backfill. Live
+managed-label mutation, backfill, workflow/scheduled automation, merge, issue
+closure, protected settings, credentials/IAM, production, Notion, Drive, and
+classroom-artifact writes remain separately governed.
