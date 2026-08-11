@@ -5,6 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 GATES = ROOT / "01_Shared_Standards/instructional-design/production-gates-and-compute.md"
 WORKFLOWS = ROOT / "01_Shared_Standards/instructional-design/instructional-materials-workflows.md"
 OVERLAY = ROOT / "02_Agent_Overlays/instructional-materials-coach.md"
+GATED_GENERATION = ROOT / "03_Templates/prompts/gated-materials-generation.md"
 
 
 def _read(path: Path) -> str:
@@ -44,6 +45,7 @@ def test_teacher_directed_revision_lane_is_bounded_and_non_authorizing():
 
 def test_full_production_gate_still_applies_outside_routine_revision():
     gates = _read(GATES)
+    gated_generation = _read(GATED_GENERATION)
 
     assert "For structural instructional revisions and new production/release" in gates
     assert "`Source Confidence` is approved" in gates
@@ -51,4 +53,9 @@ def test_full_production_gate_still_applies_outside_routine_revision():
     assert "`Modeling Readiness` is ready" in gates
     assert "`Evidence Target` is populated" in gates
     assert "`Blockers` is none" in gates
+    assert "`Production Authorized` is `Yes`" in gates
     assert "If any lane condition fails" in gates
+
+    assert "- Production Authorized" in gated_generation
+    assert "`Gate Status` is not PASS or `Production Authorized` is not `Yes`" in gated_generation
+    assert "`Gate Status` is PASS and `Production Authorized` is `Yes`" in gated_generation
