@@ -25,6 +25,7 @@ For structural instructional revisions and new production/release, generation is
 3. `Modeling Readiness` is ready for slides or ready for materials.
 4. `Evidence Target` is populated for worksheets or assessments.
 5. `Blockers` is none.
+6. `Production Authorized` is `Yes`.
 If any applicable condition fails, the agent must stop, name the blocker, and route to the owning dashboard. It must not create a partial slide deck, worksheet, rubric, packet, or placeholder product under the production path. This hard stop does not convert a qualifying teacher-directed routine revision into new production.
 ## Blocker Taxonomy
 Use one of these blocker labels:
