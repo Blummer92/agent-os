@@ -22,9 +22,10 @@ The reconciliation contract is:
 - report partial/write/readback failures without claiming synchronization;
 - continue finite batch reconciliation past item-local blockers.
 
-Managed PR labels are disposable projections only. They never authorize Ready for
-Review, merge, issue closure, review resolution, production, publication,
-protected-setting changes, credentials/IAM, or external-system writes.
+Managed PR labels are disposable projections only. They never become lifecycle,
+validation, review, merge, closure, production, or authorization truth. Authorization
+remains governed by `00_Governance/write-authorization-policy.md` and
+`01_Shared_Standards/github/excluded-surface-baseline.md`.
 
 The executor never creates labels. If a required managed label is absent from the
 repository label catalog, reconciliation returns `managed-label-unavailable` and
@@ -40,20 +41,20 @@ Supported invocation reasons represent the normal GitHub Service Agent follow-up
 Draft PR creation, head-SHA change, validation terminal state, Draft/Ready transition,
 review-thread state change, branch freshness/conflict recheck, and final-state readback.
 
-Each invocation reacquires live PR evidence through the existing provider boundary.
-If the head moves before any label mutation, the wrapper discards that stale result
-and recomputes once from fresh evidence. A head move after mutation remains visible
-as stale evidence and is not silently retried.
+Each invocation validates optional caller evidence before touching the provider, then
+reacquires live PR evidence through the existing provider boundary. If the head moves
+before any label mutation, the wrapper discards that stale result and recomputes once
+from fresh evidence. A head move after mutation remains visible as stale evidence and
+is not silently retried.
 
 The lifecycle result preserves caller operation/result evidence separately from the
 underlying reconciliation result, reports whether reconciliation was required, and
-keeps all Ready-for-Review, merge, issue-closure, review-resolution, protected-setting,
-production, and external-system authority fields false. Repeated unchanged calls
-perform zero writes because the existing reconciler computes an empty managed delta.
+keeps explicit non-authority fields false. Repeated unchanged calls perform zero
+writes because the existing reconciler computes an empty managed delta.
 
-This layer remains connector/operator driven. Future webhook, GitHub Actions,
-scheduled, polling, or persistent automation must call the same package contract but
-requires separately governed authorization and is intentionally not implemented here.
+This layer is connector/operator driven. Future unattended trigger surfaces are not
+implemented here; their authorization remains governed by the canonical policies
+linked above.
 
 ## Issue-label tooling
 
@@ -86,8 +87,7 @@ aggregate, plus required PR review checks.
 
 ## Boundary
 
-Repository implementation does not itself authorize live managed-label writes.
-Callers must separately authorize the triggering PR operation and any label mutation.
-Live backfill, workflow/scheduled automation, merge, issue closure, Draft/Ready
-mutation, review resolution, protected settings, credentials/IAM, production,
-Notion, Drive, and classroom-artifact writes remain separately governed.
+The lifecycle helper only reports reconciliation evidence and never grants authority.
+For write authorization and excluded surfaces, follow
+`00_Governance/write-authorization-policy.md` and
+`01_Shared_Standards/github/excluded-surface-baseline.md`.
