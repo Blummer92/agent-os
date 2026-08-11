@@ -30,14 +30,12 @@ from agent_os_execution_service.models import (
     ExecutionServiceInvalidationCondition,
     ExecutionServiceRequest,
 )
-from workflow_scheduler.execution.frozen_test_validation_adapter import FrozenTestCommand
 from workflow_scheduler.execution.runtime_configuration import (
+    VALIDATION_ONLY_EXECUTION_MODE,
     ConcreteRuntimeConfiguration,
     ConcreteRuntimeConfigurationError,
-)
-from workflow_scheduler.execution.single_issue_pilot import (
+    FrozenTestCommand,
     SingleIssuePilotInput,
-    VALIDATION_ONLY_EXECUTION_MODE,
 )
 
 from .approval_stage import ApprovalProjectionStageResult

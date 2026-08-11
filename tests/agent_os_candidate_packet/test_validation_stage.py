@@ -41,8 +41,11 @@ def _approved():
     assert result.status is ApprovalProjectionStageStatus.COMPLETE
     projection = replace(
         result.projection,
+        repository="Blummer92/agent-os",
         allowed_files=("08_Tooling/workflow-scheduler/tests/test_concrete_runtime_adapters.py",),
+        forbidden_paths=(".github/workflows",),
         required_tests=(_COMMAND,),
+        projection_id="",
     )
     projection_result = ApprovedExecutionProjectionResult("complete", projection, (), ())
     return replace(
