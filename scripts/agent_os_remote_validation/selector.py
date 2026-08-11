@@ -13,6 +13,7 @@ from .models import (
     MAX_PLAN_STRING_LENGTH,
     MAX_PRE_PR_SERIALIZED_BYTES,
     PRE_PR_BASE_BRANCH,
+    PRE_PR_CANDIDATE_ISSUE_NUMBER,
     PRE_PR_EXECUTION_MODE,
     PRE_PR_PER_COMMAND_TIMEOUT_SECONDS,
     PRE_PR_PROFILE,
@@ -410,20 +411,46 @@ def _verify_pre_pr_subject(subject: object) -> PrePrValidationSubject:
         raise ValueError("pre-PR subject schema name drift")
     if subject.schema_version != PRE_PR_VALIDATION_SUBJECT_SCHEMA_VERSION:
         raise ValueError("pre-PR subject schema version drift")
-    if subject.repository != PRE_PR_REPOSITORY:
-        raise ValueError("pre-PR repository drift")
-    if subject.base_branch != PRE_PR_BASE_BRANCH:
-        raise ValueError("pre-PR base branch drift")
-    if subject.execution_mode != PRE_PR_EXECUTION_MODE:
-        raise ValueError("pre-PR execution mode mismatch")
+    if type(subject.candidate_bound) is not bool:
+        raise ValueError("pre-PR candidate-bound mode drift")
+    if subject.candidate_bound:
+        if (
+            not _bounded_text(subject.repository)
+            or subject.repository.count("/") != 1
+            or any(not part for part in subject.repository.split("/"))
+        ):
+            raise ValueError("pre-PR repository drift")
+        if (
+            not isinstance(subject.issue_number, int)
+            or isinstance(subject.issue_number, bool)
+            or subject.issue_number <= 0
+        ):
+            raise ValueError("pre-PR issue identity drift")
+        if not _bounded_text(subject.base_branch):
+            raise ValueError("pre-PR base branch drift")
+        if not _bounded_text(subject.execution_mode):
+            raise ValueError("pre-PR execution mode mismatch")
+    else:
+        if subject.repository != PRE_PR_REPOSITORY:
+            raise ValueError("pre-PR repository drift")
+        if subject.issue_number != PRE_PR_CANDIDATE_ISSUE_NUMBER:
+            raise ValueError("pre-PR issue identity drift")
+        if subject.base_branch != PRE_PR_BASE_BRANCH:
+            raise ValueError("pre-PR base branch drift")
+        if subject.execution_mode != PRE_PR_EXECUTION_MODE:
+            raise ValueError("pre-PR execution mode mismatch")
     if (
         subject.branch.casefold() in PROTECTED_PRE_PR_REFS
         or subject.branch == subject.base_branch
     ):
         raise ValueError("pre-PR branch drift")
-    if not _SHA.fullmatch(subject.base_sha) or not _SHA.fullmatch(subject.expected_source_sha):
+    if (
+        not _SHA.fullmatch(subject.base_sha)
+        or not _SHA.fullmatch(subject.expected_source_sha)
+        or not _SHA.fullmatch(subject.tested_sha)
+    ):
         raise ValueError("pre-PR SHA drift")
-    if subject.tested_sha != subject.expected_source_sha:
+    if not subject.candidate_bound and subject.tested_sha != subject.expected_source_sha:
         raise ValueError("pre-PR tested SHA drift")
     return subject
 
@@ -480,7 +507,7 @@ def select_pre_pr_validation_plan(
 def serialize_pre_pr_validation_subject(subject: object) -> dict[str, object]:
     """Return deterministic canonical JSON-compatible pre-PR subject data."""
     value = _verify_pre_pr_subject(subject)
-    return {
+    payload: dict[str, object] = {
         "schema_name": value.schema_name,
         "schema_version": value.schema_version,
         "repository": value.repository,
@@ -500,6 +527,54 @@ def serialize_pre_pr_validation_subject(subject: object) -> dict[str, object]:
         "implementation_contract_fingerprint": value.implementation_contract_fingerprint,
         "execution_mode": value.execution_mode,
     }
+    if value.candidate_bound:
+        payload["candidate_bound"] = True
+    return payload
+
+
+def deserialize_pre_pr_validation_subject(payload: object) -> PrePrValidationSubject:
+    """Reconstruct one canonical pre-PR subject and rerun constructor invariants."""
+    if type(payload) is not dict:
+        raise TypeError("payload must be an exact dictionary")
+    candidate_bound = payload.get("candidate_bound", False)
+    if "candidate_bound" in payload:
+        if candidate_bound is not True:
+            raise TypeError("candidate_bound must be exactly true when present")
+    serialized_fields = {
+        "schema_name",
+        "schema_version",
+        "repository",
+        "issue_number",
+        "invocation_id",
+        "base_branch",
+        "base_sha",
+        "branch",
+        "expected_source_sha",
+        "tested_sha",
+        "allowed_files",
+        "forbidden_paths",
+        "required_command_identities",
+        "approval_id",
+        "approval_revision",
+        "projection_id",
+        "implementation_contract_fingerprint",
+        "execution_mode",
+    }
+    expected_fields = serialized_fields | ({"candidate_bound"} if candidate_bound else set())
+    if set(payload) != expected_fields:
+        raise ValueError("pre-PR subject payload fields drift")
+    tuple_fields = {
+        "allowed_files",
+        "forbidden_paths",
+        "required_command_identities",
+    }
+    values: dict[str, object] = {}
+    for key, value in payload.items():
+        if key == "candidate_bound":
+            continue
+        values[key] = tuple(value) if key in tuple_fields and type(value) is list else value
+    values["candidate_bound"] = candidate_bound
+    return PrePrValidationSubject(**values)  # type: ignore[arg-type]
 
 
 def pre_pr_validation_subject_id(subject: object) -> str:

@@ -122,6 +122,7 @@ from .provenance import (
 )
 from .selector import (
     compute_command_set_digest,
+    deserialize_pre_pr_validation_subject,
     load_rule_map,
     pre_pr_validation_plan_id,
     pre_pr_validation_subject_id,
@@ -224,6 +225,7 @@ __all__ = [
     "build_validation_evidence_bundle",
     "compute_command_set_digest",
     "compute_evidence_summary_id",
+    "deserialize_pre_pr_validation_subject",
     "dispatch_decision_id",
     "evaluate_advisory_pre_pr_evidence",
     "evaluate_dispatch_decision",
