@@ -1,10 +1,9 @@
 """Pure-local pre-PR validation packet preparation for AOS-AUTO1E (#754).
 
 This stage consumes only the already-complete #753 approval/projection result and
-explicit immutable candidate runtime inputs.  It reuses the canonical
-candidate-bound pre-PR validation subject and selector introduced by #1030.  It
-never imports the execution service or Workflow Scheduler, never runs a command,
-and never creates execution authority.
+explicit candidate/runtime evidence. It reuses the canonical candidate-bound
+pre-PR validation subject and selector introduced by #1030. It never runs a
+command, invokes a Scheduler lifecycle, or creates execution authority.
 """
 
 from __future__ import annotations
@@ -14,7 +13,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal
 
-from scripts.agent_os_execution_capabilities import RepositoryIdentity
+from scripts.agent_os_execution_capabilities import RepositoryIdentity, RepositoryStateEvidence
 from scripts.agent_os_remote_validation import (
     PrePrValidationPlan,
     PrePrValidationSubject,
@@ -41,9 +40,17 @@ class ValidationStageDisposition(str, Enum):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CandidateRuntimeInputs:
-    """Explicit candidate/runtime evidence; no field grants execution authority."""
+    """Explicit candidate/runtime evidence; no field grants execution authority.
+
+    Runtime-only values are carried here so ``execution_packet_stage`` can bind
+    the canonical execution-service request and #1032 runtime-configuration
+    seam without asking a caller to copy identities between intermediate
+    objects. The evidence IDs are prior immutable evidence references; this
+    stage never manufactures validation outcomes.
+    """
 
     repository_identity: RepositoryIdentity
+    repository_state_evidence: RepositoryStateEvidence
     issue_number: int
     invocation_id: str
     candidate_branch: str
@@ -52,6 +59,14 @@ class CandidateRuntimeInputs:
     evaluator_sha: str
     expected_changed_paths: tuple[str, ...]
     required_tests: tuple[str, ...]
+    created_at: str
+    expires_at: str
+    evaluated_at: str
+    repository_root: str
+    workspace_parent: str
+    validation_bundle_id: str
+    advisory_result_id: str
+    advisory_render_id: str
     request_revision: int = 1
     canonical_owner: str = "integration-manager"
     requesting_actor: str = "github-service-agent"
@@ -59,7 +74,7 @@ class CandidateRuntimeInputs:
     inspected_byte_limit: int = 50_000_000
     per_command_timeout_seconds: int = 30
     total_timeout_seconds: int = 300
-    max_output_bytes: int = 1_048_576
+    max_output_bytes: int = 65_536
     runtime_capability_available: bool = True
     execution_authorization_present: bool = False
     execution_authorized: Literal[False] = field(default=False, init=False)
@@ -70,6 +85,10 @@ class CandidateRuntimeInputs:
     def __post_init__(self) -> None:
         if type(self.repository_identity) is not RepositoryIdentity:
             raise TypeError("repository_identity must be exact RepositoryIdentity")
+        if type(self.repository_state_evidence) is not RepositoryStateEvidence:
+            raise TypeError("repository_state_evidence must be exact RepositoryStateEvidence")
+        if self.repository_state_evidence.repository_identity != self.repository_identity:
+            raise ValueError("repository_state_evidence identity must match repository_identity")
         if type(self.issue_number) is not int or self.issue_number <= 0:
             raise TypeError("issue_number must be a positive exact integer")
         if type(self.request_revision) is not int or self.request_revision <= 0:
@@ -77,6 +96,14 @@ class CandidateRuntimeInputs:
         for name in (
             "invocation_id",
             "candidate_branch",
+            "created_at",
+            "expires_at",
+            "evaluated_at",
+            "repository_root",
+            "workspace_parent",
+            "validation_bundle_id",
+            "advisory_result_id",
+            "advisory_render_id",
             "canonical_owner",
             "requesting_actor",
         ):
@@ -103,8 +130,12 @@ class CandidateRuntimeInputs:
             value = getattr(self, name)
             if type(value) is not int or value <= 0:
                 raise TypeError(f"{name} must be a positive exact integer")
-        if self.per_command_timeout_seconds > self.total_timeout_seconds:
-            raise ValueError("per-command timeout cannot exceed total timeout")
+        if self.per_command_timeout_seconds > 30:
+            raise ValueError("per-command timeout exceeds canonical 30-second ceiling")
+        if self.total_timeout_seconds > 300:
+            raise ValueError("total timeout exceeds canonical 300-second ceiling")
+        if self.max_output_bytes > 65_536:
+            raise ValueError("max_output_bytes exceeds canonical runtime ceiling")
         if type(self.runtime_capability_available) is not bool:
             raise TypeError("runtime_capability_available must be exact bool")
         if type(self.execution_authorization_present) is not bool:
@@ -184,6 +215,8 @@ def prepare_validation_stage(
         return _blocked("evaluator-sha-mismatch")
     if candidate_runtime_inputs.required_tests != required_tests:
         return _blocked("required-tests-mismatch")
+    if candidate_runtime_inputs.repository_state_evidence.tested_sha != tested_sha:
+        return _blocked("repository-evidence-tested-sha-mismatch")
     if any(path not in allowed_files for path in candidate_runtime_inputs.expected_changed_paths):
         return _blocked("expected-changed-paths-outside-allowlist")
 
