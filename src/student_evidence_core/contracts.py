@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 import hashlib
 import json
+import math
 from typing import Any
 
 MAX_TEXT = 512
@@ -73,7 +74,13 @@ def canonical_payload(value: Any) -> str:
     """Return deterministic JSON for supported immutable contract values."""
     if hasattr(value, "__dataclass_fields__"):
         value = asdict(value)
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
 
 
 def fingerprint(value: Any) -> str:
@@ -124,7 +131,7 @@ class EvidenceProvenance:
             if type(self.confidence) not in (int, float) or isinstance(self.confidence, bool):
                 raise ContractError("confidence:invalid-type")
             confidence = float(self.confidence)
-            if confidence < 0.0 or confidence > 1.0:
+            if not math.isfinite(confidence) or confidence < 0.0 or confidence > 1.0:
                 raise ContractError("confidence:out-of-range")
             object.__setattr__(self, "confidence", confidence)
         if not isinstance(self.trust, EvidenceTrust):
@@ -224,7 +231,15 @@ class TeacherDecision:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "proposal_id", _text(self.proposal_id, "proposal_id"))
-        if self.decision not in (ProposalState.ACCEPTED, ProposalState.CORRECTED, ProposalState.REJECTED):
+        if (
+            not isinstance(self.decision, ProposalState)
+            or self.decision
+            not in (
+                ProposalState.ACCEPTED,
+                ProposalState.CORRECTED,
+                ProposalState.REJECTED,
+            )
+        ):
             raise ContractError("decision:invalid")
         object.__setattr__(self, "decided_by", _text(self.decided_by, "decided_by"))
         object.__setattr__(self, "decision_revision", _text(self.decision_revision, "decision_revision"))
