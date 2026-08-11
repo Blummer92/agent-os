@@ -115,3 +115,81 @@ def test_excluded_surface_baseline_still_contains_core_stops() -> None:
         "irreversible actions",
     ):
         assert boundary in text
+
+
+def test_orchestrator_requires_live_execution_surface_capability_preflight() -> None:
+    preflight = section(ORCHESTRATOR, "Execution-Surface Capability Preflight")
+    for phrase in (
+        "classify the exact next action",
+        "current execution-surface capability evidence",
+        "connected GitHub surface directly",
+        "environment-health evidence",
+        "Do not assume `git`, `gh`, GitHub authentication",
+        "existing executor-route semantics from #918",
+        "reacquire capability evidence and recompute the route",
+        "capability-mismatch evidence",
+        "route change never widens authority",
+        "no capable authorized route exists",
+    ):
+        assert phrase in preflight
+
+
+def test_capability_preflight_does_not_create_new_execution_or_authority_systems() -> None:
+    preflight = section(ORCHESTRATOR, "Execution-Surface Capability Preflight")
+    for phrase in (
+        "does not define a second route selector",
+        "runner",
+        "capability registry",
+        "GitHub client",
+        "authorization framework",
+        "cannot manufacture product, connector, CLI, authentication, network, runner, or process capabilities",
+    ):
+        assert phrase in preflight
+    assert "Use an external coding-agent fallback only when the existing route contract permits it" in preflight
+    assert "Do not silently substitute an unavailable explicitly selected surface" in preflight
+
+
+def test_orchestrator_fixtures_cover_capability_routing_and_reroute_boundaries() -> None:
+    connector = section(ORCHESTRATOR_TESTS, "Test 20 - Connector-Native Capability Preflight")
+    assert "live execution-surface capability preflight" in connector
+    assert "existing #918 route semantics" in connector
+    assert "connector-native route" in connector
+
+    runner = section(ORCHESTRATOR_TESTS, "Test 21 - Runtime Work Routes To A Capable Governed Runner")
+    assert "environment-health evidence" in runner
+    assert "governed runner" in runner
+    assert "does not expand existing authorization" in runner
+
+    missing_gh = section(ORCHESTRATOR_TESTS, "Test 22 - Missing Local Gh Recomputes Instead Of Failing The Issue")
+    for phrase in (
+        "local `gh` unavailable",
+        "capability mismatch",
+        "does not classify the governing issue or implementation as defective",
+        "reacquires capability evidence",
+        "recomputes the existing executor route",
+    ):
+        assert phrase in missing_gh
+
+    fallback = section(ORCHESTRATOR_TESTS, "Test 23 - Permitted External Fallback Uses Compact Handoff")
+    assert "external fallback" in fallback
+    assert "one compact #905 handoff" in fallback
+    assert "does not create a second routing framework" in fallback
+
+    no_route = section(ORCHESTRATOR_TESTS, "Test 24 - No Capable Authorized Route Requires Human Decision")
+    assert "human decision" in no_route
+    assert "capability/authorization reason" in no_route
+
+    explicit = section(ORCHESTRATOR_TESTS, "Test 25 - Explicit Surface Selection Is Respected Without Silent Substitution")
+    assert "explicitly selects an execution surface" in explicit
+    assert "never silently substitutes another surface" in explicit
+
+    authority = section(ORCHESTRATOR_TESTS, "Test 26 - Capability Reroute Does Not Widen Authority")
+    for phrase in (
+        "preserves the existing authorization ceiling",
+        "never infers merge",
+        "workflow/protected-setting",
+        "credential/IAM",
+        "production",
+        "external-write",
+    ):
+        assert phrase in authority
