@@ -25,7 +25,8 @@ unit-alignment authority.
 - Visual Asset Library reconciliation uses stable `asset_id` plus exact verified `drive_file_id`.
 - Icon System reconciliation uses the exact icon name plus exact source/Drive asset link supplied by upstream; filenames alone are never treated as identity.
 - A create with an ambiguous transient outcome reconciles before any further create attempt.
-- Successful create/update/reconciliation requires exact readback of identity and intended values.
+- Successful create and update require exact page readback of identity and intended values.
+- Reconciliation of an already-matching record requires exact identity and intended-value agreement in the returned search evidence; an ambiguous create is reconciled with exact page readback.
 - If the Visual Asset Library succeeds but a required Icon System write fails, the coordinator returns `PARTIAL_REPAIR_REQUIRED`; retry reconciles the completed destination before attempting the incomplete destination.
 - Rate-limit and transient retries are bounded; returned errors are sanitized reason codes.
 
