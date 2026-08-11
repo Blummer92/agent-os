@@ -208,3 +208,211 @@ def test_verify_repo_state_script_remains_callable() -> None:
         capture_output=True,
     )
     assert result.returncode in (0, 2)
+
+
+# --- #972 additive runtime evidence ----------------------------------------
+
+
+def _load_health_contract() -> dict:
+    namespace = __import__("runpy").run_path(str(HEALTH_SCRIPT))
+    return namespace["build_evidence"].__globals__
+
+
+def _stub_health_checks(health: dict, monkeypatch) -> None:
+    monkeypatch.setitem(
+        health,
+        "check_repository_identity",
+        lambda _root: {"name": "repository-identity", "passed": True, "detail": {}},
+    )
+    monkeypatch.setitem(
+        health,
+        "check_checkout_identity",
+        lambda _root: {"name": "checkout-identity", "passed": True, "detail": {}},
+    )
+    monkeypatch.setitem(
+        health,
+        "check_tooling",
+        lambda _root: {
+            "name": "tooling",
+            "passed": True,
+            "detail": {
+                "git": {"available": True, "state": "available", "version": "git 2"},
+                "pip": {"available": True, "state": "available", "version": "pip 25"},
+                "gh": {"available": True, "state": "available", "version": "gh 2"},
+                "python": {"available": True, "state": "available", "version": "3.11"},
+            },
+        },
+    )
+    monkeypatch.setitem(
+        health,
+        "check_process_execution",
+        lambda: {
+            "name": "process-execution",
+            "passed": True,
+            "detail": {"state": "available", "mechanism": "python-subprocess"},
+        },
+    )
+    monkeypatch.setitem(
+        health,
+        "check_disk_space",
+        lambda _root, _minimum: {"name": "disk-space", "passed": True, "detail": {}},
+    )
+    monkeypatch.setitem(
+        health,
+        "check_validation_commands",
+        lambda _root: {"name": "validation-commands", "passed": True, "detail": {}},
+    )
+    monkeypatch.setitem(
+        health,
+        "check_github_auth_capability",
+        lambda: {
+            "name": "github-auth-capability",
+            "passed": True,
+            "detail": {"capable": True, "state": "authenticated", "source": "gh-cli"},
+        },
+    )
+
+
+def test_972_evidence_id_binds_surface_and_freshness(tmp_path: Path, monkeypatch) -> None:
+    health = _load_health_contract()
+    _stub_health_checks(health, monkeypatch)
+    first = health["build_evidence"](
+        tmp_path,
+        "local-only",
+        500,
+        execution_surface_id="codespace:test-a",
+        observed_at="2026-08-09T15:00:00Z",
+    )
+    same = health["build_evidence"](
+        tmp_path,
+        "local-only",
+        500,
+        execution_surface_id="codespace:test-a",
+        observed_at="2026-08-09T15:00:00Z",
+    )
+    newer = health["build_evidence"](
+        tmp_path,
+        "local-only",
+        500,
+        execution_surface_id="codespace:test-a",
+        observed_at="2026-08-09T15:00:01Z",
+    )
+    other_surface = health["build_evidence"](
+        tmp_path,
+        "local-only",
+        500,
+        execution_surface_id="codespace:test-b",
+        observed_at="2026-08-09T15:00:00Z",
+    )
+    assert first["environment_health_evidence_id"] == same["environment_health_evidence_id"]
+    assert first["environment_health_evidence_id"] != newer["environment_health_evidence_id"]
+    assert first["environment_health_evidence_id"] != other_surface["environment_health_evidence_id"]
+    assert health["evidence_matches_surface"](first, "codespace:test-a") is True
+    assert health["evidence_matches_surface"](first, "codespace:test-b") is False
+    assert all(value is False for value in first["authority"].values())
+
+
+def test_972_surface_and_timestamp_validation_fail_closed(tmp_path: Path, monkeypatch) -> None:
+    health = _load_health_contract()
+    monkeypatch.delenv("AGENT_OS_EXECUTION_SURFACE_ID", raising=False)
+    monkeypatch.setenv("CODESPACE_NAME", "teacher-dev-42")
+    assert health["_execution_surface_id"](tmp_path) == "codespace:teacher-dev-42"
+    try:
+        health["_execution_surface_id"](tmp_path, "bad surface id")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("invalid surface ID must fail closed")
+    assert health["_canonical_observed_at"]("2026-08-09T15:00:00Z") == "2026-08-09T15:00:00Z"
+    for invalid in ("2026-08-09 15:00:00", "2026-99-99T99:99:99Z"):
+        try:
+            health["_canonical_observed_at"](invalid)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"invalid timestamp accepted: {invalid}")
+
+
+def test_972_tool_states_versions_and_process_execution_are_bounded(monkeypatch) -> None:
+    health = _load_health_contract()
+    monkeypatch.setattr(health["shutil"], "which", lambda _name: "/fake/tool")
+    monkeypatch.setitem(health, "_run", lambda _cmd, cwd=None: (True, "v" * 500))
+    tooling = health["check_tooling"](ROOT)
+    assert tooling["detail"]["gh"]["state"] == "available"
+    assert tooling["detail"]["gh"]["version"] == "v" * health["MAX_TOOL_VERSION_CHARS"]
+    process = health["check_process_execution"]()
+    assert process["passed"] is True
+    assert process["detail"]["state"] == "available"
+
+    monkeypatch.setitem(health, "_run", lambda _cmd, cwd=None: (False, "timeout"))
+    tooling = health["check_tooling"](ROOT)
+    assert tooling["detail"]["gh"]["state"] == "unknown"
+    assert tooling["detail"]["gh"]["available"] is False
+    process = health["check_process_execution"]()
+    assert process["passed"] is False
+    assert process["detail"]["state"] == "unknown"
+
+
+def test_972_missing_gh_and_auth_probe_fail_closed(monkeypatch) -> None:
+    health = _load_health_contract()
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setattr(health["shutil"], "which", lambda _name: None)
+    tooling = health["check_tooling"](ROOT)
+    assert tooling["detail"]["gh"] == {
+        "available": False,
+        "state": "unavailable",
+        "version": None,
+    }
+    auth = health["check_github_auth_capability"]()
+    assert auth["detail"] == {"capable": False, "state": "unknown", "source": "none"}
+
+
+def test_972_github_auth_distinguishes_unauthenticated_and_unknown(monkeypatch) -> None:
+    health = _load_health_contract()
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setattr(health["shutil"], "which", lambda _name: "/fake/gh")
+    monkeypatch.setattr(
+        health["subprocess"],
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 1, "", "not authenticated"),
+    )
+    auth = health["check_github_auth_capability"]()
+    assert auth["detail"] == {
+        "capable": False,
+        "state": "unauthenticated",
+        "source": "gh-cli",
+    }
+
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(args[0], health["SUBPROCESS_TIMEOUT_SECONDS"])
+
+    monkeypatch.setattr(health["subprocess"], "run", timeout)
+    auth = health["check_github_auth_capability"]()
+    assert auth["detail"] == {"capable": False, "state": "unknown", "source": "gh-cli"}
+
+
+def test_972_contract_bookkeeping_and_boundaries() -> None:
+    runbook = RUNBOOK.read_text(encoding="utf-8")
+    for phrase in (
+        "execution_surface_id",
+        "observed_at",
+        "environment_health_evidence_id",
+        "process-execution",
+        "Issue #918",
+    ):
+        assert phrase in runbook
+    module_map = (ROOT / "04_Registry" / "module-version-map.md").read_text(encoding="utf-8")
+    assert "| Agent OS Codespaces Profile | 0.2.0 |" in module_map
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert "Agent OS Codespaces Profile from `0.1.0` to `0.2.0` for #972" in changelog
+    core = HEALTH_SCRIPT.read_text(encoding="utf-8").lower()
+    for forbidden in (
+        "google drive",
+        "notion api",
+        "chrome devtools",
+        "connector discovery",
+        "provider discovery",
+    ):
+        assert forbidden not in core

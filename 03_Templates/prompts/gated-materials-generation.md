@@ -17,13 +17,14 @@ Notion fields for this lesson:
 - Modeling Readiness
 - Evidence Target
 - Blockers
+- Production Authorized
 - Gate Status
 - Route To
 
-If `Gate Status` is not PASS, stop immediately. Name the blocker, route to the
+If `Gate Status` is not PASS or `Production Authorized` is not `Yes`, stop immediately. Name the blocker, route to the
 owner in `Route To`, and do not draft a partial product.
 
-If `Gate Status` is PASS, generate only the requested material from approved
+If `Gate Status` is PASS and `Production Authorized` is `Yes`, generate only the requested material from approved
 source material, approved modeling, approved evidence, and approved templates.
 Use approved asset-library language before creating new equivalent language.
 
@@ -56,4 +57,4 @@ Output:
 
 ## Version
 
-0.1.1
+0.1.2

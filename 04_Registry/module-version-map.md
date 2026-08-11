@@ -35,7 +35,7 @@ versions change only when the module's standards or contract changes.
 | LP Pacing Handoff Contract | 0.1.0 |
 | LP Reason Code Catalog | 0.1.0 |
 | LP Notion Working Layer | 0.1.0 |
-| Agent OS Codespaces Profile | 0.1.0 |
+| Agent OS Codespaces Profile | 0.2.0 |
 | Execution Checkpoint Contract | 0.1.0 |
 | Issue Quality Taxonomy | 0.1.0 |
 
