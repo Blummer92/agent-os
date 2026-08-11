@@ -99,18 +99,29 @@ class PrePrValidationSubject:
     projection_id: str
     implementation_contract_fingerprint: str
     execution_mode: str = PRE_PR_EXECUTION_MODE
+    candidate_bound: bool = False
 
     def __post_init__(self) -> None:
         _require_exact_value("schema_name", self.schema_name, PRE_PR_VALIDATION_SUBJECT_SCHEMA_NAME)
         _require_exact_value(
             "schema_version", self.schema_version, PRE_PR_VALIDATION_SUBJECT_SCHEMA_VERSION
         )
-        _require_exact_value("repository", self.repository, PRE_PR_REPOSITORY)
-        _require_exact_value("base_branch", self.base_branch, PRE_PR_BASE_BRANCH)
-        _require_exact_value("execution_mode", self.execution_mode, PRE_PR_EXECUTION_MODE)
+        if type(self.candidate_bound) is not bool:
+            raise TypeError("candidate_bound must be an exact boolean")
         _require_positive_int("issue_number", self.issue_number)
-        if self.issue_number != PRE_PR_CANDIDATE_ISSUE_NUMBER:
-            raise ValueError("issue_number must be the bound validation-only candidate issue")
+        if self.candidate_bound:
+            _require_exact_str("repository", self.repository)
+            parts = self.repository.split("/")
+            if len(parts) != 2 or not all(parts):
+                raise ValueError("repository must use canonical owner/repository syntax")
+            _validate_ref("base_branch", self.base_branch)
+            _validate_identifier("execution_mode", self.execution_mode)
+        else:
+            _require_exact_value("repository", self.repository, PRE_PR_REPOSITORY)
+            _require_exact_value("base_branch", self.base_branch, PRE_PR_BASE_BRANCH)
+            _require_exact_value("execution_mode", self.execution_mode, PRE_PR_EXECUTION_MODE)
+            if self.issue_number != PRE_PR_CANDIDATE_ISSUE_NUMBER:
+                raise ValueError("issue_number must be the bound validation-only candidate issue")
         _validate_identifier("invocation_id", self.invocation_id)
         _validate_identifier("approval_id", self.approval_id)
         _validate_identifier("projection_id", self.projection_id)
@@ -118,7 +129,7 @@ class PrePrValidationSubject:
         _validate_sha40("base_sha", self.base_sha)
         _validate_sha40("expected_source_sha", self.expected_source_sha)
         _validate_sha40("tested_sha", self.tested_sha)
-        if self.tested_sha != self.expected_source_sha:
+        if not self.candidate_bound and self.tested_sha != self.expected_source_sha:
             raise ValueError("tested_sha must match expected_source_sha")
         _validate_sha256(
             "implementation_contract_fingerprint", self.implementation_contract_fingerprint
