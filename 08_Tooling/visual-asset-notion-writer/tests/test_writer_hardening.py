@@ -103,8 +103,9 @@ def test_operation_keys_are_delimiter_safe():
     second = asset_request(asset_id="a", drive_file_id="b\nc")
     assert operation_key_for(first) != operation_key_for(second)
 
-    first_icon = icon_request(icon_name="a\nb", source_asset_link="https://example.com/c")
-    second_icon = icon_request(icon_name="a", source_asset_link="https://example.com/b%0Ac")
+    # These adjacent hashed fields collide under newline-joined serialization.
+    first_icon = icon_request(drive_operation_key="a\nhttps://example.com/b", source_asset_link="https://example.com/c")
+    second_icon = icon_request(drive_operation_key="a", source_asset_link="https://example.com/b\nhttps://example.com/c")
     assert icon_operation_key_for(first_icon) != icon_operation_key_for(second_icon)
 
 
