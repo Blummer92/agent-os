@@ -79,7 +79,7 @@ Save coverage HTML as artifact:
 
 ```yaml
 - name: Upload coverage report
-  uses: actions/upload-artifact@v3
+  uses: actions/upload-artifact@v6
   with:
     name: coverage-report
     path: htmlcov/

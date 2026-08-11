@@ -26,10 +26,10 @@ jobs:
         python-version: ['3.9', '3.10', '3.11', '3.12']
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: ${{ matrix.python-version }}
         cache: "pip"
@@ -83,7 +83,7 @@ Save test results:
 ```yaml
 - name: Upload test results
   if: always()
-  uses: actions/upload-artifact@v3
+  uses: actions/upload-artifact@v6
   with:
     name: test-results
     path: test-results.xml
