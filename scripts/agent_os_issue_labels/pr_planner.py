@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 _MANAGED_FAMILIES: dict[str, tuple[str, ...]] = {
@@ -26,17 +26,21 @@ class PullRequestLabelEvidence:
     current_labels: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if not self.repository.strip() or "/" not in self.repository:
-            raise ValueError("repository must be owner/name")
+        repository = self.repository.strip()
+        if repository.count("/") != 1 or any(not part for part in repository.split("/")):
+            raise ValueError("repository must be exact owner/name")
+        head_sha = self.head_sha.lower()
+        if len(head_sha) != 40 or any(c not in "0123456789abcdef" for c in head_sha):
+            raise ValueError("head_sha must be a full 40-character hexadecimal commit identity")
         if self.pr_number < 1:
             raise ValueError("pr_number must be positive")
-        if len(self.head_sha) < 7 or any(c not in "0123456789abcdef" for c in self.head_sha.lower()):
-            raise ValueError("head_sha must be a hexadecimal commit identity")
         if self.validation_state not in {"pending", "failing", "green"}:
             raise ValueError("validation_state must be pending, failing, or green")
         if self.blocking_review_threads < 0:
             raise ValueError("blocking_review_threads cannot be negative")
         normalized = tuple(sorted(set(label.strip() for label in self.current_labels if label.strip())))
+        object.__setattr__(self, "repository", repository)
+        object.__setattr__(self, "head_sha", head_sha)
         object.__setattr__(self, "current_labels", normalized)
 
 
@@ -51,8 +55,8 @@ class PullRequestLabelPlan:
     labels_to_remove: tuple[str, ...]
     unmanaged_labels_preserved: tuple[str, ...]
     reason_codes: tuple[str, ...]
-    external_write_authorized: bool = False
-    side_effects_performed: bool = False
+    external_write_authorized: bool = field(default=False, init=False)
+    side_effects_performed: bool = field(default=False, init=False)
 
 
 def managed_label_families() -> dict[str, tuple[str, ...]]:
@@ -95,7 +99,7 @@ def plan_pull_request_labels(evidence: PullRequestLabelEvidence) -> PullRequestL
 
 
 def plan_matches_head(plan: PullRequestLabelPlan, current_head_sha: str) -> bool:
-    return plan.head_sha == current_head_sha
+    return plan.head_sha == current_head_sha.lower()
 
 
 def _lifecycle_label(evidence: PullRequestLabelEvidence) -> str:
