@@ -31,6 +31,14 @@ from .issue_create import (
     sanitize_diagnostic_text,
 )
 from .planner import LabelApplicationPlan, plan_label_application
+from .pr_reconciler import (
+    BatchPullRequestLabelReconciliationResult,
+    LivePullRequestSnapshot,
+    PullRequestLabelProvider,
+    PullRequestLabelReconciliationResult,
+    reconcile_pull_request_batch,
+    reconcile_pull_request_labels,
+)
 from .validation import (
     DraftExitCode,
     DraftReasonCode,
@@ -42,6 +50,7 @@ from .validation import (
 )
 
 __all__ = [
+    "BatchPullRequestLabelReconciliationResult",
     "ConfirmationProvider",
     "DraftExitCode",
     "DraftReasonCode",
@@ -59,7 +68,10 @@ __all__ = [
     "IssueDraftResult",
     "IssueDraftValidationResult",
     "LabelApplicationPlan",
+    "LivePullRequestSnapshot",
     "MutationState",
+    "PullRequestLabelProvider",
+    "PullRequestLabelReconciliationResult",
     "SubprocessGhRunner",
     "build_issue_create_argv",
     "build_issue_draft",
@@ -70,6 +82,8 @@ __all__ = [
     "issue_create_result_to_dict",
     "plan_issue_creation",
     "plan_label_application",
+    "reconcile_pull_request_batch",
+    "reconcile_pull_request_labels",
     "render_draft_preview",
     "render_issue_create_result",
     "render_validation_preview",
