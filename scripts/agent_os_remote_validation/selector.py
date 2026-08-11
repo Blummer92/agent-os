@@ -537,8 +537,32 @@ def deserialize_pre_pr_validation_subject(payload: object) -> PrePrValidationSub
     if type(payload) is not dict:
         raise TypeError("payload must be an exact dictionary")
     candidate_bound = payload.get("candidate_bound", False)
-    if type(candidate_bound) is not bool:
-        raise TypeError("candidate_bound must be an exact boolean")
+    if "candidate_bound" in payload:
+        if candidate_bound is not True:
+            raise TypeError("candidate_bound must be exactly true when present")
+    serialized_fields = {
+        "schema_name",
+        "schema_version",
+        "repository",
+        "issue_number",
+        "invocation_id",
+        "base_branch",
+        "base_sha",
+        "branch",
+        "expected_source_sha",
+        "tested_sha",
+        "allowed_files",
+        "forbidden_paths",
+        "required_command_identities",
+        "approval_id",
+        "approval_revision",
+        "projection_id",
+        "implementation_contract_fingerprint",
+        "execution_mode",
+    }
+    expected_fields = serialized_fields | ({"candidate_bound"} if candidate_bound else set())
+    if set(payload) != expected_fields:
+        raise ValueError("pre-PR subject payload fields drift")
     tuple_fields = {
         "allowed_files",
         "forbidden_paths",
