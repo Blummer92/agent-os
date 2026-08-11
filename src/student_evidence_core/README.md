@@ -19,4 +19,4 @@ The package is intentionally compatible with existing `visual_asset_sync`, `inst
 
 The package performs no network, filesystem, database, Notion, Drive, Microsoft 365, Adobe, OCR, model, or external-system access. All authority fields in `ProjectionRecord` are required to remain false. The contracts grant no grading, curriculum, movement, publication, or external-write authority.
 
-Rollback is repository-local: revert `src/student_evidence_core/` and its focused tests. No external cleanup is required.
+Rollback is repository-local: revert `src/student_evidence_core/contracts.py`, `src/student_evidence_core/__init__.py`, `src/student_evidence_core/README.md`, and `tests/test_student_evidence_core.py`. No external cleanup is required.
