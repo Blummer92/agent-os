@@ -30,8 +30,11 @@ Before treating a material request as new production, classify it using `product
 A direct teacher request to revise an existing canonical classroom working file may use the Teacher-Directed Revision Lane when every bounded-lane condition passes. The explicit request authorizes the specified artifact edit and does not require `Production Authorized: Yes` merely to revise the existing file.
 That authority does not permit a template/master edit, new artifact, new curriculum or assessment decision, unapproved source or asset, governed-field change, sharing/permission or destination change, publication, release, or readiness/approval decision. If any boundary is crossed, use the applicable structural-revision or new-production gate instead.
 ## Vocabulary Integration Gate
-Before adding vocabulary to a slide, worksheet, handout, or assessment, inherit the CLS2 and CLS4 decisions. Use only confirmed entries and preserve teacher language, student language, material safety, and assessment eligibility as separate fields. Student-facing material requires `Slide/Worksheet Safe? = Yes`.
-Assessment language requires explicit instruction or guided or independent practice; exposure or appearance in material is insufficient.
+Before adding vocabulary to a slide, worksheet, handout, or assessment, inherit the CLS2 and CLS4 decisions. Use only confirmed entries and preserve teacher
+language, student language, material safety, and assessment eligibility as
+separate fields. Student-facing material requires `Slide/Worksheet Safe? = Yes`.
+Assessment language requires explicit instruction or guided or independent
+practice; exposure or appearance in material is insufficient.
 ## Reusable Visual Gate
 Before visual retrieval, start from a validated `MaterialRequirement` and use the governed visual-needs decision. `no-visual-needed` continues with no asset query or image-gap work. `visuals-required` may perform one bounded Visual Asset Library read only when separately authorized, then filters to eligible, human-reviewed candidates and consumes one cohesive visual plan.
 For teacher-language reuse selection, inherit `01_Shared_Standards/instructional-design/visual-asset-picker-standard.md`. The Asset Picker resolves reuse-first selection and preserves selected asset identity/constraints; this workflow consumes that handoff without reinterpreting the teacher's original selection request.
