@@ -87,13 +87,14 @@ def test_pure_configuration_binding_is_deterministic_and_side_effect_free(
 
 
 def test_pure_module_has_no_execution_capable_imports() -> None:
-    tree = ast.parse(PURE_MODULE.read_text(encoding="utf-8"))
-    imports: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imports.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            imports.add(node.module)
+    """Traverse the first-party import closure, not only direct imports."""
+    source_root = SCHEDULER_SRC.resolve()
+    modules: dict[str, Path] = {}
+    for path in source_root.rglob("*.py"):
+        relative = path.relative_to(source_root).with_suffix("")
+        parts = relative.parts
+        module = ".".join(parts[:-1]) if parts[-1] == "__init__" else ".".join(parts)
+        modules[module] = path
 
     forbidden = {
         "subprocess",
@@ -103,7 +104,46 @@ def test_pure_module_has_no_execution_capable_imports() -> None:
         "workflow_scheduler.execution.posix_process_adapter",
         "workflow_scheduler.execution.single_issue_runtime",
     }
-    assert imports.isdisjoint(forbidden)
+
+    def imported_names(module: str, path: Path) -> set[str]:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        names: set[str] = set()
+        package = module.split(".")[:-1]
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                if node.level:
+                    keep = len(package) - node.level + 1
+                    prefix = package[:keep]
+                    suffix = node.module.split(".") if node.module else []
+                    names.add(".".join(prefix + suffix))
+                elif node.module:
+                    names.add(node.module)
+        return names
+
+    queue = ["workflow_scheduler.execution.runtime_configuration"]
+    seen: set[str] = set()
+    all_imports: set[str] = set()
+    while queue:
+        module = queue.pop(0)
+        if module in seen:
+            continue
+        seen.add(module)
+        path = modules.get(module)
+        if path is None:
+            continue
+        imports = imported_names(module, path)
+        all_imports.update(imports)
+        for imported in imports:
+            candidate = imported
+            while candidate and candidate not in modules and "." in candidate:
+                candidate = candidate.rsplit(".", 1)[0]
+            if candidate in modules and candidate not in seen:
+                queue.append(candidate)
+
+    assert all_imports.isdisjoint(forbidden)
+    assert seen.isdisjoint(forbidden)
 
 
 def test_pure_module_exposes_no_runtime_entrypoint_or_adapter_builder() -> None:
