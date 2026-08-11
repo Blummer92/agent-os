@@ -131,6 +131,8 @@ def test_teacher_decision_is_not_machine_proposal_state() -> None:
     assert decision.decision is ProposalState.ACCEPTED
     with pytest.raises(ContractError, match="decision:invalid"):
         TeacherDecision("proposal-1", ProposalState.PROPOSED, "teacher", "rev")
+    with pytest.raises(ContractError, match="decision:invalid"):
+        TeacherDecision("proposal-1", "accepted", "teacher", "rev")  # type: ignore[arg-type]
 
 
 def test_projection_authority_is_always_false() -> None:
@@ -177,6 +179,17 @@ def test_malformed_and_hostile_inputs_fail_closed() -> None:
             EvidenceTrust.UNVERIFIED,
             ReviewState.NOT_REVIEWED,
         )
+    with pytest.raises(ContractError, match="confidence:out-of-range"):
+        EvidenceProvenance(
+            _locator(),
+            "extract",
+            "1",
+            float("nan"),
+            EvidenceTrust.UNVERIFIED,
+            ReviewState.NOT_REVIEWED,
+        )
+    with pytest.raises(ValueError):
+        canonical_payload({"confidence": float("nan")})
 
 
 def test_existing_packages_remain_importable_without_coupling() -> None:
