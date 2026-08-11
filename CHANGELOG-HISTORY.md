@@ -7,3 +7,4 @@ Archived historical changelog content. For current and recent history, see [CHAN
 - Split shared rules by domain.
 - Added canonical agent overlays and specialist overlays.
 - Added registry, templates, examples, archive notes, manifest, and validation report.
+- Added routed dashboard sync combinations to registry guidance.

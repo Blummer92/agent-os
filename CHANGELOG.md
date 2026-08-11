@@ -96,5 +96,4 @@
 - Clarified dashboard sync routing and prevented duplicate standalone Dashboard Sync Agent ownership.
 - Retired Apps Script Sync Test Agent as a standalone canonical agent name.
 - Preserved Apps Script Sync Test Overlay as specialist sync-validation behavior.
-- Added routed dashboard sync combinations to registry guidance.
 Older release history: see [CHANGELOG-HISTORY.md](CHANGELOG-HISTORY.md).
