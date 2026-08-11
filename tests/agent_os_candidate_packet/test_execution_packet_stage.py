@@ -55,6 +55,23 @@ def test_one_call_builds_request_command_plan_and_runtime_configuration(tmp_path
     assert first.side_effects_performed is False
 
 
+def test_expected_path_drift_changes_packet_identities(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    first_inputs = _inputs(tmp_path, approved.projection, repository_evidence)
+    first = prepare_execution_packet(approved, first_inputs)
+
+    second_inputs = replace(first_inputs, expected_changed_paths=())
+    second = prepare_execution_packet(approved, second_inputs)
+
+    assert first.packet_complete is True
+    assert second.packet_complete is True
+    assert first.validation_stage.subject_id != second.validation_stage.subject_id
+    assert first.validation_stage.validation_plan_id != second.validation_stage.validation_plan_id
+    assert first.request_fingerprint != second.request_fingerprint
+    assert first.command_plan_id != second.command_plan_id
+    assert first.runtime_configuration_fingerprint != second.runtime_configuration_fingerprint
+
+
 def test_execution_authorization_presence_changes_disposition_not_authority(tmp_path) -> None:
     approved, repository_evidence = _approved()
     inputs = _inputs(
