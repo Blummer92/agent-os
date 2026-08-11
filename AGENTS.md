@@ -78,9 +78,12 @@ truth records, or irreversible artifacts without explicit approval.
 If a legacy alias maps to a canonical agent, continue normal routing and report the
 alias resolution. If no alias exists, stop and recommend a registry update.
 
-## Required Final Report
-Every implementation or review report must include files changed, tests run,
-docs updated, unresolved blockers, handoff recommendations, and remaining risks.
+## Required Interaction Output
+Use `01_Shared_Standards/global-engineering/agent-interaction-output-standard.md`
+for final-report field ownership, situation-specific presentation profiles,
+progress/evidence labeling, and visible ordering. Do not maintain a competing
+field list in this entry-point file.
+
 For eligible Safe Implementation Lane work, also follow the `Reporting` contract
 in `01_Shared_Standards/github/safe-implementation-lane.md`: actual branch,
 exact-head evidence, rollback, and authorization/excluded-surface confirmation.
