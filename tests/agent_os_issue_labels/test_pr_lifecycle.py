@@ -205,6 +205,28 @@ def test_invalid_invocation_reason_fails_closed():
         reconcile_pull_request_lifecycle(provider, "Blummer92/agent-os", 1038, invocation_reason="merge")
 
 
+@pytest.mark.parametrize("evidence_field", ["caller_operation_evidence", "caller_result_evidence"])
+def test_invalid_caller_evidence_fails_before_provider_reads_or_writes(evidence_field):
+    provider = MutableProvider(snap())
+    kwargs = {
+        "caller_operation_evidence": "operation:1038",
+        "caller_result_evidence": "result:1038",
+        evidence_field: "   ",
+    }
+    with pytest.raises(ValueError, match="caller evidence identifiers"):
+        reconcile_pull_request_lifecycle(
+            provider,
+            "Blummer92/agent-os",
+            1038,
+            invocation_reason="draft-pr-created",
+            dry_run=False,
+            label_write_authorized=True,
+            **kwargs,
+        )
+    assert provider.read_count == 0
+    assert not provider.added and not provider.removed
+
+
 def test_result_preserves_caller_evidence_and_never_grants_lifecycle_authority():
     provider = MutableProvider(snap())
     result = invoke(provider)
