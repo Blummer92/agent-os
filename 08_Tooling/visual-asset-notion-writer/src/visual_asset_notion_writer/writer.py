@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from enum import Enum
 from hashlib import sha256
 from typing import Callable, Protocol, TypeVar
+from urllib.parse import urlsplit
 
 MAX_REFERENCE = 512
 MAX_VALUE = 4000
@@ -245,20 +246,29 @@ class NotionClient(Protocol):
     def fetch_page(self, page_id: str) -> NotionPageEvidence | None: ...
 
 
+def _operation_key_material(parts: tuple[str, ...]) -> bytes:
+    material = bytearray()
+    for part in parts:
+        encoded = part.encode("utf-8")
+        material.extend(len(encoded).to_bytes(8, "big"))
+        material.extend(encoded)
+    return bytes(material)
+
+
 def operation_key_for(request: NotionAssetWriteRequest) -> str:
-    material = "\n".join((request.data_source_id, request.asset_id, request.drive_file_id, request.drive_operation_key))
-    return sha256(material.encode("utf-8")).hexdigest()
+    parts = (request.data_source_id, request.asset_id, request.drive_file_id, request.drive_operation_key)
+    return sha256(_operation_key_material(parts)).hexdigest()
 
 
 def icon_operation_key_for(request: IconSystemWriteRequest) -> str:
-    material = "\n".join((
+    parts = (
         request.data_source_id,
         request.asset_id,
         request.drive_file_id,
         request.drive_operation_key,
         request.source_asset_link,
-    ))
-    return sha256(material.encode("utf-8")).hexdigest()
+    )
+    return sha256(_operation_key_material(parts)).hexdigest()
 
 
 def write_asset(request: NotionAssetWriteRequest, client: NotionClient | None = None, *, sleep: Callable[[float], None] = time.sleep) -> NotionAssetWriteResult:
@@ -318,7 +328,7 @@ def write_asset(request: NotionAssetWriteRequest, client: NotionClient | None = 
                 return _asset_verified(request, key, reconciled[0].page_id, fields, WriteState.RECONCILED_EXISTING, True)
         return _asset_result(request, key, WriteState.AMBIGUOUS_WRITE_RESULT, ("notion-create-outcome-ambiguous",), fields=fields, external=True)
     except Exception:
-        return _asset_result(request, key, WriteState.FAILED, ("notion-create-failed",), fields=fields)
+        return _asset_result(request, key, WriteState.FAILED, ("notion-create-failed",), fields=fields, external=True)
     if not _text(page_id):
         return _asset_result(request, key, WriteState.FAILED, ("notion-create-page-id-invalid",), fields=fields, external=True)
     try:
@@ -389,7 +399,7 @@ def write_icon(request: IconSystemWriteRequest, client: NotionClient | None = No
                 return _icon_verified(request, key, reconciled[0].page_id, fields, WriteState.RECONCILED_EXISTING, True)
         return _icon_result(request, key, WriteState.AMBIGUOUS_WRITE_RESULT, ("notion-icon-create-outcome-ambiguous",), fields=fields, external=True)
     except Exception:
-        return _icon_result(request, key, WriteState.FAILED, ("notion-icon-create-failed",), fields=fields)
+        return _icon_result(request, key, WriteState.FAILED, ("notion-icon-create-failed",), fields=fields, external=True)
     if not _text(page_id):
         return _icon_result(request, key, WriteState.FAILED, ("notion-icon-create-page-id-invalid",), fields=fields, external=True)
     try:
@@ -511,6 +521,8 @@ def _validate_icon_request(request: object) -> str | None:
         return "notion-icon-classification-not-confirmed"
     if not _text(request.icon_name) or not _text(request.source_asset_link):
         return "notion-icon-identity-missing"
+    if not _value_matches_type(request.source_asset_link, "url"):
+        return "notion-icon-source-asset-link-invalid"
     if type(request.bindings) is not tuple or type(request.working_metadata) is not tuple:
         return "notion-invalid-icon-request"
     reason = _validate_bindings(request.bindings, ICON_SYSTEM_WORKING_FIELDS, _ICON_ALLOWED_TYPES)
@@ -658,34 +670,47 @@ def _find_icon_candidates(client: NotionClient, request: IconSystemWriteRequest,
 
 def _combine_candidates(*groups: tuple[NotionPageEvidence, ...]) -> tuple[NotionPageEvidence, ...]:
     combined: dict[str, NotionPageEvidence] = {}
-    for page in (item for group in groups for item in group):
-        if type(page) is not NotionPageEvidence or not _text(page.page_id):
+    for group in groups:
+        if type(group) is not tuple:
             raise ValueError("invalid page evidence")
-        if page.page_id in combined and combined[page.page_id] != page:
-            raise ValueError("conflicting page evidence")
-        combined[page.page_id] = page
+        for page in group:
+            if type(page) is not NotionPageEvidence or not _text(page.page_id):
+                raise ValueError("invalid page evidence")
+            _page_properties(page)
+            if page.page_id in combined and combined[page.page_id] != page:
+                raise ValueError("conflicting page evidence")
+            combined[page.page_id] = page
     return tuple(combined.values())
 
 
 def _anchors_match(page: NotionPageEvidence, request: NotionAssetWriteRequest) -> bool:
-    props = _page_properties(page)
+    try:
+        props = _page_properties(page)
+    except ValueError:
+        return False
     bindings = {b.logical_field: b.property_name for b in request.bindings}
     return props.get(bindings["asset_id"]) == request.asset_id and props.get(bindings["drive_file_id"]) == request.drive_file_id
 
 
 def _icon_anchors_match(page: NotionPageEvidence, request: IconSystemWriteRequest) -> bool:
-    props = _page_properties(page)
+    try:
+        props = _page_properties(page)
+    except ValueError:
+        return False
     bindings = {b.logical_field: b.property_name for b in request.bindings}
     return props.get(bindings["icon_name"]) == request.icon_name and props.get(bindings["source_asset_link"]) == request.source_asset_link
 
 
 def _properties_match(page: NotionPageEvidence, intended: tuple[tuple[str, MetadataValue], ...]) -> bool:
-    props = _page_properties(page)
+    try:
+        props = _page_properties(page)
+    except ValueError:
+        return False
     return all(props.get(name) == value for name, value in intended)
 
 
 def _page_properties(page: NotionPageEvidence) -> dict[str, MetadataValue]:
-    if type(page.properties) is not tuple:
+    if type(page) is not NotionPageEvidence or type(page.properties) is not tuple:
         raise ValueError("invalid page properties")
     props: dict[str, MetadataValue] = {}
     for item in page.properties:
@@ -722,7 +747,12 @@ def _value_matches_type(value: MetadataValue, property_type: str) -> bool:
         return type(value) is bool
     if property_type == "multi_select":
         return type(value) is tuple and all(_text(v) for v in value) and len(set(value)) == len(value)
-    return type(value) is str and bool(value.strip()) and len(value) <= MAX_VALUE
+    if type(value) is not str or not value.strip() or len(value) > MAX_VALUE:
+        return False
+    if property_type == "url":
+        parsed = urlsplit(value.strip())
+        return parsed.scheme.casefold() in {"http", "https"} and bool(parsed.netloc)
+    return True
 
 
 def _text(value: object) -> bool:
