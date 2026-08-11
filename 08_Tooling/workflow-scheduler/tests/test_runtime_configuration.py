@@ -113,13 +113,21 @@ def test_pure_module_has_no_execution_capable_imports() -> None:
             if isinstance(node, ast.Import):
                 names.update(alias.name for alias in node.names)
             elif isinstance(node, ast.ImportFrom):
+                imported_module = ""
                 if node.level:
                     keep = len(package) - node.level + 1
                     prefix = package[:keep]
                     suffix = node.module.split(".") if node.module else []
-                    names.add(".".join(prefix + suffix))
+                    imported_module = ".".join(prefix + suffix)
                 elif node.module:
-                    names.add(node.module)
+                    imported_module = node.module
+                if imported_module:
+                    names.add(imported_module)
+                    names.update(
+                        f"{imported_module}.{alias.name}"
+                        for alias in node.names
+                        if alias.name != "*"
+                    )
         return names
 
     queue = ["workflow_scheduler.execution.runtime_configuration"]
