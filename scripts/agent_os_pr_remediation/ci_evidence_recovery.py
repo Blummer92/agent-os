@@ -58,6 +58,7 @@ class CIEvidenceIdentity:
 
 @dataclass(frozen=True, slots=True)
 class RecoveryObservation:
+    identity: CIEvidenceIdentity
     path: str
     succeeded: bool
     reason_code: str | None = None
@@ -65,6 +66,8 @@ class RecoveryObservation:
     run_complete: bool = True
 
     def __post_init__(self) -> None:
+        if type(self.identity) is not CIEvidenceIdentity:
+            raise EvidenceValidationError("observation identity must be a CIEvidenceIdentity")
         if self.path not in RECOVERY_PATHS[:-1]:
             raise EvidenceValidationError("unsupported recovery path")
         if type(self.succeeded) is not bool or type(self.run_complete) is not bool:
@@ -94,6 +97,14 @@ class CIEvidenceRecoveryPlan:
     external_write_authorized: bool = False
     side_effects_performed: bool = False
 
+    def __post_init__(self) -> None:
+        if any(value is not False for value in (
+            self.repair_authorized,
+            self.external_write_authorized,
+            self.side_effects_performed,
+        )):
+            raise EvidenceValidationError("CI evidence recovery authority fields must be exactly false")
+
     @property
     def plan_id(self) -> str:
         return deterministic_id(self.to_dict())
@@ -115,6 +126,8 @@ def plan_ci_evidence_recovery(
     retry_count: int = 0,
     retry_limit: int = 2,
 ) -> CIEvidenceRecoveryPlan:
+    if type(identity) is not CIEvidenceIdentity:
+        raise EvidenceValidationError("identity must be a CIEvidenceIdentity")
     current_head = _sha40(current_head_sha, "current_head_sha")
     if type(current_run_attempt) is not int or current_run_attempt < 1:
         raise EvidenceValidationError("current_run_attempt must be positive")
@@ -124,6 +137,8 @@ def plan_ci_evidence_recovery(
         raise EvidenceValidationError("retry_count cannot exceed retry_limit")
     if type(observations) is not tuple:
         raise EvidenceValidationError("observations must be a tuple")
+    if any(type(item) is not RecoveryObservation for item in observations):
+        raise EvidenceValidationError("observations must contain only RecoveryObservation values")
 
     attempted = tuple(item.path for item in observations)
     if len(set(attempted)) != len(attempted):
@@ -141,8 +156,13 @@ def plan_ci_evidence_recovery(
         reasons.append("run-attempt-mismatch")
     else:
         for item in observations:
+            if item.identity != identity:
+                reasons.append("wrong-head" if item.identity.head_sha != identity.head_sha else "run-attempt-mismatch")
+                break
             if item.reason_code:
                 reasons.append(item.reason_code)
+            if item.reason_code in {"wrong-head", "run-attempt-mismatch"}:
+                break
             if not item.run_complete:
                 reasons.append("run-in-progress")
                 break
@@ -151,7 +171,11 @@ def plan_ci_evidence_recovery(
                 usable = True
                 break
 
-        if not usable and "run-in-progress" not in reasons:
+        fail_closed = any(reason in {"wrong-head", "run-attempt-mismatch"} for reason in reasons)
+        if fail_closed:
+            actionable = None
+            usable = False
+        elif not usable and "run-in-progress" not in reasons:
             last_reason = reasons[-1] if reasons else None
             if last_reason in TRANSIENT_REASONS and retry_count < retry_limit:
                 next_path = attempted[-1] if attempted else RECOVERY_PATHS[0]
