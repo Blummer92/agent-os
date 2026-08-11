@@ -17,6 +17,7 @@ from scripts.agent_os_remote_validation import (
     PrePrValidationSubject,
     SelectionInput,
     compute_command_set_digest,
+    deserialize_pre_pr_validation_subject,
     load_rule_map,
     pre_pr_validation_plan_id,
     pre_pr_validation_subject_id,
@@ -447,11 +448,6 @@ def test_different_paths_with_different_rules_form_bounded_union() -> None:
 
 
 # --- Positive-PR characterization (#723 regression guard) ---------------------
-#
-# These golden values were captured from the pre-#723 selector. They pin the
-# exact profile, command set, reason code, command-set digest, and semantic
-# `validation-plan:` identity for every shipped selection surface so the
-# additive pre-PR contract cannot silently change positive-PR behavior.
 POSITIVE_PR_GOLDEN = {
     "static": (
         "static",
@@ -634,6 +630,104 @@ def test_pre_pr_semantic_change_changes_plan_id() -> None:
         _subject(invocation_id="invocation:726:0002"), RULES
     )
     assert pre_pr_validation_plan_id(original) != pre_pr_validation_plan_id(changed)
+
+
+# --- Candidate-bound pre-PR compatibility (#1030) -----------------------------
+
+
+def _candidate_subject(**overrides: object) -> PrePrValidationSubject:
+    values: dict[str, object] = {
+        "issue_number": 754,
+        "invocation_id": "invocation:754:0001",
+        "base_sha": "a" * 40,
+        "branch": "agent/754-validation-packet",
+        "expected_source_sha": "d" * 40,
+        "tested_sha": "e" * 40,
+        "allowed_files": (PILOT_PATH,),
+        "forbidden_paths": PILOT_FORBIDDEN,
+        "required_command_identities": (PILOT_COMMAND,),
+        "approval_id": "approval:754:0001",
+        "approval_revision": 1,
+        "projection_id": "projection:754:0001",
+        "implementation_contract_fingerprint": "f" * 64,
+        "candidate_bound": True,
+    }
+    values.update(overrides)
+    return PrePrValidationSubject(**values)  # type: ignore[arg-type]
+
+
+def test_candidate_bound_non_726_subject_preserves_distinct_sha_roles() -> None:
+    subject = _candidate_subject()
+    assert subject.candidate_bound is True
+    assert subject.issue_number == 754
+    assert subject.expected_source_sha == "d" * 40
+    assert subject.tested_sha == "e" * 40
+    assert subject.expected_source_sha != subject.tested_sha
+
+
+def test_candidate_bound_serialization_and_round_trip_are_exact() -> None:
+    subject = _candidate_subject()
+    payload = serialize_pre_pr_validation_subject(subject)
+    assert payload["candidate_bound"] is True
+    assert payload["issue_number"] == 754
+    assert payload["repository"] == "Blummer92/agent-os"
+    assert payload["base_branch"] == "main"
+    assert payload["branch"] == "agent/754-validation-packet"
+    assert payload["expected_source_sha"] == "d" * 40
+    assert payload["tested_sha"] == "e" * 40
+    assert payload["allowed_files"] == [PILOT_PATH]
+    assert payload["forbidden_paths"] == list(PILOT_FORBIDDEN)
+    assert payload["required_command_identities"] == [PILOT_COMMAND]
+
+    reconstructed = deserialize_pre_pr_validation_subject(payload)
+    assert reconstructed == subject
+    assert serialize_pre_pr_validation_subject(reconstructed) == payload
+    assert pre_pr_validation_subject_id(reconstructed) == pre_pr_validation_subject_id(subject)
+
+
+def test_legacy_726_serialization_omits_candidate_bound() -> None:
+    payload = serialize_pre_pr_validation_subject(_subject())
+    assert "candidate_bound" not in payload
+
+
+def test_non_726_requires_explicit_candidate_bound_mode() -> None:
+    with pytest.raises(ValueError, match="bound validation-only candidate issue"):
+        _subject(issue_number=754)
+
+
+def test_deserialization_rejects_missing_required_field() -> None:
+    payload = serialize_pre_pr_validation_subject(_subject())
+    del payload["repository"]
+    with pytest.raises(ValueError, match="payload fields drift"):
+        deserialize_pre_pr_validation_subject(payload)
+
+
+def test_deserialization_rejects_unexpected_field() -> None:
+    payload = serialize_pre_pr_validation_subject(_subject())
+    payload["unexpected"] = "value"
+    with pytest.raises(ValueError, match="payload fields drift"):
+        deserialize_pre_pr_validation_subject(payload)
+
+
+def test_deserialization_rejects_explicit_false_candidate_bound() -> None:
+    payload = serialize_pre_pr_validation_subject(_subject())
+    payload["candidate_bound"] = False
+    with pytest.raises(TypeError, match="exactly true"):
+        deserialize_pre_pr_validation_subject(payload)
+
+
+@pytest.mark.parametrize("value", [0, 1, "true", None])
+def test_deserialization_rejects_non_boolean_candidate_bound(value: object) -> None:
+    payload = serialize_pre_pr_validation_subject(_subject())
+    payload["candidate_bound"] = value
+    with pytest.raises(TypeError, match="exactly true"):
+        deserialize_pre_pr_validation_subject(payload)
+
+
+@pytest.mark.parametrize("value", [0, 1, "true", None])
+def test_constructor_rejects_non_exact_bool_candidate_bound(value: object) -> None:
+    with pytest.raises(TypeError, match="candidate_bound"):
+        _subject(candidate_bound=value)
 
 
 @pytest.mark.parametrize(
@@ -842,24 +936,11 @@ def test_pre_pr_selection_performs_no_file_io(monkeypatch: pytest.MonkeyPatch) -
 
 
 # --- Exact-over-prefix precedence semantics (#723 review H1/B2) ---------------
-#
-# The pilot path sits under the pre-existing `08_Tooling/workflow-scheduler/`
-# package prefix, so adding an exact rule for it made precedence necessary.
-# These tests pin the full consequence surface of that decision, including the
-# two selection outcomes that #723 deliberately changed.
 SCHEDULER_PACKAGE_COMMAND = "python -m pytest 08_Tooling/workflow-scheduler/tests"
 SCHEDULER_SIBLING_PATH = "08_Tooling/workflow-scheduler/src/runtime.py"
 
 
 def test_mixed_exact_and_prefix_paths_form_a_safe_superset_union() -> None:
-    """A changed-file set mixing the exact pilot path with a prefix-owned sibling.
-
-    This outcome changed with #723: at the previous head the set selected only
-    the package command with `profile.focused-package`. It now unions both
-    commands and reports `profile.focused-union`. The narrow command is fully
-    subsumed by the package command, so the union re-runs the pilot file rather
-    than skipping anything -- the change is a safe superset, never a gap.
-    """
     paths = [PILOT_PATH, SCHEDULER_SIBLING_PATH]
     plan = _select(_input(paths))
     assert plan.profile == "focused"
@@ -868,7 +949,6 @@ def test_mixed_exact_and_prefix_paths_form_a_safe_superset_union() -> None:
     assert PILOT_COMMAND.startswith(SCHEDULER_PACKAGE_COMMAND)
     assert plan.remote_build_required is True
     assert validate_validation_plan(plan) == ()
-
     assert plan.command_set_digest == compute_command_set_digest(
         "1.0.0", (SCHEDULER_PACKAGE_COMMAND, PILOT_COMMAND)
     )
@@ -952,17 +1032,12 @@ def test_multiple_prefix_owners_without_exact_owner_fail_closed() -> None:
 def test_precedence_is_independent_of_rule_order(paths: list[str]) -> None:
     baseline = _select(_input(paths))
     count = len(RULES["focused_rules"])
-    # Every rotation plus the full reversal: enough to expose any dependence on
-    # a rule's position, without paying for all `count!` orderings.
     orders = [tuple(range(count))[offset:] + tuple(range(count))[:offset] for offset in range(count)]
     orders.append(tuple(reversed(range(count))))
     for order in orders:
         rules = copy.deepcopy(RULES)
         rules["focused_rules"] = [RULES["focused_rules"][index] for index in order]
         assert _select(_input(paths), rules) == baseline
-
-
-# --- Boolean rejection for integer-only pre-PR fields (#723 review M3) --------
 
 
 @pytest.mark.parametrize("value", [True, False])
