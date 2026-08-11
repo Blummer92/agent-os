@@ -1,12 +1,14 @@
-"""Task execution engine for Workflow Scheduler."""
+"""Workflow Scheduler execution package with lazy executable exports.
 
-from workflow_scheduler.execution.executor import ExecutionResult
-from workflow_scheduler.execution.request_compat import (
-    build_execution_request_from_task,
-    is_execution_request,
-)
-from workflow_scheduler.execution.request_dispatch import Executor
-from workflow_scheduler.execution.retry_manager import RetryManager
+Keeping the package initializer free of eager executor/retry imports allows pure
+submodules such as ``runtime_configuration`` to be imported without making
+execution-capable machinery reachable. Existing package-level imports remain
+available through lazy compatibility exports.
+"""
+
+from __future__ import annotations
+
+from importlib import import_module
 
 __all__ = [
     "Executor",
@@ -15,3 +17,36 @@ __all__ = [
     "build_execution_request_from_task",
     "is_execution_request",
 ]
+
+_LAZY_EXPORTS = {
+    "ExecutionResult": (
+        "workflow_scheduler.execution.executor",
+        "ExecutionResult",
+    ),
+    "build_execution_request_from_task": (
+        "workflow_scheduler.execution.request_compat",
+        "build_execution_request_from_task",
+    ),
+    "is_execution_request": (
+        "workflow_scheduler.execution.request_compat",
+        "is_execution_request",
+    ),
+    "Executor": (
+        "workflow_scheduler.execution.request_dispatch",
+        "Executor",
+    ),
+    "RetryManager": (
+        "workflow_scheduler.execution.retry_manager",
+        "RetryManager",
+    ),
+}
+
+
+def __getattr__(name: str) -> object:
+    target = _LAZY_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_name, attribute_name = target
+    value = getattr(import_module(module_name), attribute_name)
+    globals()[name] = value
+    return value
