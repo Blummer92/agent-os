@@ -14,21 +14,43 @@ The input composes PR snapshot/thread evidence, exact-head preflight, remediatio
 
 ## CI Evidence Recovery Contract
 
-`ci_evidence_recovery.py` plans how a caller should recover the first actionable GitHub Actions failure without assuming `gh` or Cloud Shell is available. It is a planner only; it performs no network, CLI, retry, repository, or external-system operation.
+`scripts/agent_os_pr_remediation/ci_evidence_recovery.py` plans recovery of the first actionable GitHub Actions failure without assuming `gh` or Cloud Shell. It performs no network, CLI, retry, repository, or external-system operation.
 
-Each plan binds repository, PR number, full 40-character head SHA, workflow run ID, run attempt, and optional failing job ID. A moved head or superseded run attempt fails closed before recovered evidence can be used for attribution.
+Each plan binds repository, PR number, full 40-character head SHA, workflow run ID, run attempt, and optional failing job ID. Every observation carries the same identity and mismatches fail closed.
 
-The ordered recovery paths are structured evidence, direct Actions-log access, `gh` run logs, failing-job logs, an approved alternate environment, and finally a user handoff. A caller supplies observations from attempted paths; the planner deterministically selects the next path or marks evidence usable.
+Recovery paths are:
+- structured evidence;
+- direct Actions-log access;
+- `gh` run logs;
+- failing-job logs;
+- an approved alternate environment;
+- user handoff only after governed paths are exhausted.
 
-Machine-readable failure reasons distinguish CLI unavailable/unauthenticated, insufficient permission, credential conflict, wrong host, rate limiting, in-progress runs, attempt/head mismatches, run/job log failures, incomplete log association, transient network failure, expired environment, disk exhaustion, and exhausted evidence recovery.
+Machine-readable reasons distinguish CLI/auth/permission/credential/host failures, rate limits, in-progress runs, stale head or attempt, run/job log failures, incomplete log association, transient network failure, expired environments, disk exhaustion, and exhausted evidence recovery.
 
-Rate-limit and transient-network observations may retry the same path only within the caller-supplied retry budget. Other failures advance to the next untried path. Run-in-progress waits rather than masquerading as a retrieval failure. Whole-run failure can advance to job-level recovery. Incomplete step association may still retain an actionable failure.
+Retry behavior is bounded:
+- rate-limit and transient-network failures may retry the same path within budget;
+- other failures advance to the next untried path;
+- run-in-progress waits instead of becoming a retrieval failure;
+- whole-run failure may advance to job-level recovery;
+- incomplete step association may retain an actionable failure.
 
-Even successful recovery sets only `evidence_usable_for_attribution`. `repair_authorized`, `external_write_authorized`, and `side_effects_performed` remain false. Attribution and any repair authorization stay in their separately governed stages.
+Fail-closed conditions include:
+- malformed or mismatched observation identity;
+- moved exact head;
+- superseded run attempt;
+- invalid reason codes or model types;
+- duplicate recovery paths;
+- invalid retry state.
 
-## Fail-Closed Cases
+Authority limits are explicit:
+- recovery may set only `evidence_usable_for_attribution`;
+- `repair_authorized` remains false;
+- `external_write_authorized` remains false;
+- `side_effects_performed` remains false;
+- attribution and repair authorization remain separate governed stages.
 
-Malformed identity, stale exact head, obsolete run attempt, invalid reason codes, duplicate recovery paths, and invalid retry state are rejected or produce non-usable evidence. If all governed paths are exhausted without an actionable failure, the plan requires a user handoff and reports `evidence-unavailable`; it never invents a repository defect.
+If governed paths are exhausted without an actionable failure, the plan requires a user handoff and reports `evidence-unavailable`; it never invents a repository defect.
 
 ## GitHub Write Handoff
 
