@@ -13,6 +13,7 @@ from .models import (
     MAX_PLAN_STRING_LENGTH,
     MAX_PRE_PR_SERIALIZED_BYTES,
     PRE_PR_BASE_BRANCH,
+    PRE_PR_CANDIDATE_ISSUE_NUMBER,
     PRE_PR_EXECUTION_MODE,
     PRE_PR_PER_COMMAND_TIMEOUT_SECONDS,
     PRE_PR_PROFILE,
@@ -41,25 +42,12 @@ _PROFILES = frozenset({"static", "focused", "aggregate", "manual-review"})
 _PROFILE_REASONS = {
     "static": frozenset({"profile.documentation-static"}),
     "focused": frozenset({"profile.focused-package", "profile.focused-union"}),
-    "aggregate": frozenset(
-        {"profile.aggregate-configuration", "profile.aggregate-unmapped-executable"}
-    ),
-    "manual-review": frozenset(
-        {
-            "rule.ambiguous",
-            "rule.version-unsupported",
-            "identity.repository-mismatch",
-            "identity.base-sha-missing",
-            "identity.head-sha-missing",
-            "metadata.malformed",
-            "metadata.empty-changed-files",
-        }
-    ),
+    "aggregate": frozenset({"profile.aggregate-configuration", "profile.aggregate-unmapped-executable"}),
+    "manual-review": frozenset({"rule.ambiguous", "rule.version-unsupported", "identity.repository-mismatch", "identity.base-sha-missing", "identity.head-sha-missing", "metadata.malformed", "metadata.empty-changed-files"}),
 }
 
 
 def load_rule_map(path: Path | None = None) -> dict[str, Any]:
-    """Load rules at the caller boundary; selection itself remains pure."""
     data = json.loads((path or _RULES).read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError("rule map must be an object")
@@ -67,514 +55,209 @@ def load_rule_map(path: Path | None = None) -> dict[str, Any]:
 
 
 def compute_command_set_digest(version: str, commands: tuple[str, ...]) -> str:
-    """Return the canonical command-set digest used by existing selector output."""
     raw = json.dumps([version, commands], separators=(",", ":")).encode()
     return hashlib.sha256(raw).hexdigest()
 
 
 def validate_validation_plan(plan: object) -> tuple[str, ...]:
-    """Validate one canonical plan without I/O or policy inference."""
     reasons: set[str] = set()
     if not isinstance(plan, ValidationPlan):
         return ("plan.invalid-type",)
-
-    if not _bounded_text(plan.selector_version) or not _SELECTOR_VERSION.fullmatch(
-        plan.selector_version
-    ):
-        reasons.add("plan.selector-version")
-    if not _bounded_text(plan.repository):
-        reasons.add("plan.repository")
-    if not isinstance(plan.pull_request, int) or isinstance(plan.pull_request, bool):
-        reasons.add("plan.pull-request")
-    if plan.profile not in _PROFILES:
-        reasons.add("plan.profile")
-    if not isinstance(plan.commands, tuple):
-        reasons.add("plan.commands")
-    if not isinstance(plan.reason_codes, tuple):
-        reasons.add("plan.reason-codes")
-    if not isinstance(plan.remote_build_required, bool):
-        reasons.add("plan.remote-build")
-    if plan.execution_authorized is not False:
-        reasons.add("plan.execution-authorized")
-    if plan.side_effects_performed is not False:
-        reasons.add("plan.side-effects")
-
+    if not _bounded_text(plan.selector_version) or not _SELECTOR_VERSION.fullmatch(plan.selector_version): reasons.add("plan.selector-version")
+    if not _bounded_text(plan.repository): reasons.add("plan.repository")
+    if not isinstance(plan.pull_request, int) or isinstance(plan.pull_request, bool): reasons.add("plan.pull-request")
+    if plan.profile not in _PROFILES: reasons.add("plan.profile")
+    if not isinstance(plan.commands, tuple): reasons.add("plan.commands")
+    if not isinstance(plan.reason_codes, tuple): reasons.add("plan.reason-codes")
+    if not isinstance(plan.remote_build_required, bool): reasons.add("plan.remote-build")
+    if plan.execution_authorized is not False: reasons.add("plan.execution-authorized")
+    if plan.side_effects_performed is not False: reasons.add("plan.side-effects")
     commands = plan.commands if isinstance(plan.commands, tuple) else ()
     reason_codes = plan.reason_codes if isinstance(plan.reason_codes, tuple) else ()
-    if len(commands) > MAX_PLAN_COMMANDS:
-        reasons.add("plan.commands-limit")
-    if len(reason_codes) == 0 or len(reason_codes) > MAX_PLAN_REASON_CODES:
-        reasons.add("plan.reason-codes")
-    if len(set(commands)) != len(commands):
-        reasons.add("plan.commands-duplicate")
-    if any(not _bounded_text(command) for command in commands):
-        reasons.add("plan.command-invalid")
-    if any(not _bounded_text(reason) for reason in reason_codes):
-        reasons.add("plan.reason-code-invalid")
-
+    if len(commands) > MAX_PLAN_COMMANDS: reasons.add("plan.commands-limit")
+    if len(reason_codes) == 0 or len(reason_codes) > MAX_PLAN_REASON_CODES: reasons.add("plan.reason-codes")
+    if len(set(commands)) != len(commands): reasons.add("plan.commands-duplicate")
+    if any(not _bounded_text(command) for command in commands): reasons.add("plan.command-invalid")
+    if any(not _bounded_text(reason) for reason in reason_codes): reasons.add("plan.reason-code-invalid")
     if plan.profile == "manual-review":
-        if commands:
-            reasons.add("plan.manual-review-commands")
-        if plan.command_set_digest != "unavailable":
-            reasons.add("plan.manual-review-digest")
-        if plan.remote_build_required is not False:
-            reasons.add("plan.manual-review-remote-build")
-        if reason_codes and any(
-            reason not in _PROFILE_REASONS["manual-review"] for reason in reason_codes
-        ):
-            reasons.add("plan.reason-profile")
+        if commands: reasons.add("plan.manual-review-commands")
+        if plan.command_set_digest != "unavailable": reasons.add("plan.manual-review-digest")
+        if plan.remote_build_required is not False: reasons.add("plan.manual-review-remote-build")
+        if reason_codes and any(reason not in _PROFILE_REASONS["manual-review"] for reason in reason_codes): reasons.add("plan.reason-profile")
     else:
-        if not _SHA.fullmatch(plan.base_sha):
-            reasons.add("plan.base-sha")
-        if not _SHA.fullmatch(plan.head_sha):
-            reasons.add("plan.head-sha")
-        if plan.pull_request <= 0:
-            reasons.add("plan.pull-request")
-        if not _DIGEST.fullmatch(plan.command_set_digest):
-            reasons.add("plan.command-digest")
-        elif plan.command_set_digest != compute_command_set_digest(
-            plan.selector_version, commands
-        ):
-            reasons.add("plan.command-digest")
-        if reason_codes and any(
-            reason not in _PROFILE_REASONS.get(plan.profile, frozenset())
-            for reason in reason_codes
-        ):
-            reasons.add("plan.reason-profile")
+        if not _SHA.fullmatch(plan.base_sha): reasons.add("plan.base-sha")
+        if not _SHA.fullmatch(plan.head_sha): reasons.add("plan.head-sha")
+        if plan.pull_request <= 0: reasons.add("plan.pull-request")
+        if not _DIGEST.fullmatch(plan.command_set_digest): reasons.add("plan.command-digest")
+        elif plan.command_set_digest != compute_command_set_digest(plan.selector_version, commands): reasons.add("plan.command-digest")
+        if reason_codes and any(reason not in _PROFILE_REASONS.get(plan.profile, frozenset()) for reason in reason_codes): reasons.add("plan.reason-profile")
         if plan.profile == "static":
-            if commands:
-                reasons.add("plan.static-commands")
-            if plan.remote_build_required is not False:
-                reasons.add("plan.static-remote-build")
+            if commands: reasons.add("plan.static-commands")
+            if plan.remote_build_required is not False: reasons.add("plan.static-remote-build")
         elif plan.profile in {"focused", "aggregate"}:
-            if not commands:
-                reasons.add("plan.executable-commands")
-            if plan.remote_build_required is not True:
-                reasons.add("plan.executable-remote-build")
-
+            if not commands: reasons.add("plan.executable-commands")
+            if plan.remote_build_required is not True: reasons.add("plan.executable-remote-build")
     return tuple(sorted(reasons))
 
 
 def serialize_validation_plan(plan: ValidationPlan) -> dict[str, object]:
-    """Return deterministic canonical JSON-compatible plan data."""
     reasons = validate_validation_plan(plan)
-    if reasons:
-        raise ValueError("invalid validation plan: " + ",".join(reasons))
-    payload: dict[str, object] = {
-        "schema_name": VALIDATION_PLAN_SCHEMA_NAME,
-        "schema_version": VALIDATION_PLAN_SCHEMA_VERSION,
-        "selector_version": plan.selector_version,
-        "repository": plan.repository,
-        "pull_request": plan.pull_request,
-        "base_sha": plan.base_sha,
-        "head_sha": plan.head_sha,
-        "profile": plan.profile,
-        "commands": list(plan.commands),
-        "command_set_digest": plan.command_set_digest,
-        "reason_codes": list(plan.reason_codes),
-        "remote_build_required": plan.remote_build_required,
-        "execution_authorized": False,
-        "side_effects_performed": False,
-    }
-    encoded = json.dumps(
-        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    ).encode("utf-8")
-    if len(encoded) > MAX_PLAN_SERIALIZED_BYTES:
-        raise ValueError("validation plan exceeds canonical size limit")
+    if reasons: raise ValueError("invalid validation plan: " + ",".join(reasons))
+    payload: dict[str, object] = {"schema_name": VALIDATION_PLAN_SCHEMA_NAME, "schema_version": VALIDATION_PLAN_SCHEMA_VERSION, "selector_version": plan.selector_version, "repository": plan.repository, "pull_request": plan.pull_request, "base_sha": plan.base_sha, "head_sha": plan.head_sha, "profile": plan.profile, "commands": list(plan.commands), "command_set_digest": plan.command_set_digest, "reason_codes": list(plan.reason_codes), "remote_build_required": plan.remote_build_required, "execution_authorized": False, "side_effects_performed": False}
+    if len(json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")) > MAX_PLAN_SERIALIZED_BYTES: raise ValueError("validation plan exceeds canonical size limit")
     return payload
 
 
 def validation_plan_id(plan: ValidationPlan) -> str:
-    """Return a domain-separated semantic identity for one valid plan."""
-    payload = serialize_validation_plan(plan)
-    canonical = json.dumps(
-        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    ).encode("utf-8")
-    digest = hashlib.sha256(b"agent-os-validation-plan:v1\0" + canonical).hexdigest()
-    return f"validation-plan:{digest}"
+    canonical = json.dumps(serialize_validation_plan(plan), sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return f"validation-plan:{hashlib.sha256(b'agent-os-validation-plan:v1\0' + canonical).hexdigest()}"
 
 
-def _safe_text(value: object) -> str:
-    return value if isinstance(value, str) else "unavailable"
+def _safe_text(value: object) -> str: return value if isinstance(value, str) else "unavailable"
+def _safe_pr(value: object) -> int: return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
-
-def _safe_pr(value: object) -> int:
-    return value if isinstance(value, int) and not isinstance(value, bool) else 0
-
-
-def _plan(
-    value: SelectionInput,
-    profile: ValidationProfile,
-    commands: tuple[str, ...],
-    reason: str,
-) -> ValidationPlan:
+def _plan(value: SelectionInput, profile: ValidationProfile, commands: tuple[str, ...], reason: str) -> ValidationPlan:
     version = _safe_text(value.selector_version)
-    return ValidationPlan(
-        selector_version=version,
-        repository=_safe_text(value.repository),
-        pull_request=_safe_pr(value.pull_request),
-        base_sha=_safe_text(value.base_sha),
-        head_sha=_safe_text(value.head_sha),
-        profile=profile,
-        commands=commands,
-        command_set_digest=(
-            compute_command_set_digest(version, commands)
-            if profile != "manual-review"
-            else "unavailable"
-        ),
-        reason_codes=(reason,),
-        remote_build_required=profile in {"focused", "aggregate"},
-    )
+    return ValidationPlan(selector_version=version, repository=_safe_text(value.repository), pull_request=_safe_pr(value.pull_request), base_sha=_safe_text(value.base_sha), head_sha=_safe_text(value.head_sha), profile=profile, commands=commands, command_set_digest=compute_command_set_digest(version, commands) if profile != "manual-review" else "unavailable", reason_codes=(reason,), remote_build_required=profile in {"focused", "aggregate"})
 
 
-def _bounded_text(value: object) -> bool:
-    return (
-        isinstance(value, str)
-        and bool(value)
-        and len(value) <= MAX_PLAN_STRING_LENGTH
-        and _CONTROL.search(value) is None
-    )
-
-
-def _string_list(value: object) -> bool:
-    return isinstance(value, list) and all(isinstance(item, str) for item in value)
-
-
-def _usable_string_list(value: object) -> bool:
-    return _string_list(value) and all(_bounded_text(item) for item in value)
-
+def _bounded_text(value: object) -> bool: return isinstance(value, str) and bool(value) and len(value) <= MAX_PLAN_STRING_LENGTH and _CONTROL.search(value) is None
+def _string_list(value: object) -> bool: return isinstance(value, list) and all(isinstance(item, str) for item in value)
+def _usable_string_list(value: object) -> bool: return _string_list(value) and all(_bounded_text(item) for item in value)
 
 def _valid_rule_map(rules: object) -> bool:
-    if not isinstance(rules, dict):
-        return False
-    if not isinstance(rules.get("selector_version"), str):
-        return False
-    if not isinstance(rules.get("repository"), str):
-        return False
-    if not isinstance(rules.get("aggregate_command"), str):
-        return False
-    for key in (
-        "aggregate_paths",
-        "aggregate_prefixes",
-        "documentation_prefixes",
-        "documentation_suffixes",
-    ):
-        if not _string_list(rules.get(key)):
-            return False
+    if not isinstance(rules, dict) or not isinstance(rules.get("selector_version"), str) or not isinstance(rules.get("repository"), str) or not isinstance(rules.get("aggregate_command"), str): return False
+    for key in ("aggregate_paths", "aggregate_prefixes", "documentation_prefixes", "documentation_suffixes"):
+        if not _string_list(rules.get(key)): return False
     focused_rules = rules.get("focused_rules")
-    if not isinstance(focused_rules, list):
-        return False
+    if not isinstance(focused_rules, list): return False
     for rule in focused_rules:
-        if not isinstance(rule, dict):
-            return False
-        if not isinstance(rule.get("name"), str):
-            return False
-        prefixes = rule.get("prefixes", [])
-        exact_paths = rule.get("exact_paths", [])
-        if not _usable_string_list(prefixes):
-            return False
-        if not _usable_string_list(exact_paths):
-            return False
-        if not prefixes and not exact_paths:
-            return False
-        if not _string_list(rule.get("commands")):
-            return False
+        if not isinstance(rule, dict) or not isinstance(rule.get("name"), str): return False
+        prefixes, exact_paths = rule.get("prefixes", []), rule.get("exact_paths", [])
+        if not _usable_string_list(prefixes) or not _usable_string_list(exact_paths) or (not prefixes and not exact_paths) or not _string_list(rule.get("commands")): return False
     return True
 
 
-def _focused_matches(
-    path: str,
-    focused_rules: list[Any],
-) -> list[tuple[str, tuple[str, ...]]]:
-    """Return focused owners of one path; an exact owner excludes prefix owners.
-
-    Exact ownership intentionally outranks and *masks* every prefix owner of the
-    same path, so a narrow exact rule can live under an existing package prefix
-    without turning that path into `rule.ambiguous`. Two consequences follow, and
-    both are deliberate:
-
-    - a prefix-rule conflict is not reported for a path that has an exact owner,
-      because that conflict cannot affect the outcome for that path; a path with
-      no exact owner still fails closed to `rule.ambiguous`; and
-    - masking is per path, so a changed-file set mixing an exact-owned path with
-      prefix-owned siblings yields the union of both command sets. That union is
-      a safe superset and may contain a narrow command already subsumed by the
-      broader package command; it is not deduplicated here.
-
-    Selection stays independent of rule order and of changed-file order: matches
-    are partitioned by kind rather than by position, and the caller treats more
-    than one distinct command set for a single path as ambiguous.
-    """
-    exact_matches: list[tuple[str, tuple[str, ...]]] = []
-    prefix_matches: list[tuple[str, tuple[str, ...]]] = []
+def _focused_matches(path: str, focused_rules: list[Any]) -> list[tuple[str, tuple[str, ...]]]:
+    exact_matches, prefix_matches = [], []
     for rule in focused_rules:
         owner = (rule["name"], tuple(rule["commands"]))
         prefixes = tuple(rule.get("prefixes", []))
-        if path in frozenset(rule.get("exact_paths", [])):
-            exact_matches.append(owner)
-        elif prefixes and path.startswith(prefixes):
-            prefix_matches.append(owner)
+        if path in frozenset(rule.get("exact_paths", [])): exact_matches.append(owner)
+        elif prefixes and path.startswith(prefixes): prefix_matches.append(owner)
     return exact_matches or prefix_matches
 
 
-def select_validation_plan(
-    value: SelectionInput,
-    rules: dict[str, Any],
-) -> ValidationPlan:
-    """Return a deterministic plan without file, network, or process I/O."""
-    if not _valid_rule_map(rules):
-        return _plan(value, "manual-review", (), "rule.ambiguous")
-    if not isinstance(value.selector_version, str):
-        return _plan(value, "manual-review", (), "metadata.malformed")
-    if rules["selector_version"] != value.selector_version:
-        return _plan(value, "manual-review", (), "rule.version-unsupported")
-    if not isinstance(value.repository, str):
-        return _plan(value, "manual-review", (), "metadata.malformed")
-    if value.repository != rules["repository"]:
-        return _plan(value, "manual-review", (), "identity.repository-mismatch")
-    if (
-        not isinstance(value.pull_request, int)
-        or isinstance(value.pull_request, bool)
-        or value.pull_request <= 0
-    ):
-        return _plan(value, "manual-review", (), "metadata.malformed")
-    if not isinstance(value.base_sha, str) or not _SHA.fullmatch(value.base_sha):
-        return _plan(value, "manual-review", (), "identity.base-sha-missing")
-    if not isinstance(value.head_sha, str) or not _SHA.fullmatch(value.head_sha):
-        return _plan(value, "manual-review", (), "identity.head-sha-missing")
-    if not isinstance(value.changed_files, (tuple, list)) or any(
-        not isinstance(path, str) for path in value.changed_files
-    ):
-        return _plan(value, "manual-review", (), "metadata.malformed")
-
-    paths = tuple(
-        sorted(
-            {
-                path.strip().replace("\\", "/").removeprefix("./")
-                for path in value.changed_files
-                if path.strip()
-            }
-        )
-    )
-    if not paths:
-        return _plan(value, "manual-review", (), "metadata.empty-changed-files")
-
-    aggregate_paths = set(rules["aggregate_paths"])
-    aggregate_prefixes = tuple(rules["aggregate_prefixes"])
-    if any(path in aggregate_paths or path.startswith(aggregate_prefixes) for path in paths):
-        commands = (rules["aggregate_command"],)
-        return _plan(value, "aggregate", commands, "profile.aggregate-configuration")
-
-    doc_prefixes = tuple(rules["documentation_prefixes"])
-    doc_suffixes = tuple(rules["documentation_suffixes"])
-    if all(path.startswith(doc_prefixes) and path.endswith(doc_suffixes) for path in paths):
-        return _plan(value, "static", (), "profile.documentation-static")
-
-    matched_commands: list[str] = []
-    matched_rules: set[str] = set()
-    covered: set[str] = set()
+def select_validation_plan(value: SelectionInput, rules: dict[str, Any]) -> ValidationPlan:
+    if not _valid_rule_map(rules): return _plan(value, "manual-review", (), "rule.ambiguous")
+    if not isinstance(value.selector_version, str): return _plan(value, "manual-review", (), "metadata.malformed")
+    if rules["selector_version"] != value.selector_version: return _plan(value, "manual-review", (), "rule.version-unsupported")
+    if not isinstance(value.repository, str): return _plan(value, "manual-review", (), "metadata.malformed")
+    if value.repository != rules["repository"]: return _plan(value, "manual-review", (), "identity.repository-mismatch")
+    if not isinstance(value.pull_request, int) or isinstance(value.pull_request, bool) or value.pull_request <= 0: return _plan(value, "manual-review", (), "metadata.malformed")
+    if not isinstance(value.base_sha, str) or not _SHA.fullmatch(value.base_sha): return _plan(value, "manual-review", (), "identity.base-sha-missing")
+    if not isinstance(value.head_sha, str) or not _SHA.fullmatch(value.head_sha): return _plan(value, "manual-review", (), "identity.head-sha-missing")
+    if not isinstance(value.changed_files, (tuple, list)) or any(not isinstance(path, str) for path in value.changed_files): return _plan(value, "manual-review", (), "metadata.malformed")
+    paths = tuple(sorted({path.strip().replace("\\", "/").removeprefix("./") for path in value.changed_files if path.strip()}))
+    if not paths: return _plan(value, "manual-review", (), "metadata.empty-changed-files")
+    if any(path in set(rules["aggregate_paths"]) or path.startswith(tuple(rules["aggregate_prefixes"])) for path in paths): return _plan(value, "aggregate", (rules["aggregate_command"],), "profile.aggregate-configuration")
+    if all(path.startswith(tuple(rules["documentation_prefixes"])) and path.endswith(tuple(rules["documentation_suffixes"])) for path in paths): return _plan(value, "static", (), "profile.documentation-static")
+    matched_commands, matched_rules, covered = [], set(), set()
     for path in paths:
         path_matches = _focused_matches(path, rules["focused_rules"])
-        distinct_command_sets = {commands for _, commands in path_matches}
-        if len(distinct_command_sets) > 1:
-            return _plan(value, "manual-review", (), "rule.ambiguous")
+        if len({commands for _, commands in path_matches}) > 1: return _plan(value, "manual-review", (), "rule.ambiguous")
         if path_matches:
-            covered.add(path)
-            matched_rules.update(name for name, _ in path_matches)
-            matched_commands.extend(path_matches[0][1])
+            covered.add(path); matched_rules.update(name for name, _ in path_matches); matched_commands.extend(path_matches[0][1])
     if matched_commands and len(covered) == len(paths):
         commands = tuple(sorted(set(matched_commands)))
-        reason = (
-            "profile.focused-package"
-            if len(matched_rules) == 1
-            else "profile.focused-union"
-        )
-        return _plan(value, "focused", commands, reason)
-
-    executable = (".py", ".sh", ".yml", ".yaml", ".toml", ".json")
-    if any(path.endswith(executable) for path in paths):
-        return _plan(
-            value,
-            "aggregate",
-            (rules["aggregate_command"],),
-            "profile.aggregate-unmapped-executable",
-        )
+        return _plan(value, "focused", commands, "profile.focused-package" if len(matched_rules) == 1 else "profile.focused-union")
+    if any(path.endswith((".py", ".sh", ".yml", ".yaml", ".toml", ".json")) for path in paths): return _plan(value, "aggregate", (rules["aggregate_command"],), "profile.aggregate-unmapped-executable")
     return _plan(value, "manual-review", (), "rule.ambiguous")
 
 
 def _verify_pre_pr_subject(subject: object) -> PrePrValidationSubject:
-    """Re-verify one supplied pre-PR subject's frozen bindings before planning."""
-    if type(subject) is not PrePrValidationSubject:
-        raise TypeError("subject must be an exact PrePrValidationSubject")
-    if subject.schema_name != PRE_PR_VALIDATION_SUBJECT_SCHEMA_NAME:
-        raise ValueError("pre-PR subject schema name drift")
-    if subject.schema_version != PRE_PR_VALIDATION_SUBJECT_SCHEMA_VERSION:
-        raise ValueError("pre-PR subject schema version drift")
-    if subject.repository != PRE_PR_REPOSITORY:
-        raise ValueError("pre-PR repository drift")
-    if subject.base_branch != PRE_PR_BASE_BRANCH:
-        raise ValueError("pre-PR base branch drift")
-    if subject.execution_mode != PRE_PR_EXECUTION_MODE:
-        raise ValueError("pre-PR execution mode mismatch")
-    if (
-        subject.branch.casefold() in PROTECTED_PRE_PR_REFS
-        or subject.branch == subject.base_branch
-    ):
-        raise ValueError("pre-PR branch drift")
-    if not _SHA.fullmatch(subject.base_sha) or not _SHA.fullmatch(subject.expected_source_sha):
-        raise ValueError("pre-PR SHA drift")
-    if subject.tested_sha != subject.expected_source_sha:
-        raise ValueError("pre-PR tested SHA drift")
+    if type(subject) is not PrePrValidationSubject: raise TypeError("subject must be an exact PrePrValidationSubject")
+    if subject.schema_name != PRE_PR_VALIDATION_SUBJECT_SCHEMA_NAME: raise ValueError("pre-PR subject schema name drift")
+    if subject.schema_version != PRE_PR_VALIDATION_SUBJECT_SCHEMA_VERSION: raise ValueError("pre-PR subject schema version drift")
+    if type(subject.candidate_bound) is not bool: raise ValueError("pre-PR candidate-bound mode drift")
+    if subject.candidate_bound:
+        if not _bounded_text(subject.repository) or subject.repository.count("/") != 1 or any(not part for part in subject.repository.split("/")): raise ValueError("pre-PR repository drift")
+        if not isinstance(subject.issue_number, int) or isinstance(subject.issue_number, bool) or subject.issue_number <= 0: raise ValueError("pre-PR issue identity drift")
+        if not _bounded_text(subject.base_branch): raise ValueError("pre-PR base branch drift")
+        if not _bounded_text(subject.execution_mode): raise ValueError("pre-PR execution mode mismatch")
+    else:
+        if subject.repository != PRE_PR_REPOSITORY: raise ValueError("pre-PR repository drift")
+        if subject.issue_number != PRE_PR_CANDIDATE_ISSUE_NUMBER: raise ValueError("pre-PR issue identity drift")
+        if subject.base_branch != PRE_PR_BASE_BRANCH: raise ValueError("pre-PR base branch drift")
+        if subject.execution_mode != PRE_PR_EXECUTION_MODE: raise ValueError("pre-PR execution mode mismatch")
+    if subject.branch.casefold() in PROTECTED_PRE_PR_REFS or subject.branch == subject.base_branch: raise ValueError("pre-PR branch drift")
+    if not _SHA.fullmatch(subject.base_sha) or not _SHA.fullmatch(subject.expected_source_sha) or not _SHA.fullmatch(subject.tested_sha): raise ValueError("pre-PR SHA drift")
+    if not subject.candidate_bound and subject.tested_sha != subject.expected_source_sha: raise ValueError("pre-PR tested SHA drift")
     return subject
 
 
-def select_pre_pr_validation_plan(
-    subject: object,
-    rules: dict[str, Any],
-) -> PrePrValidationPlan:
-    """Return one deterministic pre-PR plan without file, network, or process I/O.
-
-    Unlike positive-PR selection, an unusable rule map, uncovered path, ambiguous
-    owner, aggregate fallback, or command-identity drift fails closed by raising
-    instead of degrading to a manual-review plan.
-    """
+def select_pre_pr_validation_plan(subject: object, rules: dict[str, Any]) -> PrePrValidationPlan:
     value = _verify_pre_pr_subject(subject)
-    if not _valid_rule_map(rules):
-        raise ValueError("pre-PR rule map is not usable")
+    if not _valid_rule_map(rules): raise ValueError("pre-PR rule map is not usable")
     selector_version = rules["selector_version"]
-    if not _SELECTOR_VERSION.fullmatch(selector_version):
-        raise ValueError("pre-PR selector version is unsupported")
-    if rules["repository"] != value.repository:
-        raise ValueError("pre-PR repository drift")
-
-    aggregate_paths = frozenset(rules["aggregate_paths"])
-    aggregate_prefixes = tuple(rules["aggregate_prefixes"])
-    matched_rules: set[str] = set()
-    matched_commands: set[str] = set()
+    if not _SELECTOR_VERSION.fullmatch(selector_version): raise ValueError("pre-PR selector version is unsupported")
+    if rules["repository"] != value.repository: raise ValueError("pre-PR repository drift")
+    aggregate_paths, aggregate_prefixes = frozenset(rules["aggregate_paths"]), tuple(rules["aggregate_prefixes"])
+    matched_rules, matched_commands = set(), set()
     for path in value.allowed_files:
-        if path in aggregate_paths or path.startswith(aggregate_prefixes):
-            raise ValueError("pre-PR scope requires focused coverage")
+        if path in aggregate_paths or path.startswith(aggregate_prefixes): raise ValueError("pre-PR scope requires focused coverage")
         path_matches = _focused_matches(path, rules["focused_rules"])
-        if not path_matches:
-            raise ValueError("pre-PR scope has partial focused coverage")
-        if len({commands for _, commands in path_matches}) > 1:
-            raise ValueError("pre-PR scope has ambiguous focused coverage")
-        matched_rules.update(name for name, _ in path_matches)
-        matched_commands.update(path_matches[0][1])
-
-    if matched_commands != set(value.required_command_identities):
-        raise ValueError("pre-PR command identity drift")
+        if not path_matches: raise ValueError("pre-PR scope has partial focused coverage")
+        if len({commands for _, commands in path_matches}) > 1: raise ValueError("pre-PR scope has ambiguous focused coverage")
+        matched_rules.update(name for name, _ in path_matches); matched_commands.update(path_matches[0][1])
+    if matched_commands != set(value.required_command_identities): raise ValueError("pre-PR command identity drift")
     commands = value.required_command_identities
-    reason = (
-        "profile.focused-package" if len(matched_rules) == 1 else "profile.focused-union"
-    )
-    return PrePrValidationPlan(
-        selector_version=selector_version,
-        subject=value,
-        commands=commands,
-        command_set_digest=compute_command_set_digest(selector_version, commands),
-        reason_codes=(reason,),
-    )
+    return PrePrValidationPlan(selector_version=selector_version, subject=value, commands=commands, command_set_digest=compute_command_set_digest(selector_version, commands), reason_codes=("profile.focused-package" if len(matched_rules) == 1 else "profile.focused-union",))
 
 
 def serialize_pre_pr_validation_subject(subject: object) -> dict[str, object]:
-    """Return deterministic canonical JSON-compatible pre-PR subject data."""
     value = _verify_pre_pr_subject(subject)
-    return {
-        "schema_name": value.schema_name,
-        "schema_version": value.schema_version,
-        "repository": value.repository,
-        "issue_number": value.issue_number,
-        "invocation_id": value.invocation_id,
-        "base_branch": value.base_branch,
-        "base_sha": value.base_sha,
-        "branch": value.branch,
-        "expected_source_sha": value.expected_source_sha,
-        "tested_sha": value.tested_sha,
-        "allowed_files": list(value.allowed_files),
-        "forbidden_paths": list(value.forbidden_paths),
-        "required_command_identities": list(value.required_command_identities),
-        "approval_id": value.approval_id,
-        "approval_revision": value.approval_revision,
-        "projection_id": value.projection_id,
-        "implementation_contract_fingerprint": value.implementation_contract_fingerprint,
-        "execution_mode": value.execution_mode,
-    }
+    payload: dict[str, object] = {"schema_name": value.schema_name, "schema_version": value.schema_version, "repository": value.repository, "issue_number": value.issue_number, "invocation_id": value.invocation_id, "base_branch": value.base_branch, "base_sha": value.base_sha, "branch": value.branch, "expected_source_sha": value.expected_source_sha, "tested_sha": value.tested_sha, "allowed_files": list(value.allowed_files), "forbidden_paths": list(value.forbidden_paths), "required_command_identities": list(value.required_command_identities), "approval_id": value.approval_id, "approval_revision": value.approval_revision, "projection_id": value.projection_id, "implementation_contract_fingerprint": value.implementation_contract_fingerprint, "execution_mode": value.execution_mode}
+    if value.candidate_bound: payload["candidate_bound"] = True
+    return payload
+
+
+def deserialize_pre_pr_validation_subject(payload: object) -> PrePrValidationSubject:
+    if type(payload) is not dict: raise TypeError("payload must be an exact dictionary")
+    base_fields = {"schema_name", "schema_version", "repository", "issue_number", "invocation_id", "base_branch", "base_sha", "branch", "expected_source_sha", "tested_sha", "allowed_files", "forbidden_paths", "required_command_identities", "approval_id", "approval_revision", "projection_id", "implementation_contract_fingerprint", "execution_mode"}
+    if set(payload) not in (base_fields, base_fields | {"candidate_bound"}): raise ValueError("pre-PR subject payload fields do not match schema")
+    candidate_bound = payload.get("candidate_bound", False)
+    if type(candidate_bound) is not bool: raise TypeError("candidate_bound must be an exact boolean")
+    for name in ("allowed_files", "forbidden_paths", "required_command_identities"):
+        if type(payload[name]) is not list: raise TypeError(f"{name} must be an exact list")
+    return PrePrValidationSubject(schema_name=payload["schema_name"], schema_version=payload["schema_version"], repository=payload["repository"], issue_number=payload["issue_number"], invocation_id=payload["invocation_id"], base_branch=payload["base_branch"], base_sha=payload["base_sha"], branch=payload["branch"], expected_source_sha=payload["expected_source_sha"], tested_sha=payload["tested_sha"], allowed_files=tuple(payload["allowed_files"]), forbidden_paths=tuple(payload["forbidden_paths"]), required_command_identities=tuple(payload["required_command_identities"]), approval_id=payload["approval_id"], approval_revision=payload["approval_revision"], projection_id=payload["projection_id"], implementation_contract_fingerprint=payload["implementation_contract_fingerprint"], execution_mode=payload["execution_mode"], candidate_bound=candidate_bound)
 
 
 def pre_pr_validation_subject_id(subject: object) -> str:
-    """Return a domain-separated semantic identity for one valid pre-PR subject."""
     canonical = _canonical_bytes(serialize_pre_pr_validation_subject(subject))
-    digest = hashlib.sha256(
-        b"agent-os-pre-pr-validation-subject:v1\0" + canonical
-    ).hexdigest()
-    return f"pre-pr-validation-subject:{digest}"
+    return f"pre-pr-validation-subject:{hashlib.sha256(b'agent-os-pre-pr-validation-subject:v1\0' + canonical).hexdigest()}"
 
 
 def serialize_pre_pr_validation_plan(plan: object) -> dict[str, object]:
-    """Return deterministic canonical JSON-compatible pre-PR plan data."""
-    if type(plan) is not PrePrValidationPlan:
-        raise TypeError("plan must be an exact PrePrValidationPlan")
-    if plan.schema_name != PRE_PR_VALIDATION_PLAN_SCHEMA_NAME:
-        raise ValueError("invalid pre-PR validation plan: schema name drift")
-    if plan.schema_version != PRE_PR_VALIDATION_PLAN_SCHEMA_VERSION:
-        raise ValueError("invalid pre-PR validation plan: schema version drift")
-    if plan.profile != PRE_PR_PROFILE:
-        raise ValueError("invalid pre-PR validation plan: profile drift")
+    if type(plan) is not PrePrValidationPlan: raise TypeError("plan must be an exact PrePrValidationPlan")
+    if plan.schema_name != PRE_PR_VALIDATION_PLAN_SCHEMA_NAME: raise ValueError("invalid pre-PR validation plan: schema name drift")
+    if plan.schema_version != PRE_PR_VALIDATION_PLAN_SCHEMA_VERSION: raise ValueError("invalid pre-PR validation plan: schema version drift")
+    if plan.profile != PRE_PR_PROFILE: raise ValueError("invalid pre-PR validation plan: profile drift")
     subject = _verify_pre_pr_subject(plan.subject)
-    if plan.commands != subject.required_command_identities:
-        raise ValueError("invalid pre-PR validation plan: command identity drift")
-    if plan.command_set_digest != compute_command_set_digest(
-        plan.selector_version, plan.commands
-    ):
-        raise ValueError("invalid pre-PR validation plan: command digest drift")
-    if any(
-        reason not in _PROFILE_REASONS[PRE_PR_PROFILE] for reason in plan.reason_codes
-    ):
-        raise ValueError("invalid pre-PR validation plan: reason code drift")
-    if (
-        plan.per_command_timeout_seconds > PRE_PR_PER_COMMAND_TIMEOUT_SECONDS
-        or plan.total_validation_timeout_seconds > PRE_PR_TOTAL_VALIDATION_TIMEOUT_SECONDS
-    ):
-        raise ValueError("invalid pre-PR validation plan: timeout ceiling exceeded")
-    if (
-        plan.remote_build_required is not False
-        or plan.execution_authorized is not False
-        or plan.merge_authorized is not False
-        or plan.side_effects_performed is not False
-    ):
-        raise ValueError("invalid pre-PR validation plan: non-authorizing invariant broken")
-
-    payload: dict[str, object] = {
-        "schema_name": plan.schema_name,
-        "schema_version": plan.schema_version,
-        "selector_version": plan.selector_version,
-        "subject": serialize_pre_pr_validation_subject(subject),
-        "subject_id": pre_pr_validation_subject_id(subject),
-        "profile": plan.profile,
-        "commands": list(plan.commands),
-        "command_set_digest": plan.command_set_digest,
-        "reason_codes": list(plan.reason_codes),
-        "per_command_timeout_seconds": plan.per_command_timeout_seconds,
-        "total_validation_timeout_seconds": plan.total_validation_timeout_seconds,
-        "remote_build_required": False,
-        "execution_authorized": False,
-        "merge_authorized": False,
-        "side_effects_performed": False,
-    }
-    if len(_canonical_bytes(payload)) > MAX_PRE_PR_SERIALIZED_BYTES:
-        raise ValueError("pre-PR validation plan exceeds canonical size limit")
+    if plan.commands != subject.required_command_identities: raise ValueError("invalid pre-PR validation plan: command identity drift")
+    if plan.command_set_digest != compute_command_set_digest(plan.selector_version, plan.commands): raise ValueError("invalid pre-PR validation plan: command digest drift")
+    if any(reason not in _PROFILE_REASONS[PRE_PR_PROFILE] for reason in plan.reason_codes): raise ValueError("invalid pre-PR validation plan: reason code drift")
+    if plan.per_command_timeout_seconds > PRE_PR_PER_COMMAND_TIMEOUT_SECONDS or plan.total_validation_timeout_seconds > PRE_PR_TOTAL_VALIDATION_TIMEOUT_SECONDS: raise ValueError("invalid pre-PR validation plan: timeout ceiling exceeded")
+    if plan.remote_build_required is not False or plan.execution_authorized is not False or plan.merge_authorized is not False or plan.side_effects_performed is not False: raise ValueError("invalid pre-PR validation plan: non-authorizing invariant broken")
+    payload: dict[str, object] = {"schema_name": plan.schema_name, "schema_version": plan.schema_version, "selector_version": plan.selector_version, "subject": serialize_pre_pr_validation_subject(subject), "subject_id": pre_pr_validation_subject_id(subject), "profile": plan.profile, "commands": list(plan.commands), "command_set_digest": plan.command_set_digest, "reason_codes": list(plan.reason_codes), "per_command_timeout_seconds": plan.per_command_timeout_seconds, "total_validation_timeout_seconds": plan.total_validation_timeout_seconds, "remote_build_required": False, "execution_authorized": False, "merge_authorized": False, "side_effects_performed": False}
+    if len(_canonical_bytes(payload)) > MAX_PRE_PR_SERIALIZED_BYTES: raise ValueError("pre-PR validation plan exceeds canonical size limit")
     return payload
 
 
 def pre_pr_validation_plan_id(plan: object) -> str:
-    """Return a domain-separated semantic identity for one valid pre-PR plan."""
     canonical = _canonical_bytes(serialize_pre_pr_validation_plan(plan))
-    digest = hashlib.sha256(b"agent-os-pre-pr-validation-plan:v1\0" + canonical).hexdigest()
-    return f"pre-pr-validation-plan:{digest}"
+    return f"pre-pr-validation-plan:{hashlib.sha256(b'agent-os-pre-pr-validation-plan:v1\0' + canonical).hexdigest()}"
 
 
 def _canonical_bytes(payload: dict[str, object]) -> bytes:
-    return json.dumps(
-        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    ).encode("utf-8")
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
