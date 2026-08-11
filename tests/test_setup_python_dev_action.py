@@ -18,7 +18,7 @@ def _assert_action_contract(content: str) -> None:
     required = [
         "runs:",
         "using: composite",
-        "uses: actions/setup-python@v5",
+        "uses: actions/setup-python@v6",
         'python-version: "3.11"',
         'cache: "pip"',
         "cache-dependency-path: requirements-dev.txt",

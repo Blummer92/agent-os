@@ -27,14 +27,14 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout runner source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.sha }}
           path: runner-source
           persist-credentials: false
 
       - name: Checkout exact frozen baseline
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ inputs.frozen_sha }}
           path: baseline
@@ -52,7 +52,7 @@ jobs:
           test "$baseline_sha" = "$FROZEN_SHA"
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
@@ -170,7 +170,7 @@ jobs:
 
       - name: Upload structured evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ env.ARTIFACT_NAME }}
           path: |
