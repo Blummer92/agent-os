@@ -15,6 +15,10 @@ from scripts.agent_os_issue_acceptance import ApprovalState
 from scripts.agent_os_issue_acceptance.approved_execution_projection import (
     ApprovedExecutionProjectionResult,
 )
+from scripts.agent_os_remote_validation import (
+    deserialize_pre_pr_validation_subject,
+    serialize_pre_pr_validation_subject,
+)
 from tests.agent_os_candidate_packet.test_approval_stage import _context, _decision
 from tests.agent_os_candidate_packet.test_proposal_stage import _prepare
 
@@ -37,7 +41,6 @@ def _approved():
     assert result.status is ApprovalProjectionStageStatus.COMPLETE
     projection = replace(
         result.projection,
-        projection_id="",
         allowed_files=("08_Tooling/workflow-scheduler/tests/test_concrete_runtime_adapters.py",),
         required_tests=(_COMMAND,),
     )
@@ -89,11 +92,31 @@ def test_complete_projection_produces_candidate_bound_validation_plan(tmp_path) 
     assert first.subject.candidate_bound is True
     assert first.subject.expected_source_sha == _CANDIDATE_SHA
     assert first.subject.tested_sha == approved.projection.tested_repository_sha
+    assert first.subject.expected_changed_paths == inputs.expected_changed_paths
     assert first.validation_plan.commands == (_COMMAND,)
     assert first.subject_id == second.subject_id
     assert first.validation_plan_id == second.validation_plan_id
+    payload = serialize_pre_pr_validation_subject(first.subject)
+    assert payload["expected_changed_paths"] == list(inputs.expected_changed_paths)
+    assert deserialize_pre_pr_validation_subject(payload) == first.subject
     assert first.execution_authorized is False
     assert first.side_effects_performed is False
+
+
+def test_in_scope_expected_path_drift_changes_subject_and_plan_identity(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    with_expected_path = _inputs(tmp_path, approved.projection, repository_evidence)
+    without_expected_path = replace(with_expected_path, expected_changed_paths=())
+
+    first = prepare_validation_stage(approved, with_expected_path)
+    second = prepare_validation_stage(approved, without_expected_path)
+
+    assert first.disposition is ValidationStageDisposition.GO
+    assert second.disposition is ValidationStageDisposition.GO
+    assert first.subject.expected_changed_paths != second.subject.expected_changed_paths
+    assert first.subject_id != second.subject_id
+    assert first.validation_plan_id != second.validation_plan_id
+    assert "expected_changed_paths" not in serialize_pre_pr_validation_subject(second.subject)
 
 
 def test_required_test_drift_fails_closed(tmp_path) -> None:
