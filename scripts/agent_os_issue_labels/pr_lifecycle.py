@@ -66,6 +66,9 @@ def reconcile_pull_request_lifecycle(
     if invocation_reason not in _LIFECYCLE_INVOCATION_REASONS:
         raise ValueError("invocation_reason must be a supported PR lifecycle event")
 
+    normalized_operation_evidence = _normalize_optional_evidence(caller_operation_evidence)
+    normalized_result_evidence = _normalize_optional_evidence(caller_result_evidence)
+
     reconciliation = reconcile_pull_request_labels(
         provider,
         repository,
@@ -107,8 +110,8 @@ def reconcile_pull_request_lifecycle(
         unmanaged_labels_preserved=reconciliation.unmanaged_labels_preserved,
         reason_codes=tuple(sorted(reason_codes)),
         reconciliation=reconciliation,
-        caller_operation_evidence=_normalize_optional_evidence(caller_operation_evidence),
-        caller_result_evidence=_normalize_optional_evidence(caller_result_evidence),
+        caller_operation_evidence=normalized_operation_evidence,
+        caller_result_evidence=normalized_result_evidence,
         label_write_authorized=reconciliation.label_write_authorized,
         side_effects_performed=reconciliation.side_effects_performed,
     )
