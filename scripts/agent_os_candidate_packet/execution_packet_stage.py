@@ -175,15 +175,15 @@ def prepare_execution_packet(
             expected_projection_id=projection.projection_id,
             expected_proposal_id=projection.proposal_id,
             expected_approval_id=projection.approval_id,
-            expected_issueplan_evidence=None,  # not consumed by pure configuration binding
-            current_issueplan_evidence=None,  # not consumed by pure configuration binding
+            expected_issueplan_evidence=None,
+            current_issueplan_evidence=None,
             approval_record=approval_projection_stage_result.decision_revision,
-            current_proposal=None,  # not consumed by pure configuration binding
+            current_proposal=None,
             repository_state_evidence=candidate_runtime_inputs.repository_state_evidence,
             evaluated_at=candidate_runtime_inputs.evaluated_at,
             validation_plan=validation.validation_plan,
             expected_plan_id=validation.validation_plan_id,
-            evidence_bundle=None,  # prior evidence is represented by its immutable ID below
+            evidence_bundle=None,
             expected_bundle_id=candidate_runtime_inputs.validation_bundle_id,
             advisory_result=None,
             expected_advisory_result_id=candidate_runtime_inputs.advisory_result_id,
@@ -274,6 +274,7 @@ def _build_request(
 
 
 def _stable_id(kind: str, inputs: CandidateRuntimeInputs) -> str:
+    expected_paths = "\0".join(inputs.expected_changed_paths)
     digest = hashlib.sha256(
         (
             "agent-os-candidate-packet-v1\0"
@@ -286,6 +287,8 @@ def _stable_id(kind: str, inputs: CandidateRuntimeInputs) -> str:
             + inputs.invocation_id
             + "\0"
             + inputs.candidate_sha
+            + "\0"
+            + expected_paths
         ).encode("utf-8")
     ).hexdigest()
     return f"candidate-{kind}:{digest}"
