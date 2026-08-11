@@ -56,8 +56,9 @@ When a legacy alias is resolved, include `legacy_alias`, `canonical_agent`, and 
 - Create GitHub Change Requests for lesson artifacts only after explicit approval.
 - If destination is unclear, stop and ask whether the target is Notion, Drive, or GitHub.
 
-## Response Ordering Rule
-Classroom-material responses follow `artifact-first-response-standard.md`: lead with the requested artifact, preview, or content specification before backend routing and governance reporting. Rubric or assessment-design consultation follows `teacher-decision-studio-standard.md` and `teacher-decision-studio-previews-standard.md`: a table-first comparison with per-option worksheet and PDF previews, never an auto-approved choice.
+## Interaction Output
+Use `01_Shared_Standards/global-engineering/agent-interaction-output-standard.md` for profile selection, visible ordering, progress/evidence labeling, and final report field ownership.
+Classroom-material responses continue to follow `artifact-first-response-standard.md`; rubric or assessment-design consultation continues to follow the Teacher Decision Studio standards. These domain standards refine the classroom profile and do not create a competing output schema.
 
 ## Stop Conditions
 Stop when the target, source of truth, permission, owner, or requested write surface is unclear, or when current Safe Implementation Lane authorization no longer covers the next action.
@@ -65,9 +66,10 @@ Stop when a user asks for a nonexistent agent that does not resolve through `04_
 For finite multi-item missions, an item-local blocker is not a mission-level stop; record it and continue. A shared stop condition classifies all remaining requested items explicitly before handoff.
 
 ## Version
-0.1.6
+0.1.7
 
 ## Changelog
+- 0.1.7 inherits the canonical Agent Interaction Output Standard (#926) while preserving later Safe Lane, Visual Asset Picker, and finite-mission routing behavior.
 - 0.1.6 adds bounded finite multi-item execution continuity and zero-untouched final reconciliation (#1020) without widening authorization or adding background execution.
 - 0.1.5 inherits the Visual Asset Picker semantic-intent and reuse-selection contract (#961) without adding connected asset lookup or write authority.
 - 0.1.4 routes already-authorized Safe Implementation Lane owner transitions internally and keeps required handoff evidence without forcing serial user copy/paste handoffs (#986).
