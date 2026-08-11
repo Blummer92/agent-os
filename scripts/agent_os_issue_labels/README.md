@@ -30,13 +30,30 @@ The executor never creates labels. If a required managed label is absent from th
 repository label catalog, reconciliation returns `managed-label-unavailable` and
 performs no mutation. Label creation remains a separately governed action.
 
-### Trigger seam
+## Lifecycle integration
 
-Phase 1 is connector/operator driven. A caller may invoke one PR or a finite PR
-batch during normal creation/cleanup or an explicitly authorized audit. Future
-webhook, GitHub Actions, scheduled, or persistent reconciliation should call the
-same executor, but those trigger/permission surfaces require separate approval and
-are intentionally absent here.
+`scripts/agent_os_issue_labels/pr_lifecycle.py` is the thin operator/connector
+integration seam for #1038. It delegates label planning and mutation to the existing
+#1022 planner and #1023 reconciler instead of defining new lifecycle or label logic.
+
+Supported invocation reasons represent the normal GitHub Service Agent follow-ups:
+Draft PR creation, head-SHA change, validation terminal state, Draft/Ready transition,
+review-thread state change, branch freshness/conflict recheck, and final-state readback.
+
+Each invocation reacquires live PR evidence through the existing provider boundary.
+If the head moves before any label mutation, the wrapper discards that stale result
+and recomputes once from fresh evidence. A head move after mutation remains visible
+as stale evidence and is not silently retried.
+
+The lifecycle result preserves caller operation/result evidence separately from the
+underlying reconciliation result, reports whether reconciliation was required, and
+keeps all Ready-for-Review, merge, issue-closure, review-resolution, protected-setting,
+production, and external-system authority fields false. Repeated unchanged calls
+perform zero writes because the existing reconciler computes an empty managed delta.
+
+This layer remains connector/operator driven. Future webhook, GitHub Actions,
+scheduled, polling, or persistent automation must call the same package contract but
+requires separately governed authorization and is intentionally not implemented here.
 
 ## Issue-label tooling
 
@@ -52,15 +69,15 @@ by their existing contracts.
 ## Read-only workflows
 
 Existing issue-label workflows remain read-only. No workflow is added or modified
-for PR-label reconciliation.
+for PR-label reconciliation or lifecycle integration.
 
 ## Validation
 
-Focused PR reconciliation tests:
+Focused lifecycle and PR reconciliation tests:
 
 ```bash
-python -m pytest tests/agent_os_issue_labels/test_pr_reconciler.py
-python -m pytest tests/agent_os_issue_labels
+python -m pytest tests/agent_os_issue_labels/test_pr_lifecycle.py -q
+python -m pytest tests/agent_os_issue_labels -q
 ```
 
 Repository acceptance still requires the executable `Agent OS Validation Gate`,
@@ -69,7 +86,8 @@ aggregate, plus required PR review checks.
 
 ## Boundary
 
-Repository implementation does not itself authorize a live label backfill. Live
-managed-label mutation, backfill, workflow/scheduled automation, merge, issue
-closure, protected settings, credentials/IAM, production, Notion, Drive, and
-classroom-artifact writes remain separately governed.
+Repository implementation does not itself authorize live managed-label writes.
+Callers must separately authorize the triggering PR operation and any label mutation.
+Live backfill, workflow/scheduled automation, merge, issue closure, Draft/Ready
+mutation, review resolution, protected settings, credentials/IAM, production,
+Notion, Drive, and classroom-artifact writes remain separately governed.
