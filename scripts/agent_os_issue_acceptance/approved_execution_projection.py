@@ -560,3 +560,239 @@ def _timestamp(value: object, name: str) -> datetime:
 
 def _optional_timestamp(value: object, name: str) -> datetime | None:
     return None if value is None else _timestamp(value, name)
+
+
+_PROJECTION_TRANSPORT_KEYS = frozenset(
+    {
+        "schema_version",
+        "projection_id",
+        "proposal_version",
+        "proposal_id",
+        "approval_id",
+        "approval_revision",
+        "approval_revision_number",
+        "approval_kind",
+        "approval_state",
+        "approval_authorizer_id",
+        "approval_decision_id",
+        "approval_decision_at",
+        "approval_expires_at",
+        "approval_supersedes_id",
+        "handoff_digest",
+        "graph_digest",
+        "planning_result_digest",
+        "repository",
+        "base_branch",
+        "evaluated_repository_sha",
+        "evaluator_commit_sha",
+        "tested_repository_sha",
+        "repository_evidence_type",
+        "supplied_node_ids",
+        "cohort_summaries",
+        "issueplan_current_state_evidence_id",
+        "repository_state_evidence_id",
+        "source_snapshot_fingerprint",
+        "scanner_result_fingerprint",
+        "implementation_contract_fingerprint",
+        "allowed_files",
+        "forbidden_paths",
+        "required_tests",
+        "projected_at",
+        "complete",
+        "authoritative",
+        "execution_authorized",
+        "side_effects_performed",
+    }
+)
+_PROJECTION_RESULT_TRANSPORT_KEYS = frozenset(
+    {
+        "status",
+        "projection",
+        "reason_codes",
+        "details",
+        "complete",
+        "authoritative",
+        "execution_authorized",
+        "side_effects_performed",
+    }
+)
+
+
+def reconstruct_approved_execution_projection(
+    payload: bytes | str | dict[str, Any],
+) -> ApprovedExecutionProjection:
+    """Strictly reconstruct one projection and reverify its supplied identity."""
+
+    raw = _decode_projection_transport_payload(payload, "approved execution projection")
+    _require_projection_transport_keys(
+        raw, _PROJECTION_TRANSPORT_KEYS, "approved execution projection"
+    )
+    if raw["complete"] is not True:
+        raise ValueError("projection complete must be true")
+    _require_projection_fixed_false(raw, "projection")
+    if type(raw["approval_revision_number"]) is not int:
+        raise ValueError("approval_revision_number must be an integer")
+    supplied_node_ids = _projection_transport_string_array(
+        raw["supplied_node_ids"], "supplied_node_ids"
+    )
+    allowed_files = _projection_transport_string_array(raw["allowed_files"], "allowed_files")
+    forbidden_paths = _projection_transport_string_array(
+        raw["forbidden_paths"], "forbidden_paths"
+    )
+    required_tests = _projection_transport_string_array(raw["required_tests"], "required_tests")
+    cohorts_raw = raw["cohort_summaries"]
+    if not isinstance(cohorts_raw, list):
+        raise ValueError("cohort_summaries must be a JSON array")
+    from .approval_records import _reconstruct_transport_cohort
+
+    cohorts = tuple(_reconstruct_transport_cohort(item) for item in cohorts_raw)
+    return ApprovedExecutionProjection(
+        schema_version=raw["schema_version"],
+        projection_id=raw["projection_id"],
+        proposal_version=raw["proposal_version"],
+        proposal_id=raw["proposal_id"],
+        approval_id=raw["approval_id"],
+        approval_revision=raw["approval_revision"],
+        approval_revision_number=raw["approval_revision_number"],
+        approval_kind=raw["approval_kind"],
+        approval_state=raw["approval_state"],
+        approval_authorizer_id=raw["approval_authorizer_id"],
+        approval_decision_id=raw["approval_decision_id"],
+        approval_decision_at=raw["approval_decision_at"],
+        approval_expires_at=raw["approval_expires_at"],
+        approval_supersedes_id=raw["approval_supersedes_id"],
+        handoff_digest=raw["handoff_digest"],
+        graph_digest=raw["graph_digest"],
+        planning_result_digest=raw["planning_result_digest"],
+        repository=raw["repository"],
+        base_branch=raw["base_branch"],
+        evaluated_repository_sha=raw["evaluated_repository_sha"],
+        evaluator_commit_sha=raw["evaluator_commit_sha"],
+        tested_repository_sha=raw["tested_repository_sha"],
+        repository_evidence_type=raw["repository_evidence_type"],
+        supplied_node_ids=supplied_node_ids,
+        cohort_summaries=cohorts,
+        issueplan_current_state_evidence_id=raw["issueplan_current_state_evidence_id"],
+        repository_state_evidence_id=raw["repository_state_evidence_id"],
+        source_snapshot_fingerprint=raw["source_snapshot_fingerprint"],
+        scanner_result_fingerprint=raw["scanner_result_fingerprint"],
+        implementation_contract_fingerprint=raw[
+            "implementation_contract_fingerprint"
+        ],
+        allowed_files=allowed_files,
+        forbidden_paths=forbidden_paths,
+        required_tests=required_tests,
+        projected_at=raw["projected_at"],
+    )
+
+
+def serialize_approved_execution_projection_result(
+    result: ApprovedExecutionProjectionResult,
+) -> bytes:
+    """Serialize one fail-closed projection result as canonical JSON plus newline."""
+
+    if not isinstance(result, ApprovedExecutionProjectionResult):
+        raise TypeError("result must be ApprovedExecutionProjectionResult")
+    projection_payload = (
+        _projection_payload(_verified_projection(result.projection))
+        if result.projection is not None
+        else None
+    )
+    payload = {
+        "status": result.status,
+        "projection": projection_payload,
+        "reason_codes": list(result.reason_codes),
+        "details": list(result.details),
+        "complete": result.complete,
+        "authoritative": False,
+        "execution_authorized": False,
+        "side_effects_performed": False,
+    }
+    return _canonical_bytes(payload) + b"\n"
+
+
+def reconstruct_approved_execution_projection_result(
+    payload: bytes | str | dict[str, Any],
+) -> ApprovedExecutionProjectionResult:
+    """Strictly reconstruct one projection result without creating authority."""
+
+    raw = _decode_projection_transport_payload(payload, "projection result")
+    _require_projection_transport_keys(
+        raw, _PROJECTION_RESULT_TRANSPORT_KEYS, "projection result"
+    )
+    _require_projection_fixed_false(raw, "projection result")
+    if type(raw["complete"]) is not bool:
+        raise ValueError("projection result complete must be a boolean")
+    status = raw["status"]
+    if status not in _RESULT_STATUSES:
+        raise ValueError("unsupported projection result status")
+    if raw["complete"] != (status == "complete"):
+        raise ValueError("projection result complete must match status")
+    reasons = _projection_transport_string_array(raw["reason_codes"], "reason_codes")
+    details = _projection_transport_string_array(raw["details"], "details")
+    projection_raw = raw["projection"]
+    if status == "complete":
+        if not isinstance(projection_raw, dict):
+            raise ValueError("complete result requires one projection")
+        if reasons:
+            raise ValueError("complete result cannot carry reason codes")
+        projection = reconstruct_approved_execution_projection(projection_raw)
+    else:
+        if projection_raw is not None:
+            raise ValueError("non-complete result cannot carry a projection")
+        if not reasons:
+            raise ValueError("non-complete result requires reason codes")
+        projection = None
+    return ApprovedExecutionProjectionResult(status, projection, reasons, details)
+
+
+def _decode_projection_transport_payload(
+    payload: bytes | str | dict[str, Any], name: str
+) -> dict[str, Any]:
+    if isinstance(payload, dict):
+        return payload
+    if isinstance(payload, bytes):
+        try:
+            text = payload.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"{name} must be UTF-8 JSON") from exc
+    elif isinstance(payload, str):
+        text = payload
+    else:
+        raise TypeError(f"{name} must be bytes, string, or mapping")
+    try:
+        decoded = json.loads(text)
+    except (json.JSONDecodeError, RecursionError) as exc:
+        raise ValueError(f"{name} must contain valid JSON") from exc
+    if not isinstance(decoded, dict):
+        raise ValueError(f"{name} must contain a JSON object")
+    return decoded
+
+
+def _require_projection_transport_keys(
+    payload: dict[str, Any], expected: frozenset[str], name: str
+) -> None:
+    actual = set(payload)
+    unknown = actual - expected
+    missing = expected - actual
+    if unknown:
+        raise ValueError(f"{name} contains unknown fields: {sorted(unknown)}")
+    if missing:
+        raise ValueError(f"{name} is missing fields: {sorted(missing)}")
+
+
+def _projection_transport_string_array(value: object, name: str) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise ValueError(f"{name} must be a JSON array")
+    if not all(isinstance(item, str) for item in value):
+        raise ValueError(f"{name} must contain only strings")
+    return tuple(value)
+
+
+def _require_projection_fixed_false(payload: dict[str, Any], name: str) -> None:
+    if payload["authoritative"] is not False:
+        raise ValueError(f"{name} authoritative must be false")
+    if payload["execution_authorized"] is not False:
+        raise ValueError(f"{name} execution_authorized must be false")
+    if payload["side_effects_performed"] is not False:
+        raise ValueError(f"{name} side_effects_performed must be false")
