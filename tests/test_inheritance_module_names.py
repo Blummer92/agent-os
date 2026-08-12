@@ -7,7 +7,7 @@ COMMON_OVERLAY = Path("02_Agent_Overlays/_common-overlay-rules.md")
 OVERLAY_DIR = Path("02_Agent_Overlays")
 
 BASELINE_MODULES = {
-    "Global Engineering": "0.3.0",
+    "Global Engineering": "0.4.0",
     "Read-Only Default": "0.1.0",
     "Source-of-Truth Checks": "0.1.0",
 }

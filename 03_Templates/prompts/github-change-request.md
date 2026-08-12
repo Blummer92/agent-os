@@ -33,6 +33,10 @@ reported in the pull request. Material architecture, ownership, schema,
 compatibility, workflow, credential, persistence, protected-setting, production,
 or external-effect changes require a new decision.
 
+## Pattern + Docs Freshness Gate
+State the existing pattern checked (`none found` allowed), reusable capability registry relevance (`not applicable` allowed), canonical implementation path, proving tests/behavior, docs expected to change, docs intentionally unchanged with bounded reason, and changelog/module-version/registry review.
+`Docs intentionally unchanged because...` is valid only when public behavior, public interfaces, workflows, owner expectations, standards, templates, and reusable capability records are unchanged.
+
 ## Proposed Content Or Patch
 Paste the exact proposed content, patch, or implementation instructions.
 
@@ -47,6 +51,8 @@ not an authorization boundary.
 - Shared rules stay in shared standards.
 - Agent-specific rules stay in overlays.
 - Registry ownership and routing stay in registry files.
+- Pattern + Docs Freshness Gate is completed or explicitly marked not applicable
+  with a bounded reason.
 - Required exact-head validation passes.
 - No blocker or blocking review conversation remains before Ready-for-Review.
 
