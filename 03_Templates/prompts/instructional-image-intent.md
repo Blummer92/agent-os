@@ -28,21 +28,9 @@ Provider-ready prompt prose is derived working output, not canonical evidence. A
 
 ## Control
 
-### Must Show
-
-- List the evidence that must be visible for the image to teach the intended idea.
-- At least one item is required.
-
-### Creative Freedom
-
-- List details that may vary without weakening the instructional purpose.
-- Use an empty list when no creative freedom is specified.
-
-### Avoid
-
-- List only relevant failure modes or unwanted content.
-- Do not repeat generic boilerplate unless it materially affects this image.
-- Use an empty list when no avoid constraints are specified.
+- **Must show:** the evidence that must be visible for the image to teach the intended idea; at least one item is required.
+- **Creative freedom:** details that may vary without weakening the instructional purpose; use an empty list when no creative freedom is specified.
+- **Avoid:** only relevant failure modes or unwanted content; do not repeat generic boilerplate unless it materially affects this image; use an empty list when no avoid constraints are specified.
 
 ## Output
 
