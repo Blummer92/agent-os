@@ -6,7 +6,7 @@ Repository releases and module versions are versioned independently, so module v
 | Module | Version |
 |---|---|
 | Global Engineering | 0.4.0 |
-| Agent Interaction Output Standard | 0.1.0 |
+| Agent Interaction Output Standard | 0.2.0 |
 | Testing And Release | 0.2.0 |
 | Read-Only Default | 0.1.0 |
 | Source-of-Truth Checks | 0.1.0 |
@@ -40,6 +40,8 @@ Repository releases and module versions are versioned independently, so module v
 | Issue Quality Taxonomy | 0.1.0 |
 
 **Global Engineering** `0.4.0` adds the Pattern + Docs Freshness Gate to repository implementation final reports and GitHub Change Request handoffs while preserving Agent Interaction Output Standard ownership of report fields and presentation order (#998; planned in #928, PR #929).
+
+**Agent Interaction Output Standard** `0.2.0` adds compact state-based operator rendering for implementation and PR-review work: bounded canonical stage bars without invented percentages, consistent `Completed` / `Current` / `Remaining` / `Blockers` labels, material-only `Best execution`, one primary `Next` action, and smallest-context prompt/command delivery (#1081). It creates no new progress state, workflow engine, routing authority, or execution authority.
 
 **Dashboard Migration Verification** (`08_Tooling/dashboard-migration-verification/`) starts as a verification-only
 migration evidence toolkit for dashboard registry examples, placeholder snapshots,
@@ -92,7 +94,7 @@ bounded Notion working-layer design and the exact-target Change Request. The
 Change Request is recorded as proposed and not authorized; six unresolved
 decisions block any live change.
 
-**Execution Checkpoint Contract** (`scripts/agent_os_execution_checkpoint/`, #895, design approved in #858) is the pure-local checkpoint record, content-addressed identity, append-only store, and resume planner; every authority field stays false.
+**Execution Checkpoint Contract** (`scripts/agent_os_execution_checkpoint/`, #895, design approved in #858) is the pure-local checkpoint record, content-addressed append-only storage with fail-closed quarantine, binding invalidation, mutation-intent identities, and deterministic non-authorizing resume planning; every authority field stays false.
 
 ## Reconciliation Notes
 
