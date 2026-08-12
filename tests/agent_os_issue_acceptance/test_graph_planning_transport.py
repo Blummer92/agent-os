@@ -77,6 +77,26 @@ def test_graph_transport_rejects_unknown_missing_and_noncanonical_fields():
         reconstruct_issue_batch_graph(reordered)
 
 
+def test_graph_transport_rejects_noncanonical_text_and_bytes():
+    encoded = serialize_issue_batch_graph(_graph())
+    canonical_text = encoded.decode("utf-8")
+    payload = json.loads(encoded)
+
+    whitespace = canonical_text.replace("{", "{ ", 1)
+    reordered = json.dumps(
+        dict(reversed(list(payload.items()))),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    duplicate = canonical_text.replace('"nodes":', '"nodes":[],"nodes":', 1)
+
+    for candidate in (whitespace, reordered, duplicate):
+        with pytest.raises(ValueError, match="canonical"):
+            reconstruct_issue_batch_graph(candidate)
+        with pytest.raises(ValueError, match="canonical"):
+            reconstruct_issue_batch_graph(candidate.encode("utf-8"))
+
+
 def test_graph_transport_rejects_enum_collection_and_dependency_drift():
     payload = json.loads(serialize_issue_batch_graph(_graph()))
 
@@ -144,6 +164,30 @@ def test_planning_transport_rejects_unknown_missing_and_authority_drift():
         reconstruct_batch_planning_result(scope)
 
 
+def test_planning_transport_rejects_noncanonical_text_and_bytes():
+    encoded = serialize_batch_planning_result(evaluate_batch_plan(_graph()))
+    canonical_text = encoded.decode("utf-8")
+    payload = json.loads(encoded)
+
+    whitespace = canonical_text.replace("{", "{ ", 1)
+    reordered = json.dumps(
+        dict(reversed(list(payload.items()))),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    duplicate = canonical_text.replace(
+        '"batch_reason_codes":',
+        '"batch_reason_codes":[],"batch_reason_codes":',
+        1,
+    )
+
+    for candidate in (whitespace, reordered, duplicate):
+        with pytest.raises(ValueError, match="canonical"):
+            reconstruct_batch_planning_result(candidate)
+        with pytest.raises(ValueError, match="canonical"):
+            reconstruct_batch_planning_result(candidate.encode("utf-8"))
+
+
 def test_planning_transport_rejects_malformed_enum_and_collection_shapes():
     payload = json.loads(serialize_batch_planning_result(evaluate_batch_plan(_graph())))
 
@@ -175,6 +219,33 @@ def test_planning_transport_rejects_coverage_and_order_drift():
     duplicate_ids["supplied_node_ids"].append(duplicate_ids["supplied_node_ids"][0])
     with pytest.raises(ValueError, match="cohorts must contain each supplied node exactly once"):
         reconstruct_batch_planning_result(duplicate_ids)
+
+    reversed_cohorts = json.loads(json.dumps(payload))
+    reversed_cohorts["cohorts"] = list(reversed(reversed_cohorts["cohorts"]))
+    with pytest.raises(ValueError, match="not canonical"):
+        reconstruct_batch_planning_result(reversed_cohorts)
+
+    nested = json.loads(json.dumps(payload))
+    cohort = nested["cohorts"][0]
+    cohort["reason_codes"] = list(reversed(cohort["reason_codes"]))
+    if len(cohort["reason_codes"]) < 2:
+        cohort["reason_codes"].append("zzz-noncanonical-order")
+        cohort["reason_codes"] = list(reversed(cohort["reason_codes"]))
+    with pytest.raises(ValueError, match="not canonical"):
+        reconstruct_batch_planning_result(nested)
+
+
+def test_planning_serializer_rejects_noncanonical_nested_ordering():
+    canonical = evaluate_batch_plan(_graph())
+    reordered = BatchPlanningResult(
+        supplied_node_ids=canonical.supplied_node_ids,
+        overall_classification=canonical.overall_classification,
+        cohorts=tuple(reversed(canonical.cohorts)),
+        batch_reason_codes=canonical.batch_reason_codes,
+        cycle_node_groups=canonical.cycle_node_groups,
+    )
+    with pytest.raises(ValueError, match="not canonical"):
+        serialize_batch_planning_result(reordered)
 
 
 def test_transport_is_offline_and_never_invokes_runtime_capabilities(monkeypatch):
