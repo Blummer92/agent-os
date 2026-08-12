@@ -24,23 +24,34 @@ Summary: GitHub group present (repository, pull request, exact head, validation 
 
 ## Case 3 - Issue Implementation Report
 Prompt: "Implement the authorized bounded scope of #926 and report."
-Ordering: completed, current, remaining, blockers, execution route, then next action; the Output Summary follows that block.
+Ordering: when a bounded canonical stage sequence exists, a state-based progress bar leads the compact block, followed by `Completed`, `Current`, `Remaining`, `Blockers`, material `Best execution`, and one concrete `Next` action; the Output Summary follows that block.
 Summary: full Base Report Contract plus the GitHub group, including branch, pull request, exact head, validation state, and current stage.
 
 ## Case 4 - PR Review / Post-PR Handoff
 Fixture: a terminal pull-request state audited from existing post-PR evidence.
-Ordering: terminal or review state with exact-head evidence first, then the recommended next issue and handoff; never a merge or closure claim.
+Ordering: review state and exact-head evidence first; when a bounded canonical stage sequence exists, use the same compact `Completed` / `Current` / `Remaining` / `Blockers` progress block before the recommended next issue and handoff; never a merge or closure claim.
 Summary: `status: deferred` with a real `next_owner`; recommended executor route is reported as routing evidence, never as authority.
 
 ## Case 5 - Blocked Source-Of-Truth Request
 Prompt: "Update the official standards from memory."
-Ordering: the controlling blocker and its exact unblock condition first; evidence and options afterward.
+Ordering: the controlling blocker and its exact unblock condition first; the compact status may show `Blockers` but must not add a progress bar when no bounded canonical stage sequence exists.
 Summary: `status: blocked` with non-empty `blockers` naming unclear source of truth and missing write authorization; no partial-completion claim.
 
 ## Case 6 - Single Command Delivery
 Prompt: "Give me the command to run repository validation."
-Ordering: one reusable copy/paste artifact first, with the brief explanation immediately before it; governance notes afterward.
+Ordering: one smallest reusable copy/paste context packet or artifact first, with the brief explanation immediately before it; omit repeated governance, source-of-truth, architecture, or repository boilerplate already available to the target unless it is material to safe execution.
 Summary: compact evidence only; `files_changed` empty, `tests_run: N/A`, and no implied execution of the command.
+
+### Compact Operator Rendering Regression Fixtures (#1081)
+
+These fixtures refine Cases 3-6 only and create no new progress state or authority.
+
+1. **Bounded implementation stages** — canonical stages exist, so the response may render a state-based bar plus `Completed`, `Current`, `Remaining`, `Blockers`, material `Best execution`, and exactly one primary `Next` action; it never labels the bar with an invented percentage.
+2. **No bounded stage sequence** — canonical evidence exposes status but no finite stage sequence, so the bar is omitted while verified status and blocker evidence remain visible.
+3. **PR review with exact head** — exact-head evidence remains visible and the compact progress block does not displace validation or authorization boundaries.
+4. **Blocked work** — the controlling blocker and exact unblock condition remain first; compactness never manufactures partial progress.
+5. **Short execution handoff** — the prompt or command contains only target, goal, bounded scope, exact validation need, stop condition, and required report evidence already needed by the target; repository-wide governance prose is not repeated.
+6. **Material route escalation** — `Best execution` appears only when route selection matters and is backed by executor-route/capability evidence, not model preference.
 
 ## Case 7 - Architecture Review
 Prompt: "Review the proposed output-contract architecture."
