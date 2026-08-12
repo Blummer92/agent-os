@@ -28,6 +28,17 @@ Recovery paths are:
 
 Machine-readable reasons distinguish CLI/auth/permission/credential/host failures, rate limits, in-progress runs, stale head or attempt, run/job log failures, incomplete log association, transient network failure, expired environments, disk exhaustion, and exhausted evidence recovery.
 
+Routine diagnostic excerpts are bounded and deterministic:
+- minimum target: 50 lines;
+- default/initial target: 50 lines;
+- routine maximum: 150 lines;
+- expansion defaults to 50-line increments and caps at 150 lines;
+- when a failing job or step is already known, callers should retrieve the smallest targeted excerpt that can expose the first actionable failure;
+- full-run or full-log retrieval is not the routine default;
+- retrieval beyond 150 lines is exceptional evidence recovery and remains subject to exact-head/run-attempt provenance and fail-closed behavior.
+
+`diagnostic_excerpt_lines(...)` validates an explicit target and `expand_diagnostic_excerpt_lines(...)` deterministically expands a target without exceeding the routine maximum. `CIEvidenceRecoveryPlan.diagnostic_excerpt_target_lines` records the bounded target selected for the plan. These values are planning evidence only; the pure-local contract does not perform log retrieval itself.
+
 Retry behavior is bounded:
 - rate-limit and transient-network failures may retry the same path within budget;
 - other failures advance to the next untried path;
@@ -41,7 +52,8 @@ Fail-closed conditions include:
 - superseded run attempt;
 - invalid reason codes or model types;
 - duplicate recovery paths;
-- invalid retry state.
+- invalid retry state;
+- diagnostic excerpt targets outside 50–150 lines or non-integer expansion values.
 
 Authority limits are explicit:
 - recovery may set only `evidence_usable_for_attribution`;
