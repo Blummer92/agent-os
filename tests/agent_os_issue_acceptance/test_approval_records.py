@@ -758,13 +758,10 @@ def test_approval_candidate_accepts_the_binding_route() -> None:
         planning_binding=binding,
     )
     assert candidate.binding.proposal_id == proposal.proposal_id
-    # No new persisted field appeared on the approval binding.
     assert not hasattr(candidate.binding, "planning_binding")
 
 
 def test_approval_candidate_without_the_binding_fails_closed() -> None:
-    """The same inputs minus the binding cannot satisfy the legacy route."""
-
     proposal, issueplan, repository, _binding = _two_phase_inputs()
     with pytest.raises(ValueError, match="current validated inputs"):
         build_approval_candidate(
@@ -833,15 +830,6 @@ _BINDING_SLOTS = (
 def _self_consistent_binding(
     binding: PlanningBindingEvidence, **overrides
 ) -> PlanningBindingEvidence:
-    """Build a binding whose ``binding_id`` still matches its own content, but
-    whose overridden field(s) diverge from the proposal it is checked against.
-
-    Recomputing ``binding_id`` alone cannot catch this: the forged binding is
-    entirely self-consistent. Only an explicit field-by-field comparison
-    against the proposal's own repository/base_branch/evaluated_repository_sha
-    detects the drift.
-    """
-
     forged = object.__new__(PlanningBindingEvidence)
     for slot in _BINDING_SLOTS:
         object.__setattr__(forged, slot, overrides.get(slot, getattr(binding, slot)))
@@ -986,3 +974,167 @@ def test_approval_applicability_rejects_a_tampered_binding() -> None:
         planning_binding=tampered,
     )
     assert result.status != "applicable"
+
+
+def test_approval_transport_round_trips_binding_record_and_applicability():
+    approved, proposal, issueplan, repository = _approved()
+    applicability = evaluate_approval_applicability(
+        approved,
+        proposal,
+        issueplan,
+        repository,
+        evaluated_at=APPROVED_AT,
+    )
+
+    binding_bytes = approval_records.serialize_approval_binding(approved.binding)
+    restored_binding = approval_records.reconstruct_approval_binding(binding_bytes)
+    assert restored_binding == approved.binding
+    assert approval_records.serialize_approval_binding(restored_binding) == binding_bytes
+
+    record_bytes = approval_records.serialize_approval_record(approved)
+    restored_record = approval_records.reconstruct_approval_record(record_bytes)
+    assert restored_record == approved
+    assert approval_records.serialize_approval_record(restored_record) == record_bytes
+
+    applicability_bytes = approval_records.serialize_approval_applicability_result(
+        applicability
+    )
+    restored_applicability = approval_records.reconstruct_approval_applicability_result(
+        applicability_bytes
+    )
+    assert restored_applicability == applicability
+    assert (
+        approval_records.serialize_approval_applicability_result(
+            restored_applicability
+        )
+        == applicability_bytes
+    )
+
+
+def test_approval_record_transport_rejects_schema_enum_identity_type_and_fixed_flag_drift():
+    approved, *_ = _approved()
+    json_module = __import__("json")
+    original = json_module.loads(approval_records.serialize_approval_record(approved))
+
+    missing = dict(original)
+    missing.pop("approval_id")
+    with pytest.raises(ValueError, match="missing fields"):
+        approval_records.reconstruct_approval_record(missing)
+
+    unknown = dict(original)
+    unknown["unexpected"] = True
+    with pytest.raises(ValueError, match="unknown fields"):
+        approval_records.reconstruct_approval_record(unknown)
+
+    unsupported = dict(original)
+    unsupported["schema_version"] = "2.0"
+    with pytest.raises(ValueError, match="unsupported approval schema version"):
+        approval_records.reconstruct_approval_record(unsupported)
+
+    boolean_revision = dict(original)
+    boolean_revision["revision_number"] = True
+    with pytest.raises(ValueError, match="revision_number"):
+        approval_records.reconstruct_approval_record(boolean_revision)
+
+    for field, value in (("approval_kind", "bogus"), ("state", "bogus")):
+        payload = dict(original)
+        payload[field] = value
+        with pytest.raises(ValueError):
+            approval_records.reconstruct_approval_record(payload)
+
+    for field, value in (
+        ("approval_id", "approval:" + "0" * 64),
+        ("approval_revision", "approval-revision:" + "0" * 64),
+        ("execution_authorized", True),
+        ("side_effects_performed", True),
+    ):
+        payload = dict(original)
+        payload[field] = value
+        with pytest.raises(ValueError):
+            approval_records.reconstruct_approval_record(payload)
+
+
+def test_approval_binding_transport_rejects_closed_schema_and_cohort_shape_drift():
+    approved, *_ = _approved()
+    json_module = __import__("json")
+    original = json_module.loads(
+        approval_records.serialize_approval_binding(approved.binding)
+    )
+
+    missing = dict(original)
+    missing.pop("proposal_id")
+    with pytest.raises(ValueError, match="missing fields"):
+        approval_records.reconstruct_approval_binding(missing)
+
+    unknown = dict(original)
+    unknown["unexpected"] = True
+    with pytest.raises(ValueError, match="unknown fields"):
+        approval_records.reconstruct_approval_binding(unknown)
+
+    wrong_array = dict(original)
+    wrong_array["supplied_node_ids"] = "issue-398"
+    with pytest.raises(ValueError, match="JSON array"):
+        approval_records.reconstruct_approval_binding(wrong_array)
+
+    malformed_cohort = json_module.loads(json_module.dumps(original))
+    malformed_cohort["cohort_summaries"][0]["unexpected"] = True
+    with pytest.raises(ValueError, match="unknown fields"):
+        approval_records.reconstruct_approval_binding(malformed_cohort)
+
+
+def test_approval_record_transport_rejects_governed_binding_drift_against_identity():
+    approved, *_ = _approved()
+    json_module = __import__("json")
+    original = json_module.loads(approval_records.serialize_approval_record(approved))
+
+    for field, value in (
+        ("allowed_files", ["different.py"]),
+        ("forbidden_paths", ["secrets/**"]),
+        ("required_tests", ["different test"]),
+    ):
+        payload = json_module.loads(json_module.dumps(original))
+        payload["binding"][field] = value
+        with pytest.raises(ValueError, match="approval_id"):
+            approval_records.reconstruct_approval_record(payload)
+
+    node_drift = json_module.loads(json_module.dumps(original))
+    node_drift["binding"]["supplied_node_ids"] = ["issue-999"]
+    node_drift["binding"]["cohort_summaries"][0]["node_ids"] = ["issue-999"]
+    with pytest.raises(ValueError, match="approval_id"):
+        approval_records.reconstruct_approval_record(node_drift)
+
+
+def test_approval_applicability_transport_rejects_invalid_status_shape_and_fixed_flags():
+    approved, proposal, issueplan, repository = _approved()
+    applicability = evaluate_approval_applicability(
+        approved,
+        proposal,
+        issueplan,
+        repository,
+        evaluated_at=APPROVED_AT,
+    )
+    json_module = __import__("json")
+    original = json_module.loads(
+        approval_records.serialize_approval_applicability_result(applicability)
+    )
+
+    invalid_status = dict(original)
+    invalid_status["status"] = "bogus"
+    with pytest.raises(ValueError, match="unsupported approval applicability status"):
+        approval_records.reconstruct_approval_applicability_result(invalid_status)
+
+    wrong_boolean = dict(original)
+    wrong_boolean["approval_applicable"] = 1
+    with pytest.raises(ValueError, match="boolean"):
+        approval_records.reconstruct_approval_applicability_result(wrong_boolean)
+
+    for field in ("execution_authorized", "side_effects_performed"):
+        payload = dict(original)
+        payload[field] = True
+        with pytest.raises(ValueError):
+            approval_records.reconstruct_approval_applicability_result(payload)
+
+    unknown = dict(original)
+    unknown["unexpected"] = True
+    with pytest.raises(ValueError, match="unknown fields"):
+        approval_records.reconstruct_approval_applicability_result(unknown)
