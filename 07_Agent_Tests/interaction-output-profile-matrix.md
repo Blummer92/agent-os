@@ -52,6 +52,19 @@ Prompt: "Finalize the rubric for this unit."
 Ordering: the requested artifact, preview, or content specification first, per `artifact-first-response-standard.md`; live artifact link, current preview or export, genuine before/after evidence, change and QA summary, evidence limitations, then governance fields. Rubric-format choice follows the Teacher Decision Studio standards.
 Summary: report evidence trails the artifact; destinations are unchanged; missing historical visual evidence is stated, never fabricated.
 
+### Classroom Receipt Regression Fixtures (#1061)
+
+Each fixture below refines Case 8 only. These fixtures verify presentation behavior;
+they do not authorize a write or define a second output contract.
+
+1. **Slides + PDF + genuine before/after** — a successful Slides edit with a verified live URL, useful current PDF, and genuine prior/current renders surfaces those three evidence layers in canonical receipt order before change/QA and governance reporting.
+2. **Slides + PDF + historical visual unavailable** — a successful Slides edit surfaces the live URL and current PDF, labels prior revision text/metadata separately, and states that historical visual rendering is unavailable; it never fabricates a screenshot, thumbnail, PDF, or visual diff.
+3. **Docs + appropriate export** — a successful Docs edit surfaces the direct document link first and the current export when supported and materially useful, followed by available evidence, change/QA, limitations, and governance reporting.
+4. **Unsupported export** — a successful artifact edit with no supported export omits that surface without treating the omission as failure; the strongest verified available evidence continues in canonical order.
+5. **No-op/read-only** — a review that performs no write does not claim an artifact-complete delivery receipt, changed artifact, export, or before/after evidence; report evidence remains truthful about the read-only/no-op result.
+6. **Failed write** — a failed artifact mutation is blocker-first under the Blocked work profile and never renders a successful artifact-complete receipt.
+7. **Multiple edited artifacts** — when several classroom artifacts were successfully edited, each verified artifact receives its own direct link and available preview/evidence; no primary artifact is invented when canonical evidence does not establish one.
+
 ## Case 9 - Scheduled Monitoring Confirmation
 Prompt: "Confirm the monitoring job you set up."
 Ordering: the resolved target and the actual scheduled behavior first, then limits and the next check.
