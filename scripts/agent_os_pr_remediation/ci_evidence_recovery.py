@@ -7,6 +7,11 @@ from typing import Any
 
 from .models import EvidenceValidationError, canonical_json, deterministic_id
 
+MIN_DIAGNOSTIC_EXCERPT_LINES = 50
+DEFAULT_DIAGNOSTIC_EXCERPT_LINES = 50
+MAX_DIAGNOSTIC_EXCERPT_LINES = 150
+DIAGNOSTIC_EXCERPT_EXPANSION_LINES = 50
+
 RECOVERY_FAILURE_REASONS = frozenset({
     "cli-unavailable", "cli-unauthenticated", "insufficient-permission",
     "credential-conflict", "wrong-host", "rate-limited", "run-in-progress",
@@ -29,6 +34,33 @@ def _sha40(value: Any, field: str) -> str:
     if len(text) != 40 or any(char not in "0123456789abcdef" for char in text):
         raise EvidenceValidationError(f"{field} must be a 40-character hexadecimal SHA")
     return text
+
+
+def diagnostic_excerpt_lines(value: int = DEFAULT_DIAGNOSTIC_EXCERPT_LINES) -> int:
+    """Validate one routine diagnostic excerpt target."""
+    if (
+        type(value) is not int
+        or value < MIN_DIAGNOSTIC_EXCERPT_LINES
+        or value > MAX_DIAGNOSTIC_EXCERPT_LINES
+    ):
+        raise EvidenceValidationError(
+            "diagnostic excerpt lines must be an integer from 50 through 150"
+        )
+    return value
+
+
+def expand_diagnostic_excerpt_lines(
+    current_lines: int,
+    *,
+    increment: int = DIAGNOSTIC_EXCERPT_EXPANSION_LINES,
+) -> int:
+    """Expand a routine excerpt deterministically without exceeding 150 lines."""
+    current = diagnostic_excerpt_lines(current_lines)
+    if type(increment) is not int or increment < 1:
+        raise EvidenceValidationError(
+            "diagnostic excerpt expansion increment must be a positive integer"
+        )
+    return min(MAX_DIAGNOSTIC_EXCERPT_LINES, current + increment)
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,11 +125,13 @@ class CIEvidenceRecoveryPlan:
     retry_count: int
     retry_limit: int
     user_handoff_required: bool
+    diagnostic_excerpt_target_lines: int = DEFAULT_DIAGNOSTIC_EXCERPT_LINES
     repair_authorized: bool = False
     external_write_authorized: bool = False
     side_effects_performed: bool = False
 
     def __post_init__(self) -> None:
+        diagnostic_excerpt_lines(self.diagnostic_excerpt_target_lines)
         if any(value is not False for value in (
             self.repair_authorized,
             self.external_write_authorized,
@@ -125,10 +159,12 @@ def plan_ci_evidence_recovery(
     observations: tuple[RecoveryObservation, ...] = (),
     retry_count: int = 0,
     retry_limit: int = 2,
+    diagnostic_excerpt_target_lines: int = DEFAULT_DIAGNOSTIC_EXCERPT_LINES,
 ) -> CIEvidenceRecoveryPlan:
     if type(identity) is not CIEvidenceIdentity:
         raise EvidenceValidationError("identity must be a CIEvidenceIdentity")
     current_head = _sha40(current_head_sha, "current_head_sha")
+    excerpt_lines = diagnostic_excerpt_lines(diagnostic_excerpt_target_lines)
     if type(current_run_attempt) is not int or current_run_attempt < 1:
         raise EvidenceValidationError("current_run_attempt must be positive")
     if type(retry_count) is not int or type(retry_limit) is not int or retry_count < 0 or retry_limit < 0:
@@ -198,4 +234,5 @@ def plan_ci_evidence_recovery(
         retry_count=retry_count,
         retry_limit=retry_limit,
         user_handoff_required=handoff,
+        diagnostic_excerpt_target_lines=excerpt_lines,
     )
