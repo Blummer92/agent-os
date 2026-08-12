@@ -46,6 +46,16 @@ from .image_intent import (
     validate_image_intent,
     validate_imported_asset_context,
 )
+from .request_interpretation import (
+    ACTIONS as REQUEST_ACTIONS,
+    CONTRACT_VERSION as REQUEST_INTERPRETATION_VERSION,
+    EFFECTS as REQUEST_EFFECTS,
+    ORIGINS as REQUEST_ORIGINS,
+    RESOURCE_KINDS as REQUEST_RESOURCE_KINDS,
+    SYSTEMS as REQUEST_SYSTEMS,
+    RequestInterpretation,
+    validate_request_interpretation,
+)
 
 __all__ = [
     "AuthorityEvidence",
@@ -68,6 +78,13 @@ __all__ = [
     "MAX_RESULT_BYTES",
     "MAX_STRING_LENGTH",
     "ORDER_INSENSITIVE_FIELDS",
+    "REQUEST_ACTIONS",
+    "REQUEST_EFFECTS",
+    "REQUEST_INTERPRETATION_VERSION",
+    "REQUEST_ORIGINS",
+    "REQUEST_RESOURCE_KINDS",
+    "REQUEST_SYSTEMS",
+    "RequestInterpretation",
     "TOP_LEVEL_FIELDS",
     "ValidatedRecord",
     "ValidationResult",
@@ -85,6 +102,7 @@ __all__ = [
     "validate_image_intent",
     "validate_imported_asset_context",
     "validate_reason_code",
+    "validate_request_interpretation",
     "validate_revision",
     "validate_stable_id",
     "validate_version",
