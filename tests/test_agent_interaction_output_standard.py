@@ -348,7 +348,7 @@ def test_pointer_surfaces_reference_the_canonical_standard() -> None:
     assert "canonical in `agent-interaction-output-standard.md`" in final_report
     assert "compatibility pointer" in final_report
     assert "must not define a competing output schema" in final_report
-    assert "0.2.0" in section(FINAL_REPORT, "Version")
+    assert "0.3.0" in section(FINAL_REPORT, "Version")
 
     overlay = normalized(COMMON_OVERLAY)
     assert "- Agent Interaction Output Standard 0.1.0" in read(COMMON_OVERLAY)
@@ -369,7 +369,7 @@ def test_orchestrator_inherits_the_standard_without_a_competing_schema() -> None
     assert CANONICAL_PATH in ordering
     assert "never displace the requested answer or artifact" in ordering
     assert "do not create a competing output schema" in ordering
-    assert "0.1.8" in section(ORCHESTRATOR, "Version")
+    assert "0.1.9" in section(ORCHESTRATOR, "Version")
 
     fixtures = read(ORCHESTRATOR_TESTS)
     assert "interaction-output-profile-matrix.md" in fixtures
