@@ -3,10 +3,13 @@ Use this template when a non-GitHub agent needs repository changes.
 
 ## Goal
 Describe the intended repository change and why it is needed.
+
 ## Requesting Agent
 Name the agent requesting the change and its overlay.
+
 ## Target Repository
 Repository owner/name and target base branch.
+
 ## Authorization Route
 Choose one:
 - exact-file GitHub Change Request; or
@@ -36,6 +39,7 @@ State the existing pattern checked (`none found` allowed), reusable capability r
 
 ## Proposed Content Or Patch
 Paste the exact proposed content, patch, or implementation instructions.
+
 ## Branch Handling
 Use a non-protected branch. A harness- or environment-assigned branch name is
 acceptable when linked to the issue and used consistently; a preferred name is
@@ -70,6 +74,7 @@ If authorization is unclear, the GitHub Service Agent must stop.
 
 ## Reviewer Or Owner
 Name the responsible owner, reviewer, or approving agent.
+
 ## Stop Conditions
 Stop when target repo, durable objective, bounded scope, owner, source of truth,
 permission, or acceptance criteria are unclear, or when a material excluded
