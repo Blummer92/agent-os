@@ -77,8 +77,10 @@ class PrePrValidationSubject:
     """One immutable issue- and invocation-bound validation subject with no pull request.
 
     A missing pull request is represented by the absence of the field, never by a
-    placeholder number, dummy pull request, or unbound mutable branch. Construction
-    fails closed on malformed identifiers, SHAs, refs, scope, or execution mode.
+    placeholder number, dummy pull request, or unbound mutable branch. Candidate-
+    bound subjects may additionally retain exact expected changed paths so packet
+    identity changes when in-scope path expectations drift. Construction fails
+    closed on malformed identifiers, SHAs, refs, scope, or execution mode.
     """
 
     schema_name: str = PRE_PR_VALIDATION_SUBJECT_SCHEMA_NAME
@@ -98,6 +100,7 @@ class PrePrValidationSubject:
     approval_revision: int
     projection_id: str
     implementation_contract_fingerprint: str
+    expected_changed_paths: tuple[str, ...] = ()
     execution_mode: str = PRE_PR_EXECUTION_MODE
     candidate_bound: bool = False
 
@@ -143,6 +146,17 @@ class PrePrValidationSubject:
             for forbidden in self.forbidden_paths:
                 if paths_overlap(allowed, forbidden):
                     raise ValueError("allowed_files and forbidden_paths must not overlap")
+        _require_exact_tuple("expected_changed_paths", self.expected_changed_paths)
+        if self.expected_changed_paths:
+            if not self.candidate_bound:
+                raise ValueError("expected_changed_paths requires candidate_bound mode")
+            _validate_path_tuple(
+                "expected_changed_paths",
+                self.expected_changed_paths,
+                MAX_PRE_PR_ALLOWED_FILES,
+            )
+            if any(path not in self.allowed_files for path in self.expected_changed_paths):
+                raise ValueError("expected_changed_paths must be contained in allowed_files")
         _validate_command_identities(self.required_command_identities)
 
 
