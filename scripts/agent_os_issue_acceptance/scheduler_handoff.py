@@ -319,6 +319,40 @@ def _planning_result_transport_payload(
     return payload
 
 
+def _canonical_planning_result(result: BatchPlanningResult) -> BatchPlanningResult:
+    rank = {value: index for index, value in enumerate(_CLASSIFICATION_PRECEDENCE)}
+    cohorts = tuple(
+        sorted(
+            (
+                PlanningCohort(
+                    node_ids=tuple(sorted(set(cohort.node_ids))),
+                    classification=cohort.classification,
+                    reason_codes=tuple(sorted(set(cohort.reason_codes))),
+                    dependency_pairs=tuple(sorted(set(cohort.dependency_pairs))),
+                    sequencing_pairs=tuple(sorted(set(cohort.sequencing_pairs))),
+                )
+                for cohort in result.cohorts
+            ),
+            key=lambda cohort: (rank[cohort.classification.value], cohort.node_ids),
+        )
+    )
+    cycle_node_groups = tuple(
+        sorted(
+            {
+                tuple(sorted(set(group)))
+                for group in result.cycle_node_groups
+            }
+        )
+    )
+    return BatchPlanningResult(
+        supplied_node_ids=tuple(sorted(set(result.supplied_node_ids))),
+        overall_classification=result.overall_classification,
+        cohorts=cohorts,
+        batch_reason_codes=tuple(sorted(set(result.batch_reason_codes))),
+        cycle_node_groups=cycle_node_groups,
+    )
+
+
 def compute_planning_result_digest(result: BatchPlanningResult) -> str:
     if not isinstance(result, BatchPlanningResult):
         raise TypeError("result must be a BatchPlanningResult")
@@ -329,15 +363,9 @@ def serialize_batch_planning_result(result: BatchPlanningResult) -> bytes:
     """Serialize one verified planning result without changing digest semantics."""
     if type(result) is not BatchPlanningResult:
         raise TypeError("result must be an exact BatchPlanningResult")
-    verified = BatchPlanningResult(
-        supplied_node_ids=tuple(result.supplied_node_ids),
-        overall_classification=result.overall_classification,
-        cohorts=tuple(result.cohorts),
-        batch_reason_codes=tuple(result.batch_reason_codes),
-        cycle_node_groups=tuple(result.cycle_node_groups),
-    )
+    verified = _canonical_planning_result(result)
     if verified != result:
-        raise ValueError("planning result does not satisfy canonical invariants")
+        raise ValueError("planning result transport is not canonical")
     return _canonical_bytes(_planning_result_transport_payload(verified))
 
 
@@ -400,7 +428,8 @@ def reconstruct_batch_planning_result(
         batch_reason_codes=batch_reason_codes,
         cycle_node_groups=cycle_node_groups,
     )
-    if _planning_result_transport_payload(result) != dict(raw):
+    canonical = _canonical_planning_result(result)
+    if canonical != result or _planning_result_transport_payload(canonical) != dict(raw):
         raise ValueError("planning result transport is not canonical")
     return result
 
@@ -489,22 +518,40 @@ def serialize_scheduler_planning_handoff(handoff: SchedulerPlanningHandoff) -> b
 def _decode_transport_payload(
     payload: bytes | str | Mapping[str, Any], name: str
 ) -> Mapping[str, Any]:
+    source_bytes: bytes | None = None
+    source_text: str | None = None
     if isinstance(payload, bytes):
+        source_bytes = payload
         try:
             raw: object = json.loads(payload.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError(f"{name} must be canonical UTF-8 JSON") from exc
     elif isinstance(payload, str):
+        source_text = payload
         try:
             raw = json.loads(payload)
         except json.JSONDecodeError as exc:
-            raise ValueError(f"{name} must be JSON") from exc
+            raise ValueError(f"{name} must be canonical JSON text") from exc
     elif isinstance(payload, Mapping):
         raw = dict(payload)
     else:
         raise TypeError("payload must be bytes, text, or a mapping")
     if not isinstance(raw, Mapping):
         raise ValueError(f"{name} payload must be an object")
+    if source_bytes is not None:
+        try:
+            canonical_bytes = _canonical_bytes(raw)
+        except (TypeError, ValueError, UnicodeEncodeError) as exc:
+            raise ValueError(f"{name} must be canonical UTF-8 JSON") from exc
+        if source_bytes != canonical_bytes:
+            raise ValueError(f"{name} must be canonical UTF-8 JSON")
+    elif source_text is not None:
+        try:
+            canonical_text = _canonical_bytes(raw).decode("utf-8")
+        except (TypeError, ValueError, UnicodeEncodeError) as exc:
+            raise ValueError(f"{name} must be canonical JSON text") from exc
+        if source_text != canonical_text:
+            raise ValueError(f"{name} must be canonical JSON text")
     return raw
 
 
