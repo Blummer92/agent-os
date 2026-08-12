@@ -13,6 +13,7 @@ See `_common-overlay-rules.md` plus:
 - `04_Registry/legacy-agent-alias-registry.md`
 - `04_Registry/responsibility-matrix.md`
 - `01_Shared_Standards/github/safe-implementation-lane.md`
+- `01_Shared_Standards/global-engineering/agent-interaction-output-standard.md`
 - `01_Shared_Standards/instructional-design/artifact-first-response-standard.md`
 - `01_Shared_Standards/instructional-design/teacher-decision-studio-standard.md`
 - `01_Shared_Standards/instructional-design/teacher-decision-studio-previews-standard.md`
@@ -69,7 +70,8 @@ Before selecting a GitHub execution path for already-authorized work, classify t
 - If destination is unclear, stop and ask whether the target is Notion, Drive, or GitHub.
 
 ## Response Ordering Rule
-Classroom-material responses follow `artifact-first-response-standard.md`: lead with the requested artifact, preview, or content specification before backend routing and governance reporting. Rubric or assessment-design consultation follows `teacher-decision-studio-standard.md` and `teacher-decision-studio-previews-standard.md`: a table-first comparison with per-option worksheet and PDF previews, never an auto-approved choice.
+Select the presentation profile, visible ordering, progress labeling, and report fields from `01_Shared_Standards/global-engineering/agent-interaction-output-standard.md`. Routing and handoff fields stay internal evidence unless the profile requires them; they never displace the requested answer or artifact.
+Classroom-material responses follow `artifact-first-response-standard.md`: lead with the requested artifact, preview, or content specification before backend routing and governance reporting. Rubric or assessment-design consultation follows `teacher-decision-studio-standard.md` and `teacher-decision-studio-previews-standard.md`: a table-first comparison with per-option worksheet and PDF previews, never an auto-approved choice. These domain standards refine the classroom profile and do not create a competing output schema.
 
 ## Stop Conditions
 Stop when the target, source of truth, permission, owner, or requested write surface is unclear, or when current Safe Implementation Lane authorization no longer covers the next action.
@@ -77,9 +79,10 @@ Stop when a user asks for a nonexistent agent that does not resolve through `04_
 For finite multi-item missions, an item-local blocker is not a mission-level stop; record it and continue. A shared stop condition classifies all remaining requested items explicitly before handoff.
 
 ## Version
-0.1.7
+0.1.8
 
 ## Changelog
+- 0.1.8 inherits the canonical Agent Interaction Output Standard (#926) for presentation-profile selection, visible ordering, progress labeling, and report field ownership, while preserving existing execution-surface preflight, Safe Implementation Lane, finite-mission, artifact-first, and Teacher Decision Studio behavior.
 - 0.1.7 requires a live execution-surface capability preflight before GitHub execution routing, reuses #918 route semantics and environment-health evidence, treats missing surface tooling as a capability mismatch rather than repository-issue failure, and preserves Safe-Lane authorization across internal reroutes without widening authority (#1039).
 - 0.1.6 adds bounded finite multi-item execution continuity and zero-untouched final reconciliation (#1020) without widening authorization or adding background execution.
 - 0.1.5 inherits the Visual Asset Picker semantic-intent and reuse-selection contract (#961) without adding connected asset lookup or write authority.

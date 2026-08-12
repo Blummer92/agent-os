@@ -68,6 +68,15 @@ non-authorizing boundary that revalidates request, plan, authorization, and
 runtime identity before delegating exactly once to the canonical validation-only
 Workflow Scheduler entrypoint. It adds no second runtime or command loop.
 
+**Agent Interaction Output Standard**
+(`01_Shared_Standards/global-engineering/agent-interaction-output-standard.md`,
+#926) is the canonical owner of the base report field set, conditional routing
+and GitHub field groups, the ten presentation profiles, visible ordering, and
+progress labeling. `AGENTS.md`, `_common-overlay-rules.md`,
+`final-report-standard.md`, and `07_Agent_Tests/agent-output-schema.md` are
+compatibility pointers to it. It renders existing canonical evidence and adds no
+state, approval, execution, or write authority.
+
 ## Reconciliation Notes
 
 A3 reviewed the version map against visible repository evidence only. Runtime
