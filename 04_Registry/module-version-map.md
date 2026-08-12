@@ -21,7 +21,7 @@ versions change only when the module's standards or contract changes.
 | Agent Orchestrator | 0.1.0 |
 | Unit Alignment Agent | 0.3.0 |
 | Teacher Modeling Coach | 0.2.0 |
-| Instructional Materials Coach | 0.4.0 |
+| Instructional Materials Coach | 0.5.0 |
 | Student Language Standard | 0.3.0 |
 | Workflow Scheduler | 0.9.1 |
 | Workspace Automation Builder Tooling | 0.1.1 |
@@ -53,7 +53,7 @@ not authorize live Workspace, Notion, trigger, sharing, or production writes.
 **Workflow Scheduler**, **Agent Memory & Context Budget Manager**,
 **IA4D-to-Scheduler Handoff Contract**, and **Agent OS Execution Service** extended descriptions moved to `04_Registry/module-version-map-details.md` to keep this index under the line-limit. Workflow Scheduler remains `0.9.1`; Agent OS Execution Service moves to `0.5.0` under #918.
 
-**Instructional Materials Coach** `0.4.0` adds `curriculum-visual-asset-compatibility-v2` (`src/instructional_workflow_contracts/VISUAL_ASSET_COMPATIBILITY.md`, `src/instructional_workflow_contracts/visual_asset_compatibility.py`) and `curriculum-visual-asset-candidates-v2` (`src/instructional_workflow_contracts/VISUAL_ASSET_CANDIDATES.md`, `src/instructional_workflow_contracts/visual_asset_candidates.py`); v1 mappings, defaults, identities, and non-authorizing behavior remain preserved (#871).
+**Instructional Materials Coach** `0.4.0` adds `curriculum-visual-asset-compatibility-v2` (`src/instructional_workflow_contracts/VISUAL_ASSET_COMPATIBILITY.md`, `src/instructional_workflow_contracts/visual_asset_compatibility.py`) and `curriculum-visual-asset-candidates-v2` (`src/instructional_workflow_contracts/VISUAL_ASSET_CANDIDATES.md`, `src/instructional_workflow_contracts/visual_asset_candidates.py`); v1 mappings, defaults, identities, and non-authorizing behavior remain preserved (#871). `0.5.0` adds `curriculum-image-intent-v1` and `curriculum-imported-asset-context-v1` (`src/instructional_workflow_contracts/image_intent.py`, template `03_Templates/prompts/instructional-image-intent.md`), keeping provider prompt prose noncanonical and provenance user-claimed (#955).
 
 **Artifact-First Response Standard** (`01_Shared_Standards/instructional-design/artifact-first-response-standard.md`,
 #821) requires classroom-material responses to lead with the requested
