@@ -2,19 +2,23 @@
 
 Use this template to define the canonical provider-neutral image intent before any provider-specific prompt is assembled.
 
-Provider-ready prompt prose is derived working output, not canonical evidence. Asset approval, rights, provenance, privacy, and classroom readiness remain governed elsewhere.
+Canonical schema source: `src/instructional_workflow_contracts/image_intent.py`.
+
+Provider-ready prompt prose is derived working output, not canonical evidence. Approval, rights, provenance, privacy, classroom readiness, source-of-truth, and write authorization remain governed by the canonical repository policies in `00_Governance/ownership-and-source-of-truth.md` and `00_Governance/write-authorization-policy.md` rather than by this template.
 
 ## Identity
 
-- **Asset ID:** optional stable ID if already assigned
+- **Contract version:** required; `curriculum-image-intent-v1`
+- **Intent ID:** required stable ImageIntent ID
+- **Asset ID:** optional stable ID if already assigned; use `null` when absent
 - **Concept:** what are we making?
 - **Purpose:** what does it teach?
 
 ## Scene
 
 - **Subject:** what must be pictured?
-- **Action:** optional action or relationship
-- **Environment:** optional setting or context
+- **Action:** optional action or relationship; use `null` when absent
+- **Environment:** optional setting or context; use `null` when absent
 
 ## Visual Direction
 
@@ -27,43 +31,50 @@ Provider-ready prompt prose is derived working output, not canonical evidence. A
 ### Must Show
 
 - List the evidence that must be visible for the image to teach the intended idea.
+- At least one item is required.
 
 ### Creative Freedom
 
 - List details that may vary without weakening the instructional purpose.
+- Use an empty list when no creative freedom is specified.
 
 ### Avoid
 
 - List only relevant failure modes or unwanted content.
 - Do not repeat generic boilerplate unless it materially affects this image.
+- Use an empty list when no avoid constraints are specified.
 
 ## Output
 
-- **Orientation:** portrait, landscape, square, wide, tall, or unspecified
+- **Orientation:** `portrait`, `landscape`, `square`, `wide`, `tall`, or `unspecified`
 - **Aspect target:** provider-neutral ratio or target such as `3:2`, `4:5`, or `16:9`
-- **Add later:** grids, arrows, labels, axes, highlights, crops, or other derivative overlays that should not be baked into the clean master
+- **Add later:** grids, arrows, labels, axes, highlights, crops, or other derivative overlays that should not be baked into the clean master; use an empty list when none are needed
 
 ## Library Handoff
 
 Keep this metadata separate from provider-generation prose.
 
-- **Unit / lesson:**
-- **Asset role:**
-- **Intended reuse:**
-- **Candidate status:**
-- **Review notes:**
+- **Unit / lesson:** optional; use `null` when absent
+- **Asset role:** optional; use `null` when absent
+- **Intended reuse:** list; use an empty list when none is supplied
+- **Candidate status:** optional; use `null` when absent
+- **Review notes:** optional; use `null` when absent
 
 ## ImportedAssetContext
 
 Use this separate working record when an image was uploaded or imported and no canonical ImageIntent exists.
 
-- **Source mode:** upload or import
-- **Provider claim:** Gemini, Meta, Firefly, Canva, other, or unknown
-- **Prompt claim:** supplied prompt or unknown
-- **Model claim:** supplied model/version or unknown
-- **Generation date claim:** supplied date or unknown
-- **Original filename:** supplied filename or unknown
-- **Source note:** optional user-supplied context
+- **Contract version:** required; `curriculum-imported-asset-context-v1`
+- **Context ID:** required stable ImportedAssetContext ID
+- **Source mode:** `upload` or `import`
+- **Provider claim:** `gemini`, `meta`, `firefly`, `canva`, `other`, or `unknown`
+- **Prompt claim:** supplied prompt or `null` when not supplied
+- **Model claim:** supplied model/version or `null` when not supplied
+- **Generation date claim:** supplied date or `null` when not supplied
+- **Original filename:** supplied filename or `null` when not supplied
+- **Source note:** optional user-supplied context or `null`
+
+`provider_claim="unknown"` is the explicit schema value when the provider itself is unknown. Optional prompt, model, date, filename, and source-note claims use `null` when no value was supplied.
 
 User-supplied provider, prompt, model, date, or source statements are provenance claims only. Do not infer missing generation history from pixels, metadata, filenames, or appearance.
 
