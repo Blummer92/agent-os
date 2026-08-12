@@ -9,4 +9,91 @@ versions change only when the module's standards or contract changes.
 | Global Engineering | 0.3.0 |
 | Testing And Release | 0.2.0 |
 | Read-Only Default | 0.1.0 |
-| Source-of-Truth
+| Source-of-Truth Checks | 0.1.0 |
+| Python Standards | 0.1.0 |
+| Google Workspace Standards | 0.1.2 |
+| Apps Script Standards | 0.1.0 |
+| Notion Standards | 0.3.0 |
+| QA/Test Standards | 0.1.0 |
+| Dashboard Governance | 0.1.0 |
+| Dashboard Migration Verification | 0.1.0 |
+| Instructional Design Standards | 0.7.0 |
+| Agent Orchestrator | 0.1.0 |
+| Unit Alignment Agent | 0.3.0 |
+| Teacher Modeling Coach | 0.2.0 |
+| Instructional Materials Coach | 0.5.0 |
+| Student Language Standard | 0.3.0 |
+| Workflow Scheduler | 0.9.1 |
+| Workspace Automation Builder Tooling | 0.1.1 |
+| Agent Memory & Context Budget Manager | 0.1.0 |
+| IA4D-to-Scheduler Handoff Contract | 0.2.0 |
+| GitHub Issue Lifecycle Standard | 0.2.0 |
+| Safe Implementation Lane | 0.3.0 |
+| Agent OS Execution Service | 0.5.0 |
+| Artifact-First Response Standard | 0.1.0 |
+| Teacher Decision Studio Standard | 0.1.0 |
+| LP Pacing Handoff Contract | 0.1.0 |
+| LP Reason Code Catalog | 0.1.0 |
+| LP Notion Working Layer | 0.1.0 |
+| Agent OS Codespaces Profile | 0.2.0 |
+| Execution Checkpoint Contract | 0.1.0 |
+| Issue Quality Taxonomy | 0.1.0 |
+
+**Dashboard Migration Verification** (`08_Tooling/dashboard-migration-verification/`) starts as a verification-only
+migration evidence toolkit for dashboard registry examples, placeholder snapshots,
+dependency graphs, conservative validation results, and human-readable reports. It
+never authorizes live Notion, Workspace, trigger, sharing, source-of-truth, or
+production dashboard writes. Standard packaging metadata was completed by D2 (#123).
+
+**Workspace Automation Builder Tooling** (`08_Tooling/workspace-automation-builder/`) includes an Apps Script safety
+bridge, offline test suite, sync safety docs, sanitized sample handoff fixture,
+JSON schemas, validation fixtures, and a local-only fixture validator. It does
+not authorize live Workspace, Notion, trigger, sharing, or production writes.
+
+**Workflow Scheduler**, **Agent Memory & Context Budget Manager**,
+**IA4D-to-Scheduler Handoff Contract**, and **Agent OS Execution Service** extended descriptions moved to `04_Registry/module-version-map-details.md` to keep this index under the line-limit. Workflow Scheduler remains `0.9.1`; Agent OS Execution Service moves to `0.5.0` under #918.
+
+**Instructional Materials Coach** `0.4.0` adds `curriculum-visual-asset-compatibility-v2` (`src/instructional_workflow_contracts/VISUAL_ASSET_COMPATIBILITY.md`, `src/instructional_workflow_contracts/visual_asset_compatibility.py`) and `curriculum-visual-asset-candidates-v2` (`src/instructional_workflow_contracts/VISUAL_ASSET_CANDIDATES.md`, `src/instructional_workflow_contracts/visual_asset_candidates.py`); v1 mappings, defaults, identities, and non-authorizing behavior remain preserved (#871). `0.5.0` adds `curriculum-image-intent-v1` and `curriculum-imported-asset-context-v1` (`src/instructional_workflow_contracts/image_intent.py`, template `03_Templates/prompts/instructional-image-intent.md`), keeping provider prompt prose noncanonical and provenance user-claimed (#955).
+
+**Artifact-First Response Standard** (`01_Shared_Standards/instructional-design/artifact-first-response-standard.md`,
+#821) requires classroom-material responses to lead with the requested
+artifact, preview, or content specification before backend routing and
+governance reporting, while preserving all existing gate, ownership, and
+stop-condition behavior.
+
+**Teacher Decision Studio Standard**
+(`01_Shared_Standards/instructional-design/teacher-decision-studio-standard.md`
+plus `teacher-decision-studio-previews-standard.md`, #823/#824) defines a
+table-first rubric/assessment consultation protocol -- comparison table,
+format catalog, explanation-risk analysis, and per-option in-chat and PDF
+worksheet previews -- that recommends without auto-approving and never writes
+a governed field without explicit teacher confirmation.
+
+**LP Pacing Handoff Contract**
+(`01_Shared_Standards/instructional-design/lp-pacing-handoff-contract.md`,
+`01_Shared_Standards/instructional-design/lp-pacing-handoff-adaptation.md`, `01_Shared_Standards/instructional-design/lp-pacing-handoff-cases.md`, and
+`04_Registry/lp-pacing-handoff-contract.yaml`, #648) defines the provider-neutral
+pacing handoff packet, owner-state independence, the six-dimension diagnosis, and
+the ordered adaptation hierarchy. It authorizes no runtime evaluator, OCR,
+classroom data, external write, or gate advancement.
+
+**LP Reason Code Catalog**
+(`01_Shared_Standards/instructional-design/lp-reason-code-catalog.md` and
+`04_Registry/lp-reason-code-catalog.yaml`, #711) holds the finite `lp-*` semantic
+reason catalog and its producer/consumer ownership map. Generic parsing, bounds,
+version, serialization, authority mechanics stay with LP9, LP12, and CW5A.
+
+**LP Notion Working Layer**
+(`01_Shared_Standards/notion/lp-notion-working-layer-standard.md` and
+`04_Registry/lp-notion-working-layer-change-request.yaml`, #652) defines the
+bounded Notion working-layer design and the exact-target Change Request. The
+Change Request is recorded as proposed and not authorized; six unresolved
+decisions block any live change.
+
+**Execution Checkpoint Contract** (`scripts/agent_os_execution_checkpoint/`, #895, design approved in #858) is the pure-local checkpoint record, content-addressed identity, append-only store, and resume planner; every authority field stays false.
+
+## Reconciliation Notes
+
+A3 reviewed this map against visible repository evidence only. Any runtime status
+not directly supported by files or validation evidence remains intentionally
+unstated rather than inferred.
