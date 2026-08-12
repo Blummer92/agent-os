@@ -205,7 +205,18 @@ def assemble_gemini_manual_prompt(intent: ValidatedRecord) -> str:
     if intent.contract_version != IMAGE_INTENT_CONTRACT_ID:
         raise ValueError("intent must use the ImageIntent contract")
 
-    data = intent.to_dict()
+    result = validate_image_intent(intent.to_dict())
+    if result.status is not ValidationStatus.VALID or result.record is None:
+        raise ValueError("intent payload must be a valid ImageIntent")
+    if (
+        intent.record_id != result.record.record_id
+        or intent.record_revision != result.record.record_revision
+        or intent.fingerprint_algorithm != result.record.fingerprint_algorithm
+        or intent.fingerprint != result.record.fingerprint
+    ):
+        raise ValueError("intent record does not match its ImageIntent payload")
+
+    data = result.record.to_dict()
     identity = data["identity"]
     scene = data["scene"]
     direction = data["visual_direction"]
