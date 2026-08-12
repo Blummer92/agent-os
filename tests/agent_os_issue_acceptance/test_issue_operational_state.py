@@ -22,6 +22,7 @@ from scripts.agent_os_issue_acceptance.issue_operational_state import (
     DependencyState,
     FreshnessState,
     IssueOperationalEvidence,
+    IssueOperationalState,
     IssueState,
     LifecycleStage,
     OperationalOutcome,
@@ -260,6 +261,62 @@ def test_competing_primary_claims_are_conflicting():
     assert state.active_branch is None
     assert state.primary_pr_numbers == (900, 901)
     assert "claim.multiple-primary" in state.reason_codes
+
+
+def test_conflicting_state_requires_at_least_two_primary_pr_numbers():
+    valid = build_issue_operational_state(
+        evidence(
+            primary_claims=(
+                claim(900),
+                claim(901, branch="agent/862-second-claim", head_sha="e" * 40),
+            )
+        )
+    )
+
+    with pytest.raises(ValueError, match="at least two primary PR numbers"):
+        replace(valid, primary_pr_numbers=(), state_id="")
+    with pytest.raises(ValueError, match="at least two primary PR numbers"):
+        replace(valid, primary_pr_numbers=(900,), state_id="")
+
+
+def test_valid_conflicting_state_round_trips_without_identity_drift():
+    state = build_issue_operational_state(
+        evidence(
+            primary_claims=(
+                claim(900),
+                claim(901, branch="agent/862-second-claim", head_sha="e" * 40),
+            )
+        )
+    )
+    serialized = serialize_issue_operational_state(state)
+    restored = deserialize_issue_operational_state(serialized)
+
+    assert restored == state
+    assert restored.state_id == state.state_id
+    assert serialize_issue_operational_state(restored) == serialized
+
+
+def test_serialized_conflicting_state_with_too_few_primary_pr_numbers_fails_closed():
+    state = build_issue_operational_state(
+        evidence(
+            primary_claims=(
+                claim(900),
+                claim(901, branch="agent/862-second-claim", head_sha="e" * 40),
+            )
+        )
+    )
+
+    payload = state.to_dict()
+    payload["primary_pr_numbers"] = []
+    payload["state_id"] = ""
+    with pytest.raises(ValueError, match="at least two primary PR numbers"):
+        deserialize_issue_operational_state(json.dumps(payload))
+
+    payload = state.to_dict()
+    payload["primary_pr_numbers"] = [900]
+    payload["state_id"] = ""
+    with pytest.raises(ValueError, match="at least two primary PR numbers"):
+        deserialize_issue_operational_state(json.dumps(payload))
 
 
 def test_merged_primary_claim_with_open_issue_requires_reconciliation():

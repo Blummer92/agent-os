@@ -594,6 +594,8 @@ class IssueOperationalState:
             raise TypeError("primary_pr_numbers must contain positive integers")
         if tuple(sorted(set(self.primary_pr_numbers))) != self.primary_pr_numbers:
             raise ValueError("primary_pr_numbers must be sorted and unique")
+        if self.claim_state is ClaimState.CONFLICTING and len(self.primary_pr_numbers) < 2:
+            raise ValueError("conflicting claim state requires at least two primary PR numbers")
         if type(self.reconciliation_required) is not bool:
             raise TypeError("reconciliation_required must be a built-in bool")
         blockers = _reason_tuple(self.blocker_codes, "blocker_codes")
