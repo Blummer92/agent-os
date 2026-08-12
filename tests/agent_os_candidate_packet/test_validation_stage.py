@@ -103,6 +103,8 @@ def test_complete_projection_produces_candidate_bound_validation_plan(tmp_path) 
     assert payload["expected_changed_paths"] == list(inputs.expected_changed_paths)
     assert deserialize_pre_pr_validation_subject(payload) == first.subject
     assert first.execution_authorized is False
+    assert first.merge_authorized is False
+    assert first.automatic_retry is False
     assert first.side_effects_performed is False
 
 
