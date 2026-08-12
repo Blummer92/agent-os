@@ -2,6 +2,7 @@
 
 - Global engineering rules apply to every coding and automation agent.
 - `reusable-capability-registry-standard.md` governs reusable capability discovery, evidence, ownership, lifecycle, and report-only validation.
+- `agent-interaction-output-standard.md` is the canonical interaction-output contract: base report fields, conditional field groups, presentation profiles, visible ordering, and progress labeling. `final-report-standard.md` points to it.
 
 ## Mobile Terminal And Cloud Shell UX
 
