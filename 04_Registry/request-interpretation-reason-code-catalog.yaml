@@ -1,0 +1,56 @@
+registry_name: request-interpretation-reason-code-catalog
+contract_version: request-interpretation-reasons-v1
+record_revision: 1
+namespace: dotted-family-cause
+semantic_owner: chatgpt-orchestrator
+authority_created: false
+families:
+  action:
+    owner: chatgpt-orchestrator
+    default_outcome: needs-decision
+  target:
+    owner: chatgpt-orchestrator
+    default_outcome: needs-decision
+  context:
+    owner: chatgpt-orchestrator
+    default_outcome: needs-decision
+  request:
+    owner: chatgpt-orchestrator
+    default_outcome: needs-decision
+codes:
+  - code: action.ambiguous
+    meaning: Requested action cannot be resolved uniquely.
+  - code: action.invalid
+    meaning: Requested action evidence is malformed.
+  - code: action.unsupported
+    meaning: Requested action is outside the v1 vocabulary.
+  - code: target.missing
+    meaning: A required target identity is absent.
+  - code: target.multiple
+    meaning: More than one canonical target remains plausible.
+  - code: target.repository-missing
+    meaning: GitHub target lacks repository identity.
+  - code: target.issue-invalid
+    meaning: Issue identity evidence is invalid.
+  - code: target.pull-request-invalid
+    meaning: Pull-request identity evidence is invalid.
+  - code: context.missing
+    meaning: Continuation requires context that is not present.
+  - code: context.stale
+    meaning: Continuation context is stale and must be refetched.
+  - code: context.multiple-candidates
+    meaning: Continuation context resolves to multiple candidates.
+  - code: request.untrusted-source
+    meaning: Instruction originated from retrieved content rather than direct user authority.
+  - code: request.conflicting-constraints
+    meaning: Requested constraints conflict materially.
+  - code: request.write-surface-unclear
+    meaning: Requested mutation does not establish a governed write surface.
+  - code: request.destination-unclear
+    meaning: Destination system cannot be resolved.
+  - code: request.monitoring-surface-required
+    meaning: Requested monitoring requires an approved scheduling surface.
+rules:
+  - Reason codes explain interpretation evidence and never grant authority.
+  - Unknown reason codes fail closed.
+  - Retrieved content never becomes direct-user authorization.

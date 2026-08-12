@@ -31,6 +31,11 @@ from .issue_create import (
     sanitize_diagnostic_text,
 )
 from .planner import LabelApplicationPlan, plan_label_application
+from .pr_lifecycle import (
+    PullRequestLifecycleReconciliationResult,
+    lifecycle_invocation_reasons,
+    reconcile_pull_request_lifecycle,
+)
 from .pr_reconciler import (
     BatchPullRequestLabelReconciliationResult,
     LivePullRequestSnapshot,
@@ -72,6 +77,7 @@ __all__ = [
     "MutationState",
     "PullRequestLabelProvider",
     "PullRequestLabelReconciliationResult",
+    "PullRequestLifecycleReconciliationResult",
     "SubprocessGhRunner",
     "build_issue_create_argv",
     "build_issue_draft",
@@ -80,10 +86,12 @@ __all__ = [
     "evaluate_issue_labels",
     "execute_issue_creation",
     "issue_create_result_to_dict",
+    "lifecycle_invocation_reasons",
     "plan_issue_creation",
     "plan_label_application",
     "reconcile_pull_request_batch",
     "reconcile_pull_request_labels",
+    "reconcile_pull_request_lifecycle",
     "render_draft_preview",
     "render_issue_create_result",
     "render_validation_preview",

@@ -30,7 +30,7 @@ def test_canonical_guidance_documents_environment_provided_pip_policy():
     assert "Cache restoration never replaces dependency installation" in guidance
 
 
-def test_affected_github_actions_examples_use_setup_python_v5():
+def test_affected_github_actions_examples_use_setup_python_v6():
     paths = (
         ROOT / "01_Shared_Standards/python/ci-cd/github-actions.md",
         ROOT / "01_Shared_Standards/python/environments/ci-cd-setup.md",
@@ -39,8 +39,8 @@ def test_affected_github_actions_examples_use_setup_python_v5():
     )
     for path in paths:
         content = path.read_text(encoding="utf-8")
-        assert "actions/setup-python@v4" not in content, path
-        assert "actions/setup-python@v5" in content, path
+        assert "actions/setup-python@v5" not in content, path
+        assert "actions/setup-python@v6" in content, path
 
 
 def test_dependency_installation_remains_explicit_in_examples_and_action():

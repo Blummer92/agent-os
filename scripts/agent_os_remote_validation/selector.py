@@ -289,22 +289,8 @@ def _focused_matches(
 ) -> list[tuple[str, tuple[str, ...]]]:
     """Return focused owners of one path; an exact owner excludes prefix owners.
 
-    Exact ownership intentionally outranks and *masks* every prefix owner of the
-    same path, so a narrow exact rule can live under an existing package prefix
-    without turning that path into `rule.ambiguous`. Two consequences follow, and
-    both are deliberate:
-
-    - a prefix-rule conflict is not reported for a path that has an exact owner,
-      because that conflict cannot affect the outcome for that path; a path with
-      no exact owner still fails closed to `rule.ambiguous`; and
-    - masking is per path, so a changed-file set mixing an exact-owned path with
-      prefix-owned siblings yields the union of both command sets. That union is
-      a safe superset and may contain a narrow command already subsumed by the
-      broader package command; it is not deduplicated here.
-
-    Selection stays independent of rule order and of changed-file order: matches
-    are partitioned by kind rather than by position, and the caller treats more
-    than one distinct command set for a single path as ambiguous.
+    Exact ownership intentionally outranks and masks every prefix owner of the
+    same path. Selection remains independent of rule and changed-file order.
     """
     exact_matches: list[tuple[str, tuple[str, ...]]] = []
     prefix_matches: list[tuple[str, tuple[str, ...]]] = []
@@ -452,6 +438,19 @@ def _verify_pre_pr_subject(subject: object) -> PrePrValidationSubject:
         raise ValueError("pre-PR SHA drift")
     if not subject.candidate_bound and subject.tested_sha != subject.expected_source_sha:
         raise ValueError("pre-PR tested SHA drift")
+    if type(subject.expected_changed_paths) is not tuple:
+        raise ValueError("pre-PR expected changed paths drift")
+    if subject.expected_changed_paths and (
+        not subject.candidate_bound
+        or tuple(sorted(set(subject.expected_changed_paths))) != subject.expected_changed_paths
+        or any(
+            not isinstance(path, str)
+            or not path
+            or path not in subject.allowed_files
+            for path in subject.expected_changed_paths
+        )
+    ):
+        raise ValueError("pre-PR expected changed paths drift")
     return subject
 
 
@@ -529,6 +528,8 @@ def serialize_pre_pr_validation_subject(subject: object) -> dict[str, object]:
     }
     if value.candidate_bound:
         payload["candidate_bound"] = True
+    if value.expected_changed_paths:
+        payload["expected_changed_paths"] = list(value.expected_changed_paths)
     return payload
 
 
@@ -537,9 +538,8 @@ def deserialize_pre_pr_validation_subject(payload: object) -> PrePrValidationSub
     if type(payload) is not dict:
         raise TypeError("payload must be an exact dictionary")
     candidate_bound = payload.get("candidate_bound", False)
-    if "candidate_bound" in payload:
-        if candidate_bound is not True:
-            raise TypeError("candidate_bound must be exactly true when present")
+    if "candidate_bound" in payload and candidate_bound is not True:
+        raise TypeError("candidate_bound must be exactly true when present")
     serialized_fields = {
         "schema_name",
         "schema_version",
@@ -561,12 +561,15 @@ def deserialize_pre_pr_validation_subject(payload: object) -> PrePrValidationSub
         "execution_mode",
     }
     expected_fields = serialized_fields | ({"candidate_bound"} if candidate_bound else set())
+    if "expected_changed_paths" in payload:
+        expected_fields.add("expected_changed_paths")
     if set(payload) != expected_fields:
         raise ValueError("pre-PR subject payload fields drift")
     tuple_fields = {
         "allowed_files",
         "forbidden_paths",
         "required_command_identities",
+        "expected_changed_paths",
     }
     values: dict[str, object] = {}
     for key, value in payload.items():
