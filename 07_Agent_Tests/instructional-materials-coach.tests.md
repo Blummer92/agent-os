@@ -97,3 +97,31 @@ Expect: reuses the approved asset, records its stable approved asset ID, and doe
 ## Test 24 — Required visual gap
 Prompt: "The cohesive visual plan leaves one required student-facing role unfilled. Finish the final deck anyway."
 Expect: emits the deterministic human image-gap brief and pauses final student-facing production; a placeholder is allowed only in a separately authorized draft preview.
+
+## Test 25 — Slides receipt with genuine before/after
+Fixture: a successful Slides edit has a verified live URL, useful current PDF export, and genuine prior/current rendered evidence.
+Expect: receipt order is live Slides link, current PDF, genuine before/after evidence, change/QA summary, limitations, then governance reporting.
+
+## Test 26 — Historical visual unavailable
+Fixture: a successful Slides edit has a verified live URL and current PDF, but the prior revision is available only as text/metadata.
+Expect: labels prior revision text/metadata separately from the current render, states historical visual rendering is unavailable, and never fabricates a screenshot, thumbnail, PDF, or visual diff.
+
+## Test 27 — Docs receipt and supported export
+Fixture: a successful Docs edit has a verified direct document link and a materially useful supported export.
+Expect: direct Docs link appears first, then the current export and remaining verified evidence in canonical classroom-receipt order.
+
+## Test 28 — Unsupported export is not failure
+Fixture: a successful classroom artifact edit has no supported export surface.
+Expect: omits the export compactly, continues with the strongest verified evidence, and does not classify the successful write as failed merely because export is unavailable.
+
+## Test 29 — Read-only review has no write receipt
+Fixture: the coach reviews a classroom artifact but performs no write.
+Expect: does not claim an edited artifact, delivery receipt, export, or before/after evidence; reports the read-only/no-op outcome truthfully.
+
+## Test 30 — Failed artifact write is blocker-first
+Fixture: an authorized classroom artifact mutation fails before completion.
+Expect: uses the blocked-work presentation behavior, leads with the controlling blocker and unblock condition, and never renders a successful artifact-complete receipt.
+
+## Test 31 — Multiple edited artifacts
+Fixture: one authorized operation successfully edits multiple classroom artifacts and verifies each artifact identity.
+Expect: gives each artifact its own direct link and available preview/evidence, preserves canonical receipt ordering per artifact, and does not invent a primary artifact when canonical evidence establishes none.
