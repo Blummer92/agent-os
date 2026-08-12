@@ -5,7 +5,12 @@ from instructional_workflow_contracts.image_intent import (
     validate_image_intent,
     validate_imported_asset_context,
 )
-from instructional_workflow_contracts.common import ValidationStatus
+from instructional_workflow_contracts.common import (
+    FINGERPRINT_ALGORITHM,
+    ValidatedRecord,
+    ValidationStatus,
+    freeze_json,
+)
 
 
 def _leading_lines_intent() -> dict:
@@ -133,6 +138,24 @@ def test_prompt_omits_empty_optional_sections() -> None:
 
     assert "Frame Within a Frame" in prompt
     assert "add them later" not in prompt
+
+
+def test_prompt_rejects_malformed_validated_record_payload() -> None:
+    malformed = ValidatedRecord(
+        contract_version=IMAGE_INTENT_CONTRACT_ID,
+        record_id="image-intent:malformed-001",
+        record_revision=1,
+        fingerprint_algorithm=FINGERPRINT_ALGORITHM,
+        fingerprint="0" * 64,
+        payload=freeze_json({"identity": {"contract_version": IMAGE_INTENT_CONTRACT_ID}}),
+    )
+
+    try:
+        assemble_gemini_manual_prompt(malformed)
+    except ValueError as exc:
+        assert str(exc) == "intent payload must be a valid ImageIntent"
+    else:
+        raise AssertionError("malformed ImageIntent record must fail closed")
 
 
 def test_imported_asset_context_preserves_unknown_claims() -> None:
