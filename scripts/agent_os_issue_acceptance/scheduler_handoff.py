@@ -10,8 +10,13 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any, Literal
 
-from .batch_graph import IssueBatchGraph
-from .batch_planning import BatchPlanningResult
+from .batch_graph import IssueBatchGraph, IssueBatchNode, build_issue_batch_graph
+from .batch_planning import (
+    BatchPlanningResult,
+    PlanningClassification,
+    PlanningCohort,
+)
+from .readiness import ReadinessOutcome
 
 SUPPORTED_CONTRACT_VERSIONS = ("0.2.0",)
 SUPPORTED_PLANNING_RESULT_VERSIONS = ("0.1.0",)
@@ -67,6 +72,44 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 _TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 _FORBIDDEN_BRANCH_CHARS = frozenset("*?[")
+
+_GRAPH_TRANSPORT_KEYS = frozenset(
+    {"nodes", "resolved_dependencies", "unresolved_dependencies"}
+)
+_GRAPH_NODE_TRANSPORT_KEYS = frozenset(
+    {
+        "node_id",
+        "readiness",
+        "readiness_evidence",
+        "owner",
+        "source_of_truth",
+        "affected_paths",
+        "forbidden_paths",
+        "dependency_ids",
+        "entity_id",
+        "provenance",
+    }
+)
+_PLANNING_RESULT_TRANSPORT_KEYS = frozenset(
+    {
+        "supplied_node_ids",
+        "overall_classification",
+        "cohorts",
+        "batch_reason_codes",
+        "cycle_node_groups",
+        "planning_scope",
+        "execution_authorized",
+    }
+)
+_PLANNING_COHORT_TRANSPORT_KEYS = frozenset(
+    {
+        "node_ids",
+        "classification",
+        "reason_codes",
+        "dependency_pairs",
+        "sequencing_pairs",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -139,9 +182,7 @@ def _digest(payload: object) -> str:
     return hashlib.sha256(_canonical_bytes(payload)).hexdigest()
 
 
-def compute_graph_digest(graph: IssueBatchGraph) -> str:
-    if not isinstance(graph, IssueBatchGraph):
-        raise TypeError("graph must be an IssueBatchGraph")
+def _graph_payload(graph: IssueBatchGraph) -> dict[str, Any]:
     nodes = []
     for node in sorted(graph.nodes, key=lambda item: item.node_id):
         nodes.append(
@@ -158,17 +199,92 @@ def compute_graph_digest(graph: IssueBatchGraph) -> str:
                 "provenance": sorted(set(node.provenance)),
             }
         )
-    return _digest(
-        {
-            "nodes": nodes,
-            "resolved_dependencies": [
-                list(pair) for pair in sorted(set(graph.resolved_dependencies))
-            ],
-            "unresolved_dependencies": [
-                list(pair) for pair in sorted(set(graph.unresolved_dependencies))
-            ],
-        }
+    return {
+        "nodes": nodes,
+        "resolved_dependencies": [
+            list(pair) for pair in sorted(set(graph.resolved_dependencies))
+        ],
+        "unresolved_dependencies": [
+            list(pair) for pair in sorted(set(graph.unresolved_dependencies))
+        ],
+    }
+
+
+def compute_graph_digest(graph: IssueBatchGraph) -> str:
+    if not isinstance(graph, IssueBatchGraph):
+        raise TypeError("graph must be an IssueBatchGraph")
+    return _digest(_graph_payload(graph))
+
+
+def serialize_issue_batch_graph(graph: IssueBatchGraph) -> bytes:
+    """Serialize one canonical built graph using the graph-digest payload."""
+    if type(graph) is not IssueBatchGraph:
+        raise TypeError("graph must be an exact IssueBatchGraph")
+    rebuilt = build_issue_batch_graph(graph.nodes)
+    if rebuilt != graph:
+        raise ValueError("graph dependency evidence does not match canonical nodes")
+    return _canonical_bytes(_graph_payload(graph))
+
+
+def reconstruct_issue_batch_graph(
+    payload: bytes | str | Mapping[str, Any],
+) -> IssueBatchGraph:
+    """Strictly reconstruct one canonical graph and rederive dependency evidence."""
+    raw = _decode_transport_payload(payload, "issue batch graph")
+    _require_exact_keys(raw, _GRAPH_TRANSPORT_KEYS, "issue batch graph")
+    raw_nodes = raw["nodes"]
+    if type(raw_nodes) is not list:
+        raise ValueError("nodes must be an array")
+    nodes: list[IssueBatchNode] = []
+    for index, item in enumerate(raw_nodes):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"nodes[{index}] must be an object")
+        _require_exact_keys(item, _GRAPH_NODE_TRANSPORT_KEYS, f"nodes[{index}]")
+        readiness_evidence = _require_string_array(
+            item["readiness_evidence"], f"nodes[{index}].readiness_evidence"
+        )
+        affected_paths = _require_string_array(
+            item["affected_paths"], f"nodes[{index}].affected_paths"
+        )
+        forbidden_paths = _require_string_array(
+            item["forbidden_paths"], f"nodes[{index}].forbidden_paths"
+        )
+        dependency_ids = _require_string_array(
+            item["dependency_ids"], f"nodes[{index}].dependency_ids"
+        )
+        provenance = _require_string_array(
+            item["provenance"], f"nodes[{index}].provenance"
+        )
+        try:
+            readiness = ReadinessOutcome(item["readiness"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"nodes[{index}].readiness is unsupported") from exc
+        nodes.append(
+            IssueBatchNode(
+                node_id=item["node_id"],
+                readiness=readiness,
+                readiness_evidence=readiness_evidence,
+                owner=item["owner"],
+                source_of_truth=item["source_of_truth"],
+                affected_paths=affected_paths,
+                forbidden_paths=forbidden_paths,
+                dependency_ids=dependency_ids,
+                entity_id=item["entity_id"],
+                provenance=provenance,
+            )
+        )
+    resolved = _require_pair_array(raw["resolved_dependencies"], "resolved_dependencies")
+    unresolved = _require_pair_array(
+        raw["unresolved_dependencies"], "unresolved_dependencies"
     )
+    graph = build_issue_batch_graph(nodes)
+    if graph.resolved_dependencies != resolved:
+        raise ValueError("resolved_dependencies do not match canonical node dependencies")
+    if graph.unresolved_dependencies != unresolved:
+        raise ValueError("unresolved_dependencies do not match canonical node dependencies")
+    if _graph_payload(graph) != dict(raw):
+        raise ValueError("graph transport is not canonical")
+    return graph
 
 
 def _planning_result_payload(result: BatchPlanningResult) -> dict[str, Any]:
@@ -190,10 +306,103 @@ def _planning_result_payload(result: BatchPlanningResult) -> dict[str, Any]:
     }
 
 
+def _planning_result_transport_payload(
+    result: BatchPlanningResult,
+) -> dict[str, Any]:
+    payload = _planning_result_payload(result)
+    payload.update(
+        {
+            "planning_scope": result.planning_scope,
+            "execution_authorized": result.execution_authorized,
+        }
+    )
+    return payload
+
+
 def compute_planning_result_digest(result: BatchPlanningResult) -> str:
     if not isinstance(result, BatchPlanningResult):
         raise TypeError("result must be a BatchPlanningResult")
     return _digest(_planning_result_payload(result))
+
+
+def serialize_batch_planning_result(result: BatchPlanningResult) -> bytes:
+    """Serialize one verified planning result without changing digest semantics."""
+    if type(result) is not BatchPlanningResult:
+        raise TypeError("result must be an exact BatchPlanningResult")
+    verified = BatchPlanningResult(
+        supplied_node_ids=tuple(result.supplied_node_ids),
+        overall_classification=result.overall_classification,
+        cohorts=tuple(result.cohorts),
+        batch_reason_codes=tuple(result.batch_reason_codes),
+        cycle_node_groups=tuple(result.cycle_node_groups),
+    )
+    if verified != result:
+        raise ValueError("planning result does not satisfy canonical invariants")
+    return _canonical_bytes(_planning_result_transport_payload(verified))
+
+
+def reconstruct_batch_planning_result(
+    payload: bytes | str | Mapping[str, Any],
+) -> BatchPlanningResult:
+    """Strictly reconstruct one planning result with closed-schema validation."""
+    raw = _decode_transport_payload(payload, "batch planning result")
+    _require_exact_keys(raw, _PLANNING_RESULT_TRANSPORT_KEYS, "batch planning result")
+    if raw["planning_scope"] != "supplied-graph-only":
+        raise ValueError("planning_scope must be supplied-graph-only")
+    if raw["execution_authorized"] is not False:
+        raise ValueError("execution_authorized must remain false")
+    supplied_node_ids = _require_string_array(raw["supplied_node_ids"], "supplied_node_ids")
+    batch_reason_codes = _require_string_array(
+        raw["batch_reason_codes"], "batch_reason_codes"
+    )
+    cycle_node_groups = _require_nested_string_arrays(
+        raw["cycle_node_groups"], "cycle_node_groups"
+    )
+    raw_cohorts = raw["cohorts"]
+    if type(raw_cohorts) is not list:
+        raise ValueError("cohorts must be an array")
+    cohorts: list[PlanningCohort] = []
+    for index, item in enumerate(raw_cohorts):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"cohorts[{index}] must be an object")
+        _require_exact_keys(
+            item, _PLANNING_COHORT_TRANSPORT_KEYS, f"cohorts[{index}]"
+        )
+        try:
+            classification = PlanningClassification(item["classification"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"cohorts[{index}].classification is unsupported") from exc
+        cohorts.append(
+            PlanningCohort(
+                node_ids=_require_string_array(
+                    item["node_ids"], f"cohorts[{index}].node_ids"
+                ),
+                classification=classification,
+                reason_codes=_require_string_array(
+                    item["reason_codes"], f"cohorts[{index}].reason_codes"
+                ),
+                dependency_pairs=_require_pair_array(
+                    item["dependency_pairs"], f"cohorts[{index}].dependency_pairs"
+                ),
+                sequencing_pairs=_require_pair_array(
+                    item["sequencing_pairs"], f"cohorts[{index}].sequencing_pairs"
+                ),
+            )
+        )
+    try:
+        overall = PlanningClassification(raw["overall_classification"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("overall_classification is unsupported") from exc
+    result = BatchPlanningResult(
+        supplied_node_ids=supplied_node_ids,
+        overall_classification=overall,
+        cohorts=tuple(cohorts),
+        batch_reason_codes=batch_reason_codes,
+        cycle_node_groups=cycle_node_groups,
+    )
+    if _planning_result_transport_payload(result) != dict(raw):
+        raise ValueError("planning result transport is not canonical")
+    return result
 
 
 def _cohort_payload(value: HandoffCohort | Mapping[str, Any]) -> dict[str, Any]:
@@ -275,6 +484,71 @@ def serialize_scheduler_planning_handoff(handoff: SchedulerPlanningHandoff) -> b
     if not isinstance(handoff, SchedulerPlanningHandoff):
         raise TypeError("handoff must be a SchedulerPlanningHandoff")
     return _canonical_bytes(_canonical_handoff_payload(handoff, include_digest=True))
+
+
+def _decode_transport_payload(
+    payload: bytes | str | Mapping[str, Any], name: str
+) -> Mapping[str, Any]:
+    if isinstance(payload, bytes):
+        try:
+            raw: object = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"{name} must be canonical UTF-8 JSON") from exc
+    elif isinstance(payload, str):
+        try:
+            raw = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{name} must be JSON") from exc
+    elif isinstance(payload, Mapping):
+        raw = dict(payload)
+    else:
+        raise TypeError("payload must be bytes, text, or a mapping")
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"{name} payload must be an object")
+    return raw
+
+
+def _require_exact_keys(
+    raw: Mapping[str, Any], expected: frozenset[str], name: str
+) -> None:
+    unknown = sorted(set(raw) - expected)
+    missing = sorted(expected - set(raw))
+    if unknown:
+        raise ValueError(f"{name} has unknown fields: {', '.join(unknown)}")
+    if missing:
+        raise ValueError(f"{name} is missing required fields: {', '.join(missing)}")
+
+
+def _require_string_array(value: object, name: str) -> tuple[str, ...]:
+    if type(value) is not list:
+        raise ValueError(f"{name} must be an array")
+    if not all(type(item) is str and item for item in value):
+        raise ValueError(f"{name} must contain non-empty strings")
+    return tuple(value)
+
+
+def _require_pair_array(value: object, name: str) -> tuple[tuple[str, str], ...]:
+    if type(value) is not list:
+        raise ValueError(f"{name} must be an array")
+    pairs: list[tuple[str, str]] = []
+    for index, item in enumerate(value):
+        if type(item) is not list or len(item) != 2:
+            raise ValueError(f"{name}[{index}] must be a two-string array")
+        if not all(type(part) is str and part for part in item):
+            raise ValueError(f"{name}[{index}] must contain non-empty strings")
+        pairs.append((item[0], item[1]))
+    return tuple(pairs)
+
+
+def _require_nested_string_arrays(
+    value: object, name: str
+) -> tuple[tuple[str, ...], ...]:
+    if type(value) is not list:
+        raise ValueError(f"{name} must be an array")
+    groups: list[tuple[str, ...]] = []
+    for index, item in enumerate(value):
+        groups.append(_require_string_array(item, f"{name}[{index}]"))
+    return tuple(groups)
 
 
 def _valid_timestamp(value: object) -> bool:
