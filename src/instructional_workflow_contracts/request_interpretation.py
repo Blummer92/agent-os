@@ -139,15 +139,24 @@ def _constraints(values: Any) -> list[dict[str, Any]]:
 
 def _semantic_reasons(origin: str, action: str, effect: str, continuation: str, target: dict[str, Any]) -> set[str]:
     reasons: set[str] = set()
-    if origin == "retrieved-content": reasons.add("request.untrusted-source")
-    if action == "unknown": reasons.add("action.ambiguous")
-    if target["system"] == "unknown": reasons.add("request.destination-unclear")
-    if target["resource_kind"] == "unknown": reasons.add("target.missing")
-    if target["system"] == "github" and target["repository"] is None: reasons.add("target.repository-missing")
-    if target["resource_kind"] in {"issue", "pull-request"} and target["resource_id"] is None: reasons.add("target.missing")
-    if continuation == "continue" and target["resource_id"] is None: reasons.add("context.missing")
-    if effect == "mutate" and origin not in {"direct-user", "approved-handoff"}: reasons.add("request.write-surface-unclear")
-    if effect == "schedule": reasons.add("request.monitoring-surface-required")
+    if origin == "retrieved-content":
+        reasons.add("request.untrusted-source")
+    if action == "unknown":
+        reasons.add("action.ambiguous")
+    if target["system"] == "unknown":
+        reasons.add("request.destination-unclear")
+    if target["resource_kind"] == "unknown":
+        reasons.add("target.missing")
+    if target["system"] == "github" and target["repository"] is None:
+        reasons.add("target.repository-missing")
+    if target["resource_kind"] in {"issue", "pull-request"} and target["resource_id"] is None:
+        reasons.add("target.missing")
+    if continuation == "continue" and target["resource_id"] is None:
+        reasons.add("context.missing")
+    if effect == "mutate" and origin not in {"direct-user", "approved-handoff"}:
+        reasons.add("request.write-surface-unclear")
+    if effect == "schedule":
+        reasons.add("request.monitoring-surface-required")
     return reasons
 
 
