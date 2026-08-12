@@ -67,6 +67,17 @@ Every file path listed in an alias must exist in the repository. Missing paths b
 | Files to read in order | 1. `AGENTS.md`<br>2. `00_Governance/write-authorization-policy.md`<br>3. `01_Shared_Standards/github/safe-implementation-lane.md`<br>4. `02_Agent_Overlays/github-service-agent.md`<br>5. `01_Shared_Standards/github/excluded-surface-baseline.md` |
 | Stop condition | Stop after the issue owner, source of truth, write boundary, bounded scope, and excluded surfaces are clear. This alias is a lookup aid only and never grants write authority or replaces live verification. |
 
+### @interaction-output
+
+| Field | Value |
+|---|---|
+| Alias | `@interaction-output` |
+| Purpose | Used when an agent needs the required report fields, presentation profile, or visible response ordering for its answer. |
+| Owner | Integration Manager |
+| Source of truth | GitHub shared global-engineering standards |
+| Files to read in order | 1. `01_Shared_Standards/global-engineering/agent-interaction-output-standard.md`<br>2. `01_Shared_Standards/global-engineering/final-report-standard.md`<br>3. `02_Agent_Overlays/_common-overlay-rules.md`<br>4. `07_Agent_Tests/agent-output-schema.md` |
+| Stop condition | Stop after the profile, required fields, and ordering are clear. Presentation grants no execution, approval, or write authority; a progress claim without canonical evidence stops for the owning contract. |
+
 ### @classroom-artifact-routing
 
 | Field | Value |

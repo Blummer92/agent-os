@@ -27,7 +27,6 @@ are split, summarized, or replaced by smaller indexed documents.
 08_Tooling/workflow-scheduler/docs/API_REFERENCE.md
 08_Tooling/workflow-scheduler/docs/USER_GUIDE.md
 08_Tooling/workflow-scheduler/docs/ARCHITECTURE.md
-07_Agent_Tests/agent-output-schema.md
 ```
 
 ## High-Risk Governed Exceptions (Deferred)

@@ -598,7 +598,6 @@ def _current_binding(
         "source-head:mismatch",
     )
     if planning_binding is None:
-        # Legacy route: the IssuePlan itself carries the downstream references.
         mismatch(
             issueplan.handoff_reference != proposal.handoff_digest,
             "handoff.changed",
@@ -620,8 +619,6 @@ def _current_binding(
             "supplied-node-ids:mismatch",
         )
     else:
-        # Two-phase route: the binding attests to the post-planning artifacts,
-        # and its own identity is recomputed before any of it is believed.
         if not isinstance(planning_binding, PlanningBindingEvidence):
             return (
                 None,
@@ -1071,3 +1068,371 @@ def _digest(value: object) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
+
+
+_APPROVAL_BINDING_TRANSPORT_KEYS = frozenset(
+    {
+        "proposal_version",
+        "proposal_id",
+        "handoff_digest",
+        "graph_digest",
+        "planning_result_digest",
+        "repository",
+        "base_branch",
+        "evaluated_repository_sha",
+        "evaluator_commit_sha",
+        "supplied_node_ids",
+        "cohort_summaries",
+        "issueplan_current_state_evidence_id",
+        "repository_state_evidence_id",
+        "repository_evidence_type",
+        "tested_repository_sha",
+        "source_snapshot_fingerprint",
+        "scanner_result_fingerprint",
+        "implementation_contract_fingerprint",
+        "allowed_files",
+        "forbidden_paths",
+        "required_tests",
+    }
+)
+_APPROVAL_RECORD_TRANSPORT_KEYS = frozenset(
+    {
+        "schema_version",
+        "approval_id",
+        "approval_revision",
+        "revision_number",
+        "previous_revision",
+        "approval_kind",
+        "state",
+        "binding",
+        "authorizer_id",
+        "decision_id",
+        "decision_at",
+        "expires_at",
+        "supersedes_approval_id",
+        "reason_codes",
+        "details",
+        "execution_authorized",
+        "side_effects_performed",
+    }
+)
+_APPROVAL_APPLICABILITY_TRANSPORT_KEYS = frozenset(
+    {
+        "status",
+        "approval_id",
+        "approval_revision",
+        "current_proposal_id",
+        "reason_codes",
+        "changed_bindings",
+        "approval_applicable",
+        "details",
+        "execution_authorized",
+        "side_effects_performed",
+    }
+)
+_COHORT_TRANSPORT_KEYS = frozenset({"node_ids", "classification", "reason_codes"})
+
+
+def serialize_approval_binding(binding: ApprovalBinding) -> bytes:
+    """Serialize one verified approval binding as canonical UTF-8 JSON."""
+
+    if not isinstance(binding, ApprovalBinding):
+        raise TypeError("binding must be ApprovalBinding")
+    verified = ApprovalBinding(**_approval_binding_constructor_values(binding))
+    return _canonical_transport_bytes(_approval_binding_transport_payload(verified))
+
+
+def reconstruct_approval_binding(
+    payload: bytes | str | Mapping[str, Any],
+) -> ApprovalBinding:
+    """Strictly reconstruct an approval binding from closed-schema transport data."""
+
+    raw = _decode_transport_payload(payload, "approval binding")
+    _require_exact_transport_keys(raw, _APPROVAL_BINDING_TRANSPORT_KEYS, "approval binding")
+    values = _approval_binding_values_from_transport(raw)
+    return ApprovalBinding(**values)
+
+
+def serialize_approval_record(record: ApprovalRecord) -> bytes:
+    """Serialize one verified approval record as canonical UTF-8 JSON."""
+
+    verified = _verified_record(record)
+    return _canonical_transport_bytes(_approval_record_transport_payload(verified))
+
+
+def reconstruct_approval_record(
+    payload: bytes | str | Mapping[str, Any],
+) -> ApprovalRecord:
+    """Strictly reconstruct one approval record and reverify its supplied identities."""
+
+    raw = _decode_transport_payload(payload, "approval record")
+    _require_exact_transport_keys(raw, _APPROVAL_RECORD_TRANSPORT_KEYS, "approval record")
+    _require_fixed_false(raw, "approval record")
+    if type(raw["revision_number"]) is not int:
+        raise ValueError("revision_number must be a positive integer")
+    binding_raw = raw["binding"]
+    if not isinstance(binding_raw, Mapping):
+        raise ValueError("binding must be an object")
+    reason_codes = _require_string_array(raw["reason_codes"], "reason_codes")
+    details = _require_string_array(raw["details"], "details")
+    try:
+        approval_kind = ApprovalKind(raw["approval_kind"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("approval_kind is unsupported") from exc
+    try:
+        state = ApprovalState(raw["state"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("state is unsupported") from exc
+    return ApprovalRecord(
+        schema_version=raw["schema_version"],
+        approval_id=raw["approval_id"],
+        approval_revision=raw["approval_revision"],
+        revision_number=raw["revision_number"],
+        previous_revision=raw["previous_revision"],
+        approval_kind=approval_kind,
+        state=state,
+        binding=reconstruct_approval_binding(binding_raw),
+        authorizer_id=raw["authorizer_id"],
+        decision_id=raw["decision_id"],
+        decision_at=raw["decision_at"],
+        expires_at=raw["expires_at"],
+        supersedes_approval_id=raw["supersedes_approval_id"],
+        reason_codes=reason_codes,
+        details=details,
+    )
+
+
+def serialize_approval_applicability_result(
+    result: ApprovalApplicabilityResult,
+) -> bytes:
+    """Serialize one applicability result without creating authorization."""
+
+    if not isinstance(result, ApprovalApplicabilityResult):
+        raise TypeError("result must be ApprovalApplicabilityResult")
+    return _canonical_transport_bytes(
+        {
+            "status": result.status,
+            "approval_id": result.approval_id,
+            "approval_revision": result.approval_revision,
+            "current_proposal_id": result.current_proposal_id,
+            "reason_codes": list(result.reason_codes),
+            "changed_bindings": list(result.changed_bindings),
+            "approval_applicable": result.approval_applicable,
+            "details": list(result.details),
+            "execution_authorized": False,
+            "side_effects_performed": False,
+        }
+    )
+
+
+def reconstruct_approval_applicability_result(
+    payload: bytes | str | Mapping[str, Any],
+) -> ApprovalApplicabilityResult:
+    """Strictly reconstruct one approval applicability result."""
+
+    raw = _decode_transport_payload(payload, "approval applicability result")
+    _require_exact_transport_keys(
+        raw,
+        _APPROVAL_APPLICABILITY_TRANSPORT_KEYS,
+        "approval applicability result",
+    )
+    _require_fixed_false(raw, "approval applicability result")
+    if type(raw["approval_applicable"]) is not bool:
+        raise ValueError("approval_applicable must be a boolean")
+    for name, pattern in (
+        ("approval_id", _APPROVAL_ID_RE),
+        ("approval_revision", _REVISION_ID_RE),
+        ("current_proposal_id", _PROPOSAL_ID_RE),
+    ):
+        value = raw[name]
+        if value is not None and (
+            not isinstance(value, str) or not pattern.fullmatch(value)
+        ):
+            raise ValueError(f"{name} is malformed")
+    return ApprovalApplicabilityResult(
+        status=raw["status"],
+        approval_id=raw["approval_id"],
+        approval_revision=raw["approval_revision"],
+        current_proposal_id=raw["current_proposal_id"],
+        reason_codes=_require_string_array(raw["reason_codes"], "reason_codes"),
+        changed_bindings=_require_string_array(
+            raw["changed_bindings"], "changed_bindings"
+        ),
+        approval_applicable=raw["approval_applicable"],
+        details=_require_string_array(raw["details"], "details"),
+    )
+
+
+def _approval_binding_constructor_values(binding: ApprovalBinding) -> dict[str, Any]:
+    return {
+        "proposal_version": binding.proposal_version,
+        "proposal_id": binding.proposal_id,
+        "handoff_digest": binding.handoff_digest,
+        "graph_digest": binding.graph_digest,
+        "planning_result_digest": binding.planning_result_digest,
+        "repository": binding.repository,
+        "base_branch": binding.base_branch,
+        "evaluated_repository_sha": binding.evaluated_repository_sha,
+        "evaluator_commit_sha": binding.evaluator_commit_sha,
+        "supplied_node_ids": binding.supplied_node_ids,
+        "cohort_summaries": binding.cohort_summaries,
+        "issueplan_current_state_evidence_id": binding.issueplan_current_state_evidence_id,
+        "repository_state_evidence_id": binding.repository_state_evidence_id,
+        "repository_evidence_type": binding.repository_evidence_type,
+        "tested_repository_sha": binding.tested_repository_sha,
+        "source_snapshot_fingerprint": binding.source_snapshot_fingerprint,
+        "scanner_result_fingerprint": binding.scanner_result_fingerprint,
+        "implementation_contract_fingerprint": binding.implementation_contract_fingerprint,
+        "allowed_files": binding.allowed_files,
+        "forbidden_paths": binding.forbidden_paths,
+        "required_tests": binding.required_tests,
+    }
+
+
+def _approval_binding_transport_payload(binding: ApprovalBinding) -> dict[str, Any]:
+    values = _approval_binding_constructor_values(binding)
+    return {
+        **values,
+        "supplied_node_ids": list(binding.supplied_node_ids),
+        "cohort_summaries": [_cohort_transport_payload(item) for item in binding.cohort_summaries],
+        "allowed_files": list(binding.allowed_files),
+        "forbidden_paths": list(binding.forbidden_paths),
+        "required_tests": list(binding.required_tests),
+    }
+
+
+def _approval_record_transport_payload(record: ApprovalRecord) -> dict[str, Any]:
+    return {
+        "schema_version": record.schema_version,
+        "approval_id": record.approval_id,
+        "approval_revision": record.approval_revision,
+        "revision_number": record.revision_number,
+        "previous_revision": record.previous_revision,
+        "approval_kind": record.approval_kind.value,
+        "state": record.state.value,
+        "binding": _approval_binding_transport_payload(record.binding),
+        "authorizer_id": record.authorizer_id,
+        "decision_id": record.decision_id,
+        "decision_at": record.decision_at,
+        "expires_at": record.expires_at,
+        "supersedes_approval_id": record.supersedes_approval_id,
+        "reason_codes": list(record.reason_codes),
+        "details": list(record.details),
+        "execution_authorized": False,
+        "side_effects_performed": False,
+    }
+
+
+def _approval_binding_values_from_transport(raw: Mapping[str, Any]) -> dict[str, Any]:
+    for name in ("supplied_node_ids", "allowed_files", "forbidden_paths", "required_tests"):
+        _require_string_array(raw[name], name)
+    cohorts_raw = raw["cohort_summaries"]
+    if not isinstance(cohorts_raw, list):
+        raise ValueError("cohort_summaries must be a JSON array")
+    cohorts = tuple(_reconstruct_transport_cohort(item) for item in cohorts_raw)
+    return {
+        "proposal_version": raw["proposal_version"],
+        "proposal_id": raw["proposal_id"],
+        "handoff_digest": raw["handoff_digest"],
+        "graph_digest": raw["graph_digest"],
+        "planning_result_digest": raw["planning_result_digest"],
+        "repository": raw["repository"],
+        "base_branch": raw["base_branch"],
+        "evaluated_repository_sha": raw["evaluated_repository_sha"],
+        "evaluator_commit_sha": raw["evaluator_commit_sha"],
+        "supplied_node_ids": tuple(raw["supplied_node_ids"]),
+        "cohort_summaries": cohorts,
+        "issueplan_current_state_evidence_id": raw["issueplan_current_state_evidence_id"],
+        "repository_state_evidence_id": raw["repository_state_evidence_id"],
+        "repository_evidence_type": raw["repository_evidence_type"],
+        "tested_repository_sha": raw["tested_repository_sha"],
+        "source_snapshot_fingerprint": raw["source_snapshot_fingerprint"],
+        "scanner_result_fingerprint": raw["scanner_result_fingerprint"],
+        "implementation_contract_fingerprint": raw["implementation_contract_fingerprint"],
+        "allowed_files": tuple(raw["allowed_files"]),
+        "forbidden_paths": tuple(raw["forbidden_paths"]),
+        "required_tests": tuple(raw["required_tests"]),
+    }
+
+
+def _cohort_transport_payload(cohort: HandoffCohort) -> dict[str, Any]:
+    return {
+        "node_ids": list(cohort.node_ids),
+        "classification": cohort.classification,
+        "reason_codes": list(cohort.reason_codes),
+    }
+
+
+def _reconstruct_transport_cohort(payload: object) -> HandoffCohort:
+    if not isinstance(payload, Mapping):
+        raise ValueError("cohort_summaries entries must be objects")
+    _require_exact_transport_keys(payload, _COHORT_TRANSPORT_KEYS, "cohort summary")
+    node_ids = _require_string_array(payload["node_ids"], "cohort node_ids")
+    reason_codes = _require_string_array(payload["reason_codes"], "cohort reason_codes")
+    classification = payload["classification"]
+    if not isinstance(classification, str) or not classification:
+        raise ValueError("cohort classification must be a non-empty string")
+    if not node_ids or any(not item for item in node_ids):
+        raise ValueError("cohort node_ids must contain non-empty strings")
+    if any(not item for item in reason_codes):
+        raise ValueError("cohort reason_codes must contain non-empty strings")
+    return HandoffCohort(tuple(node_ids), classification, tuple(reason_codes))
+
+
+def _decode_transport_payload(
+    payload: bytes | str | Mapping[str, Any], name: str
+) -> Mapping[str, Any]:
+    if isinstance(payload, Mapping):
+        return payload
+    if isinstance(payload, bytes):
+        try:
+            text = payload.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"{name} must be UTF-8 JSON") from exc
+    elif isinstance(payload, str):
+        text = payload
+    else:
+        raise TypeError(f"{name} must be bytes, string, or mapping")
+    try:
+        decoded = json.loads(text)
+    except (json.JSONDecodeError, RecursionError) as exc:
+        raise ValueError(f"{name} must contain valid JSON") from exc
+    if not isinstance(decoded, Mapping):
+        raise ValueError(f"{name} must contain a JSON object")
+    return decoded
+
+
+def _require_exact_transport_keys(
+    payload: Mapping[str, Any], expected: frozenset[str], name: str
+) -> None:
+    actual = set(payload)
+    unknown = actual - expected
+    missing = expected - actual
+    if unknown:
+        raise ValueError(f"{name} contains unknown fields: {sorted(unknown)}")
+    if missing:
+        raise ValueError(f"{name} is missing fields: {sorted(missing)}")
+
+
+def _require_string_array(value: object, name: str) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise ValueError(f"{name} must be a JSON array")
+    if not all(isinstance(item, str) for item in value):
+        raise ValueError(f"{name} must contain only strings")
+    return tuple(value)
+
+
+def _require_fixed_false(payload: Mapping[str, Any], name: str) -> None:
+    if payload["execution_authorized"] is not False:
+        raise ValueError(f"{name} execution_authorized must be false")
+    if payload["side_effects_performed"] is not False:
+        raise ValueError(f"{name} side_effects_performed must be false")
+
+
+def _canonical_transport_bytes(payload: object) -> bytes:
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")

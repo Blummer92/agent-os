@@ -666,3 +666,182 @@ def test_no_clock_network_subprocess_filesystem_or_scheduler_runtime_dependency(
     assert "subprocess" not in source
     assert "socket" not in source
     assert "sqlite" not in source.lower()
+
+
+def test_projection_transport_round_trip_is_byte_stable():
+    projection = _build().projection
+    assert projection is not None
+    encoded = serialize_approved_execution_projection(projection)
+
+    restored = approved_execution_projection.reconstruct_approved_execution_projection(
+        encoded
+    )
+
+    assert restored == projection
+    assert serialize_approved_execution_projection(restored) == encoded
+
+
+def test_projection_transport_rejects_schema_identity_type_and_fixed_flag_drift():
+    projection = _build().projection
+    assert projection is not None
+    original = json.loads(serialize_approved_execution_projection(projection))
+
+    missing = dict(original)
+    missing.pop("proposal_id")
+    with pytest.raises(ValueError, match="missing fields"):
+        approved_execution_projection.reconstruct_approved_execution_projection(missing)
+
+    unknown = dict(original)
+    unknown["unexpected"] = True
+    with pytest.raises(ValueError, match="unknown fields"):
+        approved_execution_projection.reconstruct_approved_execution_projection(unknown)
+
+    unsupported = dict(original)
+    unsupported["schema_version"] = "2.0"
+    with pytest.raises(ValueError, match="unsupported projection schema version"):
+        approved_execution_projection.reconstruct_approved_execution_projection(unsupported)
+
+    boolean_revision = dict(original)
+    boolean_revision["approval_revision_number"] = True
+    with pytest.raises(ValueError, match="approval_revision_number"):
+        approved_execution_projection.reconstruct_approved_execution_projection(
+            boolean_revision
+        )
+
+    tampered_id = dict(original)
+    tampered_id["projection_id"] = "approved-execution-projection:" + "0" * 64
+    with pytest.raises(ValueError, match="projection_id"):
+        approved_execution_projection.reconstruct_approved_execution_projection(tampered_id)
+
+    for field, value in (
+        ("complete", False),
+        ("authoritative", True),
+        ("execution_authorized", True),
+        ("side_effects_performed", True),
+    ):
+        payload = dict(original)
+        payload[field] = value
+        with pytest.raises(ValueError):
+            approved_execution_projection.reconstruct_approved_execution_projection(
+                payload
+            )
+
+
+def test_projection_transport_rejects_governed_binding_drift():
+    projection = _build().projection
+    assert projection is not None
+    original = json.loads(serialize_approved_execution_projection(projection))
+
+    mutations = (
+        ("allowed_files", ["different.py"]),
+        ("forbidden_paths", ["secrets/**"]),
+        ("required_tests", ["different test"]),
+    )
+    for field, value in mutations:
+        payload = json.loads(json.dumps(original))
+        payload[field] = value
+        with pytest.raises(ValueError, match="projection_id"):
+            approved_execution_projection.reconstruct_approved_execution_projection(
+                payload
+            )
+
+    node_drift = json.loads(json.dumps(original))
+    node_drift["supplied_node_ids"] = ["issue-999"]
+    node_drift["cohort_summaries"][0]["node_ids"] = ["issue-999"]
+    with pytest.raises(ValueError, match="projection_id"):
+        approved_execution_projection.reconstruct_approved_execution_projection(
+            node_drift
+        )
+
+    malformed_cohort = json.loads(json.dumps(original))
+    malformed_cohort["cohort_summaries"][0]["unexpected"] = True
+    with pytest.raises(ValueError, match="unknown fields"):
+        approved_execution_projection.reconstruct_approved_execution_projection(
+            malformed_cohort
+        )
+
+
+def test_projection_result_transport_round_trips_complete_and_failure_results():
+    complete = _build()
+    encoded = approved_execution_projection.serialize_approved_execution_projection_result(
+        complete
+    )
+    restored = approved_execution_projection.reconstruct_approved_execution_projection_result(
+        encoded
+    )
+    assert restored == complete
+    assert (
+        approved_execution_projection.serialize_approved_execution_projection_result(
+            restored
+        )
+        == encoded
+    )
+
+    failure = approved_execution_projection.ApprovedExecutionProjectionResult(
+        "stale",
+        None,
+        ("candidate.changed",),
+        ("drift",),
+    )
+    failure_encoded = (
+        approved_execution_projection.serialize_approved_execution_projection_result(
+            failure
+        )
+    )
+    failure_restored = (
+        approved_execution_projection.reconstruct_approved_execution_projection_result(
+            failure_encoded
+        )
+    )
+    assert failure_restored == failure
+
+
+def test_projection_result_transport_rejects_invalid_envelopes():
+    result = _build()
+    original = json.loads(
+        approved_execution_projection.serialize_approved_execution_projection_result(
+            result
+        )
+    )
+
+    for field, value in (
+        ("authoritative", True),
+        ("execution_authorized", True),
+        ("side_effects_performed", True),
+        ("complete", False),
+    ):
+        payload = json.loads(json.dumps(original))
+        payload[field] = value
+        with pytest.raises(ValueError):
+            approved_execution_projection.reconstruct_approved_execution_projection_result(
+                payload
+            )
+
+    reasons_on_complete = json.loads(json.dumps(original))
+    reasons_on_complete["reason_codes"] = ["candidate.changed"]
+    with pytest.raises(ValueError, match="cannot carry reason codes"):
+        approved_execution_projection.reconstruct_approved_execution_projection_result(
+            reasons_on_complete
+        )
+
+    missing_projection = json.loads(json.dumps(original))
+    missing_projection["projection"] = None
+    with pytest.raises(ValueError, match="requires one projection"):
+        approved_execution_projection.reconstruct_approved_execution_projection_result(
+            missing_projection
+        )
+
+    failure = {
+        "status": "stale",
+        "projection": None,
+        "reason_codes": [],
+        "details": [],
+        "complete": False,
+        "authoritative": False,
+        "execution_authorized": False,
+        "side_effects_performed": False,
+    }
+    with pytest.raises(ValueError, match="requires reason codes"):
+        approved_execution_projection.reconstruct_approved_execution_projection_result(
+            failure
+        )
