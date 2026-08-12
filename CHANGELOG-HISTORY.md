@@ -2,7 +2,7 @@
 
 Archived historical changelog content. For current and recent history, see [CHANGELOG.md](CHANGELOG.md).
 
-## 0.1.1-draft (archived)
+## 0.1.1-draft — archived entries
 - Clarified dashboard sync routing and prevented duplicate standalone Dashboard Sync Agent ownership.
 - Retired Apps Script Sync Test Agent as a standalone canonical agent name.
 - Preserved Apps Script Sync Test Overlay as specialist sync-validation behavior.
