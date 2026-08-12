@@ -9,6 +9,7 @@ Required Handoff Targets.
 - Global Engineering 0.3.0
 - Read-Only Default 0.1.0
 - Source-of-Truth Checks 0.1.0
+- Agent Interaction Output Standard 0.1.0
 
 ## Required Human Approval Points
 - Production writes
@@ -17,11 +18,10 @@ Required Handoff Targets.
 - Breaking standards changes
 
 ## Required Final Report Format
-- Files changed
-- Tests run
-- Docs updated
-- Notion updates recommended
-- Memory recommendations
+Use the base report contract and presentation profile in
+`01_Shared_Standards/global-engineering/agent-interaction-output-standard.md`.
+Overlays add only domain evidence such as recommended Notion updates or memory
+recommendations; they do not restate its fields, profiles, or ordering.
 
 ## Stop Conditions
 - Ambiguous target

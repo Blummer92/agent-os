@@ -79,7 +79,10 @@ If a legacy alias maps to a canonical agent, continue normal routing and report 
 alias resolution. If no alias exists, stop and recommend a registry update.
 
 ## Required Final Report
-Every implementation or review report must include files changed, tests run,
+`01_Shared_Standards/global-engineering/agent-interaction-output-standard.md` is
+the canonical owner of report field ownership, presentation profiles, visible
+ordering, and progress labeling. This entry point restates only its minimum:
+every implementation or review report must include files changed, tests run,
 docs updated, unresolved blockers, handoff recommendations, and remaining risks.
 For eligible Safe Implementation Lane work, also follow the `Reporting` contract
 in `01_Shared_Standards/github/safe-implementation-lane.md`: actual branch,
