@@ -38,6 +38,7 @@ versions change only when the module's standards or contract changes.
 | Agent OS Codespaces Profile | 0.2.0 |
 | Execution Checkpoint Contract | 0.1.0 |
 | Issue Quality Taxonomy | 0.1.0 |
+
 **Global Engineering** `0.4.0` adds the Pattern + Docs Freshness Gate to implementation final reports and GitHub Change Request handoffs (#998; planned in #928, PR #929).
 
 **Dashboard Migration Verification** (`08_Tooling/dashboard-migration-verification/`) starts as a verification-only
@@ -95,6 +96,4 @@ decisions block any live change.
 
 ## Reconciliation Notes
 
-A3 reviewed this map against visible repository evidence only. Any runtime status
-not directly supported by files or validation evidence remains intentionally
-unstated rather than inferred.
+A3 reviewed this map against visible repository evidence only. Any runtime status not directly supported by files or validation evidence remains intentionally unstated rather than inferred.
