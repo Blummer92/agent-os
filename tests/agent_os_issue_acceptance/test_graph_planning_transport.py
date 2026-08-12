@@ -5,8 +5,10 @@ import subprocess
 import pytest
 
 from scripts.agent_os_issue_acceptance import (
+    BatchPlanningResult,
     IssueBatchNode,
     PlanningClassification,
+    PlanningCohort,
     build_issue_batch_graph,
     compute_graph_digest,
     compute_planning_result_digest,
@@ -198,26 +200,46 @@ def test_transport_is_offline_and_never_invokes_runtime_capabilities(monkeypatch
 
 
 def test_planning_transport_preserves_all_classification_values():
-    graph = build_issue_batch_graph(
-        [
-            _node("ready"),
-            IssueBatchNode(
-                node_id="blocked",
-                readiness=ReadinessOutcome.BLOCKED,
-                owner="Integration Manager",
-                source_of_truth="GitHub",
-            ),
-        ]
+    # Constructed directly (not planner-derived) so this test exercises pure
+    # transport fidelity for every PlanningClassification member, independent
+    # of what the planner itself would ever classify a real graph as.
+    cohorts = (
+        PlanningCohort(
+            node_ids=("blocked-node",),
+            classification=PlanningClassification.BLOCKED,
+            reason_codes=("readiness-blocked",),
+        ),
+        PlanningCohort(
+            node_ids=("needs-decision-node",),
+            classification=PlanningClassification.NEEDS_DECISION,
+            reason_codes=("readiness-needs-decision",),
+        ),
+        PlanningCohort(
+            node_ids=("sequencing-a", "sequencing-b"),
+            classification=PlanningClassification.SEQUENCING_REVIEW,
+            reason_codes=("path-overlap",),
+            sequencing_pairs=(("sequencing-a", "sequencing-b"),),
+        ),
+        PlanningCohort(
+            node_ids=("parallel-node",),
+            classification=PlanningClassification.PARALLEL_CANDIDATE,
+            reason_codes=("covered-no-deterministic-conflict",),
+        ),
     )
-    result = evaluate_batch_plan(graph)
+    supplied_node_ids = tuple(
+        sorted(node_id for cohort in cohorts for node_id in cohort.node_ids)
+    )
+    result = BatchPlanningResult(
+        supplied_node_ids=supplied_node_ids,
+        overall_classification=PlanningClassification.BLOCKED,
+        cohorts=cohorts,
+    )
     reconstructed = reconstruct_batch_planning_result(
         serialize_batch_planning_result(result)
     )
 
+    assert reconstructed == result
     assert reconstructed.overall_classification is PlanningClassification.BLOCKED
     assert {
         cohort.classification for cohort in reconstructed.cohorts
-    } == {
-        PlanningClassification.BLOCKED,
-        PlanningClassification.PARALLEL_CANDIDATE,
-    }
+    } == set(PlanningClassification)
