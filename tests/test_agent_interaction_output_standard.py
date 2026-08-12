@@ -348,7 +348,7 @@ def test_pointer_surfaces_reference_the_canonical_standard() -> None:
     assert "canonical in `agent-interaction-output-standard.md`" in final_report
     assert "compatibility pointer" in final_report
     assert "must not define a competing output schema" in final_report
-    assert "0.2.0" in section(FINAL_REPORT, "Version")
+    assert "0.3.0" in section(FINAL_REPORT, "Version")
 
     overlay = normalized(COMMON_OVERLAY)
     assert "- Agent Interaction Output Standard 0.1.0" in read(COMMON_OVERLAY)
