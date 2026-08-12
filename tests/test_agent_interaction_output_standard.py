@@ -287,6 +287,33 @@ def test_profile_matrix_covers_every_required_fixture_on_both_axes() -> None:
     assert text.count("\nSummary:") == len(MATRIX_CASES)
 
 
+def test_classroom_receipt_regressions_cover_all_seven_scenarios() -> None:
+    classroom = section(PROFILE_MATRIX, "Case 8 - Classroom Artifact Response")
+    assert "Classroom Receipt Regression Fixtures (#1061)" in classroom
+    for fixture in (
+        "Slides + PDF + genuine before/after",
+        "Slides + PDF + historical visual unavailable",
+        "Docs + appropriate export",
+        "Unsupported export",
+        "No-op/read-only",
+        "Failed write",
+        "Multiple edited artifacts",
+    ):
+        assert fixture in classroom
+    for behavior in (
+        "genuine prior/current renders",
+        "historical visual rendering is unavailable",
+        "never fabricates a screenshot, thumbnail, PDF, or visual diff",
+        "current export when supported and materially useful",
+        "without treating the omission as failure",
+        "does not claim an artifact-complete delivery receipt",
+        "blocker-first under the Blocked work profile",
+        "each verified artifact receives its own direct link",
+        "no primary artifact is invented",
+    ):
+        assert behavior in classroom
+
+
 def test_blocked_and_command_fixtures_lead_with_the_required_output() -> None:
     blocked = section(PROFILE_MATRIX, "Case 5 - Blocked Source-Of-Truth Request")
     assert "controlling blocker and its exact unblock condition first" in blocked
