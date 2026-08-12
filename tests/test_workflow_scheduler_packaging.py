@@ -46,6 +46,20 @@ ALLOWED_SYMBOLS = frozenset(
     {"DraftTaskProposal", "DraftTaskProposalResult", "build_draft_task_proposals"}
 )
 
+# The #754 packet-preparation addition: the pure runtime-configuration seam
+# only, never the executable adapter modules it is built from.
+ALLOWED_IMPORTER_2 = CANDIDATE_PACKET_ROOT / "execution_packet_stage.py"
+ALLOWED_MODULE_2 = "workflow_scheduler.execution.runtime_configuration"
+ALLOWED_SYMBOLS_2 = frozenset(
+    {
+        "ConcreteRuntimeConfiguration",
+        "ConcreteRuntimeConfigurationError",
+        "FrozenTestCommand",
+        "SingleIssuePilotInput",
+        "VALIDATION_ONLY_EXECUTION_MODE",
+    }
+)
+
 # Loader and import-machinery entry points that would let candidate-packet code
 # reach Workflow Scheduler around the declared package boundary.
 PROHIBITED_LOADER_CALLS = frozenset(
@@ -265,26 +279,35 @@ def _loader_aliases(tree: ast.Module) -> set[str]:
     return aliases
 
 
+_ALLOWED_IMPORTERS = (ALLOWED_IMPORTER, ALLOWED_IMPORTER_2)
+
+
 def test_only_the_allowlisted_scripts_module_imports_workflow_scheduler() -> None:
     offending = [
         path.relative_to(ROOT).as_posix()
         for path in _python_sources(SCRIPTS_ROOT)
-        if path != ALLOWED_IMPORTER and _workflow_scheduler_imports(path)
+        if path not in _ALLOWED_IMPORTERS and _workflow_scheduler_imports(path)
     ]
     assert offending == []
 
-    # The allowlist entry exists only to serve the governed #752 WSC3 call. If
-    # that call is ever removed, the exception must be removed with it.
+    # Each allowlist entry exists only to serve its governed call (#752 WSC3,
+    # #754 packet preparation). If that call is ever removed, the exception
+    # must be removed with it.
     assert _workflow_scheduler_imports(ALLOWED_IMPORTER)
+    assert _workflow_scheduler_imports(ALLOWED_IMPORTER_2)
 
 
 def test_allowlisted_importer_uses_only_the_permitted_module_and_symbols() -> None:
-    imports = _workflow_scheduler_imports(ALLOWED_IMPORTER)
+    for importer, module, allowed_symbols in (
+        (ALLOWED_IMPORTER, ALLOWED_MODULE, ALLOWED_SYMBOLS),
+        (ALLOWED_IMPORTER_2, ALLOWED_MODULE_2, ALLOWED_SYMBOLS_2),
+    ):
+        imports = _workflow_scheduler_imports(importer)
 
-    assert {module for module, _ in imports} == {ALLOWED_MODULE}
-    symbols = {symbol for _, symbol in imports}
-    assert None not in symbols, "binding the package itself is not permitted"
-    assert symbols <= ALLOWED_SYMBOLS
+        assert {mod for mod, _ in imports} == {module}
+        symbols = {symbol for _, symbol in imports}
+        assert None not in symbols, "binding the package itself is not permitted"
+        assert symbols <= allowed_symbols
 
 
 def _boundary_violations(display_name: str, tree: ast.Module) -> list[str]:
