@@ -6,7 +6,7 @@ versions change only when the module's standards or contract changes.
 
 | Module | Version |
 |---|---|
-| Global Engineering | 0.3.0 |
+| Global Engineering | 0.4.0 |
 | Testing And Release | 0.2.0 |
 | Read-Only Default | 0.1.0 |
 | Source-of-Truth Checks | 0.1.0 |
@@ -38,6 +38,8 @@ versions change only when the module's standards or contract changes.
 | Agent OS Codespaces Profile | 0.2.0 |
 | Execution Checkpoint Contract | 0.1.0 |
 | Issue Quality Taxonomy | 0.1.0 |
+
+**Global Engineering** `0.4.0` adds the Pattern + Docs Freshness Gate to implementation final reports and GitHub Change Request handoffs (#998; planned in #928, PR #929).
 
 **Dashboard Migration Verification** (`08_Tooling/dashboard-migration-verification/`) starts as a verification-only
 migration evidence toolkit for dashboard registry examples, placeholder snapshots,

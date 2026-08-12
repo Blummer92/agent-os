@@ -3,13 +3,10 @@ Use this template when a non-GitHub agent needs repository changes.
 
 ## Goal
 Describe the intended repository change and why it is needed.
-
 ## Requesting Agent
 Name the agent requesting the change and its overlay.
-
 ## Target Repository
 Repository owner/name and target base branch.
-
 ## Authorization Route
 Choose one:
 - exact-file GitHub Change Request; or
@@ -33,9 +30,12 @@ reported in the pull request. Material architecture, ownership, schema,
 compatibility, workflow, credential, persistence, protected-setting, production,
 or external-effect changes require a new decision.
 
+## Pattern + Docs Freshness Gate
+State the existing pattern checked (`none found` allowed), reusable capability registry relevance (`not applicable` allowed), canonical implementation path, proving tests/behavior, docs expected to change, docs intentionally unchanged with bounded reason, and changelog/module-version/registry review.
+`Docs intentionally unchanged because...` is valid only when public behavior, public interfaces, workflows, owner expectations, standards, templates, and reusable capability records are unchanged.
+
 ## Proposed Content Or Patch
 Paste the exact proposed content, patch, or implementation instructions.
-
 ## Branch Handling
 Use a non-protected branch. A harness- or environment-assigned branch name is
 acceptable when linked to the issue and used consistently; a preferred name is
@@ -47,6 +47,8 @@ not an authorization boundary.
 - Shared rules stay in shared standards.
 - Agent-specific rules stay in overlays.
 - Registry ownership and routing stay in registry files.
+- Pattern + Docs Freshness Gate is completed or explicitly marked not applicable
+  with a bounded reason.
 - Required exact-head validation passes.
 - No blocker or blocking review conversation remains before Ready-for-Review.
 
@@ -68,7 +70,6 @@ If authorization is unclear, the GitHub Service Agent must stop.
 
 ## Reviewer Or Owner
 Name the responsible owner, reviewer, or approving agent.
-
 ## Stop Conditions
 Stop when target repo, durable objective, bounded scope, owner, source of truth,
 permission, or acceptance criteria are unclear, or when a material excluded
