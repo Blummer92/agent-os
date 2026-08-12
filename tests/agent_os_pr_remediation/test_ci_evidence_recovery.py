@@ -1,9 +1,14 @@
 import pytest
 
 from scripts.agent_os_pr_remediation.ci_evidence_recovery import (
+    DEFAULT_DIAGNOSTIC_EXCERPT_LINES,
+    MAX_DIAGNOSTIC_EXCERPT_LINES,
+    MIN_DIAGNOSTIC_EXCERPT_LINES,
     CIEvidenceIdentity,
     CIEvidenceRecoveryPlan,
     RecoveryObservation,
+    diagnostic_excerpt_lines,
+    expand_diagnostic_excerpt_lines,
     plan_ci_evidence_recovery,
 )
 from scripts.agent_os_pr_remediation.models import EvidenceValidationError
@@ -20,6 +25,55 @@ def identity(**overrides):
 
 def observation(*, observed_identity=None, **kwargs):
     return RecoveryObservation(identity=observed_identity or identity(), **kwargs)
+
+
+def test_diagnostic_excerpt_policy_exposes_exact_bounds_and_default():
+    assert MIN_DIAGNOSTIC_EXCERPT_LINES == 50
+    assert DEFAULT_DIAGNOSTIC_EXCERPT_LINES == 50
+    assert MAX_DIAGNOSTIC_EXCERPT_LINES == 150
+    assert diagnostic_excerpt_lines() == 50
+    assert diagnostic_excerpt_lines(50) == 50
+    assert diagnostic_excerpt_lines(150) == 150
+
+
+def test_diagnostic_excerpt_expansion_is_deterministic_and_capped():
+    assert expand_diagnostic_excerpt_lines(50) == 100
+    assert expand_diagnostic_excerpt_lines(100) == 150
+    assert expand_diagnostic_excerpt_lines(150) == 150
+    assert expand_diagnostic_excerpt_lines(50, increment=125) == 150
+
+
+@pytest.mark.parametrize("value", [49, 151, 0, -1, 50.0, True, None, "50"])
+def test_diagnostic_excerpt_policy_rejects_out_of_range_or_non_integer_values(value):
+    with pytest.raises(EvidenceValidationError):
+        diagnostic_excerpt_lines(value)
+
+
+@pytest.mark.parametrize("increment", [0, -1, 1.0, True, None])
+def test_diagnostic_excerpt_expansion_rejects_invalid_increment(increment):
+    with pytest.raises(EvidenceValidationError):
+        expand_diagnostic_excerpt_lines(50, increment=increment)
+
+
+def test_plan_carries_default_or_explicit_bounded_excerpt_target():
+    default_plan = plan_ci_evidence_recovery(
+        identity(), current_head_sha=SHA, current_run_attempt=1
+    )
+    expanded_plan = plan_ci_evidence_recovery(
+        identity(),
+        current_head_sha=SHA,
+        current_run_attempt=1,
+        diagnostic_excerpt_target_lines=150,
+    )
+    assert default_plan.diagnostic_excerpt_target_lines == 50
+    assert expanded_plan.diagnostic_excerpt_target_lines == 150
+    with pytest.raises(EvidenceValidationError):
+        plan_ci_evidence_recovery(
+            identity(),
+            current_head_sha=SHA,
+            current_run_attempt=1,
+            diagnostic_excerpt_target_lines=151,
+        )
 
 
 def test_direct_recovery_produces_usable_exact_head_evidence_without_authority():
