@@ -62,10 +62,10 @@ No profile is required to display every field.
 |---|---|
 | Simple status | the direct answer |
 | GitHub read-only investigation | verified status or blocker, then evidence and the smallest next action |
-| Issue implementation | completed, current, remaining, blockers, execution route, then next action |
-| PR review or terminal handoff | terminal or review state with exact-head evidence, then the handoff |
+| Issue implementation | state-based progress when a bounded canonical stage sequence exists, then `Completed`, `Current`, `Remaining`, `Blockers`, material `Best execution`, and one concrete `Next` action |
+| PR review or terminal handoff | review state and exact-head evidence; when a bounded canonical stage sequence exists, use the same compact state-based progress block before the handoff |
 | Blocked work | the controlling blocker and its exact unblock condition |
-| Prompt or command delivery | one reusable copy/paste artifact |
+| Prompt or command delivery | one smallest reusable copy/paste context packet or artifact |
 | Architecture review | the verdict, then evidence, risks, roadmap, and report |
 | Classroom artifact | the requested artifact, preview, or content specification |
 | Scheduled monitoring | the resolved target and its actual scheduled behavior |
@@ -79,6 +79,30 @@ Classroom-artifact receipts order their available surfaces as live artifact link
 -> current preview or export -> genuine before/after evidence -> change and QA
 summary -> evidence limitations -> governance fields. Never fabricate
 unavailable historical visual evidence.
+
+## Compact Operator Rendering
+
+- For issue implementation and PR review, use the visible labels `Completed`,
+  `Current`, `Remaining`, and `Blockers` consistently.
+- A state-based progress bar is allowed only when canonical evidence exposes a
+  bounded named stage sequence. Its filled and unfilled segments represent those
+  stage slots; the bar is not a percentage, score, persisted progress record, or
+  independent lifecycle model.
+- If no bounded canonical stage sequence exists, omit the progress bar rather
+  than inventing completion.
+- Show `Best execution` only when the executor route is material, and render it
+  from canonical executor-route or capability evidence rather than brand
+  preference.
+- Prefer one `Next` action: the smallest concrete action supported by current
+  canonical evidence. Additional options stay secondary unless a real decision
+  is required.
+- Prompt and command delivery uses the smallest reusable context packet that can
+  execute safely. Do not repeat governance, source-of-truth, architecture, or
+  repository boilerplate already available to the target agent or tool unless
+  it is a material constraint for that exact action.
+- Compact rendering never hides a controlling blocker, authorization boundary,
+  exact-head requirement, validation failure, or required final-report evidence
+  when that evidence is material.
 
 ## Progress And Evidence Rules
 
@@ -94,4 +118,4 @@ unavailable historical visual evidence.
 
 ## Version
 
-0.1.0
+0.2.0
