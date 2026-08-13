@@ -82,7 +82,6 @@ Stop when the target, source of truth, permission, owner, or requested write sur
 Stop when a user asks for a nonexistent agent that does not resolve through `04_Registry/legacy-agent-alias-registry.md`.
 For finite multi-item missions, an item-local blocker is not a mission-level stop; record it and continue. A shared stop condition classifies all remaining requested items explicitly before handoff.
 Request-interpretation continuation stops follow `chatgpt-orchestrator-request-interpretation.md`; conversation memory never resolves missing, stale, or multiple-candidate canonical context.
-
 ## Version
 0.2.0
 
