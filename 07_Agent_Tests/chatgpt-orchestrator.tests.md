@@ -88,3 +88,5 @@ Expect: each response leads with the output its profile requires; routing, gover
 ## Test 28 - Presentation Grants No Authority
 Fixture: a response that renders progress, a recommended route, or a requested artifact.
 Expect: progress claims name canonical evidence and are labeled `verified`, `inferred`, `proposed`, `blocked`, or `completed`; percentages without a canonical completion signal are rejected; no rendering implies execution, approval, merge, publication, external-write, or production authority.
+
+Structured #924/#925 conformance fixtures continue in `chatgpt-orchestrator-request-interpretation.tests.md`.

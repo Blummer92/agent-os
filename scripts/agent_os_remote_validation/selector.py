@@ -37,6 +37,7 @@ _RULES = Path(__file__).with_name("validation_profiles.yml")
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _SELECTOR_VERSION = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+_PRE_PR_SELECTOR_VERSION = "1.0.0"
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _PROFILES = frozenset({"static", "focused", "aggregate", "manual-review"})
 _PROFILE_REASONS = {
@@ -643,6 +644,66 @@ def serialize_pre_pr_validation_plan(plan: object) -> dict[str, object]:
     if len(_canonical_bytes(payload)) > MAX_PRE_PR_SERIALIZED_BYTES:
         raise ValueError("pre-PR validation plan exceeds canonical size limit")
     return payload
+
+
+def deserialize_pre_pr_validation_plan(payload: object) -> PrePrValidationPlan:
+    """Reconstruct one canonical pre-PR plan without runtime or repository I/O."""
+    if type(payload) is not dict:
+        raise TypeError("payload must be an exact dictionary")
+    expected_fields = {
+        "schema_name",
+        "schema_version",
+        "selector_version",
+        "subject",
+        "subject_id",
+        "profile",
+        "commands",
+        "command_set_digest",
+        "reason_codes",
+        "per_command_timeout_seconds",
+        "total_validation_timeout_seconds",
+        "remote_build_required",
+        "execution_authorized",
+        "merge_authorized",
+        "side_effects_performed",
+    }
+    if set(payload) != expected_fields:
+        raise ValueError("pre-PR validation plan payload fields drift")
+    if payload["selector_version"] != _PRE_PR_SELECTOR_VERSION:
+        raise ValueError("pre-PR selector version is unsupported")
+    for field in (
+        "remote_build_required",
+        "execution_authorized",
+        "merge_authorized",
+        "side_effects_performed",
+    ):
+        if payload[field] is not False:
+            raise ValueError("pre-PR validation plan non-authority drift")
+    if type(payload["commands"]) is not list:
+        raise TypeError("commands must be an exact array")
+    if type(payload["reason_codes"]) is not list:
+        raise TypeError("reason_codes must be an exact array")
+
+    subject = deserialize_pre_pr_validation_subject(payload["subject"])
+    if payload["subject_id"] != pre_pr_validation_subject_id(subject):
+        raise ValueError("pre-PR validation plan subject identity drift")
+
+    plan = PrePrValidationPlan(
+        schema_name=payload["schema_name"],
+        schema_version=payload["schema_version"],
+        selector_version=payload["selector_version"],
+        subject=subject,
+        profile=payload["profile"],
+        commands=tuple(payload["commands"]),
+        command_set_digest=payload["command_set_digest"],
+        reason_codes=tuple(payload["reason_codes"]),
+        per_command_timeout_seconds=payload["per_command_timeout_seconds"],
+        total_validation_timeout_seconds=payload["total_validation_timeout_seconds"],
+    )  # type: ignore[arg-type]
+    if serialize_pre_pr_validation_plan(plan) != payload:
+        raise ValueError("pre-PR validation plan payload is not canonical")
+    pre_pr_validation_plan_id(plan)
+    return plan
 
 
 def pre_pr_validation_plan_id(plan: object) -> str:
