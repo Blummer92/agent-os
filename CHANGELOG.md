@@ -96,5 +96,4 @@
 - Fixed `validate-repo-structure.sh` registry and empty-folder checks, added missing module-version records, and fixed a wrong path plus inconsistent shorthand in CLAUDE.md troubleshooting examples.
 - Added `07_Agent_Tests/`: compliance test prompts, a shared pass/fail checklist, and `validate-repo-structure.sh` structural regression tests.
 - Extracted `02_Agent_Overlays/_common-overlay-rules.md` from duplicated overlay blocks; overlays now reference it instead of repeating shared content.
-- Renamed `00_Governance/agent-inheritance-registry.md` to `agent-creation-policy.md` and made `04_Registry/agent-inheritance-registry.md` the sole source for the agent list and inheritance mapping.
 Older release history: see [CHANGELOG-HISTORY.md](CHANGELOG-HISTORY.md).

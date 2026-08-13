@@ -1,6 +1,6 @@
 # ChatGPT Orchestrator Request-Interpretation Conformance
 
-This detail file is part of `chatgpt-orchestrator.md` and owns only the #925 consumer rules for the canonical #924 `request-interpretation-v1` contract in `src/instructional_workflow_contracts/request_interpretation.py`.
+This detail file is part of `chatgpt-orchestrator.md` and owns only the #925 consumer rules for the canonical #924 `request-interpretation-v1` contract in `src/instructional_workflow_contracts/request_interpretation.py`. It inherits the same `_common-overlay-rules.md` baseline as its parent overlay and does not restate it here.
 
 ## Canonical Consumer Boundary
 - Validate and consume the #924 structured record before routing; do not reconstruct its semantics from raw conversation text or phrase matching.
