@@ -672,6 +672,68 @@ def _result(
     return HandoffValidationResult(outcome, passed, tuple(reasons))
 
 
+_HANDOFF_VALIDATION_RESULT_TRANSPORT_KEYS = frozenset(
+    {
+        "outcome",
+        "local_checks_passed",
+        "reason_codes",
+        "freshness",
+        "execution_authorized",
+    }
+)
+
+
+def _handoff_validation_result_payload(
+    result: HandoffValidationResult,
+) -> dict[str, Any]:
+    return {
+        "outcome": result.outcome.value,
+        "local_checks_passed": result.local_checks_passed,
+        "reason_codes": list(result.reason_codes),
+        "freshness": result.freshness,
+        "execution_authorized": result.execution_authorized,
+    }
+
+
+def serialize_handoff_validation_result(result: HandoffValidationResult) -> bytes:
+    """Serialize one canonical HandoffValidationResult's public fields."""
+    if type(result) is not HandoffValidationResult:
+        raise TypeError("result must be an exact HandoffValidationResult")
+    try:
+        payload = _handoff_validation_result_payload(result)
+        canonical = reconstruct_handoff_validation_result(payload)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError("result has invalid handoff validation fields") from exc
+    if canonical != result:
+        raise ValueError("result has noncanonical handoff validation fields")
+    return _canonical_bytes(payload)
+
+
+def reconstruct_handoff_validation_result(
+    payload: bytes | str | Mapping[str, Any],
+) -> HandoffValidationResult:
+    """Strictly reconstruct one HandoffValidationResult with closed-schema validation."""
+    raw = _decode_transport_payload(payload, "handoff validation result")
+    _require_exact_keys(
+        raw, _HANDOFF_VALIDATION_RESULT_TRANSPORT_KEYS, "handoff validation result"
+    )
+    try:
+        outcome = HandoffValidationOutcome(raw["outcome"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("outcome is unsupported") from exc
+    if type(raw["local_checks_passed"]) is not bool:
+        raise ValueError("local_checks_passed must be an exact boolean")
+    if raw["freshness"] != "not-evaluated":
+        raise ValueError("freshness must remain not-evaluated")
+    if raw["execution_authorized"] is not False:
+        raise ValueError("execution_authorized must remain false")
+    reason_codes = _require_string_array(raw["reason_codes"], "reason_codes")
+    result = HandoffValidationResult(outcome, raw["local_checks_passed"], reason_codes)
+    if _handoff_validation_result_payload(result) != dict(raw):
+        raise ValueError("handoff validation result transport is not canonical")
+    return result
+
+
 def validate_scheduler_planning_handoff(
     handoff: SchedulerPlanningHandoff | Mapping[str, Any],
 ) -> HandoffValidationResult:
