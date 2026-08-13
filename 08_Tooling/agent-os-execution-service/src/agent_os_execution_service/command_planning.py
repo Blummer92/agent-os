@@ -512,6 +512,100 @@ def serialize_validation_command_plan(plan: object) -> dict[str, object]:
     return _command_plan_payload(plan)
 
 
+def reconstruct_validation_command_plan(payload: object) -> ValidationCommandPlan:
+    """Reconstruct one exact canonical command-plan payload without I/O."""
+    if type(payload) is not dict:
+        raise TypeError("payload must be an exact dict")
+    expected_fields = {
+        "schema_version",
+        "registry_version",
+        "repository",
+        "issue_or_handoff_identity",
+        "requested_ref",
+        "expected_sha",
+        "request_revision",
+        "request_fingerprint",
+        "validation_plan_id",
+        "validation_plan_schema_version",
+        "selector_version",
+        "profile",
+        "command_set_digest",
+        "entries",
+        "execution_authorized",
+        "merge_authorized",
+        "side_effects_performed",
+    }
+    if set(payload) != expected_fields:
+        raise ValueError("command plan payload fields do not match canonical schema")
+    string_fields = (
+        "schema_version",
+        "registry_version",
+        "repository",
+        "issue_or_handoff_identity",
+        "requested_ref",
+        "expected_sha",
+        "request_fingerprint",
+        "validation_plan_id",
+        "validation_plan_schema_version",
+        "selector_version",
+        "profile",
+        "command_set_digest",
+    )
+    if any(type(payload[field]) is not str for field in string_fields):
+        raise TypeError("command plan payload contains a non-string field")
+    if type(payload["request_revision"]) is not int:
+        raise TypeError("request_revision must be an exact int")
+    if payload["execution_authorized"] is not False:
+        raise ValueError("execution_authorized must remain false")
+    if payload["merge_authorized"] is not False:
+        raise ValueError("merge_authorized must remain false")
+    if payload["side_effects_performed"] is not False:
+        raise ValueError("side_effects_performed must remain false")
+
+    raw_entries = payload["entries"]
+    if type(raw_entries) is not list:
+        raise TypeError("entries must be an exact list")
+    entries: list[CommandPlanEntry] = []
+    for raw_entry in raw_entries:
+        if type(raw_entry) is not dict or set(raw_entry) != {"operation", "argv"}:
+            raise ValueError("command plan entry fields do not match canonical schema")
+        if type(raw_entry["operation"]) is not str:
+            raise TypeError("operation must be a string")
+        try:
+            operation = CommandOperation(raw_entry["operation"])
+        except ValueError as exc:
+            raise ValueError("unsupported command operation") from exc
+        raw_argv = raw_entry["argv"]
+        if type(raw_argv) is not list:
+            raise TypeError("argv must be an exact list")
+        if any(type(item) is not str for item in raw_argv):
+            raise TypeError("argv items must be strings")
+        entries.append(CommandPlanEntry(operation=operation, argv=tuple(raw_argv)))
+
+    plan = ValidationCommandPlan(
+        schema_version=payload["schema_version"],
+        registry_version=payload["registry_version"],
+        repository=payload["repository"],
+        issue_or_handoff_identity=payload["issue_or_handoff_identity"],
+        requested_ref=payload["requested_ref"],
+        expected_sha=payload["expected_sha"],
+        request_revision=payload["request_revision"],
+        request_fingerprint=payload["request_fingerprint"],
+        validation_plan_id=payload["validation_plan_id"],
+        validation_plan_schema_version=payload["validation_plan_schema_version"],
+        selector_version=payload["selector_version"],
+        profile=payload["profile"],
+        command_set_digest=payload["command_set_digest"],
+        entries=tuple(entries),
+    )
+    reasons = validate_validation_command_plan(plan)
+    if reasons:
+        raise ValueError("invalid validation command plan: " + ",".join(reasons))
+    if serialize_validation_command_plan(plan) != payload:
+        raise ValueError("command plan payload is not canonical")
+    return plan
+
+
 def validation_command_plan_id(plan: object) -> str:
     payload = serialize_validation_command_plan(plan)
     canonical = json.dumps(
