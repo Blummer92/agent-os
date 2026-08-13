@@ -3,7 +3,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 OVERLAY = ROOT / "02_Agent_Overlays/unit-alignment-agent.md"
-FIXTURES = ROOT / "07_Agent_Tests/unit-alignment-agent-ux.tests.md"
+FIXTURES = ROOT / "07_Agent_Tests/unit-alignment-agent-tests-details.md"
 RULES = ROOT / "01_Shared_Standards/instructional-design/unit-alignment-rules.md"
 
 

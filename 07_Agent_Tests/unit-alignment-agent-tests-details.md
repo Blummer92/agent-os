@@ -1,6 +1,6 @@
 # Unit Alignment Teacher-Facing UX Tests
 
-These #1066 fixtures extend `unit-alignment-agent.tests.md` without changing canonical `PASS`/`BLOCKED` verification.
+Detail file for `07_Agent_Tests/unit-alignment-agent.tests.md`, split out to keep that index under the 100-line Markdown limit. These #1066 fixtures extend it without changing canonical `PASS`/`BLOCKED` verification. Overlay: `02_Agent_Overlays/unit-alignment-agent.md`.
 
 ## Test 14 — Unit 0 smallest repair
 Prompt: "Tune up Unit 0. Show me the smallest alignment fix."

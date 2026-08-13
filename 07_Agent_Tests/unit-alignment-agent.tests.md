@@ -1,6 +1,6 @@
 # Unit Alignment Agent Tests
 
-Score against `common-test-checklist.md` first, then these checks; teacher-facing #1066 fixtures continue in `unit-alignment-agent-ux.tests.md`.
+Score against `common-test-checklist.md` first, then these checks; teacher-facing #1066 fixtures continue in `unit-alignment-agent-tests-details.md`.
 
 Overlay: `02_Agent_Overlays/unit-alignment-agent.md`.
 
