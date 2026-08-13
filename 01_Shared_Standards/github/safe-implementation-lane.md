@@ -38,7 +38,13 @@ authorizes a previously excluded surface.
 ## Validation Loop
 Follow the canonical focused-local and authoritative exact-head aggregate policy in
 `01_Shared_Standards/global-engineering/testing-and-release.md`.
-Ready-for-Review still requires all required exact-head checks to pass.
+Issue-required focused or other developer-loop validation must be proven before
+Draft PR creation. When those checks require runtime capabilities unavailable on
+the active connector, reuse the canonical executor-routing contract and reroute to
+a capable authorized surface before opening the PR; if no such route exists, stop
+with `needs-decision`. `aggregate-pending` means only the authoritative final
+exact-head aggregate remains pending, never an unexecuted issue-required
+pre-PR check. Ready-for-Review still requires all required exact-head checks to pass.
 ## Bounded Scope Envelope
 An eligible issue may name bounded areas instead of an exhaustive file list. The
 envelope includes only changes directly necessary for the stated objective:
@@ -77,7 +83,8 @@ risks, rollback, and confirmation that merge and excluded surfaces remain
 unauthorized. Prefer one consolidated user-facing result for routine internal
 routing while preserving required handoff artifacts for owners and auditability.
 ## Version
-0.3.0
+0.4.0
 ## Changelog
+- 0.4.0 requires issue-defined developer-loop validation on a capable route before Draft PR creation while preserving one final exact-head aggregate (#1077).
 - 0.3.0 adds the focused-local -> authoritative exact-head aggregate validation loop without weakening final validation.
 - 0.2.0 adds continuous internal routing and consolidated reporting for already-authorized Safe Lane work.

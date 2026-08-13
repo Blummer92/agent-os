@@ -43,6 +43,11 @@ manifests or changelog entries do not require a new stop when behaviorally
 subordinate and reported in the PR. A harness- or environment-assigned
 non-protected branch name is acceptable and must be reported as used.
 
+## Draft-PR Managed-Label Follow-Up
+After every successful authorized Draft PR creation, immediately reacquire the live PR and exact head and invoke the existing #1022/#1023/#1038 managed-label lifecycle with reason `draft-pr-created` in the same governed operation; apply only the planner-derived managed-label delta, preserve unmanaged/human/security/dependency/third-party labels, reread to prove convergence, and perform zero label writes on an unchanged converged rerun.
+Keep Draft-PR creation evidence separate from label-reconciliation evidence. Stale, blocked, failed, or nonconvergent reconciliation is explicit and fail-closed and grants no Ready-for-Review, merge, issue-closure, review-resolution, protected-setting, production, or external-system authority.
+This follow-up is connector/operator driven; do not replace it with a GitHub Actions workflow, webhook, poller, daemon, background worker, permission expansion, or repository-local PR-creation subsystem.
+
 ## Repository-State Verification
 When a local checkout is available, use `scripts/verify-repo-state.sh`; usage is
 in `scripts/verify-repo-state.md`, and stdout follows
@@ -81,10 +86,10 @@ policy-required changelog entry, or environment-assigned non-protected branch
 that satisfies the Safe Implementation Lane.
 
 ## Version
-0.5.1
+0.6.0
 
 ## Changelog
-- 0.5.1 references the shared excluded-surface baseline added for #901 without changing authorization behavior.
+- 0.6.0 requires immediate bounded post-create managed-label reconciliation using #1022/#1023/#1038 with fresh-head, convergence, idempotency, unmanaged-label preservation, and non-authorizing failure semantics (#1076); 0.5.1 references the shared excluded-surface baseline added for #901 without changing authorization behavior.
 - 0.5.0 adds the risk-tiered Safe Implementation Lane while preserving separate merge and protected/external authorization.
 - 0.4.0 removes inherited workflow and reporting duplication while preserving GitHub-specific routing and verifier rules.
 - 0.3.0 adds Repository-State Verification via `scripts/verify-repo-state.sh`.
