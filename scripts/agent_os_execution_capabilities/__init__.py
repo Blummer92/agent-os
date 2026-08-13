@@ -20,6 +20,8 @@ from .models import (
     WorktreeState,
 )
 from .repository_state import (
+    reconstruct_repository_state_validation_result,
+    serialize_repository_state_validation_result,
     validate_capability_evidence,
     validate_repository_state_evidence,
 )
@@ -41,7 +43,9 @@ __all__ = [
     "RepositoryStateValidationResult",
     "WorktreeState",
     "consume_approved_projection_evidence",
+    "reconstruct_repository_state_validation_result",
     "serialize_capability_evidence",
+    "serialize_repository_state_validation_result",
     "validate_capability_evidence",
     "validate_repository_state_evidence",
 ]

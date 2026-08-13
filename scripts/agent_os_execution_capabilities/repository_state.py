@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Mapping
 from typing import Any
@@ -511,3 +512,245 @@ def _optional_fingerprint(value: object, reasons: set[str]) -> str | None:
         reasons.add("schema.unknown-field")
         return None
     return value
+
+
+_REPOSITORY_STATE_VALIDATION_RESULT_TRANSPORT_KEYS = frozenset(
+    {
+        "outcome", "schema_version", "evidence_id", "repository_identity",
+        "base_ref", "base_sha", "head_ref", "head_sha", "requested_ref",
+        "requested_sha", "observed_sha", "tested_sha", "pushed_sha",
+        "proposed_pr_sha", "synthetic_merge_sha", "external_build_sha",
+        "evidence_type", "contract_fingerprint", "worktree_state",
+        "reason_codes", "details", "execution_authorized",
+        "side_effects_performed",
+    }
+)
+_REPOSITORY_STATE_OPTIONAL_STRING_FIELDS = (
+    "base_ref", "base_sha", "head_ref", "head_sha", "requested_ref",
+    "requested_sha", "observed_sha", "tested_sha", "pushed_sha",
+    "proposed_pr_sha", "synthetic_merge_sha", "external_build_sha",
+    "contract_fingerprint",
+)
+
+
+def _identity_transport_payload(value: RepositoryIdentity | None) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    return {
+        "host": value.host,
+        "owner": value.owner,
+        "repository": value.repository,
+        "repository_id": value.repository_id,
+        "is_fork": value.is_fork,
+        "upstream_owner": value.upstream_owner,
+        "upstream_repository": value.upstream_repository,
+        "upstream_repository_id": value.upstream_repository_id,
+        "default_branch": value.default_branch,
+    }
+
+
+def _reconstruct_identity_transport(value: object) -> RepositoryIdentity | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError("repository_identity must be an object or null")
+    if set(value) != _IDENTITY_FIELDS:
+        unknown = sorted(set(value) - _IDENTITY_FIELDS)
+        missing = sorted(_IDENTITY_FIELDS - set(value))
+        detail = f"unknown fields: {', '.join(unknown)}" if unknown else (
+            f"missing fields: {', '.join(missing)}"
+        )
+        raise ValueError(f"repository_identity has {detail}")
+    try:
+        return RepositoryIdentity(**{key: value[key] for key in _IDENTITY_FIELDS})
+    except (TypeError, ValueError) as exc:
+        raise ValueError("repository_identity is malformed") from exc
+
+
+def _reconstruct_enum_transport(enum_cls: Any, value: object, name: str) -> Any:
+    if value is None:
+        return None
+    try:
+        return enum_cls(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} is unsupported") from exc
+
+
+def _require_optional_string_transport(value: object, name: str) -> str | None:
+    if value is None:
+        return None
+    if type(value) is not str:
+        raise ValueError(f"{name} must be a string or null")
+    return value
+
+
+def _require_string_list_transport(value: object, name: str) -> tuple[str, ...]:
+    if type(value) is not list:
+        raise ValueError(f"{name} must be an array")
+    if not all(type(item) is str for item in value):
+        raise ValueError(f"{name} must contain strings")
+    return tuple(value)
+
+
+def _repository_state_validation_result_payload(
+    result: RepositoryStateValidationResult,
+) -> dict[str, Any]:
+    return {
+        "outcome": result.outcome,
+        "schema_version": result.schema_version,
+        "evidence_id": result.evidence_id,
+        "repository_identity": _identity_transport_payload(result.repository_identity),
+        "base_ref": result.base_ref,
+        "base_sha": result.base_sha,
+        "head_ref": result.head_ref,
+        "head_sha": result.head_sha,
+        "requested_ref": result.requested_ref,
+        "requested_sha": result.requested_sha,
+        "observed_sha": result.observed_sha,
+        "tested_sha": result.tested_sha,
+        "pushed_sha": result.pushed_sha,
+        "proposed_pr_sha": result.proposed_pr_sha,
+        "synthetic_merge_sha": result.synthetic_merge_sha,
+        "external_build_sha": result.external_build_sha,
+        "evidence_type": result.evidence_type.value if result.evidence_type else None,
+        "contract_fingerprint": result.contract_fingerprint,
+        "worktree_state": result.worktree_state.value if result.worktree_state else None,
+        "reason_codes": list(result.reason_codes),
+        "details": list(result.details),
+        "execution_authorized": result.execution_authorized,
+        "side_effects_performed": result.side_effects_performed,
+    }
+
+
+def serialize_repository_state_validation_result(
+    result: RepositoryStateValidationResult,
+) -> bytes:
+    """Serialize one canonical RepositoryStateValidationResult's public fields."""
+    if type(result) is not RepositoryStateValidationResult:
+        raise TypeError("result must be an exact RepositoryStateValidationResult")
+    payload = _repository_state_validation_result_payload(result)
+    try:
+        canonical = reconstruct_repository_state_validation_result(payload)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("result has invalid repository-state validation fields") from exc
+    if canonical != result:
+        raise ValueError("result has noncanonical repository-state validation fields")
+    return json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+
+
+def reconstruct_repository_state_validation_result(
+    payload: bytes | str | Mapping[str, Any],
+) -> RepositoryStateValidationResult:
+    """Strictly reconstruct one RepositoryStateValidationResult with closed-schema validation."""
+    source_bytes: bytes | None = None
+    source_text: str | None = None
+    if isinstance(payload, bytes):
+        source_bytes = payload
+        try:
+            raw: object = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                "repository state validation result must be canonical UTF-8 JSON"
+            ) from exc
+    elif isinstance(payload, str):
+        source_text = payload
+        try:
+            raw = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                "repository state validation result must be canonical JSON text"
+            ) from exc
+    elif isinstance(payload, Mapping):
+        raw = dict(payload)
+    else:
+        raise TypeError("payload must be bytes, text, or a mapping")
+    if not isinstance(raw, Mapping):
+        raise ValueError("repository state validation result payload must be an object")
+    if source_bytes is not None:
+        try:
+            canonical_bytes = json.dumps(
+                raw, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+        except (TypeError, ValueError, UnicodeEncodeError) as exc:
+            raise ValueError(
+                "repository state validation result must be canonical UTF-8 JSON"
+            ) from exc
+        if source_bytes != canonical_bytes:
+            raise ValueError(
+                "repository state validation result must be canonical UTF-8 JSON"
+            )
+    elif source_text is not None:
+        try:
+            canonical_text = json.dumps(
+                raw, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "repository state validation result must be canonical JSON text"
+            ) from exc
+        if source_text != canonical_text:
+            raise ValueError(
+                "repository state validation result must be canonical JSON text"
+            )
+
+    unknown = sorted(set(raw) - _REPOSITORY_STATE_VALIDATION_RESULT_TRANSPORT_KEYS)
+    missing = sorted(_REPOSITORY_STATE_VALIDATION_RESULT_TRANSPORT_KEYS - set(raw))
+    if unknown:
+        raise ValueError(
+            f"repository state validation result has unknown fields: {', '.join(unknown)}"
+        )
+    if missing:
+        raise ValueError(
+            "repository state validation result is missing required fields: "
+            + ", ".join(missing)
+        )
+
+    if type(raw["outcome"]) is not str:
+        raise ValueError("outcome must be a string")
+    if type(raw["schema_version"]) is not str:
+        raise ValueError("schema_version must be a string")
+    if type(raw["evidence_id"]) is not str:
+        raise ValueError("evidence_id must be a string")
+    if raw["execution_authorized"] is not False:
+        raise ValueError("execution_authorized must remain false")
+    if raw["side_effects_performed"] is not False:
+        raise ValueError("side_effects_performed must remain false")
+
+    identity = _reconstruct_identity_transport(raw["repository_identity"])
+    evidence_type = _reconstruct_enum_transport(
+        RepositoryEvidenceType, raw["evidence_type"], "evidence_type"
+    )
+    worktree_state = _reconstruct_enum_transport(
+        WorktreeState, raw["worktree_state"], "worktree_state"
+    )
+    optional_strings = {
+        name: _require_optional_string_transport(raw[name], name)
+        for name in _REPOSITORY_STATE_OPTIONAL_STRING_FIELDS
+    }
+    reason_codes = _require_string_list_transport(raw["reason_codes"], "reason_codes")
+    details = _require_string_list_transport(raw["details"], "details")
+
+    try:
+        result = RepositoryStateValidationResult(
+            outcome=raw["outcome"],
+            schema_version=raw["schema_version"],
+            evidence_id=raw["evidence_id"],
+            repository_identity=identity,
+            evidence_type=evidence_type,
+            worktree_state=worktree_state,
+            reason_codes=reason_codes,
+            details=details,
+            **optional_strings,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "repository state validation result fields are malformed"
+        ) from exc
+
+    if _repository_state_validation_result_payload(result) != dict(raw):
+        raise ValueError(
+            "repository state validation result transport is not canonical"
+        )
+    return result
