@@ -144,6 +144,8 @@ class ValidationCommandPlan:
     side_effects_performed: Literal[False] = field(default=False, init=False)
 
 
+# Keyed by profile name so both the builder and the validator agree on exactly
+# one operation per profile without duplicating the mapping.
 _PROFILE_OPERATIONS = MappingProxyType(
     {
         "static": CommandOperation.VALIDATION_STATIC,
@@ -151,6 +153,9 @@ _PROFILE_OPERATIONS = MappingProxyType(
         "aggregate": CommandOperation.VALIDATION_AGGREGATE,
     }
 )
+
+# Derived once from the private registry so argv membership can be checked
+# without exposing, duplicating, or mutating the registry itself.
 _REGISTRY_ARGV_VALUES = frozenset(_COMMAND_REGISTRY.values())
 
 
@@ -241,6 +246,12 @@ def _build_pre_pr_command_plan(
     *,
     evaluated_at: object,
 ) -> ValidationCommandPlan:
+    """Bind one issue- and invocation-bound pre-PR plan to fixed registry argv.
+
+    The pre-PR branch never invents a pull-request identity: the command plan is
+    bound to the subject's issue, invocation, branch, and SHAs instead. Entry order
+    follows the subject's ordered command identities rather than argv order.
+    """
     request_reasons = validate_execution_service_request(
         request,
         evaluated_at=evaluated_at,
@@ -311,6 +322,16 @@ def _build_pre_pr_command_plan(
 
 
 def _runtime_safe_command_plan_entry(entry: object) -> bool:
+    """Return whether one command-plan entry has every exact runtime type and
+    bound this module trusts before it is ever used for registry membership,
+    hashing, tuple comparison, set construction, sorting, or serialization.
+
+    ``CommandPlanEntry.__post_init__`` only validates at construction time, so
+    an exact-type instance reached through ``object.__setattr__`` tampering
+    can still carry a non-tuple ``argv``, a non-``CommandOperation``
+    ``operation``, or an argv element outside the bounds construction would
+    have enforced. Every such shape is rejected here first.
+    """
     if type(entry) is not CommandPlanEntry:
         return False
     if type(entry.operation) is not CommandOperation:
@@ -328,6 +349,14 @@ def _runtime_safe_command_plan_entry(entry: object) -> bool:
 
 
 def _runtime_safe_command_plan(plan: ValidationCommandPlan) -> bool:
+    """Return whether every field has the exact runtime type this validator trusts.
+
+    Short-circuits before any risky access: ``entries`` is confirmed to be a
+    tuple before it is ever iterated, and every item is confirmed to be an
+    exact ``CommandPlanEntry`` with a defensively revalidated ``operation``
+    and ``argv`` (see ``_runtime_safe_command_plan_entry``) before either is
+    read anywhere else in this module.
+    """
     return (
         type(plan.schema_version) is str
         and type(plan.registry_version) is str
@@ -368,6 +397,17 @@ def _bounded_identity_text(value: str) -> bool:
 
 
 def validate_validation_command_plan(plan: object) -> tuple[str, ...]:
+    """Validate one command plan without I/O, mutation, or ever raising.
+
+    Returns a sorted tuple of bounded reason codes; an empty tuple means the
+    plan satisfies every check below. This is the single source of truth
+    ``serialize_validation_command_plan`` and ``validation_command_plan_id``
+    defer to -- neither function accepts a plan this validator rejects, and
+    neither carves out an exemption for unregistered argv or a profile/
+    operation mismatch. Argv membership is checked against the existing
+    private ``_COMMAND_REGISTRY`` in this module; the registry itself is
+    never exposed, copied, mutated, or version-bumped by this function.
+    """
     if type(plan) is not ValidationCommandPlan:
         return ("command-plan.invalid-type",)
     if not _runtime_safe_command_plan(plan):

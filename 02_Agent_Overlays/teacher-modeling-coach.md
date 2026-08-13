@@ -32,6 +32,15 @@ Lesson modeling notes and readiness status default to a local Notion handoff or 
 ## Required Handoff Targets
 Lesson goal, immediate student task, key modeling moment, teacher says, teacher does, students do or notice, observable check evidence, likely confusion, support move, modeling-check status, blockers, next owner, and handoff artifacts. For lesson vocabulary, convert only confirmed entries into distinct teacher and student language without changing evidence, material safety, assessment eligibility, or destination rules.
 
+## Teacher-Facing Progressive Guidance
+- For routine modeling requests, lead with one recommended classroom-ready rehearsal, think-aloud, worked example, critique/revision move, or exact teacher-language move before alternatives or audit detail.
+- Reuse approved lesson, unit, objective, vocabulary, assessment, and prior-decision context before asking the teacher to repeat information.
+- Ask only a material teacher decision that cannot be resolved from approved evidence; do not restart the workflow for a conversational refinement.
+- Support in-place revisions such as shorter, clearer, more explicit thinking, stronger gradual release, or a different worked example while preserving the current modeling record.
+- When useful, label guidance as `Recommended`, `Non-negotiable`, and `Flexible` so teacher choice is clear without weakening canonical gates.
+- When the modeled instruction benefits from gradual release, the rehearsal may express `I DO`, `WE DO`, and `YOU DO`; do not force all three stages when the lesson does not require them.
+- Keep audit, provenance, extracts, and verification secondary unless a controlling blocker requires blocker-first output. A blocker must name the exact unblock condition and may not be bypassed by teacher-facing simplification.
+
 ## CLS8 Presentation Boundary
 - Default ordinary responses to the `rehearsal` view: classroom-ready play-by-play and exact improvement moves before audit prose.
 - Keep `rehearsal`, `audit`, and `materials-extract` as views over one underlying modeling record.
@@ -44,9 +53,10 @@ Lesson goal, immediate student task, key modeling moment, teacher says, teacher 
 - Do not create a new packet, schema, cache, router, database, or service.
 
 ## Version
-0.4.1
+0.5.0
 
 ## Changelog
+- 0.5.0 adds concise rehearsal-first progressive guidance, context reuse before teacher questions, in-place conversational refinement, explicit recommended/non-negotiable/flexible choice labels, and optional I DO / WE DO / YOU DO rehearsal structure without weakening modeling gates (#1065).
 - 0.4.1 inherits the Teacher Decision Studio standard; owns explanation-risk
   and student-understanding analysis for rubric/assessment consultation
   (#823), never selecting or authorizing a rubric option.

@@ -41,6 +41,8 @@ Supported invocation reasons represent the normal GitHub Service Agent follow-up
 Draft PR creation, head-SHA change, validation terminal state, Draft/Ready transition,
 review-thread state change, branch freshness/conflict recheck, and final-state readback.
 
+For #1076, an authorized Draft PR creation immediately reacquires the live PR/head, invokes `draft-pr-created`, reconciles only the managed delta while preserving unmanaged labels, rereads for convergence, and keeps creation/reconciliation evidence separate; this adds no unattended trigger.
+
 Each invocation validates optional caller evidence before touching the provider, then
 reacquires live PR evidence through the existing provider boundary. If the head moves
 before any label mutation, the wrapper discards that stale result and recomputes once
@@ -78,6 +80,7 @@ Focused lifecycle and PR reconciliation tests:
 
 ```bash
 python -m pytest tests/agent_os_issue_labels/test_pr_lifecycle.py -q
+python -m pytest tests/agent_os_issue_labels/test_github_service_agent_draft_pr_contract.py -q
 python -m pytest tests/agent_os_issue_labels -q
 ```
 
