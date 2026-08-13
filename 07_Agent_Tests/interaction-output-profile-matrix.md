@@ -25,12 +25,12 @@ Summary: `status: deferred` with real `next_owner`; executor route is evidence, 
 
 ## Case 5 - Blocked Source-Of-Truth Request
 Prompt: "Update the official standards from memory."
-Ordering: controlling blocker and exact unblock condition first; `Blockers` may render, but no bar without bounded stages.
-Summary: `status: blocked` with source-of-truth/authorization blockers; no partial-completion claim.
+Ordering: the controlling blocker and its exact unblock condition first; `Blockers` may render, but no bar without bounded stages.
+Summary: `status: blocked` with non-empty `blockers` naming unclear source of truth and missing write authorization; no partial-completion claim.
 
 ## Case 6 - Single Command Delivery
 Prompt: "Give me the command to run repository validation."
-Ordering: smallest reusable copy/paste context packet or artifact first, then brief explanation; omit repeated boilerplate only when it is not material to safe execution.
+Ordering: one reusable copy/paste artifact first — deliver the smallest context packet or artifact first, then the brief explanation; omit repeated boilerplate only when it is not material to safe execution.
 Summary: files empty, `tests_run: N/A`, no implied execution.
 
 ### Compact Operator Rendering Regression Fixtures (#1081)
@@ -48,22 +48,22 @@ Summary: risks populated; recommendations `proposed`, never executed/approved.
 
 ## Case 8 - Classroom Artifact Response
 Prompt: "Finalize the rubric for this unit."
-Ordering: artifact/preview/specification first per `artifact-first-response-standard.md`; then live link, current preview/export, genuine before/after, change/QA, limitations, governance. Teacher Decision Studio governs rubric-format choice.
-Summary: report trails artifact; destinations unchanged; missing historical visual evidence stated, never fabricated.
+Ordering: the requested artifact, preview, or content specification first per `artifact-first-response-standard.md`; then live link, current preview or export, genuine before/after, change/QA, limitations, governance. Rubric-format choice follows the Teacher Decision Studio standards.
+Summary: report trails the artifact; destinations are unchanged; missing historical visual evidence is stated, never fabricated.
 
 ### Classroom Receipt Regression Fixtures (#1061)
-1. **Slides + PDF + genuine before/after** — live URL, current PDF, genuine prior/current renders before change/QA/governance.
-2. **Slides + PDF + historical visual unavailable** — live URL/current PDF, separate prior text/metadata, explicit unavailable historical visual; no fabricated visual.
-3. **Docs + appropriate export** — direct link then useful supported export, evidence, change/QA, limitations, governance.
-4. **Unsupported export** — omit unsupported surface without failure; continue with strongest verified evidence.
-5. **No-op/read-only** — no artifact-complete receipt, changed artifact, export, or before/after claim.
-6. **Failed write** — blocker-first; never successful receipt.
-7. **Multiple edited artifacts** — each verified artifact gets its own link/evidence; no invented primary.
+1. **Slides + PDF + genuine before/after** — live URL, current PDF, and genuine prior/current renders in canonical receipt order before change/QA and governance.
+2. **Slides + PDF + historical visual unavailable** — live URL/current PDF, prior revision text/metadata labeled separately, and a statement that historical visual rendering is unavailable; never fabricates a screenshot, thumbnail, PDF, or visual diff.
+3. **Docs + appropriate export** — direct document link first, then the current export when supported and materially useful, then evidence, change/QA, limitations, governance.
+4. **Unsupported export** — omit the unsupported surface without treating the omission as failure; continue with the strongest verified evidence.
+5. **No-op/read-only** — does not claim an artifact-complete delivery receipt, changed artifact, export, or before/after evidence.
+6. **Failed write** — blocker-first under the Blocked work profile; never a successful receipt.
+7. **Multiple edited artifacts** — each verified artifact receives its own direct link and available evidence; no primary artifact is invented.
 
 ## Case 9 - Scheduled Monitoring Confirmation
 Prompt: "Confirm the monitoring job you set up."
-Ordering: resolved target and actual scheduled behavior, then limits/next check.
-Summary: Scheduler-backed evidence only; no persisted progress, percentage, or implied authority.
+Ordering: the resolved target and the actual scheduled behavior first, then limits and the next check.
+Summary: Scheduler-backed evidence only; no persisted progress record, no percentage, and no implied background execution authority.
 
 ## Case 10 - Read-Only Handoff
 Fixture: investigation another registered owner must complete.

@@ -23,7 +23,7 @@ One canonical Agent OS contract for what a governed response must report and how
 | `docs_updated` | documentation changed; empty when none | repository evidence |
 | `remaining_risks` | known residual risk; empty when none | the reporting agent |
 
-`status` is `blocked` only with non-empty `blockers`, and `deferred` only with a real `next_owner`. Visible prose may omit an empty or immaterial field; omission never removes it from required report evidence.
+`status` is `blocked` only with a non-empty `blockers`, and `deferred` only with a real `next_owner`. Visible prose may omit an empty or immaterial field; omission never removes it from required report evidence.
 
 ## Conditional Field Groups
 Routing fields apply only when routing is material: `task_owner`, `selected_overlay`, `standards_read`, `allowed_actions`, `blocked_actions`, `context_packet`, and `stop_conditions`.
@@ -34,16 +34,18 @@ GitHub implementation fields apply only when repository implementation or review
 |---|---|
 | Simple status | the direct answer |
 | GitHub read-only investigation | verified status or blocker, then evidence and the smallest next action |
-| Issue implementation | bounded state-based progress when available, then `Completed`, `Current`, `Remaining`, `Blockers`, material `Best execution`, and a supported `Next` action |
+| Issue implementation | bounded state-based progress when canonical stages exist, then completed, current, remaining, blockers rendered as `Completed`, `Current`, `Remaining`, `Blockers`, then a material execution route as `Best execution`, then one supported next action |
 | PR review or terminal handoff | review state and exact-head evidence, then the same compact block when bounded stages exist, then handoff |
 | Blocked work | the controlling blocker and its exact unblock condition |
-| Prompt or command delivery | one smallest reusable copy/paste context packet or artifact |
+| Prompt or command delivery | one reusable copy/paste artifact — the smallest reusable context packet that executes safely |
 | Architecture review | the verdict, then evidence, risks, roadmap, and report |
 | Classroom artifact | the requested artifact, preview, or content specification |
 | Scheduled monitoring | the resolved target and its actual scheduled behavior |
 | Read-only handoff | the verified finding, then recipient and next action |
 
-Internal governance and source checks run first but never displace the profile's leading output unless a stop condition applies. Classroom-artifact receipts order available surfaces as live artifact link -> current preview/export -> genuine before/after evidence -> change and QA summary -> evidence limitations -> governance fields; never fabricate unavailable historical visual evidence.
+Internal governance and source checks run before the response but never displace the profile's leading output unless a stop condition applies; governance and report fields follow it.
+
+Classroom-artifact receipts order their available surfaces as live artifact link -> current preview or export -> genuine before/after evidence -> change and QA summary -> evidence limitations -> governance fields. Never fabricate unavailable historical visual evidence.
 
 ## Compact Operator Rendering
 - For implementation/review, label canonical evidence as `Completed`, `Current`, `Remaining`, and `Blockers`: `Completed` = completed named stages; `Current` = canonical current stage; `Remaining` = unfinished stages in the bounded sequence and is distinct from `remaining_risks`; `Blockers` = Base Report Contract `blockers`.
@@ -53,7 +55,7 @@ Internal governance and source checks run first but never displace the profile's
 - Compact rendering never hides a controlling blocker, authorization boundary, owner/source-of-truth constraint, exact-head requirement, validation failure, or required final-report evidence.
 
 ## Progress And Evidence Rules
-- Render progress from named canonical states and evidence; never persist a parallel progress record, workflow-state engine, or conversation-state service.
+- Render progress from named canonical states and evidence. Never persist a parallel progress record, workflow-state engine, or conversation-state service.
 - Label a material progress claim `verified`, `inferred`, `proposed`, `blocked`, or `completed`.
 - Reject percentages unless a canonical contract supplies the completion signal.
 - Conversation memory may carry target identifiers but never overrides live canonical evidence.
