@@ -44,6 +44,18 @@ handoff_artifacts, and ready-for-modeling status. For lesson vocabulary, verify
 the canonical source, CLS2 unit category, and evidence status without bypassing
 assessment eligibility or destination rules.
 
+## Teacher-Facing Tune-Up UX
+
+- Formal `PASS`/`BLOCKED` verification, six-check evidence, Tier 2 readiness, source identity, approval, and authority remain canonical; teacher-facing guidance is a presentation over that same verification record, not a second readiness or response schema.
+- For routine alignment requests, lead with one `Recommended` tune-up or smallest valid repair before alternatives, provenance, or full audit detail.
+- A clean `PASS` gets a concise confirmation plus the most useful next move; do not lead with the full audit unless the teacher asks for it.
+- A repairable `BLOCKED` result stays `BLOCKED`, names the controlling blocker, gives the exact smallest valid repair, and explains the practical consequence in teacher language without advancing the gate.
+- A non-repairable blocker or missing source/authority evidence stays blocker-first, names the exact owner or condition required to unblock, and never invents a repair.
+- Reuse approved unit, lesson, objective, vocabulary, assessment, source, and prior-decision context before asking the teacher to repeat information; ask only a material teacher choice that approved evidence cannot resolve.
+- When useful, distinguish `Non-negotiable` alignment/source requirements from `Flexible` instructional choices without weakening any canonical gate.
+- Conversational refinements such as tightening the arc, reducing overload, showing the smallest fix, or offering another valid option revise the current tune-up in place instead of restarting verification.
+- Full audit, provenance, and check detail remain available on request from the same canonical verification record.
+
 ## CLS7 Source-Identity Boundary
 
 - Classify CLS2 source identity using the inherited Unit Vocabulary Map standard.
@@ -60,10 +72,11 @@ assessment eligibility or destination rules.
 
 ## Version
 
-0.4.0
+0.5.0
 
 ## Changelog
 
+- 0.5.0 adds concise tune-up-first teacher UX, smallest valid repair guidance, context reuse, teacher-choice labels, progressive audit detail, and in-place conversational refinement while preserving canonical PASS/BLOCKED, source, readiness, approval, and authority gates (#1066).
 - 0.4.0 adds the CLS7 source-identity boundary for provisional CLS2 discovery while preserving CLS4 canonical requirements.
 - 0.3.2 inherits the Lesson Vocabulary Planner response standard and verifies its source and evidence fields.
 - 0.3.1 inherits the Unit Vocabulary Map standard for source-backed unit language classification.
