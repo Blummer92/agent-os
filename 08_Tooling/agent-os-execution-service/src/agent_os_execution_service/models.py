@@ -330,6 +330,185 @@ def execution_service_request_fingerprint(value: ExecutionServiceRequest) -> str
     return _fingerprint(payload)
 
 
+_REQUEST_TRANSPORT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "request_id",
+        "request_revision",
+        "created_at",
+        "expires_at",
+        "repository_identity",
+        "issue_or_handoff_identity",
+        "canonical_owner",
+        "requesting_actor",
+        "capability",
+        "base_branch",
+        "base_sha",
+        "requested_ref",
+        "expected_sha",
+        "allowed_paths",
+        "forbidden_paths",
+        "inspected_file_count_limit",
+        "inspected_byte_limit",
+        "evidence_visibility_policy",
+        "invalidation_conditions",
+        "request_fingerprint",
+    }
+)
+_REPOSITORY_IDENTITY_TRANSPORT_FIELDS = frozenset(
+    {
+        "host",
+        "owner",
+        "repository",
+        "repository_id",
+        "is_fork",
+        "upstream_owner",
+        "upstream_repository",
+        "upstream_repository_id",
+        "default_branch",
+    }
+)
+
+
+def _repository_identity_payload(value: RepositoryIdentity) -> dict[str, object]:
+    _validate_repository_identity(value)
+    return {
+        "host": value.host,
+        "owner": value.owner,
+        "repository": value.repository,
+        "repository_id": value.repository_id,
+        "is_fork": value.is_fork,
+        "upstream_owner": value.upstream_owner,
+        "upstream_repository": value.upstream_repository,
+        "upstream_repository_id": value.upstream_repository_id,
+        "default_branch": value.default_branch,
+    }
+
+
+def serialize_execution_service_request(value: object) -> dict[str, object]:
+    if type(value) is not ExecutionServiceRequest:
+        raise TypeError("value must be an exact ExecutionServiceRequest")
+    if value.schema_version != EXECUTION_SERVICE_REQUEST_SCHEMA_VERSION:
+        raise ValueError("schema_version is unsupported")
+    if value.request_fingerprint != execution_service_request_fingerprint(value):
+        raise ValueError("request_fingerprint does not match request content")
+    return {
+        "schema_version": value.schema_version,
+        "request_id": value.request_id,
+        "request_revision": value.request_revision,
+        "created_at": value.created_at,
+        "expires_at": value.expires_at,
+        "repository_identity": _repository_identity_payload(value.repository_identity),
+        "issue_or_handoff_identity": value.issue_or_handoff_identity,
+        "canonical_owner": value.canonical_owner,
+        "requesting_actor": value.requesting_actor,
+        "capability": value.capability.value,
+        "base_branch": value.base_branch,
+        "base_sha": value.base_sha,
+        "requested_ref": value.requested_ref,
+        "expected_sha": value.expected_sha,
+        "allowed_paths": list(value.allowed_paths),
+        "forbidden_paths": list(value.forbidden_paths),
+        "inspected_file_count_limit": value.inspected_file_count_limit,
+        "inspected_byte_limit": value.inspected_byte_limit,
+        "evidence_visibility_policy": value.evidence_visibility_policy.value,
+        "invalidation_conditions": [item.value for item in value.invalidation_conditions],
+        "request_fingerprint": value.request_fingerprint,
+    }
+
+
+def reconstruct_execution_service_request(payload: object) -> ExecutionServiceRequest:
+    if type(payload) is not dict:
+        raise TypeError("payload must be an exact dict")
+    keys = frozenset(payload)
+    if keys != _REQUEST_TRANSPORT_FIELDS:
+        missing = sorted(_REQUEST_TRANSPORT_FIELDS - keys)
+        unknown = sorted(keys - _REQUEST_TRANSPORT_FIELDS)
+        details: list[str] = []
+        if missing:
+            details.append("missing=" + ",".join(missing))
+        if unknown:
+            details.append("unknown=" + ",".join(unknown))
+        raise ValueError("invalid request transport fields: " + ";".join(details))
+    if payload["schema_version"] != EXECUTION_SERVICE_REQUEST_SCHEMA_VERSION:
+        raise ValueError("schema_version is unsupported")
+
+    repository_payload = payload["repository_identity"]
+    if type(repository_payload) is not dict:
+        raise TypeError("repository_identity must be an exact dict")
+    repository_keys = frozenset(repository_payload)
+    if repository_keys != _REPOSITORY_IDENTITY_TRANSPORT_FIELDS:
+        raise ValueError("repository_identity fields are not canonical")
+    repository_identity = RepositoryIdentity(
+        host=repository_payload["host"],
+        owner=repository_payload["owner"],
+        repository=repository_payload["repository"],
+        repository_id=repository_payload["repository_id"],
+        is_fork=repository_payload["is_fork"],
+        upstream_owner=repository_payload["upstream_owner"],
+        upstream_repository=repository_payload["upstream_repository"],
+        upstream_repository_id=repository_payload["upstream_repository_id"],
+        default_branch=repository_payload["default_branch"],
+    )
+    if _repository_identity_payload(repository_identity) != repository_payload:
+        raise ValueError("repository_identity payload is not canonical")
+
+    allowed_paths = payload["allowed_paths"]
+    forbidden_paths = payload["forbidden_paths"]
+    invalidation_conditions = payload["invalidation_conditions"]
+    if type(allowed_paths) is not list:
+        raise TypeError("allowed_paths must be an exact list")
+    if type(forbidden_paths) is not list:
+        raise TypeError("forbidden_paths must be an exact list")
+    if type(invalidation_conditions) is not list:
+        raise TypeError("invalidation_conditions must be an exact list")
+
+    try:
+        capability = ExecutionServiceCapability(payload["capability"])
+    except (TypeError, ValueError) as exc:
+        raise ValueError("capability is unsupported") from exc
+    try:
+        evidence_visibility_policy = EvidenceVisibilityPolicy(
+            payload["evidence_visibility_policy"]
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("evidence_visibility_policy is unsupported") from exc
+    try:
+        reconstructed_conditions = tuple(
+            ExecutionServiceInvalidationCondition(item)
+            for item in invalidation_conditions
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalidation_conditions contain an unsupported value") from exc
+
+    request = ExecutionServiceRequest(
+        schema_version=payload["schema_version"],
+        request_id=payload["request_id"],
+        request_revision=payload["request_revision"],
+        created_at=payload["created_at"],
+        expires_at=payload["expires_at"],
+        repository_identity=repository_identity,
+        issue_or_handoff_identity=payload["issue_or_handoff_identity"],
+        canonical_owner=payload["canonical_owner"],
+        requesting_actor=payload["requesting_actor"],
+        capability=capability,
+        base_branch=payload["base_branch"],
+        base_sha=payload["base_sha"],
+        requested_ref=payload["requested_ref"],
+        expected_sha=payload["expected_sha"],
+        allowed_paths=tuple(allowed_paths),
+        forbidden_paths=tuple(forbidden_paths),
+        inspected_file_count_limit=payload["inspected_file_count_limit"],
+        inspected_byte_limit=payload["inspected_byte_limit"],
+        evidence_visibility_policy=evidence_visibility_policy,
+        invalidation_conditions=reconstructed_conditions,
+        request_fingerprint=payload["request_fingerprint"],
+    )
+    if serialize_execution_service_request(request) != payload:
+        raise ValueError("request transport payload is not canonical")
+    return request
+
+
 def execution_service_result_fingerprint(value: ExecutionServiceResult) -> str:
     payload = {
         "domain": "agent-os-execution-service-result",
