@@ -13,6 +13,7 @@ from scripts.agent_os_candidate_packet.executable_lane_selection import (
     RankEvidence,
 )
 from scripts.agent_os_candidate_packet.post_pr_lane_plan import (
+    ConflictFinding,
     LanePlanOutcome,
     PostPrLanePlan,
     deserialize_post_pr_lane_plan,
@@ -160,6 +161,24 @@ def test_round_trip_is_byte_stable_and_authority_false():
     assert rebuilt.execution_authorized is False
     assert rebuilt.side_effects_performed is False
     assert rebuilt.scheduler_invoked is False
+
+
+def test_conflict_findings_are_canonicalized_before_identity():
+    base = plan_post_pr_lane(selection(), audit())
+    first = ConflictFinding("conflict.recommendation-absent", 999)
+    second = ConflictFinding("conflict.alternate-unsupported", 998)
+    left = replace(base, conflict_findings=(first, second, first), plan_id="")
+    right = replace(base, conflict_findings=(second, first), plan_id="")
+    assert left.conflict_findings == right.conflict_findings
+    assert left.plan_id == right.plan_id
+
+
+@pytest.mark.parametrize("tampered_id", ["", "post-pr-lane-plan:" + "f" * 64])
+def test_deserialization_rejects_empty_or_tampered_plan_id(tampered_id):
+    payload = plan_post_pr_lane(selection(), audit()).to_dict()
+    payload["plan_id"] = tampered_id
+    with pytest.raises(ValueError, match="plan_id"):
+        PostPrLanePlan.from_dict(payload)
 
 
 def test_unknown_fields_and_authority_true_are_rejected():
