@@ -644,7 +644,10 @@ def reconstruct_repository_state_validation_result(
     payload: bytes | str | Mapping[str, Any],
 ) -> RepositoryStateValidationResult:
     """Strictly reconstruct one RepositoryStateValidationResult with closed-schema validation."""
+    source_bytes: bytes | None = None
+    source_text: str | None = None
     if isinstance(payload, bytes):
+        source_bytes = payload
         try:
             raw: object = json.loads(payload.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -652,6 +655,7 @@ def reconstruct_repository_state_validation_result(
                 "repository state validation result must be canonical UTF-8 JSON"
             ) from exc
     elif isinstance(payload, str):
+        source_text = payload
         try:
             raw = json.loads(payload)
         except json.JSONDecodeError as exc:
@@ -664,6 +668,32 @@ def reconstruct_repository_state_validation_result(
         raise TypeError("payload must be bytes, text, or a mapping")
     if not isinstance(raw, Mapping):
         raise ValueError("repository state validation result payload must be an object")
+    if source_bytes is not None:
+        try:
+            canonical_bytes = json.dumps(
+                raw, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+        except (TypeError, ValueError, UnicodeEncodeError) as exc:
+            raise ValueError(
+                "repository state validation result must be canonical UTF-8 JSON"
+            ) from exc
+        if source_bytes != canonical_bytes:
+            raise ValueError(
+                "repository state validation result must be canonical UTF-8 JSON"
+            )
+    elif source_text is not None:
+        try:
+            canonical_text = json.dumps(
+                raw, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "repository state validation result must be canonical JSON text"
+            ) from exc
+        if source_text != canonical_text:
+            raise ValueError(
+                "repository state validation result must be canonical JSON text"
+            )
 
     unknown = sorted(set(raw) - _REPOSITORY_STATE_VALIDATION_RESULT_TRANSPORT_KEYS)
     missing = sorted(_REPOSITORY_STATE_VALIDATION_RESULT_TRANSPORT_KEYS - set(raw))

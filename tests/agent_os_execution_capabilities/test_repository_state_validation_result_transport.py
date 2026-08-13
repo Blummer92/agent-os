@@ -133,6 +133,24 @@ def test_reconstruct_from_bytes_and_str_and_mapping():
     assert reconstruct_repository_state_validation_result(payload_mapping) == result
 
 
+def test_reject_noncanonical_bytes_with_reordered_keys():
+    payload = _repository_state_validation_result_payload(_result())
+    reordered_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    assert reordered_text.encode("utf-8") != serialize_repository_state_validation_result(
+        _result()
+    )
+    with pytest.raises(ValueError):
+        reconstruct_repository_state_validation_result(reordered_text.encode("utf-8"))
+
+
+def test_reject_noncanonical_text_with_extra_whitespace():
+    canonical = serialize_repository_state_validation_result(_result()).decode("utf-8")
+    padded_text = canonical.replace(",", ", ")
+    assert padded_text != canonical
+    with pytest.raises(ValueError):
+        reconstruct_repository_state_validation_result(padded_text)
+
+
 def test_reject_bool_for_repository_id():
     payload = _repository_state_validation_result_payload(_result())
     payload["repository_identity"]["repository_id"] = True
