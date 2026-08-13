@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Literal
@@ -328,6 +328,141 @@ def execution_service_request_fingerprint(value: ExecutionServiceRequest) -> str
         "invalidation_conditions": [item.value for item in value.invalidation_conditions],
     }
     return _fingerprint(payload)
+
+
+_REPOSITORY_IDENTITY_FIELD_NAMES = frozenset(f.name for f in fields(RepositoryIdentity))
+_EXECUTION_SERVICE_REQUEST_FIELD_NAMES = frozenset(f.name for f in fields(ExecutionServiceRequest))
+
+
+def _serialize_repository_identity(value: RepositoryIdentity) -> dict[str, object]:
+    if type(value) is not RepositoryIdentity:
+        raise TypeError("repository_identity must be the canonical exact RepositoryIdentity")
+    return {
+        "host": value.host,
+        "owner": value.owner,
+        "repository": value.repository,
+        "repository_id": value.repository_id,
+        "is_fork": value.is_fork,
+        "upstream_owner": value.upstream_owner,
+        "upstream_repository": value.upstream_repository,
+        "upstream_repository_id": value.upstream_repository_id,
+        "default_branch": value.default_branch,
+    }
+
+
+def _reconstruct_repository_identity(payload: object) -> RepositoryIdentity:
+    if type(payload) is not dict:
+        raise TypeError("repository_identity payload must be an exact object")
+    if set(payload) != _REPOSITORY_IDENTITY_FIELD_NAMES:
+        raise ValueError("repository_identity payload contains unknown or missing fields")
+    return RepositoryIdentity(**payload)
+
+
+def _list_field(payload: dict[str, object], name: str) -> list:
+    value = payload[name]
+    if type(value) is not list:
+        raise TypeError(f"{name} must be an exact array")
+    return value
+
+
+def _string_list_field(payload: dict[str, object], name: str) -> list[str]:
+    values = _list_field(payload, name)
+    if not all(type(item) is str for item in values):
+        raise TypeError(f"{name} must contain exact strings")
+    return values
+
+
+def serialize_execution_service_request(value: ExecutionServiceRequest) -> dict[str, object]:
+    """Serialize one exact ``ExecutionServiceRequest`` to its canonical payload.
+
+    The payload contains every public semantic request field in deterministic
+    form: enums as their supported string values, ordered tuple fields as
+    arrays, and the nested ``RepositoryIdentity`` using its own canonical
+    field set. ``execution_service_request_fingerprint(...)`` remains the sole
+    fingerprint authority; this only carries the value already computed onto
+    the request.
+    """
+
+    if type(value) is not ExecutionServiceRequest:
+        raise TypeError("value must be an exact ExecutionServiceRequest")
+    return {
+        "schema_version": value.schema_version,
+        "request_id": value.request_id,
+        "request_revision": value.request_revision,
+        "created_at": value.created_at,
+        "expires_at": value.expires_at,
+        "repository_identity": _serialize_repository_identity(value.repository_identity),
+        "issue_or_handoff_identity": value.issue_or_handoff_identity,
+        "canonical_owner": value.canonical_owner,
+        "requesting_actor": value.requesting_actor,
+        "capability": value.capability.value,
+        "base_branch": value.base_branch,
+        "base_sha": value.base_sha,
+        "requested_ref": value.requested_ref,
+        "expected_sha": value.expected_sha,
+        "allowed_paths": list(value.allowed_paths),
+        "forbidden_paths": list(value.forbidden_paths),
+        "inspected_file_count_limit": value.inspected_file_count_limit,
+        "inspected_byte_limit": value.inspected_byte_limit,
+        "evidence_visibility_policy": value.evidence_visibility_policy.value,
+        "invalidation_conditions": [item.value for item in value.invalidation_conditions],
+        "request_fingerprint": value.request_fingerprint,
+    }
+
+
+def reconstruct_execution_service_request(payload: object) -> ExecutionServiceRequest:
+    """Reconstruct one exact ``ExecutionServiceRequest`` from its canonical payload.
+
+    Accepts only the exact canonical payload shape produced by
+    ``serialize_execution_service_request``. Every semantic check -- malformed
+    timestamps, refs, SHAs, paths, repository identity, bounds, duplicates,
+    overlaps, ordering, and fingerprint drift -- is delegated to the existing
+    ``ExecutionServiceRequest`` and ``RepositoryIdentity`` constructors so this
+    seam never duplicates or redefines request semantics.
+    """
+
+    if type(payload) is not dict:
+        raise TypeError("execution service request payload must be an exact object")
+    if set(payload) != _EXECUTION_SERVICE_REQUEST_FIELD_NAMES:
+        raise ValueError("execution service request payload contains unknown or missing fields")
+    if payload["schema_version"] != EXECUTION_SERVICE_REQUEST_SCHEMA_VERSION:
+        raise ValueError("schema_version is unsupported")
+    if type(payload["capability"]) is not str:
+        raise TypeError("capability must be an exact string")
+    capability = ExecutionServiceCapability(payload["capability"])
+    if type(payload["evidence_visibility_policy"]) is not str:
+        raise TypeError("evidence_visibility_policy must be an exact string")
+    evidence_visibility_policy = EvidenceVisibilityPolicy(payload["evidence_visibility_policy"])
+    invalidation_conditions = tuple(
+        ExecutionServiceInvalidationCondition(item)
+        for item in _string_list_field(payload, "invalidation_conditions")
+    )
+    allowed_paths = tuple(_string_list_field(payload, "allowed_paths"))
+    forbidden_paths = tuple(_string_list_field(payload, "forbidden_paths"))
+    repository_identity = _reconstruct_repository_identity(payload["repository_identity"])
+    return ExecutionServiceRequest(
+        schema_version=payload["schema_version"],
+        request_id=payload["request_id"],
+        request_revision=payload["request_revision"],
+        created_at=payload["created_at"],
+        expires_at=payload["expires_at"],
+        repository_identity=repository_identity,
+        issue_or_handoff_identity=payload["issue_or_handoff_identity"],
+        canonical_owner=payload["canonical_owner"],
+        requesting_actor=payload["requesting_actor"],
+        capability=capability,
+        base_branch=payload["base_branch"],
+        base_sha=payload["base_sha"],
+        requested_ref=payload["requested_ref"],
+        expected_sha=payload["expected_sha"],
+        allowed_paths=allowed_paths,
+        forbidden_paths=forbidden_paths,
+        inspected_file_count_limit=payload["inspected_file_count_limit"],
+        inspected_byte_limit=payload["inspected_byte_limit"],
+        evidence_visibility_policy=evidence_visibility_policy,
+        invalidation_conditions=invalidation_conditions,
+        request_fingerprint=payload["request_fingerprint"],
+    )
 
 
 def execution_service_result_fingerprint(value: ExecutionServiceResult) -> str:

@@ -42,6 +42,8 @@ from .models import (
     RepositoryInspectionObservation,
     execution_service_request_fingerprint,
     execution_service_result_fingerprint,
+    reconstruct_execution_service_request,
+    serialize_execution_service_request,
 )
 from .read_only_service import RepositoryInspector, evaluate_read_only_request
 from .request_validation import (
@@ -92,8 +94,10 @@ __all__ = [
     "executor_handoff_id",
     "executor_route_decision_id",
     "project_public_result",
+    "reconstruct_execution_service_request",
     "redact_public_text",
     "select_executor_route",
+    "serialize_execution_service_request",
     "serialize_executor_route_decision",
     "serialize_validation_command_plan",
     "validate_execution_service_request",
