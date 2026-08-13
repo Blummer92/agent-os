@@ -5,6 +5,8 @@ from .draft_ingestion import (
     DraftTaskProposal,
     DraftTaskProposalResult,
     build_draft_task_proposals,
+    reconstruct_draft_task_proposal_result,
+    serialize_draft_task_proposal_result,
 )
 from .projection_consumer import (
     ProjectionConsumptionResult,
@@ -18,4 +20,6 @@ __all__ = [
     "ProjectionConsumptionResult",
     "build_draft_task_proposals",
     "consume_approved_execution_projection",
+    "reconstruct_draft_task_proposal_result",
+    "serialize_draft_task_proposal_result",
 ]

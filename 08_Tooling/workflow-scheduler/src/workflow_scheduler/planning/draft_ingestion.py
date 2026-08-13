@@ -20,6 +20,8 @@ from scripts.agent_os_execution_capabilities import (
     RepositoryIdentity,
     RepositoryStateEvidence,
     RepositoryStateValidationResult,
+    reconstruct_repository_state_validation_result,
+    serialize_repository_state_validation_result,
     validate_repository_state_evidence,
 )
 from scripts.agent_os_issue_acceptance import (
@@ -33,6 +35,10 @@ from scripts.agent_os_issue_acceptance import (
     SchedulerPlanningHandoff,
     compare_issueplan_current_state,
     compute_planning_binding_fingerprint,
+    reconstruct_handoff_validation_result,
+    reconstruct_issueplan_current_state_comparison,
+    serialize_handoff_validation_result,
+    serialize_issueplan_current_state_comparison,
     validate_scheduler_planning_handoff,
 )
 
@@ -555,3 +561,299 @@ def _require_timestamp(value: object) -> None:
         datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ")
     except ValueError as exc:
         raise ValueError("created_at must be a valid UTC timestamp") from exc
+
+
+_DRAFT_TASK_PROPOSAL_TRANSPORT_KEYS = frozenset(
+    {
+        "proposal_version", "proposal_id", "handoff_digest", "graph_digest",
+        "planning_result_digest", "repository", "base_branch",
+        "evaluated_repository_sha", "evaluator_commit_sha", "supplied_node_ids",
+        "cohort_summaries", "issueplan_current_state_evidence_id",
+        "repository_state_evidence_id", "created_at", "eligibility_status",
+        "authorization_status", "execution_authorized",
+    }
+)
+_COHORT_TRANSPORT_KEYS = frozenset({"node_ids", "classification", "reason_codes"})
+_DRAFT_TASK_PROPOSAL_RESULT_TRANSPORT_KEYS = frozenset(
+    {
+        "status", "proposals", "reason_codes", "handoff_validation",
+        "issueplan_comparison", "repository_state_validation",
+        "authorization_status", "execution_authorized", "side_effects_performed",
+    }
+)
+
+
+def _cohort_transport_payload(cohort: HandoffCohort) -> dict[str, Any]:
+    return {
+        "node_ids": list(cohort.node_ids),
+        "classification": cohort.classification,
+        "reason_codes": list(cohort.reason_codes),
+    }
+
+
+def _reconstruct_cohort_transport(value: object) -> HandoffCohort:
+    if not isinstance(value, Mapping) or set(value) != _COHORT_TRANSPORT_KEYS:
+        raise ValueError("cohort summary transport is malformed")
+    classification = value["classification"]
+    if not isinstance(classification, str):
+        raise ValueError("cohort summary classification must be a string")
+    return HandoffCohort(
+        node_ids=_require_string_list(value["node_ids"], "cohort summary node_ids"),
+        classification=classification,
+        reason_codes=_require_string_list(
+            value["reason_codes"], "cohort summary reason_codes"
+        ),
+    )
+
+
+def _require_string_list(value: object, name: str) -> tuple[str, ...]:
+    if type(value) is not list:
+        raise ValueError(f"{name} must be an array")
+    if not all(type(item) is str for item in value):
+        raise ValueError(f"{name} must contain strings")
+    return tuple(value)
+
+
+def _draft_task_proposal_transport_payload(proposal: DraftTaskProposal) -> dict[str, Any]:
+    return {
+        "proposal_version": proposal.proposal_version,
+        "proposal_id": proposal.proposal_id,
+        "handoff_digest": proposal.handoff_digest,
+        "graph_digest": proposal.graph_digest,
+        "planning_result_digest": proposal.planning_result_digest,
+        "repository": proposal.repository,
+        "base_branch": proposal.base_branch,
+        "evaluated_repository_sha": proposal.evaluated_repository_sha,
+        "evaluator_commit_sha": proposal.evaluator_commit_sha,
+        "supplied_node_ids": list(proposal.supplied_node_ids),
+        "cohort_summaries": [
+            _cohort_transport_payload(cohort) for cohort in proposal.cohort_summaries
+        ],
+        "issueplan_current_state_evidence_id": proposal.issueplan_current_state_evidence_id,
+        "repository_state_evidence_id": proposal.repository_state_evidence_id,
+        "created_at": proposal.created_at,
+        "eligibility_status": proposal.eligibility_status,
+        "authorization_status": proposal.authorization_status,
+        "execution_authorized": proposal.execution_authorized,
+    }
+
+
+def _reconstruct_draft_task_proposal_transport(value: object) -> DraftTaskProposal:
+    if not isinstance(value, Mapping):
+        raise ValueError("draft task proposal transport must be an object")
+    unknown = sorted(set(value) - _DRAFT_TASK_PROPOSAL_TRANSPORT_KEYS)
+    missing = sorted(_DRAFT_TASK_PROPOSAL_TRANSPORT_KEYS - set(value))
+    if unknown:
+        raise ValueError(f"draft task proposal has unknown fields: {', '.join(unknown)}")
+    if missing:
+        raise ValueError(
+            f"draft task proposal is missing required fields: {', '.join(missing)}"
+        )
+    if value["execution_authorized"] is not False:
+        raise ValueError("execution_authorized must remain false")
+    if value["eligibility_status"] != "eligible":
+        raise ValueError("a transported proposal is always eligible")
+    if value["authorization_status"] != "not-evaluated":
+        raise ValueError("authorization_status must remain not-evaluated")
+    raw_cohorts = value["cohort_summaries"]
+    if type(raw_cohorts) is not list:
+        raise ValueError("cohort_summaries must be an array")
+    try:
+        proposal = DraftTaskProposal(
+            proposal_version=value["proposal_version"],
+            proposal_id=value["proposal_id"],
+            handoff_digest=value["handoff_digest"],
+            graph_digest=value["graph_digest"],
+            planning_result_digest=value["planning_result_digest"],
+            repository=value["repository"],
+            base_branch=value["base_branch"],
+            evaluated_repository_sha=value["evaluated_repository_sha"],
+            evaluator_commit_sha=value["evaluator_commit_sha"],
+            supplied_node_ids=_require_string_list(
+                value["supplied_node_ids"], "supplied_node_ids"
+            ),
+            cohort_summaries=tuple(
+                _reconstruct_cohort_transport(item) for item in raw_cohorts
+            ),
+            issueplan_current_state_evidence_id=value[
+                "issueplan_current_state_evidence_id"
+            ],
+            repository_state_evidence_id=value["repository_state_evidence_id"],
+            created_at=value["created_at"],
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("draft task proposal fields are malformed") from exc
+    if _draft_task_proposal_transport_payload(proposal) != dict(value):
+        raise ValueError("draft task proposal transport is not canonical")
+    return proposal
+
+
+def _draft_task_proposal_result_payload(
+    result: DraftTaskProposalResult,
+) -> dict[str, Any]:
+    return {
+        "status": result.status,
+        "proposals": [
+            _draft_task_proposal_transport_payload(proposal)
+            for proposal in result.proposals
+        ],
+        "reason_codes": list(result.reason_codes),
+        "handoff_validation": json.loads(
+            serialize_handoff_validation_result(result.handoff_validation)
+        ),
+        "issueplan_comparison": (
+            json.loads(
+                serialize_issueplan_current_state_comparison(result.issueplan_comparison)
+            )
+            if result.issueplan_comparison is not None
+            else None
+        ),
+        "repository_state_validation": (
+            json.loads(
+                serialize_repository_state_validation_result(
+                    result.repository_state_validation
+                )
+            )
+            if result.repository_state_validation is not None
+            else None
+        ),
+        "authorization_status": result.authorization_status,
+        "execution_authorized": result.execution_authorized,
+        "side_effects_performed": result.side_effects_performed,
+    }
+
+
+def serialize_draft_task_proposal_result(result: DraftTaskProposalResult) -> bytes:
+    """Serialize one canonical DraftTaskProposalResult's public fields.
+
+    Every nested canonical result is delegated to its own owner's
+    serializer/reconstructor rather than reimplemented here.
+    """
+    if type(result) is not DraftTaskProposalResult:
+        raise TypeError("result must be an exact DraftTaskProposalResult")
+    payload = _draft_task_proposal_result_payload(result)
+    try:
+        canonical = reconstruct_draft_task_proposal_result(payload)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("result has invalid draft task proposal fields") from exc
+    if canonical != result:
+        raise ValueError("result has noncanonical draft task proposal fields")
+    return json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+
+
+def reconstruct_draft_task_proposal_result(
+    payload: bytes | str | Mapping[str, Any],
+) -> DraftTaskProposalResult:
+    """Strictly reconstruct one DraftTaskProposalResult with closed-schema validation."""
+    source_bytes: bytes | None = None
+    source_text: str | None = None
+    if isinstance(payload, bytes):
+        source_bytes = payload
+        try:
+            raw: object = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                "draft task proposal result must be canonical UTF-8 JSON"
+            ) from exc
+    elif isinstance(payload, str):
+        source_text = payload
+        try:
+            raw = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                "draft task proposal result must be canonical JSON text"
+            ) from exc
+    elif isinstance(payload, Mapping):
+        raw = dict(payload)
+    else:
+        raise TypeError("payload must be bytes, text, or a mapping")
+    if not isinstance(raw, Mapping):
+        raise ValueError("draft task proposal result payload must be an object")
+    if source_bytes is not None:
+        canonical_bytes = json.dumps(
+            raw, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+        if source_bytes != canonical_bytes:
+            raise ValueError("draft task proposal result must be canonical UTF-8 JSON")
+    elif source_text is not None:
+        canonical_text = json.dumps(
+            raw, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        if source_text != canonical_text:
+            raise ValueError("draft task proposal result must be canonical JSON text")
+
+    unknown = sorted(set(raw) - _DRAFT_TASK_PROPOSAL_RESULT_TRANSPORT_KEYS)
+    missing = sorted(_DRAFT_TASK_PROPOSAL_RESULT_TRANSPORT_KEYS - set(raw))
+    if unknown:
+        raise ValueError(
+            f"draft task proposal result has unknown fields: {', '.join(unknown)}"
+        )
+    if missing:
+        raise ValueError(
+            "draft task proposal result is missing required fields: "
+            + ", ".join(missing)
+        )
+
+    if type(raw["status"]) is not str:
+        raise ValueError("status must be a string")
+    if raw["authorization_status"] != "not-evaluated":
+        raise ValueError("authorization_status must remain not-evaluated")
+    if raw["execution_authorized"] is not False:
+        raise ValueError("execution_authorized must remain false")
+    if raw["side_effects_performed"] is not False:
+        raise ValueError("side_effects_performed must remain false")
+
+    raw_proposals = raw["proposals"]
+    if type(raw_proposals) is not list:
+        raise ValueError("proposals must be an array")
+    proposals = tuple(
+        _reconstruct_draft_task_proposal_transport(item) for item in raw_proposals
+    )
+    reason_codes = tuple(
+        _require_string_list(raw["reason_codes"], "reason_codes")
+    )
+
+    try:
+        handoff_validation = reconstruct_handoff_validation_result(
+            raw["handoff_validation"]
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("handoff_validation is malformed") from exc
+
+    issueplan_comparison = None
+    if raw["issueplan_comparison"] is not None:
+        try:
+            issueplan_comparison = reconstruct_issueplan_current_state_comparison(
+                raw["issueplan_comparison"]
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("issueplan_comparison is malformed") from exc
+
+    repository_state_validation = None
+    if raw["repository_state_validation"] is not None:
+        try:
+            repository_state_validation = reconstruct_repository_state_validation_result(
+                raw["repository_state_validation"]
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("repository_state_validation is malformed") from exc
+
+    try:
+        result = DraftTaskProposalResult(
+            status=raw["status"],
+            proposals=proposals,
+            reason_codes=reason_codes,
+            handoff_validation=handoff_validation,
+            issueplan_comparison=issueplan_comparison,
+            repository_state_validation=repository_state_validation,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "draft task proposal result fields are malformed"
+        ) from exc
+
+    if _draft_task_proposal_result_payload(result) != dict(raw):
+        raise ValueError("draft task proposal result transport is not canonical")
+    return result
