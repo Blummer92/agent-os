@@ -84,14 +84,34 @@ def _sha(value: object, name: str) -> str:
     return text
 
 
-def _directory(value: object, name: str) -> str:
+def _directory(value: object, name: str, *, require_exists: bool = True) -> str:
+    if not isinstance(value, (str, os.PathLike)):
+        raise ConcreteRuntimeConfigurationError(f"{name} must be text or a path-like value")
     text = _text(os.fspath(value), name)
     normalized = os.path.abspath(os.path.normpath(text))
-    if text != normalized or not os.path.isabs(text) or not os.path.isdir(text):
+    if text != normalized or not os.path.isabs(text):
+        raise ConcreteRuntimeConfigurationError(
+            f"{name} must be an existing normalized absolute directory"
+        )
+    if require_exists and not os.path.isdir(text):
         raise ConcreteRuntimeConfigurationError(
             f"{name} must be an existing normalized absolute directory"
         )
     return text
+
+
+def _issue_number(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ConcreteRuntimeConfigurationError("issue_number must be an integer")
+    return value
+
+
+def _require_list(value: object, name: str) -> list:
+    if type(value) is not list:
+        raise ConcreteRuntimeConfigurationError(
+            f"{name} must be a list before tuple conversion"
+        )
+    return value
 
 
 def _positive(value: object, name: str, maximum: float) -> float:
@@ -396,41 +416,67 @@ class ConcreteRuntimeConfiguration:
             raise ConcreteRuntimeConfigurationError("configuration fingerprint drifted")
 
 
+_PAYLOAD_SCALAR_FIELDS = (
+    "schema_name",
+    "schema_version",
+    "execution_mode",
+    "repository",
+    "issue_number",
+    "invocation_id",
+    "workspace_request_id",
+    "base_branch",
+    "base_sha",
+    "source_head_sha",
+    "tested_sha",
+    "branch",
+    "projection_id",
+    "approval_id",
+    "validation_plan_id",
+    "validation_bundle_id",
+    "advisory_result_id",
+    "advisory_render_id",
+    "repository_root",
+    "workspace_parent",
+    "executor_cwd",
+    "environment_policy",
+    "executor_timeout_seconds",
+    "executor_grace_period_seconds",
+    "executor_max_output_bytes",
+    "validation_per_command_timeout_seconds",
+    "validation_total_timeout_seconds",
+    "validation_max_output_bytes",
+)
+
+_PAYLOAD_NESTED_FIELDS = (
+    "repository_identity",
+    "executor_argv",
+    "required_test_commands",
+    "allowed_files",
+    "forbidden_paths",
+)
+
+_PAYLOAD_FIELDS = frozenset(_PAYLOAD_SCALAR_FIELDS) | frozenset(_PAYLOAD_NESTED_FIELDS)
+
+_REPOSITORY_IDENTITY_FIELDS = frozenset(
+    (
+        "host",
+        "owner",
+        "repository",
+        "repository_id",
+        "is_fork",
+        "upstream_owner",
+        "upstream_repository",
+        "upstream_repository_id",
+        "default_branch",
+    )
+)
+
+
 def _payload(configuration: object) -> dict[str, object]:
     get = configuration.get if isinstance(configuration, dict) else lambda name: getattr(configuration, name)
     identity: RepositoryIdentity = get("repository_identity")
     commands: tuple[FrozenTestCommand, ...] = tuple(get("required_test_commands"))
-    scalar_names = (
-        "schema_name",
-        "schema_version",
-        "execution_mode",
-        "repository",
-        "issue_number",
-        "invocation_id",
-        "workspace_request_id",
-        "base_branch",
-        "base_sha",
-        "source_head_sha",
-        "tested_sha",
-        "branch",
-        "projection_id",
-        "approval_id",
-        "validation_plan_id",
-        "validation_bundle_id",
-        "advisory_result_id",
-        "advisory_render_id",
-        "repository_root",
-        "workspace_parent",
-        "executor_cwd",
-        "environment_policy",
-        "executor_timeout_seconds",
-        "executor_grace_period_seconds",
-        "executor_max_output_bytes",
-        "validation_per_command_timeout_seconds",
-        "validation_total_timeout_seconds",
-        "validation_max_output_bytes",
-    )
-    payload = {name: get(name) for name in scalar_names}
+    payload = {name: get(name) for name in _PAYLOAD_SCALAR_FIELDS}
     payload.update(
         {
             "repository_identity": {
@@ -462,3 +508,192 @@ def runtime_configuration_payload(
     if type(configuration) is not ConcreteRuntimeConfiguration:
         raise TypeError("configuration must be exact ConcreteRuntimeConfiguration")
     return _payload(configuration)
+
+
+def _reconstruct_repository_identity(value: object) -> RepositoryIdentity:
+    if type(value) is not dict:
+        raise ConcreteRuntimeConfigurationError(
+            "repository_identity must be an exact dictionary"
+        )
+    if set(value) != _REPOSITORY_IDENTITY_FIELDS:
+        raise ConcreteRuntimeConfigurationError(
+            "repository_identity payload fields drift"
+        )
+    if type(value["is_fork"]) is not bool:
+        raise ConcreteRuntimeConfigurationError("is_fork must be a boolean")
+    try:
+        return RepositoryIdentity(
+            host=value["host"],
+            owner=value["owner"],
+            repository=value["repository"],
+            repository_id=value["repository_id"],
+            is_fork=value["is_fork"],
+            upstream_owner=value["upstream_owner"],
+            upstream_repository=value["upstream_repository"],
+            upstream_repository_id=value["upstream_repository_id"],
+            default_branch=value["default_branch"],
+        )
+    except (TypeError, ValueError) as exc:
+        raise ConcreteRuntimeConfigurationError(
+            f"repository_identity is malformed: {exc}"
+        ) from exc
+
+
+def _reconstruct_required_test_commands(value: object) -> tuple[FrozenTestCommand, ...]:
+    if type(value) is not list:
+        raise ConcreteRuntimeConfigurationError("required_test_commands must be a list")
+    commands: list[FrozenTestCommand] = []
+    for item in value:
+        if type(item) is not dict or set(item) != {"test_id", "argv"}:
+            raise ConcreteRuntimeConfigurationError(
+                "required test command payload fields drift"
+            )
+        if type(item["argv"]) is not list:
+            raise ConcreteRuntimeConfigurationError(
+                "command argv must be a list before tuple conversion"
+            )
+        try:
+            command = FrozenTestCommand(test_id=item["test_id"], argv=item["argv"])
+        except (TypeError, ValueError) as exc:
+            raise ConcreteRuntimeConfigurationError(
+                f"required test command is malformed: {exc}"
+            ) from exc
+        commands.append(command)
+    if not commands or any(not isinstance(item, FrozenTestCommand) for item in commands):
+        raise ConcreteRuntimeConfigurationError("required_test_commands is malformed")
+    test_ids = tuple(item.test_id for item in commands)
+    if len(set(test_ids)) != len(test_ids):
+        raise ConcreteRuntimeConfigurationError(
+            "required_test_commands contains a duplicate test_id"
+        )
+    return tuple(commands)
+
+
+def reconstruct_concrete_runtime_configuration(
+    payload: object,
+    *,
+    configuration_fingerprint: object,
+) -> ConcreteRuntimeConfiguration:
+    """Reconstruct the canonical configuration purely from its exact payload.
+
+    Consumes only the exact shape returned by ``runtime_configuration_payload``
+    plus the separately supplied ``configuration_fingerprint`` -- never
+    ``configuration_fingerprint`` embedded in ``payload`` itself, since the
+    fingerprint is computed over that payload. Performs no directory probing,
+    workspace derivation, subprocess, Git, network, or other I/O. The existing
+    ``ConcreteRuntimeConfiguration.__post_init__`` re-verifies the supplied
+    fingerprint against the reconstructed payload, and this function
+    additionally requires the reconstructed canonical payload to equal the
+    supplied payload exactly, rejecting any noncanonical transport that a
+    nested constructor silently normalized.
+    """
+    if type(payload) is not dict:
+        raise ConcreteRuntimeConfigurationError("payload must be an exact dictionary")
+    if set(payload) != _PAYLOAD_FIELDS:
+        raise ConcreteRuntimeConfigurationError(
+            "runtime configuration payload fields drift"
+        )
+    if payload["schema_name"] != SCHEMA_NAME or payload["schema_version"] != SCHEMA_VERSION:
+        raise ConcreteRuntimeConfigurationError(
+            "unsupported concrete configuration schema"
+        )
+    if payload["execution_mode"] not in RUNTIME_EXECUTION_MODES:
+        raise ConcreteRuntimeConfigurationError("unsupported execution mode")
+    if payload["environment_policy"] != ENVIRONMENT_POLICY:
+        raise ConcreteRuntimeConfigurationError("unsupported environment authority")
+    if not isinstance(configuration_fingerprint, str) or not configuration_fingerprint:
+        raise ConcreteRuntimeConfigurationError(
+            "configuration_fingerprint must be non-empty text"
+        )
+
+    executor_argv = payload["executor_argv"]
+    if executor_argv is not None:
+        executor_argv = _argv(_require_list(executor_argv, "executor_argv"), "executor_argv")
+
+    values = {
+        "schema_name": SCHEMA_NAME,
+        "schema_version": SCHEMA_VERSION,
+        "execution_mode": payload["execution_mode"],
+        "repository": _text(payload["repository"], "repository"),
+        "issue_number": _issue_number(payload["issue_number"]),
+        "invocation_id": _text(payload["invocation_id"], "invocation_id"),
+        "workspace_request_id": _text(
+            payload["workspace_request_id"], "workspace_request_id"
+        ),
+        "base_branch": _text(payload["base_branch"], "base_branch"),
+        "base_sha": _sha(payload["base_sha"], "base_sha"),
+        "source_head_sha": _sha(payload["source_head_sha"], "source_head_sha"),
+        "tested_sha": _sha(payload["tested_sha"], "tested_sha"),
+        "branch": _text(payload["branch"], "branch"),
+        "projection_id": _text(payload["projection_id"], "projection_id"),
+        "approval_id": _text(payload["approval_id"], "approval_id"),
+        "validation_plan_id": _text(
+            payload["validation_plan_id"], "validation_plan_id"
+        ),
+        "validation_bundle_id": _text(
+            payload["validation_bundle_id"], "validation_bundle_id"
+        ),
+        "advisory_result_id": _text(
+            payload["advisory_result_id"], "advisory_result_id"
+        ),
+        "advisory_render_id": _text(
+            payload["advisory_render_id"], "advisory_render_id"
+        ),
+        "repository_identity": _reconstruct_repository_identity(
+            payload["repository_identity"]
+        ),
+        "repository_root": _directory(
+            payload["repository_root"], "repository_root", require_exists=False
+        ),
+        "workspace_parent": _directory(
+            payload["workspace_parent"], "workspace_parent", require_exists=False
+        ),
+        "executor_argv": executor_argv,
+        "executor_cwd": _directory(
+            payload["executor_cwd"], "executor_cwd", require_exists=False
+        ),
+        "environment_policy": ENVIRONMENT_POLICY,
+        "executor_timeout_seconds": _positive(
+            payload["executor_timeout_seconds"],
+            "executor_timeout_seconds",
+            MAX_TIMEOUT_SECONDS,
+        ),
+        "executor_grace_period_seconds": _positive(
+            payload["executor_grace_period_seconds"],
+            "executor_grace_period_seconds",
+            MAX_TIMEOUT_SECONDS,
+        ),
+        "executor_max_output_bytes": _output_bound(
+            payload["executor_max_output_bytes"], "executor_max_output_bytes"
+        ),
+        "required_test_commands": _reconstruct_required_test_commands(
+            payload["required_test_commands"]
+        ),
+        "validation_per_command_timeout_seconds": _positive(
+            payload["validation_per_command_timeout_seconds"],
+            "validation_per_command_timeout_seconds",
+            30.0,
+        ),
+        "validation_total_timeout_seconds": _positive(
+            payload["validation_total_timeout_seconds"],
+            "validation_total_timeout_seconds",
+            300.0,
+        ),
+        "validation_max_output_bytes": _output_bound(
+            payload["validation_max_output_bytes"], "validation_max_output_bytes"
+        ),
+        "allowed_files": _paths(
+            _require_list(payload["allowed_files"], "allowed_files"), "allowed_files"
+        ),
+        "forbidden_paths": _paths(
+            _require_list(payload["forbidden_paths"], "forbidden_paths"), "forbidden_paths"
+        ),
+    }
+    configuration = ConcreteRuntimeConfiguration(
+        configuration_fingerprint=configuration_fingerprint, **values
+    )
+    if runtime_configuration_payload(configuration) != payload:
+        raise ConcreteRuntimeConfigurationError(
+            "reconstructed configuration payload drifted from the supplied payload"
+        )
+    return configuration
