@@ -116,8 +116,15 @@ class PostPrLanePlan:
         object.__setattr__(self, "reason_codes", reasons)
         if type(self.conflict_findings) is not tuple or any(type(v) is not ConflictFinding for v in self.conflict_findings):
             raise TypeError("conflict_findings must be an exact tuple of ConflictFinding")
-        if len(self.conflict_findings) > MAX_CONFLICT_FINDINGS:
+        conflicts = tuple(
+            sorted(
+                set(self.conflict_findings),
+                key=lambda item: (item.reason_code, item.issue_number or 0),
+            )
+        )
+        if len(conflicts) > MAX_CONFLICT_FINDINGS:
             raise ValueError("conflict_findings exceeds bound")
+        object.__setattr__(self, "conflict_findings", conflicts)
         if self.execution_authorized or self.side_effects_performed or self.scheduler_invoked:
             raise ValueError("lane plan cannot authorize or perform execution, side effects, or scheduling")
         expected = _plan_id(self._payload())
@@ -166,8 +173,11 @@ class PostPrLanePlan:
             raise ValueError("lane plan authority/side-effect fields must be false")
         if type(payload["selected_lane_issue_numbers"]) is not list or type(payload["reason_codes"]) is not list or type(payload["conflict_findings"]) is not list:
             raise TypeError("lane-plan collections must be exact JSON arrays")
+        supplied_plan_id = payload["plan_id"]
+        if type(supplied_plan_id) is not str:
+            raise TypeError("plan_id must be a built-in string")
         route = None if payload["recommended_executor_route"] is None else ExecutorRoute(payload["recommended_executor_route"])
-        return cls(
+        plan = cls(
             schema_name=payload["schema_name"], schema_version=payload["schema_version"],
             source_executable_lane_selection_id=payload["source_executable_lane_selection_id"],
             source_post_pr_audit_id=payload["source_post_pr_audit_id"], terminal_pr_state=TerminalPrState(payload["terminal_pr_state"]),
@@ -175,8 +185,11 @@ class PostPrLanePlan:
             primary_next_issue=payload["primary_next_issue"], alternate_issue=payload["alternate_issue"],
             recommended_executor_route=route, smallest_next_action=payload["smallest_next_action"],
             reason_codes=tuple(payload["reason_codes"]),
-            conflict_findings=tuple(ConflictFinding(**item) for item in payload["conflict_findings"]), plan_id=payload["plan_id"],
+            conflict_findings=tuple(ConflictFinding(**item) for item in payload["conflict_findings"]), plan_id=supplied_plan_id,
         )
+        if supplied_plan_id != plan.plan_id:
+            raise ValueError("plan_id does not match lane-plan content")
+        return plan
 
 
 def _canonical_json(payload: object) -> str:
