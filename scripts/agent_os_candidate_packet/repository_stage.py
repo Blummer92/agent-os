@@ -47,6 +47,7 @@ to ``invalid`` rather than being repaired.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
 from enum import Enum
@@ -60,8 +61,12 @@ from scripts.agent_os_execution_capabilities import (
     RepositoryStateEvidence,
     RepositoryStateValidationResult,
     WorktreeState,
+    reconstruct_repository_state_validation_result,
+    serialize_repository_state_validation_result,
     validate_repository_state_evidence,
 )
+
+from .stage_models import STAGE_SCHEMA_VERSION
 
 REPOSITORY_OBSERVATION_REJECTED = "repository-observation-rejected"
 """The observation could not form canonical evidence at all."""
@@ -364,6 +369,105 @@ def repository_state_evidence_from_dict(
         observed_at=payload["observed_at"],
         freshness_boundary=payload["freshness_boundary"],
         evidence_id=payload["evidence_id"],
+    )
+
+
+_REPOSITORY_STAGE_RESULT_PAYLOAD_KEYS = frozenset(
+    {
+        "schema_version",
+        "status",
+        "evidence",
+        "validation",
+        "reason_codes",
+        "execution_authorized",
+        "side_effects_performed",
+    }
+)
+
+
+def repository_stage_result_to_dict(result: RepositoryStageResult) -> dict[str, Any]:
+    """Serialize one canonical RepositoryStageResult, delegating every nested object.
+
+    ``evidence`` is delegated to this module's own
+    ``repository_state_evidence_to_dict``; ``validation`` is delegated to the
+    canonical ``RepositoryStateValidationResult`` transport owned by
+    ``scripts.agent_os_execution_capabilities``. Neither nested shape is
+    reimplemented here.
+    """
+    if not isinstance(result, RepositoryStageResult):
+        raise TypeError("result must be a RepositoryStageResult")
+    payload = {
+        "schema_version": STAGE_SCHEMA_VERSION,
+        "status": result.status.value,
+        "evidence": (
+            None
+            if result.evidence is None
+            else repository_state_evidence_to_dict(result.evidence)
+        ),
+        "validation": (
+            None
+            if result.validation is None
+            else json.loads(
+                serialize_repository_state_validation_result(result.validation)
+            )
+        ),
+        "reason_codes": list(result.reason_codes),
+        "execution_authorized": False,
+        "side_effects_performed": False,
+    }
+    if repository_stage_result_from_dict(payload) != result:
+        raise ValueError("result has noncanonical repository stage fields")
+    return payload
+
+
+def repository_stage_result_from_dict(payload: Mapping[str, Any]) -> RepositoryStageResult:
+    """Reconstruct one canonical RepositoryStageResult, failing closed on drift.
+
+    The carried ``validation.evidence_id`` is verified against the reconstructed
+    ``evidence.evidence_id`` when both are present: the canonical validator
+    always binds its verdict to the evidence it evaluated, so a payload whose
+    two nested objects disagree about which evidence was validated is rejected
+    rather than silently paired.
+    """
+    if not isinstance(payload, Mapping):
+        raise ValueError("repository stage result must be a mapping")
+    if payload.get("schema_version") != STAGE_SCHEMA_VERSION:
+        raise ValueError("unsupported stage schema_version")
+    _require_exact_keys(
+        payload, _REPOSITORY_STAGE_RESULT_PAYLOAD_KEYS, "repository stage result"
+    )
+    if payload["execution_authorized"] is not False:
+        raise ValueError("execution_authorized must be false")
+    if payload["side_effects_performed"] is not False:
+        raise ValueError("side_effects_performed must be false")
+
+    evidence_payload = payload["evidence"]
+    validation_payload = payload["validation"]
+    evidence = (
+        None
+        if evidence_payload is None
+        else repository_state_evidence_from_dict(evidence_payload)
+    )
+    validation = (
+        None
+        if validation_payload is None
+        else reconstruct_repository_state_validation_result(validation_payload)
+    )
+    if evidence is not None and validation is not None:
+        if validation.evidence_id != evidence.evidence_id:
+            raise ValueError("validation does not bind to the carried evidence")
+
+    reason_codes = payload["reason_codes"]
+    if not isinstance(reason_codes, list) or not all(
+        isinstance(item, str) for item in reason_codes
+    ):
+        raise ValueError("reason_codes must be a list of strings")
+
+    return RepositoryStageResult(
+        status=RepositoryStageStatus(payload["status"]),
+        evidence=evidence,
+        validation=validation,
+        reason_codes=tuple(reason_codes),
     )
 
 

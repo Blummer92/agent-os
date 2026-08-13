@@ -2,14 +2,20 @@
 
 from dataclasses import replace
 
+import pytest
+
 from scripts.agent_os_candidate_packet.approval_stage import (
     ApprovalProjectionStageStatus,
     prepare_approval_projection,
 )
+from scripts.agent_os_candidate_packet.stage_models import STAGE_SCHEMA_VERSION
 from scripts.agent_os_candidate_packet.validation_stage import (
     CandidateRuntimeInputs,
     ValidationStageDisposition,
+    ValidationStageResult,
     prepare_validation_stage,
+    validation_stage_result_from_dict,
+    validation_stage_result_to_dict,
 )
 from scripts.agent_os_issue_acceptance import ApprovalState
 from scripts.agent_os_issue_acceptance.approved_execution_projection import (
@@ -20,7 +26,7 @@ from scripts.agent_os_remote_validation import (
     serialize_pre_pr_validation_subject,
 )
 from tests.agent_os_candidate_packet.test_approval_stage import _context, _decision
-from tests.agent_os_candidate_packet.test_proposal_stage import _prepare
+from tests.agent_os_candidate_packet.test_proposal_stage import _observation, _prepare
 
 _COMMAND = "python -m pytest 08_Tooling/workflow-scheduler/tests/test_concrete_runtime_adapters.py"
 _CANDIDATE_SHA = "d" * 40
@@ -167,3 +173,192 @@ def test_runtime_bounds_fail_before_packet_construction(tmp_path) -> None:
         assert "max_output_bytes" in str(exc)
     else:
         raise AssertionError("oversized output policy must fail closed")
+
+
+# --------------------------------------------------------------------------
+# ValidationStageResult transport (#1054).
+# --------------------------------------------------------------------------
+
+
+def test_go_result_round_trips_to_an_identical_payload(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    inputs = _inputs(tmp_path, approved.projection, repository_evidence)
+    result = prepare_validation_stage(approved, inputs)
+    assert result.disposition is ValidationStageDisposition.GO
+
+    payload = validation_stage_result_to_dict(result)
+    rebuilt = validation_stage_result_from_dict(payload)
+
+    assert type(rebuilt) is ValidationStageResult
+    assert rebuilt == result
+    assert rebuilt.subject is rebuilt.validation_plan.subject
+    assert validation_stage_result_to_dict(rebuilt) == payload
+    assert payload["schema_version"] == STAGE_SCHEMA_VERSION
+    assert payload["execution_authorized"] is False
+    assert payload["merge_authorized"] is False
+    assert payload["automatic_retry"] is False
+    assert payload["side_effects_performed"] is False
+    assert "subject" not in payload
+
+
+def test_blocked_result_round_trips_with_every_object_absent(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    inputs = _inputs(
+        tmp_path,
+        approved.projection,
+        repository_evidence,
+        required_tests=("python -m pytest",),
+    )
+    result = prepare_validation_stage(approved, inputs)
+    assert result.disposition is ValidationStageDisposition.BLOCKED
+
+    payload = validation_stage_result_to_dict(result)
+    rebuilt = validation_stage_result_from_dict(payload)
+
+    assert rebuilt == result
+    for key in ("validation_plan", "subject_id", "validation_plan_id", "evaluator_sha"):
+        assert payload[key] is None
+
+
+def test_unsupported_schema_version_is_rejected(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    inputs = _inputs(tmp_path, approved.projection, repository_evidence)
+    payload = validation_stage_result_to_dict(prepare_validation_stage(approved, inputs))
+    bad = {**payload, "schema_version": "9.9"}
+
+    with pytest.raises(ValueError, match="unsupported stage schema_version"):
+        validation_stage_result_from_dict(bad)
+
+
+def test_unknown_field_is_rejected(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    inputs = _inputs(tmp_path, approved.projection, repository_evidence)
+    payload = validation_stage_result_to_dict(prepare_validation_stage(approved, inputs))
+    bad = {**payload, "surprise": 1}
+
+    with pytest.raises(ValueError, match="unsupported field"):
+        validation_stage_result_from_dict(bad)
+
+
+def test_missing_field_is_rejected(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    inputs = _inputs(tmp_path, approved.projection, repository_evidence)
+    payload = validation_stage_result_to_dict(prepare_validation_stage(approved, inputs))
+    bad = dict(payload)
+    del bad["validation_plan"]
+
+    with pytest.raises(ValueError, match="missing field"):
+        validation_stage_result_from_dict(bad)
+
+
+def test_malformed_disposition_enum_is_rejected(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    inputs = _inputs(tmp_path, approved.projection, repository_evidence)
+    payload = validation_stage_result_to_dict(prepare_validation_stage(approved, inputs))
+    bad = {**payload, "disposition": "NOT-A-REAL-DISPOSITION"}
+
+    with pytest.raises(ValueError):
+        validation_stage_result_from_dict(bad)
+
+
+def test_wrong_nested_validation_plan_type_is_rejected(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    inputs = _inputs(tmp_path, approved.projection, repository_evidence)
+    payload = validation_stage_result_to_dict(prepare_validation_stage(approved, inputs))
+    bad = {**payload, "validation_plan": "not-an-object"}
+
+    with pytest.raises((ValueError, TypeError)):
+        validation_stage_result_from_dict(bad)
+
+
+def test_subject_id_drift_is_rejected(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    inputs = _inputs(tmp_path, approved.projection, repository_evidence)
+    payload = validation_stage_result_to_dict(prepare_validation_stage(approved, inputs))
+    bad = {**payload, "subject_id": "pre-pr-validation-subject:" + "0" * 64}
+
+    with pytest.raises(ValueError, match="subject_id does not match"):
+        validation_stage_result_from_dict(bad)
+
+
+def test_validation_plan_id_drift_is_rejected(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    inputs = _inputs(tmp_path, approved.projection, repository_evidence)
+    payload = validation_stage_result_to_dict(prepare_validation_stage(approved, inputs))
+    bad = {**payload, "validation_plan_id": "pre-pr-validation-plan:" + "0" * 64}
+
+    with pytest.raises(ValueError, match="validation_plan_id does not match"):
+        validation_stage_result_from_dict(bad)
+
+
+def test_issue_number_bool_for_int_is_rejected(tmp_path) -> None:
+    """A boolean smuggled in as the subject's issue_number must fail closed."""
+    approved, repository_evidence = _approved()
+    inputs = _inputs(tmp_path, approved.projection, repository_evidence)
+    payload = validation_stage_result_to_dict(prepare_validation_stage(approved, inputs))
+    tampered_plan = dict(payload["validation_plan"])
+    tampered_subject = dict(tampered_plan["subject"])
+    tampered_subject["issue_number"] = True
+    tampered_plan["subject"] = tampered_subject
+    bad = {**payload, "validation_plan": tampered_plan}
+
+    with pytest.raises((ValueError, TypeError)):
+        validation_stage_result_from_dict(bad)
+
+
+def test_execution_authorized_set_true_is_rejected(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    inputs = _inputs(tmp_path, approved.projection, repository_evidence)
+    payload = validation_stage_result_to_dict(prepare_validation_stage(approved, inputs))
+    bad = {**payload, "execution_authorized": True}
+
+    with pytest.raises(ValueError, match="execution_authorized must be false"):
+        validation_stage_result_from_dict(bad)
+
+
+def test_merge_authorized_set_true_is_rejected(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    inputs = _inputs(tmp_path, approved.projection, repository_evidence)
+    payload = validation_stage_result_to_dict(prepare_validation_stage(approved, inputs))
+    bad = {**payload, "merge_authorized": True}
+
+    with pytest.raises(ValueError, match="merge_authorized must be false"):
+        validation_stage_result_from_dict(bad)
+
+
+def test_automatic_retry_set_true_is_rejected(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    inputs = _inputs(tmp_path, approved.projection, repository_evidence)
+    payload = validation_stage_result_to_dict(prepare_validation_stage(approved, inputs))
+    bad = {**payload, "automatic_retry": True}
+
+    with pytest.raises(ValueError, match="automatic_retry must be false"):
+        validation_stage_result_from_dict(bad)
+
+
+def test_side_effects_performed_set_true_is_rejected(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    inputs = _inputs(tmp_path, approved.projection, repository_evidence)
+    payload = validation_stage_result_to_dict(prepare_validation_stage(approved, inputs))
+    bad = {**payload, "side_effects_performed": True}
+
+    with pytest.raises(ValueError, match="side_effects_performed must be false"):
+        validation_stage_result_from_dict(bad)
+
+
+def test_reason_codes_are_canonicalized(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    inputs = _inputs(tmp_path, approved.projection, repository_evidence)
+    result = replace(
+        prepare_validation_stage(approved, inputs),
+        reason_codes=("zeta", "alpha", "alpha"),
+    )
+
+    payload = validation_stage_result_to_dict(result)
+
+    assert payload["reason_codes"] == ["alpha", "zeta"]
+
+
+def test_a_foreign_object_is_rejected_at_serialization() -> None:
+    with pytest.raises(TypeError):
+        validation_stage_result_to_dict(_observation())

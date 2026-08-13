@@ -25,6 +25,8 @@ from scripts.agent_os_candidate_packet.proposal_stage import (
     draft_task_proposal_from_dict,
     draft_task_proposal_to_dict,
     prepare_repository_and_proposal,
+    repository_proposal_stage_result_from_dict,
+    repository_proposal_stage_result_to_dict,
 )
 from scripts.agent_os_candidate_packet.readiness_stage import prepare_issue_readiness
 from scripts.agent_os_candidate_packet.repository_stage import (
@@ -32,6 +34,7 @@ from scripts.agent_os_candidate_packet.repository_stage import (
     RepositoryStageStatus,
 )
 from scripts.agent_os_candidate_packet.stage_models import (
+    STAGE_SCHEMA_VERSION,
     DependencyEvidence,
     DependencyIdentityEvidence,
     DependencyIdentityStatus,
@@ -841,3 +844,140 @@ def test_coordinator_reaches_no_io_execution_or_persistence_surface() -> None:
         and module != "workflow_scheduler.planning.draft_ingestion"
         for module in imported
     )
+
+
+# --------------------------------------------------------------------------
+# RepositoryProposalStageResult transport (#1054).
+# --------------------------------------------------------------------------
+
+
+def test_eligible_result_round_trips_to_an_identical_payload() -> None:
+    result = _prepare()
+    assert result.status is RepositoryProposalStageStatus.ELIGIBLE
+
+    payload = repository_proposal_stage_result_to_dict(result)
+    rebuilt = repository_proposal_stage_result_from_dict(payload)
+
+    assert type(rebuilt) is RepositoryProposalStageResult
+    assert rebuilt == result
+    assert rebuilt.proposal is rebuilt.proposal_result.proposals[0]
+    assert rebuilt.repository_state_evidence is rebuilt.repository_stage.evidence
+    assert repository_proposal_stage_result_to_dict(rebuilt) == payload
+    assert payload["schema_version"] == STAGE_SCHEMA_VERSION
+    assert payload["execution_authorized"] is False
+    assert payload["side_effects_performed"] is False
+
+
+def test_invalid_input_result_round_trips_with_every_object_absent() -> None:
+    readiness = prepare_issue_readiness(
+        _request(governed_field_names=("owner_agent", "source_of_truth")),
+        _FakeIssueReader(),
+        _FakeRepositoryReader(),
+    )
+    planning = prepare_planning_handoff(
+        readiness, evaluator_sha=_SHA, created_at=_PLANNED_AT
+    )
+    result = _prepare(planning)
+    assert result.status is RepositoryProposalStageStatus.INVALID_INPUT
+
+    payload = repository_proposal_stage_result_to_dict(result)
+    rebuilt = repository_proposal_stage_result_from_dict(payload)
+
+    assert rebuilt == result
+    for key in ("repository_stage", "proposal_result", "issueplan_current_state_evidence", "planning_binding"):
+        assert payload[key] is None
+
+
+def test_unsupported_schema_version_is_rejected() -> None:
+    payload = repository_proposal_stage_result_to_dict(_prepare())
+    bad = {**payload, "schema_version": "9.9"}
+
+    with pytest.raises(ValueError, match="unsupported stage schema_version"):
+        repository_proposal_stage_result_from_dict(bad)
+
+
+def test_unknown_field_is_rejected() -> None:
+    payload = repository_proposal_stage_result_to_dict(_prepare())
+    bad = {**payload, "surprise": 1}
+
+    with pytest.raises(ValueError, match="unsupported field"):
+        repository_proposal_stage_result_from_dict(bad)
+
+
+def test_missing_field_is_rejected() -> None:
+    payload = repository_proposal_stage_result_to_dict(_prepare())
+    bad = dict(payload)
+    del bad["proposal_result"]
+
+    with pytest.raises(ValueError, match="missing field"):
+        repository_proposal_stage_result_from_dict(bad)
+
+
+def test_malformed_status_enum_is_rejected() -> None:
+    payload = repository_proposal_stage_result_to_dict(_prepare())
+    bad = {**payload, "status": "not-a-real-status"}
+
+    with pytest.raises(ValueError):
+        repository_proposal_stage_result_from_dict(bad)
+
+
+def test_wrong_nested_proposal_result_type_is_rejected() -> None:
+    payload = repository_proposal_stage_result_to_dict(_prepare())
+    bad = {**payload, "proposal_result": "not-an-object"}
+
+    with pytest.raises((ValueError, TypeError)):
+        repository_proposal_stage_result_from_dict(bad)
+
+
+def test_proposal_result_status_drift_is_rejected() -> None:
+    """An eligible outer status cannot be paired with a non-eligible proposal result."""
+    payload = repository_proposal_stage_result_to_dict(_prepare())
+    tampered = dict(payload["proposal_result"])
+    tampered["status"] = "blocked"
+    tampered["proposals"] = []
+    bad = {**payload, "proposal_result": tampered}
+
+    with pytest.raises(ValueError):
+        repository_proposal_stage_result_from_dict(bad)
+
+
+def test_repository_stage_evidence_identity_drift_is_rejected() -> None:
+    """The nested repository stage's own validation/evidence binding still applies."""
+    payload = repository_proposal_stage_result_to_dict(_prepare())
+    tampered_repository_stage = dict(payload["repository_stage"])
+    tampered_validation = dict(tampered_repository_stage["validation"])
+    tampered_validation["evidence_id"] = "x" * 40
+    tampered_repository_stage["validation"] = tampered_validation
+    bad = {**payload, "repository_stage": tampered_repository_stage}
+
+    with pytest.raises(ValueError, match="does not bind"):
+        repository_proposal_stage_result_from_dict(bad)
+
+
+def test_execution_authorized_set_true_is_rejected() -> None:
+    payload = repository_proposal_stage_result_to_dict(_prepare())
+    bad = {**payload, "execution_authorized": True}
+
+    with pytest.raises(ValueError, match="execution_authorized must be false"):
+        repository_proposal_stage_result_from_dict(bad)
+
+
+def test_side_effects_performed_set_true_is_rejected() -> None:
+    payload = repository_proposal_stage_result_to_dict(_prepare())
+    bad = {**payload, "side_effects_performed": True}
+
+    with pytest.raises(ValueError, match="side_effects_performed must be false"):
+        repository_proposal_stage_result_from_dict(bad)
+
+
+def test_reason_codes_are_canonicalized() -> None:
+    result = replace(_prepare(), reason_codes=("zeta", "alpha", "alpha"))
+
+    payload = repository_proposal_stage_result_to_dict(result)
+
+    assert payload["reason_codes"] == ["alpha", "zeta"]
+
+
+def test_a_foreign_object_is_rejected_at_serialization() -> None:
+    with pytest.raises(TypeError):
+        repository_proposal_stage_result_to_dict(_observation())

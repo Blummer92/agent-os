@@ -8,9 +8,10 @@ effects, and no circular import against `scripts/**`.
 
 Issue #752 replaced the original blanket prohibition on every `scripts/**`
 import of `workflow_scheduler` with the strict allowlist below. Exactly one
-importer, one module, and three public symbols are permitted; everything else
-still fails. This is not a general licence for `scripts/** ->
-workflow_scheduler` dependencies.
+importer, one module, and a closed set of public symbols are permitted (#1054
+widened that set with the canonical DraftTaskProposalResult transport
+functions); everything else still fails. This is not a general licence for
+`scripts/** -> workflow_scheduler` dependencies.
 """
 
 from __future__ import annotations
@@ -39,15 +40,26 @@ TARGET_MODULES = (
     "workflow_scheduler.planning.draft_ingestion",
 )
 
-# The complete #752 dependency-boundary allowlist.
+# The complete #752 dependency-boundary allowlist, widened by #1054 for the
+# canonical DraftTaskProposalResult transport (serialize/reconstruct) reused
+# by RepositoryProposalStageResult's own outer-envelope transport.
 ALLOWED_IMPORTER = CANDIDATE_PACKET_ROOT / "proposal_stage.py"
 ALLOWED_MODULE = "workflow_scheduler.planning.draft_ingestion"
 ALLOWED_SYMBOLS = frozenset(
-    {"DraftTaskProposal", "DraftTaskProposalResult", "build_draft_task_proposals"}
+    {
+        "DraftTaskProposal",
+        "DraftTaskProposalResult",
+        "build_draft_task_proposals",
+        "reconstruct_draft_task_proposal_result",
+        "serialize_draft_task_proposal_result",
+    }
 )
 
 # The #754 packet-preparation addition: the pure runtime-configuration seam
-# only, never the executable adapter modules it is built from.
+# only, never the executable adapter modules it is built from. #1054 widened
+# this set with the canonical ConcreteRuntimeConfiguration transport
+# functions reused by ExecutionPacketStageResult's own outer-envelope
+# transport.
 ALLOWED_IMPORTER_2 = CANDIDATE_PACKET_ROOT / "execution_packet_stage.py"
 ALLOWED_MODULE_2 = "workflow_scheduler.execution.runtime_configuration"
 ALLOWED_SYMBOLS_2 = frozenset(
@@ -57,6 +69,8 @@ ALLOWED_SYMBOLS_2 = frozenset(
         "FrozenTestCommand",
         "SingleIssuePilotInput",
         "VALIDATION_ONLY_EXECUTION_MODE",
+        "reconstruct_concrete_runtime_configuration",
+        "runtime_configuration_payload",
     }
 )
 

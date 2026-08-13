@@ -19,9 +19,12 @@ from scripts.agent_os_candidate_packet.repository_stage import (
     RepositoryStageResult,
     RepositoryStageStatus,
     prepare_repository_state_evidence,
+    repository_stage_result_from_dict,
+    repository_stage_result_to_dict,
     repository_state_evidence_from_dict,
     repository_state_evidence_to_dict,
 )
+from scripts.agent_os_candidate_packet.stage_models import STAGE_SCHEMA_VERSION
 from scripts.agent_os_execution_capabilities import (
     RepositoryEvidenceType,
     RepositoryIdentity,
@@ -682,3 +685,127 @@ def test_repository_stage_reaches_no_io_or_execution_surface() -> None:
 
     assert imported & _PROHIBITED_MODULES == set()
     assert called & _PROHIBITED_CALLS == set()
+
+
+# --------------------------------------------------------------------------
+# RepositoryStageResult transport (#1054).
+# --------------------------------------------------------------------------
+
+
+def _valid_stage_result() -> RepositoryStageResult:
+    result = prepare_repository_state_evidence(_observation())
+    assert result.status is RepositoryStageStatus.VALID
+    return result
+
+
+def test_valid_stage_result_round_trips_to_an_identical_payload() -> None:
+    result = _valid_stage_result()
+
+    payload = repository_stage_result_to_dict(result)
+    rebuilt = repository_stage_result_from_dict(payload)
+
+    assert type(rebuilt) is RepositoryStageResult
+    assert rebuilt == result
+    assert repository_stage_result_to_dict(rebuilt) == payload
+    assert payload["schema_version"] == STAGE_SCHEMA_VERSION
+    assert payload["execution_authorized"] is False
+    assert payload["side_effects_performed"] is False
+
+
+def test_invalid_stage_result_with_no_evidence_round_trips() -> None:
+    result = RepositoryStageResult(
+        status=RepositoryStageStatus.INVALID,
+        evidence=None,
+        validation=None,
+        reason_codes=(REPOSITORY_OBSERVATION_REJECTED,),
+    )
+
+    payload = repository_stage_result_to_dict(result)
+    rebuilt = repository_stage_result_from_dict(payload)
+
+    assert rebuilt == result
+    assert payload["evidence"] is None
+    assert payload["validation"] is None
+
+
+def test_unsupported_schema_version_is_rejected() -> None:
+    payload = repository_stage_result_to_dict(_valid_stage_result())
+    bad = {**payload, "schema_version": "9.9"}
+
+    with pytest.raises(ValueError, match="unsupported stage schema_version"):
+        repository_stage_result_from_dict(bad)
+
+
+def test_unknown_field_is_rejected() -> None:
+    payload = repository_stage_result_to_dict(_valid_stage_result())
+    bad = {**payload, "surprise": 1}
+
+    with pytest.raises(ValueError, match="unsupported field"):
+        repository_stage_result_from_dict(bad)
+
+
+def test_missing_field_is_rejected() -> None:
+    payload = repository_stage_result_to_dict(_valid_stage_result())
+    bad = dict(payload)
+    del bad["validation"]
+
+    with pytest.raises(ValueError, match="missing field"):
+        repository_stage_result_from_dict(bad)
+
+
+def test_malformed_status_enum_is_rejected() -> None:
+    payload = repository_stage_result_to_dict(_valid_stage_result())
+    bad = {**payload, "status": "not-a-real-status"}
+
+    with pytest.raises(ValueError):
+        repository_stage_result_from_dict(bad)
+
+
+def test_wrong_nested_validation_type_is_rejected() -> None:
+    payload = repository_stage_result_to_dict(_valid_stage_result())
+    bad = {**payload, "validation": "not-an-object"}
+
+    with pytest.raises((ValueError, TypeError)):
+        repository_stage_result_from_dict(bad)
+
+
+def test_validation_evidence_id_drift_is_rejected() -> None:
+    """A carried validation result must bind to the exact carried evidence."""
+    payload = repository_stage_result_to_dict(_valid_stage_result())
+    tampered_validation = dict(payload["validation"])
+    tampered_validation["evidence_id"] = "x" * 40
+    bad = {**payload, "validation": tampered_validation}
+
+    with pytest.raises(ValueError, match="does not bind"):
+        repository_stage_result_from_dict(bad)
+
+
+def test_execution_authorized_set_true_is_rejected() -> None:
+    payload = repository_stage_result_to_dict(_valid_stage_result())
+    bad = {**payload, "execution_authorized": True}
+
+    with pytest.raises(ValueError, match="execution_authorized must be false"):
+        repository_stage_result_from_dict(bad)
+
+
+def test_side_effects_performed_set_true_is_rejected() -> None:
+    payload = repository_stage_result_to_dict(_valid_stage_result())
+    bad = {**payload, "side_effects_performed": True}
+
+    with pytest.raises(ValueError, match="side_effects_performed must be false"):
+        repository_stage_result_from_dict(bad)
+
+
+def test_reason_codes_are_canonicalized() -> None:
+    result = replace(
+        _valid_stage_result(), reason_codes=("zeta", "alpha", "alpha")
+    )
+
+    payload = repository_stage_result_to_dict(result)
+
+    assert payload["reason_codes"] == ["alpha", "zeta"]
+
+
+def test_a_foreign_object_is_rejected_at_serialization() -> None:
+    with pytest.raises(TypeError):
+        repository_stage_result_to_dict(_observation())
