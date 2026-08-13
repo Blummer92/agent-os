@@ -66,6 +66,8 @@ from .issueplan_current_state import (
     build_issueplan_current_state_evidence,
     compare_issueplan_current_state,
     compute_issueplan_current_state_fingerprint,
+    reconstruct_issueplan_current_state_comparison,
+    serialize_issueplan_current_state_comparison,
 )
 from .planning_binding import (
     PLANNING_BINDING_SCHEMA_VERSION,
@@ -290,6 +292,7 @@ __all__ = [
     "reconstruct_batch_planning_result",
     "reconstruct_handoff_validation_result",
     "reconstruct_issue_batch_graph",
+    "reconstruct_issueplan_current_state_comparison",
     "record_approval_decision",
     "record_merge_authorization_decision",
     "record_merge_execution_observation",
@@ -312,6 +315,7 @@ __all__ = [
     "serialize_handoff_validation_result",
     "serialize_issue_batch_graph",
     "serialize_issue_operational_state",
+    "serialize_issueplan_current_state_comparison",
     "serialize_scheduler_planning_handoff",
     "serialize_sprint_evidence",
     "unresolved_dependency_check",

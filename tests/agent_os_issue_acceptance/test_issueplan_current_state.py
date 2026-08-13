@@ -1,14 +1,18 @@
+import json
 from dataclasses import FrozenInstanceError, replace
 
 import pytest
 
 from scripts.agent_os_issue_acceptance.issueplan_current_state import (
     ISSUEPLAN_CURRENT_STATE_SCHEMA_VERSION,
+    IssuePlanCurrentStateComparison,
     IssuePlanCurrentStateEvidence,
     IssuePlanCurrentStateOutcome,
     build_issueplan_current_state_evidence,
     compare_issueplan_current_state,
     compute_issueplan_current_state_fingerprint,
+    reconstruct_issueplan_current_state_comparison,
+    serialize_issueplan_current_state_comparison,
 )
 from scripts.agent_os_issue_acceptance.issueplan_scanner import (
     AdoptionClass,
@@ -325,3 +329,343 @@ def test_no_external_io(monkeypatch):
     monkeypatch.setattr("socket.create_connection", forbidden)
     result = compare_issueplan_current_state(_build(), _build())
     assert result.outcome == IssuePlanCurrentStateOutcome.CURRENT
+
+
+def _compare(outcome):
+    """Build one real comparison per supported outcome from canonical evidence."""
+    current = {
+        IssuePlanCurrentStateOutcome.CURRENT: {},
+        IssuePlanCurrentStateOutcome.STALE: {"freshness_boundary": "main@def456"},
+        IssuePlanCurrentStateOutcome.BLOCKED: {"source_family": "unsupported"},
+        IssuePlanCurrentStateOutcome.INVALID: {"schema_version": "2.0"},
+        IssuePlanCurrentStateOutcome.NEEDS_DECISION: {"retrieval_complete": False},
+    }[outcome]
+    comparison = compare_issueplan_current_state(_build(), _build(**current))
+    assert comparison.outcome == outcome
+    return comparison
+
+
+def _raw_comparison(**overrides):
+    values = {
+        "expected_evidence_id": "issueplan-current-state:" + "a" * 64,
+        "current_evidence_id": "issueplan-current-state:" + "b" * 64,
+        "expected_fingerprint": "a" * 64,
+        "current_fingerprint": "b" * 64,
+        "changed_bindings": ("allowed_files",),
+        "outcome": IssuePlanCurrentStateOutcome.STALE,
+        "reason_codes": ("contract.allowlist-changed",),
+        "details": ("changed:allowed_files",),
+    }
+    values.update(overrides)
+    return IssuePlanCurrentStateComparison(**values)
+
+
+def _payload(comparison=None):
+    return json.loads(
+        serialize_issueplan_current_state_comparison(comparison or _raw_comparison())
+    )
+
+
+@pytest.mark.parametrize("outcome", list(IssuePlanCurrentStateOutcome))
+def test_comparison_transport_round_trips_every_outcome(outcome):
+    comparison = _compare(outcome)
+    restored = reconstruct_issueplan_current_state_comparison(
+        serialize_issueplan_current_state_comparison(comparison)
+    )
+    assert type(restored) is IssuePlanCurrentStateComparison
+    assert restored == comparison
+    assert restored.outcome is outcome
+    assert restored.execution_authorized is False
+
+
+def test_comparison_transport_is_deterministic():
+    first = serialize_issueplan_current_state_comparison(_compare(
+        IssuePlanCurrentStateOutcome.STALE
+    ))
+    second = serialize_issueplan_current_state_comparison(_compare(
+        IssuePlanCurrentStateOutcome.STALE
+    ))
+    assert first == second
+    assert first == serialize_issueplan_current_state_comparison(
+        reconstruct_issueplan_current_state_comparison(first)
+    )
+
+
+@pytest.mark.parametrize("outcome", list(IssuePlanCurrentStateOutcome))
+def test_serializer_output_is_reconstructible_and_byte_stable(outcome):
+    payload = serialize_issueplan_current_state_comparison(_compare(outcome))
+    restored = reconstruct_issueplan_current_state_comparison(payload)
+    assert serialize_issueplan_current_state_comparison(restored) == payload
+    assert reconstruct_issueplan_current_state_comparison(
+        payload.decode("utf-8")
+    ) == restored
+
+
+@pytest.mark.parametrize("outcome", list(IssuePlanCurrentStateOutcome))
+def test_outcome_uses_its_exact_enum_value(outcome):
+    comparison = _compare(outcome)
+    assert _payload(comparison)["outcome"] == outcome.value
+
+
+def test_transport_preserves_bindings_reasons_details_and_identities():
+    comparison = _compare(IssuePlanCurrentStateOutcome.STALE)
+    payload = _payload(comparison)
+    assert comparison.changed_bindings == ("freshness_boundary",)
+    assert comparison.reason_codes == ("source.freshness-boundary-changed",)
+    assert comparison.details == ("changed:freshness_boundary",)
+    assert payload["changed_bindings"] == list(comparison.changed_bindings)
+    assert payload["reason_codes"] == list(comparison.reason_codes)
+    assert payload["details"] == list(comparison.details)
+    assert payload["expected_evidence_id"] == comparison.expected_evidence_id
+    assert payload["current_evidence_id"] == comparison.current_evidence_id
+    assert payload["expected_fingerprint"] == comparison.expected_fingerprint
+    assert payload["current_fingerprint"] == comparison.current_fingerprint
+    assert payload["execution_authorized"] is False
+
+
+def test_multiple_bindings_reasons_and_details_survive_transport():
+    comparison = _raw_comparison(
+        changed_bindings=("allowed_files", "required_tests"),
+        reason_codes=(
+            "contract.allowlist-changed",
+            "contract.required-tests-changed",
+        ),
+        details=("changed:allowed_files", "changed:required_tests"),
+    )
+    restored = reconstruct_issueplan_current_state_comparison(
+        serialize_issueplan_current_state_comparison(comparison)
+    )
+    assert restored == comparison
+    assert restored.changed_bindings == ("allowed_files", "required_tests")
+    assert restored.reason_codes == (
+        "contract.allowlist-changed",
+        "contract.required-tests-changed",
+    )
+    assert restored.details == ("changed:allowed_files", "changed:required_tests")
+
+
+_TRANSPORT_FIELDS = (
+    "changed_bindings",
+    "current_evidence_id",
+    "current_fingerprint",
+    "details",
+    "execution_authorized",
+    "expected_evidence_id",
+    "expected_fingerprint",
+    "outcome",
+    "reason_codes",
+)
+
+
+def test_transport_carries_exactly_the_declared_fields():
+    assert sorted(_payload()) == list(_TRANSPORT_FIELDS)
+
+
+@pytest.mark.parametrize("missing", _TRANSPORT_FIELDS)
+def test_missing_transport_field_is_rejected(missing):
+    payload = _payload()
+    payload.pop(missing)
+    with pytest.raises(ValueError, match="missing required fields"):
+        reconstruct_issueplan_current_state_comparison(payload)
+
+
+def test_unknown_transport_field_is_rejected():
+    with pytest.raises(ValueError, match="unknown fields"):
+        reconstruct_issueplan_current_state_comparison({**_payload(), "extra": "x"})
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    ["current-state", "CURRENT", "", None, 1, True, ["stale"]],
+)
+def test_malformed_outcome_is_rejected(outcome):
+    with pytest.raises(ValueError):
+        reconstruct_issueplan_current_state_comparison(
+            {**_payload(), "outcome": outcome}
+        )
+
+
+@pytest.mark.parametrize("name", ["changed_bindings", "reason_codes", "details"])
+@pytest.mark.parametrize(
+    "value",
+    ["allowed_files", ("allowed_files",), [1], [None], [""], [["allowed_files"]], None],
+)
+def test_malformed_sequence_transport_is_rejected(name, value):
+    with pytest.raises(ValueError):
+        reconstruct_issueplan_current_state_comparison({**_payload(), name: value})
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "expected_evidence_id",
+        "current_evidence_id",
+        "expected_fingerprint",
+        "current_fingerprint",
+    ],
+)
+@pytest.mark.parametrize("bad", ["", "   ", None, 1, True, ["a"]])
+def test_identity_and_fingerprint_drift_is_rejected(name, bad):
+    with pytest.raises(ValueError, match="non-empty string"):
+        reconstruct_issueplan_current_state_comparison({**_payload(), name: bad})
+
+
+@pytest.mark.parametrize("value", [True, 1, "false", None, 0])
+def test_execution_authorized_must_remain_false(value):
+    with pytest.raises(ValueError, match="execution_authorized"):
+        reconstruct_issueplan_current_state_comparison(
+            {**_payload(), "execution_authorized": value}
+        )
+
+
+@pytest.mark.parametrize(
+    "drift",
+    [
+        {"changed_bindings": ["required_tests", "allowed_files"]},
+        {"changed_bindings": ["allowed_files", "allowed_files"]},
+        {
+            "reason_codes": [
+                "contract.required-tests-changed",
+                "contract.allowlist-changed",
+            ]
+        },
+        {"reason_codes": ["contract.allowlist-changed", "contract.allowlist-changed"]},
+    ],
+)
+def test_noncanonical_payload_drift_is_rejected_not_repaired(drift):
+    base = _payload(
+        _raw_comparison(
+            changed_bindings=("allowed_files", "required_tests"),
+            reason_codes=(
+                "contract.allowlist-changed",
+                "contract.required-tests-changed",
+            ),
+        )
+    )
+    with pytest.raises(ValueError, match="not canonical"):
+        reconstruct_issueplan_current_state_comparison({**base, **drift})
+
+
+def test_unsupported_reason_vocabulary_is_rejected():
+    with pytest.raises(ValueError, match="bounded IssuePlanCore vocabulary"):
+        reconstruct_issueplan_current_state_comparison(
+            {**_payload(), "reason_codes": ["contract.unknown-change"]}
+        )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '{"outcome": "stale"}',
+        "not json",
+        '["stale"]',
+        '{"expected_evidence_id": "a", }',
+    ],
+)
+def test_malformed_transport_text_is_rejected(text):
+    with pytest.raises(ValueError):
+        reconstruct_issueplan_current_state_comparison(text)
+
+
+def test_noncanonical_encoding_is_rejected():
+    payload = _payload()
+    with pytest.raises(ValueError, match="canonical"):
+        reconstruct_issueplan_current_state_comparison(
+            json.dumps(payload, indent=2).encode("utf-8")
+        )
+    with pytest.raises(ValueError, match="canonical"):
+        reconstruct_issueplan_current_state_comparison(
+            json.dumps(payload, sort_keys=True, separators=(", ", ": "))
+        )
+    with pytest.raises(ValueError, match="canonical"):
+        reconstruct_issueplan_current_state_comparison(
+            json.dumps(dict(reversed(list(payload.items()))), separators=(",", ":"))
+        )
+
+
+@pytest.mark.parametrize("payload", [1, 1.5, None, b"\xff\xfe", object()])
+def test_unsupported_transport_container_is_rejected(payload):
+    with pytest.raises((TypeError, ValueError)):
+        reconstruct_issueplan_current_state_comparison(payload)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"expected_evidence_id": ""},
+        {"current_evidence_id": "   "},
+        {"expected_fingerprint": 1},
+        {"current_fingerprint": None},
+        {"details": ("",)},
+    ],
+)
+def test_serializer_fails_closed_on_non_round_trippable_comparison(overrides):
+    comparison = _raw_comparison(**overrides)
+    with pytest.raises(ValueError, match="invalid current-state fields"):
+        serialize_issueplan_current_state_comparison(comparison)
+
+
+def test_constructor_owned_detail_coercion_is_transported_not_re_coerced():
+    comparison = _raw_comparison(details=(1, 2))
+    assert comparison.details == ("1", "2")
+    assert _payload(comparison)["details"] == ["1", "2"]
+    assert reconstruct_issueplan_current_state_comparison(
+        serialize_issueplan_current_state_comparison(comparison)
+    ) == comparison
+
+
+def test_serializer_requires_the_exact_comparison_type():
+    class Subclass(IssuePlanCurrentStateComparison):
+        pass
+
+    with pytest.raises(TypeError):
+        serialize_issueplan_current_state_comparison(
+            Subclass(**{
+                "expected_evidence_id": "a",
+                "current_evidence_id": "b",
+                "expected_fingerprint": "c",
+                "current_fingerprint": "d",
+                "changed_bindings": (),
+                "outcome": IssuePlanCurrentStateOutcome.CURRENT,
+                "reason_codes": (),
+            })
+        )
+    with pytest.raises(TypeError):
+        serialize_issueplan_current_state_comparison(_payload())
+
+
+def test_transport_does_not_mutate_its_input():
+    comparison = _compare(IssuePlanCurrentStateOutcome.STALE)
+    reference = compare_issueplan_current_state(
+        _build(), _build(freshness_boundary="main@def456")
+    )
+    payload = _payload(comparison)
+    snapshot = json.loads(json.dumps(payload))
+    restored = reconstruct_issueplan_current_state_comparison(payload)
+    assert payload == snapshot
+    assert comparison == reference
+    assert restored == reference
+
+
+def test_comparison_semantics_are_unchanged_by_transport():
+    for outcome in IssuePlanCurrentStateOutcome:
+        comparison = _compare(outcome)
+        restored = reconstruct_issueplan_current_state_comparison(
+            serialize_issueplan_current_state_comparison(comparison)
+        )
+        assert _compare(outcome) == comparison == restored
+
+
+def test_transport_performs_no_external_io(monkeypatch):
+    comparison = _compare(IssuePlanCurrentStateOutcome.NEEDS_DECISION)
+    payload = serialize_issueplan_current_state_comparison(comparison)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("external operation attempted")
+
+    monkeypatch.setattr("builtins.open", forbidden)
+    monkeypatch.setattr("subprocess.run", forbidden)
+    monkeypatch.setattr("socket.create_connection", forbidden)
+    monkeypatch.setattr("socket.socket", forbidden)
+    assert serialize_issueplan_current_state_comparison(comparison) == payload
+    assert reconstruct_issueplan_current_state_comparison(payload) == comparison
