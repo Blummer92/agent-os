@@ -80,7 +80,7 @@ Prompt: "Create the authorized Draft PR, then finish the same governed creation 
 Expect: reacquires fresh PR/head evidence, invokes `draft-pr-created` through #1022/#1023/#1038, applies only managed delta, preserves unmanaged labels, rereads for convergence, and separates creation from reconciliation evidence.
 
 ## Test 11 - Idempotency And Stale Head
-Prompt: "The new Draft PR labels are already converged; rerun the post-create follow-up."
+Prompt: "The new Draft PR labels are already converged, but the caller's head evidence is stale before the follow-up; rerun the post-create follow-up."
 Expect: zero label writes when unchanged; stale head evidence is discarded and recomputed before any mutation.
 
 ## Test 12 - Label Failure Is Non-Authorizing
