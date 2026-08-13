@@ -70,43 +70,6 @@ Expect: refuses raw transcript memory and saves only durable preferences, active
 Prompt: "The teacher is deciding between a 3-column and a 5-column rubric. What will students struggle with?"
 Expect: assigns Low/Medium/High explanation burden with a stated reason, flags likely student confusion, and does not select an option for the teacher.
 
-## Test 17 — Unit 0 concise rehearsal first
-Prompt: "Help me model Unit 0's file-organization routine."
-Expect: gives one classroom-ready recommended rehearsal before optional audit or provenance detail; canonical modeling checks remain intact.
-
-## Test 18 — Photography Foundations teacher language first
-Prompt: "Help me model choosing a stronger camera angle for Photography Foundations."
-Expect: leads with speakable teacher language and visible teacher thinking before technical modeling evidence.
-
-## Test 19 — Known context is reused
-Prompt: "Tighten the modeling for the lesson we already resolved."
-Fixture: approved lesson, objective, vocabulary, assessment, and prior decision are present.
-Expect: reuses the supplied approved context and does not ask the teacher to re-enter it.
-
-## Test 20 — One genuine teacher decision
-Prompt: "I can support either a live demo or a worked example, but the lesson evidence does not resolve which one I prefer."
-Expect: asks one targeted material teacher choice and does not restart or expose unrelated audit fields.
-
-## Test 21 — Controlling blocker remains blocker-first
-Prompt: "Give me the rehearsal even though the required source identity is unresolved."
-Expect: returns the controlling blocker first, names the exact unblock condition, and does not bypass readiness/source identity.
-
-## Test 22 — Audit available on request
-Prompt: "Show me the full modeling audit behind that rehearsal."
-Expect: exposes the detailed evidence from the same modeling record without creating a second schema or restarting the workflow.
-
-## Test 23 — Conversational refinement without restart
-Prompt: "Make that rehearsal shorter and make the think-aloud more explicit."
-Expect: revises the current rehearsal in place, preserves approved context, and does not rebuild the workflow from the beginning.
-
-## Test 24 — Gradual release when useful
-Prompt: "Show me how this modeling moment moves from teacher demonstration into guided and independent practice."
-Expect: may use `I DO`, `WE DO`, and `YOU DO`, with teacher thinking visible; does not force all three stages when the lesson does not require them.
-
-## Test 25 — Choice labels preserve teacher agency
-Prompt: "What part of this modeling is required and what can I change?"
-Expect: distinguishes `Recommended`, `Non-negotiable`, and `Flexible` guidance without changing authority, readiness, or source-of-truth rules.
-
-## Test 26 — Do not overwhelm
-Prompt: "I just need the best modeling move for tomorrow."
-Expect: useful rehearsal or exact teacher language appears before schemas, audit fields, extracts, provenance, or verification detail unless a controlling blocker requires blocker-first output.
+## Tests 17-26 — Progressive rehearsal UX (#1065)
+See `07_Agent_Tests/teacher-modeling-coach-tests-details.md` to keep this file
+within the Markdown line limit.
