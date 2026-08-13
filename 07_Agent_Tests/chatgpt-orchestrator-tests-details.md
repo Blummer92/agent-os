@@ -20,7 +20,7 @@ Expect: exact-head/check/blocking-review state appears first, followed by the co
 Fixture: source-of-truth or authorization evidence is conflicting or blocks the requested action.
 Expect: uses the Blocked work profile with the controlling blocker and exact unblock condition first; compaction never removes material source-of-truth, authorization, blocker, exact-head, or validation evidence.
 
-## Test 33 - Progress Bar Requires Bounded Canonical Stages
+## Test 33 - Progress Bar Requires a Bounded Canonical Stage Sequence
 Fixture: no canonical bounded named stage sequence exists.
 Expect: omits the progress bar rather than inventing completion; may still render material status fields supported by evidence and never substitutes percentage-complete state.
 
