@@ -17,6 +17,8 @@ from .approval_stage import (
     ApprovalDecision,
     ApprovalProjectionStageResult,
     ApprovalProjectionStageStatus,
+    approval_projection_stage_result_from_dict,
+    approval_projection_stage_result_to_dict,
     prepare_approval_projection,
 )
 from .executable_lane_selection import (
@@ -52,6 +54,8 @@ from .readiness_stage import prepare_issue_readiness
 from .planning_stage import (
     PlanningHandoffStageResult,
     PlanningHandoffStageStatus,
+    planning_handoff_stage_result_from_dict,
+    planning_handoff_stage_result_to_dict,
     prepare_planning_handoff,
     reconstruct_scheduler_planning_handoff,
 )
@@ -61,6 +65,8 @@ from .proposal_stage import (
     draft_task_proposal_from_dict,
     draft_task_proposal_to_dict,
     prepare_repository_and_proposal,
+    repository_proposal_stage_result_from_dict,
+    repository_proposal_stage_result_to_dict,
 )
 from .repository_stage import (
     REPOSITORY_OBSERVATION_REJECTED,
@@ -68,6 +74,8 @@ from .repository_stage import (
     RepositoryStageResult,
     RepositoryStageStatus,
     prepare_repository_state_evidence,
+    repository_stage_result_from_dict,
+    repository_stage_result_to_dict,
     repository_state_evidence_from_dict,
     repository_state_evidence_to_dict,
 )
@@ -109,6 +117,8 @@ from .validation_stage import (
     ValidationStageDisposition,
     ValidationStageResult,
     prepare_validation_stage,
+    validation_stage_result_from_dict,
+    validation_stage_result_to_dict,
 )
 
 __all__ = [
@@ -167,12 +177,16 @@ __all__ = [
     "ValidationStageResult",
     "acceptance_report_from_payload",
     "acceptance_report_to_payload",
+    "approval_projection_stage_result_from_dict",
+    "approval_projection_stage_result_to_dict",
     "dependency_identity_evidence_from_dict",
     "dependency_identity_evidence_to_dict",
     "deserialize_executable_lane_selection",
     "deserialize_post_pr_lane_plan",
     "draft_task_proposal_from_dict",
     "draft_task_proposal_to_dict",
+    "execution_packet_stage_result_from_dict",
+    "execution_packet_stage_result_to_dict",
     "issue_readiness_stage_result_from_dict",
     "issue_readiness_stage_result_to_dict",
     "issue_snapshot_from_dict",
@@ -180,6 +194,8 @@ __all__ = [
     "issueplan_current_state_evidence_from_dict",
     "issueplan_current_state_evidence_to_dict",
     "plan_post_pr_lane",
+    "planning_handoff_stage_result_from_dict",
+    "planning_handoff_stage_result_to_dict",
     "prepare_approval_projection",
     "prepare_execution_packet",
     "prepare_issue_readiness",
@@ -191,12 +207,18 @@ __all__ = [
     "reconstruct_scheduler_planning_handoff",
     "readiness_result_from_dict",
     "readiness_result_to_dict",
+    "repository_proposal_stage_result_from_dict",
+    "repository_proposal_stage_result_to_dict",
+    "repository_stage_result_from_dict",
+    "repository_stage_result_to_dict",
     "repository_state_evidence_from_dict",
     "repository_state_evidence_to_dict",
     "resolve_issue_snapshot",
     "select_executable_lanes",
     "serialize_executable_lane_selection",
     "serialize_post_pr_lane_plan",
+    "validation_stage_result_from_dict",
+    "validation_stage_result_to_dict",
 ]
 
 # Execution-packet construction depends on the execution-service and Workflow
@@ -207,6 +229,8 @@ _LAZY_EXECUTION_PACKET_EXPORTS = frozenset(
     {
         "ExecutionPacketDisposition",
         "ExecutionPacketStageResult",
+        "execution_packet_stage_result_from_dict",
+        "execution_packet_stage_result_to_dict",
         "prepare_execution_packet",
     }
 )

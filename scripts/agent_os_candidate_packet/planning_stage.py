@@ -24,6 +24,8 @@ from scripts.agent_os_issue_acceptance.issueplan_current_state import (
 from scripts.agent_os_issue_acceptance.planning_binding import (
     PlanningBindingEvidence,
     build_planning_binding_evidence,
+    reconstruct_planning_binding_evidence,
+    serialize_planning_binding_evidence,
 )
 from scripts.agent_os_issue_acceptance.readiness import ReadinessOutcome
 from scripts.agent_os_issue_acceptance.scheduler_handoff import (
@@ -35,14 +37,23 @@ from scripts.agent_os_issue_acceptance.scheduler_handoff import (
     compute_graph_digest,
     compute_handoff_digest,
     compute_planning_result_digest,
+    reconstruct_batch_planning_result,
+    reconstruct_handoff_validation_result,
+    reconstruct_issue_batch_graph,
+    serialize_batch_planning_result,
+    serialize_handoff_validation_result,
+    serialize_issue_batch_graph,
     serialize_scheduler_planning_handoff,
     validate_scheduler_planning_handoff,
 )
 
 from .stage_models import (
+    STAGE_SCHEMA_VERSION,
     DependencyIdentityStatus,
     IssueReadinessStageResult,
     IssueReadinessStageStatus,
+    issueplan_current_state_evidence_from_dict,
+    issueplan_current_state_evidence_to_dict,
 )
 
 _OPTIONAL_GOVERNED_FIELD_STATES = frozenset(
@@ -350,6 +361,222 @@ def reconstruct_scheduler_planning_handoff(
         handoff_digest=raw["handoff_digest"],
     )
     return handoff
+
+
+_PLANNING_STAGE_RESULT_PAYLOAD_KEYS = frozenset(
+    {
+        "schema_version",
+        "status",
+        "graph",
+        "planning_result",
+        "handoff",
+        "handoff_validation",
+        "wsc3_suppliable",
+        "reason_codes",
+        "issueplan_current_state_evidence",
+        "planning_binding",
+        "execution_authorized",
+        "side_effects_performed",
+    }
+)
+
+
+def planning_handoff_stage_result_to_dict(
+    result: PlanningHandoffStageResult,
+) -> dict[str, Any]:
+    """Serialize one canonical PlanningHandoffStageResult, delegating every nested object.
+
+    ``node`` and ``serialized_handoff`` are not carried as independent payload
+    fields: ``node`` is always the graph's own single supplied node and
+    ``serialized_handoff`` is always the exact bytes ``handoff`` itself
+    canonically serializes to, so ``planning_handoff_stage_result_from_dict``
+    rebuilds both from the graph and handoff rather than transporting a
+    duplicate copy.
+    """
+    if not isinstance(result, PlanningHandoffStageResult):
+        raise TypeError("result must be a PlanningHandoffStageResult")
+    payload = {
+        "schema_version": STAGE_SCHEMA_VERSION,
+        "status": result.status.value,
+        "graph": (
+            None
+            if result.graph is None
+            else json.loads(serialize_issue_batch_graph(result.graph))
+        ),
+        "planning_result": (
+            None
+            if result.planning_result is None
+            else json.loads(serialize_batch_planning_result(result.planning_result))
+        ),
+        "handoff": (
+            None
+            if result.handoff is None
+            else json.loads(serialize_scheduler_planning_handoff(result.handoff))
+        ),
+        "handoff_validation": (
+            None
+            if result.handoff_validation is None
+            else json.loads(
+                serialize_handoff_validation_result(result.handoff_validation)
+            )
+        ),
+        "wsc3_suppliable": result.wsc3_suppliable,
+        "reason_codes": list(result.reason_codes),
+        "issueplan_current_state_evidence": (
+            None
+            if result.issueplan_current_state_evidence is None
+            else issueplan_current_state_evidence_to_dict(
+                result.issueplan_current_state_evidence
+            )
+        ),
+        "planning_binding": (
+            None
+            if result.planning_binding is None
+            else json.loads(
+                serialize_planning_binding_evidence(result.planning_binding)
+            )
+        ),
+        "execution_authorized": False,
+        "side_effects_performed": False,
+    }
+    if planning_handoff_stage_result_from_dict(payload) != result:
+        raise ValueError("result has noncanonical planning handoff stage fields")
+    return payload
+
+
+def planning_handoff_stage_result_from_dict(
+    payload: Mapping[str, Any],
+) -> PlanningHandoffStageResult:
+    """Reconstruct one canonical PlanningHandoffStageResult, failing closed on drift.
+
+    Cross-object bindings are re-verified rather than trusted: the graph and
+    planning-result digests must match the handoff's own digests, the handoff
+    validation must equal what re-running ``validate_scheduler_planning_handoff``
+    on the handoff itself produces, and any planning binding must equal what
+    ``build_planning_binding_evidence`` rebuilds from the carried IssuePlan
+    evidence and handoff.
+    """
+    if not isinstance(payload, Mapping):
+        raise ValueError("planning handoff stage result must be a mapping")
+    if payload.get("schema_version") != STAGE_SCHEMA_VERSION:
+        raise ValueError("unsupported stage schema_version")
+    _require_exact_keys(
+        payload, _PLANNING_STAGE_RESULT_PAYLOAD_KEYS, "planning handoff stage result"
+    )
+    if payload["execution_authorized"] is not False:
+        raise ValueError("execution_authorized must be false")
+    if payload["side_effects_performed"] is not False:
+        raise ValueError("side_effects_performed must be false")
+    if type(payload["wsc3_suppliable"]) is not bool:
+        raise ValueError("wsc3_suppliable must be an exact boolean")
+
+    status = PlanningHandoffStageStatus(payload["status"])
+
+    graph_payload = payload["graph"]
+    planning_result_payload = payload["planning_result"]
+    handoff_payload = payload["handoff"]
+    handoff_validation_payload = payload["handoff_validation"]
+    issueplan_payload = payload["issueplan_current_state_evidence"]
+    planning_binding_payload = payload["planning_binding"]
+
+    graph = (
+        None if graph_payload is None else reconstruct_issue_batch_graph(graph_payload)
+    )
+    planning_result = (
+        None
+        if planning_result_payload is None
+        else reconstruct_batch_planning_result(planning_result_payload)
+    )
+    handoff = (
+        None
+        if handoff_payload is None
+        else reconstruct_scheduler_planning_handoff(handoff_payload)
+    )
+    handoff_validation = (
+        None
+        if handoff_validation_payload is None
+        else reconstruct_handoff_validation_result(handoff_validation_payload)
+    )
+    issueplan = (
+        None
+        if issueplan_payload is None
+        else issueplan_current_state_evidence_from_dict(issueplan_payload)
+    )
+    planning_binding = (
+        None
+        if planning_binding_payload is None
+        else reconstruct_planning_binding_evidence(planning_binding_payload)
+    )
+
+    if graph is not None and handoff is not None:
+        if compute_graph_digest(graph) != handoff.graph_digest:
+            raise ValueError("graph does not bind to the handoff's graph_digest")
+    if planning_result is not None and handoff is not None:
+        if compute_planning_result_digest(planning_result) != handoff.planning_result_digest:
+            raise ValueError(
+                "planning result does not bind to the handoff's planning_result_digest"
+            )
+    if handoff is not None and handoff_validation is not None:
+        if validate_scheduler_planning_handoff(handoff) != handoff_validation:
+            raise ValueError("handoff validation does not match the carried handoff")
+    if planning_binding is not None:
+        if handoff is None or issueplan is None:
+            raise ValueError(
+                "planning binding requires both the handoff and IssuePlan evidence"
+            )
+        rebuilt_binding = build_planning_binding_evidence(
+            issueplan, handoff, created_at=planning_binding.created_at
+        )
+        if rebuilt_binding != planning_binding:
+            raise ValueError(
+                "planning binding does not match the IssuePlan evidence and handoff"
+            )
+
+    node: IssueBatchNode | None = None
+    if graph is not None:
+        if not graph.nodes:
+            raise ValueError("graph must contain the stage node")
+        node = graph.nodes[0]
+
+    serialized_handoff = (
+        None if handoff is None else serialize_scheduler_planning_handoff(handoff)
+    )
+
+    reason_codes = payload["reason_codes"]
+    if not isinstance(reason_codes, list) or not all(
+        isinstance(item, str) for item in reason_codes
+    ):
+        raise ValueError("reason_codes must be a list of strings")
+
+    return PlanningHandoffStageResult(
+        status=status,
+        node=node,
+        graph=graph,
+        planning_result=planning_result,
+        handoff=handoff,
+        serialized_handoff=serialized_handoff,
+        handoff_validation=handoff_validation,
+        wsc3_suppliable=payload["wsc3_suppliable"],
+        reason_codes=tuple(reason_codes),
+        issueplan_current_state_evidence=issueplan,
+        planning_binding=planning_binding,
+    )
+
+
+def _require_exact_keys(
+    payload: object, keys: frozenset[str], label: str
+) -> Mapping[str, Any]:
+    """Closed-schema key check, mirroring the repository-stage transport rule."""
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"{label} must be a mapping")
+    supplied = set(payload)
+    missing = sorted(keys - supplied)
+    if missing:
+        raise ValueError(f"{label} is missing field(s): " + ", ".join(missing))
+    unsupported = sorted(supplied - keys)
+    if unsupported:
+        raise ValueError(f"{label} has unsupported field(s): " + ", ".join(unsupported))
+    return payload
 
 
 def _decode_governed_text(

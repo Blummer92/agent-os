@@ -13,10 +13,17 @@ for path in (EXECUTION_SERVICE_SRC, SCHEDULER_SRC):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
+import pytest  # noqa: E402
+
 from scripts.agent_os_candidate_packet.execution_packet_stage import (  # noqa: E402
     ExecutionPacketDisposition,
+    ExecutionPacketStageResult,
+    execution_packet_stage_result_from_dict,
+    execution_packet_stage_result_to_dict,
     prepare_execution_packet,
 )
+from scripts.agent_os_candidate_packet.stage_models import STAGE_SCHEMA_VERSION  # noqa: E402
+from tests.agent_os_candidate_packet.test_proposal_stage import _observation  # noqa: E402
 from tests.agent_os_candidate_packet.test_validation_stage import (  # noqa: E402
     _CANDIDATE_SHA,
     _approved,
@@ -125,6 +132,206 @@ def test_expired_request_fails_before_runtime_configuration(tmp_path) -> None:
     assert result.packet_complete is False
     assert result.runtime_configuration is None
     assert result.reason_codes == ("execution-request-or-command-plan-invalid",)
+
+
+# --------------------------------------------------------------------------
+# ExecutionPacketStageResult transport (#1054).
+# --------------------------------------------------------------------------
+
+
+def test_complete_packet_round_trips_to_an_identical_payload(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    inputs = _inputs(
+        tmp_path,
+        approved.projection,
+        repository_evidence,
+        execution_authorization_present=True,
+    )
+    result = prepare_execution_packet(approved, inputs)
+    assert result.disposition is ExecutionPacketDisposition.GO
+    assert result.packet_complete is True
+
+    payload = execution_packet_stage_result_to_dict(result)
+    rebuilt = execution_packet_stage_result_from_dict(payload)
+
+    assert type(rebuilt) is ExecutionPacketStageResult
+    assert rebuilt == result
+    assert execution_packet_stage_result_to_dict(rebuilt) == payload
+    assert payload["schema_version"] == STAGE_SCHEMA_VERSION
+    assert payload["execution_authorized"] is False
+    assert payload["merge_authorized"] is False
+    assert payload["automatic_retry"] is False
+    assert payload["side_effects_performed"] is False
+
+
+def test_incomplete_packet_round_trips_with_no_runtime_configuration(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    inputs = _inputs(
+        tmp_path,
+        approved.projection,
+        repository_evidence,
+        runtime_capability_available=False,
+    )
+    result = prepare_execution_packet(approved, inputs)
+    assert result.packet_complete is False
+    assert result.request is not None
+    assert result.command_plan is not None
+
+    payload = execution_packet_stage_result_to_dict(result)
+    rebuilt = execution_packet_stage_result_from_dict(payload)
+
+    assert rebuilt == result
+    assert payload["request"] is not None
+    assert payload["command_plan"] is not None
+    assert payload["runtime_configuration"] is None
+
+
+def test_unsupported_schema_version_is_rejected(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    inputs = _inputs(tmp_path, approved.projection, repository_evidence)
+    payload = execution_packet_stage_result_to_dict(prepare_execution_packet(approved, inputs))
+    bad = {**payload, "schema_version": "9.9"}
+
+    with pytest.raises(ValueError, match="unsupported stage schema_version"):
+        execution_packet_stage_result_from_dict(bad)
+
+
+def test_unknown_field_is_rejected(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    inputs = _inputs(tmp_path, approved.projection, repository_evidence)
+    payload = execution_packet_stage_result_to_dict(prepare_execution_packet(approved, inputs))
+    bad = {**payload, "surprise": 1}
+
+    with pytest.raises(ValueError, match="unsupported field"):
+        execution_packet_stage_result_from_dict(bad)
+
+
+def test_missing_field_is_rejected(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    inputs = _inputs(tmp_path, approved.projection, repository_evidence)
+    payload = execution_packet_stage_result_to_dict(prepare_execution_packet(approved, inputs))
+    bad = dict(payload)
+    del bad["command_plan"]
+
+    with pytest.raises(ValueError, match="missing field"):
+        execution_packet_stage_result_from_dict(bad)
+
+
+def test_malformed_disposition_enum_is_rejected(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    inputs = _inputs(tmp_path, approved.projection, repository_evidence)
+    payload = execution_packet_stage_result_to_dict(prepare_execution_packet(approved, inputs))
+    bad = {**payload, "disposition": "NOT-A-REAL-DISPOSITION"}
+
+    with pytest.raises(ValueError):
+        execution_packet_stage_result_from_dict(bad)
+
+
+def test_wrong_nested_request_type_is_rejected(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    inputs = _inputs(tmp_path, approved.projection, repository_evidence)
+    payload = execution_packet_stage_result_to_dict(prepare_execution_packet(approved, inputs))
+    bad = {**payload, "request": "not-an-object"}
+
+    with pytest.raises((ValueError, TypeError)):
+        execution_packet_stage_result_from_dict(bad)
+
+
+def test_packet_complete_boolean_misuse_is_rejected(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    inputs = _inputs(tmp_path, approved.projection, repository_evidence)
+    payload = execution_packet_stage_result_to_dict(prepare_execution_packet(approved, inputs))
+    bad = {**payload, "packet_complete": 1}
+
+    with pytest.raises(ValueError, match="exact boolean"):
+        execution_packet_stage_result_from_dict(bad)
+
+
+def test_request_fingerprint_drift_is_rejected(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    inputs = _inputs(tmp_path, approved.projection, repository_evidence)
+    payload = execution_packet_stage_result_to_dict(prepare_execution_packet(approved, inputs))
+    bad = {**payload, "request_fingerprint": "0" * 64}
+
+    with pytest.raises(ValueError, match="request_fingerprint does not match"):
+        execution_packet_stage_result_from_dict(bad)
+
+
+def test_command_plan_id_drift_is_rejected(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    inputs = _inputs(tmp_path, approved.projection, repository_evidence)
+    payload = execution_packet_stage_result_to_dict(prepare_execution_packet(approved, inputs))
+    bad = {**payload, "command_plan_id": "command-plan:" + "0" * 64}
+
+    with pytest.raises(ValueError, match="command_plan_id does not match"):
+        execution_packet_stage_result_from_dict(bad)
+
+
+def test_runtime_configuration_fingerprint_drift_is_rejected(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    inputs = _inputs(
+        tmp_path,
+        approved.projection,
+        repository_evidence,
+        execution_authorization_present=True,
+    )
+    payload = execution_packet_stage_result_to_dict(prepare_execution_packet(approved, inputs))
+    bad = {**payload, "runtime_configuration_fingerprint": "0" * 64}
+
+    with pytest.raises(ValueError):
+        execution_packet_stage_result_from_dict(bad)
+
+
+def test_command_plan_request_binding_drift_is_rejected(tmp_path) -> None:
+    """A command plan carrying a foreign request fingerprint must fail closed."""
+    approved, repository_evidence = _approved()
+    inputs = _inputs(tmp_path, approved.projection, repository_evidence)
+    result = prepare_execution_packet(approved, inputs)
+    payload = execution_packet_stage_result_to_dict(result)
+
+    other_inputs = _inputs(tmp_path, approved.projection, repository_evidence, request_revision=2)
+    other = prepare_execution_packet(approved, other_inputs)
+    other_payload = execution_packet_stage_result_to_dict(other)
+
+    bad = {**payload, "command_plan": other_payload["command_plan"]}
+
+    with pytest.raises(ValueError):
+        execution_packet_stage_result_from_dict(bad)
+
+
+def test_execution_authorized_set_true_is_rejected(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    inputs = _inputs(tmp_path, approved.projection, repository_evidence)
+    payload = execution_packet_stage_result_to_dict(prepare_execution_packet(approved, inputs))
+    bad = {**payload, "execution_authorized": True}
+
+    with pytest.raises(ValueError, match="execution_authorized must be false"):
+        execution_packet_stage_result_from_dict(bad)
+
+
+def test_merge_authorized_set_true_is_rejected(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    inputs = _inputs(tmp_path, approved.projection, repository_evidence)
+    payload = execution_packet_stage_result_to_dict(prepare_execution_packet(approved, inputs))
+    bad = {**payload, "merge_authorized": True}
+
+    with pytest.raises(ValueError, match="merge_authorized must be false"):
+        execution_packet_stage_result_from_dict(bad)
+
+
+def test_side_effects_performed_set_true_is_rejected(tmp_path) -> None:
+    approved, repository_evidence = _approved()
+    inputs = _inputs(tmp_path, approved.projection, repository_evidence)
+    payload = execution_packet_stage_result_to_dict(prepare_execution_packet(approved, inputs))
+    bad = {**payload, "side_effects_performed": True}
+
+    with pytest.raises(ValueError, match="side_effects_performed must be false"):
+        execution_packet_stage_result_from_dict(bad)
+
+
+def test_a_foreign_object_is_rejected_at_serialization() -> None:
+    with pytest.raises(TypeError):
+        execution_packet_stage_result_to_dict(_observation())
 
 
 def test_candidate_sha_drift_changes_request_and_runtime_fingerprints(tmp_path) -> None:

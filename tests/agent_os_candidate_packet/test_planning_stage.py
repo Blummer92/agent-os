@@ -8,11 +8,14 @@ import pytest
 from scripts.agent_os_candidate_packet.planning_stage import (
     PlanningHandoffStageResult,
     PlanningHandoffStageStatus,
+    planning_handoff_stage_result_from_dict,
+    planning_handoff_stage_result_to_dict,
     prepare_planning_handoff,
     reconstruct_scheduler_planning_handoff,
 )
 from scripts.agent_os_candidate_packet.readiness_stage import prepare_issue_readiness
 from scripts.agent_os_candidate_packet.stage_models import (
+    STAGE_SCHEMA_VERSION,
     DependencyEvidence,
     DependencyIdentityEvidence,
     DependencyIdentityStatus,
@@ -552,3 +555,211 @@ def test_binding_field_rejects_a_foreign_type() -> None:
     ready = _ready_planning_result()
     with pytest.raises(TypeError, match="PlanningBindingEvidence"):
         replace(ready, planning_binding="planning-binding:x")
+
+
+# --------------------------------------------------------------------------
+# PlanningHandoffStageResult transport (#1054).
+# --------------------------------------------------------------------------
+
+
+def _with_binding() -> PlanningHandoffStageResult:
+    result = prepare_planning_handoff(
+        _natural_readiness(), evaluator_sha="a" * 40, created_at=_CREATED_AT
+    )
+    assert result.status is PlanningHandoffStageStatus.READY
+    assert result.planning_binding is not None
+    return result
+
+
+def test_complete_result_with_binding_round_trips_to_an_identical_payload() -> None:
+    result = _with_binding()
+
+    payload = planning_handoff_stage_result_to_dict(result)
+    rebuilt = planning_handoff_stage_result_from_dict(payload)
+
+    assert type(rebuilt) is PlanningHandoffStageResult
+    assert rebuilt == result
+    assert rebuilt.node is rebuilt.graph.nodes[0]
+    assert planning_handoff_stage_result_to_dict(rebuilt) == payload
+    assert payload["schema_version"] == STAGE_SCHEMA_VERSION
+    assert payload["execution_authorized"] is False
+    assert payload["side_effects_performed"] is False
+
+
+def test_legacy_result_without_binding_round_trips() -> None:
+    result = _ready_planning_result()
+    assert result.planning_binding is None
+
+    payload = planning_handoff_stage_result_to_dict(result)
+    rebuilt = planning_handoff_stage_result_from_dict(payload)
+
+    assert rebuilt == result
+    assert payload["planning_binding"] is None
+
+
+def test_invalid_input_result_round_trips_with_every_object_absent() -> None:
+    result = prepare_planning_handoff(
+        prepare_issue_readiness(
+            _request(governed_field_names=("owner_agent", "source_of_truth")),
+            _FakeIssueReader(),
+            _FakeRepositoryReader(),
+        ),
+        evaluator_sha=_SHA,
+        created_at=_CREATED_AT,
+    )
+    assert result.status is PlanningHandoffStageStatus.INVALID_INPUT
+
+    payload = planning_handoff_stage_result_to_dict(result)
+    rebuilt = planning_handoff_stage_result_from_dict(payload)
+
+    assert rebuilt == result
+    for key in ("graph", "planning_result", "handoff", "handoff_validation", "planning_binding"):
+        assert payload[key] is None
+
+
+def test_unsupported_schema_version_is_rejected() -> None:
+    payload = planning_handoff_stage_result_to_dict(_ready_planning_result())
+    bad = {**payload, "schema_version": "9.9"}
+
+    with pytest.raises(ValueError, match="unsupported stage schema_version"):
+        planning_handoff_stage_result_from_dict(bad)
+
+
+def test_unknown_field_is_rejected() -> None:
+    payload = planning_handoff_stage_result_to_dict(_ready_planning_result())
+    bad = {**payload, "surprise": 1}
+
+    with pytest.raises(ValueError, match="unsupported field"):
+        planning_handoff_stage_result_from_dict(bad)
+
+
+def test_missing_field_is_rejected() -> None:
+    payload = planning_handoff_stage_result_to_dict(_ready_planning_result())
+    bad = dict(payload)
+    del bad["handoff"]
+
+    with pytest.raises(ValueError, match="missing field"):
+        planning_handoff_stage_result_from_dict(bad)
+
+
+def test_malformed_status_enum_is_rejected() -> None:
+    payload = planning_handoff_stage_result_to_dict(_ready_planning_result())
+    bad = {**payload, "status": "not-a-real-status"}
+
+    with pytest.raises(ValueError):
+        planning_handoff_stage_result_from_dict(bad)
+
+
+def test_wsc3_suppliable_boolean_misuse_is_rejected() -> None:
+    payload = planning_handoff_stage_result_to_dict(_ready_planning_result())
+    bad = {**payload, "wsc3_suppliable": 1}
+
+    with pytest.raises(ValueError, match="exact boolean"):
+        planning_handoff_stage_result_from_dict(bad)
+
+
+def test_graph_digest_binding_drift_is_rejected() -> None:
+    payload = planning_handoff_stage_result_to_dict(_ready_planning_result())
+    tampered_graph = json.loads(json.dumps(payload["graph"]))
+    tampered_graph["nodes"][0]["owner"] = "someone-else"
+    bad = {**payload, "graph": tampered_graph}
+
+    with pytest.raises(ValueError, match="graph_digest"):
+        planning_handoff_stage_result_from_dict(bad)
+
+
+def test_planning_result_digest_binding_drift_is_rejected() -> None:
+    payload = planning_handoff_stage_result_to_dict(_ready_planning_result())
+    tampered_planning_result = json.loads(json.dumps(payload["planning_result"]))
+    tampered_planning_result["batch_reason_codes"] = ["tampered-reason"]
+    bad = {**payload, "planning_result": tampered_planning_result}
+
+    with pytest.raises(ValueError, match="planning_result_digest"):
+        planning_handoff_stage_result_from_dict(bad)
+
+
+def test_handoff_validation_drift_is_rejected() -> None:
+    payload = planning_handoff_stage_result_to_dict(_ready_planning_result())
+    tampered_validation = dict(payload["handoff_validation"])
+    tampered_validation["local_checks_passed"] = False
+    bad = {**payload, "handoff_validation": tampered_validation}
+
+    with pytest.raises(ValueError, match="does not match the carried handoff"):
+        planning_handoff_stage_result_from_dict(bad)
+
+
+def test_planning_binding_drift_is_rejected() -> None:
+    """A planning binding whose own fingerprint no longer matches its content
+
+    is rejected by the nested PlanningBindingEvidence transport itself before
+    this stage's own IssuePlan/handoff cross-check ever runs.
+    """
+    payload = planning_handoff_stage_result_to_dict(_with_binding())
+    tampered_binding = dict(payload["planning_binding"])
+    tampered_binding["supplied_node_ids"] = ["issue-999"]
+    bad = {**payload, "planning_binding": tampered_binding}
+
+    with pytest.raises(ValueError):
+        planning_handoff_stage_result_from_dict(bad)
+
+
+def test_planning_binding_disagreeing_with_its_own_issueplan_is_rejected() -> None:
+    """A self-consistent binding that does not match the carried IssuePlan/handoff.
+
+    is rejected by this stage's cross-object binding check, not by the nested
+    binding's own identity check.
+    """
+    first = _with_binding()
+    second = prepare_planning_handoff(
+        _natural_readiness(evaluated_repository_sha="f" * 40),
+        evaluator_sha="a" * 40,
+        created_at=_CREATED_AT,
+    )
+    assert second.planning_binding is not None
+    assert second.planning_binding.binding_id != first.planning_binding.binding_id
+
+    payload = planning_handoff_stage_result_to_dict(first)
+    swapped_binding = planning_handoff_stage_result_to_dict(second)["planning_binding"]
+    bad = {**payload, "planning_binding": swapped_binding}
+
+    with pytest.raises(
+        ValueError, match="does not match the IssuePlan evidence and handoff"
+    ):
+        planning_handoff_stage_result_from_dict(bad)
+
+
+def test_wrong_nested_handoff_type_is_rejected() -> None:
+    payload = planning_handoff_stage_result_to_dict(_ready_planning_result())
+    bad = {**payload, "handoff": "not-an-object"}
+
+    with pytest.raises((ValueError, TypeError)):
+        planning_handoff_stage_result_from_dict(bad)
+
+
+def test_execution_authorized_set_true_is_rejected() -> None:
+    payload = planning_handoff_stage_result_to_dict(_ready_planning_result())
+    bad = {**payload, "execution_authorized": True}
+
+    with pytest.raises(ValueError, match="execution_authorized must be false"):
+        planning_handoff_stage_result_from_dict(bad)
+
+
+def test_side_effects_performed_set_true_is_rejected() -> None:
+    payload = planning_handoff_stage_result_to_dict(_ready_planning_result())
+    bad = {**payload, "side_effects_performed": True}
+
+    with pytest.raises(ValueError, match="side_effects_performed must be false"):
+        planning_handoff_stage_result_from_dict(bad)
+
+
+def test_reason_codes_are_canonicalized() -> None:
+    result = replace(_ready_planning_result(), reason_codes=("zeta", "alpha", "alpha"))
+
+    payload = planning_handoff_stage_result_to_dict(result)
+
+    assert payload["reason_codes"] == ["alpha", "zeta"]
+
+
+def test_a_foreign_object_is_rejected_at_serialization() -> None:
+    with pytest.raises(TypeError):
+        planning_handoff_stage_result_to_dict(_natural_readiness())

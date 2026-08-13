@@ -10,9 +10,11 @@ non-authoritative and cannot authorize execution.
 
 from __future__ import annotations
 
+import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
 from scripts.agent_os_issue_acceptance.approval_records import (
     ApprovalApplicabilityResult,
@@ -21,15 +23,22 @@ from scripts.agent_os_issue_acceptance.approval_records import (
     ApprovalState,
     build_approval_candidate,
     evaluate_approval_applicability,
+    reconstruct_approval_applicability_result,
+    reconstruct_approval_record,
     record_approval_decision,
+    serialize_approval_applicability_result,
+    serialize_approval_record,
 )
 from scripts.agent_os_issue_acceptance.approved_execution_projection import (
     ApprovedExecutionProjection,
     ApprovedExecutionProjectionResult,
     build_approved_execution_projection,
+    reconstruct_approved_execution_projection_result,
+    serialize_approved_execution_projection_result,
 )
 
 from .proposal_stage import RepositoryProposalStageResult, RepositoryProposalStageStatus
+from .stage_models import STAGE_SCHEMA_VERSION
 
 
 class ApprovalProjectionStageStatus(str, Enum):
@@ -126,6 +135,158 @@ class ApprovalProjectionStageResult:
         elif self.projection is not None:
             raise ValueError("non-complete results cannot carry a projection")
         object.__setattr__(self, "reason_codes", tuple(sorted(set(self.reason_codes))))
+
+
+_APPROVAL_PROJECTION_STAGE_RESULT_PAYLOAD_KEYS = frozenset(
+    {
+        "schema_version",
+        "status",
+        "pending_candidate",
+        "decision_revision",
+        "applicability",
+        "projection_result",
+        "reason_codes",
+        "execution_authorized",
+        "side_effects_performed",
+    }
+)
+
+
+def approval_projection_stage_result_to_dict(
+    result: ApprovalProjectionStageResult,
+) -> dict[str, Any]:
+    """Serialize one canonical ApprovalProjectionStageResult.
+
+    ``projection`` is not carried as an independent payload field: for a
+    complete result it is always ``projection_result``'s own projection
+    object, so ``approval_projection_stage_result_from_dict`` recovers it by
+    identity rather than transporting a duplicate copy.
+    """
+    if not isinstance(result, ApprovalProjectionStageResult):
+        raise TypeError("result must be an ApprovalProjectionStageResult")
+    payload = {
+        "schema_version": STAGE_SCHEMA_VERSION,
+        "status": result.status.value,
+        "pending_candidate": (
+            None
+            if result.pending_candidate is None
+            else json.loads(serialize_approval_record(result.pending_candidate))
+        ),
+        "decision_revision": (
+            None
+            if result.decision_revision is None
+            else json.loads(serialize_approval_record(result.decision_revision))
+        ),
+        "applicability": (
+            None
+            if result.applicability is None
+            else json.loads(
+                serialize_approval_applicability_result(result.applicability)
+            )
+        ),
+        "projection_result": (
+            None
+            if result.projection_result is None
+            else json.loads(
+                serialize_approved_execution_projection_result(
+                    result.projection_result
+                )
+            )
+        ),
+        "reason_codes": list(result.reason_codes),
+        "execution_authorized": False,
+        "side_effects_performed": False,
+    }
+    if approval_projection_stage_result_from_dict(payload) != result:
+        raise ValueError("result has noncanonical approval projection stage fields")
+    return payload
+
+
+def approval_projection_stage_result_from_dict(
+    payload: Mapping[str, Any],
+) -> ApprovalProjectionStageResult:
+    """Reconstruct one canonical ApprovalProjectionStageResult, failing closed on drift."""
+    if not isinstance(payload, Mapping):
+        raise ValueError("approval projection stage result must be a mapping")
+    if payload.get("schema_version") != STAGE_SCHEMA_VERSION:
+        raise ValueError("unsupported stage schema_version")
+    _require_exact_keys(
+        payload,
+        _APPROVAL_PROJECTION_STAGE_RESULT_PAYLOAD_KEYS,
+        "approval projection stage result",
+    )
+    if payload["execution_authorized"] is not False:
+        raise ValueError("execution_authorized must be false")
+    if payload["side_effects_performed"] is not False:
+        raise ValueError("side_effects_performed must be false")
+
+    status = ApprovalProjectionStageStatus(payload["status"])
+
+    pending_candidate_payload = payload["pending_candidate"]
+    decision_revision_payload = payload["decision_revision"]
+    applicability_payload = payload["applicability"]
+    projection_result_payload = payload["projection_result"]
+
+    pending_candidate = (
+        None
+        if pending_candidate_payload is None
+        else reconstruct_approval_record(pending_candidate_payload)
+    )
+    decision_revision = (
+        None
+        if decision_revision_payload is None
+        else reconstruct_approval_record(decision_revision_payload)
+    )
+    applicability = (
+        None
+        if applicability_payload is None
+        else reconstruct_approval_applicability_result(applicability_payload)
+    )
+    projection_result = (
+        None
+        if projection_result_payload is None
+        else reconstruct_approved_execution_projection_result(
+            projection_result_payload
+        )
+    )
+
+    projection = None
+    if status is ApprovalProjectionStageStatus.COMPLETE:
+        if projection_result is None or not projection_result.complete:
+            raise ValueError("complete results require a complete projection result")
+        projection = projection_result.projection
+
+    reason_codes = payload["reason_codes"]
+    if not isinstance(reason_codes, list) or not all(
+        isinstance(item, str) for item in reason_codes
+    ):
+        raise ValueError("reason_codes must be a list of strings")
+
+    return ApprovalProjectionStageResult(
+        status=status,
+        pending_candidate=pending_candidate,
+        decision_revision=decision_revision,
+        applicability=applicability,
+        projection_result=projection_result,
+        projection=projection,
+        reason_codes=tuple(reason_codes),
+    )
+
+
+def _require_exact_keys(
+    payload: object, keys: frozenset[str], label: str
+) -> Mapping[str, Any]:
+    """Closed-schema key check, mirroring the repository-stage transport rule."""
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"{label} must be a mapping")
+    supplied = set(payload)
+    missing = sorted(keys - supplied)
+    if missing:
+        raise ValueError(f"{label} is missing field(s): " + ", ".join(missing))
+    unsupported = sorted(supplied - keys)
+    if unsupported:
+        raise ValueError(f"{label} has unsupported field(s): " + ", ".join(unsupported))
+    return payload
 
 
 def prepare_approval_projection(

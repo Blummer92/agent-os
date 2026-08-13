@@ -9,9 +9,10 @@ command, invokes a Scheduler lifecycle, or creates execution authority.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
 from scripts.agent_os_execution_capabilities import RepositoryIdentity, RepositoryStateEvidence
 from scripts.agent_os_remote_validation import (
@@ -21,12 +22,15 @@ from scripts.agent_os_remote_validation import (
     pre_pr_validation_plan_id,
     pre_pr_validation_subject_id,
     select_pre_pr_validation_plan,
+    serialize_pre_pr_validation_plan,
 )
+from scripts.agent_os_remote_validation.selector import deserialize_pre_pr_validation_plan
 
 from .approval_stage import (
     ApprovalProjectionStageResult,
     ApprovalProjectionStageStatus,
 )
+from .stage_models import STAGE_SCHEMA_VERSION
 
 _SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 
@@ -174,6 +178,175 @@ class ValidationStageResult:
                 raise ValueError("GO requires subject and plan identities")
         elif self.subject is not None or self.validation_plan is not None:
             raise ValueError("non-GO validation results cannot carry partial canonical objects")
+
+
+_VALIDATION_STAGE_RESULT_PAYLOAD_KEYS = frozenset(
+    {
+        "schema_version",
+        "disposition",
+        "validation_plan",
+        "subject_id",
+        "validation_plan_id",
+        "evaluator_sha",
+        "reason_codes",
+        "execution_authorized",
+        "merge_authorized",
+        "automatic_retry",
+        "side_effects_performed",
+    }
+)
+
+
+def validation_stage_result_to_dict(result: ValidationStageResult) -> dict[str, Any]:
+    """Serialize one canonical ValidationStageResult.
+
+    ``subject`` and the redundant scalar fields (``repository``,
+    ``issue_number``, ``invocation_id``, ``base_sha``, ``source_sha``,
+    ``tested_sha``, ``candidate_sha``) are not carried as independent payload
+    fields: every one of them is always read straight off ``validation_plan``'s
+    own carried subject, so ``validation_stage_result_from_dict`` rebuilds
+    them from that single canonical object rather than trusting duplicated
+    copies. ``validation_plan`` is delegated whole to the canonical
+    ``PrePrValidationPlan`` transport, which already embeds its subject.
+    """
+    if not isinstance(result, ValidationStageResult):
+        raise TypeError("result must be a ValidationStageResult")
+    payload = {
+        "schema_version": STAGE_SCHEMA_VERSION,
+        "disposition": result.disposition.value,
+        "validation_plan": (
+            None
+            if result.validation_plan is None
+            else serialize_pre_pr_validation_plan(result.validation_plan)
+        ),
+        "subject_id": result.subject_id,
+        "validation_plan_id": result.validation_plan_id,
+        "evaluator_sha": result.evaluator_sha,
+        "reason_codes": list(result.reason_codes),
+        "execution_authorized": False,
+        "merge_authorized": False,
+        "automatic_retry": False,
+        "side_effects_performed": False,
+    }
+    if validation_stage_result_from_dict(payload) != result:
+        raise ValueError("result has noncanonical validation stage fields")
+    return payload
+
+
+def validation_stage_result_from_dict(payload: Mapping[str, Any]) -> ValidationStageResult:
+    """Reconstruct one canonical ValidationStageResult, failing closed on drift.
+
+    ``subject_id`` and ``validation_plan_id`` are re-derived from the
+    reconstructed plan and its own carried subject and compared against the
+    carried identities: a payload whose identity strings no longer match its
+    own canonical objects is rejected rather than trusted.
+    """
+    if not isinstance(payload, Mapping):
+        raise ValueError("validation stage result must be a mapping")
+    if payload.get("schema_version") != STAGE_SCHEMA_VERSION:
+        raise ValueError("unsupported stage schema_version")
+    _require_exact_keys(
+        payload, _VALIDATION_STAGE_RESULT_PAYLOAD_KEYS, "validation stage result"
+    )
+    for name in (
+        "execution_authorized",
+        "merge_authorized",
+        "automatic_retry",
+        "side_effects_performed",
+    ):
+        if payload[name] is not False:
+            raise ValueError(f"{name} must be false")
+
+    disposition = ValidationStageDisposition(payload["disposition"])
+    plan_payload = payload["validation_plan"]
+    subject_id_payload = payload["subject_id"]
+    plan_id_payload = payload["validation_plan_id"]
+    evaluator_sha = payload["evaluator_sha"]
+
+    reason_codes = payload["reason_codes"]
+    if not isinstance(reason_codes, list) or not all(
+        isinstance(item, str) for item in reason_codes
+    ):
+        raise ValueError("reason_codes must be a list of strings")
+
+    if disposition is ValidationStageDisposition.GO:
+        if (
+            plan_payload is None
+            or subject_id_payload is None
+            or plan_id_payload is None
+            or evaluator_sha is None
+        ):
+            raise ValueError(
+                "GO disposition requires the canonical validation plan and identities"
+            )
+        if type(evaluator_sha) is not str or not evaluator_sha:
+            raise ValueError("evaluator_sha must be non-empty text")
+        plan = deserialize_pre_pr_validation_plan(plan_payload)
+        subject = plan.subject
+        subject_id = pre_pr_validation_subject_id(subject)
+        plan_id = pre_pr_validation_plan_id(plan)
+        if subject_id != subject_id_payload:
+            raise ValueError("subject_id does not match the canonical validation subject")
+        if plan_id != plan_id_payload:
+            raise ValueError("validation_plan_id does not match the canonical validation plan")
+        return ValidationStageResult(
+            disposition=disposition,
+            subject=subject,
+            validation_plan=plan,
+            subject_id=subject_id,
+            validation_plan_id=plan_id,
+            repository=subject.repository,
+            issue_number=subject.issue_number,
+            invocation_id=subject.invocation_id,
+            base_sha=subject.base_sha,
+            source_sha=subject.expected_source_sha,
+            tested_sha=subject.tested_sha,
+            evaluator_sha=evaluator_sha,
+            candidate_sha=subject.expected_source_sha,
+            reason_codes=tuple(reason_codes),
+        )
+
+    if (
+        plan_payload is not None
+        or subject_id_payload is not None
+        or plan_id_payload is not None
+        or evaluator_sha is not None
+    ):
+        raise ValueError(
+            "non-GO validation results must not carry canonical objects or identities"
+        )
+    return ValidationStageResult(
+        disposition=disposition,
+        subject=None,
+        validation_plan=None,
+        subject_id=None,
+        validation_plan_id=None,
+        repository=None,
+        issue_number=None,
+        invocation_id=None,
+        base_sha=None,
+        source_sha=None,
+        tested_sha=None,
+        evaluator_sha=None,
+        candidate_sha=None,
+        reason_codes=tuple(reason_codes),
+    )
+
+
+def _require_exact_keys(
+    payload: object, keys: frozenset[str], label: str
+) -> Mapping[str, Any]:
+    """Closed-schema key check, mirroring the repository-stage transport rule."""
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"{label} must be a mapping")
+    supplied = set(payload)
+    missing = sorted(keys - supplied)
+    if missing:
+        raise ValueError(f"{label} is missing field(s): " + ", ".join(missing))
+    unsupported = sorted(supplied - keys)
+    if unsupported:
+        raise ValueError(f"{label} has unsupported field(s): " + ", ".join(unsupported))
+    return payload
 
 
 def prepare_validation_stage(

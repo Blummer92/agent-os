@@ -14,13 +14,16 @@ runtime/operator authorization record outside this issue.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
 from agent_os_execution_service.command_planning import (
     ValidationCommandPlan,
     build_validation_command_plan,
+    reconstruct_validation_command_plan,
+    serialize_validation_command_plan,
     validation_command_plan_id,
 )
 from agent_os_execution_service.models import (
@@ -29,6 +32,8 @@ from agent_os_execution_service.models import (
     ExecutionServiceCapability,
     ExecutionServiceInvalidationCondition,
     ExecutionServiceRequest,
+    reconstruct_execution_service_request,
+    serialize_execution_service_request,
 )
 from workflow_scheduler.execution.runtime_configuration import (
     VALIDATION_ONLY_EXECUTION_MODE,
@@ -36,14 +41,19 @@ from workflow_scheduler.execution.runtime_configuration import (
     ConcreteRuntimeConfigurationError,
     FrozenTestCommand,
     SingleIssuePilotInput,
+    reconstruct_concrete_runtime_configuration,
+    runtime_configuration_payload,
 )
 
 from .approval_stage import ApprovalProjectionStageResult
+from .stage_models import STAGE_SCHEMA_VERSION
 from .validation_stage import (
     CandidateRuntimeInputs,
     ValidationStageDisposition,
     ValidationStageResult,
     prepare_validation_stage,
+    validation_stage_result_from_dict,
+    validation_stage_result_to_dict,
 )
 
 
@@ -89,6 +99,197 @@ class ExecutionPacketStageResult:
                 raise ValueError("complete packet requires every canonical fingerprint")
         elif self.runtime_configuration is not None:
             raise ValueError("incomplete packet cannot carry runtime configuration")
+
+
+_EXECUTION_PACKET_STAGE_RESULT_PAYLOAD_KEYS = frozenset(
+    {
+        "schema_version",
+        "disposition",
+        "validation_stage",
+        "request",
+        "command_plan",
+        "runtime_configuration",
+        "request_fingerprint",
+        "command_plan_id",
+        "runtime_configuration_fingerprint",
+        "packet_complete",
+        "runtime_capability_available",
+        "execution_authorization_present",
+        "reason_codes",
+        "execution_authorized",
+        "merge_authorized",
+        "automatic_retry",
+        "side_effects_performed",
+    }
+)
+
+
+def execution_packet_stage_result_to_dict(
+    result: ExecutionPacketStageResult,
+) -> dict[str, Any]:
+    """Serialize one canonical ExecutionPacketStageResult, delegating every nested object.
+
+    ``validation_stage`` reuses this package's own ``validation_stage_result``
+    transport; ``request``, ``command_plan``, and ``runtime_configuration``
+    each reuse their owning package's canonical transport. Nothing here
+    reimplements a nested shape.
+    """
+    if not isinstance(result, ExecutionPacketStageResult):
+        raise TypeError("result must be an ExecutionPacketStageResult")
+    payload = {
+        "schema_version": STAGE_SCHEMA_VERSION,
+        "disposition": result.disposition.value,
+        "validation_stage": validation_stage_result_to_dict(result.validation_stage),
+        "request": (
+            None
+            if result.request is None
+            else serialize_execution_service_request(result.request)
+        ),
+        "command_plan": (
+            None
+            if result.command_plan is None
+            else serialize_validation_command_plan(result.command_plan)
+        ),
+        "runtime_configuration": (
+            None
+            if result.runtime_configuration is None
+            else runtime_configuration_payload(result.runtime_configuration)
+        ),
+        "request_fingerprint": result.request_fingerprint,
+        "command_plan_id": result.command_plan_id,
+        "runtime_configuration_fingerprint": result.runtime_configuration_fingerprint,
+        "packet_complete": result.packet_complete,
+        "runtime_capability_available": result.runtime_capability_available,
+        "execution_authorization_present": result.execution_authorization_present,
+        "reason_codes": list(result.reason_codes),
+        "execution_authorized": False,
+        "merge_authorized": False,
+        "automatic_retry": False,
+        "side_effects_performed": False,
+    }
+    if execution_packet_stage_result_from_dict(payload) != result:
+        raise ValueError("result has noncanonical execution packet stage fields")
+    return payload
+
+
+def execution_packet_stage_result_from_dict(
+    payload: Mapping[str, Any],
+) -> ExecutionPacketStageResult:
+    """Reconstruct one canonical ExecutionPacketStageResult, failing closed on drift.
+
+    ``request_fingerprint``, ``command_plan_id``, and
+    ``runtime_configuration_fingerprint`` are re-derived from the reconstructed
+    nested objects and compared against the carried identities, and the
+    command plan's own carried ``request_fingerprint``/``validation_plan_id``
+    are checked against the request and validation-stage plan identity rather
+    than trusted as free-standing scalars.
+    """
+    if not isinstance(payload, Mapping):
+        raise ValueError("execution packet stage result must be a mapping")
+    if payload.get("schema_version") != STAGE_SCHEMA_VERSION:
+        raise ValueError("unsupported stage schema_version")
+    _require_exact_keys(
+        payload,
+        _EXECUTION_PACKET_STAGE_RESULT_PAYLOAD_KEYS,
+        "execution packet stage result",
+    )
+    for name in (
+        "execution_authorized",
+        "merge_authorized",
+        "automatic_retry",
+        "side_effects_performed",
+    ):
+        if payload[name] is not False:
+            raise ValueError(f"{name} must be false")
+    for name in (
+        "packet_complete",
+        "runtime_capability_available",
+        "execution_authorization_present",
+    ):
+        if type(payload[name]) is not bool:
+            raise ValueError(f"{name} must be an exact boolean")
+
+    disposition = ExecutionPacketDisposition(payload["disposition"])
+    validation_stage = validation_stage_result_from_dict(payload["validation_stage"])
+
+    request_payload = payload["request"]
+    command_plan_payload = payload["command_plan"]
+    runtime_configuration_data = payload["runtime_configuration"]
+    request_fingerprint = payload["request_fingerprint"]
+    command_plan_id = payload["command_plan_id"]
+    runtime_configuration_fingerprint = payload["runtime_configuration_fingerprint"]
+
+    request: ExecutionServiceRequest | None = None
+    if request_payload is not None:
+        request = reconstruct_execution_service_request(request_payload)
+        if request.request_fingerprint != request_fingerprint:
+            raise ValueError("request_fingerprint does not match the canonical request")
+
+    command_plan: ValidationCommandPlan | None = None
+    if command_plan_payload is not None:
+        command_plan = reconstruct_validation_command_plan(command_plan_payload)
+        if validation_command_plan_id(command_plan) != command_plan_id:
+            raise ValueError("command_plan_id does not match the canonical command plan")
+        if request is not None and command_plan.request_fingerprint != request.request_fingerprint:
+            raise ValueError("command plan does not bind to the execution-service request")
+        if (
+            validation_stage.validation_plan_id is not None
+            and command_plan.validation_plan_id != validation_stage.validation_plan_id
+        ):
+            raise ValueError("command plan does not bind to the validation stage's plan")
+
+    runtime_configuration: ConcreteRuntimeConfiguration | None = None
+    if runtime_configuration_data is not None:
+        if runtime_configuration_fingerprint is None:
+            raise ValueError("runtime configuration requires its fingerprint")
+        try:
+            runtime_configuration = reconstruct_concrete_runtime_configuration(
+                runtime_configuration_data,
+                configuration_fingerprint=runtime_configuration_fingerprint,
+            )
+        except ConcreteRuntimeConfigurationError as error:
+            raise ValueError(f"runtime configuration is invalid: {error}") from error
+        if runtime_configuration.configuration_fingerprint != runtime_configuration_fingerprint:
+            raise ValueError(
+                "runtime_configuration_fingerprint does not match the canonical configuration"
+            )
+
+    reason_codes = payload["reason_codes"]
+    if not isinstance(reason_codes, list) or not all(
+        isinstance(item, str) for item in reason_codes
+    ):
+        raise ValueError("reason_codes must be a list of strings")
+
+    return ExecutionPacketStageResult(
+        disposition=disposition,
+        validation_stage=validation_stage,
+        request=request,
+        command_plan=command_plan,
+        runtime_configuration=runtime_configuration,
+        request_fingerprint=request_fingerprint,
+        command_plan_id=command_plan_id,
+        runtime_configuration_fingerprint=runtime_configuration_fingerprint,
+        packet_complete=payload["packet_complete"],
+        runtime_capability_available=payload["runtime_capability_available"],
+        execution_authorization_present=payload["execution_authorization_present"],
+        reason_codes=tuple(reason_codes),
+    )
+
+
+def _require_exact_keys(
+    payload: object, keys: frozenset[str], label: str
+) -> Mapping[str, Any]:
+    """Closed-schema key check, mirroring the repository-stage transport rule."""
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"{label} must be a mapping")
+    supplied = set(payload)
+    missing = sorted(keys - supplied)
+    if missing:
+        raise ValueError(f"{label} is missing field(s): " + ", ".join(missing))
+    unsupported = sorted(supplied - keys)
+    if unsupported:
+        raise ValueError(f"{label} has unsupported field(s): " + ", ".join(unsupported))
+    return payload
 
 
 def prepare_execution_packet(

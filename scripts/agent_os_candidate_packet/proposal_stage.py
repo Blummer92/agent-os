@@ -47,6 +47,7 @@ external-system operation, and every result it produces carries
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
 from enum import Enum
@@ -56,7 +57,11 @@ from scripts.agent_os_execution_capabilities import RepositoryStateEvidence
 from scripts.agent_os_issue_acceptance.issueplan_current_state import (
     IssuePlanCurrentStateEvidence,
 )
-from scripts.agent_os_issue_acceptance.planning_binding import PlanningBindingEvidence
+from scripts.agent_os_issue_acceptance.planning_binding import (
+    PlanningBindingEvidence,
+    reconstruct_planning_binding_evidence,
+    serialize_planning_binding_evidence,
+)
 from scripts.agent_os_issue_acceptance.scheduler_handoff import (
     HandoffCohort,
     SchedulerPlanningHandoff,
@@ -65,6 +70,8 @@ from workflow_scheduler.planning.draft_ingestion import (
     DraftTaskProposal,
     DraftTaskProposalResult,
     build_draft_task_proposals,
+    reconstruct_draft_task_proposal_result,
+    serialize_draft_task_proposal_result,
 )
 
 from .planning_stage import PlanningHandoffStageResult, PlanningHandoffStageStatus
@@ -73,6 +80,13 @@ from .repository_stage import (
     RepositoryStageResult,
     RepositoryStageStatus,
     prepare_repository_state_evidence,
+    repository_stage_result_from_dict,
+    repository_stage_result_to_dict,
+)
+from .stage_models import (
+    STAGE_SCHEMA_VERSION,
+    issueplan_current_state_evidence_from_dict,
+    issueplan_current_state_evidence_to_dict,
 )
 
 WSC3_STATUS_UNMAPPED = "wsc3-status-unmapped"
@@ -342,6 +356,146 @@ def draft_task_proposal_from_dict(payload: Mapping[str, Any]) -> DraftTaskPropos
         issueplan_current_state_evidence_id=payload["issueplan_current_state_evidence_id"],
         repository_state_evidence_id=payload["repository_state_evidence_id"],
         created_at=payload["created_at"],
+    )
+
+
+_REPOSITORY_PROPOSAL_STAGE_RESULT_PAYLOAD_KEYS = frozenset(
+    {
+        "schema_version",
+        "status",
+        "repository_stage",
+        "proposal_result",
+        "reason_codes",
+        "issueplan_current_state_evidence",
+        "planning_binding",
+        "execution_authorized",
+        "side_effects_performed",
+    }
+)
+
+
+def repository_proposal_stage_result_to_dict(
+    result: RepositoryProposalStageResult,
+) -> dict[str, Any]:
+    """Serialize one canonical RepositoryProposalStageResult.
+
+    ``repository_state_evidence`` and ``proposal`` are not carried as
+    independent payload fields: they are always the repository stage's own
+    evidence object and the proposal result's own eligible proposal, so
+    ``repository_proposal_stage_result_from_dict`` recovers both by identity
+    from ``repository_stage`` and ``proposal_result`` rather than transporting
+    duplicate copies.
+    """
+    if not isinstance(result, RepositoryProposalStageResult):
+        raise TypeError("result must be a RepositoryProposalStageResult")
+    payload = {
+        "schema_version": STAGE_SCHEMA_VERSION,
+        "status": result.status.value,
+        "repository_stage": (
+            None
+            if result.repository_stage is None
+            else repository_stage_result_to_dict(result.repository_stage)
+        ),
+        "proposal_result": (
+            None
+            if result.proposal_result is None
+            else json.loads(
+                serialize_draft_task_proposal_result(result.proposal_result)
+            )
+        ),
+        "reason_codes": list(result.reason_codes),
+        "issueplan_current_state_evidence": (
+            None
+            if result.issueplan_current_state_evidence is None
+            else issueplan_current_state_evidence_to_dict(
+                result.issueplan_current_state_evidence
+            )
+        ),
+        "planning_binding": (
+            None
+            if result.planning_binding is None
+            else json.loads(
+                serialize_planning_binding_evidence(result.planning_binding)
+            )
+        ),
+        "execution_authorized": False,
+        "side_effects_performed": False,
+    }
+    if repository_proposal_stage_result_from_dict(payload) != result:
+        raise ValueError("result has noncanonical repository proposal stage fields")
+    return payload
+
+
+def repository_proposal_stage_result_from_dict(
+    payload: Mapping[str, Any],
+) -> RepositoryProposalStageResult:
+    """Reconstruct one canonical RepositoryProposalStageResult, failing closed on drift."""
+    if not isinstance(payload, Mapping):
+        raise ValueError("repository proposal stage result must be a mapping")
+    if payload.get("schema_version") != STAGE_SCHEMA_VERSION:
+        raise ValueError("unsupported stage schema_version")
+    _require_exact_keys(
+        payload,
+        _REPOSITORY_PROPOSAL_STAGE_RESULT_PAYLOAD_KEYS,
+        "repository proposal stage result",
+    )
+    if payload["execution_authorized"] is not False:
+        raise ValueError("execution_authorized must be false")
+    if payload["side_effects_performed"] is not False:
+        raise ValueError("side_effects_performed must be false")
+
+    status = RepositoryProposalStageStatus(payload["status"])
+
+    repository_stage_payload = payload["repository_stage"]
+    proposal_result_payload = payload["proposal_result"]
+    issueplan_payload = payload["issueplan_current_state_evidence"]
+    planning_binding_payload = payload["planning_binding"]
+
+    repository_stage = (
+        None
+        if repository_stage_payload is None
+        else repository_stage_result_from_dict(repository_stage_payload)
+    )
+    repository_state_evidence = (
+        None if repository_stage is None else repository_stage.evidence
+    )
+    proposal_result = (
+        None
+        if proposal_result_payload is None
+        else reconstruct_draft_task_proposal_result(proposal_result_payload)
+    )
+    issueplan = (
+        None
+        if issueplan_payload is None
+        else issueplan_current_state_evidence_from_dict(issueplan_payload)
+    )
+    planning_binding = (
+        None
+        if planning_binding_payload is None
+        else reconstruct_planning_binding_evidence(planning_binding_payload)
+    )
+
+    proposal = None
+    if status is RepositoryProposalStageStatus.ELIGIBLE:
+        if proposal_result is None or proposal_result.status != "eligible":
+            raise ValueError("eligible results require an eligible proposal result")
+        proposal = proposal_result.proposals[0]
+
+    reason_codes = payload["reason_codes"]
+    if not isinstance(reason_codes, list) or not all(
+        isinstance(item, str) for item in reason_codes
+    ):
+        raise ValueError("reason_codes must be a list of strings")
+
+    return RepositoryProposalStageResult(
+        status=status,
+        repository_stage=repository_stage,
+        repository_state_evidence=repository_state_evidence,
+        proposal_result=proposal_result,
+        proposal=proposal,
+        reason_codes=tuple(reason_codes),
+        issueplan_current_state_evidence=issueplan,
+        planning_binding=planning_binding,
     )
 
 
