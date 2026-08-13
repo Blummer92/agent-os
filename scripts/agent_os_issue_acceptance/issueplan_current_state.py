@@ -411,6 +411,93 @@ def compare_issueplan_current_state(
     )
 
 
+_COMPARISON_TRANSPORT_KEYS = frozenset(
+    {
+        "expected_evidence_id",
+        "current_evidence_id",
+        "expected_fingerprint",
+        "current_fingerprint",
+        "changed_bindings",
+        "outcome",
+        "reason_codes",
+        "details",
+        "execution_authorized",
+    }
+)
+_COMPARISON_IDENTITY_FIELDS = (
+    "expected_evidence_id",
+    "current_evidence_id",
+    "expected_fingerprint",
+    "current_fingerprint",
+)
+_COMPARISON_TRANSPORT_NAME = "issueplan current-state comparison"
+
+
+def _comparison_payload(
+    comparison: IssuePlanCurrentStateComparison,
+) -> dict[str, Any]:
+    return {
+        "expected_evidence_id": comparison.expected_evidence_id,
+        "current_evidence_id": comparison.current_evidence_id,
+        "expected_fingerprint": comparison.expected_fingerprint,
+        "current_fingerprint": comparison.current_fingerprint,
+        "changed_bindings": list(comparison.changed_bindings),
+        "outcome": comparison.outcome.value,
+        "reason_codes": list(comparison.reason_codes),
+        "details": list(comparison.details),
+        "execution_authorized": comparison.execution_authorized,
+    }
+
+
+def serialize_issueplan_current_state_comparison(
+    comparison: IssuePlanCurrentStateComparison,
+) -> bytes:
+    """Serialize one canonical IssuePlanCurrentStateComparison's public fields."""
+    if type(comparison) is not IssuePlanCurrentStateComparison:
+        raise TypeError("comparison must be an exact IssuePlanCurrentStateComparison")
+    try:
+        payload = _comparison_payload(comparison)
+        canonical = reconstruct_issueplan_current_state_comparison(payload)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError("comparison has invalid current-state fields") from exc
+    if canonical != comparison:
+        raise ValueError("comparison has noncanonical current-state fields")
+    return _bytes(payload)
+
+
+def reconstruct_issueplan_current_state_comparison(
+    payload: bytes | str | Mapping[str, Any],
+) -> IssuePlanCurrentStateComparison:
+    """Strictly reconstruct one comparison with closed-schema transport validation."""
+    raw = _decode_transport_payload(payload)
+    _require_exact_keys(raw)
+    for name in _COMPARISON_IDENTITY_FIELDS:
+        _text(raw[name], name)
+    if type(raw["outcome"]) is not str:
+        raise ValueError("outcome must be an exact string")
+    try:
+        outcome = IssuePlanCurrentStateOutcome(raw["outcome"])
+    except ValueError as exc:
+        raise ValueError("outcome is unsupported") from exc
+    if raw["execution_authorized"] is not False:
+        raise ValueError("execution_authorized must remain false")
+    comparison = IssuePlanCurrentStateComparison(
+        expected_evidence_id=raw["expected_evidence_id"],
+        current_evidence_id=raw["current_evidence_id"],
+        expected_fingerprint=raw["expected_fingerprint"],
+        current_fingerprint=raw["current_fingerprint"],
+        changed_bindings=_require_string_array(
+            raw["changed_bindings"], "changed_bindings"
+        ),
+        outcome=outcome,
+        reason_codes=_require_string_array(raw["reason_codes"], "reason_codes"),
+        details=_require_string_array(raw["details"], "details"),
+    )
+    if _comparison_payload(comparison) != dict(raw):
+        raise ValueError(f"{_COMPARISON_TRANSPORT_NAME} transport is not canonical")
+    return comparison
+
+
 def _comparison(
     expected: IssuePlanCurrentStateEvidence,
     current: IssuePlanCurrentStateEvidence,
@@ -752,6 +839,59 @@ def _bytes(value: Any) -> bytes:
 
 def _digest(value: Any) -> str:
     return hashlib.sha256(_bytes(value)).hexdigest()
+
+
+def _decode_transport_payload(
+    payload: bytes | str | Mapping[str, Any],
+) -> Mapping[str, Any]:
+    name = _COMPARISON_TRANSPORT_NAME
+    source_bytes: bytes | None = None
+    source_text: str | None = None
+    if isinstance(payload, bytes):
+        source_bytes = payload
+        try:
+            raw: object = json.loads(payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"{name} must be canonical UTF-8 JSON") from exc
+    elif isinstance(payload, str):
+        source_text = payload
+        try:
+            raw = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{name} must be canonical JSON text") from exc
+    elif isinstance(payload, Mapping):
+        raw = dict(payload)
+    else:
+        raise TypeError("payload must be bytes, text, or a mapping")
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"{name} payload must be an object")
+    if source_bytes is not None and source_bytes != _bytes(raw):
+        raise ValueError(f"{name} must be canonical UTF-8 JSON")
+    if source_text is not None and source_text != _bytes(raw).decode("utf-8"):
+        raise ValueError(f"{name} must be canonical JSON text")
+    return raw
+
+
+def _require_exact_keys(raw: Mapping[str, Any]) -> None:
+    unknown = sorted(set(raw) - _COMPARISON_TRANSPORT_KEYS)
+    missing = sorted(_COMPARISON_TRANSPORT_KEYS - set(raw))
+    if unknown:
+        raise ValueError(
+            f"{_COMPARISON_TRANSPORT_NAME} has unknown fields: {', '.join(unknown)}"
+        )
+    if missing:
+        raise ValueError(
+            f"{_COMPARISON_TRANSPORT_NAME} is missing required fields: "
+            f"{', '.join(missing)}"
+        )
+
+
+def _require_string_array(value: object, name: str) -> tuple[str, ...]:
+    if type(value) is not list:
+        raise ValueError(f"{name} must be an array")
+    if not all(type(item) is str and item for item in value):
+        raise ValueError(f"{name} must contain non-empty strings")
+    return tuple(value)
 
 
 def _reasons(values: Iterable[str]) -> tuple[str, ...]:
