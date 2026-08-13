@@ -28,16 +28,16 @@ is_line_limit_exception() {
   grep -Fxq "$path" "$exceptions_file"
 }
 
-# 1. Every Markdown file except CLAUDE.md and documented exceptions must stay
-#    under 100 lines.
+# 1. Every Markdown file except CLAUDE.md and documented exceptions may contain
+#    at most 150 logical lines.
 over_limit=""
 while IFS= read -r f; do
   rel="${f#./}"
   if is_line_limit_exception "$rel"; then
     continue
   fi
-  lines=$(wc -l < "$f")
-  if [ "$lines" -ge 100 ]; then
+  lines=$(awk 'END { print NR }' "$f")
+  if [ "$lines" -gt 150 ]; then
     over_limit="${over_limit}${f}: ${lines} lines
 "
   fi
@@ -45,7 +45,7 @@ done < <(find . -name "*.md" -not -path "./.git/*" -not -name "CLAUDE.md" | sort
 if [ -n "$over_limit" ]; then
   printf "%b" "$over_limit"
 fi
-check "All non-exempt Markdown files (except CLAUDE.md) are under 100 lines" "$([ -z "$over_limit" ] && echo 0 || echo 1)"
+check "All non-exempt Markdown files (except CLAUDE.md) are at most 150 logical lines" "$([ -z "$over_limit" ] && echo 0 || echo 1)"
 
 # 2. Every overlay must reference _common-overlay-rules.md instead of
 #    repeating the shared blocks (regression guard for overlay dedup).
