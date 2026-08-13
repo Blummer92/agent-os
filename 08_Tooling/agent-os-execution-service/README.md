@@ -71,11 +71,9 @@ The complete frozen contract and stop conditions are in Issue #918.
 
 `ExecutionServiceRequest` and `ExecutionServiceResult` remain frozen, bounded,
 strictly typed, canonically serialized, and content-addressed. The caller
-supplies `evaluated_at`; the service never reads the host clock. Public
-`serialize_execution_service_request(...)` and
-`reconstruct_execution_service_request(...)` provide the canonical closed-schema
-transport for the existing request type while preserving its constructor-owned
-validation and fingerprint semantics.
+supplies `evaluated_at`; the service never reads the host clock. The public
+request serializer/reconstructor preserves constructor-owned validation and
+fingerprint semantics.
 
 Validation command planning maps only registered command strings to fixed argv.
 It performs no shell parsing, alias expansion, user-supplied argv execution,
@@ -97,8 +95,6 @@ bash 07_Agent_Tests/validate-repo-structure.sh
 ./scripts/validate-all.sh
 git diff --check
 ```
-
 ## Rollback
-Revert the Issue #1070 request-transport additions and the corresponding README
-update. No service, runner, workflow, credential, checkpoint record, production
-resource, or external state requires cleanup.
+Revert the Issue #1070 request-transport and README additions; no external state
+requires cleanup.
