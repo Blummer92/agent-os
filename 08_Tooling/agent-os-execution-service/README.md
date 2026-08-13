@@ -21,6 +21,7 @@ Ready for Review, and merge authorization remain separate states.
 ## Public capabilities
 - `inspect_repository`
 - `verify_repository_state`
+- canonical `ExecutionServiceRequest` serialization/reconstruction
 - deterministic validation command planning
 - deterministic executor routing and immutable handoff construction
 
@@ -70,7 +71,11 @@ The complete frozen contract and stop conditions are in Issue #918.
 
 `ExecutionServiceRequest` and `ExecutionServiceResult` remain frozen, bounded,
 strictly typed, canonically serialized, and content-addressed. The caller
-supplies `evaluated_at`; the service never reads the host clock.
+supplies `evaluated_at`; the service never reads the host clock. Public
+`serialize_execution_service_request(...)` and
+`reconstruct_execution_service_request(...)` provide the canonical closed-schema
+transport for the existing request type while preserving its constructor-owned
+validation and fingerprint semantics.
 
 Validation command planning maps only registered command strings to fixed argv.
 It performs no shell parsing, alias expansion, user-supplied argv execution,
@@ -94,5 +99,6 @@ git diff --check
 ```
 
 ## Rollback
-Revert the nine Issue #918 files. No service, runner, workflow, credential,
-checkpoint record, production resource, or external state requires cleanup.
+Revert the Issue #1070 request-transport additions and the corresponding README
+update. No service, runner, workflow, credential, checkpoint record, production
+resource, or external state requires cleanup.
