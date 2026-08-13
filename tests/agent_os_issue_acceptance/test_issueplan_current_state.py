@@ -444,7 +444,24 @@ def test_multiple_bindings_reasons_and_details_survive_transport():
     assert restored.details == ("changed:allowed_files", "changed:required_tests")
 
 
-@pytest.mark.parametrize("missing", sorted(_payload()))
+_TRANSPORT_FIELDS = (
+    "changed_bindings",
+    "current_evidence_id",
+    "current_fingerprint",
+    "details",
+    "execution_authorized",
+    "expected_evidence_id",
+    "expected_fingerprint",
+    "outcome",
+    "reason_codes",
+)
+
+
+def test_transport_carries_exactly_the_declared_fields():
+    assert sorted(_payload()) == list(_TRANSPORT_FIELDS)
+
+
+@pytest.mark.parametrize("missing", _TRANSPORT_FIELDS)
 def test_missing_transport_field_is_rejected(missing):
     payload = _payload()
     payload.pop(missing)
