@@ -4,6 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ORCHESTRATOR = ROOT / "02_Agent_Overlays/chatgpt-orchestrator.md"
 ORCHESTRATOR_TESTS = ROOT / "07_Agent_Tests/chatgpt-orchestrator.tests.md"
+ORCHESTRATOR_DETAILS = ROOT / "07_Agent_Tests/chatgpt-orchestrator-tests-details.md"
 
 
 def read(path: Path) -> str:
@@ -65,7 +66,7 @@ def test_compaction_preserves_material_handoff_evidence() -> None:
 
 
 def test_required_regression_fixtures_cover_ordering_and_omission() -> None:
-    fixtures = read(ORCHESTRATOR_TESTS)
+    fixtures = read(ORCHESTRATOR_DETAILS)
     for heading in (
         "Test 29 - Compact Runtime Rendering For Implementation And Handoff",
         "Test 30 - Next Step Leads With One Supported Action",
