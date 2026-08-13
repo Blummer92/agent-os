@@ -144,8 +144,6 @@ class ValidationCommandPlan:
     side_effects_performed: Literal[False] = field(default=False, init=False)
 
 
-# Keyed by profile name so both the builder and the validator agree on exactly
-# one operation per profile without duplicating the mapping.
 _PROFILE_OPERATIONS = MappingProxyType(
     {
         "static": CommandOperation.VALIDATION_STATIC,
@@ -153,9 +151,6 @@ _PROFILE_OPERATIONS = MappingProxyType(
         "aggregate": CommandOperation.VALIDATION_AGGREGATE,
     }
 )
-
-# Derived once from the private registry so argv membership can be checked
-# without exposing, duplicating, or mutating the registry itself.
 _REGISTRY_ARGV_VALUES = frozenset(_COMMAND_REGISTRY.values())
 
 
@@ -246,12 +241,6 @@ def _build_pre_pr_command_plan(
     *,
     evaluated_at: object,
 ) -> ValidationCommandPlan:
-    """Bind one issue- and invocation-bound pre-PR plan to fixed registry argv.
-
-    The pre-PR branch never invents a pull-request identity: the command plan is
-    bound to the subject's issue, invocation, branch, and SHAs instead. Entry order
-    follows the subject's ordered command identities rather than argv order.
-    """
     request_reasons = validate_execution_service_request(
         request,
         evaluated_at=evaluated_at,
@@ -322,16 +311,6 @@ def _build_pre_pr_command_plan(
 
 
 def _runtime_safe_command_plan_entry(entry: object) -> bool:
-    """Return whether one command-plan entry has every exact runtime type and
-    bound this module trusts before it is ever used for registry membership,
-    hashing, tuple comparison, set construction, sorting, or serialization.
-
-    ``CommandPlanEntry.__post_init__`` only validates at construction time, so
-    an exact-type instance reached through ``object.__setattr__`` tampering
-    can still carry a non-tuple ``argv``, a non-``CommandOperation``
-    ``operation``, or an argv element outside the bounds construction would
-    have enforced. Every such shape is rejected here first.
-    """
     if type(entry) is not CommandPlanEntry:
         return False
     if type(entry.operation) is not CommandOperation:
@@ -349,14 +328,6 @@ def _runtime_safe_command_plan_entry(entry: object) -> bool:
 
 
 def _runtime_safe_command_plan(plan: ValidationCommandPlan) -> bool:
-    """Return whether every field has the exact runtime type this validator trusts.
-
-    Short-circuits before any risky access: ``entries`` is confirmed to be a
-    tuple before it is ever iterated, and every item is confirmed to be an
-    exact ``CommandPlanEntry`` with a defensively revalidated ``operation``
-    and ``argv`` (see ``_runtime_safe_command_plan_entry``) before either is
-    read anywhere else in this module.
-    """
     return (
         type(plan.schema_version) is str
         and type(plan.registry_version) is str
@@ -397,17 +368,6 @@ def _bounded_identity_text(value: str) -> bool:
 
 
 def validate_validation_command_plan(plan: object) -> tuple[str, ...]:
-    """Validate one command plan without I/O, mutation, or ever raising.
-
-    Returns a sorted tuple of bounded reason codes; an empty tuple means the
-    plan satisfies every check below. This is the single source of truth
-    ``serialize_validation_command_plan`` and ``validation_command_plan_id``
-    defer to -- neither function accepts a plan this validator rejects, and
-    neither carves out an exemption for unregistered argv or a profile/
-    operation mismatch. Argv membership is checked against the existing
-    private ``_COMMAND_REGISTRY`` in this module; the registry itself is
-    never exposed, copied, mutated, or version-bumped by this function.
-    """
     if type(plan) is not ValidationCommandPlan:
         return ("command-plan.invalid-type",)
     if not _runtime_safe_command_plan(plan):
@@ -510,6 +470,100 @@ def serialize_validation_command_plan(plan: object) -> dict[str, object]:
             "invalid validation command plan: " + ",".join(reasons)
         )
     return _command_plan_payload(plan)
+
+
+def reconstruct_validation_command_plan(payload: object) -> ValidationCommandPlan:
+    """Reconstruct one exact canonical command-plan payload without I/O."""
+    if type(payload) is not dict:
+        raise TypeError("payload must be an exact dict")
+    expected_fields = {
+        "schema_version",
+        "registry_version",
+        "repository",
+        "issue_or_handoff_identity",
+        "requested_ref",
+        "expected_sha",
+        "request_revision",
+        "request_fingerprint",
+        "validation_plan_id",
+        "validation_plan_schema_version",
+        "selector_version",
+        "profile",
+        "command_set_digest",
+        "entries",
+        "execution_authorized",
+        "merge_authorized",
+        "side_effects_performed",
+    }
+    if set(payload) != expected_fields:
+        raise ValueError("command plan payload fields do not match canonical schema")
+    string_fields = (
+        "schema_version",
+        "registry_version",
+        "repository",
+        "issue_or_handoff_identity",
+        "requested_ref",
+        "expected_sha",
+        "request_fingerprint",
+        "validation_plan_id",
+        "validation_plan_schema_version",
+        "selector_version",
+        "profile",
+        "command_set_digest",
+    )
+    if any(type(payload[field]) is not str for field in string_fields):
+        raise TypeError("command plan payload contains a non-string field")
+    if type(payload["request_revision"]) is not int:
+        raise TypeError("request_revision must be an exact int")
+    if payload["execution_authorized"] is not False:
+        raise ValueError("execution_authorized must remain false")
+    if payload["merge_authorized"] is not False:
+        raise ValueError("merge_authorized must remain false")
+    if payload["side_effects_performed"] is not False:
+        raise ValueError("side_effects_performed must remain false")
+
+    raw_entries = payload["entries"]
+    if type(raw_entries) is not list:
+        raise TypeError("entries must be an exact list")
+    entries: list[CommandPlanEntry] = []
+    for raw_entry in raw_entries:
+        if type(raw_entry) is not dict or set(raw_entry) != {"operation", "argv"}:
+            raise ValueError("command plan entry fields do not match canonical schema")
+        if type(raw_entry["operation"]) is not str:
+            raise TypeError("operation must be a string")
+        try:
+            operation = CommandOperation(raw_entry["operation"])
+        except ValueError as exc:
+            raise ValueError("unsupported command operation") from exc
+        raw_argv = raw_entry["argv"]
+        if type(raw_argv) is not list:
+            raise TypeError("argv must be an exact list")
+        if any(type(item) is not str for item in raw_argv):
+            raise TypeError("argv items must be strings")
+        entries.append(CommandPlanEntry(operation=operation, argv=tuple(raw_argv)))
+
+    plan = ValidationCommandPlan(
+        schema_version=payload["schema_version"],
+        registry_version=payload["registry_version"],
+        repository=payload["repository"],
+        issue_or_handoff_identity=payload["issue_or_handoff_identity"],
+        requested_ref=payload["requested_ref"],
+        expected_sha=payload["expected_sha"],
+        request_revision=payload["request_revision"],
+        request_fingerprint=payload["request_fingerprint"],
+        validation_plan_id=payload["validation_plan_id"],
+        validation_plan_schema_version=payload["validation_plan_schema_version"],
+        selector_version=payload["selector_version"],
+        profile=payload["profile"],
+        command_set_digest=payload["command_set_digest"],
+        entries=tuple(entries),
+    )
+    reasons = validate_validation_command_plan(plan)
+    if reasons:
+        raise ValueError("invalid validation command plan: " + ",".join(reasons))
+    if serialize_validation_command_plan(plan) != payload:
+        raise ValueError("command plan payload is not canonical")
+    return plan
 
 
 def validation_command_plan_id(plan: object) -> str:
