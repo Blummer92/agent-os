@@ -73,6 +73,8 @@ Before selecting a GitHub execution path for already-authorized work, classify t
 
 ## Response Ordering Rule
 Select the presentation profile, visible ordering, progress labeling, and report fields from `01_Shared_Standards/global-engineering/agent-interaction-output-standard.md`. Routing and handoff fields stay internal evidence unless the profile requires them; they never displace the requested answer or artifact.
+For ordinary Agent OS issue implementation, review, repair, and terminal handoff turns, enforce the canonical compact operator rendering at runtime rather than expanding internal routing or governance evidence into a narrative preamble. When canonical evidence supplies a bounded named stage sequence, render a bounded state-based progress bar followed by `Completed:`, `Current:`, `Remaining:`, and `Blockers:`. Omit the bar when no bounded canonical stage sequence exists; never invent completion or percentage state. Show `Best execution:` only when current executor-route or capability evidence is material, and show `Next:` only when canonical evidence supports one concrete next action.
+`Complete handoff` and `Complete the handoff` use that compact implementation/review rendering. `Next step` leads with the single supported next action. `Work on #<issue>` uses the compact progress labels while bounded work is underway. PR review leads with exact-head, check, and blocking-review state before the compact status block when bounded stages exist. Prompt or command handoffs use the smallest reusable packet that preserves material authorization, owner/source-of-truth, blocker, exact-head, validation, and final-report constraints. Internal routing and audit evidence remains internal unless materially required by the selected profile.
 Classroom-material responses follow `artifact-first-response-standard.md`: lead with the requested artifact, preview, or content specification before backend routing and governance reporting. Rubric or assessment-design consultation follows `teacher-decision-studio-standard.md` and `teacher-decision-studio-previews-standard.md`: a table-first comparison with per-option worksheet and PDF previews, never an auto-approved choice. These domain standards refine the classroom profile and do not create a competing output schema.
 
 ## Stop Conditions
@@ -82,9 +84,10 @@ For finite multi-item missions, an item-local blocker is not a mission-level sto
 Request-interpretation continuation stops follow `chatgpt-orchestrator-request-interpretation.md`; conversation memory never resolves missing, stale, or multiple-candidate canonical context.
 
 ## Version
-0.1.9
+0.2.0
 
 ## Changelog
+- 0.2.0 wires the canonical compact Agent Interaction Output Standard into runtime-facing Orchestrator behavior for implementation, review, handoff, continuation, and PR-review turns; bounded progress is evidence-based, conditional fields remain conditional, and no new state, routing, or authority system is introduced (#1086).
 - 0.1.9 consumes canonical #924 structured request interpretation as upstream routing evidence and delegates detailed conformance/freshness rules to `chatgpt-orchestrator-request-interpretation.md` (#925).
 - 0.1.8 inherits the canonical Agent Interaction Output Standard (#926) for presentation-profile selection, visible ordering, progress labeling, and report field ownership, while preserving existing execution-surface preflight, Safe Implementation Lane, finite-mission, artifact-first, and Teacher Decision Studio behavior.
 - 0.1.7 requires a live execution-surface capability preflight before GitHub execution routing, reuses #918 route semantics and environment-health evidence, treats missing surface tooling as a capability mismatch rather than repository-issue failure, and preserves Safe-Lane authorization across internal reroutes without widening authority (#1039).
