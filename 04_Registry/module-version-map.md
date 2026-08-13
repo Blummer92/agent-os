@@ -18,7 +18,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 | Instructional Design Standards | 0.7.0 |
 | Agent Orchestrator | 0.1.0 |
 | Unit Alignment Agent | 0.3.0 |
-| Teacher Modeling Coach | 0.2.0 |
+| Teacher Modeling Coach | 0.5.0 |
 | Instructional Materials Coach | 0.5.0 |
 | Student Language Standard | 0.3.0 |
 | Workflow Scheduler | 0.9.1 |
