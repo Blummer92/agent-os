@@ -31,8 +31,8 @@ Fixture: #924 `VALID`, `action: generate`, photography subject constraint, appro
 Expect: `task_owner: instructional-materials-coach`, registered Instructional Materials Coach overlay, photography remains a content domain, and student-facing output stays on the approved Drive/Slides destination.
 
 ## Test 36 - Noncanonical Mutation Is Blocked
-Fixture: #924 mutation result carrying `request.write-surface-unclear` because requested official source is memory/noncanonical.
-Expect: blocked/needs-decision and governed source-of-truth routing; wording creates no authorization.
+Fixture: #924 `INVALID` mutation result carrying `request.write-surface-unclear` because requested official source is memory/noncanonical.
+Expect: Orchestrator `status: blocked` with validation-failure evidence; governed source-of-truth routing remains authoritative, no mutation is routed, and no authorization is created.
 
 ## Test 37 - Scheduling Requires Monitoring Surface And Grants No Runtime Authority
 Fixture: #924 `MANUAL_REVIEW_REQUIRED`, `requested_effect: schedule`, reason `request.monitoring-surface-required`, `authorization_created=false`.
