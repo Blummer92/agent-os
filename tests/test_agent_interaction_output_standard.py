@@ -369,7 +369,7 @@ def test_orchestrator_inherits_the_standard_without_a_competing_schema() -> None
     assert CANONICAL_PATH in ordering
     assert "never displace the requested answer or artifact" in ordering
     assert "do not create a competing output schema" in ordering
-    assert "0.1.8" in section(ORCHESTRATOR, "Version")
+    assert "0.1.9" in section(ORCHESTRATOR, "Version")
 
     fixtures = read(ORCHESTRATOR_TESTS)
     assert "interaction-output-profile-matrix.md" in fixtures
@@ -378,7 +378,7 @@ def test_orchestrator_inherits_the_standard_without_a_competing_schema() -> None
 
 
 def test_standard_is_registered_and_navigable() -> None:
-    assert "| Agent Interaction Output Standard | 0.1.0 |" in read(VERSION_MAP)
+    assert "| Agent Interaction Output Standard | 0.2.0 |" in read(VERSION_MAP)
     navigation = read(NAVIGATION)
     assert "@interaction-output" in navigation
     assert CANONICAL_PATH in navigation

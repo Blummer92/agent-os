@@ -34,6 +34,9 @@ GitHub repository writes, production systems, governed fields, source-of-truth r
 These fields may remain internal routing/audit evidence. Do not make the user copy/paste them solely because responsibility moves to another registered owner when the current Safe Implementation Lane authorization remains applicable.
 When a legacy alias is resolved, include `legacy_alias`, `canonical_agent`, and `selected_overlay` in the routing output.
 
+## Request-Interpretation Conformance
+Consume the canonical #924 `request-interpretation-v1` record; do not parse raw language or define a second interpretation/routing vocabulary. The complete consumer, continuation-freshness, status-mapping, and authority-ceiling rules are in `chatgpt-orchestrator-request-interpretation.md`.
+
 ## Routing Rules
 - Route only to real agents listed in `04_Registry/agent-inheritance-registry.md`.
 - Before stopping on an unregistered or unknown agent name, check `04_Registry/legacy-agent-alias-registry.md`.
@@ -52,7 +55,6 @@ When a legacy alias is resolved, include `legacy_alias`, `canonical_agent`, and 
 
 ## Execution-Surface Capability Preflight
 Before selecting a GitHub execution path for already-authorized work, classify the exact next action against the existing #918 executor-routing capability vocabulary and inspect current execution-surface capability evidence.
-
 - Use the connected GitHub surface directly when its available actions are sufficient for the exact next action and no local/runtime capability is required.
 - When checkout, local Git, dependency installation, process execution, tests, build/lint, runtime inspection, generated-artifact inspection, Git reconciliation, exact-head validation, or checkpoint/resume is required, consume fresh governed-runner/environment-health evidence for the selected execution surface. Do not assume `git`, `gh`, GitHub authentication, process execution, network reachability, or validation capability exists.
 - Apply the existing executor-route semantics from #918. This overlay does not define a second route selector, runner, capability registry, GitHub client, or authorization framework.
@@ -77,11 +79,13 @@ Classroom-material responses follow `artifact-first-response-standard.md`: lead 
 Stop when the target, source of truth, permission, owner, or requested write surface is unclear, or when current Safe Implementation Lane authorization no longer covers the next action.
 Stop when a user asks for a nonexistent agent that does not resolve through `04_Registry/legacy-agent-alias-registry.md`.
 For finite multi-item missions, an item-local blocker is not a mission-level stop; record it and continue. A shared stop condition classifies all remaining requested items explicitly before handoff.
+Request-interpretation continuation stops follow `chatgpt-orchestrator-request-interpretation.md`; conversation memory never resolves missing, stale, or multiple-candidate canonical context.
 
 ## Version
-0.1.8
+0.1.9
 
 ## Changelog
+- 0.1.9 consumes canonical #924 structured request interpretation as upstream routing evidence and delegates detailed conformance/freshness rules to `chatgpt-orchestrator-request-interpretation.md` (#925).
 - 0.1.8 inherits the canonical Agent Interaction Output Standard (#926) for presentation-profile selection, visible ordering, progress labeling, and report field ownership, while preserving existing execution-surface preflight, Safe Implementation Lane, finite-mission, artifact-first, and Teacher Decision Studio behavior.
 - 0.1.7 requires a live execution-surface capability preflight before GitHub execution routing, reuses #918 route semantics and environment-health evidence, treats missing surface tooling as a capability mismatch rather than repository-issue failure, and preserves Safe-Lane authorization across internal reroutes without widening authority (#1039).
 - 0.1.6 adds bounded finite multi-item execution continuity and zero-untouched final reconciliation (#1020) without widening authorization or adding background execution.

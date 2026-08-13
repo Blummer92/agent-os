@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 HELPER_OVERLAYS = {
     "apps-script-sync-test-overlay",
+    "chatgpt-orchestrator-request-interpretation",
     "dashboard-builder-overlay",
     "python-development-overlay",
     "workspace-implementation-overlay",
