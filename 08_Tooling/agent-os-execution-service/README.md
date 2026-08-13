@@ -96,5 +96,4 @@ bash 07_Agent_Tests/validate-repo-structure.sh
 git diff --check
 ```
 ## Rollback
-Revert the Issue #1070 request-transport and README additions; no external state
-requires cleanup.
+Revert the Issue #1070 request-transport and README additions; no external state requires cleanup.
