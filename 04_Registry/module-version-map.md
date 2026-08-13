@@ -20,7 +20,7 @@ Repository releases and module versions are versioned independently, so module v
 | Instructional Design Standards | 0.7.0 |
 | Agent Orchestrator | 0.1.0 |
 | Unit Alignment Agent | 0.3.0 |
-| Teacher Modeling Coach | 0.2.0 |
+| Teacher Modeling Coach | 0.5.0 |
 | Instructional Materials Coach | 0.5.0 |
 | Student Language Standard | 0.3.0 |
 | Workflow Scheduler | 0.9.1 |
@@ -92,7 +92,7 @@ bounded Notion working-layer design and the exact-target Change Request. The
 Change Request is recorded as proposed and not authorized; six unresolved
 decisions block any live change.
 
-**Execution Checkpoint Contract** (`scripts/agent_os_execution_checkpoint/`, #895, design approved in #858) is the pure-local checkpoint record, content-addressed identity, append-only store, and resume planner; every authority field stays false.
+**Execution Checkpoint Contract** (`scripts/agent_os_execution_checkpoint/`, #895, design approved in #858) is the pure-local checkpoint record, content-addressed append-only store, and resume planner; every authority field stays false.
 
 ## Reconciliation Notes
 
