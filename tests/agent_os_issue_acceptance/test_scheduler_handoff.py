@@ -1,5 +1,6 @@
 import ast
 import inspect
+import json
 import socket
 import subprocess
 from dataclasses import FrozenInstanceError
@@ -23,10 +24,13 @@ from scripts.agent_os_issue_acceptance.readiness import ReadinessOutcome
 from scripts.agent_os_issue_acceptance.scheduler_handoff import (
     HandoffCohort,
     HandoffValidationOutcome,
+    HandoffValidationResult,
     SchedulerPlanningHandoff,
     compute_graph_digest,
     compute_handoff_digest,
     compute_planning_result_digest,
+    reconstruct_handoff_validation_result,
+    serialize_handoff_validation_result,
     serialize_scheduler_planning_handoff,
     validate_scheduler_planning_handoff,
 )
@@ -406,6 +410,8 @@ def test_package_exports_only_approved_handoff_boundary():
         "compute_graph_digest",
         "compute_handoff_digest",
         "compute_planning_result_digest",
+        "reconstruct_handoff_validation_result",
+        "serialize_handoff_validation_result",
         "serialize_scheduler_planning_handoff",
         "validate_scheduler_planning_handoff",
     }
@@ -428,6 +434,7 @@ def test_all_public_functions_are_offline(monkeypatch):
     graph = build_issue_batch_graph([node()])
     plan = evaluate_batch_plan(graph)
     handoff = valid_handoff()
+    validation_result = HandoffValidationResult(HandoffValidationOutcome.FRESH, True, ())
     monkeypatch.setattr(socket, "socket", lambda *args, **kwargs: pytest.fail("network access"))
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: pytest.fail("subprocess access"))
     compute_graph_digest(graph)
@@ -435,3 +442,157 @@ def test_all_public_functions_are_offline(monkeypatch):
     compute_handoff_digest(handoff)
     serialize_scheduler_planning_handoff(handoff)
     validate_scheduler_planning_handoff(handoff)
+    encoded_result = serialize_handoff_validation_result(validation_result)
+    reconstruct_handoff_validation_result(encoded_result)
+
+
+def _handoff_validation_payload(**changes):
+    result = HandoffValidationResult(HandoffValidationOutcome.FRESH, True, ())
+    payload = json.loads(serialize_handoff_validation_result(result))
+    payload.update(changes)
+    return payload
+
+
+@pytest.mark.parametrize(
+    "outcome,reasons",
+    [
+        (HandoffValidationOutcome.FRESH, ()),
+        (HandoffValidationOutcome.STALE, ()),
+        (HandoffValidationOutcome.INVALID, ("unknown-field", "handoff-digest-mismatch")),
+        (HandoffValidationOutcome.NEEDS_DECISION, ("external-revalidation-required",)),
+    ],
+)
+def test_handoff_validation_result_round_trips_for_every_outcome(outcome, reasons):
+    result = HandoffValidationResult(outcome, outcome is not HandoffValidationOutcome.INVALID, reasons)
+    encoded = serialize_handoff_validation_result(result)
+    assert reconstruct_handoff_validation_result(encoded) == result
+
+
+def test_handoff_validation_result_serialization_is_deterministic():
+    result = HandoffValidationResult(
+        HandoffValidationOutcome.INVALID, False, ("unknown-field", "handoff-digest-mismatch")
+    )
+    assert serialize_handoff_validation_result(result) == serialize_handoff_validation_result(result)
+
+
+def test_handoff_validation_result_serialize_after_reconstruct_matches():
+    result = HandoffValidationResult(
+        HandoffValidationOutcome.NEEDS_DECISION, True, ("external-revalidation-required",)
+    )
+    encoded = serialize_handoff_validation_result(result)
+    reconstructed = reconstruct_handoff_validation_result(encoded)
+    assert serialize_handoff_validation_result(reconstructed) == encoded
+
+
+def test_handoff_validation_result_outcome_serializes_to_string_value():
+    result = HandoffValidationResult(HandoffValidationOutcome.STALE, False, ())
+    payload = json.loads(serialize_handoff_validation_result(result))
+    assert payload["outcome"] == "stale"
+
+
+def test_handoff_validation_result_reason_codes_preserved_in_canonical_order():
+    result = HandoffValidationResult(
+        HandoffValidationOutcome.INVALID, False, ("unknown-field", "handoff-digest-mismatch")
+    )
+    payload = json.loads(serialize_handoff_validation_result(result))
+    assert payload["reason_codes"] == sorted({"unknown-field", "handoff-digest-mismatch"})
+
+
+def test_handoff_validation_result_reconstruct_rejects_unknown_field():
+    payload = _handoff_validation_payload(extra="x")
+    with pytest.raises(ValueError):
+        reconstruct_handoff_validation_result(payload)
+
+
+@pytest.mark.parametrize(
+    "missing", sorted(scheduler_handoff._HANDOFF_VALIDATION_RESULT_TRANSPORT_KEYS)
+)
+def test_handoff_validation_result_reconstruct_rejects_missing_field(missing):
+    payload = _handoff_validation_payload()
+    payload.pop(missing)
+    with pytest.raises(ValueError):
+        reconstruct_handoff_validation_result(payload)
+
+
+@pytest.mark.parametrize("bad_outcome", ["unsupported", "Fresh", 1, None])
+def test_handoff_validation_result_reconstruct_rejects_malformed_outcome(bad_outcome):
+    payload = _handoff_validation_payload(outcome=bad_outcome)
+    with pytest.raises(ValueError):
+        reconstruct_handoff_validation_result(payload)
+
+
+@pytest.mark.parametrize("bad_value", [1, 0, "true", None])
+def test_handoff_validation_result_reconstruct_rejects_nonbool_local_checks_passed(bad_value):
+    payload = _handoff_validation_payload(local_checks_passed=bad_value)
+    with pytest.raises(ValueError):
+        reconstruct_handoff_validation_result(payload)
+
+
+@pytest.mark.parametrize("bad_value", [None, "external-revalidation-required", {"a": 1}, 1])
+def test_handoff_validation_result_reconstruct_requires_reason_codes_array(bad_value):
+    payload = _handoff_validation_payload(reason_codes=bad_value)
+    with pytest.raises(ValueError):
+        reconstruct_handoff_validation_result(payload)
+
+
+@pytest.mark.parametrize("bad_item", [1, None, "", True])
+def test_handoff_validation_result_reconstruct_rejects_malformed_reason_code_item(bad_item):
+    payload = _handoff_validation_payload(reason_codes=[bad_item])
+    with pytest.raises(ValueError):
+        reconstruct_handoff_validation_result(payload)
+
+
+def test_handoff_validation_result_reconstruct_rejects_unowned_reason_code():
+    payload = _handoff_validation_payload(reason_codes=["not-a-real-reason-code"])
+    with pytest.raises(ValueError):
+        reconstruct_handoff_validation_result(payload)
+
+
+def test_handoff_validation_result_reconstruct_rejects_unsorted_reason_codes():
+    codes = ["unknown-field", "handoff-digest-mismatch"]
+    assert codes != sorted(codes)
+    payload = _handoff_validation_payload(
+        outcome="invalid", local_checks_passed=False, reason_codes=codes
+    )
+    with pytest.raises(ValueError):
+        reconstruct_handoff_validation_result(payload)
+
+
+def test_handoff_validation_result_reconstruct_rejects_duplicate_reason_codes():
+    payload = _handoff_validation_payload(
+        outcome="needs-decision",
+        reason_codes=["external-revalidation-required", "external-revalidation-required"],
+    )
+    with pytest.raises(ValueError):
+        reconstruct_handoff_validation_result(payload)
+
+
+def test_handoff_validation_result_reconstruct_rejects_freshness_drift():
+    payload = _handoff_validation_payload(freshness="evaluated")
+    with pytest.raises(ValueError):
+        reconstruct_handoff_validation_result(payload)
+
+
+def test_handoff_validation_result_reconstruct_rejects_execution_authorized_true():
+    payload = _handoff_validation_payload(execution_authorized=True)
+    with pytest.raises(ValueError):
+        reconstruct_handoff_validation_result(payload)
+
+
+@pytest.mark.parametrize("bad_value", [0, "false", None])
+def test_handoff_validation_result_reconstruct_rejects_nonbool_execution_authorized(bad_value):
+    payload = _handoff_validation_payload(execution_authorized=bad_value)
+    with pytest.raises(ValueError):
+        reconstruct_handoff_validation_result(payload)
+
+
+def test_handoff_validation_result_reconstruct_does_not_mutate_input_mapping():
+    payload = _handoff_validation_payload()
+    before = dict(payload)
+    reconstruct_handoff_validation_result(payload)
+    assert payload == before
+
+
+def test_handoff_validation_result_serialize_requires_exact_type():
+    with pytest.raises(TypeError):
+        serialize_handoff_validation_result({"outcome": "fresh"})
