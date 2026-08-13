@@ -699,7 +699,14 @@ def serialize_handoff_validation_result(result: HandoffValidationResult) -> byte
     """Serialize one canonical HandoffValidationResult's public fields."""
     if type(result) is not HandoffValidationResult:
         raise TypeError("result must be an exact HandoffValidationResult")
-    return _canonical_bytes(_handoff_validation_result_payload(result))
+    try:
+        payload = _handoff_validation_result_payload(result)
+        canonical = reconstruct_handoff_validation_result(payload)
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError("result has invalid handoff validation fields") from exc
+    if canonical != result:
+        raise ValueError("result has noncanonical handoff validation fields")
+    return _canonical_bytes(payload)
 
 
 def reconstruct_handoff_validation_result(

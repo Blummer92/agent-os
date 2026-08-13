@@ -596,3 +596,9 @@ def test_handoff_validation_result_reconstruct_does_not_mutate_input_mapping():
 def test_handoff_validation_result_serialize_requires_exact_type():
     with pytest.raises(TypeError):
         serialize_handoff_validation_result({"outcome": "fresh"})
+
+
+def test_handoff_validation_result_serialize_rejects_nonbool_local_checks_passed():
+    result = HandoffValidationResult(HandoffValidationOutcome.FRESH, 1, ())
+    with pytest.raises(ValueError):
+        serialize_handoff_validation_result(result)
