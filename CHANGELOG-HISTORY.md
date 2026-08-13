@@ -6,6 +6,7 @@ Archived historical changelog content. For current and recent history, see [CHAN
 - Clarified dashboard sync routing and prevented duplicate standalone Dashboard Sync Agent ownership.
 - Retired Apps Script Sync Test Agent as a standalone canonical agent name.
 - Preserved Apps Script Sync Test Overlay as specialist sync-validation behavior.
+- Renamed `00_Governance/agent-inheritance-registry.md` to `agent-creation-policy.md` and made `04_Registry/agent-inheritance-registry.md` the sole source for the agent list and inheritance mapping.
 
 ## 0.1.0
 - Created modular Agent OS Markdown knowledge base.

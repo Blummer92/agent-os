@@ -33,6 +33,16 @@ from .executable_lane_selection import (
     select_executable_lanes,
     serialize_executable_lane_selection,
 )
+from .post_pr_lane_plan import (
+    POST_PR_LANE_PLAN_SCHEMA_NAME,
+    POST_PR_LANE_PLAN_SCHEMA_VERSION,
+    ConflictFinding,
+    LanePlanOutcome,
+    PostPrLanePlan,
+    deserialize_post_pr_lane_plan,
+    plan_post_pr_lane,
+    serialize_post_pr_lane_plan,
+)
 from .implementation_packet_projection import (
     ImplementationPacketProjection,
     ImplementationPacketSourceIdentities,
@@ -112,13 +122,18 @@ __all__ = [
     "DEPENDENCY_IDENTITY_NOT_SUPPLIED_REASON",
     "EXECUTABLE_LANE_SELECTION_SCHEMA_NAME",
     "EXECUTABLE_LANE_SELECTION_SCHEMA_VERSION",
+    "POST_PR_LANE_PLAN_SCHEMA_NAME",
+    "POST_PR_LANE_PLAN_SCHEMA_VERSION",
     "ExecutionPacketDisposition",
     "ExecutionPacketStageResult",
     "REPOSITORY_OBSERVATION_REJECTED",
     "STAGE_SCHEMA_VERSION",
     "CandidateIssueEvidence",
+    "ConflictFinding",
     "DuplicateClaimFinding",
     "ExecutableLaneSelection",
+    "LanePlanOutcome",
+    "PostPrLanePlan",
     "ImplementationPacketProjection",
     "ImplementationPacketSourceIdentities",
     "PlanningHandoffStageResult",
@@ -155,6 +170,7 @@ __all__ = [
     "dependency_identity_evidence_from_dict",
     "dependency_identity_evidence_to_dict",
     "deserialize_executable_lane_selection",
+    "deserialize_post_pr_lane_plan",
     "draft_task_proposal_from_dict",
     "draft_task_proposal_to_dict",
     "issue_readiness_stage_result_from_dict",
@@ -163,6 +179,7 @@ __all__ = [
     "issue_snapshot_to_dict",
     "issueplan_current_state_evidence_from_dict",
     "issueplan_current_state_evidence_to_dict",
+    "plan_post_pr_lane",
     "prepare_approval_projection",
     "prepare_execution_packet",
     "prepare_issue_readiness",
@@ -179,6 +196,7 @@ __all__ = [
     "resolve_issue_snapshot",
     "select_executable_lanes",
     "serialize_executable_lane_selection",
+    "serialize_post_pr_lane_plan",
 ]
 
 # Execution-packet construction depends on the execution-service and Workflow

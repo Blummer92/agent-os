@@ -26,7 +26,9 @@ def test_focused_local_validation_is_non_final() -> None:
 
     assert (
         "A focused pass is non-final evidence: treat it as `aggregate-pending`, "
-        "not as final validation success."
+        "not as final validation success; `aggregate-pending` means only the "
+        "authoritative final aggregate remains pending, not any unexecuted "
+        "issue-required developer-loop check."
     ) in developer_loop
     assert (
         "A focused pass never suppresses, replaces, or impersonates the required "
@@ -34,6 +36,43 @@ def test_focused_local_validation_is_non_final() -> None:
     ) in authoritative
     assert "01_Shared_Standards/global-engineering/testing-and-release.md" in lane
     assert "Ready-for-Review still requires all required exact-head checks to pass." in lane
+
+
+def test_issue_required_developer_loop_checks_gate_draft_pr_creation() -> None:
+    developer_loop = normalized_section(TESTING, "Developer Loop Validation")
+    lane = normalized_section(SAFE_LANE, "Validation Loop")
+
+    assert (
+        "Issue-required focused, structural, compile or lint, line-count, and diff "
+        "checks designated for the developer loop are pre-PR gates and must run "
+        "before Draft PR creation."
+    ) in developer_loop
+    assert (
+        "Draft PR creation must not be used as the first execution of an "
+        "issue-required developer-loop check."
+    ) in developer_loop
+    assert (
+        "Issue-required focused or other developer-loop validation must be proven "
+        "before Draft PR creation."
+    ) in lane
+
+
+def test_runtime_validation_requires_capable_executor_route() -> None:
+    developer_loop = normalized_section(TESTING, "Developer Loop Validation")
+    lane = normalized_section(SAFE_LANE, "Validation Loop")
+
+    assert (
+        "When the active execution surface cannot run a required developer-loop "
+        "check, reroute through the canonical executor-routing contract before "
+        "Draft PR creation; if no capable authorized route exists, stop with "
+        "`needs-decision`."
+    ) in developer_loop
+    assert "reuse the canonical executor-routing contract" in lane
+    assert "if no such route exists, stop with `needs-decision`" in lane
+    assert (
+        "`aggregate-pending` means only the authoritative final exact-head aggregate "
+        "remains pending, never an unexecuted issue-required pre-PR check."
+    ) in lane
 
 
 def test_clean_exact_head_ci_may_satisfy_full_suite_requirement() -> None:
