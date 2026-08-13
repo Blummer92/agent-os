@@ -1,5 +1,6 @@
 """Focused AOS-AUTO1D approval/projection coordinator tests (#753)."""
 
+import json
 from dataclasses import replace
 
 import pytest
@@ -14,7 +15,12 @@ from scripts.agent_os_candidate_packet.approval_stage import (
     prepare_approval_projection,
 )
 from scripts.agent_os_candidate_packet.stage_models import STAGE_SCHEMA_VERSION
-from scripts.agent_os_issue_acceptance import ApprovalKind, ApprovalState
+from scripts.agent_os_issue_acceptance import (
+    ApprovalKind,
+    ApprovalState,
+    record_approval_decision,
+    serialize_approval_record,
+)
 from scripts.agent_os_issue_acceptance.approved_execution_projection import (
     serialize_approved_execution_projection,
 )
@@ -335,6 +341,148 @@ def test_approval_record_identity_drift_is_rejected() -> None:
     bad = {**payload, "pending_candidate": tampered_candidate}
 
     with pytest.raises(ValueError):
+        approval_projection_stage_result_from_dict(bad)
+
+
+# --------------------------------------------------------------------------
+# Cross-object approval identity/revision binding (#1054 review follow-up).
+# --------------------------------------------------------------------------
+
+
+def _other_approval_complete() -> ApprovalProjectionStageResult:
+    """A second, independently valid COMPLETE result for a *different* approval.
+
+    A distinct ``expires_at`` changes the deterministic ``approval_id`` (which
+    is derived from approval_kind/binding/expires_at/supersedes_approval_id,
+    never from the decision), so every nested object below is internally
+    valid on its own but describes a different approval lineage than
+    ``_complete()``.
+    """
+    other_context = ApprovalCandidateContext(
+        approval_kind=ApprovalKind.IMPLEMENTATION,
+        authorizer_id="candidate-preparer",
+        decision_id="candidate-753-other",
+        decision_at=_CANDIDATE_AT,
+        expires_at="2026-08-06T09:00:00Z",
+    )
+    result = prepare_approval_projection(
+        _prepare(),
+        candidate_context=other_context,
+        approval_decision=_decision(),
+        evaluated_at=_EVALUATED_AT,
+        projected_at=_PROJECTED_AT,
+    )
+    assert result.status is ApprovalProjectionStageStatus.COMPLETE
+    assert result.pending_candidate.approval_id != _complete().pending_candidate.approval_id
+    return result
+
+
+def _other_revision_same_approval() -> ApprovalProjectionStageResult:
+    """A REJECTED result for the *same* approval_id as ``_complete()``.
+
+    ``approval_id`` never depends on the decision, so this shares
+    ``_complete()``'s approval_id while carrying a distinct
+    ``approval_revision`` -- the exact "same approval, different revision"
+    shape the smallest fix must still accept as legitimate elsewhere, but
+    must not let get silently mixed across objects.
+    """
+    result = prepare_approval_projection(
+        _prepare(),
+        candidate_context=_context(),
+        approval_decision=_decision(ApprovalState.REJECTED),
+        evaluated_at=_EVALUATED_AT,
+        projected_at=_PROJECTED_AT,
+    )
+    assert result.status is ApprovalProjectionStageStatus.REJECTED
+    assert result.applicability is not None
+    assert result.decision_revision.approval_id == _complete().pending_candidate.approval_id
+    assert result.decision_revision.approval_revision != _complete().decision_revision.approval_revision
+    return result
+
+
+def test_decision_revision_from_a_different_approval_is_rejected() -> None:
+    """A decision revision cannot be paired with a foreign pending candidate."""
+    payload = approval_projection_stage_result_to_dict(_complete())
+    other_payload = approval_projection_stage_result_to_dict(_other_approval_complete())
+    bad = {**payload, "decision_revision": other_payload["decision_revision"]}
+
+    with pytest.raises(ValueError, match="does not bind to the pending candidate"):
+        approval_projection_stage_result_from_dict(bad)
+
+
+def test_decision_revision_breaking_the_revision_lineage_is_rejected() -> None:
+    """A third-generation revision does not directly descend from the pending
+
+    candidate (revision 1) even though it shares the same approval_id.
+    """
+    complete = _complete()
+    third_revision = record_approval_decision(
+        complete.decision_revision,
+        state=ApprovalState.SUPERSEDED,
+        decision_id="human-superseded-753",
+        authorizer_id="repository-owner",
+        decision_at="2026-08-06T04:20:00Z",
+    )
+    assert third_revision.approval_id == complete.pending_candidate.approval_id
+    assert third_revision.previous_revision != complete.pending_candidate.approval_revision
+
+    payload = approval_projection_stage_result_to_dict(complete)
+    bad = {
+        **payload,
+        "decision_revision": json.loads(serialize_approval_record(third_revision)),
+    }
+
+    with pytest.raises(ValueError, match="does not continue the pending candidate"):
+        approval_projection_stage_result_from_dict(bad)
+
+
+def test_applicability_from_a_different_approval_is_rejected() -> None:
+    payload = approval_projection_stage_result_to_dict(_complete())
+    other_payload = approval_projection_stage_result_to_dict(_other_approval_complete())
+    bad = {**payload, "applicability": other_payload["applicability"]}
+
+    with pytest.raises(ValueError, match="does not bind to the carried approval record"):
+        approval_projection_stage_result_from_dict(bad)
+
+
+def test_applicability_from_a_different_revision_of_the_same_approval_is_rejected() -> None:
+    """Same approval_id, different approval_revision -- still rejected."""
+    payload = approval_projection_stage_result_to_dict(_complete())
+    foreign_revision_payload = approval_projection_stage_result_to_dict(
+        _other_revision_same_approval()
+    )
+    bad = {**payload, "applicability": foreign_revision_payload["applicability"]}
+
+    with pytest.raises(ValueError, match="does not bind to the carried decision revision"):
+        approval_projection_stage_result_from_dict(bad)
+
+
+def test_complete_projection_bound_to_a_foreign_decision_revision_is_rejected() -> None:
+    """A complete projection result cannot be paired with a foreign approval's decision revision.
+
+    Only ``projection_result`` is swapped here, so the pending candidate,
+    decision revision, and applicability all stay mutually consistent with
+    each other -- proving this exercises the projection-vs-decision-revision
+    binding specifically, not an earlier candidate/decision or applicability
+    mismatch.
+    """
+    payload = approval_projection_stage_result_to_dict(_complete())
+    other_payload = approval_projection_stage_result_to_dict(_other_approval_complete())
+    bad = {**payload, "projection_result": other_payload["projection_result"]}
+
+    with pytest.raises(
+        ValueError, match="projection does not bind to the carried decision revision"
+    ):
+        approval_projection_stage_result_from_dict(bad)
+
+
+def test_complete_result_missing_its_decision_revision_is_rejected() -> None:
+    payload = approval_projection_stage_result_to_dict(_complete())
+    bad = dict(payload)
+    bad["decision_revision"] = None
+    bad["applicability"] = None
+
+    with pytest.raises(ValueError, match="complete results require a decision revision"):
         approval_projection_stage_result_from_dict(bad)
 
 

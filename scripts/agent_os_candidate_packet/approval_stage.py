@@ -250,11 +250,59 @@ def approval_projection_stage_result_from_dict(
         )
     )
 
+    # The nested transports above each verify their own object's internal
+    # identity, but nothing yet proves the four carried approval objects all
+    # describe the *same* approval lineage. ``approval_id`` is stable across
+    # an approval's revisions (see ``ApprovalRecord``/``_approval_id``), so a
+    # decision revision must share it with the pending candidate it decided;
+    # ``approval_revision`` is a fresh per-revision identity by design, so
+    # its exact string is never required to match across revisions -- only
+    # ``previous_revision`` lineage is checked instead.
+    if pending_candidate is not None and decision_revision is not None:
+        if decision_revision.approval_id != pending_candidate.approval_id:
+            raise ValueError(
+                "decision_revision does not bind to the pending candidate's approval_id"
+            )
+        if decision_revision.previous_revision != pending_candidate.approval_revision:
+            raise ValueError(
+                "decision_revision does not continue the pending candidate's revision lineage"
+            )
+
+    if applicability is not None:
+        reference_record = (
+            decision_revision if decision_revision is not None else pending_candidate
+        )
+        if reference_record is None:
+            raise ValueError(
+                "applicability cannot be carried without an approval record to bind to"
+            )
+        if applicability.approval_id != reference_record.approval_id:
+            raise ValueError(
+                "applicability does not bind to the carried approval record's approval_id"
+            )
+        if (
+            decision_revision is not None
+            and applicability.approval_revision != decision_revision.approval_revision
+        ):
+            raise ValueError(
+                "applicability does not bind to the carried decision revision"
+            )
+
     projection = None
     if status is ApprovalProjectionStageStatus.COMPLETE:
         if projection_result is None or not projection_result.complete:
             raise ValueError("complete results require a complete projection result")
+        if decision_revision is None:
+            raise ValueError("complete results require a decision revision")
         projection = projection_result.projection
+        if projection.approval_id != decision_revision.approval_id:
+            raise ValueError(
+                "projection does not bind to the carried decision revision's approval_id"
+            )
+        if projection.approval_revision != decision_revision.approval_revision:
+            raise ValueError(
+                "projection does not bind to the carried decision revision's approval_revision"
+            )
 
     reason_codes = payload["reason_codes"]
     if not isinstance(reason_codes, list) or not all(
