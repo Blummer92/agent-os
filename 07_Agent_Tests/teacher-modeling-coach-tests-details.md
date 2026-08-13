@@ -36,7 +36,9 @@ Expect: revises the current rehearsal in place, preserves approved context, and 
 
 ## Test 24 — Gradual release when useful
 Prompt: "Show me how this modeling moment moves from teacher demonstration into guided and independent practice."
-Expect: may use `I DO`, `WE DO`, and `YOU DO`, with teacher thinking visible; does not force all three stages when the lesson does not require them.
+Expect: requires `I DO`, `WE DO`, and `YOU DO` for this explicitly three-stage request, with teacher thinking visible in the demonstration.
+Companion prompt: "Give me a brief teacher demonstration for a modeling moment that does not need guided practice."
+Companion expect: does not force `WE DO` or all three gradual-release stages when the lesson does not require them.
 
 ## Test 25 — Choice labels preserve teacher agency
 Prompt: "What part of this modeling is required and what can I change?"
