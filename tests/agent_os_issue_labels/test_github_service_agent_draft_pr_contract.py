@@ -5,6 +5,7 @@ from scripts.agent_os_issue_labels.pr_lifecycle import lifecycle_invocation_reas
 
 ROOT = Path(__file__).resolve().parents[2]
 OVERLAY = ROOT / "02_Agent_Overlays" / "github-service-agent.md"
+VERSION_MAP = ROOT / "04_Registry" / "module-version-map.md"
 
 
 def _overlay_text() -> str:
@@ -14,32 +15,31 @@ def _overlay_text() -> str:
 def test_draft_pr_creation_requires_existing_managed_label_lifecycle_follow_up():
     text = _overlay_text()
 
-    assert "Every successful authorized Draft PR creation must immediately perform" in text
-    assert "`draft-pr-created`" in text
-    assert "#1022 planner, #1023 reconciler, and #1038 lifecycle integration" in text
-    assert "Reacquire the created PR and its exact live head SHA before label mutation" in text
-    assert "Preserve every unmanaged, human, security, dependency, and third-party label" in text
-    assert "Reread the PR after mutation and prove managed-label convergence" in text
-    assert "already-converged rerun must perform zero label writes" in text
-    assert "creation evidence separately from label-reconciliation result" in text
+    for required in (
+        "After every successful authorized Draft PR creation",
+        "`draft-pr-created`",
+        "#1022/#1023/#1038",
+        "planner-derived managed-label delta",
+        "preserve unmanaged/human/security/dependency/third-party labels",
+        "reread to prove convergence",
+        "zero label writes on an unchanged converged rerun",
+        "creation evidence separate from label-reconciliation evidence",
+    ):
+        assert required in text
     assert "draft-pr-created" in lifecycle_invocation_reasons()
 
 
 def test_draft_pr_label_follow_up_preserves_non_authority_and_excludes_unattended_triggers():
     text = _overlay_text()
 
-    for authority in (
+    for required in (
         "Ready-for-Review",
         "merge",
-        "issue closure",
-        "review resolution",
-        "protected setting",
+        "issue-closure",
+        "review-resolution",
+        "protected-setting",
         "production",
         "external-system authority",
-    ):
-        assert authority in text
-
-    for excluded_surface in (
         "GitHub Actions workflow",
         "webhook",
         "poller",
@@ -48,4 +48,9 @@ def test_draft_pr_label_follow_up_preserves_non_authority_and_excludes_unattende
         "permission expansion",
         "repository-local PR-creation subsystem",
     ):
-        assert excluded_surface in text
+        assert required in text
+
+
+def test_github_service_agent_version_is_registered():
+    version_map = VERSION_MAP.read_text(encoding="utf-8")
+    assert "| GitHub Service Agent | 0.6.0 |" in version_map

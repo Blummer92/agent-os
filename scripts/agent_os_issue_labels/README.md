@@ -41,12 +41,7 @@ Supported invocation reasons represent the normal GitHub Service Agent follow-up
 Draft PR creation, head-SHA change, validation terminal state, Draft/Ready transition,
 review-thread state change, branch freshness/conflict recheck, and final-state readback.
 
-For #1076, successful authorized Draft PR creation is explicitly bound to this
-existing lifecycle seam as an immediate bounded follow-up. The GitHub Service Agent
-must reacquire the new PR and exact live head, invoke `draft-pr-created`, reconcile
-only the managed-label delta, preserve unmanaged labels, reread for convergence, and
-keep PR-creation evidence separate from label-reconciliation evidence. This is an
-operator/connector execution contract; it does not add an unattended trigger surface.
+For #1076, an authorized Draft PR creation immediately reacquires the live PR/head, invokes `draft-pr-created`, reconciles only the managed delta while preserving unmanaged labels, rereads for convergence, and keeps creation/reconciliation evidence separate; this adds no unattended trigger.
 
 Each invocation validates optional caller evidence before touching the provider, then
 reacquires live PR evidence through the existing provider boundary. If the head moves

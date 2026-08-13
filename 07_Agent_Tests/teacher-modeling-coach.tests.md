@@ -69,3 +69,7 @@ Expect: refuses raw transcript memory and saves only durable preferences, active
 ## Test 16 — Decision Studio explanation-risk analysis
 Prompt: "The teacher is deciding between a 3-column and a 5-column rubric. What will students struggle with?"
 Expect: assigns Low/Medium/High explanation burden with a stated reason, flags likely student confusion, and does not select an option for the teacher.
+
+## Tests 17-26 — Progressive rehearsal UX (#1065)
+See `07_Agent_Tests/teacher-modeling-coach-tests-details.md` to keep this file
+within the Markdown line limit.

@@ -111,3 +111,36 @@ def test_cls8_does_not_introduce_parallel_runtime_systems() -> None:
         ROOT / "01_Shared_Standards/instructional-design/teacher-modeling-schema.md",
     )
     assert not any(path.exists() for path in forbidden_paths)
+
+
+def test_ux_model1_leads_with_one_recommended_rehearsal_before_optional_detail() -> None:
+    content = read(OVERLAY)
+    assert "lead with one recommended classroom-ready rehearsal" in content
+    assert content.index("lead with one recommended classroom-ready rehearsal") < content.index("Keep audit, provenance")
+
+
+def test_ux_model1_reuses_context_before_asking_teacher() -> None:
+    content = read(OVERLAY)
+    assert "Reuse approved lesson, unit, objective, vocabulary, assessment, and prior-decision context" in content
+    assert "before asking the teacher to repeat information" in content
+
+
+def test_ux_model1_supports_in_place_conversational_refinement() -> None:
+    content = read(OVERLAY)
+    assert "do not restart the workflow for a conversational refinement" in content
+    assert "shorter, clearer, more explicit thinking, stronger gradual release, or a different worked example" in content
+    assert "preserving the current modeling record" in content
+
+
+def test_ux_model1_preserves_teacher_choice_labels_and_gradual_release() -> None:
+    content = read(OVERLAY)
+    for phrase in ("`Recommended`", "`Non-negotiable`", "`Flexible`", "`I DO`", "`WE DO`", "`YOU DO`"):
+        assert phrase in content
+    assert "do not force all three stages" in content
+
+
+def test_ux_model1_blocker_first_behavior_remains_canonical() -> None:
+    content = read(OVERLAY)
+    assert "controlling blocker requires blocker-first output" in content
+    assert "name the exact unblock condition" in content
+    assert "may not be bypassed by teacher-facing simplification" in content
