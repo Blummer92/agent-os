@@ -56,6 +56,8 @@ def prepare_conversational_unit_knowledge_input(
         raise ConversationalKnowledgeContextError("candidate count exceeds bound")
     if not isinstance(context, dict):
         raise ConversationalKnowledgeContextError("phase1_input.context must be a mapping")
+    if len(candidate_evidence) > MAX_CANDIDATES:
+        raise ConversationalKnowledgeContextError("candidate evidence count exceeds bound")
 
     by_id: dict[str, dict[str, Any]] = {}
     for raw in candidate_evidence:
