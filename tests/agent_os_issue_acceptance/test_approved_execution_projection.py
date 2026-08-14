@@ -27,6 +27,7 @@ from scripts.agent_os_execution_capabilities import (  # noqa: E402
     WorktreeState,
 )
 from scripts.agent_os_issue_acceptance import (  # noqa: E402
+    APPROVAL_RECORD_SEMANTIC_SCHEMA_VERSION,
     APPROVED_EXECUTION_PROJECTION_SCHEMA_VERSION,
     ApprovalKind,
     ApprovalState,
@@ -35,6 +36,7 @@ from scripts.agent_os_issue_acceptance import (  # noqa: E402
     build_approval_candidate,
     build_approved_execution_projection,
     build_issueplan_current_state_evidence,
+    build_planning_binding_evidence,
     compute_handoff_digest,
     evaluate_approval_applicability,
     record_approval_decision,
@@ -226,6 +228,11 @@ def _repository_state(
         observed_at="2026-07-20T11:45:00Z",
         freshness_boundary="workflow-run-407",
     )
+
+
+def _repository_state_with(base, **changes):
+    changes.setdefault("evidence_id", "")
+    return replace(base, **changes)
 
 
 def _proposal_inputs(*, handoff=None, issueplan=None, repository=None):
@@ -845,3 +852,164 @@ def test_projection_result_transport_rejects_invalid_envelopes():
         approved_execution_projection.reconstruct_approved_execution_projection_result(
             failure
         )
+
+
+# --------------------------------------------------------------------------
+# #407 semantic carry-forward: projection binds CURRENT exact identities
+# rather than replaying stale prior-attempt IDs from the ApprovalBinding
+# (#1115).
+# --------------------------------------------------------------------------
+
+
+def _semantic_two_phase_approved():
+    handoff = _handoff()
+    issueplan = _issueplan(
+        handoff,
+        graph_reference=None,
+        planning_result_reference=None,
+        handoff_reference=None,
+        supplied_node_ids=(),
+    )
+    repository = _repository_state(
+        head_sha=handoff.evaluated_repository_sha,
+        requested_sha=handoff.evaluated_repository_sha,
+    )
+    binding = build_planning_binding_evidence(
+        issueplan, handoff, created_at=CREATED_AT
+    )
+    result = build_draft_task_proposals(
+        handoff,
+        issueplan,
+        repository,
+        created_at=CREATED_AT,
+        planning_binding=binding,
+    )
+    assert result.status == "eligible"
+    proposal = result.proposals[0]
+    candidate = build_approval_candidate(
+        proposal,
+        issueplan,
+        repository,
+        approval_kind=ApprovalKind.IMPLEMENTATION,
+        authorizer_id="operator-1",
+        decision_id="request-1115-projection",
+        decision_at=CREATED_AT,
+        expires_at=EXPIRES_AT,
+        planning_binding=binding,
+        schema_version=APPROVAL_RECORD_SEMANTIC_SCHEMA_VERSION,
+    )
+    approved = record_approval_decision(
+        candidate,
+        state=ApprovalState.APPROVED,
+        decision_id="decision-1115-projection",
+        authorizer_id="operator-2",
+        decision_at=APPROVED_AT,
+    )
+    return approved, proposal, issueplan, repository, binding
+
+
+def test_projection_binds_current_exact_identities_after_semantic_carry_forward():
+    approved, original_proposal, issueplan, repository, _binding = (
+        _semantic_two_phase_approved()
+    )
+
+    retry_handoff = _handoff(created_at="2026-07-20T11:10:00Z")
+    retry_binding = build_planning_binding_evidence(
+        issueplan, retry_handoff, created_at="2026-07-20T11:11:00Z"
+    )
+    retry_repository = _repository_state_with(
+        repository,
+        observed_at="2026-07-20T11:12:00Z",
+        correlation_id="dns-retry-attempt-2",
+    )
+    retry_result = build_draft_task_proposals(
+        retry_handoff,
+        issueplan,
+        retry_repository,
+        created_at="2026-07-20T11:13:00Z",
+        planning_binding=retry_binding,
+    )
+    assert retry_result.status == "eligible"
+    retry_proposal = retry_result.proposals[0]
+    assert retry_proposal.proposal_id != original_proposal.proposal_id
+    assert retry_proposal.handoff_digest != original_proposal.handoff_digest
+    assert (
+        retry_proposal.repository_state_evidence_id
+        != original_proposal.repository_state_evidence_id
+    )
+
+    applicability = evaluate_approval_applicability(
+        approved,
+        retry_proposal,
+        issueplan,
+        retry_repository,
+        evaluated_at="2026-07-20T11:14:00Z",
+        planning_binding=retry_binding,
+    )
+    assert applicability.status == "applicable"
+
+    result = build_approved_execution_projection(
+        retry_proposal,
+        approved,
+        applicability,
+        issueplan,
+        retry_repository,
+        projected_at="2026-07-20T11:14:00Z",
+        planning_binding=retry_binding,
+    )
+    assert result.status == "complete"
+    projection = result.projection
+    assert projection is not None
+
+    # CURRENT exact identities, not the stale prior-attempt ones.
+    assert projection.proposal_id == retry_proposal.proposal_id
+    assert projection.proposal_id != original_proposal.proposal_id
+    assert projection.repository_state_evidence_id == retry_repository.evidence_id
+    assert (
+        projection.repository_state_evidence_id
+        != approved.binding.repository_state_evidence_id
+    )
+    assert projection.handoff_digest == retry_proposal.handoff_digest
+    assert projection.handoff_digest != approved.binding.handoff_digest
+
+    # ORIGINAL human approval identity/revision, unchanged.
+    assert projection.approval_id == approved.approval_id
+    assert projection.approval_revision == approved.approval_revision
+
+    # Never authoritative or execution-authorizing.
+    assert projection.authoritative is False
+    assert projection.execution_authorized is False
+    assert projection.side_effects_performed is False
+
+
+def test_projection_still_fails_closed_for_semantic_schema_on_authority_change():
+    approved, proposal, issueplan, repository, binding = (
+        _semantic_two_phase_approved()
+    )
+    changed_issueplan = _issueplan(
+        _handoff(),
+        graph_reference=None,
+        planning_result_reference=None,
+        handoff_reference=None,
+        supplied_node_ids=(),
+        allowed_files=("different.py",),
+    )
+    applicability = evaluate_approval_applicability(
+        approved,
+        proposal,
+        changed_issueplan,
+        repository,
+        evaluated_at=PROJECTED_AT,
+        planning_binding=binding,
+    )
+    result = build_approved_execution_projection(
+        proposal,
+        approved,
+        applicability,
+        changed_issueplan,
+        repository,
+        projected_at=PROJECTED_AT,
+        planning_binding=binding,
+    )
+    assert result.status != "complete"
+    assert result.projection is None

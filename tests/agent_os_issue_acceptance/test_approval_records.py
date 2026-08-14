@@ -27,6 +27,7 @@ from scripts.agent_os_execution_capabilities import (  # noqa: E402
 )
 from scripts.agent_os_issue_acceptance import (  # noqa: E402
     APPROVAL_RECORD_SCHEMA_VERSION,
+    APPROVAL_RECORD_SEMANTIC_SCHEMA_VERSION,
     ApprovalKind,
     ApprovalRecord,
     ApprovalState,
@@ -36,8 +37,10 @@ from scripts.agent_os_issue_acceptance import (  # noqa: E402
     SchedulerPlanningHandoff,
     build_approval_candidate,
     build_issueplan_current_state_evidence,
+    compute_current_approval_binding,
     compute_handoff_digest,
     compute_planning_binding_fingerprint,
+    compute_semantic_approval_subject,
     evaluate_approval_applicability,
     record_approval_decision,
 )
@@ -224,6 +227,11 @@ def _repository_state(
         observed_at="2026-07-20T11:45:00Z",
         freshness_boundary="workflow-run-1",
     )
+
+
+def _repository_state_with(base, **changes):
+    changes.setdefault("evidence_id", "")
+    return replace(base, **changes)
 
 
 def _inputs(*, handoff=None, issueplan=None, repository=None, created_at=CREATED_AT):
@@ -1138,3 +1146,384 @@ def test_approval_applicability_transport_rejects_invalid_status_shape_and_fixed
     unknown["unexpected"] = True
     with pytest.raises(ValueError, match="unknown fields"):
         approval_records.reconstruct_approval_applicability_result(unknown)
+
+
+# --------------------------------------------------------------------------
+# Semantic approval-subject identity and carry-forward applicability (#1115).
+# --------------------------------------------------------------------------
+
+
+def _semantic_candidate(
+    *, kind=ApprovalKind.IMPLEMENTATION, expires_at=EXPIRES_AT, **inputs
+):
+    proposal, issueplan, repository = _inputs(**inputs)
+    candidate = build_approval_candidate(
+        proposal,
+        issueplan,
+        repository,
+        approval_kind=kind,
+        authorizer_id="operator-1",
+        decision_id="request-1115",
+        decision_at=CREATED_AT,
+        expires_at=expires_at,
+        schema_version=APPROVAL_RECORD_SEMANTIC_SCHEMA_VERSION,
+    )
+    return candidate, proposal, issueplan, repository
+
+
+def _semantic_approved(**kwargs):
+    candidate, proposal, issueplan, repository = _semantic_candidate(**kwargs)
+    approved = record_approval_decision(
+        candidate,
+        state=ApprovalState.APPROVED,
+        decision_id="decision-approve-1115",
+        authorizer_id="operator-2",
+        decision_at=APPROVED_AT,
+    )
+    return approved, proposal, issueplan, repository
+
+
+def test_semantic_subject_is_scoped_to_semantic_schema_and_deterministic():
+    v1_candidate, *_ = _candidate()
+    assert v1_candidate.schema_version == APPROVAL_RECORD_SCHEMA_VERSION
+    assert v1_candidate.semantic_subject_id is None
+
+    first, proposal, issueplan, repository = _semantic_candidate()
+    second, *_ = _semantic_candidate()
+    assert first.schema_version == APPROVAL_RECORD_SEMANTIC_SCHEMA_VERSION
+    assert first.semantic_subject_id is not None
+    assert first.semantic_subject_id.startswith("semantic-approval-subject:")
+    assert first.semantic_subject_id == second.semantic_subject_id
+    assert first.approval_id == second.approval_id
+
+    recomputed = compute_semantic_approval_subject(
+        first.binding,
+        repository,
+        approval_kind=first.approval_kind,
+        expires_at=first.expires_at,
+        supersedes_approval_id=first.supersedes_approval_id,
+    )
+    assert recomputed == first.semantic_subject_id
+
+
+def test_build_approval_candidate_rejects_unsupported_schema_version():
+    proposal, issueplan, repository = _inputs()
+    with pytest.raises(ValueError, match="unsupported approval schema version"):
+        build_approval_candidate(
+            proposal,
+            issueplan,
+            repository,
+            approval_kind=ApprovalKind.IMPLEMENTATION,
+            authorizer_id="operator-1",
+            decision_id="request-bad-version",
+            decision_at=CREATED_AT,
+            schema_version="9.9",
+        )
+
+
+def test_semantic_carry_forward_applies_for_observed_at_only_change():
+    approved, proposal, issueplan, repository = _semantic_approved()
+    refreshed_repository = _repository_state_with(
+        repository, observed_at="2026-07-20T12:15:00Z"
+    )
+    result = build_draft_task_proposals(
+        _handoff(), issueplan, refreshed_repository, created_at=CREATED_AT
+    )
+    assert result.status == "eligible"
+    refreshed_proposal = result.proposals[0]
+    assert (
+        refreshed_proposal.repository_state_evidence_id
+        != proposal.repository_state_evidence_id
+    )
+
+    applicability = evaluate_approval_applicability(
+        approved,
+        refreshed_proposal,
+        issueplan,
+        refreshed_repository,
+        evaluated_at=APPROVED_AT,
+    )
+    assert applicability.status == "applicable"
+    assert applicability.approval_applicable is True
+    assert applicability.changed_bindings == ()
+    assert applicability.execution_authorized is False
+    assert applicability.side_effects_performed is False
+    assert "semantic-carry-forward:applied" in applicability.details
+
+
+def test_semantic_carry_forward_applies_for_correlation_id_only_change():
+    approved, proposal, issueplan, repository = _semantic_approved()
+    refreshed_repository = _repository_state_with(
+        repository, correlation_id="retry-attempt-2"
+    )
+    result = build_draft_task_proposals(
+        _handoff(), issueplan, refreshed_repository, created_at=CREATED_AT
+    )
+    assert result.status == "eligible"
+    refreshed_proposal = result.proposals[0]
+
+    applicability = evaluate_approval_applicability(
+        approved,
+        refreshed_proposal,
+        issueplan,
+        refreshed_repository,
+        evaluated_at=APPROVED_AT,
+    )
+    assert applicability.status == "applicable"
+    assert applicability.changed_bindings == ()
+
+
+def test_semantic_carry_forward_applies_for_handoff_and_planning_created_at_only_change():
+    handoff = _handoff()
+    issueplan = _issueplan(
+        handoff,
+        graph_reference=None,
+        planning_result_reference=None,
+        handoff_reference=None,
+        supplied_node_ids=(),
+    )
+    repository = _repository_state(
+        head_sha=handoff.evaluated_repository_sha,
+        requested_sha=handoff.evaluated_repository_sha,
+    )
+    binding = build_planning_binding_evidence(
+        issueplan, handoff, created_at=CREATED_AT
+    )
+    result = build_draft_task_proposals(
+        handoff,
+        issueplan,
+        repository,
+        created_at=CREATED_AT,
+        planning_binding=binding,
+    )
+    assert result.status == "eligible"
+    proposal = result.proposals[0]
+
+    candidate = build_approval_candidate(
+        proposal,
+        issueplan,
+        repository,
+        approval_kind=ApprovalKind.IMPLEMENTATION,
+        authorizer_id="operator-1",
+        decision_id="request-1115-handoff",
+        decision_at=CREATED_AT,
+        expires_at=EXPIRES_AT,
+        planning_binding=binding,
+        schema_version=APPROVAL_RECORD_SEMANTIC_SCHEMA_VERSION,
+    )
+    approved = record_approval_decision(
+        candidate,
+        state=ApprovalState.APPROVED,
+        decision_id="decision-1115-handoff",
+        authorizer_id="operator-2",
+        decision_at=CREATED_AT,
+    )
+
+    # Same handoff content, only created_at moves: covers the #726
+    # DNS-before-side-effects recovery case, where a re-run recomputes
+    # planning artifacts with fresh timestamps but identical authority
+    # content.
+    replay_handoff = _handoff(created_at="2026-07-20T11:30:00Z")
+    replay_binding = build_planning_binding_evidence(
+        issueplan, replay_handoff, created_at="2026-07-20T11:35:00Z"
+    )
+    replay_result = build_draft_task_proposals(
+        replay_handoff,
+        issueplan,
+        repository,
+        created_at=CREATED_AT,
+        planning_binding=replay_binding,
+    )
+    assert replay_result.status == "eligible"
+    replay_proposal = replay_result.proposals[0]
+    assert replay_proposal.handoff_digest != proposal.handoff_digest
+
+    applicability = evaluate_approval_applicability(
+        approved,
+        replay_proposal,
+        issueplan,
+        repository,
+        evaluated_at=CREATED_AT,
+        planning_binding=replay_binding,
+    )
+    assert applicability.status == "applicable"
+    assert applicability.changed_bindings == ()
+
+
+def test_semantic_carry_forward_combines_multiple_excluded_field_changes():
+    """The #726 recovery case: observed_at, correlation_id, and creation
+    timestamps all move together after a retry with no authority-relevant
+    content change -- candidate approval must still carry forward, and
+    execution authority must never be inferred."""
+
+    handoff = _handoff()
+    issueplan = _issueplan(
+        handoff,
+        graph_reference=None,
+        planning_result_reference=None,
+        handoff_reference=None,
+        supplied_node_ids=(),
+    )
+    repository = _repository_state(
+        head_sha=handoff.evaluated_repository_sha,
+        requested_sha=handoff.evaluated_repository_sha,
+    )
+    binding = build_planning_binding_evidence(
+        issueplan, handoff, created_at=CREATED_AT
+    )
+    result = build_draft_task_proposals(
+        handoff,
+        issueplan,
+        repository,
+        created_at=CREATED_AT,
+        planning_binding=binding,
+    )
+    proposal = result.proposals[0]
+    candidate = build_approval_candidate(
+        proposal,
+        issueplan,
+        repository,
+        approval_kind=ApprovalKind.IMPLEMENTATION,
+        authorizer_id="operator-1",
+        decision_id="request-726-recovery",
+        decision_at=CREATED_AT,
+        expires_at=EXPIRES_AT,
+        planning_binding=binding,
+        schema_version=APPROVAL_RECORD_SEMANTIC_SCHEMA_VERSION,
+    )
+    approved = record_approval_decision(
+        candidate,
+        state=ApprovalState.APPROVED,
+        decision_id="decision-726-recovery",
+        authorizer_id="operator-2",
+        decision_at=CREATED_AT,
+    )
+
+    retry_handoff = _handoff(created_at="2026-07-20T11:40:00Z")
+    retry_binding = build_planning_binding_evidence(
+        issueplan, retry_handoff, created_at="2026-07-20T11:41:00Z"
+    )
+    retry_repository = _repository_state_with(
+        repository,
+        observed_at="2026-07-20T11:42:00Z",
+        correlation_id="dns-retry-attempt-2",
+    )
+    retry_result = build_draft_task_proposals(
+        retry_handoff,
+        issueplan,
+        retry_repository,
+        created_at="2026-07-20T11:43:00Z",
+        planning_binding=retry_binding,
+    )
+    assert retry_result.status == "eligible"
+    retry_proposal = retry_result.proposals[0]
+    assert retry_proposal.handoff_digest != proposal.handoff_digest
+    assert (
+        retry_proposal.repository_state_evidence_id
+        != proposal.repository_state_evidence_id
+    )
+    assert retry_proposal.proposal_id != proposal.proposal_id
+
+    applicability = evaluate_approval_applicability(
+        approved,
+        retry_proposal,
+        issueplan,
+        retry_repository,
+        evaluated_at="2026-07-20T11:44:00Z",
+        planning_binding=retry_binding,
+    )
+    assert applicability.status == "applicable"
+    assert applicability.approval_applicable is True
+    assert applicability.changed_bindings == ()
+    assert applicability.execution_authorized is False
+    assert applicability.side_effects_performed is False
+    assert applicability.current_proposal_id == retry_proposal.proposal_id
+
+
+def test_semantic_carry_forward_does_not_apply_when_freshness_boundary_changes():
+    approved, proposal, issueplan, repository = _semantic_approved()
+    refreshed_repository = _repository_state_with(
+        repository, freshness_boundary="workflow-run-2"
+    )
+    result = build_draft_task_proposals(
+        _handoff(), issueplan, refreshed_repository, created_at=CREATED_AT
+    )
+    assert result.status == "eligible"
+    refreshed_proposal = result.proposals[0]
+
+    applicability = evaluate_approval_applicability(
+        approved,
+        refreshed_proposal,
+        issueplan,
+        refreshed_repository,
+        evaluated_at=APPROVED_AT,
+    )
+    assert applicability.status == "stale"
+    assert applicability.approval_applicable is False
+    assert applicability.changed_bindings != ()
+
+
+def test_semantic_carry_forward_does_not_apply_when_worktree_becomes_dirty():
+    approved, proposal, issueplan, repository = _semantic_approved()
+    dirty_repository = _repository_state_with(
+        repository,
+        worktree_state=WorktreeState.DIRTY,
+        worktree_reason_codes=("worktree.dirty",),
+    )
+
+    applicability = evaluate_approval_applicability(
+        approved,
+        proposal,
+        issueplan,
+        dirty_repository,
+        evaluated_at=APPROVED_AT,
+    )
+    assert applicability.status == "blocked"
+    assert applicability.approval_applicable is False
+
+
+def test_semantic_schema_still_fails_closed_when_allowed_files_change():
+    approved, proposal, issueplan, repository = _semantic_approved()
+    changed_issueplan = _issueplan(_handoff(), allowed_files=("different.py",))
+
+    applicability = evaluate_approval_applicability(
+        approved,
+        proposal,
+        changed_issueplan,
+        repository,
+        evaluated_at=APPROVED_AT,
+    )
+    assert applicability.status == "stale"
+    assert applicability.approval_applicable is False
+
+
+def test_semantic_schema_transport_round_trips_and_rejects_semantic_subject_tamper():
+    approved, *_ = _semantic_approved()
+    record_bytes = approval_records.serialize_approval_record(approved)
+    restored = approval_records.reconstruct_approval_record(record_bytes)
+    assert restored == approved
+    assert approval_records.serialize_approval_record(restored) == record_bytes
+
+    json_module = __import__("json")
+    original = json_module.loads(record_bytes)
+    assert original["semantic_subject_id"] == approved.semantic_subject_id
+
+    tampered = dict(original)
+    tampered["semantic_subject_id"] = "semantic-approval-subject:" + "0" * 64
+    with pytest.raises(ValueError, match="approval_id"):
+        approval_records.reconstruct_approval_record(tampered)
+
+    missing_key = dict(original)
+    missing_key.pop("semantic_subject_id")
+    with pytest.raises(ValueError, match="missing fields"):
+        approval_records.reconstruct_approval_record(missing_key)
+
+    # A schema-1.0 payload must never carry the semantic_subject_id key.
+    v1_approved, *_ = _approved()
+    v1_bytes = approval_records.serialize_approval_record(v1_approved)
+    v1_payload = json_module.loads(v1_bytes)
+    assert "semantic_subject_id" not in v1_payload
+    smuggled = dict(v1_payload)
+    smuggled["semantic_subject_id"] = approved.semantic_subject_id
+    with pytest.raises(ValueError, match="unknown fields"):
+        approval_records.reconstruct_approval_record(smuggled)

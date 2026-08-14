@@ -14,10 +14,12 @@ from scripts.agent_os_execution_capabilities import (
 
 from .approval_records import (
     APPROVAL_INVALIDATION_REASON_CODES,
+    APPROVAL_RECORD_SUPPORTED_SCHEMA_VERSIONS,
     ApprovalApplicabilityResult,
     ApprovalKind,
     ApprovalRecord,
     ApprovalState,
+    compute_current_approval_binding,
     evaluate_approval_applicability,
 )
 from .issueplan_current_state import IssuePlanCurrentStateEvidence
@@ -261,7 +263,8 @@ def build_approved_execution_projection(
     except (TypeError, ValueError) as exc:
         reason = (
             "version.unsupported"
-            if getattr(approval_record, "schema_version", None) != "1.0"
+            if getattr(approval_record, "schema_version", None)
+            not in APPROVAL_RECORD_SUPPORTED_SCHEMA_VERSIONS
             else "projection.incomplete"
         )
         return _failure("invalid", (reason,), (f"verification:{exc}",))
@@ -296,12 +299,26 @@ def build_approved_execution_projection(
             )
         return _failure(recomputed.status, reasons, recomputed.details)
 
-    binding = approval_record.binding
     if repository_state_evidence.tested_sha is None:
         return _failure(
             "needs-decision",
             ("projection.incomplete",),
             ("repository-tested-sha:missing",),
+        )
+    try:
+        # Always bind CURRENT exact identities (proposal/repository-state/
+        # planning-handoff), not the stored approval_record.binding -- when
+        # semantic carry-forward applies those stored IDs are a stale prior
+        # attempt's IDs even though the approval itself remains applicable.
+        binding = compute_current_approval_binding(
+            proposal,
+            issueplan_current_state_evidence,
+            repository_state_evidence,
+            planning_binding,
+        )
+    except (TypeError, ValueError) as exc:
+        return _failure(
+            "invalid", ("projection.incomplete",), (f"current-binding:{exc}",)
         )
 
     try:
