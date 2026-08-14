@@ -159,6 +159,7 @@ has_cycle, cycle_path = resolver.has_cycle()
 
 # Ready tasks
 completed = {"task-0", "task-1"}
+ready = resolver.get_ready_tasks(completed)
 
 # Dependency analysis
 all_deps = resolver.get_all_dependencies("task-2")
