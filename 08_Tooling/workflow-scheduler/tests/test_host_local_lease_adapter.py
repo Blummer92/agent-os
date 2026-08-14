@@ -7,6 +7,7 @@ import stat
 from pathlib import Path
 
 import pytest
+import workflow_scheduler.execution as execution_pkg
 
 from workflow_scheduler.execution.host_local_lease_adapter import (
     HOST_LOCAL_LEASE_SCHEMA_VERSION,
@@ -36,12 +37,19 @@ def _request(*, invocation_id: str = "inv-758") -> PilotLeaseRequest:
 
 
 def _worker(root: str, request: PilotLeaseRequest, start, output) -> None:
-    adapter = HostLocalLeaseAdapter(
-        policy=HostLocalLeasePolicy(lease_directory=root)
-    )
+    adapter = HostLocalLeaseAdapter(policy=HostLocalLeasePolicy(lease_directory=root))
     start.wait()
     grant = adapter.acquire(request)
     output.put((grant.acquired, grant.generation, grant.reason))
+
+
+def _orphan_worker(root: str, request: PilotLeaseRequest, marker: str) -> None:
+    adapter = HostLocalLeaseAdapter(policy=HostLocalLeasePolicy(lease_directory=root))
+    grant = adapter.acquire(request)
+    if not grant.acquired:
+        os._exit(2)
+    Path(marker).write_text(str(grant.generation), encoding="ascii")
+    os._exit(0)
 
 
 def _adapter(tmp_path: Path) -> HostLocalLeaseAdapter:
@@ -64,11 +72,13 @@ def _forge(
     )
 
 
-def test_policy_protocol_and_identity_compatibility(tmp_path: Path) -> None:
+def test_policy_protocol_exports_and_identity_compatibility(tmp_path: Path) -> None:
     adapter = _adapter(tmp_path)
     request = _request()
     assert isinstance(adapter, LeaseAdapter)
     assert HOST_LOCAL_LEASE_SCHEMA_VERSION == "1.0"
+    assert execution_pkg.HostLocalLeaseAdapter is HostLocalLeaseAdapter
+    assert execution_pkg.HostLocalLeasePolicy is HostLocalLeasePolicy
 
     grant = adapter.acquire(request)
     assert grant.acquired is True
@@ -173,6 +183,53 @@ def test_existing_active_state_is_never_expired_or_stolen(tmp_path: Path) -> Non
     assert first.release(grant).released is True
 
 
+def test_abrupt_child_exit_preserves_orphan_as_occupied(tmp_path: Path) -> None:
+    root = str(tmp_path / "leases")
+    HostLocalLeaseAdapter(policy=HostLocalLeasePolicy(lease_directory=root))
+    request = _request(invocation_id="orphan")
+    marker = tmp_path / "acquired.txt"
+    context = multiprocessing.get_context("spawn")
+    process = context.Process(
+        target=_orphan_worker, args=(root, request, str(marker))
+    )
+    process.start()
+    process.join(timeout=10)
+    assert process.exitcode == 0
+    assert marker.read_text(encoding="ascii") == "1"
+
+    after_crash = HostLocalLeaseAdapter(
+        policy=HostLocalLeasePolicy(lease_directory=root)
+    )
+    observation = after_crash.inspect(request)
+    blocked = after_crash.acquire(request)
+    assert observation.active is True
+    assert observation.ambiguous is False
+    assert blocked.acquired is False
+    assert blocked.generation == 1
+    assert "already acquired" in blocked.reason
+
+
+def test_process_control_exception_propagates_and_leaves_ambiguity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter = _adapter(tmp_path)
+    request = _request(invocation_id="interrupt")
+
+    def interrupt(_path: Path, _generation: int) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(adapter, "_write_generation", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        adapter.acquire(request)
+
+    observation = adapter.inspect(request)
+    blocked = adapter.acquire(request)
+    assert observation.active is True
+    assert observation.ambiguous is True
+    assert blocked.acquired is False
+    assert "manual recovery" in blocked.reason
+
+
 def test_private_permissions_and_path_rejections(tmp_path: Path) -> None:
     adapter = _adapter(tmp_path)
     root = Path(adapter._policy.lease_directory)
@@ -227,6 +284,14 @@ def test_malformed_release_is_non_mutating(tmp_path: Path) -> None:
     result = adapter.release(malformed)
     assert result.released is False
     assert result.reason == "malformed release request"
+
+
+def test_no_renew_takeover_force_release_or_retry_surface(tmp_path: Path) -> None:
+    adapter = _adapter(tmp_path)
+    for name in ("renew", "takeover", "force_release", "retry"):
+        assert not hasattr(adapter, name)
+    assert adapter._policy.automatic_retry is False
+    assert adapter._policy.takeover_allowed is False
 
 
 def test_architecture_has_no_network_retry_or_runtime_wiring() -> None:
