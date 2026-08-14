@@ -159,7 +159,6 @@ has_cycle, cycle_path = resolver.has_cycle()
 
 # Ready tasks
 completed = {"task-0", "task-1"}
-ready = resolver.get_ready_tasks(completed)
 
 # Dependency analysis
 all_deps = resolver.get_all_dependencies("task-2")
@@ -216,7 +215,7 @@ logger.log_task_approved(task, approved_by="reviewer")
 logger.log_task_started(task)
 logger.log_task_completed(task, result={"rows": 100})
 logger.log_task_failed(task, error="Timeout", is_transient=False)
-logger.log_task_paused()
+logger.log_task_paused(task)
 logger.log_task_cancelled(task, reason="User cancelled")
 logger.log_governance_blocked(task, blockers=["ambiguous_target"])
 logger.log_governance_check_passed(task)
