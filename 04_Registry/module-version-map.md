@@ -50,19 +50,19 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 
 **Workflow Scheduler**, **Agent Memory & Context Budget Manager**, **IA4D-to-Scheduler Handoff Contract**, and **Agent OS Execution Service** extended descriptions live in `04_Registry/module-version-map-details.md`. Workflow Scheduler moves to `0.10.0` under #758 for the additive host-local concurrency-1 lease adapter; Agent OS Execution Service remains `0.5.0`.
 
-**Instructional Materials Coach** `0.4.0` adds `curriculum-visual-asset-compatibility-v2` and `curriculum-visual-asset-candidates-v2` (#871), preserving v1 behavior and adding governed cohesion metadata required by #851. `0.5.0` adds `curriculum-image-intent-v1` and `curriculum-imported-asset-context-v1` (#955), keeping provider prompt prose noncanonical and provenance user-claimed. `0.5.1` clarifies that Notion remains Draft Mode by default and no Append-Only Safe Log Mode or general Notion-write authority is inherited automatically (#1103).
+**Instructional Materials Coach** `0.4.0` adds `curriculum-visual-asset-compatibility-v2` and `curriculum-visual-asset-candidates-v2` (#871), preserving v1 mappings, defaults, identities, and non-authorizing behavior. `0.5.0` adds `curriculum-image-intent-v1` and `curriculum-imported-asset-context-v1` (#955), keeping provider prompt prose noncanonical and provenance user-claimed. `0.5.1` clarifies that Notion remains Draft Mode by default and no Append-Only Safe Log Mode or general Notion-write authority is inherited automatically (#1103).
 
 **Artifact-First Response Standard** (`01_Shared_Standards/instructional-design/artifact-first-response-standard.md`, #821) requires classroom-material responses to lead with the requested artifact, preview, or content specification before backend routing and governance reporting while preserving existing gates, ownership, and stops.
 
 **Teacher Decision Studio Standard** (`01_Shared_Standards/instructional-design/teacher-decision-studio-standard.md` plus `teacher-decision-studio-previews-standard.md`, #823/#824) defines table-first rubric/assessment consultation, explanation-risk analysis, and per-option previews; it recommends without auto-approving or writing governed fields.
 
-**LP Pacing Handoff Contract** (`01_Shared_Standards/instructional-design/lp-pacing-handoff-contract.md`, adaptation/cases companions, and `04_Registry/lp-pacing-handoff-contract.yaml`, #648) defines the provider-neutral pacing packet, owner-state independence, diagnosis mapping, and adaptation hierarchy; it authorizes no runtime evaluator, OCR, classroom data, external write, or gate advancement.
+**LP Pacing Handoff Contract** (`01_Shared_Standards/instructional-design/lp-pacing-handoff-contract.md`, adaptation/cases companions, and `04_Registry/lp-pacing-handoff-contract.yaml`, #648) defines the provider-neutral pacing packet, owner-state independence, diagnosis, and adaptation hierarchy; it authorizes no runtime evaluator, OCR, classroom data, external write, or gate advancement.
 
 **LP Reason Code Catalog** (`01_Shared_Standards/instructional-design/lp-reason-code-catalog.md` and `04_Registry/lp-reason-code-catalog.yaml`, #711) owns the finite `lp-*` semantic reason catalog and producer/consumer map; parsing, bounds, serialization, and authority mechanics remain with LP9, LP12, and CW5A.
 
 **LP Notion Working Layer** (`01_Shared_Standards/notion/lp-notion-working-layer-standard.md` and `04_Registry/lp-notion-working-layer-change-request.yaml`, #652) defines the bounded Notion working-layer design and exact-target Change Request; it remains proposed/not authorized with six unresolved decisions.
 
-**Execution Checkpoint Contract** (`scripts/agent_os_execution_checkpoint/`, #895, design approved in #858) is the pure-local checkpoint record, content-addressed append-only storage, and resume planner; every authority field stays false.
+**Execution Checkpoint Contract** (`scripts/agent_os_execution_checkpoint/`, #895, design approved in #858) is the pure-local checkpoint record, content-addressed append-only storage with fail-closed quarantine, binding invalidation, mutation-intent identities, and deterministic non-authorizing resume planning. See `scripts/agent_os_execution_checkpoint/README.md`.
 
 ## Reconciliation Notes
 A3 reviewed this map against visible repository evidence only. Runtime status not directly supported by files or validation evidence remains unstated.
