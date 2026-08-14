@@ -19,15 +19,22 @@ pytest --cov=src --cov-report=html
 
 ### GitHub Actions
 
+Codecov v6 OIDC requires `id-token: write`; keep normal repository contents read-only.
+
 ```yaml
+permissions:
+  contents: read
+  id-token: write
+
 - name: Run tests with coverage
   run: |
     pytest --cov=src --cov-fail-under=80 --cov-report=xml
 
 - name: Upload coverage to Codecov
-  uses: codecov/codecov-action@v3
+  uses: codecov/codecov-action@v6
   with:
-    file: ./coverage.xml
+    files: ./coverage.xml
+    use_oidc: true
 ```
 
 ## Coverage Badge

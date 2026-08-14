@@ -1,7 +1,6 @@
 # CI/CD Setup (GitHub Actions)
 
-Use the installer policy in `../ci-cd/github-actions.md`: keep the environment-provided
-pip unless a documented compatibility requirement justifies a constrained version.
+Use the installer policy in `../ci-cd/github-actions.md`.
 
 ## Workflow File
 
@@ -16,13 +15,15 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+  id-token: write
 jobs:
   tests:
     runs-on: ubuntu-latest
     strategy:
       matrix:
         python-version: ['3.9', '3.10', '3.11', '3.12']
-
     services:
       postgres:
         image: postgres:15-alpine
@@ -36,10 +37,8 @@ jobs:
           --health-retries 5
         ports:
           - 5432:5432
-
     steps:
     - uses: actions/checkout@v5
-
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v6
       with:
@@ -54,9 +53,10 @@ jobs:
       run: pytest --cov=src --cov-report=xml
 
     - name: Upload coverage
-      uses: codecov/codecov-action@v3
+      uses: codecov/codecov-action@v6
       with:
-        file: ./coverage.xml
+        files: ./coverage.xml
+        use_oidc: true
 
     - name: Code quality checks
       run: |
@@ -64,6 +64,8 @@ jobs:
         black --check src tests
         mypy src
 ```
+
+Codecov OIDC avoids a long-lived secret; it requires `id-token: write` only.
 
 ## Branch Protection Rules
 

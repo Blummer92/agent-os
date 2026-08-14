@@ -18,6 +18,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+  id-token: write
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -39,18 +42,21 @@ jobs:
       run: python -m pip install -r requirements-dev.txt
 
     - name: Run tests
-      run: pytest --cov=src --cov-fail-under=80
+      run: pytest --cov=src --cov-fail-under=80 --cov-report=xml
 
     - name: Upload coverage
-      uses: codecov/codecov-action@v3
+      uses: codecov/codecov-action@v6
+      with:
+        files: ./coverage.xml
+        use_oidc: true
 ```
 
-The `strategy.matrix` block runs each listed Python version as a separate job.
+The `strategy.matrix` block runs each listed Python version as a separate job. Codecov
+OIDC avoids a long-lived upload secret and requires `id-token: write` as shown above.
 
 ## Service Dependencies
 
 For database/Redis in tests:
-
 ```yaml
 services:
   postgres:
@@ -69,7 +75,6 @@ services:
 ## Conditional Steps
 
 Only run on main branch:
-
 ```yaml
 - name: Report coverage
   if: github.ref == 'refs/heads/main'
@@ -79,7 +84,6 @@ Only run on main branch:
 ## Artifact Upload
 
 Save test results:
-
 ```yaml
 - name: Upload test results
   if: always()
@@ -91,5 +95,5 @@ Save test results:
 
 ## Manual Trigger
 
-Add `workflow_dispatch:` under `on:` to allow triggering from the GitHub UI. Add a
-status badge to the README with `![Tests](.../workflows/tests.yml/badge.svg)`.
+Add `workflow_dispatch:` under `on:` to allow triggering from the GitHub UI, and a
+status badge with `![Tests](.../workflows/tests.yml/badge.svg)`.
