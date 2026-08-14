@@ -514,6 +514,11 @@ repos:
     hooks:
       - id: flake8
 
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.0.0
+    hooks:
+      - id: mypy
+
   - repo: local
     hooks:
       - id: pytest
@@ -535,12 +540,12 @@ pre-commit install
 ## Checklist
 
 - [ ] Virtual environment created and activated
-- [ ] Test dependencies installed (`requirements-dev.txt`)
-- [ ] `pytest.ini` configured
-- [ ] `tests/conftest.py` created with root fixtures
+- [ ] Test dependencies installed (requirements-dev.txt)
+- [ ] pytest.ini configured
+- [ ] tests/conftest.py created with root fixtures
 - [ ] CI/CD workflow configured (GitHub Actions/GitLab CI)
 - [ ] Database fixtures set up for integration tests
-- [ ] Environment variables configured (`.env.test`)
+- [ ] Environment variables configured (.env.test)
 - [ ] Mock API/external service fixtures created
 - [ ] Docker setup for consistent environments
 - [ ] Pre-commit hooks configured
