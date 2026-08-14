@@ -156,10 +156,10 @@ class HostLocalLeaseAdapter:
             raise TypeError("request must be an exact PilotLeaseRequest")
         lease_identity = pilot_lease_identity(request)
         active_path, generation_path = self._paths(lease_identity)
-        generation = 0
-        if generation_path.exists():
-            generation = self._decode_generation(self._read_bounded(generation_path))
         if not active_path.exists():
+            generation = 0
+            if generation_path.exists():
+                generation = self._decode_generation(self._read_bounded(generation_path))
             return HostLocalLeaseObservation(
                 lease_identity=lease_identity, active=False, ambiguous=False, generation=generation
             )
@@ -168,6 +168,12 @@ class HostLocalLeaseAdapter:
                 self._read_bounded(active_path)
             )
         except (OSError, ValueError) as exc:
+            generation = 0
+            try:
+                if generation_path.exists():
+                    generation = self._decode_generation(self._read_bounded(generation_path))
+            except (OSError, ValueError):
+                pass
             return HostLocalLeaseObservation(
                 lease_identity=lease_identity,
                 active=True,
@@ -175,12 +181,41 @@ class HostLocalLeaseAdapter:
                 generation=generation,
                 reason=str(exc),
             )
-        if stored_lease != lease_identity or active_generation != generation:
+        if stored_lease != lease_identity:
             return HostLocalLeaseObservation(
                 lease_identity=lease_identity,
                 active=True,
                 ambiguous=True,
-                generation=generation,
+                generation=active_generation,
+                holder_identity=holder,
+                reason="active lease identity does not match requested lease",
+            )
+        if not generation_path.exists():
+            return HostLocalLeaseObservation(
+                lease_identity=lease_identity,
+                active=True,
+                ambiguous=True,
+                generation=active_generation,
+                holder_identity=holder,
+                reason="active lease generation is not durably recorded",
+            )
+        try:
+            durable_generation = self._decode_generation(self._read_bounded(generation_path))
+        except (OSError, ValueError) as exc:
+            return HostLocalLeaseObservation(
+                lease_identity=lease_identity,
+                active=True,
+                ambiguous=True,
+                generation=active_generation,
+                holder_identity=holder,
+                reason=str(exc),
+            )
+        if active_generation != durable_generation:
+            return HostLocalLeaseObservation(
+                lease_identity=lease_identity,
+                active=True,
+                ambiguous=True,
+                generation=active_generation,
                 holder_identity=holder,
                 reason="active lease metadata does not match durable generation",
             )
@@ -188,7 +223,7 @@ class HostLocalLeaseAdapter:
             lease_identity=lease_identity,
             active=True,
             ambiguous=False,
-            generation=generation,
+            generation=durable_generation,
             holder_identity=holder,
         )
 
