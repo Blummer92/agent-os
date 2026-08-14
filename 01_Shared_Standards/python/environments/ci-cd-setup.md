@@ -16,6 +16,10 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   tests:
     runs-on: ubuntu-latest
@@ -54,9 +58,10 @@ jobs:
       run: pytest --cov=src --cov-report=xml
 
     - name: Upload coverage
-      uses: codecov/codecov-action@v3
+      uses: codecov/codecov-action@v6
       with:
-        file: ./coverage.xml
+        files: ./coverage.xml
+        use_oidc: true
 
     - name: Code quality checks
       run: |
@@ -64,6 +69,9 @@ jobs:
         black --check src tests
         mypy src
 ```
+
+Codecov OIDC avoids a long-lived upload secret. It requires `id-token: write`; do not
+add broader permissions merely to enable coverage upload.
 
 ## Branch Protection Rules
 
