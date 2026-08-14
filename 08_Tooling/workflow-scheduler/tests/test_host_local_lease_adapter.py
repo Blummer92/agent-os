@@ -117,6 +117,27 @@ def test_two_processes_race_and_exactly_one_acquires(tmp_path: Path) -> None:
     assert {generation for _, generation, _ in results} == {1}
 
 
+def test_active_generation_is_preserved_while_durable_record_is_ambiguous(
+    tmp_path: Path,
+) -> None:
+    adapter = _adapter(tmp_path)
+    request = _request(invocation_id="generation-window")
+    grant = adapter.acquire(request)
+    assert grant.acquired is True
+    _, generation_path = adapter._paths(grant.lease_identity)
+    generation_path.unlink()
+
+    observation = adapter.inspect(request)
+    blocked = adapter.acquire(request)
+    assert observation.active is True
+    assert observation.ambiguous is True
+    assert observation.generation == grant.generation == 1
+    assert "not durably recorded" in observation.reason
+    assert blocked.acquired is False
+    assert blocked.generation == grant.generation
+    assert "manual recovery" in blocked.reason
+
+
 def test_duplicate_release_and_generation_fencing(tmp_path: Path) -> None:
     adapter = _adapter(tmp_path)
     request = _request()
