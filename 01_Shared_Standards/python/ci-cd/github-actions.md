@@ -21,7 +21,6 @@ on:
 permissions:
   contents: read
   id-token: write
-
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -53,13 +52,11 @@ jobs:
 ```
 
 The `strategy.matrix` block runs each listed Python version as a separate job. Codecov
-OIDC avoids a long-lived upload secret and requires the explicit `id-token: write`
-permission shown above.
+OIDC avoids a long-lived upload secret and requires `id-token: write` as shown above.
 
 ## Service Dependencies
 
 For database/Redis in tests:
-
 ```yaml
 services:
   postgres:
@@ -78,7 +75,6 @@ services:
 ## Conditional Steps
 
 Only run on main branch:
-
 ```yaml
 - name: Report coverage
   if: github.ref == 'refs/heads/main'
@@ -88,7 +84,6 @@ Only run on main branch:
 ## Artifact Upload
 
 Save test results:
-
 ```yaml
 - name: Upload test results
   if: always()
@@ -100,5 +95,5 @@ Save test results:
 
 ## Manual Trigger
 
-Add `workflow_dispatch:` under `on:` to allow triggering from the GitHub UI. Add a
-status badge to the README with `![Tests](.../workflows/tests.yml/badge.svg)`.
+Add `workflow_dispatch:` under `on:` to allow triggering from the GitHub UI, and a
+status badge with `![Tests](.../workflows/tests.yml/badge.svg)`.

@@ -15,7 +15,6 @@ Codecov v6 OIDC requires `id-token: write`; keep normal repository contents read
 permissions:
   contents: read
   id-token: write
-
 - name: Upload to Codecov
   uses: codecov/codecov-action@v6
   with:
@@ -96,11 +95,5 @@ Then download and view locally.
 
 ## Coverage Trends
 
-Track coverage over time with Codecov:
-
-1. Push coverage to Codecov
-2. Codecov tracks historical data
-3. See trends in dashboard
-4. Alerts on significant drops
-
-Result: Coverage trends visible in PR checks.
+Track coverage over time with Codecov: push coverage, review historical trends, and
+alert on significant drops. Result: trends visible in PR checks.
