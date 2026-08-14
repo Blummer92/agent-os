@@ -11,7 +11,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 | Python Standards | 0.1.0 |
 | Google Workspace Standards | 0.1.2 |
 | Apps Script Standards | 0.1.0 |
-| Notion Standards | 0.3.0 |
+| Notion Standards | 0.4.0 |
 | QA/Test Standards | 0.1.0 |
 | Dashboard Governance | 0.1.0 |
 | Dashboard Migration Verification | 0.1.0 |
@@ -20,7 +20,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 | GitHub Service Agent | 0.6.0 |
 | Unit Alignment Agent | 0.5.0 |
 | Teacher Modeling Coach | 0.5.0 |
-| Instructional Materials Coach | 0.5.0 |
+| Instructional Materials Coach | 0.5.1 |
 | Student Language Standard | 0.3.0 |
 | Workflow Scheduler | 0.9.1 |
 | Workspace Automation Builder Tooling | 0.1.1 |
@@ -42,13 +42,15 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 
 **Agent Interaction Output Standard** `0.2.0` adds compact state-based operator rendering for implementation and PR review (#1081): bounded stage bars without invented percentages, canonical `Completed` / `Current` / `Remaining` / `Blockers` evidence labels, material-only `Best execution`, supported `Next`, and smallest-context delivery; no new progress state or authority.
 
+**Notion Standards** `0.4.0` defines the canonical Draft Mode, Append-Only Safe Log Mode, and Canonical Update Mode write-safety vocabulary in `notion-record-update-safety.md` (#1103). Mode classification never creates authority; existing write authorization remains canonical in `00_Governance/write-authorization-policy.md`.
+
 **Dashboard Migration Verification** (`08_Tooling/dashboard-migration-verification/`) is a verification-only migration evidence toolkit for registry examples, placeholder snapshots, dependency graphs, conservative validation results, and reports. It never authorizes live Notion, Workspace, trigger, sharing, source-of-truth, or production dashboard writes. Standard packaging metadata was completed by D2 (#123).
 
 **Workspace Automation Builder Tooling** (`08_Tooling/workspace-automation-builder/`) includes an Apps Script safety bridge, offline tests, sync safety docs, sanitized sample handoff fixture, JSON schemas, validation fixtures, and a local-only fixture validator. It does not authorize live Workspace, Notion, trigger, sharing, or production writes.
 
 **Workflow Scheduler**, **Agent Memory & Context Budget Manager**, **IA4D-to-Scheduler Handoff Contract**, and **Agent OS Execution Service** extended descriptions live in `04_Registry/module-version-map-details.md`. Workflow Scheduler remains `0.9.1`; Agent OS Execution Service moves to `0.5.0` under #918.
 
-**Instructional Materials Coach** `0.4.0` adds `curriculum-visual-asset-compatibility-v2` and `curriculum-visual-asset-candidates-v2` (#871), preserving v1 mappings, defaults, identities, and non-authorizing behavior. `0.5.0` adds `curriculum-image-intent-v1` and `curriculum-imported-asset-context-v1` (#955), keeping provider prompt prose noncanonical and provenance user-claimed.
+**Instructional Materials Coach** `0.4.0` adds `curriculum-visual-asset-compatibility-v2` and `curriculum-visual-asset-candidates-v2` (#871), preserving v1 mappings, defaults, identities, and non-authorizing behavior. `0.5.0` adds `curriculum-image-intent-v1` and `curriculum-imported-asset-context-v1` (#955), keeping provider prompt prose noncanonical and provenance user-claimed. `0.5.1` clarifies that Notion remains Draft Mode by default and no Append-Only Safe Log Mode or general Notion-write authority is inherited automatically (#1103).
 
 **Artifact-First Response Standard** (`01_Shared_Standards/instructional-design/artifact-first-response-standard.md`, #821) requires classroom-material responses to lead with the requested artifact, preview, or content specification before backend routing and governance reporting while preserving existing gates, ownership, and stops.
 
