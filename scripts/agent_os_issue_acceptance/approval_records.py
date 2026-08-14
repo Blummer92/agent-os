@@ -27,6 +27,11 @@ from .planning_binding import (
 from .scheduler_handoff import HandoffCohort
 
 APPROVAL_RECORD_SCHEMA_VERSION = "1.0"
+APPROVAL_RECORD_SEMANTIC_SCHEMA_VERSION = "1.1"
+APPROVAL_RECORD_SUPPORTED_SCHEMA_VERSIONS = frozenset(
+    {APPROVAL_RECORD_SCHEMA_VERSION, APPROVAL_RECORD_SEMANTIC_SCHEMA_VERSION}
+)
+SEMANTIC_APPROVAL_SUBJECT_SCHEMA_VERSION = "1.0"
 
 _SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -34,6 +39,7 @@ _APPROVAL_ID_RE = re.compile(r"^approval:[0-9a-f]{64}$")
 _REVISION_ID_RE = re.compile(r"^approval-revision:[0-9a-f]{64}$")
 _PROPOSAL_ID_RE = re.compile(r"^draft-task-proposal:[0-9a-f]{64}$")
 _ISSUEPLAN_ID_RE = re.compile(r"^issueplan-current-state:[0-9a-f]{64}$")
+_SEMANTIC_SUBJECT_ID_RE = re.compile(r"^semantic-approval-subject:[0-9a-f]{64}$")
 _TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 APPROVAL_INVALIDATION_REASON_CODES = frozenset(
@@ -207,12 +213,24 @@ class ApprovalRecord:
     supersedes_approval_id: str | None
     reason_codes: tuple[str, ...]
     details: tuple[str, ...] = ()
+    semantic_subject_id: str | None = None
     execution_authorized: Literal[False] = field(default=False, init=False)
     side_effects_performed: Literal[False] = field(default=False, init=False)
 
     def __post_init__(self) -> None:
-        if self.schema_version != APPROVAL_RECORD_SCHEMA_VERSION:
+        if self.schema_version not in APPROVAL_RECORD_SUPPORTED_SCHEMA_VERSIONS:
             raise ValueError("unsupported approval schema version")
+        if self.schema_version == APPROVAL_RECORD_SCHEMA_VERSION:
+            if self.semantic_subject_id is not None:
+                raise ValueError(
+                    "schema 1.0 approval records cannot carry a semantic_subject_id"
+                )
+        elif not isinstance(
+            self.semantic_subject_id, str
+        ) or not _SEMANTIC_SUBJECT_ID_RE.fullmatch(self.semantic_subject_id):
+            raise ValueError(
+                "semantic-version approval records require a valid semantic_subject_id"
+            )
         if not isinstance(self.approval_kind, ApprovalKind) or not isinstance(
             self.state, ApprovalState
         ):
@@ -272,6 +290,8 @@ class ApprovalRecord:
             self.binding,
             self.expires_at,
             self.supersedes_approval_id,
+            schema_version=self.schema_version,
+            semantic_subject_id=self.semantic_subject_id,
         )
         if self.approval_id and self.approval_id != expected_id:
             raise ValueError("approval_id does not match approval candidate content")
@@ -331,7 +351,10 @@ def build_approval_candidate(
     expires_at: str | None = None,
     supersedes: ApprovalRecord | None = None,
     planning_binding: PlanningBindingEvidence | None = None,
+    schema_version: str = APPROVAL_RECORD_SCHEMA_VERSION,
 ) -> ApprovalRecord:
+    if schema_version not in APPROVAL_RECORD_SUPPORTED_SCHEMA_VERSIONS:
+        raise ValueError("unsupported approval schema version")
     binding, status, reasons, details = _current_binding(
         proposal,
         issueplan_current_state_evidence,
@@ -360,13 +383,24 @@ def build_approval_candidate(
         ):
             raise ValueError("replacement candidate cannot predate prior approval")
         prior_id = prior.approval_id
+    kind = ApprovalKind(approval_kind)
+    semantic_subject_id = None
+    if schema_version == APPROVAL_RECORD_SEMANTIC_SCHEMA_VERSION:
+        semantic_subject_id = compute_semantic_approval_subject(
+            binding,
+            repository_state_evidence,
+            approval_kind=kind,
+            expires_at=expires_at,
+            supersedes_approval_id=prior_id,
+            planning_binding=planning_binding,
+        )
     return ApprovalRecord(
-        schema_version=APPROVAL_RECORD_SCHEMA_VERSION,
+        schema_version=schema_version,
         approval_id="",
         approval_revision="",
         revision_number=1,
         previous_revision=None,
-        approval_kind=ApprovalKind(approval_kind),
+        approval_kind=kind,
         state=ApprovalState.PENDING,
         binding=binding,
         authorizer_id=authorizer_id,
@@ -375,6 +409,7 @@ def build_approval_candidate(
         expires_at=expires_at,
         supersedes_approval_id=prior_id,
         reason_codes=(),
+        semantic_subject_id=semantic_subject_id,
     )
 
 
@@ -437,6 +472,7 @@ def record_approval_decision(
         supersedes_approval_id=current.supersedes_approval_id,
         reason_codes=tuple(sorted(reasons)),
         details=tuple(str(item) for item in details),
+        semantic_subject_id=current.semantic_subject_id,
     )
 
 
@@ -468,7 +504,7 @@ def evaluate_approval_applicability(
         reason = (
             "version.unsupported"
             if getattr(approval_record, "schema_version", None)
-            != APPROVAL_RECORD_SCHEMA_VERSION
+            not in APPROVAL_RECORD_SUPPORTED_SCHEMA_VERSIONS
             else "projection.incomplete"
         )
         return _result(
@@ -500,8 +536,31 @@ def evaluate_approval_applicability(
         _reason_codes(invalidation_events)
     )
     changed = _changed_bindings(approval.binding, binding)
-    reasons.update(_binding_reasons(changed))
     details = list(current_details)
+    if (
+        changed
+        and approval.schema_version == APPROVAL_RECORD_SEMANTIC_SCHEMA_VERSION
+        and approval.semantic_subject_id is not None
+    ):
+        try:
+            current_subject = compute_semantic_approval_subject(
+                binding,
+                current_repository_state_evidence,
+                approval_kind=approval.approval_kind,
+                expires_at=approval.expires_at,
+                supersedes_approval_id=approval.supersedes_approval_id,
+                planning_binding=planning_binding,
+            )
+        except (TypeError, ValueError) as exc:
+            current_subject = None
+            details.append(f"semantic-carry-forward:unavailable:{exc}")
+        if current_subject is not None and current_subject == approval.semantic_subject_id:
+            changed = ()
+            details.append("semantic-carry-forward:applied")
+        elif current_subject is not None:
+            details.append("semantic-carry-forward:subject-mismatch")
+    if changed:
+        reasons.update(_binding_reasons(changed))
     if approval.state in {ApprovalState.PENDING, ApprovalState.REJECTED}:
         return _result(
             "blocked",
@@ -776,6 +835,164 @@ def _current_binding(
     )
 
 
+def compute_current_approval_binding(
+    proposal: object,
+    issueplan_current_state_evidence: IssuePlanCurrentStateEvidence,
+    repository_state_evidence: RepositoryStateEvidence | Mapping[str, Any],
+    planning_binding: PlanningBindingEvidence | None = None,
+) -> ApprovalBinding:
+    """Return the freshly computed CURRENT ApprovalBinding for exact-identity use.
+
+    Unlike a stored ApprovalRecord.binding, this always reflects the current
+    proposal/repository/planning identities -- required by #407 so a projection
+    built after semantic carry-forward binds current exact IDs, not stale ones.
+    """
+    binding, status, reasons, details = _current_binding(
+        proposal,
+        issueplan_current_state_evidence,
+        repository_state_evidence,
+        planning_binding,
+    )
+    if binding is None or status != "applicable":
+        raise ValueError(
+            "current approval binding requires current validated inputs: "
+            + ",".join((*reasons, *details))
+        )
+    return binding
+
+
+def _repository_state_for_subject(
+    value: RepositoryStateEvidence | Mapping[str, Any],
+) -> RepositoryStateEvidence:
+    if isinstance(value, RepositoryStateEvidence):
+        return value
+    if isinstance(value, Mapping):
+        try:
+            return RepositoryStateEvidence(**dict(value))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"repository_state_evidence is malformed: {exc}"
+            ) from exc
+    raise TypeError(
+        "repository_state_evidence must be RepositoryStateEvidence or a mapping"
+    )
+
+
+def _semantic_subject_payload(
+    binding: ApprovalBinding,
+    repository_state_evidence: RepositoryStateEvidence | Mapping[str, Any],
+    planning_binding: PlanningBindingEvidence | None,
+    *,
+    approval_kind: str,
+    expires_at: str | None,
+    supersedes_approval_id: str | None,
+) -> dict[str, Any]:
+    repository_state = _repository_state_for_subject(repository_state_evidence)
+    if repository_state.evidence_id != binding.repository_state_evidence_id:
+        raise ValueError(
+            "repository_state_evidence does not match the current approval binding"
+        )
+    return {
+        "subject_schema_version": SEMANTIC_APPROVAL_SUBJECT_SCHEMA_VERSION,
+        "approval_kind": approval_kind,
+        "expires_at": expires_at,
+        "supersedes_approval_id": supersedes_approval_id,
+        "proposal_version": binding.proposal_version,
+        "repository": binding.repository.casefold(),
+        "base_branch": binding.base_branch,
+        "evaluated_repository_sha": binding.evaluated_repository_sha,
+        "evaluator_commit_sha": binding.evaluator_commit_sha,
+        "graph_digest": binding.graph_digest,
+        "planning_result_digest": binding.planning_result_digest,
+        "supplied_node_ids": list(binding.supplied_node_ids),
+        "cohort_summaries": [
+            {
+                "node_ids": list(cohort.node_ids),
+                "classification": cohort.classification,
+                "reason_codes": list(cohort.reason_codes),
+            }
+            for cohort in binding.cohort_summaries
+        ],
+        "issueplan_current_state_evidence_id": (
+            binding.issueplan_current_state_evidence_id
+        ),
+        "repository_evidence_type": binding.repository_evidence_type,
+        "tested_repository_sha": binding.tested_repository_sha,
+        "source_snapshot_fingerprint": binding.source_snapshot_fingerprint,
+        "scanner_result_fingerprint": binding.scanner_result_fingerprint,
+        "implementation_contract_fingerprint": (
+            binding.implementation_contract_fingerprint
+        ),
+        "allowed_files": list(binding.allowed_files),
+        "forbidden_paths": list(binding.forbidden_paths),
+        "required_tests": list(binding.required_tests),
+        "repository_identity": list(
+            repository_state.repository_identity.canonical_key
+        ),
+        "head_ref": repository_state.head_ref,
+        "requested_ref": repository_state.requested_ref,
+        "producer_adapter": repository_state.producer_adapter,
+        "producer_adapter_version": repository_state.producer_adapter_version,
+        "evidence_schema_version": repository_state.evidence_schema_version,
+        "base_sha": repository_state.base_sha,
+        "head_sha": repository_state.head_sha,
+        "requested_sha": repository_state.requested_sha,
+        "pushed_sha": repository_state.pushed_sha,
+        "proposed_pr_sha": repository_state.proposed_pr_sha,
+        "synthetic_merge_sha": repository_state.synthetic_merge_sha,
+        "external_build_sha": repository_state.external_build_sha,
+        "contract_fingerprint": repository_state.contract_fingerprint,
+        "worktree_state": repository_state.worktree_state.value,
+        "worktree_reason_codes": list(repository_state.worktree_reason_codes),
+        "freshness_boundary": repository_state.freshness_boundary,
+        "handoff_contract_version": (
+            planning_binding.handoff_contract_version
+            if planning_binding is not None
+            else None
+        ),
+        "planning_result_version": (
+            planning_binding.planning_result_version
+            if planning_binding is not None
+            else None
+        ),
+    }
+
+
+def compute_semantic_approval_subject(
+    binding: ApprovalBinding,
+    repository_state_evidence: RepositoryStateEvidence | Mapping[str, Any],
+    *,
+    approval_kind: ApprovalKind | str,
+    expires_at: str | None = None,
+    supersedes_approval_id: str | None = None,
+    planning_binding: PlanningBindingEvidence | None = None,
+) -> str:
+    """Compute the versioned canonical semantic approval-subject identity.
+
+    Includes all authority-relevant semantics and excludes only the approved
+    audit/attempt metadata: RepositoryStateEvidence.observed_at and
+    correlation_id, SchedulerPlanningHandoff.created_at (via
+    PlanningBindingEvidence.handoff_digest, which is never used here),
+    PlanningBindingEvidence.created_at, and DraftTaskProposal.created_at.
+    """
+    if not isinstance(binding, ApprovalBinding):
+        raise TypeError("binding must be ApprovalBinding")
+    if planning_binding is not None and not isinstance(
+        planning_binding, PlanningBindingEvidence
+    ):
+        raise TypeError("planning_binding must be PlanningBindingEvidence or None")
+    kind_value = ApprovalKind(approval_kind).value
+    payload = _semantic_subject_payload(
+        binding,
+        repository_state_evidence,
+        planning_binding,
+        approval_kind=kind_value,
+        expires_at=expires_at,
+        supersedes_approval_id=supersedes_approval_id,
+    )
+    return f"semantic-approval-subject:{_digest(payload)}"
+
+
 def _verified_proposal(proposal: object) -> Any:
     proposal_type = type(proposal)
     if proposal_type.__name__ != "DraftTaskProposal" or not (
@@ -831,6 +1048,7 @@ def _verified_record(record: ApprovalRecord) -> ApprovalRecord:
         supersedes_approval_id=record.supersedes_approval_id,
         reason_codes=record.reason_codes,
         details=record.details,
+        semantic_subject_id=record.semantic_subject_id,
     )
 
 
@@ -839,12 +1057,41 @@ def _approval_id(
     binding: ApprovalBinding,
     expires_at: str | None,
     supersedes_approval_id: str | None,
+    *,
+    schema_version: str = APPROVAL_RECORD_SCHEMA_VERSION,
+    semantic_subject_id: str | None = None,
 ) -> str:
-    return f"approval:{_digest({'schema_version': APPROVAL_RECORD_SCHEMA_VERSION, 'approval_kind': kind.value, 'binding': _binding_payload(binding), 'expires_at': expires_at, 'supersedes_approval_id': supersedes_approval_id})}"
+    payload: dict[str, Any] = {
+        "schema_version": schema_version,
+        "approval_kind": kind.value,
+        "binding": _binding_payload(binding),
+        "expires_at": expires_at,
+        "supersedes_approval_id": supersedes_approval_id,
+    }
+    if semantic_subject_id is not None:
+        payload["semantic_subject_id"] = semantic_subject_id
+    return f"approval:{_digest(payload)}"
 
 
 def _approval_revision(record: ApprovalRecord) -> str:
-    return f"approval-revision:{_digest({'schema_version': record.schema_version, 'approval_id': record.approval_id, 'revision_number': record.revision_number, 'previous_revision': record.previous_revision, 'approval_kind': record.approval_kind.value, 'state': record.state.value, 'binding': _binding_payload(record.binding), 'authorizer_id': record.authorizer_id, 'decision_id': record.decision_id, 'decision_at': record.decision_at, 'expires_at': record.expires_at, 'supersedes_approval_id': record.supersedes_approval_id, 'reason_codes': list(record.reason_codes)})}"
+    payload: dict[str, Any] = {
+        "schema_version": record.schema_version,
+        "approval_id": record.approval_id,
+        "revision_number": record.revision_number,
+        "previous_revision": record.previous_revision,
+        "approval_kind": record.approval_kind.value,
+        "state": record.state.value,
+        "binding": _binding_payload(record.binding),
+        "authorizer_id": record.authorizer_id,
+        "decision_id": record.decision_id,
+        "decision_at": record.decision_at,
+        "expires_at": record.expires_at,
+        "supersedes_approval_id": record.supersedes_approval_id,
+        "reason_codes": list(record.reason_codes),
+    }
+    if record.semantic_subject_id is not None:
+        payload["semantic_subject_id"] = record.semantic_subject_id
+    return f"approval-revision:{_digest(payload)}"
 
 
 def _binding_payload(binding: ApprovalBinding) -> dict[str, Any]:
@@ -1116,6 +1363,9 @@ _APPROVAL_RECORD_TRANSPORT_KEYS = frozenset(
         "side_effects_performed",
     }
 )
+_APPROVAL_RECORD_TRANSPORT_KEYS_SEMANTIC = _APPROVAL_RECORD_TRANSPORT_KEYS | {
+    "semantic_subject_id"
+}
 _APPROVAL_APPLICABILITY_TRANSPORT_KEYS = frozenset(
     {
         "status",
@@ -1166,7 +1416,16 @@ def reconstruct_approval_record(
     """Strictly reconstruct one approval record and reverify its supplied identities."""
 
     raw = _decode_transport_payload(payload, "approval record")
-    _require_exact_transport_keys(raw, _APPROVAL_RECORD_TRANSPORT_KEYS, "approval record")
+    is_semantic = (
+        isinstance(raw, Mapping)
+        and raw.get("schema_version") == APPROVAL_RECORD_SEMANTIC_SCHEMA_VERSION
+    )
+    expected_keys = (
+        _APPROVAL_RECORD_TRANSPORT_KEYS_SEMANTIC
+        if is_semantic
+        else _APPROVAL_RECORD_TRANSPORT_KEYS
+    )
+    _require_exact_transport_keys(raw, expected_keys, "approval record")
     _require_fixed_false(raw, "approval record")
     if type(raw["revision_number"]) is not int:
         raise ValueError("revision_number must be a positive integer")
@@ -1199,6 +1458,7 @@ def reconstruct_approval_record(
         supersedes_approval_id=raw["supersedes_approval_id"],
         reason_codes=reason_codes,
         details=details,
+        semantic_subject_id=raw.get("semantic_subject_id"),
     )
 
 
@@ -1302,7 +1562,7 @@ def _approval_binding_transport_payload(binding: ApprovalBinding) -> dict[str, A
 
 
 def _approval_record_transport_payload(record: ApprovalRecord) -> dict[str, Any]:
-    return {
+    payload = {
         "schema_version": record.schema_version,
         "approval_id": record.approval_id,
         "approval_revision": record.approval_revision,
@@ -1321,6 +1581,9 @@ def _approval_record_transport_payload(record: ApprovalRecord) -> dict[str, Any]
         "execution_authorized": False,
         "side_effects_performed": False,
     }
+    if record.schema_version == APPROVAL_RECORD_SEMANTIC_SCHEMA_VERSION:
+        payload["semantic_subject_id"] = record.semantic_subject_id
+    return payload
 
 
 def _approval_binding_values_from_transport(raw: Mapping[str, Any]) -> dict[str, Any]:
