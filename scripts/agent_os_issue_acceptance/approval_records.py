@@ -551,11 +551,14 @@ def evaluate_approval_applicability(
                 supersedes_approval_id=approval.supersedes_approval_id,
                 planning_binding=planning_binding,
             )
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as exc:
             current_subject = None
+            details.append(f"semantic-carry-forward:unavailable:{exc}")
         if current_subject is not None and current_subject == approval.semantic_subject_id:
             changed = ()
             details.append("semantic-carry-forward:applied")
+        elif current_subject is not None:
+            details.append("semantic-carry-forward:subject-mismatch")
     if changed:
         reasons.update(_binding_reasons(changed))
     if approval.state in {ApprovalState.PENDING, ApprovalState.REJECTED}:
@@ -926,6 +929,8 @@ def _semantic_subject_payload(
         "repository_identity": list(
             repository_state.repository_identity.canonical_key
         ),
+        "head_ref": repository_state.head_ref,
+        "requested_ref": repository_state.requested_ref,
         "producer_adapter": repository_state.producer_adapter,
         "producer_adapter_version": repository_state.producer_adapter_version,
         "evidence_schema_version": repository_state.evidence_schema_version,

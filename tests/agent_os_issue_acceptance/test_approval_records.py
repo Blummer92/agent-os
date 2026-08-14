@@ -1188,7 +1188,7 @@ def test_semantic_subject_is_scoped_to_semantic_schema_and_deterministic():
     assert v1_candidate.schema_version == APPROVAL_RECORD_SCHEMA_VERSION
     assert v1_candidate.semantic_subject_id is None
 
-    first, proposal, issueplan, repository = _semantic_candidate()
+    first, _proposal, _issueplan, repository = _semantic_candidate()
     second, *_ = _semantic_candidate()
     assert first.schema_version == APPROVAL_RECORD_SEMANTIC_SCHEMA_VERSION
     assert first.semantic_subject_id is not None
@@ -1252,7 +1252,7 @@ def test_semantic_carry_forward_applies_for_observed_at_only_change():
 
 
 def test_semantic_carry_forward_applies_for_correlation_id_only_change():
-    approved, proposal, issueplan, repository = _semantic_approved()
+    approved, _proposal, issueplan, repository = _semantic_approved()
     refreshed_repository = _repository_state_with(
         repository, correlation_id="retry-attempt-2"
     )
@@ -1441,7 +1441,7 @@ def test_semantic_carry_forward_combines_multiple_excluded_field_changes():
 
 
 def test_semantic_carry_forward_does_not_apply_when_freshness_boundary_changes():
-    approved, proposal, issueplan, repository = _semantic_approved()
+    approved, _proposal, issueplan, repository = _semantic_approved()
     refreshed_repository = _repository_state_with(
         repository, freshness_boundary="workflow-run-2"
     )
@@ -1480,10 +1480,17 @@ def test_semantic_carry_forward_does_not_apply_when_worktree_becomes_dirty():
     )
     assert applicability.status == "blocked"
     assert applicability.approval_applicable is False
+    # The dirty worktree fails repository-state validation before a current
+    # binding is even constructed, so semantic-subject comparison never runs.
+    assert applicability.changed_bindings == ()
+    assert "semantic-carry-forward:applied" not in applicability.details
+    assert any(
+        detail.startswith("repository:") for detail in applicability.details
+    )
 
 
 def test_semantic_schema_still_fails_closed_when_allowed_files_change():
-    approved, proposal, issueplan, repository = _semantic_approved()
+    approved, proposal, _original_issueplan, repository = _semantic_approved()
     changed_issueplan = _issueplan(_handoff(), allowed_files=("different.py",))
 
     applicability = evaluate_approval_applicability(

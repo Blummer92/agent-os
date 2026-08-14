@@ -983,7 +983,7 @@ def test_projection_binds_current_exact_identities_after_semantic_carry_forward(
 
 
 def test_projection_still_fails_closed_for_semantic_schema_on_authority_change():
-    approved, proposal, issueplan, repository, binding = (
+    approved, proposal, _original_issueplan, repository, binding = (
         _semantic_two_phase_approved()
     )
     changed_issueplan = _issueplan(
