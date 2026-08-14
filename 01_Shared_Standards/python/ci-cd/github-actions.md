@@ -18,6 +18,10 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -39,13 +43,18 @@ jobs:
       run: python -m pip install -r requirements-dev.txt
 
     - name: Run tests
-      run: pytest --cov=src --cov-fail-under=80
+      run: pytest --cov=src --cov-fail-under=80 --cov-report=xml
 
     - name: Upload coverage
-      uses: codecov/codecov-action@v3
+      uses: codecov/codecov-action@v6
+      with:
+        files: ./coverage.xml
+        use_oidc: true
 ```
 
-The `strategy.matrix` block runs each listed Python version as a separate job.
+The `strategy.matrix` block runs each listed Python version as a separate job. Codecov
+OIDC avoids a long-lived upload secret and requires the explicit `id-token: write`
+permission shown above.
 
 ## Service Dependencies
 
