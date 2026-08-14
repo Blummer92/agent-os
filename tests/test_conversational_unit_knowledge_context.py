@@ -4,7 +4,12 @@ import copy
 
 import pytest
 
+from instructional_workflow_contracts import ValidationStatus
+from instructional_workflow_contracts.conversational_unit_knowledge import (
+    decide_conversational_unit_knowledge,
+)
 from instructional_workflow_contracts.conversational_unit_knowledge_context import (
+    MAX_CANDIDATES,
     ConversationalKnowledgeContextError,
     prepare_conversational_unit_knowledge_input,
 )
@@ -148,3 +153,44 @@ def test_multiple_candidates_are_candidate_local_and_order_preserving() -> None:
     assert [item["candidate_id"] for item in result["candidates"]] == ["candidate-1", "candidate-2"]
     assert [item["existing_relation"] for item in result["candidates"]] == ["identical", "conflicting"]
     assert result["authority"] == packet["authority"]
+
+
+def test_candidate_evidence_bound_accepts_32_and_rejects_33_before_processing() -> None:
+    candidates = [_candidate(f"candidate-{index}") for index in range(MAX_CANDIDATES)]
+    evidence = [_evidence(f"candidate-{index}") for index in range(MAX_CANDIDATES)]
+    result = prepare_conversational_unit_knowledge_input(_packet(*candidates), evidence)
+    assert len(result["candidates"]) == MAX_CANDIDATES
+
+    oversized = evidence + [_evidence("candidate-overflow")]
+    with pytest.raises(ConversationalKnowledgeContextError, match="candidate evidence count exceeds bound"):
+        prepare_conversational_unit_knowledge_input(_packet(*candidates), oversized)
+
+
+@pytest.mark.parametrize(
+    ("relation", "freshness", "existing_ref", "expected"),
+    [
+        ("identical", "current", "knowledge-1", "unchanged"),
+        ("identical", "stale", "knowledge-1", "reconfirm"),
+        ("conflicting", "current", "knowledge-1", "conflict"),
+        ("supersedes", "current", "knowledge-1", "correction"),
+        ("none", "current", None, "propose-persistence"),
+    ],
+)
+def test_prepared_input_is_phase1_compatible(
+    relation: str, freshness: str, existing_ref: str | None, expected: str
+) -> None:
+    prepared = prepare_conversational_unit_knowledge_input(
+        _packet(_candidate()),
+        [_evidence(relation=relation, freshness=freshness, existing_ref=existing_ref)],
+    )
+    result = decide_conversational_unit_knowledge(prepared)
+    assert result.status is ValidationStatus.VALID
+    assert result.record is not None
+    payload = result.record.to_dict()
+    assert payload["decisions"][0]["disposition"] == expected
+    assert payload["authority"] == {
+        "execution_authorized": False,
+        "external_write_authorized": False,
+        "production_authorized": False,
+        "publication_authorized": False,
+    }
