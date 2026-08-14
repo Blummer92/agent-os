@@ -13,6 +13,10 @@ from importlib import import_module
 __all__ = [
     "Executor",
     "ExecutionResult",
+    "HOST_LOCAL_LEASE_SCHEMA_VERSION",
+    "HostLocalLeaseAdapter",
+    "HostLocalLeaseObservation",
+    "HostLocalLeasePolicy",
     "RetryManager",
     "build_execution_request_from_task",
     "is_execution_request",
@@ -38,6 +42,22 @@ _LAZY_EXPORTS = {
     "RetryManager": (
         "workflow_scheduler.execution.retry_manager",
         "RetryManager",
+    ),
+    "HOST_LOCAL_LEASE_SCHEMA_VERSION": (
+        "workflow_scheduler.execution.host_local_lease_adapter",
+        "HOST_LOCAL_LEASE_SCHEMA_VERSION",
+    ),
+    "HostLocalLeaseAdapter": (
+        "workflow_scheduler.execution.host_local_lease_adapter",
+        "HostLocalLeaseAdapter",
+    ),
+    "HostLocalLeaseObservation": (
+        "workflow_scheduler.execution.host_local_lease_adapter",
+        "HostLocalLeaseObservation",
+    ),
+    "HostLocalLeasePolicy": (
+        "workflow_scheduler.execution.host_local_lease_adapter",
+        "HostLocalLeasePolicy",
     ),
 }
 
