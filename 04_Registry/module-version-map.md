@@ -62,7 +62,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 
 **LP Notion Working Layer** (`01_Shared_Standards/notion/lp-notion-working-layer-standard.md` and `04_Registry/lp-notion-working-layer-change-request.yaml`, #652) defines the bounded Notion working-layer design and exact-target Change Request; it remains proposed/not authorized with six unresolved decisions.
 
-**Execution Checkpoint Contract** (`scripts/agent_os_execution_checkpoint/`, #895, design approved in #858) is the pure-local checkpoint record, content-addressed append-only storage with fail-closed quarantine, binding invalidation, mutation-intent identities, and deterministic non-authorizing resume planning. See `scripts/agent_os_execution_checkpoint/README.md`.
+**Execution Checkpoint Contract** (`scripts/agent_os_execution_checkpoint/`, #895, design approved in #858) is the pure-local checkpoint record, content-addressed append-only storage, and resume planner; every authority field stays false.
 
 ## Reconciliation Notes
 A3 reviewed this map against visible repository evidence only. Runtime status not directly supported by files or validation evidence remains unstated.
