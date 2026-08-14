@@ -22,7 +22,7 @@ permissions:
     files: ./coverage.xml
     flags: unittests
     name: codecov-umbrella
-    fail_ci_if_error: true
+    fail_ci_if_error: false
     use_oidc: true
 ```
 
