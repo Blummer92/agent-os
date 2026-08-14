@@ -18,16 +18,56 @@ Route selection never satisfies those preconditions.
 Execution authorization, route selection, command execution, validation success,
 Ready for Review, and merge authorization remain separate states.
 
+## Authorized-validation admission — Issue #757
+
+`authorized_validation.py` is the pure security checkpoint between a complete
+non-authorizing candidate packet plus separately supplied human execution
+authorization and later runtime-capable lifecycle stages.
+
+The request deliberately binds canonical roots rather than flattening and
+re-owning their schemas: the exact `CandidatePacket`, approval/projection stage,
+execution-packet stage, `ExecutionAuthorizationEvidence`, and one versioned
+lifecycle-policy profile. Admission re-runs each owning module's canonical
+transport/identity checks and then verifies the cross-bindings for repository,
+issue, invocation, SHAs, approval/projection, validation plan, command plan,
+request, runtime configuration, scope, tests, argv, timeouts, output bounds, and
+expected changed paths.
+
+The existing `ExecutionAuthorizationEvidence` does not itself carry candidate
+packet, invocation, permitted-operation, or authorizer fields. #757 therefore
+binds those values in the content-addressed lifecycle request without changing or
+replacing the canonical authorization model. This prevents an otherwise valid
+authorization from being replayed against another candidate packet, invocation,
+or operation. The only admitted operation in this contract is
+`validation-only`; requested concurrency is exactly `1` and automatic retry is
+always false.
+
+Admission statuses are finite: `accepted`, `blocked`, `stale`,
+`needs-decision`, and `invalid`. Unknown schema fields/versions, malformed or
+noncanonical evidence, identity drift, expired/not-yet-active authorization, and
+unsupported policy authority fail closed. An `accepted` result remains
+non-authorizing evidence (`execution_authorized=false`) and is not a reusable
+bearer capability. The end-to-end lifecycle owner must revalidate the exact
+request/admission binding and required currentness immediately before its first
+separately authorized side effect.
+
+Construction, serialization, reconstruction, and admission verification perform
+no lease acquisition, worktree creation, process execution, Git mutation,
+network access, provider invocation, credential access, workflow dispatch,
+publication, retry, or external write.
+
 ## Public capabilities
 - `inspect_repository`
 - `verify_repository_state`
 - canonical `ExecutionServiceRequest` serialization/reconstruction
 - deterministic validation command planning
 - deterministic executor routing and immutable handoff construction
+- pure authorized-validation lifecycle request construction and admission
+  verification
 
-An accepted request, command plan, route decision, or handoff is evidence only.
-It does not authorize edits, commands, pushes, review readiness, merge,
-deployment, or external mutation.
+An accepted request, command plan, route decision, handoff, or #757 admission is
+evidence only. It does not authorize edits, commands, pushes, review readiness,
+merge, deployment, or external mutation.
 
 ## Executor routing — Issue #918
 
@@ -88,6 +128,8 @@ From the repository root:
 
 ```bash
 PYTHONPATH=08_Tooling/agent-os-execution-service/src python -m pytest -q \
+  08_Tooling/agent-os-execution-service/tests/test_authorized_validation.py
+PYTHONPATH=08_Tooling/agent-os-execution-service/src python -m pytest -q \
   08_Tooling/agent-os-execution-service/tests/test_executor_routing.py
 PYTHONPATH=08_Tooling/agent-os-execution-service/src python -m pytest -q \
   08_Tooling/agent-os-execution-service/tests
@@ -95,5 +137,9 @@ bash 07_Agent_Tests/validate-repo-structure.sh
 ./scripts/validate-all.sh
 git diff --check
 ```
+
 ## Rollback
-Revert the Issue #1070 request-transport and README additions; no external state requires cleanup.
+
+Revert the Issue #757 verifier, lazy exports, focused tests, and this README
+section to remove the admission capability. No runtime, repository, lease,
+worktree, process, or external state requires cleanup.
