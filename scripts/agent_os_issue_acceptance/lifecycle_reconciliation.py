@@ -353,7 +353,11 @@ def reconcile_lifecycle(e: LifecycleReconciliationInput) -> LifecycleReconciliat
         reasons.add("claim.multiple-primary")
         decision = True
     snap = e.lifecycle_snapshot
-    if snap and (snap.repository != e.repository or snap.issue_number != e.issue_number):
+    if snap and (
+        snap.repository != e.repository
+        or snap.issue_number != e.issue_number
+        or snap.issue_state != s.issue_state.value
+    ):
         reasons.add("source.lifecycle-snapshot-conflict")
         decision = True
 
@@ -407,15 +411,18 @@ def reconcile_lifecycle(e: LifecycleReconciliationInput) -> LifecycleReconciliat
                 reasons.add("validation.exact-head-stale")
                 actions.append(ReconciliationAction(ActionCategory.OBSERVATION, "validation.exact-head-stale", "validation", v.tested_head_sha, pr.head_sha))
 
-    if snap and s.issue_state is IssueState.OPEN:
-        desired = {ReadinessState.READY: "status:ready", ReadinessState.BLOCKED: "status:blocked", ReadinessState.NEEDS_DECISION: "status:needs-decision"}.get(s.readiness)
+    if snap:
         current = tuple(v for v in snap.lifecycle_labels if v.startswith("status:"))
-        if desired and current != (desired,):
+        desired = None
+        if s.issue_state is IssueState.OPEN:
+            desired = {ReadinessState.READY: "status:ready", ReadinessState.BLOCKED: "status:blocked", ReadinessState.NEEDS_DECISION: "status:needs-decision"}.get(s.readiness)
+        expected_status = (desired,) if desired else ()
+        if current != expected_status:
             reasons.add("lifecycle.status-label-stale")
             adm = _admission(e, "replace-lifecycle-labels")
             if adm is None:
                 reasons.add("authorization.lifecycle-admission-required")
-            actions.append(ReconciliationAction(ActionCategory.GOVERNED_MUTATION, "lifecycle.status-label-stale", "lifecycle-labels", ",".join(current) or "none", desired, "replace-lifecycle-labels", admission_result_id=adm.result_id if adm else None, expected_state_guards=_guards(e)))
+            actions.append(ReconciliationAction(ActionCategory.GOVERNED_MUTATION, "lifecycle.status-label-stale", "lifecycle-labels", ",".join(current) or "none", desired or "none", "replace-lifecycle-labels", admission_result_id=adm.result_id if adm else None, expected_state_guards=_guards(e)))
 
     merged_open = s.issue_state is IssueState.OPEN and (s.primary_pr_state is PrimaryPrState.MERGED or (pr and pr.state is PullRequestState.MERGED))
     if merged_open:

@@ -52,7 +52,7 @@ def authority(state: AuthorizationState) -> AuthorityProjection:
     )
 
 
-def state(*, readiness=ReadinessState.READY, dependency=DependencyState.CLEAR, claims=(), issue_state=IssueState.OPEN, terminal=TerminalDisposition.NONE, closure=AuthorizationState.NOT_AUTHORIZED):
+def state(*, readiness=ReadinessState.READY, dependency=DependencyState.CLEAR, claims=(), issue_state=IssueState.OPEN, terminal=TerminalDisposition.NONE, closure=AuthorizationState.NOT_AUTHORIZED, observed_labels=("status:ready",)):
     return build_issue_operational_state(
         IssueOperationalEvidence(
             repository="Blummer92/agent-os",
@@ -75,7 +75,7 @@ def state(*, readiness=ReadinessState.READY, dependency=DependencyState.CLEAR, c
             primary_claims=claims,
             validation_state=ValidationState.NOT_RUN,
             freshness_state=FreshnessState.CURRENT,
-            observed_labels=("status:ready",),
+            observed_labels=observed_labels,
         )
     )
 
@@ -88,13 +88,13 @@ def pr(*, value=PullRequestState.DRAFT, head=HEAD):
     return PullRequestEvidence(997, "agent/996-lifecycle-reconciliation", head, value, "pr:997")
 
 
-def snapshot(*, status="status:ready", value="draft", merged=False, head=HEAD):
+def snapshot(*, status="status:ready", value="draft", merged=False, head=HEAD, issue_state="open"):
     return LifecycleStateSnapshot(
         repository="Blummer92/agent-os", issue_number=996,
         pull_request_number=997 if value != "none" else None,
         source_head=head if value != "none" else None, base_head=SOURCE,
-        pr_state=value, merged=merged, issue_state="open", review_state="clear",
-        unresolved_threads=0, lifecycle_labels=(status,), observed_revision="revision-1",
+        pr_state=value, merged=merged, issue_state=issue_state, review_state="clear",
+        unresolved_threads=0, lifecycle_labels=(() if status is None else (status,)), observed_revision="revision-1",
     )
 
 
@@ -102,6 +102,10 @@ def input_for(current_state, **changes):
     data = {"repository": "Blummer92/agent-os", "issue_number": 996, "operational_state": current_state}
     data.update(changes)
     return LifecycleReconciliationInput(**data)
+
+
+def admission_for(snap: LifecycleStateSnapshot, *, authorization_id="lifecycle-authorization:1"):
+    return LifecycleMutationAdmissionResult(requested_mutation="replace-lifecycle-labels", admitted=True, status=AdmissionStatus.ADMITTED, reason_codes=(), details=(), authorization_id=authorization_id, snapshot_id=snap.snapshot_id)
 
 
 def test_completed_dependency_still_projected_as_blocking_is_repaired():
@@ -181,11 +185,55 @@ def test_stale_lifecycle_label_requires_existing_admission_not_inferred_authorit
 def test_matching_lifecycle_admission_is_preserved_on_recommendation():
     current = state(claims=(claim(),))
     snap = snapshot(status="status:blocked")
-    admission = LifecycleMutationAdmissionResult(requested_mutation="replace-lifecycle-labels", admitted=True, status=AdmissionStatus.ADMITTED, reason_codes=(), details=(), authorization_id="lifecycle-authorization:1", snapshot_id=snap.snapshot_id)
+    admission = admission_for(snap)
     result = reconcile_lifecycle(input_for(current, lifecycle_snapshot=snap, current_pull_request=pr(), admissions=(admission,)))
     action = next(item for item in result.actions if item.reason_code == "lifecycle.status-label-stale")
     assert action.admission_result_id == admission.result_id
     assert "authorization.lifecycle-admission-required" not in result.reason_codes
+
+
+@pytest.mark.parametrize("status", ["status:ready", "status:blocked", "status:needs-decision"])
+def test_closed_terminal_issue_plans_removal_of_stale_active_status(status: str):
+    current = state(issue_state=IssueState.CLOSED, terminal=TerminalDisposition.COMPLETED, observed_labels=(status,))
+    snap = snapshot(status=status, value="none", issue_state="closed")
+    admission = admission_for(snap)
+    result = reconcile_lifecycle(input_for(current, lifecycle_snapshot=snap, admissions=(admission,)))
+    action = next(item for item in result.actions if item.reason_code == "lifecycle.status-label-stale")
+    assert result.outcome is ReconciliationOutcome.REQUIRED
+    assert action.category is ActionCategory.GOVERNED_MUTATION
+    assert action.required_mutation == "replace-lifecycle-labels"
+    assert action.observed == status
+    assert action.expected == "none"
+    assert action.admission_result_id == admission.result_id
+    assert result.closure_authorization is AuthorizationState.NOT_AUTHORIZED
+    assert result.merge_authorization is AuthorizationState.NOT_AUTHORIZED
+    assert result.side_effects_performed is False
+
+
+def test_closed_terminal_issue_without_active_status_is_already_converged():
+    current = state(issue_state=IssueState.CLOSED, terminal=TerminalDisposition.COMPLETED, observed_labels=())
+    snap = snapshot(status=None, value="none", issue_state="closed")
+    result = reconcile_lifecycle(input_for(current, lifecycle_snapshot=snap))
+    assert result.outcome is ReconciliationOutcome.CONSISTENT
+    assert not result.actions
+
+
+def test_closed_terminal_issue_requires_matching_label_admission():
+    current = state(issue_state=IssueState.CLOSED, terminal=TerminalDisposition.COMPLETED)
+    snap = snapshot(value="none", issue_state="closed")
+    result = reconcile_lifecycle(input_for(current, lifecycle_snapshot=snap))
+    action = next(item for item in result.actions if item.reason_code == "lifecycle.status-label-stale")
+    assert "authorization.lifecycle-admission-required" in result.reason_codes
+    assert action.admission_result_id is None
+
+
+def test_closed_terminal_issue_rejects_stale_snapshot_issue_state():
+    current = state(issue_state=IssueState.CLOSED, terminal=TerminalDisposition.COMPLETED)
+    stale_snap = snapshot(value="none", issue_state="open")
+    result = reconcile_lifecycle(input_for(current, lifecycle_snapshot=stale_snap, admissions=(admission_for(stale_snap),)))
+    assert result.outcome is ReconciliationOutcome.NEEDS_DECISION
+    assert "source.lifecycle-snapshot-conflict" in result.reason_codes
+    assert result.actions[0].category is ActionCategory.MANUAL_DECISION
 
 
 def test_conflicting_dependency_evidence_fails_closed():
