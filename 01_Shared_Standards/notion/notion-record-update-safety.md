@@ -12,7 +12,7 @@ content only and perform no live Notion mutation.
 
 ### Append-Only Safe Log Mode
 
-May be used only for a separately approved database and record class. Before each
+May be used only when the applicable authorization policy separately authorizes the exact database and record class. Before each
 write, verify all of the following are current and unambiguous:
 
 - exact approved database identity and schema identity;
