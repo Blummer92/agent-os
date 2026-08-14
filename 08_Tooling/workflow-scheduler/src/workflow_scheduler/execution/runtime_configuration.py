@@ -101,8 +101,8 @@ def _directory(value: object, name: str, *, require_exists: bool = True) -> str:
 
 
 def _issue_number(value: object) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ConcreteRuntimeConfigurationError("issue_number must be an integer")
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ConcreteRuntimeConfigurationError("issue_number must be a positive integer")
     return value
 
 
@@ -182,16 +182,54 @@ def _paths(value: object, name: str) -> tuple[str, ...]:
     return items
 
 
-def _workspace_path(pilot_input: SingleIssuePilotInput, parent: str) -> str:
+def _path_conflicts(allowed_files: tuple[str, ...], forbidden_paths: tuple[str, ...]) -> bool:
+    def matches(path: str, pattern: str) -> bool:
+        if pattern.endswith("/**"):
+            prefix = pattern[:-3].rstrip("/")
+            return path == prefix or path.startswith(prefix + "/")
+        if pattern.endswith("*"):
+            return path.startswith(pattern[:-1])
+        return path == pattern
+
+    return any(matches(path, pattern) for path in allowed_files for pattern in forbidden_paths)
+
+
+def _workspace_path_from_values(
+    *, workspace_request_id: str, repository: str, branch: str, source_head_sha: str, parent: str
+) -> str:
     request = WorkspaceRequest(
-        workspace_request_id=pilot_input.workspace_request_id,
-        repository=pilot_input.repository,
-        branch=pilot_input.branch,
-        expected_revision=pilot_input.source_head_sha,
+        workspace_request_id=workspace_request_id,
+        repository=repository,
+        branch=branch,
+        expected_revision=source_head_sha,
     )
     identity = pilot_workspace_identity(request)
     suffix = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
     return os.path.join(parent, f"agent-os-worktree-{suffix}")
+
+
+def _workspace_path(pilot_input: SingleIssuePilotInput, parent: str) -> str:
+    return _workspace_path_from_values(
+        workspace_request_id=pilot_input.workspace_request_id,
+        repository=pilot_input.repository,
+        branch=pilot_input.branch,
+        source_head_sha=pilot_input.source_head_sha,
+        parent=parent,
+    )
+
+
+def _validated_commands(
+    required_test_commands: tuple[FrozenTestCommand, ...], expected_test_ids: tuple[str, ...]
+) -> tuple[FrozenTestCommand, ...]:
+    commands = tuple(required_test_commands)
+    if not commands or any(not isinstance(item, FrozenTestCommand) for item in commands):
+        raise ConcreteRuntimeConfigurationError("required_test_commands is malformed")
+    test_ids = tuple(item.test_id for item in commands)
+    if len(set(test_ids)) != len(test_ids) or test_ids != expected_test_ids:
+        raise ConcreteRuntimeConfigurationError(
+            "required test identities are duplicate, missing, reordered, or unbound"
+        )
+    return commands
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -285,14 +323,8 @@ class ConcreteRuntimeConfiguration:
         )
         if evidence_identity != repository_identity:
             raise ConcreteRuntimeConfigurationError("repository identity drifted")
-        commands = tuple(required_test_commands)
-        if not commands or any(not isinstance(item, FrozenTestCommand) for item in commands):
-            raise ConcreteRuntimeConfigurationError("required_test_commands is malformed")
-        test_ids = tuple(item.test_id for item in commands)
-        if len(set(test_ids)) != len(test_ids) or test_ids != tuple(pilot_input.required_tests):
-            raise ConcreteRuntimeConfigurationError(
-                "required test identities are duplicate, missing, reordered, or unbound"
-            )
+        test_ids = tuple(pilot_input.required_tests)
+        commands = _validated_commands(required_test_commands, test_ids)
         if tuple(getattr(pilot_input.validation_plan, "commands", ())) != test_ids:
             raise ConcreteRuntimeConfigurationError(
                 "validation plan command identities drifted"
@@ -304,7 +336,7 @@ class ConcreteRuntimeConfiguration:
             "schema_version": SCHEMA_VERSION,
             "execution_mode": execution_mode,
             "repository": _text(pilot_input.repository, "repository"),
-            "issue_number": pilot_input.issue_numbers[0],
+            "issue_number": _issue_number(pilot_input.issue_numbers[0]),
             "invocation_id": _text(pilot_input.invocation_id, "invocation_id"),
             "workspace_request_id": _text(pilot_input.workspace_request_id, "workspace_request_id"),
             "base_branch": _text(pilot_input.base_branch, "base_branch"),
@@ -354,6 +386,125 @@ class ConcreteRuntimeConfiguration:
         }
         if environment_policy != ENVIRONMENT_POLICY:
             raise ConcreteRuntimeConfigurationError("unsupported environment authority")
+        return cls(configuration_fingerprint=_fingerprint(_payload(values)), **values)
+
+    @classmethod
+    def bind_candidate(
+        cls,
+        *,
+        repository: str,
+        issue_number: int,
+        invocation_id: str,
+        workspace_request_id: str,
+        base_branch: str,
+        base_sha: str,
+        source_head_sha: str,
+        tested_sha: str,
+        branch: str,
+        projection_id: str,
+        approval_id: str,
+        validation_plan_id: str,
+        validation_bundle_id: str,
+        advisory_result_id: str,
+        advisory_render_id: str,
+        repository_identity: RepositoryIdentity,
+        repository_root: str | os.PathLike[str],
+        workspace_parent: str | os.PathLike[str],
+        required_test_commands: tuple[FrozenTestCommand, ...],
+        allowed_files: tuple[str, ...],
+        forbidden_paths: tuple[str, ...],
+        executor_timeout_seconds: float = 30.0,
+        executor_grace_period_seconds: float = 5.0,
+        executor_max_output_bytes: int = MAX_OUTPUT_BYTES,
+        validation_per_command_timeout_seconds: float = 30.0,
+        validation_total_timeout_seconds: float = 300.0,
+        validation_max_output_bytes: int = MAX_OUTPUT_BYTES,
+        environment_policy: str = ENVIRONMENT_POLICY,
+    ) -> "ConcreteRuntimeConfiguration":
+        """Bind a validation-only configuration from truthful pre-execution evidence."""
+        if not isinstance(repository_identity, RepositoryIdentity):
+            raise ConcreteRuntimeConfigurationError(
+                "repository_identity must be RepositoryIdentity"
+            )
+        root = _directory(repository_root, "repository_root")
+        parent = _directory(workspace_parent, "workspace_parent")
+        commands = tuple(required_test_commands)
+        if not commands or any(not isinstance(item, FrozenTestCommand) for item in commands):
+            raise ConcreteRuntimeConfigurationError("required_test_commands is malformed")
+        test_ids = tuple(item.test_id for item in commands)
+        if len(set(test_ids)) != len(test_ids):
+            raise ConcreteRuntimeConfigurationError(
+                "required test identities are duplicate, missing, reordered, or unbound"
+            )
+        canonical_allowed = _paths(allowed_files, "allowed_files")
+        canonical_forbidden = _paths(forbidden_paths, "forbidden_paths")
+        if _path_conflicts(canonical_allowed, canonical_forbidden):
+            raise ConcreteRuntimeConfigurationError("allowed and forbidden paths conflict")
+        if environment_policy != ENVIRONMENT_POLICY:
+            raise ConcreteRuntimeConfigurationError("unsupported environment authority")
+        canonical_repository = _text(repository, "repository")
+        canonical_workspace_request_id = _text(workspace_request_id, "workspace_request_id")
+        canonical_branch = _text(branch, "branch")
+        canonical_source_head_sha = _sha(source_head_sha, "source_head_sha")
+        values = {
+            "schema_name": SCHEMA_NAME,
+            "schema_version": SCHEMA_VERSION,
+            "execution_mode": VALIDATION_ONLY_EXECUTION_MODE,
+            "repository": canonical_repository,
+            "issue_number": _issue_number(issue_number),
+            "invocation_id": _text(invocation_id, "invocation_id"),
+            "workspace_request_id": canonical_workspace_request_id,
+            "base_branch": _text(base_branch, "base_branch"),
+            "base_sha": _sha(base_sha, "base_sha"),
+            "source_head_sha": canonical_source_head_sha,
+            "tested_sha": _sha(tested_sha, "tested_sha"),
+            "branch": canonical_branch,
+            "projection_id": _text(projection_id, "projection_id"),
+            "approval_id": _text(approval_id, "approval_id"),
+            "validation_plan_id": _text(validation_plan_id, "validation_plan_id"),
+            "validation_bundle_id": _text(validation_bundle_id, "validation_bundle_id"),
+            "advisory_result_id": _text(advisory_result_id, "advisory_result_id"),
+            "advisory_render_id": _text(advisory_render_id, "advisory_render_id"),
+            "repository_identity": repository_identity,
+            "repository_root": root,
+            "workspace_parent": parent,
+            "executor_argv": None,
+            "executor_cwd": _workspace_path_from_values(
+                workspace_request_id=canonical_workspace_request_id,
+                repository=canonical_repository,
+                branch=canonical_branch,
+                source_head_sha=canonical_source_head_sha,
+                parent=parent,
+            ),
+            "environment_policy": environment_policy,
+            "executor_timeout_seconds": _positive(
+                executor_timeout_seconds, "executor_timeout_seconds", MAX_TIMEOUT_SECONDS
+            ),
+            "executor_grace_period_seconds": _positive(
+                executor_grace_period_seconds,
+                "executor_grace_period_seconds",
+                MAX_TIMEOUT_SECONDS,
+            ),
+            "executor_max_output_bytes": _output_bound(
+                executor_max_output_bytes, "executor_max_output_bytes"
+            ),
+            "required_test_commands": commands,
+            "validation_per_command_timeout_seconds": _positive(
+                validation_per_command_timeout_seconds,
+                "validation_per_command_timeout_seconds",
+                30.0,
+            ),
+            "validation_total_timeout_seconds": _positive(
+                validation_total_timeout_seconds,
+                "validation_total_timeout_seconds",
+                300.0,
+            ),
+            "validation_max_output_bytes": _output_bound(
+                validation_max_output_bytes, "validation_max_output_bytes"
+            ),
+            "allowed_files": canonical_allowed,
+            "forbidden_paths": canonical_forbidden,
+        }
         return cls(configuration_fingerprint=_fingerprint(_payload(values)), **values)
 
     def __post_init__(self) -> None:
