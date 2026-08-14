@@ -216,7 +216,7 @@ logger.log_task_approved(task, approved_by="reviewer")
 logger.log_task_started(task)
 logger.log_task_completed(task, result={"rows": 100})
 logger.log_task_failed(task, error="Timeout", is_transient=False)
-logger.log_task_paused(task)
+logger.log_task_paused()
 logger.log_task_cancelled(task, reason="User cancelled")
 logger.log_governance_blocked(task, blockers=["ambiguous_target"])
 logger.log_governance_check_passed(task)
@@ -266,6 +266,40 @@ result = adapter.execute(task)
 
 log = adapter.get_execution_log()
 ```
+
+### HostLocalLeaseAdapter
+
+`HostLocalLeaseAdapter` is the bounded host-local implementation of the canonical
+single-issue `LeaseAdapter` protocol. It coordinates independent processes on one
+host through caller-supplied private filesystem metadata; it is not a distributed
+lease, scheduler, daemon, retry service, or recovery mechanism.
+
+```python
+from workflow_scheduler.execution import HostLocalLeaseAdapter, HostLocalLeasePolicy
+
+lease = HostLocalLeaseAdapter(
+    policy=HostLocalLeasePolicy(lease_directory="/private/path/agent-os-leases")
+)
+grant = lease.acquire(request)
+if grant.acquired:
+    release = lease.release(grant)
+```
+
+The lease directory must be absolute, normalized, non-symlinked, and private to
+the current owner (`0700`); lease metadata is written `0600`. Acquisition is
+atomic across local processes, and every grant is bound to the canonical lease
+identity, holder identity, and a monotonically increasing generation/fencing
+value. Release succeeds only for the exact active lease, holder, and generation
+and rereads filesystem state by requiring the active metadata path to be absent
+before reporting success.
+
+Existing, malformed, stale, orphaned, oversized, symlinked, or otherwise
+ambiguous metadata is fail-closed. The adapter never infers safe ownership from
+file age, TTL, process absence, or clock expiry and never steals, renews,
+force-releases, automatically retries, or takes over a lease. Crash recovery and
+manual cleanup of ambiguous metadata remain separately authorized operator work.
+The existing `InMemoryLeaseAdapter` remains supported for process-local tests;
+real runtime selection/wiring of the host-local adapter belongs to #762.
 
 ## Executor
 
