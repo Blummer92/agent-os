@@ -210,6 +210,10 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -277,10 +281,11 @@ jobs:
             --junitxml=junit.xml
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v6
         with:
           files: ./coverage.xml
           fail_ci_if_error: false
+          use_oidc: true
 ```
 
 ### GitLab CI
@@ -509,11 +514,6 @@ repos:
     hooks:
       - id: flake8
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.0.0
-    hooks:
-      - id: mypy
-
   - repo: local
     hooks:
       - id: pytest
@@ -535,12 +535,12 @@ pre-commit install
 ## Checklist
 
 - [ ] Virtual environment created and activated
-- [ ] Test dependencies installed (requirements-dev.txt)
-- [ ] pytest.ini configured
-- [ ] tests/conftest.py created with root fixtures
+- [ ] Test dependencies installed (`requirements-dev.txt`)
+- [ ] `pytest.ini` configured
+- [ ] `tests/conftest.py` created with root fixtures
 - [ ] CI/CD workflow configured (GitHub Actions/GitLab CI)
 - [ ] Database fixtures set up for integration tests
-- [ ] Environment variables configured (.env.test)
+- [ ] Environment variables configured (`.env.test`)
 - [ ] Mock API/external service fixtures created
 - [ ] Docker setup for consistent environments
 - [ ] Pre-commit hooks configured
