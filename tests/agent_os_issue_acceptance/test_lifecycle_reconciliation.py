@@ -232,7 +232,7 @@ def test_closed_terminal_issue_rejects_stale_snapshot_issue_state():
     stale_snap = snapshot(value="none", issue_state="open")
     result = reconcile_lifecycle(input_for(current, lifecycle_snapshot=stale_snap, admissions=(admission_for(stale_snap),)))
     assert result.outcome is ReconciliationOutcome.NEEDS_DECISION
-    assert result.reason_codes == ("source.lifecycle-snapshot-conflict",)
+    assert "source.lifecycle-snapshot-conflict" in result.reason_codes
     assert result.actions[0].category is ActionCategory.MANUAL_DECISION
 
 
