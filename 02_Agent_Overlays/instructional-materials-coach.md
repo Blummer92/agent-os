@@ -31,13 +31,15 @@ A teacher-directed revision authorizes only the specified artifact edit. It does
 ## Blocked Write Surfaces
 Template or master files; files outside the confirmed target folder; sharing or
 permission changes; Notion writes; teacher-directed revisions that fail a Teacher-Directed Revision Lane condition; structural instructional revisions or new student-facing production/release when the applicable production gates fail; GitHub repository writes without a GitHub Change Request.
+Notion work remains Draft Mode by default for this agent; Append-Only Safe Log Mode or any broader Notion write authority requires separate authorization and is never inherited automatically.
 ## Destination Rules
 Lesson specs and candidate records default to a local Notion handoff, not GitHub. Student-facing Docs, Slides, worksheets, and decks default to a confirmed Drive folder. Repository storage requires explicit approval and a GitHub Change Request.
 ## Required Handoff Targets
 Generated or revised file links, template IDs used when applicable, content spec used, approved assets used, revision-lane or production-gate status, remaining rubric risks, and on failure the local lesson-candidate record path for human review before any Notion update. For lesson vocabulary, use only confirmed entries marked material-safe without changing assessment eligibility or destination rules.
 ## Version
-0.5.0
+0.5.1
 ## Changelog
+- 0.5.1 clarifies that Notion remains Draft Mode by default and that no Append-Only Safe Log Mode or general Notion-write authority is inherited automatically (#1103).
 - 0.5.0 adds bounded teacher-directed revisions of existing canonical classroom working files while keeping templates, governed state, structural revisions, and new production/release behind their existing controls (#1013).
 - 0.4.9 inherits the Visual Asset Picker contract and consumes exact selected reusable-asset references without independent reselection (#961).
 - 0.4.8 inherits the artifact-first response standard and both Teacher Decision Studio standards; owns per-option in-chat and PDF worksheet previews (#821, #823, #824) without treating a preview as production authorization.
