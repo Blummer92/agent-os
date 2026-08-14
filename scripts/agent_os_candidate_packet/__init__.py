@@ -18,7 +18,20 @@ from .blockers import (
     RUNTIME_REASON_CODES,
     build_failure,
 )
+from .cli import (
+    PreparedCandidatePacket,
+    prepare_candidate_packet,
+    prepared_candidate_packet_to_dict,
+    render_summary,
+)
 from .compiler import compile_candidate_packet
+from .contract_fingerprint import (
+    IMPLEMENTATION_CONTRACT_SCHEMA_NAME,
+    IMPLEMENTATION_CONTRACT_SCHEMA_VERSION,
+    ImplementationContractError,
+    compute_implementation_contract_fingerprint,
+    derive_canonical_contract,
+)
 from .models import (
     COMPILER_SCHEMA_NAME,
     COMPILER_SCHEMA_VERSION,
@@ -172,6 +185,10 @@ __all__ = [
     "PACKET_SCHEMA_VERSION",
     "FAILURE_SCHEMA_NAME",
     "FAILURE_SCHEMA_VERSION",
+    "IMPLEMENTATION_CONTRACT_SCHEMA_NAME",
+    "IMPLEMENTATION_CONTRACT_SCHEMA_VERSION",
+    "ImplementationContractError",
+    "PreparedCandidatePacket",
     "FailureClass",
     "FreshnessBindingResult",
     "RUNTIME_REASON_CODES",
@@ -235,6 +252,11 @@ __all__ = [
     "candidate_packet_id",
     "compile_candidate_packet",
     "compute_candidate_packet_fingerprint",
+    "compute_implementation_contract_fingerprint",
+    "derive_canonical_contract",
+    "prepare_candidate_packet",
+    "prepared_candidate_packet_to_dict",
+    "render_summary",
     "dependency_identity_evidence_from_dict",
     "dependency_identity_evidence_to_dict",
     "deserialize_candidate_packet",

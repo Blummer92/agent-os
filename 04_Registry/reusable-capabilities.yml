@@ -669,3 +669,55 @@ capabilities:
       - Lifecycle status is experimental under registry version 0.1.0.
       - The public operator CLI contract is agent-os-pr-remediation-cli/v1.
       - Existing PRR1-4 package interfaces remain canonical; no new runner or GitHub client is introduced.
+
+  - capability_id: candidate-packet-entrypoint
+    name: Candidate Packet Entrypoint
+    summary: Public read-only entrypoint that composes the existing source/readiness/planning/repository/approval/validation/execution-candidate stage pipeline and a deterministic implementation-contract fingerprint into one prepared candidate-packet result, without caller-invented identity or any execution/write authority.
+    status: experimental
+    canonical_paths:
+      - scripts/agent_os_candidate_packet/cli.py
+      - scripts/agent_os_candidate_packet/contract_fingerprint.py
+      - scripts/agent_os_candidate_packet/__init__.py
+      - scripts/agent_os_candidate_packet/README.md
+    public_interfaces:
+      - scripts.agent_os_candidate_packet:prepare_candidate_packet
+      - scripts.agent_os_candidate_packet:PreparedCandidatePacket
+      - scripts.agent_os_candidate_packet:prepared_candidate_packet_to_dict
+      - scripts.agent_os_candidate_packet:render_summary
+      - scripts.agent_os_candidate_packet:compute_implementation_contract_fingerprint
+      - scripts.agent_os_candidate_packet:derive_canonical_contract
+      - scripts.agent_os_candidate_packet.cli:main
+    owner_agent: Integration Manager
+    supporting_agents:
+      - GitHub Service Agent
+      - QA / Test Agent
+    known_consumers: []
+    known_consumer_exemption: Approved under repository-owner authorization to work on #1105 (AOS-AUTO1G) for experimental admission of the terminal #749 Stage 7 integration entrypoint. The public function and CLI are verified end-to-end through focused fingerprint tests, natural full-pipeline tests, CLI tests, and architecture-boundary tests in this same change; no non-test repository-relative consumer file exists yet.
+    tests:
+      - tests/agent_os_candidate_packet/test_contract_fingerprint.py
+      - tests/agent_os_candidate_packet/test_end_to_end.py
+      - tests/agent_os_candidate_packet/test_cli.py
+    keywords:
+      - candidate-packet
+      - implementation-contract-fingerprint
+      - public-entrypoint
+      - read-only
+      - deterministic-identity
+    reuse_guidance: Use prepare_candidate_packet (or the prepare-candidate-packet CLI) as the single composition entrypoint for the #750-#755/#917 pipeline instead of hand-wiring stage calls or re-deriving a fingerprint from raw issue text; treat every result as evidence only, never execution, merge, or write authority.
+    side_effects:
+      - Reads only caller-supplied issue/repository/candidate/approval/runtime evidence already required by the composed stages.
+      - Performs no network access, subprocess execution, credential use, Scheduler execution, GitHub write, or external write; execution_authorized, merge_authorized, and side_effects_performed are always false in every result.
+    inputs:
+      - Caller-supplied issue snapshot, dependency/validation evidence, optional planning/repository/candidate/approval/execution-candidate evidence, and issue source/repository readers.
+    outputs:
+      - A PreparedCandidatePacket referencing the already-canonical stage results it composed, plus the derived implementation_contract_fingerprint and a finite disposition/stage-reached label.
+    invariants:
+      - implementation_contract_fingerprint is derived only from already-canonical governed IssuePlan fields (entity identity, scope, forbidden paths, required tests, documentation-impact) and excludes prose, labels, formatting, and observational timestamps.
+      - The fingerprint is a bare hex-64 SHA-256 digest, matching the codebase's existing *_fingerprint convention, and is never used in place of the independent source/body revision identity.
+      - Reaching an execution-candidate packet never sets execution_authorized, merge_authorized, or side_effects_performed to true.
+    failure_modes:
+      - Malformed, incomplete, oversized, or type-confused governed-field input to the fingerprint derivation fails closed with ImplementationContractError.
+      - Missing or unresolved upstream evidence (dependency identity, repository observation, candidate context, approval decision, runtime inputs) stops the pipeline truthfully at the first unmet stage instead of guessing forward.
+    compatibility:
+      - Lifecycle status is experimental under registry version 0.1.0.
+      - Reuses the existing #750-#755/#917 stage contracts and IssuePlanSourceSnapshot.governed_fields verbatim; no upstream production file was modified to admit this capability.
