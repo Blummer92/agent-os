@@ -54,6 +54,9 @@ from .request_validation import (
 )
 
 __all__ = [
+    "AUTHORIZED_VALIDATION_PERMITTED_OPERATION",
+    "AUTHORIZED_VALIDATION_POLICY_SCHEMA_VERSION",
+    "AUTHORIZED_VALIDATION_SCHEMA_VERSION",
     "COMMAND_PLAN_SCHEMA_VERSION",
     "COMMAND_REGISTRY_VERSION",
     "EXECUTION_COMPOSITION_SCHEMA_VERSION",
@@ -62,6 +65,10 @@ __all__ = [
     "EXECUTION_SERVICE_RESULT_SCHEMA_VERSION",
     "EXECUTION_SERVICE_VERSION",
     "EXECUTOR_ROUTING_SCHEMA_VERSION",
+    "AuthorizedValidationAdmissionResult",
+    "AuthorizedValidationAdmissionStatus",
+    "AuthorizedValidationLifecyclePolicy",
+    "AuthorizedValidationLifecycleRequest",
     "CommandOperation",
     "CommandPlanEntry",
     "EvidenceVisibilityPolicy",
@@ -84,6 +91,7 @@ __all__ = [
     "RepositoryInspectionObservation",
     "RepositoryInspector",
     "ValidationCommandPlan",
+    "build_authorized_validation_lifecycle_request",
     "build_executor_handoff",
     "build_validation_command_plan",
     "compose_and_run_validation",
@@ -94,27 +102,45 @@ __all__ = [
     "executor_handoff_id",
     "executor_route_decision_id",
     "project_public_result",
+    "reconstruct_authorized_validation_lifecycle_request",
     "reconstruct_execution_service_request",
     "redact_public_text",
     "select_executor_route",
+    "serialize_authorized_validation_lifecycle_request",
     "serialize_execution_service_request",
     "serialize_executor_route_decision",
     "serialize_validation_command_plan",
     "validate_execution_service_request",
     "validate_validation_command_plan",
     "validation_command_plan_id",
+    "verify_authorized_validation_admission",
 ]
 
-# Runtime composition still depends on Workflow Scheduler, which is not on
-# ``sys.path`` for every consumer. Only the runtime-composition names remain
-# lazy. The authorization evidence contract is imported eagerly from the pure
-# module above so package-level authorization imports never load Scheduler.
+# Runtime composition and #757 admission depend on Workflow Scheduler or the
+# candidate-packet package, which are not on ``sys.path`` for every consumer.
+# Keep those exports lazy so importing the pure Execution Service core does not
+# make runtime-capable modules reachable or create a packaging dependency.
 _LAZY_COMPOSITION_EXPORTS = frozenset(
     (
         "EXECUTION_COMPOSITION_SCHEMA_VERSION",
         "ExecutionCompositionResult",
         "ExecutionCompositionStatus",
         "compose_and_run_validation",
+    )
+)
+_LAZY_AUTHORIZED_VALIDATION_EXPORTS = frozenset(
+    (
+        "AUTHORIZED_VALIDATION_PERMITTED_OPERATION",
+        "AUTHORIZED_VALIDATION_POLICY_SCHEMA_VERSION",
+        "AUTHORIZED_VALIDATION_SCHEMA_VERSION",
+        "AuthorizedValidationAdmissionResult",
+        "AuthorizedValidationAdmissionStatus",
+        "AuthorizedValidationLifecyclePolicy",
+        "AuthorizedValidationLifecycleRequest",
+        "build_authorized_validation_lifecycle_request",
+        "reconstruct_authorized_validation_lifecycle_request",
+        "serialize_authorized_validation_lifecycle_request",
+        "verify_authorized_validation_admission",
     )
 )
 
@@ -124,4 +150,8 @@ def __getattr__(name: str) -> object:
         from . import execution_composition as _execution_composition
 
         return getattr(_execution_composition, name)
+    if name in _LAZY_AUTHORIZED_VALIDATION_EXPORTS:
+        from . import authorized_validation as _authorized_validation
+
+        return getattr(_authorized_validation, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
