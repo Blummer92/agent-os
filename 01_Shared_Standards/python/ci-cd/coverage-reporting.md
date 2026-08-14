@@ -9,14 +9,21 @@
 
 ## Upload to Codecov
 
+Codecov v6 OIDC requires `id-token: write`; keep normal repository contents read-only.
+
 ```yaml
+permissions:
+  contents: read
+  id-token: write
+
 - name: Upload to Codecov
-  uses: codecov/codecov-action@v3
+  uses: codecov/codecov-action@v6
   with:
-    file: ./coverage.xml
+    files: ./coverage.xml
     flags: unittests
     name: codecov-umbrella
     fail_ci_if_error: true
+    use_oidc: true
 ```
 
 ## Coverage Badge
