@@ -41,6 +41,10 @@ from workflow_scheduler.execution.single_issue_runtime import (
     SingleIssueRuntimeOutcome,
     run_single_issue_runtime_entrypoint,
 )
+from workflow_scheduler.execution.single_issue_pilot import WorkspaceHandle
+from workflow_scheduler.execution.workspace_state_evidence import (
+    WorkspaceStateObservation,
+)
 
 ProcessCancellationCheck = Callable[[], bool]
 
@@ -214,6 +218,23 @@ def build_concrete_runtime_adapters(
         executor=executor,
         validator=validator,
         validation_runner=validation_runner,
+    )
+
+
+def capture_workspace_state_observation(
+    adapters: ConcreteRuntimeAdapters,
+    handle: WorkspaceHandle,
+    *,
+    observation_kind: str,
+) -> WorkspaceStateObservation:
+    """Capture one complete workspace-state observation via the bound workspace adapter.
+
+    A thin pass-through to ``GitWorktreeAdapter.inspect_complete_state``; it
+    adds no new runner, orchestration, or runtime wiring. Runtime selection
+    of when this is called is out of this issue's scope.
+    """
+    return adapters.workspace.inspect_complete_state(
+        handle, observation_kind=observation_kind
     )
 
 

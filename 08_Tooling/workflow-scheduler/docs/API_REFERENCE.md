@@ -431,6 +431,63 @@ result = run_bounded_posix_process(
 )
 ```
 
+## Workspace State Evidence (WSC-AUTO1D)
+
+### `workspace_state_evidence`
+
+Complete, content-addressed workspace-state and changed-path evidence,
+reusing `GitWorktreeAdapter`'s own `GitRunner`/`PosixGitRunner` and bounded
+process path. Adds no second Git runner, worktree manager, or cleanup
+subsystem.
+
+**Path categories** (never collapsed into a single `clean: bool`):
+`staged`, `unstaged`, `untracked`, `ignored`, `renamed`, `copied`, `deleted`,
+`conflict`, `submodule`. A path can appear in more than one category (for
+example a rename that is also further modified in the worktree). `is_clean`
+is a derived convenience value computed from every category except
+`ignored`; the categories themselves remain the authoritative evidence.
+
+**Completeness rules**: an observation is `complete` only when both
+`git worktree list --porcelain -z` and `git status --porcelain=v2 -z`
+succeed, exactly one worktree record matches the observed path, the lock
+identity (when supplied) matches, and status parsing raised no error.
+Timeout, truncation, malformed NUL framing, an unsupported status record
+type, a truncated rename/copy pairing, a duplicate/conflicting record, or
+more than 512 status records all mark the observation incomplete rather
+than guessing. Documented `#` porcelain-v2 header lines are skipped
+forward-compatibly; any other unknown record type fails closed.
+
+**Initial/final timing and the validation-only empty-path invariant**:
+`WorkspaceLifecycleEvidence` bundles exactly one `initial` and one `final`
+`WorkspaceStateObservation`. `initial_blocks_validation` is true when the
+initial observation is incomplete or not clean. `final_prevents_success` is
+true when the final observation is incomplete or not clean.
+`validation_only_success` requires both to be false, and
+`satisfies_expected_changed_paths` additionally requires the caller-supplied
+expected-changed-paths set to be empty alongside the final observation's
+observed changed paths.
+
+**Cleanup proof**: filesystem worktree removal and Git administrative
+metadata removal remain the two independent proofs already produced by
+`GitWorktreeAdapter.cleanup` (`WorkspaceCleanup.filesystem_removed` and
+`WorkspaceCleanup.metadata_removed`); this module does not add or replace
+cleanup behavior and adds no destructive Git command.
+
+```python
+from workflow_scheduler.execution.workspace_state_evidence import (
+    WorkspaceLifecycleEvidence,
+)
+
+initial = adapter.inspect_complete_state(handle, observation_kind="initial")
+# ... validation-only execution happens here, outside this module ...
+final = adapter.inspect_complete_state(handle, observation_kind="final")
+
+evidence = WorkspaceLifecycleEvidence(
+    initial=initial, final=final, validation_only=True,
+)
+assert evidence.validation_only_success
+```
+
 ## CLI
 
 ### WorkflowSchedulerCLI
