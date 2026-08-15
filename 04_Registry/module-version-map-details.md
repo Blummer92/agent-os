@@ -3,16 +3,21 @@
 Extended module descriptions moved out of `module-version-map.md` to keep that
 index below 100 lines. See that file for the canonical version table.
 
-**Workflow Scheduler** (`08_Tooling/workflow-scheduler/`) reflects sixteen
-shipped milestones: Phase 1; 2A–2E; 3A–3F; WSC3; WSC5B5; and WSC5B6. WSC3
-validates supplied WSC1, IssuePlanCore, and GEX evidence and emits immutable,
-unapproved proposal evidence. WSC5B5 exposes the retained frozen-validation
-result beside the runtime outcome without rerunning validation or adding
-authority. WSC5B6 adds validation-only execution to the same lifecycle while
-reusing lease, worktree, cancellation, validation, containment, cleanup,
-release, and quarantine contracts. It adds no tasks, approvals, queues, workers,
-persistence, or external I/O. See
-`08_Tooling/workflow-scheduler/docs/ARCHITECTURE.md`.
+**Workflow Scheduler** (`08_Tooling/workflow-scheduler/`) now includes the
+WSC-AUTO2A (#722) bounded Claude Code CLI adapter at version `0.14.0`. The
+adapter consumes caller-supplied #934 Implementation Packet/source identities
+plus exact provider path/version/auth-status evidence and produces one
+deterministic non-shell argv tuple. It permits only file read/edit/write/search
+tools, explicitly disallows Bash, web tools, and MCP, disables session/Chrome/
+slash-command surfaces, bounds turns and prompt/output sizes, and normalizes
+already-executed JSON results into non-authorizing terminal evidence without
+retaining provider prose. It performs no provider launch, credential lookup,
+network access, worktree/lease/containment lifecycle, validation, retry, GitHub
+write, merge, or issue closure. The existing Workflow Scheduler runtime remains
+the sole process/worktree/validation lifecycle; #935 owns the first live coding
+pilot. Earlier WSC milestones remain unchanged; see
+`08_Tooling/workflow-scheduler/docs/ARCHITECTURE.md` and
+`docs/CLAUDE_CODE_EXECUTOR_ADAPTER.md`.
 
 **Agent Memory & Context Budget Manager**
 (`08_Tooling/agent-memory-context-manager/`) includes packaging metadata, a
@@ -44,49 +49,21 @@ fixed order. It adds no runner, lease, containment, workspace, status model,
 or retry logic of its own. Package metadata, `EXECUTION_SERVICE_VERSION`, and
 registry records are aligned at `0.6.0`.
 
-The same service moved `0.4.0` -> `0.5.0` under
-AOS-CHATGPT2 (Issue #918). `executor_routing.py` adds one pure deterministic
-execution-surface router for already-selected, already-authorized work. It owns
-exactly four routes, twelve routing-only capabilities, immutable
-`ExecutorRouteDecision` and `ExecutorHandoff`, finite reasons, canonical JSON,
-content-addressed identities, and bounded opaque references to upstream
-request, authorization, operating-mode, lane-selection, repository-state,
-worktree, package, environment, checkpoint, resume, validation-plan, and
-Workflow Scheduler evidence.
+The same service moved `0.4.0` -> `0.5.0` under AOS-CHATGPT2 (Issue #918).
+`executor_routing.py` owns the pure deterministic four-route executor selector
+and immutable `ExecutorRouteDecision`/`ExecutorHandoff` records. It does not
+invoke a runner or provider; #722 supplies the first concrete coding-provider
+binding without changing #918 ownership.
 
-Routing precedence is exact: an explicit human-decision override wins first;
-otherwise connector-native is selected when sufficient, the governed runner is
-selected when available and capable, an external fallback is selected only when
-explicitly permitted and available after runner insufficiency, and human
-decision is selected otherwise. The router does not select work, validate
-upstream semantic objects, widen authority, invoke a runner, execute a process,
-persist checkpoints, call GitHub or a provider, or create a second capability,
-authorization, validation, checkpoint, worktree, runner, or Scheduler framework.
-Package metadata, `EXECUTION_SERVICE_VERSION`, and registry records are aligned
-at `0.5.0`.
-
-The same service moved `0.3.0` -> `0.4.0` under PILOT-VALIDATION (Issue #723).
-`command_planning.py` added an exact pre-PR branch binding
-`PrePrValidationSubject` and `PrePrValidationPlan` to an
-`ExecutionServiceRequest` for validation-only candidate #726 without fabricating
-a pull request. Existing positive-PR identities remain stable,
-`COMMAND_REGISTRY_VERSION` remains `1.0`, authorization stays false, and the
-30-second command and 300-second total ceilings remain enforced.
-
-The service moved `0.2.0` -> `0.3.0` under WSC6B4 (Issue #697).
-`execution_composition.py` added `compose_and_run_validation(...)`, a thin
-non-authorizing boundary that revalidates request, plan, authorization, and
-runtime identity before delegating exactly once to the canonical validation-only
-Workflow Scheduler entrypoint. It adds no second runtime or command loop.
+The service moved `0.3.0` -> `0.4.0` under PILOT-VALIDATION (Issue #723) for
+exact pre-PR validation subject/plan binding, and moved `0.2.0` -> `0.3.0` under
+WSC6B4 (Issue #697) for the thin validation composition boundary.
 
 **Agent Interaction Output Standard**
 (`01_Shared_Standards/global-engineering/agent-interaction-output-standard.md`,
-#926) is the canonical owner of the base report field set, conditional routing
-and GitHub field groups, the ten presentation profiles, visible ordering, and
-progress labeling. `AGENTS.md`, `_common-overlay-rules.md`,
-`final-report-standard.md`, and `07_Agent_Tests/agent-output-schema.md` are
-compatibility pointers to it. It renders existing canonical evidence and adds no
-state, approval, execution, or write authority.
+#926) is the canonical owner of report field ownership, presentation profiles,
+visible ordering, and evidence-grounded progress labeling. Compact operator
+rendering was added in #1081 without creating new progress state or authority.
 
 ## Reconciliation Notes
 
