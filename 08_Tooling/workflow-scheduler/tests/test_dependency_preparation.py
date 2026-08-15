@@ -16,8 +16,10 @@ from scripts.agent_os_execution_capabilities.dependencies import (
 )
 from workflow_scheduler.execution import single_issue_runtime as runtime_module
 from workflow_scheduler.execution.concrete_runtime_adapters import (
+    ConcreteDependencyCommandRunner,
     ConcreteDependencyObservationProvider,
     ConcreteDependencyPreparationInputs,
+    _python_dependency_environment_directory,
 )
 from workflow_scheduler.execution.dependency_preparation import (
     BoundDependencyPreparationAdapter,
@@ -43,6 +45,7 @@ def observation(**changes) -> DependencyPreparationObservation:
         workspace_identity="workspace:1",
         source_sha=HEAD,
         environment_health_evidence_id="health:1",
+        environment_health_current=True,
         runtime_version="3.12.1",
         runtime_compatible=True,
         package_manager_version="24.0",
@@ -60,7 +63,7 @@ def observation(**changes) -> DependencyPreparationObservation:
 def python_spec(*, qualification: bool = False) -> RequiredEnvironmentSpec:
     return RequiredEnvironmentSpec(
         ecosystem=DependencyEcosystem.PYTHON_PIP,
-        package_root="repo",
+        package_root=".",
         runtime_requirement=">=3.11",
         dependency_manifest_identity=artifact("requirements-dev.txt"),
         lock_or_constraints_identity=None,
@@ -127,6 +130,17 @@ def test_1138_qualification_pin_stays_structured_and_exact() -> None:
         evaluated_at="2026-08-15T20:00:00Z",
     )
     assert plan.argv[-1] == "hypothesis==6.165.9"
+
+
+def test_stale_environment_health_blocks_before_preparation() -> None:
+    plan = plan_dependency_preparation(
+        python_spec(),
+        observation(environment_health_current=False),
+        evaluated_at="2026-08-15T20:00:00Z",
+    )
+    assert plan.status is DependencyPreparationStatus.BLOCKED
+    assert plan.argv is None
+    assert plan.reason_codes == ("dependency.environment-stale",)
 
 
 def test_python_offline_requires_proven_complete_bundle_and_separate_location() -> None:
@@ -405,6 +419,7 @@ def test_concrete_observer_verifies_workspace_manifest_and_lock_hashes(tmp_path)
     inputs = ConcreteDependencyPreparationInputs(
         execution_surface_id="surface:1",
         environment_health_evidence_id="health:1",
+        environment_health_current=True,
         runtime_version="22.16.0",
         runtime_compatible=True,
         package_manager_version="10.9.2",
@@ -431,6 +446,50 @@ def test_concrete_observer_verifies_workspace_manifest_and_lock_hashes(tmp_path)
         workspace_identity="workspace:1", existing_ready_evidence=None
     )
     assert second.lock_matches is False
+
+
+def test_python_concrete_runner_creates_clean_external_venv_before_install(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    configuration = SimpleNamespace(
+        configuration_fingerprint="concrete-adapters:test",
+        workspace_parent=str(tmp_path),
+        executor_cwd=str(workspace),
+        validation_total_timeout_seconds=30.0,
+        executor_grace_period_seconds=1.0,
+        validation_max_output_bytes=65_536,
+        delegated_parent_cgroup=None,
+        invocation_id="invocation:1",
+        environment_policy="isolated-path-home-c-locale",
+        repository_root=str(workspace),
+        required_environment_spec=python_spec(),
+    )
+    runner = ConcreteDependencyCommandRunner(configuration, python_spec())
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(argv, *, suffix, include_dependency_environment=True):
+        calls.append(tuple(argv))
+        return SimpleNamespace(
+            return_code=0,
+            termination_confirmed=True,
+            timeout_observed=False,
+            cancellation_requested=False,
+            stderr_text="",
+            reason="",
+            stdout_text="pkg==1.0\n",
+        )
+
+    runner._run = fake_run  # type: ignore[method-assign]
+    result = runner.run(
+        ("python", "-m", "pip", "install", "-r", "requirements-dev.txt"),
+        workspace_identity="workspace:1",
+    )
+    venv = _python_dependency_environment_directory(configuration)
+    assert result.succeeded is True
+    assert calls[0] == ("python", "-m", "venv", "--clear", venv)
+    assert calls[1][0] == f"{venv}/bin/python"
+    assert calls[1][1:] == ("-m", "pip", "install", "-r", "requirements-dev.txt")
+    assert calls[2] == (f"{venv}/bin/python", "-m", "pip", "freeze", "--all")
 
 
 def test_runtime_wrappers_refuse_executor_and_validator_before_ready() -> None:
