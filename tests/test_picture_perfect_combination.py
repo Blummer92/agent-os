@@ -1,4 +1,6 @@
-from instructional_workflow_contracts import apply_combined_modeling_decision
+from instructional_workflow_contracts.picture_perfect_combination import (
+    apply_combined_modeling_decision,
+)
 
 
 def _candidate(action_id, source_indexes, *, fragile=False):
