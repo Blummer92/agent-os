@@ -8,11 +8,26 @@ The configuration classes are re-exported here for backward compatibility.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from dataclasses import dataclass, field
 from typing import Callable
 
+from scripts.agent_os_execution_capabilities.dependencies import (
+    DependencyCacheState,
+    DependencyInstallMode,
+    DependencyReadinessEvidence,
+    RequiredEnvironmentSpec,
+)
 from workflow_scheduler.execution import cgroup_v2_containment
+from workflow_scheduler.execution.dependency_preparation import (
+    BoundDependencyPreparationAdapter,
+    DependencyCommandObservation,
+    DependencyCommandRunner,
+    DependencyPreparationAdapter,
+    DependencyPreparationObservation,
+    DependencyPreparationObservationProvider,
+)
 from workflow_scheduler.execution.frozen_test_validation_adapter import (
     BoundedCommandRunner,
     ChangedPathsInspector,
@@ -43,12 +58,12 @@ from workflow_scheduler.execution.single_issue_pilot import (
     VALIDATION_ONLY_EXECUTION_MODE,
     CancellationProbe,
     SingleIssuePilotInput,
+    WorkspaceHandle,
 )
 from workflow_scheduler.execution.single_issue_runtime import (
     SingleIssueRuntimeOutcome,
     run_single_issue_runtime_entrypoint,
 )
-from workflow_scheduler.execution.single_issue_pilot import WorkspaceHandle
 from workflow_scheduler.execution.workspace_state_evidence import (
     WorkspaceLifecycleEvidence,
     WorkspaceStateObservation,
@@ -67,13 +82,7 @@ class ConcreteRuntimeContainmentError(ConcreteRuntimeConfigurationError):
 
 
 def _invocation_scope(configuration: ConcreteRuntimeConfiguration, *, suffix: str) -> str:
-    """A bounded, filesystem-safe per-purpose invocation id derived from the base one.
-
-    Multiple #759 invocation cgroups can exist under the same
-    ``delegated_parent_cgroup`` for one configuration (the executor and each
-    validation command each get their own), so each needs a distinct,
-    collision-free directory name.
-    """
+    """A bounded, filesystem-safe per-purpose invocation id derived from the base one."""
     digest = hashlib.sha256(
         f"{configuration.invocation_id}:{suffix}".encode("utf-8")
     ).hexdigest()
@@ -112,15 +121,7 @@ def _lease_adapter(
 
 
 class WorkspaceStateCapturingAdapter:
-    """Thin #760 capture wrapper: every call delegates to the bound adapter unchanged.
-
-    Captures the #760 initial observation immediately after a successful
-    ``create`` and the #760 final observation immediately before delegating
-    to the real ``cleanup`` -- the only two points in the unmodified
-    single-issue-pilot lifecycle where the workspace is known to exist and
-    is about to change ownership. Adds no Git runner, worktree manager, or
-    orchestration beyond that pass-through.
-    """
+    """Thin #760 capture wrapper: every call delegates to the bound adapter unchanged."""
 
     def __init__(self, adapter: GitWorktreeAdapter) -> None:
         self._adapter = adapter
@@ -137,6 +138,11 @@ class WorkspaceStateCapturingAdapter:
 
     def inspect(self, handle):
         return self._adapter.inspect(handle)
+
+    def inspect_complete_state(self, handle, *, observation_kind):
+        return self._adapter.inspect_complete_state(
+            handle, observation_kind=observation_kind
+        )
 
     def cleanup(self, handle):
         if handle.created and self.final_observation is None:
@@ -257,12 +263,269 @@ class GitChangedPathsInspector(ChangedPathsInspector):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class ConcreteDependencyPreparationInputs:
+    """Current-surface facts supplied by #972/source-cache evidence, never credentials."""
+
+    execution_surface_id: str
+    environment_health_evidence_id: str
+    runtime_version: str
+    runtime_compatible: bool
+    package_manager_version: str
+    observed_source_identity: str
+    source_reachable: bool
+    package_available: bool
+    cache_state: DependencyCacheState
+    expires_at: str
+    offline_source_identity: str | None = None
+    offline_source_location: str | None = None
+    existing_ready_evidence: DependencyReadinessEvidence | None = None
+
+    def __post_init__(self) -> None:
+        for name in (
+            "execution_surface_id",
+            "environment_health_evidence_id",
+            "runtime_version",
+            "package_manager_version",
+            "observed_source_identity",
+            "expires_at",
+        ):
+            value = getattr(self, name)
+            if type(value) is not str or not value or "\x00" in value:
+                raise TypeError(f"{name} must be non-empty NUL-free exact text")
+        for name in ("runtime_compatible", "source_reachable", "package_available"):
+            if type(getattr(self, name)) is not bool:
+                raise TypeError(f"{name} must be exact bool")
+        if type(self.cache_state) is not DependencyCacheState:
+            raise TypeError("cache_state must be exact DependencyCacheState")
+        if self.offline_source_identity is not None and (
+            type(self.offline_source_identity) is not str
+            or not self.offline_source_identity
+        ):
+            raise TypeError("offline_source_identity must be non-empty exact text or None")
+        if self.offline_source_location is not None and (
+            type(self.offline_source_location) is not str
+            or not self.offline_source_location
+            or "\x00" in self.offline_source_location
+        ):
+            raise TypeError("offline_source_location must be non-empty NUL-free text or None")
+        if self.existing_ready_evidence is not None and type(
+            self.existing_ready_evidence
+        ) is not DependencyReadinessEvidence:
+            raise TypeError(
+                "existing_ready_evidence must be exact DependencyReadinessEvidence or None"
+            )
+
+
+def _file_sha256(path: str) -> str | None:
+    try:
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(65_536), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except (FileNotFoundError, IsADirectoryError, PermissionError, OSError):
+        return None
+
+
+def _workspace_file(configuration: ConcreteRuntimeConfiguration, relative_path: str) -> str:
+    return os.path.join(configuration.executor_cwd, *relative_path.split("/"))
+
+
+class ConcreteDependencyObservationProvider(DependencyPreparationObservationProvider):
+    """Verify task manifest/lock identities against one already-created workspace."""
+
+    def __init__(
+        self,
+        configuration: ConcreteRuntimeConfiguration,
+        spec: RequiredEnvironmentSpec,
+        inputs: ConcreteDependencyPreparationInputs,
+    ) -> None:
+        self._configuration = configuration
+        self._spec = spec
+        self._inputs = inputs
+
+    def observe(
+        self,
+        *,
+        workspace_identity: str,
+        existing_ready_evidence: DependencyReadinessEvidence | None,
+    ) -> DependencyPreparationObservation:
+        manifest_sha = _file_sha256(
+            _workspace_file(
+                self._configuration,
+                self._spec.dependency_manifest_identity.relative_path,
+            )
+        )
+        lock_matches: bool | None = None
+        if self._spec.lock_or_constraints_identity is not None:
+            lock_sha = _file_sha256(
+                _workspace_file(
+                    self._configuration,
+                    self._spec.lock_or_constraints_identity.relative_path,
+                )
+            )
+            lock_matches = lock_sha == self._spec.lock_or_constraints_identity.sha256
+        return DependencyPreparationObservation(
+            execution_surface_id=self._inputs.execution_surface_id,
+            workspace_identity=workspace_identity,
+            source_sha=self._configuration.source_head_sha,
+            environment_health_evidence_id=self._inputs.environment_health_evidence_id,
+            runtime_version=self._inputs.runtime_version,
+            runtime_compatible=self._inputs.runtime_compatible,
+            package_manager_version=self._inputs.package_manager_version,
+            manifest_matches=(
+                manifest_sha == self._spec.dependency_manifest_identity.sha256
+            ),
+            lock_matches=lock_matches,
+            source_identity_matches=(
+                self._inputs.observed_source_identity
+                == self._spec.approved_source_identity
+            ),
+            source_reachable=self._inputs.source_reachable,
+            package_available=self._inputs.package_available,
+            cache_state=self._inputs.cache_state,
+            offline_source_identity=self._inputs.offline_source_identity,
+            offline_source_location=self._inputs.offline_source_location,
+            existing_ready_evidence=(
+                existing_ready_evidence or self._inputs.existing_ready_evidence
+            ),
+        )
+
+
+class ConcreteDependencyCommandRunner(DependencyCommandRunner):
+    """Run one deterministic preparation command and hash resolved environment evidence."""
+
+    def __init__(
+        self,
+        configuration: ConcreteRuntimeConfiguration,
+        spec: RequiredEnvironmentSpec,
+        *,
+        cancelled: ProcessCancellationCheck | None = None,
+    ) -> None:
+        self._configuration = configuration
+        self._spec = spec
+        self._cancelled = cancelled
+        self._attempts = 0
+
+    def _cwd(self) -> str:
+        if self._spec.package_root == ".":
+            return self._configuration.executor_cwd
+        return _workspace_file(self._configuration, self._spec.package_root)
+
+    def _run(self, argv: tuple[str, ...], *, suffix: str) -> PosixProcessExecutionResult:
+        return run_bounded_posix_process(
+            argv,
+            timeout_seconds=self._configuration.validation_total_timeout_seconds,
+            grace_period_seconds=self._configuration.executor_grace_period_seconds,
+            max_output_bytes=self._configuration.validation_max_output_bytes,
+            cwd=self._cwd(),
+            env=_environment(self._configuration),
+            cancelled=self._cancelled,
+            containment=_containment_config(
+                self._configuration, suffix=f"dependency:{suffix}"
+            ),
+        )
+
+    @staticmethod
+    def _succeeded(result: PosixProcessExecutionResult) -> bool:
+        return (
+            result.return_code == 0
+            and result.termination_confirmed
+            and not result.timeout_observed
+            and not result.cancellation_requested
+        )
+
+    @staticmethod
+    def _failure_reason(result: PosixProcessExecutionResult) -> str:
+        text = f"{result.stderr_text}\n{result.reason}".casefold()
+        if any(
+            marker in text
+            for marker in (
+                "eai_again",
+                "temporary failure in name resolution",
+                "network is unreachable",
+                "connection timed out",
+            )
+        ):
+            return "dependency.source-unavailable"
+        if any(
+            marker in text
+            for marker in (
+                "no matching distribution found",
+                "could not find a version that satisfies",
+                "notarget",
+                "e404",
+            )
+        ):
+            return "dependency.package-unavailable"
+        return "dependency.preparation-failed"
+
+    def _resolved_identity(self) -> str | None:
+        if self._spec.install_mode is DependencyInstallMode.ABSENT_AUTHORIZED_LOCK_GENERATION:
+            lock_path = os.path.join(self._cwd(), "package-lock.json")
+            digest = _file_sha256(lock_path)
+            return None if digest is None else f"lock:{digest}"
+        if self._spec.ecosystem.value == "python-pip":
+            result = self._run(
+                ("python", "-m", "pip", "freeze", "--all"), suffix="resolve-python"
+            )
+            if not self._succeeded(result):
+                return None
+            lines = sorted(
+                line.strip()
+                for line in result.stdout_text.splitlines()
+                if line.strip()
+            )
+            digest = hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+            return f"pip-freeze:{digest}"
+        result = self._run(("npm", "ls", "--all", "--json"), suffix="resolve-node")
+        if not self._succeeded(result):
+            return None
+        try:
+            payload = json.loads(result.stdout_text)
+            canonical = json.dumps(
+                payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+        return f"npm-tree:{hashlib.sha256(canonical).hexdigest()}"
+
+    def run(
+        self, argv: tuple[str, ...], *, workspace_identity: str
+    ) -> DependencyCommandObservation:
+        if self._attempts >= 2:
+            raise RuntimeError(
+                "dependency command runner allows initial preparation plus one changed-input preparation"
+            )
+        self._attempts += 1
+        result = self._run(tuple(argv), suffix=f"prepare-{self._attempts}")
+        if not self._succeeded(result):
+            return DependencyCommandObservation(
+                attempted=True,
+                succeeded=False,
+                failure_reason_code=self._failure_reason(result),
+            )
+        return DependencyCommandObservation(
+            attempted=True,
+            succeeded=True,
+            resolved_dependency_identity=self._resolved_identity(),
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class ConcreteRuntimeAdapters:
     lease: InMemoryLeaseAdapter | HostLocalLeaseAdapter
     workspace: WorkspaceStateCapturingAdapter
     executor: PosixProcessExecutor | None
     validator: FrozenTestValidationAdapter
     validation_runner: BoundPosixCommandRunner = field(repr=False)
+    dependency_preparer: DependencyPreparationAdapter | None = field(
+        default=None, repr=False
+    )
 
 
 def build_concrete_runtime_adapters(
@@ -272,14 +535,10 @@ def build_concrete_runtime_adapters(
     git_runner: GitRunner | None = None,
     process_cancelled: ProcessCancellationCheck | None = None,
     changed_paths_inspector: ChangedPathsInspector | None = None,
+    dependency_preparation_inputs: ConcreteDependencyPreparationInputs | None = None,
+    dependency_command_runner: DependencyCommandRunner | None = None,
 ) -> ConcreteRuntimeAdapters:
-    """Verify one binding and construct the executable adapters for this mode.
-
-    #759 containment (when ``configuration.delegated_parent_cgroup`` is set)
-    is preflighted here, before the #758 lease or the worktree exist for
-    this invocation -- a failed preflight fails closed before either is
-    created.
-    """
+    """Verify one binding and construct the executable adapters for this mode."""
 
     configuration.verify(pilot_input)
     _preflight_containment(configuration)
@@ -322,12 +581,40 @@ def build_concrete_runtime_adapters(
         ),
         cancelled=process_cancelled,
     )
+
+    spec = configuration.required_environment_spec
+    dependency_preparer: DependencyPreparationAdapter | None = None
+    if spec is None:
+        if dependency_preparation_inputs is not None or dependency_command_runner is not None:
+            raise ConcreteRuntimeConfigurationError(
+                "dependency preparation inputs require a bound required environment"
+            )
+    else:
+        if type(dependency_preparation_inputs) is not ConcreteDependencyPreparationInputs:
+            raise ConcreteRuntimeConfigurationError(
+                "required environment requires current dependency preparation inputs"
+            )
+        observation_provider = ConcreteDependencyObservationProvider(
+            configuration, spec, dependency_preparation_inputs
+        )
+        command_runner = dependency_command_runner or ConcreteDependencyCommandRunner(
+            configuration, spec, cancelled=process_cancelled
+        )
+        dependency_preparer = BoundDependencyPreparationAdapter(
+            spec=spec,
+            observations=observation_provider,
+            runner=command_runner,
+            evaluated_at=pilot_input.evaluated_at,
+            expires_at=dependency_preparation_inputs.expires_at,
+        )
+
     return ConcreteRuntimeAdapters(
         lease=lease,
         workspace=workspace,
         executor=executor,
         validator=validator,
         validation_runner=validation_runner,
+        dependency_preparer=dependency_preparer,
     )
 
 
@@ -337,12 +624,7 @@ def capture_workspace_state_observation(
     *,
     observation_kind: str,
 ) -> WorkspaceStateObservation:
-    """Capture one complete workspace-state observation via the bound workspace adapter.
-
-    A thin pass-through to ``GitWorktreeAdapter.inspect_complete_state``; it
-    adds no new runner, orchestration, or runtime wiring. Runtime selection
-    of when this is called is out of this issue's scope.
-    """
+    """Capture one complete workspace-state observation via the bound workspace adapter."""
     return adapters.workspace.inspect_complete_state(
         handle, observation_kind=observation_kind
     )
@@ -365,8 +647,10 @@ def run_concrete_runtime_entrypoint_with_validation_evidence(
     git_runner: GitRunner | None = None,
     process_cancelled: ProcessCancellationCheck | None = None,
     changed_paths_inspector: ChangedPathsInspector | None = None,
+    dependency_preparation_inputs: ConcreteDependencyPreparationInputs | None = None,
+    dependency_command_runner: DependencyCommandRunner | None = None,
 ) -> ConcreteRuntimeExecutionOutcome:
-    """Run once and return the exact validation/#760 evidence retained by the adapters."""
+    """Run once and return retained validation, workspace, and readiness evidence."""
 
     adapters = build_concrete_runtime_adapters(
         pilot_input,
@@ -374,6 +658,8 @@ def run_concrete_runtime_entrypoint_with_validation_evidence(
         git_runner=git_runner,
         process_cancelled=process_cancelled,
         changed_paths_inspector=changed_paths_inspector,
+        dependency_preparation_inputs=dependency_preparation_inputs,
+        dependency_command_runner=dependency_command_runner,
     )
     runtime_outcome = run_single_issue_runtime_entrypoint(
         pilot_input,
@@ -382,6 +668,7 @@ def run_concrete_runtime_entrypoint_with_validation_evidence(
         executor=adapters.executor,
         validator=adapters.validator,
         cancelled=cancelled,
+        dependency_preparer=adapters.dependency_preparer,
     )
     workspace_lifecycle_evidence: WorkspaceLifecycleEvidence | None = None
     if (
@@ -408,6 +695,8 @@ def run_concrete_runtime_entrypoint(
     git_runner: GitRunner | None = None,
     process_cancelled: ProcessCancellationCheck | None = None,
     changed_paths_inspector: ChangedPathsInspector | None = None,
+    dependency_preparation_inputs: ConcreteDependencyPreparationInputs | None = None,
+    dependency_command_runner: DependencyCommandRunner | None = None,
 ) -> SingleIssueRuntimeOutcome:
     """Preserve the existing runtime-only compatibility contract."""
 
@@ -418,4 +707,6 @@ def run_concrete_runtime_entrypoint(
         git_runner=git_runner,
         process_cancelled=process_cancelled,
         changed_paths_inspector=changed_paths_inspector,
+        dependency_preparation_inputs=dependency_preparation_inputs,
+        dependency_command_runner=dependency_command_runner,
     ).runtime_outcome
