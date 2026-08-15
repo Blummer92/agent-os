@@ -25,7 +25,7 @@ def test_dry_run_workflow_uses_minimal_permissions_and_per_issue_concurrency():
 
 def test_dry_run_workflow_uses_shared_environment_after_checkout():
     content = WORKFLOW.read_text(encoding="utf-8")
-    checkout = content.index("uses: actions/checkout@v5")
+    checkout = content.index("uses: actions/checkout@v7")
     shared_setup = content.index("uses: ./.github/actions/setup-python-dev")
     assert checkout < shared_setup
     assert "uses: actions/setup-python@v6" not in content
@@ -59,7 +59,7 @@ def test_dry_run_workflow_calls_planner_and_publishes_audit_summary():
     assert "--event-type" in content
     assert "--commit-sha" in content
     assert "GITHUB_STEP_SUMMARY" in content
-    assert "uses: actions/github-script@v8" in content
+    assert "uses: actions/github-script@v9" in content
 
 
 def test_dry_run_workflow_contains_no_label_mutation_path():

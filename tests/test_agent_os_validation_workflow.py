@@ -118,14 +118,14 @@ def test_governed_validation_paths_do_not_upgrade_pip_unconditionally():
 
 def test_validation_gate_cache_paths_match_installed_dependency_manifests():
     content = WORKFLOW.read_text(encoding="utf-8")
-    assert "uses: actions/setup-python@v6" in content
+    assert "uses: actions/setup-python@v7" in content
     assert 'cache: "pip"' in content
     _assert_dependency_cache_parity(content)
 
 
 def test_scheduler_cache_paths_match_installed_dependency_manifests():
     content = SCHEDULER_WORKFLOW.read_text(encoding="utf-8")
-    assert "uses: actions/setup-python@v6" in content
+    assert "uses: actions/setup-python@v7" in content
     assert 'cache: "pip"' in content
     _assert_dependency_cache_parity(content)
     assert _cache_dependency_paths(content) == {
