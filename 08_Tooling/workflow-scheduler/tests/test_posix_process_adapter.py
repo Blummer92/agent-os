@@ -494,12 +494,14 @@ requires_real_containment = pytest.mark.skipif(
 def delegated_parent() -> str | None:
     root = _discover_cgroup2_mount()
     if root is None:
-        return None
+        yield None
+        return
     path = os.path.join(root, f"agentos-adapter-test-{uuid.uuid4().hex}")
     try:
         os.mkdir(path)
     except OSError:
-        return None
+        yield None
+        return
     yield path
     try:
         os.rmdir(path)
