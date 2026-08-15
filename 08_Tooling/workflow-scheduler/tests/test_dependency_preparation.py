@@ -10,8 +10,10 @@ from scripts.agent_os_execution_capabilities.dependencies import (
     DependencyEcosystem,
     DependencyInstallMode,
     DependencyPreparationStatus,
+    DependencyReadinessEvidence,
     LocalProjectRequirement,
     QualificationOnlyDependencyPin,
+    ReproducibilityLevel,
     RequiredEnvironmentSpec,
 )
 from workflow_scheduler.execution import single_issue_runtime as runtime_module
@@ -19,6 +21,7 @@ from workflow_scheduler.execution.concrete_runtime_adapters import (
     ConcreteDependencyCommandRunner,
     ConcreteDependencyObservationProvider,
     ConcreteDependencyPreparationInputs,
+    _local_project_sha256,
     _python_dependency_environment_directory,
 )
 from workflow_scheduler.execution.dependency_preparation import (
@@ -51,6 +54,7 @@ def observation(**changes) -> DependencyPreparationObservation:
         package_manager_version="24.0",
         manifest_matches=True,
         lock_matches=True,
+        local_projects_match=True,
         source_identity_matches=True,
         source_reachable=True,
         package_available=True,
@@ -108,6 +112,41 @@ def node_spec(*, lock: bool = True, lock_generation: bool = False) -> RequiredEn
     )
 
 
+def ready_evidence(
+    spec: RequiredEnvironmentSpec, *, execution_surface_id: str = "surface:1"
+) -> DependencyReadinessEvidence:
+    return DependencyReadinessEvidence(
+        execution_surface_id=execution_surface_id,
+        workspace_identity="workspace:1",
+        source_sha=HEAD,
+        required_environment_id=spec.required_environment_id,
+        package_root=spec.package_root,
+        ecosystem=spec.ecosystem,
+        runtime_version="3.12.1",
+        package_manager_version="24.0",
+        declared_dependency_identity=spec.dependency_manifest_identity.sha256,
+        lock_or_constraints_identity=(
+            None
+            if spec.lock_or_constraints_identity is None
+            else spec.lock_or_constraints_identity.sha256
+        ),
+        install_mode=spec.install_mode,
+        source_or_registry_identity=spec.approved_source_identity,
+        cache_state=DependencyCacheState.NOT_APPLICABLE,
+        preparation_status=DependencyPreparationStatus.READY,
+        resolved_dependency_identity="resolved:abc",
+        environment_health_evidence_id="health:1",
+        observed_at="2026-08-15T19:30:00Z",
+        expires_at="2026-08-15T21:00:00Z",
+        reproducibility_level=(
+            ReproducibilityLevel.LOCKED
+            if spec.lock_or_constraints_identity is not None
+            else ReproducibilityLevel.RESOLVED
+        ),
+        reason_codes=(),
+    )
+
+
 def test_935_python_root_uses_one_bounded_pip_install() -> None:
     plan = plan_dependency_preparation(
         python_spec(), observation(), evaluated_at="2026-08-15T20:00:00Z"
@@ -141,6 +180,22 @@ def test_stale_environment_health_blocks_before_preparation() -> None:
     assert plan.status is DependencyPreparationStatus.BLOCKED
     assert plan.argv is None
     assert plan.reason_codes == ("dependency.environment-stale",)
+
+
+def test_other_surface_ready_evidence_blocks_instead_of_repreparing() -> None:
+    spec = python_spec()
+    plan = plan_dependency_preparation(
+        spec,
+        observation(
+            existing_ready_evidence=ready_evidence(
+                spec, execution_surface_id="surface:other"
+            )
+        ),
+        evaluated_at="2026-08-15T20:00:00Z",
+    )
+    assert plan.status is DependencyPreparationStatus.BLOCKED
+    assert plan.argv is None
+    assert plan.reason_codes == ("dependency.environment-surface-mismatch",)
 
 
 def test_python_offline_requires_proven_complete_bundle_and_separate_location() -> None:
@@ -331,9 +386,37 @@ def test_local_projects_make_editability_explicit() -> None:
         required_validation_command_ids=("pytest",),
     )
     plan = plan_dependency_preparation(
-        editable, observation(), evaluated_at="2026-08-15T20:00:00Z"
+        editable,
+        observation(local_projects_match=True),
+        evaluated_at="2026-08-15T20:00:00Z",
     )
     assert plan.argv[-2:] == ("-e", "src")
+
+
+def test_editable_source_drift_blocks_before_preparation() -> None:
+    editable = RequiredEnvironmentSpec(
+        ecosystem=DependencyEcosystem.PYTHON_PIP,
+        package_root=".",
+        runtime_requirement=">=3.11",
+        dependency_manifest_identity=artifact("requirements-dev.txt"),
+        lock_or_constraints_identity=None,
+        install_mode=DependencyInstallMode.NORMAL,
+        local_project_requirements=(
+            LocalProjectRequirement(
+                relative_path="src", sha256=SHA, editable=True
+            ),
+        ),
+        approved_source_identity="pypi.org/simple",
+        required_validation_command_ids=("pytest",),
+    )
+    plan = plan_dependency_preparation(
+        editable,
+        observation(local_projects_match=False),
+        evaluated_at="2026-08-15T20:00:00Z",
+    )
+    assert plan.status is DependencyPreparationStatus.BLOCKED
+    assert plan.argv is None
+    assert plan.reason_codes == ("dependency.editable-source-drift",)
 
 
 def test_dependency_input_drift_requires_recheck_only_for_bound_inputs() -> None:
@@ -439,6 +522,7 @@ def test_concrete_observer_verifies_workspace_manifest_and_lock_hashes(tmp_path)
     )
     assert first.manifest_matches is True
     assert first.lock_matches is True
+    assert first.local_projects_match is True
     assert first.execution_surface_id == "surface:1"
     assert first.environment_health_evidence_id == "health:1"
     lock.write_text('{"lockfileVersion":2}\n', encoding="utf-8")
@@ -446,6 +530,108 @@ def test_concrete_observer_verifies_workspace_manifest_and_lock_hashes(tmp_path)
         workspace_identity="workspace:1", existing_ready_evidence=None
     )
     assert second.lock_matches is False
+
+
+def test_concrete_observer_binds_local_project_directory_identity(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    manifest = workspace / "requirements-dev.txt"
+    manifest.write_text("pytest>=8\n", encoding="utf-8")
+    source = workspace / "src"
+    source.mkdir()
+    module = source / "module.py"
+    module.write_text("VALUE = 1\n", encoding="utf-8")
+    manifest_sha = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    source_sha = _local_project_sha256(str(source))
+    assert source_sha is not None
+    spec = RequiredEnvironmentSpec(
+        ecosystem=DependencyEcosystem.PYTHON_PIP,
+        package_root=".",
+        runtime_requirement=">=3.11",
+        dependency_manifest_identity=artifact("requirements-dev.txt", manifest_sha),
+        lock_or_constraints_identity=None,
+        install_mode=DependencyInstallMode.NORMAL,
+        local_project_requirements=(
+            LocalProjectRequirement(
+                relative_path="src", sha256=source_sha, editable=True
+            ),
+        ),
+        approved_source_identity="pypi.org/simple",
+        required_validation_command_ids=("pytest",),
+    )
+    inputs = ConcreteDependencyPreparationInputs(
+        execution_surface_id="surface:1",
+        environment_health_evidence_id="health:1",
+        environment_health_current=True,
+        runtime_version="3.12.1",
+        runtime_compatible=True,
+        package_manager_version="24.0",
+        observed_source_identity="pypi.org/simple",
+        source_reachable=True,
+        package_available=True,
+        cache_state=DependencyCacheState.NOT_APPLICABLE,
+        expires_at="2026-08-15T21:00:00Z",
+    )
+    provider = ConcreteDependencyObservationProvider(
+        SimpleNamespace(executor_cwd=str(workspace), source_head_sha=HEAD),
+        spec,
+        inputs,
+    )
+    first = provider.observe(
+        workspace_identity="workspace:1", existing_ready_evidence=None
+    )
+    assert first.local_projects_match is True
+    module.write_text("VALUE = 2\n", encoding="utf-8")
+    second = provider.observe(
+        workspace_identity="workspace:1", existing_ready_evidence=None
+    )
+    assert second.local_projects_match is False
+
+
+def test_concrete_observer_preserves_other_surface_evidence_for_blocking(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    manifest = workspace / "requirements-dev.txt"
+    manifest.write_bytes(b"x")
+    manifest_sha = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    spec = RequiredEnvironmentSpec(
+        ecosystem=DependencyEcosystem.PYTHON_PIP,
+        package_root=".",
+        runtime_requirement=">=3.11",
+        dependency_manifest_identity=artifact("requirements-dev.txt", manifest_sha),
+        lock_or_constraints_identity=None,
+        install_mode=DependencyInstallMode.NORMAL,
+        approved_source_identity="pypi.org/simple",
+        required_validation_command_ids=("pytest",),
+    )
+    wrong_surface = ready_evidence(spec, execution_surface_id="surface:other")
+    inputs = ConcreteDependencyPreparationInputs(
+        execution_surface_id="surface:1",
+        environment_health_evidence_id="health:1",
+        environment_health_current=True,
+        runtime_version="3.12.1",
+        runtime_compatible=True,
+        package_manager_version="24.0",
+        observed_source_identity="pypi.org/simple",
+        source_reachable=True,
+        package_available=True,
+        cache_state=DependencyCacheState.NOT_APPLICABLE,
+        expires_at="2026-08-15T21:00:00Z",
+        existing_ready_evidence=wrong_surface,
+    )
+    provider = ConcreteDependencyObservationProvider(
+        SimpleNamespace(executor_cwd=str(workspace), source_head_sha=HEAD),
+        spec,
+        inputs,
+    )
+    observed = provider.observe(
+        workspace_identity="workspace:1", existing_ready_evidence=None
+    )
+    assert observed.existing_ready_evidence is wrong_surface
+    plan = plan_dependency_preparation(
+        spec, observed, evaluated_at="2026-08-15T20:00:00Z"
+    )
+    assert plan.reason_codes == ("dependency.environment-surface-mismatch",)
 
 
 def test_python_concrete_runner_creates_clean_external_venv_before_install(tmp_path) -> None:
