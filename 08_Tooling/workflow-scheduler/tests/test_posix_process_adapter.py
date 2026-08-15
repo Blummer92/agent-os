@@ -17,6 +17,7 @@ import signal
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 
 import pytest
@@ -28,11 +29,13 @@ if str(REPOSITORY_ROOT) not in sys.path:
 if str(SCHEDULER_SRC) not in sys.path:
     sys.path.insert(0, str(SCHEDULER_SRC))
 
+from workflow_scheduler.execution import cgroup_v2_containment  # noqa: E402
 from workflow_scheduler.execution import posix_process_adapter as adapter_module  # noqa: E402
 from workflow_scheduler.execution.posix_process_adapter import (  # noqa: E402
     MAX_ARGUMENT_BYTES,
     MAX_ARGV_ITEMS,
     MAX_COMMAND_BYTES,
+    ContainmentConfig,
     PosixProcessAdapterError,
     PosixProcessExecutor,
     PosixProcessExecutorConfig,
@@ -455,3 +458,350 @@ def test_module_never_retries_execution() -> None:
     source = inspect.getsource(adapter_module)
     for forbidden_token in ("RetryManager", "retry_attempt", "max_retries", "backoff"):
         assert forbidden_token not in source
+
+
+# --------------------------------------------------------------------------
+# WSC-AUTO1C: opt-in cgroup v2 containment
+#
+# Real launches are gated on the real preflight probe (not a blanket
+# platform check) so this suite still runs, and still proves the
+# fail-closed path, on a host where the native extension is not built or
+# clone3()/cgroup v2 delegation is unavailable.
+# --------------------------------------------------------------------------
+
+
+def _discover_cgroup2_mount() -> str | None:
+    for candidate in ("/sys/fs/cgroup", "/sys/fs/cgroup/unified"):
+        if os.path.isfile(os.path.join(candidate, "cgroup.controllers")):
+            return candidate
+    return None
+
+
+def _real_containment_supported() -> bool:
+    root = _discover_cgroup2_mount()
+    if root is None:
+        return False
+    return cgroup_v2_containment.preflight_check(root).supported
+
+
+requires_real_containment = pytest.mark.skipif(
+    not _real_containment_supported(),
+    reason="real cgroup v2 delegation/clone3 support not available on this host",
+)
+
+
+@pytest.fixture()
+def delegated_parent() -> str | None:
+    root = _discover_cgroup2_mount()
+    if root is None:
+        return None
+    path = os.path.join(root, f"agentos-adapter-test-{uuid.uuid4().hex}")
+    try:
+        os.mkdir(path)
+    except OSError:
+        return None
+    yield path
+    try:
+        os.rmdir(path)
+    except OSError:
+        pass
+
+
+def _containment(delegated_parent_path: str) -> ContainmentConfig:
+    return ContainmentConfig(
+        delegated_parent_cgroup=delegated_parent_path,
+        invocation_id=str(uuid.uuid4()),
+    )
+
+
+def test_containment_config_rejects_empty_delegated_parent() -> None:
+    with pytest.raises(PosixProcessAdapterError):
+        ContainmentConfig(delegated_parent_cgroup="", invocation_id="x")
+
+
+def test_containment_config_rejects_empty_invocation_id() -> None:
+    with pytest.raises(PosixProcessAdapterError):
+        ContainmentConfig(delegated_parent_cgroup="/sys/fs/cgroup", invocation_id="")
+
+
+def test_uncontained_default_path_is_unaffected_by_containment_fields() -> None:
+    result = run_bounded_posix_process([PY, "-c", "print(1)"])
+    assert result.contained is False
+    assert result.invocation_cgroup_path is None
+    assert result.populated_confirmed_clear is None
+    assert result.cleanup_confirmed is None
+
+
+def test_preflight_failure_raises_before_any_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[object] = []
+    monkeypatch.setattr(
+        adapter_module.cgroup_v2_containment,
+        "preflight_check",
+        lambda *_a, **_k: cgroup_v2_containment.ContainmentPreflightResult(
+            supported=False,
+            delegated_parent_cgroup="/no/such/path",
+            cgroup_v2_mounted=False,
+            delegated_parent_exists=False,
+            can_create_and_remove_child=False,
+            clone3_extension_loaded=False,
+            clone3_syscall_supported=False,
+            cgroup_events_readable=False,
+            cgroup_kill_writable=False,
+            reason="simulated unsupported host",
+        ),
+    )
+
+    def _fail_if_called(*args: object, **kwargs: object) -> None:
+        calls.append((args, kwargs))
+        raise AssertionError("no launch may be attempted after a failed preflight")
+
+    monkeypatch.setattr(adapter_module, "launch_into_cgroup", _fail_if_called)
+
+    with pytest.raises(cgroup_v2_containment.CgroupV2PreflightError):
+        run_bounded_posix_process(
+            [PY, "-c", "print(1)"],
+            containment=ContainmentConfig(
+                delegated_parent_cgroup="/no/such/path", invocation_id="x"
+            ),
+        )
+    assert calls == []
+
+
+@requires_real_containment
+def test_contained_ordinary_completion(delegated_parent: str) -> None:
+    result = run_bounded_posix_process(
+        [PY, "-c", "print('hello')"], containment=_containment(delegated_parent)
+    )
+    assert result.contained is True
+    assert result.started is True
+    assert result.return_code == 0
+    assert result.stdout_text == "hello\n"
+    assert result.termination_confirmed is True
+    assert result.possible_partial_effects is False
+    assert result.populated_confirmed_clear is True
+    assert result.cleanup_confirmed is True
+    assert not os.path.exists(result.invocation_cgroup_path)
+
+
+@requires_real_containment
+def test_contained_argv_cwd_env_stdin_stdout_stderr_compatibility(
+    tmp_path: Path, delegated_parent: str
+) -> None:
+    script = (
+        "import os, sys\n"
+        "print(os.getcwd())\n"
+        "print(os.environ.get('AGENTOS_TEST_VAR'))\n"
+        "print(sys.stdin.read() == '')\n"
+    )
+    result = run_bounded_posix_process(
+        [PY, "-c", script],
+        cwd=str(tmp_path),
+        env={"AGENTOS_TEST_VAR": "contained-value", "PATH": os.environ.get("PATH", "")},
+        containment=_containment(delegated_parent),
+    )
+    lines = result.stdout_text.splitlines()
+    assert lines[0] == str(tmp_path)
+    assert lines[1] == "contained-value"
+    assert lines[2] == "True"  # stdin was /dev/null: empty read
+    assert result.termination_confirmed is True
+
+
+@requires_real_containment
+def test_contained_child_reports_its_own_cgroup_path(delegated_parent: str) -> None:
+    result = run_bounded_posix_process(
+        [PY, "-c", "print(open('/proc/self/cgroup').read(), end='')"],
+        containment=_containment(delegated_parent),
+    )
+    expected_suffix = os.path.basename(result.invocation_cgroup_path)
+    assert result.stdout_text.strip().endswith(expected_suffix)
+    assert "0::/" in result.stdout_text
+
+
+@requires_real_containment
+def test_contained_deterministic_exec_failure_does_not_hang(delegated_parent: str) -> None:
+    started = time.monotonic()
+    result = run_bounded_posix_process(
+        ["/no/such/binary-adapter-test"],
+        timeout_seconds=5.0,
+        containment=_containment(delegated_parent),
+    )
+    elapsed = time.monotonic() - started
+    assert elapsed < 5.0
+    assert result.exec_failure_phase == "execve"
+    assert result.exec_failure_errno == 2
+
+
+@requires_real_containment
+def test_contained_child_and_grandchild_success(delegated_parent: str) -> None:
+    script = (
+        "import os\n"
+        "pid = os.fork()\n"
+        "if pid == 0:\n"
+        "    os._exit(0)\n"
+        "else:\n"
+        "    os.waitpid(pid, 0)\n"
+        "    print('parent-and-child-done')\n"
+    )
+    result = run_bounded_posix_process(
+        [PY, "-c", script], containment=_containment(delegated_parent)
+    )
+    assert "parent-and-child-done" in result.stdout_text
+    assert result.termination_confirmed is True
+
+
+@requires_real_containment
+def test_contained_surviving_descendant_still_proven_and_cleaned_up(delegated_parent: str) -> None:
+    # The direct child ignores SIGTERM and forks a grandchild that also
+    # ignores SIGTERM and outlives it; containment must still prove/clean
+    # up the whole subtree via cgroup.kill, not just the direct child.
+    script = (
+        "import signal, os, time, sys\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "pid = os.fork()\n"
+        "if pid == 0:\n"
+        "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "    time.sleep(30)\n"
+        "    os._exit(0)\n"
+        "else:\n"
+        "    print(pid)\n"
+        "    sys.stdout.flush()\n"
+        "    time.sleep(30)\n"
+    )
+    result = run_bounded_posix_process(
+        [PY, "-c", script],
+        timeout_seconds=0.3,
+        grace_period_seconds=0.5,
+        containment=_containment(delegated_parent),
+    )
+    assert result.timeout_observed is True
+    assert result.signal_dispatched == "SIGTERM"
+    assert result.cgroup_kill_dispatched is True
+    assert result.termination_confirmed is True
+    assert result.populated_confirmed_clear is True
+    assert result.cleanup_confirmed is True
+
+
+@requires_real_containment
+def test_contained_process_group_escape_via_setsid_still_contained(delegated_parent: str) -> None:
+    # The child calls setsid() to leave its process group; process-group
+    # SIGTERM will not reach it, so termination must fall through to
+    # cgroup.kill and still prove/clean up the whole subtree.
+    # The clone3 launcher already made this child its own session/group
+    # leader (matching subprocess's start_new_session=True); a second
+    # setsid() call here is the child's own escape attempt and normally
+    # fails with EPERM precisely because it is already a leader -- which
+    # is itself evidence the escape did not create a second, signal-blind
+    # process group. Either way SIGTERM is ignored, so containment must
+    # still fall through to cgroup.kill.
+    script = (
+        "import os, signal, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "try:\n"
+        "    os.setsid()\n"
+        "except OSError:\n"
+        "    pass\n"
+        "time.sleep(30)\n"
+    )
+    result = run_bounded_posix_process(
+        [PY, "-c", script],
+        timeout_seconds=0.3,
+        grace_period_seconds=0.5,
+        containment=_containment(delegated_parent),
+    )
+    assert result.timeout_observed is True
+    assert result.cgroup_kill_dispatched is True
+    assert result.termination_confirmed is True
+    assert result.populated_confirmed_clear is True
+    assert result.cleanup_confirmed is True
+
+
+@requires_real_containment
+def test_contained_descendant_holding_pipe_open_does_not_hang_drain(delegated_parent: str) -> None:
+    script = (
+        "import os, sys, time\n"
+        "pid = os.fork()\n"
+        "if pid == 0:\n"
+        "    time.sleep(30)\n"  # keeps stdout fd open long after the parent exits
+        "    os._exit(0)\n"
+        "else:\n"
+        "    print('parent-done')\n"
+    )
+    started = time.monotonic()
+    result = run_bounded_posix_process(
+        [PY, "-c", script],
+        timeout_seconds=2.0,
+        grace_period_seconds=0.3,
+        containment=_containment(delegated_parent),
+    )
+    elapsed = time.monotonic() - started
+    assert elapsed < 10.0
+    assert "parent-done" in result.stdout_text
+
+
+@requires_real_containment
+def test_contained_exactly_one_spawn_no_retry(delegated_parent: str) -> None:
+    marker = str(uuid.uuid4())
+    script = f"print('{marker}')"
+    result = run_bounded_posix_process([PY, "-c", script], containment=_containment(delegated_parent))
+    assert result.stdout_text.count(marker) == 1
+
+
+@requires_real_containment
+def test_contained_pid_reuse_diagnostics_are_distinct_across_runs(delegated_parent: str) -> None:
+    result_a = run_bounded_posix_process(
+        [PY, "-c", "print(1)"], containment=_containment(delegated_parent)
+    )
+    result_b = run_bounded_posix_process(
+        [PY, "-c", "print(2)"], containment=_containment(delegated_parent)
+    )
+    assert result_a.pid is not None
+    assert result_b.pid is not None
+    assert result_a.invocation_cgroup_path != result_b.invocation_cgroup_path
+
+
+def test_executor_config_threads_containment_through(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    def _fake_run(*args: object, **kwargs: object) -> object:
+        seen["containment"] = kwargs.get("containment")
+        return adapter_module.PosixProcessExecutionResult(
+            started=True,
+            timeout_observed=False,
+            cancellation_requested=False,
+            signal_dispatched=None,
+            escalation_dispatched=False,
+            child_exit_observed=True,
+            communication_completed=True,
+            return_code=0,
+            stdout_text="",
+            stdout_truncated=False,
+            stderr_text="",
+            stderr_truncated=False,
+            termination_confirmed=True,
+            possible_partial_effects=False,
+        )
+
+    monkeypatch.setattr(adapter_module, "run_bounded_posix_process", _fake_run)
+    containment = ContainmentConfig(delegated_parent_cgroup="/sys/fs/cgroup", invocation_id="x")
+    config = PosixProcessExecutorConfig(argv=(PY, "-c", "print(1)"), containment=containment)
+    executor = PosixProcessExecutor(config)
+    executor.run(_request())
+    assert seen["containment"] is containment
+
+
+def test_containment_module_exposes_no_shell_network_or_persistence_surface() -> None:
+    import inspect as _inspect
+
+    from workflow_scheduler.execution import cgroup_v2_containment as cgroup_module
+
+    source = _inspect.getsource(cgroup_module)
+    tree = ast.parse(source)
+    imported_modules: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_modules.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported_modules.append(node.module)
+    for module_name in imported_modules:
+        root = module_name.split(".")[0]
+        assert root not in _FORBIDDEN_IMPORT_ROOTS, f"forbidden import: {module_name}"

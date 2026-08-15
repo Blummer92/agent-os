@@ -348,6 +348,89 @@ results = executor.execute_many(tasks=[task1, task2], ownership_registry=registr
 - `checks_passed`: Passed checks
 - `checks_failed`: Failed checks
 
+## POSIX Process Execution
+
+### PosixProcessAdapter and WSC-AUTO1C cgroup v2 Containment
+
+`run_bounded_posix_process` (`execution/posix_process_adapter.py`) runs one
+argv sequence at most once and returns a bounded, immutable evidence
+record: exact argv/cwd/env, `stdin=/dev/null`, bounded stdout/stderr,
+timeout/cancellation, process-group `SIGTERM`, one bounded escalation, and
+`termination_confirmed` only once the child's exit and the final pipe
+drain/reap are directly observed. `PosixProcessExecutor` is the thin
+one-shot `PilotExecutor` adapter around it.
+
+An optional `containment: ContainmentConfig | None` parameter (also
+`PosixProcessExecutorConfig.containment`) adds exact per-invocation Linux
+cgroup v2 containment evidence. Omitted, behavior is exactly the pre-#759
+adapter -- this is the rollback path: drop the `containment` argument (or
+leave it unset) and the caller reverts to plain `subprocess.Popen` with no
+cgroup involvement at all.
+
+**Prerequisites**: Linux with cgroup v2 mounted (unified or hybrid
+`.../unified`), one exact delegated Agent OS parent cgroup subtree the
+caller already owns write access to, and a kernel implementing the
+`clone3()` syscall with `CLONE_INTO_CGROUP` (see `clone3(2)`, `cgroups(7)`).
+
+**Why a C extension**: a race-free way to land a child directly inside a
+target cgroup does not exist through `subprocess.Popen`/`posix_spawn` plus
+a later `cgroup.procs` migration -- the child can exec or fork before
+migration completes. `preexec_fn` is documented by CPython as unsafe in a
+threaded process. `clone3_cgroup_launcher.py` wraps the minimal
+`_clone3_cgroup` C extension (`_clone3_cgroup.c`), which calls
+`clone3(CLONE_INTO_CGROUP)` directly so the kernel creates the child
+already inside the target cgroup. Only the parent side uses the Python C
+API; the moment the syscall returns in the child, execution follows a
+narrow, pre-computed, async-signal-safe path (`dup2`, `chdir`, `setsid`,
+`execve`) with no `Py_*` call and no heap allocation, then hands off via
+`execve` or reports a bounded exec failure through a dedicated
+`O_CLOEXEC` error pipe -- never a hang. There is no fallback to the
+uncontained launch mechanism from this path.
+
+**Preflight** (`cgroup_v2_containment.preflight_check`): probes cgroup v2
+mount, delegated-parent existence, create/remove rights, native extension
+availability, `clone3()` kernel support, and `cgroup.events`/`cgroup.kill`
+accessibility -- all before any validation launch. Any failure raises
+`CgroupV2PreflightError` with zero uncontained spawn attempts; there is no
+silent fallback for that invocation.
+
+**Launch and identity**: one fresh `wsc-invocation-<id>` cgroup is created
+under the delegated parent per run and removed again at the end; no other
+cgroup path is ever read, signaled, or removed.
+
+**Escalation order**: process-group `SIGTERM` first (identical timing to
+the uncontained path), then bounded exact-scope `cgroup.kill` only if the
+grace period expires without exit -- reaching descendants that forked,
+detached via `setsid()`, or otherwise left the original process group,
+because cgroup membership (not process-group membership) is what
+containment relies on.
+
+**Recursive emptiness proof and cleanup**: `termination_confirmed` requires
+the kernel's own recursive `cgroup.events` `populated=0` proof (covering
+the invocation cgroup and every descendant, not just the direct child)
+plus confirmed `rmdir` of that now-empty cgroup. A non-empty cleanup
+attempt raises `CgroupV2NotEmptyError` and leaves the cgroup in place
+rather than force-removing it.
+
+**Unsupported host / quarantine**: on a host that fails preflight,
+containment fails closed with a typed error before any process runs --
+callers should route this to the same manual-review/quarantine path used
+for other unproven-termination cases, never a silent uncontained retry.
+
+```python
+from workflow_scheduler.execution.posix_process_adapter import (
+    ContainmentConfig, run_bounded_posix_process,
+)
+
+result = run_bounded_posix_process(
+    ["some-command"],
+    containment=ContainmentConfig(
+        delegated_parent_cgroup="/sys/fs/cgroup/agent-os-workflow-scheduler",
+        invocation_id="issue-759-attempt-1",
+    ),
+)
+```
+
 ## CLI
 
 ### WorkflowSchedulerCLI

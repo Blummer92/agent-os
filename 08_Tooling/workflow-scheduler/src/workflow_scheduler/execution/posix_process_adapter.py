@@ -17,6 +17,18 @@ Termination is only ever reported as confirmed once both the child's exit and
 the final pipe drain/reap have been directly observed. An ``ESRCH`` (process
 already gone) response to a signal is never itself treated as proof of
 termination.
+
+WSC-AUTO1C adds an additive, opt-in ``containment`` parameter. When omitted
+(the default), every existing behavior above is exactly unchanged. When a
+``ContainmentConfig`` is supplied, the child is launched directly inside one
+fresh per-invocation Linux cgroup v2 subtree via ``clone3_cgroup_launcher``
+instead of ``subprocess.Popen``, escalation adds a bounded exact-scope
+``cgroup.kill`` stage after process-group ``SIGTERM``, and
+``termination_confirmed`` additionally requires the kernel's own recursive
+``cgroup.events`` ``populated=0`` proof and confirmed removal of that empty
+invocation cgroup. A containment preflight failure fails closed before any
+process is spawned; there is no fallback to the uncontained path for that
+invocation.
 """
 
 from __future__ import annotations
@@ -29,6 +41,11 @@ import time
 from dataclasses import dataclass
 from typing import Callable, Sequence
 
+from workflow_scheduler.execution import cgroup_v2_containment
+from workflow_scheduler.execution.clone3_cgroup_launcher import (
+    Clone3LaunchRequest,
+    launch_into_cgroup,
+)
 from workflow_scheduler.execution.single_issue_pilot import (
     ExecutorOutcome,
     PilotExecutionObservation,
@@ -57,6 +74,41 @@ class PosixProcessAdapterError(ValueError):
 
 
 CancellationCheck = Callable[[], bool]
+
+DEFAULT_DESCENDANT_WAIT_SECONDS = DEFAULT_GRACE_PERIOD_SECONDS
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ContainmentConfig:
+    """Opt-in per-invocation Linux cgroup v2 containment configuration.
+
+    ``delegated_parent_cgroup`` must be the one exact delegated Agent OS
+    parent cgroup v2 subtree (never an arbitrary host path); a fresh
+    ``wsc-invocation-<invocation_id>`` child cgroup is created under it for
+    this run only, and only that one child cgroup is ever read, signaled,
+    or removed.
+    """
+
+    delegated_parent_cgroup: str
+    invocation_id: str
+    descendant_wait_seconds: float = DEFAULT_DESCENDANT_WAIT_SECONDS
+
+    def __post_init__(self) -> None:
+        if not self.delegated_parent_cgroup:
+            raise PosixProcessAdapterError(
+                "containment.delegated_parent_cgroup must be a non-empty path"
+            )
+        if not self.invocation_id:
+            raise PosixProcessAdapterError(
+                "containment.invocation_id must be a non-empty identifier"
+            )
+        if (
+            not isinstance(self.descendant_wait_seconds, (int, float))
+            or self.descendant_wait_seconds < 0
+        ):
+            raise PosixProcessAdapterError(
+                "containment.descendant_wait_seconds must not be negative"
+            )
 
 
 # --------------------------------------------------------------------------
@@ -158,6 +210,14 @@ class PosixProcessExecutionResult:
     termination_confirmed: bool
     possible_partial_effects: bool
     reason: str = ""
+    pid: int | None = None
+    contained: bool = False
+    invocation_cgroup_path: str | None = None
+    cgroup_kill_dispatched: bool = False
+    populated_confirmed_clear: bool | None = None
+    cleanup_confirmed: bool | None = None
+    exec_failure_phase: str | None = None
+    exec_failure_errno: int | None = None
 
 
 def _signal_group(process: "subprocess.Popen[bytes]", sig: signal.Signals) -> str | None:
@@ -224,6 +284,7 @@ def run_bounded_posix_process(
     env: dict[str, str] | None = None,
     cancelled: CancellationCheck | None = None,
     poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
+    containment: ContainmentConfig | None = None,
 ) -> PosixProcessExecutionResult:
     """Run exactly one bounded POSIX process attempt and return its evidence.
 
@@ -234,6 +295,11 @@ def run_bounded_posix_process(
     always finishes the wait/reap before returning. Never reports
     termination as confirmed unless both the child's exit and the final
     drain/reap were directly observed.
+
+    ``containment`` is additive and opt-in. When ``None`` (the default),
+    everything above is exactly the pre-#759 behavior. When supplied, see
+    the module docstring and ``_run_bounded_posix_process_contained`` for
+    the cgroup v2 containment path.
     """
     _require_posix()
     validated_argv = _validate_argv(argv)
@@ -243,6 +309,19 @@ def run_bounded_posix_process(
         raise PosixProcessAdapterError("grace_period_seconds must not be negative")
     if not isinstance(max_output_bytes, int) or max_output_bytes <= 0:
         raise PosixProcessAdapterError("max_output_bytes must be a positive integer")
+
+    if containment is not None:
+        return _run_bounded_posix_process_contained(
+            validated_argv,
+            timeout_seconds=timeout_seconds,
+            grace_period_seconds=grace_period_seconds,
+            max_output_bytes=max_output_bytes,
+            cwd=cwd,
+            env=env,
+            cancelled=cancelled,
+            poll_interval_seconds=poll_interval_seconds,
+            containment=containment,
+        )
 
     process: subprocess.Popen[bytes] = subprocess.Popen(  # noqa: S603 - argv validated above
         list(validated_argv),
@@ -335,6 +414,7 @@ def run_bounded_posix_process(
         termination_confirmed=termination_confirmed,
         possible_partial_effects=possible_partial_effects,
         reason=reason,
+        pid=process.pid,
     )
 
 
@@ -359,6 +439,280 @@ def _bounded_reason(
 
 
 # --------------------------------------------------------------------------
+# Optional cgroup v2 containment path (WSC-AUTO1C)
+# --------------------------------------------------------------------------
+
+
+def _decode_wait_status(status: int) -> int | None:
+    """Mirror ``subprocess``'s return-code sign convention for a raw wait status."""
+    if os.WIFSIGNALED(status):
+        return -os.WTERMSIG(status)
+    if os.WIFEXITED(status):
+        return os.WEXITSTATUS(status)
+    return None
+
+
+class _ClonedProcessHandle:
+    """Duck-types just enough of ``subprocess.Popen`` for ``_signal_group``/``_drain_until``.
+
+    Backs a pid that was created by ``clone3(CLONE_INTO_CGROUP)`` rather
+    than ``subprocess.Popen``, so both helpers can be reused verbatim for
+    the contained launch path instead of duplicating their polling logic.
+    """
+
+    __slots__ = ("pid", "_returncode")
+
+    def __init__(self, pid: int) -> None:
+        self.pid = pid
+        self._returncode: int | None = None
+
+    def poll(self) -> int | None:
+        if self._returncode is not None:
+            return self._returncode
+        try:
+            reaped_pid, status = os.waitpid(self.pid, os.WNOHANG)
+        except ChildProcessError:
+            return self._returncode
+        if reaped_pid == 0:
+            return None
+        self._returncode = _decode_wait_status(status)
+        return self._returncode
+
+    def wait(self, timeout: float | None = None) -> int:
+        if self._returncode is not None:
+            return self._returncode
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            return_code = self.poll()
+            if return_code is not None:
+                return return_code
+            if deadline is not None and time.monotonic() >= deadline:
+                raise subprocess.TimeoutExpired(cmd=["<contained>"], timeout=timeout)
+            time.sleep(0.005)
+
+
+def _bounded_reason_contained(
+    *,
+    return_code: int | None,
+    timeout_observed: bool,
+    cancellation_requested: bool,
+    signal_dispatched: str | None,
+    cgroup_kill_dispatched: bool,
+    populated_confirmed_clear: bool | None,
+    cleanup_confirmed: bool | None,
+    exec_failure_phase: str | None,
+    exec_failure_errno: int | None,
+) -> str:
+    text = (
+        f"return_code={return_code} timeout_observed={timeout_observed} "
+        f"cancellation_requested={cancellation_requested} "
+        f"signal_dispatched={signal_dispatched} "
+        f"cgroup_kill_dispatched={cgroup_kill_dispatched} "
+        f"populated_confirmed_clear={populated_confirmed_clear} "
+        f"cleanup_confirmed={cleanup_confirmed} "
+        f"exec_failure_phase={exec_failure_phase} exec_failure_errno={exec_failure_errno}"
+    )
+    return text[:MAX_REASON_LENGTH]
+
+
+def _run_bounded_posix_process_contained(
+    validated_argv: tuple[str, ...],
+    *,
+    timeout_seconds: float,
+    grace_period_seconds: float,
+    max_output_bytes: int,
+    cwd: str | None,
+    env: dict[str, str] | None,
+    cancelled: CancellationCheck | None,
+    poll_interval_seconds: float,
+    containment: ContainmentConfig,
+) -> PosixProcessExecutionResult:
+    """The WSC-AUTO1C cgroup v2 containment launch/escalation/evidence path.
+
+    Preflight runs first and fails closed (raises) before any process is
+    spawned. Escalation on timeout/cancellation is process-group ``SIGTERM``
+    first (identical timing/logic to the uncontained path), then bounded
+    exact-scope ``cgroup.kill`` only if the grace period expires without
+    exit. ``termination_confirmed`` additionally requires the kernel's own
+    recursive ``cgroup.events`` ``populated=0`` proof and confirmed removal
+    of the invocation cgroup.
+    """
+    preflight = cgroup_v2_containment.preflight_check(containment.delegated_parent_cgroup)
+    if not preflight.supported:
+        raise cgroup_v2_containment.CgroupV2PreflightError(
+            f"cgroup v2 containment preflight failed: {preflight.reason}"
+        )
+
+    inv_cgroup = cgroup_v2_containment.InvocationCgroup.create(
+        containment.delegated_parent_cgroup, containment.invocation_id
+    )
+
+    devnull_fd = os.open(os.devnull, os.O_RDONLY)
+    stdout_r_fd, stdout_w_fd = os.pipe()
+    stderr_r_fd, stderr_w_fd = os.pipe()
+
+    stdout_buf = _BoundedBuffer(max_output_bytes)
+    stderr_buf = _BoundedBuffer(max_output_bytes)
+
+    env_for_launch = None if env is None else dict(env)
+
+    started = False
+    handle: _ClonedProcessHandle | None = None
+    exec_failed = False
+    exec_failure_phase: str | None = None
+    exec_failure_errno: int | None = None
+    selector = selectors.DefaultSelector()
+    stdout_stream = None
+    stderr_stream = None
+
+    timeout_observed = False
+    cancellation_requested = False
+    signal_dispatched: str | None = None
+    cgroup_kill_dispatched = False
+    child_exit_observed = False
+    communication_completed = False
+    return_code: int | None = None
+    populated_confirmed_clear: bool | None = None
+    cleanup_confirmed: bool | None = None
+
+    try:
+        outcome = launch_into_cgroup(
+            Clone3LaunchRequest(
+                argv=validated_argv,
+                cwd=cwd,
+                env=env_for_launch,
+                cgroup_fd=inv_cgroup.fd,
+                stdin_fd=devnull_fd,
+                stdout_fd=stdout_w_fd,
+                stderr_fd=stderr_w_fd,
+            )
+        )
+        started = True
+        handle = _ClonedProcessHandle(outcome.pid)
+        exec_failed = outcome.exec_failed
+        exec_failure_phase = outcome.exec_failure_phase
+        exec_failure_errno = outcome.exec_failure_errno
+    finally:
+        os.close(devnull_fd)
+        os.close(stdout_w_fd)
+        os.close(stderr_w_fd)
+
+    try:
+        stdout_stream = os.fdopen(stdout_r_fd, "rb")
+        stderr_stream = os.fdopen(stderr_r_fd, "rb")
+        os.set_blocking(stdout_stream.fileno(), False)
+        os.set_blocking(stderr_stream.fileno(), False)
+        selector.register(stdout_stream, selectors.EVENT_READ, stdout_buf)
+        selector.register(stderr_stream, selectors.EVENT_READ, stderr_buf)
+        open_streams = {stdout_stream, stderr_stream}
+
+        try:
+            deadline = time.monotonic() + timeout_seconds
+            timeout_observed, cancellation_requested, exited = _drain_until(
+                handle, selector, open_streams, deadline, cancelled, poll_interval_seconds
+            )
+            child_exit_observed = exited
+
+            if not exited and (timeout_observed or cancellation_requested):
+                signal_dispatched = _signal_group(handle, signal.SIGTERM)
+                grace_deadline = time.monotonic() + grace_period_seconds
+                _, _, exited_after_term = _drain_until(
+                    handle, selector, open_streams, grace_deadline, None, poll_interval_seconds
+                )
+                child_exit_observed = exited_after_term
+
+                if not exited_after_term:
+                    try:
+                        inv_cgroup.kill()
+                        cgroup_kill_dispatched = True
+                    except cgroup_v2_containment.CgroupV2ContainmentError:
+                        cgroup_kill_dispatched = False
+                    kill_deadline = time.monotonic() + grace_period_seconds
+                    _, _, exited_after_kill = _drain_until(
+                        handle, selector, open_streams, kill_deadline, None, poll_interval_seconds
+                    )
+                    child_exit_observed = exited_after_kill
+        finally:
+            selector.close()
+
+        if child_exit_observed or handle.poll() is not None:
+            try:
+                return_code = handle.wait(timeout=max(grace_period_seconds, 0.1))
+                communication_completed = True
+            except subprocess.TimeoutExpired:
+                communication_completed = False
+
+        if child_exit_observed:
+            populated_confirmed_clear = inv_cgroup.wait_until_empty(
+                deadline_seconds=containment.descendant_wait_seconds
+            )
+            if populated_confirmed_clear:
+                try:
+                    cleanup_confirmed = inv_cgroup.cleanup()
+                except cgroup_v2_containment.CgroupV2ContainmentError:
+                    cleanup_confirmed = False
+            else:
+                cleanup_confirmed = False
+    finally:
+        if stdout_stream is not None:
+            stdout_stream.close()
+        else:
+            os.close(stdout_r_fd)
+        if stderr_stream is not None:
+            stderr_stream.close()
+        else:
+            os.close(stderr_r_fd)
+        inv_cgroup.close()
+
+    termination_confirmed = bool(
+        child_exit_observed
+        and communication_completed
+        and return_code is not None
+        and populated_confirmed_clear
+        and cleanup_confirmed
+    )
+    possible_partial_effects = not termination_confirmed
+
+    reason = _bounded_reason_contained(
+        return_code=return_code,
+        timeout_observed=timeout_observed,
+        cancellation_requested=cancellation_requested,
+        signal_dispatched=signal_dispatched,
+        cgroup_kill_dispatched=cgroup_kill_dispatched,
+        populated_confirmed_clear=populated_confirmed_clear,
+        cleanup_confirmed=cleanup_confirmed,
+        exec_failure_phase=exec_failure_phase,
+        exec_failure_errno=exec_failure_errno,
+    )
+
+    return PosixProcessExecutionResult(
+        started=started,
+        timeout_observed=timeout_observed,
+        cancellation_requested=cancellation_requested,
+        signal_dispatched=signal_dispatched,
+        escalation_dispatched=cgroup_kill_dispatched,
+        child_exit_observed=child_exit_observed,
+        communication_completed=communication_completed,
+        return_code=return_code,
+        stdout_text=stdout_buf.text(),
+        stdout_truncated=stdout_buf.truncated,
+        stderr_text=stderr_buf.text(),
+        stderr_truncated=stderr_buf.truncated,
+        termination_confirmed=termination_confirmed,
+        possible_partial_effects=possible_partial_effects,
+        reason=reason,
+        pid=handle.pid if handle is not None else None,
+        contained=True,
+        invocation_cgroup_path=inv_cgroup.path,
+        cgroup_kill_dispatched=cgroup_kill_dispatched,
+        populated_confirmed_clear=populated_confirmed_clear,
+        cleanup_confirmed=cleanup_confirmed,
+        exec_failure_phase=exec_failure_phase,
+        exec_failure_errno=exec_failure_errno,
+    )
+
+
+# --------------------------------------------------------------------------
 # PilotExecutor-conformant, one-shot adapter
 # --------------------------------------------------------------------------
 
@@ -373,6 +727,7 @@ class PosixProcessExecutorConfig:
     max_output_bytes: int = MAX_OUTPUT_BYTES
     cwd: str | None = None
     env: dict[str, str] | None = None
+    containment: ContainmentConfig | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "argv", _validate_argv(self.argv))
@@ -433,6 +788,7 @@ class PosixProcessExecutor:
             cwd=self._config.cwd,
             env=self._config.env,
             cancelled=self._cancelled,
+            containment=self._config.containment,
         )
         self.last_result = result
         return _to_pilot_execution_observation(result)
