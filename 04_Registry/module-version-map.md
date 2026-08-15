@@ -27,7 +27,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 | Agent Memory & Context Budget Manager | 0.1.0 |
 | IA4D-to-Scheduler Handoff Contract | 0.2.0 |
 | GitHub Issue Lifecycle Standard | 0.2.0 |
-| Safe Implementation Lane | 0.4.0 |
+| Safe Implementation Lane | 0.5.0 |
 | Agent OS Execution Service | 0.6.0 |
 | Artifact-First Response Standard | 0.1.0 |
 | Teacher Decision Studio Standard | 0.1.0 |
@@ -41,6 +41,8 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 **Global Engineering** `0.4.0` adds the Pattern + Docs Freshness Gate to repository implementation final reports and GitHub Change Request handoffs while preserving Agent Interaction Output Standard ownership of report fields and presentation order (#998; planned in #928, PR #929).
 
 **Agent Interaction Output Standard** `0.2.0` adds compact state-based operator rendering for implementation and PR review (#1081): bounded stage bars without invented percentages, canonical `Completed` / `Current` / `Remaining` / `Blockers` evidence labels, material-only `Best execution`, supported `Next`, and smallest-context delivery; no new progress state or authority.
+
+**Safe Implementation Lane** `0.5.0` composes existing #895 checkpoint/resume and #758 lease evidence into resumable authorized work, distinguishes same-branch `HEAD_ADVANCED` from #1187 base-behind refresh, and requires current replacement evidence before cancelled stale-head validation is treated as superseded (#1188). It creates no retry, lease takeover, merge, closure, or external-write authority.
 
 **Notion Standards** `0.4.0` defines the canonical Draft Mode, Append-Only Safe Log Mode, and Canonical Update Mode write-safety vocabulary in `notion-record-update-safety.md` (#1103). Mode classification never creates authority; existing write authorization remains canonical in `00_Governance/write-authorization-policy.md`.
 
