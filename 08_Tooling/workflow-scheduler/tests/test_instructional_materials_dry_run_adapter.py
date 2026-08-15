@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 import workflow_scheduler.adapters.instructional_materials_dry_run_adapter as adapter_module
+import workflow_scheduler.adapters.registry as registry_module
 from workflow_scheduler.adapters import InstructionalMaterialsDryRunAdapter
 from workflow_scheduler.adapters.instructional_materials_contract import (
     validate_instructional_materials_contract,
@@ -76,6 +77,10 @@ def test_adapter_opts_into_execution_request_and_delegates_result_unchanged(monk
     assert adapter.accepts_execution_request is True
     assert adapter.execute(execution_request) is sentinel
     assert seen == [execution_request]
+
+
+def test_adapter_is_exported_but_not_runtime_registered():
+    assert InstructionalMaterialsDryRunAdapter not in registry_module._REGISTRY.values()
 
 
 def test_valid_result_matches_c3a_and_preserves_request_state():
