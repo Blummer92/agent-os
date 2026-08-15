@@ -46,6 +46,7 @@ from .image_intent import (
     validate_image_intent,
     validate_imported_asset_context,
 )
+from .picture_perfect_combination import apply_combined_modeling_decision
 from .picture_perfect_integration import (
     MODELING_DISPOSITIONS,
     RJ_EVIDENCE_STATES,
@@ -102,6 +103,7 @@ __all__ = [
     "ValidatedRecord",
     "ValidationResult",
     "ValidationStatus",
+    "apply_combined_modeling_decision",
     "apply_modeling_decision",
     "assemble_gemini_manual_prompt",
     "build_image_intent",
