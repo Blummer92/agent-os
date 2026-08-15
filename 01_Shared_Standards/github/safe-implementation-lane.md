@@ -35,6 +35,12 @@ ownership. Already-authorized tests, docs, in-scope repair, exact-head validatio
 Draft PR maintenance, and Ready-for-Review may continue without a new user prompt.
 Conversation continuity, including `continue`, `next step`, or `keep going`, never
 authorizes a previously excluded surface.
+## Execution Continuation
+For a currently authorized Safe Implementation Lane issue, discovery of one existing valid issue-linked branch, Draft PR, or checkpoint lineage is normally a resume target, not a stop condition. Reacquire current repository, authorization, scope, ownership, checkpoint, exact-head, and canonical Scheduler lease evidence; consume the existing `ResumePlan`; and continue from the newest valid checkpoint when no active conflict exists.
+
+An existing active Scheduler lease is the concurrency authority. Do not create a competing branch, PR, execution, or lease; do not steal, force-release, expire by age, or automatically retry an active or ambiguous lease. When the same authorized branch advances from SHA A to SHA B, reacquire B, inspect the head change, rebind current exact-head evidence, invalidate only the head-bound evidence required by existing contracts, and continue when authorization, ownership, and bounded scope remain valid. If `main` advanced and the PR branch is behind, route to the separately governed branch-refresh path rather than treating base drift as ordinary `HEAD_ADVANCED`.
+
+Cancelled validation on stale SHA A may be projected as `SUPERSEDED_BY_NEW_HEAD` only when bounded evidence proves the old run was cancelled, the current PR head is different SHA B, a newer run/check for B exists in the same validation lane/concurrency group, and replacement/supersession evidence is current. A genuine test or configuration failure on A remains genuine failure evidence. Only validation bound to the current exact head may satisfy Ready-for-Review.
 ## Validation Loop
 Follow the canonical focused-local and authoritative exact-head aggregate policy in
 `01_Shared_Standards/global-engineering/testing-and-release.md`.
@@ -83,8 +89,9 @@ risks, rollback, and confirmation that merge and excluded surfaces remain
 unauthorized. Prefer one consolidated user-facing result for routine internal
 routing while preserving required handoff artifacts for owners and auditability.
 ## Version
-0.4.0
+0.5.0
 ## Changelog
+- 0.5.0 makes existing authorized branch/PR/checkpoint lineage resumable through the canonical #895 ResumePlan and #758 Scheduler lease, separates same-branch `HEAD_ADVANCED` from #1187 base-behind refresh, and requires bounded proof before cancelled stale-head validation is classified as superseded (#1188).
 - 0.4.0 requires issue-defined developer-loop validation on a capable route before Draft PR creation while preserving one final exact-head aggregate (#1077).
 - 0.3.0 adds the focused-local -> authoritative exact-head aggregate validation loop without weakening final validation.
 - 0.2.0 adds continuous internal routing and consolidated reporting for already-authorized Safe Lane work.
