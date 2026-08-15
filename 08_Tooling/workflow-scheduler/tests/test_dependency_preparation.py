@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
+from types import SimpleNamespace
 
 from scripts.agent_os_execution_capabilities.dependencies import (
     DependencyArtifactIdentity,
@@ -11,6 +13,11 @@ from scripts.agent_os_execution_capabilities.dependencies import (
     LocalProjectRequirement,
     QualificationOnlyDependencyPin,
     RequiredEnvironmentSpec,
+)
+from workflow_scheduler.execution import single_issue_runtime as runtime_module
+from workflow_scheduler.execution.concrete_runtime_adapters import (
+    ConcreteDependencyObservationProvider,
+    ConcreteDependencyPreparationInputs,
 )
 from workflow_scheduler.execution.dependency_preparation import (
     BoundDependencyPreparationAdapter,
@@ -373,3 +380,92 @@ def test_bound_adapter_allows_initial_check_plus_one_changed_input_recheck() -> 
         assert "initial readiness and one changed-input recheck" in str(exc)
     else:
         raise AssertionError("third preparation call must fail closed")
+
+
+def test_concrete_observer_verifies_workspace_manifest_and_lock_hashes(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    package = workspace / "app"
+    package.mkdir(parents=True)
+    manifest = package / "package.json"
+    lock = package / "package-lock.json"
+    manifest.write_text('{"name":"app"}\n', encoding="utf-8")
+    lock.write_text('{"lockfileVersion":3}\n', encoding="utf-8")
+    manifest_sha = hashlib.sha256(manifest.read_bytes()).hexdigest()
+    lock_sha = hashlib.sha256(lock.read_bytes()).hexdigest()
+    spec = RequiredEnvironmentSpec(
+        ecosystem=DependencyEcosystem.NODE_NPM,
+        package_root="app",
+        runtime_requirement=">=20.19.0",
+        dependency_manifest_identity=artifact("app/package.json", manifest_sha),
+        lock_or_constraints_identity=artifact("app/package-lock.json", lock_sha),
+        install_mode=DependencyInstallMode.NORMAL,
+        approved_source_identity="registry.npmjs.org",
+        required_validation_command_ids=("npm-test",),
+    )
+    inputs = ConcreteDependencyPreparationInputs(
+        execution_surface_id="surface:1",
+        environment_health_evidence_id="health:1",
+        runtime_version="22.16.0",
+        runtime_compatible=True,
+        package_manager_version="10.9.2",
+        observed_source_identity="registry.npmjs.org",
+        source_reachable=True,
+        package_available=True,
+        cache_state=DependencyCacheState.NOT_APPLICABLE,
+        expires_at="2026-08-15T21:00:00Z",
+    )
+    provider = ConcreteDependencyObservationProvider(
+        SimpleNamespace(executor_cwd=str(workspace), source_head_sha=HEAD),
+        spec,
+        inputs,
+    )
+    first = provider.observe(
+        workspace_identity="workspace:1", existing_ready_evidence=None
+    )
+    assert first.manifest_matches is True
+    assert first.lock_matches is True
+    assert first.execution_surface_id == "surface:1"
+    assert first.environment_health_evidence_id == "health:1"
+    lock.write_text('{"lockfileVersion":2}\n', encoding="utf-8")
+    second = provider.observe(
+        workspace_identity="workspace:1", existing_ready_evidence=None
+    )
+    assert second.lock_matches is False
+
+
+def test_runtime_wrappers_refuse_executor_and_validator_before_ready() -> None:
+    class Executor:
+        calls = 0
+
+        def run(self, request):
+            self.calls += 1
+            raise AssertionError("executor must not be delegated before READY")
+
+    class Validator:
+        calls = 0
+
+        def validate(self, request):
+            self.calls += 1
+            raise AssertionError("validator must not be delegated before READY")
+
+    gate = SimpleNamespace(
+        ready=False,
+        recheck_required=False,
+        blocker_summary="dependency-readiness:blocked",
+        note_executor_changes=lambda changed_paths: None,
+    )
+    executor = Executor()
+    validator = Validator()
+    wrapped_executor = runtime_module._DependencyReadyExecutor(executor, gate)
+    wrapped_validator = runtime_module._DependencyReadyValidator(validator, gate)
+    try:
+        wrapped_executor.run(object())
+    except RuntimeError as exc:
+        assert "READY dependency evidence" in str(exc)
+    else:
+        raise AssertionError("executor dispatch must fail closed")
+    validation = wrapped_validator.validate(SimpleNamespace(workspace_identity="workspace:1"))
+    assert validation.attempted is False
+    assert validation.passed is False
+    assert executor.calls == 0
+    assert validator.calls == 0
