@@ -246,7 +246,13 @@ def _usable_string_list(value: object) -> bool:
     return _string_list(value) and all(_bounded_text(item) for item in value)
 
 
-def _valid_rule_map(rules: object) -> bool:
+def _valid_focused_rule_map(rules: object) -> bool:
+    """Validate rule-map structure, independent of command-coverage metadata.
+
+    Pre-PR planning never applies subsumption (frozen command bindings stay
+    exact), so its rule-map validity must not depend on `command_coverage`
+    remaining in sync with whatever focused-rule commands a caller supplies.
+    """
     if not isinstance(rules, dict):
         return False
     if not isinstance(rules.get("selector_version"), str):
@@ -282,6 +288,105 @@ def _valid_rule_map(rules: object) -> bool:
         if not _string_list(rule.get("commands")):
             return False
     return True
+
+
+def _valid_rule_map(rules: object) -> bool:
+    """Validate rule-map structure plus command-coverage metadata.
+
+    Used only by positive-PR selection, which is the sole consumer of
+    coverage-driven subsumption.
+    """
+    if not _valid_focused_rule_map(rules):
+        return False
+    if not _valid_command_coverage(
+        rules.get("command_coverage", []), rules["focused_rules"]
+    ):
+        return False
+    return True
+
+
+def _registered_commands(focused_rules: list[Any]) -> set[str]:
+    registered: set[str] = set()
+    for rule in focused_rules:
+        registered.update(rule.get("commands", []))
+    return registered
+
+
+def _valid_command_coverage(coverage: object, focused_rules: list[Any]) -> bool:
+    """Validate explicit coverage declarations fail-closed; no inference allowed.
+
+    Rejects duplicate declarations, unknown commands, self-subsumption,
+    cycles, malformed command lists, and ambiguous conflicting coverage
+    (a narrow command claimed by more than one broader command).
+    """
+    if not isinstance(coverage, list):
+        return False
+    registered = _registered_commands(focused_rules)
+    declared_broader: set[str] = set()
+    narrow_to_broader: dict[str, str] = {}
+    for entry in coverage:
+        if not isinstance(entry, dict):
+            return False
+        broader = entry.get("broader")
+        subsumes = entry.get("subsumes")
+        if not isinstance(broader, str) or broader not in registered:
+            return False
+        if not _string_list(subsumes) or not subsumes:
+            return False
+        if broader in declared_broader:
+            return False
+        declared_broader.add(broader)
+        seen_in_entry: set[str] = set()
+        for narrow in subsumes:
+            if narrow not in registered:
+                return False
+            if narrow == broader:
+                return False
+            if narrow in seen_in_entry:
+                return False
+            seen_in_entry.add(narrow)
+            if narrow in narrow_to_broader:
+                return False
+            narrow_to_broader[narrow] = broader
+    for start in narrow_to_broader:
+        current = start
+        visited: set[str] = set()
+        while current in narrow_to_broader:
+            current = narrow_to_broader[current]
+            if current == start or current in visited:
+                return False
+            visited.add(current)
+    return True
+
+
+def _coverage_map(rules: dict[str, Any]) -> dict[str, str]:
+    """Return the validated narrow-command -> broader-command coverage map."""
+    narrow_to_broader: dict[str, str] = {}
+    for entry in rules.get("command_coverage", []):
+        broader = entry["broader"]
+        for narrow in entry["subsumes"]:
+            narrow_to_broader[narrow] = broader
+    return narrow_to_broader
+
+
+def _apply_subsumption(
+    commands: tuple[str, ...], narrow_to_broader: dict[str, str]
+) -> tuple[str, ...]:
+    """Suppress commands whose declared broader command is also selected.
+
+    Pure and deterministic: the result of this fixed-point closure does not
+    depend on dict iteration order, since removing a covered command never
+    changes whether another command's declared broader command is present.
+    """
+    remaining = set(commands)
+    changed = True
+    while changed:
+        changed = False
+        for narrow, broader in narrow_to_broader.items():
+            if narrow in remaining and broader in remaining:
+                remaining.discard(narrow)
+                changed = True
+    return tuple(sorted(remaining))
 
 
 def _focused_matches(
@@ -371,7 +476,9 @@ def select_validation_plan(
             matched_rules.update(name for name, _ in path_matches)
             matched_commands.extend(path_matches[0][1])
     if matched_commands and len(covered) == len(paths):
-        commands = tuple(sorted(set(matched_commands)))
+        commands = _apply_subsumption(
+            tuple(sorted(set(matched_commands))), _coverage_map(rules)
+        )
         reason = (
             "profile.focused-package"
             if len(matched_rules) == 1
@@ -466,7 +573,7 @@ def select_pre_pr_validation_plan(
     instead of degrading to a manual-review plan.
     """
     value = _verify_pre_pr_subject(subject)
-    if not _valid_rule_map(rules):
+    if not _valid_focused_rule_map(rules):
         raise ValueError("pre-PR rule map is not usable")
     selector_version = rules["selector_version"]
     if not _SELECTOR_VERSION.fullmatch(selector_version):
