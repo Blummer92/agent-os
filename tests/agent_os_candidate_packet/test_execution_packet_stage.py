@@ -185,6 +185,7 @@ def test_conflicting_allowed_and_forbidden_paths_fail_closed(tmp_path) -> None:
     conflicting_projection = replace(
         approved.projection,
         forbidden_paths=approved.projection.allowed_files,
+        projection_id="",
     )
     conflicting_projection_result = ApprovedExecutionProjectionResult(
         "complete", conflicting_projection, (), ()
