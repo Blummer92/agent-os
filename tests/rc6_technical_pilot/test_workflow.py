@@ -30,7 +30,7 @@ def test_workflow_preflights_then_runs_focused_tests_and_pilot():
     assert "--preflight-only" in text
     assert "pytest -q runner-source/tests/rc6_technical_pilot" in text
     assert "runner-source/scripts/agent_os_rc6_technical_pilot.py" in text
-    assert "actions/upload-artifact@v6" in text
+    assert "actions/upload-artifact@v7" in text
     assert "rc6-technical-pilot.json" in text
     assert "rc6-technical-pilot.md" in text
     assert "SHA256SUMS" in text
@@ -43,7 +43,7 @@ def test_workflow_preflights_then_runs_focused_tests_and_pilot():
 
 def test_workflow_uses_separate_verified_runner_and_frozen_checkouts():
     text = _text()
-    assert text.count("uses: actions/checkout@v5") == 2
+    assert text.count("uses: actions/checkout@v7") == 2
     assert "ref: ${{ github.sha }}" in text
     assert "path: runner-source" in text
     assert "ref: ${{ inputs.frozen_sha }}" in text

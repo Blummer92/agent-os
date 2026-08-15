@@ -31,6 +31,29 @@ Construction, serialization, reconstruction, and admission verification perform 
 
 Accepted requests, plans, routes, handoffs, and #757 admissions are evidence only; they do not authorize edits, commands, pushes, review readiness, merge, deployment, or external mutation.
 
+## Unified validation-lifecycle evidence — Issue #761
+
+`validation_lifecycle_evidence.py` defines one immutable, content-addressed `ValidationLifecycleEvidenceBundle` and one deterministic `ValidationLifecycleResult` projection over the already-canonical lower-level evidence produced by #757 (authorized admission), #758/#759 (lease and process-tree containment, surfaced through `SingleIssuePilotResult`), #760 (`WorkspaceLifecycleEvidence`), and the existing `ExecutionCompositionResult`. It owns none of that lower-level semantics: it never re-parses Git status, never re-implements lease or termination proof, and never rewrites a lower-level status or identity. It only verifies the supplied canonical objects belong together (repository, every SHA role, invocation, request/plan/runtime fingerprints, and nested result identities) and projects one additive top-level terminal status over the verified whole.
+
+**Three dimensions stay separate**: authorization/admission truth (the #757 admission result), observed runtime/lifecycle truth (the embedded lower-level results), and evidence completeness/integrity (the bundle's `evidence_availability` ledger, using `EvidenceAvailability.{present,not-applicable,unavailable,missing-required}` instead of ambiguous `None`). Successful runtime evidence never manufactures authorization; a terminal status never implies authorization; evidence completeness never implies authorization. `side_effects_performed` is read directly from already-verified `ExecutionCompositionResult`/`SingleIssuePilotResult` observed facts, never inferred from the projected status.
+
+**Terminal statuses** (`ValidationLifecycleTerminalStatus`): `succeeded`, `validation-failed`, `blocked`, `stale`, `timed-out`, `cancelled`, `quarantined`, `cleanup-failed`, `release-failed`, `termination-uncertain`, `evidence-incomplete`. No existing lower-level status vocabulary is renamed or removed. Pre-execution `blocked`/`stale` (and admission `needs-decision`, mapped to `blocked`; admission `invalid`, mapped to `evidence-incomplete`) are decided first and stay authoritative whenever the lifecycle never validly entered execution — a bundle cannot even be constructed with post-execution evidence attached to a non-accepted admission; construction fails closed instead.
+
+For a lifecycle that was accepted into execution, exactly one frozen, documented precedence table (`POST_ADMISSION_TERMINAL_STATUS_PRECEDENCE`) decides the projection, evaluated by one pure function (`project_validation_lifecycle_result`):
+
+```
+quarantined > termination-uncertain > cleanup-failed > release-failed
+  > timed-out > cancelled > evidence-incomplete > validation-failed > succeeded
+```
+
+`succeeded` is a strict conjunction, not a default: verified admission acceptance, `execution_authorized=true`, a `completed` pilot result with confirmed lease acquisition/release, complete filesystem and Git-administrative cleanup, no cancellation/partial effects, a `passed` validation result, complete #760 initial/final workspace evidence, both the declared expected changed paths and the observed final changed paths empty, no quarantine packet, and no missing-required evidence. Any missing conjunct withholds success.
+
+**Bounds and secrets**: the canonical serialized bundle is bounded (`MAX_BUNDLE_SERIALIZED_BYTES`), reason codes and evidence-availability items are bounded and deduplicated, and #761 never truncates lower-level output a canonical lower-level object already records as bounded/truncated. Secret-like public evidence reuses the existing `workflow_scheduler.execution.quarantine_review` redaction/rejection convention rather than a second scanner, and stores opaque IDs/fingerprints instead of copied command/output prose.
+
+**Serialization/reconstruction** uses one schema version, deterministic key/list ordering, strict unknown/missing-field rejection, and a reconstruct → re-verify → recompute-identity path that reuses each nested object's own canonical constructor, serializer, and identity function wherever one exists (`serialize_authorized_validation_lifecycle_request`, `serialize_single_issue_pilot_result`/`single_issue_pilot_result_id`, `serialize_quarantine_evidence_packet`/`quarantine_evidence_packet_id`, the real `WorkspaceStateObservation`/`WorkspaceLifecycleEvidence` constructors); tampering with any embedded identity changes the recomputed `bundle_id`/`result_id` and reconstruction rejects.
+
+**Recovery interpretation**: `evidence_availability`/`reason_codes` on the projected result tell a human adopter which conjunct is missing or which lower-level fact dominated; the bundle makes no rollback, cleanup, retry, or fresh-invocation decision itself — that remains the separately governed #762 concern. Construction, projection, and (de)serialization perform no I/O, subprocess, network/provider call, filesystem write, GitHub publication, cleanup, lease release, retry, or execution.
+
 ## Executor routing — Issue #918
 
 Executable-lane selection decides what work may proceed; executor routing decides only which execution surface receives already-approved work.
@@ -63,7 +86,8 @@ From the repository root:
 ```bash
 PYTHONPATH=08_Tooling/agent-os-execution-service/src python -m pytest -q \
   08_Tooling/agent-os-execution-service/tests/test_authorized_validation.py \
-  08_Tooling/agent-os-execution-service/tests/test_executor_routing.py
+  08_Tooling/agent-os-execution-service/tests/test_executor_routing.py \
+  08_Tooling/agent-os-execution-service/tests/test_validation_lifecycle_evidence.py
 bash 07_Agent_Tests/validate-repo-structure.sh
 ./scripts/validate-all.sh
 git diff --check
@@ -71,4 +95,4 @@ git diff --check
 
 ## Rollback
 
-Revert the #757 verifier, lazy exports, focused tests, and this README section. No runtime, repository, lease, worktree, process, or external state requires cleanup.
+Revert the #757 verifier, the #761 unified evidence bundle/projection, lazy exports, focused tests, and the corresponding README sections. No runtime, repository, lease, worktree, process, or external state requires cleanup.
