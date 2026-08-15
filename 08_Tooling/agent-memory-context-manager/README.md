@@ -71,7 +71,6 @@ Prefer cached summaries over re-reading stable files, targeted grep/glob over fu
 
 ## CKR2 — Coding Knowledge Selection
 `coding_knowledge_selection.select_coding_knowledge(...)` is a pure-local, provider-neutral selector for already-normalized coding working-knowledge candidates. The caller supplies bounded task/repository signals and decides whether specialized knowledge is needed before retrieval. CKR2 performs no GitHub, Notion, filesystem, network, Scheduler, model, or provider access.
-
 Selection is deterministic: exact library match outranks ecosystem/language plus capability, which outranks exact path/keyword evidence; stable knowledge identity breaks ties. Ordinary input is capped at five candidates and at most three retained records. Currentness is finite (`current`, `stale`, `unverifiable`), and stale, unverifiable, duplicate-identity-conflicting, or authority-conflicting evidence fails closed to `manual-review`.
 
 The result exposes finite sufficiency (`not-needed`, `sufficient`, `insufficient`, `manual-review`) and caller-owned retrieval escalation (`none`, `known-reference`, `filtered-data-source-query`, `exact-narrow-lookup`, `workspace-search`, `manual-review`). `not-needed` requires no knowledge preload. Canonical GitHub references remain authoritative; CKR2 creates no authority and performs no writes or side effects.
