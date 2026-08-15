@@ -1088,3 +1088,19 @@ def test_prepare_at_most_once(repo) -> None:
     instance.prepare(request)
     with pytest.raises(RuntimeError, match="at most once"):
         instance.prepare(request)
+
+
+def test_inspect_complete_state_reuses_bound_runner_and_root(repo) -> None:
+    """Regression: #760's evidence integration reuses this adapter's own
+    GitRunner/root/env rather than constructing a second Git runner."""
+    root, parent, request = repo
+    instance, request, handle, path = created(repo)
+    initial = instance.inspect_complete_state(handle, observation_kind="initial")
+    assert initial.observation_kind == "initial"
+    assert initial.complete and initial.is_clean
+    assert initial.workspace_path == str(path)
+    (path / "scratch.txt").write_text("noise\n")
+    final = instance.inspect_complete_state(handle, observation_kind="final")
+    assert final.observation_kind == "final"
+    assert final.complete and not final.is_clean
+    assert {item.path for item in final.untracked} == {"scratch.txt"}

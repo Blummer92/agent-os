@@ -1070,6 +1070,31 @@ def test_validation_only_quarantined_cleanup_path(tmp_path: Path) -> None:
     assert git_runner.added is True
 
 
+def test_capture_workspace_state_observation_delegates_to_bound_adapter() -> None:
+    """Regression: #760's capture helper is a thin pass-through -- it adds no
+    new runner, orchestration, or runtime wiring of its own."""
+    calls: list[tuple[object, str]] = []
+
+    class _FakeWorkspace:
+        def inspect_complete_state(self, handle, *, observation_kind: str) -> str:
+            calls.append((handle, observation_kind))
+            return f"observation:{observation_kind}"
+
+    adapters = ConcreteRuntimeAdapters(
+        lease=InMemoryLeaseAdapter(),
+        workspace=_FakeWorkspace(),
+        executor=None,
+        validator=None,
+        validation_runner=None,
+    )
+    handle = object()
+    result = module.capture_workspace_state_observation(
+        adapters, handle, observation_kind="initial"
+    )
+    assert result == "observation:initial"
+    assert calls == [(handle, "initial")]
+
+
 def test_no_no_op_executor_or_second_lifecycle_in_the_adapter_layer() -> None:
     source = MODULE_PATH.read_text(encoding="utf-8")
     for forbidden_token in ("NoOpExecutor", "NullExecutor", "RetryManager"):
