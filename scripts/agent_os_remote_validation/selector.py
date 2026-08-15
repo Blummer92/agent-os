@@ -246,7 +246,13 @@ def _usable_string_list(value: object) -> bool:
     return _string_list(value) and all(_bounded_text(item) for item in value)
 
 
-def _valid_rule_map(rules: object) -> bool:
+def _valid_focused_rule_map(rules: object) -> bool:
+    """Validate rule-map structure, independent of command-coverage metadata.
+
+    Pre-PR planning never applies subsumption (frozen command bindings stay
+    exact), so its rule-map validity must not depend on `command_coverage`
+    remaining in sync with whatever focused-rule commands a caller supplies.
+    """
     if not isinstance(rules, dict):
         return False
     if not isinstance(rules.get("selector_version"), str):
@@ -281,7 +287,20 @@ def _valid_rule_map(rules: object) -> bool:
             return False
         if not _string_list(rule.get("commands")):
             return False
-    if not _valid_command_coverage(rules.get("command_coverage", []), focused_rules):
+    return True
+
+
+def _valid_rule_map(rules: object) -> bool:
+    """Validate rule-map structure plus command-coverage metadata.
+
+    Used only by positive-PR selection, which is the sole consumer of
+    coverage-driven subsumption.
+    """
+    if not _valid_focused_rule_map(rules):
+        return False
+    if not _valid_command_coverage(
+        rules.get("command_coverage", []), rules["focused_rules"]
+    ):
         return False
     return True
 
@@ -554,7 +573,7 @@ def select_pre_pr_validation_plan(
     instead of degrading to a manual-review plan.
     """
     value = _verify_pre_pr_subject(subject)
-    if not _valid_rule_map(rules):
+    if not _valid_focused_rule_map(rules):
         raise ValueError("pre-PR rule map is not usable")
     selector_version = rules["selector_version"]
     if not _SELECTOR_VERSION.fullmatch(selector_version):

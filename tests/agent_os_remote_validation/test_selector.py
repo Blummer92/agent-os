@@ -1248,6 +1248,34 @@ def test_coverage_selection_performs_no_file_io(monkeypatch: pytest.MonkeyPatch)
     assert plan.commands == (SCHEDULER_PACKAGE_COMMAND,)
 
 
+def test_pre_pr_rule_map_validity_is_independent_of_coverage_metadata() -> None:
+    """Pre-PR planning never applies subsumption, so a rule map with focused
+    commands that have drifted out of sync with `command_coverage` must still
+    be usable for pre-PR selection, even though the same map would now be
+    invalid (and fail closed) for positive-PR selection."""
+    unregistered = "python -m pytest tests/not-allowlisted.py"
+    rules = copy.deepcopy(RULES)
+    for rule in rules["focused_rules"]:
+        if rule["name"] == "workflow-scheduler-concrete-runtime-adapters":
+            rule["commands"] = [unregistered]
+
+    # Positive-PR selection still fails closed: the coverage entry now
+    # references an unregistered command.
+    plan = _select(_input([SCHEDULER_SIBLING_PATH]), rules)
+    assert plan.profile == "manual-review"
+    assert plan.reason_codes == ("rule.ambiguous",)
+
+    # Pre-PR selection is unaffected: it never consults command_coverage.
+    pre_pr_plan = select_pre_pr_validation_plan(
+        _subject(
+            allowed_files=(PILOT_PATH,),
+            required_command_identities=(unregistered,),
+        ),
+        rules,
+    )
+    assert pre_pr_plan.commands == (unregistered,)
+
+
 def test_pre_pr_frozen_binding_is_not_auto_suppressed() -> None:
     """Pre-PR command identities stay exact; coverage never widens or narrows them."""
     subject = _subject()
