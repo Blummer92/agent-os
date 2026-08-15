@@ -370,6 +370,51 @@ def _file_sha256(path: str) -> str | None:
         return None
 
 
+def _local_project_sha256(path: str) -> str | None:
+    """Hash one declared local source without following symlinks.
+
+    Files use their raw SHA-256. Directories use a canonical SHA-256 over sorted
+    directory entries and per-file SHA-256 digests so source drift is detected
+    without recording absolute paths or file contents in readiness evidence.
+    """
+    if os.path.islink(path):
+        return None
+    if os.path.isfile(path):
+        return _file_sha256(path)
+    if not os.path.isdir(path):
+        return None
+    entries: list[tuple[str, ...]] = []
+    try:
+        for root, dirnames, filenames in os.walk(path, topdown=True, followlinks=False):
+            dirnames.sort()
+            filenames.sort()
+            for dirname in dirnames:
+                full = os.path.join(root, dirname)
+                if os.path.islink(full):
+                    return None
+                relative = os.path.relpath(full, path).replace(os.sep, "/")
+                entries.append(("d", relative))
+            for filename in filenames:
+                full = os.path.join(root, filename)
+                if os.path.islink(full):
+                    return None
+                file_digest = _file_sha256(full)
+                if file_digest is None:
+                    return None
+                relative = os.path.relpath(full, path).replace(os.sep, "/")
+                entries.append(("f", relative, file_digest))
+    except OSError:
+        return None
+    canonical = json.dumps(
+        entries,
+        sort_keys=False,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
 def _workspace_file(configuration: ConcreteRuntimeConfiguration, relative_path: str) -> str:
     return os.path.join(configuration.executor_cwd, *relative_path.split("/"))
 
@@ -389,7 +434,7 @@ def _materialized_environment_present(
 
 
 class ConcreteDependencyObservationProvider(DependencyPreparationObservationProvider):
-    """Verify task manifest/lock identities against one already-created workspace."""
+    """Verify task manifest/lock/local-source identities in one created workspace."""
 
     def __init__(
         self,
@@ -422,9 +467,18 @@ class ConcreteDependencyObservationProvider(DependencyPreparationObservationProv
                 )
             )
             lock_matches = lock_sha == self._spec.lock_or_constraints_identity.sha256
+        local_projects_match = all(
+            _local_project_sha256(
+                _workspace_file(self._configuration, requirement.relative_path)
+            )
+            == requirement.sha256
+            for requirement in self._spec.local_project_requirements
+        )
         reusable = existing_ready_evidence or self._inputs.existing_ready_evidence
-        if reusable is not None and not _materialized_environment_present(
-            self._configuration, self._spec
+        if (
+            reusable is not None
+            and reusable.execution_surface_id == self._inputs.execution_surface_id
+            and not _materialized_environment_present(self._configuration, self._spec)
         ):
             reusable = None
         return DependencyPreparationObservation(
@@ -440,6 +494,7 @@ class ConcreteDependencyObservationProvider(DependencyPreparationObservationProv
                 manifest_sha == self._spec.dependency_manifest_identity.sha256
             ),
             lock_matches=lock_matches,
+            local_projects_match=local_projects_match,
             source_identity_matches=(
                 self._inputs.observed_source_identity
                 == self._spec.approved_source_identity
