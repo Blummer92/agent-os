@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import tutorialRecording from './fixtures/tutorial0-recording.json';
 import tutorialEvidence from './fixtures/tutorial0-evidence.json';
 import { App } from './App';
@@ -42,10 +42,12 @@ describe('Picture Perfect Coach shell and upload', () => {
 
     expect(await screen.findByRole('heading', { name: 'Recording loaded' })).toBeTruthy();
     const expected = summarizeEvidence(tutorialEvidence as unknown as UploadEvidenceProjection);
-    expect(screen.getByText(String(expected.actionsFound))).toBeTruthy();
-    expect(screen.getByText(String(expected.instructionalCandidates))).toBeTruthy();
-    expect(screen.getByText(String(expected.likelyNoiseRecovery))).toBeTruthy();
-    expect(screen.getByText(String(expected.needsReview))).toBeTruthy();
+    const summary = screen.getByLabelText('Recording summary');
+    const cards = within(summary).getAllByRole('article');
+    expect(cards[0]?.textContent).toContain(String(expected.actionsFound));
+    expect(cards[1]?.textContent).toContain(String(expected.instructionalCandidates));
+    expect(cards[2]?.textContent).toContain(String(expected.likelyNoiseRecovery));
+    expect(cards[3]?.textContent).toContain(String(expected.needsReview));
   });
 
   it('keeps technical evidence collapsed, sanitized, and explicit about pending RJ3/RJ4 state', async () => {
