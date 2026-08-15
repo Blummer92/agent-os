@@ -13,8 +13,10 @@ from scripts.agent_os_execution_capabilities.dependencies import (
     RequiredEnvironmentSpec,
 )
 from workflow_scheduler.execution.dependency_preparation import (
+    BoundDependencyPreparationAdapter,
     DependencyCommandObservation,
     DependencyPreparationObservation,
+    dependency_inputs_changed,
     execute_dependency_preparation,
     plan_dependency_preparation,
 )
@@ -120,7 +122,7 @@ def test_1138_qualification_pin_stays_structured_and_exact() -> None:
     assert plan.argv[-1] == "hypothesis==6.165.9"
 
 
-def test_python_offline_requires_proven_complete_bundle() -> None:
+def test_python_offline_requires_proven_complete_bundle_and_separate_location() -> None:
     blocked = plan_dependency_preparation(
         python_spec(),
         observation(
@@ -131,12 +133,23 @@ def test_python_offline_requires_proven_complete_bundle() -> None:
     )
     assert blocked.status is DependencyPreparationStatus.BLOCKED
     assert "dependency.cache-incomplete" in blocked.reason_codes
+    identity_only = plan_dependency_preparation(
+        python_spec(),
+        observation(
+            source_reachable=False,
+            cache_state=DependencyCacheState.CURRENT_COMPLETE,
+            offline_source_identity="wheelhouse:sha256-abc",
+        ),
+        evaluated_at="2026-08-15T20:00:00Z",
+    )
+    assert identity_only.status is DependencyPreparationStatus.BLOCKED
     allowed = plan_dependency_preparation(
         python_spec(),
         observation(
             source_reachable=False,
             cache_state=DependencyCacheState.CURRENT_COMPLETE,
             offline_source_identity="wheelhouse:sha256-abc",
+            offline_source_location=".agent-os/wheelhouse",
         ),
         evaluated_at="2026-08-15T20:00:00Z",
     )
@@ -148,6 +161,8 @@ def test_python_offline_requires_proven_complete_bundle() -> None:
         "--no-index",
         "--find-links",
     )
+    assert allowed.argv[6] == ".agent-os/wheelhouse"
+    assert allowed.source_identity == "wheelhouse:sha256-abc"
 
 
 def test_node_lock_uses_npm_ci_and_never_npm_install() -> None:
@@ -236,6 +251,25 @@ def test_authorized_lock_generation_returns_source_update_required_after_success
     assert evidence.reason_codes == ("dependency.source-update-required",)
 
 
+def test_missing_resolved_environment_evidence_fails_closed() -> None:
+    @dataclass
+    class Runner:
+        def run(
+            self, argv: tuple[str, ...], *, workspace_identity: str
+        ) -> DependencyCommandObservation:
+            return DependencyCommandObservation(attempted=True, succeeded=True)
+
+    evidence = execute_dependency_preparation(
+        python_spec(),
+        observation(),
+        Runner(),
+        evaluated_at="2026-08-15T20:00:00Z",
+        expires_at="2026-08-15T21:00:00Z",
+    )
+    assert evidence.preparation_status is DependencyPreparationStatus.FAILED
+    assert evidence.reason_codes == ("dependency.resolved-evidence-missing",)
+
+
 def test_missing_package_manager_or_manifest_drift_blocks_before_runner() -> None:
     assert plan_dependency_preparation(
         python_spec(),
@@ -279,3 +313,63 @@ def test_local_projects_make_editability_explicit() -> None:
         editable, observation(), evaluated_at="2026-08-15T20:00:00Z"
     )
     assert plan.argv[-2:] == ("-e", "src")
+
+
+def test_dependency_input_drift_requires_recheck_only_for_bound_inputs() -> None:
+    spec = node_spec()
+    assert dependency_inputs_changed(
+        spec,
+        (
+            "08_Tooling/instructional-materials-coach/picture-perfect-coach/package-lock.json",
+        ),
+    )
+    assert not dependency_inputs_changed(spec, ("README.md",))
+
+
+def test_bound_adapter_allows_initial_check_plus_one_changed_input_recheck() -> None:
+    spec = python_spec()
+
+    @dataclass
+    class Provider:
+        calls: int = 0
+
+        def observe(self, *, workspace_identity, existing_ready_evidence):
+            self.calls += 1
+            return observation(
+                workspace_identity=workspace_identity,
+                existing_ready_evidence=existing_ready_evidence,
+            )
+
+    @dataclass
+    class Runner:
+        calls: int = 0
+
+        def run(self, argv, *, workspace_identity):
+            self.calls += 1
+            return DependencyCommandObservation(
+                attempted=True,
+                succeeded=True,
+                resolved_dependency_identity=f"resolved:{self.calls}",
+            )
+
+    provider = Provider()
+    runner = Runner()
+    adapter = BoundDependencyPreparationAdapter(
+        spec=spec,
+        observations=provider,
+        runner=runner,
+        evaluated_at="2026-08-15T20:00:00Z",
+        expires_at="2026-08-15T21:00:00Z",
+    )
+    first = adapter.prepare(workspace_identity="workspace:1")
+    second = adapter.prepare(workspace_identity="workspace:1")
+    assert first.preparation_status is DependencyPreparationStatus.READY
+    assert second.preparation_status is DependencyPreparationStatus.READY
+    assert runner.calls == 1
+    assert provider.calls == 2
+    try:
+        adapter.prepare(workspace_identity="workspace:1")
+    except RuntimeError as exc:
+        assert "initial readiness and one changed-input recheck" in str(exc)
+    else:
+        raise AssertionError("third preparation call must fail closed")
