@@ -2,31 +2,44 @@
 
 This is the deterministic integration layer only. It accepts one already
 fully-supplied ``SingleIssuePilotInput`` (the approved execution packet) plus
-the five orchestrator-defined adapters, verifies the adapters satisfy their
+the orchestrator-defined adapters, verifies the adapters satisfy their
 protocols, calls ``run_single_issue_pilot(...)`` exactly once, and returns the
 canonical result together with a bounded, immutable local runtime observation
 packet. When the result status is ``quarantined`` it constructs local
 quarantine evidence through the existing, unmodified WSC5R public contract.
 
+AOS-RUNNER1D adds one optional dependency-preparation adapter. When supplied,
+a thin runtime gate delegates workspace inspection first, admits dependency
+preparation only after that observation proves the same safe workspace facts
+the pilot will reverify, and refuses provider/validation delegation until
+current READY dependency evidence exists. If provider output changes a bound
+dependency manifest, lock/constraints input, or declared local-project source,
+the validator gate performs one changed-input recheck before validation. That
+second check is not a retry of a failed preparation.
+
 In validation-only mode the executor adapter is absent by contract rather than
 substituted, so the observation records no executor adapter at all.
 
-This module performs no I/O. It defines no subprocess, Git worktree, lease
-backend, retry, queue, persistence, GitHub, workflow, or network
-implementation, and it does not import the legacy Scheduler executor, request
-dispatch, or RetryManager. All approval/projection/IssuePlan/validation-plan/
-bundle/advisory/repository/SHA/path/test evidence is reverified exactly once,
-inside the unmodified orchestrator, by the canonical public APIs it already
-calls -- this module defines no competing validation and does not duplicate
-that logic.
+This module performs no subprocess, Git, package-manager, lease-backend,
+network, queue, persistence, GitHub, or workflow I/O. Executable preparation
+remains behind the injected dependency adapter. All approval/projection/
+IssuePlan/validation-plan/bundle/advisory/repository/SHA/path/test evidence is
+reverified by the canonical pilot public APIs rather than duplicated here.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
+from scripts.agent_os_execution_capabilities.dependencies import (
+    DependencyPreparationStatus,
+    DependencyReadinessEvidence,
+)
+from workflow_scheduler.execution.dependency_preparation import (
+    DependencyPreparationAdapter,
+)
 from workflow_scheduler.execution.quarantine_review import (
     QuarantineEvidencePacket,
     build_quarantine_evidence_packet,
@@ -36,11 +49,18 @@ from workflow_scheduler.execution.single_issue_pilot import (
     VALIDATION_ONLY_EXECUTION_MODE,
     CancellationProbe,
     LeaseAdapter,
+    PilotExecutionObservation,
+    PilotExecutionRequest,
     PilotExecutor,
+    PilotValidationObservation,
+    PilotValidationRequest,
     SingleIssuePilotInput,
     SingleIssuePilotResult,
     ValidationAdapter,
     WorkspaceAdapter,
+    WorkspaceHandle,
+    WorkspaceInspection,
+    WorkspaceRequest,
     run_single_issue_pilot,
 )
 
@@ -101,8 +121,6 @@ class RuntimeObservation:
     execution_mode: str
     lease_adapter_type: str
     workspace_adapter_type: str
-    # ``None`` records that no executor adapter existed for this invocation.
-    # Validation-only mode never names an executor it did not have.
     executor_adapter_type: str | None
     validator_adapter_type: str
     cancellation_probe_type: str
@@ -187,6 +205,143 @@ def serialize_runtime_observation(observation: RuntimeObservation) -> dict[str, 
 
 
 # --------------------------------------------------------------------------
+# Dependency readiness runtime gate
+# --------------------------------------------------------------------------
+
+
+class _DependencyRuntimeGate:
+    def __init__(
+        self,
+        adapter: DependencyPreparationAdapter,
+        pilot_input: SingleIssuePilotInput,
+    ) -> None:
+        self._adapter = adapter
+        self._pilot_input = pilot_input
+        self.evidence: list[DependencyReadinessEvidence] = []
+        self.ready = False
+        self.recheck_required = False
+
+    def ensure_ready(self, workspace_identity: str) -> bool:
+        evidence = self._adapter.prepare(workspace_identity=workspace_identity)
+        if type(evidence) is not DependencyReadinessEvidence:
+            raise RuntimeError(
+                "dependency preparer must return exact DependencyReadinessEvidence"
+            )
+        self.evidence.append(evidence)
+        if evidence.workspace_identity != workspace_identity:
+            raise RuntimeError("dependency readiness workspace identity drifted")
+        if evidence.source_sha != self._pilot_input.source_head_sha:
+            raise RuntimeError("dependency readiness source SHA drifted")
+        if not evidence.is_current(self._pilot_input.evaluated_at):
+            self.ready = False
+            self.recheck_required = False
+            return False
+        self.ready = evidence.preparation_status is DependencyPreparationStatus.READY
+        self.recheck_required = False
+        return self.ready
+
+    def note_executor_changes(self, changed_paths: tuple[str, ...]) -> None:
+        if self._adapter.requires_recheck(tuple(changed_paths)):
+            self.ready = False
+            self.recheck_required = True
+
+    @property
+    def blocker_summary(self) -> str:
+        if not self.evidence:
+            return "dependency-readiness:no-evidence"
+        latest = self.evidence[-1]
+        reasons = ",".join(latest.reason_codes) or latest.preparation_status.value
+        return f"dependency-readiness:{reasons}"
+
+
+class _DependencyReadyWorkspaceAdapter:
+    def __init__(
+        self,
+        adapter: WorkspaceAdapter,
+        gate: _DependencyRuntimeGate,
+        pilot_input: SingleIssuePilotInput,
+    ) -> None:
+        self._adapter = adapter
+        self._gate = gate
+        self._pilot_input = pilot_input
+
+    def create(self, request: WorkspaceRequest):
+        return self._adapter.create(request)
+
+    def inspect(self, handle: WorkspaceHandle):
+        inspection = self._adapter.inspect(handle)
+        if not _workspace_observation_is_safe(inspection, self._pilot_input):
+            return inspection
+        if self._gate.ensure_ready(handle.workspace_identity):
+            return inspection
+        return replace(
+            inspection,
+            resolved=False,
+            reason=self._gate.blocker_summary,
+        )
+
+    def cleanup(self, handle: WorkspaceHandle):
+        return self._adapter.cleanup(handle)
+
+
+def _workspace_observation_is_safe(
+    inspection: object,
+    pilot_input: SingleIssuePilotInput,
+) -> bool:
+    if type(inspection) is not WorkspaceInspection:
+        return False
+    return (
+        inspection.resolved
+        and not inspection.missing
+        and not inspection.prunable
+        and not inspection.reused
+        and not inspection.detached
+        and inspection.clean
+        and (not inspection.locked or inspection.locked_expected)
+        and inspection.repository == pilot_input.repository
+        and inspection.branch == pilot_input.branch
+        and inspection.expected_revision == pilot_input.source_head_sha
+        and inspection.actual_revision == pilot_input.source_head_sha
+    )
+
+
+class _DependencyReadyExecutor:
+    def __init__(self, adapter: PilotExecutor, gate: _DependencyRuntimeGate) -> None:
+        self._adapter = adapter
+        self._gate = gate
+
+    def run(self, request: PilotExecutionRequest) -> PilotExecutionObservation:
+        if not self._gate.ready:
+            raise RuntimeError("executor dispatch refused without READY dependency evidence")
+        observation = self._adapter.run(request)
+        if type(observation) is PilotExecutionObservation:
+            self._gate.note_executor_changes(tuple(observation.changed_paths))
+        return observation
+
+
+class _DependencyReadyValidator:
+    def __init__(self, adapter: ValidationAdapter, gate: _DependencyRuntimeGate) -> None:
+        self._adapter = adapter
+        self._gate = gate
+
+    def validate(self, request: PilotValidationRequest) -> PilotValidationObservation:
+        if self._gate.recheck_required:
+            if not self._gate.ensure_ready(request.workspace_identity):
+                return PilotValidationObservation(
+                    attempted=False,
+                    passed=False,
+                    reason=self._gate.blocker_summary,
+                )
+        if not self._gate.ready:
+            return PilotValidationObservation(
+                attempted=False,
+                passed=False,
+                reason=self._gate.blocker_summary,
+            )
+        return self._adapter.validate(request)
+
+
+# --------------------------------------------------------------------------
 # Outcome
 # --------------------------------------------------------------------------
 
@@ -198,6 +353,7 @@ class SingleIssueRuntimeOutcome:
     result: SingleIssuePilotResult
     observation: RuntimeObservation
     quarantine_evidence: QuarantineEvidencePacket | None
+    dependency_readiness_evidence: tuple[DependencyReadinessEvidence, ...] = ()
 
 
 # --------------------------------------------------------------------------
@@ -219,21 +375,14 @@ def run_single_issue_runtime_entrypoint(
     executor: PilotExecutor | None = None,
     validator: ValidationAdapter,
     cancelled: CancellationProbe,
+    dependency_preparer: DependencyPreparationAdapter | None = None,
 ) -> SingleIssueRuntimeOutcome:
     """Validate wiring, run the orchestrator exactly once, and return evidence.
 
-    Every approval/projection/IssuePlan/validation-plan/bundle/advisory/
-    repository/SHA/path/test check is performed exactly once, inside the
-    unmodified ``run_single_issue_pilot`` orchestrator, through its existing
-    canonical public APIs. This function fails closed on malformed input or
-    non-conforming adapters before the orchestrator -- and therefore before
-    any adapter method -- is ever called, and never invokes the orchestrator
-    more than once.
-
-    An absent executor is accepted only when the supplied mode is exactly
-    validation-only. Standard mode still requires a protocol-conforming
-    executor, and validation-only mode refuses one: an unsupported, malformed,
-    or drifted mode fails closed here, before any adapter runs.
+    The optional dependency preparer is a single runtime-owned gate. It is
+    invoked only after a safe workspace inspection and before provider or
+    validation delegation. A changed dependency input may trigger one new
+    readiness check before validation; failed preparation is never retried.
     """
     if not isinstance(pilot_input, SingleIssuePilotInput):
         raise RuntimeEntrypointError("pilot_input must be SingleIssuePilotInput")
@@ -257,13 +406,32 @@ def run_single_issue_runtime_entrypoint(
     if not callable(cancelled):
         raise RuntimeEntrypointError("cancelled must satisfy the CancellationProbe protocol")
     cancellation_type = type(cancelled).__name__
+    if dependency_preparer is not None and not isinstance(
+        dependency_preparer, DependencyPreparationAdapter
+    ):
+        raise RuntimeEntrypointError(
+            "dependency_preparer does not satisfy DependencyPreparationAdapter"
+        )
+
+    runtime_workspace: WorkspaceAdapter = workspace
+    runtime_executor: PilotExecutor | None = executor
+    runtime_validator: ValidationAdapter = validator
+    gate: _DependencyRuntimeGate | None = None
+    if dependency_preparer is not None:
+        gate = _DependencyRuntimeGate(dependency_preparer, pilot_input)
+        runtime_workspace = _DependencyReadyWorkspaceAdapter(
+            workspace, gate, pilot_input
+        )
+        if executor is not None:
+            runtime_executor = _DependencyReadyExecutor(executor, gate)
+        runtime_validator = _DependencyReadyValidator(validator, gate)
 
     result = run_single_issue_pilot(
         pilot_input,
         lease=lease,
-        workspace=workspace,
-        executor=executor,
-        validator=validator,
+        workspace=runtime_workspace,
+        executor=runtime_executor,
+        validator=runtime_validator,
         cancelled=cancelled,
     )
 
@@ -295,12 +463,13 @@ def run_single_issue_runtime_entrypoint(
         "agent-os-wsc5b1-runtime-observation", payload
     )
     observation = RuntimeObservation(observation_id=observation_id, **payload)
-    # Enforce the aggregate canonical size/identity bound here so an
-    # oversized or tampered observation can never leave the entrypoint; the
-    # original RuntimeObservation object (not the serialized dict) is still
-    # what gets returned.
     serialize_runtime_observation(observation)
 
     return SingleIssueRuntimeOutcome(
-        result=result, observation=observation, quarantine_evidence=quarantine_evidence
+        result=result,
+        observation=observation,
+        quarantine_evidence=quarantine_evidence,
+        dependency_readiness_evidence=(
+            () if gate is None else tuple(gate.evidence)
+        ),
     )
