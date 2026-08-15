@@ -3,15 +3,30 @@
 Extended module descriptions moved out of `module-version-map.md` to keep that
 index below 100 lines. See that file for the canonical version table.
 
-**Workflow Scheduler** (`08_Tooling/workflow-scheduler/`) reflects sixteen
-shipped milestones: Phase 1; 2A–2E; 3A–3F; WSC3; WSC5B5; and WSC5B6. WSC3
-validates supplied WSC1, IssuePlanCore, and GEX evidence and emits immutable,
-unapproved proposal evidence. WSC5B5 exposes the retained frozen-validation
-result beside the runtime outcome without rerunning validation or adding
-authority. WSC5B6 adds validation-only execution to the same lifecycle while
-reusing lease, worktree, cancellation, validation, containment, cleanup,
-release, and quarantine contracts. It adds no tasks, approvals, queues, workers,
-persistence, or external I/O. See
+**Workflow Scheduler** (`08_Tooling/workflow-scheduler/`) is `0.15.0` under
+AOS-RUNNER1D (#1185). The existing single-issue runtime now owns one optional,
+task-scoped dependency-readiness gate after verified workspace inspection and
+before executor or validation dispatch. It consumes the existing GEX
+`RequiredEnvironmentSpec` / `DependencyReadinessEvidence` domain and upstream
+#972 execution-surface health identity; it does not create a second runner,
+Scheduler, candidate packet, environment-health schema, package manager, retry
+service, cache service, or provider-specific provisioning path. Python/pip uses
+one bounded requirements/local-project/qualification-pin preparation attempt;
+Node/npm requires `npm ci` for a committed lock, allows `npm ci --offline` only
+with proven complete compatible cache evidence, and treats explicitly authorized
+lock generation as `source-update-required` until the new lock is committed and
+the packet is rebound to the new exact head. Provider and validation dispatch
+fail closed without current READY evidence, and dependency-input changes may
+trigger one changed-input readiness recheck before validation. See
+`08_Tooling/workflow-scheduler/docs/DEPENDENCY_READINESS.md`.
+
+Earlier Workflow Scheduler milestones include Phase 1; 2A–2E; 3A–3F; WSC3;
+WSC5B5; and WSC5B6. WSC3 validates supplied WSC1, IssuePlanCore, and GEX
+evidence and emits immutable, unapproved proposal evidence. WSC5B5 exposes the
+retained frozen-validation result beside the runtime outcome without rerunning
+validation or adding authority. WSC5B6 adds validation-only execution to the
+same lifecycle while reusing lease, worktree, cancellation, validation,
+containment, cleanup, release, and quarantine contracts. See
 `08_Tooling/workflow-scheduler/docs/ARCHITECTURE.md`.
 
 **Agent Memory & Context Budget Manager**
