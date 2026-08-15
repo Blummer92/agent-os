@@ -267,6 +267,28 @@ result = adapter.execute(task)
 log = adapter.get_execution_log()
 ```
 
+### InstructionalMaterialsDryRunAdapter
+
+`InstructionalMaterialsDryRunAdapter` explicitly opts into immutable
+`ExecutionRequest` input and delegates the request unchanged to the C3A
+`validate_instructional_materials_contract` helper. The adapter contains no
+payload validation, execution sink, credential lookup, network access, or
+filesystem-write behavior of its own.
+
+```python
+from workflow_scheduler.adapters import InstructionalMaterialsDryRunAdapter
+
+adapter = InstructionalMaterialsDryRunAdapter()
+result = adapter.execute(execution_request)
+```
+
+A successful result proves only local contract validation and deterministic
+receipt rendering. It does **not** prove approval, execution authorization,
+source freshness, external capability, template access, target-folder access,
+credentials, artifact quality, or permission to write. The receipt command is an
+inert argument list and is never executed by this adapter. The sanitized authoring
+example is `examples/instructional-materials-dry-run.yaml`.
+
 ### HostLocalLeaseAdapter
 
 `HostLocalLeaseAdapter` is the bounded host-local implementation of the canonical
