@@ -33,6 +33,8 @@
       "type": "doubleClick",
       "selectors": [["[data-testid='folder-asset-card-urn:aaid:synthetic-digital-media']"]]
     },
+    {"type": "keyDown", "key": "Shift"},
+    {"type": "keyUp", "key": "Shift"},
     {
       "type": "click",
       "selectors": [["aria/Create folder"], ["[data-testid='create-asset-menu-item-folder']"]]
@@ -43,8 +45,6 @@
       "selectors": [["[data-testid='organizer-rename-textfield']"]]
     },
     {"type": "keyDown", "key": "Enter"},
-    {"type": "keyUp", "key": "Enter"},
-    {"type": "keyDown", "key": "Shift"},
-    {"type": "keyUp", "key": "Shift"}
+    {"type": "keyUp", "key": "Enter"}
   ]
 }
