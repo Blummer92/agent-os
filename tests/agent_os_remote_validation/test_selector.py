@@ -378,6 +378,7 @@ def test_old_prefix_only_rule_maps_remain_valid() -> None:
             "commands": ["python -m pytest legacy/tests"],
         }
     ]
+    rules["command_coverage"] = []
     plan = _select(_input(["legacy/module.py"]), rules)
     assert plan.profile == "focused"
     assert plan.commands == ("python -m pytest legacy/tests",)
@@ -941,23 +942,26 @@ SCHEDULER_SIBLING_PATH = "08_Tooling/workflow-scheduler/src/runtime.py"
 
 
 def test_mixed_exact_and_prefix_paths_form_a_safe_superset_union() -> None:
+    # #729: explicit coverage proves the broader package command already
+    # executes the narrower exact-path command, so the narrow command is
+    # suppressed from the focused union rather than run twice.
     paths = [PILOT_PATH, SCHEDULER_SIBLING_PATH]
     plan = _select(_input(paths))
     assert plan.profile == "focused"
     assert plan.reason_codes == ("profile.focused-union",)
-    assert plan.commands == (SCHEDULER_PACKAGE_COMMAND, PILOT_COMMAND)
+    assert plan.commands == (SCHEDULER_PACKAGE_COMMAND,)
     assert PILOT_COMMAND.startswith(SCHEDULER_PACKAGE_COMMAND)
     assert plan.remote_build_required is True
     assert validate_validation_plan(plan) == ()
     assert plan.command_set_digest == compute_command_set_digest(
-        "1.0.0", (SCHEDULER_PACKAGE_COMMAND, PILOT_COMMAND)
+        "1.0.0", (SCHEDULER_PACKAGE_COMMAND,)
     )
     assert plan.command_set_digest == (
-        "59459cb78c6b2804aebb46597472814a1d649bfb76a6b883868b2fbe4020d221"
+        "3097113361d5a7559dba62f28f8aeea873f6ad5011536e29a9837e1352d40250"
     )
     assert validation_plan_id(plan) == (
         "validation-plan:"
-        "71f0353ba0a292bb656b87deb3ec8fab9ff07b8d14f7ffbbb73a2de1f3482935"
+        "980493f198e70547c4edebf55414e2fd1e1fa31a895437e826b9e4546dc787fb"
     )
     assert serialize_validation_plan(plan) == serialize_validation_plan(_select(_input(paths)))
 
@@ -1067,3 +1071,218 @@ def test_boolean_timeouts_are_rejected(field: str, value: bool) -> None:
 def test_boolean_issue_number_is_rejected(value: bool) -> None:
     with pytest.raises(TypeError, match="issue_number"):
         _subject(issue_number=value)
+
+
+# --- Explicit command-coverage subsumption (#729) ------------------------------
+ISSUE_ACCEPTANCE_COMMAND = "python -m pytest tests/agent_os_issue_acceptance"
+ISSUE_ACCEPTANCE_PATH = "tests/agent_os_issue_acceptance/test_records.py"
+
+
+def _coverage_rules(coverage: list[dict[str, object]]) -> dict[str, object]:
+    rules = copy.deepcopy(RULES)
+    rules["command_coverage"] = coverage
+    return rules
+
+
+def test_exact_only_narrow_selection_is_unaffected_by_coverage() -> None:
+    plan = _select(_input([PILOT_PATH]))
+    assert plan.profile == "focused"
+    assert plan.commands == (PILOT_COMMAND,)
+    assert plan.reason_codes == ("profile.focused-package",)
+
+
+def test_broader_plus_narrower_suppresses_the_narrow_command() -> None:
+    plan = _select(_input([PILOT_PATH, SCHEDULER_SIBLING_PATH]))
+    assert plan.profile == "focused"
+    assert plan.commands == (SCHEDULER_PACKAGE_COMMAND,)
+    assert PILOT_COMMAND not in plan.commands
+
+
+def test_unrelated_commands_survive_suppression() -> None:
+    plan = _select(_input([PILOT_PATH, SCHEDULER_SIBLING_PATH, ISSUE_ACCEPTANCE_PATH]))
+    assert plan.profile == "focused"
+    assert plan.commands == tuple(
+        sorted((SCHEDULER_PACKAGE_COMMAND, ISSUE_ACCEPTANCE_COMMAND))
+    )
+    assert PILOT_COMMAND not in plan.commands
+
+
+def test_duplicate_coverage_declaration_fails_closed() -> None:
+    rules = _coverage_rules(
+        [
+            {"broader": SCHEDULER_PACKAGE_COMMAND, "subsumes": [PILOT_COMMAND]},
+            {"broader": SCHEDULER_PACKAGE_COMMAND, "subsumes": [PILOT_COMMAND]},
+        ]
+    )
+    plan = _select(_input([PILOT_PATH, SCHEDULER_SIBLING_PATH]), rules)
+    assert plan.profile == "manual-review"
+    assert plan.reason_codes == ("rule.ambiguous",)
+
+
+def test_duplicate_subsumed_command_within_one_entry_fails_closed() -> None:
+    rules = _coverage_rules(
+        [
+            {
+                "broader": SCHEDULER_PACKAGE_COMMAND,
+                "subsumes": [PILOT_COMMAND, PILOT_COMMAND],
+            }
+        ]
+    )
+    plan = _select(_input([PILOT_PATH, SCHEDULER_SIBLING_PATH]), rules)
+    assert plan.profile == "manual-review"
+    assert plan.reason_codes == ("rule.ambiguous",)
+
+
+def test_unknown_broader_command_in_coverage_fails_closed() -> None:
+    rules = _coverage_rules(
+        [{"broader": "python -m pytest not/registered", "subsumes": [PILOT_COMMAND]}]
+    )
+    plan = _select(_input([PILOT_PATH, SCHEDULER_SIBLING_PATH]), rules)
+    assert plan.profile == "manual-review"
+    assert plan.reason_codes == ("rule.ambiguous",)
+
+
+def test_unknown_subsumed_command_in_coverage_fails_closed() -> None:
+    rules = _coverage_rules(
+        [
+            {
+                "broader": SCHEDULER_PACKAGE_COMMAND,
+                "subsumes": ["python -m pytest not/registered"],
+            }
+        ]
+    )
+    plan = _select(_input([PILOT_PATH, SCHEDULER_SIBLING_PATH]), rules)
+    assert plan.profile == "manual-review"
+    assert plan.reason_codes == ("rule.ambiguous",)
+
+
+def test_self_subsumption_fails_closed() -> None:
+    rules = _coverage_rules(
+        [{"broader": SCHEDULER_PACKAGE_COMMAND, "subsumes": [SCHEDULER_PACKAGE_COMMAND]}]
+    )
+    plan = _select(_input([PILOT_PATH, SCHEDULER_SIBLING_PATH]), rules)
+    assert plan.profile == "manual-review"
+    assert plan.reason_codes == ("rule.ambiguous",)
+
+
+def test_cyclic_coverage_fails_closed() -> None:
+    rules = _coverage_rules(
+        [
+            {"broader": ISSUE_ACCEPTANCE_COMMAND, "subsumes": [SCHEDULER_PACKAGE_COMMAND]},
+            {"broader": SCHEDULER_PACKAGE_COMMAND, "subsumes": [ISSUE_ACCEPTANCE_COMMAND]},
+        ]
+    )
+    plan = _select(
+        _input([ISSUE_ACCEPTANCE_PATH, SCHEDULER_SIBLING_PATH]), rules
+    )
+    assert plan.profile == "manual-review"
+    assert plan.reason_codes == ("rule.ambiguous",)
+
+
+def test_ambiguous_conflicting_coverage_fails_closed() -> None:
+    rules = _coverage_rules(
+        [
+            {"broader": SCHEDULER_PACKAGE_COMMAND, "subsumes": [PILOT_COMMAND]},
+            {"broader": ISSUE_ACCEPTANCE_COMMAND, "subsumes": [PILOT_COMMAND]},
+        ]
+    )
+    plan = _select(
+        _input([PILOT_PATH, SCHEDULER_SIBLING_PATH, ISSUE_ACCEPTANCE_PATH]), rules
+    )
+    assert plan.profile == "manual-review"
+    assert plan.reason_codes == ("rule.ambiguous",)
+
+
+@pytest.mark.parametrize(
+    "coverage",
+    [
+        [{"broader": SCHEDULER_PACKAGE_COMMAND}],
+        [{"subsumes": [PILOT_COMMAND]}],
+        [{"broader": 1, "subsumes": [PILOT_COMMAND]}],
+        [{"broader": SCHEDULER_PACKAGE_COMMAND, "subsumes": PILOT_COMMAND}],
+        [{"broader": SCHEDULER_PACKAGE_COMMAND, "subsumes": []}],
+        [{"broader": SCHEDULER_PACKAGE_COMMAND, "subsumes": [1]}],
+        "not-a-list",
+    ],
+)
+def test_malformed_coverage_command_lists_fail_closed(coverage: object) -> None:
+    rules = _coverage_rules(coverage)  # type: ignore[arg-type]
+    plan = _select(_input([PILOT_PATH, SCHEDULER_SIBLING_PATH]), rules)
+    assert plan.profile == "manual-review"
+    assert plan.reason_codes == ("rule.ambiguous",)
+
+
+def test_coverage_declaration_order_does_not_affect_suppression() -> None:
+    paths = [PILOT_PATH, SCHEDULER_SIBLING_PATH]
+    forward = _coverage_rules(
+        [{"broader": SCHEDULER_PACKAGE_COMMAND, "subsumes": [PILOT_COMMAND]}]
+    )
+    same_relationship_restated = _coverage_rules(
+        [{"broader": SCHEDULER_PACKAGE_COMMAND, "subsumes": [PILOT_COMMAND]}]
+    )
+    assert _select(_input(paths), forward) == _select(
+        _input(list(reversed(paths))), same_relationship_restated
+    )
+
+
+def test_coverage_suppression_serialization_digest_and_identity_are_deterministic() -> None:
+    paths = [PILOT_PATH, SCHEDULER_SIBLING_PATH]
+    first = _select(_input(paths))
+    second = _select(_input(list(reversed(paths))))
+    assert first == second
+    assert serialize_validation_plan(first) == serialize_validation_plan(second)
+    assert first.command_set_digest == compute_command_set_digest(
+        first.selector_version, first.commands
+    )
+    assert validation_plan_id(first) == validation_plan_id(second)
+
+
+def test_coverage_selection_performs_no_file_io(monkeypatch: pytest.MonkeyPatch) -> None:
+    value = _input([PILOT_PATH, SCHEDULER_SIBLING_PATH])
+
+    def fail_read(*args: object, **kwargs: object) -> str:
+        raise AssertionError("coverage selection attempted file I/O")
+
+    monkeypatch.setattr(Path, "read_text", fail_read)
+    plan = select_validation_plan(value, RULES)
+    assert plan.commands == (SCHEDULER_PACKAGE_COMMAND,)
+
+
+def test_pre_pr_rule_map_validity_is_independent_of_coverage_metadata() -> None:
+    """Pre-PR planning never applies subsumption, so a rule map with focused
+    commands that have drifted out of sync with `command_coverage` must still
+    be usable for pre-PR selection, even though the same map would now be
+    invalid (and fail closed) for positive-PR selection."""
+    unregistered = "python -m pytest tests/not-allowlisted.py"
+    rules = copy.deepcopy(RULES)
+    for rule in rules["focused_rules"]:
+        if rule["name"] == "workflow-scheduler-concrete-runtime-adapters":
+            rule["commands"] = [unregistered]
+
+    # Positive-PR selection still fails closed: the coverage entry now
+    # references an unregistered command.
+    plan = _select(_input([SCHEDULER_SIBLING_PATH]), rules)
+    assert plan.profile == "manual-review"
+    assert plan.reason_codes == ("rule.ambiguous",)
+
+    # Pre-PR selection is unaffected: it never consults command_coverage.
+    pre_pr_plan = select_pre_pr_validation_plan(
+        _subject(
+            allowed_files=(PILOT_PATH,),
+            required_command_identities=(unregistered,),
+        ),
+        rules,
+    )
+    assert pre_pr_plan.commands == (unregistered,)
+
+
+def test_pre_pr_frozen_binding_is_not_auto_suppressed() -> None:
+    """Pre-PR command identities stay exact; coverage never widens or narrows them."""
+    subject = _subject()
+    with pytest.raises(ValueError, match="command identity drift"):
+        select_pre_pr_validation_plan(
+            _subject(required_command_identities=(SCHEDULER_PACKAGE_COMMAND,)), RULES
+        )
+    # The originally bound narrow command remains exact and valid.
+    plan = select_pre_pr_validation_plan(subject, RULES)
+    assert plan.commands == (PILOT_COMMAND,)

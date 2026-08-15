@@ -14,7 +14,7 @@ def test_report_only_acceptance_workflow_exists_and_calls_checker():
     assert "Agent OS Issue Acceptance Report" in content
     assert "pull_request:" in content
     assert "workflow_dispatch:" in content
-    assert "actions/checkout@v5" in content
+    assert "actions/checkout@v7" in content
     assert "./.github/actions/setup-python-dev" in content
     assert "python -m scripts.agent_os_issue_acceptance.cli" in content
     assert "GITHUB_STEP_SUMMARY" in content
@@ -23,7 +23,7 @@ def test_report_only_acceptance_workflow_exists_and_calls_checker():
 def test_report_only_acceptance_workflow_uses_shared_environment_after_checkout():
     content = _content()
 
-    checkout = content.index("uses: actions/checkout@v5")
+    checkout = content.index("uses: actions/checkout@v7")
     shared_setup = content.index("uses: ./.github/actions/setup-python-dev")
     assert checkout < shared_setup
     assert "uses: actions/setup-python@v6" not in content

@@ -90,10 +90,19 @@ __all__ = [
     "PrivateEvidence",
     "RepositoryInspectionObservation",
     "RepositoryInspector",
+    "POST_ADMISSION_TERMINAL_STATUS_PRECEDENCE",
+    "VALIDATION_LIFECYCLE_EVIDENCE_SCHEMA_VERSION",
+    "EvidenceAvailability",
+    "EvidenceAvailabilityRecord",
     "ValidationCommandPlan",
+    "ValidationLifecycleEvidenceBundle",
+    "ValidationLifecycleEvidenceError",
+    "ValidationLifecycleResult",
+    "ValidationLifecycleTerminalStatus",
     "build_authorized_validation_lifecycle_request",
     "build_executor_handoff",
     "build_validation_command_plan",
+    "build_validation_lifecycle_evidence_bundle",
     "compose_and_run_validation",
     "contains_secret_marker",
     "evaluate_read_only_request",
@@ -102,14 +111,20 @@ __all__ = [
     "executor_handoff_id",
     "executor_route_decision_id",
     "project_public_result",
+    "project_validation_lifecycle_result",
     "reconstruct_authorized_validation_lifecycle_request",
     "reconstruct_execution_service_request",
+    "reconstruct_validation_lifecycle_evidence_bundle",
+    "reconstruct_validation_lifecycle_result",
     "redact_public_text",
+    "run_authorized_validation_lifecycle",
     "select_executor_route",
     "serialize_authorized_validation_lifecycle_request",
     "serialize_execution_service_request",
     "serialize_executor_route_decision",
     "serialize_validation_command_plan",
+    "serialize_validation_lifecycle_evidence_bundle",
+    "serialize_validation_lifecycle_result",
     "validate_execution_service_request",
     "validate_validation_command_plan",
     "validation_command_plan_id",
@@ -143,6 +158,40 @@ _LAZY_AUTHORIZED_VALIDATION_EXPORTS = frozenset(
         "verify_authorized_validation_admission",
     )
 )
+# The unified validation-lifecycle evidence bundle (#761) composes #757
+# admission evidence with #758/#759/#760 lower-level Workflow Scheduler
+# evidence, so it carries the same Workflow Scheduler packaging dependency as
+# the composition and authorized-validation exports above and stays lazy for
+# the identical reason: importing the pure Execution Service core must not by
+# itself make runtime-capable modules reachable.
+_LAZY_VALIDATION_LIFECYCLE_EVIDENCE_EXPORTS = frozenset(
+    (
+        "POST_ADMISSION_TERMINAL_STATUS_PRECEDENCE",
+        "VALIDATION_LIFECYCLE_EVIDENCE_SCHEMA_VERSION",
+        "EvidenceAvailability",
+        "EvidenceAvailabilityRecord",
+        "ValidationLifecycleEvidenceBundle",
+        "ValidationLifecycleEvidenceError",
+        "ValidationLifecycleResult",
+        "ValidationLifecycleTerminalStatus",
+        "build_validation_lifecycle_evidence_bundle",
+        "project_validation_lifecycle_result",
+        "reconstruct_validation_lifecycle_evidence_bundle",
+        "reconstruct_validation_lifecycle_result",
+        "serialize_validation_lifecycle_evidence_bundle",
+        "serialize_validation_lifecycle_result",
+    )
+)
+
+
+# The #762 authorized-validation entrypoint composes #757 admission with
+# #758/#759/#760/#761 through ``execution_composition``/
+# ``validation_lifecycle_evidence``, so it carries the same Workflow
+# Scheduler/candidate-packet packaging dependency and stays lazy for the
+# identical reason.
+_LAZY_AUTHORIZED_VALIDATION_ENTRYPOINT_EXPORTS = frozenset(
+    ("run_authorized_validation_lifecycle",)
+)
 
 
 def __getattr__(name: str) -> object:
@@ -154,4 +203,12 @@ def __getattr__(name: str) -> object:
         from . import authorized_validation as _authorized_validation
 
         return getattr(_authorized_validation, name)
+    if name in _LAZY_VALIDATION_LIFECYCLE_EVIDENCE_EXPORTS:
+        from . import validation_lifecycle_evidence as _validation_lifecycle_evidence
+
+        return getattr(_validation_lifecycle_evidence, name)
+    if name in _LAZY_AUTHORIZED_VALIDATION_ENTRYPOINT_EXPORTS:
+        from . import authorized_validation_entrypoint as _authorized_validation_entrypoint
+
+        return getattr(_authorized_validation_entrypoint, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

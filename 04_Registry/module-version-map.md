@@ -22,13 +22,13 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 | Teacher Modeling Coach | 0.5.0 |
 | Instructional Materials Coach | 0.5.1 |
 | Student Language Standard | 0.3.0 |
-| Workflow Scheduler | 0.12.0 |
+| Workflow Scheduler | 0.14.0 |
 | Workspace Automation Builder Tooling | 0.1.1 |
 | Agent Memory & Context Budget Manager | 0.1.0 |
 | IA4D-to-Scheduler Handoff Contract | 0.2.0 |
 | GitHub Issue Lifecycle Standard | 0.2.0 |
 | Safe Implementation Lane | 0.4.0 |
-| Agent OS Execution Service | 0.5.0 |
+| Agent OS Execution Service | 0.6.0 |
 | Artifact-First Response Standard | 0.1.0 |
 | Teacher Decision Studio Standard | 0.1.0 |
 | LP Pacing Handoff Contract | 0.1.0 |
@@ -48,7 +48,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 
 **Workspace Automation Builder Tooling** (`08_Tooling/workspace-automation-builder/`) includes an Apps Script safety bridge, offline tests, sync safety docs, sanitized sample handoff fixture, JSON schemas, validation fixtures, and a local-only fixture validator. It does not authorize live Workspace, Notion, trigger, sharing, or production writes.
 
-**Workflow Scheduler**, **Agent Memory & Context Budget Manager**, **IA4D-to-Scheduler Handoff Contract**, and **Agent OS Execution Service** extended descriptions live in `04_Registry/module-version-map-details.md`. Workflow Scheduler moved to `0.10.0` under #758 for the additive host-local concurrency-1 lease adapter, moved to `0.11.0` under #759 (WSC-AUTO1C) for the additive, opt-in Linux cgroup v2 process-tree containment on the POSIX process adapter, and moves to `0.12.0` under #760 (WSC-AUTO1D) for the additive complete workspace-state and changed-path evidence model (see `CHANGELOG.md`); Agent OS Execution Service remains `0.5.0`.
+**Workflow Scheduler**, **Agent Memory & Context Budget Manager**, **IA4D-to-Scheduler Handoff Contract**, and **Agent OS Execution Service** extended descriptions live in `04_Registry/module-version-map-details.md`. Workflow Scheduler moved to `0.10.0` under #758 for the additive host-local concurrency-1 lease adapter, moved to `0.11.0` under #759 for opt-in Linux cgroup v2 containment, moved to `0.12.0` under #760 for complete workspace-state evidence, moved to `0.13.0` under #762 for authorized-validation runtime composition, and moves to `0.14.0` under #722 for the pure bounded Claude Code invocation/result adapter; Agent OS Execution Service is `0.6.0` under #762.
 
 **Instructional Materials Coach** `0.4.0` adds `curriculum-visual-asset-compatibility-v2` and `curriculum-visual-asset-candidates-v2` (#871), preserving v1 mappings, defaults, identities, and non-authorizing behavior. `0.5.0` adds `curriculum-image-intent-v1` and `curriculum-imported-asset-context-v1` (#955), keeping provider prompt prose noncanonical and provenance user-claimed. `0.5.1` clarifies that Notion remains Draft Mode by default and no Append-Only Safe Log Mode or general Notion-write authority is inherited automatically (#1103).
 

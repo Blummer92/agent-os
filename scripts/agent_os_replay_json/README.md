@@ -28,3 +28,34 @@ Each semantic action contains `source_indexes` and raw selector/value/URL eviden
 `semantic timeline -> UX analysis -> optional JSON rewrite`
 
 Application-specific UX rules belong outside this parser. The analyzer reports evidence and fragility; it does not decide classroom content or execute browser actions.
+
+## RJ2 rewrite capability
+
+RJ2 consumes the RJ1 semantic timeline and produces a bounded proposed rewrite.
+
+Supported rewrite vocabulary:
+
+- `keep`
+- `remove-noise`
+- `replace-sequence`
+- `move-before`
+- `move-after`
+- `change-selector`
+- `insert-assertion`
+
+Safety rules:
+
+- preserve source-index provenance;
+- never invent selectors;
+- preserve unknown/unsupported steps;
+- preserve click versus double-click;
+- do not remove recovery behavior as noise;
+- reject instructional-action removal;
+- treat reorder requests as unproven without explicit dependency evidence;
+- return `proven`, `unproven`, or `rejected` rather than guessing.
+
+RJ2 does not prove Recorder-format conformance or browser replay equivalence.
+
+Canonical sequence:
+
+`RJ1 semantic analysis -> RJ2 rewrite -> RJ3 conformance -> RJ4 replay equivalence`
