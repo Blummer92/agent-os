@@ -30,6 +30,7 @@ class DependencyPreparationObservation:
     source_reachable: bool
     package_available: bool
     cache_state: DependencyCacheState
+    local_projects_match: bool = False
     offline_source_identity: str | None = None
     offline_source_location: str | None = None
     existing_ready_evidence: DependencyReadinessEvidence | None = None
@@ -37,6 +38,8 @@ class DependencyPreparationObservation:
     def __post_init__(self) -> None:
         if type(self.environment_health_current) is not bool:
             raise TypeError("environment_health_current must be exact bool")
+        if type(self.local_projects_match) is not bool:
+            raise TypeError("local_projects_match must be exact bool")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -189,6 +192,17 @@ def plan_dependency_preparation(
         return _blocked(
             spec, observation, "dependency.package-manager-unavailable"
         )
+
+    existing = observation.existing_ready_evidence
+    if (
+        existing is not None
+        and existing.preparation_status is DependencyPreparationStatus.READY
+        and existing.execution_surface_id != observation.execution_surface_id
+    ):
+        return _blocked(
+            spec, observation, "dependency.environment-surface-mismatch"
+        )
+
     if not observation.manifest_matches:
         return _blocked(spec, observation, "dependency.manifest-drift")
     if not observation.source_identity_matches:
@@ -198,8 +212,9 @@ def plan_dependency_preparation(
         and observation.lock_matches is not True
     ):
         return _blocked(spec, observation, "dependency.lock-mismatch")
+    if spec.local_project_requirements and not observation.local_projects_match:
+        return _blocked(spec, observation, "dependency.editable-source-drift")
 
-    existing = observation.existing_ready_evidence
     if existing is not None:
         matches = (
             existing.preparation_status is DependencyPreparationStatus.READY
