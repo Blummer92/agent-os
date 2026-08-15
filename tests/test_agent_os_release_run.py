@@ -1,9 +1,11 @@
 import importlib.util
+import sys
 from pathlib import Path
 
 MODULE = Path(__file__).parents[1] / "scripts" / "agent-os-release-run.py"
 spec = importlib.util.spec_from_file_location("release_run", MODULE)
 release_run = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = release_run
 spec.loader.exec_module(release_run)
 
 
