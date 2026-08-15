@@ -14,7 +14,11 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal
 
-from scripts.agent_os_execution_capabilities import RepositoryIdentity, RepositoryStateEvidence
+from scripts.agent_os_execution_capabilities import (
+    RepositoryIdentity,
+    RepositoryStateEvidence,
+    RequiredEnvironmentSpec,
+)
 from scripts.agent_os_remote_validation import (
     PrePrValidationPlan,
     PrePrValidationSubject,
@@ -81,6 +85,7 @@ class CandidateRuntimeInputs:
     max_output_bytes: int = 65_536
     runtime_capability_available: bool = True
     execution_authorization_present: bool = False
+    required_environment_spec: RequiredEnvironmentSpec | None = None
     execution_authorized: Literal[False] = field(default=False, init=False)
     merge_authorized: Literal[False] = field(default=False, init=False)
     automatic_retry: Literal[False] = field(default=False, init=False)
@@ -144,6 +149,21 @@ class CandidateRuntimeInputs:
             raise TypeError("runtime_capability_available must be exact bool")
         if type(self.execution_authorization_present) is not bool:
             raise TypeError("execution_authorization_present must be exact bool")
+        if (
+            self.required_environment_spec is not None
+            and type(self.required_environment_spec) is not RequiredEnvironmentSpec
+        ):
+            raise TypeError(
+                "required_environment_spec must be exact RequiredEnvironmentSpec or None"
+            )
+        if (
+            self.required_environment_spec is not None
+            and self.required_environment_spec.required_validation_command_ids
+            != self.required_tests
+        ):
+            raise ValueError(
+                "required_environment_spec validation commands must match required_tests"
+            )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
