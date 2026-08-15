@@ -1,0 +1,50 @@
+{
+  "title": "Synthetic Tutorial 0 organization core",
+  "steps": [
+    {
+      "type": "setViewport",
+      "width": 1440,
+      "height": 900,
+      "deviceScaleFactor": 1,
+      "isMobile": false,
+      "hasTouch": false,
+      "isLandscape": true
+    },
+    {
+      "type": "navigate",
+      "url": "https://new.express.adobe.test/your-stuff"
+    },
+    {
+      "type": "click",
+      "selectors": [["aria/Your stuff"], ["[data-testid='sidebar-button-your-stuff']"]]
+    },
+    {
+      "type": "click",
+      "selectors": [["aria/Create folder"], ["[data-testid='create-asset-menu-item-folder']"]]
+    },
+    {
+      "type": "change",
+      "value": "Digital Media",
+      "selectors": [["[data-testid='organizer-rename-textfield']"]]
+    },
+    {"type": "keyDown", "key": "Enter"},
+    {"type": "keyUp", "key": "Enter"},
+    {
+      "type": "doubleClick",
+      "selectors": [["[data-testid='folder-asset-card-urn:aaid:synthetic-digital-media']"]]
+    },
+    {
+      "type": "click",
+      "selectors": [["aria/Create folder"], ["[data-testid='create-asset-menu-item-folder']"]]
+    },
+    {
+      "type": "change",
+      "value": "Tutorial 0 - Organize My Files",
+      "selectors": [["[data-testid='organizer-rename-textfield']"]]
+    },
+    {"type": "keyDown", "key": "Enter"},
+    {"type": "keyUp", "key": "Enter"},
+    {"type": "keyDown", "key": "Shift"},
+    {"type": "keyUp", "key": "Shift"}
+  ]
+}
