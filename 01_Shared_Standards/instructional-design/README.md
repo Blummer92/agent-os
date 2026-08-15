@@ -35,8 +35,11 @@ Teacher Modeling uses exactly five modeling checks: learning objective,
 think-aloud method, component breakdown, visual anchors, and error analysis.
 
 Assessment design uses the target-first contract in
-`assessment-design-standard.md` before item or task generation. It is report-only
-and does not authorize grading, readiness, classroom use, production, or writes.
+`assessment-design-standard.md` before item or task generation. Blueprint core
+planning then packages that approved design through
+`assessment-blueprint-core-standard.md` without redefining its semantics. Both
+are report-only and do not authorize grading, readiness, classroom use,
+production, or writes.
 
 ## Files
 
@@ -44,6 +47,7 @@ and does not authorize grading, readiness, classroom use, production, or writes.
 - `teacher-modeling-standards.md` — canonical Teacher Modeling schema and checks
 - `orchestration-rules.md` — canonical owner, mode, context, reuse, and stop rules
 - `assessment-design-standard.md` — target → claim → evidence → method contract and survey/mastery boundary
+- `assessment-blueprint-core-standard.md` — #837-preserving blueprint schema and fail-closed core validation; lifecycle/staleness remains #1192
 - `student-language-standard.md` — reusable student-facing language artifacts
 - `learning-science-rules.md` — classroom design rules for materials
 - `production-gates-and-compute.md` — hard-stop gates and efficiency rules
@@ -60,4 +64,4 @@ fields, standards, and output keys.
 
 ## Version
 
-0.8.0
+0.9.0
