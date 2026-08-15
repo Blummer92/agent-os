@@ -7,10 +7,12 @@ The configuration classes are re-exported here for backward compatibility.
 
 from __future__ import annotations
 
+import hashlib
 import os
 from dataclasses import dataclass, field
 from typing import Callable
 
+from workflow_scheduler.execution import cgroup_v2_containment
 from workflow_scheduler.execution.frozen_test_validation_adapter import (
     BoundedCommandRunner,
     ChangedPathsInspector,
@@ -20,8 +22,13 @@ from workflow_scheduler.execution.frozen_test_validation_adapter import (
     FrozenTestValidationResult,
 )
 from workflow_scheduler.execution.git_worktree_adapter import GitRunner, GitWorktreeAdapter
+from workflow_scheduler.execution.host_local_lease_adapter import (
+    HostLocalLeaseAdapter,
+    HostLocalLeasePolicy,
+)
 from workflow_scheduler.execution.in_memory_lease_adapter import InMemoryLeaseAdapter
 from workflow_scheduler.execution.posix_process_adapter import (
+    ContainmentConfig,
     PosixProcessExecutionResult,
     PosixProcessExecutor,
     PosixProcessExecutorConfig,
@@ -43,10 +50,100 @@ from workflow_scheduler.execution.single_issue_runtime import (
 )
 from workflow_scheduler.execution.single_issue_pilot import WorkspaceHandle
 from workflow_scheduler.execution.workspace_state_evidence import (
+    WorkspaceLifecycleEvidence,
     WorkspaceStateObservation,
 )
 
 ProcessCancellationCheck = Callable[[], bool]
+
+
+class ConcreteRuntimeContainmentError(ConcreteRuntimeConfigurationError):
+    """Raised when configured #759 containment cannot be preflighted.
+
+    Raised before any lease, worktree, or process exists for this
+    invocation -- there is no fallback to the uncontained path once
+    ``delegated_parent_cgroup`` has been configured.
+    """
+
+
+def _invocation_scope(configuration: ConcreteRuntimeConfiguration, *, suffix: str) -> str:
+    """A bounded, filesystem-safe per-purpose invocation id derived from the base one.
+
+    Multiple #759 invocation cgroups can exist under the same
+    ``delegated_parent_cgroup`` for one configuration (the executor and each
+    validation command each get their own), so each needs a distinct,
+    collision-free directory name.
+    """
+    digest = hashlib.sha256(
+        f"{configuration.invocation_id}:{suffix}".encode("utf-8")
+    ).hexdigest()
+    return f"wsc-{digest[:32]}"
+
+
+def _preflight_containment(configuration: ConcreteRuntimeConfiguration) -> None:
+    if configuration.delegated_parent_cgroup is None:
+        return
+    preflight = cgroup_v2_containment.preflight_check(configuration.delegated_parent_cgroup)
+    if not preflight.supported:
+        raise ConcreteRuntimeContainmentError(
+            f"#759 containment preflight failed: {preflight.reason}"
+        )
+
+
+def _containment_config(
+    configuration: ConcreteRuntimeConfiguration, *, suffix: str
+) -> ContainmentConfig | None:
+    if configuration.delegated_parent_cgroup is None:
+        return None
+    return ContainmentConfig(
+        delegated_parent_cgroup=configuration.delegated_parent_cgroup,
+        invocation_id=_invocation_scope(configuration, suffix=suffix),
+    )
+
+
+def _lease_adapter(
+    configuration: ConcreteRuntimeConfiguration,
+) -> InMemoryLeaseAdapter | HostLocalLeaseAdapter:
+    if configuration.lease_directory is None:
+        return InMemoryLeaseAdapter()
+    return HostLocalLeaseAdapter(
+        policy=HostLocalLeasePolicy(lease_directory=configuration.lease_directory)
+    )
+
+
+class WorkspaceStateCapturingAdapter:
+    """Thin #760 capture wrapper: every call delegates to the bound adapter unchanged.
+
+    Captures the #760 initial observation immediately after a successful
+    ``create`` and the #760 final observation immediately before delegating
+    to the real ``cleanup`` -- the only two points in the unmodified
+    single-issue-pilot lifecycle where the workspace is known to exist and
+    is about to change ownership. Adds no Git runner, worktree manager, or
+    orchestration beyond that pass-through.
+    """
+
+    def __init__(self, adapter: GitWorktreeAdapter) -> None:
+        self._adapter = adapter
+        self.initial_observation: WorkspaceStateObservation | None = None
+        self.final_observation: WorkspaceStateObservation | None = None
+
+    def create(self, request):
+        handle = self._adapter.create(request)
+        if handle.created:
+            self.initial_observation = self._adapter.inspect_complete_state(
+                handle, observation_kind="initial"
+            )
+        return handle
+
+    def inspect(self, handle):
+        return self._adapter.inspect(handle)
+
+    def cleanup(self, handle):
+        if handle.created and self.final_observation is None:
+            self.final_observation = self._adapter.inspect_complete_state(
+                handle, observation_kind="final"
+            )
+        return self._adapter.cleanup(handle)
 
 
 def _environment(configuration: ConcreteRuntimeConfiguration) -> dict[str, str]:
@@ -98,6 +195,9 @@ class BoundPosixCommandRunner(BoundedCommandRunner):
             cwd=self._configuration.executor_cwd,
             env=_environment(self._configuration),
             cancelled=self._cancelled,
+            containment=_containment_config(
+                self._configuration, suffix=f"validate:{request.test_id}"
+            ),
         )
         self.last_result = result
         outcome = (
@@ -158,8 +258,8 @@ class GitChangedPathsInspector(ChangedPathsInspector):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ConcreteRuntimeAdapters:
-    lease: InMemoryLeaseAdapter
-    workspace: GitWorktreeAdapter
+    lease: InMemoryLeaseAdapter | HostLocalLeaseAdapter
+    workspace: WorkspaceStateCapturingAdapter
     executor: PosixProcessExecutor | None
     validator: FrozenTestValidationAdapter
     validation_runner: BoundPosixCommandRunner = field(repr=False)
@@ -173,15 +273,24 @@ def build_concrete_runtime_adapters(
     process_cancelled: ProcessCancellationCheck | None = None,
     changed_paths_inspector: ChangedPathsInspector | None = None,
 ) -> ConcreteRuntimeAdapters:
-    """Verify one binding and construct the executable adapters for this mode."""
+    """Verify one binding and construct the executable adapters for this mode.
+
+    #759 containment (when ``configuration.delegated_parent_cgroup`` is set)
+    is preflighted here, before the #758 lease or the worktree exist for
+    this invocation -- a failed preflight fails closed before either is
+    created.
+    """
 
     configuration.verify(pilot_input)
-    lease = InMemoryLeaseAdapter()
-    workspace = GitWorktreeAdapter(
-        repository_root=configuration.repository_root,
-        workspace_parent=configuration.workspace_parent,
-        repository_identity=configuration.repository_identity,
-        runner=git_runner,
+    _preflight_containment(configuration)
+    lease = _lease_adapter(configuration)
+    workspace = WorkspaceStateCapturingAdapter(
+        GitWorktreeAdapter(
+            repository_root=configuration.repository_root,
+            workspace_parent=configuration.workspace_parent,
+            repository_identity=configuration.repository_identity,
+            runner=git_runner,
+        )
     )
     executor: PosixProcessExecutor | None = None
     if configuration.execution_mode != VALIDATION_ONLY_EXECUTION_MODE:
@@ -193,6 +302,7 @@ def build_concrete_runtime_adapters(
                 max_output_bytes=configuration.executor_max_output_bytes,
                 cwd=configuration.executor_cwd,
                 env=_environment(configuration),
+                containment=_containment_config(configuration, suffix="executor"),
             ),
             cancelled=process_cancelled,
         )
@@ -244,6 +354,7 @@ class ConcreteRuntimeExecutionOutcome:
 
     runtime_outcome: SingleIssueRuntimeOutcome
     validation_result: FrozenTestValidationResult | None
+    workspace_lifecycle_evidence: WorkspaceLifecycleEvidence | None = None
 
 
 def run_concrete_runtime_entrypoint_with_validation_evidence(
@@ -255,7 +366,7 @@ def run_concrete_runtime_entrypoint_with_validation_evidence(
     process_cancelled: ProcessCancellationCheck | None = None,
     changed_paths_inspector: ChangedPathsInspector | None = None,
 ) -> ConcreteRuntimeExecutionOutcome:
-    """Run once and return the exact validation evidence retained by the adapter."""
+    """Run once and return the exact validation/#760 evidence retained by the adapters."""
 
     adapters = build_concrete_runtime_adapters(
         pilot_input,
@@ -272,9 +383,20 @@ def run_concrete_runtime_entrypoint_with_validation_evidence(
         validator=adapters.validator,
         cancelled=cancelled,
     )
+    workspace_lifecycle_evidence: WorkspaceLifecycleEvidence | None = None
+    if (
+        adapters.workspace.initial_observation is not None
+        and adapters.workspace.final_observation is not None
+    ):
+        workspace_lifecycle_evidence = WorkspaceLifecycleEvidence(
+            initial=adapters.workspace.initial_observation,
+            final=adapters.workspace.final_observation,
+            validation_only=pilot_input.execution_mode == VALIDATION_ONLY_EXECUTION_MODE,
+        )
     return ConcreteRuntimeExecutionOutcome(
         runtime_outcome=runtime_outcome,
         validation_result=adapters.validator.last_result,
+        workspace_lifecycle_evidence=workspace_lifecycle_evidence,
     )
 
 

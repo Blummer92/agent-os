@@ -100,6 +100,19 @@ def _directory(value: object, name: str, *, require_exists: bool = True) -> str:
     return text
 
 
+def _optional_directory(value: object, name: str) -> str | None:
+    """Same bounds as ``_directory``, but ``None`` opts out entirely.
+
+    Existence is never required: the #758/#759 seams this binds either
+    create the directory themselves (``HostLocalLeaseAdapter``) or are
+    delegated host infrastructure this configuration only names, never
+    provisions.
+    """
+    if value is None:
+        return None
+    return _directory(value, name, require_exists=False)
+
+
 def _issue_number(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ConcreteRuntimeConfigurationError("issue_number must be a positive integer")
@@ -263,6 +276,8 @@ class ConcreteRuntimeConfiguration:
     repository_identity: RepositoryIdentity
     repository_root: str
     workspace_parent: str
+    lease_directory: str | None
+    delegated_parent_cgroup: str | None
     executor_argv: tuple[str, ...] | None
     executor_cwd: str
     environment_policy: Literal["isolated-path-home-c-locale"]
@@ -294,7 +309,18 @@ class ConcreteRuntimeConfiguration:
         validation_total_timeout_seconds: float = 300.0,
         validation_max_output_bytes: int = MAX_OUTPUT_BYTES,
         environment_policy: str = ENVIRONMENT_POLICY,
+        lease_directory: str | os.PathLike[str] | None = None,
+        delegated_parent_cgroup: str | os.PathLike[str] | None = None,
     ) -> "ConcreteRuntimeConfiguration":
+        """Bind the canonical configuration.
+
+        ``lease_directory`` and ``delegated_parent_cgroup`` are additive and
+        opt-in (default ``None``): omitted, the bound configuration selects
+        the pre-#758/#759 in-memory lease and uncontained POSIX process
+        adapters exactly as before. Supplying either binds the matching
+        production-shaped #758 host-local lease / #759 delegated cgroup v2
+        containment seam instead, with no other behavior change.
+        """
         if (
             not isinstance(pilot_input, SingleIssuePilotInput)
             or len(pilot_input.issue_numbers) != 1
@@ -353,6 +379,10 @@ class ConcreteRuntimeConfiguration:
             "repository_identity": repository_identity,
             "repository_root": root,
             "workspace_parent": parent,
+            "lease_directory": _optional_directory(lease_directory, "lease_directory"),
+            "delegated_parent_cgroup": _optional_directory(
+                delegated_parent_cgroup, "delegated_parent_cgroup"
+            ),
             "executor_argv": argv,
             "executor_cwd": _workspace_path(pilot_input, parent),
             "environment_policy": environment_policy,
@@ -420,8 +450,14 @@ class ConcreteRuntimeConfiguration:
         validation_total_timeout_seconds: float = 300.0,
         validation_max_output_bytes: int = MAX_OUTPUT_BYTES,
         environment_policy: str = ENVIRONMENT_POLICY,
+        lease_directory: str | os.PathLike[str] | None = None,
+        delegated_parent_cgroup: str | os.PathLike[str] | None = None,
     ) -> "ConcreteRuntimeConfiguration":
-        """Bind a validation-only configuration from truthful pre-execution evidence."""
+        """Bind a validation-only configuration from truthful pre-execution evidence.
+
+        See ``bind`` for ``lease_directory``/``delegated_parent_cgroup``: both
+        are additive and opt-in, defaulting to the pre-#758/#759 behavior.
+        """
         if not isinstance(repository_identity, RepositoryIdentity):
             raise ConcreteRuntimeConfigurationError(
                 "repository_identity must be RepositoryIdentity"
@@ -468,6 +504,10 @@ class ConcreteRuntimeConfiguration:
             "repository_identity": repository_identity,
             "repository_root": root,
             "workspace_parent": parent,
+            "lease_directory": _optional_directory(lease_directory, "lease_directory"),
+            "delegated_parent_cgroup": _optional_directory(
+                delegated_parent_cgroup, "delegated_parent_cgroup"
+            ),
             "executor_argv": None,
             "executor_cwd": _workspace_path_from_values(
                 workspace_request_id=canonical_workspace_request_id,
@@ -588,6 +628,8 @@ _PAYLOAD_SCALAR_FIELDS = (
     "advisory_render_id",
     "repository_root",
     "workspace_parent",
+    "lease_directory",
+    "delegated_parent_cgroup",
     "executor_cwd",
     "environment_policy",
     "executor_timeout_seconds",
@@ -798,6 +840,10 @@ def reconstruct_concrete_runtime_configuration(
         ),
         "workspace_parent": _directory(
             payload["workspace_parent"], "workspace_parent", require_exists=False
+        ),
+        "lease_directory": _optional_directory(payload["lease_directory"], "lease_directory"),
+        "delegated_parent_cgroup": _optional_directory(
+            payload["delegated_parent_cgroup"], "delegated_parent_cgroup"
         ),
         "executor_argv": executor_argv,
         "executor_cwd": _directory(
