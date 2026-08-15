@@ -16,7 +16,7 @@ def test_report_only_workflow_exists_and_calls_checker():
 
 def test_report_only_workflow_uses_shared_environment_after_checkout():
     content = WORKFLOW.read_text(encoding="utf-8")
-    checkout = content.index("uses: actions/checkout@v5")
+    checkout = content.index("uses: actions/checkout@v7")
     shared_setup = content.index("uses: ./.github/actions/setup-python-dev")
     assert checkout < shared_setup
     assert "uses: actions/setup-python@v6" not in content
