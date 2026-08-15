@@ -46,17 +46,6 @@ from .image_intent import (
     validate_image_intent,
     validate_imported_asset_context,
 )
-from .picture_perfect_combination import apply_combined_modeling_decision
-from .picture_perfect_integration import (
-    MODELING_DISPOSITIONS,
-    RJ_EVIDENCE_STATES,
-    VISUAL_STATES,
-    apply_modeling_decision,
-    build_image_intent,
-    build_modeling_candidates,
-    build_visual_requirement,
-    visual_provenance,
-)
 from .request_interpretation import (
     ACTIONS as REQUEST_ACTIONS,
     CONTRACT_VERSION as REQUEST_INTERPRETATION_VERSION,
@@ -88,7 +77,6 @@ __all__ = [
     "MAX_REFERENCES",
     "MAX_RESULT_BYTES",
     "MAX_STRING_LENGTH",
-    "MODELING_DISPOSITIONS",
     "ORDER_INSENSITIVE_FIELDS",
     "REQUEST_ACTIONS",
     "REQUEST_EFFECTS",
@@ -96,19 +84,12 @@ __all__ = [
     "REQUEST_ORIGINS",
     "REQUEST_RESOURCE_KINDS",
     "REQUEST_SYSTEMS",
-    "RJ_EVIDENCE_STATES",
     "RequestInterpretation",
     "TOP_LEVEL_FIELDS",
-    "VISUAL_STATES",
     "ValidatedRecord",
     "ValidationResult",
     "ValidationStatus",
-    "apply_combined_modeling_decision",
-    "apply_modeling_decision",
     "assemble_gemini_manual_prompt",
-    "build_image_intent",
-    "build_modeling_candidates",
-    "build_visual_requirement",
     "canonical_json_bytes",
     "canonical_size",
     "freeze_json",
@@ -125,5 +106,4 @@ __all__ = [
     "validate_revision",
     "validate_stable_id",
     "validate_version",
-    "visual_provenance",
 ]
