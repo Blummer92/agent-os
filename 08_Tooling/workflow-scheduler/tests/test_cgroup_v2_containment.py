@@ -45,13 +45,15 @@ def _discover_cgroup2_mount() -> str | None:
 def delegated_parent() -> str | None:
     root = _discover_cgroup2_mount()
     if root is None:
-        return None
+        yield None
+        return
     name = f"agentos-containment-test-{uuid.uuid4().hex}"
     path = os.path.join(root, name)
     try:
         os.mkdir(path)
     except OSError:
-        return None
+        yield None
+        return
     yield path
     try:
         os.rmdir(path)
