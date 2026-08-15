@@ -15,6 +15,7 @@ from typing import Callable
 
 from scripts.agent_os_execution_capabilities.dependencies import (
     DependencyCacheState,
+    DependencyEcosystem,
     DependencyInstallMode,
     DependencyReadinessEvidence,
     RequiredEnvironmentSpec,
@@ -152,10 +153,35 @@ class WorkspaceStateCapturingAdapter:
         return self._adapter.cleanup(handle)
 
 
-def _environment(configuration: ConcreteRuntimeConfiguration) -> dict[str, str]:
+def _python_dependency_environment_directory(
+    configuration: ConcreteRuntimeConfiguration,
+) -> str:
+    digest = hashlib.sha256(
+        f"{configuration.configuration_fingerprint}:python-dependency-env".encode(
+            "utf-8"
+        )
+    ).hexdigest()[:24]
+    return os.path.join(
+        configuration.workspace_parent, f"agent-os-dependency-env-{digest}"
+    )
+
+
+def _python_dependency_executable(
+    configuration: ConcreteRuntimeConfiguration,
+) -> str:
+    return os.path.join(
+        _python_dependency_environment_directory(configuration), "bin", "python"
+    )
+
+
+def _environment(
+    configuration: ConcreteRuntimeConfiguration,
+    *,
+    include_dependency_environment: bool = True,
+) -> dict[str, str]:
     if configuration.environment_policy != ENVIRONMENT_POLICY:
         raise ConcreteRuntimeConfigurationError("unsupported environment authority")
-    return {
+    environment = {
         "PATH": os.environ.get("PATH", ""),
         "HOME": configuration.repository_root,
         "LANG": "C",
@@ -163,6 +189,17 @@ def _environment(configuration: ConcreteRuntimeConfiguration) -> dict[str, str]:
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_TERMINAL_PROMPT": "0",
     }
+    spec = configuration.required_environment_spec
+    if (
+        include_dependency_environment
+        and spec is not None
+        and spec.ecosystem is DependencyEcosystem.PYTHON_PIP
+        and os.path.isfile(_python_dependency_executable(configuration))
+    ):
+        venv = _python_dependency_environment_directory(configuration)
+        environment["VIRTUAL_ENV"] = venv
+        environment["PATH"] = os.path.join(venv, "bin") + os.pathsep + environment["PATH"]
+    return environment
 
 
 class BoundPosixCommandRunner(BoundedCommandRunner):
@@ -268,6 +305,7 @@ class ConcreteDependencyPreparationInputs:
 
     execution_surface_id: str
     environment_health_evidence_id: str
+    environment_health_current: bool
     runtime_version: str
     runtime_compatible: bool
     package_manager_version: str
@@ -292,7 +330,12 @@ class ConcreteDependencyPreparationInputs:
             value = getattr(self, name)
             if type(value) is not str or not value or "\x00" in value:
                 raise TypeError(f"{name} must be non-empty NUL-free exact text")
-        for name in ("runtime_compatible", "source_reachable", "package_available"):
+        for name in (
+            "environment_health_current",
+            "runtime_compatible",
+            "source_reachable",
+            "package_available",
+        ):
             if type(getattr(self, name)) is not bool:
                 raise TypeError(f"{name} must be exact bool")
         if type(self.cache_state) is not DependencyCacheState:
@@ -331,6 +374,20 @@ def _workspace_file(configuration: ConcreteRuntimeConfiguration, relative_path: 
     return os.path.join(configuration.executor_cwd, *relative_path.split("/"))
 
 
+def _materialized_environment_present(
+    configuration: ConcreteRuntimeConfiguration,
+    spec: RequiredEnvironmentSpec,
+) -> bool:
+    if spec.ecosystem is DependencyEcosystem.PYTHON_PIP:
+        return os.path.isfile(_python_dependency_executable(configuration))
+    package_root = (
+        configuration.executor_cwd
+        if spec.package_root == "."
+        else _workspace_file(configuration, spec.package_root)
+    )
+    return os.path.isdir(os.path.join(package_root, "node_modules"))
+
+
 class ConcreteDependencyObservationProvider(DependencyPreparationObservationProvider):
     """Verify task manifest/lock identities against one already-created workspace."""
 
@@ -365,11 +422,17 @@ class ConcreteDependencyObservationProvider(DependencyPreparationObservationProv
                 )
             )
             lock_matches = lock_sha == self._spec.lock_or_constraints_identity.sha256
+        reusable = existing_ready_evidence or self._inputs.existing_ready_evidence
+        if reusable is not None and not _materialized_environment_present(
+            self._configuration, self._spec
+        ):
+            reusable = None
         return DependencyPreparationObservation(
             execution_surface_id=self._inputs.execution_surface_id,
             workspace_identity=workspace_identity,
             source_sha=self._configuration.source_head_sha,
             environment_health_evidence_id=self._inputs.environment_health_evidence_id,
+            environment_health_current=self._inputs.environment_health_current,
             runtime_version=self._inputs.runtime_version,
             runtime_compatible=self._inputs.runtime_compatible,
             package_manager_version=self._inputs.package_manager_version,
@@ -386,14 +449,12 @@ class ConcreteDependencyObservationProvider(DependencyPreparationObservationProv
             cache_state=self._inputs.cache_state,
             offline_source_identity=self._inputs.offline_source_identity,
             offline_source_location=self._inputs.offline_source_location,
-            existing_ready_evidence=(
-                existing_ready_evidence or self._inputs.existing_ready_evidence
-            ),
+            existing_ready_evidence=reusable,
         )
 
 
 class ConcreteDependencyCommandRunner(DependencyCommandRunner):
-    """Run one deterministic preparation command and hash resolved environment evidence."""
+    """Run deterministic preparation and hash resolved environment evidence."""
 
     def __init__(
         self,
@@ -408,18 +469,29 @@ class ConcreteDependencyCommandRunner(DependencyCommandRunner):
         self._attempts = 0
 
     def _cwd(self) -> str:
+        if self._spec.ecosystem is DependencyEcosystem.PYTHON_PIP:
+            return self._configuration.executor_cwd
         if self._spec.package_root == ".":
             return self._configuration.executor_cwd
         return _workspace_file(self._configuration, self._spec.package_root)
 
-    def _run(self, argv: tuple[str, ...], *, suffix: str) -> PosixProcessExecutionResult:
+    def _run(
+        self,
+        argv: tuple[str, ...],
+        *,
+        suffix: str,
+        include_dependency_environment: bool = True,
+    ) -> PosixProcessExecutionResult:
         return run_bounded_posix_process(
             argv,
             timeout_seconds=self._configuration.validation_total_timeout_seconds,
             grace_period_seconds=self._configuration.executor_grace_period_seconds,
             max_output_bytes=self._configuration.validation_max_output_bytes,
             cwd=self._cwd(),
-            env=_environment(self._configuration),
+            env=_environment(
+                self._configuration,
+                include_dependency_environment=include_dependency_environment,
+            ),
             cancelled=self._cancelled,
             containment=_containment_config(
                 self._configuration, suffix=f"dependency:{suffix}"
@@ -460,14 +532,34 @@ class ConcreteDependencyCommandRunner(DependencyCommandRunner):
             return "dependency.package-unavailable"
         return "dependency.preparation-failed"
 
+    def _prepare_clean_python_environment(self) -> PosixProcessExecutionResult:
+        return self._run(
+            (
+                "python",
+                "-m",
+                "venv",
+                "--clear",
+                _python_dependency_environment_directory(self._configuration),
+            ),
+            suffix="python-venv",
+            include_dependency_environment=False,
+        )
+
     def _resolved_identity(self) -> str | None:
         if self._spec.install_mode is DependencyInstallMode.ABSENT_AUTHORIZED_LOCK_GENERATION:
             lock_path = os.path.join(self._cwd(), "package-lock.json")
             digest = _file_sha256(lock_path)
             return None if digest is None else f"lock:{digest}"
-        if self._spec.ecosystem.value == "python-pip":
+        if self._spec.ecosystem is DependencyEcosystem.PYTHON_PIP:
             result = self._run(
-                ("python", "-m", "pip", "freeze", "--all"), suffix="resolve-python"
+                (
+                    _python_dependency_executable(self._configuration),
+                    "-m",
+                    "pip",
+                    "freeze",
+                    "--all",
+                ),
+                suffix="resolve-python",
             )
             if not self._succeeded(result):
                 return None
@@ -502,7 +594,26 @@ class ConcreteDependencyCommandRunner(DependencyCommandRunner):
                 "dependency command runner allows initial preparation plus one changed-input preparation"
             )
         self._attempts += 1
-        result = self._run(tuple(argv), suffix=f"prepare-{self._attempts}")
+        effective_argv = tuple(argv)
+        if self._spec.ecosystem is DependencyEcosystem.PYTHON_PIP:
+            environment_result = self._prepare_clean_python_environment()
+            if not self._succeeded(environment_result):
+                return DependencyCommandObservation(
+                    attempted=True,
+                    succeeded=False,
+                    failure_reason_code="dependency.preparation-failed",
+                )
+            if effective_argv[:3] != ("python", "-m", "pip"):
+                return DependencyCommandObservation(
+                    attempted=True,
+                    succeeded=False,
+                    failure_reason_code="dependency.preparation-failed",
+                )
+            effective_argv = (
+                _python_dependency_executable(self._configuration),
+                *effective_argv[1:],
+            )
+        result = self._run(effective_argv, suffix=f"prepare-{self._attempts}")
         if not self._succeeded(result):
             return DependencyCommandObservation(
                 attempted=True,
