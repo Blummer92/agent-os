@@ -115,6 +115,13 @@ class ExecutionCompositionResult:
     side_effects_performed: bool
     reason_codes: tuple[str, ...]
     evidence_id: str
+    # Additive #762 fields: the exact same canonical objects the single
+    # ``run_concrete_runtime_entrypoint_with_validation_evidence`` call
+    # already produced below, retained by reference for #761's lifecycle
+    # bundle so it never has to re-run the runtime to obtain them.
+    pilot_result: object | None = None
+    workspace_lifecycle_evidence: object | None = None
+    quarantine_packet: object | None = None
 
 
 def _evidence_id(
@@ -514,4 +521,7 @@ def compose_and_run_validation(
         side_effects_performed=side_effects_performed,
         reason_codes=reason_codes,
         evidence_id=evidence_id,
+        pilot_result=pilot_result,
+        workspace_lifecycle_evidence=outcome.workspace_lifecycle_evidence,
+        quarantine_packet=outcome.runtime_outcome.quarantine_evidence,
     )
