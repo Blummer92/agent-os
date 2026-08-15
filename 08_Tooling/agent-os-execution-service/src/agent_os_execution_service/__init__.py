@@ -117,6 +117,7 @@ __all__ = [
     "reconstruct_validation_lifecycle_evidence_bundle",
     "reconstruct_validation_lifecycle_result",
     "redact_public_text",
+    "run_authorized_validation_lifecycle",
     "select_executor_route",
     "serialize_authorized_validation_lifecycle_request",
     "serialize_execution_service_request",
@@ -183,6 +184,16 @@ _LAZY_VALIDATION_LIFECYCLE_EVIDENCE_EXPORTS = frozenset(
 )
 
 
+# The #762 authorized-validation entrypoint composes #757 admission with
+# #758/#759/#760/#761 through ``execution_composition``/
+# ``validation_lifecycle_evidence``, so it carries the same Workflow
+# Scheduler/candidate-packet packaging dependency and stays lazy for the
+# identical reason.
+_LAZY_AUTHORIZED_VALIDATION_ENTRYPOINT_EXPORTS = frozenset(
+    ("run_authorized_validation_lifecycle",)
+)
+
+
 def __getattr__(name: str) -> object:
     if name in _LAZY_COMPOSITION_EXPORTS:
         from . import execution_composition as _execution_composition
@@ -196,4 +207,8 @@ def __getattr__(name: str) -> object:
         from . import validation_lifecycle_evidence as _validation_lifecycle_evidence
 
         return getattr(_validation_lifecycle_evidence, name)
+    if name in _LAZY_AUTHORIZED_VALIDATION_ENTRYPOINT_EXPORTS:
+        from . import authorized_validation_entrypoint as _authorized_validation_entrypoint
+
+        return getattr(_authorized_validation_entrypoint, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

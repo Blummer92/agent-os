@@ -33,7 +33,18 @@ freshness, authorize execution, or change Workflow Scheduler runtime. Future
 version changes require approved change control.
 
 **Agent OS Execution Service**
-(`08_Tooling/agent-os-execution-service/`) moved `0.4.0` -> `0.5.0` under
+(`08_Tooling/agent-os-execution-service/`) moved `0.5.0` -> `0.6.0` under
+WSC-AUTO1F (Issue #762). `authorized_validation_entrypoint.py` adds one thin
+end-to-end entrypoint, `run_authorized_validation_lifecycle`, composing #757
+admission, the existing `compose_and_run_validation` composition boundary
+(extended additively with `pilot_result`/`workspace_lifecycle_evidence`/
+`quarantine_packet` fields so #761 never re-runs the runtime for evidence it
+already produced), and #761's bundle/terminal-result projection, in that
+fixed order. It adds no runner, lease, containment, workspace, status model,
+or retry logic of its own. Package metadata, `EXECUTION_SERVICE_VERSION`, and
+registry records are aligned at `0.6.0`.
+
+The same service moved `0.4.0` -> `0.5.0` under
 AOS-CHATGPT2 (Issue #918). `executor_routing.py` adds one pure deterministic
 execution-surface router for already-selected, already-authorized work. It owns
 exactly four routes, twelve routing-only capabilities, immutable

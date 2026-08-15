@@ -11,6 +11,11 @@ from __future__ import annotations
 from importlib import import_module
 
 __all__ = [
+    "CLAUDE_CODE_ADAPTER_SCHEMA_VERSION",
+    "ClaudeCodeAdapterError",
+    "ClaudeCodeInvocation",
+    "ClaudeCodeResultEvidence",
+    "ClaudeCodeTerminalStatus",
     "Executor",
     "ExecutionResult",
     "HOST_LOCAL_LEASE_SCHEMA_VERSION",
@@ -18,11 +23,41 @@ __all__ = [
     "HostLocalLeaseObservation",
     "HostLocalLeasePolicy",
     "RetryManager",
+    "build_claude_code_invocation",
     "build_execution_request_from_task",
     "is_execution_request",
+    "normalize_claude_code_result",
 ]
 
 _LAZY_EXPORTS = {
+    "CLAUDE_CODE_ADAPTER_SCHEMA_VERSION": (
+        "workflow_scheduler.execution.claude_code_executor_adapter",
+        "CLAUDE_CODE_ADAPTER_SCHEMA_VERSION",
+    ),
+    "ClaudeCodeAdapterError": (
+        "workflow_scheduler.execution.claude_code_executor_adapter",
+        "ClaudeCodeAdapterError",
+    ),
+    "ClaudeCodeInvocation": (
+        "workflow_scheduler.execution.claude_code_executor_adapter",
+        "ClaudeCodeInvocation",
+    ),
+    "ClaudeCodeResultEvidence": (
+        "workflow_scheduler.execution.claude_code_executor_adapter",
+        "ClaudeCodeResultEvidence",
+    ),
+    "ClaudeCodeTerminalStatus": (
+        "workflow_scheduler.execution.claude_code_executor_adapter",
+        "ClaudeCodeTerminalStatus",
+    ),
+    "build_claude_code_invocation": (
+        "workflow_scheduler.execution.claude_code_executor_adapter",
+        "build_claude_code_invocation",
+    ),
+    "normalize_claude_code_result": (
+        "workflow_scheduler.execution.claude_code_executor_adapter",
+        "normalize_claude_code_result",
+    ),
     "ExecutionResult": (
         "workflow_scheduler.execution.executor",
         "ExecutionResult",

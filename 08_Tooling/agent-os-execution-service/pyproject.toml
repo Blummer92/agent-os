@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-os-execution-service"
-version = "0.5.0"
-description = "Agent OS execution-service package: immutable read-only request and inspection core, deterministic validation planning and non-executing executor routing, plus a governed non-authorizing validation-execution composition boundary over the canonical Workflow Scheduler runtime"
+version = "0.6.0"
+description = "Agent OS execution-service package: immutable read-only request and inspection core, deterministic validation planning and non-executing executor routing, a governed non-authorizing validation-execution composition boundary over the canonical Workflow Scheduler runtime, and the end-to-end authorized-validation lifecycle entrypoint composing #757/#758/#759/#760/#761"
 requires-python = ">=3.11"
 
 [tool.setuptools]

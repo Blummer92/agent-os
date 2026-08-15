@@ -1,0 +1,125 @@
+"""WSC-AUTO1F end-to-end authorized validation entrypoint (#762).
+
+Composes the already-canonical #757 admission verifier, the #758/#759
+concrete-runtime seams reused unmodified through
+``execution_composition.compose_and_run_validation``, and the #761 unified
+lifecycle evidence bundle / terminal-result projection into one call. This
+module owns none of that logic: it is a thin ordering and evidence-assembly
+layer only, and performs no execution, admission, or status-precedence
+decision of its own.
+
+No validation is ever spawned unless #757 admission is ACCEPTED. #759
+containment preflight (when the caller's runtime configuration names a
+``delegated_parent_cgroup``) happens inside the single, already-canonical
+``compose_and_run_validation`` call -- before the #758 lease or the worktree
+exist for this invocation -- see
+``workflow_scheduler.execution.concrete_runtime_adapters._preflight_containment``.
+
+Do not add a second orchestrator, lease/containment/workspace/evidence
+implementation, retry loop, or status-mapping table here: every terminal
+status this module returns comes from #761's single, unmodified precedence
+table in ``validation_lifecycle_evidence.project_validation_lifecycle_result``.
+"""
+
+from __future__ import annotations
+
+from workflow_scheduler.execution.single_issue_pilot import (
+    CancellationProbe,
+    SingleIssuePilotInput,
+)
+
+from .authorized_validation import (
+    AuthorizedValidationAdmissionStatus,
+    AuthorizedValidationLifecycleRequest,
+    verify_authorized_validation_admission,
+)
+from .execution_composition import compose_and_run_validation
+from .validation_lifecycle_evidence import (
+    ValidationLifecycleResult,
+    build_validation_lifecycle_evidence_bundle,
+    project_validation_lifecycle_result,
+)
+
+
+def run_authorized_validation_lifecycle(
+    *,
+    admission_request: AuthorizedValidationLifecycleRequest,
+    evaluated_at: str,
+    pilot_input: SingleIssuePilotInput,
+    cancelled: CancellationProbe,
+    git_runner: object | None = None,
+    process_cancelled: object | None = None,
+    changed_paths_inspector: object | None = None,
+) -> ValidationLifecycleResult:
+    """Run the one authorized-validation lifecycle sequence and return its terminal result.
+
+    1. Verify #757 admission. A non-accepted admission returns immediately
+       with zero runtime evidence and zero side effects: no lease, no
+       worktree, no #759 containment, no validation spawn.
+    2. When accepted, delegate exactly once to the canonical
+       ``compose_and_run_validation`` (which itself delegates exactly once
+       to ``run_concrete_runtime_entrypoint_with_validation_evidence``): #759
+       containment preflight, #758 lease acquisition, worktree creation,
+       #760 initial capture, the one authorized validation run, #760 final
+       capture, cleanup, and release all happen inside that one call, in
+       that fixed order, through the unmodified Workflow Scheduler
+       lifecycle -- never duplicated here.
+    3. Assemble the #761 bundle from exactly the evidence that single call
+       produced, and project the one terminal result from it. #761's
+       precedence table is reused unmodified; this function adds no status
+       of its own.
+
+    The three canonical objects the accepted path needs
+    (``ExecutionServiceRequest``, ``ValidationCommandPlan``,
+    ``ConcreteRuntimeConfiguration``) are read from
+    ``admission_request.execution_packet_stage`` -- already independently
+    re-verified as present and non-drifted by #757 admission itself -- so
+    this function never re-derives or duplicates that identity check.
+    """
+    if not isinstance(admission_request, AuthorizedValidationLifecycleRequest):
+        raise TypeError(
+            "admission_request must be exact AuthorizedValidationLifecycleRequest"
+        )
+
+    admission_result = verify_authorized_validation_admission(
+        admission_request, evaluated_at=evaluated_at
+    )
+
+    execution_composition = None
+    if admission_result.status is AuthorizedValidationAdmissionStatus.ACCEPTED:
+        execution_stage = admission_request.execution_packet_stage
+        execution_composition = compose_and_run_validation(
+            request=execution_stage.request,
+            command_plan=execution_stage.command_plan,
+            authorization=admission_request.execution_authorization,
+            evaluated_at=evaluated_at,
+            pilot_input=pilot_input,
+            configuration=execution_stage.runtime_configuration,
+            cancelled=cancelled,
+            git_runner=git_runner,
+            process_cancelled=process_cancelled,
+            changed_paths_inspector=changed_paths_inspector,
+        )
+
+    bundle = build_validation_lifecycle_evidence_bundle(
+        evaluated_at=evaluated_at,
+        admission_request=admission_request,
+        admission_result=admission_result,
+        execution_composition=execution_composition,
+        pilot_result=(
+            execution_composition.pilot_result
+            if execution_composition is not None
+            else None
+        ),
+        workspace_lifecycle_evidence=(
+            execution_composition.workspace_lifecycle_evidence
+            if execution_composition is not None
+            else None
+        ),
+        quarantine_packet=(
+            execution_composition.quarantine_packet
+            if execution_composition is not None
+            else None
+        ),
+    )
+    return project_validation_lifecycle_result(bundle, evaluated_at=evaluated_at)
