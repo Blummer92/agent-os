@@ -109,12 +109,12 @@ def _valid_request_shell(request: object) -> bool:
 
 
 def _has_exact_keys(value: object, expected: set[str]) -> bool:
-    if type(value) is not dict:
+    if type(value) is not dict or len(value) != len(expected):
         return False
     keys = tuple(value.keys())
     if any(type(key) is not str for key in keys):
         return False
-    return len(keys) == len(expected) and set(keys) == expected
+    return set(keys) == expected
 
 
 def validate_instructional_materials_contract(request: ExecutionRequest) -> dict[str, Any]:
