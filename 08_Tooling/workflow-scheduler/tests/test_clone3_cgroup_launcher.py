@@ -47,18 +47,16 @@ def _discover_cgroup2_mount() -> str | None:
 
 
 @pytest.fixture()
-def delegated_parent(tmp_path_factory: pytest.TempPathFactory) -> str | None:
+def delegated_parent(tmp_path_factory: pytest.TempPathFactory) -> str:
     root = _discover_cgroup2_mount()
     if root is None:
-        yield None
-        return
+        pytest.skip("no cgroup v2 mount available on this host")
     name = f"agentos-clone3-launcher-test-{uuid.uuid4().hex}"
     path = os.path.join(root, name)
     try:
         os.mkdir(path)
     except OSError:
-        yield None
-        return
+        pytest.skip("writable/delegated cgroup v2 capability is unavailable on this host")
     yield path
     try:
         os.rmdir(path)
