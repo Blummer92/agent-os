@@ -20,6 +20,7 @@ class DependencyPreparationObservation:
     workspace_identity: str
     source_sha: str
     environment_health_evidence_id: str
+    environment_health_current: bool
     runtime_version: str | None
     runtime_compatible: bool
     package_manager_version: str | None
@@ -32,6 +33,10 @@ class DependencyPreparationObservation:
     offline_source_identity: str | None = None
     offline_source_location: str | None = None
     existing_ready_evidence: DependencyReadinessEvidence | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.environment_health_current) is not bool:
+            raise TypeError("environment_health_current must be exact bool")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -176,6 +181,8 @@ def plan_dependency_preparation(
         raise TypeError("spec must be exact RequiredEnvironmentSpec")
     if type(observation) is not DependencyPreparationObservation:
         raise TypeError("observation must be exact DependencyPreparationObservation")
+    if not observation.environment_health_current:
+        return _blocked(spec, observation, "dependency.environment-stale")
     if observation.runtime_version is None or not observation.runtime_compatible:
         return _blocked(spec, observation, "runtime.incompatible")
     if observation.package_manager_version is None:
