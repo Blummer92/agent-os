@@ -382,3 +382,20 @@ def test_execution_context_subclass_fails_closed_before_nested_inspection():
 
     request = _request(execution_context=EvilContext())
     assert validate_instructional_materials_contract(request)["status"] == "failure"
+
+
+def test_oversized_builtin_mappings_fail_closed_before_schema_processing():
+    oversized = {f"unexpected_{index}": "x" for index in range(4096)}
+    assert (
+        validate_instructional_materials_contract(_request(payload=oversized))["status"]
+        == "failure"
+    )
+
+    payload = _payload()
+    payload["production_gates"] = {
+        f"unexpected_{index}": "x" for index in range(4096)
+    }
+    assert (
+        validate_instructional_materials_contract(_request(payload=payload))["status"]
+        == "failure"
+    )
