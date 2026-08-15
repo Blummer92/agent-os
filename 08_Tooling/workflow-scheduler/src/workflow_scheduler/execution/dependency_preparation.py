@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from scripts.agent_os_execution_capabilities.dependencies import (
     DependencyCacheState,
@@ -30,6 +30,7 @@ class DependencyPreparationObservation:
     package_available: bool
     cache_state: DependencyCacheState
     offline_source_identity: str | None = None
+    offline_source_location: str | None = None
     existing_ready_evidence: DependencyReadinessEvidence | None = None
 
 
@@ -55,6 +56,114 @@ class DependencyCommandRunner(Protocol):
     def run(
         self, argv: tuple[str, ...], *, workspace_identity: str
     ) -> DependencyCommandObservation: ...
+
+
+class DependencyPreparationObservationProvider(Protocol):
+    def observe(
+        self,
+        *,
+        workspace_identity: str,
+        existing_ready_evidence: DependencyReadinessEvidence | None,
+    ) -> DependencyPreparationObservation: ...
+
+
+@runtime_checkable
+class DependencyPreparationAdapter(Protocol):
+    """One task-scoped readiness/preparation seam owned by the Scheduler runtime."""
+
+    def prepare(self, *, workspace_identity: str) -> DependencyReadinessEvidence: ...
+
+    def requires_recheck(self, changed_paths: tuple[str, ...]) -> bool: ...
+
+
+class BoundDependencyPreparationAdapter:
+    """Bind one frozen environment spec to observation and command adapters.
+
+    This adapter performs no retry. A second ``prepare`` call is permitted only
+    after dependency inputs changed and therefore represents a new readiness
+    state, not a retry of the prior attempt.
+    """
+
+    def __init__(
+        self,
+        *,
+        spec: RequiredEnvironmentSpec,
+        observations: DependencyPreparationObservationProvider,
+        runner: DependencyCommandRunner,
+        evaluated_at: str,
+        expires_at: str,
+    ) -> None:
+        if type(spec) is not RequiredEnvironmentSpec:
+            raise TypeError("spec must be exact RequiredEnvironmentSpec")
+        self._spec = spec
+        self._observations = observations
+        self._runner = runner
+        self._evaluated_at = evaluated_at
+        self._expires_at = expires_at
+        self._last_ready: DependencyReadinessEvidence | None = None
+        self._attempts = 0
+
+    @property
+    def attempts(self) -> int:
+        return self._attempts
+
+    @property
+    def last_ready_evidence(self) -> DependencyReadinessEvidence | None:
+        return self._last_ready
+
+    def prepare(self, *, workspace_identity: str) -> DependencyReadinessEvidence:
+        if self._attempts >= 2:
+            raise RuntimeError(
+                "dependency preparation may run only for initial readiness and one changed-input recheck"
+            )
+        self._attempts += 1
+        observation = self._observations.observe(
+            workspace_identity=workspace_identity,
+            existing_ready_evidence=self._last_ready,
+        )
+        if type(observation) is not DependencyPreparationObservation:
+            raise TypeError(
+                "dependency observation provider must return DependencyPreparationObservation"
+            )
+        if observation.workspace_identity != workspace_identity:
+            raise ValueError("dependency observation workspace identity drifted")
+        evidence = execute_dependency_preparation(
+            self._spec,
+            observation,
+            self._runner,
+            evaluated_at=self._evaluated_at,
+            expires_at=self._expires_at,
+        )
+        if evidence.preparation_status is DependencyPreparationStatus.READY:
+            self._last_ready = evidence
+        else:
+            self._last_ready = None
+        return evidence
+
+    def requires_recheck(self, changed_paths: tuple[str, ...]) -> bool:
+        return dependency_inputs_changed(self._spec, changed_paths)
+
+
+def dependency_inputs_changed(
+    spec: RequiredEnvironmentSpec, changed_paths: tuple[str, ...]
+) -> bool:
+    if type(spec) is not RequiredEnvironmentSpec:
+        raise TypeError("spec must be exact RequiredEnvironmentSpec")
+    if type(changed_paths) is not tuple or not all(
+        type(path) is str and path for path in changed_paths
+    ):
+        raise TypeError("changed_paths must be an exact tuple of non-empty strings")
+    watched = {spec.dependency_manifest_identity.relative_path}
+    if spec.lock_or_constraints_identity is not None:
+        watched.add(spec.lock_or_constraints_identity.relative_path)
+    project_roots = tuple(
+        requirement.relative_path.rstrip("/") + "/"
+        for requirement in spec.local_project_requirements
+    )
+    return any(
+        path in watched or any(path.startswith(root) for root in project_roots)
+        for path in changed_paths
+    )
 
 
 def plan_dependency_preparation(
@@ -94,6 +203,17 @@ def plan_dependency_preparation(
             and existing.source_or_registry_identity == spec.approved_source_identity
             and existing.runtime_version == observation.runtime_version
             and existing.package_manager_version == observation.package_manager_version
+            and existing.declared_dependency_identity
+            == spec.dependency_manifest_identity.sha256
+            and existing.lock_or_constraints_identity
+            == (
+                None
+                if spec.lock_or_constraints_identity is None
+                else spec.lock_or_constraints_identity.sha256
+            )
+            and existing.environment_health_evidence_id
+            == observation.environment_health_evidence_id
+            and existing.cache_state == observation.cache_state
             and existing.is_current(evaluated_at)
         )
         if matches:
@@ -107,10 +227,15 @@ def plan_dependency_preparation(
     source_identity = spec.approved_source_identity
     offline = False
     if not observation.source_reachable:
-        if (
-            observation.cache_state is not DependencyCacheState.CURRENT_COMPLETE
-            or not observation.offline_source_identity
-        ):
+        complete_offline = (
+            observation.cache_state is DependencyCacheState.CURRENT_COMPLETE
+            and observation.offline_source_identity is not None
+            and (
+                spec.ecosystem is DependencyEcosystem.NODE_NPM
+                or observation.offline_source_location is not None
+            )
+        )
+        if not complete_offline:
             reason = (
                 "dependency.cache-incomplete"
                 if observation.cache_state
@@ -118,7 +243,7 @@ def plan_dependency_preparation(
                 else "dependency.source-unavailable"
             )
             return _blocked(spec, observation, reason)
-        source_identity = observation.offline_source_identity
+        source_identity = observation.offline_source_identity or source_identity
         offline = True
     if not observation.package_available:
         return _blocked(spec, observation, "dependency.package-unavailable")
@@ -126,7 +251,10 @@ def plan_dependency_preparation(
     if spec.ecosystem is DependencyEcosystem.PYTHON_PIP:
         argv = ["python", "-m", "pip", "install"]
         if offline:
-            argv.extend(("--no-index", "--find-links", source_identity))
+            assert observation.offline_source_location is not None
+            argv.extend(
+                ("--no-index", "--find-links", observation.offline_source_location)
+            )
         argv.extend(("-r", spec.dependency_manifest_identity.relative_path))
         for project in spec.local_project_requirements:
             if project.editable:
@@ -208,13 +336,23 @@ def execute_dependency_preparation(
         if plan.post_success_status is DependencyPreparationStatus.SOURCE_UPDATE_REQUIRED
         else (),
     )
+    resolved = result.resolved_dependency_identity
+    if final.status is DependencyPreparationStatus.READY and not resolved:
+        failed = DependencyPreparationPlan(
+            status=DependencyPreparationStatus.FAILED,
+            argv=plan.argv,
+            source_identity=plan.source_identity,
+            cache_state=plan.cache_state,
+            reason_codes=("dependency.resolved-evidence-missing",),
+        )
+        return _evidence(spec, observation, failed, evaluated_at, expires_at, None)
     return _evidence(
         spec,
         observation,
         final,
         evaluated_at,
         expires_at,
-        result.resolved_dependency_identity,
+        resolved,
     )
 
 
