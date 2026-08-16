@@ -393,12 +393,22 @@ class _DependencyReadyValidator:
                 return PilotValidationObservation(
                     attempted=False,
                     passed=False,
+                    started=False,
+                    # No validation command was ever dispatched, so there is
+                    # nothing whose termination could be in question --
+                    # vacuously terminal, matching every never-started
+                    # command in the frozen-test aggregation.
+                    termination_confirmed=True,
+                    possible_partial_effects=False,
                     reason=self._gate.blocker_summary,
                 )
         if not self._gate.ready:
             return PilotValidationObservation(
                 attempted=False,
                 passed=False,
+                started=False,
+                termination_confirmed=True,
+                possible_partial_effects=False,
                 reason=self._gate.blocker_summary,
             )
         return self._adapter.validate(request)

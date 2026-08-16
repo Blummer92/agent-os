@@ -2533,3 +2533,121 @@ def test_no_no_op_executor_or_second_lifecycle_exists() -> None:
     assert source.count("_dispatch_executor(state, executor)") == 1
     assert source.count("def _run_validation(") == 1
     assert source.count("_run_validation(state, validator)") == 1
+
+
+# --------------------------------------------------------------------------
+# AOS-VALTERM1 (#1205): explicit validation-process termination evidence,
+# at the pilot's own consumption boundary. #1205 does not implement the
+# #1202 lease-release fence -- these tests prove the evidence is correctly
+# wired all the way to PilotValidationObservation, ready for a future #1202
+# refresh to consume, without changing this contract further.
+# --------------------------------------------------------------------------
+
+
+def test_valterm1_standard_mode_distinguishes_executor_from_validation_evidence() -> None:
+    """#1205-9: executor and validation termination proof never collide."""
+    executor = FakeExecutor(
+        observation=PilotExecutionObservation(
+            outcome="succeeded",
+            started=True,
+            termination_confirmed=True,
+            changed_paths=CHANGED_PATHS,
+        )
+    )
+    validation_observation = PilotValidationObservation(
+        attempted=True,
+        passed=True,
+        started=True,
+        termination_confirmed=False,
+        possible_partial_effects=True,
+        completed_tests=REQUIRED_TESTS,
+    )
+    validator = FakeValidator(observation=validation_observation)
+
+    result = _run(executor=executor, validator=validator)
+
+    assert result.status == "completed"
+    # The executor lane's own #759-backed termination proof is unaffected by
+    # the validation lane's separate, weaker evidence.
+    assert result.termination_confirmed is True
+    # The validation lane's evidence lives on the observation the validator
+    # actually returned, independent of the executor lane.
+    assert len(validator.calls) == 1
+    assert validation_observation.termination_confirmed is False
+    assert validation_observation.possible_partial_effects is True
+
+
+def test_valterm1_validation_only_call_return_is_not_terminal_proof() -> None:
+    """#1205-8: the pilot completing is not proof every dispatched validation
+    command confirmed termination -- ``executor_called is False`` in this
+    mode makes that distinction more important, not less."""
+    validation_observation = PilotValidationObservation(
+        attempted=True,
+        passed=True,
+        started=True,
+        termination_confirmed=False,
+        possible_partial_effects=True,
+        completed_tests=REQUIRED_TESTS,
+    )
+    validator = FakeValidator(observation=validation_observation)
+
+    result = _run_validation_only(validator=validator)
+
+    # #1205 carries the evidence; it does not yet gate pilot status on it --
+    # that policy belongs to #1202. Call-return-based status alone still
+    # reads as ordinary success here.
+    assert result.status == "completed"
+    assert result.executor_called is False
+    # The explicit evidence the validator actually returned says otherwise: a
+    # future consumer reading it directly, instead of inferring safety from
+    # status == "completed", would correctly treat this as unresolved.
+    assert len(validator.calls) == 1
+    assert validation_observation.termination_confirmed is False
+    assert validation_observation.possible_partial_effects is True
+
+
+def test_valterm1_forward_compatible_explicit_evidence_replaces_call_return() -> None:
+    """#1205-18: a hypothetical future consumer can switch from "the call
+    returned" to reading ``termination_confirmed`` directly, with no further
+    change to this contract -- proving forward compatibility for #1202's
+    eventual refresh away from ``validation_control_returned``."""
+    for termination_confirmed, possible_partial_effects in ((True, False), (False, True)):
+        observation = PilotValidationObservation(
+            attempted=True,
+            passed=True,
+            started=True,
+            termination_confirmed=termination_confirmed,
+            possible_partial_effects=possible_partial_effects,
+            completed_tests=REQUIRED_TESTS,
+        )
+        validator = FakeValidator(observation=observation)
+
+        result = _run_validation_only(validator=validator)
+
+        # Call-return-based signal is identical in both scenarios...
+        assert result.status == "completed"
+        call_return_based_verdict = result.status == "completed"
+        # ...but the explicit evidence correctly distinguishes them.
+        explicit_evidence_based_verdict = observation.termination_confirmed
+        assert explicit_evidence_based_verdict is termination_confirmed
+        if not termination_confirmed:
+            assert call_return_based_verdict != explicit_evidence_based_verdict
+
+
+def test_valterm1_pilot_validation_observation_defaults_are_conservative() -> None:
+    """A future/unaware ``ValidationAdapter`` that omits the new fields is
+    read as unresolved, never as silently proven terminal."""
+    bare = PilotValidationObservation(attempted=True, passed=True)
+    assert bare.started is False
+    assert bare.termination_confirmed is False
+    assert bare.possible_partial_effects is False
+
+
+def test_valterm1_field_names_match_executor_lane_vocabulary() -> None:
+    """PilotValidationObservation reuses PilotExecutionObservation's own
+    #759 vocabulary rather than inventing a parallel one."""
+    executor_fields = set(PilotExecutionObservation.__dataclass_fields__)
+    validation_fields = set(PilotValidationObservation.__dataclass_fields__)
+    shared = {"started", "termination_confirmed", "possible_partial_effects"}
+    assert shared <= executor_fields
+    assert shared <= validation_fields

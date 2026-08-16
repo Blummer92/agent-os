@@ -816,6 +816,11 @@ def test_runtime_wrappers_refuse_executor_and_validator_before_ready() -> None:
     validation = wrapped_validator.validate(SimpleNamespace(workspace_identity="workspace:1"))
     assert validation.attempted is False
     assert validation.passed is False
+    # AOS-VALTERM1 (#1205): nothing was ever dispatched, so this is
+    # vacuously terminal -- not silently read as unresolved.
+    assert validation.started is False
+    assert validation.termination_confirmed is True
+    assert validation.possible_partial_effects is False
     assert executor.calls == 0
     assert validator.calls == 0
 
@@ -1142,6 +1147,9 @@ def test_r2_preparation_created_tracked_drift_forbids_ready_provider_and_validat
         SimpleNamespace(workspace_identity="workspace:1")
     )
     assert result.attempted is False and result.passed is False
+    assert result.started is False
+    assert result.termination_confirmed is True
+    assert result.possible_partial_effects is False
 
 
 def test_r2_incomplete_or_source_drifted_reinspection_fails_closed() -> None:

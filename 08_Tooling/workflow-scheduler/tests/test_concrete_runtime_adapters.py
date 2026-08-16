@@ -341,6 +341,63 @@ def test_runner_maps_posix_evidence_and_never_retries(
         runner.run(request)
 
 
+def test_runner_maps_759_termination_evidence_exactly(tmp_path: Path) -> None:
+    """#1205-14: termination_confirmed/possible_partial_effects pass through
+    from PosixProcessExecutionResult to CommandRunObservation unchanged --
+    never inferred from outcome or return_code."""
+    configuration = _configuration(
+        tmp_path, validation_argv=(sys.executable, "-c", "pass")
+    )
+    Path(configuration.executor_cwd).mkdir()
+    runner = BoundPosixCommandRunner(configuration)
+    command = configuration.required_test_commands[0]
+    request = CommandRunRequest(
+        test_id=command.test_id,
+        argv=command.argv,
+        timeout_seconds=1.0,
+    )
+
+    observation = runner.run(request)
+
+    assert runner.last_result is not None
+    assert observation.outcome == "succeeded"
+    assert observation.termination_confirmed == runner.last_result.termination_confirmed
+    assert (
+        observation.possible_partial_effects
+        == runner.last_result.possible_partial_effects
+    )
+    # A real contained/uncontained #759 run of `python -c "pass"` genuinely
+    # confirms termination; this pins the mapping isn't merely coincidentally
+    # equal on both sides (e.g. both False by omission).
+    assert observation.termination_confirmed is True
+    assert observation.possible_partial_effects is False
+
+
+def test_runner_maps_759_termination_evidence_on_failure_too(tmp_path: Path) -> None:
+    """A failed command can still be terminal -- outcome and evidence are
+    independent, mirroring PosixProcessExecutionResult exactly."""
+    configuration = _configuration(
+        tmp_path, validation_argv=(sys.executable, "-c", "import sys;sys.exit(1)")
+    )
+    Path(configuration.executor_cwd).mkdir()
+    runner = BoundPosixCommandRunner(configuration)
+    command = configuration.required_test_commands[0]
+    request = CommandRunRequest(
+        test_id=command.test_id,
+        argv=command.argv,
+        timeout_seconds=1.0,
+    )
+
+    observation = runner.run(request)
+
+    assert runner.last_result is not None
+    assert observation.outcome == "failed"
+    assert observation.started is True
+    assert observation.termination_confirmed == runner.last_result.termination_confirmed
+    assert observation.termination_confirmed is True
+    assert observation.possible_partial_effects is False
+
+
 def test_unbound_runner_argv_fails_before_execution(tmp_path: Path) -> None:
     configuration = _configuration(tmp_path)
     runner = BoundPosixCommandRunner(configuration)
