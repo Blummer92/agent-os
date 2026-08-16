@@ -160,6 +160,8 @@ def _command_outcome(test_id, *, outcome="succeeded", started=True, return_code=
         test_id=test_id,
         outcome=outcome,
         started=started,
+        termination_confirmed=True,
+        possible_partial_effects=False,
         return_code=return_code,
         stdout_text="ok",
         stderr_text="",
@@ -172,6 +174,9 @@ def _validation_result(request, *, passed=True, attempted=True, outcome="succeed
     runtime = request.execution_packet_stage.runtime_configuration
     test_ids = tuple(item.test_id for item in runtime.required_test_commands)
     return FrozenTestValidationResult(
+        started=attempted,
+        termination_confirmed=True,
+        possible_partial_effects=False,
         attempted=attempted,
         passed=passed,
         cancellation_requested=False,

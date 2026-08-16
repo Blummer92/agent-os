@@ -881,6 +881,8 @@ def _reconstruct_admission_result(payload: object) -> AuthorizedValidationAdmiss
 
 def _serialize_command_run_observation(value: object) -> dict[str, object]:
     return {
+        "termination_confirmed": value.termination_confirmed,
+        "possible_partial_effects": value.possible_partial_effects,
         "test_id": value.test_id,
         "outcome": value.outcome,
         "started": value.started,
@@ -895,6 +897,8 @@ def _serialize_command_run_observation(value: object) -> dict[str, object]:
 def _reconstruct_command_run_observation(payload: dict[str, object]) -> object:
     CommandRunObservation = _command_run_observation_type()
     return CommandRunObservation(
+        termination_confirmed=payload["termination_confirmed"],
+        possible_partial_effects=payload["possible_partial_effects"],
         test_id=payload["test_id"],
         outcome=payload["outcome"],
         started=payload["started"],
@@ -908,6 +912,9 @@ def _reconstruct_command_run_observation(payload: dict[str, object]) -> object:
 
 def _serialize_validation_result(value: object) -> dict[str, object]:
     return {
+        "started": value.started,
+        "termination_confirmed": value.termination_confirmed,
+        "possible_partial_effects": value.possible_partial_effects,
         "attempted": value.attempted,
         "passed": value.passed,
         "cancellation_requested": value.cancellation_requested,
@@ -922,6 +929,9 @@ def _serialize_validation_result(value: object) -> dict[str, object]:
 def _reconstruct_validation_result(payload: dict[str, object]) -> object:
     FrozenTestValidationResult = _frozen_test_validation_result_type()
     return FrozenTestValidationResult(
+        started=payload["started"],
+        termination_confirmed=payload["termination_confirmed"],
+        possible_partial_effects=payload["possible_partial_effects"],
         attempted=payload["attempted"],
         passed=payload["passed"],
         cancellation_requested=payload["cancellation_requested"],
