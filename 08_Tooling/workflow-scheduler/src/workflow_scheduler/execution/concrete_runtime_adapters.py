@@ -268,6 +268,8 @@ class BoundPosixCommandRunner(BoundedCommandRunner):
             test_id=request.test_id,
             outcome=outcome,
             started=result.started,
+            termination_confirmed=result.termination_confirmed,
+            possible_partial_effects=result.possible_partial_effects,
             return_code=result.return_code,
             stdout_text=result.stdout_text,
             stderr_text=result.stderr_text,

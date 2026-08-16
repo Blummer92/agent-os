@@ -984,3 +984,354 @@ def test_module_source_contains_no_forbidden_execution_tokens() -> None:
     )
     for token in forbidden:
         assert token not in source
+
+
+# --------------------------------------------------------------------------
+# AOS-VALTERM1 (#1205): explicit validation-process termination evidence
+#
+# CommandRunObservation.termination_confirmed/possible_partial_effects carry
+# the same #759 vocabulary through FrozenTestValidationResult into
+# PilotValidationObservation, independently of outcome/return_code, so a
+# validator call returning control is never mistaken for proof that every
+# dispatched command actually terminated.
+# --------------------------------------------------------------------------
+
+
+def test_valterm1_succeeded_command_preserves_confirmed_termination() -> None:
+    """#1205-1: started + succeeded + confirmed termination, no partial effects."""
+    adapter = make_adapter(
+        {"test-a": success("test-a", termination_confirmed=True, possible_partial_effects=False)}
+    )
+    observed = adapter.validate(request("test-a"))
+
+    assert observed.passed is True
+    assert observed.started is True
+    assert observed.termination_confirmed is True
+    assert observed.possible_partial_effects is False
+    assert outcome(adapter).termination_confirmed is True
+    assert outcome(adapter).possible_partial_effects is False
+
+
+def test_valterm1_failed_command_can_still_be_terminal() -> None:
+    """#1205-2: outcome=failed and termination_confirmed=true are independent."""
+    failing = CommandRunObservation(
+        test_id="test-a",
+        outcome="failed",
+        started=True,
+        termination_confirmed=True,
+        possible_partial_effects=False,
+        return_code=1,
+    )
+    adapter = make_adapter({"test-a": failing})
+
+    observed = adapter.validate(request("test-a"))
+
+    assert observed.passed is False
+    assert outcome(adapter).outcome == "failed"
+    # Validation failed, but the process's own termination is still proven.
+    assert observed.started is True
+    assert observed.termination_confirmed is True
+    assert observed.possible_partial_effects is False
+
+
+def test_valterm1_timeout_preserves_confirmed_termination(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1205-3: elapsed>effective_timeout reclassifies outcome, not the proof."""
+    monkeypatch.setattr(module.time, "monotonic", Clock(0.0, 0.0, 0.0, 0.0, 0.2, 0.2))
+    slow = CommandRunObservation(
+        test_id="test-a",
+        outcome="succeeded",
+        started=True,
+        termination_confirmed=True,
+        possible_partial_effects=False,
+        return_code=0,
+    )
+    adapter = make_adapter(
+        {"test-a": slow}, per_command_timeout_seconds=0.1, total_timeout_seconds=1
+    )
+
+    observed = adapter.validate(request("test-a"))
+
+    assert outcome(adapter).outcome == "timed-out"
+    assert observed.started is True
+    assert observed.termination_confirmed is True
+    assert observed.possible_partial_effects is False
+
+
+def test_valterm1_total_budget_timeout_after_normalize_preserves_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1205-3b: the total-budget-exhausted rewrap must not discard #759 evidence."""
+    terminal = CommandRunObservation(
+        test_id="test-a",
+        outcome="succeeded",
+        started=True,
+        termination_confirmed=True,
+        possible_partial_effects=False,
+        return_code=0,
+    )
+    monkeypatch.setattr(module.time, "monotonic", Clock(0.0, 0.0, 0.0, 0.0, 0.5, 2.0))
+    adapter = make_adapter(
+        {"test-a": terminal}, per_command_timeout_seconds=10.0, total_timeout_seconds=1.0
+    )
+
+    observed = adapter.validate(request("test-a"))
+
+    assert outcome(adapter).outcome == "timed-out"
+    assert adapter.last_result is not None
+    assert adapter.last_result.total_timed_out is True
+    # The command actually ran and confirmed termination before the total
+    # budget was found exhausted; that proof must survive the rewrap.
+    assert observed.started is True
+    assert observed.termination_confirmed is True
+    assert observed.possible_partial_effects is False
+
+
+def test_valterm1_cancellation_preserves_confirmed_termination() -> None:
+    """#1205-4."""
+    terminal = CommandRunObservation(
+        test_id="test-a",
+        outcome="cancelled",
+        started=True,
+        termination_confirmed=True,
+        possible_partial_effects=False,
+    )
+    adapter = make_adapter({"test-a": terminal})
+
+    observed = adapter.validate(request("test-a"))
+
+    assert outcome(adapter).outcome == "cancelled"
+    assert observed.started is True
+    assert observed.termination_confirmed is True
+    assert observed.possible_partial_effects is False
+
+
+def test_valterm1_started_without_confirmed_termination_is_preserved_unresolved() -> None:
+    """#1205-5: explicit unresolved termination is carried through, not hidden."""
+    adapter = make_adapter(
+        {"test-a": success("test-a", termination_confirmed=False, possible_partial_effects=False)}
+    )
+
+    observed = adapter.validate(request("test-a"))
+
+    assert observed.passed is True
+    assert observed.started is True
+    assert observed.termination_confirmed is False
+    # Lacking proof, despite reporting no partial effects itself, still marks
+    # the aggregate as possibly having partial effects.
+    assert observed.possible_partial_effects is True
+
+
+def test_valterm1_started_with_explicit_partial_effects_is_preserved() -> None:
+    """#1205-6."""
+    adapter = make_adapter(
+        {"test-a": success("test-a", termination_confirmed=False, possible_partial_effects=True)}
+    )
+
+    observed = adapter.validate(request("test-a"))
+
+    assert observed.started is True
+    assert observed.termination_confirmed is False
+    assert observed.possible_partial_effects is True
+
+
+@pytest.mark.parametrize(
+    ("changes", "reason_fragment"),
+    [
+        ({"termination_confirmed": 1}, "termination evidence was malformed"),
+        ({"termination_confirmed": "yes"}, "termination evidence was malformed"),
+        ({"possible_partial_effects": 0}, "partial-effects evidence was malformed"),
+        ({"possible_partial_effects": None}, "partial-effects evidence was malformed"),
+        (
+            {"started": False, "termination_confirmed": True, "outcome": "failed", "return_code": None},
+            "claimed confirmed termination for a command that never started",
+        ),
+    ],
+)
+def test_valterm1_malformed_termination_evidence_fails_closed(
+    changes: dict[str, object], reason_fragment: str
+) -> None:
+    """#1205-7: malformed or contradictory evidence is never silently accepted."""
+    adapter = make_adapter({"test-a": success("test-a", **changes)})
+
+    observed = adapter.validate(request("test-a"))
+
+    assert observed.passed is False
+    assert outcome(adapter).outcome == "failed"
+    assert reason_fragment in outcome(adapter).reason
+    # Fail-closed evidence never claims termination it could not verify.
+    assert outcome(adapter).termination_confirmed is False
+
+
+def test_valterm1_call_returning_is_not_equated_with_terminal_proof() -> None:
+    """#1205-8/18: the validate() call succeeding is not termination proof.
+
+    This is the exact gap #1205 closes: a validator can return control
+    (attempted=True, passed=True) while the underlying command's termination
+    was never confirmed. A consumer must read ``termination_confirmed``
+    explicitly rather than inferring it from the call having returned or from
+    ``passed`` -- proving the old "call returned" proxy and the new explicit
+    evidence are genuinely different signals, so a future consumer can safely
+    switch from one to the other without another model change.
+    """
+    adapter = make_adapter(
+        {"test-a": success("test-a", termination_confirmed=False, possible_partial_effects=True)}
+    )
+
+    observed = adapter.validate(request("test-a"))
+
+    # The call returned normally and validation criteria were met...
+    assert observed.attempted is True
+    assert observed.passed is True
+    # ...but that is not proof every dispatched command terminated. A
+    # hypothetical release-permission check based on call-return alone would
+    # wrongly treat this as safe; one reading the explicit field would not.
+    call_return_based_release_permitted = observed.attempted and observed.passed
+    explicit_evidence_based_release_permitted = observed.termination_confirmed
+    assert call_return_based_release_permitted is True
+    assert explicit_evidence_based_release_permitted is False
+    assert call_return_based_release_permitted != explicit_evidence_based_release_permitted
+
+
+def test_valterm1_multiple_commands_all_terminal_aggregates_true() -> None:
+    """#1205-10."""
+    adapter = make_adapter(
+        {
+            "test-a": success("test-a", termination_confirmed=True),
+            "test-b": success("test-b", termination_confirmed=True),
+        },
+        test_ids=("test-a", "test-b"),
+    )
+
+    adapter.validate(request("test-a", "test-b"))
+
+    assert adapter.last_result is not None
+    assert adapter.last_result.started is True
+    assert adapter.last_result.termination_confirmed is True
+    assert adapter.last_result.possible_partial_effects is False
+
+
+def test_valterm1_multiple_commands_one_nonterminal_aggregates_false() -> None:
+    """#1205-11: a single unresolved command defeats the whole aggregate."""
+    adapter = make_adapter(
+        {
+            "test-a": success("test-a", termination_confirmed=True),
+            "test-b": success("test-b", termination_confirmed=False),
+        },
+        test_ids=("test-a", "test-b"),
+    )
+
+    adapter.validate(request("test-a", "test-b"))
+
+    assert adapter.last_result is not None
+    assert adapter.last_result.started is True
+    assert adapter.last_result.termination_confirmed is False
+    assert adapter.last_result.possible_partial_effects is True
+
+
+def test_valterm1_never_started_command_does_not_falsely_defeat_aggregate() -> None:
+    """#1205-12: a command excluded by an earlier cancellation stays out of it."""
+
+    def cancel_after_first() -> bool:
+        cancel_after_first.count += 1  # type: ignore[attr-defined]
+        return cancel_after_first.count > 1  # type: ignore[attr-defined]
+
+    cancel_after_first.count = 0  # type: ignore[attr-defined]
+
+    adapter = make_adapter(
+        {
+            "test-a": success("test-a", termination_confirmed=True),
+            "test-b": success("test-b", termination_confirmed=True),
+        },
+        test_ids=("test-a", "test-b"),
+        cancelled=cancel_after_first,
+    )
+
+    result = adapter.validate(request("test-a", "test-b"))
+
+    assert result.attempted is True
+    assert adapter.last_result is not None
+    outcomes = adapter.last_result.command_outcomes
+    assert outcomes[0].test_id == "test-a" and outcomes[0].started is True
+    assert outcomes[1].test_id == "test-b" and outcomes[1].started is False
+    # test-b was never dispatched (cancelled first); it must not drag the
+    # aggregate, proven terminal by test-a alone, down to unresolved.
+    assert adapter.last_result.termination_confirmed is True
+    assert adapter.last_result.possible_partial_effects is False
+
+
+def test_valterm1_zero_commands_started_is_vacuously_terminal() -> None:
+    """No commands ran at all (identity/order mismatch) -- nothing to prove."""
+    runner = FakeRunner({"test-a": success("test-a")})
+    adapter = FrozenTestValidationAdapter(required_test_commands=commands("test-a"), runner=runner)
+
+    observed = adapter.validate(request("test-b"))
+
+    assert observed.passed is False
+    assert observed.started is False
+    assert observed.termination_confirmed is True
+    assert observed.possible_partial_effects is False
+    assert runner.calls == []
+
+
+@pytest.mark.parametrize("error_type", PROCESS_CONTROL_EXCEPTIONS)
+def test_valterm1_process_control_exception_fabricates_no_terminal_evidence(
+    error_type: type[BaseException],
+) -> None:
+    """#1205-13: a hard stop mid-command leaves no result to report at all."""
+    runner = FakeRunner({"test-a": error_type("process control")})
+    adapter = FrozenTestValidationAdapter(required_test_commands=commands("test-a"), runner=runner)
+
+    with pytest.raises(error_type):
+        adapter.validate(request("test-a"))
+
+    # No PilotValidationObservation is ever produced on this path, so no
+    # termination_confirmed=True could be fabricated for the caller to see.
+    assert adapter.last_result is None
+
+
+def test_valterm1_command_run_observation_fields_are_independent_of_outcome() -> None:
+    """Outcome/return_code must never be used to infer termination evidence."""
+    for outcome_value, termination, partial in (
+        ("succeeded", True, False),
+        ("succeeded", False, True),
+        ("failed", True, False),
+        ("failed", False, True),
+        ("timed-out", True, False),
+        ("timed-out", False, True),
+        ("cancelled", True, False),
+        ("cancelled", False, True),
+    ):
+        observation = CommandRunObservation(
+            test_id="test-a",
+            outcome=outcome_value,  # type: ignore[arg-type]
+            started=True,
+            termination_confirmed=termination,
+            possible_partial_effects=partial,
+        )
+        assert observation.outcome == outcome_value
+        assert observation.termination_confirmed is termination
+        assert observation.possible_partial_effects is partial
+
+
+def test_valterm1_aggregate_helper_is_pure_and_matches_documented_rule() -> None:
+    aggregate = module._aggregate_command_termination
+
+    assert aggregate(()) == (False, True, False)
+
+    never_started = CommandRunObservation(test_id="x", outcome="cancelled", started=False)
+    assert aggregate((never_started,)) == (False, True, False)
+
+    terminal = CommandRunObservation(
+        test_id="x", outcome="succeeded", started=True, termination_confirmed=True
+    )
+    assert aggregate((terminal,)) == (True, True, False)
+
+    unresolved = CommandRunObservation(
+        test_id="x", outcome="succeeded", started=True, termination_confirmed=False
+    )
+    assert aggregate((unresolved,)) == (True, False, True)
+
+    assert aggregate((terminal, never_started)) == (True, True, False)
+    assert aggregate((terminal, unresolved)) == (True, False, True)

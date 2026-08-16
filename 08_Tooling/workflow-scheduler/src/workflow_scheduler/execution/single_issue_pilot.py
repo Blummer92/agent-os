@@ -467,10 +467,29 @@ class PilotValidationRequest:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PilotValidationObservation:
-    """Observed validation result for one bounded validation attempt."""
+    """Observed validation result for one bounded validation attempt.
+
+    ``started``, ``termination_confirmed``, and ``possible_partial_effects``
+    (AOS-VALTERM1 / #1205) carry the same #759 termination vocabulary
+    ``PilotExecutionObservation`` already exposes for the executor lane,
+    aggregated conservatively across whatever the validator actually
+    dispatched. The validator's call returning control -- ``attempted``/
+    ``passed`` being set at all -- is never by itself proof that every
+    dispatched validation command terminated; these fields are the explicit,
+    additive evidence for that question. They default to the conservative
+    reading (nothing proven) so an adapter that predates this contract is
+    never silently read as having proven termination it never reported.
+
+    This observation only describes what validation actually did. It carries
+    no lease-release or lifecycle decision of its own -- that policy lives
+    where the lease is owned, not here.
+    """
 
     attempted: bool
     passed: bool
+    started: bool = False
+    termination_confirmed: bool = False
+    possible_partial_effects: bool = False
     completed_tests: tuple[str, ...] = ()
     changed_paths: tuple[str, ...] = ()
     reason: str = ""
@@ -941,7 +960,9 @@ class _PilotState:
     possible_partial_effects: bool = False
 
     validation_attempts: int = 0
-    validation_control_returned: bool = False
+    validation_started: bool | None = None
+    validation_termination_confirmed: bool = False
+    validation_possible_partial_effects: bool = False
     validation_attempted: bool = False
     validation_passed: bool = False
     changed_paths: tuple[str, ...] = ()
@@ -2017,14 +2038,12 @@ def _run_validation(state: _PilotState, validator: ValidationAdapter) -> None:
         # A bounded, contract-defined adapter error is still the one-shot
         # validation call completing and handing control back, so the
         # validation lane is resolved even though its outcome is a failure.
-        state.validation_control_returned = True
         raise state.stop(
             "failed",
             reasons=("validation.error",),
             detail="validation:error",
             error=str(exc),
         ) from exc
-    state.validation_control_returned = True
 
     if not isinstance(observation, PilotValidationObservation):
         raise state.stop(
@@ -2033,6 +2052,9 @@ def _run_validation(state: _PilotState, validator: ValidationAdapter) -> None:
             detail="validation:unsupported-observation",
         )
 
+    state.validation_started = bool(observation.started)
+    state.validation_termination_confirmed = bool(observation.termination_confirmed)
+    state.validation_possible_partial_effects = bool(observation.possible_partial_effects)
     state.validation_attempted = bool(observation.attempted)
     state.validation_passed = bool(observation.passed)
 
@@ -2243,8 +2265,14 @@ def _termination_proven(state: _PilotState) -> bool:
     """
     if state.executor_dispatch_attempts and not state.termination_confirmed:
         return False
-    if state.validation_attempts and not state.validation_control_returned:
-        return False
+    if state.validation_attempts:
+        if state.validation_started is None:
+            return False
+        if state.validation_started and (
+            not state.validation_termination_confirmed
+            or state.validation_possible_partial_effects
+        ):
+            return False
     return True
 
 
