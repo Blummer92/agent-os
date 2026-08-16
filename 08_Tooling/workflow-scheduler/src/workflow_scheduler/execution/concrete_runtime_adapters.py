@@ -22,12 +22,15 @@ from scripts.agent_os_execution_capabilities.dependencies import (
 )
 from workflow_scheduler.execution import cgroup_v2_containment
 from workflow_scheduler.execution.dependency_preparation import (
+    UNSUPPORTED_SOURCE_INDIRECTION,
     BoundDependencyPreparationAdapter,
     DependencyCommandObservation,
     DependencyCommandRunner,
     DependencyPreparationAdapter,
     DependencyPreparationObservation,
     DependencyPreparationObservationProvider,
+    validate_npm_lock_source_forms,
+    validate_python_requirements_source_forms,
 )
 from workflow_scheduler.execution.frozen_test_validation_adapter import (
     BoundedCommandRunner,
@@ -71,6 +74,8 @@ from workflow_scheduler.execution.workspace_state_evidence import (
 )
 
 ProcessCancellationCheck = Callable[[], bool]
+
+_MAX_MANIFEST_BYTES = 4_194_304
 
 
 class ConcreteRuntimeContainmentError(ConcreteRuntimeConfigurationError):
@@ -188,6 +193,13 @@ def _environment(
         "LC_ALL": "C",
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_TERMINAL_PROMPT": "0",
+        # Ambient pip/npm configuration files may declare additional indexes,
+        # scoped registries, or mirrors that a command-line source argument
+        # cannot override. Disabling them with each tool's own documented
+        # "no config file" value keeps the approved source authoritative.
+        "PIP_CONFIG_FILE": os.devnull,
+        "NPM_CONFIG_USERCONFIG": os.devnull,
+        "NPM_CONFIG_GLOBALCONFIG": os.devnull,
     }
     spec = configuration.required_environment_spec
     if (
@@ -419,6 +431,53 @@ def _workspace_file(configuration: ConcreteRuntimeConfiguration, relative_path: 
     return os.path.join(configuration.executor_cwd, *relative_path.split("/"))
 
 
+def _read_workspace_text(path: str) -> str | None:
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read(_MAX_MANIFEST_BYTES + 1)
+    except OSError:
+        return None
+    if len(raw) > _MAX_MANIFEST_BYTES:
+        return None
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def _observed_source_form_reason_codes(
+    configuration: ConcreteRuntimeConfiguration, spec: RequiredEnvironmentSpec
+) -> tuple[str, ...]:
+    """Validate the workspace manifest/lock source forms against the frozen spec.
+
+    Unreadable, oversized, or unparseable dependency input fails closed: the
+    structural contract cannot be proven, so preparation must not proceed.
+    """
+    if spec.ecosystem is DependencyEcosystem.PYTHON_PIP:
+        text = _read_workspace_text(
+            _workspace_file(
+                configuration, spec.dependency_manifest_identity.relative_path
+            )
+        )
+        if text is None:
+            return (UNSUPPORTED_SOURCE_INDIRECTION,)
+        return validate_python_requirements_source_forms(text, spec)
+    if spec.lock_or_constraints_identity is None:
+        # Authorized lock generation has no lock to validate yet; the generated
+        # lock is returned as SOURCE_UPDATE_REQUIRED and re-enters this contract.
+        return ()
+    text = _read_workspace_text(
+        _workspace_file(configuration, spec.lock_or_constraints_identity.relative_path)
+    )
+    if text is None:
+        return (UNSUPPORTED_SOURCE_INDIRECTION,)
+    try:
+        payload = json.loads(text)
+    except (ValueError, json.JSONDecodeError):
+        return (UNSUPPORTED_SOURCE_INDIRECTION,)
+    return validate_npm_lock_source_forms(payload, spec)
+
+
 def _materialized_environment_present(
     configuration: ConcreteRuntimeConfiguration,
     spec: RequiredEnvironmentSpec,
@@ -495,6 +554,9 @@ class ConcreteDependencyObservationProvider(DependencyPreparationObservationProv
             ),
             lock_matches=lock_matches,
             local_projects_match=local_projects_match,
+            source_form_reason_codes=_observed_source_form_reason_codes(
+                self._configuration, self._spec
+            ),
             source_identity_matches=(
                 self._inputs.observed_source_identity
                 == self._spec.approved_source_identity

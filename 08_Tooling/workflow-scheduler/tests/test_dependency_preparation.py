@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -17,6 +18,7 @@ from scripts.agent_os_execution_capabilities.dependencies import (
     RequiredEnvironmentSpec,
 )
 from workflow_scheduler.execution import single_issue_runtime as runtime_module
+from workflow_scheduler.execution.single_issue_pilot import WorkspaceInspection
 from workflow_scheduler.execution.concrete_runtime_adapters import (
     ConcreteDependencyCommandRunner,
     ConcreteDependencyObservationProvider,
@@ -25,12 +27,18 @@ from workflow_scheduler.execution.concrete_runtime_adapters import (
     _python_dependency_environment_directory,
 )
 from workflow_scheduler.execution.dependency_preparation import (
+    POST_PREPARATION_DRIFT,
+    UNDECLARED_LOCAL_PROJECT,
+    UNDECLARED_PACKAGE_SOURCE,
+    UNSUPPORTED_SOURCE_INDIRECTION,
     BoundDependencyPreparationAdapter,
     DependencyCommandObservation,
     DependencyPreparationObservation,
     dependency_inputs_changed,
     execute_dependency_preparation,
     plan_dependency_preparation,
+    validate_npm_lock_source_forms,
+    validate_python_requirements_source_forms,
 )
 
 SHA = "a" * 64
@@ -64,7 +72,44 @@ def observation(**changes) -> DependencyPreparationObservation:
     return DependencyPreparationObservation(**values)
 
 
-def python_spec(*, qualification: bool = False) -> RequiredEnvironmentSpec:
+# The actual editable local projects declared by the repository-root
+# `requirements-dev.txt`. #935 requires these to enter through the structured
+# local-project contract rather than through raw manifest text.
+ROOT_EDITABLE_PROJECTS = (
+    "08_Tooling/agent-memory-context-manager",
+    "08_Tooling/visual-asset-intake",
+    "08_Tooling/workflow-scheduler",
+    "src",
+)
+
+ROOT_REQUIREMENTS_TEXT = """\
+# Development & Testing Dependencies
+pytest>=7.0.0
+pytest-mock>=3.10.0
+PyGithub==2.9.1
+
+# Local editable packages
+-e ./src
+-e ./08_Tooling/agent-memory-context-manager
+-e ./08_Tooling/workflow-scheduler
+-e ./08_Tooling/visual-asset-intake
+"""
+
+
+def local_projects(
+    paths: tuple[str, ...] = ROOT_EDITABLE_PROJECTS, *, editable: bool = True
+) -> tuple[LocalProjectRequirement, ...]:
+    return tuple(
+        LocalProjectRequirement(relative_path=path, sha256=SHA, editable=editable)
+        for path in sorted(paths)
+    )
+
+
+def python_spec(
+    *,
+    qualification: bool = False,
+    projects: tuple[LocalProjectRequirement, ...] | None = None,
+) -> RequiredEnvironmentSpec:
     return RequiredEnvironmentSpec(
         ecosystem=DependencyEcosystem.PYTHON_PIP,
         package_root=".",
@@ -80,6 +125,9 @@ def python_spec(*, qualification: bool = False) -> RequiredEnvironmentSpec:
             (QualificationOnlyDependencyPin(package="hypothesis", version="6.165.9"),)
             if qualification
             else ()
+        ),
+        local_project_requirements=(
+            local_projects() if projects is None else projects
         ),
         approved_source_identity="pypi.org/simple",
         required_validation_command_ids=("pytest",),
@@ -148,8 +196,9 @@ def ready_evidence(
 
 
 def test_935_python_root_uses_one_bounded_pip_install() -> None:
+    spec = python_spec()
     plan = plan_dependency_preparation(
-        python_spec(), observation(), evaluated_at="2026-08-15T20:00:00Z"
+        spec, observation(), evaluated_at="2026-08-15T20:00:00Z"
     )
     assert plan.status is DependencyPreparationStatus.PREPARATION_REQUIRED
     assert plan.argv == (
@@ -157,9 +206,33 @@ def test_935_python_root_uses_one_bounded_pip_install() -> None:
         "-m",
         "pip",
         "install",
+        "--only-binary=:all:",
+        "--index-url=https://pypi.org/simple",
         "-r",
         "requirements-dev.txt",
+        "-e",
+        "08_Tooling/agent-memory-context-manager",
+        "-e",
+        "08_Tooling/visual-asset-intake",
+        "-e",
+        "08_Tooling/workflow-scheduler",
+        "-e",
+        "src",
     )
+
+
+def test_935_root_fixture_structurally_binds_every_actual_editable_project() -> None:
+    """#935: the four real `requirements-dev.txt` editables are structural, not raw text."""
+    spec = python_spec()
+    declared = {
+        requirement.relative_path: requirement
+        for requirement in spec.local_project_requirements
+    }
+    assert tuple(sorted(declared)) == ROOT_EDITABLE_PROJECTS
+    assert all(requirement.editable for requirement in declared.values())
+    # The same four projects are exactly what the manifest text declares, so the
+    # raw manifest introduces no local project the frozen contract does not carry.
+    assert validate_python_requirements_source_forms(ROOT_REQUIREMENTS_TEXT, spec) == ()
 
 
 def test_1138_qualification_pin_stays_structured_and_exact() -> None:
@@ -229,16 +302,19 @@ def test_python_offline_requires_proven_complete_bundle_and_separate_location() 
         ),
         evaluated_at="2026-08-15T20:00:00Z",
     )
-    assert allowed.argv[:6] == (
+    assert allowed.argv[:7] == (
         "python",
         "-m",
         "pip",
         "install",
+        "--only-binary=:all:",
         "--no-index",
         "--find-links",
     )
-    assert allowed.argv[6] == ".agent-os/wheelhouse"
+    assert allowed.argv[7] == ".agent-os/wheelhouse"
     assert allowed.source_identity == "wheelhouse:sha256-abc"
+    # Offline preparation must not also carry an index URL.
+    assert not any(item.startswith("--index-url") for item in allowed.argv)
 
 
 def test_node_lock_uses_npm_ci_and_never_npm_install() -> None:
@@ -247,7 +323,26 @@ def test_node_lock_uses_npm_ci_and_never_npm_install() -> None:
         observation(runtime_version="22.16.0", package_manager_version="10.9.2"),
         evaluated_at="2026-08-15T20:00:00Z",
     )
-    assert plan.argv == ("npm", "ci")
+    assert plan.argv == (
+        "npm",
+        "ci",
+        "--ignore-scripts",
+        "--no-audit",
+        "--registry=https://registry.npmjs.org",
+    )
+
+
+def test_npm_preparation_governs_install_scripts_audit_and_registry() -> None:
+    """R2: install-time code execution and audit traffic are explicit, not inherited."""
+    plan = plan_dependency_preparation(
+        node_spec(),
+        observation(runtime_version="22.16.0", package_manager_version="10.9.2"),
+        evaluated_at="2026-08-15T20:00:00Z",
+    )
+    assert "--ignore-scripts" in plan.argv
+    assert "--no-audit" in plan.argv
+    assert "--registry=https://registry.npmjs.org" in plan.argv
+    assert "npm" == plan.argv[0] and "ci" == plan.argv[1]
 
 
 def test_node_offline_uses_only_npm_ci_offline() -> None:
@@ -262,7 +357,14 @@ def test_node_offline_uses_only_npm_ci_offline() -> None:
         ),
         evaluated_at="2026-08-15T20:00:00Z",
     )
-    assert plan.argv == ("npm", "ci", "--offline")
+    assert plan.argv == (
+        "npm",
+        "ci",
+        "--ignore-scripts",
+        "--no-audit",
+        "--registry=https://registry.npmjs.org",
+        "--offline",
+    )
     assert "--prefer-offline" not in plan.argv
 
 
@@ -319,6 +421,8 @@ def test_authorized_lock_generation_returns_source_update_required_after_success
         "install",
         "--package-lock-only",
         "--ignore-scripts",
+        "--no-audit",
+        "--registry=https://registry.npmjs.org",
     )
     assert (
         evidence.preparation_status
@@ -714,3 +818,467 @@ def test_runtime_wrappers_refuse_executor_and_validator_before_ready() -> None:
     assert validation.passed is False
     assert executor.calls == 0
     assert validator.calls == 0
+
+
+# ---------------------------------------------------------------------------
+# R1 -- structured dependency/source enforcement
+# ---------------------------------------------------------------------------
+
+
+def python_source_forms(text: str, **spec_changes) -> tuple[str, ...]:
+    return validate_python_requirements_source_forms(text, python_spec(**spec_changes))
+
+
+def test_r1_undeclared_python_editable_local_project_is_blocked() -> None:
+    assert python_source_forms("-e ./08_Tooling/not-declared") == (
+        UNDECLARED_LOCAL_PROJECT,
+    )
+    # An otherwise-declared project may not enter without editable authorization.
+    assert python_source_forms(
+        "-e ./src", projects=local_projects(("src",), editable=False)
+    ) == (UNDECLARED_LOCAL_PROJECT,)
+
+
+def test_r1_declared_editable_project_with_source_drift_is_blocked() -> None:
+    spec = python_spec()
+    plan = plan_dependency_preparation(
+        spec,
+        observation(local_projects_match=False),
+        evaluated_at="2026-08-15T20:00:00Z",
+    )
+    assert plan.status is DependencyPreparationStatus.BLOCKED
+    assert plan.reason_codes == ("dependency.editable-source-drift",)
+    assert plan.argv is None
+
+
+def test_r1_undeclared_python_package_sources_are_blocked() -> None:
+    cases = {
+        "alternate index": "--index-url https://internal.example/simple",
+        "extra index": "--extra-index-url https://internal.example/simple",
+        "short alternate index": "-i https://internal.example/simple",
+        "find links": "--find-links ./vendor-wheels",
+        "short find links": "-f https://internal.example/wheels",
+        "direct url": "requests @ https://internal.example/requests-2.0.0.whl",
+        "bare url": "https://internal.example/requests-2.0.0.tar.gz",
+        "vcs": "package @ git+https://github.com/example/package@main",
+        "bare vcs": "git+https://github.com/example/package@main#egg=package",
+        "archive": "./vendor/requests-2.0.0.tar.gz",
+        "interpolated": "--index-url https://${TOKEN}@internal.example/simple",
+        "trusted host": "--trusted-host internal.example",
+        "no index": "--no-index",
+    }
+    for label, line in cases.items():
+        assert python_source_forms(line) == (UNDECLARED_PACKAGE_SOURCE,), label
+
+
+def test_r1_nested_python_source_indirection_is_blocked() -> None:
+    for line in ("-r other-requirements.txt", "--requirement nested.txt",
+                 "-c constraints.txt", "--constraint constraints.txt"):
+        assert python_source_forms(line) == (UNSUPPORTED_SOURCE_INDIRECTION,), line
+    # An unrecognised directive is never delegated to pip unvalidated.
+    assert python_source_forms("--some-future-option value") == (
+        UNSUPPORTED_SOURCE_INDIRECTION,
+    )
+
+
+def test_r1_ordinary_named_requirements_and_comments_stay_authorized() -> None:
+    text = (
+        "# comment line\n"
+        "pytest>=7.0.0  # trailing comment\n"
+        "\n"
+        "PyGithub==2.9.1\n"
+        "coverage[toml]>=6.0.0\n"
+        'black>=22.0.0 ; python_version >= "3.11"\n'
+        "pytest-\\\n"
+        "mock>=3.10.0\n"
+    )
+    assert python_source_forms(text) == ()
+
+
+def test_r1_approved_python_source_binding_is_explicit() -> None:
+    plan = plan_dependency_preparation(
+        python_spec(), observation(), evaluated_at="2026-08-15T20:00:00Z"
+    )
+    assert "--index-url=https://pypi.org/simple" in plan.argv
+    assert plan.source_identity == "pypi.org/simple"
+
+
+def test_r1_ambient_pip_and_npm_config_cannot_redirect_the_approved_source() -> None:
+    """Ambient config files are disabled with each tool's own documented value."""
+    from workflow_scheduler.execution.concrete_runtime_adapters import _environment
+
+    configuration = SimpleNamespace(
+        environment_policy=None,
+        repository_root="/repo",
+        required_environment_spec=None,
+    )
+    # `_environment` validates the policy identity first; reuse the real one.
+    from workflow_scheduler.execution.runtime_configuration import ENVIRONMENT_POLICY
+
+    configuration.environment_policy = ENVIRONMENT_POLICY
+    environment = _environment(configuration)
+    assert environment["PIP_CONFIG_FILE"] == os.devnull
+    assert environment["NPM_CONFIG_USERCONFIG"] == os.devnull
+    assert environment["NPM_CONFIG_GLOBALCONFIG"] == os.devnull
+    # No ambient index/registry variable is forwarded into preparation.
+    assert not any(
+        key.startswith(("PIP_INDEX", "PIP_EXTRA", "NPM_CONFIG_REGISTRY"))
+        for key in environment
+    )
+
+
+def npm_lock(*entries: tuple[str, dict]) -> dict:
+    packages = {"": {"name": "picture-perfect-coach", "version": "1.0.0"}}
+    packages.update(dict(entries))
+    return {"lockfileVersion": 3, "packages": packages}
+
+
+def test_r1_npm_lockfile_with_unapproved_remote_source_is_blocked() -> None:
+    payload = npm_lock(
+        (
+            "node_modules/left-pad",
+            {
+                "version": "1.3.0",
+                "resolved": "https://internal.example/left-pad-1.3.0.tgz",
+            },
+        )
+    )
+    assert validate_npm_lock_source_forms(payload, node_spec()) == (
+        UNDECLARED_PACKAGE_SOURCE,
+    )
+    insecure = npm_lock(
+        (
+            "node_modules/left-pad",
+            {
+                "version": "1.3.0",
+                "resolved": "http://registry.npmjs.org/left-pad-1.3.0.tgz",
+            },
+        )
+    )
+    assert validate_npm_lock_source_forms(insecure, node_spec()) == (
+        UNDECLARED_PACKAGE_SOURCE,
+    )
+
+
+def test_r1_npm_lockfile_with_unapproved_git_file_or_directory_source_is_blocked() -> None:
+    git_entry = npm_lock(
+        (
+            "node_modules/tool",
+            {"version": "1.0.0", "resolved": "git+ssh://git@github.com/example/tool.git#abc"},
+        )
+    )
+    assert validate_npm_lock_source_forms(git_entry, node_spec()) == (
+        UNDECLARED_PACKAGE_SOURCE,
+    )
+    file_entry = npm_lock(
+        ("node_modules/tool", {"version": "1.0.0", "resolved": "file:../vendor/tool"})
+    )
+    assert validate_npm_lock_source_forms(file_entry, node_spec()) == (
+        UNDECLARED_LOCAL_PROJECT,
+    )
+    directory_entry = npm_lock(("packages/helper", {"version": "1.0.0"}))
+    assert validate_npm_lock_source_forms(directory_entry, node_spec()) == (
+        UNDECLARED_LOCAL_PROJECT,
+    )
+    link_entry = npm_lock(
+        ("node_modules/helper", {"link": True, "resolved": "packages/helper"})
+    )
+    assert validate_npm_lock_source_forms(link_entry, node_spec()) == (
+        UNDECLARED_LOCAL_PROJECT,
+    )
+
+
+def test_r1_npm_registry_binding_matches_the_approved_identity() -> None:
+    approved = npm_lock(
+        (
+            "node_modules/left-pad",
+            {
+                "version": "1.3.0",
+                "resolved": "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz",
+            },
+        )
+    )
+    assert validate_npm_lock_source_forms(approved, node_spec()) == ()
+    plan = plan_dependency_preparation(
+        node_spec(),
+        observation(runtime_version="22.16.0", package_manager_version="10.9.2"),
+        evaluated_at="2026-08-15T20:00:00Z",
+    )
+    assert "--registry=https://registry.npmjs.org" in plan.argv
+
+
+def test_r1_malformed_or_absent_npm_lock_payload_fails_closed() -> None:
+    assert validate_npm_lock_source_forms(["not", "a", "mapping"], node_spec()) == (
+        UNDECLARED_PACKAGE_SOURCE,
+    )
+    assert validate_npm_lock_source_forms({"lockfileVersion": 3}, node_spec()) == (
+        UNDECLARED_PACKAGE_SOURCE,
+    )
+
+
+def test_r1_observed_source_form_findings_block_before_any_command() -> None:
+    plan = plan_dependency_preparation(
+        python_spec(),
+        observation(source_form_reason_codes=(UNDECLARED_PACKAGE_SOURCE,)),
+        evaluated_at="2026-08-15T20:00:00Z",
+    )
+    assert plan.status is DependencyPreparationStatus.BLOCKED
+    assert plan.argv is None
+    assert plan.reason_codes == (UNDECLARED_PACKAGE_SOURCE,)
+
+
+# ---------------------------------------------------------------------------
+# R2 -- post-preparation workspace integrity and install-time code policy
+# ---------------------------------------------------------------------------
+
+
+def safe_inspection() -> WorkspaceInspection:
+    return WorkspaceInspection(
+        resolved=True,
+        repository="Blummer92/agent-os",
+        branch="agent/1185-dependency-readiness",
+        expected_revision=HEAD,
+        actual_revision=HEAD,
+        clean=True,
+        detached=False,
+        reused=False,
+        locked=True,
+        locked_expected=True,
+        missing=False,
+        prunable=False,
+    )
+
+
+class _FakeWorkspace:
+    """Minimal stand-in exposing the same inspect/complete-state seam #760 owns."""
+
+    def __init__(self, *, complete=True, is_clean=True, observed_sha=HEAD) -> None:
+        self._observation = SimpleNamespace(
+            complete=complete, is_clean=is_clean, observed_sha=observed_sha
+        )
+        self.complete_state_calls = 0
+
+    def create(self, request):
+        raise AssertionError("create must not be called by this test")
+
+    def inspect(self, handle):
+        return safe_inspection()
+
+    def inspect_complete_state(self, handle, *, observation_kind):
+        self.complete_state_calls += 1
+        assert observation_kind in ("initial", "final")
+        return self._observation
+
+    def cleanup(self, handle):
+        raise AssertionError("cleanup must not be called by this test")
+
+
+class _ReadyPreparer:
+    def __init__(self, spec: RequiredEnvironmentSpec) -> None:
+        self._spec = spec
+        self.prepare_calls = 0
+
+    def prepare(self, *, workspace_identity: str) -> DependencyReadinessEvidence:
+        self.prepare_calls += 1
+        return ready_evidence(self._spec)
+
+    def requires_recheck(self, changed_paths: tuple[str, ...]) -> bool:
+        return False
+
+
+def _wire_gate(workspace: _FakeWorkspace, preparer: _ReadyPreparer):
+    pilot_input = SimpleNamespace(
+        source_head_sha=HEAD,
+        evaluated_at="2026-08-15T20:00:00Z",
+        repository="Blummer92/agent-os",
+        branch="agent/1185-dependency-readiness",
+    )
+    gate = runtime_module._DependencyRuntimeGate(preparer, pilot_input)
+    wrapped = runtime_module._DependencyReadyWorkspaceAdapter(
+        workspace, gate, pilot_input
+    )
+    return gate, wrapped
+
+
+def test_r2_clean_post_preparation_reinspection_allows_continuation() -> None:
+    spec = python_spec()
+    workspace = _FakeWorkspace()
+    preparer = _ReadyPreparer(spec)
+    gate, wrapped = _wire_gate(workspace, preparer)
+    inspection = wrapped.inspect(SimpleNamespace(workspace_identity="workspace:1"))
+    assert inspection.resolved is True
+    assert gate.ready is True
+    # The existing complete workspace-state inspection is reused, not duplicated.
+    assert workspace.complete_state_calls == 1
+    assert len(gate.post_preparation_observations) == 1
+
+
+def test_r2_preparation_created_tracked_drift_forbids_ready_provider_and_validation() -> None:
+    spec = python_spec()
+    workspace = _FakeWorkspace(is_clean=False)
+    preparer = _ReadyPreparer(spec)
+    gate, wrapped = _wire_gate(workspace, preparer)
+    inspection = wrapped.inspect(SimpleNamespace(workspace_identity="workspace:1"))
+
+    assert inspection.resolved is False
+    assert gate.ready is False
+    assert POST_PREPARATION_DRIFT in inspection.reason
+
+    class Executor:
+        def run(self, request):
+            raise AssertionError("provider dispatch must be refused after drift")
+
+    class Validator:
+        def validate(self, request):
+            raise AssertionError("validation dispatch must be refused after drift")
+
+    try:
+        runtime_module._DependencyReadyExecutor(Executor(), gate).run(object())
+    except RuntimeError as exc:
+        assert "READY dependency evidence" in str(exc)
+    else:
+        raise AssertionError("executor dispatch must fail closed")
+    result = runtime_module._DependencyReadyValidator(Validator(), gate).validate(
+        SimpleNamespace(workspace_identity="workspace:1")
+    )
+    assert result.attempted is False and result.passed is False
+
+
+def test_r2_incomplete_or_source_drifted_reinspection_fails_closed() -> None:
+    spec = python_spec()
+    for workspace in (
+        _FakeWorkspace(complete=False),
+        _FakeWorkspace(observed_sha="d" * 40),
+    ):
+        gate, wrapped = _wire_gate(workspace, _ReadyPreparer(spec))
+        inspection = wrapped.inspect(SimpleNamespace(workspace_identity="workspace:1"))
+        assert inspection.resolved is False
+        assert gate.ready is False
+
+
+def test_r2_missing_complete_state_inspection_fails_closed() -> None:
+    class WithoutCompleteState:
+        def inspect(self, handle):
+            return safe_inspection()
+
+    spec = python_spec()
+    gate, wrapped = _wire_gate(WithoutCompleteState(), _ReadyPreparer(spec))
+    inspection = wrapped.inspect(SimpleNamespace(workspace_identity="workspace:1"))
+    assert inspection.resolved is False
+    assert gate.ready is False
+    assert "complete-state-inspection-unavailable" in inspection.reason
+
+
+def test_r2_claimed_complete_npm_cache_with_failed_offline_install_fails_closed() -> None:
+    """Required npm cache hardening: one attempt, FAILED, zero retry, zero fallback."""
+    spec = node_spec()
+
+    @dataclass
+    class Runner:
+        calls: list = None
+
+        def __post_init__(self) -> None:
+            self.calls = []
+
+        def run(
+            self, argv: tuple[str, ...], *, workspace_identity: str
+        ) -> DependencyCommandObservation:
+            self.calls.append(argv)
+            return DependencyCommandObservation(
+                attempted=True,
+                succeeded=False,
+                failure_reason_code="dependency.package-unavailable",
+            )
+
+    runner = Runner()
+    evidence = execute_dependency_preparation(
+        spec,
+        observation(
+            runtime_version="22.16.0",
+            package_manager_version="10.9.2",
+            source_reachable=False,
+            cache_state=DependencyCacheState.CURRENT_COMPLETE,
+            offline_source_identity="npm-cache:sha256-abc",
+        ),
+        runner,
+        evaluated_at="2026-08-15T20:00:00Z",
+        expires_at="2026-08-15T21:00:00Z",
+    )
+    assert evidence.preparation_status is DependencyPreparationStatus.FAILED
+    assert evidence.reason_codes == ("dependency.package-unavailable",)
+    assert evidence.retry_attempted is False
+    # Exactly one `npm ci --offline` attempt: no retry and no online fallback.
+    assert len(runner.calls) == 1
+    assert runner.calls[0][:2] == ("npm", "ci")
+    assert "--offline" in runner.calls[0]
+    assert evidence.resolved_dependency_identity is None
+
+
+def test_r2_concrete_observer_reports_source_forms_from_the_real_manifest(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    manifest = workspace / "requirements-dev.txt"
+    manifest.write_text("pytest>=7.0.0\n--extra-index-url https://internal.example\n")
+    digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+
+    spec = RequiredEnvironmentSpec(
+        ecosystem=DependencyEcosystem.PYTHON_PIP,
+        package_root=".",
+        runtime_requirement=">=3.11",
+        dependency_manifest_identity=artifact("requirements-dev.txt", digest),
+        lock_or_constraints_identity=None,
+        install_mode=DependencyInstallMode.NORMAL,
+        approved_source_identity="pypi.org/simple",
+        required_validation_command_ids=("pytest",),
+    )
+    configuration = SimpleNamespace(
+        executor_cwd=str(workspace), source_head_sha=HEAD
+    )
+    inputs = ConcreteDependencyPreparationInputs(
+        execution_surface_id="surface:1",
+        environment_health_evidence_id="health:1",
+        environment_health_current=True,
+        runtime_version="3.12.1",
+        runtime_compatible=True,
+        package_manager_version="24.0",
+        observed_source_identity="pypi.org/simple",
+        source_reachable=True,
+        package_available=True,
+        cache_state=DependencyCacheState.NOT_APPLICABLE,
+        expires_at="2026-08-15T21:00:00Z",
+    )
+    provider = ConcreteDependencyObservationProvider(configuration, spec, inputs)
+    observed = provider.observe(
+        workspace_identity="workspace:1", existing_ready_evidence=None
+    )
+    assert observed.manifest_matches is True
+    assert observed.source_form_reason_codes == (UNDECLARED_PACKAGE_SOURCE,)
+
+    plan = plan_dependency_preparation(
+        spec, observed, evaluated_at="2026-08-15T20:00:00Z"
+    )
+    assert plan.status is DependencyPreparationStatus.BLOCKED
+    assert plan.argv is None
+
+
+def test_r2_unreadable_dependency_input_fails_closed(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    spec = RequiredEnvironmentSpec(
+        ecosystem=DependencyEcosystem.PYTHON_PIP,
+        package_root=".",
+        runtime_requirement=">=3.11",
+        dependency_manifest_identity=artifact("requirements-dev.txt"),
+        lock_or_constraints_identity=None,
+        install_mode=DependencyInstallMode.NORMAL,
+        approved_source_identity="pypi.org/simple",
+        required_validation_command_ids=("pytest",),
+    )
+    configuration = SimpleNamespace(executor_cwd=str(workspace), source_head_sha=HEAD)
+    from workflow_scheduler.execution.concrete_runtime_adapters import (
+        _observed_source_form_reason_codes,
+    )
+
+    assert _observed_source_form_reason_codes(configuration, spec) == (
+        UNSUPPORTED_SOURCE_INDIRECTION,
+    )

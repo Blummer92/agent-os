@@ -65,6 +65,10 @@ DEPENDENCY_REASON_CODES = frozenset(
         "dependency.environment-stale",
         "dependency.environment-surface-mismatch",
         "dependency.validation-command-missing",
+        "dependency.undeclared-package-source",
+        "dependency.undeclared-local-project",
+        "dependency.unsupported-source-indirection",
+        "dependency.post-preparation-drift",
     }
 )
 

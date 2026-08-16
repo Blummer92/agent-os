@@ -38,6 +38,7 @@ from scripts.agent_os_execution_capabilities.dependencies import (
     DependencyReadinessEvidence,
 )
 from workflow_scheduler.execution.dependency_preparation import (
+    POST_PREPARATION_DRIFT,
     DependencyPreparationAdapter,
 )
 from workflow_scheduler.execution.quarantine_review import (
@@ -220,8 +221,60 @@ class _DependencyRuntimeGate:
         self.evidence: list[DependencyReadinessEvidence] = []
         self.ready = False
         self.recheck_required = False
+        self.post_preparation_observations: list[object] = []
+        self._post_preparation_reason: str | None = None
+        self._workspace: object | None = None
+        self._handle: WorkspaceHandle | None = None
+
+    def bind_workspace(self, workspace: object, handle: WorkspaceHandle) -> None:
+        """Remember the inspected workspace so a later recheck reuses the same seam."""
+        self._workspace = workspace
+        self._handle = handle
+
+    def ensure_ready_with_workspace_integrity(self, workspace_identity: str) -> bool:
+        """Prepare, then prove the post-preparation workspace state before continuing."""
+        if not self.ensure_ready(workspace_identity):
+            return False
+        if self._workspace is None or self._handle is None:
+            self.ready = False
+            self._post_preparation_reason = "complete-state-inspection-unavailable"
+            return False
+        return self.confirm_post_preparation_workspace(self._workspace, self._handle)
+
+    def confirm_post_preparation_workspace(
+        self, workspace: object, handle: WorkspaceHandle
+    ) -> bool:
+        """Reuse the existing complete workspace-state inspection after preparation.
+
+        Successful preparation may run package-manager and build-backend code, so
+        the pre-preparation observation is no longer sufficient evidence. This
+        reuses the #760 complete inspection the bound workspace adapter already
+        owns; it creates no second workspace-integrity mechanism. Missing or
+        unresolved complete-state evidence fails closed.
+        """
+        inspector = getattr(workspace, "inspect_complete_state", None)
+        if not callable(inspector):
+            self.ready = False
+            self._post_preparation_reason = "complete-state-inspection-unavailable"
+            return False
+        observation = inspector(handle, observation_kind="initial")
+        self.post_preparation_observations.append(observation)
+        complete = getattr(observation, "complete", False)
+        is_clean = getattr(observation, "is_clean", False)
+        observed_sha = getattr(observation, "observed_sha", None)
+        if (
+            complete is not True
+            or is_clean is not True
+            or observed_sha != self._pilot_input.source_head_sha
+        ):
+            self.ready = False
+            self._post_preparation_reason = POST_PREPARATION_DRIFT
+            return False
+        self._post_preparation_reason = None
+        return True
 
     def ensure_ready(self, workspace_identity: str) -> bool:
+        self._post_preparation_reason = None
         evidence = self._adapter.prepare(workspace_identity=workspace_identity)
         if type(evidence) is not DependencyReadinessEvidence:
             raise RuntimeError(
@@ -247,6 +300,8 @@ class _DependencyRuntimeGate:
 
     @property
     def blocker_summary(self) -> str:
+        if self._post_preparation_reason is not None:
+            return f"dependency-readiness:{self._post_preparation_reason}"
         if not self.evidence:
             return "dependency-readiness:no-evidence"
         latest = self.evidence[-1]
@@ -272,12 +327,18 @@ class _DependencyReadyWorkspaceAdapter:
         inspection = self._adapter.inspect(handle)
         if not _workspace_observation_is_safe(inspection, self._pilot_input):
             return inspection
-        if self._gate.ensure_ready(handle.workspace_identity):
+        self._gate.bind_workspace(self._adapter, handle)
+        if self._gate.ensure_ready_with_workspace_integrity(handle.workspace_identity):
             return inspection
         return replace(
             inspection,
             resolved=False,
             reason=self._gate.blocker_summary,
+        )
+
+    def inspect_complete_state(self, handle: WorkspaceHandle, *, observation_kind: str):
+        return self._adapter.inspect_complete_state(
+            handle, observation_kind=observation_kind
         )
 
     def cleanup(self, handle: WorkspaceHandle):
@@ -326,7 +387,9 @@ class _DependencyReadyValidator:
 
     def validate(self, request: PilotValidationRequest) -> PilotValidationObservation:
         if self._gate.recheck_required:
-            if not self._gate.ensure_ready(request.workspace_identity):
+            if not self._gate.ensure_ready_with_workspace_integrity(
+                request.workspace_identity
+            ):
                 return PilotValidationObservation(
                     attempted=False,
                     passed=False,
