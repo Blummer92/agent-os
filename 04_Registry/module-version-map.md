@@ -22,7 +22,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 | Teacher Modeling Coach | 0.5.0 |
 | Instructional Materials Coach | 0.5.1 |
 | Student Language Standard | 0.3.0 |
-| Workflow Scheduler | 0.16.0 |
+| Workflow Scheduler | 0.17.0 |
 | Workspace Automation Builder Tooling | 0.1.1 |
 | Agent Memory & Context Budget Manager | 0.1.0 |
 | IA4D-to-Scheduler Handoff Contract | 0.2.0 |
