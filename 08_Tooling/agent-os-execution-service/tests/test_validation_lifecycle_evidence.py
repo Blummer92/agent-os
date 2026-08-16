@@ -33,6 +33,8 @@ from agent_os_execution_service.validation_lifecycle_evidence import (  # noqa: 
     ValidationLifecycleEvidenceBundle,
     ValidationLifecycleEvidenceError,
     ValidationLifecycleTerminalStatus,
+    _reconstruct_command_run_observation,
+    _reconstruct_validation_result,
     build_validation_lifecycle_evidence_bundle,
     project_validation_lifecycle_result,
     reconstruct_validation_lifecycle_evidence_bundle,
@@ -160,6 +162,8 @@ def _command_outcome(test_id, *, outcome="succeeded", started=True, return_code=
         test_id=test_id,
         outcome=outcome,
         started=started,
+        termination_confirmed=True,
+        possible_partial_effects=False,
         return_code=return_code,
         stdout_text="ok",
         stderr_text="",
@@ -172,6 +176,9 @@ def _validation_result(request, *, passed=True, attempted=True, outcome="succeed
     runtime = request.execution_packet_stage.runtime_configuration
     test_ids = tuple(item.test_id for item in runtime.required_test_commands)
     return FrozenTestValidationResult(
+        started=attempted,
+        termination_confirmed=True,
+        possible_partial_effects=False,
         attempted=attempted,
         passed=passed,
         cancellation_requested=False,
@@ -809,6 +816,73 @@ def test_final_dirty_changed_paths_prevent_success(tmp_path) -> None:
 # Serialization / reconstruction / identity
 # ---------------------------------------------------------------------------
 
+def test_command_observation_missing_termination_evidence_fails_closed():
+    payload = {
+        "test_id": "test-command",
+        "outcome": "succeeded",
+        "started": True,
+        "possible_partial_effects": False,
+        "return_code": 0,
+        "stdout_text": "ok",
+        "stderr_text": "",
+        "changed_paths": [],
+        "reason": "",
+    }
+
+    with pytest.raises(ValidationLifecycleEvidenceError):
+        _reconstruct_command_run_observation(payload)
+
+
+def test_validation_result_missing_termination_evidence_fails_closed():
+    payload = {
+        "attempted": True,
+        "passed": True,
+        "cancellation_requested": False,
+        "total_timed_out": False,
+        "termination_confirmed": True,
+        "possible_partial_effects": False,
+        "completed_tests": [],
+        "changed_paths": [],
+        "command_outcomes": [],
+        "reason": "",
+    }
+
+    with pytest.raises(ValidationLifecycleEvidenceError):
+        _reconstruct_validation_result(payload)
+
+def test_command_observation_missing_termination_evidence_fails_closed():
+    payload = {
+        "test_id": "test-command",
+        "outcome": "succeeded",
+        "started": True,
+        "possible_partial_effects": False,
+        "return_code": 0,
+        "stdout_text": "ok",
+        "stderr_text": "",
+        "changed_paths": [],
+        "reason": "",
+    }
+
+    with pytest.raises(ValidationLifecycleEvidenceError):
+        _reconstruct_command_run_observation(payload)
+
+
+def test_validation_result_missing_termination_evidence_fails_closed():
+    payload = {
+        "attempted": True,
+        "passed": True,
+        "cancellation_requested": False,
+        "total_timed_out": False,
+        "termination_confirmed": True,
+        "possible_partial_effects": False,
+        "completed_tests": [],
+        "changed_paths": [],
+        "command_outcomes": [],
+        "reason": "",
+    }
+
+    with pytest.raises(ValidationLifecycleEvidenceError):
+        _reconstruct_validation_result(payload)
 
 def test_bundle_serializes_and_reconstructs_exactly(tmp_path) -> None:
     bundle = _clean_bundle(tmp_path)

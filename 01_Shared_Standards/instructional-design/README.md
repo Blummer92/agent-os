@@ -1,7 +1,7 @@
 # Instructional Design Standards
 
 Shared standards for agents that design, verify, or build classroom units,
-teacher modeling, and student-facing instructional materials.
+teacher modeling, assessments, and student-facing instructional materials.
 
 ## Curriculum Pipeline
 
@@ -22,7 +22,8 @@ product.
 ## Scope
 
 These standards apply when an agent aligns units to standards, creates teacher
-modeling, generates classroom slides/worksheets, or routes curriculum work.
+modeling, designs assessment evidence, generates classroom slides/worksheets, or
+routes curriculum work.
 
 ## Canonical Checks
 
@@ -33,11 +34,16 @@ alignment.
 Teacher Modeling uses exactly five modeling checks: learning objective,
 think-aloud method, component breakdown, visual anchors, and error analysis.
 
+Assessment design uses the target-first contract in
+`assessment-design-standard.md` before item or task generation. It is report-only
+and does not authorize grading, readiness, classroom use, production, or writes.
+
 ## Files
 
 - `unit-alignment-rules.md` — canonical Unit Alignment schema and six checks
 - `teacher-modeling-standards.md` — canonical Teacher Modeling schema and checks
 - `orchestration-rules.md` — canonical owner, mode, context, reuse, and stop rules
+- `assessment-design-standard.md` — target → claim → evidence → method contract and survey/mastery boundary
 - `student-language-standard.md` — reusable student-facing language artifacts
 - `learning-science-rules.md` — classroom design rules for materials
 - `production-gates-and-compute.md` — hard-stop gates and efficiency rules
@@ -54,4 +60,4 @@ fields, standards, and output keys.
 
 ## Version
 
-0.6.0
+0.8.0

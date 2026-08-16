@@ -466,10 +466,29 @@ class PilotValidationRequest:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PilotValidationObservation:
-    """Observed validation result for one bounded validation attempt."""
+    """Observed validation result for one bounded validation attempt.
+
+    ``started``, ``termination_confirmed``, and ``possible_partial_effects``
+    (AOS-VALTERM1 / #1205) carry the same #759 termination vocabulary
+    ``PilotExecutionObservation`` already exposes for the executor lane,
+    aggregated conservatively across whatever the validator actually
+    dispatched. The validator's call returning control -- ``attempted``/
+    ``passed`` being set at all -- is never by itself proof that every
+    dispatched validation command terminated; these fields are the explicit,
+    additive evidence for that question. They default to the conservative
+    reading (nothing proven) so an adapter that predates this contract is
+    never silently read as having proven termination it never reported.
+
+    This observation only describes what validation actually did. It carries
+    no lease-release or lifecycle decision of its own -- that policy lives
+    where the lease is owned, not here.
+    """
 
     attempted: bool
     passed: bool
+    started: bool = False
+    termination_confirmed: bool = False
+    possible_partial_effects: bool = False
     completed_tests: tuple[str, ...] = ()
     changed_paths: tuple[str, ...] = ()
     reason: str = ""

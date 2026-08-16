@@ -31,6 +31,15 @@ from .issue_create import (
     sanitize_diagnostic_text,
 )
 from .planner import LabelApplicationPlan, plan_label_application
+from .pr_branch_refresh import (
+    BranchRefreshMutationResult,
+    BranchRefreshValidationResult,
+    PullRequestBranchRefreshProvider,
+    PullRequestBranchRefreshRequest,
+    PullRequestBranchRefreshResult,
+    PullRequestBranchSnapshot,
+    refresh_pull_request_branch,
+)
 from .pr_lifecycle import (
     PullRequestLifecycleReconciliationResult,
     lifecycle_invocation_reasons,
@@ -56,6 +65,8 @@ from .validation import (
 
 __all__ = [
     "BatchPullRequestLabelReconciliationResult",
+    "BranchRefreshMutationResult",
+    "BranchRefreshValidationResult",
     "ConfirmationProvider",
     "DraftExitCode",
     "DraftReasonCode",
@@ -75,6 +86,10 @@ __all__ = [
     "LabelApplicationPlan",
     "LivePullRequestSnapshot",
     "MutationState",
+    "PullRequestBranchRefreshProvider",
+    "PullRequestBranchRefreshRequest",
+    "PullRequestBranchRefreshResult",
+    "PullRequestBranchSnapshot",
     "PullRequestLabelProvider",
     "PullRequestLabelReconciliationResult",
     "PullRequestLifecycleReconciliationResult",
@@ -92,6 +107,7 @@ __all__ = [
     "reconcile_pull_request_batch",
     "reconcile_pull_request_labels",
     "reconcile_pull_request_lifecycle",
+    "refresh_pull_request_branch",
     "render_draft_preview",
     "render_issue_create_result",
     "render_validation_preview",
