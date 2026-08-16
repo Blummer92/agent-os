@@ -896,6 +896,17 @@ def _serialize_command_run_observation(value: object) -> dict[str, object]:
 
 def _reconstruct_command_run_observation(payload: dict[str, object]) -> object:
     CommandRunObservation = _command_run_observation_type()
+
+    required_fields = {
+        "termination_confirmed",
+        "possible_partial_effects",
+    }
+    missing = required_fields - payload.keys()
+    if missing:
+        raise ValidationLifecycleEvidenceError(
+            f"command run observation missing required fields: {sorted(missing)}"
+        )
+
     return CommandRunObservation(
         termination_confirmed=payload["termination_confirmed"],
         possible_partial_effects=payload["possible_partial_effects"],
@@ -921,13 +932,28 @@ def _serialize_validation_result(value: object) -> dict[str, object]:
         "total_timed_out": value.total_timed_out,
         "completed_tests": list(value.completed_tests),
         "changed_paths": list(value.changed_paths),
-        "command_outcomes": [_serialize_command_run_observation(item) for item in value.command_outcomes],
+        "command_outcomes": [
+            _serialize_command_run_observation(item)
+            for item in value.command_outcomes
+        ],
         "reason": value.reason,
     }
 
 
 def _reconstruct_validation_result(payload: dict[str, object]) -> object:
     FrozenTestValidationResult = _frozen_test_validation_result_type()
+
+    required_fields = {
+        "started",
+        "termination_confirmed",
+        "possible_partial_effects",
+    }
+    missing = required_fields - payload.keys()
+    if missing:
+        raise ValidationLifecycleEvidenceError(
+            f"validation result missing required fields: {sorted(missing)}"
+        )
+
     return FrozenTestValidationResult(
         started=payload["started"],
         termination_confirmed=payload["termination_confirmed"],
@@ -939,11 +965,41 @@ def _reconstruct_validation_result(payload: dict[str, object]) -> object:
         completed_tests=tuple(payload["completed_tests"]),
         changed_paths=tuple(payload["changed_paths"]),
         command_outcomes=tuple(
-            _reconstruct_command_run_observation(item) for item in payload["command_outcomes"]
+            _reconstruct_command_run_observation(item)
+            for item in payload["command_outcomes"]
         ),
         reason=payload["reason"],
     )
 
+def _reconstruct_validation_result(payload: dict[str, object]) -> object:
+    FrozenTestValidationResult = _frozen_test_validation_result_type()
+    required_fields = {
+        "started",
+        "termination_confirmed",
+        "possible_partial_effects",
+    }
+    missing = required_fields - payload.keys()
+    if missing:
+        raise ValidationLifecycleEvidenceError(
+            f"validation result missing required fields: {sorted(missing)}"
+        )
+
+    return FrozenTestValidationResult(
+        started=payload["started"],
+        termination_confirmed=payload["termination_confirmed"],
+        possible_partial_effects=payload["possible_partial_effects"],
+        attempted=payload["attempted"],
+        passed=payload["passed"],
+        cancellation_requested=payload["cancellation_requested"],
+        total_timed_out=payload["total_timed_out"],
+        completed_tests=tuple(payload["completed_tests"]),
+        changed_paths=tuple(payload["changed_paths"]),
+        command_outcomes=tuple(
+            _reconstruct_command_run_observation(item)
+            for item in payload["command_outcomes"]
+        ),
+        reason=payload["reason"],
+    )
 
 def _serialize_execution_composition(value: ExecutionCompositionResult) -> dict[str, object]:
     return {
