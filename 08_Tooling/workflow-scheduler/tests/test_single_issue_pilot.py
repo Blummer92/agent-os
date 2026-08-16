@@ -1509,10 +1509,12 @@ def test_executor_process_termination_propagates_after_exactly_once_teardown() -
             executor=FakeExecutor(error=KeyboardInterrupt()),
         )
 
-    # Process-level termination is never converted into a pilot result, but the
-    # lease and workspace it left behind are still torn down exactly once.
+    # Process-level termination is never converted into a pilot result. The
+    # workspace it left behind is still cleaned exactly once, but a descendant
+    # of the interrupted executor may still be alive, so the lease is NOT
+    # released: teardown may never make it newly available on that evidence.
     assert len(workspace.cleanup_calls) == 1
-    assert len(lease.release_calls) == 1
+    assert lease.release_calls == []
 
 
 def test_executor_system_exit_propagates_after_exactly_once_teardown() -> None:
@@ -1527,16 +1529,16 @@ def test_executor_system_exit_propagates_after_exactly_once_teardown() -> None:
         )
 
     assert len(workspace.cleanup_calls) == 1
-    assert len(lease.release_calls) == 1
+    assert lease.release_calls == []
 
 
 def test_release_termination_preserves_cleanup_and_the_executor_termination() -> None:
     lease = FakeLease(release_error=SystemExit("release terminated"))
     workspace = FakeWorkspace()
 
-    # The executor's KeyboardInterrupt is the original termination. A later
-    # SystemExit from lease release must neither replace it nor erase the
-    # cleanup that already happened.
+    # The executor's KeyboardInterrupt is the original termination and reaches
+    # the caller unchanged. Release is never even attempted here, so the
+    # adapter's own SystemExit cannot fire and cannot replace it.
     with pytest.raises(KeyboardInterrupt):
         _run(
             lease=lease,
@@ -1545,7 +1547,7 @@ def test_release_termination_preserves_cleanup_and_the_executor_termination() ->
         )
 
     assert len(workspace.cleanup_calls) == 1
-    assert len(lease.release_calls) == 1
+    assert lease.release_calls == []
 
 
 def test_timeout_with_confirmed_termination_is_timed_out() -> None:
@@ -1900,8 +1902,13 @@ def test_unexpected_validation_error_cleans_up_and_releases_once() -> None:
     assert result.executor_called is True
     assert len(workspace.cleanup_calls) == 1
     assert result.workspace_cleanup_attempts == 1
-    assert len(lease.release_calls) == 1
-    assert result.lease_release_attempts == 1
+    # The unexpected validator error proves nothing about the bounded command
+    # it may already have started, so the validation lane stays unresolved and
+    # the lease is withheld rather than released.
+    assert lease.release_calls == []
+    assert result.lease_release_attempts == 0
+    assert result.lease_released is False
+    assert "lease.release-withheld-unproven-termination" in result.reason_codes
 
 
 def test_unexpected_teardown_errors_are_still_attempted_exactly_once() -> None:
@@ -1974,7 +1981,7 @@ def test_lifecycle_termination_wins_over_a_teardown_termination() -> None:
         )
 
     assert len(workspace.cleanup_calls) == 1
-    assert len(lease.release_calls) == 1
+    assert lease.release_calls == []
 
 
 def test_process_level_termination_propagates_after_teardown() -> None:
@@ -2477,8 +2484,12 @@ def test_validation_only_process_termination_propagates_after_teardown(
             lease=lease, workspace=workspace, validator=TerminatingValidator()
         )
 
+    # Validation-only mode dispatches no executor, but the validation adapter
+    # may still have started a bounded subprocess before process control took
+    # the call away. ``executor_called is False`` is therefore NOT proof that
+    # no governed worker is alive, and the lease must not become available.
     assert len(workspace.cleanup_calls) == 1
-    assert len(lease.release_calls) == 1
+    assert lease.release_calls == []
 
 
 def test_validation_only_result_identity_is_deterministic_and_mode_bound() -> None:
@@ -2533,3 +2544,269 @@ def test_no_no_op_executor_or_second_lifecycle_exists() -> None:
     assert source.count("_dispatch_executor(state, executor)") == 1
     assert source.count("def _run_validation(") == 1
     assert source.count("_run_validation(state, validator)") == 1
+
+
+# --------------------------------------------------------------------------
+# AOS-LEASE1 (#1202): unresolved-termination lease fencing
+#
+# The lease may become newly available only when nothing was ever dispatched
+# or when every dispatched lane proved terminal. These tests prove both the
+# permitted and the withheld side, and that neither mode can be short-circuited
+# by ``executor_called``.
+# --------------------------------------------------------------------------
+
+
+WITHHELD_CODE = "lease.release-withheld-unproven-termination"
+
+
+def test_lease1_ordinary_contained_run_still_releases_exactly_once() -> None:
+    """#1202-1: acquire -> terminal execution -> cleanup -> exact release."""
+    lease = FakeLease()
+    workspace = FakeWorkspace()
+
+    result = _run(lease=lease, workspace=workspace)
+
+    assert result.status == "completed"
+    assert result.termination_confirmed is True
+    assert result.validation_attempts == 1
+    assert len(lease.release_calls) == 1
+    assert result.lease_release_attempts == 1
+    assert result.lease_released is True
+    assert WITHHELD_CODE not in result.reason_codes
+    # The release is the exact acquired identity, not a broadened one.
+    released = lease.release_calls[0]
+    assert released.lease_identity == result.lease_identity
+    assert released.holder_identity == result.lease_holder_identity
+    assert released.generation == result.lease_generation
+
+
+@pytest.mark.parametrize("error_type", [KeyboardInterrupt, SystemExit])
+def test_lease1_contained_process_control_with_live_descendant_withholds_lease(
+    error_type,
+) -> None:
+    """#1202-5/6: process control past a started executor never frees the lease."""
+    lease = FakeLease()
+    workspace = FakeWorkspace()
+
+    # Process-control exceptions must still propagate unchanged: they are never
+    # converted into an ordinary result status just to simplify teardown.
+    with pytest.raises(error_type):
+        _run(
+            lease=lease,
+            workspace=workspace,
+            executor=FakeExecutor(error=error_type("descendant still alive")),
+        )
+
+    assert lease.release_calls == []
+    assert lease.acquire_calls  # exact active ownership is retained, not undone
+    assert len(workspace.cleanup_calls) == 1
+
+
+def test_lease1_unconfirmed_termination_cannot_report_release_or_availability() -> None:
+    """#1202-8: unresolved termination + generic finalization is never a release."""
+    executor = FakeExecutor(
+        observation=PilotExecutionObservation(
+            outcome="succeeded", started=True, termination_confirmed=False
+        )
+    )
+    lease = FakeLease()
+
+    result = _run(lease=lease, executor=executor)
+
+    assert result.status == "quarantined"
+    assert result.termination_confirmed is False
+    assert lease.release_calls == []
+    assert result.lease_released is False
+    assert result.lease_release_attempts == 0
+    assert WITHHELD_CODE in result.reason_codes
+    assert "lease-release:withheld:termination-unresolved" in result.release_errors
+
+
+def test_lease1_hard_stop_before_any_dispatch_still_releases_exactly() -> None:
+    """#1202-7: nothing was dispatched, so no governed worker can exist."""
+
+    def probe(checkpoint: str) -> bool:
+        if checkpoint == "pre-executor":
+            raise _HardStop("terminated before dispatch")
+        return False
+
+    lease = FakeLease()
+    executor = FakeExecutor()
+    validator = FakeValidator()
+
+    with pytest.raises(_HardStop):
+        _run(cancelled=probe, lease=lease, executor=executor, validator=validator)
+
+    assert executor.calls == []
+    assert validator.calls == []
+    assert len(lease.release_calls) == 1
+
+
+def test_lease1_pre_executor_cancellation_still_releases_exactly() -> None:
+    lease = FakeLease()
+    executor = FakeExecutor()
+
+    result = _run(cancelled=cancel_at("pre-executor"), lease=lease, executor=executor)
+
+    assert executor.calls == []
+    assert result.executor_dispatch_attempts == 0
+    assert result.validation_attempts == 0
+    assert len(lease.release_calls) == 1
+    assert result.lease_released is True
+
+
+def test_lease1_validation_only_success_still_releases_exactly_once() -> None:
+    """Validation-only mode keeps its ordinary release; the fence is not broad."""
+    lease = FakeLease()
+
+    result = _run_validation_only(lease=lease)
+
+    assert result.status == "completed"
+    assert result.executor_called is False
+    assert result.validation_attempts == 1
+    assert len(lease.release_calls) == 1
+    assert result.lease_released is True
+
+
+@pytest.mark.parametrize("error_type", [KeyboardInterrupt, SystemExit, GeneratorExit])
+def test_lease1_validation_only_process_control_withholds_despite_no_executor(
+    error_type,
+) -> None:
+    """#1202: ``executor_called is False`` is not proof that nothing is alive.
+
+    Validation-only mode dispatches no executor, but the validation adapter can
+    still start a bounded subprocess. A process-control exception taken during
+    that call leaves the validation lane unresolved, so the lease is withheld
+    even though every executor field is false.
+    """
+    lease = FakeLease()
+
+    class TerminatingValidator(FakeValidator):
+        def validate(self, request):
+            self.calls.append(request)
+            raise error_type("process control during validation")
+
+    validator = TerminatingValidator()
+    with pytest.raises(error_type):
+        _run_validation_only(lease=lease, validator=validator)
+
+    assert len(validator.calls) == 1
+    assert lease.release_calls == []
+
+
+def test_lease1_standard_mode_validation_lane_is_fenced_independently() -> None:
+    """A terminal executor does not excuse an unresolved validation lane."""
+    lease = FakeLease()
+    executor = FakeExecutor()
+
+    class TerminatingValidator(FakeValidator):
+        def validate(self, request):
+            self.calls.append(request)
+            raise KeyboardInterrupt("process control during validation")
+
+    with pytest.raises(KeyboardInterrupt):
+        _run(lease=lease, executor=executor, validator=TerminatingValidator())
+
+    # The executor lane proved terminal; the validation lane did not.
+    assert len(executor.calls) == 1
+    assert lease.release_calls == []
+
+
+def test_lease1_expected_validation_adapter_error_still_releases() -> None:
+    """A bounded, contract-defined validation failure resolves its lane."""
+    lease = FakeLease()
+
+    result = _run(lease=lease, validator=FakeValidator(error=ValueError("bad plan")))
+
+    assert result.status == "failed"
+    assert len(lease.release_calls) == 1
+    assert result.lease_released is True
+    assert WITHHELD_CODE not in result.reason_codes
+
+
+def test_lease1_withheld_release_keeps_quarantine_dominant() -> None:
+    """#1202-22: workspace/process uncertainty keeps quarantine dominant."""
+    lease = FakeLease()
+    workspace = FakeWorkspace(
+        cleanup=WorkspaceCleanup(filesystem_removed=False, metadata_removed=False)
+    )
+    executor = FakeExecutor(
+        observation=PilotExecutionObservation(
+            outcome="failed", started=True, termination_confirmed=False
+        )
+    )
+
+    result = _run(lease=lease, workspace=workspace, executor=executor)
+
+    assert result.status == "quarantined"
+    assert result.lease_released is False
+    assert WITHHELD_CODE in result.reason_codes
+    assert "workspace.filesystem-cleanup-failed" in result.reason_codes
+
+
+def test_lease1_fence_uses_explicit_lane_predicates_not_one_broad_flag() -> None:
+    """The fence must not collapse into a single ``executor_called`` shortcut."""
+    source = inspect.getsource(pilot_module)
+    assert source.count("def _release_permitted(") == 1
+    assert source.count("def _termination_proven(") == 1
+    assert source.count("def _execution_started(") == 1
+    assert "if not _release_permitted(state):" in source
+    # Both dispatch lanes are consulted; neither is inferred from the other.
+    assert "state.executor_dispatch_attempts and not state.termination_confirmed" in source
+    assert "state.validation_attempts and not state.validation_control_returned" in source
+
+
+def test_lease1_no_takeover_expiry_or_retry_surface_was_introduced() -> None:
+    source = inspect.getsource(pilot_module)
+    for forbidden_token in (
+        "force_release",
+        "takeover",
+        "steal",
+        "heartbeat",
+        "ttl",
+        "expire",
+        "automatic_retry",
+    ):
+        assert forbidden_token not in source.lower()
+
+
+def test_lease1_validation_only_unexpected_error_withholds_and_quarantines() -> None:
+    """The one non-hard-stop path that leaves the validation lane unresolved."""
+    lease = FakeLease()
+
+    result = _run_validation_only(
+        lease=lease, validator=FakeValidator(error=_Boom("runner exploded"))
+    )
+
+    assert result.status == "quarantined"
+    assert result.executor_called is False
+    assert result.validation_attempts == 1
+    assert lease.release_calls == []
+    assert result.lease_released is False
+    assert result.lease_release_attempts == 0
+    assert WITHHELD_CODE in result.reason_codes
+
+
+def test_lease1_withheld_release_always_forces_quarantine_precedence() -> None:
+    """A withheld release is recorded as a release error, so quarantine wins."""
+    result = _run(
+        executor=FakeExecutor(
+            observation=PilotExecutionObservation(
+                outcome="succeeded", started=True, termination_confirmed=False
+            )
+        )
+    )
+
+    assert result.release_errors
+    assert result.status == "quarantined"
+
+    # The recorded release error alone is enough to make quarantine dominate,
+    # independently of the executor and partial-effect signals: a withheld
+    # release can never be downgraded to needs-decision or stale.
+    state = pilot_module._PilotState(pilot_input=_pilot_input())
+    state.release_errors.append("lease-release:withheld:termination-unresolved")
+    state.quarantined = True
+    state.primary_status = "needs-decision"
+
+    assert pilot_module._side_effects_were_possible(state) is True
+    assert pilot_module._final_status(state) == "quarantined"

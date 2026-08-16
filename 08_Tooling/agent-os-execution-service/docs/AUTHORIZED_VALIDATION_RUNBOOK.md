@@ -47,9 +47,9 @@ There is no retry anywhere in this path.
 | `evidence_incomplete` | Either the admission input itself was invalid (identity/content check failed), or the accepted run produced incomplete/missing evidence (e.g. #759 preflight failed, or a runtime exception was caught inside composition). | Read `reason_codes` for the specific cause. A `#759 containment preflight failed` reason means the delegated cgroup is unusable on this host -- fix host cgroup delegation before retrying; do not fall back to an uncontained run for an invocation that was configured to require containment. |
 | `validation_failed` | Everything else completed cleanly; the validation command(s) did not pass. | Inspect the retained `FrozenTestValidationResult` on the composition evidence. This is a real validation failure, not an infrastructure problem -- do not quarantine or force-cleanup. |
 | `quarantined` | The pilot itself hit an unexpected/unclassified error. A `QuarantineEvidencePacket` is attached. | Manual review required. This is Workflow Scheduler's existing quarantine posture, unchanged by #762 -- see `quarantine_review.py`. |
-| `termination_uncertain` | The executor or validation process's termination could not be directly confirmed (proc reaped, but not through the full observed-exit + drain path). | Manual review of the host for an orphaned process before reusing this workspace or lease. Never assume clean termination. |
+| `termination_uncertain` | The executor or validation process's termination could not be directly confirmed (proc reaped, but not through the full observed-exit + drain path). | Manual review of the host for an orphaned process before reusing this workspace or lease. Never assume clean termination. Since #1202 the lease is also **withheld** on this path (`lease.release-withheld-unproven-termination`): it stays actively owned rather than becoming available while a process tree may still be alive. Clearing it requires the governed recovery below. |
 | `cleanup_failed` | Worktree cleanup did not confirm both filesystem and metadata removal. | Manual worktree cleanup. Do not `git worktree remove --force` or `git clean` as a substitute -- that is exactly the destructive shortcut #758/#759/#760 are designed to avoid. |
-| `release_failed` | Lease release did not confirm (host-local: metadata mismatch or ambiguous state). | Manual lease review under the configured `lease_directory`. Never delete the lease's `.active.json` file by hand to "unstick" it -- `HostLocalLeaseAdapter` treats that ambiguity as requiring exactly this kind of manual recovery, on purpose. |
+| `release_failed` | Lease release did not confirm or was withheld (host-local: metadata mismatch, ambiguous state, or unproven termination). | Manual lease review under the configured `lease_directory`. Never delete the lease's `.active.json` file by hand to "unstick" it. Use `HostLocalLeaseAdapter.recover_orphaned_lease` (#1202), which requires the exact lease/holder/generation, the originating invocation, proven #759 containment termination, a resolved workspace disposition, and review evidence -- and performs zero mutation on any mismatch. |
 | `timed_out` | The bounded validation run exceeded its timeout. | Distinct from `cancelled` -- if unexpected, check whether the configured timeout is realistic for this command set, not a retry loop. |
 | `cancelled` | The caller's `CancellationProbe` fired before or during the run. | Expected under caller-initiated cancellation. No cleanup ambiguity implied by cancellation alone -- check the other evidence fields if in doubt. |
 
@@ -63,6 +63,11 @@ re-order or override it.
   run. `automatic_retry` is fixed `False` throughout the #757-#761 chain.
 - Never takes over, force-releases, or expires a lease. An ambiguous
   host-local lease state is always left for manual recovery.
+- Never releases a lease on unproven termination. Once the executor or the
+  validation adapter has been dispatched, teardown releases only when that lane
+  proved terminal; otherwise exact ownership is retained (#1202). Recovery is an
+  operator-invoked, evidence-bound call -- there is no age, TTL, heartbeat, or
+  PID-absence path that frees a lease, and nothing recovers one automatically.
 - Never force-removes a worktree, runs `git reset`/`git clean`/`git stash`,
   or otherwise mutates repository state outside the one authorized
   validation command set.

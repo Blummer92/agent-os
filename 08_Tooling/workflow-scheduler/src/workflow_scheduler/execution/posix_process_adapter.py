@@ -220,6 +220,97 @@ class PosixProcessExecutionResult:
     exec_failure_errno: int | None = None
 
 
+MAX_CGROUP_PATH_LENGTH = 1024
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ContainedTerminationEvidence:
+    """Independently observed containment proof for exactly one invocation.
+
+    Carries only the canonical contained-termination facts this module already
+    owns: the direct child exit/reap, the final pipe drain, the kernel's own
+    recursive ``cgroup.events`` ``populated=0`` observation, and removal of that
+    exact invocation cgroup.
+
+    Process age, TTL, wall-clock expiry, heartbeat absence, PID absence,
+    ``ESRCH``, process names, and host reachability are deliberately absent:
+    none of them prove termination, so none of them can be expressed here and
+    none of them can satisfy ``termination_proven``.
+    """
+
+    invocation_cgroup_path: str
+    contained: bool
+    child_exit_observed: bool
+    communication_completed: bool
+    return_code: int | None
+    populated_confirmed_clear: bool | None
+    cleanup_confirmed: bool | None
+
+    def __post_init__(self) -> None:
+        if type(self.invocation_cgroup_path) is not str or not self.invocation_cgroup_path:
+            raise PosixProcessAdapterError(
+                "invocation_cgroup_path must be a non-empty string"
+            )
+        if len(self.invocation_cgroup_path) > MAX_CGROUP_PATH_LENGTH:
+            raise PosixProcessAdapterError(
+                "invocation_cgroup_path exceeds the bounded path length"
+            )
+        for name in ("contained", "child_exit_observed", "communication_completed"):
+            if type(getattr(self, name)) is not bool:
+                raise PosixProcessAdapterError(f"{name} must be an exact bool")
+        if self.return_code is not None and (
+            type(self.return_code) is not int or isinstance(self.return_code, bool)
+        ):
+            raise PosixProcessAdapterError("return_code must be an int or None")
+        for name in ("populated_confirmed_clear", "cleanup_confirmed"):
+            value = getattr(self, name)
+            if value is not None and type(value) is not bool:
+                raise PosixProcessAdapterError(f"{name} must be a bool or None")
+
+    @property
+    def termination_proven(self) -> bool:
+        """Report the same contained proof ``termination_confirmed`` requires.
+
+        This mirrors ``_run_bounded_posix_process_contained`` exactly so the
+        containment proof keeps a single definition in this module. An
+        uncontained attempt can never satisfy it.
+        """
+        return bool(
+            self.contained
+            and self.child_exit_observed
+            and self.communication_completed
+            and self.return_code is not None
+            and self.populated_confirmed_clear
+            and self.cleanup_confirmed
+        )
+
+
+def contained_termination_evidence(
+    result: PosixProcessExecutionResult,
+) -> ContainedTerminationEvidence:
+    """Project one bounded contained execution result onto its termination proof.
+
+    Raises rather than inventing a path when the attempt was never contained:
+    only the containment path produces the recursive-emptiness and cgroup
+    cleanup observations this evidence is built from.
+    """
+    if type(result) is not PosixProcessExecutionResult:
+        raise PosixProcessAdapterError("result must be an exact PosixProcessExecutionResult")
+    if not result.contained or result.invocation_cgroup_path is None:
+        raise PosixProcessAdapterError(
+            "contained termination evidence requires a contained invocation"
+        )
+    return ContainedTerminationEvidence(
+        invocation_cgroup_path=result.invocation_cgroup_path,
+        contained=bool(result.contained),
+        child_exit_observed=bool(result.child_exit_observed),
+        communication_completed=bool(result.communication_completed),
+        return_code=result.return_code,
+        populated_confirmed_clear=result.populated_confirmed_clear,
+        cleanup_confirmed=result.cleanup_confirmed,
+    )
+
+
 def _signal_group(process: "subprocess.Popen[bytes]", sig: signal.Signals) -> str | None:
     try:
         pgid = os.getpgid(process.pid)
