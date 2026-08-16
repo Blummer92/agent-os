@@ -453,6 +453,83 @@ result = run_bounded_posix_process(
 )
 ```
 
+## Frozen-Test Validation
+
+### FrozenTestValidationAdapter and Explicit Termination Evidence (AOS-VALTERM1 / #1205)
+
+`FrozenTestValidationAdapter` (`execution/frozen_test_validation_adapter.py`)
+is the one-shot `ValidationAdapter` that runs a caller-frozen, immutable set
+of required-test commands through an injected `BoundedCommandRunner` and
+returns a `PilotValidationObservation`. Command execution stays fully
+delegated -- this module owns bounding, aggregation, and evidence, never a
+process runner of its own.
+
+`CommandRunObservation`, `FrozenTestValidationResult`, and
+`PilotValidationObservation` each carry `started`/`termination_confirmed`/
+`possible_partial_effects` -- the same #759 vocabulary
+`PosixProcessExecutionResult`/`PilotExecutionObservation` already use for the
+executor lane, now threaded through the validation lane too. Before #1205
+this evidence stopped at `CommandRunObservation.started`; a validator
+returning control (`attempted=True`, `passed=True`) was not, by itself,
+proof that every dispatched command's process actually terminated.
+
+`termination_confirmed`/`possible_partial_effects` are always independent of
+`outcome`/`return_code`: a command can be `outcome="failed"` (or
+`"timed-out"`, `"cancelled"`) while still confirmed terminal, and
+`outcome="succeeded"` while termination remains unconfirmed. Neither field
+is ever inferred from the other.
+
+```python
+from workflow_scheduler.execution.frozen_test_validation_adapter import (
+    FrozenTestValidationAdapter, FrozenTestCommand,
+)
+
+adapter = FrozenTestValidationAdapter(
+    required_test_commands=(FrozenTestCommand(test_id="pytest", argv=("pytest",)),),
+    runner=my_bound_posix_command_runner,
+)
+observation = adapter.validate(request)
+if observation.attempted and not observation.termination_confirmed:
+    # A command may have started and never confirmed termination even
+    # though validate() returned normally -- this is not "safe by default".
+    ...
+```
+
+**Aggregation** (`_aggregate_command_termination`): conservative over every
+command actually dispatched. A command that never started (excluded by an
+earlier cancellation, timeout, or budget exhaustion) requires no termination
+proof and can never make an otherwise-terminal result look unresolved; zero
+started commands is vacuously terminal. `termination_confirmed` requires
+every started command to confirm it explicitly; `possible_partial_effects` is
+set by any started command reporting it directly, or lacking the required
+proof.
+
+**Fail-closed evidence**: a non-bool `termination_confirmed`/
+`possible_partial_effects`, or a `started=False` command claiming confirmed
+termination, is rejected as malformed -- never silently accepted or defaulted
+toward "terminal". Both fields default `False` on `CommandRunObservation`,
+so a `BoundedCommandRunner` written before #1205 is read as having proven
+nothing, not as having proven safety.
+
+**`BoundPosixCommandRunner`** (`concrete_runtime_adapters.py`) maps
+`termination_confirmed`/`possible_partial_effects` straight from the real
+`PosixProcessExecutionResult` it obtains via `run_bounded_posix_process`,
+unchanged -- the same #759 evidence the executor lane already trusts.
+
+**Scope**: this is evidence only. `PilotValidationObservation` decides no
+lease-release policy; #1202 remains the sole owner of when a lease may be
+released, and its release fence is not implemented by this module. #1205
+makes the explicit validation-termination evidence available for a future
+#1202 refresh to consume in place of a weaker call-return proxy.
+
+**Known gap**: `agent-os-execution-service`'s
+`validation_lifecycle_evidence.py` serialize/reconstruct round-trip for
+`CommandRunObservation`/`FrozenTestValidationResult` does not yet carry these
+fields -- a reconstructed evidence bundle reads the conservative default
+regardless of what was actually observed. That module's own tests could not
+be collected in this environment (pre-existing missing `github` dependency),
+so this was flagged rather than fixed here.
+
 ## Workspace State Evidence (WSC-AUTO1D)
 
 ### `workspace_state_evidence`
