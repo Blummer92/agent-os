@@ -30,8 +30,9 @@ def ingress(**overrides: object) -> IssueCommentIngressResult:
 
 
 class FakeAdapter:
-    def __init__(self, *, state=VmState.RUNNING):
+    def __init__(self, *, state=VmState.RUNNING, clean_terminal=False):
         self.state = state
+        self.clean_terminal = clean_terminal
         self.calls: list[str] = []
 
     def observe_state(self, resource):
@@ -57,6 +58,17 @@ class FakeAdapter:
             "--handoff-id",
             HANDOFF,
         )
+        if self.clean_terminal:
+            return HostInvocationEvidence(
+                invoked=True,
+                accepted=True,
+                scheduler_invocation_id="scheduler:1",
+                execution_id="execution:1",
+                terminal_status="succeeded",
+                termination_confirmed=True,
+                lease_released=True,
+                cleanup_complete=True,
+            )
         return HostInvocationEvidence(
             invoked=True,
             accepted=True,
@@ -89,6 +101,16 @@ def test_live_binding_invokes_once_and_withholds_shutdown() -> None:
     assert result["control"]["host_accepted"] is True
     assert result["control"]["shutdown_issued"] is False
     assert result["control"]["retry_attempted"] is False
+
+
+def test_clean_terminal_evidence_still_never_calls_stop_in_first_activation() -> None:
+    adapter = FakeAdapter(clean_terminal=True)
+    result = live.execute_transport(ingress(), claims=claims(), adapter=adapter)
+    assert adapter.calls == ["observe", "probe", "invoke"]
+    assert result["control"]["status"] == "accepted"
+    assert result["control"]["shutdown_eligible"] is True
+    assert result["control"]["shutdown_issued"] is False
+    assert "shutdown-withheld" in result["control"]["reason_codes"]
 
 
 def test_stopped_vm_starts_once_before_invocation() -> None:
@@ -158,6 +180,19 @@ def test_invoke_rejects_noncanonical_argv_without_gcloud() -> None:
     adapter = live.GcloudIapAdapter()
     with pytest.raises(live.GcloudCommandError, match="non-canonical"):
         adapter.invoke(live.RESOURCE, ("sh", "-c", "whoami"))
+
+
+def test_invoke_rejects_handoff_shell_injection_without_gcloud() -> None:
+    adapter = live.GcloudIapAdapter()
+    with pytest.raises(live.GcloudCommandError, match="handoff"):
+        adapter.invoke(
+            live.RESOURCE,
+            (
+                "/usr/local/libexec/agent-os-governed-resume",
+                "--handoff-id",
+                HANDOFF + ";whoami",
+            ),
+        )
 
 
 def test_transport_file_drops_authority_fields(tmp_path: Path) -> None:
