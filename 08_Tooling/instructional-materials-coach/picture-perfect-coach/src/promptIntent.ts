@@ -23,6 +23,7 @@ export type PromptCardModel = VisualSpecification & {
 };
 
 const KNOWN_WRONG_APPS = ['Canva', 'Figma', 'Photoshop'];
+const PROVIDER_SPECIFIC_MARKERS = ['Midjourney', 'Gemini', 'Adobe Firefly', 'ChatGPT image generation', '--ar ', '--stylize '];
 
 export function validateVisualSpecification(spec: VisualSpecification): string[] {
   const errors: string[] = [];
@@ -66,12 +67,20 @@ export function validateApplicationFidelity(card: PromptCardModel): string[] {
   if (card.status === 'blocked') return [card.blocker ?? 'prompt is blocked'];
   const errors: string[] = [];
   if (!card.portablePrompt.includes(card.application)) errors.push('portable prompt lost modeled application identity');
+  if (!card.portablePrompt.includes(`${card.application} interface`)) errors.push('portable prompt lost software-interface requirement');
   for (const wrongApp of KNOWN_WRONG_APPS) {
     if (wrongApp !== card.application && card.portablePrompt.includes(`depict ${wrongApp}`)) {
       errors.push(`portable prompt substituted wrong application: ${wrongApp}`);
     }
   }
   if (!card.portablePrompt.includes(card.applicationContext)) errors.push('portable prompt lost application context');
+  if (!card.portablePrompt.includes(card.targetState)) errors.push('portable prompt lost target state');
+  for (const item of card.mustShow) {
+    if (!card.portablePrompt.includes(item)) errors.push(`portable prompt lost must-show evidence: ${item}`);
+  }
+  for (const marker of PROVIDER_SPECIFIC_MARKERS) {
+    if (card.portablePrompt.includes(marker)) errors.push(`canonical prompt contains provider-specific syntax: ${marker}`);
+  }
   return errors;
 }
 
