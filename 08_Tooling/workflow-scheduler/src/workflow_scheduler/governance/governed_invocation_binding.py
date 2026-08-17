@@ -53,8 +53,11 @@ class GovernedInvocationBinding:
                 raise ValueError(f"{name} must be bounded non-empty text")
         if self.transport_status != "accepted" or self.transport_reason != "accepted-envelope":
             raise ValueError("binding requires accepted ingress transport evidence")
-        if self.binding_id != _binding_id(self):
-            raise ValueError("binding_id does not match content")
+        computed = _binding_id(self)
+        if self.binding_id:
+            if self.binding_id != computed:
+                raise ValueError("binding_id does not match content")
+        object.__setattr__(self, "binding_id", computed)
 
     def to_dict(self) -> dict[str, object]:
         return _payload(self, include_id=True)
@@ -130,10 +133,10 @@ def bind_ingress_to_gce(
         f"{resource.project}\0{resource.zone}\0{resource.instance}"
     ).encode("utf-8")
     control_request_id = "gce-control-request:" + hashlib.sha256(request_material).hexdigest()
-    provisional = GovernedInvocationBinding(
+    return GovernedInvocationBinding(
         schema_name=BINDING_SCHEMA_NAME,
         schema_version=BINDING_SCHEMA_VERSION,
-        binding_id="governed-invocation-binding:" + "0" * 64,
+        binding_id="",
         repository=ingress.repository,
         issue_number=ingress.issue_number,
         handoff_id=ingress.handoff_id_or_none,
@@ -143,5 +146,3 @@ def bind_ingress_to_gce(
         transport_status=ingress.status,
         transport_reason=ingress.reason,
     )
-    object.__setattr__(provisional, "binding_id", _binding_id(provisional))
-    return provisional
