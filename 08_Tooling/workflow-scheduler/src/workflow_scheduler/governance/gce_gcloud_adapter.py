@@ -15,11 +15,13 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from .gce_control_path import (
+    FIXED_ENTRYPOINT,
     GceResourceTuple,
     HostInvocationEvidence,
     OidcTrustPolicy,
     VmState,
     run_gce_control_path,
+    validate_handoff_id,
 )
 from .github_issue_comment_ingress import IssueCommentIngressResult
 from .governed_invocation_binding import bind_ingress_to_gce
@@ -128,20 +130,18 @@ class GcloudIapAdapter:
     def probe_ready(self, resource: GceResourceTuple) -> bool:
         result = self._ssh(
             resource,
-            "test -x /usr/local/libexec/agent-os-governed-resume",
+            f"test -x {FIXED_ENTRYPOINT}",
         )
         return result.returncode == 0
 
     def invoke(
         self, resource: GceResourceTuple, argv: tuple[str, ...]
     ) -> HostInvocationEvidence:
-        if len(argv) != 3 or argv[0] != "/usr/local/libexec/agent-os-governed-resume":
+        if len(argv) != 3 or argv[0] != FIXED_ENTRYPOINT or argv[1] != "--handoff-id":
             raise GcloudCommandError("non-canonical host argv rejected")
-        if argv[1] != "--handoff-id":
-            raise GcloudCommandError("non-canonical host argv rejected")
-        # handoff IDs are restricted to [a-z0-9:-] by the pure control contract,
-        # so the fixed command contains no caller-controlled shell syntax.
-        command = f"{argv[0]} {argv[1]} {argv[2]}"
+        if not validate_handoff_id(argv[2]):
+            raise GcloudCommandError("non-canonical handoff id rejected")
+        command = f"{FIXED_ENTRYPOINT} --handoff-id {argv[2]}"
         result = self._ssh(resource, command)
         if result.returncode != 0:
             raise GcloudCommandError("fixed host invocation failed")
@@ -151,6 +151,9 @@ class GcloudIapAdapter:
             raise GcloudCommandError("host evidence was not JSON") from exc
         if type(payload) is not dict:
             raise GcloudCommandError("host evidence must be an object")
+        refs = payload.get("evidence_refs", ())
+        if type(refs) not in (list, tuple):
+            raise GcloudCommandError("host evidence refs must be an array")
         return HostInvocationEvidence(
             invoked=True,
             accepted=payload.get("accepted") is True,
@@ -162,12 +165,13 @@ class GcloudIapAdapter:
             cleanup_complete=payload.get("cleanup_complete") is True,
             retained_lease=payload.get("retained_lease") is True,
             quarantined=payload.get("quarantined") is True,
-            evidence_refs=tuple(payload.get("evidence_refs", ())),
+            evidence_refs=tuple(refs),
         )
 
     def stop(self, resource: GceResourceTuple) -> bool:
         # First activation is deliberately start/invoke only. The transport IAM
-        # role has no compute.instances.stop permission.
+        # role has no compute.instances.stop permission. execute_transport also
+        # disables the pure control path's shutdown actuation for this profile.
         return False
 
 
@@ -207,6 +211,7 @@ def execute_transport(
         expected_resource=RESOURCE,
         handoff_id=binding.handoff_id,
         adapter=adapter,
+        allow_shutdown=False,
     )
     return {
         "binding": binding.to_dict(),
