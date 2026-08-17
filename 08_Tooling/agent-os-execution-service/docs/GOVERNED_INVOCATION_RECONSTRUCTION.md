@@ -22,13 +22,13 @@ executor-handoff id
   -> exact current SingleIssuePilotInput OR fail-closed result
 ```
 
-The descriptor references repository/issue, route decision, execution-service
-request fingerprint, authorization, source ref/SHA, checkpoint, ResumePlan,
-environment profile/health, required-environment and dependency-readiness
-evidence, Workflow Scheduler runtime identity, candidate packet, concrete
-runtime-configuration fingerprint, and execution/invocation identity. These are
-references, not duplicated authoritative objects; drift makes reconstruction
-stale or blocked instead of rewriting historical evidence.
+The descriptor references repository/issue and #918 subject identity, route
+decision, execution-service request fingerprint, authorization, source ref/SHA,
+checkpoint and ResumePlan, environment profile/health, required-environment,
+dependency-readiness, execution-surface and canonical workspace identities,
+Workflow Scheduler runtime identity, candidate packet, concrete runtime
+configuration, and execution/invocation identity. These are references, not
+duplicated authoritative objects; drift makes reconstruction stale or blocked.
 
 ## Public seams
 Checkpoint/continuation package:
@@ -53,12 +53,12 @@ and trusted evaluation time. The external/user-controlled value is the handoff
 identity only.
 
 ## Fail-closed behavior
-Reconstruction returns no pilot input for descriptor tamper/rebinding;
-route/handoff or execution-authorization drift; repository/source/scope drift;
-checkpoint invalidation or ResumePlan mismatch/completion; environment or
-dependency-readiness drift; candidate/runtime-configuration or pilot-input
-drift; active conflicting lease; ambiguous retained/orphaned lease; or a prior
-lease generation proving the same logical invocation was already consumed.
+Reconstruction returns no pilot input for descriptor tamper/rebinding or store
+failure; route/handoff/subject, authorization, repository/source/scope, or
+command-plan drift; checkpoint invalidation or ResumePlan mismatch/completion;
+environment, dependency-readiness, execution-surface, or canonical-workspace
+drift; candidate/runtime-configuration or pilot-input drift; active conflicting
+lease; ambiguous retained/orphaned lease; or prior same-invocation consumption.
 
 Ambiguous lease ownership is never expired, stolen, force-released, or taken
 over. #1202 exclusively owns recovery. An inactive exact lease with generation
