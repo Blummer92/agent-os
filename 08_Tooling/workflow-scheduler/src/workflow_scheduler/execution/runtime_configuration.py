@@ -21,6 +21,15 @@ import posixpath
 from dataclasses import dataclass
 from typing import Literal
 
+from scripts.agent_os_execution_capabilities.dependencies import (
+    DependencyArtifactIdentity,
+    DependencyEcosystem,
+    DependencyInstallMode,
+    LocalProjectRequirement,
+    QualificationOnlyDependencyPin,
+    RequiredEnvironmentSpec,
+    required_environment_spec_payload,
+)
 from scripts.agent_os_execution_capabilities.models import RepositoryIdentity
 from workflow_scheduler.execution.frozen_test_validation_adapter import FrozenTestCommand
 from workflow_scheduler.execution.single_issue_pilot import (
@@ -98,6 +107,19 @@ def _directory(value: object, name: str, *, require_exists: bool = True) -> str:
             f"{name} must be an existing normalized absolute directory"
         )
     return text
+
+
+def _optional_directory(value: object, name: str) -> str | None:
+    """Same bounds as ``_directory``, but ``None`` opts out entirely.
+
+    Existence is never required: the #758/#759 seams this binds either
+    create the directory themselves (``HostLocalLeaseAdapter``) or are
+    delegated host infrastructure this configuration only names, never
+    provisions.
+    """
+    if value is None:
+        return None
+    return _directory(value, name, require_exists=False)
 
 
 def _issue_number(value: object) -> int:
@@ -232,6 +254,23 @@ def _validated_commands(
     return commands
 
 
+def _required_environment(
+    value: RequiredEnvironmentSpec | None,
+    expected_test_ids: tuple[str, ...],
+) -> RequiredEnvironmentSpec | None:
+    if value is None:
+        return None
+    if type(value) is not RequiredEnvironmentSpec:
+        raise ConcreteRuntimeConfigurationError(
+            "required_environment_spec must be exact RequiredEnvironmentSpec or None"
+        )
+    if value.required_validation_command_ids != tuple(sorted(expected_test_ids)):
+        raise ConcreteRuntimeConfigurationError(
+            "required environment validation-command identities drifted"
+        )
+    return value
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ConcreteRuntimeConfiguration:
     """Immutable configuration for exactly one approved runtime packet.
@@ -263,6 +302,8 @@ class ConcreteRuntimeConfiguration:
     repository_identity: RepositoryIdentity
     repository_root: str
     workspace_parent: str
+    lease_directory: str | None
+    delegated_parent_cgroup: str | None
     executor_argv: tuple[str, ...] | None
     executor_cwd: str
     environment_policy: Literal["isolated-path-home-c-locale"]
@@ -275,6 +316,7 @@ class ConcreteRuntimeConfiguration:
     validation_max_output_bytes: int
     allowed_files: tuple[str, ...]
     forbidden_paths: tuple[str, ...]
+    required_environment_spec: RequiredEnvironmentSpec | None = None
 
     @classmethod
     def bind(
@@ -294,7 +336,19 @@ class ConcreteRuntimeConfiguration:
         validation_total_timeout_seconds: float = 300.0,
         validation_max_output_bytes: int = MAX_OUTPUT_BYTES,
         environment_policy: str = ENVIRONMENT_POLICY,
+        lease_directory: str | os.PathLike[str] | None = None,
+        delegated_parent_cgroup: str | os.PathLike[str] | None = None,
+        required_environment_spec: RequiredEnvironmentSpec | None = None,
     ) -> "ConcreteRuntimeConfiguration":
+        """Bind the canonical configuration.
+
+        ``lease_directory`` and ``delegated_parent_cgroup`` are additive and
+        opt-in (default ``None``): omitted, the bound configuration selects
+        the pre-#758/#759 in-memory lease and uncontained POSIX process
+        adapters exactly as before. Supplying either binds the matching
+        production-shaped #758 host-local lease / #759 delegated cgroup v2
+        containment seam instead, with no other behavior change.
+        """
         if (
             not isinstance(pilot_input, SingleIssuePilotInput)
             or len(pilot_input.issue_numbers) != 1
@@ -325,6 +379,7 @@ class ConcreteRuntimeConfiguration:
             raise ConcreteRuntimeConfigurationError("repository identity drifted")
         test_ids = tuple(pilot_input.required_tests)
         commands = _validated_commands(required_test_commands, test_ids)
+        environment = _required_environment(required_environment_spec, test_ids)
         if tuple(getattr(pilot_input.validation_plan, "commands", ())) != test_ids:
             raise ConcreteRuntimeConfigurationError(
                 "validation plan command identities drifted"
@@ -353,6 +408,10 @@ class ConcreteRuntimeConfiguration:
             "repository_identity": repository_identity,
             "repository_root": root,
             "workspace_parent": parent,
+            "lease_directory": _optional_directory(lease_directory, "lease_directory"),
+            "delegated_parent_cgroup": _optional_directory(
+                delegated_parent_cgroup, "delegated_parent_cgroup"
+            ),
             "executor_argv": argv,
             "executor_cwd": _workspace_path(pilot_input, parent),
             "environment_policy": environment_policy,
@@ -383,6 +442,7 @@ class ConcreteRuntimeConfiguration:
             ),
             "allowed_files": _paths(pilot_input.allowed_files, "allowed_files"),
             "forbidden_paths": _paths(pilot_input.forbidden_paths, "forbidden_paths"),
+            "required_environment_spec": environment,
         }
         if environment_policy != ENVIRONMENT_POLICY:
             raise ConcreteRuntimeConfigurationError("unsupported environment authority")
@@ -420,8 +480,15 @@ class ConcreteRuntimeConfiguration:
         validation_total_timeout_seconds: float = 300.0,
         validation_max_output_bytes: int = MAX_OUTPUT_BYTES,
         environment_policy: str = ENVIRONMENT_POLICY,
+        lease_directory: str | os.PathLike[str] | None = None,
+        delegated_parent_cgroup: str | os.PathLike[str] | None = None,
+        required_environment_spec: RequiredEnvironmentSpec | None = None,
     ) -> "ConcreteRuntimeConfiguration":
-        """Bind a validation-only configuration from truthful pre-execution evidence."""
+        """Bind a validation-only configuration from truthful pre-execution evidence.
+
+        See ``bind`` for ``lease_directory``/``delegated_parent_cgroup``: both
+        are additive and opt-in, defaulting to the pre-#758/#759 behavior.
+        """
         if not isinstance(repository_identity, RepositoryIdentity):
             raise ConcreteRuntimeConfigurationError(
                 "repository_identity must be RepositoryIdentity"
@@ -436,6 +503,7 @@ class ConcreteRuntimeConfiguration:
             raise ConcreteRuntimeConfigurationError(
                 "required test identities are duplicate, missing, reordered, or unbound"
             )
+        environment = _required_environment(required_environment_spec, test_ids)
         canonical_allowed = _paths(allowed_files, "allowed_files")
         canonical_forbidden = _paths(forbidden_paths, "forbidden_paths")
         if _path_conflicts(canonical_allowed, canonical_forbidden):
@@ -468,6 +536,10 @@ class ConcreteRuntimeConfiguration:
             "repository_identity": repository_identity,
             "repository_root": root,
             "workspace_parent": parent,
+            "lease_directory": _optional_directory(lease_directory, "lease_directory"),
+            "delegated_parent_cgroup": _optional_directory(
+                delegated_parent_cgroup, "delegated_parent_cgroup"
+            ),
             "executor_argv": None,
             "executor_cwd": _workspace_path_from_values(
                 workspace_request_id=canonical_workspace_request_id,
@@ -504,6 +576,7 @@ class ConcreteRuntimeConfiguration:
             ),
             "allowed_files": canonical_allowed,
             "forbidden_paths": canonical_forbidden,
+            "required_environment_spec": environment,
         }
         return cls(configuration_fingerprint=_fingerprint(_payload(values)), **values)
 
@@ -552,6 +625,7 @@ class ConcreteRuntimeConfiguration:
             raise ConcreteRuntimeConfigurationError(
                 "required test identity or order drifted"
             )
+        _required_environment(self.required_environment_spec, test_ids)
         if tuple(getattr(pilot_input.validation_plan, "commands", ())) != test_ids:
             raise ConcreteRuntimeConfigurationError(
                 "validation plan command identity drifted"
@@ -588,6 +662,8 @@ _PAYLOAD_SCALAR_FIELDS = (
     "advisory_render_id",
     "repository_root",
     "workspace_parent",
+    "lease_directory",
+    "delegated_parent_cgroup",
     "executor_cwd",
     "environment_policy",
     "executor_timeout_seconds",
@@ -606,7 +682,8 @@ _PAYLOAD_NESTED_FIELDS = (
     "forbidden_paths",
 )
 
-_PAYLOAD_FIELDS = frozenset(_PAYLOAD_SCALAR_FIELDS) | frozenset(_PAYLOAD_NESTED_FIELDS)
+_BASE_PAYLOAD_FIELDS = frozenset(_PAYLOAD_SCALAR_FIELDS) | frozenset(_PAYLOAD_NESTED_FIELDS)
+_REQUIRED_ENVIRONMENT_PAYLOAD_FIELD = "required_environment_spec"
 
 _REPOSITORY_IDENTITY_FIELDS = frozenset(
     (
@@ -649,6 +726,15 @@ def _payload(configuration: object) -> dict[str, object]:
             "forbidden_paths": list(get("forbidden_paths")),
         }
     )
+    environment = get("required_environment_spec")
+    if environment is not None:
+        if type(environment) is not RequiredEnvironmentSpec:
+            raise ConcreteRuntimeConfigurationError(
+                "required_environment_spec must be exact RequiredEnvironmentSpec or None"
+            )
+        payload[_REQUIRED_ENVIRONMENT_PAYLOAD_FIELD] = required_environment_spec_payload(
+            environment
+        )
     return payload
 
 
@@ -720,6 +806,90 @@ def _reconstruct_required_test_commands(value: object) -> tuple[FrozenTestComman
     return tuple(commands)
 
 
+def _reconstruct_artifact(value: object, name: str) -> DependencyArtifactIdentity:
+    if type(value) is not dict or set(value) != {"relative_path", "sha256"}:
+        raise ConcreteRuntimeConfigurationError(f"{name} payload fields drift")
+    try:
+        return DependencyArtifactIdentity(
+            relative_path=value["relative_path"], sha256=value["sha256"]
+        )
+    except (TypeError, ValueError) as exc:
+        raise ConcreteRuntimeConfigurationError(f"{name} is malformed: {exc}") from exc
+
+
+def _reconstruct_required_environment(value: object) -> RequiredEnvironmentSpec:
+    expected = {
+        "ecosystem",
+        "package_root",
+        "runtime_requirement",
+        "dependency_manifest_identity",
+        "lock_or_constraints_identity",
+        "install_mode",
+        "local_project_requirements",
+        "qualification_only_pins",
+        "approved_source_identity",
+        "required_validation_command_ids",
+        "required_environment_id",
+    }
+    if type(value) is not dict or set(value) != expected:
+        raise ConcreteRuntimeConfigurationError(
+            "required_environment_spec payload fields drift"
+        )
+    projects_value = value["local_project_requirements"]
+    pins_value = value["qualification_only_pins"]
+    command_ids = value["required_validation_command_ids"]
+    if type(projects_value) is not list or type(pins_value) is not list or type(command_ids) is not list:
+        raise ConcreteRuntimeConfigurationError(
+            "required_environment_spec nested lists are malformed"
+        )
+    try:
+        projects = tuple(
+            LocalProjectRequirement(
+                relative_path=item["relative_path"],
+                sha256=item["sha256"],
+                editable=item["editable"],
+            )
+            for item in projects_value
+            if type(item) is dict and set(item) == {"relative_path", "sha256", "editable"}
+        )
+        if len(projects) != len(projects_value):
+            raise ValueError("local-project payload fields drift")
+        pins = tuple(
+            QualificationOnlyDependencyPin(
+                package=item["package"], version=item["version"]
+            )
+            for item in pins_value
+            if type(item) is dict and set(item) == {"package", "version"}
+        )
+        if len(pins) != len(pins_value):
+            raise ValueError("qualification-pin payload fields drift")
+        lock_value = value["lock_or_constraints_identity"]
+        return RequiredEnvironmentSpec(
+            ecosystem=DependencyEcosystem(value["ecosystem"]),
+            package_root=value["package_root"],
+            runtime_requirement=value["runtime_requirement"],
+            dependency_manifest_identity=_reconstruct_artifact(
+                value["dependency_manifest_identity"],
+                "dependency_manifest_identity",
+            ),
+            lock_or_constraints_identity=(
+                None
+                if lock_value is None
+                else _reconstruct_artifact(lock_value, "lock_or_constraints_identity")
+            ),
+            install_mode=DependencyInstallMode(value["install_mode"]),
+            local_project_requirements=projects,
+            qualification_only_pins=pins,
+            approved_source_identity=value["approved_source_identity"],
+            required_validation_command_ids=tuple(command_ids),
+            required_environment_id=value["required_environment_id"],
+        )
+    except (TypeError, ValueError, KeyError) as exc:
+        raise ConcreteRuntimeConfigurationError(
+            f"required_environment_spec is malformed: {exc}"
+        ) from exc
+
+
 def reconstruct_concrete_runtime_configuration(
     payload: object,
     *,
@@ -740,7 +910,12 @@ def reconstruct_concrete_runtime_configuration(
     """
     if type(payload) is not dict:
         raise ConcreteRuntimeConfigurationError("payload must be an exact dictionary")
-    if set(payload) != _PAYLOAD_FIELDS:
+    fields = set(payload)
+    supported_fields = (
+        fields == _BASE_PAYLOAD_FIELDS
+        or fields == _BASE_PAYLOAD_FIELDS | {_REQUIRED_ENVIRONMENT_PAYLOAD_FIELD}
+    )
+    if not supported_fields:
         raise ConcreteRuntimeConfigurationError(
             "runtime configuration payload fields drift"
         )
@@ -761,6 +936,13 @@ def reconstruct_concrete_runtime_configuration(
     if executor_argv is not None:
         executor_argv = _argv(_require_list(executor_argv, "executor_argv"), "executor_argv")
 
+    environment = (
+        None
+        if _REQUIRED_ENVIRONMENT_PAYLOAD_FIELD not in payload
+        else _reconstruct_required_environment(
+            payload[_REQUIRED_ENVIRONMENT_PAYLOAD_FIELD]
+        )
+    )
     values = {
         "schema_name": SCHEMA_NAME,
         "schema_version": SCHEMA_VERSION,
@@ -798,6 +980,10 @@ def reconstruct_concrete_runtime_configuration(
         ),
         "workspace_parent": _directory(
             payload["workspace_parent"], "workspace_parent", require_exists=False
+        ),
+        "lease_directory": _optional_directory(payload["lease_directory"], "lease_directory"),
+        "delegated_parent_cgroup": _optional_directory(
+            payload["delegated_parent_cgroup"], "delegated_parent_cgroup"
         ),
         "executor_argv": executor_argv,
         "executor_cwd": _directory(
@@ -839,6 +1025,7 @@ def reconstruct_concrete_runtime_configuration(
         "forbidden_paths": _paths(
             _require_list(payload["forbidden_paths"], "forbidden_paths"), "forbidden_paths"
         ),
+        "required_environment_spec": environment,
     }
     configuration = ConcreteRuntimeConfiguration(
         configuration_fingerprint=configuration_fingerprint, **values

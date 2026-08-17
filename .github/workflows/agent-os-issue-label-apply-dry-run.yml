@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Set up Python test environment
         uses: ./.github/actions/setup-python-dev
@@ -45,7 +45,7 @@ jobs:
       - name: Collect issue and repository label evidence
         if: steps.resolve.outputs.status == 'pass'
         id: collect
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           RESOLVED_ISSUE_NUMBER: ${{ steps.resolve.outputs.issue-number }}
         with:

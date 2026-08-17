@@ -140,11 +140,23 @@ class CommandRunRequest:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CommandRunObservation:
-    """One caller-supplied observation of a command attempt."""
+    """One caller-supplied observation of a command attempt.
+
+    ``termination_confirmed`` and ``possible_partial_effects`` are the same
+    #759 termination vocabulary ``PosixProcessExecutionResult`` already
+    carries, kept independent of ``outcome``/``return_code`` on purpose: a
+    command can be ``outcome="failed"`` (or ``"succeeded"``, ``"timed-out"``,
+    ``"cancelled"``) while its termination is separately confirmed or
+    unconfirmed. Neither field is ever inferred from the other here. Both
+    default conservatively to ``False`` -- a runner that omits them is never
+    silently read as having proven termination.
+    """
 
     test_id: str
     outcome: CommandOutcome
     started: bool
+    termination_confirmed: bool = False
+    possible_partial_effects: bool = False
     return_code: int | None = None
     stdout_text: str = field(default="", repr=False)
     stderr_text: str = field(default="", repr=False)
@@ -219,16 +231,56 @@ def _validate_changed_path(
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class FrozenTestValidationResult:
-    """Bounded immutable evidence for one frozen-test validation attempt."""
+    """Bounded immutable evidence for one frozen-test validation attempt.
+
+    ``started``, ``termination_confirmed``, and ``possible_partial_effects``
+    are conservative aggregates over ``command_outcomes`` -- see
+    ``_aggregate_command_termination`` for the exact rule. A command that
+    never started never requires termination proof and can never make the
+    aggregate falsely nonterminal; a command that started must explicitly
+    confirm termination or the aggregate reports it as unresolved.
+    """
 
     attempted: bool
     passed: bool
     cancellation_requested: bool
     total_timed_out: bool
+    started: bool
+    termination_confirmed: bool
+    possible_partial_effects: bool
     completed_tests: tuple[str, ...]
     changed_paths: tuple[str, ...]
     command_outcomes: tuple[CommandRunObservation, ...] = field(repr=False)
     reason: str = field(default="", repr=False)
+
+
+def _aggregate_command_termination(
+    outcomes: tuple[CommandRunObservation, ...],
+) -> tuple[bool, bool, bool]:
+    """Conservatively aggregate #759 termination evidence across commands.
+
+    Returns ``(started, termination_confirmed, possible_partial_effects)``.
+
+    Only commands that actually started are considered: a command that was
+    never dispatched (cancelled/timed-out before it ran, or excluded by an
+    earlier stop) requires no termination proof and is excluded from both the
+    ``all()`` and ``any()`` below, so it can never make an otherwise-terminal
+    aggregate look unresolved. When no command started at all, the aggregate
+    is vacuously terminal -- there is nothing whose termination could be in
+    question. ``termination_confirmed`` requires every started command to
+    explicitly confirm it; ``possible_partial_effects`` is set by any started
+    command that reports it directly, or that started without confirming
+    termination (the two are not assumed to be complementary here, even
+    though the canonical #759 producer keeps them so).
+    """
+    started_commands = tuple(item for item in outcomes if item.started)
+    started = bool(started_commands)
+    termination_confirmed = all(item.termination_confirmed for item in started_commands)
+    possible_partial_effects = any(
+        item.possible_partial_effects or not item.termination_confirmed
+        for item in started_commands
+    )
+    return started, termination_confirmed, possible_partial_effects
 
 
 def _normalize_utf8(text: str) -> tuple[str, bytes]:
@@ -344,6 +396,24 @@ def _normalize_observation(
         return _failed_observation(command.test_id, "runner observation outcome was unsupported", started=started)
     if type(observation.started) is not bool:
         return _failed_observation(command.test_id, "runner observation started flag was malformed")
+    if type(observation.termination_confirmed) is not bool:
+        return _failed_observation(
+            command.test_id,
+            "runner observation termination evidence was malformed",
+            started=started,
+        )
+    if type(observation.possible_partial_effects) is not bool:
+        return _failed_observation(
+            command.test_id,
+            "runner observation partial-effects evidence was malformed",
+            started=started,
+        )
+    if observation.started is False and observation.termination_confirmed is True:
+        return _failed_observation(
+            command.test_id,
+            "runner observation claimed confirmed termination for a command that never started",
+            started=started,
+        )
     if observation.return_code is not None and type(observation.return_code) is not int:
         return _failed_observation(command.test_id, "runner observation return code was malformed", started=started)
     if not isinstance(observation.stdout_text, str):
@@ -381,6 +451,8 @@ def _normalize_observation(
         test_id=command.test_id,
         outcome=outcome,
         started=observation.started,
+        termination_confirmed=observation.termination_confirmed,
+        possible_partial_effects=observation.possible_partial_effects,
         return_code=observation.return_code,
         stdout_text=stdout_text,
         stderr_text=stderr_text,
@@ -435,6 +507,9 @@ def run_frozen_test_validation(
             passed=False,
             cancellation_requested=False,
             total_timed_out=False,
+            started=False,
+            termination_confirmed=True,
+            possible_partial_effects=False,
             completed_tests=(),
             changed_paths=(),
             command_outcomes=(),
@@ -575,6 +650,8 @@ def run_frozen_test_validation(
                     test_id=command.test_id,
                     outcome="timed-out",
                     started=normalized.started,
+                    termination_confirmed=normalized.termination_confirmed,
+                    possible_partial_effects=normalized.possible_partial_effects,
                     return_code=normalized.return_code,
                     stdout_text=normalized.stdout_text,
                     stderr_text=normalized.stderr_text,
@@ -587,11 +664,17 @@ def run_frozen_test_validation(
             completed.append(command.test_id)
 
     if len(completed) > MAX_COMPLETED_TESTS:
+        bounded_started, bounded_termination_confirmed, bounded_possible_partial_effects = (
+            _aggregate_command_termination(tuple(outcomes))
+        )
         return FrozenTestValidationResult(
             attempted=True,
             passed=False,
             cancellation_requested=cancellation_requested,
             total_timed_out=total_timed_out,
+            started=bounded_started,
+            termination_confirmed=bounded_termination_confirmed,
+            possible_partial_effects=bounded_possible_partial_effects,
             completed_tests=(),
             changed_paths=(),
             command_outcomes=tuple(outcomes),
@@ -680,11 +763,17 @@ def run_frozen_test_validation(
     else:
         reason = ""
 
+    final_started, final_termination_confirmed, final_possible_partial_effects = (
+        _aggregate_command_termination(tuple(outcomes))
+    )
     return FrozenTestValidationResult(
         attempted=True,
         passed=passed,
         cancellation_requested=cancellation_requested,
         total_timed_out=total_timed_out,
+        started=final_started,
+        termination_confirmed=final_termination_confirmed,
+        possible_partial_effects=final_possible_partial_effects,
         completed_tests=tuple(completed) if passed else (),
         changed_paths=changed_paths,
         command_outcomes=tuple(outcomes),
@@ -733,6 +822,9 @@ def _to_pilot_validation_observation(
     return PilotValidationObservation(
         attempted=result.attempted,
         passed=result.passed,
+        started=result.started,
+        termination_confirmed=result.termination_confirmed,
+        possible_partial_effects=result.possible_partial_effects,
         completed_tests=result.completed_tests,
         changed_paths=result.changed_paths,
         reason=_public_validation_reason(result),

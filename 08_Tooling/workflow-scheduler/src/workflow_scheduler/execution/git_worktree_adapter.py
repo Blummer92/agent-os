@@ -8,7 +8,12 @@ import math
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Literal, Mapping, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Literal, Mapping, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from workflow_scheduler.execution.workspace_state_evidence import (
+        WorkspaceStateObservation,
+    )
 
 from scripts.agent_os_execution_capabilities.models import (
     CAPABILITY_EVIDENCE_SCHEMA_NAME,
@@ -1341,6 +1346,34 @@ class GitWorktreeAdapter:
             missing=not exists,
             prunable=record.prunable,
             reason=_reason("; ".join(reasons)),
+        )
+
+    def inspect_complete_state(
+        self, handle: WorkspaceHandle, *, observation_kind: str
+    ) -> "WorkspaceStateObservation":
+        """Capture one complete workspace-state observation for the bound workspace.
+
+        Reuses this adapter's own ``GitRunner``, root, and bounded process
+        policy; no second Git runner or worktree manager is created.
+        """
+        from workflow_scheduler.execution.workspace_state_evidence import (
+            inspect_complete_workspace_state,
+        )
+
+        binding = self._bound(handle)
+        return inspect_complete_workspace_state(
+            runner=self._runner,
+            git_binary=self._git,
+            repository_root=self._root,
+            workspace_path=binding.path,
+            repository_identity=self._identity,
+            branch=_branch_name(binding.branch_ref) or binding.request.branch,
+            expected_sha=binding.request.expected_revision,
+            lock_identity=binding.lock_reason,
+            observation_kind=observation_kind,
+            environment=self._env,
+            timeout_seconds=self._timeout,
+            max_output_bytes=self._output,
         )
 
     def cleanup(self, handle: WorkspaceHandle) -> WorkspaceCleanup:

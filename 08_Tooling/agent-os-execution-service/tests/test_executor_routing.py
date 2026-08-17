@@ -526,9 +526,9 @@ def test_version_surfaces_and_markdown_limits_are_aligned() -> None:
     ).read_text(encoding="utf-8")
     map_text = (repo_root / "04_Registry/module-version-map.md").read_text(encoding="utf-8")
     details_text = (repo_root / "04_Registry/module-version-map-details.md").read_text(encoding="utf-8")
-    assert project["project"]["version"] == "0.5.0"
-    assert 'EXECUTION_SERVICE_VERSION = "0.5.0"' in models_text
-    assert re.search(r"\| Agent OS Execution Service \| 0\.5\.0 \|", map_text)
-    assert "moved `0.4.0` -> `0.5.0`" in details_text
+    assert project["project"]["version"] == "0.6.0"
+    assert 'EXECUTION_SERVICE_VERSION = "0.6.0"' in models_text
+    assert re.search(r"\| Agent OS Execution Service \| 0\.6\.0 \|", map_text)
+    assert "moved `0.5.0` -> `0.6.0`" in details_text
     assert len((package_root / "README.md").read_text(encoding="utf-8").splitlines()) < 100
     assert len(map_text.splitlines()) < 100

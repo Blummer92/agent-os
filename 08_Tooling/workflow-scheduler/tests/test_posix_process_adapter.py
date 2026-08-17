@@ -807,3 +807,129 @@ def test_containment_module_exposes_no_shell_network_or_persistence_surface() ->
     for module_name in imported_modules:
         root = module_name.split(".")[0]
         assert root not in _FORBIDDEN_IMPORT_ROOTS, f"forbidden import: {module_name}"
+
+
+# --------------------------------------------------------------------------
+# AOS-LEASE1 (#1202): contained termination evidence for lease recovery
+#
+# The proof definition stays owned here (#759). These tests pin it to the same
+# conditions ``termination_confirmed`` already requires, so a weaker generic
+# process check can never be substituted downstream.
+# --------------------------------------------------------------------------
+
+
+def _contained_result(**overrides):
+    base = dict(
+        started=True,
+        timeout_observed=False,
+        cancellation_requested=False,
+        signal_dispatched=None,
+        escalation_dispatched=False,
+        child_exit_observed=True,
+        communication_completed=True,
+        return_code=0,
+        stdout_text="",
+        stdout_truncated=False,
+        stderr_text="",
+        stderr_truncated=False,
+        termination_confirmed=True,
+        possible_partial_effects=False,
+        contained=True,
+        invocation_cgroup_path="/sys/fs/cgroup/agent-os/inv-1",
+        cgroup_kill_dispatched=False,
+        populated_confirmed_clear=True,
+        cleanup_confirmed=True,
+    )
+    base.update(overrides)
+    return adapter_module.PosixProcessExecutionResult(**base)
+
+
+def test_lease1_contained_evidence_matches_termination_confirmed_exactly() -> None:
+    result = _contained_result()
+    evidence = adapter_module.contained_termination_evidence(result)
+
+    assert evidence.termination_proven is True
+    assert evidence.termination_proven == result.termination_confirmed
+    assert evidence.invocation_cgroup_path == result.invocation_cgroup_path
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"child_exit_observed": False},
+        {"communication_completed": False},
+        {"return_code": None},
+        {"populated_confirmed_clear": False},
+        {"populated_confirmed_clear": None},
+        {"cleanup_confirmed": False},
+        {"cleanup_confirmed": None},
+    ],
+)
+def test_lease1_any_missing_containment_fact_defeats_the_proof(overrides) -> None:
+    """Reap, drain, recursive populated=0, and exact cleanup are all required."""
+    result = _contained_result(termination_confirmed=False, **overrides)
+
+    assert adapter_module.contained_termination_evidence(result).termination_proven is False
+
+
+def test_lease1_uncontained_execution_cannot_produce_containment_evidence() -> None:
+    """An uncontained attempt has no recursive-emptiness proof to project."""
+    uncontained = _contained_result(
+        contained=False,
+        invocation_cgroup_path=None,
+        populated_confirmed_clear=None,
+        cleanup_confirmed=None,
+    )
+
+    with pytest.raises(PosixProcessAdapterError):
+        adapter_module.contained_termination_evidence(uncontained)
+
+
+def test_lease1_termination_evidence_rejects_malformed_bindings() -> None:
+    with pytest.raises(PosixProcessAdapterError):
+        adapter_module.ContainedTerminationEvidence(
+            invocation_cgroup_path="",
+            contained=True,
+            child_exit_observed=True,
+            communication_completed=True,
+            return_code=0,
+            populated_confirmed_clear=True,
+            cleanup_confirmed=True,
+        )
+    with pytest.raises(PosixProcessAdapterError):
+        adapter_module.ContainedTerminationEvidence(
+            invocation_cgroup_path="/sys/fs/cgroup/agent-os/inv-1",
+            contained="yes",
+            child_exit_observed=True,
+            communication_completed=True,
+            return_code=0,
+            populated_confirmed_clear=True,
+            cleanup_confirmed=True,
+        )
+    with pytest.raises(PosixProcessAdapterError):
+        adapter_module.contained_termination_evidence(object())
+
+
+def test_lease1_containment_proof_keeps_a_single_definition() -> None:
+    """The recovery proof must not drift from the executor's own proof.
+
+    Rather than pinning source text, this cross-checks the two definitions
+    against each other over every combination of the containment facts.
+    """
+    import itertools
+
+    for combo in itertools.product([True, False], repeat=4):
+        child_exit, drain, populated, cleanup = combo
+        result = _contained_result(
+            child_exit_observed=child_exit,
+            communication_completed=drain,
+            populated_confirmed_clear=populated,
+            cleanup_confirmed=cleanup,
+            termination_confirmed=all(combo),
+        )
+        evidence = adapter_module.contained_termination_evidence(result)
+        assert evidence.termination_proven == result.termination_confirmed == all(combo)
+
+    # A missing return code defeats the proof on both sides as well.
+    no_rc = _contained_result(return_code=None, termination_confirmed=False)
+    assert adapter_module.contained_termination_evidence(no_rc).termination_proven is False

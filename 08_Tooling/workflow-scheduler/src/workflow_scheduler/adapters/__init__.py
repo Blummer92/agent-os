@@ -22,6 +22,9 @@ from workflow_scheduler.adapters.github_readonly_adapter import (
     GitHubReadOnlyAdapter,
     GitHubReadOnlyAdapterError,
 )
+from workflow_scheduler.adapters.instructional_materials_dry_run_adapter import (
+    InstructionalMaterialsDryRunAdapter,
+)
 from workflow_scheduler.adapters.noop_adapter import NoopAdapter
 from workflow_scheduler.adapters.notion_readonly_adapter import (
     NotionReadOnlyAdapter,
@@ -32,6 +35,7 @@ from workflow_scheduler.adapters.registry import available_adapters, resolve_ada
 __all__ = [
     "TaskAdapter",
     "NoopAdapter",
+    "InstructionalMaterialsDryRunAdapter",
     "FakeSuccessAdapter",
     "FakeFailureAdapter",
     "FakeRetryableAdapter",

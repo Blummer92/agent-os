@@ -39,6 +39,9 @@ from workflow_scheduler.execution.git_worktree_adapter import (  # noqa: E402
     GitObservation,
     GitWorktreeAdapter,
 )
+from workflow_scheduler.execution.host_local_lease_adapter import (  # noqa: E402
+    HostLocalLeaseAdapter,
+)
 from workflow_scheduler.execution.in_memory_lease_adapter import (  # noqa: E402
     InMemoryLeaseAdapter,
 )
@@ -338,6 +341,63 @@ def test_runner_maps_posix_evidence_and_never_retries(
         runner.run(request)
 
 
+def test_runner_maps_759_termination_evidence_exactly(tmp_path: Path) -> None:
+    """#1205-14: termination_confirmed/possible_partial_effects pass through
+    from PosixProcessExecutionResult to CommandRunObservation unchanged --
+    never inferred from outcome or return_code."""
+    configuration = _configuration(
+        tmp_path, validation_argv=(sys.executable, "-c", "pass")
+    )
+    Path(configuration.executor_cwd).mkdir()
+    runner = BoundPosixCommandRunner(configuration)
+    command = configuration.required_test_commands[0]
+    request = CommandRunRequest(
+        test_id=command.test_id,
+        argv=command.argv,
+        timeout_seconds=1.0,
+    )
+
+    observation = runner.run(request)
+
+    assert runner.last_result is not None
+    assert observation.outcome == "succeeded"
+    assert observation.termination_confirmed == runner.last_result.termination_confirmed
+    assert (
+        observation.possible_partial_effects
+        == runner.last_result.possible_partial_effects
+    )
+    # A real contained/uncontained #759 run of `python -c "pass"` genuinely
+    # confirms termination; this pins the mapping isn't merely coincidentally
+    # equal on both sides (e.g. both False by omission).
+    assert observation.termination_confirmed is True
+    assert observation.possible_partial_effects is False
+
+
+def test_runner_maps_759_termination_evidence_on_failure_too(tmp_path: Path) -> None:
+    """A failed command can still be terminal -- outcome and evidence are
+    independent, mirroring PosixProcessExecutionResult exactly."""
+    configuration = _configuration(
+        tmp_path, validation_argv=(sys.executable, "-c", "import sys;sys.exit(1)")
+    )
+    Path(configuration.executor_cwd).mkdir()
+    runner = BoundPosixCommandRunner(configuration)
+    command = configuration.required_test_commands[0]
+    request = CommandRunRequest(
+        test_id=command.test_id,
+        argv=command.argv,
+        timeout_seconds=1.0,
+    )
+
+    observation = runner.run(request)
+
+    assert runner.last_result is not None
+    assert observation.outcome == "failed"
+    assert observation.started is True
+    assert observation.termination_confirmed == runner.last_result.termination_confirmed
+    assert observation.termination_confirmed is True
+    assert observation.possible_partial_effects is False
+
+
 def test_unbound_runner_argv_fails_before_execution(tmp_path: Path) -> None:
     configuration = _configuration(tmp_path)
     runner = BoundPosixCommandRunner(configuration)
@@ -365,7 +425,8 @@ def test_builder_constructs_only_existing_adapter_types(tmp_path: Path) -> None:
     )
     assert isinstance(adapters, ConcreteRuntimeAdapters)
     assert isinstance(adapters.lease, InMemoryLeaseAdapter)
-    assert isinstance(adapters.workspace, GitWorktreeAdapter)
+    assert isinstance(adapters.workspace, module.WorkspaceStateCapturingAdapter)
+    assert isinstance(adapters.workspace._adapter, GitWorktreeAdapter)
     assert isinstance(adapters.executor, PosixProcessExecutor)
     assert isinstance(adapters.validator, module.FrozenTestValidationAdapter)
 
@@ -872,7 +933,8 @@ def test_validation_only_builder_constructs_no_process_executor(
     assert isinstance(adapters, ConcreteRuntimeAdapters)
     assert adapters.executor is None
     assert isinstance(adapters.lease, InMemoryLeaseAdapter)
-    assert isinstance(adapters.workspace, GitWorktreeAdapter)
+    assert isinstance(adapters.workspace, module.WorkspaceStateCapturingAdapter)
+    assert isinstance(adapters.workspace._adapter, GitWorktreeAdapter)
     assert isinstance(adapters.validator, module.FrozenTestValidationAdapter)
 
 
@@ -1068,6 +1130,197 @@ def test_validation_only_quarantined_cleanup_path(tmp_path: Path) -> None:
     assert outcome.runtime_outcome.result.workspace_cleanup_attempts == 1
     assert outcome.runtime_outcome.result.lease_release_attempts == 1
     assert git_runner.added is True
+
+
+def test_capture_workspace_state_observation_delegates_to_bound_adapter() -> None:
+    """Regression: #760's capture helper is a thin pass-through -- it adds no
+    new runner, orchestration, or runtime wiring of its own."""
+    calls: list[tuple[object, str]] = []
+
+    class _FakeWorkspace:
+        def inspect_complete_state(self, handle, *, observation_kind: str) -> str:
+            calls.append((handle, observation_kind))
+            return f"observation:{observation_kind}"
+
+    adapters = ConcreteRuntimeAdapters(
+        lease=InMemoryLeaseAdapter(),
+        workspace=_FakeWorkspace(),
+        executor=None,
+        validator=None,
+        validation_runner=None,
+    )
+    handle = object()
+    result = module.capture_workspace_state_observation(
+        adapters, handle, observation_kind="initial"
+    )
+    assert result == "observation:initial"
+    assert calls == [(handle, "initial")]
+
+
+# #758/#759 seam wiring (WSC-AUTO1F / #762)
+
+
+def _configuration_with_containment(
+    tmp_path: Path,
+    *,
+    lease_directory: str | None = None,
+    delegated_parent_cgroup: str | None = None,
+    executor_argv: tuple[str, ...] = (sys.executable, "-c", "pass"),
+    validation_argv: tuple[str, ...] = (sys.executable, "-c", "pass"),
+) -> ConcreteRuntimeConfiguration:
+    root = tmp_path / "repository"
+    parent = tmp_path / "worktrees"
+    root.mkdir()
+    parent.mkdir()
+    return ConcreteRuntimeConfiguration.bind(
+        tsp._pilot_input(),
+        repository_identity=tsp._identity(),
+        repository_root=str(root),
+        workspace_parent=str(parent),
+        executor_argv=executor_argv,
+        required_test_commands=_commands(validation_argv),
+        executor_timeout_seconds=1.0,
+        executor_grace_period_seconds=0.05,
+        validation_per_command_timeout_seconds=1.0,
+        validation_total_timeout_seconds=5.0,
+        lease_directory=lease_directory,
+        delegated_parent_cgroup=delegated_parent_cgroup,
+    )
+
+
+def test_omitted_lease_directory_preserves_in_memory_lease_adapter(tmp_path: Path) -> None:
+    configuration = _configuration(tmp_path)
+    adapters = build_concrete_runtime_adapters(
+        tsp._pilot_input(),
+        configuration,
+        git_runner=ScenarioGitRunner(configuration),
+        changed_paths_inspector=lambda: (),
+    )
+    assert isinstance(adapters.lease, InMemoryLeaseAdapter)
+
+
+def test_configured_lease_directory_selects_host_local_lease_adapter(tmp_path: Path) -> None:
+    """#758: an explicit lease_directory binds the production-shaped host-local lease."""
+    lease_dir = tmp_path / "leases"
+    configuration = _configuration_with_containment(tmp_path, lease_directory=str(lease_dir))
+    adapters = build_concrete_runtime_adapters(
+        tsp._pilot_input(),
+        configuration,
+        git_runner=ScenarioGitRunner(configuration),
+        changed_paths_inspector=lambda: (),
+    )
+    assert isinstance(adapters.lease, HostLocalLeaseAdapter)
+    assert lease_dir.is_dir()
+
+
+def test_omitted_delegated_parent_cgroup_yields_no_containment(tmp_path: Path) -> None:
+    configuration = _configuration(tmp_path)
+    assert module._containment_config(configuration, suffix="executor") is None
+    module._preflight_containment(configuration)  # must not raise
+
+
+def test_configured_containment_preflight_failure_prevents_any_side_effect(
+    tmp_path: Path,
+) -> None:
+    """#759: an unusable delegated_parent_cgroup fails closed before any lease or worktree exists."""
+    lease_dir = tmp_path / "leases"
+    not_a_real_cgroup = tmp_path / "not-a-real-cgroup"
+    not_a_real_cgroup.mkdir()
+    configuration = _configuration_with_containment(
+        tmp_path,
+        lease_directory=str(lease_dir),
+        delegated_parent_cgroup=str(not_a_real_cgroup),
+    )
+    with pytest.raises(module.ConcreteRuntimeContainmentError):
+        build_concrete_runtime_adapters(
+            tsp._pilot_input(),
+            configuration,
+            git_runner=ScenarioGitRunner(configuration),
+            changed_paths_inspector=lambda: (),
+        )
+    assert not lease_dir.exists()
+
+
+def test_containment_config_scopes_are_distinct_and_deterministic(tmp_path: Path) -> None:
+    configuration = _configuration_with_containment(
+        tmp_path, delegated_parent_cgroup=str(tmp_path / "cgroup-parent")
+    )
+    executor_containment = module._containment_config(configuration, suffix="executor")
+    validation_containment = module._containment_config(configuration, suffix="validate:test-a")
+    executor_again = module._containment_config(configuration, suffix="executor")
+
+    assert executor_containment.invocation_id != validation_containment.invocation_id
+    assert executor_containment.invocation_id == executor_again.invocation_id
+    assert executor_containment.delegated_parent_cgroup == configuration.delegated_parent_cgroup
+
+
+def test_workspace_state_capturing_adapter_captures_initial_and_final_once() -> None:
+    """#760: initial captured right after a real create, final right before real cleanup."""
+    calls: list[str] = []
+
+    class _FakeInner:
+        def create(self, request):
+            calls.append("create")
+            return module.WorkspaceHandle(created=True, workspace_identity="ws-1")
+
+        def inspect(self, handle):
+            calls.append("inspect")
+            return "inspection"
+
+        def inspect_complete_state(self, handle, *, observation_kind: str):
+            calls.append(f"capture:{observation_kind}")
+            return f"observation:{observation_kind}"
+
+        def cleanup(self, handle):
+            calls.append("cleanup")
+            return "cleanup-result"
+
+    wrapper = module.WorkspaceStateCapturingAdapter(_FakeInner())
+    handle = wrapper.create(object())
+    assert wrapper.initial_observation == "observation:initial"
+    assert wrapper.inspect(handle) == "inspection"
+    result = wrapper.cleanup(handle)
+    assert result == "cleanup-result"
+    assert wrapper.final_observation == "observation:final"
+    assert calls == ["create", "capture:initial", "inspect", "capture:final", "cleanup"]
+
+
+def test_workspace_state_capturing_adapter_skips_capture_when_not_created() -> None:
+    class _FakeInner:
+        def create(self, request):
+            return module.WorkspaceHandle(
+                created=False, workspace_identity="ws-1", reason="nope"
+            )
+
+        def cleanup(self, handle):
+            return "cleanup-result"
+
+        def inspect_complete_state(self, handle, *, observation_kind: str):
+            raise AssertionError("must not capture when the workspace was never created")
+
+    wrapper = module.WorkspaceStateCapturingAdapter(_FakeInner())
+    handle = wrapper.create(object())
+    assert wrapper.initial_observation is None
+    wrapper.cleanup(handle)
+    assert wrapper.final_observation is None
+
+
+def test_evidence_entrypoint_returns_workspace_lifecycle_evidence_when_captured(
+    tmp_path: Path,
+) -> None:
+    configuration = _configuration(tmp_path)
+    git_runner = ScenarioGitRunner(configuration)
+    outcome = run_concrete_runtime_entrypoint_with_validation_evidence(
+        tsp._pilot_input(),
+        configuration,
+        cancelled=tsp.never_cancelled,
+        git_runner=git_runner,
+        changed_paths_inspector=lambda: (),
+    )
+    assert outcome.runtime_outcome.result.status == "completed"
+    assert isinstance(outcome.workspace_lifecycle_evidence, module.WorkspaceLifecycleEvidence)
+    assert outcome.workspace_lifecycle_evidence.initial.observation_kind == "initial"
+    assert outcome.workspace_lifecycle_evidence.final.observation_kind == "final"
 
 
 def test_no_no_op_executor_or_second_lifecycle_in_the_adapter_layer() -> None:

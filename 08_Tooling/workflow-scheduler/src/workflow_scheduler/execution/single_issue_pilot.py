@@ -191,6 +191,7 @@ PILOT_REASON_CODES: frozenset[str] = frozenset(
         "lease.release-failed",
         "lease.release-ambiguous",
         "lease.release-forced",
+        "lease.release-withheld-unproven-termination",
         "workspace.creation-failed",
         "workspace.repository-mismatch",
         "workspace.branch-mismatch",
@@ -466,10 +467,29 @@ class PilotValidationRequest:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class PilotValidationObservation:
-    """Observed validation result for one bounded validation attempt."""
+    """Observed validation result for one bounded validation attempt.
+
+    ``started``, ``termination_confirmed``, and ``possible_partial_effects``
+    (AOS-VALTERM1 / #1205) carry the same #759 termination vocabulary
+    ``PilotExecutionObservation`` already exposes for the executor lane,
+    aggregated conservatively across whatever the validator actually
+    dispatched. The validator's call returning control -- ``attempted``/
+    ``passed`` being set at all -- is never by itself proof that every
+    dispatched validation command terminated; these fields are the explicit,
+    additive evidence for that question. They default to the conservative
+    reading (nothing proven) so an adapter that predates this contract is
+    never silently read as having proven termination it never reported.
+
+    This observation only describes what validation actually did. It carries
+    no lease-release or lifecycle decision of its own -- that policy lives
+    where the lease is owned, not here.
+    """
 
     attempted: bool
     passed: bool
+    started: bool = False
+    termination_confirmed: bool = False
+    possible_partial_effects: bool = False
     completed_tests: tuple[str, ...] = ()
     changed_paths: tuple[str, ...] = ()
     reason: str = ""
@@ -940,6 +960,9 @@ class _PilotState:
     possible_partial_effects: bool = False
 
     validation_attempts: int = 0
+    validation_started: bool | None = None
+    validation_termination_confirmed: bool = False
+    validation_possible_partial_effects: bool = False
     validation_attempted: bool = False
     validation_passed: bool = False
     changed_paths: tuple[str, ...] = ()
@@ -2012,6 +2035,9 @@ def _run_validation(state: _PilotState, validator: ValidationAdapter) -> None:
     try:
         observation = validator.validate(request)
     except _EXPECTED_ADAPTER_EXCEPTIONS as exc:
+        # A bounded, contract-defined adapter error is still the one-shot
+        # validation call completing and handing control back, so the
+        # validation lane is resolved even though its outcome is a failure.
         raise state.stop(
             "failed",
             reasons=("validation.error",),
@@ -2026,6 +2052,9 @@ def _run_validation(state: _PilotState, validator: ValidationAdapter) -> None:
             detail="validation:unsupported-observation",
         )
 
+    state.validation_started = bool(observation.started)
+    state.validation_termination_confirmed = bool(observation.termination_confirmed)
+    state.validation_possible_partial_effects = bool(observation.possible_partial_effects)
     state.validation_attempted = bool(observation.attempted)
     state.validation_passed = bool(observation.passed)
 
@@ -2206,9 +2235,71 @@ def _cleanup_workspace(state: _PilotState, workspace_adapter: WorkspaceAdapter) 
         state.quarantined = True
 
 
+def _execution_started(state: _PilotState) -> bool:
+    """Report whether any governed worker dispatch was ever attempted.
+
+    Both dispatch surfaces count. ``executor_called`` alone is not the
+    question: validation-only mode never dispatches an executor, yet the
+    validation adapter may still run a bounded subprocess, so a validation
+    attempt makes termination just as much of an open question as an executor
+    attempt. Each dispatch counter is raised immediately before its adapter
+    call, so an attempt is recorded even when control never comes back.
+    """
+    return bool(state.executor_dispatch_attempts or state.validation_attempts)
+
+
+def _termination_proven(state: _PilotState) -> bool:
+    """Report whether every dispatched lane proved its execution terminal.
+
+    Each lane is answered by its own canonical evidence rather than by one
+    shared boolean, so a lane that never ran can never mask a lane that did:
+
+    * the executor lane is proven only by ``termination_confirmed``, which
+      ``PosixProcessExecutor`` sets from the contained child exit/reap, final
+      pipe drain, recursive ``cgroup.events`` ``populated=0``, and exact
+      invocation-cgroup cleanup;
+    * the validation lane is proven only by the bounded one-shot validation
+      call handing control back, which is the strongest evidence the frozen
+      ``PilotValidationObservation`` contract carries. A process-level
+      termination through that call leaves the lane unresolved.
+    """
+    if state.executor_dispatch_attempts and not state.termination_confirmed:
+        return False
+    if state.validation_attempts:
+        if state.validation_started is None:
+            return False
+        if state.validation_started and (
+            not state.validation_termination_confirmed
+            or state.validation_possible_partial_effects
+        ):
+            return False
+    return True
+
+
+def _release_permitted(state: _PilotState) -> bool:
+    """Report whether making this lease newly available is truthful.
+
+    Release is permitted only when nothing was ever dispatched, or when every
+    lane that was dispatched proved terminal. Once a governed worker may be
+    alive, ordinary teardown must retain exact active lease ownership: a lease
+    that becomes available while its process tree survives is the two-active-
+    owners failure this fence exists to prevent.
+    """
+    return not _execution_started(state) or _termination_proven(state)
+
+
 def _release_lease(state: _PilotState, lease_adapter: LeaseAdapter) -> None:
     grant = state.lease_grant
     if grant is None or not state.lease_acquired or state.lease_release_attempts:
+        return
+
+    if not _release_permitted(state):
+        # Retain exact active ownership and require governed recovery. No
+        # release is attempted, so the attempt counter stays at zero and the
+        # active lease is never made available on unproven termination.
+        state.release_errors.append("lease-release:withheld:termination-unresolved")
+        state.reason_codes.add("lease.release-withheld-unproven-termination")
+        state.quarantined = True
         return
 
     state.lease_release_attempts = 1
