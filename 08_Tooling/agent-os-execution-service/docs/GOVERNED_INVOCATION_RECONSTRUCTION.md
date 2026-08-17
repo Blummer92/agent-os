@@ -58,12 +58,13 @@ failure; route/handoff/subject, authorization, repository/source/scope, or
 command-plan drift; checkpoint invalidation or ResumePlan mismatch/completion;
 environment, dependency-readiness, execution-surface, or canonical-workspace
 drift; candidate/runtime-configuration or pilot-input drift; active conflicting
-lease; ambiguous retained/orphaned lease; or prior same-invocation consumption.
+lease; or ambiguous retained/orphaned lease.
 
 Ambiguous lease ownership is never expired, stolen, force-released, or taken
-over. #1202 exclusively owns recovery. An inactive exact lease with generation
-above zero blocks replay; a legitimate continuation needs a new canonical
-invocation identity.
+over. #1202 exclusively owns recovery. An inactive exact lease remains eligible
+for canonical reacquisition regardless of its preserved generation history;
+#895/#1188 ResumePlan currentness, not generation count, decides whether useful
+continuation work remains.
 
 ## Authority and side effects
 The descriptor and reconstruction result are evidence only. They grant no
