@@ -9,7 +9,8 @@ describe('PromptCards', () => {
     expect(screen.getByRole('heading', { name: 'Picture Perfect prompts' })).toBeTruthy();
     expect(screen.getByText('Application: Adobe Express')).toBeTruthy();
     expect(screen.getByText('result')).toBeTruthy();
-    expect(screen.getByLabelText('Portable prompt')).toHaveValue(expect.stringContaining('Adobe Express'));
+    const prompt = screen.getByLabelText('Portable prompt') as HTMLTextAreaElement;
+    expect(prompt.value).toContain('Adobe Express');
     expect(screen.getByRole('button', { name: 'Copy Prompt' })).toBeTruthy();
     expect(screen.getByText('View prompt evidence')).toBeTruthy();
   });
