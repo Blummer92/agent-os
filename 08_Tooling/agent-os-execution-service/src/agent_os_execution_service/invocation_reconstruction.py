@@ -1,17 +1,16 @@
 """AOS-INV1 (#1218) one-id governed invocation reconstruction/admission seam.
 
 The caller supplies one immutable ``executor-handoff:<sha256>`` identity plus
-injected read-only/local evidence providers.  This module loads the small
-checkpoint-owned invocation descriptor, reacquires the current canonical
-objects through exactly one resolver call, cross-checks their existing
-identities, observes the existing Scheduler lease without acquiring it, and
-returns the exact current ``SingleIssuePilotInput`` only when every binding is
-still current.
+injected read-only/local evidence providers. This module loads the small
+checkpoint-owned invocation descriptor, reacquires current canonical objects
+through exactly one resolver call, cross-checks their existing identities,
+observes the existing Scheduler lease without acquiring it, and returns the
+exact current ``SingleIssuePilotInput`` only when every binding is still current.
 
 No command text, path, provider prompt, package instruction, workflow payload,
-or arbitrary argv enters this interface.  The module performs no GitHub,
+or arbitrary argv enters this interface. The module performs no GitHub,
 network, subprocess, cloud, VM-lifecycle, merge, issue-closure, retry, lease
-acquisition/release, or Scheduler execution.  Existing Scheduler lease truth
+acquisition/release, or Scheduler execution. Existing Scheduler lease truth
 remains the sole concurrency authority.
 """
 
@@ -52,7 +51,9 @@ from workflow_scheduler.execution.runtime_configuration import (
 from workflow_scheduler.execution.single_issue_pilot import (
     PilotLeaseRequest,
     SingleIssuePilotInput,
+    WorkspaceRequest,
     pilot_lease_identity,
+    pilot_workspace_identity,
 )
 
 from .authorization import ExecutionAuthorizationEvidence
@@ -60,7 +61,6 @@ from .executor_routing import ExecutorHandoff, ExecutorRoute, ExecutorRouteDecis
 
 INVOCATION_RECONSTRUCTION_SCHEMA_NAME = "agent-os-governed-invocation-reconstruction"
 INVOCATION_RECONSTRUCTION_SCHEMA_VERSION = "1.0"
-_MAX_TEXT = 4096
 
 
 class InvocationReconstructionStatus(str, Enum):
@@ -74,22 +74,27 @@ class InvocationReconstructionReason(str, Enum):
     ADMITTED = "admitted"
     DESCRIPTOR_MISSING = "descriptor-missing"
     DESCRIPTOR_INVALID = "descriptor-invalid"
+    DESCRIPTOR_UNAVAILABLE = "descriptor-unavailable"
     CURRENT_EVIDENCE_UNAVAILABLE = "current-evidence-unavailable"
     CURRENT_EVIDENCE_MALFORMED = "current-evidence-malformed"
     ROUTE_DECISION_MISMATCH = "route-decision-mismatch"
     HANDOFF_MISMATCH = "handoff-mismatch"
+    SUBJECT_MISMATCH = "subject-mismatch"
     ROUTE_NOT_GOVERNED_RUNNER = "route-not-governed-runner"
     EXECUTION_NOT_AUTHORIZED = "execution-not-authorized"
     AUTHORIZATION_MISMATCH = "authorization-mismatch"
     AUTHORIZATION_NOT_CURRENT = "authorization-not-current"
     SOURCE_MISMATCH = "source-mismatch"
     SCOPE_MISMATCH = "scope-mismatch"
+    COMMAND_PLAN_MISMATCH = "command-plan-mismatch"
     CHECKPOINT_MISMATCH = "checkpoint-mismatch"
     CHECKPOINT_NOT_CURRENT = "checkpoint-not-current"
     RESUME_PLAN_MISMATCH = "resume-plan-mismatch"
     RESUME_PLAN_COMPLETE = "resume-plan-complete"
     ENVIRONMENT_MISMATCH = "environment-mismatch"
     DEPENDENCY_READINESS_MISMATCH = "dependency-readiness-mismatch"
+    EXECUTION_SURFACE_MISMATCH = "execution-surface-mismatch"
+    WORKSPACE_MISMATCH = "workspace-mismatch"
     DEPENDENCY_NOT_READY = "dependency-not-ready"
     CANDIDATE_PACKET_MISMATCH = "candidate-packet-mismatch"
     CANDIDATE_PACKET_NOT_EXECUTABLE = "candidate-packet-not-executable"
@@ -124,8 +129,16 @@ class CurrentInvocationEvidence:
             ("checkpoint", self.checkpoint, ExecutionCheckpoint),
             ("resume_plan", self.resume_plan, ResumePlan),
             ("candidate_packet", self.candidate_packet, CandidatePacket),
-            ("runtime_configuration", self.runtime_configuration, ConcreteRuntimeConfiguration),
-            ("dependency_readiness", self.dependency_readiness, DependencyReadinessEvidence),
+            (
+                "runtime_configuration",
+                self.runtime_configuration,
+                ConcreteRuntimeConfiguration,
+            ),
+            (
+                "dependency_readiness",
+                self.dependency_readiness,
+                DependencyReadinessEvidence,
+            ),
         )
         for name, value, expected_type in exact:
             if type(value) is not expected_type:
@@ -184,8 +197,13 @@ class InvocationReconstructionResult:
             raise TypeError("status must be exact InvocationReconstructionStatus")
         if type(self.reason_codes) is not tuple or not self.reason_codes:
             raise ValueError("reason_codes must be a non-empty exact tuple")
-        if any(type(item) is not InvocationReconstructionReason for item in self.reason_codes):
-            raise TypeError("reason_codes must contain exact InvocationReconstructionReason values")
+        if any(
+            type(item) is not InvocationReconstructionReason
+            for item in self.reason_codes
+        ):
+            raise TypeError(
+                "reason_codes must contain exact InvocationReconstructionReason values"
+            )
         canonical = tuple(sorted(set(self.reason_codes), key=lambda item: item.value))
         if self.reason_codes != canonical:
             raise ValueError("reason_codes must be sorted and unique")
@@ -247,7 +265,8 @@ def _result_id(
         "lease_identity": lease_identity,
     }
     digest = hashlib.sha256(
-        b"agent-os-governed-invocation-reconstruction:v1\0" + _canonical_bytes(payload)
+        b"agent-os-governed-invocation-reconstruction:v1\0"
+        + _canonical_bytes(payload)
     ).hexdigest()
     return f"invocation-reconstruction:{digest}"
 
@@ -297,7 +316,9 @@ def _result(
 def _utc(value: str) -> datetime:
     if type(value) is not str or len(value) != 20 or not value.endswith("Z"):
         raise ValueError("timestamp must use canonical UTC seconds")
-    parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(
+        tzinfo=timezone.utc
+    )
     if parsed.strftime("%Y-%m-%dT%H:%M:%SZ") != value:
         raise ValueError("timestamp is not canonical")
     return parsed
@@ -325,10 +346,21 @@ def _lease_request(pilot_input: SingleIssuePilotInput) -> PilotLeaseRequest:
     )
 
 
+def _workspace_identity(pilot_input: SingleIssuePilotInput) -> str:
+    request = WorkspaceRequest(
+        workspace_request_id=pilot_input.workspace_request_id,
+        repository=pilot_input.repository,
+        branch=pilot_input.branch,
+        expected_revision=pilot_input.source_head_sha,
+    )
+    return pilot_workspace_identity(request)
+
+
 def _classify_reasons(
     reasons: set[InvocationReconstructionReason],
 ) -> InvocationReconstructionStatus:
     needs_decision = {
+        InvocationReconstructionReason.DESCRIPTOR_UNAVAILABLE,
         InvocationReconstructionReason.CURRENT_EVIDENCE_UNAVAILABLE,
         InvocationReconstructionReason.CURRENT_EVIDENCE_MALFORMED,
         InvocationReconstructionReason.LEASE_OBSERVATION_UNAVAILABLE,
@@ -337,14 +369,18 @@ def _classify_reasons(
     stale = {
         InvocationReconstructionReason.ROUTE_DECISION_MISMATCH,
         InvocationReconstructionReason.HANDOFF_MISMATCH,
+        InvocationReconstructionReason.SUBJECT_MISMATCH,
         InvocationReconstructionReason.AUTHORIZATION_NOT_CURRENT,
         InvocationReconstructionReason.SOURCE_MISMATCH,
         InvocationReconstructionReason.SCOPE_MISMATCH,
+        InvocationReconstructionReason.COMMAND_PLAN_MISMATCH,
         InvocationReconstructionReason.CHECKPOINT_MISMATCH,
         InvocationReconstructionReason.CHECKPOINT_NOT_CURRENT,
         InvocationReconstructionReason.RESUME_PLAN_MISMATCH,
         InvocationReconstructionReason.ENVIRONMENT_MISMATCH,
         InvocationReconstructionReason.DEPENDENCY_READINESS_MISMATCH,
+        InvocationReconstructionReason.EXECUTION_SURFACE_MISMATCH,
+        InvocationReconstructionReason.WORKSPACE_MISMATCH,
         InvocationReconstructionReason.CANDIDATE_PACKET_MISMATCH,
         InvocationReconstructionReason.RUNTIME_CONFIGURATION_MISMATCH,
         InvocationReconstructionReason.PILOT_INPUT_MISMATCH,
@@ -373,10 +409,18 @@ def _cross_check(
     readiness = current.dependency_readiness
     pilot = current.pilot_input
 
-    if route.decision_id != descriptor.route_decision_id or handoff.route_decision_id != route.decision_id:
+    if (
+        route.decision_id != descriptor.route_decision_id
+        or handoff.route_decision_id != route.decision_id
+    ):
         reasons.add(InvocationReconstructionReason.ROUTE_DECISION_MISMATCH)
     if handoff.handoff_id != descriptor.handoff_id:
         reasons.add(InvocationReconstructionReason.HANDOFF_MISMATCH)
+    if (
+        route.issue_or_handoff_identity != descriptor.issue_or_handoff_identity
+        or handoff.issue_or_handoff_identity != descriptor.issue_or_handoff_identity
+    ):
+        reasons.add(InvocationReconstructionReason.SUBJECT_MISMATCH)
     if (
         route.selected_route is not ExecutorRoute.CHATGPT_GOVERNED_RUNNER
         or handoff.destination_route is not ExecutorRoute.CHATGPT_GOVERNED_RUNNER
@@ -404,17 +448,29 @@ def _cross_check(
     try:
         if not _current_window(evaluated_at, route.created_at, route.expires_at):
             reasons.add(InvocationReconstructionReason.AUTHORIZATION_NOT_CURRENT)
-        if not _current_window(evaluated_at, authorization.authorized_at, authorization.expires_at):
+        if not _current_window(
+            evaluated_at,
+            authorization.authorized_at,
+            authorization.expires_at,
+        ):
             reasons.add(InvocationReconstructionReason.AUTHORIZATION_NOT_CURRENT)
     except (TypeError, ValueError):
         reasons.add(InvocationReconstructionReason.CURRENT_EVIDENCE_MALFORMED)
 
     if (
-        handoff.repository.casefold() != descriptor.repository.casefold()
+        route.repository.casefold() != descriptor.repository.casefold()
+        or handoff.repository.casefold() != descriptor.repository.casefold()
         or handoff.source_ref_or_none != descriptor.source_ref
         or handoff.source_sha_or_none != descriptor.source_sha
     ):
         reasons.add(InvocationReconstructionReason.SOURCE_MISMATCH)
+
+    command_plan_id = checkpoint.command_plan_id
+    if (
+        route.validation_command_plan_id_or_none != command_plan_id
+        or handoff.validation_command_plan_id_or_none != command_plan_id
+    ):
+        reasons.add(InvocationReconstructionReason.COMMAND_PLAN_MISMATCH)
 
     if (
         route.checkpoint_id_or_none != descriptor.checkpoint_id
@@ -429,7 +485,8 @@ def _cross_check(
         reasons.add(InvocationReconstructionReason.CHECKPOINT_MISMATCH)
     if (
         checkpoint.invalidation_state is not InvalidationState.CURRENT
-        or checkpoint.lifecycle_state not in {LifecycleState.ACTIVE, LifecycleState.INTERRUPTED}
+        or checkpoint.lifecycle_state
+        not in {LifecycleState.ACTIVE, LifecycleState.INTERRUPTED}
     ):
         reasons.add(InvocationReconstructionReason.CHECKPOINT_NOT_CURRENT)
 
@@ -450,14 +507,16 @@ def _cross_check(
         or handoff.environment_profile_id_or_none != descriptor.environment_profile_id
         or route.environment_health_evidence_id_or_none
         != descriptor.environment_health_evidence_id
-        or route.workflow_runtime_identity_or_none != descriptor.workflow_runtime_identity
+        or route.workflow_runtime_identity_or_none
+        != descriptor.workflow_runtime_identity
     ):
         reasons.add(InvocationReconstructionReason.ENVIRONMENT_MISMATCH)
 
     required_environment = configuration.required_environment_spec
     if (
         required_environment is None
-        or required_environment.required_environment_id != descriptor.required_environment_id
+        or required_environment.required_environment_id
+        != descriptor.required_environment_id
     ):
         reasons.add(InvocationReconstructionReason.ENVIRONMENT_MISMATCH)
     if (
@@ -469,6 +528,18 @@ def _cross_check(
         or readiness.source_sha != descriptor.source_sha
     ):
         reasons.add(InvocationReconstructionReason.DEPENDENCY_READINESS_MISMATCH)
+    if readiness.execution_surface_id != descriptor.execution_surface_id:
+        reasons.add(InvocationReconstructionReason.EXECUTION_SURFACE_MISMATCH)
+    try:
+        current_workspace_identity = _workspace_identity(pilot)
+    except (TypeError, ValueError):
+        reasons.add(InvocationReconstructionReason.CURRENT_EVIDENCE_MALFORMED)
+    else:
+        if (
+            readiness.workspace_identity != descriptor.workspace_identity
+            or current_workspace_identity != descriptor.workspace_identity
+        ):
+            reasons.add(InvocationReconstructionReason.WORKSPACE_MISMATCH)
     if readiness.preparation_status is not DependencyPreparationStatus.READY:
         reasons.add(InvocationReconstructionReason.DEPENDENCY_NOT_READY)
     try:
@@ -535,7 +606,7 @@ def reconstruct_governed_invocation(
     """Resolve one immutable handoff id to one current canonical pilot input.
 
     Descriptor load, current-evidence reacquisition, and lease observation each
-    occur at most once.  A blocked/stale/ambiguous path returns no pilot input,
+    occur at most once. A blocked/stale/ambiguous path returns no pilot input,
     so callers cannot accidentally dispatch the Scheduler after failed
     admission.
     """
@@ -557,14 +628,23 @@ def reconstruct_governed_invocation(
             reasons=(InvocationReconstructionReason.DESCRIPTOR_MISSING,),
             handoff_id=handoff_id,
         )
-    except (InvocationDescriptorIntegrityError, TypeError, ValueError):
+    except InvocationDescriptorIntegrityError:
         return _result(
             status=InvocationReconstructionStatus.NEEDS_DECISION,
             reasons=(InvocationReconstructionReason.DESCRIPTOR_INVALID,),
             handoff_id=handoff_id,
         )
+    except (TypeError, ValueError, RuntimeError, OSError):
+        return _result(
+            status=InvocationReconstructionStatus.NEEDS_DECISION,
+            reasons=(InvocationReconstructionReason.DESCRIPTOR_UNAVAILABLE,),
+            handoff_id=handoff_id,
+        )
 
-    if type(descriptor) is not GovernedInvocationDescriptor or descriptor.handoff_id != handoff_id:
+    if (
+        type(descriptor) is not GovernedInvocationDescriptor
+        or descriptor.handoff_id != handoff_id
+    ):
         return _result(
             status=InvocationReconstructionStatus.NEEDS_DECISION,
             reasons=(InvocationReconstructionReason.DESCRIPTOR_INVALID,),
