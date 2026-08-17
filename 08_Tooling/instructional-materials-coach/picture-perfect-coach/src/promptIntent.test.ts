@@ -45,6 +45,19 @@ describe('PPUX-C application identity fidelity', () => {
     expect(validateApplicationFidelity(wrong)).toContain('portable prompt substituted wrong application: Canva');
   });
 
+  it('rejects a generic diagram that drops required software-interface context', () => {
+    const card = buildPortablePrompt(adobeSpec);
+    const diagram = { ...card, portablePrompt: `Diagram for ${card.application}: ${card.targetState}. Must show Adobe Express and Create new file.` };
+    expect(validateApplicationFidelity(diagram)).toContain('portable prompt lost software-interface requirement');
+    expect(validateApplicationFidelity(diagram)).toContain('portable prompt lost application context');
+  });
+
+  it('rejects provider-specific canonical syntax', () => {
+    const card = buildPortablePrompt(adobeSpec);
+    const providerSpecific = { ...card, portablePrompt: `${card.portablePrompt} --ar 16:9` };
+    expect(validateApplicationFidelity(providerSpecific)).toContain('canonical prompt contains provider-specific syntax: --ar ');
+  });
+
   it('fails closed when requested UI detail is not supported by evidence', () => {
     const card = buildPortablePrompt({ ...adobeSpec, requestedUiDetails: ['Create new file', 'Magic unsupported button'] });
     expect(card.status).toBe('blocked');
