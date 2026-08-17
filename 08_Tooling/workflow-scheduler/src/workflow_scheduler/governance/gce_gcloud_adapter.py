@@ -1,0 +1,267 @@
+"""Concrete bounded gcloud/IAP adapter for the #1217 GCE control path.
+
+The adapter is intentionally narrow: one exact GCE tuple, start-if-stopped,
+IAP/OS Login SSH, and one fixed host argv supplied by ``gce_control_path``.
+It has no retry loop for invocation, no arbitrary command API, and no stop
+capability in the first activation.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import time
+from pathlib import Path
+from typing import Mapping, Sequence
+
+from .gce_control_path import (
+    GceResourceTuple,
+    HostInvocationEvidence,
+    OidcTrustPolicy,
+    VmState,
+    run_gce_control_path,
+)
+from .github_issue_comment_ingress import IssueCommentIngressResult
+from .governed_invocation_binding import bind_ingress_to_gce
+
+PROJECT = "agent-os-502614"
+ZONE = "us-central1-a"
+INSTANCE = "agent-os-test"
+RESOURCE = GceResourceTuple(project=PROJECT, zone=ZONE, instance=INSTANCE)
+WORKFLOW_REF = (
+    "Blummer92/agent-os/.github/workflows/"
+    "agent-os-governed-invocation.yml@refs/heads/main"
+)
+WIF_PROVIDER = (
+    "//iam.googleapis.com/projects/966859826758/locations/global/"
+    "workloadIdentityPools/agent-os-github/providers/agent-os-main"
+)
+
+
+class GcloudCommandError(RuntimeError):
+    """Raised when a bounded gcloud command cannot produce trusted evidence."""
+
+
+def _run(argv: Sequence[str], *, timeout: int = 60) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        tuple(argv),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def _require_ok(result: subprocess.CompletedProcess[str], operation: str) -> str:
+    if result.returncode != 0:
+        raise GcloudCommandError(f"{operation} failed")
+    return result.stdout.strip()
+
+
+def _state(value: str) -> VmState:
+    normalized = value.strip().upper()
+    mapping = {
+        "RUNNING": VmState.RUNNING,
+        "TERMINATED": VmState.STOPPED,
+        "STOPPED": VmState.STOPPED,
+        "STAGING": VmState.STAGING,
+        "STOPPING": VmState.STOPPING,
+        "SUSPENDING": VmState.SUSPENDING,
+    }
+    return mapping.get(normalized, VmState.UNKNOWN)
+
+
+class GcloudIapAdapter:
+    """One-attempt gcloud adapter with no VM-stop authority."""
+
+    def __init__(self, *, poll_seconds: float = 2.0, max_polls: int = 30) -> None:
+        if poll_seconds <= 0 or max_polls < 1:
+            raise ValueError("poll bounds must be positive")
+        self.poll_seconds = poll_seconds
+        self.max_polls = max_polls
+
+    @staticmethod
+    def _resource_args(resource: GceResourceTuple) -> tuple[str, ...]:
+        if resource != RESOURCE:
+            raise GcloudCommandError("resource tuple is not the approved #1217 target")
+        return ("--project", resource.project, "--zone", resource.zone)
+
+    def observe_state(self, resource: GceResourceTuple) -> VmState:
+        result = _run(
+            (
+                "gcloud", "compute", "instances", "describe", resource.instance,
+                *self._resource_args(resource), "--format=value(status)",
+            )
+        )
+        return _state(_require_ok(result, "observe instance state"))
+
+    def start(self, resource: GceResourceTuple) -> bool:
+        result = _run(
+            (
+                "gcloud", "compute", "instances", "start", resource.instance,
+                *self._resource_args(resource), "--quiet",
+            ),
+            timeout=120,
+        )
+        return result.returncode == 0
+
+    def wait_until_running(self, resource: GceResourceTuple) -> VmState:
+        for _ in range(self.max_polls):
+            state = self.observe_state(resource)
+            if state is VmState.RUNNING:
+                return state
+            if state not in {VmState.STAGING, VmState.STOPPED}:
+                return state
+            time.sleep(self.poll_seconds)
+        return VmState.UNKNOWN
+
+    def _ssh(self, resource: GceResourceTuple, command: str) -> subprocess.CompletedProcess[str]:
+        return _run(
+            (
+                "gcloud", "compute", "ssh", resource.instance,
+                *self._resource_args(resource),
+                "--tunnel-through-iap", "--quiet", "--command", command,
+            ),
+            timeout=180,
+        )
+
+    def probe_ready(self, resource: GceResourceTuple) -> bool:
+        result = self._ssh(
+            resource,
+            "test -x /usr/local/libexec/agent-os-governed-resume",
+        )
+        return result.returncode == 0
+
+    def invoke(
+        self, resource: GceResourceTuple, argv: tuple[str, ...]
+    ) -> HostInvocationEvidence:
+        if len(argv) != 3 or argv[0] != "/usr/local/libexec/agent-os-governed-resume":
+            raise GcloudCommandError("non-canonical host argv rejected")
+        if argv[1] != "--handoff-id":
+            raise GcloudCommandError("non-canonical host argv rejected")
+        # handoff IDs are restricted to [a-z0-9:-] by the pure control contract,
+        # so the fixed command contains no caller-controlled shell syntax.
+        command = f"{argv[0]} {argv[1]} {argv[2]}"
+        result = self._ssh(resource, command)
+        if result.returncode != 0:
+            raise GcloudCommandError("fixed host invocation failed")
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise GcloudCommandError("host evidence was not JSON") from exc
+        if type(payload) is not dict:
+            raise GcloudCommandError("host evidence must be an object")
+        return HostInvocationEvidence(
+            invoked=True,
+            accepted=payload.get("accepted") is True,
+            scheduler_invocation_id=payload.get("scheduler_invocation_id"),
+            execution_id=payload.get("execution_id"),
+            terminal_status=payload.get("terminal_status"),
+            termination_confirmed=payload.get("termination_confirmed") is True,
+            lease_released=payload.get("lease_released") is True,
+            cleanup_complete=payload.get("cleanup_complete") is True,
+            retained_lease=payload.get("retained_lease") is True,
+            quarantined=payload.get("quarantined") is True,
+            evidence_refs=tuple(payload.get("evidence_refs", ())),
+        )
+
+    def stop(self, resource: GceResourceTuple) -> bool:
+        # First activation is deliberately start/invoke only. The transport IAM
+        # role has no compute.instances.stop permission.
+        return False
+
+
+def _ingress_from_file(path: Path) -> IssueCommentIngressResult:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if type(payload) is not dict:
+        raise ValueError("transport evidence must be an object")
+    return IssueCommentIngressResult(**{
+        key: payload[key]
+        for key in (
+            "schema_version", "status", "reason", "repository", "issue_number",
+            "comment_id", "actor", "handoff_id_or_none",
+            "logical_trigger_id_or_none", "run_attempt",
+        )
+    })
+
+
+def execute_transport(
+    ingress: IssueCommentIngressResult,
+    *,
+    claims: Mapping[str, object],
+    adapter: GcloudIapAdapter,
+) -> dict[str, object]:
+    binding = bind_ingress_to_gce(ingress, resource=RESOURCE)
+    policy = OidcTrustPolicy(
+        repository="Blummer92/agent-os",
+        repository_owner="Blummer92",
+        workflow_ref=WORKFLOW_REF,
+        ref="refs/heads/main",
+        audience=WIF_PROVIDER,
+    )
+    result = run_gce_control_path(
+        request_id=binding.control_request_id,
+        claims=claims,
+        trust_policy=policy,
+        resource=binding.resource,
+        expected_resource=RESOURCE,
+        handoff_id=binding.handoff_id,
+        adapter=adapter,
+    )
+    return {
+        "binding": binding.to_dict(),
+        "control": {
+            "result_id": result.result_id,
+            "status": result.status.value,
+            "reason_codes": [item.value for item in result.reason_codes],
+            "request_id": result.request_id,
+            "handoff_id": result.handoff_id,
+            "start_issued": result.start_issued,
+            "host_ready": result.host_ready,
+            "host_invoked": result.host_invoked,
+            "host_accepted": result.host_accepted,
+            "scheduler_invocation_id": result.scheduler_invocation_id,
+            "execution_id": result.execution_id,
+            "terminal_status": result.terminal_status,
+            "shutdown_eligible": result.shutdown_eligible,
+            "shutdown_issued": result.shutdown_issued,
+            "retry_attempted": False,
+            "github_writes_authorized": False,
+            "merge_authorized": False,
+        },
+    }
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--transport", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--repository", required=True)
+    parser.add_argument("--repository-owner", required=True)
+    parser.add_argument("--workflow-ref", required=True)
+    parser.add_argument("--ref", required=True)
+    parser.add_argument("--audience", required=True)
+    args = parser.parse_args(argv)
+    claims = {
+        "repository": args.repository,
+        "repository_owner": args.repository_owner,
+        "workflow_ref": args.workflow_ref,
+        "ref": args.ref,
+        "aud": args.audience,
+    }
+    evidence = execute_transport(
+        _ingress_from_file(args.transport),
+        claims=claims,
+        adapter=GcloudIapAdapter(),
+    )
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(
+        json.dumps(evidence, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    print(json.dumps(evidence, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
