@@ -26,7 +26,17 @@ from scripts.agent_os_execution_checkpoint.invocation_descriptor import (
 )
 from scripts.agent_os_execution_checkpoint.models import InvalidationState, LifecycleState
 from workflow_scheduler.execution.host_local_lease_adapter import HostLocalLeaseObservation
-from workflow_scheduler.execution.single_issue_pilot import PilotLeaseRequest, pilot_lease_identity
+from workflow_scheduler.execution.single_issue_pilot import (
+    PilotLeaseRequest,
+    WorkspaceRequest,
+    pilot_lease_identity,
+    pilot_workspace_identity,
+)
+
+
+BRANCH = "agent/1218-governed-invocation-descriptor"
+SOURCE_SHA = "a" * 40
+WORKSPACE_REQUEST_ID = "workspace-1218-a"
 
 
 def _digest(label: str) -> str:
@@ -37,24 +47,38 @@ def _id(prefix: str, label: str) -> str:
     return f"{prefix}:{_digest(label)}"
 
 
+def _workspace_id() -> str:
+    return pilot_workspace_identity(
+        WorkspaceRequest(
+            workspace_request_id=WORKSPACE_REQUEST_ID,
+            repository="Blummer92/agent-os",
+            branch=BRANCH,
+            expected_revision=SOURCE_SHA,
+        )
+    )
+
+
 def _descriptor(**overrides: object) -> GovernedInvocationDescriptor:
     values: dict[str, object] = {
         "schema_name": INVOCATION_DESCRIPTOR_SCHEMA_NAME,
         "schema_version": INVOCATION_DESCRIPTOR_SCHEMA_VERSION,
         "repository": "Blummer92/agent-os",
         "issue_number": 1218,
+        "issue_or_handoff_identity": "issue:1218",
         "handoff_id": _id("executor-handoff", "handoff"),
         "route_decision_id": _id("executor-route-decision", "route"),
         "execution_service_request_fingerprint": _id("execution-request", "request"),
         "authorization_id": _id("authorization", "authorization"),
-        "source_ref": "refs/heads/agent/1218-governed-invocation-descriptor",
-        "source_sha": "a" * 40,
+        "source_ref": f"refs/heads/{BRANCH}",
+        "source_sha": SOURCE_SHA,
         "checkpoint_id": _id("agent-os.execution-checkpoint", "checkpoint"),
         "resume_plan_id": _id("agent-os.execution-checkpoint.resume-plan", "resume"),
         "environment_profile_id": _id("environment-profile", "profile"),
         "environment_health_evidence_id": _id("environment-health", "health"),
         "required_environment_id": _id("required-environment", "required-environment"),
         "dependency_readiness_evidence_id": _id("dependency-readiness", "readiness"),
+        "execution_surface_id": "execution-surface:gce-agent-os-test",
+        "workspace_identity": _workspace_id(),
         "workflow_runtime_identity": _id("workflow-runtime", "runtime"),
         "candidate_packet_id": _id("candidate-packet", "packet"),
         "runtime_configuration_fingerprint": _id("concrete-adapters", "configuration"),
@@ -66,16 +90,24 @@ def _descriptor(**overrides: object) -> GovernedInvocationDescriptor:
 
 
 def _current_like(descriptor: GovernedInvocationDescriptor) -> SimpleNamespace:
+    command_plan_id = _id("command-plan", "plan")
     route = SimpleNamespace(
         decision_id=descriptor.route_decision_id,
+        repository=descriptor.repository,
+        issue_or_handoff_identity=descriptor.issue_or_handoff_identity,
         selected_route=ExecutorRoute.CHATGPT_GOVERNED_RUNNER,
         execution_authorized=True,
-        execution_service_request_fingerprint_or_none=descriptor.execution_service_request_fingerprint,
+        execution_service_request_fingerprint_or_none=(
+            descriptor.execution_service_request_fingerprint
+        ),
         authorization_id_or_none=descriptor.authorization_id,
+        validation_command_plan_id_or_none=command_plan_id,
         checkpoint_id_or_none=descriptor.checkpoint_id,
         resume_plan_id_or_none=descriptor.resume_plan_id,
         environment_profile_id_or_none=descriptor.environment_profile_id,
-        environment_health_evidence_id_or_none=descriptor.environment_health_evidence_id,
+        environment_health_evidence_id_or_none=(
+            descriptor.environment_health_evidence_id
+        ),
         workflow_runtime_identity_or_none=descriptor.workflow_runtime_identity,
         created_at="2026-08-17T10:00:00Z",
         expires_at="2026-08-17T12:00:00Z",
@@ -83,9 +115,12 @@ def _current_like(descriptor: GovernedInvocationDescriptor) -> SimpleNamespace:
     handoff = SimpleNamespace(
         route_decision_id=descriptor.route_decision_id,
         handoff_id=descriptor.handoff_id,
+        issue_or_handoff_identity=descriptor.issue_or_handoff_identity,
         destination_route=ExecutorRoute.CHATGPT_GOVERNED_RUNNER,
         execution_authorized=True,
-        execution_service_request_fingerprint_or_none=descriptor.execution_service_request_fingerprint,
+        execution_service_request_fingerprint_or_none=(
+            descriptor.execution_service_request_fingerprint
+        ),
         authorization_id_or_none=descriptor.authorization_id,
         repository=descriptor.repository,
         source_ref_or_none=descriptor.source_ref,
@@ -93,7 +128,7 @@ def _current_like(descriptor: GovernedInvocationDescriptor) -> SimpleNamespace:
         checkpoint_id_or_none=descriptor.checkpoint_id,
         resume_plan_id_or_none=descriptor.resume_plan_id,
         environment_profile_id_or_none=descriptor.environment_profile_id,
-        validation_command_plan_id_or_none=_id("command-plan", "plan"),
+        validation_command_plan_id_or_none=command_plan_id,
         allowed_paths=("scripts/agent_os_execution_checkpoint",),
         forbidden_paths=(".github/workflows",),
     )
@@ -113,6 +148,7 @@ def _current_like(descriptor: GovernedInvocationDescriptor) -> SimpleNamespace:
         execution_id=descriptor.execution_id,
         invocation_id=descriptor.invocation_id,
         source_sha=descriptor.source_sha,
+        command_plan_id=command_plan_id,
         invalidation_state=InvalidationState.CURRENT,
         lifecycle_state=LifecycleState.INTERRUPTED,
     )
@@ -134,7 +170,9 @@ def _current_like(descriptor: GovernedInvocationDescriptor) -> SimpleNamespace:
         forbidden_paths=handoff.forbidden_paths,
         required_tests=("focused",),
     )
-    required_environment = SimpleNamespace(required_environment_id=descriptor.required_environment_id)
+    required_environment = SimpleNamespace(
+        required_environment_id=descriptor.required_environment_id
+    )
 
     class _Configuration(SimpleNamespace):
         def verify(self, _pilot) -> None:
@@ -152,6 +190,8 @@ def _current_like(descriptor: GovernedInvocationDescriptor) -> SimpleNamespace:
         dependency_readiness_evidence_id=descriptor.dependency_readiness_evidence_id,
         required_environment_id=descriptor.required_environment_id,
         environment_health_evidence_id=descriptor.environment_health_evidence_id,
+        execution_surface_id=descriptor.execution_surface_id,
+        workspace_identity=descriptor.workspace_identity,
         source_sha=descriptor.source_sha,
         preparation_status=DependencyPreparationStatus.READY,
         observed_at="2026-08-17T10:00:00Z",
@@ -162,6 +202,8 @@ def _current_like(descriptor: GovernedInvocationDescriptor) -> SimpleNamespace:
         issue_numbers=(descriptor.issue_number,),
         invocation_id=descriptor.invocation_id,
         source_head_sha=descriptor.source_sha,
+        branch=BRANCH,
+        workspace_request_id=WORKSPACE_REQUEST_ID,
         allowed_files=handoff.allowed_paths,
         forbidden_paths=handoff.forbidden_paths,
         required_tests=("focused",),
@@ -182,42 +224,176 @@ def _current_like(descriptor: GovernedInvocationDescriptor) -> SimpleNamespace:
 def test_cross_check_accepts_fully_matching_reacquired_bindings(monkeypatch) -> None:
     descriptor = _descriptor()
     current = _current_like(descriptor)
-    monkeypatch.setattr(reconstruction, "candidate_packet_id", lambda packet: packet.packet_id)
+    monkeypatch.setattr(
+        reconstruction, "candidate_packet_id", lambda packet: packet.packet_id
+    )
     assert reconstruction._cross_check(
-        descriptor, current, evaluated_at="2026-08-17T11:00:00Z"
+        descriptor,
+        current,
+        evaluated_at="2026-08-17T11:00:00Z",
     ) == set()
 
 
 @pytest.mark.parametrize(
     "mutator,reason",
     [
-        (lambda c: setattr(c.handoff, "handoff_id", _id("executor-handoff", "stale")), InvocationReconstructionReason.HANDOFF_MISMATCH),
-        (lambda c: setattr(c.route_decision, "decision_id", _id("executor-route-decision", "stale")), InvocationReconstructionReason.ROUTE_DECISION_MISMATCH),
-        (lambda c: setattr(c.authorization, "expires_at", "2026-08-17T10:30:00Z"), InvocationReconstructionReason.AUTHORIZATION_NOT_CURRENT),
-        (lambda c: setattr(c.authorization, "execution_authorized", False), InvocationReconstructionReason.AUTHORIZATION_MISMATCH),
-        (lambda c: setattr(c.handoff, "source_sha_or_none", "b" * 40), InvocationReconstructionReason.SOURCE_MISMATCH),
-        (lambda c: setattr(c.handoff, "execution_service_request_fingerprint_or_none", _id("execution-request", "other")), InvocationReconstructionReason.SCOPE_MISMATCH),
-        (lambda c: setattr(c.checkpoint, "checkpoint_id", _id("agent-os.execution-checkpoint", "other")), InvocationReconstructionReason.CHECKPOINT_MISMATCH),
-        (lambda c: setattr(c.checkpoint, "invalidation_state", InvalidationState.SUPERSEDED), InvocationReconstructionReason.CHECKPOINT_NOT_CURRENT),
-        (lambda c: setattr(c.resume_plan, "plan_id", _id("agent-os.execution-checkpoint.resume-plan", "other")), InvocationReconstructionReason.RESUME_PLAN_MISMATCH),
-        (lambda c: setattr(c.resume_plan, "resume_point", None), InvocationReconstructionReason.RESUME_PLAN_COMPLETE),
-        (lambda c: setattr(c.route_decision, "environment_profile_id_or_none", _id("environment-profile", "other")), InvocationReconstructionReason.ENVIRONMENT_MISMATCH),
-        (lambda c: setattr(c.dependency_readiness, "required_environment_id", _id("required-environment", "other")), InvocationReconstructionReason.DEPENDENCY_READINESS_MISMATCH),
-        (lambda c: setattr(c.dependency_readiness, "preparation_status", DependencyPreparationStatus.BLOCKED), InvocationReconstructionReason.DEPENDENCY_NOT_READY),
-        (lambda c: setattr(c.candidate_packet, "packet_id", _id("candidate-packet", "other")), InvocationReconstructionReason.CANDIDATE_PACKET_MISMATCH),
-        (lambda c: setattr(c.runtime_configuration, "configuration_fingerprint", _id("concrete-adapters", "other")), InvocationReconstructionReason.RUNTIME_CONFIGURATION_MISMATCH),
-        (lambda c: setattr(c.pilot_input, "allowed_files", ("outside",)), InvocationReconstructionReason.PILOT_INPUT_MISMATCH),
+        (
+            lambda c: setattr(
+                c.handoff, "handoff_id", _id("executor-handoff", "stale")
+            ),
+            InvocationReconstructionReason.HANDOFF_MISMATCH,
+        ),
+        (
+            lambda c: setattr(c.handoff, "issue_or_handoff_identity", "issue:999"),
+            InvocationReconstructionReason.SUBJECT_MISMATCH,
+        ),
+        (
+            lambda c: setattr(
+                c.route_decision,
+                "decision_id",
+                _id("executor-route-decision", "stale"),
+            ),
+            InvocationReconstructionReason.ROUTE_DECISION_MISMATCH,
+        ),
+        (
+            lambda c: setattr(
+                c.authorization, "expires_at", "2026-08-17T10:30:00Z"
+            ),
+            InvocationReconstructionReason.AUTHORIZATION_NOT_CURRENT,
+        ),
+        (
+            lambda c: setattr(c.authorization, "execution_authorized", False),
+            InvocationReconstructionReason.AUTHORIZATION_MISMATCH,
+        ),
+        (
+            lambda c: setattr(c.handoff, "source_sha_or_none", "b" * 40),
+            InvocationReconstructionReason.SOURCE_MISMATCH,
+        ),
+        (
+            lambda c: setattr(
+                c.handoff,
+                "execution_service_request_fingerprint_or_none",
+                _id("execution-request", "other"),
+            ),
+            InvocationReconstructionReason.SCOPE_MISMATCH,
+        ),
+        (
+            lambda c: setattr(
+                c.handoff,
+                "validation_command_plan_id_or_none",
+                _id("command-plan", "other"),
+            ),
+            InvocationReconstructionReason.COMMAND_PLAN_MISMATCH,
+        ),
+        (
+            lambda c: setattr(
+                c.checkpoint,
+                "checkpoint_id",
+                _id("agent-os.execution-checkpoint", "other"),
+            ),
+            InvocationReconstructionReason.CHECKPOINT_MISMATCH,
+        ),
+        (
+            lambda c: setattr(
+                c.checkpoint, "invalidation_state", InvalidationState.SUPERSEDED
+            ),
+            InvocationReconstructionReason.CHECKPOINT_NOT_CURRENT,
+        ),
+        (
+            lambda c: setattr(
+                c.resume_plan,
+                "plan_id",
+                _id("agent-os.execution-checkpoint.resume-plan", "other"),
+            ),
+            InvocationReconstructionReason.RESUME_PLAN_MISMATCH,
+        ),
+        (
+            lambda c: setattr(c.resume_plan, "resume_point", None),
+            InvocationReconstructionReason.RESUME_PLAN_COMPLETE,
+        ),
+        (
+            lambda c: setattr(
+                c.route_decision,
+                "environment_profile_id_or_none",
+                _id("environment-profile", "other"),
+            ),
+            InvocationReconstructionReason.ENVIRONMENT_MISMATCH,
+        ),
+        (
+            lambda c: setattr(
+                c.dependency_readiness,
+                "required_environment_id",
+                _id("required-environment", "other"),
+            ),
+            InvocationReconstructionReason.DEPENDENCY_READINESS_MISMATCH,
+        ),
+        (
+            lambda c: setattr(
+                c.dependency_readiness,
+                "execution_surface_id",
+                "execution-surface:other-host",
+            ),
+            InvocationReconstructionReason.EXECUTION_SURFACE_MISMATCH,
+        ),
+        (
+            lambda c: setattr(
+                c.dependency_readiness,
+                "workspace_identity",
+                _id("pilot-workspace", "other"),
+            ),
+            InvocationReconstructionReason.WORKSPACE_MISMATCH,
+        ),
+        (
+            lambda c: setattr(
+                c.pilot_input, "workspace_request_id", "workspace-other"
+            ),
+            InvocationReconstructionReason.WORKSPACE_MISMATCH,
+        ),
+        (
+            lambda c: setattr(
+                c.dependency_readiness,
+                "preparation_status",
+                DependencyPreparationStatus.BLOCKED,
+            ),
+            InvocationReconstructionReason.DEPENDENCY_NOT_READY,
+        ),
+        (
+            lambda c: setattr(
+                c.candidate_packet,
+                "packet_id",
+                _id("candidate-packet", "other"),
+            ),
+            InvocationReconstructionReason.CANDIDATE_PACKET_MISMATCH,
+        ),
+        (
+            lambda c: setattr(
+                c.runtime_configuration,
+                "configuration_fingerprint",
+                _id("concrete-adapters", "other"),
+            ),
+            InvocationReconstructionReason.RUNTIME_CONFIGURATION_MISMATCH,
+        ),
+        (
+            lambda c: setattr(c.pilot_input, "allowed_files", ("outside",)),
+            InvocationReconstructionReason.PILOT_INPUT_MISMATCH,
+        ),
     ],
 )
 def test_cross_check_fails_closed_on_stale_or_mismatched_current_evidence(
-    monkeypatch, mutator, reason
+    monkeypatch,
+    mutator,
+    reason,
 ) -> None:
     descriptor = _descriptor()
     current = _current_like(descriptor)
-    monkeypatch.setattr(reconstruction, "candidate_packet_id", lambda packet: packet.packet_id)
+    monkeypatch.setattr(
+        reconstruction, "candidate_packet_id", lambda packet: packet.packet_id
+    )
     mutator(current)
     reasons = reconstruction._cross_check(
-        descriptor, current, evaluated_at="2026-08-17T11:00:00Z"
+        descriptor,
+        current,
+        evaluated_at="2026-08-17T11:00:00Z",
     )
     assert reason in reasons
 
@@ -267,15 +443,21 @@ def _lease_request() -> PilotLeaseRequest:
         repository="Blummer92/agent-os",
         issue_number=1218,
         invocation_id="invocation-1218-a",
-        branch="agent/1218-governed-invocation-descriptor",
-        workspace_request_id="workspace-1218-a",
+        branch=BRANCH,
+        workspace_request_id=WORKSPACE_REQUEST_ID,
         projection_id="projection-1218-a",
         approval_id="approval-1218-a",
-        source_head_sha="a" * 40,
+        source_head_sha=SOURCE_SHA,
     )
 
 
-def _run_lease_case(monkeypatch, *, active: bool, ambiguous: bool, generation: int):
+def _run_lease_case(
+    monkeypatch,
+    *,
+    active: bool,
+    ambiguous: bool,
+    generation: int,
+):
     descriptor = _descriptor()
 
     class _Pilot:
@@ -297,7 +479,11 @@ def _run_lease_case(monkeypatch, *, active: bool, ambiguous: bool, generation: i
         )
     )
     monkeypatch.setattr(reconstruction, "SingleIssuePilotInput", _Pilot)
-    monkeypatch.setattr(reconstruction, "_cross_check", lambda *_args, **_kwargs: set())
+    monkeypatch.setattr(
+        reconstruction,
+        "_cross_check",
+        lambda *_args, **_kwargs: set(),
+    )
     monkeypatch.setattr(reconstruction, "_lease_request", lambda _pilot: request)
     result = reconstruct_governed_invocation(
         descriptor.handoff_id,
@@ -313,7 +499,12 @@ def _run_lease_case(monkeypatch, *, active: bool, ambiguous: bool, generation: i
 
 
 def test_admitted_returns_exact_current_pilot_and_never_authority(monkeypatch) -> None:
-    result = _run_lease_case(monkeypatch, active=False, ambiguous=False, generation=0)
+    result = _run_lease_case(
+        monkeypatch,
+        active=False,
+        ambiguous=False,
+        generation=0,
+    )
     assert result.status is InvocationReconstructionStatus.ADMITTED
     assert result.reason_codes == (InvocationReconstructionReason.ADMITTED,)
     assert result.pilot_input is not None
@@ -326,21 +517,36 @@ def test_admitted_returns_exact_current_pilot_and_never_authority(monkeypatch) -
 
 
 def test_active_lease_blocks_without_second_execution(monkeypatch) -> None:
-    result = _run_lease_case(monkeypatch, active=True, ambiguous=False, generation=1)
+    result = _run_lease_case(
+        monkeypatch,
+        active=True,
+        ambiguous=False,
+        generation=1,
+    )
     assert result.status is InvocationReconstructionStatus.BLOCKED
     assert result.reason_codes == (InvocationReconstructionReason.LEASE_CONFLICT,)
     assert result.pilot_input is None
 
 
 def test_ambiguous_retained_lease_needs_decision_without_takeover(monkeypatch) -> None:
-    result = _run_lease_case(monkeypatch, active=True, ambiguous=True, generation=1)
+    result = _run_lease_case(
+        monkeypatch,
+        active=True,
+        ambiguous=True,
+        generation=1,
+    )
     assert result.status is InvocationReconstructionStatus.NEEDS_DECISION
     assert result.reason_codes == (InvocationReconstructionReason.LEASE_AMBIGUOUS,)
     assert result.pilot_input is None
 
 
 def test_released_generation_blocks_duplicate_consumed_invocation(monkeypatch) -> None:
-    result = _run_lease_case(monkeypatch, active=False, ambiguous=False, generation=1)
+    result = _run_lease_case(
+        monkeypatch,
+        active=False,
+        ambiguous=False,
+        generation=1,
+    )
     assert result.status is InvocationReconstructionStatus.BLOCKED
     assert result.reason_codes == (
         InvocationReconstructionReason.INVOCATION_ALREADY_CONSUMED,
@@ -348,7 +554,7 @@ def test_released_generation_blocks_duplicate_consumed_invocation(monkeypatch) -
     assert result.pilot_input is None
 
 
-def test_missing_invalid_and_unavailable_evidence_fail_before_lease(monkeypatch) -> None:
+def test_missing_invalid_and_unavailable_evidence_fail_before_lease() -> None:
     descriptor = _descriptor()
     lease = _LeaseReader(None)
 
@@ -372,6 +578,19 @@ def test_missing_invalid_and_unavailable_evidence_fail_before_lease(monkeypatch)
     )
     assert invalid.status is InvocationReconstructionStatus.NEEDS_DECISION
     assert invalid.reason_codes == (InvocationReconstructionReason.DESCRIPTOR_INVALID,)
+    assert lease.calls == 0
+
+    descriptor_unavailable = reconstruct_governed_invocation(
+        descriptor.handoff_id,
+        descriptor_loader=_Loader(RuntimeError("store unavailable")),
+        resolver=_Resolver(RuntimeError("must not run")),
+        lease_reader=lease,
+        evaluated_at="2026-08-17T11:00:00Z",
+    )
+    assert descriptor_unavailable.status is InvocationReconstructionStatus.NEEDS_DECISION
+    assert descriptor_unavailable.reason_codes == (
+        InvocationReconstructionReason.DESCRIPTOR_UNAVAILABLE,
+    )
     assert lease.calls == 0
 
     unavailable = reconstruct_governed_invocation(
