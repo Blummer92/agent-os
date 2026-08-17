@@ -6,21 +6,29 @@ Repository: `<owner/repo>`
 Pull request: `<number>`
 Issue: `<number>`
 Expected head SHA: `<sha40>`
+Observed live PR head SHA: `<sha40>`
+Current main SHA: `<sha40>`
+Branch freshness: `<current|behind|conflicted|unknown>`
+Validation head SHA: `<sha40>`
+Current PR lifecycle state: `<draft|ready|merged|closed>`
+Prior checkpoint phase/head/lifecycle state: `<values | none>`
 Allowed changed files or bounded scope: `<scope>`
 Authorized merge method: `<merge|squash|rebase>`
 Canonical required workflow/check names: `<source-backed names>`
 Authoritative aggregate check: `<exact check identity>`
 Observed workflow/check conclusions: `<name -> conclusion>`
+#1038 lifecycle reconciliation receipt: `<current receipt>`
+#1187 branch-refresh receipt when a refresh occurred: `<receipt | none>`
 #988 validation-failure evidence when a required check failed: `<bounded evidence | unavailable>`
 
-Run the governed Agent OS release lifecycle using current GitHub evidence and `scripts/agent-os-release-run.py` as the deterministic state contract.
+Run the governed Agent OS release lifecycle using freshly reacquired GitHub evidence and `scripts/agent-os-release-run.py` as the deterministic state contract.
 
-Reacquire the canonical required validation set from current issue/repository policy; do not let this prompt or a shorter caller-supplied list weaken it. Fail closed when the canonical set or authoritative aggregate identity cannot be proven. A missing, stale, pending, cancelled, timed-out, `not_triggered`, unexpectedly skipped, failed, or unknown required check is not success. Unrelated green checks do not substitute for the authoritative aggregate.
+At every phase boundary, reacquire live PR head, current main, branch freshness/conflict, PR Draft/Ready/merged/closed state, validation evidence, review conversations, and managed-label reconciliation. Treat checkpoint values only as comparison evidence.
 
-When a required validation check fails, use the existing #988 classifier rather than guessing from a red banner. A proven PR regression may route to bounded in-scope repair. Inherited-main, CI infrastructure/configuration failure, or insufficient evidence blocks. If setup or infrastructure fails before aggregate validation runs, report that validation did not complete; do not call it a code/test regression.
+If the branch is behind, stop and route exclusively through #1187. Do not treat green CI, `branch:behind`, `branch:current`, or any other managed label as refresh or release authority. After #1187 changes the head, invalidate prior head-bound evidence, require exact-head validation on the new head, and require current #1038 reconciliation before continuing.
 
-Continue automatically through read-only verification and transitions already authorized by the issue. Reacquire exact-head evidence after every write. Fail closed on head drift, scope drift, requested changes, unresolved blocking review conversations, ambiguous linked issue, or stale evidence.
+Terminal validation must have a converged #1038 receipt bound to the current exact head before Agent OS performs Ready-for-Review. After governed Draft -> Ready, reacquire live state and reconcile with the `draft-ready-transition` lifecycle hook before release classification.
 
-Stop separately for merge authorization and issue-closure authorization. Never infer either from green CI, review completion, implementation authorization, or conversation continuity. Do not rerun workflows, dismiss reviews, delete branches, enable auto-merge, bypass protection, change required checks/repository settings, or touch credentials/production/billing/external systems without separate explicit authorization.
+If reacquisition shows Draft -> Ready, unexpected head movement, merge, or closure outside the current governed operation, do not continue from the old checkpoint. Reclassify from current evidence or return the deterministic external-transition stop emitted by the evaluator.
 
-At each stop return the current phase, classification, exact head, validation classification when available, blockers, side effects performed, and one compact next-action/approval request. After authorized merge, verify the merge commit and resulting `main`. After separately authorized issue closure, post the completion record before closing the issue.
+Green CI is evidence only. Stop separately for merge authorization and issue-closure authorization. Never infer either from implementation authorization, review completion, managed labels, or conversation continuity. Do not rerun workflows, dismiss reviews, delete branches, enable auto-merge, use merge queue, bypass protection, change required checks/repository settings, alter Scheduler lease semantics, or touch credentials/production/billing/external systems without separate explicit authorization.

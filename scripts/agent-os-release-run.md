@@ -10,47 +10,61 @@ An operator or connector gathers fresh GitHub evidence, writes it as JSON, and r
 python scripts/agent-os-release-run.py evidence.json
 ```
 
-Required evidence includes repository, pull request number, issue number, expected and observed head SHA, bounded changed-file scope, authorized merge method, observed check conclusions, the canonical required-check set, and the identity of the authoritative aggregate validation check.
+Required evidence includes repository, pull request number, issue number, expected and observed PR head SHA, current `main` SHA, current branch freshness state, the SHA to which authoritative validation is bound, bounded changed-file scope, authorized merge method, observed check conclusions, the canonical required-check set, the authoritative aggregate validation identity, current PR lifecycle state, review-thread state, and the current #1038 managed-label reconciliation receipt.
 
-The canonical required-check set is source-backed evidence, not a caller-controlled shortcut. If it is missing, if the authoritative aggregate identity is unavailable, or if an observed required check is omitted from the supplied check results, the evaluator blocks. Unrelated green checks never substitute for the required aggregate lane.
+The evaluator consumes the public receipts produced by the existing lifecycle contracts instead of duplicating them:
 
-The machine emits one bounded JSON object with schema identity, repository/PR/issue identity, expected and observed head, phase, classification, states, changed files, checks, canonical check identity, review summary, authorization flags, next action, blockers, validation-failure classification when available, and recorded side effects.
+- #1038: `PullRequestLifecycleReconciliationResult`-shaped evidence, including `reconciliation_status`, `invocation_reason`, and `verified_head_sha`;
+- #1187: `PullRequestBranchRefreshResult`-shaped evidence, including old/new head identity, head-evidence invalidation, refreshed-head validation, and post-refresh lifecycle reconciliation.
 
-Classifications are `READY_FOR_MERGE_AUTHORIZATION`, `NEEDS_FIX`, and `BLOCKED`. Green evidence never creates authorization.
+Managed labels such as `pr:*`, `validation:*`, `branch:*`, and `review:*` are derived cache only. They never grant Ready-for-Review, merge, closure, refresh, or any other authority.
 
-## Validation failure classification
+## Phase-boundary reacquisition
 
-The release evaluator reuses the completed #988 deterministic classifier from `scripts/agent_os_issue_acceptance/validation_failure_classifier.py`. It does not parse provider logs or invent root cause.
+The release operator must reacquire live PR state at every phase boundary and rebuild the evidence object. A checkpoint may carry only the prior `checkpoint_phase`, `checkpoint_head_sha`, and `checkpoint_pr_lifecycle_state`; those values are comparison evidence, not authority.
 
-For a failed required validation check, supply bounded `validation_failure_evidence` only when current source evidence is available. The #988 result controls release interpretation:
+The evaluator fails closed when reacquisition proves:
 
-- `pr_regression` -> `NEEDS_FIX`, limited to the already-authorized issue scope;
-- `inherited_main_failure` -> `BLOCKED`, without contaminating the feature PR;
-- `ci_infrastructure_configuration_failure` -> `BLOCKED`; required validation remains unsatisfied;
-- `insufficient_evidence_needs_decision` or absent/malformed failure evidence -> `BLOCKED`.
+- unexpected head movement not explained by a converged #1187 receipt;
+- Draft -> Ready outside the current governed operation;
+- merge or closure outside the current governed operation;
+- lifecycle state inconsistent with the prior checkpoint.
 
-A red check caused by runner setup, network failure, action failure, or another condition that prevented the aggregate command from running is therefore not reported as a code regression. It still cannot satisfy Ready-for-Review or release review.
+Draft -> Ready outside Agent OS returns an `external-transition` result and requires a fresh reclassification from the current Ready state. External merge/closure is terminal for the stale release-run checkpoint.
 
-Pending, missing, stale, `not_triggered`, cancelled, timed-out, unexpectedly skipped, failed, and unknown required checks remain explicit non-success states. Only a successful authoritative aggregate bound to the exact current head can satisfy that gate under the current Testing And Release / Safe Implementation Lane contract.
+## Branch freshness and #1187
 
-#694 remains the owner of future provider-neutral failure normalization. This release evaluator consumes bounded facts and #988 classification; it does not duplicate #694.
+`branch_state` must be `current`, `behind`, `conflicted`, or `unknown` and must be derived from current GitHub evidence against the supplied current `main` SHA.
 
-## Phases
+- `behind` is always `BLOCKED` and routes only to `route-through-gh-life3-1187`;
+- `conflicted` and `unknown` fail closed;
+- green validation on a behind head is never release-ready;
+- a `branch:current` managed label cannot substitute for live freshness evidence.
 
-`preflight` -> `exact-head-validation` -> `review-conversation-gate` -> `ready-for-review` -> `release-review` -> `merge-authorization-pause` -> `merge` -> `post-merge-verification` -> `issue-closure-authorization-pause` -> `issue-closure`.
+After #1187 advances the PR head, the release-run requires the refresh receipt to prove the old/new head transition, required head-bound evidence invalidation, green validation on the refreshed head, and converged post-refresh lifecycle reconciliation. The top-level `validation_head_sha` must equal the current observed PR head; prior-head green validation is stale by definition.
 
-The evaluator collapses already-proven read-only phases into the next protected boundary. Head drift, scope drift, missing/non-success canonical checks, requested-changes review, or unresolved blocking threads fail closed.
+## #1038 managed-label reconciliation
 
-Merge requires `merge_authorized=true` and must be performed by the GitHub Service Agent at the expected head with the separately approved method. Issue closure requires `issue_closure_authorized=true`; a completion comment must be recorded before closure.
+Before governed Ready-for-Review or release classification, current terminal validation must be followed by a current #1038 reconciliation receipt. The receipt must be converged, bound to the exact observed head, and have a release-current invocation reason such as `validation-terminal`, `draft-ready-transition`, `branch-state-rechecked`, or `final-state-readback`.
 
-## Mobile usage
+A missing, failed, or stale reconciliation blocks. Stale managed labels never compensate for a stale receipt. Unmanaged taxonomy, human, security, dependency, and third-party labels remain outside the release evaluator and are not mutated by it.
 
-Use the reusable prompt in `03_Templates/prompts/agent-os-release-run.md`. Supply the PR number, issue number, expected head, allowed scope, merge method, source-backed canonical required-check set, authoritative aggregate identity, observed checks, and any bounded #988 failure evidence. The orchestrator should continue through read-only/already-authorized phases and return only the next genuine blocker or compact authorization request.
+## Validation
 
-## Desktop usage
+The canonical required-check set is source-backed evidence, not a caller-controlled shortcut. If it is missing, if the authoritative aggregate identity is unavailable, if the aggregate is omitted, or if `validation_head_sha` differs from the live PR head, the evaluator blocks. Unrelated green checks never substitute for the required aggregate lane.
 
-Gather the same evidence with the GitHub connector or CLI, save it to `evidence.json`, run the command above, and use the emitted `next_action` as the only permitted transition. Reacquire live evidence after every write.
+The release evaluator reuses completed #988 validation-failure classification. `pr_regression` may produce `NEEDS_FIX` inside existing scope; inherited-main failure, CI infrastructure/configuration failure, and insufficient evidence remain `BLOCKED`. Green CI is evidence only and never creates merge authorization.
+
+## Ready-for-Review and merge
+
+A Draft PR with all gates green and `ready_for_review_authorized=true` stops at `ready-for-review` with `perform-ready-for-review-at-exact-head`. The operator performs that already-authorized GitHub transition, reacquires live state, runs/requires #1038 `draft-ready-transition` reconciliation, and evaluates again. Only then may the run reach `merge-authorization-pause`.
+
+Merge still requires separate `merge_authorized=true` and exact-head execution with the approved method. Issue closure remains a separate authorization after post-merge verification and completion-record publication.
+
+## Mobile and desktop usage
+
+Use `03_Templates/prompts/agent-os-release-run.md` on mobile or desktop. Gather the same fresh evidence with the GitHub connector or CLI, run the evaluator, perform only its bounded next action, and reacquire before the next phase. Never continue from a stale checkpoint after a human or another tool changes head, Draft/Ready state, merge state, or closure state.
 
 ## Safety
 
-This tool is evidence evaluation, not a privileged release bot. It never infers merge or issue-closure authority. Workflow reruns, review dismissal, branch deletion, auto-merge, bypass, protected settings, required-check configuration, credentials, production, billing, and external-system writes remain separately unauthorized.
+This tool is evidence evaluation, not a privileged release bot. It never infers merge or issue-closure authority. Workflow reruns, review dismissal, branch deletion, auto-merge, merge queue, bypass, protected settings, required-check configuration, credentials, production, billing, Scheduler lease changes, and external-system writes remain separately unauthorized.
