@@ -47,5 +47,13 @@
       "commands": ["python -m pytest tests/test_teacher_modeling_workflows.py"]
     }
   ],
+  "command_coverage": [
+    {
+      "broader": "python -m pytest 08_Tooling/workflow-scheduler/tests",
+      "subsumes": [
+        "python -m pytest 08_Tooling/workflow-scheduler/tests/test_concrete_runtime_adapters.py"
+      ]
+    }
+  ],
   "aggregate_command": "python -m pytest"
 }

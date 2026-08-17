@@ -383,6 +383,7 @@ def prepare_execution_packet(
             validation_total_timeout_seconds=candidate_runtime_inputs.total_timeout_seconds,
             executor_max_output_bytes=candidate_runtime_inputs.max_output_bytes,
             validation_max_output_bytes=candidate_runtime_inputs.max_output_bytes,
+            required_environment_spec=candidate_runtime_inputs.required_environment_spec,
         )
     except (ConcreteRuntimeConfigurationError, TypeError, ValueError):
         return _result(

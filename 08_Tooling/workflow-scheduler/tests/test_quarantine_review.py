@@ -808,3 +808,99 @@ def test_no_disposition_produces_an_executable_side_effect() -> None:
         )
         assert isinstance(event, qr.ReviewEvent)
         assert event.resulting_state in qr.QUARANTINE_REVIEW_STATES
+
+
+# --------------------------------------------------------------------------
+# AOS-LEASE1 (#1202): withheld-release evidence stays representable
+# --------------------------------------------------------------------------
+
+
+WITHHELD_CODE = "lease.release-withheld-unproven-termination"
+
+
+def _withheld_result(**overrides: object) -> SingleIssuePilotResult:
+    base: dict[str, object] = dict(
+        lease_acquired=True,
+        lease_released=False,
+        lease_release_attempts=0,
+        reason_codes=(WITHHELD_CODE,),
+        release_errors=("lease-release:withheld:termination-unresolved",),
+    )
+    base.update(overrides)
+    return _result(**base)
+
+
+def test_lease1_withheld_release_classifies_as_termination_unresolved() -> None:
+    """#1202-22: the termination question dominates the narrower lease state."""
+    result = _withheld_result(termination_confirmed=True, executor_called=True)
+
+    state = qr.classify_quarantine_state(result)
+
+    assert state == "termination-unresolved"
+    assert qr.requires_pause(state) is True
+    # Termination-unresolved is non-downgradable, so the reason the ownership
+    # is still held can never be quietly lost by a later review event.
+    assert "termination-unresolved" in qr._NON_DOWNGRADABLE_STATES
+
+
+def test_lease1_withheld_release_after_unconfirmed_termination_is_unresolved() -> None:
+    result = _withheld_result(
+        termination_confirmed=False,
+        executor_called=True,
+        reason_codes=(WITHHELD_CODE, "executor.termination-unconfirmed"),
+    )
+
+    assert qr.classify_quarantine_state(result) == "termination-unresolved"
+
+
+def test_lease1_validation_only_withheld_release_is_not_read_as_no_effects() -> None:
+    """``executor_called is False`` must not classify as contained-no-effects."""
+    result = _withheld_result(
+        execution_mode="validation-only",
+        executor_called=False,
+        executor_started=False,
+        executor_dispatch_attempts=0,
+        termination_confirmed=False,
+        validation_attempts=1,
+        validation_attempted=False,
+        validation_passed=False,
+    )
+
+    state = qr.classify_quarantine_state(result)
+
+    assert state == "termination-unresolved"
+    assert state != "contained-no-effects-proven"
+    assert qr.requires_pause(state) is True
+
+
+def test_lease1_repeated_unresolved_orphan_evidence_is_representable_no_retry() -> None:
+    """#1202-20: repeatable evidence for #1200, with no retry or recovery here."""
+    first = _withheld_result(invocation_id="invocation-588-0001")
+    second = _withheld_result(invocation_id="invocation-588-0002")
+
+    packets = [qr.build_quarantine_evidence_packet(item) for item in (first, second)]
+
+    # Each occurrence is separately identified, so a no-progress consumer can
+    # count them without this module ever retrying or recovering anything.
+    assert packets[0].packet_id != packets[1].packet_id
+    assert {packet.initial_review_state for packet in packets} == {"termination-unresolved"}
+    assert all(WITHHELD_CODE in packet.reason_codes for packet in packets)
+    assert all(packet.paused is True for packet in packets)
+    assert all(packet.lease_acquired and not packet.lease_released for packet in packets)
+
+    source = inspect.getsource(qr)
+    for forbidden in ("automatic_retry", "force_release", "takeover", "heartbeat"):
+        assert forbidden not in source
+
+
+def test_lease1_ownership_generation_evidence_is_carried_for_compatibility() -> None:
+    """#1202-21: generation evidence stays available for a #1201 rejection."""
+    old_generation = _withheld_result(lease_generation=2)
+
+    packet = qr.build_quarantine_evidence_packet(old_generation)
+    serialized = qr.serialize_quarantine_evidence_packet(packet)
+
+    assert packet.lease_generation == 2
+    assert serialized["lease_generation"] == 2
+    assert serialized["lease_identity"] == old_generation.lease_identity
+    assert serialized["lease_holder_identity"] == old_generation.lease_holder_identity

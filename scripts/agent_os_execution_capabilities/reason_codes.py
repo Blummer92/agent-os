@@ -43,12 +43,43 @@ WORKTREE_REASON_CODES = frozenset(
     }
 )
 
+RUNTIME_REASON_CODES = frozenset({"runtime.incompatible"})
+
+DEPENDENCY_REASON_CODES = frozenset(
+    {
+        "dependency.open-ended-requirements",
+        "dependency.resolved-evidence-missing",
+        "dependency.lock-mismatch",
+        "dependency.hash-evidence-missing",
+        "dependency.package-source-drift",
+        "dependency.editable-source-drift",
+        "dependency.transitive-drift",
+        "dependency.manifest-drift",
+        "dependency.lock-required",
+        "dependency.package-manager-unavailable",
+        "dependency.source-unavailable",
+        "dependency.package-unavailable",
+        "dependency.cache-incomplete",
+        "dependency.preparation-failed",
+        "dependency.source-update-required",
+        "dependency.environment-stale",
+        "dependency.environment-surface-mismatch",
+        "dependency.validation-command-missing",
+        "dependency.undeclared-package-source",
+        "dependency.undeclared-local-project",
+        "dependency.unsupported-source-indirection",
+        "dependency.post-preparation-drift",
+    }
+)
+
 APPROVED_REASON_CODES = frozenset(
     set(SCHEMA_REASON_CODES)
     | set(ADAPTER_REASON_CODES)
     | set(REPOSITORY_REASON_CODES)
     | set(REF_REASON_CODES)
     | set(WORKTREE_REASON_CODES)
+    | set(RUNTIME_REASON_CODES)
+    | set(DEPENDENCY_REASON_CODES)
 )
 
 

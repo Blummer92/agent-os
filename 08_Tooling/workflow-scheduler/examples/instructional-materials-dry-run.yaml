@@ -1,0 +1,33 @@
+workflow_id: "classroom-artifact-dry-run-v1"
+title: "Instructional Materials Coach dry-run"
+created_by: "human-operator"
+mode: "Draft"
+tasks:
+  - id: "build-materials-bundle"
+    type: "classroom_artifact"
+    owner: "instructional-materials-coach"
+    action: "build:instructional-materials"
+    idempotency_key: "example-materials-dry-run-001"
+    mode: "Draft"
+    priority: 0
+    approval_required: false
+    production_ready: false
+    depends_on: []
+    payload:
+      contract_version: "imc-materials-task-v1"
+      operation: "build_materials_bundle"
+      dry_run: true
+      execution_authorized: false
+      content_path: "lessons/example-lesson.yaml"
+      slides_template_id: "slides-template-example"
+      doc_template_id: "doc-template-example"
+      target_drive_folder_id: "drive-folder-example"
+      lessons_dir: "reports/lessons"
+      production_gates:
+        source_confidence: "approved"
+        unit_readiness: "ready"
+        modeling_readiness: "ready_for_slides"
+        evidence_target: "example-modeling-handoff"
+        blockers: "none"
+      governed_field_risk: false
+      writes_governed_field: false

@@ -8,6 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from workflow_scheduler.execution.posix_process_adapter import (
+    ContainedTerminationEvidence,
+)
 from workflow_scheduler.execution.single_issue_pilot import (
     PilotLeaseGrant,
     PilotLeaseReleaseObservation,
@@ -19,6 +22,14 @@ from workflow_scheduler.execution.single_issue_pilot import (
 HOST_LOCAL_LEASE_SCHEMA_VERSION = "1.0"
 _MAX_METADATA_BYTES = 16_384
 _MAX_PATH_LENGTH = 1024
+_MAX_IDENTITY_LENGTH = 512
+
+# Workspace/repository dispositions that are resolved enough to recover under.
+# There is deliberately no "unknown" member: while the workspace disposition is
+# open, quarantine remains dominant and no recovery may proceed.
+LEASE_RECOVERY_WORKSPACE_DISPOSITIONS: frozenset[str] = frozenset(
+    {"workspace-removed-and-verified", "workspace-preserved-under-review"}
+)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -55,6 +66,68 @@ class HostLocalLeaseObservation:
     ambiguous: bool
     generation: int
     holder_identity: str | None = None
+    reason: str = ""
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class OrphanedLeaseRecoveryRequest:
+    """Every precondition one bounded exact-identity orphan recovery requires.
+
+    Recovery is never inferred. The caller must bind the exact lease being
+    recovered, the exact ownership it expects to remove, the invocation that
+    ownership came from, independently proven termination, a resolved
+    workspace/repository disposition, and the review evidence authorizing the
+    recovery. There is no field through which lease age, TTL, wall-clock
+    expiry, heartbeat absence, PID absence, ``ESRCH``, host reachability, or a
+    belief that execution is probably dead could be supplied, because none of
+    those prove anything.
+    """
+
+    lease_identity: str
+    expected_holder_identity: str
+    expected_generation: int
+    original_invocation_id: str
+    termination_evidence: ContainedTerminationEvidence
+    workspace_disposition: str
+    review_evidence_identity: str
+
+    def __post_init__(self) -> None:
+        for name in (
+            "lease_identity",
+            "expected_holder_identity",
+            "original_invocation_id",
+            "workspace_disposition",
+            "review_evidence_identity",
+        ):
+            value = getattr(self, name)
+            if type(value) is not str or not value:
+                raise ValueError(f"{name} must be a non-empty string")
+            if len(value) > _MAX_IDENTITY_LENGTH:
+                raise ValueError(f"{name} exceeds the bounded identity length")
+        if type(self.expected_generation) is not int or isinstance(
+            self.expected_generation, bool
+        ):
+            raise ValueError("expected_generation must be an exact int")
+        if self.expected_generation < 1:
+            raise ValueError("expected_generation must be a positive generation")
+        if type(self.termination_evidence) is not ContainedTerminationEvidence:
+            raise TypeError(
+                "termination_evidence must be an exact ContainedTerminationEvidence"
+            )
+        if self.workspace_disposition not in LEASE_RECOVERY_WORKSPACE_DISPOSITIONS:
+            raise ValueError("workspace_disposition must be a resolved disposition")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class OrphanedLeaseRecoveryObservation:
+    """Bounded evidence for exactly one attempted orphan recovery."""
+
+    recovered: bool
+    mutated: bool
+    lease_identity: str
+    expected_holder_identity: str
+    expected_generation: int
+    retained_generation: int
     reason: str = ""
 
 
@@ -380,4 +453,128 @@ class HostLocalLeaseAdapter:
             lease_identity=lease_identity,
             holder_identity=holder_identity,
             generation=generation,
+        )
+
+    def _before_recovery_mutation(self) -> None:
+        """The compare-and-act boundary between the decision and the mutation.
+
+        Overridable so a test can interleave real concurrent activity here and
+        prove the authoritative re-read below rejects drift. It is a no-op in
+        every production path.
+        """
+
+    def _rejected(
+        self,
+        request: OrphanedLeaseRecoveryRequest,
+        reason: str,
+        *,
+        retained_generation: int = 0,
+    ) -> OrphanedLeaseRecoveryObservation:
+        return OrphanedLeaseRecoveryObservation(
+            recovered=False,
+            mutated=False,
+            lease_identity=request.lease_identity,
+            expected_holder_identity=request.expected_holder_identity,
+            expected_generation=request.expected_generation,
+            retained_generation=retained_generation,
+            reason=reason,
+        )
+
+    def recover_orphaned_lease(
+        self, request: OrphanedLeaseRecoveryRequest
+    ) -> OrphanedLeaseRecoveryObservation:
+        """Recover exactly one genuinely orphaned host-local lease, or do nothing.
+
+        This is not a force-release, steal, takeover, expiry, or retry. It
+        removes only the exact active ownership state named by the request, and
+        only after independently proven termination and an authoritative
+        re-read that still matches that exact lease identity, holder identity,
+        and generation. Any mismatch, ambiguity, or uncertainty performs zero
+        mutation and fails closed.
+
+        Generation history is deliberately preserved: the durable generation
+        record is never rewritten or reset, so the next ordinary acquisition
+        reads it and receives a strictly newer generation. A stale holder from
+        the recovered generation can therefore never release the next owner.
+        """
+        if type(request) is not OrphanedLeaseRecoveryRequest:
+            raise TypeError("request must be an exact OrphanedLeaseRecoveryRequest")
+
+        if not request.termination_evidence.termination_proven:
+            return self._rejected(
+                request, "recovery requires independently proven prior termination"
+            )
+
+        try:
+            active_path, generation_path = self._paths(request.lease_identity)
+        except ValueError as exc:
+            return self._rejected(request, str(exc))
+
+        if active_path.is_symlink() or generation_path.is_symlink():
+            return self._rejected(request, "ambiguous lease metadata requires manual recovery")
+        if not active_path.exists():
+            return self._rejected(request, "no active lease ownership to recover")
+
+        # Decision read: the ownership the caller believes it is recovering.
+        try:
+            decided = self._decode_active(self._read_bounded(active_path))
+            durable_generation = self._decode_generation(self._read_bounded(generation_path))
+        except (OSError, ValueError) as exc:
+            return self._rejected(request, str(exc))
+
+        expected = (
+            request.lease_identity,
+            request.expected_holder_identity,
+            request.expected_generation,
+        )
+        if decided != expected or durable_generation != request.expected_generation:
+            return self._rejected(
+                request,
+                "active lease metadata does not match the exact recovery identity",
+                retained_generation=durable_generation,
+            )
+
+        self._before_recovery_mutation()
+
+        # Authoritative re-read immediately before the only mutation. If the
+        # active lease moved on between the decision and here, nothing is
+        # touched: the current owner is never disturbed by a stale recovery.
+        try:
+            if not active_path.exists() or active_path.is_symlink():
+                return self._rejected(
+                    request,
+                    "active lease ownership changed before recovery could act",
+                    retained_generation=durable_generation,
+                )
+            current = self._decode_active(self._read_bounded(active_path))
+            current_durable = self._decode_generation(self._read_bounded(generation_path))
+        except (OSError, ValueError) as exc:
+            return self._rejected(request, str(exc), retained_generation=durable_generation)
+
+        if current != expected or current_durable != request.expected_generation:
+            return self._rejected(
+                request,
+                "active lease ownership changed before recovery could act",
+                retained_generation=current_durable,
+            )
+
+        # Remove only the exact active ownership. The generation record stays.
+        active_path.unlink()
+        if active_path.exists():
+            return OrphanedLeaseRecoveryObservation(
+                recovered=False,
+                mutated=True,
+                lease_identity=request.lease_identity,
+                expected_holder_identity=request.expected_holder_identity,
+                expected_generation=request.expected_generation,
+                retained_generation=current_durable,
+                reason="recovery could not be observed complete",
+            )
+        return OrphanedLeaseRecoveryObservation(
+            recovered=True,
+            mutated=True,
+            lease_identity=request.lease_identity,
+            expected_holder_identity=request.expected_holder_identity,
+            expected_generation=request.expected_generation,
+            retained_generation=current_durable,
         )

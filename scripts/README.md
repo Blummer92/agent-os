@@ -40,6 +40,16 @@ documented in `scripts/build-chatgpt-checkout-package.md`.
 
 Tests: `tests/test_build_chatgpt_checkout_package.py`.
 
+## agent-os-release-run.py
+
+Offline deterministic release-run state evaluator for Issue #903. It consumes fresh GitHub evidence, reuses the completed #988 validation-failure classifier, requires a source-backed canonical validation set and authoritative exact-head aggregate, and returns the next governed lifecycle action without performing GitHub writes itself.
+
+```bash
+python scripts/agent-os-release-run.py evidence.json
+```
+
+Contract, CI infrastructure-vs-code failure handling, mobile/desktop usage, protected authorization pauses, and safety boundaries are documented in `scripts/agent-os-release-run.md`. Tests: `tests/test_agent_os_release_run.py`.
+
 ## validate-all.sh
 
 Aggregate local validation runner: structural validation plus every discovered
