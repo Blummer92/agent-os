@@ -1,0 +1,71 @@
+name: Agent OS Governed Invocation Ingress
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-os-ingress-${{ github.repository_id }}-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  ingress:
+    name: Validate bounded Agent OS resume transport
+    if: ${{ github.event.issue.pull_request == null }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out canonical workflow source
+        uses: actions/checkout@v7
+
+      - name: Parse low-trust issue comment envelope
+        run: |
+          mkdir -p "$RUNNER_TEMP/agent-os-ingress"
+          PYTHONPATH=08_Tooling/workflow-scheduler/src \
+            python -m workflow_scheduler.governance.github_issue_comment_ingress \
+              --event "$GITHUB_EVENT_PATH" \
+              --repository "$GITHUB_REPOSITORY" \
+              --allowed-actor Blummer92 \
+              --run-attempt "$GITHUB_RUN_ATTEMPT" \
+              --output "$RUNNER_TEMP/agent-os-ingress/transport.json"
+
+      - name: Fail closed before governed Scheduler dispatch
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          source = Path(os.environ["RUNNER_TEMP"]) / "agent-os-ingress" / "transport.json"
+          payload = json.loads(source.read_text(encoding="utf-8"))
+          evidence = {
+              "schema_version": "1.0",
+              "transport": payload,
+              "dispatch_status": "blocked",
+              "dispatch_reason": "governed-runtime-control-path-not-yet-bound",
+              "execution_authorized": False,
+              "scheduler_invoked": False,
+              "side_effects_performed": False,
+          }
+          target = source.with_name("result.json")
+          target.write_text(
+              json.dumps(evidence, sort_keys=True, separators=(",", ":")) + "\n",
+              encoding="utf-8",
+          )
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("## Agent OS governed invocation ingress\n\n")
+              summary.write(f"Transport status: `{payload['status']}`\n\n")
+              summary.write(f"Transport reason: `{payload['reason']}`\n\n")
+              summary.write("Scheduler dispatch: `blocked` — governed runtime control path is not yet bound.\n")
+          PY
+
+      - name: Publish bounded ingress evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-os-ingress-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/agent-os-ingress/*.json
+          if-no-files-found: error
+          retention-days: 7
