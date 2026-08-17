@@ -35,6 +35,7 @@ def _descriptor(**overrides: object) -> GovernedInvocationDescriptor:
         "schema_version": INVOCATION_DESCRIPTOR_SCHEMA_VERSION,
         "repository": "Blummer92/agent-os",
         "issue_number": 1218,
+        "issue_or_handoff_identity": "issue:1218",
         "handoff_id": _id("executor-handoff", "handoff"),
         "route_decision_id": _id("executor-route-decision", "route"),
         "execution_service_request_fingerprint": _id("execution-request", "request"),
@@ -47,6 +48,8 @@ def _descriptor(**overrides: object) -> GovernedInvocationDescriptor:
         "environment_health_evidence_id": _id("environment-health", "health"),
         "required_environment_id": _id("required-environment", "required-environment"),
         "dependency_readiness_evidence_id": _id("dependency-readiness", "readiness"),
+        "execution_surface_id": "execution-surface:gce-agent-os-test",
+        "workspace_identity": _id("pilot-workspace", "workspace"),
         "workflow_runtime_identity": _id("workflow-runtime", "runtime"),
         "candidate_packet_id": _id("candidate-packet", "packet"),
         "runtime_configuration_fingerprint": _id("concrete-adapters", "configuration"),
@@ -70,6 +73,18 @@ def test_descriptor_is_deterministic_bounded_and_non_authorizing() -> None:
     assert first.merge_authorized is False
     assert first.issue_closure_authorized is False
     assert first.external_writes_authorized is False
+
+
+def test_descriptor_binds_subject_workspace_and_execution_surface() -> None:
+    descriptor = _descriptor()
+    assert descriptor.issue_or_handoff_identity == "issue:1218"
+    assert descriptor.execution_surface_id == "execution-surface:gce-agent-os-test"
+    assert descriptor.workspace_identity.startswith("pilot-workspace:")
+    assert replace(
+        descriptor,
+        workspace_identity=_id("pilot-workspace", "different"),
+        descriptor_id="",
+    ).descriptor_id != descriptor.descriptor_id
 
 
 def test_descriptor_schema_contains_only_identity_references_not_execution_text() -> None:
@@ -103,17 +118,23 @@ def test_deserialize_rejects_unknown_field_authority_and_tampering() -> None:
     extra = dict(payload)
     extra["command"] = "rm -rf /"
     with pytest.raises(ValueError, match="unknown or missing"):
-        deserialize_invocation_descriptor(json.dumps(extra, sort_keys=True, separators=(",", ":")))
+        deserialize_invocation_descriptor(
+            json.dumps(extra, sort_keys=True, separators=(",", ":"))
+        )
 
     authority = dict(payload)
     authority["execution_authorized"] = True
     with pytest.raises(ValueError, match="must remain false"):
-        deserialize_invocation_descriptor(json.dumps(authority, sort_keys=True, separators=(",", ":")))
+        deserialize_invocation_descriptor(
+            json.dumps(authority, sort_keys=True, separators=(",", ":"))
+        )
 
     tampered = dict(payload)
     tampered["source_sha"] = "b" * 40
     with pytest.raises(ValueError, match="descriptor_id"):
-        deserialize_invocation_descriptor(json.dumps(tampered, sort_keys=True, separators=(",", ":")))
+        deserialize_invocation_descriptor(
+            json.dumps(tampered, sort_keys=True, separators=(",", ":"))
+        )
 
 
 def test_append_and_direct_handoff_lookup_are_idempotent(tmp_path) -> None:
@@ -162,4 +183,7 @@ def test_malformed_handoff_and_descriptor_identity_are_rejected() -> None:
 
     valid = _descriptor()
     with pytest.raises(ValueError, match="descriptor_id"):
-        replace(valid, descriptor_id=_id("agent-os.governed-invocation-descriptor", "wrong"))
+        replace(
+            valid,
+            descriptor_id=_id("agent-os.governed-invocation-descriptor", "wrong"),
+        )
