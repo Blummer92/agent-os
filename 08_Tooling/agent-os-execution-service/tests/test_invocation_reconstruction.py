@@ -2,31 +2,43 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-import agent_os_execution_service.invocation_reconstruction as reconstruction
-from agent_os_execution_service.executor_routing import ExecutorRoute
-from agent_os_execution_service.invocation_reconstruction import (
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
+
+import agent_os_execution_service.invocation_reconstruction as reconstruction  # noqa: E402
+from agent_os_execution_service.executor_routing import ExecutorRoute  # noqa: E402
+from agent_os_execution_service.invocation_reconstruction import (  # noqa: E402
     CurrentInvocationEvidence,
     InvocationReconstructionReason,
     InvocationReconstructionStatus,
     reconstruct_governed_invocation,
 )
-from scripts.agent_os_candidate_packet.models import CandidatePacketPhase
-from scripts.agent_os_execution_capabilities.dependencies import DependencyPreparationStatus
-from scripts.agent_os_execution_checkpoint.invocation_descriptor import (
+from scripts.agent_os_candidate_packet.models import CandidatePacketPhase  # noqa: E402
+from scripts.agent_os_execution_capabilities.dependencies import (  # noqa: E402
+    DependencyPreparationStatus,
+)
+from scripts.agent_os_execution_checkpoint.invocation_descriptor import (  # noqa: E402
     INVOCATION_DESCRIPTOR_SCHEMA_NAME,
     INVOCATION_DESCRIPTOR_SCHEMA_VERSION,
     GovernedInvocationDescriptor,
     InvocationDescriptorIntegrityError,
     InvocationDescriptorNotFound,
 )
-from scripts.agent_os_execution_checkpoint.models import InvalidationState, LifecycleState
-from workflow_scheduler.execution.host_local_lease_adapter import HostLocalLeaseObservation
-from workflow_scheduler.execution.single_issue_pilot import (
+from scripts.agent_os_execution_checkpoint.models import (  # noqa: E402
+    InvalidationState,
+    LifecycleState,
+)
+from workflow_scheduler.execution.host_local_lease_adapter import (  # noqa: E402
+    HostLocalLeaseObservation,
+)
+from workflow_scheduler.execution.single_issue_pilot import (  # noqa: E402
     PilotLeaseRequest,
     WorkspaceRequest,
     pilot_lease_identity,
