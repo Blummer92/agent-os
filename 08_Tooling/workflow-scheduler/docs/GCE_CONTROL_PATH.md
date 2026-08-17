@@ -1,187 +1,66 @@
 # GCE Control Path — #1217
 
 ## Purpose
-
-#1217 defines the smallest governed Google Compute Engine control-path contract
-used by the bounded #1203 GitHub ingress. The control path is transport and VM
-actuation only. It does not own Scheduler admission, execution authorization,
-lease truth, retry, provider selection, publication, or repository writes.
-
-Canonical flow:
+#1217 owns the smallest governed GCE transport/VM-actuation contract used by #1203. It does not own Scheduler admission, execution authorization, lease truth, retry, provider selection, publication, or repository writes.
 
 ```text
-GitHub OIDC
--> Google Workload Identity Federation
--> dedicated transport service account
--> exact GCE resource tuple
--> start-if-stopped / observe-running
--> IAP + OS Login
--> fixed host entrypoint with one executor-handoff id
--> #1218 invocation reconstruction
--> existing Workflow Scheduler
--> bounded evidence
--> evidence-gated VM stop
+GitHub OIDC -> Google WIF -> dedicated transport service account
+-> exact GCE tuple -> start-if-stopped / observe-running -> IAP + OS Login
+-> fixed host entrypoint + one executor-handoff id -> #1218 reconstruction
+-> existing Workflow Scheduler -> bounded evidence -> evidence-gated VM stop
 ```
 
-## Exact resource tuple
+## Frozen resource and trust envelope
+The v1 target is `agent-os-502614 / us-central1-a / agent-os-test`. Any other tuple is rejected before adapter effects.
 
-The v1 qualification target is fixed to:
-
-```text
-project:  agent-os-502614
-zone:     us-central1-a
-instance: agent-os-test
-```
-
-A caller that supplies any other resource tuple is rejected before the control
-adapter performs an external action.
-
-## OIDC trust envelope
-
-The pure control-path contract requires exact values for:
-
-- repository;
-- repository owner;
-- exact `workflow_ref`;
-- `refs/heads/main`;
-- configured Google Workload Identity Provider audience.
-
-These fields model the frozen Google trust boundary. #1203 separately owns the
-GitHub comment actor rule and canonical Agent OS authorization reacquisition.
-A matching OIDC claim set does not itself authorize Agent OS execution.
-
-No service-account JSON key, SSH private key, or other long-lived credential is
-part of this repository contract.
+OIDC admission requires exact repository, repository owner, `workflow_ref`, `refs/heads/main`, and configured Workload Identity Provider audience. #1203 separately owns comment-actor admission and Agent OS authorization reacquisition; matching OIDC claims never create execution authority. No service-account JSON key, SSH private key, or other long-lived credential belongs in this contract.
 
 ## Fixed host invocation
-
-The only caller-controlled invocation datum is one canonical identity:
+The only caller-controlled execution datum is `executor-handoff:<64-lowercase-hex>`. Host argv is constructed internally as exactly:
 
 ```text
-executor-handoff:<64-lowercase-hex>
+/usr/local/libexec/agent-os-governed-resume --handoff-id executor-handoff:<64-lowercase-hex>
 ```
 
-The host argv is constructed internally as exactly:
+There is no API for caller shell text, argv lists, prompts, paths, package/test commands, branch operations, or environment payloads. The transport must bind the merged #1218 seam rather than duplicate it:
 
 ```text
-/usr/local/libexec/agent-os-governed-resume \
-  --handoff-id executor-handoff:<64-lowercase-hex>
-```
-
-There is no API for supplying shell text, an argv list, a prompt, a path, a
-package command, a validation command, a branch operation, or environment
-variables. The module does not invoke a shell or subprocess.
-
-The fixed host entrypoint must bind the merged #1218 seam:
-
-```text
-executor-handoff id
--> GovernedInvocationDescriptor
--> current canonical evidence reacquisition
--> exact source/scope/checkpoint/ResumePlan/environment/runtime checks
+handoff id -> GovernedInvocationDescriptor -> current evidence reacquisition
+-> source/scope/checkpoint/ResumePlan/environment/runtime checks
 -> existing Scheduler lease observation
 -> exact current SingleIssuePilotInput OR fail-closed result
 ```
 
-The transport must not duplicate these checks in workflow YAML or shell logic.
-
 ## VM state machine
-
-The pure contract permits:
-
 ```text
-STOPPED
-  -> one start request
-  -> one bounded wait/observation
-  -> RUNNING
-
-RUNNING
-  -> no restart
-
-STAGING / STOPPING / SUSPENDING / UNKNOWN / UNREACHABLE
-  -> blocked
-  -> no host invocation
+STOPPED -> one start -> one bounded wait -> RUNNING
+RUNNING -> no restart
+STAGING / STOPPING / SUSPENDING / UNKNOWN / UNREACHABLE -> blocked
 ```
 
-There is no automatic retry or failover to another VM, Codespace, runner, or
-provider.
-
-After RUNNING is proven, one readiness probe must succeed before the fixed host
-entrypoint can be invoked.
+There is no automatic retry or fallback. One readiness probe must succeed before the fixed host entrypoint is invoked.
 
 ## Shutdown gate
+VM stop is actuation only; it never proves termination, lease release, or cleanup. Automatic stop is eligible only for `succeeded` or `validation-failed` with confirmed termination + lease release + cleanup, or `blocked-before-execution` with explicit proof that no retained ownership remains and release/cleanup are complete.
 
-VM stop is actuation only. It never proves execution termination, lease release,
-or cleanup.
+Shutdown is withheld for retained lease ownership, quarantine, `termination-uncertain`, cleanup failure, release failure, or any outcome lacking complete terminal proof. Stop failure becomes `needs-decision`. Actions completion, SSH disconnect, PID absence, elapsed time, or transport timeout are not termination evidence.
 
-Automatic stop is eligible only when host-side canonical evidence proves one of
-these bounded cases:
+## Pure adapter boundary
+`workflow_scheduler.governance.gce_control_path` owns validation and deterministic sequencing only. A separately authorized concrete adapter may observe/start/wait for the exact VM, perform bounded IAP/OS Login readiness, invoke the fixed host entrypoint, and stop the exact VM when the shutdown gate permits it.
 
-- `succeeded` with termination confirmed, lease released, and cleanup complete;
-- `validation-failed` with the same clean terminal proof;
-- `blocked-before-execution` with explicit proof that no retained ownership
-  remains and cleanup/release are complete.
-
-Shutdown is withheld for retained lease ownership, quarantine,
-`termination-uncertain`, cleanup failure, release failure, or any other outcome
-without the complete terminal proof. A stop failure becomes `needs-decision`.
-
-This preserves #758/#1202/#759 truth: Actions completion, SSH disconnect, PID
-absence, elapsed time, or transport timeout are not termination evidence.
-
-## Adapter boundary
-
-`workflow_scheduler.governance.gce_control_path` is pure and injected. It owns
-only validation and deterministic control-path sequencing. A concrete adapter
-may later implement the separately authorized Google operations:
-
-- observe instance state;
-- start the exact instance;
-- wait for RUNNING;
-- perform the bounded IAP/OS Login readiness probe;
-- invoke the fixed host entrypoint;
-- stop the exact instance when the shutdown gate permits it.
-
-The pure module itself imports no Google SDK, GitHub client, network library, or
-subprocess package. It creates no credential, IAM binding, queue, daemon,
-database, persistent state, lease, or Scheduler execution.
+The pure module imports no Google SDK, GitHub client, network library, or subprocess package. It creates no credential, IAM binding, queue, daemon, database, persistent state, lease, Scheduler execution, or retry system.
 
 ## Bounded result
+The result carries bounded request/handoff identity, exact resource tuple, initial/final VM state, start/invoke/stop observations, bounded Scheduler invocation/execution identities returned by the host, terminal status/evidence references, shutdown eligibility, and finite reason codes. Authority fields are fixed false: the result cannot authorize Scheduler work, lease operations, GitHub writes, arbitrary commands, or merge.
 
-The control-path result records only bounded transport evidence, including:
-
-- request and handoff identity;
-- exact resource tuple;
-- initial/final observed VM state;
-- whether start/host invocation/stop were issued;
-- bounded Scheduler invocation/execution identities returned by the host;
-- terminal status and evidence references;
-- shutdown eligibility;
-- a finite reason-code set.
-
-Authority fields are fixed false. The result does not authorize Scheduler work,
-lease operations, GitHub writes, arbitrary commands, or merge.
-
-## Ownership boundaries
-
-- #1203 owns issue-comment parsing, actor admission, and the GitHub workflow.
-- #1217 owns the Google identity/VM/IAP/OS Login control path and fixed host
-  invocation binding.
-- #1218 owns one-ID reconstruction/admission.
-- #758 owns Scheduler lease/concurrency truth.
-- #1202 owns orphaned/ambiguous lease recovery.
-- #759 owns process containment and termination proof.
-- #1197 owns dependency readiness.
-
-No second owner is introduced by this module.
+## Ownership
+- #1203: issue-comment parsing, actor admission, GitHub workflow.
+- #1217: Google identity/VM/IAP/OS Login control path and fixed host binding.
+- #1218: one-ID reconstruction/admission.
+- #758: Scheduler lease/concurrency truth.
+- #1202: orphaned/ambiguous lease recovery.
+- #759: containment and termination proof.
+- #1197: dependency readiness.
 
 ## Activation boundary
-
-Repository implementation and offline tests are credential-free. Live
-Workload Identity Federation, IAM, OS Login, IAP, VM lifecycle, public-IP/service
-account hardening, deployment of the fixed host entrypoint, and the required
-live smoke test must run only on a capable execution surface under the explicit
-#1203/#1217 excluded-surface authorization.
-
-A repository-only validation pass is not evidence that the external GCP
-activation has succeeded.
+Repository code/tests are credential-free. Live WIF/IAM, OS Login, IAP, VM lifecycle, public-IP/service-account hardening, fixed-entrypoint deployment, and the required live smoke test must run only on a capable governed GCP surface under the existing explicit #1203/#1217 excluded-surface authorization. Repository validation alone is not evidence that external GCP activation succeeded.
