@@ -1,16 +1,16 @@
 """Bounded persisted lookup descriptor for one governed Agent OS invocation.
 
 AOS-INV1 (#1218) extends the existing execution-checkpoint/continuation
-persistence boundary with one small, immutable reference record.  The record
-maps an existing content-addressed ``ExecutorHandoff`` identity to the canonical
-identities needed to reacquire current execution evidence.  It does not persist
-``SingleIssuePilotInput`` or any executable command data and it never creates
+persistence boundary with one small, immutable reference record. The record
+maps an existing content-addressed ``ExecutorHandoff`` identity to canonical
+identities needed to reacquire current execution evidence. It does not persist
+``SingleIssuePilotInput`` or executable command data and never creates
 execution, GitHub, merge, closure, or external-write authority.
 
-Storage stays under the caller-supplied execution-checkpoint store root.  One
+Storage stays under the caller-supplied execution-checkpoint store root. One
 file is keyed directly by the immutable handoff identity, so a caller holding
 only that identity never has to scan issue directories or invent a second
-index.  Existing checkpoint-store atomic-write and path-safety helpers are
+index. Existing checkpoint-store atomic-write and path-safety helpers are
 reused; no queue, lock, retry system, daemon, or second lifecycle is introduced.
 """
 
@@ -65,7 +65,11 @@ class AppendInvocationDescriptorOutcome:
     already_present: bool
 
 
-def _bounded_text(value: object, name: str, maximum: int = MAX_INVOCATION_DESCRIPTOR_TEXT_BYTES) -> str:
+def _bounded_text(
+    value: object,
+    name: str,
+    maximum: int = MAX_INVOCATION_DESCRIPTOR_TEXT_BYTES,
+) -> str:
     if type(value) is not str or not value or _CONTROL_RE.search(value):
         raise TypeError(f"{name} must be non-empty control-free exact text")
     if len(value.encode("utf-8")) > maximum:
@@ -107,12 +111,15 @@ def _handoff_id(value: object) -> str:
     return text
 
 
-def _descriptor_payload(value: "GovernedInvocationDescriptor", *, include_id: bool) -> dict[str, object]:
+def _descriptor_payload(
+    value: "GovernedInvocationDescriptor", *, include_id: bool
+) -> dict[str, object]:
     payload: dict[str, object] = {
         "schema_name": value.schema_name,
         "schema_version": value.schema_version,
         "repository": value.repository,
         "issue_number": value.issue_number,
+        "issue_or_handoff_identity": value.issue_or_handoff_identity,
         "handoff_id": value.handoff_id,
         "route_decision_id": value.route_decision_id,
         "execution_service_request_fingerprint": value.execution_service_request_fingerprint,
@@ -125,6 +132,8 @@ def _descriptor_payload(value: "GovernedInvocationDescriptor", *, include_id: bo
         "environment_health_evidence_id": value.environment_health_evidence_id,
         "required_environment_id": value.required_environment_id,
         "dependency_readiness_evidence_id": value.dependency_readiness_evidence_id,
+        "execution_surface_id": value.execution_surface_id,
+        "workspace_identity": value.workspace_identity,
         "workflow_runtime_identity": value.workflow_runtime_identity,
         "candidate_packet_id": value.candidate_packet_id,
         "runtime_configuration_fingerprint": value.runtime_configuration_fingerprint,
@@ -159,6 +168,7 @@ class GovernedInvocationDescriptor:
     schema_version: Literal["1.0"]
     repository: str
     issue_number: int
+    issue_or_handoff_identity: str
     handoff_id: str
     route_decision_id: str
     execution_service_request_fingerprint: str
@@ -171,6 +181,8 @@ class GovernedInvocationDescriptor:
     environment_health_evidence_id: str
     required_environment_id: str
     dependency_readiness_evidence_id: str
+    execution_surface_id: str
+    workspace_identity: str
     workflow_runtime_identity: str
     candidate_packet_id: str
     runtime_configuration_fingerprint: str
@@ -194,6 +206,7 @@ class GovernedInvocationDescriptor:
         _positive_issue(self.issue_number)
         object.__setattr__(self, "handoff_id", _handoff_id(self.handoff_id))
         for name in (
+            "issue_or_handoff_identity",
             "route_decision_id",
             "execution_service_request_fingerprint",
             "authorization_id",
@@ -204,6 +217,8 @@ class GovernedInvocationDescriptor:
             "environment_health_evidence_id",
             "required_environment_id",
             "dependency_readiness_evidence_id",
+            "execution_surface_id",
+            "workspace_identity",
             "workflow_runtime_identity",
             "candidate_packet_id",
             "runtime_configuration_fingerprint",
@@ -244,7 +259,9 @@ def serialize_invocation_descriptor(value: GovernedInvocationDescriptor) -> byte
     return payload
 
 
-def deserialize_invocation_descriptor(payload: bytes | bytearray | memoryview | str) -> GovernedInvocationDescriptor:
+def deserialize_invocation_descriptor(
+    payload: bytes | bytearray | memoryview | str,
+) -> GovernedInvocationDescriptor:
     if isinstance(payload, str):
         raw = payload.encode("utf-8")
     elif isinstance(payload, (bytes, bytearray, memoryview)):
@@ -264,6 +281,7 @@ def deserialize_invocation_descriptor(payload: bytes | bytearray | memoryview | 
         "schema_version",
         "repository",
         "issue_number",
+        "issue_or_handoff_identity",
         "handoff_id",
         "route_decision_id",
         "execution_service_request_fingerprint",
@@ -276,6 +294,8 @@ def deserialize_invocation_descriptor(payload: bytes | bytearray | memoryview | 
         "environment_health_evidence_id",
         "required_environment_id",
         "dependency_readiness_evidence_id",
+        "execution_surface_id",
+        "workspace_identity",
         "workflow_runtime_identity",
         "candidate_packet_id",
         "runtime_configuration_fingerprint",
@@ -301,14 +321,19 @@ def deserialize_invocation_descriptor(payload: bytes | bytearray | memoryview | 
     ):
         if decoded[name] is not False:
             raise ValueError(f"{name} must remain false")
-    values = {name: decoded[name] for name in expected if name not in {
-        "repository_implementation_authorized",
-        "execution_authorized",
-        "github_writes_authorized",
-        "merge_authorized",
-        "issue_closure_authorized",
-        "external_writes_authorized",
-    }}
+    values = {
+        name: decoded[name]
+        for name in expected
+        if name
+        not in {
+            "repository_implementation_authorized",
+            "execution_authorized",
+            "github_writes_authorized",
+            "merge_authorized",
+            "issue_closure_authorized",
+            "external_writes_authorized",
+        }
+    }
     descriptor = GovernedInvocationDescriptor(**values)
     if serialize_invocation_descriptor(descriptor) != raw:
         raise ValueError("governed invocation descriptor is not canonical byte form")
