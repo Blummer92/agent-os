@@ -104,7 +104,6 @@ class InvocationReconstructionReason(str, Enum):
     LEASE_IDENTITY_MISMATCH = "lease-identity-mismatch"
     LEASE_AMBIGUOUS = "lease-ambiguous"
     LEASE_CONFLICT = "lease-conflict"
-    INVOCATION_ALREADY_CONSUMED = "invocation-already-consumed"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -715,14 +714,6 @@ def reconstruct_governed_invocation(
         return _result(
             status=InvocationReconstructionStatus.BLOCKED,
             reasons=(InvocationReconstructionReason.LEASE_CONFLICT,),
-            handoff_id=handoff_id,
-            descriptor=descriptor,
-            lease_identity=expected_lease_identity,
-        )
-    if observation.generation > 0:
-        return _result(
-            status=InvocationReconstructionStatus.BLOCKED,
-            reasons=(InvocationReconstructionReason.INVOCATION_ALREADY_CONSUMED,),
             handoff_id=handoff_id,
             descriptor=descriptor,
             lease_identity=expected_lease_identity,
