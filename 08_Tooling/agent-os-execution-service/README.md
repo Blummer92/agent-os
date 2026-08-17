@@ -8,6 +8,10 @@ Pure-local surfaces validate requests, inspect supplied repository snapshots, pr
 
 The Issue #697 execution-composition surface may delegate validation exactly once to the canonical Workflow Scheduler only after request, command-plan, authorization, and runtime-configuration checks pass. Route selection never satisfies those preconditions. Execution authorization, routing, command execution, validation success, Ready for Review, and merge authorization remain separate states.
 
+## Execution-authorization source — Issue #1226
+
+`execution_authorization_source.py` reacquires current explicit execution authorization from one injected read-only GitHub issue-comment snapshot. Only an exact `agent-os-execution-authorization/v1` compact-JSON record authored by the current user-account repository owner is eligible; ordinary prose, non-owner comments, labels, authentication, candidate approval, workflow identity, and transport identity never authorize execution. The content-addressed record reconstructs the existing `ExecutionAuthorizationEvidence` rather than defining a second authorization model. Newer same-invocation records supersede older identities, `execution_authorized=false` revokes, incomplete or ambiguous source evidence fails closed, and currentness requires the supplied evaluation time to remain inside the authorization window. The reader owns no GitHub client, mutation, retry, consumption/replay lock, Scheduler state, checkpoint, or persistent store; #1218 and #758/#1202 retain invocation/lease truth.
+
 ## Authorized-validation admission — Issue #757
 
 `authorized_validation.py` is the pure security checkpoint between a complete non-authorizing candidate packet plus separately supplied human execution authorization and later runtime-capable lifecycle stages.
