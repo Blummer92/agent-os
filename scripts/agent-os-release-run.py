@@ -22,10 +22,19 @@ from agent_os_issue_acceptance.validation_failure_classifier import (
 )
 
 SCHEMA_NAME = "agent-os-release-run"
-SCHEMA_VERSION = "1.1.0"
+SCHEMA_VERSION = "1.2.0"
 CLASSIFICATIONS = {"READY_FOR_MERGE_AUTHORIZATION", "NEEDS_FIX", "BLOCKED"}
 SUCCESS_CHECKS = {"success"}
 MERGE_METHODS = {"merge", "squash", "rebase"}
+BRANCH_STATES = {"current", "behind", "conflicted", "unknown"}
+PR_LIFECYCLE_STATES = {"draft", "ready", "merged", "closed"}
+REQUIRED_REFRESH_INVALIDATIONS = {
+    "branch-freshness",
+    "lifecycle-reconciliation",
+    "merge-authorization",
+    "ready-for-review",
+    "tested-sha",
+}
 
 
 @dataclass
@@ -37,10 +46,18 @@ class ReleaseRunState:
     issue_number: int = 0
     expected_head_sha: str = ""
     observed_head_sha: str = ""
+    current_main_sha: str = ""
+    validation_head_sha: str = ""
+    branch_state: str = "unknown"
     phase: str = "preflight"
     classification: str = "BLOCKED"
     pr_state: str = "open"
+    pr_lifecycle_state: str = "draft"
     issue_state: str = "open"
+    checkpoint_phase: str | None = None
+    checkpoint_head_sha: str | None = None
+    checkpoint_pr_lifecycle_state: str | None = None
+    external_transition: str | None = None
     changed_files: list[str] = field(default_factory=list)
     required_checks: dict[str, str] = field(default_factory=dict)
     canonical_required_checks: list[str] = field(default_factory=list)
@@ -51,6 +68,8 @@ class ReleaseRunState:
     ready_for_review_authorized: bool = False
     merge_authorized: bool = False
     issue_closure_authorized: bool = False
+    lifecycle_reconciliation_status: str | None = None
+    lifecycle_invocation_reason: str | None = None
     next_action: str = "stop"
     blockers: list[str] = field(default_factory=list)
     side_effects_performed: list[str] = field(default_factory=list)
@@ -58,14 +77,27 @@ class ReleaseRunState:
 
 def evaluate_release_run(evidence: dict[str, Any]) -> ReleaseRunState:
     """Project fresh caller-supplied release evidence into one governed next state."""
+    lifecycle = evidence.get("lifecycle_reconciliation")
+    if lifecycle is not None and not isinstance(lifecycle, dict):
+        raise TypeError("lifecycle_reconciliation must be object or null")
+
     state = ReleaseRunState(
         repository=str(evidence.get("repository", "")),
         pull_request_number=_int_or_zero(evidence.get("pull_request_number")),
         issue_number=_int_or_zero(evidence.get("issue_number")),
         expected_head_sha=str(evidence.get("expected_head_sha", "")),
         observed_head_sha=str(evidence.get("observed_head_sha", "")),
+        current_main_sha=str(evidence.get("current_main_sha", "")),
+        validation_head_sha=str(evidence.get("validation_head_sha", "")),
+        branch_state=str(evidence.get("branch_state", "unknown")),
         pr_state=str(evidence.get("pr_state", "open")),
+        pr_lifecycle_state=str(evidence.get("pr_lifecycle_state", "draft")),
         issue_state=str(evidence.get("issue_state", "open")),
+        checkpoint_phase=_optional_string(evidence.get("checkpoint_phase")),
+        checkpoint_head_sha=_optional_string(evidence.get("checkpoint_head_sha")),
+        checkpoint_pr_lifecycle_state=_optional_string(
+            evidence.get("checkpoint_pr_lifecycle_state")
+        ),
         changed_files=_sorted_strings(evidence.get("changed_files", [])),
         required_checks=_sorted_string_map(evidence.get("required_checks", {})),
         canonical_required_checks=_sorted_strings(
@@ -85,21 +117,42 @@ def evaluate_release_run(evidence: dict[str, Any]) -> ReleaseRunState:
         issue_closure_authorized=_exact_bool(
             evidence.get("issue_closure_authorized", False)
         ),
+        lifecycle_reconciliation_status=(
+            str(lifecycle.get("reconciliation_status", "")) if lifecycle else None
+        ),
+        lifecycle_invocation_reason=(
+            str(lifecycle.get("invocation_reason", "")) if lifecycle else None
+        ),
         side_effects_performed=_ordered_strings(
             evidence.get("side_effects_performed", [])
         ),
     )
+
     allowed = set(_sorted_strings(evidence.get("allowed_changed_files", [])))
     if not state.repository or not state.pull_request_number or not state.issue_number:
         state.blockers.append("missing release-run identity")
-    if state.pr_state not in {"open", "merged"}:
+    if state.pr_state not in {"open", "merged", "closed"}:
         state.blockers.append(f"unsupported PR state: {state.pr_state}")
+    if state.pr_lifecycle_state not in PR_LIFECYCLE_STATES:
+        state.blockers.append(
+            f"unsupported PR lifecycle state: {state.pr_lifecycle_state}"
+        )
     if state.expected_head_sha != state.observed_head_sha:
         state.blockers.append("exact-head drift")
     if allowed and not set(state.changed_files).issubset(allowed):
         state.blockers.append("changed-file scope drift")
     if state.authorized_merge_method not in MERGE_METHODS:
         state.blockers.append("authorized merge method is missing or unsupported")
+
+    external_terminal = _detect_external_transition(state, evidence)
+    if external_terminal:
+        return state
+
+    if state.pr_state == "open":
+        _validate_branch_freshness(state, evidence)
+        _validate_refresh_receipt(state, evidence.get("branch_refresh_result"))
+        _validate_validation_head(state)
+        _validate_lifecycle_receipt(state, lifecycle)
 
     _validate_authoritative_checks(state)
     _classify_failed_validation(state, evidence.get("validation_failure_evidence"))
@@ -110,6 +163,7 @@ def evaluate_release_run(evidence: dict[str, Any]) -> ReleaseRunState:
         state.blockers.append("requested-changes review is unresolved")
     if int(state.review_thread_summary.get("blocking_unresolved", 0)) > 0:
         state.blockers.append("blocking review conversation is unresolved")
+
     if state.blockers:
         state.phase = "release-review"
         state.classification = (
@@ -118,11 +172,18 @@ def evaluate_release_run(evidence: dict[str, Any]) -> ReleaseRunState:
             == ValidationFailureClassification.PR_REGRESSION.value
             else "BLOCKED"
         )
-        state.next_action = (
-            "repair-within-authorized-scope-and-revalidate"
-            if state.classification == "NEEDS_FIX"
-            else "resolve-or-reacquire-blocking-evidence"
-        )
+        if "branch is behind current main" in state.blockers:
+            state.next_action = "route-through-gh-life3-1187"
+        elif any(item.startswith("managed-label reconciliation") for item in state.blockers):
+            state.next_action = "reconcile-managed-labels-via-gh-life2-1038"
+        elif state.external_transition:
+            state.next_action = "reacquire-and-reclassify-external-transition"
+        else:
+            state.next_action = (
+                "repair-within-authorized-scope-and-revalidate"
+                if state.classification == "NEEDS_FIX"
+                else "resolve-or-reacquire-blocking-evidence"
+            )
         return state
 
     if state.pr_state == "merged":
@@ -148,11 +209,24 @@ def evaluate_release_run(evidence: dict[str, Any]) -> ReleaseRunState:
             state.next_action = "close-issue"
         return state
 
-    if not state.ready_for_review_authorized:
+    if state.pr_state == "closed":
+        state.phase = "external-transition"
+        state.classification = "BLOCKED"
+        state.external_transition = "closed"
+        state.blockers.append("pull request is closed")
+        state.next_action = "terminal-external-transition-closed"
+        return state
+
+    if state.pr_lifecycle_state == "draft":
         state.phase = "ready-for-review"
         state.classification = "BLOCKED"
-        state.next_action = "request-ready-for-review-authorization"
-    elif not state.merge_authorized:
+        if not state.ready_for_review_authorized:
+            state.next_action = "request-ready-for-review-authorization"
+        else:
+            state.next_action = "perform-ready-for-review-at-exact-head"
+        return state
+
+    if not state.merge_authorized:
         state.phase = "merge-authorization-pause"
         state.classification = "READY_FOR_MERGE_AUTHORIZATION"
         state.next_action = "request-merge-authorization"
@@ -163,6 +237,142 @@ def evaluate_release_run(evidence: dict[str, Any]) -> ReleaseRunState:
             f"merge-at-expected-head-with-{state.authorized_merge_method}"
         )
     return state
+
+
+def _detect_external_transition(state: ReleaseRunState, evidence: dict[str, Any]) -> bool:
+    checkpoint_state = state.checkpoint_pr_lifecycle_state
+    if checkpoint_state and checkpoint_state not in PR_LIFECYCLE_STATES:
+        state.blockers.append("checkpoint lifecycle state is unsupported")
+        return False
+
+    refresh = evidence.get("branch_refresh_result")
+    refresh_proves_head = _refresh_proves_head_transition(
+        refresh, state.checkpoint_head_sha, state.observed_head_sha
+    )
+    if (
+        state.checkpoint_head_sha
+        and state.checkpoint_head_sha != state.observed_head_sha
+        and not refresh_proves_head
+    ):
+        state.phase = "external-transition"
+        state.classification = "BLOCKED"
+        state.external_transition = "unexpected-head-movement"
+        state.blockers.append("unexpected head movement since checkpoint")
+        state.next_action = "reacquire-and-reclassify-external-transition"
+        return True
+
+    if (
+        checkpoint_state == "draft"
+        and state.pr_lifecycle_state == "ready"
+        and "ready-for-review" not in state.side_effects_performed
+    ):
+        state.phase = "external-transition"
+        state.classification = "BLOCKED"
+        state.external_transition = "draft-to-ready"
+        state.blockers.append("Draft to Ready occurred outside current governed operation")
+        state.next_action = "reacquire-and-reclassify-current-ready-state"
+        return True
+
+    if (
+        state.pr_state == "merged"
+        and checkpoint_state not in {None, "merged"}
+        and "merge" not in state.side_effects_performed
+    ):
+        state.phase = "external-transition"
+        state.classification = "BLOCKED"
+        state.external_transition = "merged"
+        state.blockers.append("pull request was merged outside current governed operation")
+        state.next_action = "terminal-external-transition-merged"
+        return True
+
+    if (
+        state.pr_state == "closed"
+        and checkpoint_state not in {None, "closed"}
+        and "close-pr" not in state.side_effects_performed
+    ):
+        state.phase = "external-transition"
+        state.classification = "BLOCKED"
+        state.external_transition = "closed"
+        state.blockers.append("pull request was closed outside current governed operation")
+        state.next_action = "terminal-external-transition-closed"
+        return True
+    return False
+
+
+def _validate_branch_freshness(state: ReleaseRunState, evidence: dict[str, Any]) -> None:
+    if not _is_sha40(state.current_main_sha):
+        state.blockers.append("current main SHA is missing or invalid")
+    if state.branch_state not in BRANCH_STATES:
+        state.blockers.append(f"unsupported branch state: {state.branch_state}")
+        return
+    if state.branch_state == "behind":
+        state.blockers.append("branch is behind current main")
+    elif state.branch_state == "conflicted":
+        state.blockers.append("branch is conflicted")
+    elif state.branch_state == "unknown":
+        state.blockers.append("branch freshness is unknown")
+
+
+def _validate_validation_head(state: ReleaseRunState) -> None:
+    if not _is_sha40(state.validation_head_sha):
+        state.blockers.append("exact-head validation identity is missing or invalid")
+    elif state.validation_head_sha != state.observed_head_sha:
+        state.blockers.append("authoritative validation is bound to a stale head")
+
+
+def _validate_lifecycle_receipt(
+    state: ReleaseRunState, lifecycle: dict[str, Any] | None
+) -> None:
+    if lifecycle is None:
+        state.blockers.append("managed-label reconciliation receipt is missing")
+        return
+    if lifecycle.get("reconciliation_status") != "converged":
+        state.blockers.append("managed-label reconciliation is not converged")
+    verified_head = lifecycle.get("verified_head_sha")
+    if verified_head != state.observed_head_sha:
+        state.blockers.append("managed-label reconciliation is bound to a stale head")
+    invocation = lifecycle.get("invocation_reason")
+    if invocation not in {
+        "validation-terminal",
+        "draft-ready-transition",
+        "branch-state-rechecked",
+        "final-state-readback",
+    }:
+        state.blockers.append("managed-label reconciliation invocation is not release-current")
+
+
+def _validate_refresh_receipt(state: ReleaseRunState, raw: Any) -> None:
+    if raw is None:
+        return
+    if not isinstance(raw, dict):
+        raise TypeError("branch_refresh_result must be object or null")
+    if raw.get("status") != "converged":
+        state.blockers.append("#1187 refresh result is not converged")
+        return
+    if raw.get("new_head_sha") != state.observed_head_sha:
+        state.blockers.append("#1187 refresh result does not match current head")
+    invalidated = raw.get("invalidated_head_evidence", [])
+    if not isinstance(invalidated, (list, tuple)):
+        state.blockers.append("#1187 invalidation receipt is malformed")
+    elif not REQUIRED_REFRESH_INVALIDATIONS.issubset(set(invalidated)):
+        state.blockers.append("#1187 refresh did not prove required head-evidence invalidation")
+    validation = raw.get("validation")
+    if not isinstance(validation, dict):
+        state.blockers.append("#1187 refreshed-head validation receipt is missing")
+    else:
+        if validation.get("head_sha") != state.observed_head_sha:
+            state.blockers.append("#1187 refreshed-head validation is stale")
+        if validation.get("status") != "green":
+            state.blockers.append("#1187 refreshed-head validation is not green")
+    lifecycle = raw.get("lifecycle_reconciliation")
+    if not isinstance(lifecycle, dict) or lifecycle.get("reconciliation_status") != "converged":
+        state.blockers.append("#1187 post-refresh lifecycle reconciliation is not converged")
+
+
+def _refresh_proves_head_transition(raw: Any, old_head: str | None, new_head: str) -> bool:
+    if not isinstance(raw, dict) or raw.get("status") != "converged":
+        return False
+    return raw.get("old_head_sha") == old_head and raw.get("new_head_sha") == new_head
 
 
 def _validate_authoritative_checks(state: ReleaseRunState) -> None:
@@ -231,6 +441,20 @@ def _classify_failed_validation(state: ReleaseRunState, raw: Any) -> None:
     except (KeyError, TypeError, ValueError):
         return
     state.validation_failure_classification = result.classification.value
+
+
+def _is_sha40(value: Any) -> bool:
+    return isinstance(value, str) and len(value) == 40 and all(
+        char in "0123456789abcdef" for char in value.lower()
+    )
+
+
+def _optional_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError("optional checkpoint values must be strings or null")
+    return value
 
 
 def _exact_bool(value: Any) -> bool:

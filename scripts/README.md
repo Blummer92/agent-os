@@ -42,13 +42,13 @@ Tests: `tests/test_build_chatgpt_checkout_package.py`.
 
 ## agent-os-release-run.py
 
-Offline deterministic release-run state evaluator for Issue #903. It consumes fresh GitHub evidence, reuses the completed #988 validation-failure classifier, requires a source-backed canonical validation set and authoritative exact-head aggregate, and returns the next governed lifecycle action without performing GitHub writes itself.
+Offline deterministic release-run state evaluator for Issue #903. It consumes freshly reacquired GitHub evidence, reuses #988 validation-failure classification plus #1038 lifecycle-reconciliation and #1187 refresh receipts, binds validation and lifecycle state to the exact current PR head, and returns the next governed lifecycle action without performing GitHub writes itself.
 
 ```bash
 python scripts/agent-os-release-run.py evidence.json
 ```
 
-Contract, CI infrastructure-vs-code failure handling, mobile/desktop usage, protected authorization pauses, and safety boundaries are documented in `scripts/agent-os-release-run.md`. Tests: `tests/test_agent_os_release_run.py`.
+The contract now fails closed on behind/conflicted/unknown freshness, stale validation or reconciliation, unexplained head movement, out-of-band Draft -> Ready, and external merge/closure. Managed lifecycle labels remain non-authoritative derived cache. Contract, mobile/desktop usage, protected authorization pauses, and safety boundaries are documented in `scripts/agent-os-release-run.md`. Tests: `tests/test_agent_os_release_run.py`.
 
 ## validate-all.sh
 
