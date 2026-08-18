@@ -391,6 +391,7 @@ def _overall_result(status: ProviderObservationStatus) -> tuple[OverallResult, P
         ProviderObservationStatus.FAILURE: (OverallResult.FAILURE, ProviderReason.PROVIDER_FAILURE),
         ProviderObservationStatus.TIMEOUT: (OverallResult.TIMEOUT, ProviderReason.PROVIDER_TIMEOUT),
         ProviderObservationStatus.CANCELLED: (OverallResult.CANCELLED, ProviderReason.PROVIDER_CANCELLED),
+        ProviderObservationStatus.EXPIRED: (OverallResult.EXPIRED, ProviderReason.PROVIDER_EXPIRED),
         ProviderObservationStatus.INTERNAL_ERROR: (OverallResult.INTERNAL_ERROR, ProviderReason.PROVIDER_INTERNAL_ERROR),
     }
     return mapping[status]

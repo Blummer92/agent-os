@@ -619,6 +619,172 @@ def test_cancelled_observation_is_relayed_without_adapter_initiated_cancellation
     assert result.side_effect_state is ProviderSideEffectState.CONFIRMED
 
 
+# 14b. expired observation is terminal and distinct.
+def test_expired_observation_is_accepted_and_terminal():
+    invocation = _invocation()
+    client = FakeCloudBuildClient(
+        submit_result=CloudBuildSubmissionOutcome(kind="confirmed", build_id="build-1", observed_at=OBSERVED_AT),
+        observe_results=[
+            CloudBuildObservationOutcome(
+                kind="expired",
+                tested_sha=SHA,
+                observed_at=OBSERVED_AT_LATER,
+                source_complete=True,
+            )
+        ],
+    )
+    adapter = _adapter(client, max_poll_attempts=5)
+    result = adapter.run(invocation)
+    assert result.status is ProviderStatus.TERMINAL
+    assert result.side_effect_state is ProviderSideEffectState.CONFIRMED
+    assert result.build_id == "build-1"
+    assert result.tested_sha == SHA
+    assert adapter.poll_attempts == 1
+    assert len(client.observe_calls) == 1
+
+
+def test_expired_preserves_exact_build_id_and_sha():
+    invocation = _invocation()
+    client = FakeCloudBuildClient(
+        submit_result=CloudBuildSubmissionOutcome(kind="confirmed", build_id="build-expired-42", observed_at=OBSERVED_AT),
+        observe_results=[
+            CloudBuildObservationOutcome(
+                kind="expired",
+                tested_sha=SHA,
+                observed_at=OBSERVED_AT_LATER,
+                source_complete=True,
+            )
+        ],
+    )
+    result = _adapter(client).run(invocation)
+    assert result.build_id == "build-expired-42"
+    assert result.tested_sha == SHA
+    assert isinstance(result.build_id, str)
+    assert isinstance(result.tested_sha, str)
+
+
+def test_expired_produces_terminal_expired_result():
+    invocation = _invocation()
+    client = FakeCloudBuildClient(
+        submit_result=CloudBuildSubmissionOutcome(kind="confirmed", build_id="build-1", observed_at=OBSERVED_AT),
+        observe_results=[
+            CloudBuildObservationOutcome(
+                kind="expired",
+                tested_sha=SHA,
+                observed_at=OBSERVED_AT_LATER,
+                source_complete=True,
+            )
+        ],
+    )
+    result = _adapter(client).run(invocation)
+    evidence = result.normalized_cloud_build_evidence
+    assert evidence.overall_result is OverallResult.EXPIRED
+    assert evidence.terminal is True
+
+
+def test_expired_leaves_failed_step_and_exit_code_none():
+    invocation = _invocation()
+    client = FakeCloudBuildClient(
+        submit_result=CloudBuildSubmissionOutcome(kind="confirmed", build_id="build-1", observed_at=OBSERVED_AT),
+        observe_results=[
+            CloudBuildObservationOutcome(
+                kind="expired",
+                tested_sha=SHA,
+                observed_at=OBSERVED_AT_LATER,
+                source_complete=True,
+            )
+        ],
+    )
+    result = _adapter(client).run(invocation)
+    evidence = result.normalized_cloud_build_evidence
+    assert evidence.failed_step is None
+    assert evidence.exit_code is None
+
+
+def test_expired_stops_polling_immediately():
+    invocation = _invocation()
+    client = FakeCloudBuildClient(
+        submit_result=CloudBuildSubmissionOutcome(kind="confirmed", build_id="build-1", observed_at=OBSERVED_AT),
+        observe_results=[
+            CloudBuildObservationOutcome(kind="expired", tested_sha=SHA, observed_at=OBSERVED_AT_LATER, source_complete=True),
+            CloudBuildObservationOutcome(kind="working", observed_at=OBSERVED_AT_LATER),
+        ],
+    )
+    adapter = _adapter(client, max_poll_attempts=10)
+    result = adapter.run(invocation)
+    assert adapter.poll_attempts == 1
+    assert len(client.observe_calls) == 1
+    assert result.status is ProviderStatus.TERMINAL
+
+
+def test_timeout_cancelled_and_expired_are_distinct():
+    scenarios = []
+
+    timeout_invocation = _invocation()
+    timeout_client = FakeCloudBuildClient(
+        submit_result=CloudBuildSubmissionOutcome(kind="confirmed", build_id="build-timeout", observed_at=OBSERVED_AT),
+        observe_results=[
+            CloudBuildObservationOutcome(
+                kind="timeout",
+                tested_sha=SHA,
+                observed_at=OBSERVED_AT_LATER,
+                source_complete=True,
+            )
+        ],
+    )
+    scenarios.append(("timeout", timeout_invocation, timeout_client, OverallResult.TIMEOUT))
+
+    cancelled_invocation = _invocation()
+    cancelled_client = FakeCloudBuildClient(
+        submit_result=CloudBuildSubmissionOutcome(kind="confirmed", build_id="build-cancelled", observed_at=OBSERVED_AT),
+        observe_results=[
+            CloudBuildObservationOutcome(
+                kind="cancelled",
+                tested_sha=SHA,
+                observed_at=OBSERVED_AT_LATER,
+                source_complete=True,
+            )
+        ],
+    )
+    scenarios.append(("cancelled", cancelled_invocation, cancelled_client, OverallResult.CANCELLED))
+
+    expired_invocation = _invocation()
+    expired_client = FakeCloudBuildClient(
+        submit_result=CloudBuildSubmissionOutcome(kind="confirmed", build_id="build-expired", observed_at=OBSERVED_AT),
+        observe_results=[
+            CloudBuildObservationOutcome(
+                kind="expired",
+                tested_sha=SHA,
+                observed_at=OBSERVED_AT_LATER,
+                source_complete=True,
+            )
+        ],
+    )
+    scenarios.append(("expired", expired_invocation, expired_client, OverallResult.EXPIRED))
+
+    for kind, invocation, client, expected_result in scenarios:
+        result = _adapter(client).run(invocation)
+        assert result.status is ProviderStatus.TERMINAL
+        assert result.side_effect_state is ProviderSideEffectState.CONFIRMED
+        assert result.normalized_cloud_build_evidence.overall_result is expected_result
+        assert result.normalized_cloud_build_evidence.terminal is True
+
+
+def test_static_and_runtime_observation_vocabularies_align():
+    from scripts.agent_os_cloud_build_provider.adapter import (
+        ObservationOutcomeKind,
+        _OBSERVATION_OUTCOME_KINDS,
+    )
+    from scripts.agent_os_cloud_build_provider.models import ProviderObservationStatus
+
+    model_values = {status.value for status in ProviderObservationStatus}
+    runtime_values = _OBSERVATION_OUTCOME_KINDS
+
+    assert model_values == runtime_values
+    assert "expired" in model_values
+    assert "expired" in runtime_values
+
+
 # 15. duplicate adapter operation does not submit twice.
 def test_duplicate_run_does_not_resubmit():
     invocation = _invocation()

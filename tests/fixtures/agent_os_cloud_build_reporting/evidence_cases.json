@@ -53,6 +53,19 @@
     }
   },
   {
+    "name": "expired",
+    "kwargs": {
+      "build_id": "build-expired-1",
+      "tested_sha": "4444444444444444444444444444444444444444",
+      "repository": "Blummer92/agent-os",
+      "overall_result": "expired",
+      "terminal": true,
+      "source_complete": true,
+      "failed_step": null,
+      "exit_code": null
+    }
+  },
+  {
     "name": "internal_error",
     "kwargs": {
       "build_id": "build-internal-error-1",

@@ -732,6 +732,112 @@ def test_hostile_unbounded_iterable_does_not_hang_or_exhaust() -> None:
     assert result.reason_codes == ("resolution.too-many-candidates",)
 
 
+def test_expired_terminal_result_requires_terminal_flag_true() -> None:
+    evidence = normalize_cloud_build_evidence(
+        build_id="build-expired-1",
+        tested_sha=SHA_A,
+        repository=REPO,
+        overall_result="expired",
+        terminal=True,
+        source_complete=True,
+        failed_step=None,
+        exit_code=None,
+    )
+    assert evidence.overall_result == OverallResult.EXPIRED
+    assert evidence.terminal is True
+
+
+def test_expired_terminal_result_requires_terminal_flag_false_rejects() -> None:
+    with pytest.raises(CloudBuildEvidenceError):
+        normalize_cloud_build_evidence(
+            build_id="build-expired-1",
+            tested_sha=SHA_A,
+            repository=REPO,
+            overall_result="expired",
+            terminal=False,
+            source_complete=True,
+        )
+
+
+def test_expired_with_failed_step_rejected() -> None:
+    with pytest.raises(CloudBuildEvidenceError):
+        normalize_cloud_build_evidence(
+            build_id="build-expired-1",
+            tested_sha=SHA_A,
+            repository=REPO,
+            overall_result="expired",
+            terminal=True,
+            source_complete=True,
+            failed_step="none",
+            exit_code=None,
+        )
+
+
+def test_expired_with_exit_code_zero_rejected() -> None:
+    with pytest.raises(CloudBuildEvidenceError):
+        normalize_cloud_build_evidence(
+            build_id="build-expired-1",
+            tested_sha=SHA_A,
+            repository=REPO,
+            overall_result="expired",
+            terminal=True,
+            source_complete=True,
+            failed_step=None,
+            exit_code=0,
+        )
+
+
+def test_expired_preserves_deterministic_semantic_identity() -> None:
+    evidence = normalize_cloud_build_evidence(
+        build_id="build-expired-1",
+        tested_sha=SHA_A,
+        repository=REPO,
+        overall_result="expired",
+        terminal=True,
+        source_complete=True,
+    )
+    identity_1 = evidence_semantic_identity(evidence)
+    evidence_2 = normalize_cloud_build_evidence(
+        build_id="build-expired-1",
+        tested_sha=SHA_A,
+        repository=REPO,
+        overall_result="expired",
+        terminal=True,
+        source_complete=True,
+    )
+    identity_2 = evidence_semantic_identity(evidence_2)
+    assert identity_1 == identity_2
+
+
+def test_expired_rendering_preserves_literal_overall_result() -> None:
+    evidence = normalize_cloud_build_evidence(
+        build_id="build-expired-1",
+        tested_sha=SHA_A,
+        repository=REPO,
+        overall_result="expired",
+        terminal=True,
+        source_complete=True,
+    )
+    result = resolve_pull_request(evidence, candidates=[_candidate()])
+    assert result.status == ResolutionStatus.RESOLVED
+    projection = render_comment_projection(evidence, result)
+    assert "expired" in projection.rendered_body
+    assert "result: expired" in projection.rendered_body
+
+
+def test_expired_authority_and_side_effects_remain_false() -> None:
+    evidence = normalize_cloud_build_evidence(
+        build_id="build-expired-1",
+        tested_sha=SHA_A,
+        repository=REPO,
+        overall_result="expired",
+        terminal=True,
+        source_complete=True,
+    )
+    assert evidence.execution_authorized is False
+    assert evidence.side_effects_performed is False
+
+
 def test_candidate_input_list_is_not_mutated() -> None:
     evidence = _success_evidence()
     candidates = [_candidate(), _candidate(pull_request_number=2, head_sha=SHA_B, state=PullRequestState.CLOSED)]

@@ -412,6 +412,7 @@ def test_non_launch_dispatch_creates_no_invocation():
         (ProviderObservationStatus.FAILURE, ProviderStatus.TERMINAL, ProviderReason.PROVIDER_FAILURE),
         (ProviderObservationStatus.TIMEOUT, ProviderStatus.TERMINAL, ProviderReason.PROVIDER_TIMEOUT),
         (ProviderObservationStatus.CANCELLED, ProviderStatus.TERMINAL, ProviderReason.PROVIDER_CANCELLED),
+        (ProviderObservationStatus.EXPIRED, ProviderStatus.TERMINAL, ProviderReason.PROVIDER_EXPIRED),
         (ProviderObservationStatus.INTERNAL_ERROR, ProviderStatus.TERMINAL, ProviderReason.PROVIDER_INTERNAL_ERROR),
     ],
 )
@@ -670,6 +671,91 @@ def test_observation_rejects_impossible_or_malformed_timestamps_without_reading_
             source_complete=True,
             side_effect_state=ProviderSideEffectState.CONFIRMED,
         )
+
+
+def test_expired_is_terminal_and_preserves_provider_expired_reason():
+    invocation = _accepted().invocation
+    observation = CloudBuildProviderObservation(
+        invocation_id=invocation.invocation_id,
+        build_id="build:804",
+        repository=invocation.repository,
+        tested_sha=invocation.resolved_sha,
+        terminal_status=ProviderObservationStatus.EXPIRED,
+        failed_step=None,
+        exit_code=None,
+        observed_at="2026-07-30T20:10:00Z",
+        source_complete=True,
+        side_effect_state=ProviderSideEffectState.CONFIRMED,
+    )
+    result = project_cloud_build_provider_result(invocation, observation)
+    assert result.status is ProviderStatus.TERMINAL
+    assert ProviderReason.PROVIDER_EXPIRED in result.reason_codes
+    assert result.normalized_cloud_build_evidence is not None
+    assert result.merge_authorized is False
+
+
+def test_expired_result_preserves_exact_identities():
+    invocation = _accepted().invocation
+    observation = CloudBuildProviderObservation(
+        invocation_id=invocation.invocation_id,
+        build_id="build:804",
+        repository=invocation.repository,
+        tested_sha=invocation.resolved_sha,
+        terminal_status=ProviderObservationStatus.EXPIRED,
+        failed_step=None,
+        exit_code=None,
+        observed_at="2026-07-30T20:10:00Z",
+        source_complete=True,
+        side_effect_state=ProviderSideEffectState.CONFIRMED,
+    )
+    result = project_cloud_build_provider_result(invocation, observation)
+    assert result.build_id == "build:804"
+    assert result.tested_sha == invocation.resolved_sha
+    assert result.invocation_id == invocation.invocation_id
+    assert result.normalized_cloud_build_evidence.build_id == "build:804"
+    assert result.normalized_cloud_build_evidence.tested_sha == invocation.resolved_sha
+    assert result.normalized_cloud_build_evidence.invocation_id == invocation.invocation_id
+
+
+def test_expired_carries_no_failed_step_or_exit_code():
+    invocation = _accepted().invocation
+    observation = CloudBuildProviderObservation(
+        invocation_id=invocation.invocation_id,
+        build_id="build:804",
+        repository=invocation.repository,
+        tested_sha=invocation.resolved_sha,
+        terminal_status=ProviderObservationStatus.EXPIRED,
+        failed_step=None,
+        exit_code=None,
+        observed_at="2026-07-30T20:10:00Z",
+        source_complete=True,
+        side_effect_state=ProviderSideEffectState.CONFIRMED,
+    )
+    result = project_cloud_build_provider_result(invocation, observation)
+    assert result.normalized_cloud_build_evidence.failed_step is None
+    assert result.normalized_cloud_build_evidence.exit_code is None
+
+
+def test_unknown_side_effect_dominates_expired_status():
+    invocation = _accepted().invocation
+    observation = CloudBuildProviderObservation(
+        invocation_id=invocation.invocation_id,
+        build_id="build:804",
+        repository=invocation.repository,
+        tested_sha=invocation.resolved_sha,
+        terminal_status=ProviderObservationStatus.EXPIRED,
+        failed_step=None,
+        exit_code=None,
+        observed_at="2026-07-30T20:10:00Z",
+        source_complete=True,
+        side_effect_state=ProviderSideEffectState.UNKNOWN,
+    )
+    result = project_cloud_build_provider_result(invocation, observation)
+    assert result.status is ProviderStatus.UNKNOWN
+    assert result.side_effect_state is ProviderSideEffectState.UNKNOWN
+    assert result.normalized_cloud_build_evidence is None
+    assert result.reason_codes == (ProviderReason.OBSERVATION_UNKNOWN,)
+    assert result.merge_authorized is False
 
 
 def test_public_surface_has_no_shell_sdk_or_io_capability():
