@@ -232,6 +232,10 @@ class CloudBuildProviderInvocation:
         if not all(type(item) is ProviderCommandEntry for item in self.fixed_command_entries):
             raise TypeError("fixed_command_entries must contain exact ProviderCommandEntry values")
         _exact_tuple("fixed_argv_identities", self.fixed_argv_identities)
+        # Recomputed, never trusted as supplied: a caller cannot pair a real
+        # command entry with a forged or stale argv identity, because the
+        # only accepted value is the one independently derived from that
+        # exact entry via ``argv_identity``.
         recomputed_argv_identities = tuple(
             argv_identity(entry) for entry in self.fixed_command_entries
         )
@@ -326,6 +330,8 @@ class CloudBuildProviderResult:
         if type(self.side_effect_state) is not ProviderSideEffectState:
             raise TypeError("side_effect_state must be ProviderSideEffectState")
 
+        # Status coherence: a caller cannot directly construct a result whose
+        # status contradicts its invocation, evidence, or side-effect state.
         if self.execution_authorized != (self.invocation is not None):
             raise ValueError(
                 "execution_authorized must agree with whether an invocation is carried"
@@ -369,210 +375,149 @@ class CloudBuildProviderResult:
         object.__setattr__(self, "result_id", computed)
 
 
-def argv_identity(entry: ProviderCommandEntry) -> str:
-    payload = _canonical_json(
-        {"operation": entry.operation, "argv": list(entry.argv)}
-    )
-    return "argv:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
-
-
-def cloud_build_provider_configuration_fingerprint(
-    configuration: CloudBuildProviderConfiguration,
-) -> str:
-    payload = {
-        "schema_version": configuration.schema_version,
-        "project_id": configuration.project_id,
-        "location": configuration.location,
-        "runtime_service_account_identity": configuration.runtime_service_account_identity,
-        "build_service_account_identity": configuration.build_service_account_identity,
-        "build_definition_identity": configuration.build_definition_identity,
-        "builder_image_identity": configuration.builder_image_identity,
-        "validator_dependency_identity": configuration.validator_dependency_identity,
-        "evidence_destination_identity": configuration.evidence_destination_identity,
-        "max_build_timeout_seconds": configuration.max_build_timeout_seconds,
-        "max_output_bytes": configuration.max_output_bytes,
-        "max_diagnostic_bytes": configuration.max_diagnostic_bytes,
-    }
-    return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
-
-
-def cloud_build_provider_invocation_id(invocation: CloudBuildProviderInvocation) -> str:
-    payload = {
-        "schema_version": invocation.schema_version,
-        "request_id": invocation.request_id,
-        "request_revision": invocation.request_revision,
-        "request_fingerprint": invocation.request_fingerprint,
-        "issue_or_handoff_identity": invocation.issue_or_handoff_identity,
-        "command_plan_id": invocation.command_plan_id,
-        "validation_plan_id": invocation.validation_plan_id,
-        "dispatch_decision_id": invocation.dispatch_decision_id,
-        "dispatch_identity": invocation.dispatch_identity,
-        "authorization_id": invocation.authorization_id,
-        "repository": invocation.repository,
-        "requested_ref": invocation.requested_ref,
-        "expected_sha": invocation.expected_sha,
-        "resolved_sha": invocation.resolved_sha,
-        "profile": invocation.profile,
-        "selector_version": invocation.selector_version,
-        "command_set_digest": invocation.command_set_digest,
-        "fixed_command_entries": [
-            {"operation": item.operation, "argv": list(item.argv)}
-            for item in invocation.fixed_command_entries
-        ],
-        "fixed_argv_identities": list(invocation.fixed_argv_identities),
-        "provider_configuration_fingerprint": invocation.provider_configuration_fingerprint,
-    }
-    return "cloud-build-invocation:" + hashlib.sha256(
-        _canonical_json(payload).encode("utf-8")
-    ).hexdigest()
-
-
-def cloud_build_provider_result_id(result: CloudBuildProviderResult) -> str:
-    payload = serialize_cloud_build_provider_result(result, include_result_id=False)
-    return "cloud-build-result:" + hashlib.sha256(
-        _canonical_json(payload).encode("utf-8")
-    ).hexdigest()
-
-
-def serialize_cloud_build_provider_configuration(
-    configuration: CloudBuildProviderConfiguration,
-) -> dict[str, object]:
-    return {
-        "schema_version": configuration.schema_version,
-        "project_id": configuration.project_id,
-        "location": configuration.location,
-        "runtime_service_account_identity": configuration.runtime_service_account_identity,
-        "build_service_account_identity": configuration.build_service_account_identity,
-        "build_definition_identity": configuration.build_definition_identity,
-        "builder_image_identity": configuration.builder_image_identity,
-        "validator_dependency_identity": configuration.validator_dependency_identity,
-        "evidence_destination_identity": configuration.evidence_destination_identity,
-        "max_build_timeout_seconds": configuration.max_build_timeout_seconds,
-        "max_output_bytes": configuration.max_output_bytes,
-        "max_diagnostic_bytes": configuration.max_diagnostic_bytes,
-        "configuration_fingerprint": configuration.configuration_fingerprint,
-    }
-
-
-def serialize_cloud_build_provider_invocation(
-    invocation: CloudBuildProviderInvocation,
-) -> dict[str, object]:
-    return {
-        "schema_version": invocation.schema_version,
-        "request_id": invocation.request_id,
-        "request_revision": invocation.request_revision,
-        "request_fingerprint": invocation.request_fingerprint,
-        "issue_or_handoff_identity": invocation.issue_or_handoff_identity,
-        "command_plan_id": invocation.command_plan_id,
-        "validation_plan_id": invocation.validation_plan_id,
-        "dispatch_decision_id": invocation.dispatch_decision_id,
-        "dispatch_identity": invocation.dispatch_identity,
-        "authorization_id": invocation.authorization_id,
-        "repository": invocation.repository,
-        "requested_ref": invocation.requested_ref,
-        "expected_sha": invocation.expected_sha,
-        "resolved_sha": invocation.resolved_sha,
-        "profile": invocation.profile,
-        "selector_version": invocation.selector_version,
-        "command_set_digest": invocation.command_set_digest,
-        "fixed_command_entries": [
-            {"operation": item.operation, "argv": list(item.argv)}
-            for item in invocation.fixed_command_entries
-        ],
-        "fixed_argv_identities": list(invocation.fixed_argv_identities),
-        "provider_configuration_fingerprint": invocation.provider_configuration_fingerprint,
-        "invocation_id": invocation.invocation_id,
-        "execution_authorized": invocation.execution_authorized,
-        "merge_authorized": invocation.merge_authorized,
-        "side_effects_performed": invocation.side_effects_performed,
-    }
-
-
-def serialize_cloud_build_provider_result(
-    result: CloudBuildProviderResult,
-    *,
-    include_result_id: bool = True,
-) -> dict[str, object]:
-    payload: dict[str, object] = {
-        "schema_version": result.schema_version,
-        "status": result.status.value,
-        "invocation": (
-            serialize_cloud_build_provider_invocation(result.invocation)
-            if result.invocation is not None
-            else None
-        ),
-        "invocation_id": result.invocation_id,
-        "build_id": result.build_id,
-        "tested_sha": result.tested_sha,
-        "reason_codes": [item.value for item in result.reason_codes],
-        "normalized_cloud_build_evidence": (
-            _serialize_evidence(result.normalized_cloud_build_evidence)
-            if result.normalized_cloud_build_evidence is not None
-            else None
-        ),
-        "execution_authorized": result.execution_authorized,
-        "merge_authorized": result.merge_authorized,
-        "side_effect_state": result.side_effect_state.value,
-    }
-    if include_result_id:
-        payload["result_id"] = result.result_id
+def serialize_cloud_build_provider_configuration(value: CloudBuildProviderConfiguration) -> dict[str, object]:
+    if type(value) is not CloudBuildProviderConfiguration:
+        raise TypeError("configuration must be an exact CloudBuildProviderConfiguration")
+    payload = _configuration_payload(value)
+    payload["configuration_fingerprint"] = value.configuration_fingerprint
+    _bounded_serialized(payload)
     return payload
 
 
-def _serialize_evidence(evidence: CloudBuildResultEvidence) -> dict[str, object]:
+def cloud_build_provider_configuration_fingerprint(value: CloudBuildProviderConfiguration) -> str:
+    return _digest("agent-os-cloud-build-provider-configuration:v1", _configuration_payload(value))
+
+
+def serialize_cloud_build_provider_invocation(value: CloudBuildProviderInvocation) -> dict[str, object]:
+    if type(value) is not CloudBuildProviderInvocation:
+        raise TypeError("invocation must be an exact CloudBuildProviderInvocation")
+    payload = _invocation_payload(value)
+    payload["invocation_id"] = value.invocation_id
+    _bounded_serialized(payload)
+    return payload
+
+
+def cloud_build_provider_invocation_id(value: CloudBuildProviderInvocation) -> str:
+    return "cloud-build-provider-invocation:" + _digest(
+        "agent-os-cloud-build-provider-invocation:v1", _invocation_payload(value)
+    )
+
+
+def serialize_cloud_build_provider_result(value: CloudBuildProviderResult) -> dict[str, object]:
+    if type(value) is not CloudBuildProviderResult:
+        raise TypeError("result must be an exact CloudBuildProviderResult")
+    payload = _result_payload(value)
+    payload["result_id"] = value.result_id
+    _bounded_serialized(payload)
+    return payload
+
+
+def cloud_build_provider_result_id(value: CloudBuildProviderResult) -> str:
+    return "cloud-build-provider-result:" + _digest(
+        "agent-os-cloud-build-provider-result:v1", _result_payload(value)
+    )
+
+
+def argv_identity(entry: ProviderCommandEntry) -> str:
+    if type(entry) is not ProviderCommandEntry:
+        raise TypeError("entry must be an exact ProviderCommandEntry")
+    return _digest(
+        "agent-os-cloud-build-provider-argv:v1",
+        {"operation": entry.operation, "argv": list(entry.argv)},
+    )
+
+
+def _configuration_payload(value: CloudBuildProviderConfiguration) -> dict[str, object]:
     return {
-        "build_id": evidence.build_id,
-        "tested_sha": evidence.tested_sha,
-        "repository": evidence.repository,
-        "trigger_id": evidence.trigger_id,
-        "invocation_id": evidence.invocation_id,
-        "overall_result": evidence.overall_result.value,
-        "failed_step": evidence.failed_step,
-        "exit_code": evidence.exit_code,
-        "observed_at": evidence.observed_at,
-        "terminal": evidence.terminal,
-        "source_complete": evidence.source_complete,
-        "execution_authorized": evidence.execution_authorized,
-        "side_effects_performed": evidence.side_effects_performed,
+        "schema_version": value.schema_version,
+        "project_id": value.project_id,
+        "location": value.location,
+        "runtime_service_account_identity": value.runtime_service_account_identity,
+        "build_service_account_identity": value.build_service_account_identity,
+        "build_definition_identity": value.build_definition_identity,
+        "builder_image_identity": value.builder_image_identity,
+        "validator_dependency_identity": value.validator_dependency_identity,
+        "evidence_destination_identity": value.evidence_destination_identity,
+        "max_build_timeout_seconds": value.max_build_timeout_seconds,
+        "max_output_bytes": value.max_output_bytes,
+        "max_diagnostic_bytes": value.max_diagnostic_bytes,
     }
 
 
-def _bounded_text(name: str, value: object) -> None:
-    if type(value) is not str or not value or len(value) > MAX_PROVIDER_STRING_LENGTH:
-        raise ValueError(f"{name} must be a bounded non-empty string")
-    if _CONTROL_RE.search(value):
-        raise ValueError(f"{name} contains a control character")
-    if _SECRET_RE.search(value):
-        raise ValueError(f"{name} contains secret-like material")
+def _invocation_payload(value: CloudBuildProviderInvocation) -> dict[str, object]:
+    return {
+        "schema_version": value.schema_version,
+        "request_id": value.request_id,
+        "request_revision": value.request_revision,
+        "request_fingerprint": value.request_fingerprint,
+        "issue_or_handoff_identity": value.issue_or_handoff_identity,
+        "command_plan_id": value.command_plan_id,
+        "validation_plan_id": value.validation_plan_id,
+        "dispatch_decision_id": value.dispatch_decision_id,
+        "dispatch_identity": value.dispatch_identity,
+        "authorization_id": value.authorization_id,
+        "repository": value.repository,
+        "requested_ref": value.requested_ref,
+        "expected_sha": value.expected_sha,
+        "resolved_sha": value.resolved_sha,
+        "profile": value.profile,
+        "selector_version": value.selector_version,
+        "command_set_digest": value.command_set_digest,
+        "fixed_command_entries": [
+            {"operation": item.operation, "argv": list(item.argv)}
+            for item in value.fixed_command_entries
+        ],
+        "fixed_argv_identities": list(value.fixed_argv_identities),
+        "provider_configuration_fingerprint": value.provider_configuration_fingerprint,
+        "execution_authorized": True,
+        "merge_authorized": False,
+        "side_effects_performed": False,
+    }
 
 
-def _bounded_identity(name: str, value: object) -> None:
-    _bounded_text(name, value)
-    assert type(value) is str
-    if not _IDENTIFIER_RE.fullmatch(value):
-        raise ValueError(f"{name} must use the bounded identity alphabet")
+def _result_payload(value: CloudBuildProviderResult) -> dict[str, object]:
+    evidence = value.normalized_cloud_build_evidence
+    normalized = None
+    if evidence is not None:
+        normalized = {
+            "build_id": evidence.build_id,
+            "tested_sha": evidence.tested_sha,
+            "repository": evidence.repository,
+            "trigger_id": evidence.trigger_id,
+            "invocation_id": evidence.invocation_id,
+            "overall_result": evidence.overall_result.value,
+            "failed_step": evidence.failed_step,
+            "exit_code": evidence.exit_code,
+            "observed_at": evidence.observed_at,
+            "terminal": evidence.terminal,
+            "source_complete": evidence.source_complete,
+            "execution_authorized": False,
+            "side_effects_performed": False,
+        }
+    return {
+        "schema_version": value.schema_version,
+        "status": value.status.value,
+        "invocation": serialize_cloud_build_provider_invocation(value.invocation) if value.invocation else None,
+        "invocation_id": value.invocation_id,
+        "build_id": value.build_id,
+        "tested_sha": value.tested_sha,
+        "reason_codes": [item.value for item in value.reason_codes],
+        "normalized_cloud_build_evidence": normalized,
+        "execution_authorized": value.execution_authorized,
+        "merge_authorized": False,
+        "side_effect_state": value.side_effect_state.value,
+    }
 
 
-def _repository(value: object) -> None:
-    _bounded_text("repository", value)
-    assert type(value) is str
-    if not _REPOSITORY_RE.fullmatch(value):
-        raise ValueError("repository must be owner/name")
+def _digest(domain: str, payload: dict[str, object]) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    return hashlib.sha256(domain.encode("ascii") + b"\0" + encoded).hexdigest()
 
 
-def _sha40(name: str, value: object) -> None:
-    if type(value) is not str or not _SHA40_RE.fullmatch(value):
-        raise ValueError(f"{name} must be a full lowercase SHA")
-
-
-def _sha256(name: str, value: object) -> None:
-    if type(value) is not str or not _SHA256_RE.fullmatch(value):
-        raise ValueError(f"{name} must be a lowercase sha256 hex digest")
-
-
-def _positive_int(name: str, value: object) -> None:
-    if type(value) is not int or value <= 0:
-        raise TypeError(f"{name} must be an exact positive integer")
+def _bounded_serialized(payload: dict[str, object]) -> None:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    if len(encoded) > MAX_PROVIDER_SERIALIZED_BYTES:
+        raise ValueError("provider value exceeds serialized byte ceiling")
 
 
 def _exact_tuple(name: str, value: object) -> None:
@@ -580,21 +525,57 @@ def _exact_tuple(name: str, value: object) -> None:
         raise TypeError(f"{name} must be an exact tuple")
 
 
-def _canonical_utc(name: str, value: object) -> None:
+def _positive_int(name: str, value: object) -> None:
+    if type(value) is not int or value <= 0:
+        raise TypeError(f"{name} must be a positive exact integer")
+
+
+def _bounded_text(name: str, value: object) -> None:
+    if type(value) is not str:
+        raise TypeError(f"{name} must be an exact string")
+    if not value or len(value) > MAX_PROVIDER_STRING_LENGTH:
+        raise ValueError(f"{name} must be non-empty and bounded")
+    if _CONTROL_RE.search(value):
+        raise ValueError(f"{name} contains a control character")
+    if _SECRET_RE.search(value):
+        raise ValueError(f"{name} contains a secret-like value")
+
+
+def _bounded_identity(name: str, value: object) -> None:
     _bounded_text(name, value)
-    assert type(value) is str
-    if not _TIMESTAMP_RE.fullmatch(value):
-        raise ValueError(f"{name} must use canonical UTC format")
+    if not _IDENTIFIER_RE.fullmatch(value):
+        raise ValueError(f"{name} must use bounded identity syntax")
+
+
+def _repository(value: object) -> None:
+    _bounded_text("repository", value)
+    if not _REPOSITORY_RE.fullmatch(value):
+        raise ValueError("repository must use owner/name syntax")
+
+
+def _sha40(name: str, value: object) -> None:
+    if type(value) is not str or not _SHA40_RE.fullmatch(value):
+        raise ValueError(f"{name} must be a lowercase 40-character SHA")
+
+
+def _sha256(name: str, value: object) -> None:
+    if type(value) is not str or not _SHA256_RE.fullmatch(value):
+        raise ValueError(f"{name} must be a lowercase SHA-256 digest")
+
+
+def _canonical_utc(name: str, value: object) -> None:
+    """Strictly parse-and-round-trip one canonical UTC timestamp.
+
+    A regex alone accepts calendar-impossible values like ``2026-02-30`` or
+    clock-impossible values like ``25:61:00``; ``strptime`` rejects both, and
+    the round trip back through ``strftime`` rejects any input that is not
+    already in its own canonical form. Never reads the host clock.
+    """
+    if type(value) is not str or not _TIMESTAMP_RE.fullmatch(value):
+        raise ValueError(f"{name} must be canonical UTC seconds")
     try:
         parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
-    except ValueError as exc:
-        raise ValueError(f"{name} must be a valid canonical UTC timestamp") from exc
+    except ValueError:
+        raise ValueError(f"{name} must be canonical UTC seconds") from None
     if parsed.strftime("%Y-%m-%dT%H:%M:%SZ") != value:
-        raise ValueError(f"{name} must use canonical UTC format")
-
-
-def _canonical_json(value: object) -> str:
-    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    if len(payload.encode("utf-8")) > MAX_PROVIDER_SERIALIZED_BYTES:
-        raise ValueError("serialized provider payload exceeds size limit")
-    return payload
+        raise ValueError(f"{name} must be canonical UTC seconds")
