@@ -220,3 +220,40 @@ class PullRequestResolutionResult:
         object.__setattr__(self, "reason_codes", tuple(sorted(dict.fromkeys(codes))))
         if not self.reason_codes:
             raise CloudBuildEvidenceError("reason_codes must not be empty")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CloudBuildCommentProjection:
+    stable_marker: str
+    build_id: str
+    tested_sha: str
+    overall_result: str
+    failed_step: str
+    exit_code: str
+    reporting_status: str
+    manual_review_reasons: tuple[str, ...]
+    rendered_body: str
+    side_effects_performed: Literal[False] = field(default=False, init=False)
+    execution_authorized: Literal[False] = field(default=False, init=False)
+
+    def __post_init__(self) -> None:
+        _check_bounded_str("stable_marker", self.stable_marker)
+        _check_bounded_str("build_id", self.build_id)
+        if not isinstance(self.tested_sha, str) or not _SHA40_RE.fullmatch(self.tested_sha):
+            raise CloudBuildEvidenceError("tested_sha must be a full 40-character lowercase SHA")
+        _check_bounded_str("overall_result", self.overall_result)
+        _check_bounded_str("failed_step", self.failed_step)
+        _check_bounded_str("exit_code", self.exit_code)
+        _check_bounded_str("reporting_status", self.reporting_status)
+
+        reasons = tuple(self.manual_review_reasons)
+        if len(reasons) > MAX_REASON_CODES:
+            raise CloudBuildEvidenceError("too many manual_review_reasons")
+        for reason in reasons:
+            _check_bounded_str("manual_review_reason", reason)
+        object.__setattr__(self, "manual_review_reasons", tuple(sorted(dict.fromkeys(reasons))))
+
+        if not isinstance(self.rendered_body, str) or not self.rendered_body:
+            raise CloudBuildEvidenceError("rendered_body must be a non-empty string")
+        if len(self.rendered_body) > MAX_FIELD_LENGTH * 8:
+            raise CloudBuildEvidenceError("rendered_body exceeds maximum length")
