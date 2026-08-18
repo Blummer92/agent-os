@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: agent-os-ingress-${{ github.repository_id }}-${{ github.event.issue.number }}
@@ -13,7 +14,7 @@ concurrency:
 
 jobs:
   ingress:
-    name: Validate bounded Agent OS resume transport
+    name: Validate and transport bounded Agent OS resume
     if: ${{ github.event.issue.pull_request == null }}
     runs-on: ubuntu-latest
     steps:
@@ -21,6 +22,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Parse low-trust issue comment envelope
+        id: transport
         run: |
           mkdir -p "$RUNNER_TEMP/agent-os-ingress"
           PYTHONPATH=08_Tooling/workflow-scheduler/src \
@@ -30,35 +32,94 @@ jobs:
               --allowed-actor Blummer92 \
               --run-attempt "$GITHUB_RUN_ATTEMPT" \
               --output "$RUNNER_TEMP/agent-os-ingress/transport.json"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          payload = json.loads(
+              (Path(os.environ["RUNNER_TEMP"]) / "agent-os-ingress" / "transport.json").read_text()
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"accepted={'true' if payload['status'] == 'accepted' else 'false'}\n")
+          PY
 
-      - name: Fail closed before governed Scheduler dispatch
+      - name: Record non-accepted bounded transport evidence
+        if: ${{ steps.transport.outputs.accepted != 'true' }}
         run: |
           python - <<'PY'
           import json
           import os
           from pathlib import Path
-
-          source = Path(os.environ["RUNNER_TEMP"]) / "agent-os-ingress" / "transport.json"
-          payload = json.loads(source.read_text(encoding="utf-8"))
-          evidence = {
+          root = Path(os.environ["RUNNER_TEMP"]) / "agent-os-ingress"
+          transport = json.loads((root / "transport.json").read_text(encoding="utf-8"))
+          result = {
               "schema_version": "1.0",
-              "transport": payload,
+              "transport": transport,
               "dispatch_status": "blocked",
-              "dispatch_reason": "governed-runtime-control-path-not-yet-bound",
+              "dispatch_reason": transport["reason"],
               "execution_authorized": False,
               "scheduler_invoked": False,
               "side_effects_performed": False,
           }
-          target = source.with_name("result.json")
-          target.write_text(
-              json.dumps(evidence, sort_keys=True, separators=(",", ":")) + "\n",
+          (root / "result.json").write_text(
+              json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n",
               encoding="utf-8",
           )
+          PY
+
+      - name: Authenticate bounded Agent OS transport
+        if: ${{ steps.transport.outputs.accepted == 'true' }}
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/966859826758/locations/global/workloadIdentityPools/agent-os-github/providers/agent-os-main
+          service_account: agent-os-transport@agent-os-502614.iam.gserviceaccount.com
+
+      - name: Install Google Cloud CLI
+        if: ${{ steps.transport.outputs.accepted == 'true' }}
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Invoke exact governed GCE control path
+        if: ${{ steps.transport.outputs.accepted == 'true' }}
+        env:
+          AGENT_OS_WIF_AUDIENCE: //iam.googleapis.com/projects/966859826758/locations/global/workloadIdentityPools/agent-os-github/providers/agent-os-main
+        run: |
+          PYTHONPATH=08_Tooling/workflow-scheduler/src \
+            python -m workflow_scheduler.governance.gce_gcloud_adapter \
+              --transport "$RUNNER_TEMP/agent-os-ingress/transport.json" \
+              --output "$RUNNER_TEMP/agent-os-ingress/result.json" \
+              --repository "$GITHUB_REPOSITORY" \
+              --repository-owner "${{ github.repository_owner }}" \
+              --workflow-ref "${{ github.workflow_ref }}" \
+              --ref "$GITHUB_REF" \
+              --audience "$AGENT_OS_WIF_AUDIENCE"
+
+      - name: Publish bounded invocation summary
+        if: ${{ always() }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"]) / "agent-os-ingress"
+          transport_path = root / "transport.json"
+          result_path = root / "result.json"
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
-              summary.write("## Agent OS governed invocation ingress\n\n")
-              summary.write(f"Transport status: `{payload['status']}`\n\n")
-              summary.write(f"Transport reason: `{payload['reason']}`\n\n")
-              summary.write("Scheduler dispatch: `blocked` — governed runtime control path is not yet bound.\n")
+              summary.write("## Agent OS governed invocation\n\n")
+              if transport_path.exists():
+                  transport = json.loads(transport_path.read_text(encoding="utf-8"))
+                  summary.write(f"Transport: `{transport['status']}` / `{transport['reason']}`\n\n")
+              if result_path.exists():
+                  result = json.loads(result_path.read_text(encoding="utf-8"))
+                  control = result.get("control")
+                  if isinstance(control, dict):
+                      summary.write(f"Control status: `{control.get('status')}`\n\n")
+                      summary.write(f"Reasons: `{','.join(control.get('reason_codes', []))}`\n\n")
+                      summary.write(f"Scheduler accepted: `{control.get('host_accepted')}`\n\n")
+                      summary.write(f"Automatic shutdown issued: `{control.get('shutdown_issued')}`\n")
+                  else:
+                      summary.write(f"Dispatch: `{result.get('dispatch_status')}` / `{result.get('dispatch_reason')}`\n")
+              else:
+                  summary.write("Result evidence unavailable; manual review required.\n")
           PY
 
       - name: Publish bounded ingress evidence
@@ -67,5 +128,5 @@ jobs:
         with:
           name: agent-os-ingress-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/agent-os-ingress/*.json
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 7

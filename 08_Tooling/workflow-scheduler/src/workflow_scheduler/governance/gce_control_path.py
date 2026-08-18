@@ -317,15 +317,18 @@ def run_gce_control_path(
     expected_resource: GceResourceTuple,
     handoff_id: str,
     adapter: GceControlAdapter,
+    allow_shutdown: bool = True,
 ) -> GceControlPathResult:
     """Execute one bounded control-plane attempt with no retries.
 
     The function validates immutable transport data first, then performs at most
-    one VM start, one readiness probe, one fixed host invocation, and one
-    evidence-gated stop through the injected adapter.
+    one VM start, one readiness probe, one fixed host invocation, and, only when
+    explicitly enabled, one evidence-gated stop through the injected adapter.
     """
     if type(request_id) is not str or not request_id or len(request_id) > 512:
         raise ValueError("request_id must be bounded non-empty text")
+    if type(allow_shutdown) is not bool:
+        raise TypeError("allow_shutdown must be bool")
     if not isinstance(trust_policy, OidcTrustPolicy):
         raise TypeError("trust_policy must be OidcTrustPolicy")
     if (
@@ -478,7 +481,7 @@ def run_gce_control_path(
         else ControlPathReason.HOST_INVOCATION_BLOCKED
     )
 
-    if eligible:
+    if eligible and allow_shutdown:
         try:
             stopped = adapter.stop(resource)
         except (TypeError, ValueError, RuntimeError, OSError):

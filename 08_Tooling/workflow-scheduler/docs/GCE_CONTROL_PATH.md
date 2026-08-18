@@ -7,13 +7,15 @@
 GitHub OIDC -> Google WIF -> dedicated transport service account
 -> exact GCE tuple -> start-if-stopped / observe-running -> IAP + OS Login
 -> fixed host entrypoint + one executor-handoff id -> #1218 reconstruction
--> existing Workflow Scheduler -> bounded evidence -> evidence-gated VM stop
+-> existing Workflow Scheduler -> bounded evidence
 ```
 
 ## Frozen resource and trust envelope
 The v1 target is `agent-os-502614 / us-central1-a / agent-os-test`. Any other tuple is rejected before adapter effects.
 
-OIDC admission requires exact repository, repository owner, `workflow_ref`, `refs/heads/main`, and configured Workload Identity Provider audience. #1203 separately owns comment-actor admission and Agent OS authorization reacquisition; matching OIDC claims never create execution authority. No service-account JSON key, SSH private key, or other long-lived credential belongs in this contract.
+The activated cloud identity reuses the existing `agent-os-github` Workload Identity Pool, `agent-os-main` provider, and `agent-os-transport@agent-os-502614.iam.gserviceaccount.com`. The provider is restricted to GitHub repository ID `1289370915`, repository-owner ID `32861845`, `issue_comment`, `refs/heads/main`, and the exact `agent-os-governed-invocation.yml@refs/heads/main` workflow reference. No service-account JSON key or persistent SSH private key is used.
+
+The transport custom role is intentionally limited to `compute.instances.get`, `compute.instances.start`, and `compute.projects.get`. IAP tunnel access is conditioned to destination port 22 and OS Login is granted on `agent-os-test` only. The first activation deliberately has no `compute.instances.stop` authority.
 
 ## Fixed host invocation
 The only caller-controlled execution datum is `executor-handoff:<64-lowercase-hex>`. Host argv is constructed internally as exactly:
@@ -33,25 +35,47 @@ handoff id -> GovernedInvocationDescriptor -> current evidence reacquisition
 
 ## VM state machine
 ```text
-STOPPED -> one start -> one bounded wait -> RUNNING
+STOPPED -> one start -> bounded state observation -> RUNNING
 RUNNING -> no restart
 STAGING / STOPPING / SUSPENDING / UNKNOWN / UNREACHABLE -> blocked
 ```
 
-There is no automatic retry or fallback. One readiness probe must succeed before the fixed host entrypoint is invoked.
+There is no invocation retry or provider fallback. Bounded polling observes a VM start already issued by the one control attempt; it does not create another execution attempt. One IAP/OS Login readiness probe must succeed before the fixed host entrypoint is invoked.
 
-## Shutdown gate
-VM stop is actuation only; it never proves termination, lease release, or cleanup. Automatic stop is eligible only for `succeeded` or `validation-failed` with confirmed termination + lease release + cleanup, or `blocked-before-execution` with explicit proof that no retained ownership remains and release/cleanup are complete.
+## First-activation shutdown rule
+The pure control contract retains the future evidence-gated shutdown model, but the concrete first-activation adapter implements `stop()` as a fail-closed no-op and the transport IAM role has no `compute.instances.stop` permission. Therefore the first live qualification can authenticate, observe, start if stopped, connect, invoke, and return evidence, but it cannot stop the VM.
 
-Shutdown is withheld for retained lease ownership, quarantine, `termination-uncertain`, cleanup failure, release failure, or any outcome lacking complete terminal proof. Stop failure becomes `needs-decision`. Actions completion, SSH disconnect, PID absence, elapsed time, or transport timeout are not termination evidence.
+Automatic shutdown remains a later separately reviewed hardening step after end-to-end terminal, lease-release, containment, and cleanup evidence is proven live. Actions completion, SSH disconnect, PID absence, elapsed time, or transport timeout are never termination evidence.
 
-## Pure adapter boundary
-`workflow_scheduler.governance.gce_control_path` owns validation and deterministic sequencing only. A separately authorized concrete adapter may observe/start/wait for the exact VM, perform bounded IAP/OS Login readiness, invoke the fixed host entrypoint, and stop the exact VM when the shutdown gate permits it.
+## Concrete gcloud/IAP adapter
+`workflow_scheduler.governance.gce_gcloud_adapter` is the only concrete external-effect adapter for this activation. It:
 
-The pure module imports no Google SDK, GitHub client, network library, or subprocess package. It creates no credential, IAM binding, queue, daemon, database, persistent state, lease, Scheduler execution, or retry system.
+- accepts only the frozen GCE tuple;
+- uses `gcloud compute instances describe/start` for bounded VM control;
+- uses `gcloud compute ssh --tunnel-through-iap` for readiness and invocation;
+- probes only the fixed executable path;
+- accepts only the fixed three-element argv produced by `gce_control_path`;
+- parses bounded JSON host evidence into `HostInvocationEvidence`;
+- has no automatic invocation retry and no VM-stop command surface.
+
+The pure `gce_control_path` remains the deterministic sequencing and policy boundary; the concrete adapter does not acquire leases or decide Scheduler admission.
+
+## GitHub workflow activation
+`.github/workflows/agent-os-governed-invocation.yml` remains #1203's bounded issue-comment ingress and now adds only the separately authorized #1217 transport activation:
+
+```text
+accepted ingress
+-> id-token: write
+-> google-github-actions/auth using agent-os-main + agent-os-transport
+-> setup-gcloud
+-> gce_gcloud_adapter
+-> bounded JSON artifact + step summary
+```
+
+The workflow has only `contents: read` and `id-token: write`. GitHub Actions concurrency is transport noise reduction only; deterministic handoff/control-request identity plus the existing Scheduler lease remain the execution/idempotency authority.
 
 ## Bounded result
-The result carries bounded request/handoff identity, exact resource tuple, initial/final VM state, start/invoke/stop observations, bounded Scheduler invocation/execution identities returned by the host, terminal status/evidence references, shutdown eligibility, and finite reason codes. Authority fields are fixed false: the result cannot authorize Scheduler work, lease operations, GitHub writes, arbitrary commands, or merge.
+The result carries bounded request/handoff identity, exact resource tuple, start/invoke observations, bounded Scheduler invocation/execution identities returned by the host, terminal status, and finite reason codes. Authority fields remain false: transport evidence cannot authorize Scheduler work, lease operations, GitHub writes, readiness, merge, or issue closure.
 
 ## Ownership
 - #1203: issue-comment parsing, actor admission, GitHub workflow.
@@ -62,5 +86,8 @@ The result carries bounded request/handoff identity, exact resource tuple, initi
 - #759: containment and termination proof.
 - #1197: dependency readiness.
 
-## Activation boundary
-Repository code/tests are credential-free. Live WIF/IAM, OS Login, IAP, VM lifecycle, public-IP/service-account hardening, fixed-entrypoint deployment, and the required live smoke test must run only on a capable governed GCP surface under the existing explicit #1203/#1217 excluded-surface authorization. Repository validation alone is not evidence that external GCP activation succeeded.
+## Live smoke gate
+Do not perform the live smoke test until focused offline validation and repository aggregate validation are green on the implementation head. The smoke test must use one pre-existing authorized `ExecutorHandoff`, invoke the fixed entrypoint once, then replay the same logical request once to prove no second Scheduler execution is created. The VM remains running after first qualification.
+
+## Rollback
+Repository rollback reverts the workflow, concrete adapter, tests, and this runbook update. Cloud rollback removes only the #1217 WIF/IAM/IAP/OS Login/firewall bindings that were explicitly created or changed for this path. Durable Scheduler execution records, ResumePlans, ExecutorHandoffs, checkpoints, lease history, validation evidence, branches, and PR history are never rollback targets.
