@@ -75,13 +75,13 @@ def evaluate_cancellation(evidence: CloudBuildCancellationEvidence) -> Cancellat
     if type(evidence) is not CloudBuildCancellationEvidence:
         raise TypeError("evidence must be exact CloudBuildCancellationEvidence")
     if evidence.identity_ambiguous:
-        return CancellationDecision(CancellationEligibility.AMBIGUOUS, "identity/currentness/provider evidence is ambiguous")
+        return CancellationDecision(outcome=CancellationEligibility.AMBIGUOUS, reason="identity/currentness/provider evidence is ambiguous")
     if evidence.prior_request_accepted:
-        return CancellationDecision(CancellationEligibility.CANCELLATION_ALREADY_REQUESTED, "cancellation request was already accepted")
+        return CancellationDecision(outcome=CancellationEligibility.CANCELLATION_ALREADY_REQUESTED, reason="cancellation request was already accepted")
     if evidence.observation_status is not ProviderObservationStatus.WORKING:
-        return CancellationDecision(CancellationEligibility.NOT_RUNNING, "exact provider observation is not WORKING")
+        return CancellationDecision(outcome=CancellationEligibility.NOT_RUNNING, reason="exact provider observation is not WORKING")
     if evidence.current_head_sha is None or evidence.current_head_sha == evidence.obsolete_sha or not evidence.supersession_proven:
-        return CancellationDecision(CancellationEligibility.NOT_SUPERSEDED, "exact newer current head and supersession proof are required")
+        return CancellationDecision(outcome=CancellationEligibility.NOT_SUPERSEDED, reason="exact newer current head and supersession proof are required")
     identities_match = all((
         evidence.repository_matches,
         evidence.pr_matches,
@@ -94,8 +94,8 @@ def evaluate_cancellation(evidence: CloudBuildCancellationEvidence) -> Cancellat
         evidence.final_head_aggregate_preserved,
     ))
     if not identities_match:
-        return CancellationDecision(CancellationEligibility.IDENTITY_MISMATCH, "one or more required exact identity bindings do not match")
-    return CancellationDecision(CancellationEligibility.CANCEL_ELIGIBLE, "exact superseded WORKING build is eligible for one cancellation request")
+        return CancellationDecision(outcome=CancellationEligibility.IDENTITY_MISMATCH, reason="one or more required exact identity bindings do not match")
+    return CancellationDecision(outcome=CancellationEligibility.CANCEL_ELIGIBLE, reason="exact superseded WORKING build is eligible for one cancellation request")
 
 
 class SupersededBuildCancellation:
