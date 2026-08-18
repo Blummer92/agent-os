@@ -46,8 +46,10 @@ from scripts.agent_os_remote_validation import (
 SHA = "a" * 40
 BASE_SHA = "b" * 40
 COMMAND = "python -m pytest"
+FOCUSED_COMMAND = "python -m pytest tests/test_curriculum_pipeline_boundaries.py"
 SELECTOR_VERSION = "1.0.0"
 DIGEST = compute_command_set_digest(SELECTOR_VERSION, (COMMAND,))
+FOCUSED_DIGEST = compute_command_set_digest(SELECTOR_VERSION, (FOCUSED_COMMAND,))
 
 
 def _request(*, expires_at="2026-07-31T00:00:00Z"):
@@ -95,6 +97,21 @@ def _plan():
     )
 
 
+def _focused_plan():
+    return ValidationPlan(
+        selector_version=SELECTOR_VERSION,
+        repository="Blummer92/agent-os",
+        pull_request=804,
+        base_sha=BASE_SHA,
+        head_sha=SHA,
+        profile="focused",
+        commands=(FOCUSED_COMMAND,),
+        command_set_digest=FOCUSED_DIGEST,
+        reason_codes=("profile.focused-package",),
+        remote_build_required=True,
+    )
+
+
 def _command_plan(request, plan):
     return ValidationCommandPlan(
         schema_version=COMMAND_PLAN_SCHEMA_VERSION,
@@ -114,6 +131,35 @@ def _command_plan(request, plan):
             CommandPlanEntry(
                 operation=CommandOperation.VALIDATION_AGGREGATE,
                 argv=("python", "-m", "pytest"),
+            ),
+        ),
+    )
+
+
+def _focused_command_plan(request, plan):
+    return ValidationCommandPlan(
+        schema_version=COMMAND_PLAN_SCHEMA_VERSION,
+        registry_version=COMMAND_REGISTRY_VERSION,
+        repository=plan.repository,
+        issue_or_handoff_identity=request.issue_or_handoff_identity,
+        requested_ref=request.requested_ref,
+        expected_sha=request.expected_sha,
+        request_revision=request.request_revision,
+        request_fingerprint=request.request_fingerprint,
+        validation_plan_id=validation_plan_id(plan),
+        validation_plan_schema_version="1.0",
+        selector_version=plan.selector_version,
+        profile=plan.profile,
+        command_set_digest=plan.command_set_digest,
+        entries=(
+            CommandPlanEntry(
+                operation=CommandOperation.VALIDATION_FOCUSED,
+                argv=(
+                    "python",
+                    "-m",
+                    "pytest",
+                    "tests/test_curriculum_pipeline_boundaries.py",
+                ),
             ),
         ),
     )
@@ -166,13 +212,61 @@ def _inputs():
     )
 
 
+def _focused_inputs():
+    request = _request()
+    plan = _focused_plan()
+    command_plan = _focused_command_plan(request, plan)
+    dispatch = evaluate_dispatch_decision(plan, (), current_pr_head_sha=SHA)
+    return (
+        request,
+        command_plan,
+        dispatch,
+        _authorization(request, command_plan),
+        _configuration(),
+    )
+
+
 def _accepted():
     result = prepare_cloud_build_provider_invocation(
-        *_inputs(), resolved_sha=SHA, evaluated_at="2026-07-30T20:00:00Z"
+        *_focused_inputs(), resolved_sha=SHA, evaluated_at="2026-07-30T20:00:00Z"
     )
     assert result.status is ProviderStatus.ACCEPTED
     assert result.invocation is not None
     return result
+
+
+def test_valid_aggregate_is_skipped_before_invocation_and_is_deterministic():
+    left = prepare_cloud_build_provider_invocation(
+        *_inputs(), resolved_sha=SHA, evaluated_at="2026-07-30T20:00:00Z"
+    )
+    right = prepare_cloud_build_provider_invocation(
+        *_inputs(), resolved_sha=SHA, evaluated_at="2026-07-30T20:00:00Z"
+    )
+    assert left == right
+    assert left.status is ProviderStatus.SKIPPED
+    assert left.reason_codes == (
+        ProviderReason.PROVIDER_AGGREGATE_REDUNDANT_EQUIVALENT,
+    )
+    assert left.invocation is None
+    assert left.invocation_id is None
+    assert left.build_id is None
+    assert left.tested_sha is None
+    assert left.normalized_cloud_build_evidence is None
+    assert left.execution_authorized is False
+    assert left.side_effect_state is ProviderSideEffectState.NONE
+    assert left.merge_authorized is False
+    assert left.result_id == right.result_id
+
+    payload = serialize_cloud_build_provider_result(left)
+    assert payload["status"] == "skipped"
+    assert payload["invocation"] is None
+    assert payload["invocation_id"] is None
+    assert payload["build_id"] is None
+    assert payload["tested_sha"] is None
+    assert payload["normalized_cloud_build_evidence"] is None
+    assert payload["execution_authorized"] is False
+    assert payload["merge_authorized"] is False
+    assert payload["side_effect_state"] == "none"
 
 
 def test_valid_invocation_is_deterministic_and_non_authorizing_for_merge():
@@ -186,6 +280,7 @@ def test_valid_invocation_is_deterministic_and_non_authorizing_for_merge():
     assert left.invocation.merge_authorized is False
     assert left.invocation.side_effects_performed is False
     assert left.invocation.authorization_id == "authorization:804"
+    assert left.invocation.profile == "focused"
     assert cloud_build_provider_invocation_id(left.invocation) == left.invocation_id
     assert cloud_build_provider_result_id(left) == left.result_id
 
@@ -254,8 +349,30 @@ def test_identity_and_authorization_drift_fails_closed(mutation, reason):
     )
     assert result.status is ProviderStatus.MANUAL_REVIEW
     assert reason in result.reason_codes
+    assert ProviderReason.PROVIDER_AGGREGATE_REDUNDANT_EQUIVALENT not in result.reason_codes
     assert result.invocation is None
     assert result.merge_authorized is False
+
+
+def test_aggregate_configuration_drift_fails_closed_before_policy_skip():
+    request, command_plan, dispatch, authorization, configuration = _inputs()
+    object.__setattr__(configuration, "configuration_fingerprint", "e" * 64)
+    result = prepare_cloud_build_provider_invocation(
+        request,
+        command_plan,
+        dispatch,
+        authorization,
+        configuration,
+        resolved_sha=SHA,
+        evaluated_at="2026-07-30T20:00:00Z",
+    )
+    assert result.status is ProviderStatus.MANUAL_REVIEW
+    assert result.reason_codes == (
+        ProviderReason.PROVIDER_CONFIGURATION_FINGERPRINT_MISMATCH,
+    )
+    assert ProviderReason.PROVIDER_AGGREGATE_REDUNDANT_EQUIVALENT not in result.reason_codes
+    assert result.invocation is None
+    assert result.side_effect_state is ProviderSideEffectState.NONE
 
 
 def test_non_launch_dispatch_creates_no_invocation():
@@ -278,7 +395,8 @@ def test_non_launch_dispatch_creates_no_invocation():
     )
     assert dispatch.status == "stale-skipped"
     assert result.status is ProviderStatus.SKIPPED
-    assert ProviderReason.DISPATCH_NON_LAUNCH in result.reason_codes
+    assert result.reason_codes == (ProviderReason.DISPATCH_NON_LAUNCH,)
+    assert ProviderReason.PROVIDER_AGGREGATE_REDUNDANT_EQUIVALENT not in result.reason_codes
     assert result.invocation is None
     assert result.merge_authorized is False
     assert result.side_effect_state is ProviderSideEffectState.NONE
@@ -385,6 +503,7 @@ def test_malformed_command_plan_field_fails_closed_instead_of_raising():
     )
     assert result.status is ProviderStatus.MANUAL_REVIEW
     assert ProviderReason.COMMAND_PLAN_INVALID in result.reason_codes
+    assert ProviderReason.PROVIDER_AGGREGATE_REDUNDANT_EQUIVALENT not in result.reason_codes
     assert result.invocation is None
     assert result.merge_authorized is False
 
@@ -408,6 +527,7 @@ def test_unregistered_argv_never_reaches_an_accepted_invocation():
     )
     assert result.status is ProviderStatus.MANUAL_REVIEW
     assert ProviderReason.COMMAND_PLAN_INVALID in result.reason_codes
+    assert ProviderReason.PROVIDER_AGGREGATE_REDUNDANT_EQUIVALENT not in result.reason_codes
     assert result.invocation is None
 
 

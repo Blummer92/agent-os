@@ -51,7 +51,7 @@ from scripts.agent_os_remote_validation import (
 SHA = "a" * 40
 BASE_SHA = "b" * 40
 OTHER_SHA = "e" * 40
-COMMAND = "python -m pytest"
+COMMAND = "python -m pytest tests/test_curriculum_pipeline_boundaries.py"
 SELECTOR_VERSION = "1.0.0"
 DIGEST = compute_command_set_digest(SELECTOR_VERSION, (COMMAND,))
 OBSERVED_AT = "2026-07-31T00:05:00Z"
@@ -95,10 +95,10 @@ def _plan():
         pull_request=805,
         base_sha=BASE_SHA,
         head_sha=SHA,
-        profile="aggregate",
+        profile="focused",
         commands=(COMMAND,),
         command_set_digest=DIGEST,
-        reason_codes=("profile.aggregate-configuration",),
+        reason_codes=("profile.focused-package",),
         remote_build_required=True,
     )
 
@@ -120,8 +120,13 @@ def _command_plan(request, plan):
         command_set_digest=plan.command_set_digest,
         entries=(
             CommandPlanEntry(
-                operation=CommandOperation.VALIDATION_AGGREGATE,
-                argv=("python", "-m", "pytest"),
+                operation=CommandOperation.VALIDATION_FOCUSED,
+                argv=(
+                    "python",
+                    "-m",
+                    "pytest",
+                    "tests/test_curriculum_pipeline_boundaries.py",
+                ),
             ),
         ),
     )
