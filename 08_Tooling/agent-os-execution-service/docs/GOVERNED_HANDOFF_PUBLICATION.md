@@ -124,6 +124,10 @@ reuse, and architecture boundaries. Existing #918 and #1218/#1228 regression
 suites remain the canonical detailed tests for route and reconstruction mismatch
 semantics.
 
+An isolated no-network harness may be used for developer feedback, but it is not
+canonical pre-PR or exact-head evidence. Draft PR creation remains gated on the
+issue-required repository-capable focused/regression validation.
+
 Ready-for-Review still requires authoritative exact-head repository validation.
 
 ## Rollback
