@@ -41,7 +41,11 @@ from .execution_authorization_source import (
     reacquire_execution_authorization,
 )
 from .executor_routing import ExecutorHandoff, ExecutorRouteDecision
-from .invocation_reconstruction import CurrentInvocationEvidence
+from .invocation_reconstruction import (
+    CurrentInvocationEvidence,
+    InvocationReconstructionReason,
+    _cross_check,
+)
 
 
 class CurrentInvocationResolutionError(RuntimeError):
@@ -193,8 +197,7 @@ class CanonicalCurrentInvocationResolver:
         )
 
 
-def persist_current_invocation_descriptor(
-    store_root: Path | str,
+def build_current_invocation_descriptor(
     *,
     route_decision: ExecutorRouteDecision,
     handoff: ExecutorHandoff,
@@ -205,13 +208,8 @@ def persist_current_invocation_descriptor(
     runtime_configuration: ConcreteRuntimeConfiguration,
     dependency_readiness: DependencyReadinessEvidence,
     pilot_input: SingleIssuePilotInput,
-) -> AppendInvocationDescriptorOutcome:
-    """Write the small non-authorizing descriptor at the runnable-handoff seam.
-
-    Complete route, authorization, checkpoint, candidate, runtime, dependency,
-    and pilot objects remain with their existing owners.  Only their bounded
-    identities are copied into the append-only checkpoint-owned descriptor.
-    """
+) -> GovernedInvocationDescriptor:
+    """Build the existing bounded descriptor without persisting it."""
 
     required = (
         (route_decision.execution_service_request_fingerprint_or_none, "request"),
@@ -227,7 +225,9 @@ def persist_current_invocation_descriptor(
     )
     missing = tuple(label for value, label in required if value is None)
     if missing:
-        raise ValueError("runnable handoff is missing descriptor bindings: " + ", ".join(missing))
+        raise ValueError(
+            "runnable handoff is missing descriptor bindings: " + ", ".join(missing)
+        )
 
     workspace_identity = pilot_workspace_identity(
         WorkspaceRequest(
@@ -237,7 +237,7 @@ def persist_current_invocation_descriptor(
             expected_revision=pilot_input.source_head_sha,
         )
     )
-    descriptor = GovernedInvocationDescriptor(
+    return GovernedInvocationDescriptor(
         schema_name=INVOCATION_DESCRIPTOR_SCHEMA_NAME,
         schema_version=INVOCATION_DESCRIPTOR_SCHEMA_VERSION,
         repository=checkpoint.repository,
@@ -270,5 +270,53 @@ def persist_current_invocation_descriptor(
         ),
         execution_id=checkpoint.execution_id,
         invocation_id=checkpoint.invocation_id,
+    )
+
+
+def validate_current_invocation_bindings(
+    descriptor: GovernedInvocationDescriptor,
+    current: CurrentInvocationEvidence,
+    *,
+    evaluated_at: str,
+) -> set[InvocationReconstructionReason]:
+    """Reuse #1218's current-evidence cross-check without observing a lease."""
+
+    if type(descriptor) is not GovernedInvocationDescriptor:
+        raise TypeError("descriptor must be an exact GovernedInvocationDescriptor")
+    if type(current) is not CurrentInvocationEvidence:
+        raise TypeError("current must be an exact CurrentInvocationEvidence")
+    return _cross_check(descriptor, current, evaluated_at=evaluated_at)
+
+
+def persist_current_invocation_descriptor(
+    store_root: Path | str,
+    *,
+    route_decision: ExecutorRouteDecision,
+    handoff: ExecutorHandoff,
+    authorization: ExecutionAuthorizationEvidence,
+    checkpoint: ExecutionCheckpoint,
+    resume_plan: ResumePlan,
+    candidate_packet: CandidatePacket,
+    runtime_configuration: ConcreteRuntimeConfiguration,
+    dependency_readiness: DependencyReadinessEvidence,
+    pilot_input: SingleIssuePilotInput,
+) -> AppendInvocationDescriptorOutcome:
+    """Write the small non-authorizing descriptor at the runnable-handoff seam.
+
+    Complete route, authorization, checkpoint, candidate, runtime, dependency,
+    and pilot objects remain with their existing owners.  Only their bounded
+    identities are copied into the append-only checkpoint-owned descriptor.
+    """
+
+    descriptor = build_current_invocation_descriptor(
+        route_decision=route_decision,
+        handoff=handoff,
+        authorization=authorization,
+        checkpoint=checkpoint,
+        resume_plan=resume_plan,
+        candidate_packet=candidate_packet,
+        runtime_configuration=runtime_configuration,
+        dependency_readiness=dependency_readiness,
+        pilot_input=pilot_input,
     )
     return append_invocation_descriptor(store_root, descriptor)
