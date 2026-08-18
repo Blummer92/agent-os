@@ -47,7 +47,7 @@ The provider copies exact `CommandPlanEntry` values from the canonical `Validati
 
 Provider result statuses are `accepted`, `skipped`, `manual-review`, `unavailable`, `unknown`, and `terminal`.
 
-Observation statuses are `working`, `success`, `failure`, `timeout`, `cancelled`, `internal-error`, `unavailable`, and `unknown`.
+Observation statuses are `working`, `success`, `failure`, `timeout`, `cancelled`, `expired`, `internal-error`, `unavailable`, and `unknown`. `expired` is provider-reported queue-expiry terminal evidence, distinct from timeout/failure/cancelled; never infer it from elapsed time; it grants no retry/cancel/readiness/merge/closure/execution/lease authority.
 
 Side-effect states are `none`, `confirmed`, and `unknown`.
 
