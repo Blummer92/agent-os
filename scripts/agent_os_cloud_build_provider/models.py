@@ -94,6 +94,7 @@ class ProviderReason(str, Enum):
     RESOLVED_SHA_MISMATCH = "identity.resolved-sha-mismatch"
     PROFILE_MISMATCH = "identity.profile-mismatch"
     DIGEST_MISMATCH = "identity.digest-mismatch"
+    PROVIDER_AGGREGATE_REDUNDANT_EQUIVALENT = "provider.aggregate-redundant-equivalent"
     PROVIDER_CONFIGURATION_INVALID = "provider.configuration-invalid"
     PROVIDER_CONFIGURATION_FINGERPRINT_MISMATCH = "provider.configuration-fingerprint-mismatch"
     OBSERVATION_INVOCATION_MISMATCH = "observation.invocation-mismatch"

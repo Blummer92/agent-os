@@ -204,6 +204,18 @@ def prepare_cloud_build_provider_invocation(
             execution_authorized=False,
         )
 
+    # GitHub Actions owns the ordinary authoritative exact-head aggregate.
+    # Cloud Build remains available for focused/provider-specific work, but a
+    # fully valid aggregate must be declined here before an accepted provider
+    # invocation exists. All fail-closed identity, authorization, dispatch,
+    # SHA, and configuration checks above therefore retain precedence.
+    if command_plan.profile == "aggregate":
+        return _result(
+            status=ProviderStatus.SKIPPED,
+            reasons={ProviderReason.PROVIDER_AGGREGATE_REDUNDANT_EQUIVALENT},
+            execution_authorized=False,
+        )
+
     provider_entries = tuple(
         ProviderCommandEntry(operation=entry.operation.value, argv=entry.argv)
         for entry in command_plan.entries

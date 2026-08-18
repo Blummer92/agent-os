@@ -53,6 +53,16 @@ Side-effect states are `none`, `confirmed`, and `unknown`.
 
 Reason codes are finite enum values. Raw exceptions, credentials, provider payloads, unrestricted logs, filesystem paths, and headers are never serialized into public results.
 
+## Ordinary aggregate admission policy (#1233)
+
+GitHub Actions owns the ordinary authoritative exact-final-head aggregate validation lane. Cloud Build therefore does not admit an otherwise-valid ordinary `aggregate` command plan after all existing provider acceptance evidence has validated. The provider returns `status=skipped` with reason `provider.aggregate-redundant-equivalent`, carries no accepted `CloudBuildProviderInvocation`, build ID, tested SHA, or normalized execution evidence, keeps `side_effect_state=none`, and never grants merge authority.
+
+The ordering is deliberate: malformed command plans, identity/SHA drift, invalid or non-launch generic dispatch evidence, inactive/mismatched authorization, and provider-configuration drift keep their existing fail-closed classifications and are not converted into a cost-saving aggregate skip. A valid `focused` plan remains eligible for the existing accepted-invocation behavior.
+
+Issue #369 remains the sole owner of generic launch eligibility, stale-head handling, duplicate/reuse/retry/supersession semantics, and dispatch identity. #1233 adds only this provider-specific admission rule after those generic and provider checks are already satisfied; it does not change validation-plan or command-plan identities/serialization.
+
+Because `CloudBuildProviderAdapter` consumes only an already accepted `CloudBuildProviderInvocation`, a skipped aggregate produces no adapter input and cannot reach the injected `CloudBuildProviderClient.submit` path.
+
 ## At-most-once and unknown-outcome behavior
 
 Issue #369 remains the sole owner of launch eligibility, duplicate suppression, stale-head handling, reuse, supersession, and retry recommendation. This package accepts only a verified `launch-eligible` decision with `launch_recommended=true`. Reused, duplicate, stale, non-required, supersede-required, malformed, and manual-review decisions create no invocation.
