@@ -23,6 +23,32 @@ authorization source, provider selector, or shell-command interface. Currentness
 authorization, checkpoint/ResumePlan, dependency readiness, and lease truth stay
 with their existing canonical owners.
 
+## Module/CLI execution path
+
+`main(argv=None, *, bindings=None)` is the real entrypoint `__main__` calls, so
+`python3 -m agent_os_execution_service.governed_resume_entrypoint "$@"` (what the
+installed wrapper runs) genuinely parses argv, reconstructs, and dispatches at
+most once instead of silently completing as a no-op. Argv parsing (and its
+rejection of anything other than one canonical `--handoff-id`) still runs before
+`bindings.reconstruct` is ever called.
+
+`build_governed_resume_bindings(...)` composes the real
+`reconstruct_governed_invocation` (#1218) and `run_single_issue_pilot` (#758/#1253)
+functions -- imported directly, never duplicated -- into the single-argument
+`GovernedResumeBindings` shape this module requires. Every argument it takes
+(descriptor loader, current-evidence resolver, lease reader, lease/workspace/
+executor/validator adapters, cancellation probe) is an existing canonical
+protocol implementation supplied by the caller; this function performs no
+reconstruction or dispatch logic of its own and invents no adapter.
+
+Concrete production instances of those adapters (real descriptor storage,
+GitHub-backed current-evidence readers, host-local lease/workspace/executor
+adapters) are host composition, not part of this repository-only slice -- see
+"Remaining risks" on the linked pull request. Run with no `bindings` supplied,
+`main()` uses a fail-closed stand-in that raises before any dispatch could
+occur, so the installed host command can no longer exit successfully without
+attempting governed resume.
+
 ## Installation contract
 
 The installer defaults to root:root mode `0755` at the frozen path. Re-running

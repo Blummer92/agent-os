@@ -4,14 +4,34 @@ The public contract accepts exactly one immutable ``executor-handoff:<sha256>``
 identity. It never accepts command text. Currentness/admission remains owned
 by the existing #1218 reconstruction seam and execution remains owned by the
 existing Workflow Scheduler boundary supplied by the host composition.
+
+``main``/``__main__`` make the module genuinely runnable as
+``python3 -m agent_os_execution_service.governed_resume_entrypoint``.
+``build_governed_resume_bindings`` composes the real #1218
+``reconstruct_governed_invocation`` seam and the real #758/#1253 Workflow
+Scheduler ``run_single_issue_pilot`` boundary into the single-argument shape
+this module's bindings require; it performs no reconstruction or dispatch
+logic itself. The concrete host-specific adapters those functions need
+(descriptor storage, current-evidence readers, lease/workspace/executor
+adapters) remain the caller's/host's responsibility, exactly as every other
+canonical caller of these two functions already requires -- this module does
+not invent deployment-specific state discovery. Run standalone without an
+injected composition, the module fails closed with a clear error instead of
+silently completing without performing governed resume.
 """
 
 from __future__ import annotations
 
+import functools
 import json
 import re
+import sys
 from dataclasses import dataclass
 from typing import Callable, Sequence
+
+from .invocation_reconstruction import reconstruct_governed_invocation
+
+from workflow_scheduler.execution.single_issue_pilot import run_single_issue_pilot
 
 HANDOFF_RE = re.compile(r"\Aexecutor-handoff:[0-9a-f]{64}\Z")
 SCHEMA = "agent-os-governed-resume-host-evidence/v1"
@@ -85,3 +105,70 @@ def run_governed_resume(argv: Sequence[str], *, bindings: GovernedResumeBindings
 
     bindings.dispatch(pilot_input)
     return _evidence(handoff_id=handoff_id, status="completed", reasons=("admitted",))
+
+
+def build_governed_resume_bindings(
+    *,
+    descriptor_loader: Callable[[str], object],
+    resolver: object,
+    lease_reader: object,
+    evaluated_at: str,
+    lease: object,
+    workspace: object,
+    executor: object | None,
+    validator: object,
+    cancelled: Callable[[], bool],
+) -> GovernedResumeBindings:
+    """Wire the real #1218 reconstruction seam and #758 Scheduler boundary.
+
+    Every keyword argument is an existing canonical protocol implementation
+    supplied by the caller/host. This function performs no reconstruction or
+    dispatch logic of its own -- it only adapts the multi-argument canonical
+    call shapes of ``reconstruct_governed_invocation`` and
+    ``run_single_issue_pilot`` into the single-argument
+    ``Callable[[str], object]``/``Callable[[object], object]`` shape
+    ``GovernedResumeBindings`` requires.
+    """
+    reconstruct = functools.partial(
+        reconstruct_governed_invocation,
+        descriptor_loader=descriptor_loader,
+        resolver=resolver,
+        lease_reader=lease_reader,
+        evaluated_at=evaluated_at,
+    )
+    dispatch = functools.partial(
+        run_single_issue_pilot,
+        lease=lease,
+        workspace=workspace,
+        executor=executor,
+        validator=validator,
+        cancelled=cancelled,
+    )
+    return GovernedResumeBindings(reconstruct, dispatch)
+
+
+def _no_host_composition_bindings(handoff_id: str) -> object:
+    raise RuntimeError(
+        "governed-resume requires host-supplied #1218/#1253 composition; "
+        "no production reconstruction/dispatch binding is wired into this "
+        "repository slice -- see docs/GOVERNED_RESUME_ENTRYPOINT.md"
+    )
+
+
+def main(argv: Sequence[str] | None = None, *, bindings: GovernedResumeBindings | None = None) -> int:
+    """Module/CLI execution path: parse argv, reconstruct, then dispatch at most once.
+
+    ``bindings`` defaults to a fail-closed stand-in so that running this
+    module standalone without an injected host composition raises instead of
+    silently completing without performing governed resume.
+    """
+    if argv is None:
+        argv = sys.argv[1:]
+    if bindings is None:
+        bindings = GovernedResumeBindings(_no_host_composition_bindings, lambda _: None)
+    print(run_governed_resume(argv, bindings=bindings))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

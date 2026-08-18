@@ -1,16 +1,29 @@
+import functools
 import json
+import os
+import subprocess
+import sys
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 
 import pytest
 
 from agent_os_execution_service.governed_resume_entrypoint import (
     GovernedResumeBindings,
+    build_governed_resume_bindings,
+    main,
     parse_handoff_argv,
     run_governed_resume,
 )
+from agent_os_execution_service.invocation_reconstruction import (
+    reconstruct_governed_invocation,
+)
+from workflow_scheduler.execution.single_issue_pilot import run_single_issue_pilot
 
 H = "executor-handoff:" + "a" * 64
+PACKAGE_SRC = Path(__file__).parents[1] / "src"
+REPOSITORY_ROOT = Path(__file__).parents[3]
 
 
 class Status(str, Enum):
@@ -96,6 +109,131 @@ def test_bounded_evidence_does_not_echo_command_text():
     assert set(json.loads(payload)) == {
         "handoff_id", "reason_codes", "scheduler_dispatch_count", "schema", "status"
     }
+
+
+def test_main_module_entrypoint_preserves_reconstruction_before_dispatch(capsys):
+    calls = []
+    pilot = object()
+
+    def reconstruct(handoff_id):
+        calls.append(("reconstruct", handoff_id))
+        return Result(Status.ADMITTED, ("admitted",), pilot)
+
+    def dispatch(value):
+        calls.append(("dispatch", value))
+
+    exit_code = main(
+        ["--handoff-id", H],
+        bindings=GovernedResumeBindings(reconstruct, dispatch),
+    )
+    assert exit_code == 0
+    assert calls == [("reconstruct", H), ("dispatch", pilot)]
+    output = json.loads(capsys.readouterr().out)
+    assert output["scheduler_dispatch_count"] == 1
+
+
+@pytest.mark.parametrize("status", [Status.BLOCKED, Status.STALE, Status.NEEDS_DECISION])
+def test_main_nonadmitted_input_never_dispatches(status, capsys):
+    dispatched = []
+    result = Result(status, ("example-reason",), None)
+    exit_code = main(
+        ["--handoff-id", H],
+        bindings=GovernedResumeBindings(lambda _: result, dispatched.append),
+    )
+    assert exit_code == 0
+    assert dispatched == []
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == status.value
+    assert payload["scheduler_dispatch_count"] == 0
+
+
+def test_main_malformed_argv_fails_before_reconstruction():
+    reconstruct_calls = []
+
+    def reconstruct(handoff_id):
+        reconstruct_calls.append(handoff_id)
+        return Result(Status.ADMITTED, ("admitted",), object())
+
+    with pytest.raises(ValueError):
+        main(
+            ["--command", "echo pwned"],
+            bindings=GovernedResumeBindings(reconstruct, lambda _: None),
+        )
+    assert reconstruct_calls == []
+
+
+def test_main_rejects_arbitrary_shell_payload_in_handoff_position():
+    with pytest.raises(ValueError):
+        main(
+            ["--handoff-id", H + "; echo pwned"],
+            bindings=GovernedResumeBindings(lambda _: None, lambda _: None),
+        )
+
+
+def test_build_governed_resume_bindings_reuses_canonical_functions_without_duplication():
+    bindings = build_governed_resume_bindings(
+        descriptor_loader=lambda handoff_id: None,
+        resolver=None,
+        lease_reader=None,
+        evaluated_at="2026-08-18T00:00:00Z",
+        lease=None,
+        workspace=None,
+        executor=None,
+        validator=None,
+        cancelled=lambda: False,
+    )
+    assert isinstance(bindings.reconstruct, functools.partial)
+    assert bindings.reconstruct.func is reconstruct_governed_invocation
+    assert bindings.reconstruct.keywords["evaluated_at"] == "2026-08-18T00:00:00Z"
+
+    assert isinstance(bindings.dispatch, functools.partial)
+    assert bindings.dispatch.func is run_single_issue_pilot
+
+
+def test_module_invoked_as_cli_actually_executes_and_fails_closed_without_composition():
+    """Genuine ``python3 -m ...`` invocation, proving the module entrypoint runs.
+
+    With no host-supplied composition, this must fail closed (nonzero exit,
+    no silent success) rather than executing a no-op, which was the original
+    bug: the installed host command could exit 0 without performing governed
+    resume at all.
+    """
+    env = os.environ | {"PYTHONPATH": str(PACKAGE_SRC)}
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "agent_os_execution_service.governed_resume_entrypoint",
+            "--handoff-id",
+            H,
+        ],
+        env=env,
+        cwd=REPOSITORY_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode != 0
+    assert "host-supplied" in proc.stderr
+
+
+def test_module_invoked_as_cli_rejects_malformed_argv_before_any_composition():
+    env = os.environ | {"PYTHONPATH": str(PACKAGE_SRC)}
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "agent_os_execution_service.governed_resume_entrypoint",
+            "--command",
+            "echo pwned",
+        ],
+        env=env,
+        cwd=REPOSITORY_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode != 0
+    assert "echo" not in proc.stdout
+    assert "expected exactly --handoff-id" in proc.stderr
 
 
 def test_installer_contract_is_fixed_and_idempotent(tmp_path):
