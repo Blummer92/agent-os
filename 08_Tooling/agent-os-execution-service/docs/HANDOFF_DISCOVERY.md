@@ -1,0 +1,47 @@
+# Governed Handoff Discovery — #1237
+
+## Purpose
+
+#1237 adds one read-only locator at the existing #1218 checkpoint-owned invocation-descriptor boundary. It solves only the bootstrap problem where a trusted integration knows the canonical repository and issue but does not yet possess the immutable `executor-handoff:<sha256>` identity.
+
+```text
+repository + issue
+-> scan existing bounded #1218 invocation-descriptor store
+-> validate every descriptor read
+-> exactly one matching descriptor => existing immutable handoff id
+-> zero matches => not-found
+-> multiple matches / corruption / unavailable store => needs-decision
+-> existing #1218 reconstruction/current-evidence/lease checks
+-> Scheduler admission or fail closed
+```
+
+## Authority boundary
+
+Discovery is not authorization and is not currentness. The result has all authority and side-effect fields fixed false. A found handoff must still pass `reconstruct_governed_invocation(...)`, including current route, authorization, source/scope, checkpoint, ResumePlan, environment/dependency, workspace/runtime, and Scheduler lease checks.
+
+The locator never:
+
+- creates or persists a handoff, route decision, checkpoint, or descriptor;
+- chooses among multiple historical descriptors;
+- interprets issue prose, chat text, labels, or branch names as execution authority;
+- acquires/releases a lease or invokes the Scheduler;
+- performs GitHub, network, subprocess, cloud, VM lifecycle, credential, merge, issue-closure, or external writes;
+- adds a second index, database, queue, daemon, retry system, router, Scheduler, or authority store.
+
+## Store behavior
+
+The implementation scans only `<store_root>/invocations/*.json`, the existing bounded #1218 descriptor directory. The existing maximum descriptor count remains the scan bound. Each candidate is deserialized canonically and its filename is checked against its immutable handoff identity. Store unavailability, any descriptor-integrity failure, or a descriptor count above the existing bound returns `needs-decision` without exposing a handoff.
+
+Repository matching is case-insensitive; issue matching is exact. The locator does not use file timestamps, directory order, `latest` heuristics, or issue status to select a candidate.
+
+Multiple descriptors for the same repository and issue are intentionally ambiguous at this seam. The locator does not guess which historical handoff is current; currentness remains downstream canonical evidence and must be resolved explicitly rather than inferred from descriptor age.
+
+## Integration handoff
+
+A ChatGPT-side or host-side integration may use this locator only as the read step that obtains an existing handoff identity. It must preserve the established route precedence and then invoke the existing bounded `/agent-os resume executor-handoff:<sha256>` transport. If no unique handoff exists, the integration must not synthesize one or silently fall back to local CLI.
+
+This repository-only seam does not itself make the ChatGPT product surface callable and does not deploy `/usr/local/libexec/agent-os-governed-resume` on GCE. #1238 remains the owner of host entrypoint deployment/integrity. #1239 remains the owner of live GitHub-to-GCE invocation and replay qualification after #1238.
+
+## Rollback
+
+Remove this locator module, its focused tests, and this note. The existing #1218 descriptor format/store, immutable handoff identities, reconstruction, Scheduler state, GCE transport, branches, PRs, and external resources remain unchanged.
