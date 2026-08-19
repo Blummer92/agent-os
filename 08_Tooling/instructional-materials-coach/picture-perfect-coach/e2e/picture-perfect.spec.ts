@@ -1,5 +1,10 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { expect, test, type Page } from '@playwright/test';
-import tutorialRecording from '../src/fixtures/tutorial0-recording.json';
+
+const tutorialRecording = JSON.parse(
+  readFileSync(fileURLToPath(new URL('../src/fixtures/tutorial0-recording.json', import.meta.url)), 'utf8'),
+) as { title: string; steps: Array<Record<string, unknown> & { type: string; url?: string }> };
 
 async function openUpload(page: Page) {
   await page.goto('/');
@@ -88,7 +93,7 @@ test('malformed Recorder JSON fails closed with one bounded recovery action', as
 test('off-approved-origin Recorder navigation is surfaced and cannot become instructional evidence', async ({ page }) => {
   const unsafe = structuredClone(tutorialRecording);
   const navigate = unsafe.steps.find((step) => step.type === 'navigate');
-  if (!navigate || navigate.type !== 'navigate') throw new Error('fixture navigate step missing');
+  if (!navigate) throw new Error('fixture navigate step missing');
   navigate.url = 'https://example.invalid/not-approved';
   await openUpload(page);
   await uploadJson(page, unsafe, 'off-origin.json');
