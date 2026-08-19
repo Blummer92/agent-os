@@ -18,6 +18,7 @@ const EVIDENCE_STATES = new Set<EvidenceState>([
   'unavailable',
 ]);
 const MODELING_DISPOSITIONS = new Set(['keep', 'combine', 'not-instructional', 'needs-review']);
+const APPROVED_SYNTHETIC_ORIGIN = 'https://new.express.adobe.test';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -34,6 +35,14 @@ function canonicalize(value: unknown): string {
 function hasRecorderShape(value: unknown): value is { steps: unknown[] } {
   return isRecord(value) && Array.isArray(value.steps) && value.steps.length > 0 &&
     value.steps.every((step) => isRecord(step) && typeof step.type === 'string');
+}
+
+function hasOffApprovedOrigin(value: { steps: unknown[] }): boolean {
+  return value.steps.some((step) => {
+    if (!isRecord(step) || step.type !== 'navigate' || typeof step.url !== 'string') return false;
+    try { return new URL(step.url).origin !== APPROVED_SYNTHETIC_ORIGIN; }
+    catch { return true; }
+  });
 }
 
 function isEvidenceState(value: unknown): value is EvidenceState {
@@ -116,6 +125,9 @@ export function validateUploadText(text: string): UploadValidationResult {
   }
   if (!hasRecorderShape(parsed)) {
     return { ok: false, message: 'This JSON does not contain the bounded Recorder step structure required by this upload screen.' };
+  }
+  if (hasOffApprovedOrigin(parsed)) {
+    return { ok: false, message: 'This recording includes navigation outside the approved Adobe Express modeling origin. Picture Perfect stopped before treating it as instructional evidence.' };
   }
   if (canonicalize(parsed) !== canonicalize(tutorialRecording)) {
     return { ok: false, message: 'The recording parsed, but this offline slice has no Teacher Modeling evidence for it yet. No instructional counts were guessed.' };
