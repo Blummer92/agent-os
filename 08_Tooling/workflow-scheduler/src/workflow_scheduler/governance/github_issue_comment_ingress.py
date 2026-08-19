@@ -35,6 +35,7 @@ _ACTOR_RE = re.compile(r"[A-Za-z0-9-]{1,39}", re.ASCII)
 IngressStatus = Literal["accepted", "blocked", "ignored"]
 IngressReason = Literal[
     "accepted-envelope",
+    "accepted-discovery-envelope",
     "event-not-created",
     "pull-request-comment",
     "repository-mismatch",
@@ -87,6 +88,11 @@ def _logical_trigger_id(repository: str, issue_number: int, handoff_id: str) -> 
     return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
 
 
+def _discovery_trigger_id(repository: str, issue_number: int) -> str:
+    material = f"{repository}\0{issue_number}\0discover".encode("ascii")
+    return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
+
+
 def _result(
     *,
     status: IngressStatus,
@@ -97,10 +103,13 @@ def _result(
     comment_id: int | None = None,
     actor: str | None = None,
     handoff_id: str | None = None,
+    discovery: bool = False,
 ) -> IssueCommentIngressResult:
     logical_id = None
     if handoff_id is not None and issue_number is not None:
         logical_id = _logical_trigger_id(repository, issue_number, handoff_id)
+    elif discovery and issue_number is not None:
+        logical_id = _discovery_trigger_id(repository, issue_number)
     return IssueCommentIngressResult(
         schema_version=INGRESS_SCHEMA_VERSION,
         status=status,
@@ -248,6 +257,18 @@ def admit_issue_comment_event(
             comment_id=comment_id,
             actor=actor,
         )
+    if body == "/agent-os discover":
+        return _result(
+            status="accepted",
+            reason="accepted-discovery-envelope",
+            repository=expected_repository,
+            run_attempt=run_attempt,
+            issue_number=issue_number,
+            comment_id=comment_id,
+            actor=actor,
+            discovery=True,
+        )
+
     match = _TRIGGER_RE.fullmatch(body)
     if match is None:
         return _result(

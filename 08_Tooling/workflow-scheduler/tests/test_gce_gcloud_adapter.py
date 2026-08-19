@@ -211,3 +211,58 @@ def test_frozen_resource_and_provider_are_exact() -> None:
     assert live.RESOURCE.instance == "agent-os-test"
     assert "966859826758" in live.WIF_PROVIDER
     assert "agent-os-github/providers/agent-os-main" in live.WIF_PROVIDER
+
+
+class DiscoveryAdapter(FakeAdapter):
+    def probe_discovery_ready(self, resource):
+        self.calls.append("probe-discovery")
+        return True
+
+    def discover(self, resource, *, repository, issue_number):
+        self.calls.append("discover")
+        return {
+            "status": "found",
+            "reason_codes": ["found"],
+            "repository": repository,
+            "issue_number": issue_number,
+            "matching_descriptor_count": 1,
+            "handoff_id": HANDOFF,
+            "result_id": "invocation-handoff-discovery:test",
+            "execution_authorized": False,
+            "scheduler_invoked": False,
+            "side_effects_performed": False,
+        }
+
+
+def discovery_ingress() -> IssueCommentIngressResult:
+    return ingress(
+        reason="accepted-discovery-envelope",
+        handoff_id_or_none=None,
+        logical_trigger_id_or_none="issue-comment-trigger:" + "c" * 64,
+    )
+
+
+def test_discovery_uses_fixed_host_path_and_never_invokes_scheduler_path() -> None:
+    adapter = DiscoveryAdapter()
+    result = live.execute_transport(
+        discovery_ingress(),
+        claims=claims(),
+        adapter=adapter,
+    )
+    assert adapter.calls == ["observe", "probe-discovery", "discover"]
+    assert result["discovery"]["status"] == "found"
+    assert result["discovery"]["handoff_id"] == HANDOFF
+    assert result["discovery"]["execution_authorized"] is False
+    assert result["discovery"]["scheduler_invoked"] is False
+
+
+def test_discovery_wrong_claims_fail_before_host_access() -> None:
+    adapter = DiscoveryAdapter()
+    result = live.execute_transport(
+        discovery_ingress(),
+        claims=claims(repository="other/repo"),
+        adapter=adapter,
+    )
+    assert adapter.calls == []
+    assert result["discovery"]["status"] == "blocked"
+    assert result["discovery"]["handoff_id"] is None

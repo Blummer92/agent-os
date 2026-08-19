@@ -1,0 +1,30 @@
+#!/bin/sh
+set -eu
+
+TARGET=${TARGET:-/usr/local/libexec/agent-os-handoff-discovery}
+MODE=${MODE:-0755}
+OWNER=${OWNER:-root}
+GROUP=${GROUP:-root}
+
+case "$TARGET" in
+  /usr/local/libexec/agent-os-handoff-discovery|*/agent-os-handoff-discovery) ;;
+  *) echo "refusing unexpected target" >&2; exit 64 ;;
+esac
+
+wrapper=$(mktemp)
+trap 'rm -f "$wrapper"' EXIT HUP INT TERM
+
+cat > "$wrapper" <<'EOF'
+#!/bin/sh
+set -eu
+exec /usr/bin/env python3 -m agent_os_execution_service.handoff_discovery_entrypoint "$@"
+EOF
+
+if [ -f "$TARGET" ] && cmp -s "$wrapper" "$TARGET"; then
+  chmod "$MODE" "$TARGET"
+  chown "$OWNER:$GROUP" "$TARGET"
+  exit 0
+fi
+
+install -d -m 0755 "$(dirname "$TARGET")"
+install -o "$OWNER" -g "$GROUP" -m "$MODE" "$wrapper" "$TARGET"
