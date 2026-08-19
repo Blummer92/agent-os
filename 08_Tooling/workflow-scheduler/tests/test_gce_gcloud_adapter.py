@@ -176,6 +176,63 @@ def test_probe_command_is_fixed_and_iap_only(monkeypatch: pytest.MonkeyPatch) ->
     assert command[-1] == "test -x /usr/local/libexec/agent-os-governed-resume"
 
 
+def test_discovery_probe_imports_tracked_module_without_second_host_wrapper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(argv, *, timeout=60):
+        calls.append(tuple(argv))
+        class Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return Result()
+
+    monkeypatch.setattr(live, "_run", fake_run)
+    assert live.GcloudIapAdapter().probe_discovery_ready(live.RESOURCE) is True
+    command = calls[0]
+    assert "--tunnel-through-iap" in command
+    assert command[-1] == (
+        "/usr/bin/env python3 -c 'import "
+        "agent_os_execution_service.handoff_discovery_entrypoint'"
+    )
+    assert "/usr/local/libexec/agent-os-handoff-discovery" not in command[-1]
+
+
+def test_discovery_command_is_fixed_module_invocation() -> None:
+    command = live._discovery_command(
+        repository="Blummer92/agent-os",
+        issue_number=1284,
+    )
+    assert command == (
+        "/usr/bin/env python3 -m "
+        "agent_os_execution_service.handoff_discovery_entrypoint "
+        "--repository Blummer92/agent-os --issue-number 1284"
+    )
+    assert "/usr/local/libexec/agent-os-handoff-discovery" not in command
+
+
+@pytest.mark.parametrize(
+    ("repository", "issue_number"),
+    [
+        ("other/repo", 1284),
+        ("Blummer92/agent-os", 0),
+        ("Blummer92/agent-os", True),
+        ("Blummer92/agent-os", "1284;whoami"),
+    ],
+)
+def test_discovery_command_rejects_noncanonical_inputs(
+    repository: object,
+    issue_number: object,
+) -> None:
+    with pytest.raises(live.GcloudCommandError, match="non-canonical"):
+        live._discovery_command(
+            repository=repository,  # type: ignore[arg-type]
+            issue_number=issue_number,  # type: ignore[arg-type]
+        )
+
+
 def test_invoke_rejects_noncanonical_argv_without_gcloud() -> None:
     adapter = live.GcloudIapAdapter()
     with pytest.raises(live.GcloudCommandError, match="non-canonical"):
@@ -242,7 +299,7 @@ def discovery_ingress() -> IssueCommentIngressResult:
     )
 
 
-def test_discovery_uses_fixed_host_path_and_never_invokes_scheduler_path() -> None:
+def test_discovery_uses_fixed_module_path_and_never_invokes_scheduler_path() -> None:
     adapter = DiscoveryAdapter()
     result = live.execute_transport(
         discovery_ingress(),
