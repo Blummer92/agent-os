@@ -33,6 +33,9 @@ handoff id -> GovernedInvocationDescriptor -> current evidence reacquisition
 -> exact current SingleIssuePilotInput OR fail-closed result
 ```
 
+## Read-only discovery operation (#1284)
+The same transport also carries one bounded read-only operation. `/agent-os discover-handoff` takes no argument; repository and issue come from the GitHub event envelope, and `run_gce_discovery_path` invokes only `/usr/local/libexec/agent-os-handoff-discovery --repository <owner/name> --issue-number <n>`. It reuses this trust envelope, resource tuple, and VM state machine, never reaches the resume entrypoint, Scheduler, or a lease, and returns a non-authorizing `found | not-found | needs-decision` projection. See `08_Tooling/agent-os-execution-service/docs/HANDOFF_DISCOVERY_ENTRYPOINT.md`.
+
 ## VM state machine
 ```text
 STOPPED -> one start -> bounded state observation -> RUNNING

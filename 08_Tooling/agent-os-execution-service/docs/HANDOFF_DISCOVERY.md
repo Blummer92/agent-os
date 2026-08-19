@@ -40,9 +40,13 @@ Multiple descriptors for the same repository and issue are intentionally ambiguo
 
 A ChatGPT-side or host-side integration may use this locator only as the read step that obtains an existing handoff identity. It must preserve the established route precedence and then invoke the existing bounded `/agent-os resume executor-handoff:<sha256>` transport. If no unique handoff exists, the integration must not synthesize one or silently fall back to local CLI.
 
-The first landed consumer is the Claude Code execution-interface preflight: `.claude/settings.json` wires `UserPromptSubmit` and `PreToolUse` hooks to `scripts/agent-os-execution-interface-preflight.py`, which runs before generic GitHub publish tooling checks local `git`/`gh`. It calls this locator and reports the resulting existing ingress, adding no routing, authorization, descriptor, or execution authority of its own. See `scripts/agent-os-execution-interface-preflight.md`. The ChatGPT product-side pre-tool routing layer remains a separate, still-unowned integration surface.
+The first landed consumer is the Claude Code execution-interface preflight: `.claude/settings.json` wires `UserPromptSubmit` and `PreToolUse` hooks to `scripts/agent-os-execution-interface-preflight.py`, which runs before generic GitHub publish tooling checks local `git`/`gh`. It calls this locator and reports the resulting existing ingress, adding no routing, authorization, descriptor, or execution authority of its own. See `scripts/agent-os-execution-interface-preflight.md`.
 
-This repository-only seam does not itself make the ChatGPT product surface callable and does not deploy `/usr/local/libexec/agent-os-governed-resume` on GCE. #1238 remains the owner of host entrypoint deployment/integrity. #1239 remains the owner of live GitHub-to-GCE invocation and replay qualification after #1238.
+The second landed consumer is the #1284 GitHub-native binding, which serves an execution interface that cannot read this store directly. `/agent-os discover-handoff` carries no argument; the existing #1203 ingress supplies repository and issue from the GitHub event envelope, the existing #1217/#1230 transport reaches the fixed read-only host entrypoint, and that entrypoint calls this locator with a server-fixed store root. The bounded result is published as ordinary workflow evidence the interface can read, after which the unchanged `/agent-os resume executor-handoff:<sha256>` ingress remains the only execution trigger. See `HANDOFF_DISCOVERY_ENTRYPOINT.md`.
+
+That binding adds no store, index, router, Scheduler, lease, or transport, and a discovery result never becomes authorization merely by being visible on GitHub.
+
+This repository-only seam does not deploy `/usr/local/libexec/agent-os-governed-resume` or `/usr/local/libexec/agent-os-handoff-discovery` on GCE. #1238 remains the owner of host entrypoint deployment/integrity. #1239 remains the owner of live GitHub-to-GCE invocation and replay qualification after #1238.
 
 ## Rollback
 

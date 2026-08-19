@@ -16,13 +16,14 @@ HANDOFF = "executor-handoff:" + "a" * 64
 
 def _ingress(**overrides: object) -> IssueCommentIngressResult:
     values = dict(
-        schema_version="1.0",
+        schema_version="1.1",
         status="accepted",
         reason="accepted-envelope",
         repository="Blummer92/agent-os",
         issue_number=1203,
         comment_id=99,
         actor="Blummer92",
+        operation_or_none="resume",
         handoff_id_or_none=HANDOFF,
         logical_trigger_id_or_none="issue-comment-trigger:" + "b" * 64,
         run_attempt=1,

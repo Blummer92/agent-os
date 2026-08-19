@@ -8,6 +8,7 @@ capability in the first activation.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 import time
@@ -15,13 +16,18 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from .gce_control_path import (
+    FIXED_DISCOVERY_ENTRYPOINT,
     FIXED_ENTRYPOINT,
     GceResourceTuple,
+    HostDiscoveryEvidence,
     HostInvocationEvidence,
     OidcTrustPolicy,
     VmState,
     run_gce_control_path,
+    run_gce_discovery_path,
     validate_handoff_id,
+    validate_issue_number,
+    validate_repository,
 )
 from .github_issue_comment_ingress import IssueCommentIngressResult
 from .governed_invocation_binding import bind_ingress_to_gce
@@ -134,6 +140,57 @@ class GcloudIapAdapter:
         )
         return result.returncode == 0
 
+    def probe_discovery_ready(self, resource: GceResourceTuple) -> bool:
+        result = self._ssh(
+            resource,
+            f"test -x {FIXED_DISCOVERY_ENTRYPOINT}",
+        )
+        return result.returncode == 0
+
+    def discover(
+        self, resource: GceResourceTuple, argv: tuple[str, ...]
+    ) -> HostDiscoveryEvidence:
+        """Run the fixed read-only locator and parse its bounded projection.
+
+        The argv is re-validated here even though the control path built it, so
+        that no path other than the fixed discovery entrypoint and no argument
+        other than a canonical repository/issue pair can ever be executed.
+        """
+        if len(argv) != 5 or argv[0] != FIXED_DISCOVERY_ENTRYPOINT:
+            raise GcloudCommandError("non-canonical discovery argv rejected")
+        if argv[1] != "--repository" or argv[3] != "--issue-number":
+            raise GcloudCommandError("non-canonical discovery argv rejected")
+        if not validate_repository(argv[2]):
+            raise GcloudCommandError("non-canonical repository rejected")
+        if not argv[4].isdigit() or not validate_issue_number(int(argv[4])):
+            raise GcloudCommandError("non-canonical issue number rejected")
+        command = (
+            f"{FIXED_DISCOVERY_ENTRYPOINT} --repository {argv[2]} "
+            f"--issue-number {argv[4]}"
+        )
+        result = self._ssh(resource, command)
+        if result.returncode != 0:
+            raise GcloudCommandError("fixed discovery invocation failed")
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise GcloudCommandError("discovery evidence was not JSON") from exc
+        if type(payload) is not dict:
+            raise GcloudCommandError("discovery evidence must be an object")
+        reasons = payload.get("reason_codes", ())
+        if type(reasons) not in (list, tuple):
+            raise GcloudCommandError("discovery reason codes must be an array")
+        return HostDiscoveryEvidence(
+            invoked=True,
+            status=payload.get("status"),
+            reason_codes=tuple(reasons),
+            repository=payload.get("repository"),
+            issue_number=payload.get("issue_number"),
+            matching_descriptor_count=payload.get("matching_descriptor_count"),
+            handoff_id=payload.get("handoff_id"),
+            result_id=payload.get("result_id"),
+        )
+
     def invoke(
         self, resource: GceResourceTuple, argv: tuple[str, ...]
     ) -> HostInvocationEvidence:
@@ -183,10 +240,20 @@ def _ingress_from_file(path: Path) -> IssueCommentIngressResult:
         key: payload[key]
         for key in (
             "schema_version", "status", "reason", "repository", "issue_number",
-            "comment_id", "actor", "handoff_id_or_none",
+            "comment_id", "actor", "operation_or_none", "handoff_id_or_none",
             "logical_trigger_id_or_none", "run_attempt",
         )
     })
+
+
+def _trust_policy() -> OidcTrustPolicy:
+    return OidcTrustPolicy(
+        repository="Blummer92/agent-os",
+        repository_owner="Blummer92",
+        workflow_ref=WORKFLOW_REF,
+        ref="refs/heads/main",
+        audience=WIF_PROVIDER,
+    )
 
 
 def execute_transport(
@@ -195,14 +262,10 @@ def execute_transport(
     claims: Mapping[str, object],
     adapter: GcloudIapAdapter,
 ) -> dict[str, object]:
+    if ingress.operation_or_none != "resume":
+        raise ValueError("resume transport requires the resume operation")
     binding = bind_ingress_to_gce(ingress, resource=RESOURCE)
-    policy = OidcTrustPolicy(
-        repository="Blummer92/agent-os",
-        repository_owner="Blummer92",
-        workflow_ref=WORKFLOW_REF,
-        ref="refs/heads/main",
-        audience=WIF_PROVIDER,
-    )
+    policy = _trust_policy()
     result = run_gce_control_path(
         request_id=binding.control_request_id,
         claims=claims,
@@ -237,6 +300,55 @@ def execute_transport(
     }
 
 
+def execute_discovery_transport(
+    ingress: IssueCommentIngressResult,
+    *,
+    claims: Mapping[str, object],
+    adapter: GcloudIapAdapter,
+) -> dict[str, object]:
+    """Run one bounded read-only #1284 discovery over the existing transport.
+
+    No ``GovernedInvocationBinding`` is produced: that binding exists to carry
+    an immutable handoff into execution, and discovery has no handoff yet and
+    no execution to reach. The request identity is derived from the ingress
+    logical trigger and the fixed resource, so a replayed discovery comment
+    yields the same request identity.
+    """
+    if type(ingress) is not IssueCommentIngressResult:
+        raise TypeError("ingress must be exact IssueCommentIngressResult")
+    if ingress.status != "accepted" or ingress.reason != "accepted-envelope":
+        raise ValueError("only accepted ingress evidence may be discovered against")
+    if ingress.operation_or_none != "discover-handoff":
+        raise ValueError("discovery transport requires the discovery operation")
+    if ingress.issue_number is None or ingress.logical_trigger_id_or_none is None:
+        raise ValueError("accepted discovery ingress is missing bounded identity")
+    if ingress.handoff_id_or_none is not None:
+        raise ValueError("discovery ingress must not carry a handoff identity")
+    if ingress.run_attempt != 1:
+        raise ValueError("workflow reruns cannot create a discovery request")
+
+    material = (
+        f"{ingress.logical_trigger_id_or_none}\0"
+        f"{RESOURCE.project}\0{RESOURCE.zone}\0{RESOURCE.instance}"
+    ).encode("utf-8")
+    request_id = "gce-discovery-request:" + hashlib.sha256(material).hexdigest()
+    result = run_gce_discovery_path(
+        request_id=request_id,
+        claims=claims,
+        trust_policy=_trust_policy(),
+        resource=RESOURCE,
+        expected_resource=RESOURCE,
+        repository=ingress.repository,
+        issue_number=ingress.issue_number,
+        adapter=adapter,
+    )
+    return {
+        "operation": "discover-handoff",
+        "logical_trigger_id": ingress.logical_trigger_id_or_none,
+        "discovery": result.to_dict(),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--transport", type=Path, required=True)
@@ -254,11 +366,12 @@ def main(argv: list[str] | None = None) -> int:
         "ref": args.ref,
         "aud": args.audience,
     }
-    evidence = execute_transport(
-        _ingress_from_file(args.transport),
-        claims=claims,
-        adapter=GcloudIapAdapter(),
-    )
+    ingress = _ingress_from_file(args.transport)
+    adapter = GcloudIapAdapter()
+    if ingress.operation_or_none == "discover-handoff":
+        evidence = execute_discovery_transport(ingress, claims=claims, adapter=adapter)
+    else:
+        evidence = execute_transport(ingress, claims=claims, adapter=adapter)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
         json.dumps(evidence, sort_keys=True, separators=(",", ":")) + "\n",

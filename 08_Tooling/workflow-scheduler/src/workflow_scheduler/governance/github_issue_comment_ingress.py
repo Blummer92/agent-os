@@ -6,6 +6,14 @@ not Scheduler admission.  Canonical authorization, handoff reconstruction,
 lease state, exact-head state, dependency readiness, and runtime dispatch remain
 owned by their existing Agent OS components.
 
+Two bounded operations are recognized. ``resume`` carries one immutable
+``executor-handoff:<sha256>`` identity, exactly as before. ``discover-handoff``
+(#1284) carries no argument whatsoever: the repository and issue identity used
+downstream are the envelope values validated here, so an integration surface can
+locate an existing handoff without any caller-supplied path, store root, handoff
+string, or command text reaching the host. Discovery is a locator only; the
+resume operation remains the sole execution trigger.
+
 The parser never executes comment text, constructs shell commands from comment
 text, performs network I/O, mutates a repository, acquires a lease, or invokes a
 Scheduler/executor.
@@ -21,7 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-INGRESS_SCHEMA_VERSION = "1.0"
+INGRESS_SCHEMA_VERSION = "1.1"
 MAX_EVENT_BYTES = 1_048_576
 MAX_COMMENT_BYTES = 256
 _HANDOFF_RE = re.compile(r"executor-handoff:[0-9a-f]{64}", re.ASCII)
@@ -29,10 +37,16 @@ _TRIGGER_RE = re.compile(
     r"/agent-os resume (?P<handoff>executor-handoff:[0-9a-f]{64})",
     re.ASCII,
 )
+#: The #1284 discovery trigger deliberately carries no arguments at all. The
+#: repository and issue identity come from the already-validated GitHub event
+#: envelope, never from comment prose, so no caller-supplied store root, path,
+#: handoff, branch, or command text can reach the host.
+_DISCOVERY_TRIGGER = "/agent-os discover-handoff"
 _REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", re.ASCII)
 _ACTOR_RE = re.compile(r"[A-Za-z0-9-]{1,39}", re.ASCII)
 
 IngressStatus = Literal["accepted", "blocked", "ignored"]
+IngressOperation = Literal["resume", "discover-handoff"]
 IngressReason = Literal[
     "accepted-envelope",
     "event-not-created",
@@ -57,6 +71,7 @@ class IssueCommentIngressResult:
     issue_number: int | None
     comment_id: int | None
     actor: str | None
+    operation_or_none: IngressOperation | None
     handoff_id_or_none: str | None
     logical_trigger_id_or_none: str | None
     run_attempt: int
@@ -73,6 +88,7 @@ class IssueCommentIngressResult:
             "issue_number": self.issue_number,
             "comment_id": self.comment_id,
             "actor": self.actor,
+            "operation_or_none": self.operation_or_none,
             "handoff_id_or_none": self.handoff_id_or_none,
             "logical_trigger_id_or_none": self.logical_trigger_id_or_none,
             "run_attempt": self.run_attempt,
@@ -87,6 +103,17 @@ def _logical_trigger_id(repository: str, issue_number: int, handoff_id: str) -> 
     return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
 
 
+def _discovery_trigger_id(repository: str, issue_number: int) -> str:
+    """Derive the replay-stable logical identity of one discovery request.
+
+    Discovery has no handoff to bind, so identity comes from the repository and
+    issue alone. Two identical discovery comments therefore share one logical
+    trigger identity, exactly as duplicate resume comments already do.
+    """
+    material = f"{repository}\0{issue_number}".encode("ascii")
+    return f"issue-comment-discovery-trigger:{hashlib.sha256(material).hexdigest()}"
+
+
 def _result(
     *,
     status: IngressStatus,
@@ -96,11 +123,15 @@ def _result(
     issue_number: int | None = None,
     comment_id: int | None = None,
     actor: str | None = None,
+    operation: IngressOperation | None = None,
     handoff_id: str | None = None,
 ) -> IssueCommentIngressResult:
     logical_id = None
-    if handoff_id is not None and issue_number is not None:
-        logical_id = _logical_trigger_id(repository, issue_number, handoff_id)
+    if issue_number is not None:
+        if handoff_id is not None:
+            logical_id = _logical_trigger_id(repository, issue_number, handoff_id)
+        elif operation == "discover-handoff":
+            logical_id = _discovery_trigger_id(repository, issue_number)
     return IssueCommentIngressResult(
         schema_version=INGRESS_SCHEMA_VERSION,
         status=status,
@@ -109,6 +140,7 @@ def _result(
         issue_number=issue_number,
         comment_id=comment_id,
         actor=actor,
+        operation_or_none=operation,
         handoff_id_or_none=handoff_id,
         logical_trigger_id_or_none=logical_id,
         run_attempt=run_attempt,
@@ -248,6 +280,21 @@ def admit_issue_comment_event(
             comment_id=comment_id,
             actor=actor,
         )
+    if body == _DISCOVERY_TRIGGER:
+        # Discovery carries no caller-supplied argument. Repository and issue
+        # identity are the envelope values already validated above, so comment
+        # prose can never name a store root, path, handoff, or command.
+        return _result(
+            status="accepted",
+            reason="accepted-envelope",
+            repository=expected_repository,
+            run_attempt=run_attempt,
+            issue_number=issue_number,
+            comment_id=comment_id,
+            actor=actor,
+            operation="discover-handoff",
+        )
+
     match = _TRIGGER_RE.fullmatch(body)
     if match is None:
         return _result(
@@ -278,6 +325,7 @@ def admit_issue_comment_event(
         issue_number=issue_number,
         comment_id=comment_id,
         actor=actor,
+        operation="resume",
         handoff_id=handoff_id,
     )
 

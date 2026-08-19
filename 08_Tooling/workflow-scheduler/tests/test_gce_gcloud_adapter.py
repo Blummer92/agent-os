@@ -14,13 +14,14 @@ HANDOFF = "executor-handoff:" + "a" * 64
 
 def ingress(**overrides: object) -> IssueCommentIngressResult:
     values = dict(
-        schema_version="1.0",
+        schema_version="1.1",
         status="accepted",
         reason="accepted-envelope",
         repository="Blummer92/agent-os",
         issue_number=1217,
         comment_id=10,
         actor="Blummer92",
+        operation_or_none="resume",
         handoff_id_or_none=HANDOFF,
         logical_trigger_id_or_none="issue-comment-trigger:" + "b" * 64,
         run_attempt=1,
@@ -211,3 +212,189 @@ def test_frozen_resource_and_provider_are_exact() -> None:
     assert live.RESOURCE.instance == "agent-os-test"
     assert "966859826758" in live.WIF_PROVIDER
     assert "agent-os-github/providers/agent-os-main" in live.WIF_PROVIDER
+
+
+DISCOVERY_RESULT = {
+    "status": "found",
+    "reason_codes": ["found"],
+    "repository": "Blummer92/agent-os",
+    "issue_number": 1284,
+    "matching_descriptor_count": 1,
+    "handoff_id": HANDOFF,
+    "result_id": "invocation-handoff-discovery:" + "c" * 64,
+}
+
+
+def discovery_ingress(**overrides: object) -> IssueCommentIngressResult:
+    values = dict(
+        issue_number=1284,
+        operation_or_none="discover-handoff",
+        handoff_id_or_none=None,
+        logical_trigger_id_or_none="issue-comment-discovery-trigger:" + "d" * 64,
+    )
+    values.update(overrides)
+    return ingress(**values)
+
+
+class FakeDiscoveryAdapter:
+    def __init__(self, *, stdout: str | None = None, returncode: int = 0) -> None:
+        self.stdout = json.dumps(DISCOVERY_RESULT) if stdout is None else stdout
+        self.returncode = returncode
+        self.commands: list[str] = []
+
+    def observe_state(self, resource):
+        return VmState.RUNNING
+
+    def start(self, resource):
+        return True
+
+    def wait_until_running(self, resource):
+        return VmState.RUNNING
+
+    def probe_discovery_ready(self, resource):
+        self.commands.append("probe")
+        return True
+
+    def discover(self, resource, argv):
+        return live.GcloudIapAdapter.discover(self, resource, argv)
+
+    def _ssh(self, resource, command):
+        self.commands.append(command)
+
+        class Completed:
+            pass
+
+        result = Completed()
+        result.returncode = self.returncode
+        result.stdout = self.stdout
+        return result
+
+
+def test_discovery_probe_targets_the_read_only_entrypoint() -> None:
+    adapter = FakeDiscoveryAdapter()
+    assert live.GcloudIapAdapter.probe_discovery_ready(adapter, live.RESOURCE) is True
+    assert adapter.commands[-1] == (
+        "test -x /usr/local/libexec/agent-os-handoff-discovery"
+    )
+
+
+def test_discovery_command_is_the_fixed_entrypoint_with_bounded_arguments() -> None:
+    adapter = FakeDiscoveryAdapter()
+    evidence = adapter.discover(
+        live.RESOURCE,
+        (
+            "/usr/local/libexec/agent-os-handoff-discovery",
+            "--repository",
+            "Blummer92/agent-os",
+            "--issue-number",
+            "1284",
+        ),
+    )
+    assert adapter.commands[-1] == (
+        "/usr/local/libexec/agent-os-handoff-discovery "
+        "--repository Blummer92/agent-os --issue-number 1284"
+    )
+    assert evidence.handoff_id == HANDOFF
+    assert evidence.status == "found"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ("/usr/local/libexec/agent-os-governed-resume", "--repository", "a/b", "--issue-number", "1"),
+        ("/bin/sh", "--repository", "a/b", "--issue-number", "1"),
+        ("/usr/local/libexec/agent-os-handoff-discovery", "--store-root", "/etc", "--issue-number", "1"),
+        ("/usr/local/libexec/agent-os-handoff-discovery", "--repository", "a/b; rm -rf /", "--issue-number", "1"),
+        ("/usr/local/libexec/agent-os-handoff-discovery", "--repository", "a/b", "--issue-number", "0"),
+        ("/usr/local/libexec/agent-os-handoff-discovery", "--repository", "a/b", "--issue-number", "1x"),
+        ("/usr/local/libexec/agent-os-handoff-discovery", "--repository", "a/b"),
+    ],
+)
+def test_noncanonical_discovery_argv_never_reaches_the_host(argv) -> None:
+    adapter = FakeDiscoveryAdapter()
+    with pytest.raises(live.GcloudCommandError):
+        adapter.discover(live.RESOURCE, argv)
+    assert adapter.commands == []
+
+
+def test_nonjson_discovery_output_fails_closed() -> None:
+    adapter = FakeDiscoveryAdapter(stdout="not json")
+    with pytest.raises(live.GcloudCommandError):
+        adapter.discover(
+            live.RESOURCE,
+            (
+                "/usr/local/libexec/agent-os-handoff-discovery",
+                "--repository",
+                "Blummer92/agent-os",
+                "--issue-number",
+                "1284",
+            ),
+        )
+
+
+def test_discovery_transport_returns_bounded_nonauthorizing_evidence() -> None:
+    evidence = live.execute_discovery_transport(
+        discovery_ingress(),
+        claims=claims(),
+        adapter=FakeDiscoveryAdapter(),
+    )
+    assert evidence["operation"] == "discover-handoff"
+    discovery = evidence["discovery"]
+    assert discovery["discovery_status"] == "found"
+    assert discovery["handoff_id"] == HANDOFF
+    for key in (
+        "execution_authorized",
+        "scheduler_invoked",
+        "lease_acquired",
+        "handoff_persisted",
+        "checkpoint_store_written",
+        "github_writes_authorized",
+        "merge_authorized",
+        "issue_closure_authorized",
+    ):
+        assert discovery[key] is False
+
+
+def test_replayed_discovery_reuses_the_same_request_identity() -> None:
+    first = live.execute_discovery_transport(
+        discovery_ingress(comment_id=1), claims=claims(), adapter=FakeDiscoveryAdapter()
+    )
+    second = live.execute_discovery_transport(
+        discovery_ingress(comment_id=2), claims=claims(), adapter=FakeDiscoveryAdapter()
+    )
+    assert first["discovery"]["request_id"] == second["discovery"]["request_id"]
+    assert first["discovery"]["handoff_id"] == second["discovery"]["handoff_id"]
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"operation_or_none": "resume", "handoff_id_or_none": HANDOFF},
+        {"handoff_id_or_none": HANDOFF},
+        {"status": "ignored"},
+        {"run_attempt": 2},
+        {"logical_trigger_id_or_none": None},
+    ],
+)
+def test_discovery_transport_rejects_noncanonical_ingress(overrides) -> None:
+    with pytest.raises(ValueError):
+        live.execute_discovery_transport(
+            discovery_ingress(**overrides),
+            claims=claims(),
+            adapter=FakeDiscoveryAdapter(),
+        )
+
+
+def test_discovery_never_binds_a_governed_invocation_or_reaches_resume() -> None:
+    evidence = live.execute_discovery_transport(
+        discovery_ingress(), claims=claims(), adapter=FakeDiscoveryAdapter()
+    )
+    assert "binding" not in evidence
+    assert "control" not in evidence
+
+
+def test_discovery_ingress_can_never_enter_the_resume_transport() -> None:
+    with pytest.raises(ValueError, match="resume operation"):
+        live.execute_transport(
+            discovery_ingress(), claims=claims(), adapter=FakeAdapter()
+        )

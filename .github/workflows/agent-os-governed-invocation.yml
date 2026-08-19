@@ -39,8 +39,10 @@ jobs:
           payload = json.loads(
               (Path(os.environ["RUNNER_TEMP"]) / "agent-os-ingress" / "transport.json").read_text()
           )
+          operation = payload["operation_or_none"] or "none"
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(f"accepted={'true' if payload['status'] == 'accepted' else 'false'}\n")
+              output.write(f"operation={operation}\n")
           PY
 
       - name: Record non-accepted bounded transport evidence
@@ -78,6 +80,11 @@ jobs:
         if: ${{ steps.transport.outputs.accepted == 'true' }}
         uses: google-github-actions/setup-gcloud@v3
 
+      # One adapter serves both bounded operations. `resume` reaches the fixed
+      # governed-resume entrypoint; `discover-handoff` reaches the fixed
+      # read-only locator and never touches the Scheduler, a lease, or the
+      # resume entrypoint. The operation is decided by the already-validated
+      # transport evidence, never by comment prose.
       - name: Invoke exact governed GCE control path
         if: ${{ steps.transport.outputs.accepted == 'true' }}
         env:
@@ -111,7 +118,32 @@ jobs:
               if result_path.exists():
                   result = json.loads(result_path.read_text(encoding="utf-8"))
                   control = result.get("control")
-                  if isinstance(control, dict):
+                  discovery = result.get("discovery")
+                  if isinstance(discovery, dict):
+                      # Bounded, non-authorizing discovery evidence. A `found`
+                      # handoff is an identity an integration surface may copy
+                      # into the existing `/agent-os resume ...` ingress; it is
+                      # not currentness and not execution authority.
+                      summary.write("Operation: `discover-handoff`\n\n")
+                      summary.write(f"Transport status: `{discovery.get('status')}`\n\n")
+                      summary.write(f"Reasons: `{','.join(discovery.get('reason_codes', []))}`\n\n")
+                      summary.write(f"Discovery status: `{discovery.get('discovery_status')}`\n\n")
+                      summary.write(
+                          "Discovery reasons: "
+                          f"`{','.join(discovery.get('discovery_reason_codes', []))}`\n\n"
+                      )
+                      summary.write(f"Repository: `{discovery.get('repository')}`\n\n")
+                      summary.write(f"Issue: `{discovery.get('issue_number')}`\n\n")
+                      summary.write(
+                          "Matching descriptors: "
+                          f"`{discovery.get('matching_descriptor_count')}`\n\n"
+                      )
+                      summary.write(f"Handoff: `{discovery.get('handoff_id')}`\n\n")
+                      summary.write(f"Discovery result id: `{discovery.get('discovery_result_id')}`\n\n")
+                      summary.write(f"Execution authorized: `{discovery.get('execution_authorized')}`\n\n")
+                      summary.write(f"Scheduler invoked: `{discovery.get('scheduler_invoked')}`\n")
+                  elif isinstance(control, dict):
+                      summary.write("Operation: `resume`\n\n")
                       summary.write(f"Control status: `{control.get('status')}`\n\n")
                       summary.write(f"Reasons: `{','.join(control.get('reason_codes', []))}`\n\n")
                       summary.write(f"Scheduler accepted: `{control.get('host_accepted')}`\n\n")

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from workflow_scheduler.governance.github_issue_comment_ingress import (
     admit_issue_comment_event,
     main,
@@ -127,3 +129,97 @@ def test_cli_writes_bounded_canonical_json(tmp_path: Path) -> None:
     assert payload["execution_authorized"] is False
     assert payload["scheduler_invoked"] is False
     assert payload["side_effects_performed"] is False
+
+
+DISCOVERY = "/agent-os discover-handoff"
+
+
+def test_discovery_trigger_is_accepted_with_envelope_identity_only() -> None:
+    result = admit(event(DISCOVERY))
+    assert result.status == "accepted"
+    assert result.reason == "accepted-envelope"
+    assert result.operation_or_none == "discover-handoff"
+    # Identity comes from the envelope, never from the comment body.
+    assert result.repository == REPOSITORY
+    assert result.issue_number == 1203
+    assert result.handoff_id_or_none is None
+    assert result.logical_trigger_id_or_none is not None
+    assert result.execution_authorized is False
+    assert result.scheduler_invoked is False
+    assert result.side_effects_performed is False
+
+
+def test_resume_trigger_still_reports_the_resume_operation() -> None:
+    result = admit(event(f"/agent-os resume {HANDOFF}"))
+    assert result.operation_or_none == "resume"
+    assert result.handoff_id_or_none == HANDOFF
+
+
+def test_discovery_and_resume_have_distinct_logical_trigger_identities() -> None:
+    discovery = admit(event(DISCOVERY))
+    resume = admit(event(f"/agent-os resume {HANDOFF}"))
+    assert (
+        discovery.logical_trigger_id_or_none != resume.logical_trigger_id_or_none
+    )
+    assert discovery.logical_trigger_id_or_none.startswith(
+        "issue-comment-discovery-trigger:"
+    )
+
+
+def test_replayed_discovery_shares_one_logical_trigger_identity() -> None:
+    first = event(DISCOVERY)
+    second = event(DISCOVERY)
+    second["comment"]["id"] = 9983
+    assert (
+        admit(first).logical_trigger_id_or_none
+        == admit(second).logical_trigger_id_or_none
+    )
+
+
+def test_discovery_on_a_different_issue_has_a_different_identity() -> None:
+    first = admit(event(DISCOVERY))
+    other = event(DISCOVERY)
+    other["issue"]["number"] = 1239
+    assert first.logical_trigger_id_or_none != admit(other).logical_trigger_id_or_none
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        f"{DISCOVERY} --store-root /etc",
+        f"{DISCOVERY} Blummer92/agent-os 1284",
+        f"{DISCOVERY}; rm -rf /",
+        f"{DISCOVERY} {HANDOFF}",
+        " /agent-os discover-handoff",
+        "/agent-os discover-handoff ",
+        "/agent-os discover",
+    ],
+)
+def test_discovery_trigger_accepts_no_argument_whatsoever(body: str) -> None:
+    result = admit(event(body))
+    assert (result.status, result.reason) == ("ignored", "malformed-trigger")
+    assert result.operation_or_none is None
+
+
+def test_fake_handoff_in_prose_never_becomes_discovery_authority() -> None:
+    fake = "executor-handoff:" + "f" * 64
+    result = admit(event(f"Please resume {fake} now"))
+    assert (result.status, result.reason) == ("ignored", "malformed-trigger")
+    assert result.handoff_id_or_none is None
+    assert result.operation_or_none is None
+
+
+def test_unauthorized_actor_cannot_trigger_discovery() -> None:
+    result = admit(event(DISCOVERY, actor="mallory"))
+    assert (result.status, result.reason) == ("blocked", "actor-not-allowed")
+    assert result.operation_or_none is None
+
+
+def test_discovery_rerun_is_not_transport_authority() -> None:
+    result = admit(event(DISCOVERY), run_attempt=2)
+    assert (result.status, result.reason) == ("blocked", "workflow-rerun")
+
+
+def test_discovery_result_never_copies_the_comment_body() -> None:
+    encoded = json.dumps(admit(event(DISCOVERY)).to_dict(), sort_keys=True)
+    assert DISCOVERY not in encoded

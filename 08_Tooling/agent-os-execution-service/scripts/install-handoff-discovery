@@ -1,0 +1,46 @@
+#!/bin/sh
+set -eu
+
+TARGET=${TARGET:-/usr/local/libexec/agent-os-handoff-discovery}
+MODE=${MODE:-0755}
+OWNER=${OWNER:-root}
+GROUP=${GROUP:-root}
+STORE_ROOT=${STORE_ROOT:-/var/lib/agent-os/checkpoints}
+
+case "$TARGET" in
+  /usr/local/libexec/agent-os-handoff-discovery|*/agent-os-handoff-discovery) ;;
+  *) echo "refusing unexpected target" >&2; exit 64 ;;
+esac
+
+case "$STORE_ROOT" in
+  /*) ;;
+  *) echo "store root must be an absolute path" >&2; exit 64 ;;
+esac
+case "$STORE_ROOT" in
+  *[!A-Za-z0-9._/-]*) echo "store root contains unsupported characters" >&2; exit 64 ;;
+  *..*) echo "store root must not contain '..'" >&2; exit 64 ;;
+esac
+
+wrapper=$(mktemp)
+trap 'rm -f "$wrapper"' EXIT HUP INT TERM
+
+# The store root is baked in at install time and reassigned unconditionally, so
+# an inherited or SSH-forwarded environment can never redirect the scan. The
+# wrapper forwards argv unchanged and evaluates no command text. Discovery is
+# read-only, so unlike the resume wrapper it needs no delegated systemd scope.
+cat > "$wrapper" <<EOF
+#!/bin/sh
+set -eu
+AGENT_OS_CHECKPOINT_STORE_ROOT=$STORE_ROOT
+export AGENT_OS_CHECKPOINT_STORE_ROOT
+exec /usr/bin/env python3 -m agent_os_execution_service.handoff_discovery_entrypoint "\$@"
+EOF
+
+if [ -f "$TARGET" ] && cmp -s "$wrapper" "$TARGET"; then
+  chmod "$MODE" "$TARGET"
+  chown "$OWNER:$GROUP" "$TARGET"
+  exit 0
+fi
+
+install -d -m 0755 "$(dirname "$TARGET")"
+install -o "$OWNER" -g "$GROUP" -m "$MODE" "$wrapper" "$TARGET"
