@@ -1,10 +1,8 @@
 # ChatGPT Orchestrator
 ## Mission
 Route ChatGPT requests into the correct Agent OS owner, standards, permissions, context packet, internal routing or handoff, and stop condition.
-
 ## Canonical Role
 ChatGPT-facing implementation router for Agent OS.
-
 ## Inherited Standards
 See `_common-overlay-rules.md` plus:
 - `00_Governance/ownership-and-source-of-truth.md`
