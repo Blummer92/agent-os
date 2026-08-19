@@ -29,9 +29,13 @@ For an Adobe Express modeled tutorial, a complete portable prompt must preserve 
 
 Generic creative-app UI, another application, missing application context, provider-specific canonical syntax, or unsupported UI detail fails closed. Provider adapters may alter execution syntax/settings only and may not remove application identity, target state, or must-show evidence.
 
+## Stage 4 reviewed-projection consumption
+
+`projectReviewedTutorialToPromptCards` (in `promptIntent.ts`) is the Stage-4 seam: it consumes the merged PPUX-B `ReviewedTutorialProjection` / `ReviewedStepProjection` boundary from `review.ts` and produces bounded `PromptCardModel[]`. Application identity is read only from each reviewed step's `modeled_application` (approved Teacher Modeling evidence, threaded through `types.ts` and `review.ts`) — it is never inferred from step title, tutorial name, or branding text. A reviewed step without an approved `modeled_application` blocks its prompt card. Image-framing content (purpose, must-show, target state, etc.) is supplied separately as approved `PromptAuthoringInput`, since Recorder/Teacher Modeling evidence does not itself carry that authoring layer. `execution_authorized` remains `false` throughout and is never read or propagated into a prompt card.
+
 ## Tutorial 0 fixture
 
-The privacy-safe Tutorial 0 fixtures cover the coherent Adobe Express sequence without promoting raw Recorder segmentation into student lessons. Supported prompt cards preserve Adobe Express identity. Unsupported details remain blocked rather than invented.
+`fixtures/tutorial0-prompts.ts` derives its prompt cards by running the real evidence fixture through `deriveReviewedTutorial` and `projectReviewedTutorialToPromptCards`, so the Tutorial 0 golden path proves the same pipeline the live app uses, not a hand-authored shortcut. The privacy-safe Tutorial 0 fixtures cover the coherent Adobe Express sequence without promoting raw Recorder segmentation into student lessons. Supported prompt cards preserve Adobe Express identity, sourced from approved evidence. Unsupported details remain blocked rather than invented.
 
 ## Commands
 

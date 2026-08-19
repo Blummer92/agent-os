@@ -40,6 +40,12 @@ export interface ModelingStepProjection {
     rj4_state: EvidenceState;
     fragile?: boolean;
     recovery?: boolean;
+    /**
+     * Modeled application identity as supplied by Teacher Modeling approved evidence.
+     * null means evidence did not establish an application identity for this step;
+     * consumers must never infer it from title/branding text instead.
+     */
+    modeled_application: string | null;
   };
   execution_authorized: false;
 }
@@ -68,6 +74,12 @@ export interface ReviewedStepProjection {
   source_indexes: number[];
   recording_id: string;
   recording_sha256: string;
+  /**
+   * Modeled application identity carried forward from approved evidence.
+   * null means no approved evidence established an application identity;
+   * Stage 4 must block software-UI prompts rather than infer or invent one.
+   */
+  modeled_application: string | null;
   execution_authorized: false;
 }
 

@@ -70,6 +70,7 @@ function isModelingStep(value: unknown): value is ModelingStepProjection {
     isEvidenceState(value.source.rj3_state) && isEvidenceState(value.source.rj4_state) &&
     (value.source.fragile === undefined || typeof value.source.fragile === 'boolean') &&
     (value.source.recovery === undefined || typeof value.source.recovery === 'boolean') &&
+    (value.source.modeled_application === null || typeof value.source.modeled_application === 'string') &&
     value.execution_authorized === false;
 }
 

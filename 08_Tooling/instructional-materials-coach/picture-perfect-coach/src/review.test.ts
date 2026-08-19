@@ -59,6 +59,27 @@ describe('Picture Perfect review derivation', () => {
     expect(deriveReviewedTutorial(evidence, [])).toMatchObject({ ok: false });
   });
 
+  it('carries modeled_application forward from approved evidence into the reviewed step', () => {
+    const result = deriveReviewedTutorial(evidence, keepAll);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      for (const step of result.tutorial.retained_steps) {
+        if (step.source_step_ids.includes('tutorial0-step-08-incidental-shift')) continue;
+        expect(step.modeled_application).toBe('Adobe Express');
+      }
+    }
+  });
+
+  it('blocks combine when contributing steps report contradictory modeled application identity', () => {
+    const mismatched = structuredClone(evidence);
+    mismatched.modeling_steps[1]!.source.modeled_application = 'Canva';
+    const decisions = keepAll.map((decision, index) => index === 1 ? { ...decision, choice: 'combine-with-previous' as const } : decision);
+    expect(deriveReviewedTutorial(mismatched, decisions)).toEqual({
+      ok: false,
+      reason: 'Combined steps report contradictory modeled application identity.',
+    });
+  });
+
   it('fails closed on duplicate identity and contradictory recording provenance', () => {
     const duplicate = structuredClone(evidence);
     duplicate.modeling_steps[1]!.step_id = duplicate.modeling_steps[0]!.step_id;

@@ -47,6 +47,7 @@ function retainedStep(step: ModelingStepProjection): ReviewedStepProjection {
     source_indexes: [...step.source.source_indexes],
     recording_id: step.source.recording_id,
     recording_sha256: step.source.recording_sha256,
+    modeled_application: step.source.modeled_application,
     execution_authorized: false,
   };
 }
@@ -76,6 +77,9 @@ export function deriveReviewedTutorial(evidence: UploadEvidenceProjection, decis
       if (!previous) return { ok: false, reason: 'The first retained step cannot combine with a previous step.' };
       if (previous.recording_id !== step.source.recording_id || previous.recording_sha256 !== step.source.recording_sha256) {
         return { ok: false, reason: 'Combine cannot cross recording identity.' };
+      }
+      if (previous.modeled_application !== step.source.modeled_application) {
+        return { ok: false, reason: 'Combined steps report contradictory modeled application identity.' };
       }
       previous.source_step_ids = [...previous.source_step_ids, step.step_id];
       previous.source_steps = [...previous.source_steps, step];

@@ -1,3 +1,5 @@
+import type { ReviewedStepProjection, ReviewedTutorialProjection } from './types';
+
 export type ImageState = 'action' | 'result' | 'action+result';
 
 export type VisualSpecification = {
@@ -82,6 +84,81 @@ export function validateApplicationFidelity(card: PromptCardModel): string[] {
     if (card.portablePrompt.includes(marker)) errors.push(`canonical prompt contains provider-specific syntax: ${marker}`);
   }
   return errors;
+}
+
+/**
+ * Teacher/approved image-framing content for one reviewed step. This is authoring
+ * content (what to show, why, and where) that Recorder/Teacher Modeling evidence
+ * does not itself supply. It never carries or overrides application identity —
+ * that comes only from the reviewed step's approved `modeled_application`.
+ */
+export type PromptAuthoringInput = {
+  imagePurpose: string;
+  imageState: ImageState;
+  applicationContext: string;
+  targetState: string;
+  mustShow: readonly string[];
+  mustNotShow: readonly string[];
+  annotationSpace: string;
+  evidenceSupportedUiDetails: readonly string[];
+  requestedUiDetails: readonly string[];
+  uncertainty?: string;
+};
+
+/**
+ * Projects one Stage-3 reviewed step (ReviewedStepProjection, from the merged
+ * PPUX-B review boundary) plus its approved authoring content into a bounded
+ * Stage-4 VisualSpecification. Application identity is taken only from
+ * `step.modeled_application` (approved evidence) — never inferred from step
+ * title/student_action text, branding, or the tutorial name. A missing
+ * `modeled_application` blocks the resulting prompt card.
+ */
+export function projectReviewedStepToVisualSpecification(
+  step: ReviewedStepProjection,
+  authoring: PromptAuthoringInput,
+): VisualSpecification {
+  const provenance = [
+    `recording:${step.recording_id}`,
+    `recording_sha256:${step.recording_sha256}`,
+    ...step.source_step_ids.map((id) => `source_step:${id}`),
+    ...step.semantic_action_ids.map((id) => `semantic_action:${id}`),
+  ];
+  return {
+    stepNumber: step.sequence,
+    imagePurpose: authoring.imagePurpose,
+    imageState: authoring.imageState,
+    application: step.modeled_application ?? '',
+    applicationContext: authoring.applicationContext,
+    targetState: authoring.targetState,
+    mustShow: authoring.mustShow,
+    mustNotShow: authoring.mustNotShow,
+    annotationSpace: authoring.annotationSpace,
+    provenance,
+    evidenceSupportedUiDetails: authoring.evidenceSupportedUiDetails,
+    requestedUiDetails: authoring.requestedUiDetails,
+    uncertainty: authoring.uncertainty,
+  };
+}
+
+/**
+ * Projects an approved ReviewedTutorialProjection into Stage-4 prompt cards.
+ * `authoringByStepId` supplies image-framing content keyed by `review_step_id`;
+ * a reviewed step with no matching authoring entry is skipped (not invented).
+ * `execution_authorized` on the source tutorial and every reviewed step must
+ * remain false — this function never authorizes execution and does not read
+ * or propagate any execution-authorization flag into the resulting cards.
+ */
+export function projectReviewedTutorialToPromptCards(
+  tutorial: ReviewedTutorialProjection,
+  authoringByStepId: ReadonlyMap<string, PromptAuthoringInput>,
+): PromptCardModel[] {
+  const cards: PromptCardModel[] = [];
+  for (const step of tutorial.retained_steps) {
+    const authoring = authoringByStepId.get(step.review_step_id);
+    if (!authoring) continue;
+    cards.push(buildPortablePrompt(projectReviewedStepToVisualSpecification(step, authoring)));
+  }
+  return cards;
 }
 
 export function assertProviderAdapterPreservesIntent(source: PromptCardModel, adaptedPrompt: string): string[] {
