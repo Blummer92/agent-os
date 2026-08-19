@@ -1,0 +1,9 @@
+{
+  "title": "Synthetic RJ2 noisy rewrite",
+  "steps": [
+    {"type": "navigate", "url": "https://example.test/"},
+    {"type": "doubleClick", "selectors": [["aria/Folder A"]], "offsetX": 8, "offsetY": 9},
+    {"type": "change", "selectors": [["aria/Title"]], "value": "Renamed item"},
+    {"type": "waitForElement", "selectors": [["aria/Renamed item"]], "visible": true}
+  ]
+}

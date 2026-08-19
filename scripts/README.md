@@ -87,3 +87,13 @@ Contract, outcomes, configuration, boundary, and rollback are documented in
 `scripts/agent-os-execution-interface-preflight.md`.
 
 Tests: `tests/agent_os_execution_interface/`.
+
+## agent_os_execution_interface/pre_pr_runtime_compatibility.py
+
+Pure pre-dispatch projection for #1278. It joins existing #1197
+`RequiredEnvironmentSpec`/`DependencyReadinessEvidence` into existing #918
+`ExecutorCapability` routing inputs so a declared pre-PR developer loop is never
+routed to a surface that only edits code or reads/writes GitHub. It adds no
+route, runner, Scheduler, registry, dependency framework, or authority. See
+`scripts/agent-os-prepr-runtime-compatibility.md`; tests:
+`tests/agent_os_execution_interface/test_pre_pr_runtime_compatibility.py`.
