@@ -3,11 +3,7 @@ from pathlib import Path
 import pytest
 
 from scripts.agent_os_issue_acceptance.models import LinkedIssueParseStatus
-from scripts.agent_os_issue_acceptance.parse_pr import (
-    missing_final_report_fields,
-    parse_linked_issue,
-    parse_linked_issue_result,
-)
+from scripts.agent_os_issue_acceptance.parse_pr import missing_final_report_fields, parse_linked_issue, parse_linked_issue_result
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -35,10 +31,7 @@ def test_first_match_regression_prefers_explicit_target():
     assert [candidate.issue_number for candidate in result.bare_references] == [180]
 
 
-@pytest.mark.parametrize(
-    "keyword",
-    ["close", "closes", "closed", "fix", "fixes", "fixed", "resolve", "resolves", "resolved"],
-)
+@pytest.mark.parametrize("keyword", ["close", "closes", "closed", "fix", "fixes", "fixed", "resolve", "resolves", "resolved"])
 def test_supported_keyword_variants_resolve(keyword):
     for rendered in (keyword, keyword.upper(), keyword.title()):
         result = parse_linked_issue_result(f"{rendered} #223")
@@ -52,12 +45,41 @@ def test_optional_colon_resolves():
     assert result.issue_number == 223
 
 
+@pytest.mark.parametrize(
+    "body,title,status,issue_number",
+    [
+        ("", "Fixes #100", LinkedIssueParseStatus.MANUAL_REVIEW, None),
+        ("Closes #123", "", LinkedIssueParseStatus.RESOLVED, 123),
+        ("Fixes https://github.com/Blummer92/agent-os/issues/123", "", LinkedIssueParseStatus.RESOLVED, 123),
+        ("", "Fixes https://github.com/Blummer92/agent-os/issues/123", LinkedIssueParseStatus.MANUAL_REVIEW, None),
+        ("Related to #123", "", LinkedIssueParseStatus.MANUAL_REVIEW, None),
+        ("Closes #223\nFixes #223", "", LinkedIssueParseStatus.RESOLVED, 223),
+        ("Closes #223\nFixes #224", "", LinkedIssueParseStatus.MANUAL_REVIEW, None),
+        ("Closes owner/repo#77", "", LinkedIssueParseStatus.MANUAL_REVIEW, None),
+        ("Closes https://github.com/owner/repo/issues/77", "", LinkedIssueParseStatus.MANUAL_REVIEW, None),
+    ],
+)
+def test_github_linkage_semantics_matrix(body, title, status, issue_number):
+    result = parse_linked_issue_result(body, title)
+    assert result.status == status
+    assert result.issue_number == issue_number
+
+
 def test_incidental_title_reference_does_not_override_explicit_body_target():
     result = parse_linked_issue_result("Closes #223", "Follow-up to #180")
     assert result.status == LinkedIssueParseStatus.RESOLVED
     assert result.issue_number == 223
     assert result.explicit_candidates[0].source == "body"
     assert result.bare_references[0].source == "title"
+
+
+def test_title_closing_keyword_is_retained_as_non_authoritative_evidence():
+    result = parse_linked_issue_result("Closes #224", "Fixes #223")
+    assert result.status == LinkedIssueParseStatus.RESOLVED
+    assert result.issue_number == 224
+    assert [candidate.source for candidate in result.explicit_candidates] == ["body"]
+    assert result.bare_references[0].source == "title"
+    assert result.bare_references[0].keyword == "fixes"
 
 
 def test_same_explicit_target_repeated_deduplicates_by_target():
@@ -70,16 +92,8 @@ def test_same_explicit_target_repeated_deduplicates_by_target():
 def test_multiple_unique_explicit_targets_require_manual_review():
     result = parse_linked_issue_result("Closes #223\nFixes #224")
     assert result.status == LinkedIssueParseStatus.MANUAL_REVIEW
-    assert result.issue_number is None
-    assert "#223" in result.reasons[0]
-    assert "#224" in result.reasons[0]
+    assert "#223" in result.reasons[0] and "#224" in result.reasons[0]
     assert parse_linked_issue("Closes #223\nFixes #224") is None
-
-
-def test_conflicting_title_and_body_targets_require_manual_review():
-    result = parse_linked_issue_result("Closes #224", "Fixes #223")
-    assert result.status == LinkedIssueParseStatus.MANUAL_REVIEW
-    assert {candidate.source for candidate in result.explicit_candidates} == {"title", "body"}
 
 
 @pytest.mark.parametrize("body", ["Related to #223.", "Related to #223 and #224."])
@@ -121,18 +135,9 @@ def test_malformed_authoritative_syntax_requires_manual_review():
     assert result.bare_references[0].keyword == "closes"
 
 
-@pytest.mark.parametrize(
-    "body",
-    [
-        "```text\nCloses #223\n```",
-        "Use `Closes #223` in the PR body.",
-        "> Closes #223",
-        "<!-- Closes #223 -->",
-    ],
-)
+@pytest.mark.parametrize("body", ["```text\nCloses #223\n```", "Use `Closes #223` in the PR body.", "> Closes #223", "<!-- Closes #223 -->", "```text\nFixes https://github.com/Blummer92/agent-os/issues/223\n```"])
 def test_non_authoritative_markdown_contexts_do_not_auto_resolve(body):
-    result = parse_linked_issue_result(body)
-    assert result.status == LinkedIssueParseStatus.NONE
+    assert parse_linked_issue_result(body).status == LinkedIssueParseStatus.NONE
 
 
 @pytest.mark.parametrize("body", ["    Closes #223", "\tCloses #223"])
@@ -151,7 +156,6 @@ def test_prose_target_after_indented_example_resolves():
 def test_indented_example_plus_bare_reference_requires_manual_review():
     result = parse_linked_issue_result("    Closes #180\nSee #223 for context.")
     assert result.status == LinkedIssueParseStatus.MANUAL_REVIEW
-    assert result.issue_number is None
     assert [candidate.issue_number for candidate in result.bare_references] == [223]
 
 
