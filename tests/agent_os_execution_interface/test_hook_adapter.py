@@ -123,13 +123,30 @@ def test_repository_identity_is_none_without_a_remote(tmp_path, monkeypatch):
     assert hook_adapter.resolve_repository_identity(tmp_path) is None
 
 
-# --- key regression: `Work on #1259` with local `gh` unavailable ------------
+# --- key regression: `Work on #1259`, with and without a local `gh` ---------
 
 
-def test_work_on_1259_reaches_governed_resume_without_local_gh(
-    governed_checkout, configured_env
+@pytest.fixture(params=("gh-absent", "gh-present"))
+def local_gh(request, tmp_path, monkeypatch):
+    """Control whether a local `gh` is on PATH, instead of trusting the runner.
+
+    The governed route must win either way, so both cases are asserted
+    deterministically rather than inherited from whatever CI happens to install.
+    """
+    path_dir = tmp_path / f"bin-{request.param}"
+    path_dir.mkdir()
+    if request.param == "gh-present":
+        executable = path_dir / "gh"
+        executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        executable.chmod(0o755)
+    monkeypatch.setenv("PATH", str(path_dir))
+    assert (shutil.which("gh") is not None) is (request.param == "gh-present")
+    return request.param
+
+
+def test_work_on_1259_reaches_governed_resume_regardless_of_local_gh(
+    governed_checkout, configured_env, local_gh
 ):
-    assert shutil.which("gh") is None, "regression requires local gh to be absent"
     descriptor = _descriptor()
     append_invocation_descriptor(configured_env, descriptor)
 
