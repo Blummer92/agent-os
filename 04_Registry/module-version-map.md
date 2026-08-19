@@ -15,8 +15,8 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 | QA/Test Standards | 0.1.0 |
 | Dashboard Governance | 0.1.0 |
 | Dashboard Migration Verification | 0.1.0 |
-| Instructional Design Standards | 0.8.0 |
-| Agent Orchestrator | 0.1.0 |
+| Instructional Design Standards | 0.9.0 |
+| Agent Orchestrator | 0.2.0 |
 | GitHub Service Agent | 0.6.0 |
 | Unit Alignment Agent | 0.5.0 |
 | Teacher Modeling Coach | 0.5.0 |
@@ -46,7 +46,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 
 **Notion Standards** `0.4.0` defines the canonical Draft Mode, Append-Only Safe Log Mode, and Canonical Update Mode write-safety vocabulary in `notion-record-update-safety.md` (#1103). Mode classification never creates authority; existing write authorization remains canonical in `00_Governance/write-authorization-policy.md`.
 
-**Instructional Design Standards** `0.8.0` adds the provider-neutral Assessment Design Standard (#837): purpose classification, target → claim → evidence → method ordering, survey/mastery separation, authentic-performance rules, fixed non-authority fields, the stable #838 handoff, and synthetic regression fixtures. It does not create an Assessment Agent or authorize grading, readiness, classroom use, production, publication, or external writes.
+**Instructional Design Standards** `0.9.0` adds the Unit Creation Conversational Contract (#1213): exploratory unit planning leads with useful teacher-facing work, material questions remain bounded, AI proposals stay distinct from teacher-confirmed choices, the Unit Sketch remains provisional, and modeling-feasibility semantics are advisory only. Agent Orchestrator `0.2.0` consumes that shared contract by reference without changing canonical routing, persistence, readiness, authority, or downstream ownership.
 
 **Dashboard Migration Verification** (`08_Tooling/dashboard-migration-verification/`) is a verification-only migration evidence toolkit for registry examples, placeholder snapshots, dependency graphs, conservative validation results, and reports. It never authorizes live Notion, Workspace, trigger, sharing, source-of-truth, or production dashboard writes. Standard packaging metadata was completed by D2 (#123).
 

@@ -43,6 +43,7 @@ and does not authorize grading, readiness, classroom use, production, or writes.
 - `unit-alignment-rules.md` — canonical Unit Alignment schema and six checks
 - `teacher-modeling-standards.md` — canonical Teacher Modeling schema and checks
 - `orchestration-rules.md` — canonical owner, mode, context, reuse, and stop rules
+- `unit-creation-conversational-contract.md` — exploratory unit-planning presentation, teacher-choice, confirmation, Unit Sketch, and bounded advisory semantics
 - `assessment-design-standard.md` — target → claim → evidence → method contract and survey/mastery boundary
 - `student-language-standard.md` — reusable student-facing language artifacts
 - `learning-science-rules.md` — classroom design rules for materials
@@ -60,4 +61,4 @@ fields, standards, and output keys.
 
 ## Version
 
-0.8.0
+0.9.0
