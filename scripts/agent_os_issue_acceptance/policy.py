@@ -39,7 +39,7 @@ def evaluate_acceptance(data: AcceptanceInput, pr_title: str = "") -> Acceptance
     linked_issue_result = parse_linked_issue_result(data.pr_body, pr_title)
 
     changed_file_evidence_unavailable = data.changed_files_supplied and not data.changed_files
-    diff_evidence_unavailable = data.diff_supplied and not data.diff_text
+    diff_evidence_unavailable = data.diff_supplied and not data.diff_text.strip()
 
     checks: list[CheckResult] = [
         linked_issue.check(parse_result=linked_issue_result),
