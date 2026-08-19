@@ -42,13 +42,13 @@ Tests: `tests/test_build_chatgpt_checkout_package.py`.
 
 ## agent-os-release-run.py
 
-Offline deterministic release-run state evaluator for Issue #903. It consumes fresh GitHub evidence, reuses the completed #988 validation-failure classifier, requires a source-backed canonical validation set and authoritative exact-head aggregate, and returns the next governed lifecycle action without performing GitHub writes itself.
+Offline deterministic release-run state evaluator for Issue #903. It consumes freshly reacquired GitHub evidence, reuses #988 validation-failure classification plus #1038 lifecycle-reconciliation and #1187 refresh receipts, binds validation and lifecycle state to the exact current PR head, and returns the next governed lifecycle action without performing GitHub writes itself.
 
 ```bash
 python scripts/agent-os-release-run.py evidence.json
 ```
 
-Contract, CI infrastructure-vs-code failure handling, mobile/desktop usage, protected authorization pauses, and safety boundaries are documented in `scripts/agent-os-release-run.md`. Tests: `tests/test_agent_os_release_run.py`.
+The contract now fails closed on behind/conflicted/unknown freshness, stale validation or reconciliation, unexplained head movement, out-of-band Draft -> Ready, and external merge/closure. Managed lifecycle labels remain non-authoritative derived cache. Contract, mobile/desktop usage, protected authorization pauses, and safety boundaries are documented in `scripts/agent-os-release-run.md`. Tests: `tests/test_agent_os_release_run.py`.
 
 ## validate-all.sh
 
@@ -68,3 +68,22 @@ Bounded local Git Database adapter for Issue #920. It reads exact commit/tree/bl
 Local advisory guard against pushes to protected branches, installed as a
 `pre-push` hook. Policy lives in
 `01_Shared_Standards/github/protected-branch-governance.md`.
+
+## agent-os-execution-interface-preflight.py
+
+Pre-tool governed-route preflight for #1237, wired from `.claude/settings.json`
+as Claude Code `UserPromptSubmit` and `PreToolUse` hooks so a governed Agent OS
+request resolves the existing handoff-discovery/resume path before generic
+GitHub publish tooling checks local `git`/`gh`. It consumes the existing #1237
+locator and introduces no second router, locator, descriptor store, transport,
+Scheduler, lease, or execution authority.
+
+```bash
+scripts/agent-os-execution-interface-preflight.py \
+  --repository Blummer92/agent-os --issue 1259 --store-root <path>
+```
+
+Contract, outcomes, configuration, boundary, and rollback are documented in
+`scripts/agent-os-execution-interface-preflight.md`.
+
+Tests: `tests/agent_os_execution_interface/`.

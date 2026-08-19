@@ -3,13 +3,14 @@
 This package separates pure-local planning and evidence contracts from the governed validation-execution composition surface.
 
 ## Authority boundary
-
 Pure-local surfaces validate requests, inspect supplied repository snapshots, project results, serialize evidence, build validation command plans, and select executor routes. They do not run commands, mutate repositories, dispatch a runtime, or authorize work.
 
 The Issue #697 execution-composition surface may delegate validation exactly once to the canonical Workflow Scheduler only after request, command-plan, authorization, and runtime-configuration checks pass. Route selection never satisfies those preconditions. Execution authorization, routing, command execution, validation success, Ready for Review, and merge authorization remain separate states.
 
-## Authorized-validation admission — Issue #757
+## Execution-authorization source — Issue #1226
+`execution_authorization_source.py` reacquires current explicit execution authorization from one injected read-only GitHub issue-comment snapshot. Only an exact `agent-os-execution-authorization/v1` compact-JSON record authored by the current user-account repository owner is eligible; ordinary prose, non-owner comments, labels, authentication, candidate approval, workflow identity, and transport identity never authorize execution. The content-addressed record reconstructs the existing `ExecutionAuthorizationEvidence` rather than defining a second authorization model. Newer same-invocation records supersede older identities, `execution_authorized=false` revokes, incomplete or ambiguous source evidence fails closed, and currentness requires the supplied evaluation time to remain inside the authorization window. The reader owns no GitHub client, mutation, retry, consumption/replay lock, Scheduler state, checkpoint, or persistent store; #1218 and #758/#1202 retain invocation/lease truth.
 
+## Authorized-validation admission — Issue #757
 `authorized_validation.py` is the pure security checkpoint between a complete non-authorizing candidate packet plus separately supplied human execution authorization and later runtime-capable lifecycle stages.
 
 The lifecycle request binds canonical roots rather than flattening their schemas: the exact `CandidatePacket`, approval/projection stage, execution-packet stage, `ExecutionAuthorizationEvidence`, and a versioned lifecycle-policy profile. Admission reuses each owning module's canonical transport/identity checks, then verifies repository, issue, invocation, SHA, approval/projection, validation-plan, command-plan, request, runtime, scope, tests, argv, timeout/output, and expected-changed-path bindings.
@@ -21,7 +22,6 @@ Admission statuses are `accepted`, `blocked`, `stale`, `needs-decision`, and `in
 Construction, serialization, reconstruction, and admission verification perform no lease acquisition, worktree creation, process execution, Git mutation, network/provider/credential access, workflow dispatch, publication, retry, or external write.
 
 ## Public capabilities
-
 - `inspect_repository`
 - `verify_repository_state`
 - canonical `ExecutionServiceRequest` serialization/reconstruction
@@ -32,7 +32,6 @@ Construction, serialization, reconstruction, and admission verification perform 
 Accepted requests, plans, routes, handoffs, and #757 admissions are evidence only; they do not authorize edits, commands, pushes, review readiness, merge, deployment, or external mutation.
 
 ## Unified validation-lifecycle evidence — Issue #761
-
 `validation_lifecycle_evidence.py` defines one immutable, content-addressed `ValidationLifecycleEvidenceBundle` and one deterministic `ValidationLifecycleResult` projection over the already-canonical lower-level evidence produced by #757 (authorized admission), #758/#759 (lease and process-tree containment, surfaced through `SingleIssuePilotResult`), #760 (`WorkspaceLifecycleEvidence`), and the existing `ExecutionCompositionResult`. It owns none of that lower-level semantics: it never re-parses Git status, never re-implements lease or termination proof, and never rewrites a lower-level status or identity. It only verifies the supplied canonical objects belong together (repository, every SHA role, invocation, request/plan/runtime fingerprints, and nested result identities) and projects one additive top-level terminal status over the verified whole.
 
 **Three dimensions stay separate**: authorization/admission truth (the #757 admission result), observed runtime/lifecycle truth (the embedded lower-level results), and evidence completeness/integrity (the bundle's `evidence_availability` ledger, using `EvidenceAvailability.{present,not-applicable,unavailable,missing-required}` instead of ambiguous `None`). Successful runtime evidence never manufactures authorization; a terminal status never implies authorization; evidence completeness never implies authorization. `side_effects_performed` is read directly from already-verified `ExecutionCompositionResult`/`SingleIssuePilotResult` observed facts, never inferred from the projected status.
@@ -55,7 +54,6 @@ quarantined > termination-uncertain > cleanup-failed > release-failed
 **Recovery interpretation**: `evidence_availability`/`reason_codes` on the projected result tell a human adopter which conjunct is missing or which lower-level fact dominated; the bundle makes no rollback, cleanup, retry, or fresh-invocation decision itself — that remains the separately governed #762 concern. Construction, projection, and (de)serialization perform no I/O, subprocess, network/provider call, filesystem write, GitHub publication, cleanup, lease release, retry, or execution.
 
 ## Executor routing — Issue #918
-
 Executable-lane selection decides what work may proceed; executor routing decides only which execution surface receives already-approved work.
 
 Deterministic route precedence:
@@ -72,7 +70,6 @@ The routing-only `ExecutorCapability` vocabulary is closed: `checkout`, `isolate
 Routing never creates or widens authority. The router reads no host clock and performs no filesystem, subprocess, network, GitHub, workflow, credential, provider, runner, persistence, production, retry, or external-system operation. The complete frozen contract and stop conditions remain in Issue #918.
 
 ## Existing request, planning, and inspection contracts
-
 `ExecutionServiceRequest` and `ExecutionServiceResult` remain frozen, bounded, strictly typed, canonically serialized, and content-addressed. The caller supplies `evaluated_at`; the service never reads the host clock.
 
 Validation command planning maps only registered command strings to fixed argv and performs no shell parsing, alias expansion, user-supplied argv execution, network access, persistence, retry, or runtime dispatch.
@@ -80,7 +77,6 @@ Validation command planning maps only registered command strings to fixed argv a
 `RepositoryInspector` is injected and invoked at most once after validation. Repository-state verification delegates only canonical evidence to the existing validator; private evidence is excluded from public projections.
 
 ## Validation
-
 From the repository root:
 
 ```bash
@@ -94,5 +90,4 @@ git diff --check
 ```
 
 ## Rollback
-
 Revert the #757 verifier, the #761 unified evidence bundle/projection, lazy exports, focused tests, and the corresponding README sections. No runtime, repository, lease, worktree, process, or external state requires cleanup.

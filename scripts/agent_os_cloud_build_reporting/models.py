@@ -32,6 +32,7 @@ class OverallResult(str, Enum):
     FAILURE = "failure"
     TIMEOUT = "timeout"
     CANCELLED = "cancelled"
+    EXPIRED = "expired"
     INTERNAL_ERROR = "internal-error"
     UNAVAILABLE = "unavailable"
     PENDING = "pending"
@@ -44,6 +45,7 @@ TERMINAL_RESULTS = frozenset(
         OverallResult.FAILURE,
         OverallResult.TIMEOUT,
         OverallResult.CANCELLED,
+        OverallResult.EXPIRED,
         OverallResult.INTERNAL_ERROR,
     }
 )
