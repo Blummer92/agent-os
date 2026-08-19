@@ -1,41 +1,57 @@
-# Picture Perfect Coach — PPUX-A / PPUX-C
+# Picture Perfect Coach — PPUX-A / B / C / D
 
-Bounded implementation package for the Picture Perfect Coach shell and prompt-card flow.
+Bounded implementation package for the five-stage Picture Perfect authoring flow.
 
 ## Scope
 
-Implemented slices:
+Implemented flow:
 
 ```text
-PPUX-A: Model -> Upload -> validation/result -> Review boundary
-PPUX-C: approved modeled steps -> Prompt Cards -> future Ready boundary
+Model -> Upload -> Review -> Prompts -> Ready
 ```
 
-This package does not implement Stage 3 Review decisions, Stage 5 Ready/handoff behavior, image generation, provider APIs, live Adobe execution, or Notion/Drive/classroom writes.
+Stage 5 Ready performs deterministic local preflight and can generate a local implementation acceptance / GitHub handoff packet. It does **not** call GitHub or authorize implementation.
+
+This package does not perform image generation, provider APIs, live Adobe/browser execution, GitHub branch/PR creation, merge, issue closure, Notion/Drive/classroom writes, or production activation.
 
 ## Canonical boundaries
 
 - #1134 remains the source for Recorder -> Teacher Modeling -> Picture Perfect ownership and provenance semantics.
 - Teacher Modeling owns instructional disposition; this UI does not classify raw Recorder events into instructional truth.
 - #955 remains the canonical provider-neutral ImageIntent owner; this package consumes that intent seam and does not define a competing image-intent framework.
+- TypeScript interfaces are bounded UI/consumer projections only.
 - For software tutorials, provider-neutral means image-provider-neutral, not application-neutral.
 - Application identity fidelity does not authorize invention of controls, labels, locations, or states absent from approved evidence.
-- RJ3/RJ4 are separate evidence states. `pending` and `unavailable` are rendered as not proven.
-- TypeScript interfaces in this package are bounded consumer projections only, not authoritative replacements for the GitHub/Python contracts.
+- Prompt/image output remains presentation guidance, never source instructional evidence.
 
-## Application-fidelity contract
+## Stage 4 prompt boundary
 
-For an Adobe Express modeled tutorial, a complete portable prompt must preserve `application: Adobe Express`, recognizable Adobe Express context, the intended target/state, must-show constraints, and approved provenance.
+`projectReviewedTutorialToPromptCards` consumes the PPUX-B `ReviewedTutorialProjection` / `ReviewedStepProjection` boundary and produces bounded `PromptCardModel[]`. Application identity comes only from approved `modeled_application`; missing identity blocks software-UI prompt output rather than being inferred.
 
-Generic creative-app UI, another application, missing application context, provider-specific canonical syntax, or unsupported UI detail fails closed. Provider adapters may alter execution syntax/settings only and may not remove application identity, target state, or must-show evidence.
+## Stage 5 Ready boundary
 
-## Stage 4 reviewed-projection consumption
+`runReadyPreflight` in `preflight.ts` deterministically checks the bounded evidence needed for an implementation handoff, including source identity/fingerprint, reviewed-step provenance, explicit review decisions, modeled application identity, prompt validity, golden fixture identity, required tests, Definition of Done, and architecture-decision status.
 
-`projectReviewedTutorialToPromptCards` (in `promptIntent.ts`) is the Stage-4 seam: it consumes the merged PPUX-B `ReviewedTutorialProjection` / `ReviewedStepProjection` boundary from `review.ts` and produces bounded `PromptCardModel[]`. Application identity is read only from each reviewed step's `modeled_application` (approved Teacher Modeling evidence, threaded through `types.ts` and `review.ts`) — it is never inferred from step title, tutorial name, or branding text. A reviewed step without an approved `modeled_application` blocks its prompt card. Image-framing content (purpose, must-show, target state, etc.) is supplied separately as approved `PromptAuthoringInput`, since Recorder/Teacher Modeling evidence does not itself carry that authoring layer. `execution_authorized` remains `false` throughout and is never read or propagated into a prompt card.
+`createGitHubHandoffPacket` returns a local `picture-perfect-ready-v1` packet only when all required rows pass. The packet preserves source/provenance, retained and excluded review outcomes, prompt requirements, provider-adapter boundaries, tests, non-goals, and Definition of Done, and always states:
+
+```text
+execution_authorized: false
+```
+
+Invariant:
+
+```text
+ready_for_handoff
+!= implementation_authorized
+!= GitHub write authorized
+!= external write authorized
+```
+
+The teacher-facing `Create GitHub Handoff` button only renders the packet locally for review/copy. It has no GitHub client or external-write path.
 
 ## Tutorial 0 fixture
 
-`fixtures/tutorial0-prompts.ts` derives its prompt cards by running the real evidence fixture through `deriveReviewedTutorial` and `projectReviewedTutorialToPromptCards`, so the Tutorial 0 golden path proves the same pipeline the live app uses, not a hand-authored shortcut. The privacy-safe Tutorial 0 fixtures cover the coherent Adobe Express sequence without promoting raw Recorder segmentation into student lessons. Supported prompt cards preserve Adobe Express identity, sourced from approved evidence. Unsupported details remain blocked rather than invented.
+The privacy-safe Tutorial 0 fixture runs through the real evidence -> Review -> Prompt -> Ready derivation. Supported prompt cards preserve Adobe Express identity because approved evidence carries it. The Ready packet preserves the coherent reviewed sequence, combined-step provenance, excluded incidental step, recording identity/fingerprint, and provider-neutral prompt constraints.
 
 ## Commands
 
@@ -52,4 +68,4 @@ The package is designed for Node `>=22.12 <23`, matching the adjacent capture to
 
 ## Security / execution boundary
 
-Normal source code contains no network, provider SDK, Puppeteer, or Playwright execution sink. `npm run guard` enforces that bounded surface. A passing package test proves only local Picture Perfect UI transformation and presentation behavior; it does not prove live Adobe fidelity or image-provider output.
+Normal source code contains no network, provider SDK, Puppeteer, Playwright, GitHub API, Notion, or Drive execution sink. `npm run guard` enforces the bounded surface. Passing tests prove only local Picture Perfect transformation, presentation, deterministic preflight, and packet generation; they do not prove live Adobe fidelity, image-provider output, or GitHub execution.
