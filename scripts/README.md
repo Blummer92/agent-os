@@ -68,3 +68,22 @@ Bounded local Git Database adapter for Issue #920. It reads exact commit/tree/bl
 Local advisory guard against pushes to protected branches, installed as a
 `pre-push` hook. Policy lives in
 `01_Shared_Standards/github/protected-branch-governance.md`.
+
+## agent-os-execution-interface-preflight.py
+
+Pre-tool governed-route preflight for #1237, wired from `.claude/settings.json`
+as Claude Code `UserPromptSubmit` and `PreToolUse` hooks so a governed Agent OS
+request resolves the existing handoff-discovery/resume path before generic
+GitHub publish tooling checks local `git`/`gh`. It consumes the existing #1237
+locator and introduces no second router, locator, descriptor store, transport,
+Scheduler, lease, or execution authority.
+
+```bash
+scripts/agent-os-execution-interface-preflight.py \
+  --repository Blummer92/agent-os --issue 1259 --store-root <path>
+```
+
+Contract, outcomes, configuration, boundary, and rollback are documented in
+`scripts/agent-os-execution-interface-preflight.md`.
+
+Tests: `tests/agent_os_execution_interface/`.

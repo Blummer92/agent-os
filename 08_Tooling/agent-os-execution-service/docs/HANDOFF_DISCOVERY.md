@@ -40,6 +40,8 @@ Multiple descriptors for the same repository and issue are intentionally ambiguo
 
 A ChatGPT-side or host-side integration may use this locator only as the read step that obtains an existing handoff identity. It must preserve the established route precedence and then invoke the existing bounded `/agent-os resume executor-handoff:<sha256>` transport. If no unique handoff exists, the integration must not synthesize one or silently fall back to local CLI.
 
+The first landed consumer is the Claude Code execution-interface preflight: `.claude/settings.json` wires `UserPromptSubmit` and `PreToolUse` hooks to `scripts/agent-os-execution-interface-preflight.py`, which runs before generic GitHub publish tooling checks local `git`/`gh`. It calls this locator and reports the resulting existing ingress, adding no routing, authorization, descriptor, or execution authority of its own. See `scripts/agent-os-execution-interface-preflight.md`. The ChatGPT product-side pre-tool routing layer remains a separate, still-unowned integration surface.
+
 This repository-only seam does not itself make the ChatGPT product surface callable and does not deploy `/usr/local/libexec/agent-os-governed-resume` on GCE. #1238 remains the owner of host entrypoint deployment/integrity. #1239 remains the owner of live GitHub-to-GCE invocation and replay qualification after #1238.
 
 ## Rollback
