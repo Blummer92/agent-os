@@ -62,6 +62,11 @@ def test_contract_reuses_existing_ppux_owners_and_tutorial_fixture() -> None:
     assert "Model -> Upload -> Review -> Prompts -> Ready" in routing
     assert "Model -> Upload -> Review -> Prompts -> Ready" in readme
     assert "Adobe Express" in fixture
-    assert fixture.count("status: 'ready'") == 3
-    assert "status: 'blocked'" in fixture
+    for ready_step in (
+        "tutorial0-step-01-organize-location",
+        "tutorial0-step-03-square-file",
+        "tutorial0-step-05-landscape-file",
+    ):
+        assert ready_step in fixture
+    assert "tutorial0BlockedFinalState" in fixture
     assert "Exact favorite-food filenames" in fixture
