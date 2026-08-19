@@ -136,6 +136,8 @@ def main(argv: list[str] | None = None) -> int:
             pr_body=_read_text(args.pr_body),
             changed_files=_read_changed_files(args.changed_files),
             diff_text=_read_text(args.diff),
+            changed_files_supplied=bool(args.changed_files),
+            diff_supplied=bool(args.diff),
         ),
         pr_title=args.pr_title,
     )

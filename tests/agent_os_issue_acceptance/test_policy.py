@@ -135,6 +135,58 @@ def test_banned_pattern_detection_fails():
     assert _result(report, "banned patterns").status == Status.FAIL
 
 
+def test_supplied_empty_diff_requires_manual_review():
+    report = evaluate_acceptance(
+        AcceptanceInput(
+            issue_body=_read("issue_valid.md"),
+            pr_body=_read("pr_body_valid.md"),
+            changed_files=_changed("changed_files_valid.txt"),
+            diff_text="",
+            diff_supplied=True,
+        )
+    )
+
+    result = _result(report, "banned patterns")
+    assert result.status == Status.MANUAL_REVIEW
+    assert report.overall_status == Status.MANUAL_REVIEW
+    assert "input=diff; state=empty-supplied" in result.evidence
+    assert "diff_supplied=true" in report.evidence
+
+
+def test_empty_optional_diff_preserves_legacy_pass_behavior():
+    report = evaluate_acceptance(
+        AcceptanceInput(
+            issue_body=_read("issue_valid.md"),
+            pr_body=_read("pr_body_valid.md"),
+            changed_files=_changed("changed_files_valid.txt"),
+            diff_text="",
+            diff_supplied=False,
+        )
+    )
+
+    assert _result(report, "banned patterns").status == Status.PASS
+    assert "diff_supplied=false" in report.evidence
+
+
+def test_supplied_empty_changed_files_require_manual_review():
+    report = evaluate_acceptance(
+        AcceptanceInput(
+            issue_body=_read("issue_valid.md"),
+            pr_body=_read("pr_body_valid.md"),
+            changed_files=[],
+            diff_text=_read("diff_clean.patch"),
+            changed_files_supplied=True,
+        )
+    )
+
+    for name in ("required files", "forbidden paths", "required docs"):
+        result = _result(report, name)
+        assert result.status == Status.MANUAL_REVIEW
+        assert "input=changed-files; state=empty-supplied" in result.evidence
+    assert report.overall_status == Status.MANUAL_REVIEW
+    assert "changed_files_supplied=true" in report.evidence
+
+
 def test_missing_metadata_requires_manual_review():
     report = evaluate_acceptance(
         AcceptanceInput(

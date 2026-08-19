@@ -23,19 +23,48 @@ from .parse_issue import project_issue_metadata, scan_issue_metadata
 from .parse_pr import parse_linked_issue_result
 
 
+def _unavailable_evidence_check(name: str, input_name: str) -> CheckResult:
+    return CheckResult(
+        name,
+        Status.MANUAL_REVIEW,
+        f"{input_name} evidence was supplied but is empty; this check cannot be completed safely.",
+        [f"input={input_name}; state=empty-supplied"],
+    )
+
+
 def evaluate_acceptance(data: AcceptanceInput, pr_title: str = "") -> AcceptanceReport:
     """Run IA2 v1 checks against offline issue, PR, file-list, and diff inputs."""
     scan_result = scan_issue_metadata(data.issue_body)
     metadata = project_issue_metadata(scan_result)
     linked_issue_result = parse_linked_issue_result(data.pr_body, pr_title)
+
+    changed_file_evidence_unavailable = data.changed_files_supplied and not data.changed_files
+    diff_evidence_unavailable = data.diff_supplied and not data.diff_text
+
     checks: list[CheckResult] = [
         linked_issue.check(parse_result=linked_issue_result),
         final_report_fields.check(data.pr_body),
-        required_files.check(metadata, data.changed_files),
-        forbidden_paths.check(metadata, data.changed_files),
-        required_docs.check(metadata, data.changed_files),
+        (
+            _unavailable_evidence_check("required files", "changed-files")
+            if changed_file_evidence_unavailable
+            else required_files.check(metadata, data.changed_files)
+        ),
+        (
+            _unavailable_evidence_check("forbidden paths", "changed-files")
+            if changed_file_evidence_unavailable
+            else forbidden_paths.check(metadata, data.changed_files)
+        ),
+        (
+            _unavailable_evidence_check("required docs", "changed-files")
+            if changed_file_evidence_unavailable
+            else required_docs.check(metadata, data.changed_files)
+        ),
         required_tests.check(metadata, data.changed_files, data.pr_body),
-        banned_patterns.check(metadata, data.diff_text),
+        (
+            _unavailable_evidence_check("banned patterns", "diff")
+            if diff_evidence_unavailable
+            else banned_patterns.check(metadata, data.diff_text)
+        ),
         validation_commands.check(data.pr_body),
     ]
 
@@ -60,6 +89,8 @@ def evaluate_acceptance(data: AcceptanceInput, pr_title: str = "") -> Acceptance
 
     evidence = [
         f"changed_files={len(data.changed_files)}",
+        f"changed_files_supplied={str(data.changed_files_supplied).lower()}",
+        f"diff_supplied={str(data.diff_supplied).lower()}",
         f"metadata_present={metadata.present}",
         f"linked_issue_status={linked_issue_result.status.value}",
         f"issueplan_adoption_class={scan_result.adoption_class.value}",
