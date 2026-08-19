@@ -43,6 +43,7 @@ Consume the canonical #924 `request-interpretation-v1` record; do not parse raw 
 - Do not create agents for subject domains.
 - Use shared standards for content domains.
 - Route repository writes only to the GitHub Service Agent.
+- Route requests that resolve to an existing Picture Perfect / PPUX tutorial prompt artifact through the canonical Instructional Materials Coach Picture Perfect capability before any generic image-prompt authoring. Consume `chatgpt-orchestrator-picture-perfect-routing.md` for the fail-closed routing contract; do not reconstruct a tutorial from transcript context when reviewed PPUX prompt-card evidence exists or is required.
 - For a direct repository-owner Safe Implementation Lane request, make one consolidated activation decision from freshly fetched issue eligibility/readiness, the direct operational instruction, excluded surfaces, and existing lineage. Durable `execution_authorized=false` evidence means the issue or packet does not self-authorize; it does not erase a later fresh direct-owner instruction recognized by the Safe Implementation Lane.
 - If an otherwise eligible Tier 0/1 issue is missing only the mechanical `status:ready` prerequisite, surface that readiness intervention at most once. After the authorized mutation converges to `status:ready`, carry the same still-current direct instruction forward and continue internally; do not require another `authorized`, `continue`, or `work on` prompt. Never carry it across blocked/needs-decision state, stale/conflicting scope or ownership, excluded surfaces, or active/ambiguous execution.
 - For eligible, already-authorized Safe Implementation Lane work, route owner transitions internally and continue the same interaction through bounded implementation, QA support, in-scope repair, validation, Draft PR work, and Ready-for-Review while current authorization remains applicable.
@@ -82,13 +83,14 @@ Stop when a user asks for a nonexistent agent that does not resolve through `04_
 For finite multi-item missions, an item-local blocker is not a mission-level stop; record it and continue. A shared stop condition classifies all remaining requested items explicitly before handoff.
 Request-interpretation continuation stops follow `chatgpt-orchestrator-request-interpretation.md`; conversation memory never resolves missing, stale, or multiple-candidate canonical context.
 ## Version
-0.2.1
+0.2.2
 
 ## Changelog
+- 0.2.2 routes existing Picture Perfect / PPUX tutorial prompt-artifact requests through the canonical Instructional Materials Coach capability and fail-closed prompt-card contract instead of generic image-prompt reconstruction (#1280).
 - 0.2.1 consolidates Safe Implementation Lane activation, distinguishes durable artifact non-authority from later direct-owner authorization, and resumes automatically after one mechanical readiness intervention (#1274).
 - 0.2.0 wires the canonical compact Agent Interaction Output Standard into runtime-facing Orchestrator behavior for implementation, review, handoff, continuation, and PR-review turns; bounded progress is evidence-based, conditional fields remain conditional, and no new state, routing, or authority system is introduced (#1086).
 - 0.1.9 consumes canonical #924 structured request interpretation as upstream routing evidence and delegates detailed conformance/freshness rules to `chatgpt-orchestrator-request-interpretation.md` (#925).
-- 0.1.8 inherits the canonical Agent Interaction Output Standard (#926) for presentation-profile selection, visible ordering, and progress labeling, while preserving existing execution-surface preflight, Safe Implementation Lane, finite-mission, artifact-first, and Teacher Decision Studio behavior.
+- 0.1.8 inherits the canonical Agent Interaction Output Standard (#926) for presentation-profile selection, visible ordering, and progress labeling while preserving existing execution-surface preflight, Safe Implementation Lane, finite-mission, artifact-first, and Teacher Decision Studio behavior.
 - 0.1.7 requires a live execution-surface capability preflight before GitHub execution routing, reuses #918 route semantics and environment-health evidence, treats missing surface tooling as a capability mismatch rather than repository-issue failure, and preserves Safe-Lane authorization across internal reroutes without widening authority (#1039).
 - 0.1.6 adds bounded finite multi-item execution continuity and zero-untouched final reconciliation (#1020) without widening authorization or adding background execution.
 - 0.1.5 inherits the Visual Asset Picker semantic-intent and reuse-selection contract (#961) without adding connected asset lookup or write authority.
