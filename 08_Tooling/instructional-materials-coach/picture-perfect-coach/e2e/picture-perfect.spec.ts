@@ -45,6 +45,10 @@ async function approveTutorial(page: Page) {
   await expect(page.getByRole('heading', { name: 'Picture Perfect prompts' })).toBeVisible();
 }
 
+function currentStage(page: Page, label: string) {
+  return page.getByRole('navigation', { name: 'Picture Perfect stages' }).locator('li[aria-current="step"]').filter({ hasText: label });
+}
+
 test('Tutorial 0 completes Model -> Upload -> Review -> Prompts -> Ready -> local handoff', async ({ page }) => {
   const externalRequests: string[] = [];
   page.on('request', (request) => {
@@ -57,7 +61,7 @@ test('Tutorial 0 completes Model -> Upload -> Review -> Prompts -> Ready -> loca
   await expect(page.getByText(/things need your attention/i)).toBeVisible();
   await approveTutorial(page);
 
-  await expect(page.getByText('Prompts').locator('..')).toHaveAttribute('aria-current', 'step');
+  await expect(currentStage(page, 'Prompts')).toHaveCount(1);
   const promptCards = page.locator('article.prompt-card');
   expect(await promptCards.count()).toBeGreaterThan(0);
   await expect(promptCards.first().getByText('Application: Adobe Express')).toBeVisible();
@@ -66,7 +70,7 @@ test('Tutorial 0 completes Model -> Upload -> Review -> Prompts -> Ready -> loca
 
   await page.getByRole('button', { name: 'Open Ready' }).click();
   await expect(page.getByRole('heading', { name: 'Implementation handoff preflight' })).toBeVisible();
-  await expect(page.getByText('Ready').locator('..')).toHaveAttribute('aria-current', 'step');
+  await expect(currentStage(page, 'Ready')).toHaveCount(1);
   expect(await page.getByText(/^Pass ·/).count()).toBeGreaterThan(5);
 
   const createHandoff = page.getByRole('button', { name: 'Create GitHub Handoff' });
