@@ -1,5 +1,6 @@
 export type EvidenceState = 'pending' | 'passed' | 'failed' | 'indeterminate' | 'unavailable';
 export type ModelingDisposition = 'keep' | 'combine' | 'not-instructional' | 'needs-review';
+export type ReviewChoice = 'keep' | 'combine-with-previous' | 'not-instructional';
 
 export interface RewriteEvidence {
   kind: string;
@@ -25,6 +26,10 @@ export interface ModelingStepProjection {
   step_id: string;
   sequence: number;
   disposition: ModelingDisposition;
+  title?: string;
+  student_action?: string | null;
+  notice?: string | null;
+  check?: string | null;
   semantic_action_ids: string[];
   source: {
     candidate_id: string;
@@ -33,6 +38,8 @@ export interface ModelingStepProjection {
     source_indexes: number[];
     rj3_state: EvidenceState;
     rj4_state: EvidenceState;
+    fragile?: boolean;
+    recovery?: boolean;
   };
   execution_authorized: false;
 }
@@ -45,6 +52,32 @@ export interface UploadEvidenceProjection {
   rj4_state: EvidenceState;
   modeling_candidates: ModelingCandidateProjection[];
   modeling_steps: ModelingStepProjection[];
+}
+
+export interface ReviewDecision {
+  step_id: string;
+  choice: ReviewChoice;
+}
+
+export interface ReviewedStepProjection {
+  review_step_id: string;
+  sequence: number;
+  source_step_ids: string[];
+  source_steps: ModelingStepProjection[];
+  semantic_action_ids: string[];
+  source_indexes: number[];
+  recording_id: string;
+  recording_sha256: string;
+  execution_authorized: false;
+}
+
+export interface ReviewedTutorialProjection {
+  recording_id: string;
+  recording_sha256: string;
+  retained_steps: ReviewedStepProjection[];
+  excluded_step_ids: string[];
+  review_decisions: ReviewDecision[];
+  execution_authorized: false;
 }
 
 export interface UploadSummary {
@@ -73,6 +106,7 @@ export type UploadValidationResult =
       ok: true;
       summary: UploadSummary;
       technical: SafeTechnicalDetails;
+      evidence: UploadEvidenceProjection;
     }
   | {
       ok: false;
