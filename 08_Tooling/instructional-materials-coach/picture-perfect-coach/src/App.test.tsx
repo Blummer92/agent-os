@@ -11,12 +11,21 @@ async function reachReview() {
   fireEvent.click(screen.getByRole('button', { name: 'Start Review' }));
 }
 
-describe('Picture Perfect Coach review UX', () => {
-  it('shows five stages and activates Review while Prompts and Ready remain later slices', async () => {
+async function reachPrompts() {
+  await reachReview();
+  const cards = screen.getAllByRole('article');
+  fireEvent.click(within(cards[0]!).getByRole('button', { name: 'Keep & Continue' }));
+  fireEvent.click(within(cards[1]!).getByRole('button', { name: 'Combine with Previous' }));
+  for (let index = 2; index < cards.length - 1; index += 1) fireEvent.click(within(cards[index]!).getByRole('button', { name: 'Keep & Continue' }));
+  fireEvent.click(within(cards[cards.length - 1]!).getByRole('button', { name: 'Not Instructional' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Approve Tutorial' }));
+  await screen.findByRole('heading', { name: 'Picture Perfect prompts' });
+}
+
+describe('Picture Perfect Coach review and Ready UX', () => {
+  it('shows five stages and activates Review', async () => {
     await reachReview();
     expect(screen.getByText('Review').closest('li')?.getAttribute('aria-current')).toBe('step');
-    expect(screen.getByText('Prompts').closest('li')?.getAttribute('aria-disabled')).toBe('true');
-    expect(screen.getByText('Ready').closest('li')?.getAttribute('aria-disabled')).toBe('true');
   });
 
   it('renders exception-first review cards with explicit teacher decisions', async () => {
@@ -25,7 +34,6 @@ describe('Picture Perfect Coach review UX', () => {
     expect(screen.getByText(/things need your attention/i)).toBeTruthy();
     const review = screen.getByLabelText('Review steps');
     expect(within(review).getAllByRole('article').length).toBeGreaterThan(1);
-    expect(screen.getAllByRole('button', { name: 'Keep & Continue' }).length).toBeGreaterThan(1);
     expect(screen.getAllByRole('button', { name: 'Combine with Previous' })[0]?.hasAttribute('disabled')).toBe(true);
   });
 
@@ -43,20 +51,21 @@ describe('Picture Perfect Coach review UX', () => {
     expect(screen.getByText(/Every modeled step needs an explicit review decision/i)).toBeTruthy();
   });
 
-  it('supports Keep, Combine, and Not Instructional then reaches the Prompts stage with Tutorial 0 prompt cards', async () => {
-    await reachReview();
-    const cards = screen.getAllByRole('article');
-    fireEvent.click(within(cards[0]!).getByRole('button', { name: 'Keep & Continue' }));
-    fireEvent.click(within(cards[1]!).getByRole('button', { name: 'Combine with Previous' }));
-    for (let index = 2; index < cards.length - 1; index += 1) {
-      fireEvent.click(within(cards[index]!).getByRole('button', { name: 'Keep & Continue' }));
-    }
-    fireEvent.click(within(cards[cards.length - 1]!).getByRole('button', { name: 'Not Instructional' }));
-    const approve = screen.getByRole('button', { name: 'Approve Tutorial' });
-    expect(approve.hasAttribute('disabled')).toBe(false);
-    fireEvent.click(approve);
-    expect(await screen.findByRole('heading', { name: 'Picture Perfect prompts' })).toBeTruthy();
+  it('reaches Prompts then Ready and generates a local non-authorizing handoff packet', async () => {
+    await reachPrompts();
     expect(screen.getAllByText('Application: Adobe Express').length).toBeGreaterThan(0);
-    expect(screen.getByText('These prompts are derived presentation guidance. They never become instructional source evidence.')).toBeTruthy();
+    expect(screen.getByText('Prompts').closest('li')?.getAttribute('aria-current')).toBe('step');
+    fireEvent.click(screen.getByRole('button', { name: 'Open Ready' }));
+    expect(await screen.findByRole('heading', { name: 'Implementation handoff preflight' })).toBeTruthy();
+    expect(screen.getByText('Ready').closest('li')?.getAttribute('aria-current')).toBe('step');
+    expect(screen.getAllByText(/^Pass ·/).length).toBeGreaterThan(5);
+    const create = screen.getByRole('button', { name: 'Create GitHub Handoff' });
+    expect(create.hasAttribute('disabled')).toBe(false);
+    fireEvent.click(create);
+    const packet = screen.getByLabelText('GitHub handoff packet') as HTMLTextAreaElement;
+    expect(packet.value).toContain('"execution_authorized": false');
+    expect(packet.value).toContain('"modeled_application": "Adobe Express"');
+    expect(packet.value).toContain('tutorial0-step-08-incidental-shift');
+    expect(screen.getByText(/No GitHub write occurred/i)).toBeTruthy();
   });
 });
