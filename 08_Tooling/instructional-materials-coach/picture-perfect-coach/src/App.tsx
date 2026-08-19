@@ -2,7 +2,16 @@ import { useRef, useState } from 'react';
 import { useMachine } from '@xstate/react';
 import { evidenceStatusLabel, validateUploadText } from './evidence';
 import { deriveReviewedTutorial, needsAttention } from './review';
-import type { ReviewChoice, ReviewDecision, SafeTechnicalDetails, UploadEvidenceProjection, UploadSummary } from './types';
+import { PromptCards } from './PromptCards';
+import { tutorial0PromptCards, tutorial0ReviewedTutorial } from './fixtures/tutorial0-prompts';
+import type {
+  ReviewChoice,
+  ReviewDecision,
+  ReviewedTutorialProjection,
+  SafeTechnicalDetails,
+  UploadEvidenceProjection,
+  UploadSummary,
+} from './types';
 import { picturePerfectMachine } from './workflowMachine';
 
 const STAGES = ['Model', 'Upload', 'Review', 'Prompts', 'Ready'] as const;
@@ -61,6 +70,7 @@ export function App() {
   const [uploadEvidence, setUploadEvidence] = useState<UploadEvidence | null>(null);
   const [decisions, setDecisions] = useState<ReviewDecision[]>([]);
   const [approvedCount, setApprovedCount] = useState(0);
+  const [reviewedTutorial, setReviewedTutorial] = useState<ReviewedTutorialProjection | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const processFile = async (file: File | undefined) => {
     if (!file) return; send({ type: 'UPLOAD_SELECTED' }); setErrorMessage(null); setUploadEvidence(null); setDecisions([]);
@@ -71,7 +81,7 @@ export function App() {
   const decide = (stepId: string, choice: ReviewChoice) => setDecisions((current) => [...current.filter((item) => item.step_id !== stepId), { step_id: stepId, choice }]);
   const approve = () => {
     if (!uploadEvidence) return; const result = deriveReviewedTutorial(uploadEvidence.evidence, decisions); if (!result.ok) return;
-    setApprovedCount(result.tutorial.retained_steps.length); send({ type: 'APPROVE_TUTORIAL' });
+    setApprovedCount(result.tutorial.retained_steps.length); setReviewedTutorial(result.tutorial); send({ type: 'APPROVE_TUTORIAL' });
   };
   const stateValue = String(state.value);
   return <main className="app-shell"><header className="hero"><p className="eyebrow">Picture Perfect Coach</p><h1>Turn teacher modeling into clear tutorial visuals.</h1></header>
@@ -83,6 +93,17 @@ export function App() {
       {state.matches('upload_valid') && uploadEvidence && <div className="panel"><p className="step-kicker">Stage 2 · Upload</p><h2>Recording loaded</h2><div className="summary-grid" aria-label="Recording summary"><article><strong>{uploadEvidence.summary.actionsFound}</strong><span>actions found</span></article><article><strong>{uploadEvidence.summary.instructionalCandidates}</strong><span>instructional candidates</span></article><article><strong>{uploadEvidence.summary.likelyNoiseRecovery}</strong><span>likely noise/recovery</span></article><article><strong>{uploadEvidence.summary.needsReview}</strong><span>needs your review</span></article></div><TechnicalDetails technical={uploadEvidence.technical}/><button className="primary" onClick={() => send({ type: 'CONTINUE_TO_REVIEW' })}>Continue to Review</button></div>}
       {state.matches('ready_for_review') && uploadEvidence && <div className="panel"><p className="step-kicker">Stage 3 · Review</p><h2>Ready to review the tutorial.</h2><button className="primary" onClick={() => send({ type: 'START_REVIEW' })}>Start Review</button></div>}
       {(state.matches('reviewing_steps') || state.matches('review_attention_required')) && uploadEvidence && <ReviewWorkspace evidence={uploadEvidence.evidence} decisions={decisions} decide={decide} approve={approve}/>} 
-      {state.matches('tutorial_approved') && <div className="panel"><p className="step-kicker">Stage 4 boundary · Prompts</p><h2>Tutorial review approved.</h2><p>{approvedCount} reviewed instructional steps are ready for the Prompts slice. No prompts or images were generated here.</p></div>}
+      {state.matches('tutorial_approved') && reviewedTutorial && (
+        reviewedTutorial.recording_id === tutorial0ReviewedTutorial.recording_id &&
+        reviewedTutorial.recording_sha256 === tutorial0ReviewedTutorial.recording_sha256 ? (
+          <PromptCards cards={tutorial0PromptCards} />
+        ) : (
+          <div className="panel">
+            <p className="step-kicker">Stage 4 boundary · Prompts</p>
+            <h2>Tutorial review approved.</h2>
+            <p>{approvedCount} reviewed instructional steps are ready for the Prompts slice. This offline slice has approved prompt-authoring content only for the Tutorial 0 recording, so no prompts were generated here.</p>
+          </div>
+        )
+      )}
     </section></main>;
 }

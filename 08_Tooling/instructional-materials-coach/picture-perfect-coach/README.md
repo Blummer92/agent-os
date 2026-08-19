@@ -1,30 +1,41 @@
-# Picture Perfect Coach — PPUX-A
+# Picture Perfect Coach — PPUX-A / PPUX-C
 
-Bounded first implementation slice for #1183.
+Bounded implementation package for the Picture Perfect Coach shell and prompt-card flow.
 
 ## Scope
 
-This package implements only:
+Implemented slices:
 
 ```text
-Model -> Upload -> validation/result -> Review boundary
+PPUX-A: Model -> Upload -> validation/result -> Review boundary
+PPUX-C: approved modeled steps -> Prompt Cards -> future Ready boundary
 ```
 
-It does not implement tutorial review decisions, prompt generation, image generation, Ready/handoff behavior, Recorder conformance (RJ3), replay equivalence (RJ4), live Adobe execution, or any Notion/Drive/classroom write.
+This package does not implement Stage 3 Review decisions, Stage 5 Ready/handoff behavior, image generation, provider APIs, live Adobe execution, or Notion/Drive/classroom writes.
 
 ## Canonical boundaries
 
 - #1134 remains the source for Recorder -> Teacher Modeling -> Picture Perfect ownership and provenance semantics.
 - Teacher Modeling owns instructional disposition; this UI does not classify raw Recorder events into instructional truth.
-- #955 remains the canonical provider-neutral ImageIntent owner; this package does not define an image-intent model.
+- #955 remains the canonical provider-neutral ImageIntent owner; this package consumes that intent seam and does not define a competing image-intent framework.
+- For software tutorials, provider-neutral means image-provider-neutral, not application-neutral.
+- Application identity fidelity does not authorize invention of controls, labels, locations, or states absent from approved evidence.
 - RJ3/RJ4 are separate evidence states. `pending` and `unavailable` are rendered as not proven.
 - TypeScript interfaces in this package are bounded consumer projections only, not authoritative replacements for the GitHub/Python contracts.
 
-## Offline synthetic fixture
+## Application-fidelity contract
 
-`src/fixtures/tutorial0-recording.json` is privacy-safe synthetic Recorder data. Its companion evidence projection uses the completed #1134 shape and preserves authority-false semantics. Unknown recordings fail closed because this first slice has no connected analysis service and must not guess instructional counts.
+For an Adobe Express modeled tutorial, a complete portable prompt must preserve `application: Adobe Express`, recognizable Adobe Express context, the intended target/state, must-show constraints, and approved provenance.
 
-The synthetic workflow covers organizing the Adobe Express location, creating/opening Tutorial 0, square/landscape/portrait file creation, favorite-food reference imagery, naming/organization, final-location verification, and one removable incidental key event. It contains no authentic Adobe account data or student data.
+Generic creative-app UI, another application, missing application context, provider-specific canonical syntax, or unsupported UI detail fails closed. Provider adapters may alter execution syntax/settings only and may not remove application identity, target state, or must-show evidence.
+
+## Stage 4 reviewed-projection consumption
+
+`projectReviewedTutorialToPromptCards` (in `promptIntent.ts`) is the Stage-4 seam: it consumes the merged PPUX-B `ReviewedTutorialProjection` / `ReviewedStepProjection` boundary from `review.ts` and produces bounded `PromptCardModel[]`. Application identity is read only from each reviewed step's `modeled_application` (approved Teacher Modeling evidence, threaded through `types.ts` and `review.ts`) — it is never inferred from step title, tutorial name, or branding text. A reviewed step without an approved `modeled_application` blocks its prompt card. Image-framing content (purpose, must-show, target state, etc.) is supplied separately as approved `PromptAuthoringInput`, since Recorder/Teacher Modeling evidence does not itself carry that authoring layer. `execution_authorized` remains `false` throughout and is never read or propagated into a prompt card.
+
+## Tutorial 0 fixture
+
+`fixtures/tutorial0-prompts.ts` derives its prompt cards by running the real evidence fixture through `deriveReviewedTutorial` and `projectReviewedTutorialToPromptCards`, so the Tutorial 0 golden path proves the same pipeline the live app uses, not a hand-authored shortcut. The privacy-safe Tutorial 0 fixtures cover the coherent Adobe Express sequence without promoting raw Recorder segmentation into student lessons. Supported prompt cards preserve Adobe Express identity, sourced from approved evidence. Unsupported details remain blocked rather than invented.
 
 ## Commands
 
@@ -41,4 +52,4 @@ The package is designed for Node `>=22.12 <23`, matching the adjacent capture to
 
 ## Security / execution boundary
 
-Normal source code contains no network, provider SDK, Puppeteer, or Playwright execution sink. `npm run guard` enforces that bounded surface. A passing package test proves only the local Picture Perfect UI transformation and presentation behavior; it does not prove live Adobe fidelity.
+Normal source code contains no network, provider SDK, Puppeteer, or Playwright execution sink. `npm run guard` enforces that bounded surface. A passing package test proves only local Picture Perfect UI transformation and presentation behavior; it does not prove live Adobe fidelity or image-provider output.

@@ -43,7 +43,7 @@ describe('Picture Perfect Coach review UX', () => {
     expect(screen.getByText(/Every modeled step needs an explicit review decision/i)).toBeTruthy();
   });
 
-  it('supports Keep, Combine, and Not Instructional then reaches only the Prompts boundary', async () => {
+  it('supports Keep, Combine, and Not Instructional then reaches the Prompts stage with Tutorial 0 prompt cards', async () => {
     await reachReview();
     const cards = screen.getAllByRole('article');
     fireEvent.click(within(cards[0]!).getByRole('button', { name: 'Keep & Continue' }));
@@ -55,7 +55,8 @@ describe('Picture Perfect Coach review UX', () => {
     const approve = screen.getByRole('button', { name: 'Approve Tutorial' });
     expect(approve.hasAttribute('disabled')).toBe(false);
     fireEvent.click(approve);
-    expect(await screen.findByRole('heading', { name: 'Tutorial review approved.' })).toBeTruthy();
-    expect(screen.getByText(/No prompts or images were generated here/i)).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Picture Perfect prompts' })).toBeTruthy();
+    expect(screen.getAllByText('Application: Adobe Express').length).toBeGreaterThan(0);
+    expect(screen.getByText('These prompts are derived presentation guidance. They never become instructional source evidence.')).toBeTruthy();
   });
 });
