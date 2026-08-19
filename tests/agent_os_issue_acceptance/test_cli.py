@@ -34,6 +34,33 @@ def test_transport_arguments_are_optional_when_absent(tmp_path, capsys):
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
+def test_cli_marks_supplied_empty_diff_as_manual_review(tmp_path, capsys):
+    empty_diff = tmp_path / "diff.patch"
+    empty_diff.write_text("", encoding="utf-8")
+
+    main(
+        [
+            "--issue",
+            str(FIXTURES / "issue_valid.md"),
+            "--pr-body",
+            str(FIXTURES / "pr_body_valid.md"),
+            "--changed-files",
+            str(FIXTURES / "changed_files_valid.txt"),
+            "--diff",
+            str(empty_diff),
+            "--format",
+            "json",
+        ]
+    )
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["overall_status"] == "manual-review"
+    banned = next(check for check in output["checks"] if check["name"] == "banned patterns")
+    assert banned["status"] == "manual-review"
+    assert "input=diff; state=empty-supplied" in banned["evidence"]
+    assert "diff_supplied=true" in output["evidence"]
+
+
 def test_json_report_distinguishes_manual_review_from_none():
     body = (FIXTURES / "pr_body_valid.md").read_text().replace(
         "Closes #164", "Closes #223\nFixes #224"

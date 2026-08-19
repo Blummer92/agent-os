@@ -15,7 +15,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 | QA/Test Standards | 0.1.0 |
 | Dashboard Governance | 0.1.0 |
 | Dashboard Migration Verification | 0.1.0 |
-| Instructional Design Standards | 0.10.0 |
+| Instructional Design Standards | 0.11.0 |
 | Agent Orchestrator | 0.3.0 |
 | GitHub Service Agent | 0.6.0 |
 | Unit Alignment Agent | 0.6.0 |
@@ -42,11 +42,11 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 
 **Agent Interaction Output Standard** `0.2.0` adds compact state-based operator rendering for implementation and PR review (#1081): bounded stage bars without invented percentages, canonical `Completed` / `Current` / `Remaining` / `Blockers` evidence labels, material-only `Best execution`, supported `Next`, and smallest-context delivery; no new progress state or authority.
 
-**Safe Implementation Lane** `0.5.0` composes existing #895 checkpoint/resume and #758 lease evidence into resumable authorized work, distinguishes same-branch `HEAD_ADVANCED` from #1187 base-behind refresh, and requires current replacement evidence before cancelled stale-head validation is treated as superseded (#1188). It creates no retry, lease takeover, merge, closure, or external-write authority.
+**Safe Implementation Lane** `0.5.0` composes existing #895 checkpoint/resume and #758 Scheduler lease evidence into resumable authorized work, distinguishes same-branch `HEAD_ADVANCED` from #1187 base-behind refresh, and requires current replacement evidence before cancelled stale-head validation is treated as superseded (#1188). It creates no retry, lease takeover, merge, closure, or external-write authority.
 
 **Notion Standards** `0.4.0` defines the canonical Draft Mode, Append-Only Safe Log Mode, and Canonical Update Mode write-safety vocabulary in `notion-record-update-safety.md` (#1103). Mode classification never creates authority; existing write authorization remains canonical in `00_Governance/write-authorization-policy.md`.
 
-**Instructional Design Standards** `0.10.0` integrates the Unit Creation Conversational Contract across the existing curriculum owner route (#1214): the bounded pre-verification modeling-feasibility advisory reuses current context/handoff surfaces, Unit Alignment remains sole PASS/BLOCKED owner, formal Teacher Modeling remains post-PASS, stale downstream readiness cannot survive changed governing inputs, and Materials cannot consume advisory output as approved modeling. Agent Orchestrator `0.3.0`, Unit Alignment Agent `0.6.0`, and Teacher Modeling Coach `0.6.0` consume that boundary without new state, packet, router, readiness, persistence, or lifecycle schemas.
+**Instructional Design Standards** `0.11.0` adds the Assessment Blueprint Core Standard (#838): a versioned provider-neutral blueprint schema that preserves the complete #837 design-record contract, structures provenance/scoring/accessibility/AI planning metadata, validates fixed non-authority fields, and fails closed without implementing lifecycle/stale-state behavior owned by #1192. `0.10.0` integrated the Unit Creation Conversational Contract (#1214). Neither change creates an Assessment Agent or authorizes grading, readiness, classroom use, production, publication, or external writes.
 
 **Dashboard Migration Verification** (`08_Tooling/dashboard-migration-verification/`) is a verification-only migration evidence toolkit for registry examples, placeholder snapshots, dependency graphs, conservative validation results, and reports. It never authorizes live Notion, Workspace, trigger, sharing, source-of-truth, or production dashboard writes. Standard packaging metadata was completed by D2 (#123).
 
