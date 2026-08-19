@@ -68,3 +68,27 @@ leases, workspaces, or audit records.
 Actual installation/verification on `agent-os-test`, SSH/IAP use, IAM/WIF,
 workflow changes, production activation, merge, and issue closure remain outside
 this repository-only slice.
+
+## Production host composition (#1287 / AOS-GCE2B)
+
+`production_host_composition.build_production_governed_resume_bindings(...)`
+supplies the smallest production wiring for the two adapters above.
+`build_governed_resume_bindings` cannot be reused directly: it needs
+`lease`/`workspace`/`executor`/`validator` eagerly, but those depend on the
+`ConcreteRuntimeConfiguration` for the exact `pilot_input` reconstruction
+admits, which is not known until after admission. So this module builds
+`GovernedResumeBindings` directly: `reconstruct` is a `functools.partial` of
+`reconstruct_governed_invocation` bound to production readers
+(`HostCurrentInvocationSources`, `CanonicalCurrentInvocationResolver`,
+`load_invocation_descriptor`); `dispatch` builds the concrete adapters via
+`build_concrete_runtime_adapters` only once an admitted `pilot_input` exists,
+then calls `run_single_issue_pilot` exactly once.
+
+The checkpoint store root comes only from `AGENT_OS_CHECKPOINT_STORE_ROOT`
+(no default, no caller override), matching the existing hook-adapter
+convention. A host-local `lease_directory` is required; both the
+reconstruction-time lease observation and the dispatch-time lease adapter use
+`HostLocalLeaseAdapter` exclusively. If the runtime configuration bound to an
+admitted pilot input would select any other lease directory (including
+`None`, which selects `InMemoryLeaseAdapter`), dispatch fails closed instead.
+No new Scheduler, lease, store, router, or transport system is introduced.
