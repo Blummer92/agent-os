@@ -153,6 +153,23 @@ def test_supplied_empty_diff_requires_manual_review():
     assert "diff_supplied=true" in report.evidence
 
 
+def test_supplied_whitespace_only_diff_requires_manual_review():
+    report = evaluate_acceptance(
+        AcceptanceInput(
+            issue_body=_read("issue_valid.md"),
+            pr_body=_read("pr_body_valid.md"),
+            changed_files=_changed("changed_files_valid.txt"),
+            diff_text=" \n\t",
+            diff_supplied=True,
+        )
+    )
+
+    result = _result(report, "banned patterns")
+    assert result.status == Status.MANUAL_REVIEW
+    assert report.overall_status == Status.MANUAL_REVIEW
+    assert "input=diff; state=empty-supplied" in result.evidence
+
+
 def test_empty_optional_diff_preserves_legacy_pass_behavior():
     report = evaluate_acceptance(
         AcceptanceInput(
