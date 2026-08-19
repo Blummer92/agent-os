@@ -30,6 +30,7 @@ PROJECT = "agent-os-502614"
 ZONE = "us-central1-a"
 INSTANCE = "agent-os-test"
 RESOURCE = GceResourceTuple(project=PROJECT, zone=ZONE, instance=INSTANCE)
+DISCOVERY_ENTRYPOINT = "/usr/local/libexec/agent-os-handoff-discovery"
 WORKFLOW_REF = (
     "Blummer92/agent-os/.github/workflows/"
     "agent-os-governed-invocation.yml@refs/heads/main"
@@ -134,6 +135,47 @@ class GcloudIapAdapter:
         )
         return result.returncode == 0
 
+    def probe_discovery_ready(self, resource: GceResourceTuple) -> bool:
+        result = self._ssh(
+            resource,
+            f"test -x {DISCOVERY_ENTRYPOINT}",
+        )
+        return result.returncode == 0
+
+    def discover(
+        self,
+        resource: GceResourceTuple,
+        *,
+        repository: str,
+        issue_number: int,
+    ) -> dict[str, object]:
+        if repository != "Blummer92/agent-os":
+            raise GcloudCommandError("non-canonical discovery repository rejected")
+        if type(issue_number) is not int or issue_number < 1:
+            raise GcloudCommandError("non-canonical discovery issue rejected")
+        command = (
+            f"{DISCOVERY_ENTRYPOINT} "
+            f"--repository {repository} --issue-number {issue_number}"
+        )
+        result = self._ssh(resource, command)
+        if result.returncode != 0:
+            raise GcloudCommandError("fixed host discovery failed")
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise GcloudCommandError("host discovery evidence was not JSON") from exc
+        if type(payload) is not dict:
+            raise GcloudCommandError("host discovery evidence must be an object")
+        if payload.get("repository") != repository:
+            raise GcloudCommandError("host discovery repository mismatch")
+        if payload.get("issue_number") != issue_number:
+            raise GcloudCommandError("host discovery issue mismatch")
+        if payload.get("execution_authorized") is not False:
+            raise GcloudCommandError("discovery must remain non-authorizing")
+        if payload.get("side_effects_performed") is not False:
+            raise GcloudCommandError("discovery must remain read-only")
+        return payload
+
     def invoke(
         self, resource: GceResourceTuple, argv: tuple[str, ...]
     ) -> HostInvocationEvidence:
@@ -195,6 +237,90 @@ def execute_transport(
     claims: Mapping[str, object],
     adapter: GcloudIapAdapter,
 ) -> dict[str, object]:
+    if ingress.reason == "accepted-discovery-envelope":
+        if ingress.status != "accepted" or ingress.issue_number is None:
+            raise ValueError("discovery requires accepted canonical issue evidence")
+        if ingress.handoff_id_or_none is not None:
+            raise ValueError("discovery must not carry a handoff identity")
+        if ingress.run_attempt != 1:
+            raise ValueError("workflow reruns cannot perform discovery")
+
+        policy = OidcTrustPolicy(
+            repository="Blummer92/agent-os",
+            repository_owner="Blummer92",
+            workflow_ref=WORKFLOW_REF,
+            ref="refs/heads/main",
+            audience=WIF_PROVIDER,
+        )
+        if not policy.accepts(claims):
+            return {
+                "discovery": {
+                    "status": "blocked",
+                    "reason_codes": ["claims-rejected"],
+                    "repository": ingress.repository,
+                    "issue_number": ingress.issue_number,
+                    "handoff_id": None,
+                    "execution_authorized": False,
+                    "scheduler_invoked": False,
+                    "side_effects_performed": False,
+                }
+            }
+
+        initial = adapter.observe_state(RESOURCE)
+        if initial is VmState.STOPPED:
+            if not adapter.start(RESOURCE):
+                return {
+                    "discovery": {
+                        "status": "needs-decision",
+                        "reason_codes": ["vm-start-failed"],
+                        "repository": ingress.repository,
+                        "issue_number": ingress.issue_number,
+                        "handoff_id": None,
+                        "execution_authorized": False,
+                        "scheduler_invoked": False,
+                        "side_effects_performed": False,
+                    }
+                }
+            state = adapter.wait_until_running(RESOURCE)
+        else:
+            state = initial
+
+        if state is not VmState.RUNNING:
+            return {
+                "discovery": {
+                    "status": "needs-decision",
+                    "reason_codes": ["host-unavailable"],
+                    "repository": ingress.repository,
+                    "issue_number": ingress.issue_number,
+                    "handoff_id": None,
+                    "execution_authorized": False,
+                    "scheduler_invoked": False,
+                    "side_effects_performed": False,
+                }
+            }
+
+        if not adapter.probe_discovery_ready(RESOURCE):
+            return {
+                "discovery": {
+                    "status": "needs-decision",
+                    "reason_codes": ["discovery-entrypoint-unavailable"],
+                    "repository": ingress.repository,
+                    "issue_number": ingress.issue_number,
+                    "handoff_id": None,
+                    "execution_authorized": False,
+                    "scheduler_invoked": False,
+                    "side_effects_performed": False,
+                }
+            }
+
+        return {
+            "discovery": adapter.discover(
+                RESOURCE,
+                repository=ingress.repository,
+                issue_number=ingress.issue_number,
+            )
+        }
+
     binding = bind_ingress_to_gce(ingress, resource=RESOURCE)
     policy = OidcTrustPolicy(
         repository="Blummer92/agent-os",
