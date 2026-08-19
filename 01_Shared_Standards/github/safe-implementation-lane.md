@@ -15,6 +15,10 @@ The lane is available only when all of these are true:
 Tier 2, closed, blocked, stale, conflicting, cross-system, production,
 credential, workflow, governed-field, source-of-truth, and irreversible work is
 not eligible.
+## Activation Preflight
+Treat lane activation as one consolidated decision over live issue eligibility, current readiness, direct repository-owner operational authorization, excluded surfaces, and existing branch/PR/checkpoint/lease lineage. Durable issue or handoff text such as `execution_authorized=false` means that artifact does not grant authority by itself; it is not a permanent veto on a later fresh direct repository-owner instruction that this standard recognizes as authorization. `status:ready` remains readiness metadata, not execution authority.
+
+If an otherwise eligible Tier 0/1 issue is missing only the mechanical `status:ready` prerequisite, the issue is not yet lane-eligible. Surface the required readiness intervention at most once when policy requires owner approval. After that authorized mutation converges to canonical `status:ready`, reuse the same still-current direct implementation instruction and continue without asking for `continue`, `authorized`, or a second `work on` instruction. Do not carry the instruction across `status:blocked`, `status:needs-decision`, stale/conflicting scope or ownership, an excluded surface, or an active/ambiguous execution lease.
 ## Authorization Effect
 For an eligible issue, the explicit implementation instruction authorizes:
 - one non-protected branch;
@@ -37,9 +41,7 @@ Conversation continuity, including `continue`, `next step`, or `keep going`, nev
 authorizes a previously excluded surface.
 ## Execution Continuation
 For a currently authorized Safe Implementation Lane issue, discovery of one existing valid issue-linked branch, Draft PR, or checkpoint lineage is normally a resume target, not a stop condition. Reacquire current repository, authorization, scope, ownership, checkpoint, exact-head, and canonical Scheduler lease evidence; consume the existing `ResumePlan`; and continue from the newest valid checkpoint when no active conflict exists.
-
 An existing active Scheduler lease is the concurrency authority. Do not create a competing branch, PR, execution, or lease; do not steal, force-release, expire by age, or automatically retry an active or ambiguous lease. When the same authorized branch advances from SHA A to SHA B, reacquire B, inspect the head change, rebind current exact-head evidence, invalidate only the head-bound evidence required by existing contracts, and continue when authorization, ownership, and bounded scope remain valid. If `main` advanced and the PR branch is behind, route to the separately governed branch-refresh path rather than treating base drift as ordinary `HEAD_ADVANCED`.
-
 Cancelled validation on stale SHA A may be projected as `SUPERSEDED_BY_NEW_HEAD` only when bounded evidence proves the old run was cancelled, the current PR head is different SHA B, a newer run/check for B exists in the same validation lane/concurrency group, and replacement/supersession evidence is current. A genuine test or configuration failure on A remains genuine failure evidence. Only validation bound to the current exact head may satisfy Ready-for-Review.
 ## Validation Loop
 Follow the canonical focused-local and authoritative exact-head aggregate policy in
@@ -89,8 +91,9 @@ risks, rollback, and confirmation that merge and excluded surfaces remain
 unauthorized. Prefer one consolidated user-facing result for routine internal
 routing while preserving required handoff artifacts for owners and auditability.
 ## Version
-0.5.0
+0.6.0
 ## Changelog
+- 0.6.0 distinguishes artifact non-authority from later direct-owner authorization, consolidates activation preflight, and carries one current instruction across a single mechanical readiness intervention without weakening fail-closed stops (#1274).
 - 0.5.0 makes existing authorized branch/PR/checkpoint lineage resumable through the canonical #895 ResumePlan and #758 Scheduler lease, separates same-branch `HEAD_ADVANCED` from #1187 base-behind refresh, and requires bounded proof before cancelled stale-head validation is classified as superseded (#1188).
 - 0.4.0 requires issue-defined developer-loop validation on a capable route before Draft PR creation while preserving one final exact-head aggregate (#1077).
 - 0.3.0 adds the focused-local -> authoritative exact-head aggregate validation loop without weakening final validation.
