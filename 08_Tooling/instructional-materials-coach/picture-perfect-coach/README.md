@@ -1,6 +1,6 @@
-# Picture Perfect Coach — PPUX-A / B / C / D
+# Picture Perfect Coach — PPUX-A / B / C / D / E
 
-Bounded implementation package for the five-stage Picture Perfect authoring flow.
+Bounded implementation package for the five-stage Picture Perfect authoring flow and its local browser acceptance suite.
 
 ## Scope
 
@@ -12,7 +12,9 @@ Model -> Upload -> Review -> Prompts -> Ready
 
 Stage 5 Ready performs deterministic local preflight and can generate a local implementation acceptance / GitHub handoff packet. It does **not** call GitHub or authorize implementation.
 
-This package does not perform image generation, provider APIs, live Adobe/browser execution, GitHub branch/PR creation, merge, issue closure, Notion/Drive/classroom writes, or production activation.
+PPUX-E adds Playwright acceptance against the actual Vite application. It proves the privacy-safe Tutorial 0 journey and required fail-closed browser cases without navigating the real Adobe product or any external provider.
+
+This package does not perform image generation, provider APIs, live Adobe/browser replay, GitHub branch/PR creation, merge, issue closure, Notion/Drive/classroom writes, or production activation.
 
 ## Canonical boundaries
 
@@ -49,6 +51,14 @@ ready_for_handoff
 
 The teacher-facing `Create GitHub Handoff` button only renders the packet locally for review/copy. It has no GitHub client or external-write path.
 
+## Browser acceptance
+
+`playwright.config.ts` starts the local Vite application on loopback and runs Chromium with one deterministic worker. The suite in `e2e/` drives the actual upload input, Review controls, prompt cards, Ready preflight, and local handoff packet.
+
+The acceptance suite covers the Tutorial 0 happy path plus malformed JSON, off-approved-origin navigation, missing Teacher Modeling evidence, source mismatch, unresolved Review, provider-neutral/application-identity behavior, and the non-authorizing prompt/handoff boundary.
+
+Playwright screenshots and video are disabled so acceptance does not create unnecessary visual artifacts. Traces are retained only on failure. Browser acceptance is local application testing, not live Adobe replay.
+
 ## Tutorial 0 fixture
 
 The privacy-safe Tutorial 0 fixture runs through the real evidence -> Review -> Prompt -> Ready derivation. Supported prompt cards preserve Adobe Express identity because approved evidence carries it. The Ready packet preserves the coherent reviewed sequence, combined-step provenance, excluded incidental step, recording identity/fingerprint, and provider-neutral prompt constraints.
@@ -56,16 +66,18 @@ The privacy-safe Tutorial 0 fixture runs through the real evidence -> Review -> 
 ## Commands
 
 ```bash
-npm install
+npm ci
+npx playwright install chromium
 npm run typecheck
 npm run lint
 npm test
 npm run build
 npm run guard
+npm run test:e2e
 ```
 
 The package is designed for Node `>=22.12 <23`, matching the adjacent capture tool runtime contract.
 
 ## Security / execution boundary
 
-Normal source code contains no network, provider SDK, Puppeteer, Playwright, GitHub API, Notion, or Drive execution sink. `npm run guard` enforces the bounded surface. Passing tests prove only local Picture Perfect transformation, presentation, deterministic preflight, and packet generation; they do not prove live Adobe fidelity, image-provider output, or GitHub execution.
+Normal application source contains no network, provider SDK, Puppeteer, GitHub API, Notion, or Drive execution sink. Playwright exists only in the package's test/development surface and drives the local Vite app. `npm run guard` enforces the bounded production surface. Passing tests prove local Picture Perfect transformation, presentation, deterministic preflight, packet generation, and browser UX acceptance; they do not prove live Adobe fidelity, image-provider output, or GitHub execution.
