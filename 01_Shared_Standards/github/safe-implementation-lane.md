@@ -17,7 +17,6 @@ credential, workflow, governed-field, source-of-truth, and irreversible work is
 not eligible.
 ## Activation Preflight
 Treat lane activation as one consolidated decision over live issue eligibility, current readiness, direct repository-owner operational authorization, excluded surfaces, and existing branch/PR/checkpoint/lease lineage. Durable issue or handoff text such as `execution_authorized=false` means that artifact does not grant authority by itself; it is not a permanent veto on a later fresh direct repository-owner instruction that this standard recognizes as authorization. `status:ready` remains readiness metadata, not execution authority.
-
 If an otherwise eligible Tier 0/1 issue is missing only the mechanical `status:ready` prerequisite, the issue is not yet lane-eligible. Surface the required readiness intervention at most once when policy requires owner approval. After that authorized mutation converges to canonical `status:ready`, reuse the same still-current direct implementation instruction and continue without asking for `continue`, `authorized`, or a second `work on` instruction. Do not carry the instruction across `status:blocked`, `status:needs-decision`, stale/conflicting scope or ownership, an excluded surface, or an active/ambiguous execution lease.
 ## Authorization Effect
 For an eligible issue, the explicit implementation instruction authorizes:
