@@ -226,3 +226,25 @@ def test_pre_pr_stale_authorization_fails_before_base_drift_routing() -> None:
 
     assert decision.disposition is ContinuationDisposition.STALE_EXISTING_WORK
     assert decision.reason_codes == ("authorization.stale",)
+
+
+def test_pre_pr_current_continues_developer_loop_without_pr_lifecycle_routing() -> None:
+    request = _lease_request()
+    decision = plan_execution_continuation(
+        _work(base_behind=False, current_base_sha=BASE_A),
+        resume_plan=_plan(),
+        lease_request=request,
+        lease_observation=_inactive_lease(request),
+    )
+
+    assert decision.disposition is ContinuationDisposition.RESUMABLE_EXISTING_WORK
+    assert decision.reason_codes == ("existing.resumable", "lease.no-active-conflict")
+    assert decision.resume_point == CANONICAL_STAGE_ORDER[0].value
+    assert "branch.base-behind-pre-pr-replan" not in decision.reason_codes
+    assert "branch.base-behind-route-gh-life3" not in decision.reason_codes
+    assert decision.branch_refresh_authorized is False
+    assert decision.continuation_authorized is False
+    assert decision.retry_authorized is False
+    assert decision.merge_authorized is False
+    assert decision.issue_closure_authorized is False
+    assert decision.external_writes_authorized is False

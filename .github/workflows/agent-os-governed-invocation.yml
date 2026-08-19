@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   ingress:
-    name: Validate and transport bounded Agent OS resume
+    name: Validate and transport bounded Agent OS invocation
     if: ${{ github.event.issue.pull_request == null }}
     runs-on: ubuntu-latest
     steps:
@@ -117,7 +117,14 @@ jobs:
                       summary.write(f"Scheduler accepted: `{control.get('host_accepted')}`\n\n")
                       summary.write(f"Automatic shutdown issued: `{control.get('shutdown_issued')}`\n")
                   else:
-                      summary.write(f"Dispatch: `{result.get('dispatch_status')}` / `{result.get('dispatch_reason')}`\n")
+                      discovery = result.get("discovery")
+                      if isinstance(discovery, dict):
+                          summary.write(f"Discovery status: `{discovery.get('status')}`\n\n")
+                          summary.write(f"Reasons: `{','.join(discovery.get('reason_codes', []))}`\n\n")
+                          summary.write(f"Handoff found: `{discovery.get('handoff_id') is not None}`\n\n")
+                          summary.write("Scheduler invoked by discovery: `False`\n")
+                      else:
+                          summary.write(f"Dispatch: `{result.get('dispatch_status')}` / `{result.get('dispatch_reason')}`\n")
               else:
                   summary.write("Result evidence unavailable; manual review required.\n")
           PY

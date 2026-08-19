@@ -127,3 +127,27 @@ def test_cli_writes_bounded_canonical_json(tmp_path: Path) -> None:
     assert payload["execution_authorized"] is False
     assert payload["scheduler_invoked"] is False
     assert payload["side_effects_performed"] is False
+
+
+def test_exact_discovery_trigger_is_accepted_without_handoff_authority() -> None:
+    result = admit(event("/agent-os discover"))
+    assert result.status == "accepted"
+    assert result.reason == "accepted-discovery-envelope"
+    assert result.handoff_id_or_none is None
+    assert result.logical_trigger_id_or_none is not None
+    assert result.execution_authorized is False
+    assert result.scheduler_invoked is False
+    assert result.side_effects_performed is False
+
+
+def test_discovery_trigger_rejects_arguments_and_fake_handoff_text() -> None:
+    result = admit(event(f"/agent-os discover {HANDOFF}"))
+    assert (result.status, result.reason) == ("ignored", "malformed-trigger")
+    assert result.handoff_id_or_none is None
+
+
+def test_duplicate_discovery_comments_share_logical_identity() -> None:
+    first = event("/agent-os discover")
+    second = event("/agent-os discover")
+    second["comment"]["id"] = 9982
+    assert admit(first).logical_trigger_id_or_none == admit(second).logical_trigger_id_or_none
