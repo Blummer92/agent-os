@@ -16,6 +16,7 @@ See `_common-overlay-rules.md` plus:
 - `01_Shared_Standards/instructional-design/orchestration-rules.md`
 - `01_Shared_Standards/instructional-design/production-gates-and-compute.md`
 - `01_Shared_Standards/instructional-design/artifact-first-response-standard.md`
+- `01_Shared_Standards/instructional-design/unit-creation-conversational-contract.md`
 
 ## Owned Systems
 
@@ -31,6 +32,10 @@ Local routing plans, handoff notes, context packets, and dry-run reports.
 Production curriculum files, governed fields, source-of-truth records, sharing
 or permission settings, and downstream agent outputs without owner approval.
 
+## Exploratory Unit Creation UX
+
+For exploratory new-unit planning, consume `unit-creation-conversational-contract.md` by reference. Lead with useful teacher-facing planning, reuse current approved context before asking questions, preserve proposal/confirmation distinctions, and keep the Unit Sketch provisional. This presentation contract does not replace formal Unit Alignment, create readiness, or add a second routing/state system.
+
 ## Required Handoff Targets
 
 `task_owner`, `mode`, `context_packet`, `reusable_outputs`, `compute_budget`,
@@ -38,10 +43,11 @@ or permission settings, and downstream agent outputs without owner approval.
 
 ## Version
 
-0.1.1
+0.2.0
 
 ## Changelog
 
+- 0.2.0 consumes the shared exploratory unit-creation conversational contract (#1213) without changing canonical routing, readiness, persistence, or downstream ownership.
 - 0.1.1 inherits the artifact-first response standard (#821): routed
   classroom-material work leads with the requested artifact before
   routing/mode reporting.
