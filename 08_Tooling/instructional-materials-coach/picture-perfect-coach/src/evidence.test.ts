@@ -30,4 +30,15 @@ describe('upload evidence consumer', () => {
     expect(evidence.modeling_candidates.every((item) => item.execution_authorized === false)).toBe(true);
     expect(evidence.modeling_steps.every((item) => item.execution_authorized === false)).toBe(true);
   });
+
+  it('surfaces off-approved-origin navigation and fails closed', () => {
+    const unsafe = structuredClone(tutorialRecording);
+    const navigate = unsafe.steps.find((step) => step.type === 'navigate');
+    if (!navigate || navigate.type !== 'navigate') throw new Error('fixture navigate step missing');
+    navigate.url = 'https://example.invalid/not-approved';
+    const result = validateUploadText(JSON.stringify(unsafe));
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unsafe recording unexpectedly accepted');
+    expect(result.message).toMatch(/outside the approved Adobe Express modeling origin/i);
+  });
 });
