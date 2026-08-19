@@ -147,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
 
     transport_payload = None
     if any(
-        getattr(args, name) not in (None, "")
+        getattr(args, name) not in (None, "", False)
         for name in (
             "transport_repository",
             "transport_issue_number",
