@@ -5,21 +5,24 @@ import re
 from .models import LinkedIssueCandidate, LinkedIssueParseResult, LinkedIssueParseStatus
 
 _SUPPORTED_KEYWORDS = r"close[sd]?|fix(?:e[sd])?|resolve[sd]?"
-_TARGET = r"(?:(?P<repository>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+))?#(?P<number>\d+)"
+_REPOSITORY = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
+_SHORT_TARGET = rf"(?:(?P<repository>{_REPOSITORY}))?#(?P<number>\d+)"
+_URL_TARGET = rf"https://github\.com/(?P<url_repository>{_REPOSITORY})/issues/(?P<url_number>\d+)"
+_TARGET = rf"(?P<target>(?:{_URL_TARGET}|{_SHORT_TARGET}))"
 
 EXPLICIT_LINK_RE = re.compile(
-    rf"\b(?P<keyword>{_SUPPORTED_KEYWORDS})(?:\s*:\s*|\s+)(?P<target>{_TARGET})\b",
+    rf"\b(?P<keyword>{_SUPPORTED_KEYWORDS})(?:\s*:\s*|\s+){_TARGET}\b",
     re.IGNORECASE,
 )
 UNSUPPORTED_LINK_RE = re.compile(
-    rf"\b(?P<keyword>address(?:es|ed)?)(?:\s*:\s*|\s+)(?P<target>{_TARGET})\b",
+    rf"\b(?P<keyword>address(?:es|ed)?)(?:\s*:\s*|\s+){_TARGET}\b",
     re.IGNORECASE,
 )
 ISSUE_REFERENCE_RE = re.compile(
-    r"(?<![A-Za-z0-9_.-])(?P<target>(?:(?P<repository>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+))?#(?P<number>\d+))\b"
+    rf"(?<![A-Za-z0-9_.-]){_TARGET}\b"
 )
 _AUTHORITATIVE_PREFIX_RE = re.compile(
-    rf"\b(?P<keyword>{_SUPPORTED_KEYWORDS}|address(?:es|ed)?)\b[^#\n]{{0,40}}$",
+    rf"\b(?P<keyword>{_SUPPORTED_KEYWORDS}|address(?:es|ed)?)\b[^#\n]{{0,80}}$",
     re.IGNORECASE,
 )
 _INLINE_CODE_RE = re.compile(r"`+[^`\n]*?`+")
@@ -38,7 +41,7 @@ REQUIRED_PR_FIELDS = [
 
 
 def parse_linked_issue_result(pr_body: str, pr_title: str = "") -> LinkedIssueParseResult:
-    """Parse authoritative linked-issue evidence without guessing on ambiguity."""
+    """Parse GitHub-authoritative body linkage while retaining title evidence."""
     explicit: list[LinkedIssueCandidate] = []
     bare: list[LinkedIssueCandidate] = []
 
@@ -94,7 +97,7 @@ def parse_linked_issue_result(pr_body: str, pr_title: str = "") -> LinkedIssuePa
                 for candidate in authoritative_looking
             )
             reason = (
-                "Unsupported or malformed authoritative-looking issue references were detected: "
+                "Unsupported or non-authoritative closing-looking issue references were detected: "
                 f"{details}."
             )
         else:
@@ -127,8 +130,8 @@ def _extract_candidates(
     occupied_target_spans: list[tuple[int, int]] = []
 
     for match in EXPLICIT_LINK_RE.finditer(masked):
-        candidate = _candidate_from_match(match, source, explicit=True)
-        explicit.append(candidate)
+        candidate = _candidate_from_match(match, source, explicit=source == "body")
+        (explicit if source == "body" else bare).append(candidate)
         occupied_target_spans.append(match.span("target"))
 
     for match in UNSUPPORTED_LINK_RE.finditer(masked):
@@ -140,13 +143,14 @@ def _extract_candidates(
         if _overlaps(match.span("target"), occupied_target_spans):
             continue
         line_start = masked.rfind("\n", 0, match.start("target")) + 1
-        prefix = masked[max(line_start, match.start("target") - 50):match.start("target")]
+        prefix = masked[max(line_start, match.start("target") - 90):match.start("target")]
         prefix_match = _AUTHORITATIVE_PREFIX_RE.search(prefix)
         keyword = prefix_match.group("keyword").lower() if prefix_match else None
+        repository, issue_number = _target_identity(match)
         bare.append(
             LinkedIssueCandidate(
-                issue_number=int(match.group("number")),
-                repository=match.group("repository"),
+                issue_number=issue_number,
+                repository=repository,
                 keyword=keyword,
                 source=source,
                 position=match.start("target"),
@@ -163,15 +167,22 @@ def _candidate_from_match(
     source: str,
     explicit: bool,
 ) -> LinkedIssueCandidate:
+    repository, issue_number = _target_identity(match)
     return LinkedIssueCandidate(
-        issue_number=int(match.group("number")),
-        repository=match.group("repository"),
+        issue_number=issue_number,
+        repository=repository,
         keyword=match.group("keyword").lower(),
         source=source,
         position=match.start("target"),
         raw_target=match.group("target"),
         explicit=explicit,
     )
+
+
+def _target_identity(match: re.Match[str]) -> tuple[str | None, int]:
+    repository = match.group("url_repository") or match.group("repository")
+    number = match.group("url_number") or match.group("number")
+    return repository, int(number)
 
 
 def _mask_non_authoritative_markdown(text: str) -> str:
