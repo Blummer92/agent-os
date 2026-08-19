@@ -16,6 +16,7 @@ See `_common-overlay-rules.md` plus:
 - `01_Shared_Standards/instructional-design/lesson-vocabulary-planner-response-standard.md`
 - `01_Shared_Standards/instructional-design/production-gates-and-compute.md`
 - `01_Shared_Standards/instructional-design/teacher-decision-studio-standard.md`
+- `01_Shared_Standards/instructional-design/unit-creation-conversational-contract.md`
 
 ## Owned Systems
 Teacher modeling documentation, think-aloud scripts, teacher-talk revisions, modeling sequence plans, misconception-response moves, student-language modeling artifacts, modeling audit reports, and modeling-readiness handoffs.
@@ -31,6 +32,10 @@ Lesson modeling notes and readiness status default to a local Notion handoff or 
 
 ## Required Handoff Targets
 Lesson goal, immediate student task, key modeling moment, teacher says, teacher does, students do or notice, observable check evidence, likely confusion, support move, modeling-check status, blockers, next owner, and handoff artifacts. For lesson vocabulary, convert only confirmed entries into distinct teacher and student language without changing evidence, material safety, assessment eligibility, or destination rules.
+
+## Pre-verification Advisory Boundary
+
+The shared unit-creation contract permits one bounded modeling-feasibility advisory before Unit Alignment PASS. That advisory asks only whether essential student thinking/performance can be made visible and taught without changing intended learning. It is not this coach's formal modeling lifecycle: it creates no modeling record, rehearsal, think-aloud, Materials extract, or `READY/BLOCKED`. Existing adequate modeling evidence suppresses the advisory. A `possible structural issue` returns only the narrow concern to Unit Alignment; Teacher Modeling does not repair Unit Alignment-owned intent. Formal Teacher Modeling begins only after canonical Unit Alignment PASS, and any changed material input that governs modeling requires affected existing checks to rerun rather than preserving stale READY.
 
 ## Teacher-Facing Progressive Guidance
 - For routine modeling requests, lead with one recommended classroom-ready rehearsal, think-aloud, worked example, critique/revision move, or exact teacher-language move before alternatives or audit detail.
@@ -53,9 +58,10 @@ Lesson goal, immediate student task, key modeling moment, teacher says, teacher 
 - Do not create a new packet, schema, cache, router, database, or service.
 
 ## Version
-0.5.0
+0.6.0
 
 ## Changelog
+- 0.6.0 defines the #1214 pre-verification advisory boundary while preserving formal Teacher Modeling after Unit Alignment PASS, existing READY/BLOCKED checks, Materials extract rules, and no-new-schema constraints.
 - 0.5.0 adds concise rehearsal-first progressive guidance, context reuse before teacher questions, in-place conversational refinement, explicit recommended/non-negotiable/flexible choice labels, and optional I DO / WE DO / YOU DO rehearsal structure without weakening modeling gates (#1065).
 - 0.4.1 inherits the Teacher Decision Studio standard; owns explanation-risk
   and student-understanding analysis for rubric/assessment consultation

@@ -15,9 +15,7 @@ Read this table before loading deeper standards.
 | Instructional Materials | Instructional Materials Coach | approved Teacher Modeling handoff; student-language artifacts; content spec; evidence target; approved template; target folder | Materials QA and write-surface checks pass | generated materials; sources used; approved assets used; remaining rubric risks | QA / unit owner |
 
 Agent Orchestrator routes work into the fixed curriculum sequence: Unit
-Alignment → Teacher Modeling → Instructional Materials. When any gate fails,
-stop, name the blocker, and route to `next_owner` instead of drafting a partial
-product.
+Alignment → Teacher Modeling → Instructional Materials. Exploratory unit onboarding may use the bounded pre-verification modeling-feasibility advisory defined in `unit-creation-conversational-contract.md`; that advisory creates no gate status and cannot start formal Teacher Modeling before Unit Alignment PASS. When any canonical gate fails, stop, name the blocker, and route to `next_owner` instead of drafting a partial product.
 
 ## Scope
 
@@ -43,7 +41,7 @@ and does not authorize grading, readiness, classroom use, production, or writes.
 - `unit-alignment-rules.md` — canonical Unit Alignment schema and six checks
 - `teacher-modeling-standards.md` — canonical Teacher Modeling schema and checks
 - `orchestration-rules.md` — canonical owner, mode, context, reuse, and stop rules
-- `unit-creation-conversational-contract.md` — exploratory unit-planning presentation, teacher-choice, confirmation, Unit Sketch, and bounded advisory semantics
+- `unit-creation-conversational-contract.md` — exploratory unit-planning presentation, teacher-choice, confirmation, Unit Sketch, bounded advisory semantics, and cross-owner integration boundary
 - `assessment-design-standard.md` — target → claim → evidence → method contract and survey/mastery boundary
 - `student-language-standard.md` — reusable student-facing language artifacts
 - `learning-science-rules.md` — classroom design rules for materials
@@ -61,4 +59,4 @@ fields, standards, and output keys.
 
 ## Version
 
-0.9.0
+0.10.0
