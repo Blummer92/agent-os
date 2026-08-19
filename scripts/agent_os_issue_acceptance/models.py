@@ -89,6 +89,11 @@ class AcceptanceInput:
     pr_body: str
     changed_files: list[str]
     diff_text: str = ""
+    # Evidence provenance is intentionally separate from evidence content. An
+    # empty value can mean either "retrieved and empty" or "not supplied";
+    # callers such as the CLI must preserve that distinction explicitly.
+    changed_files_supplied: bool = True
+    diff_supplied: bool = False
 
 
 @dataclass(frozen=True)
