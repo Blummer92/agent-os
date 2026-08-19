@@ -30,7 +30,8 @@ PROJECT = "agent-os-502614"
 ZONE = "us-central1-a"
 INSTANCE = "agent-os-test"
 RESOURCE = GceResourceTuple(project=PROJECT, zone=ZONE, instance=INSTANCE)
-DISCOVERY_ENTRYPOINT = "/usr/local/libexec/agent-os-handoff-discovery"
+DISCOVERY_MODULE = "agent_os_execution_service.handoff_discovery_entrypoint"
+DISCOVERY_PROBE_COMMAND = f"/usr/bin/env python3 -c 'import {DISCOVERY_MODULE}'"
 WORKFLOW_REF = (
     "Blummer92/agent-os/.github/workflows/"
     "agent-os-governed-invocation.yml@refs/heads/main"
@@ -72,6 +73,17 @@ def _state(value: str) -> VmState:
         "SUSPENDING": VmState.SUSPENDING,
     }
     return mapping.get(normalized, VmState.UNKNOWN)
+
+
+def _discovery_command(*, repository: str, issue_number: int) -> str:
+    if repository != "Blummer92/agent-os":
+        raise GcloudCommandError("non-canonical discovery repository rejected")
+    if type(issue_number) is not int or issue_number < 1:
+        raise GcloudCommandError("non-canonical discovery issue rejected")
+    return (
+        f"/usr/bin/env python3 -m {DISCOVERY_MODULE} "
+        f"--repository {repository} --issue-number {issue_number}"
+    )
 
 
 class GcloudIapAdapter:
@@ -136,10 +148,7 @@ class GcloudIapAdapter:
         return result.returncode == 0
 
     def probe_discovery_ready(self, resource: GceResourceTuple) -> bool:
-        result = self._ssh(
-            resource,
-            f"test -x {DISCOVERY_ENTRYPOINT}",
-        )
+        result = self._ssh(resource, DISCOVERY_PROBE_COMMAND)
         return result.returncode == 0
 
     def discover(
@@ -149,13 +158,9 @@ class GcloudIapAdapter:
         repository: str,
         issue_number: int,
     ) -> dict[str, object]:
-        if repository != "Blummer92/agent-os":
-            raise GcloudCommandError("non-canonical discovery repository rejected")
-        if type(issue_number) is not int or issue_number < 1:
-            raise GcloudCommandError("non-canonical discovery issue rejected")
-        command = (
-            f"{DISCOVERY_ENTRYPOINT} "
-            f"--repository {repository} --issue-number {issue_number}"
+        command = _discovery_command(
+            repository=repository,
+            issue_number=issue_number,
         )
         result = self._ssh(resource, command)
         if result.returncode != 0:
