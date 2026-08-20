@@ -1,4 +1,7 @@
-from instructional_workflow_contracts import ValidationStatus, validate_request_interpretation
+from instructional_workflow_contracts import (
+    ValidationStatus,
+    validate_request_interpretation,
+)
 from instructional_workflow_contracts.common import sha256_hex
 
 from scripts.agent_os_issue_acceptance.issue_operational_state import (
@@ -28,7 +31,6 @@ from scripts.agent_os_issue_acceptance.merge_authorization import (
 from scripts.agent_os_issue_acceptance.operating_mode import (
     EnvironmentCapabilityEvidence,
     EnvironmentCapabilityState,
-    LifecycleStage as _UnusedLifecycleStage,
     RequestedMode,
     evaluate_operating_mode_decision,
 )
@@ -91,9 +93,15 @@ def operational_state(merge_authorization, closure_authorization):
         lifecycle_stage=LifecycleStage.REVIEW,
         terminal_disposition=TerminalDisposition.NONE,
         readiness=ReadinessState.READY,
-        implementation_authorization=authority(AuthorizationState.AUTHORIZED, APPROVAL_ID),
-        ready_for_review_authorization=authority(AuthorizationState.AUTHORIZED, APPROVAL_ID),
-        execution_authorization=authority(AuthorizationState.AUTHORIZED, APPROVAL_ID),
+        implementation_authorization=authority(
+            AuthorizationState.AUTHORIZED, APPROVAL_ID
+        ),
+        ready_for_review_authorization=authority(
+            AuthorizationState.AUTHORIZED, APPROVAL_ID
+        ),
+        execution_authorization=authority(
+            AuthorizationState.AUTHORIZED, APPROVAL_ID
+        ),
         merge_authorization=merge_authorization,
         closure_authorization=closure_authorization,
         external_write_authorization=authority(AuthorizationState.NOT_APPLICABLE),
@@ -129,7 +137,7 @@ def test_fast_lane_request_stays_non_authorizing_until_canonical_records_admit()
     assert "authorization.merge-not-authorized" in decision.blocker_codes
 
 
-def test_same_request_identity_can_back_existing_merge_and_closure_authority_paths():
+def test_request_identity_backs_existing_merge_and_closure_authority_paths():
     interpreted = validate_request_interpretation(request_payload())
     assert interpreted.status is ValidationStatus.VALID
     assert interpreted.record is not None
