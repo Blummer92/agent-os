@@ -74,7 +74,7 @@ Legacy label disposition, verified against current repository labels and `.githu
 | bare `workflow-scheduler` | `epic:workflow-scheduler` — both exist; only the epic-prefixed form is map-declared |
 | `planning` | `type:planning` exists and is actively used on open issues, but neither it nor `planning` is declared in the label map's `type` field; retain both without an automated alias until the map is updated |
 | `phase-4` | no automatic alias; not in the label map; retire only after a dependency review |
-| `adapter-migration` | no automatic alias; retire or map only through a separate approved decision |
+| `adapter-migration` | no automatic alias; not in the label map; retire or map only through a separate approved decision |
 
 Do not add a legacy label to a new issue. Do not claim a disposition beyond this table without repository or label-map evidence.
 
