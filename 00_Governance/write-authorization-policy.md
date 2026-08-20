@@ -59,10 +59,25 @@ instruction may activate the bounded workflow in
 `01_Shared_Standards/github/safe-implementation-lane.md`. Readiness alone does
 not authorize implementation.
 
-That instruction may cover one non-protected branch, the bounded scope envelope,
-corresponding offline tests and documentation, one draft pull request, and
-Ready-for-Review after required exact-head validation passes with no blockers.
+An ordinary implementation instruction may cover one non-protected branch, the
+bounded scope envelope, corresponding offline tests and documentation, one draft
+pull request, and Ready-for-Review after required exact-head validation passes
+with no blockers. It does not authorize merge or issue closure.
 
-Excluded surfaces listed in
+For an eligible Tier 0 or Tier 1 GitHub issue whose canonical boundary is
+`no-external-write`, the distinct repository-owner instruction
+`work on #<issue> in fast lane` may also serve as the separate explicit
+authorization input for merge and closure of that same implementation issue only
+when the canonical `request-interpretation-v1` record carries
+`operating-mode=release` for the exact issue. That requested ceiling never creates
+authority by itself: current Safe Lane eligibility, `IssueOperationalState`,
+`operating_mode.py`, exact-head validation, server-side review/merge rules, and
+terminal reconciliation must all independently admit the action.
+
+Tier 2 work cannot self-bootstrap through Terminal Fast Lane. Auto-merge, direct
+protected-branch writes, protected settings/rulesets/required checks, workflow
+changes, credentials/secrets/IAM/permissions, production, external-system writes,
+governed-field mutation, source-of-truth changes, persistence-path changes,
+irreversible actions, and other surfaces in
 `01_Shared_Standards/github/excluded-surface-baseline.md` remain separately
 authorized.
