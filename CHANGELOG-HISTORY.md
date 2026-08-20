@@ -3,6 +3,7 @@
 Archived historical changelog content. For current and recent history, see [CHANGELOG.md](CHANGELOG.md).
 
 ## 0.1.1-draft — archived entries
+- Added Instructional Materials Coach as a canonical agent, registered it, added tests, added a prompt-index entry, and added a runnable Python package at `08_Tooling/instructional-materials-coach/` for Slides decks and Docs worksheets from approved templates.
 - Fixed `validate-repo-structure.sh` registry and empty-folder checks, added missing module-version records, and fixed a wrong path plus inconsistent shorthand in CLAUDE.md troubleshooting examples.
 - Clarified dashboard sync routing and prevented duplicate standalone Dashboard Sync Agent ownership.
 - Retired Apps Script Sync Test Agent as a standalone canonical agent name.
