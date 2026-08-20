@@ -1,15 +1,20 @@
 """Pure-local deterministic Fast-Lane terminal-authority activation (#1309-D).
 
-Parses an operator instruction for the exact explicit terminal Fast-Lane
-phrase and combines it with caller-supplied Tier/external-write evidence to
-decide which `RequestedMode` ceiling (from `operating_mode.py`) the
-instruction may request. This module adds no new lifecycle stage,
-authorization dimension, merge/closure authority, execution path, router, or
-Scheduler. `evaluate_operating_mode(...)` still walks every implementation,
+Parses an operator instruction for the exact explicit terminal Fast-Lane phrase
+and combines it with caller-supplied Tier/external-write evidence to decide
+whether the instruction may request the `RequestedMode.RELEASE` ceiling from
+`operating_mode.py`. This module is a terminal-authority overlay only: when no
+eligible Fast-Lane grant exists it returns no requested-mode override, so the
+caller's existing Safe Implementation Lane authorization and requested mode
+remain unchanged.
+
+This module adds no new lifecycle stage, authorization dimension,
+merge/closure authority, execution path, router, or Scheduler.
+`evaluate_operating_mode(...)` still walks every implementation,
 Ready-for-Review, merge, and closure gate against canonical
 `IssueOperationalState` evidence before anything proceeds; granting the
-`RELEASE` ceiling here only lets that walk be attempted in one turn instead
-of requiring a repeated user prompt at each stage.
+`RELEASE` ceiling here only lets that walk be attempted in one turn instead of
+requiring a repeated user prompt at each terminal stage.
 """
 
 from __future__ import annotations
@@ -42,7 +47,7 @@ class FastLaneActivationResult:
     terminal_phrase_detected: bool
     instruction_issue_number: int | None
     granted: bool
-    requested_mode_ceiling: RequestedMode
+    requested_mode_ceiling: RequestedMode | None
     reason: FastLaneActivationReason
 
 
@@ -70,16 +75,22 @@ def evaluate_fast_lane_terminal_activation(
     tier: int,
     external_writes: str,
 ) -> FastLaneActivationResult:
-    """Decide the `RequestedMode` ceiling one instruction may request.
+    """Decide whether one instruction grants a terminal mode override.
 
     Only the exact phrase ``work on #<issue> in fast lane``, matching the
     already-bound issue number, on a Tier 0/1 issue declaring
     ``no-external-write`` (``external_writes == "none"``), may request
-    ``RequestedMode.RELEASE``. Every other input -- including a mismatched
-    issue number, Tier 2, a declared external write, or an ordinary
-    continuation phrase such as ``continue`` -- is capped at
-    ``RequestedMode.PLANNING`` and grants no terminal authority. This
-    function performs no GitHub, network, filesystem, or Scheduler I/O and
+    ``RequestedMode.RELEASE``.
+
+    Every non-grant returns ``requested_mode_ceiling=None``. That means this
+    terminal-only evaluator does not downgrade or replace the caller's ordinary
+    Safe Implementation Lane requested mode. In particular, ordinary authorized
+    ``work on #<issue>`` and continuation may still proceed through
+    implementation, Draft PR, repair, exact-head validation, and
+    Ready-for-Review under the existing Safe Lane contract; they simply gain no
+    merge/closure authority from this evaluator.
+
+    This function performs no GitHub, network, filesystem, or Scheduler I/O and
     creates no side effect.
     """
     if (
@@ -100,7 +111,7 @@ def evaluate_fast_lane_terminal_activation(
     def _result(
         *,
         granted: bool,
-        ceiling: RequestedMode,
+        ceiling: RequestedMode | None,
         reason: FastLaneActivationReason,
     ) -> FastLaneActivationResult:
         return FastLaneActivationResult(
@@ -115,28 +126,28 @@ def evaluate_fast_lane_terminal_activation(
     if not terminal_phrase_detected:
         return _result(
             granted=False,
-            ceiling=RequestedMode.PLANNING,
+            ceiling=None,
             reason=FastLaneActivationReason.NO_TERMINAL_PHRASE,
         )
 
     if instruction_issue_number != bound_issue_number:
         return _result(
             granted=False,
-            ceiling=RequestedMode.PLANNING,
+            ceiling=None,
             reason=FastLaneActivationReason.ISSUE_MISMATCH,
         )
 
     if tier not in (0, 1):
         return _result(
             granted=False,
-            ceiling=RequestedMode.PLANNING,
+            ceiling=None,
             reason=FastLaneActivationReason.TIER_INELIGIBLE,
         )
 
     if external_writes != "none":
         return _result(
             granted=False,
-            ceiling=RequestedMode.PLANNING,
+            ceiling=None,
             reason=FastLaneActivationReason.EXTERNAL_WRITE_INELIGIBLE,
         )
 
