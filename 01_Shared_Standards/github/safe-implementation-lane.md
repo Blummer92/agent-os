@@ -71,12 +71,15 @@ in fast lane` may request the `RequestedMode.RELEASE` ceiling from
 already-bound issue, evaluated by
 `scripts/agent_os_issue_acceptance/fast_lane_activation.py`. Ordinary `work on
 #<issue>`, `continue`, `next step`, `keep going`, a mismatched issue number,
-Tier 2, or any declared external write is capped at `RequestedMode.PLANNING`
-and carries no terminal authority. Granting the ceiling adds no new
-lifecycle stage, router, or authority: `evaluate_operating_mode(...)` still
-walks implementation, Ready-for-Review, merge, and closure one gate at a
-time against canonical `IssueOperationalState` evidence, stopping at the
-first unmet gate exactly as it does for any other requested mode.
+Tier 2, or any declared external write receives no Terminal Fast Lane mode
+override and gains no merge/closure authority from this evaluator. Existing
+ordinary Safe Implementation Lane authorization and its requested mode remain
+unchanged, including implementation through Ready-for-Review when otherwise
+authorized. Granting the `RequestedMode.RELEASE` override adds no new lifecycle
+stage, router, or authority: `evaluate_operating_mode(...)` still walks
+implementation, Ready-for-Review, merge, and closure one gate at a time against
+canonical `IssueOperationalState` evidence, stopping at the first unmet gate
+exactly as it does for any other requested mode.
 Within an active Terminal Fast Lane grant, a safely admitted `branch:behind`
 refresh through the existing #1187 `pr_branch_refresh.py` contract needs no
 second user prompt solely because `main` advanced; its own admission checks
@@ -91,14 +94,14 @@ of the activation phrase.
 A harness- or environment-assigned branch name is acceptable when it is
 non-protected, linked to the issue, and used consistently. A preferred branch
 name is guidance, not an authorization boundary.
-Authorization boundary: It does not authorize merge, auto-merge, issue closure, protected-setting changes, or production or external writes; every other surface listed in `01_Shared_Standards/github/excluded-surface-baseline.md` remains separately unauthorized unless explicitly approved through the governing path.
+Authorization boundary: ordinary Safe Implementation Lane authorization does not authorize merge, auto-merge, issue closure, protected-setting changes, or production or external writes. An explicit eligible Terminal Fast Lane grant may authorize only merge and implementation-issue closure through the existing current-evidence gates; every other surface listed in `01_Shared_Standards/github/excluded-surface-baseline.md` remains separately unauthorized unless explicitly approved through its governing path.
 ## Operational Authorization Comments
 The open issue body remains authoritative for durable objective, ownership,
 scope, non-goals, and protected surfaces. When the body explicitly permits
 comment-routed operational authorization, a dated repository-owner comment may
 activate or pause implementation, smoke testing, or Ready-for-Review. A comment
 may not broaden durable scope, authorize an excluded surface, contradict the
-body, reactivate a closed issue, or authorize merge.
+body, reactivate a closed issue, or authorize merge unless it is the explicit Terminal Fast Lane activation recognized above.
 ## Stop Conditions
 Stop for `needs-decision` when evidence is ambiguous, stale, blocked, closed, or
 conflicting, or when work would materially change architecture, ownership,
@@ -109,13 +112,13 @@ entry, or environment-assigned non-protected branch.
 ## Reporting
 The pull request records the actual branch, all files changed, why each support
 file was necessary, tests and exact-head evidence, docs, blockers, handoffs,
-risks, rollback, and confirmation that merge and excluded surfaces remain
-unauthorized. Prefer one consolidated user-facing result for routine internal
-routing while preserving required handoff artifacts for owners and auditability.
+risks, rollback, and the applicable authorization boundary. Prefer one
+consolidated user-facing result for routine internal routing while preserving
+required handoff artifacts for owners and auditability.
 ## Version
 0.7.0
 ## Changelog
-- 0.7.0 adds the opt-in Terminal Fast Lane (#1309): the exact `work on #<issue> in fast lane` phrase, evaluated by `fast_lane_activation.py`, may request the existing `RequestedMode.RELEASE` ceiling for eligible Tier 0/1 `no-external-write` work, and an active grant lets the existing #1187 branch refresh continue without a second user prompt when its own admission checks pass; no new lifecycle stage, router, or authority was added.
+- 0.7.0 adds the opt-in Terminal Fast Lane (#1309): the exact `work on #<issue> in fast lane` phrase, evaluated by `fast_lane_activation.py`, may request the existing `RequestedMode.RELEASE` ceiling for eligible Tier 0/1 `no-external-write` work, while every non-grant leaves the ordinary Safe Lane requested mode unchanged; an active grant lets the existing #1187 branch refresh continue without a second user prompt when its own admission checks pass. No new lifecycle stage, router, or authority was added.
 - 0.6.0 distinguishes artifact non-authority from later direct-owner authorization, consolidates activation preflight, and carries one current instruction across a single mechanical readiness intervention without weakening fail-closed stops (#1274).
 - 0.5.0 makes existing authorized branch/PR/checkpoint lineage resumable through the canonical #895 ResumePlan and #758 Scheduler lease, separates same-branch `HEAD_ADVANCED` from #1187 base-behind refresh, and requires bounded proof before cancelled stale-head validation is classified as superseded (#1188).
 - 0.4.0 requires issue-defined developer-loop validation on a capable route before Draft PR creation while preserving one final exact-head aggregate (#1077).
