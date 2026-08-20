@@ -15,7 +15,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 | QA/Test Standards | 0.1.0 |
 | Dashboard Governance | 0.1.0 |
 | Dashboard Migration Verification | 0.1.0 |
-| Instructional Design Standards | 0.11.0 |
+| Instructional Design Standards | 0.12.0 |
 | Agent Orchestrator | 0.3.0 |
 | GitHub Service Agent | 0.6.0 |
 | Unit Alignment Agent | 0.6.0 |
@@ -46,7 +46,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 
 **Notion Standards** `0.4.0` defines the canonical Draft Mode, Append-Only Safe Log Mode, and Canonical Update Mode write-safety vocabulary in `notion-record-update-safety.md` (#1103). Mode classification never creates authority; existing write authorization remains canonical in `00_Governance/write-authorization-policy.md`.
 
-**Instructional Design Standards** `0.11.0` adds the Assessment Blueprint Core Standard (#838): a versioned provider-neutral blueprint schema that preserves the complete #837 design-record contract, structures provenance/scoring/accessibility/AI planning metadata, validates fixed non-authority fields, and fails closed without implementing lifecycle/stale-state behavior owned by #1192. `0.10.0` integrated the Unit Creation Conversational Contract (#1214). Neither change creates an Assessment Agent or authorizes grading, readiness, classroom use, production, publication, or external writes.
+**Instructional Design Standards** `0.12.0` adds the Assessment Blueprint Lifecycle Standard (#1192): a provider-neutral lifecycle schema over the #838 core with deterministic change-impact classes, explicit stale-validation reasons, bounded object/consumer invalidation, fail-closed ambiguous dependency impact, and revalidation scopes while preserving #837/#838 semantics and fixed non-authority. `0.11.0` added the Assessment Blueprint Core Standard (#838); `0.10.0` integrated the Unit Creation Conversational Contract (#1214). These changes create no Assessment Agent and authorize no grading, readiness, classroom use, production, publication, or external writes.
 
 **Dashboard Migration Verification** (`08_Tooling/dashboard-migration-verification/`) is a verification-only migration evidence toolkit for registry examples, placeholder snapshots, dependency graphs, conservative validation results, and reports. It never authorizes live Notion, Workspace, trigger, sharing, source-of-truth, or production dashboard writes. Standard packaging metadata was completed by D2 (#123).
 
