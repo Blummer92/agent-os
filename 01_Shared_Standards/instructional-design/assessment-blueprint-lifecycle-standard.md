@@ -6,7 +6,7 @@ Define the reusable, provider-neutral lifecycle layer for the #838 Assessment Bl
 The lifecycle consumes one exact `assessment-blueprint-core/v1` object. #837 owns assessment-design meaning and #838 owns blueprint-core structure and validation. This standard may classify the effect of a change; it must not rewrite purpose, targets, claims, evidence, methods, scoring meaning, accessibility meaning, AI policy, provenance, or fixed authority.
 
 ## Lifecycle Evidence
-Every projection binds the stable `blueprint_id`, current `blueprint_version`, `last_validated_blueprint_version`, current and last-validated source versions, current and last-validated upstream design-record IDs, canonical changed paths, dependency-impact state, affected object IDs, and downstream consumers affected by changed handoff fields. Inputs are caller-supplied structured evidence; this contract performs no live lookup or external write.
+Every projection binds the stable `blueprint_id`, current `blueprint_version`, `last_validated_blueprint_version`, current and last-validated source versions, current and last-validated upstream design-record IDs, canonical changed paths, a finite `change_origin` (`system`, `teacher_authorized`, or `source_update`), dependency-impact state, affected object IDs, and downstream consumers affected by changed handoff fields. Inputs are caller-supplied structured evidence; this contract performs no live lookup or external write.
 
 ## Deterministic Change-Impact Classes
 Return exactly one primary class using this precedence, highest first: `downstream_invalidation`, `teacher_review`, `qa_rerun`, `blueprint_validation`, `local_validation`, `no_revalidation`.
@@ -15,7 +15,7 @@ Return exactly one primary class using this precedence, highest first: `downstre
 - `local_validation`: bounded non-semantic wording or presentation clarification that changes no upstream meaning or downstream contract.
 - `blueprint_validation`: a core planning object changes, including provenance, task format, complexity, blockers, uncertainties, or other blueprint semantics not owned by a stronger class.
 - `qa_rerun`: evidence sufficiency, method alignment, scoring validity, accessibility, AI-policy consistency, authority validation, or downstream-schema completeness changes.
-- `teacher_review`: an authorized teacher decision changes purpose, intended use, available time, scoring/observation approach, authentic-task feasibility, or bounded assignment conditions.
+- `teacher_review`: `change_origin=teacher_authorized` and the teacher decision changes purpose, intended use, available time, scoring/observation approach, authentic-task feasibility, or bounded assignment conditions. A field path alone never proves teacher origin.
 - `downstream_invalidation`: a field already handed to sequencing, QA, dashboard, or portability consumers changes, or a shared semantic root changes.
 
 Unknown change paths or ambiguous dependency impact fail closed to `needs-decision`; they are never classified as safe.
