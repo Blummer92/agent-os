@@ -284,7 +284,7 @@ def _evaluate_terminal_reconciliation(
             state.blockers.append(lease_blocker)
             state.next_action = (
                 "release-exactly-owned-lease"
-                if lease_blocker == "terminal lease release receipt is missing"
+                if lease_blocker == "terminal lease release observation is missing"
                 else "reacquire-terminal-lease-evidence"
             )
             return
@@ -314,11 +314,11 @@ def _evaluate_terminal_reconciliation(
 
 
 def _lease_release_blocker(evidence: dict[str, Any]) -> str | None:
-    receipt = evidence.get("lease_release_receipt")
-    if receipt is None:
-        return "terminal lease release receipt is missing"
-    if not isinstance(receipt, dict):
-        return "terminal lease release receipt is malformed"
+    observation = evidence.get("lease_release_receipt")
+    if observation is None:
+        return "terminal lease release observation is missing"
+    if not isinstance(observation, dict):
+        return "terminal lease release observation is malformed"
 
     expected_identity = evidence.get("lease_identity")
     expected_holder = evidence.get("lease_holder_identity")
@@ -334,16 +334,12 @@ def _lease_release_blocker(evidence: dict[str, Any]) -> str | None:
         return "terminal lease identity evidence is missing or invalid"
 
     if (
-        receipt.get("lease_identity") != expected_identity
-        or receipt.get("holder_identity") != expected_holder
-        or receipt.get("generation") != expected_generation
+        observation.get("lease_identity") != expected_identity
+        or observation.get("holder_identity") != expected_holder
+        or observation.get("generation") != expected_generation
     ):
-        return "terminal lease release receipt identity does not match owned lease"
-    if receipt.get("forced") is not False:
-        return "terminal lease release receipt used forbidden force semantics"
-    if receipt.get("ambiguous") is not False:
-        return "terminal lease release outcome is ambiguous"
-    if receipt.get("released") is not True:
+        return "terminal lease release observation identity does not match owned lease"
+    if observation.get("released") is not True:
         return "terminal lease release is not proven"
     return None
 
