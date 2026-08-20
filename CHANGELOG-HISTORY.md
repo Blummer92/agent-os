@@ -18,3 +18,5 @@ Archived historical changelog content. For current and recent history, see [CHAN
 - Added routed dashboard sync combinations to registry guidance.
 - Extracted `02_Agent_Overlays/_common-overlay-rules.md` from duplicated overlay blocks; overlays now reference it instead of repeating shared content.
 - Added `07_Agent_Tests/`: compliance test prompts, a shared pass/fail checklist, and `validate-repo-structure.sh` structural regression tests.
+- Gave Instructional Materials Coach a Notion learning loop that writes local lesson-candidate records matching the real Lessons Learned field schema and documented the schema in `01_Shared_Standards/notion/notion-learning-databases.md`.
+- Added `03_Templates/prompts/daily-agent-shortcuts.md` with low-friction daily lanes for dashboard drafts, QA reviews, Python local fixes, and instructional material drafts without weakening safety gates.

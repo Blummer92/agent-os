@@ -96,6 +96,32 @@ def _drop_from_sys_modules(prefix: str) -> None:
             sys.modules.pop(name, None)
 
 
+def _real_search_locations(entries) -> list[Path]:
+    """Resolve a package's search path to the distinct directories it really has.
+
+    Since #1300 the editable install of `workflow-scheduler` also declares
+    canonical repository-root `scripts.*` packages, so setuptools serves it
+    through its meta-path finder rather than a plain path entry. That finder
+    adds a synthetic `__editable__....finder.__path_hook__` marker to `__path__`,
+    which is not a directory and holds no module, and once the hook has been
+    exercised it also re-adds the canonical directory it already resolved to.
+    Both are artifacts of the editable strategy, not extra package trees, so
+    non-directories are dropped and repeats collapsed.
+
+    What #912 owns is unchanged: the package must be backed by exactly one real
+    tree, so a second, *different* directory still fails here.
+    """
+    distinct: list[Path] = []
+    for entry in entries:
+        path = Path(entry)
+        if not path.is_dir():
+            continue
+        resolved = path.resolve()
+        if resolved not in distinct:
+            distinct.append(resolved)
+    return distinct
+
+
 def _fresh_import_of_target() -> None:
     for module_name in TARGET_MODULES:
         _drop_from_sys_modules(module_name)
@@ -124,8 +150,7 @@ def test_root_import_resolves_to_canonical_package_tree() -> None:
     assert resolved_module_path == CANONICAL_PACKAGE_ROOT / "planning" / "draft_ingestion.py"
 
     package = sys.modules["workflow_scheduler"]
-    search_locations = [Path(entry).resolve() for entry in package.__path__]
-    assert search_locations == [CANONICAL_PACKAGE_ROOT]
+    assert _real_search_locations(package.__path__) == [CANONICAL_PACKAGE_ROOT]
 
 
 def test_root_import_exposes_draft_task_proposal_symbols() -> None:
@@ -141,8 +166,7 @@ def test_root_import_exposes_draft_task_proposal_symbols() -> None:
 def test_no_duplicate_installed_workflow_scheduler_module_path() -> None:
     spec = importlib.util.find_spec("workflow_scheduler")
     assert spec is not None
-    search_locations = [Path(entry).resolve() for entry in spec.submodule_search_locations]
-    assert search_locations == [CANONICAL_PACKAGE_ROOT]
+    assert _real_search_locations(spec.submodule_search_locations) == [CANONICAL_PACKAGE_ROOT]
 
 
 def test_import_performs_no_subprocess_network_or_filesystem_write(monkeypatch) -> None:
