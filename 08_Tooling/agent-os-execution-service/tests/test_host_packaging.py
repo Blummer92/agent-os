@@ -141,15 +141,42 @@ def _venv_site_packages(python: Path) -> Path:
     return Path(location)
 
 
+_EXTRA_MARKER = re.compile(r"""extra\s*==\s*['"]([^'"]+)['"]""")
+_REQUIREMENT_HEAD = re.compile(r"^([A-Za-z0-9._-]+)\s*(?:\[([^\]]*)\])?")
+
+# Never copied into the isolated environment: overwriting the bootstrap tooling
+# a fresh venv installed for itself breaks that environment's own pip.
+_BOOTSTRAP_DISTRIBUTIONS = frozenset({"pip", "setuptools", "wheel", "pkg-resources"})
+
+
+def _requirement_target(requirement: str) -> tuple[str, frozenset[str]]:
+    """Split `name[extra1,extra2] >= 1.0 ; marker` into its name and extras."""
+    head = requirement.split(";")[0].strip()
+    match = _REQUIREMENT_HEAD.match(head)
+    if match is None:
+        return "", frozenset()
+    extras = {part.strip().lower() for part in (match.group(2) or "").split(",")}
+    return match.group(1), frozenset(extra for extra in extras if extra)
+
+
+def _requirement_extra(requirement: str) -> str | None:
+    """The extra a requirement is gated behind, if any."""
+    marker = requirement.split(";", 1)
+    if len(marker) < 2:
+        return None
+    found = _EXTRA_MARKER.search(marker[1])
+    return found.group(1).lower() if found else None
+
+
 def _third_party_requirements(wheels: dict[str, Path]) -> set[str]:
     """Declared requirements that are not Agent OS distributions themselves."""
     agent_os_names = {name.replace("_", "-") for name in wheels}
     required: set[str] = set()
     for wheel in wheels.values():
         for requirement in _wheel_metadata(wheel).get_all("Requires-Dist", []):
-            if "extra ==" in requirement:
+            if _requirement_extra(requirement) is not None:
                 continue
-            name = re.split(r"[;\[<>=!~ ]", requirement, maxsplit=1)[0].strip()
+            name, _ = _requirement_target(requirement)
             if name and name.lower().replace("_", "-") not in agent_os_names:
                 required.add(name)
     return required
@@ -204,17 +231,25 @@ def _vendor_offline(names: set[str], site_packages: Path) -> None:
     Offline by construction: nothing is downloaded, and only distributions
     reachable from the declared third-party requirements are copied, so no
     Agent OS source or editable finder can leak into the isolated environment.
+
+    The walk follows an extra's dependencies only when a requirement actually
+    asked for that extra (`pyjwt[crypto]` pulls in `cryptography`). Following
+    every extra would drag each distribution's whole test and docs tooling in --
+    including `pip` itself, whose metadata would then shadow the one the fresh
+    venv bootstrapped for itself and break it.
     """
     site_packages.mkdir(parents=True, exist_ok=True)
     # ``required`` separates what the Agent OS wheels themselves declare -- whose
     # absence is an environment gap worth reporting -- from dependencies
     # discovered while walking, which may legitimately be absent here.
-    pending: list[tuple[str, bool]] = [(name, True) for name in names]
+    pending: list[tuple[str, frozenset[str], bool]] = [
+        (name, frozenset(), True) for name in names
+    ]
     seen: set[str] = set()
     while pending:
-        name, required = pending.pop()
+        name, extras, required = pending.pop()
         key = name.lower().replace("_", "-")
-        if key in seen:
+        if key in seen or key in _BOOTSTRAP_DISTRIBUTIONS:
             continue
         seen.add(key)
         try:
@@ -228,9 +263,12 @@ def _vendor_offline(names: set[str], site_packages: Path) -> None:
             continue
         _copy_distribution(distribution, site_packages)
         for requirement in distribution.requires or ():
-            dependency = re.split(r"[;\[<>=!~ ]", requirement, maxsplit=1)[0].strip()
+            gate = _requirement_extra(requirement)
+            if gate is not None and gate not in extras:
+                continue
+            dependency, dependency_extras = _requirement_target(requirement)
             if dependency:
-                pending.append((dependency, False))
+                pending.append((dependency, dependency_extras, False))
 
 
 @pytest.fixture(scope="module")
