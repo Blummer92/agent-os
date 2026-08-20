@@ -98,6 +98,29 @@ def test_one_command_is_a_constraint_not_an_action():
     assert data["constraints"] == [{"name": "output-count", "value": 1}]
 
 
+def test_terminal_fast_lane_is_structured_constraint_not_authority():
+    result = validate_request_interpretation(
+        payload(
+            raw_input_digest=sha256_hex("work on #844 in fast lane"),
+            constraints=[{"name": "operating-mode", "value": "release"}],
+        )
+    )
+    assert result.status is ValidationStatus.VALID
+    assert result.record is not None
+    data = result.record.to_dict()
+    assert data["target"]["resource_id"] == "844"
+    assert data["constraints"] == [{"name": "operating-mode", "value": "release"}]
+    assert data["authorization_created"] is False
+    assert result.authority.execution_authorized is False
+    assert result.authority.external_write_authorized is False
+
+
+def test_ordinary_work_on_has_no_terminal_fast_lane_constraint():
+    data = record(payload(raw_input_digest=sha256_hex("work on #844")))
+    assert data["constraints"] == []
+    assert data["authorization_created"] is False
+
+
 def test_schedule_requires_monitoring_surface():
     result = validate_request_interpretation(payload(action="review", requested_effect="schedule"))
     assert result.status is ValidationStatus.MANUAL_REVIEW_REQUIRED
