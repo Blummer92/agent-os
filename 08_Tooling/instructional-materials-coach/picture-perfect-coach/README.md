@@ -30,6 +30,14 @@ This package does not perform image generation, provider APIs, live Adobe/browse
 
 `projectReviewedTutorialToPromptCards` consumes the PPUX-B `ReviewedTutorialProjection` / `ReviewedStepProjection` boundary and produces bounded `PromptCardModel[]`. Application identity comes only from approved `modeled_application`; missing identity blocks software-UI prompt output rather than being inferred.
 
+## UI-claim evidence boundary (PPUX-F1)
+
+**Picture Perfect cannot currently produce a ready software-interface visual, by design.** A frame that shows the real application interface may only be produced from approved captured screen evidence. No capture evidence is bound yet — that is PPUX-F2 — so every software-interface frame resolves to `blocked` with the machine-readable reason `visual-evidence-missing` rather than emitting a prompt that would have an image model reconstruct the interface.
+
+`uiEvidence.ts` derives UI claims from the approved recording only, in two kinds: `accessible-name` (an `aria/...` selector) and `entered-value` (a `change` value). Semantic modeling fields such as a candidate `target` are instructional descriptors and are never UI evidence — `Square project` is not the recorded label `Square`. Every claim is bound to the source state it was observed at and to that action's identity (`source_fingerprint`), whose canonicalization is byte-compatible with `capture/safe_recording.mjs` so PPUX-F2 can join without retrofitting.
+
+Rules enforced: authoring cannot supply or widen supported UI evidence; a claim observed at one action cannot authorize another (state locality); details observed at separate states are not co-visible in one frame; combining reviewed steps widens scope without flattening action-local evidence; a matching `source_index` with a mismatched `source_fingerprint` fails closed; the software-interface determination is derived, and an author may raise it but never lower it; a blocked card exposes no portable prompt and no copy affordance. Card runtime state stays binary (`ready | blocked`), with nuance in `blockerReasons`.
+
 ## Stage 5 Ready boundary
 
 `runReadyPreflight` in `preflight.ts` deterministically checks the bounded evidence needed for an implementation handoff, including source identity/fingerprint, reviewed-step provenance, explicit review decisions, modeled application identity, prompt validity, golden fixture identity, required tests, Definition of Done, and architecture-decision status.
@@ -61,7 +69,9 @@ Playwright screenshots and video are disabled so acceptance does not create unne
 
 ## Tutorial 0 fixture
 
-The privacy-safe Tutorial 0 fixture runs through the real evidence -> Review -> Prompt -> Ready derivation. Supported prompt cards preserve Adobe Express identity because approved evidence carries it. The Ready packet preserves the coherent reviewed sequence, combined-step provenance, excluded incidental step, recording identity/fingerprint, and provider-neutral prompt constraints.
+The privacy-safe Tutorial 0 fixture runs through the real evidence -> Review -> Prompt -> Ready derivation and preserves Adobe Express identity because approved evidence carries it.
+
+Its authored UI text was corrected against the recording under PPUX-F1: the folder is `Tutorial 0 - Organize My Files` (never `Tutorial 0 - My Favorite Food`), the control is `Create new` (never `Create new file`), and the landscape frame claims only `Landscape` because `Square` and `Portrait` belong to other steps. Every Tutorial 0 frame then blocks for want of screen evidence, which is the correct outcome; the recording and evidence fixtures are source evidence and are never edited to make authored prompt content validate.
 
 ## Commands
 

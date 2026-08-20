@@ -47,6 +47,9 @@ export type GitHubHandoffPacket = {
     must_show: readonly string[];
     must_not_show: readonly string[];
     provenance: readonly string[];
+    requires_screen_fidelity: boolean;
+    captured_screen_ref: string | null;
+    blocker_reasons: readonly string[];
   }[];
   provider_adapter_boundary: string;
   presentation_evidence_only: true;
@@ -88,6 +91,19 @@ export function runReadyPreflight(
   const fixtureAvailable = Boolean(context.fixtureId.trim());
   const architectureResolved = !context.unresolvedArchitectureDecision;
 
+  const interfaceCards = cards.filter((card) => card.requiresScreenFidelity);
+  const unbackedInterfaceCards = interfaceCards.filter((card) => card.capturedScreenRef === null);
+  const visualEvidenceRow: PreflightRow = interfaceCards.length === 0
+    ? { id: 'visual-evidence', label: 'Captured screen evidence bound where required', state: 'not-applicable', detail: 'No frame claims the real software interface.' }
+    : {
+        id: 'visual-evidence',
+        label: 'Captured screen evidence bound where required',
+        state: unbackedInterfaceCards.length === 0 ? 'pass' : 'fail',
+        detail: unbackedInterfaceCards.length === 0
+          ? `${interfaceCards.length} software-interface frames are backed by approved capture evidence.`
+          : `${unbackedInterfaceCards.length} of ${interfaceCards.length} software-interface frames have no approved screen capture, so they cannot be produced from a generated stand-in.`,
+      };
+
   const rows: PreflightRow[] = [
     row('recorder-source', 'Recorder source identified', sourceIdentityOk, sourceIdentityOk ? `${tutorial.recording_id} · ${tutorial.recording_sha256}` : 'Recording ID and fingerprint are required.'),
     row('modeling-source', 'Tutorial/modeling source identified', modelingSourceOk, modelingSourceOk ? modelingSources.join(' · ') : 'No approved Teacher Modeling source reference is present in prompt provenance.'),
@@ -95,6 +111,7 @@ export function runReadyPreflight(
     row('review-resolved', 'No unresolved review item', tutorial.review_decisions.length > 0, tutorial.review_decisions.length > 0 ? `${tutorial.review_decisions.length} explicit review decisions` : 'Explicit review decisions are required.'),
     row('provenance', 'Source identity/fingerprint preserved', provenanceOk && promptProvenanceOk, provenanceOk && promptProvenanceOk ? 'Reviewed steps and prompt cards retain bounded source provenance.' : 'Required reviewed-step or prompt provenance is missing or inconsistent.'),
     row('application', 'Modeled application identity preserved where required', applicationsOk, applicationsOk ? 'Every retained software step has approved application identity.' : 'A retained software step is missing approved application identity.'),
+    visualEvidenceRow,
     row('prompt-contract', 'Provider-neutral prompt contract validates', promptCardsOk, promptCardsOk ? `${cards.length} prompt cards validate` : 'One or more prompt cards are blocked or violate application/provider-neutral constraints.'),
     row('presentation-only', 'Prompt/image output remains presentation-only evidence', true, 'Ready and handoff output explicitly remain non-authorizing presentation guidance.'),
     row('golden-fixture', 'Golden fixture available', fixtureAvailable, fixtureAvailable ? context.fixtureId : 'A canonical privacy-safe fixture ID is required.'),
@@ -138,6 +155,9 @@ export function createGitHubHandoffPacket(
       must_show: card.mustShow,
       must_not_show: card.mustNotShow,
       provenance: card.provenance,
+      requires_screen_fidelity: card.requiresScreenFidelity,
+      captured_screen_ref: card.capturedScreenRef,
+      blocker_reasons: card.blockerReasons,
     })),
     provider_adapter_boundary: 'Provider adapters may change execution syntax/settings only; they may not change application identity, instructional meaning, target state, must-show/must-not-show constraints, provenance, or modeled sequence.',
     presentation_evidence_only: true,
