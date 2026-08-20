@@ -57,7 +57,9 @@ def test_granted_for_matching_tier0_no_external_write() -> None:
     "instruction",
     ["work on #1309", "continue", "next step", "keep going"],
 )
-def test_ordinary_continuation_never_implies_terminal_authority(instruction: str) -> None:
+def test_ordinary_continuation_never_implies_terminal_authority_or_downgrades_mode(
+    instruction: str,
+) -> None:
     result = evaluate_fast_lane_terminal_activation(
         instruction=instruction,
         bound_issue_number=1309,
@@ -65,11 +67,28 @@ def test_ordinary_continuation_never_implies_terminal_authority(instruction: str
         external_writes="none",
     )
     assert result.granted is False
-    assert result.requested_mode_ceiling is RequestedMode.PLANNING
+    assert result.requested_mode_ceiling is None
     assert result.reason is FastLaneActivationReason.NO_TERMINAL_PHRASE
 
 
-def test_mismatched_issue_number_is_rejected() -> None:
+@pytest.mark.parametrize(
+    "existing_mode",
+    [RequestedMode.BUILD, RequestedMode.DRAFT_PR, RequestedMode.REVIEW],
+)
+def test_non_grant_preserves_existing_safe_lane_requested_mode(
+    existing_mode: RequestedMode,
+) -> None:
+    result = evaluate_fast_lane_terminal_activation(
+        instruction="work on #1309",
+        bound_issue_number=1309,
+        tier=1,
+        external_writes="none",
+    )
+    effective_mode = result.requested_mode_ceiling or existing_mode
+    assert effective_mode is existing_mode
+
+
+def test_mismatched_issue_number_is_rejected_without_mode_override() -> None:
     result = evaluate_fast_lane_terminal_activation(
         instruction="work on #42 in fast lane",
         bound_issue_number=1309,
@@ -77,6 +96,7 @@ def test_mismatched_issue_number_is_rejected() -> None:
         external_writes="none",
     )
     assert result.granted is False
+    assert result.requested_mode_ceiling is None
     assert result.reason is FastLaneActivationReason.ISSUE_MISMATCH
 
 
@@ -88,7 +108,7 @@ def test_tier_2_cannot_enter_terminal_fast_lane() -> None:
         external_writes="none",
     )
     assert result.granted is False
-    assert result.requested_mode_ceiling is RequestedMode.PLANNING
+    assert result.requested_mode_ceiling is None
     assert result.reason is FastLaneActivationReason.TIER_INELIGIBLE
 
 
@@ -100,6 +120,7 @@ def test_external_write_issue_cannot_enter_terminal_fast_lane() -> None:
         external_writes="notion",
     )
     assert result.granted is False
+    assert result.requested_mode_ceiling is None
     assert result.reason is FastLaneActivationReason.EXTERNAL_WRITE_INELIGIBLE
 
 
