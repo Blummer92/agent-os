@@ -96,6 +96,20 @@ def _drop_from_sys_modules(prefix: str) -> None:
             sys.modules.pop(name, None)
 
 
+def _real_search_locations(entries) -> list[Path]:
+    """Resolve a package's search path to the directories that really exist.
+
+    Since #1300 the editable install of `workflow-scheduler` also declares
+    canonical repository-root `scripts.*` packages, so setuptools serves it
+    through its meta-path finder and appends a synthetic
+    `__editable__....finder.__path_hook__` marker to `__path__`. That marker is
+    not a directory and holds no module, so it is filtered out here; the
+    assertion that exactly one real canonical tree backs the package -- what
+    #912 owns -- is unchanged and still fails on a genuine duplicate.
+    """
+    return [Path(entry).resolve() for entry in entries if Path(entry).is_dir()]
+
+
 def _fresh_import_of_target() -> None:
     for module_name in TARGET_MODULES:
         _drop_from_sys_modules(module_name)
@@ -124,8 +138,7 @@ def test_root_import_resolves_to_canonical_package_tree() -> None:
     assert resolved_module_path == CANONICAL_PACKAGE_ROOT / "planning" / "draft_ingestion.py"
 
     package = sys.modules["workflow_scheduler"]
-    search_locations = [Path(entry).resolve() for entry in package.__path__]
-    assert search_locations == [CANONICAL_PACKAGE_ROOT]
+    assert _real_search_locations(package.__path__) == [CANONICAL_PACKAGE_ROOT]
 
 
 def test_root_import_exposes_draft_task_proposal_symbols() -> None:
@@ -141,8 +154,7 @@ def test_root_import_exposes_draft_task_proposal_symbols() -> None:
 def test_no_duplicate_installed_workflow_scheduler_module_path() -> None:
     spec = importlib.util.find_spec("workflow_scheduler")
     assert spec is not None
-    search_locations = [Path(entry).resolve() for entry in spec.submodule_search_locations]
-    assert search_locations == [CANONICAL_PACKAGE_ROOT]
+    assert _real_search_locations(spec.submodule_search_locations) == [CANONICAL_PACKAGE_ROOT]
 
 
 def test_import_performs_no_subprocess_network_or_filesystem_write(monkeypatch) -> None:
