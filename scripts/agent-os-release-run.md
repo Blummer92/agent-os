@@ -35,13 +35,13 @@ After a governed merge is verified, terminal progression is ordered and idempote
 
 1. publish the concise completion pointer;
 2. terminalize/supersede the current checkpoint/ResumePlan lineage through its owner;
-3. prove terminal lease disposition and, when required, consume an exact non-forced, unambiguous release receipt matching lease identity, holder, and generation;
+3. prove terminal lease disposition and, when release is required, consume the canonical `PilotLeaseReleaseObservation` shape (`released`, `lease_identity`, `holder_identity`, `generation`, optional `reason`) matching the exact owned lease;
 4. close the implementation issue only when closure authorization is current;
 5. require converged `final-state-readback` lifecycle reconciliation bound to the exact head;
 6. emit one final report;
 7. converge to `COMPLETED`.
 
-The release-run module owns ordering only. It does not reimplement checkpoint, lease, GitHub mutation, label reconciliation, or authorization semantics.
+The release-run module owns ordering only. It does not reimplement checkpoint, lease, GitHub mutation, label reconciliation, or authorization semantics. The Scheduler release operation itself has no force/takeover path; ambiguous transport outcomes must be resolved by reacquiring canonical lease state before supplying a release observation.
 
 ## Safety
 
