@@ -71,6 +71,7 @@ def _case(monkeypatch, *, events: list[str] | None = None):
     request_fp = "execution-request:" + "1" * 64
     handoff_id = "executor-handoff:" + "2" * 64
     descriptor_id = "agent-os.governed-invocation-descriptor:" + "3" * 64
+    capsule_id = "governed-resume-restart-capsule:" + "7" * 64
 
     route = _Route()
     route.repository = repository
@@ -134,6 +135,7 @@ def _case(monkeypatch, *, events: list[str] | None = None):
     pilot = _Pilot()
 
     handoff = SimpleNamespace(handoff_id=handoff_id)
+    capsule = SimpleNamespace(handoff_id=handoff_id, capsule_id=capsule_id)
     descriptor = _Descriptor()
     descriptor.repository = repository
     descriptor.issue_or_handoff_identity = route.issue_or_handoff_identity
@@ -216,6 +218,17 @@ def _case(monkeypatch, *, events: list[str] | None = None):
         lambda *_args, **_kwargs: events.append("checkpoint-durability-check")
         or checkpoint,
     )
+    monkeypatch.setattr(
+        publication,
+        "build_restart_capsule",
+        lambda **_kwargs: events.append("restart-capsule-build") or capsule,
+    )
+    monkeypatch.setattr(
+        publication,
+        "append_restart_capsule",
+        lambda *_args, **_kwargs: events.append("restart-capsule-persist")
+        or SimpleNamespace(handoff_id=handoff.handoff_id, capsule_id=capsule.capsule_id),
+    )
 
     kwargs = dict(
         store_root="/tmp/checkpoints",
@@ -240,6 +253,7 @@ def _case(monkeypatch, *, events: list[str] | None = None):
         handoff=handoff,
         outcome=outcome,
         checkpoint=checkpoint,
+        capsule=capsule,
         events=events,
     )
 
@@ -254,10 +268,12 @@ def test_success_orders_route_handoff_validation_persistence_then_return(monkeyp
         "descriptor-preview",
         "current-evidence",
         "validate-bindings",
+        "restart-capsule-build",
         "route-decision-persist",
         "handoff-persist",
         "resume-plan-persist",
         "checkpoint-durability-check",
+        "restart-capsule-persist",
         "persist",
     ]
 
@@ -513,6 +529,78 @@ def test_checkpoint_durability_read_back_mismatch_blocks_before_descriptor_persi
     assert "persist" not in case.events
 
 
+def test_restart_capsule_persistence_failure_blocks_before_descriptor_persistence(
+    monkeypatch,
+) -> None:
+    case = _case(monkeypatch)
+    calls = 0
+
+    def fail(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise OSError("capsule store unavailable")
+
+    monkeypatch.setattr(publication, "append_restart_capsule", fail)
+    with pytest.raises(publication.HandoffPublicationError) as exc:
+        publication.publish_governed_handoff(**case.kwargs)
+    assert exc.value.reason_codes == ("restart-capsule-persistence-failed",)
+    assert calls == 1
+    assert "checkpoint-durability-check" in case.events
+    assert "persist" not in case.events
+
+
+def test_restart_capsule_persistence_mismatch_blocks_before_descriptor_persistence(
+    monkeypatch,
+) -> None:
+    case = _case(monkeypatch)
+    monkeypatch.setattr(
+        publication,
+        "append_restart_capsule",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            handoff_id=case.handoff.handoff_id,
+            capsule_id="governed-resume-restart-capsule:" + "f" * 64,
+        ),
+    )
+    with pytest.raises(publication.HandoffPublicationError) as exc:
+        publication.publish_governed_handoff(**case.kwargs)
+    assert exc.value.reason_codes == ("restart-capsule-persistence-mismatch",)
+    assert "persist" not in case.events
+
+
+def test_restart_capsule_handoff_drift_blocks_before_descriptor_persistence(
+    monkeypatch,
+) -> None:
+    case = _case(monkeypatch)
+    monkeypatch.setattr(
+        publication,
+        "append_restart_capsule",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            handoff_id="executor-handoff:" + "f" * 64,
+            capsule_id=case.capsule.capsule_id,
+        ),
+    )
+    with pytest.raises(publication.HandoffPublicationError) as exc:
+        publication.publish_governed_handoff(**case.kwargs)
+    assert exc.value.reason_codes == ("restart-capsule-persistence-mismatch",)
+    assert "persist" not in case.events
+
+
+def test_restart_capsule_build_failure_is_bounded_and_blocks_all_persistence(
+    monkeypatch,
+) -> None:
+    case = _case(monkeypatch)
+    monkeypatch.setattr(
+        publication,
+        "build_restart_capsule",
+        lambda **_kwargs: (_ for _ in ()).throw(ValueError("capsule evidence drift")),
+    )
+    with pytest.raises(publication.HandoffPublicationError) as exc:
+        publication.publish_governed_handoff(**case.kwargs)
+    assert exc.value.reason_codes == ("current-evidence-malformed",)
+    assert "route-decision-persist" not in case.events
+    assert "persist" not in case.events
+
+
 def test_recoverable_artifact_persistence_happens_between_validation_and_descriptor(
     monkeypatch,
 ) -> None:
@@ -525,8 +613,17 @@ def test_recoverable_artifact_persistence_happens_between_validation_and_descrip
         "handoff-persist",
         "resume-plan-persist",
         "checkpoint-durability-check",
+        "restart-capsule-persist",
     ):
         assert validate_index < case.events.index(step) < persist_index
+    # #1303: the bounded restart capsule must be durable only after the four
+    # #1304 recoverable artifacts and still before the descriptor is published,
+    # so a discoverable descriptor never lacks its required restart evidence.
+    assert (
+        case.events.index("checkpoint-durability-check")
+        < case.events.index("restart-capsule-persist")
+        < persist_index
+    )
 
 
 def test_malformed_current_evidence_is_bounded_failure(monkeypatch) -> None:

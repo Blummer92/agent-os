@@ -44,6 +44,8 @@ The capsule does **not** persist a `SingleIssuePilotInput`, current authorizatio
 
 Publication is fail-closed: `publish_governed_handoff(...)` persists the capsule after #1304's route/handoff/checkpoint/ResumePlan durability checks and before the descriptor becomes discoverable. A capsule write failure therefore cannot expose a runnable descriptor whose static restart evidence is missing.
 
+The capsule step extends the existing #1243/#1304 publication seam rather than adding a second publication path. Capsule construction stays inside the seam's existing current-evidence boundary, so unbuildable restart evidence fails closed as `current-evidence-malformed` before any artifact is persisted. Capsule persistence adds exactly two bounded reason codes, `restart-capsule-persistence-failed` and `restart-capsule-persistence-mismatch`; both block descriptor persistence and neither retries. `tests/test_handoff_publication.py` owns this ordering and fail-closed contract for every step in the seam.
+
 ## Current evidence reacquisition
 
 `ProductionHostStateSources` implements all seven production slots as one bounded composition rather than seven independent mini-systems.
