@@ -22,8 +22,13 @@ from agent_os_issue_acceptance.validation_failure_classifier import (
 )
 
 SCHEMA_NAME = "agent-os-release-run"
-SCHEMA_VERSION = "1.2.0"
-CLASSIFICATIONS = {"READY_FOR_MERGE_AUTHORIZATION", "NEEDS_FIX", "BLOCKED"}
+SCHEMA_VERSION = "1.3.0"
+CLASSIFICATIONS = {
+    "READY_FOR_MERGE_AUTHORIZATION",
+    "NEEDS_FIX",
+    "BLOCKED",
+    "COMPLETED",
+}
 SUCCESS_CHECKS = {"success"}
 MERGE_METHODS = {"merge", "squash", "rebase"}
 BRANCH_STATES = {"current", "behind", "conflicted", "unknown"}
@@ -70,6 +75,7 @@ class ReleaseRunState:
     issue_closure_authorized: bool = False
     lifecycle_reconciliation_status: str | None = None
     lifecycle_invocation_reason: str | None = None
+    terminal_reconciliation_status: str | None = None
     next_action: str = "stop"
     blockers: list[str] = field(default_factory=list)
     side_effects_performed: list[str] = field(default_factory=list)
@@ -137,6 +143,8 @@ def evaluate_release_run(evidence: dict[str, Any]) -> ReleaseRunState:
         state.blockers.append(
             f"unsupported PR lifecycle state: {state.pr_lifecycle_state}"
         )
+    if state.issue_state not in {"open", "closed"}:
+        state.blockers.append(f"unsupported issue state: {state.issue_state}")
     if state.expected_head_sha != state.observed_head_sha:
         state.blockers.append("exact-head drift")
     if allowed and not set(state.changed_files).issubset(allowed):
@@ -187,26 +195,7 @@ def evaluate_release_run(evidence: dict[str, Any]) -> ReleaseRunState:
         return state
 
     if state.pr_state == "merged":
-        if (
-            evidence.get("merge_commit_verified", False) is not True
-            or evidence.get("main_verified", False) is not True
-        ):
-            state.phase = "post-merge-verification"
-            state.classification = "BLOCKED"
-            state.blockers.append("post-merge verification incomplete")
-            state.next_action = "verify-merge-and-main"
-        elif not state.issue_closure_authorized:
-            state.phase = "issue-closure-authorization-pause"
-            state.classification = "BLOCKED"
-            state.next_action = "request-issue-closure-authorization"
-        elif "completion-comment" not in state.side_effects_performed:
-            state.phase = "issue-closure"
-            state.classification = "BLOCKED"
-            state.next_action = "post-completion-comment-before-closure"
-        else:
-            state.phase = "issue-closure"
-            state.classification = "READY_FOR_MERGE_AUTHORIZATION"
-            state.next_action = "close-issue"
+        _evaluate_terminal_reconciliation(state, evidence)
         return state
 
     if state.pr_state == "closed":
@@ -237,6 +226,140 @@ def evaluate_release_run(evidence: dict[str, Any]) -> ReleaseRunState:
             f"merge-at-expected-head-with-{state.authorized_merge_method}"
         )
     return state
+
+
+def _evaluate_terminal_reconciliation(
+    state: ReleaseRunState, evidence: dict[str, Any]
+) -> None:
+    """Compose existing terminal owners without reimplementing their semantics.
+
+    The release-run evaluator owns ordering only. Completion comments and issue
+    closure remain GitHub mutations, lineage terminalization remains checkpoint/
+    ResumePlan evidence, lease release remains the Scheduler lease owner's exact
+    holder/generation operation, and final projection repair remains the existing
+    lifecycle reconciler. Caller-supplied receipts are required before advancing.
+    Rerunning the same evidence is idempotent and returns the same next action.
+    """
+
+    state.phase = "terminal-reconciliation"
+    state.terminal_reconciliation_status = "pending"
+
+    if (
+        evidence.get("merge_commit_verified", False) is not True
+        or evidence.get("main_verified", False) is not True
+    ):
+        state.phase = "post-merge-verification"
+        state.classification = "BLOCKED"
+        state.blockers.append("post-merge verification incomplete")
+        state.next_action = "verify-merge-and-main"
+        return
+
+    if not state.issue_closure_authorized:
+        state.phase = "issue-closure-authorization-pause"
+        state.classification = "BLOCKED"
+        state.next_action = "request-issue-closure-authorization"
+        return
+
+    if "completion-comment" not in state.side_effects_performed:
+        state.classification = "BLOCKED"
+        state.next_action = "post-completion-comment-before-closure"
+        return
+
+    if "lineage-terminalized" not in state.side_effects_performed:
+        state.classification = "BLOCKED"
+        state.next_action = "terminalize-current-lineage-via-checkpoint-owner"
+        return
+
+    if "lease_release_required" not in evidence:
+        state.classification = "BLOCKED"
+        state.blockers.append("terminal lease disposition evidence is missing")
+        state.next_action = "reacquire-terminal-lease-disposition"
+        return
+
+    lease_release_required = _exact_bool(evidence["lease_release_required"])
+    if lease_release_required:
+        lease_blocker = _lease_release_blocker(evidence)
+        if lease_blocker is not None:
+            state.classification = "BLOCKED"
+            state.blockers.append(lease_blocker)
+            state.next_action = (
+                "release-exactly-owned-lease"
+                if lease_blocker == "terminal lease release receipt is missing"
+                else "reacquire-terminal-lease-evidence"
+            )
+            return
+
+    if state.issue_state != "closed":
+        state.classification = "READY_FOR_MERGE_AUTHORIZATION"
+        state.next_action = "close-issue"
+        return
+
+    terminal_lifecycle = evidence.get("terminal_lifecycle_reconciliation")
+    lifecycle_blocker = _terminal_lifecycle_blocker(state, terminal_lifecycle)
+    if lifecycle_blocker is not None:
+        state.classification = "BLOCKED"
+        state.blockers.append(lifecycle_blocker)
+        state.next_action = "reconcile-terminal-projections-via-existing-lifecycle"
+        return
+
+    if "final-report" not in state.side_effects_performed:
+        state.classification = "BLOCKED"
+        state.next_action = "emit-final-report"
+        return
+
+    state.phase = "terminal-complete"
+    state.classification = "COMPLETED"
+    state.terminal_reconciliation_status = "converged"
+    state.next_action = "none"
+
+
+def _lease_release_blocker(evidence: dict[str, Any]) -> str | None:
+    receipt = evidence.get("lease_release_receipt")
+    if receipt is None:
+        return "terminal lease release receipt is missing"
+    if not isinstance(receipt, dict):
+        return "terminal lease release receipt is malformed"
+
+    expected_identity = evidence.get("lease_identity")
+    expected_holder = evidence.get("lease_holder_identity")
+    expected_generation = evidence.get("lease_generation")
+    if (
+        not isinstance(expected_identity, str)
+        or not expected_identity
+        or not isinstance(expected_holder, str)
+        or not expected_holder
+        or type(expected_generation) is not int
+        or expected_generation < 1
+    ):
+        return "terminal lease identity evidence is missing or invalid"
+
+    if (
+        receipt.get("lease_identity") != expected_identity
+        or receipt.get("holder_identity") != expected_holder
+        or receipt.get("generation") != expected_generation
+    ):
+        return "terminal lease release receipt identity does not match owned lease"
+    if receipt.get("forced") is not False:
+        return "terminal lease release receipt used forbidden force semantics"
+    if receipt.get("ambiguous") is not False:
+        return "terminal lease release outcome is ambiguous"
+    if receipt.get("released") is not True:
+        return "terminal lease release is not proven"
+    return None
+
+
+def _terminal_lifecycle_blocker(
+    state: ReleaseRunState, lifecycle: Any
+) -> str | None:
+    if not isinstance(lifecycle, dict):
+        return "terminal projection reconciliation receipt is missing"
+    if lifecycle.get("reconciliation_status") != "converged":
+        return "terminal projection reconciliation is not converged"
+    if lifecycle.get("verified_head_sha") != state.observed_head_sha:
+        return "terminal projection reconciliation is bound to a stale head"
+    if lifecycle.get("invocation_reason") != "final-state-readback":
+        return "terminal projection reconciliation is not final-state readback"
+    return None
 
 
 def _detect_external_transition(state: ReleaseRunState, evidence: dict[str, Any]) -> bool:
