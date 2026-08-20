@@ -27,14 +27,13 @@ def lifecycle(reason="validation-terminal"):
     }
 
 
-def lease_receipt(**overrides):
+def lease_observation(**overrides):
     value = {
         "released": True,
         "lease_identity": LEASE_ID,
         "holder_identity": HOLDER_ID,
         "generation": GENERATION,
-        "ambiguous": False,
-        "forced": False,
+        "reason": None,
     }
     value.update(overrides)
     return value
@@ -73,6 +72,10 @@ def evidence(**overrides):
     return value
 
 
+def terminal_side_effects():
+    return ["merge", "completion-comment", "lineage-terminalized"]
+
+
 def test_terminal_reconciliation_starts_with_completion_pointer():
     state = release_run.evaluate_release_run(evidence())
     assert state.phase == "terminal-reconciliation"
@@ -88,69 +91,50 @@ def test_completion_pointer_then_terminalizes_existing_lineage():
 
 def test_terminal_reconciliation_requires_explicit_lease_disposition():
     state = release_run.evaluate_release_run(
-        evidence(
-            side_effects_performed=[
-                "merge",
-                "completion-comment",
-                "lineage-terminalized",
-            ]
-        )
+        evidence(side_effects_performed=terminal_side_effects())
     )
     assert "terminal lease disposition evidence is missing" in state.blockers
     assert state.next_action == "reacquire-terminal-lease-disposition"
 
 
-def test_owned_lease_must_release_through_exact_identity_receipt():
+def test_owned_lease_requires_canonical_release_observation():
     state = release_run.evaluate_release_run(
         evidence(
-            side_effects_performed=[
-                "merge",
-                "completion-comment",
-                "lineage-terminalized",
-            ],
+            side_effects_performed=terminal_side_effects(),
             lease_release_required=True,
             lease_identity=LEASE_ID,
             lease_holder_identity=HOLDER_ID,
             lease_generation=GENERATION,
         )
     )
+    assert "terminal lease release observation is missing" in state.blockers
     assert state.next_action == "release-exactly-owned-lease"
 
 
-def test_mismatched_forced_or_ambiguous_lease_release_fails_closed():
-    cases = (
-        lease_receipt(generation=GENERATION + 1),
-        lease_receipt(forced=True),
-        lease_receipt(ambiguous=True),
-        lease_receipt(released=False),
-    )
-    for receipt in cases:
+def test_mismatched_or_unreleased_canonical_observation_fails_closed():
+    for observation in (
+        lease_observation(generation=GENERATION + 1),
+        lease_observation(holder_identity="pilot-holder:other"),
+        lease_observation(released=False, reason="lease is not owned"),
+    ):
         state = release_run.evaluate_release_run(
             evidence(
-                side_effects_performed=[
-                    "merge",
-                    "completion-comment",
-                    "lineage-terminalized",
-                ],
+                side_effects_performed=terminal_side_effects(),
                 lease_release_required=True,
                 lease_identity=LEASE_ID,
                 lease_holder_identity=HOLDER_ID,
                 lease_generation=GENERATION,
-                lease_release_receipt=receipt,
+                lease_release_receipt=observation,
             )
         )
         assert state.classification == "BLOCKED"
         assert state.next_action == "reacquire-terminal-lease-evidence"
 
 
-def test_proven_no_lease_or_exact_release_allows_issue_closure():
+def test_proven_no_lease_or_exact_canonical_release_allows_issue_closure():
     no_lease = release_run.evaluate_release_run(
         evidence(
-            side_effects_performed=[
-                "merge",
-                "completion-comment",
-                "lineage-terminalized",
-            ],
+            side_effects_performed=terminal_side_effects(),
             lease_release_required=False,
         )
     )
@@ -158,16 +142,12 @@ def test_proven_no_lease_or_exact_release_allows_issue_closure():
 
     released = release_run.evaluate_release_run(
         evidence(
-            side_effects_performed=[
-                "merge",
-                "completion-comment",
-                "lineage-terminalized",
-            ],
+            side_effects_performed=terminal_side_effects(),
             lease_release_required=True,
             lease_identity=LEASE_ID,
             lease_holder_identity=HOLDER_ID,
             lease_generation=GENERATION,
-            lease_release_receipt=lease_receipt(),
+            lease_release_receipt=lease_observation(),
         )
     )
     assert released.next_action == "close-issue"
@@ -177,12 +157,7 @@ def test_closed_issue_requires_final_existing_lifecycle_reconciliation():
     state = release_run.evaluate_release_run(
         evidence(
             issue_state="closed",
-            side_effects_performed=[
-                "merge",
-                "completion-comment",
-                "lineage-terminalized",
-                "close-issue",
-            ],
+            side_effects_performed=[*terminal_side_effects(), "close-issue"],
             lease_release_required=False,
         )
     )
@@ -190,28 +165,20 @@ def test_closed_issue_requires_final_existing_lifecycle_reconciliation():
     assert state.next_action == "reconcile-terminal-projections-via-existing-lifecycle"
 
 
-def test_terminal_reconciliation_finishes_with_one_final_report():
+def test_terminal_reconciliation_finishes_with_one_final_report_idempotently():
     before_report = evidence(
         issue_state="closed",
-        side_effects_performed=[
-            "merge",
-            "completion-comment",
-            "lineage-terminalized",
-            "close-issue",
-        ],
+        side_effects_performed=[*terminal_side_effects(), "close-issue"],
         lease_release_required=False,
         terminal_lifecycle_reconciliation=lifecycle("final-state-readback"),
     )
     pending = release_run.evaluate_release_run(before_report)
     assert pending.next_action == "emit-final-report"
 
-    complete_evidence = dict(before_report)
-    complete_evidence["side_effects_performed"] = [
-        *before_report["side_effects_performed"],
-        "final-report",
-    ]
-    first = release_run.evaluate_release_run(complete_evidence)
-    second = release_run.evaluate_release_run(complete_evidence)
+    complete = dict(before_report)
+    complete["side_effects_performed"] = [*before_report["side_effects_performed"], "final-report"]
+    first = release_run.evaluate_release_run(complete)
+    second = release_run.evaluate_release_run(complete)
     assert first == second
     assert first.phase == "terminal-complete"
     assert first.classification == "COMPLETED"
