@@ -130,7 +130,7 @@ def test_fast_lane_request_stays_non_authorizing_until_canonical_records_admit()
     no_authority = authority(AuthorizationState.NOT_AUTHORIZED)
     decision = evaluate_operating_mode_decision(
         operational_state(no_authority, no_authority),
-        RequestedMode.RELEASE,
+        RequestedMode.RELEASE.value,
         environment(),
     )
     assert decision.maximum_permitted_stage is LifecycleStage.REVIEW
@@ -197,7 +197,7 @@ def test_request_identity_backs_existing_merge_and_closure_authority_paths():
 
     decision = evaluate_operating_mode_decision(
         operational_state(merge_projection, closure_projection),
-        RequestedMode.RELEASE,
+        RequestedMode.RELEASE.value,
         environment(),
     )
     assert decision.maximum_permitted_stage is LifecycleStage.CLOSED
