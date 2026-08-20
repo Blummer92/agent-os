@@ -74,7 +74,7 @@ Return implementation evidence and unresolved decisions to the requesting owner.
 Route validation uncertainty to QA / Test Agent support and cross-system
 ownership or source-of-truth conflicts to the Integration Manager.
 
-All excluded surfaces — including merge, auto-merge, issue closure — remain blocked without separate explicit authorization under `01_Shared_Standards/github/excluded-surface-baseline.md`. For eligible Tier 0/1 `no-external-write` work, a fresh direct-user canonical request interpretation carrying `operating-mode=release` under the Terminal Fast Lane contract is one such bounded authorization input for merge and implementation-issue closure only; `operating_mode.py`, exact-head checks, server-side merge/review requirements, and terminal reconciliation still gate every action. Tier 2, protected-setting, workflow, credential, production, and external-write surfaces stay excluded regardless of requested mode.
+All excluded surfaces — including merge, auto-merge, issue closure — remain blocked without separate explicit authorization under `01_Shared_Standards/github/excluded-surface-baseline.md`. For eligible Tier 0/1 `no-external-write` work, a fresh direct-user canonical request interpretation carrying `operating-mode=release` under the Terminal Fast Lane contract is one bounded owner-decision input for merge and implementation-issue closure only. It must be recorded through the existing content-bound merge-authorization and lifecycle-mutation authorization contracts; never project `merge_authorized` or `closure_authorized` directly from the request constraint. `IssueOperationalState`, `operating_mode.py`, exact-head checks, server-side merge/review requirements, and terminal reconciliation remain authoritative. Tier 2, protected-setting, workflow, credential, production, and external-write surfaces stay excluded regardless of requested mode.
 
 ## Stop Conditions
 Stop when repository, ownership, objective, authorization, acceptance criteria,
@@ -89,7 +89,7 @@ that satisfies the Safe Implementation Lane.
 0.7.0
 
 ## Changelog
-- 0.7.0 consumes the canonical Terminal Fast Lane request interpretation as a bounded authorization input for eligible Tier 0/1 `no-external-write` work, while existing operating-mode, exact-head, merge/review, closure, and excluded-surface gates remain authoritative; no Fast-Lane-specific parser or second authority system is owned here (#1309).
+- 0.7.0 consumes the canonical Terminal Fast Lane request interpretation as a bounded owner-decision input for eligible Tier 0/1 `no-external-write` work and records any merge/closure authority through the existing content-bound authorization contracts; `IssueOperationalState`, `operating_mode.py`, exact-head, merge/review, closure, and excluded-surface gates remain authoritative, with no Fast-Lane-specific parser or second authority system (#1309).
 - 0.6.0 requires immediate bounded post-create managed-label reconciliation using #1022/#1023/#1038 with fresh-head, convergence, idempotency, unmanaged-label preservation, and non-authorizing failure semantics (#1076); 0.5.1 references the shared excluded-surface baseline added for #901 without changing authorization behavior.
 - 0.5.0 adds the risk-tiered Safe Implementation Lane while preserving separate merge and protected/external authorization.
 - 0.4.0 removes inherited workflow and reporting duplication while preserving GitHub-specific routing and verifier rules.
