@@ -26,7 +26,7 @@ Owns implementation evidence: files changed, exact source head, tested SHA or sy
 
 ## Safe Implementation Lane
 
-Eligible Tier 0 and Tier 1 repository work may use `safe-implementation-lane.md`. The bounded lane accepts directly necessary support files and environment-assigned non-protected branch names, and may include Ready-for-Review after exact-head validation; merge and all excluded surfaces remain separately authorized.
+Eligible Tier 0 and Tier 1 repository work may use `safe-implementation-lane.md`. The bounded lane accepts directly necessary support files and environment-assigned non-protected branch names, and may include Ready-for-Review after exact-head validation; ordinary Safe Lane merge and all excluded surfaces remain separately authorized unless the opt-in Terminal Fast Lane contract applies.
 
 ## Child-Issue Creation Test
 
@@ -34,7 +34,7 @@ Split a child issue only when all are true: independent objective; different all
 
 ## Promotion In Place
 
-A planning/design issue may be promoted in place to Level 2 instead of superseded by a successor when its objective, ownership, bounded scope, source of truth, and risk tier remain materially unchanged and no material architecture, compatibility, external-effect, or protected-surface change is introduced, evaluated by `scripts/agent_os_issue_acceptance/promotion_in_place.py`. This reuses the Child-Issue Creation Test above as the sole alternative; a material change always requires a successor issue rather than a second splitting policy. Closed historical issues are immutable and are never promoted.
+A planning/design issue may be promoted in place to Level 2 instead of superseded by a successor when the canonical issue body still proves the same objective, ownership, bounded scope, source of truth, and risk tier and no material architecture, compatibility, external-effect, protected-surface, or objective change has been introduced. Apply the existing Child-Issue Creation Test above against that canonical issue evidence; do not construct a second issue-scope snapshot, parser, or promotion state model. When a material change is present, a successor is required. Closed historical issues are immutable and are never promoted.
 
 ## Canonical Boilerplate By Reference
 
@@ -74,7 +74,7 @@ Legacy label disposition, verified against current repository labels and `.githu
 | bare `workflow-scheduler` | `epic:workflow-scheduler` — both exist; only the epic-prefixed form is map-declared |
 | `planning` | `type:planning` exists and is actively used on open issues, but neither it nor `planning` is declared in the label map's `type` field; retain both without an automated alias until the map is updated |
 | `phase-4` | no automatic alias; not in the label map; retire only after a dependency review |
-| `adapter-migration` | no automatic alias; not in the label map; retire or map only through a separate approved decision |
+| `adapter-migration` | no automatic alias; retire or map only through a separate approved decision |
 
 Do not add a legacy label to a new issue. Do not claim a disposition beyond this table without repository or label-map evidence.
 
@@ -84,4 +84,4 @@ Do not add a legacy label to a new issue. Do not claim a disposition beyond this
 
 ## Changelog
 
-- 0.3.0 adds the Promotion In Place evaluator reusing the existing Child-Issue Creation Test, and generalizes the volatile-execution-facts restriction beyond Level 1 roadmap issues (#1309).
+- 0.3.0 adds Promotion In Place as a canonical issue-body/Child-Issue Creation Test classification without a parallel issue-state model, and generalizes the volatile-execution-facts restriction beyond Level 1 roadmap issues (#1309).
