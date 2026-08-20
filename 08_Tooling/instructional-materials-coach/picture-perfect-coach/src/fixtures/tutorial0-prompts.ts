@@ -1,10 +1,20 @@
 import tutorial0Evidence from './tutorial0-evidence.json';
+import tutorial0Recording from './tutorial0-recording.json';
 import { deriveReviewedTutorial } from '../review';
+import { deriveRecordingUiEvidence } from '../uiEvidence';
 import { projectReviewedTutorialToPromptCards, type PromptAuthoringInput } from '../promptIntent';
 import type { PromptCardModel } from '../promptIntent';
 import type { ReviewDecision, UploadEvidenceProjection } from '../types';
 
-const evidence = tutorial0Evidence as unknown as UploadEvidenceProjection;
+const projected = tutorial0Evidence as unknown as Omit<UploadEvidenceProjection, 'recording_evidence'>;
+
+// UI-claim evidence is derived from the approved recording, exactly as the upload
+// boundary derives it. The recording is source evidence and is never edited to make
+// authored prompt content validate.
+const evidence: UploadEvidenceProjection = {
+  ...projected,
+  recording_evidence: deriveRecordingUiEvidence(tutorial0Recording, projected.recording_sha256),
+};
 
 const decisions: ReviewDecision[] = [
   { step_id: 'tutorial0-step-01-organize-location', choice: 'keep' },
@@ -27,9 +37,16 @@ export const tutorial0ReviewedTutorial = reviewResult.tutorial;
 const commonMustNotShow = ['student data', 'private account information', 'DevTools', 'Recorder controls', 'invented Adobe controls'];
 const commonProvenance = ['Teacher Modeling: Tutorial 0', 'Recorder evidence: approved modeled actions'];
 
-// Authoring content (what to show, why) supplied by approved Teacher Modeling review — not
-// derivable from Recorder evidence alone. Application identity itself is never authored here;
-// it flows only from each reviewed step's `modeled_application`.
+// Authoring content (what to show, why) supplied by approved Teacher Modeling review.
+// Authoring can no longer declare which UI details evidence supports — that is derived
+// from the recording and narrowed to each frame's own source indexes.
+//
+// UI text below is corrected against the recording (PPUX-F1 / #1293):
+//   - the tutorial folder is `Tutorial 0 - Organize My Files` (recording index 9),
+//     not `Tutorial 0 - My Favorite Food`, which the recording never contains;
+//   - the recorded accessible name is `Create new` (index 13), not `Create new file`;
+//   - `Square` (index 14) and `Portrait` (index 26) belong to other steps, so the
+//     landscape frame claims only `Landscape` (index 20).
 const authoringByStepId = new Map<string, PromptAuthoringInput>([
   [
     'tutorial0-step-01-organize-location',
@@ -37,12 +54,11 @@ const authoringByStepId = new Map<string, PromptAuthoringInput>([
       imagePurpose: 'Show the organized destination before collecting reference imagery.',
       imageState: 'result',
       applicationContext: 'Adobe Express Your stuff workspace and location context',
-      targetState: 'Tutorial 0 - My Favorite Food location is visibly organized under Digital Media',
-      mustShow: ['Adobe Express', 'Your stuff', 'Digital Media', 'Tutorial 0 - My Favorite Food'],
+      targetState: 'Tutorial 0 - Organize My Files location is visibly organized under Digital Media',
+      mustShow: ['Adobe Express', 'Your stuff', 'Digital Media', 'Tutorial 0 - Organize My Files'],
       mustNotShow: commonMustNotShow,
       annotationSpace: 'beside the visible location indicator for one teacher-added callout',
-      evidenceSupportedUiDetails: ['Your stuff', 'Digital Media', 'Tutorial 0 - My Favorite Food'],
-      requestedUiDetails: ['Your stuff', 'Digital Media', 'Tutorial 0 - My Favorite Food'],
+      requestedUiDetails: ['Your stuff', 'Digital Media', 'Tutorial 0 - Organize My Files'],
     },
   ],
   [
@@ -51,26 +67,24 @@ const authoringByStepId = new Map<string, PromptAuthoringInput>([
       imagePurpose: 'Show where a student starts a new reference file.',
       imageState: 'action',
       applicationContext: 'Adobe Express workspace with enough surrounding navigation for orientation',
-      targetState: 'Create new file is the clear next action',
-      mustShow: ['Adobe Express', 'Create new file'],
+      targetState: 'Create new is the clear next action',
+      mustShow: ['Adobe Express', 'Create new'],
       mustNotShow: commonMustNotShow,
-      annotationSpace: 'around Create new file for an arrow and step number',
-      evidenceSupportedUiDetails: ['Create new file'],
-      requestedUiDetails: ['Create new file'],
+      annotationSpace: 'around Create new for an arrow and step number',
+      requestedUiDetails: ['Create new'],
     },
   ],
   [
     'tutorial0-step-05-landscape-file',
     {
-      imagePurpose: 'Help students recognize the three modeled canvas choices during file creation.',
+      imagePurpose: 'Help students recognize the landscape canvas choice during file creation.',
       imageState: 'action+result',
       applicationContext: 'Adobe Express new-file creation context',
-      targetState: 'Square, Landscape, and Portrait choices are visible and distinguishable',
-      mustShow: ['Adobe Express', 'Square', 'Landscape', 'Portrait'],
+      targetState: 'the Landscape choice is visible and distinguishable',
+      mustShow: ['Adobe Express', 'Landscape'],
       mustNotShow: commonMustNotShow,
-      annotationSpace: 'near each format choice for short teacher-added labels',
-      evidenceSupportedUiDetails: ['Square', 'Landscape', 'Portrait'],
-      requestedUiDetails: ['Square', 'Landscape', 'Portrait'],
+      annotationSpace: 'near the format choice for a short teacher-added label',
+      requestedUiDetails: ['Landscape'],
     },
   ],
 ]);
@@ -88,11 +102,10 @@ const blockedAuthoring = new Map<string, PromptAuthoringInput>([
       imageState: 'result',
       applicationContext: 'Adobe Express final organized reference location',
       targetState: 'favorite-food reference files are organized in the intended Tutorial 0 location',
-      mustShow: ['Adobe Express', 'Tutorial 0 - My Favorite Food'],
+      mustShow: ['Adobe Express', 'Tutorial 0 - Organize My Files'],
       mustNotShow: commonMustNotShow,
       annotationSpace: 'beside the final location for a Check your location callout',
-      evidenceSupportedUiDetails: ['Tutorial 0 - My Favorite Food'],
-      requestedUiDetails: ['Tutorial 0 - My Favorite Food', 'exact favorite-food filenames'],
+      requestedUiDetails: ['Tutorial 0 - Organize My Files', 'exact favorite-food filenames'],
       uncertainty: 'Exact favorite-food filenames and final file arrangement are not established by approved evidence.',
     },
   ],

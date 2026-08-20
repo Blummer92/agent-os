@@ -51,21 +51,31 @@ describe('Picture Perfect Coach review and Ready UX', () => {
     expect(screen.getByText(/Every modeled step needs an explicit review decision/i)).toBeTruthy();
   });
 
-  it('reaches Prompts then Ready and generates a local non-authorizing handoff packet', async () => {
+  it('reaches Prompts and blocks every software-interface frame that has no screen evidence', async () => {
     await reachPrompts();
     expect(screen.getAllByText('Application: Adobe Express').length).toBeGreaterThan(0);
     expect(screen.getByText('Prompts').closest('li')?.getAttribute('aria-current')).toBe('step');
+
+    // Tutorial 0 frames all claim the real Adobe Express interface, and no capture
+    // evidence is bound yet, so none may offer a generated stand-in prompt.
+    expect(screen.getAllByText('Prompt blocked').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Software interface — needs screen capture').length).toBeGreaterThan(0);
+    expect(screen.queryByLabelText('Portable prompt')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Copy Prompt' })).toBeNull();
+    expect(screen.getAllByText('visual-evidence-missing').length).toBeGreaterThan(0);
+  });
+
+  it('keeps Ready fail-closed and the handoff packet ungenerated while evidence is missing', async () => {
+    await reachPrompts();
     fireEvent.click(screen.getByRole('button', { name: 'Open Ready' }));
     expect(await screen.findByRole('heading', { name: 'Implementation handoff preflight' })).toBeTruthy();
     expect(screen.getByText('Ready').closest('li')?.getAttribute('aria-current')).toBe('step');
-    expect(screen.getAllByText(/^Pass ·/).length).toBeGreaterThan(5);
+
+    expect(screen.getByText(/^Blocked · Captured screen evidence bound where required$/)).toBeTruthy();
+
     const create = screen.getByRole('button', { name: 'Create GitHub Handoff' });
-    expect(create.hasAttribute('disabled')).toBe(false);
-    fireEvent.click(create);
-    const packet = screen.getByLabelText('GitHub handoff packet') as HTMLTextAreaElement;
-    expect(packet.value).toContain('"execution_authorized": false');
-    expect(packet.value).toContain('"modeled_application": "Adobe Express"');
-    expect(packet.value).toContain('tutorial0-step-08-incidental-shift');
-    expect(screen.getByText(/No GitHub write occurred/i)).toBeTruthy();
+    expect(create.hasAttribute('disabled')).toBe(true);
+    expect(screen.queryByLabelText('GitHub handoff packet')).toBeNull();
+    expect(screen.getByText(/Create GitHub Handoff stays disabled until every required preflight row passes/i)).toBeTruthy();
   });
 });

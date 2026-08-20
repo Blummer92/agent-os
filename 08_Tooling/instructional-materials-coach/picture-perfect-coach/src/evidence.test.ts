@@ -1,10 +1,15 @@
 import tutorialEvidence from './fixtures/tutorial0-evidence.json';
 import tutorialRecording from './fixtures/tutorial0-recording.json';
 import { safeTechnicalDetails, summarizeEvidence, validateUploadText } from './evidence';
+import { deriveRecordingUiEvidence } from './uiEvidence';
 import type { UploadEvidenceProjection } from './types';
 
 describe('upload evidence consumer', () => {
-  const evidence = tutorialEvidence as unknown as UploadEvidenceProjection;
+  const projected = tutorialEvidence as unknown as Omit<UploadEvidenceProjection, 'recording_evidence'>;
+  const evidence: UploadEvidenceProjection = {
+    ...projected,
+    recording_evidence: deriveRecordingUiEvidence(tutorialRecording, projected.recording_sha256),
+  };
 
   it('derives summary counts instead of storing presentation totals', () => {
     const summary = summarizeEvidence(evidence);

@@ -13,12 +13,20 @@ export function PromptCards({ cards }: { cards: readonly PromptCardModel[] }) {
               <strong>Image {card.stepNumber}</strong>
               <span>{card.imageState}</span>
               <span>Application: {card.application || 'Needs review'}</span>
+              <span>{card.requiresScreenFidelity ? 'Software interface — needs screen capture' : 'Non-interface visual'}</span>
             </div>
             <p>{card.imagePurpose}</p>
             {card.status === 'blocked' ? (
               <div role="status" className="boundary-note">
                 <strong>Prompt blocked</strong>
                 <p>{card.blocker}</p>
+                <p>
+                  No prompt is offered for a blocked frame. Picture Perfect will not generate a
+                  stand-in for the real software interface.
+                </p>
+                <ul aria-label={`Blocker reasons for image ${card.stepNumber}`}>
+                  {card.blockerReasons.map((reason) => <li key={reason}><code>{reason}</code></li>)}
+                </ul>
                 {card.uncertainty && <p>{card.uncertainty}</p>}
               </div>
             ) : (
