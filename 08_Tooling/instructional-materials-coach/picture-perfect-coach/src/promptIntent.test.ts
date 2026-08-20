@@ -211,6 +211,17 @@ describe('PPUX-F1 UI-claim evidence authority', () => {
     expect(stripped.blockerReasons).toContain(BLOCKER_REASONS.visualEvidenceMissing);
   });
 
+  it('re-derives the gate even if a specification is constructed with the flag turned off', () => {
+    // Defence in depth: the projection derives the flag, but validation must not trust
+    // it, or a hand-built specification could claim interface text as non-interface.
+    const spec = specFor([1], authoringFor());
+    const forged: VisualSpecification = { ...spec, requiresScreenFidelity: false };
+    const card = buildPortablePrompt(forged);
+    expect(card.status).toBe('blocked');
+    expect(card.blockerReasons).toContain(BLOCKER_REASONS.visualEvidenceMissing);
+    expect(card.portablePrompt).toBe('');
+  });
+
   it('lets an author raise but never lower the software-interface determination', () => {
     const raised = buildPortablePrompt(specFor([1], authoringFor({
       requestedUiDetails: [], mustShow: ['a neutral concept'], applicationContext: '',

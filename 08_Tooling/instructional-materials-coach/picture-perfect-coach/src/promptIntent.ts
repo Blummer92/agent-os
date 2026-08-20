@@ -111,13 +111,18 @@ export function validateVisualSpecification(spec: VisualSpecification): BlockerR
     if (!reasons.includes(reason)) reasons.push(reason);
   };
 
+  // Re-derive rather than trust the stored flag: the determination is raise-only, so a
+  // specification that claims interface text can never validate as non-interface even
+  // if it was constructed with the flag turned off.
+  const requiresScreenFidelity = derivesScreenFidelity(spec, spec.requiresScreenFidelity);
+
   if (!spec.application.trim()) push(BLOCKER_REASONS.applicationIdentityMissing);
   if (!spec.targetState.trim() || spec.mustShow.length === 0 || spec.provenance.length === 0) {
     push(BLOCKER_REASONS.specificationIncomplete);
   }
   // Application context describes surrounding interface, so an interface frame must
   // state it; a non-interface frame must not smuggle it in.
-  if (spec.requiresScreenFidelity && !spec.applicationContext.trim()) {
+  if (requiresScreenFidelity && !spec.applicationContext.trim()) {
     push(BLOCKER_REASONS.specificationIncomplete);
   }
 
@@ -145,7 +150,7 @@ export function validateVisualSpecification(spec: VisualSpecification): BlockerR
     push(BLOCKER_REASONS.uiClaimNotCoVisible);
   }
 
-  if (spec.requiresScreenFidelity && spec.capturedScreenRef === null) {
+  if (requiresScreenFidelity && spec.capturedScreenRef === null) {
     push(BLOCKER_REASONS.visualEvidenceMissing);
   }
   return reasons;
