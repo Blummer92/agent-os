@@ -64,6 +64,29 @@ A support change must remain behaviorally subordinate and be listed in the pull
 request report. It may not introduce a new subsystem, owner, schema,
 compatibility break, credential, workflow, persistence path, or external effect.
 Those are material changes and require `needs-decision`.
+## Terminal Fast Lane
+An unambiguous repository-owner instruction of the exact form `work on #<issue>
+in fast lane` may request the `RequestedMode.RELEASE` ceiling from
+`scripts/agent_os_issue_acceptance/operating_mode.py` for that exact
+already-bound issue, evaluated by
+`scripts/agent_os_issue_acceptance/fast_lane_activation.py`. Ordinary `work on
+#<issue>`, `continue`, `next step`, `keep going`, a mismatched issue number,
+Tier 2, or any declared external write is capped at `RequestedMode.PLANNING`
+and carries no terminal authority. Granting the ceiling adds no new
+lifecycle stage, router, or authority: `evaluate_operating_mode(...)` still
+walks implementation, Ready-for-Review, merge, and closure one gate at a
+time against canonical `IssueOperationalState` evidence, stopping at the
+first unmet gate exactly as it does for any other requested mode.
+Within an active Terminal Fast Lane grant, a safely admitted `branch:behind`
+refresh through the existing #1187 `pr_branch_refresh.py` contract needs no
+second user prompt solely because `main` advanced; its own admission checks
+(exact base/head identity, scope, mergeability, and required validation)
+remain the fail-closed boundary, and a conflicted, ambiguous, or unsafe
+refresh still stops without a weaker fallback. Terminal Fast Lane never
+widens Tier-2, protected-setting, workflow, credential, production, or other
+excluded-surface authorization; those remain separately governed regardless
+of the activation phrase.
+
 ## Branch Names
 A harness- or environment-assigned branch name is acceptable when it is
 non-protected, linked to the issue, and used consistently. A preferred branch
@@ -90,8 +113,9 @@ risks, rollback, and confirmation that merge and excluded surfaces remain
 unauthorized. Prefer one consolidated user-facing result for routine internal
 routing while preserving required handoff artifacts for owners and auditability.
 ## Version
-0.6.0
+0.7.0
 ## Changelog
+- 0.7.0 adds the opt-in Terminal Fast Lane (#1309): the exact `work on #<issue> in fast lane` phrase, evaluated by `fast_lane_activation.py`, may request the existing `RequestedMode.RELEASE` ceiling for eligible Tier 0/1 `no-external-write` work, and an active grant lets the existing #1187 branch refresh continue without a second user prompt when its own admission checks pass; no new lifecycle stage, router, or authority was added.
 - 0.6.0 distinguishes artifact non-authority from later direct-owner authorization, consolidates activation preflight, and carries one current instruction across a single mechanical readiness intervention without weakening fail-closed stops (#1274).
 - 0.5.0 makes existing authorized branch/PR/checkpoint lineage resumable through the canonical #895 ResumePlan and #758 Scheduler lease, separates same-branch `HEAD_ADVANCED` from #1187 base-behind refresh, and requires bounded proof before cancelled stale-head validation is classified as superseded (#1188).
 - 0.4.0 requires issue-defined developer-loop validation on a capable route before Draft PR creation while preserving one final exact-head aggregate (#1077).

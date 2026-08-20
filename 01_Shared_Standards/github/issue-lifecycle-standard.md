@@ -32,6 +32,10 @@ Eligible Tier 0 and Tier 1 repository work may use `safe-implementation-lane.md`
 
 Split a child issue only when all are true: independent objective; different allowlist; independently mergeable; standalone value; combining would make one PR unsafe or oversized. Otherwise use acceptance criteria, checklist items, or regression tests in the existing issue.
 
+## Promotion In Place
+
+A planning/design issue may be promoted in place to Level 2 instead of superseded by a successor when its objective, ownership, bounded scope, source of truth, and risk tier remain materially unchanged and no material architecture, compatibility, external-effect, or protected-surface change is introduced, evaluated by `scripts/agent_os_issue_acceptance/promotion_in_place.py`. This reuses the Child-Issue Creation Test above as the sole alternative; a material change always requires a successor issue rather than a second splitting policy. Closed historical issues are immutable and are never promoted.
+
 ## Canonical Boilerplate By Reference
 
 Link, do not paste: write authorization (`00_Governance/write-authorization-policy.md`), final report (`01_Shared_Standards/global-engineering/final-report-standard.md`), validation commands (`scripts/validate-all.sh`, `07_Agent_Tests/validate-repo-structure.sh`), protected-branch and exact-SHA rules (`protected-branch-governance.md`), and PR evidence headings (`.github/PULL_REQUEST_TEMPLATE.md`). Issue-specific stop conditions and acceptance criteria always stay in the issue body.
@@ -39,6 +43,8 @@ Link, do not paste: write authorization (`00_Governance/write-authorization-poli
 ## Issue-Body Maintenance
 
 The issue body is authoritative for durable objective, ownership, scope, non-goals, and protected surfaces. When a durable decision changes the contract, edit the body and add one concise dated comment naming what changed and why; edit history preserves prior text. A dated operational authorization comment may activate or pause work only when the body permits that route and the comment does not broaden or contradict the durable contract. Do not leave a stale body behind contradictory comments.
+
+Volatile execution facts -- current `main`/PR/head SHA, branch freshness, CI/check conclusion, executor availability, lease generation, or other transient runtime state -- are never embedded as durable contract requirements in any issue body at any level. Store them in current evidence, checkpoints, PR records, or dated operational comments instead; the Level 1 roadmap restriction above is one instance of this general rule.
 
 ## Risk Ownership
 
@@ -74,4 +80,8 @@ Do not add a legacy label to a new issue. Do not claim a disposition beyond this
 
 ## Version
 
-0.2.0
+0.3.0
+
+## Changelog
+
+- 0.3.0 adds the Promotion In Place evaluator reusing the existing Child-Issue Creation Test, and generalizes the volatile-execution-facts restriction beyond Level 1 roadmap issues (#1309).

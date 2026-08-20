@@ -74,7 +74,7 @@ Return implementation evidence and unresolved decisions to the requesting owner.
 Route validation uncertainty to QA / Test Agent support and cross-system
 ownership or source-of-truth conflicts to the Integration Manager.
 
-All excluded surfaces — including merge, auto-merge, issue closure — remain blocked without separate explicit authorization under `01_Shared_Standards/github/excluded-surface-baseline.md`.
+All excluded surfaces — including merge, auto-merge, issue closure — remain blocked without separate explicit authorization under `01_Shared_Standards/github/excluded-surface-baseline.md`. A Terminal Fast Lane grant (`fast_lane_activation.py`, `01_Shared_Standards/github/safe-implementation-lane.md`) is one such explicit authorization for eligible Tier 0/1 `no-external-write` work only: merge and closure still require every existing gate in `operating_mode.py` to pass, and Tier 2, protected-setting, workflow, credential, and production surfaces stay excluded regardless of the activation phrase.
 
 ## Stop Conditions
 Stop when repository, ownership, objective, authorization, acceptance criteria,
@@ -86,9 +86,10 @@ policy-required changelog entry, or environment-assigned non-protected branch
 that satisfies the Safe Implementation Lane.
 
 ## Version
-0.6.0
+0.7.0
 
 ## Changelog
+- 0.7.0 recognizes a Terminal Fast Lane grant as one explicit excluded-surface authorization scoped to eligible Tier 0/1 `no-external-write` work, still gated by every existing merge/closure authority check; no excluded surface was widened (#1309).
 - 0.6.0 requires immediate bounded post-create managed-label reconciliation using #1022/#1023/#1038 with fresh-head, convergence, idempotency, unmanaged-label preservation, and non-authorizing failure semantics (#1076); 0.5.1 references the shared excluded-surface baseline added for #901 without changing authorization behavior.
 - 0.5.0 adds the risk-tiered Safe Implementation Lane while preserving separate merge and protected/external authorization.
 - 0.4.0 removes inherited workflow and reporting duplication while preserving GitHub-specific routing and verifier rules.

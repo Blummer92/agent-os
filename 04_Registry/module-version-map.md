@@ -17,7 +17,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 | Dashboard Migration Verification | 0.1.0 |
 | Instructional Design Standards | 0.12.0 |
 | Agent Orchestrator | 0.3.0 |
-| GitHub Service Agent | 0.6.0 |
+| GitHub Service Agent | 0.7.0 |
 | Unit Alignment Agent | 0.6.0 |
 | Teacher Modeling Coach | 0.6.0 |
 | Instructional Materials Coach | 0.5.1 |
@@ -26,8 +26,8 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 | Workspace Automation Builder Tooling | 0.1.1 |
 | Agent Memory & Context Budget Manager | 0.1.0 |
 | IA4D-to-Scheduler Handoff Contract | 0.2.0 |
-| GitHub Issue Lifecycle Standard | 0.2.0 |
-| Safe Implementation Lane | 0.5.0 |
+| GitHub Issue Lifecycle Standard | 0.3.0 |
+| Safe Implementation Lane | 0.7.0 |
 | Agent OS Execution Service | 0.6.0 |
 | Artifact-First Response Standard | 0.1.0 |
 | Teacher Decision Studio Standard | 0.1.0 |
@@ -42,7 +42,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 
 **Agent Interaction Output Standard** `0.2.0` adds compact state-based operator rendering for implementation and PR review (#1081): bounded stage bars without invented percentages, canonical `Completed` / `Current` / `Remaining` / `Blockers` evidence labels, material-only `Best execution`, supported `Next`, and smallest-context delivery; no new progress state or authority.
 
-**Safe Implementation Lane** `0.5.0` composes existing #895 checkpoint/resume and #758 Scheduler lease evidence into resumable authorized work, distinguishes same-branch `HEAD_ADVANCED` from #1187 base-behind refresh, and requires current replacement evidence before cancelled stale-head validation is treated as superseded (#1188). It creates no retry, lease takeover, merge, closure, or external-write authority.
+**Safe Implementation Lane** `0.7.0` adds the opt-in Terminal Fast Lane (#1309): the exact `work on #<issue> in fast lane` phrase, evaluated by `scripts/agent_os_issue_acceptance/fast_lane_activation.py`, may request the existing `operating_mode.py` `RequestedMode.RELEASE` ceiling for eligible Tier 0/1 `no-external-write` work only, and an active grant lets the existing #1187 branch refresh continue without a second user prompt when its own admission checks pass; no new lifecycle stage, router, merge, closure, or external-write authority was added. This registry entry was previously stale at `0.5.0` against the standard's own `0.6.0` (#1274); `0.6.0` distinguished artifact non-authority from later direct-owner authorization and carried one instruction across a single mechanical readiness intervention. `0.5.0` composed existing #895 checkpoint/resume and #758 Scheduler lease evidence into resumable authorized work, distinguished same-branch `HEAD_ADVANCED` from #1187 base-behind refresh, and required current replacement evidence before cancelled stale-head validation was treated as superseded (#1188).
 
 **Notion Standards** `0.4.0` defines the canonical Draft Mode, Append-Only Safe Log Mode, and Canonical Update Mode write-safety vocabulary in `notion-record-update-safety.md` (#1103). Mode classification never creates authority; existing write authorization remains canonical in `00_Governance/write-authorization-policy.md`.
 
@@ -67,6 +67,10 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 **LP Notion Working Layer** (`01_Shared_Standards/notion/lp-notion-working-layer-standard.md` and `04_Registry/lp-notion-working-layer-change-request.yaml`, #652) defines the bounded Notion working-layer design and exact-target Change Request; it remains proposed/not authorized with six unresolved decisions.
 
 **Execution Checkpoint Contract** (`scripts/agent_os_execution_checkpoint/`, #895, design approved in #858) is the pure-local checkpoint record, content-addressed append-only storage, and resume planner; every authority field stays false. Its canonical source location and ownership are unchanged by #1300 (AOS-GCE2C); that issue only made the same files installable by declaring them in the `workflow-scheduler` distribution, so exactly one implementation of the descriptor loader continues to exist. #1304 (AOS-GCE2E) additively closed the ResumePlan round-trip and checkpoint-by-id gaps here (`resume_plan_from_dict`/`serialize_resume_plan`/`deserialize_resume_plan`, `resume_plan_store.py`, `store.load_checkpoint_by_id`) and added the sibling #918 route-decision/handoff stores under `agent-os-execution-service`; no package metadata or version changed.
+
+**GitHub Issue Lifecycle Standard** `0.3.0` adds the Promotion In Place evaluator (`scripts/agent_os_issue_acceptance/promotion_in_place.py`, #1309) reusing the existing Child-Issue Creation Test, and generalizes the volatile-execution-facts restriction beyond Level 1 roadmap issues.
+
+**GitHub Service Agent** `0.7.0` recognizes a Terminal Fast Lane grant as one explicit excluded-surface authorization scoped to eligible Tier 0/1 `no-external-write` work, still gated by every existing merge/closure authority check in `operating_mode.py` (#1309).
 
 ## Reconciliation Notes
 A3 reviewed this map against visible repository evidence only. Runtime status not directly supported by files or validation evidence remains unstated.
