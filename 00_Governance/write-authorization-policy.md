@@ -66,13 +66,16 @@ with no blockers. It does not authorize merge or issue closure.
 
 For an eligible Tier 0 or Tier 1 GitHub issue whose canonical boundary is
 `no-external-write`, the distinct repository-owner instruction
-`work on #<issue> in fast lane` may also serve as the separate explicit
-authorization input for merge and closure of that same implementation issue only
-when the canonical `request-interpretation-v1` record carries
-`operating-mode=release` for the exact issue. That requested ceiling never creates
-authority by itself: current Safe Lane eligibility, `IssueOperationalState`,
-`operating_mode.py`, exact-head validation, server-side review/merge rules, and
-terminal reconciliation must all independently admit the action.
+`work on #<issue> in fast lane` may also serve as the separate explicit owner
+decision for merge and closure of that same implementation issue only when the
+canonical `request-interpretation-v1` record carries `operating-mode=release`
+for the exact issue. The request record remains non-authorizing evidence: record
+the owner decision through the existing content-bound merge-authorization and
+lifecycle-mutation authorization contracts, then let `IssueOperationalState`
+project those current results. Never set merge/closure authority directly from
+the request constraint. `operating_mode.py`, exact-head validation, server-side
+review/merge rules, and terminal reconciliation must still independently admit
+the action.
 
 Tier 2 work cannot self-bootstrap through Terminal Fast Lane. Auto-merge, direct
 protected-branch writes, protected settings/rulesets/required checks, workflow
