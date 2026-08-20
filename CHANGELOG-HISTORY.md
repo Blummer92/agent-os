@@ -3,6 +3,7 @@
 Archived historical changelog content. For current and recent history, see [CHANGELOG.md](CHANGELOG.md).
 
 ## 0.1.1-draft — archived entries
+- Added `00_Governance/agent-os-advisory-mode.md` and a Current Operating Mode section in `CLAUDE.md` so Agent OS is advisory during pilot review for low-risk work while preserving strict approval gates for sensitive writes.
 - Added Instructional Materials Coach as a canonical agent, registered it, added tests, added a prompt-index entry, and added a runnable Python package at `08_Tooling/instructional-materials-coach/` for Slides decks and Docs worksheets from approved templates.
 - Fixed `validate-repo-structure.sh` registry and empty-folder checks, added missing module-version records, and fixed a wrong path plus inconsistent shorthand in CLAUDE.md troubleshooting examples.
 - Clarified dashboard sync routing and prevented duplicate standalone Dashboard Sync Agent ownership.

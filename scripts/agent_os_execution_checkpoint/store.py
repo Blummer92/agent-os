@@ -57,6 +57,14 @@ class CheckpointStoreIntegrityConflict(RuntimeError):
     """
 
 
+class CheckpointNotFound(LookupError):
+    """Raised when no valid checkpoint with the requested exact id exists."""
+
+
+class CheckpointQuarantined(LookupError):
+    """Raised when the requested checkpoint_id is known but quarantined."""
+
+
 @dataclass(frozen=True, slots=True)
 class AppendOutcome:
     checkpoint_id: str
@@ -704,3 +712,39 @@ def retention_cutoff_epoch_seconds(*, terminal: bool, now: float | None = None) 
     reference = time.time() if now is None else now
     days = 30 if terminal else 14
     return reference - (days * 24 * 60 * 60)
+
+
+def load_checkpoint_by_id(
+    store_root: Path | str, issue_number: int, checkpoint_id: str
+) -> ExecutionCheckpoint:
+    """Bounded exact lookup of one #895 checkpoint by its descriptor-bound id.
+
+    Reuses ``load_checkpoints`` unchanged -- full parent-chain verification,
+    quarantine, and content-address reverification -- and selects the single
+    matching record from its result. Fails closed rather than fabricating or
+    guessing: a checkpoint that is missing, quarantined, or present more than
+    once under one identity (structurally unreachable under the existing
+    content-addressed atomic writes, guarded here only defensively) never
+    returns a value.
+    """
+
+    if type(checkpoint_id) is not str or not checkpoint_id:
+        raise TypeError("checkpoint_id must be a non-empty built-in str")
+
+    result = load_checkpoints(store_root, issue_number)
+
+    if checkpoint_id in result.quarantined_checkpoint_ids:
+        raise CheckpointQuarantined(checkpoint_id)
+
+    matches = [
+        item.checkpoint
+        for item in result.valid
+        if item.checkpoint.checkpoint_id == checkpoint_id
+    ]
+    if not matches:
+        raise CheckpointNotFound(checkpoint_id)
+    if len(matches) > 1:
+        raise CheckpointStoreIntegrityConflict(
+            f"more than one valid record claims checkpoint_id {checkpoint_id}"
+        )
+    return matches[0]
