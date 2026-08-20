@@ -92,3 +92,8 @@ reconstruction-time lease observation and the dispatch-time lease adapter use
 admitted pilot input would select any other lease directory (including
 `None`, which selects `InMemoryLeaseAdapter`), dispatch fails closed instead.
 No new Scheduler, lease, store, router, or transport system is introduced.
+
+Installing that dependency graph on the qualified host -- which distribution owns
+each module, the declared runtime dependencies, and the native Scheduler
+extension build -- is `HOST_RUNTIME_INSTALLATION.md` (#1300 / AOS-GCE2C).
+#1304 (AOS-GCE2E) made the four artifacts `HostCurrentInvocationSources` still needs concrete readers for -- route decision, full handoff, checkpoint-by-id, `ResumePlan` -- durably persist/read-by-id; wiring those readers here remains #1303's scope.

@@ -4,6 +4,15 @@ This thin Execution Service composition seam reuses #918 route/handoff
 construction and #1218/#1228 descriptor/current-binding contracts. It performs
 no Scheduler admission or execution, lease operation, process launch, provider
 selection, transport, retry, GitHub write, or cloud operation.
+
+AOS-GCE2E (#1304) extends the ordering this module's docstring already
+promised: a runnable handoff is now returned only after all four
+descriptor-bound recoverable artifacts -- the #918 route decision, the full
+#918 handoff, the #895 checkpoint, and the #895 ResumePlan -- are durable,
+not only the descriptor that references their IDs. This reuses the existing
+#895 checkpoint store (read-only, via ``load_checkpoint_by_id``) and the new
+#1304 route-decision/handoff/resume-plan stores; it introduces no second
+persistence authority and changes no routing/currentness semantics.
 """
 
 from __future__ import annotations
@@ -16,7 +25,14 @@ from scripts.agent_os_execution_checkpoint.invocation_descriptor import (
     AppendInvocationDescriptorOutcome,
 )
 from scripts.agent_os_execution_checkpoint.models import ExecutionCheckpoint
+from scripts.agent_os_execution_checkpoint.resume_plan_store import append_resume_plan
 from scripts.agent_os_execution_checkpoint.resume_planner import ResumePlan
+from scripts.agent_os_execution_checkpoint.store import (
+    CheckpointNotFound,
+    CheckpointQuarantined,
+    CheckpointStoreUnavailable,
+    load_checkpoint_by_id,
+)
 from workflow_scheduler.execution.runtime_configuration import ConcreteRuntimeConfiguration
 from workflow_scheduler.execution.single_issue_pilot import SingleIssuePilotInput
 
@@ -33,9 +49,11 @@ from .executor_routing import (
     build_executor_handoff,
     select_executor_route,
 )
+from .handoff_store import append_executor_handoff
 from .invocation_reconstruction import CurrentInvocationEvidence, InvocationReconstructionReason
 from .models import ExecutionServiceRequest
 from .request_validation import validate_execution_service_request
+from .route_decision_store import append_route_decision
 
 _PUBLICATION_REASONS = frozenset(
     {
@@ -44,6 +62,13 @@ _PUBLICATION_REASONS = frozenset(
         "route-reselection-mismatch",
         "route-not-governed-runner",
         "request-binding-mismatch",
+        "route-decision-persistence-failed",
+        "route-decision-persistence-mismatch",
+        "handoff-persistence-failed",
+        "handoff-persistence-mismatch",
+        "resume-plan-persistence-failed",
+        "resume-plan-persistence-mismatch",
+        "checkpoint-not-durable",
         "descriptor-persistence-failed",
         "descriptor-persistence-mismatch",
     }
@@ -222,6 +247,42 @@ def publish_governed_handoff(
         or descriptor.source_sha != request.expected_sha
     ):
         raise HandoffPublicationError("request-binding-mismatch")
+
+    try:
+        route_decision_outcome = append_route_decision(store_root, route_decision)
+    except (KeyboardInterrupt, SystemExit, GeneratorExit):
+        raise
+    except Exception as exc:  # noqa: BLE001 - persistence is the fail-closed boundary
+        raise HandoffPublicationError("route-decision-persistence-failed") from exc
+    if route_decision_outcome.decision_id != route_decision.decision_id:
+        raise HandoffPublicationError("route-decision-persistence-mismatch")
+
+    try:
+        handoff_outcome = append_executor_handoff(store_root, handoff)
+    except (KeyboardInterrupt, SystemExit, GeneratorExit):
+        raise
+    except Exception as exc:  # noqa: BLE001 - persistence is the fail-closed boundary
+        raise HandoffPublicationError("handoff-persistence-failed") from exc
+    if handoff_outcome.handoff_id != handoff.handoff_id:
+        raise HandoffPublicationError("handoff-persistence-mismatch")
+
+    try:
+        resume_plan_outcome = append_resume_plan(store_root, resume_plan)
+    except (KeyboardInterrupt, SystemExit, GeneratorExit):
+        raise
+    except Exception as exc:  # noqa: BLE001 - persistence is the fail-closed boundary
+        raise HandoffPublicationError("resume-plan-persistence-failed") from exc
+    if resume_plan_outcome.plan_id != resume_plan.plan_id:
+        raise HandoffPublicationError("resume-plan-persistence-mismatch")
+
+    try:
+        durable_checkpoint = load_checkpoint_by_id(
+            store_root, checkpoint.issue_number, checkpoint.checkpoint_id
+        )
+    except (CheckpointNotFound, CheckpointQuarantined, CheckpointStoreUnavailable) as exc:
+        raise HandoffPublicationError("checkpoint-not-durable") from exc
+    if durable_checkpoint != checkpoint:
+        raise HandoffPublicationError("checkpoint-not-durable")
 
     try:
         outcome = persist_current_invocation_descriptor(

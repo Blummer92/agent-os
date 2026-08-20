@@ -29,5 +29,8 @@ coverage[toml]>=6.0.0
 # Local editable packages (development convenience only; wheel tests prove packaging)
 -e ./src
 -e ./08_Tooling/agent-memory-context-manager
+# workflow-scheduler declares this local distribution (#1300); it is not on an
+# index, so the developer loop must supply it from the checkout.
+-e ./08_Tooling/reusable-capability-registry
 -e ./08_Tooling/workflow-scheduler
 -e ./08_Tooling/visual-asset-intake

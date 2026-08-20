@@ -111,6 +111,7 @@ def _case(monkeypatch, *, events: list[str] | None = None):
     route.external_writes_authorized = False
     route.merge_authorized = False
     route.selected_route = ExecutorRoute.CHATGPT_GOVERNED_RUNNER
+    route.decision_id = "executor-route-decision:" + "6" * 64
 
     request = _Request()
     request.repository_identity = SimpleNamespace(owner="Blummer92", repository="agent-os")
@@ -124,6 +125,7 @@ def _case(monkeypatch, *, events: list[str] | None = None):
     authorization = _Authorization()
     checkpoint = _Checkpoint()
     checkpoint.checkpoint_id = route.checkpoint_id_or_none
+    checkpoint.issue_number = 1243
     resume = _ResumePlan()
     resume.plan_id = route.resume_plan_id_or_none
     packet = _Packet()
@@ -190,6 +192,30 @@ def _case(monkeypatch, *, events: list[str] | None = None):
         "persist_current_invocation_descriptor",
         lambda *_args, **_kwargs: events.append("persist") or outcome,
     )
+    monkeypatch.setattr(
+        publication,
+        "append_route_decision",
+        lambda *_args, **_kwargs: events.append("route-decision-persist")
+        or SimpleNamespace(decision_id=route.decision_id),
+    )
+    monkeypatch.setattr(
+        publication,
+        "append_executor_handoff",
+        lambda *_args, **_kwargs: events.append("handoff-persist")
+        or SimpleNamespace(handoff_id=handoff.handoff_id),
+    )
+    monkeypatch.setattr(
+        publication,
+        "append_resume_plan",
+        lambda *_args, **_kwargs: events.append("resume-plan-persist")
+        or SimpleNamespace(plan_id=resume.plan_id),
+    )
+    monkeypatch.setattr(
+        publication,
+        "load_checkpoint_by_id",
+        lambda *_args, **_kwargs: events.append("checkpoint-durability-check")
+        or checkpoint,
+    )
 
     kwargs = dict(
         store_root="/tmp/checkpoints",
@@ -228,6 +254,10 @@ def test_success_orders_route_handoff_validation_persistence_then_return(monkeyp
         "descriptor-preview",
         "current-evidence",
         "validate-bindings",
+        "route-decision-persist",
+        "handoff-persist",
+        "resume-plan-persist",
+        "checkpoint-durability-check",
         "persist",
     ]
 
@@ -361,6 +391,142 @@ def test_persistence_outcome_must_match_preview_descriptor_and_handoff(monkeypat
     with pytest.raises(publication.HandoffPublicationError) as exc:
         publication.publish_governed_handoff(**case.kwargs)
     assert exc.value.reason_codes == ("descriptor-persistence-mismatch",)
+
+
+def test_route_decision_persistence_failure_blocks_before_handoff_persistence(monkeypatch) -> None:
+    case = _case(monkeypatch)
+
+    def fail(*_args, **_kwargs):
+        raise OSError("store unavailable")
+
+    monkeypatch.setattr(publication, "append_route_decision", fail)
+    with pytest.raises(publication.HandoffPublicationError) as exc:
+        publication.publish_governed_handoff(**case.kwargs)
+    assert exc.value.reason_codes == ("route-decision-persistence-failed",)
+    assert "handoff-persist" not in case.events
+    assert "persist" not in case.events
+
+
+def test_route_decision_persistence_mismatch_blocks_before_handoff_persistence(monkeypatch) -> None:
+    case = _case(monkeypatch)
+    monkeypatch.setattr(
+        publication,
+        "append_route_decision",
+        lambda *_args, **_kwargs: SimpleNamespace(decision_id="executor-route-decision:" + "f" * 64),
+    )
+    with pytest.raises(publication.HandoffPublicationError) as exc:
+        publication.publish_governed_handoff(**case.kwargs)
+    assert exc.value.reason_codes == ("route-decision-persistence-mismatch",)
+    assert "handoff-persist" not in case.events
+
+
+def test_handoff_persistence_failure_blocks_before_resume_plan_persistence(monkeypatch) -> None:
+    case = _case(monkeypatch)
+
+    def fail(*_args, **_kwargs):
+        raise OSError("store unavailable")
+
+    monkeypatch.setattr(publication, "append_executor_handoff", fail)
+    with pytest.raises(publication.HandoffPublicationError) as exc:
+        publication.publish_governed_handoff(**case.kwargs)
+    assert exc.value.reason_codes == ("handoff-persistence-failed",)
+    assert "route-decision-persist" in case.events
+    assert "resume-plan-persist" not in case.events
+    assert "persist" not in case.events
+
+
+def test_handoff_persistence_mismatch_blocks_before_resume_plan_persistence(monkeypatch) -> None:
+    case = _case(monkeypatch)
+    monkeypatch.setattr(
+        publication,
+        "append_executor_handoff",
+        lambda *_args, **_kwargs: SimpleNamespace(handoff_id="executor-handoff:" + "f" * 64),
+    )
+    with pytest.raises(publication.HandoffPublicationError) as exc:
+        publication.publish_governed_handoff(**case.kwargs)
+    assert exc.value.reason_codes == ("handoff-persistence-mismatch",)
+    assert "resume-plan-persist" not in case.events
+
+
+def test_resume_plan_persistence_failure_blocks_before_checkpoint_check(monkeypatch) -> None:
+    case = _case(monkeypatch)
+
+    def fail(*_args, **_kwargs):
+        raise OSError("store unavailable")
+
+    monkeypatch.setattr(publication, "append_resume_plan", fail)
+    with pytest.raises(publication.HandoffPublicationError) as exc:
+        publication.publish_governed_handoff(**case.kwargs)
+    assert exc.value.reason_codes == ("resume-plan-persistence-failed",)
+    assert "handoff-persist" in case.events
+    assert "checkpoint-durability-check" not in case.events
+    assert "persist" not in case.events
+
+
+def test_resume_plan_persistence_mismatch_blocks_before_checkpoint_check(monkeypatch) -> None:
+    case = _case(monkeypatch)
+    monkeypatch.setattr(
+        publication,
+        "append_resume_plan",
+        lambda *_args, **_kwargs: SimpleNamespace(plan_id="resume-plan:different"),
+    )
+    with pytest.raises(publication.HandoffPublicationError) as exc:
+        publication.publish_governed_handoff(**case.kwargs)
+    assert exc.value.reason_codes == ("resume-plan-persistence-mismatch",)
+    assert "checkpoint-durability-check" not in case.events
+
+
+@pytest.mark.parametrize(
+    "raised",
+    [
+        lambda: publication.CheckpointNotFound("checkpoint:current"),
+        lambda: publication.CheckpointQuarantined("checkpoint:current"),
+        lambda: publication.CheckpointStoreUnavailable("store unavailable"),
+    ],
+)
+def test_checkpoint_not_durable_blocks_before_descriptor_persistence(monkeypatch, raised) -> None:
+    case = _case(monkeypatch)
+
+    def fail(*_args, **_kwargs):
+        raise raised()
+
+    monkeypatch.setattr(publication, "load_checkpoint_by_id", fail)
+    with pytest.raises(publication.HandoffPublicationError) as exc:
+        publication.publish_governed_handoff(**case.kwargs)
+    assert exc.value.reason_codes == ("checkpoint-not-durable",)
+    assert "resume-plan-persist" in case.events
+    assert "persist" not in case.events
+
+
+def test_checkpoint_durability_read_back_mismatch_blocks_before_descriptor_persistence(
+    monkeypatch,
+) -> None:
+    case = _case(monkeypatch)
+    monkeypatch.setattr(
+        publication,
+        "load_checkpoint_by_id",
+        lambda *_args, **_kwargs: object(),
+    )
+    with pytest.raises(publication.HandoffPublicationError) as exc:
+        publication.publish_governed_handoff(**case.kwargs)
+    assert exc.value.reason_codes == ("checkpoint-not-durable",)
+    assert "persist" not in case.events
+
+
+def test_recoverable_artifact_persistence_happens_between_validation_and_descriptor(
+    monkeypatch,
+) -> None:
+    case = _case(monkeypatch)
+    publication.publish_governed_handoff(**case.kwargs)
+    validate_index = case.events.index("validate-bindings")
+    persist_index = case.events.index("persist")
+    for step in (
+        "route-decision-persist",
+        "handoff-persist",
+        "resume-plan-persist",
+        "checkpoint-durability-check",
+    ):
+        assert validate_index < case.events.index(step) < persist_index
 
 
 def test_malformed_current_evidence_is_bounded_failure(monkeypatch) -> None:
