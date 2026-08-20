@@ -1,18 +1,16 @@
-"""Publish one governed-runner handoff only after descriptor durability.
+"""Publish one governed-runner handoff only after restart evidence is durable.
 
 This thin Execution Service composition seam reuses #918 route/handoff
 construction and #1218/#1228 descriptor/current-binding contracts. It performs
 no Scheduler admission or execution, lease operation, process launch, provider
 selection, transport, retry, GitHub write, or cloud operation.
 
-AOS-GCE2E (#1304) extends the ordering this module's docstring already
-promised: a runnable handoff is now returned only after all four
-descriptor-bound recoverable artifacts -- the #918 route decision, the full
-#918 handoff, the #895 checkpoint, and the #895 ResumePlan -- are durable,
-not only the descriptor that references their IDs. This reuses the existing
-#895 checkpoint store (read-only, via ``load_checkpoint_by_id``) and the new
-#1304 route-decision/handoff/resume-plan stores; it introduces no second
-persistence authority and changes no routing/currentness semantics.
+AOS-GCE2E (#1304) made route decision, full handoff, checkpoint, and ResumePlan
+recoverable before descriptor publication. AOS-GCE2D (#1303) adds exactly one
+bounded, non-authorizing restart capsule for the static validation/approval
+observations that cannot be regenerated from the descriptor alone. The capsule
+is persisted before the descriptor and never substitutes for fresh #1218/#1253
+currentness, authorization, or Scheduler lease admission.
 """
 
 from __future__ import annotations
@@ -49,6 +47,10 @@ from .executor_routing import (
     build_executor_handoff,
     select_executor_route,
 )
+from .governed_resume_restart_capsule import (
+    append_restart_capsule,
+    build_restart_capsule,
+)
 from .handoff_store import append_executor_handoff
 from .invocation_reconstruction import CurrentInvocationEvidence, InvocationReconstructionReason
 from .models import ExecutionServiceRequest
@@ -69,6 +71,8 @@ _PUBLICATION_REASONS = frozenset(
         "resume-plan-persistence-failed",
         "resume-plan-persistence-mismatch",
         "checkpoint-not-durable",
+        "restart-capsule-persistence-failed",
+        "restart-capsule-persistence-mismatch",
         "descriptor-persistence-failed",
         "descriptor-persistence-mismatch",
     }
@@ -151,7 +155,7 @@ def publish_governed_handoff(
     required_return_evidence: tuple[str, ...],
     stop_conditions: tuple[str, ...],
 ) -> ExecutorHandoff:
-    """Return the existing immutable handoff only after descriptor persistence."""
+    """Return the existing immutable handoff only after all restart artifacts persist."""
 
     exact = (
         (request, ExecutionServiceRequest),
@@ -234,6 +238,13 @@ def publish_governed_handoff(
             current,
             evaluated_at=evaluated_at,
         )
+        restart_capsule = build_restart_capsule(
+            handoff_id=handoff.handoff_id,
+            candidate_packet=candidate_packet,
+            pilot_input=pilot_input,
+            created_at=route_decision.created_at,
+            expires_at=route_decision.expires_at,
+        )
     except (TypeError, ValueError) as exc:
         raise HandoffPublicationError("current-evidence-malformed") from exc
     if binding_reasons:
@@ -283,6 +294,18 @@ def publish_governed_handoff(
         raise HandoffPublicationError("checkpoint-not-durable") from exc
     if durable_checkpoint != checkpoint:
         raise HandoffPublicationError("checkpoint-not-durable")
+
+    try:
+        capsule_outcome = append_restart_capsule(store_root, restart_capsule)
+    except (KeyboardInterrupt, SystemExit, GeneratorExit):
+        raise
+    except Exception as exc:  # noqa: BLE001 - persistence is the fail-closed boundary
+        raise HandoffPublicationError("restart-capsule-persistence-failed") from exc
+    if (
+        capsule_outcome.handoff_id != handoff.handoff_id
+        or capsule_outcome.capsule_id != restart_capsule.capsule_id
+    ):
+        raise HandoffPublicationError("restart-capsule-persistence-mismatch")
 
     try:
         outcome = persist_current_invocation_descriptor(
