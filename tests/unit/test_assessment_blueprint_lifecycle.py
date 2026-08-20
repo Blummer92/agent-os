@@ -29,31 +29,41 @@ PREFIX_IMPACT = (
     ("blueprint.accessibility.", "qa_rerun"),
     ("blueprint.ai_conditions.", "qa_rerun"),
     ("blueprint.authority.", "qa_rerun"),
-    ("blueprint.assessment_design_record.assessment_purpose", "teacher_review"),
-    ("blueprint.assessment_design_record.intended_instructional_decision", "teacher_review"),
-    ("blueprint.student_time.", "teacher_review"),
-    ("blueprint.scoring.", "teacher_review"),
-    ("blueprint.assessment_design_record.authenticity_requirement", "teacher_review"),
+    ("blueprint.assessment_design_record.assessment_purpose", "blueprint_validation"),
+    ("blueprint.assessment_design_record.intended_instructional_decision", "blueprint_validation"),
+    ("blueprint.student_time.", "blueprint_validation"),
+    ("blueprint.scoring.", "qa_rerun"),
+    ("blueprint.assessment_design_record.authenticity_requirement", "blueprint_validation"),
     ("blueprint.assessment_design_record.approved_target_ref", "blueprint_validation"),
     ("blueprint.assessment_design_record.claim_statement", "blueprint_validation"),
 )
 
 
-def _impact_for_path(path):
+def _impact_for_path(path, change_origin):
     if path.startswith("handoff."):
         parts = path.split(".", 2)
         if len(parts) == 3 and parts[1] in CONSUMERS:
             return "downstream_invalidation"
         return None
     matches = [impact for prefix, impact in PREFIX_IMPACT if path.startswith(prefix)]
-    return max(matches, key=IMPACT_ORDER.index) if matches else None
+    impact = max(matches, key=IMPACT_ORDER.index) if matches else None
+    teacher_paths = (
+        "blueprint.assessment_design_record.assessment_purpose",
+        "blueprint.assessment_design_record.intended_instructional_decision",
+        "blueprint.student_time.",
+        "blueprint.scoring.",
+        "blueprint.assessment_design_record.authenticity_requirement",
+    )
+    if change_origin == "teacher_authorized" and any(path.startswith(prefix) for prefix in teacher_paths):
+        return "teacher_review"
+    return impact
 
 
 def project(record):
     if record.get("authority_override") or record.get("semantic_override"):
         return {"disposition": "needs-decision", "invalidated_consumers": [], "stale": True}
 
-    impacts = [_impact_for_path(path) for path in record["changed_paths"]]
+    impacts = [_impact_for_path(path, record["change_origin"]) for path in record["changed_paths"]]
     if any(impact is None for impact in impacts) or record["dependency_impact"] == "ambiguous":
         return {"disposition": "needs-decision", "invalidated_consumers": [], "stale": True}
 
@@ -100,6 +110,7 @@ def test_schema_composes_core_instead_of_redefining_authority():
     assert schema["properties"]["blueprint"]["$ref"] == "assessment-blueprint-core.v1.schema.json"
     assert "authority" not in schema["properties"]
     assert schema["properties"]["change_impact_class"]["enum"] == list(IMPACT_ORDER)
+    assert schema["properties"]["change_origin"]["enum"] == ["system", "teacher_authorized", "source_update"]
     assert schema["additionalProperties"] is False
 
 
@@ -138,6 +149,7 @@ def test_stale_reason_codes_are_deterministic():
         "current_design_record_id": "d2",
         "last_validated_design_record_id": "d1",
         "changed_paths": ["handoff.qa.validation_status"],
+        "change_origin": "system",
         "dependency_impact": "resolved",
         "shared_semantic_root_changed": False,
         "object_ids": ["qa"],
