@@ -110,7 +110,7 @@ jobs:
         shell: bash
         env:
           HOST_RUNTIME_SOURCE_SHA: 038fd018c8d132d07815d6e7e34a4f0eda8d2d8b
-          HOST_INSTALL_SCRIPT_SHA256: 4fd47315c98b525bac917fb3aa65e97300e8706ecf2e6a48ff0fcbdcd8f5f6b9
+          HOST_INSTALL_SCRIPT_SHA256: 7e60139d07056244645927594bccad65d7d60ac6bbeb28fa73a7ab528ebb5198
         run: |
           set -euo pipefail
           evidence_root="$RUNNER_TEMP/agent-os-ingress"
@@ -199,8 +199,16 @@ jobs:
               refusal="$(grep -E '^host runtime install refused: ' "$evidence_root/host-install.stderr" | tail -n 1 || true)"
               case "$refusal" in
                 *"installer checksum mismatch") failure_reason=host-installer-integrity-mismatch ;;
+                *"staged checkout does not match source SHA") failure_reason=host-runtime-source-mismatch ;;
                 *"checkout does not match EXPECTED_SHA") failure_reason=host-runtime-source-mismatch ;;
+                *"source SHA is not on canonical main") failure_reason=host-runtime-source-not-main ;;
                 *"checkout must be on main") failure_reason=host-runtime-source-not-main ;;
+                *"privileged installer unavailable") failure_reason=host-privileged-installer-unavailable ;;
+                *"privileged installer must be a root-owned regular file") failure_reason=host-privileged-installer-unsafe ;;
+                *"privileged installer must run as root"|*"privileged installer argv must be exactly --source-sha <sha>"|*"source SHA must be a lowercase 40-hex commit") failure_reason=host-privileged-installer-misuse ;;
+                *"privileged installer evidence malformed"|*"privileged installer evidence source mismatch") failure_reason=host-privileged-installer-evidence-invalid ;;
+                *"staging root must not be a symlink"|*"staging root is not root-owned 0700") failure_reason=host-staging-root-unsafe ;;
+                *"staged tree must be root-owned"|*"staged entrypoint installer must not be a symlink"|*"staged entrypoint installer missing") failure_reason=host-staged-source-unsafe ;;
                 *"host OS identity unavailable") failure_reason=host-os-identity-unavailable ;;
                 *"qualified host must be Debian") failure_reason=host-os-unqualified ;;
                 *"qualified host must be Debian 12") failure_reason=host-os-version-unqualified ;;

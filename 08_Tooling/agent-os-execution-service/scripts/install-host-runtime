@@ -1,10 +1,16 @@
 #!/bin/sh
+# Unprivileged Agent OS host-runtime orchestration (#1238 route, hardened by #1341).
+#
+# This script holds no privileged step of its own. It performs host preflight,
+# then delegates every privileged operation to the fixed root-owned installer at
+# PRIVILEGED_INSTALLER, which stages and installs entirely from a root-owned
+# directory. Nothing under this script's control is executed as root, so a
+# compromised transport identity cannot substitute privileged code.
 set -eu
 
 EXPECTED_SHA=${EXPECTED_SHA:-}
 REPOSITORY_ROOT=${REPOSITORY_ROOT:-}
-TARGET=/usr/local/libexec/agent-os-governed-resume
-WHEEL_DIR=/tmp/agent-os-host-runtime-wheels-1238
+PRIVILEGED_INSTALLER=/usr/local/libexec/agent-os-host-install
 
 fail() {
   printf '%s\n' "host runtime install refused: $1" >&2
@@ -32,72 +38,51 @@ case "${VERSION_ID:-}" in
 esac
 
 command -v sudo >/dev/null 2>&1 || fail "sudo unavailable"
-sudo -n true >/dev/null 2>&1 || fail "passwordless bounded sudo unavailable"
 python3 -m pip --version >/dev/null 2>&1 || fail "python3 pip unavailable"
 
-rm -rf "$WHEEL_DIR"
-mkdir -p "$WHEEL_DIR"
-trap 'rm -rf "$WHEEL_DIR"' EXIT HUP INT TERM
+# The privileged installer must already be present as a root-owned regular file
+# that this identity cannot rewrite. Refuse before invoking it otherwise.
+if [ -L "$PRIVILEGED_INSTALLER" ]; then
+  fail "privileged installer must be a root-owned regular file"
+fi
+[ -f "$PRIVILEGED_INSTALLER" ] && [ -x "$PRIVILEGED_INSTALLER" ] ||
+  fail "privileged installer unavailable"
+installer_metadata=$(stat -c '%U:%G:%a' "$PRIVILEGED_INSTALLER")
+case "$installer_metadata" in
+  root:root:700|root:root:750|root:root:755) ;;
+  *) fail "privileged installer must be a root-owned regular file" ;;
+esac
 
-sudo -n apt-get install -y build-essential python3-dev >&2
+# Probe the exact command this identity is about to run. The bounded sudoers rule
+# authorizes only that one invocation, so a generic `sudo -n true` probe would
+# report a false negative here.
+sudo -n -l "$PRIVILEGED_INSTALLER" --source-sha "$EXPECTED_SHA" >/dev/null 2>&1 ||
+  fail "passwordless bounded sudo unavailable"
 
-cd "$REPOSITORY_ROOT"
-python3 -m pip wheel --no-deps --wheel-dir "$WHEEL_DIR" \
-  ./08_Tooling/reusable-capability-registry \
-  ./08_Tooling/agent-memory-context-manager \
-  ./08_Tooling/workflow-scheduler \
-  ./08_Tooling/agent-os-execution-service >&2
+install_json=$(sudo -n "$PRIVILEGED_INSTALLER" --source-sha "$EXPECTED_SHA")
 
-set -- "$WHEEL_DIR"/reusable_capability_registry-*.whl
-[ "$#" -eq 1 ] && [ -f "$1" ] || fail "expected one reusable-capability-registry wheel"
-capability_wheel=$1
-set -- "$WHEEL_DIR"/agent_memory_context_manager-*.whl
-[ "$#" -eq 1 ] && [ -f "$1" ] || fail "expected one agent-memory-context-manager wheel"
-context_wheel=$1
-set -- "$WHEEL_DIR"/workflow_scheduler-*.whl
-[ "$#" -eq 1 ] && [ -f "$1" ] || fail "expected one workflow-scheduler wheel"
-scheduler_wheel=$1
-set -- "$WHEEL_DIR"/agent_os_execution_service-*.whl
-[ "$#" -eq 1 ] && [ -f "$1" ] || fail "expected one agent-os-execution-service wheel"
-service_wheel=$1
-
-sudo -n python3 -m pip install --break-system-packages --force-reinstall \
-  "$capability_wheel" \
-  "$context_wheel" \
-  "$scheduler_wheel" \
-  "$service_wheel" >&2
-
-(
-  cd /tmp
-  env -u PYTHONPATH python3 -c 'import agent_os_execution_service.handoff_discovery_entrypoint; import agent_os_execution_service.governed_resume_entrypoint; import workflow_scheduler.execution._clone3_cgroup'
-) >&2
-
-sudo -n sh "$REPOSITORY_ROOT/08_Tooling/agent-os-execution-service/scripts/install-governed-resume"
-first_hash=$(sha256sum "$TARGET" | awk '{print $1}')
-sudo -n sh "$REPOSITORY_ROOT/08_Tooling/agent-os-execution-service/scripts/install-governed-resume"
-second_hash=$(sha256sum "$TARGET" | awk '{print $1}')
-[ "$first_hash" = "$second_hash" ] || fail "entrypoint installer was not idempotent"
-
-metadata=$(stat -c '%U:%G:%a' "$TARGET")
-[ "$metadata" = "root:root:755" ] || fail "entrypoint owner/group/mode mismatch"
-
-TARGET_HASH=$first_hash SOURCE_SHA=$source_sha python3 - <<'PY'
+INSTALL_JSON="$install_json" EXPECTED_SHA="$EXPECTED_SHA" python3 - <<'PY'
 import json
 import os
+import sys
 
-print(json.dumps({
-    "status": "installed",
-    "source_sha": os.environ["SOURCE_SHA"],
-    "target": "/usr/local/libexec/agent-os-governed-resume",
-    "owner": "root",
-    "group": "root",
-    "mode": "755",
-    "sha256": os.environ["TARGET_HASH"],
-    "discovery_importable": True,
-    "governed_resume_importable": True,
-    "native_extension_importable": True,
-    "scheduler_invoked": False,
-    "execution_authorized": False,
-    "side_effects_performed": True,
-}, sort_keys=True, separators=(",", ":")))
+raw = os.environ["INSTALL_JSON"]
+try:
+    payload = json.loads(raw)
+except ValueError:
+    sys.stderr.write(
+        "host runtime install refused: privileged installer evidence malformed\n"
+    )
+    raise SystemExit(64)
+if not isinstance(payload, dict) or payload.get("status") != "installed":
+    sys.stderr.write(
+        "host runtime install refused: privileged installer evidence malformed\n"
+    )
+    raise SystemExit(64)
+if payload.get("source_sha") != os.environ["EXPECTED_SHA"]:
+    sys.stderr.write(
+        "host runtime install refused: privileged installer evidence source mismatch\n"
+    )
+    raise SystemExit(64)
+print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
 PY

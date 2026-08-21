@@ -7,6 +7,9 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github/workflows/agent-os-governed-invocation.yml"
 INSTALLER = ROOT / "08_Tooling/agent-os-execution-service/scripts/install-host-runtime"
+PRIVILEGED_INSTALLER = (
+    ROOT / "08_Tooling/agent-os-execution-service/scripts/agent-os-host-install"
+)
 
 # Installer refusal suffix -> the finite reason code the route must report.
 # `None` marks a refusal the route deliberately leaves on the generic default
@@ -18,6 +21,21 @@ REFUSAL_REASONS = {
     "REPOSITORY_ROOT must be a git checkout": None,
     "checkout does not match EXPECTED_SHA": "host-runtime-source-mismatch",
     "checkout must be on main": "host-runtime-source-not-main",
+    # #1341 privileged-boundary refusals.
+    "privileged installer unavailable": "host-privileged-installer-unavailable",
+    "privileged installer must be a root-owned regular file": "host-privileged-installer-unsafe",
+    "privileged installer must run as root": "host-privileged-installer-misuse",
+    "privileged installer argv must be exactly --source-sha <sha>": "host-privileged-installer-misuse",
+    "source SHA must be a lowercase 40-hex commit": "host-privileged-installer-misuse",
+    "privileged installer evidence malformed": "host-privileged-installer-evidence-invalid",
+    "privileged installer evidence source mismatch": "host-privileged-installer-evidence-invalid",
+    "staging root must not be a symlink": "host-staging-root-unsafe",
+    "staging root is not root-owned 0700": "host-staging-root-unsafe",
+    "staged tree must be root-owned": "host-staged-source-unsafe",
+    "staged entrypoint installer must not be a symlink": "host-staged-source-unsafe",
+    "staged entrypoint installer missing": "host-staged-source-unsafe",
+    "source SHA is not on canonical main": "host-runtime-source-not-main",
+    "staged checkout does not match source SHA": "host-runtime-source-mismatch",
     "host OS identity unavailable": "host-os-identity-unavailable",
     "qualified host must be Debian": "host-os-unqualified",
     "qualified host must be Debian 12": "host-os-version-unqualified",
@@ -119,8 +137,11 @@ def test_repair_defaults_unknown_refusals_instead_of_guessing() -> None:
 
 def test_repair_covers_every_refusal_the_installer_can_emit() -> None:
     """A new installer refusal must be classified deliberately, not silently."""
-    text = INSTALLER.read_text(encoding="utf-8")
-    emitted = set(re.findall(r'fail "([^"]+)"', text))
+    emitted = set()
+    for script in (INSTALLER, PRIVILEGED_INSTALLER):
+        text = script.read_text(encoding="utf-8")
+        emitted.update(re.findall(r'fail "([^"$]+)"', text))
+        emitted.update(re.findall(r'host runtime install refused: ([^"$\\]+)\\n', text))
     emitted.add("installer checksum mismatch")  # emitted by the remote preamble
     assert emitted == set(REFUSAL_REASONS)
 

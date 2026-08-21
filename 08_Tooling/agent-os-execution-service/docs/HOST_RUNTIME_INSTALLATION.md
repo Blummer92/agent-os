@@ -97,6 +97,91 @@ policy, and regression validation can be performed. After merge, one exact owner
 comment can perform the already-authorized host installation, after which normal
 `/agent-os discover` should be reissued on #1238.
 
+## Bounded privileged installation (#1341)
+
+The original #1238 route ran every privileged step against paths the unprivileged
+OS Login transport identity could write: wheels it had just built under
+`/tmp/agent-os-host-runtime-wheels-1238`, and `install-governed-resume` inside its
+own `/tmp` checkout, which carried no digest at all. Any sudoers policy wide
+enough to permit that is root-equivalent, because `pip install` and `sh` execute
+whatever content is at those paths at the moment root runs them.
+
+`scripts/agent-os-host-install` closes this. It is installed once, out of band, as
+`root:root 0755` at `/usr/local/libexec/agent-os-host-install`, and it owns every
+privileged step:
+
+1. it refuses unless it is running as root;
+2. it accepts exactly `--source-sha <40-lowercase-hex>` and nothing else — the one
+   caller-supplied value is never used as a path;
+3. it creates `/var/lib/agent-os/host-install-staging` as `root:root 0700`,
+   refusing to follow a symlink and verifying ownership and mode after creation;
+4. it clones the fixed canonical repository URL itself, requires the requested
+   commit to be an ancestor of canonical `main`, checks it out detached, and
+   confirms the resulting tree is root-owned;
+5. it builds the four distributions and installs those wheels, runs
+   `install-governed-resume` twice, and verifies idempotency and `root:root 0755`
+   integrity — all entirely inside root-owned staging;
+6. an `EXIT`/`HUP`/`INT`/`TERM` trap removes staging deterministically, on refusal
+   as well as on success.
+
+`scripts/install-host-runtime` keeps host preflight, the finite reason codes, and
+evidence emission, and now holds no privileged step of its own. Before delegating
+it verifies the helper is a root-owned, non-symlink, non-world-writable regular
+file, and afterwards it requires the returned evidence to be well formed and to
+report the exact expected source SHA.
+
+Its capability probe is `sudo -n -l <helper> --source-sha <sha>`, which asks the
+policy about the exact invocation it is about to make. The old `sudo -n true`
+probe must not be used with this rule: the rule deliberately does not authorize
+`/usr/bin/true`, so that probe would report `host-passwordless-sudo-unavailable`
+on a correctly configured host.
+
+### Host bootstrap
+
+Both steps require an operator who already holds administrative access to the VM;
+neither is performed by the transport identity. Install the helper from a trusted
+checkout, then authorize exactly it:
+
+```sh
+sudo install -o root -g root -m 0755 \
+  08_Tooling/agent-os-execution-service/scripts/agent-os-host-install \
+  /usr/local/libexec/agent-os-host-install
+```
+
+The sudoers rule contains no `*` wildcard. Its only variable part is a
+fixed-length lowercase-hex character class, so it matches a 40-character commit id
+and nothing else — no path, no second argument, no shell payload:
+
+<!-- sudoers-begin -->
+```sudoers
+# /etc/sudoers.d/agent-os-host-install   root:root 0440
+sa_<UNIQUE_ID> ALL=(root) NOPASSWD: /usr/local/libexec/agent-os-host-install --source-sha [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]
+```
+<!-- sudoers-end -->
+
+Validate with `sudo visudo -c -f <file>` before installing it, and `sudo visudo -c`
+after. Resolve `<UNIQUE_ID>` with:
+
+```sh
+gcloud iam service-accounts describe \
+  agent-os-transport@agent-os-502614.iam.gserviceaccount.com \
+  --project agent-os-502614 --format='value(uniqueId)'
+```
+
+Do **not** grant `roles/compute.osAdminLogin` instead: it adds the identity to
+`google-sudoers`, whose policy is `NOPASSWD:ALL`.
+
+### Why this is no longer root-equivalent
+
+Under the old policy, root executed content chosen by the transport identity. Under
+this one, the only thing that identity supplies is a commit id that must already
+exist in canonical `main` history — which requires repository write access and
+review, not a file write in `/tmp`. Everything root executes is fetched by root
+from the fixed canonical URL into a `0700` root-owned directory the identity
+cannot read, write, or traverse, and the directory is verified after creation
+rather than assumed. There is no window in which a path root will later use is
+writable by that identity.
+
 ## Proof
 
 `tests/test_host_packaging.py` proves this contract offline. It builds the real
@@ -130,3 +215,17 @@ and this documentation. Host rollback removes `/usr/local/libexec/agent-os-gover
 and uninstalls the four Agent OS distributions if the installation itself must be
 reverted. Do not delete or alter checkpoint descriptors, ResumePlans,
 dependency-readiness evidence, Scheduler leases, workspaces, or audit records.
+
+The #1341 privileged path adds exactly three host artifacts, and rollback removes
+only those:
+
+```sh
+sudo rm -f /etc/sudoers.d/agent-os-host-install && sudo visudo -c
+sudo rm -f /usr/local/libexec/agent-os-host-install
+sudo rm -rf /var/lib/agent-os
+```
+
+`/var/lib/agent-os` holds only transient staging, which the installer already
+removes on every exit; deleting it is a no-op unless an installation was killed
+uncleanly. No package, checkpoint, ResumePlan, lease, or audit record is touched by
+this rollback.
