@@ -165,6 +165,7 @@ def test_factory_composes_one_reader_and_one_transport_into_1319(monkeypatch, tm
         handoff_id=HANDOFF_ID,
         candidate_packet=packet,
         required_environment_spec=spec,
+        validation_plan_id="validation-plan:test",
     )
     configuration = SimpleNamespace(checkpoint_store_root=tmp_path)
     readiness = object()
@@ -212,6 +213,7 @@ def test_factory_composes_one_reader_and_one_transport_into_1319(monkeypatch, tm
     assert reader_kwargs["issue_number"] == descriptor.issue_number
     assert reader_kwargs["dependency_readiness"] is readiness
     assert reader_kwargs["validation_result"] is advisory
+    assert reader_kwargs["expected_validation_plan_id"] == capsule.validation_plan_id
     bootstrap_kwargs = captured["bootstrap_kwargs"]
     assert bootstrap_kwargs["issue_transport"] is transport
     assert bootstrap_kwargs["authorization_transport"] is transport
