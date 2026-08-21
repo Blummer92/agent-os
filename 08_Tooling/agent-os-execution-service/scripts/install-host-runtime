@@ -1,0 +1,103 @@
+#!/bin/sh
+set -eu
+
+EXPECTED_SHA=${EXPECTED_SHA:-}
+REPOSITORY_ROOT=${REPOSITORY_ROOT:-}
+TARGET=/usr/local/libexec/agent-os-governed-resume
+WHEEL_DIR=/tmp/agent-os-host-runtime-wheels-1238
+
+fail() {
+  printf '%s\n' "host runtime install refused: $1" >&2
+  exit 64
+}
+
+printf '%s\n' "$EXPECTED_SHA" | grep -Eq '^[0-9a-f]{40}$' || fail "EXPECTED_SHA must be a lowercase 40-hex commit"
+case "$REPOSITORY_ROOT" in
+  /*) ;;
+  *) fail "REPOSITORY_ROOT must be absolute" ;;
+esac
+[ -d "$REPOSITORY_ROOT/.git" ] || fail "REPOSITORY_ROOT must be a git checkout"
+
+source_sha=$(git -C "$REPOSITORY_ROOT" rev-parse HEAD)
+[ "$source_sha" = "$EXPECTED_SHA" ] || fail "checkout does not match EXPECTED_SHA"
+branch=$(git -C "$REPOSITORY_ROOT" rev-parse --abbrev-ref HEAD)
+[ "$branch" = "main" ] || fail "checkout must be on main"
+
+[ -r /etc/os-release ] || fail "host OS identity unavailable"
+. /etc/os-release
+[ "${ID:-}" = "debian" ] || fail "qualified host must be Debian"
+case "${VERSION_ID:-}" in
+  12|12.*) ;;
+  *) fail "qualified host must be Debian 12" ;;
+esac
+
+command -v sudo >/dev/null 2>&1 || fail "sudo unavailable"
+sudo -n true >/dev/null 2>&1 || fail "passwordless bounded sudo unavailable"
+python3 -m pip --version >/dev/null 2>&1 || fail "python3 pip unavailable"
+
+rm -rf "$WHEEL_DIR"
+mkdir -p "$WHEEL_DIR"
+trap 'rm -rf "$WHEEL_DIR"' EXIT HUP INT TERM
+
+sudo -n apt-get install -y build-essential python3-dev >&2
+
+cd "$REPOSITORY_ROOT"
+python3 -m pip wheel --no-deps --wheel-dir "$WHEEL_DIR" \
+  ./08_Tooling/reusable-capability-registry \
+  ./08_Tooling/agent-memory-context-manager \
+  ./08_Tooling/workflow-scheduler \
+  ./08_Tooling/agent-os-execution-service >&2
+
+set -- "$WHEEL_DIR"/reusable_capability_registry-*.whl
+[ "$#" -eq 1 ] && [ -f "$1" ] || fail "expected one reusable-capability-registry wheel"
+capability_wheel=$1
+set -- "$WHEEL_DIR"/agent_memory_context_manager-*.whl
+[ "$#" -eq 1 ] && [ -f "$1" ] || fail "expected one agent-memory-context-manager wheel"
+context_wheel=$1
+set -- "$WHEEL_DIR"/workflow_scheduler-*.whl
+[ "$#" -eq 1 ] && [ -f "$1" ] || fail "expected one workflow-scheduler wheel"
+scheduler_wheel=$1
+set -- "$WHEEL_DIR"/agent_os_execution_service-*.whl
+[ "$#" -eq 1 ] && [ -f "$1" ] || fail "expected one agent-os-execution-service wheel"
+service_wheel=$1
+
+sudo -n python3 -m pip install --break-system-packages --force-reinstall \
+  "$capability_wheel" \
+  "$context_wheel" \
+  "$scheduler_wheel" \
+  "$service_wheel" >&2
+
+(
+  cd /tmp
+  env -u PYTHONPATH python3 -c 'import agent_os_execution_service.handoff_discovery_entrypoint; import agent_os_execution_service.governed_resume_entrypoint; import workflow_scheduler.execution._clone3_cgroup'
+) >&2
+
+sudo -n sh "$REPOSITORY_ROOT/08_Tooling/agent-os-execution-service/scripts/install-governed-resume"
+first_hash=$(sha256sum "$TARGET" | awk '{print $1}')
+sudo -n sh "$REPOSITORY_ROOT/08_Tooling/agent-os-execution-service/scripts/install-governed-resume"
+second_hash=$(sha256sum "$TARGET" | awk '{print $1}')
+[ "$first_hash" = "$second_hash" ] || fail "entrypoint installer was not idempotent"
+
+metadata=$(stat -c '%U:%G:%a' "$TARGET")
+[ "$metadata" = "root:root:755" ] || fail "entrypoint owner/group/mode mismatch"
+
+TARGET_HASH=$first_hash SOURCE_SHA=$source_sha python3 - <<'PY'
+import json
+import os
+
+print(json.dumps({
+    "status": "installed",
+    "source_sha": os.environ["SOURCE_SHA"],
+    "target": "/usr/local/libexec/agent-os-governed-resume",
+    "owner": "root",
+    "group": "root",
+    "mode": "755",
+    "sha256": os.environ["TARGET_HASH"],
+    "discovery_importable": True,
+    "governed_resume_importable": True,
+    "native_extension_importable": True,
+    "scheduler_invoked": False,
+    "execution_authorized": False,
+    "side_effects_performed": True,
+}, sort_keys=True, separators=(",", ":")))
+PY

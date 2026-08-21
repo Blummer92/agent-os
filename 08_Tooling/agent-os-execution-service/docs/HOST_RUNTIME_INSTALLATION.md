@@ -62,6 +62,41 @@ Containment behavior itself is unchanged. `cgroup_v2_containment` and
 not built/importable" as a degraded reason when the extension is missing; #1300
 only gives the host a deterministic way to build it.
 
+## Bounded #1238 maintenance route
+
+The tracked `scripts/install-host-runtime` wrapper is the repository-owned host
+installation procedure for the separately authorized #1238 maintenance action.
+It accepts only an absolute repository checkout and an exact lowercase 40-hex
+`EXPECTED_SHA`, requires that checkout to be on `main`, verifies Debian 12 and
+passwordless bounded `sudo`, builds the four canonical distributions from that
+checkout, force-reinstalls only those wheels, verifies the discovery entrypoint,
+governed-resume entrypoint, and `_clone3_cgroup` native extension from outside the
+checkout with `PYTHONPATH` removed, then runs `scripts/install-governed-resume`
+twice to prove idempotency and root:root `0755` integrity. It emits bounded JSON
+with the installed target hash and explicitly reports that no Scheduler execution
+was authorized or invoked.
+
+The existing `.github/workflows/agent-os-governed-invocation.yml` may route the
+exact repository-owner comment `/agent-os install-host-runtime` on issue #1238 to
+this installer only after that workflow change is itself reviewed and merged.
+The route reuses the existing `issue_comment`/`refs/heads/main` WIF trust envelope,
+existing `agent-os-transport` service account, exact resource tuple
+`agent-os-502614 / us-central1-a / agent-os-test`, IAP/OS Login path, and current
+GitHub permissions (`contents: read`, `id-token: write`). It adds no IAM/WIF
+configuration, no secret, no VM-stop authority, no repository-write permission,
+and no Scheduler/lease/retry/execution authority. Comment text is matched exactly
+and is never forwarded to the host; the workflow transfers only the tracked
+installer whose SHA-256 is pinned in the workflow and checks out the pinned
+canonical `main` source SHA on the host before installation.
+
+Because GitHub loads `issue_comment` workflows from the default branch and the
+WIF provider is bound to the exact workflow on `refs/heads/main`, this maintenance
+route cannot perform a live host mutation while it exists only on a feature
+branch. Merge remains separately authorized. Before merge, only offline syntax,
+policy, and regression validation can be performed. After merge, one exact owner
+comment can perform the already-authorized host installation, after which normal
+`/agent-os discover` should be reissued on #1238.
+
 ## Proof
 
 `tests/test_host_packaging.py` proves this contract offline. It builds the real
@@ -75,13 +110,23 @@ It also runs `python3 -m agent_os_execution_service.governed_resume_entrypoint`
 with no arguments and requires the frozen argv contract to reject it, proving the
 installed dependency graph loads before argv parsing without any dispatch.
 
+`tests/test_agent_os_host_runtime_install_workflow.py` additionally proves the
+maintenance route is bound to owner ID `32861845`, repository ID `1289370915`,
+issue #1238, run-attempt 1, `issue_comment`, `refs/heads/main`, and the exact
+workflow reference; preserves the existing least-privilege GitHub permissions;
+pins the canonical source and installer digest; fixes the one GCE resource tuple;
+contains no VM-stop or Scheduler-dispatch path; and keeps the host installer free
+of gcloud, arbitrary command evaluation, or a second execution authority.
+
 This proves installation and import/startup only. No Scheduler job, lease
-acquisition, or reconstruction is executed, and no GitHub, network, cloud, IAM,
-VM, SSH, or IAP effect occurs. Live GitHub-to-GCE invocation and replay
-qualification remain owned by #1239, and host installation/verification by #1238.
+acquisition, or reconstruction is executed by installation. Live GitHub-to-GCE
+invocation and replay qualification remain separately governed; host
+installation/verification remains #1238 until live evidence is green.
 
 ## Rollback
 
-Uninstall the four distributions, or discard the environment they were installed
-into. No checkpoint descriptor, ResumePlan, dependency-readiness record,
-Scheduler lease, workspace, or audit record is touched by installation.
+Repository rollback reverts the maintenance route, its bounded installer, tests,
+and this documentation. Host rollback removes `/usr/local/libexec/agent-os-governed-resume`
+and uninstalls the four Agent OS distributions if the installation itself must be
+reverted. Do not delete or alter checkpoint descriptors, ResumePlans,
+dependency-readiness evidence, Scheduler leases, workspaces, or audit records.
