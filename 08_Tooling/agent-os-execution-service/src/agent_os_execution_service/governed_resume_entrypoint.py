@@ -11,13 +11,16 @@ existing Workflow Scheduler boundary supplied by the host composition.
 ``reconstruct_governed_invocation`` seam and the real #758/#1253 Workflow
 Scheduler ``run_single_issue_pilot`` boundary into the single-argument shape
 this module's bindings require; it performs no reconstruction or dispatch
-logic itself. The concrete host-specific adapters those functions need
-(descriptor storage, current-evidence readers, lease/workspace/executor
-adapters) remain the caller's/host's responsibility, exactly as every other
-canonical caller of these two functions already requires -- this module does
-not invent deployment-specific state discovery. Run standalone without an
-injected composition, the module fails closed with a clear error instead of
-silently completing without performing governed resume.
+logic itself.
+
+AOS-GCE1 (#1217) wires the installed default path to the repository-owned #1319
+production host bootstrap.  The import is deliberately lazy and occurs only
+after the fixed argv contract has been validated, so malformed caller input
+cannot trigger host configuration, credential, repository, process, or
+Scheduler work.  Explicitly injected bindings remain unchanged for tests and
+other governed callers, and ``_no_host_composition_bindings`` remains the
+explicit fail-closed stand-in when a caller intentionally wants no host
+composition.
 """
 
 from __future__ import annotations
@@ -150,22 +153,25 @@ def build_governed_resume_bindings(
 def _no_host_composition_bindings(handoff_id: str) -> object:
     raise RuntimeError(
         "governed-resume requires host-supplied #1218/#1253 composition; "
-        "no production reconstruction/dispatch binding is wired into this "
-        "repository slice -- see docs/GOVERNED_RESUME_ENTRYPOINT.md"
+        "no production reconstruction/dispatch binding is available"
     )
 
 
-def main(argv: Sequence[str] | None = None, *, bindings: GovernedResumeBindings | None = None) -> int:
-    """Module/CLI execution path: parse argv, reconstruct, then dispatch at most once.
-
-    ``bindings`` defaults to a fail-closed stand-in so that running this
-    module standalone without an injected host composition raises instead of
-    silently completing without performing governed resume.
-    """
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    bindings: GovernedResumeBindings | None = None,
+) -> int:
+    """Parse fixed argv, select production composition, then dispatch at most once."""
     if argv is None:
         argv = sys.argv[1:]
     if bindings is None:
-        bindings = GovernedResumeBindings(_no_host_composition_bindings, lambda _: None)
+        handoff_id = parse_handoff_argv(argv)
+        from .production_governed_resume_factory import (
+            build_production_governed_resume_bindings_for_handoff,
+        )
+
+        bindings = build_production_governed_resume_bindings_for_handoff(handoff_id)
     print(run_governed_resume(argv, bindings=bindings))
     return 0
 
