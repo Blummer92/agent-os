@@ -3,6 +3,9 @@
 Legacy compatibility guidance; not a canonical executable agent or repository
 implementation owner.
 
+## Inherited Standards
+See `_common-overlay-rules.md` and `01_Shared_Standards/python/INDEX.md`.
+
 ## Purpose
 Preserve historical Python-specific routing language while directing current
 repository implementation to the GitHub Service Agent and current Python
