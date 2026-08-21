@@ -23,19 +23,24 @@ dependencies = [
   "requests>=2.31,<3",
 ]
 
-# The two ``scripts.*`` packages below stay canonical where they are and are
+# The ``scripts.*`` packages below stay canonical where they are and are
 # imported only by this distribution's runtime (``agent_os_candidate_packet``,
-# and the ``agent_os_github_issue_provider`` it depends on). Everything else
-# under ``scripts.`` that this runtime imports is distributed by
-# ``workflow-scheduler``; no module is carried by two distributions.
+# the ``agent_os_github_issue_provider`` it depends on, and -- since #1319 --
+# ``agent_os_candidate_packet_live_input``, whose ``LiveIssueReader`` and
+# canonical ``verify-repo-state.sh`` observation assembler the production host
+# bootstrap reuses). Everything else under ``scripts.`` that this runtime
+# imports is distributed by ``workflow-scheduler``; no module is carried by two
+# distributions.
 [tool.setuptools]
 packages = [
   "agent_os_execution_service",
   "scripts.agent_os_candidate_packet",
+  "scripts.agent_os_candidate_packet_live_input",
   "scripts.agent_os_github_issue_provider",
 ]
 
 [tool.setuptools.package-dir]
 "" = "src"
 "scripts.agent_os_candidate_packet" = "../../scripts/agent_os_candidate_packet"
+"scripts.agent_os_candidate_packet_live_input" = "../../scripts/agent_os_candidate_packet_live_input"
 "scripts.agent_os_github_issue_provider" = "../../scripts/agent_os_github_issue_provider"

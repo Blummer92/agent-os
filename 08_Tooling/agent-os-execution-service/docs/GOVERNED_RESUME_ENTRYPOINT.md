@@ -97,3 +97,119 @@ Installing that dependency graph on the qualified host -- which distribution own
 each module, the declared runtime dependencies, and the native Scheduler
 extension build -- is `HOST_RUNTIME_INSTALLATION.md` (#1300 / AOS-GCE2C).
 #1304 (AOS-GCE2E) made the four artifacts `HostCurrentInvocationSources` still needs concrete readers for -- route decision, full handoff, checkpoint-by-id, `ResumePlan` -- durably persist/read-by-id; wiring those readers here remains #1303's scope.
+
+## Production host bootstrap (#1319 / AOS-GCE2E)
+
+`production_host_bootstrap.build_production_host_bootstrap(...)` is the one
+repository-owned boundary that turns trusted host state into the #1303
+`ProductionHostStateSources`, and
+`ProductionHostBootstrap.governed_resume_bindings(...)` hands those seven source
+methods to the #1287 composition above. It composes only: no reconstruction,
+authorization, Scheduler, lease, store, checkpoint, router, retry, or
+transport-control-plane semantics live here.
+
+### Host configuration
+
+Static host locations come from the process environment only -- never from
+argv, issue text, issue-comment text, or a handoff payload -- extending the
+existing `AGENT_OS_CHECKPOINT_STORE_ROOT` convention rather than opening a
+second configuration source of truth:
+
+| Variable | Required | Meaning |
+|---|---|---|
+| `AGENT_OS_CHECKPOINT_STORE_ROOT` | yes | Checkpoint/descriptor/capsule store root (the same variable `production_host_composition` binds). |
+| `AGENT_OS_REPOSITORY_ROOT` | yes | Absolute path of the governed checkout the canonical verifier runs in. |
+| `AGENT_OS_WORKSPACE_PARENT` | yes | Absolute parent directory for Scheduler workspaces. |
+| `AGENT_OS_LEASE_DIRECTORY` | yes | The one host-local Scheduler lease directory. |
+| `AGENT_OS_DELEGATED_PARENT_CGROUP` | no | The already-qualified delegated cgroup the #1238 wrapper establishes. |
+| `AGENT_OS_REPOSITORY_HOST` | no | Git host for the repository identity. Defaults to `github.com`. |
+
+Every required path must be absolute, and a missing or blank value fails closed
+naming the variable. `governed_resume_bindings(...)` re-checks that the bound
+store root still matches `AGENT_OS_CHECKPOINT_STORE_ROOT` so two store
+locations can never be composed. The one configured `lease_directory` reaches
+both the #1303 sources (which bind it into the runtime configuration) and the
+#1287 composition (which observes and dispatches against it), so
+reconstruction-time and dispatch-time lease directories cannot diverge.
+
+`evaluated_at` comes from `canonical_evaluated_at()` -- the host clock at
+bootstrap, in canonical UTC seconds -- never from caller-controlled input. A
+naive datetime fails closed instead of being assumed to be UTC.
+
+### Read transports
+
+`host_github_read_transport.HostGitHubReadTransport` is the smallest reusable
+adapter over the GitHub access boundary this repository already has. Current
+`main` has canonical read-only PyGithub transports
+(`scripts/agent_os_github_issue_provider`, `scripts/agent_os_github_git_objects`)
+but neither exposes a single-issue read or an issue-comments read, so one
+object over one injected JSON read callable satisfies **both** contracts rather
+than two independent clients:
+
+- `get_issue(...)` satisfies `SingleIssueTransport`; `LiveIssueReader` (#1155)
+  stays the sole owner of issue normalization and fail-closed status mapping.
+- `read_authorization_source(...)` satisfies
+  `ExecutionAuthorizationSourceTransport`; `reacquire_execution_authorization(...)`
+  stays the sole owner of trust, currentness, binding, and revocation. A
+  comment page budget that cannot cover the snapshot's own bound reports
+  `comments_complete=False`, which that owner already maps to
+  `source-incomplete` / `needs-decision`.
+
+`build_host_github_read_transport_from_environment(...)` reuses the existing
+`GITHUB_TOKEN`/`GH_TOKEN` convention (`scripts/agent_os_github_git_objects/cli.py`)
+and the existing PyGithub auth boundary. No new credential, IAM, GitHub App, or
+network control plane is introduced, and the token is never stored on, logged
+by, or echoed from any object here. Both new modules import `github` and
+`subprocess` locally, so offline tests import them with no process, network, or
+credential machinery.
+
+### Repository observation
+
+`build_repository_observation_reader(...)` runs the canonical
+`scripts/verify-repo-state.sh` with a fixed argv (`shell=False`, no
+caller-supplied command, no caller-supplied root) under the configured
+repository root, and assembles the result through the canonical
+`build_repository_observation_from_verifier_stdout(...)`. Git state is never
+reimplemented: the script is the only thing that runs Git, and only its
+documented exit code enters diagnostics -- its stderr never becomes governed
+evidence. The branch pair comes from the trusted restart capsule (#1303
+consumes `observation.base_sha` as `evaluated_repository_sha`, so the verifier
+is asked for the base branch the candidate packet is pinned to), and every
+field the assembler leaves to the caller is bound from an existing canonical
+owner: `correlation_id` from the descriptor's `invocation_id`,
+`contract_fingerprint` from the approval record's
+`implementation_contract_fingerprint`, `freshness_boundary` from the candidate
+packet, `requested_ref`/`requested_sha` from the pinned base branch and base
+SHA (so live base drift fails closed), and `tested_sha`/`pushed_sha`/
+`proposed_pr_sha`/`synthetic_merge_sha` as explicit `None` because the verifier
+does not observe them.
+
+### AOS-GCE2F dependency
+
+`required_environment_spec_reader` is #1320's
+`build_required_environment_spec_reader(store_root)`, composed without learning
+its source-of-truth internals. `repository_evidence_reader` is a **required**
+argument and is #1320's `LiveRepositoryEvidenceReader` (or another canonical
+`RepositoryEvidenceReader`): this bootstrap supplies no default and no
+substitute, because inventing an evidence source would be exactly the second
+source of truth #1319 forbids. An absent binding fails closed before any
+Scheduler dispatch is reachable.
+
+### Known cross-contract gap
+
+`verify-repo-state.sh` prints `BASE_REF=origin/<base>` while the repository
+stage compares `base_ref` against the planning handoff's plain `<base>`. That
+vocabulary difference is latent in current `main` -- it predates this bootstrap,
+in the canonical assembler and the verifier contract -- and is owned by those
+contracts, not by this composition boundary. Until it is reconciled, a live
+governed resume reaches the repository stage and fails closed there rather than
+admitting; offline composition, binding, and fail-closed behaviour are
+unaffected. Live qualification remains #1239.
+
+### Rollback for this slice
+
+Revert `production_host_bootstrap.py`, `host_github_read_transport.py`, their
+focused tests, this section, the `scripts.agent_os_candidate_packet_live_input`
+packaging entry, and the CHANGELOG record. Leave #1303, #1287, #1320, #1300,
+#1238, #1218/#1253, Scheduler leases, checkpoint evidence, and external
+resources unchanged.
