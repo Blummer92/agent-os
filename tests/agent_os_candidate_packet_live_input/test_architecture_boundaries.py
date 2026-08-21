@@ -12,6 +12,8 @@ Protocol, and the only Git-adjacent input is a caller-supplied
 from __future__ import annotations
 
 import ast
+import io
+import tokenize
 from pathlib import Path
 
 import pytest
@@ -38,6 +40,17 @@ _FORBIDDEN_MODULE_PREFIXES = (
     "workflow_scheduler.execution.lease",
     "workflow_scheduler.execution.worktree",
 )
+
+
+def _code_text(path: Path) -> str:
+    """Return the module's executable text with comments and string literals dropped."""
+    source = path.read_text(encoding="utf-8")
+    kept: list[str] = []
+    for token in tokenize.generate_tokens(io.StringIO(source).readline):
+        if token.type in (tokenize.COMMENT, tokenize.STRING):
+            continue
+        kept.append(token.string)
+    return " ".join(kept)
 
 
 def _imported_module_names(path: Path) -> set[str]:
@@ -108,3 +121,52 @@ def test_reader_and_evidence_reader_authority_fields_default_false() -> None:
 
     assert LiveIssueReader(transport=_Transport()).execution_authorized is False
     assert LiveRepositoryEvidenceReader().execution_authorized is False
+
+
+# --- AOS-GCE2F (#1320) structured-source boundaries ---------------------------
+
+
+def test_repository_reader_never_consults_labels_prose_ci_or_pr_state() -> None:
+    """Unavailable evidence stays unavailable; nothing is guessed from GitHub."""
+    source = _code_text(_PACKAGE_DIR / "repository_reader.py")
+    for banned in (
+        "check_run",
+        "check_suite",
+        "conclusion",
+        "workflow_run",
+        "labels",
+        "issue_body",
+        ".body",
+        "merged_at",
+        "statuses_url",
+    ):
+        assert banned not in source, f"repository_reader.py consults {banned!r}"
+
+
+def test_repository_reader_introduces_no_second_readiness_or_validation_model() -> None:
+    """The adapter maps existing canonical owners; it never redefines them."""
+    source = _code_text(_PACKAGE_DIR / "repository_reader.py")
+    tree = ast.parse((_PACKAGE_DIR / "repository_reader.py").read_text(encoding="utf-8"))
+    defined = {
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.ClassDef, ast.AsyncFunctionDef))
+    }
+    assert defined == {"LiveRepositoryEvidenceReader"}
+    for banned in (
+        "class DependencyReadinessEvidence",
+        "class RequiredEnvironmentSpec",
+        "class ValidationPlan",
+        "select_validation_plan",
+        "Scheduler",
+        "sqlite3",
+        "retry",
+    ):
+        assert banned not in source, f"repository_reader.py introduces {banned!r}"
+
+
+def test_repository_reader_reuses_the_canonical_evidence_vocabularies() -> None:
+    imported = _imported_module_names(_PACKAGE_DIR / "repository_reader.py")
+    assert "scripts.agent_os_candidate_packet.stage_models" in imported
+    assert "scripts.agent_os_execution_capabilities.dependencies" in imported
+    assert "scripts.agent_os_remote_validation.advisory_gate" in imported

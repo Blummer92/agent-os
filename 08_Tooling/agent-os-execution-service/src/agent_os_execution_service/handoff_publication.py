@@ -8,9 +8,13 @@ selection, transport, retry, GitHub write, or cloud operation.
 AOS-GCE2E (#1304) made route decision, full handoff, checkpoint, and ResumePlan
 recoverable before descriptor publication. AOS-GCE2D (#1303) adds exactly one
 bounded, non-authorizing restart capsule for the static validation/approval
-observations that cannot be regenerated from the descriptor alone. The capsule
-is persisted before the descriptor and never substitutes for fresh #1218/#1253
-currentness, authorization, or Scheduler lease admission.
+observations that cannot be regenerated from the descriptor alone. AOS-GCE2F
+(#1320) carries the immutable ``RequiredEnvironmentSpec`` already bound into the
+verified runtime configuration through that same capsule, so governed resume can
+recover the declarative requirement the descriptor's ``required_environment_id``
+asserts without a new store or a second environment model. The capsule is
+persisted before the descriptor and never substitutes for fresh #1218/#1253
+currentness, authorization, dependency readiness, or Scheduler lease admission.
 """
 
 from __future__ import annotations
@@ -242,6 +246,7 @@ def publish_governed_handoff(
             handoff_id=handoff.handoff_id,
             candidate_packet=candidate_packet,
             pilot_input=pilot_input,
+            required_environment_spec=runtime_configuration.required_environment_spec,
             created_at=route_decision.created_at,
             expires_at=route_decision.expires_at,
         )

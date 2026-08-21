@@ -3,9 +3,21 @@
 The capsule is a continuation artifact, never an authority record.  It keeps only
 non-authorizing evidence that cannot be recovered from current source owners:
 the exact CandidatePacket, the immutable approval decision record, canonical
-validation observations, and the small pilot identities needed to rebuild the
-runtime and validation evidence.  Current issue/repository/authorization/lease
-truth is deliberately absent and must be reacquired by #1218/#1253.
+validation observations, the immutable ``RequiredEnvironmentSpec`` already bound
+into the invocation's runtime configuration, and the small pilot identities
+needed to rebuild the runtime and validation evidence.  Current
+issue/repository/authorization/lease truth is deliberately absent and must be
+reacquired by #1218/#1253.
+
+AOS-GCE2F (#1320) added the ``RequiredEnvironmentSpec`` slot through this one
+existing persistence path rather than a new store, database, registry, or
+service.  The persisted specification is declarative requirement data only: it
+never proves that dependencies are installed or READY.  #1185/#1197
+``DependencyReadinessEvidence`` remains the sole runtime dependency-readiness
+authority and is reacquired and currentness-checked independently.  The
+invocation descriptor's ``required_environment_id`` stays a binding assertion,
+and a recovered specification whose content identity does not match it fails
+closed.
 """
 
 from __future__ import annotations
@@ -15,14 +27,22 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Callable, Literal
 
 from scripts.agent_os_candidate_packet.models import (
     CandidatePacket,
     deserialize_candidate_packet,
     serialize_candidate_packet,
 )
+from scripts.agent_os_execution_capabilities.dependencies import (
+    RequiredEnvironmentSpec,
+    reconstruct_required_environment_spec,
+    required_environment_spec_payload,
+)
 from scripts.agent_os_execution_checkpoint.identity import canonical_json_bytes
+from scripts.agent_os_execution_checkpoint.invocation_descriptor import (
+    GovernedInvocationDescriptor,
+)
 from scripts.agent_os_execution_checkpoint.store import (
     CheckpointStoreCapacityExceeded,
     CheckpointStoreIntegrityConflict,
@@ -47,7 +67,7 @@ from scripts.agent_os_remote_validation.evidence_bundle import (
 from workflow_scheduler.execution.single_issue_pilot import SingleIssuePilotInput
 
 CAPSULE_SCHEMA_NAME = "agent-os-governed-resume-restart-capsule"
-CAPSULE_SCHEMA_VERSION = "1.0"
+CAPSULE_SCHEMA_VERSION = "1.1"
 MAX_CAPSULE_BYTES = 2 * 1024 * 1024
 MAX_CAPSULES = 4096
 MAX_CAPSULE_STORE_BYTES = 256 * 1024 * 1024
@@ -75,10 +95,11 @@ class GovernedResumeRestartCapsule:
     """One content-addressed, non-authorizing restart continuation record."""
 
     schema_name: Literal["agent-os-governed-resume-restart-capsule"]
-    schema_version: Literal["1.0"]
+    schema_version: Literal["1.1"]
     handoff_id: str
     candidate_packet: CandidatePacket
     approval_record: ApprovalRecord
+    required_environment_spec: RequiredEnvironmentSpec
     validation_bundle_json: str
     validation_plan_id: str
     validation_bundle_id: str
@@ -106,6 +127,10 @@ class GovernedResumeRestartCapsule:
             raise TypeError("candidate_packet must be an exact CandidatePacket")
         if type(self.approval_record) is not ApprovalRecord:
             raise TypeError("approval_record must be an exact ApprovalRecord")
+        if type(self.required_environment_spec) is not RequiredEnvironmentSpec:
+            raise TypeError(
+                "required_environment_spec must be an exact RequiredEnvironmentSpec"
+            )
         for name in (
             "validation_plan_id",
             "validation_bundle_id",
@@ -189,6 +214,9 @@ def _payload(value: GovernedResumeRestartCapsule, *, include_id: bool) -> dict[s
         "handoff_id": value.handoff_id,
         "candidate_packet": serialize_candidate_packet(value.candidate_packet),
         "approval_record": _approval_payload(value.approval_record),
+        "required_environment_spec": required_environment_spec_payload(
+            value.required_environment_spec
+        ),
         "validation_bundle_json": value.validation_bundle_json,
         "validation_plan_id": value.validation_plan_id,
         "validation_bundle_id": value.validation_bundle_id,
@@ -225,6 +253,7 @@ def build_restart_capsule(
     handoff_id: str,
     candidate_packet: CandidatePacket,
     pilot_input: SingleIssuePilotInput,
+    required_environment_spec: RequiredEnvironmentSpec,
     created_at: str,
     expires_at: str,
 ) -> GovernedResumeRestartCapsule:
@@ -234,6 +263,10 @@ def build_restart_capsule(
         raise TypeError("candidate_packet must be an exact CandidatePacket")
     if not isinstance(pilot_input, SingleIssuePilotInput):
         raise TypeError("pilot_input must be SingleIssuePilotInput")
+    if type(required_environment_spec) is not RequiredEnvironmentSpec:
+        raise TypeError(
+            "required_environment_spec must be an exact RequiredEnvironmentSpec"
+        )
     approval = pilot_input.approval_record
     if type(approval) is not ApprovalRecord:
         raise ValueError("runnable pilot input requires an exact approval record")
@@ -247,6 +280,13 @@ def build_restart_capsule(
         or tuple(candidate_packet.required_tests) != tuple(pilot_input.required_tests)
     ):
         raise ValueError("candidate packet does not bind to pilot input")
+    if required_environment_spec.required_validation_command_ids != tuple(
+        sorted(candidate_packet.required_tests)
+    ):
+        raise ValueError(
+            "required environment validation-command identities do not bind to the "
+            "candidate packet"
+        )
 
     bundle_id = validation_evidence_bundle_id(pilot_input.evidence_bundle)
     advisory_id = advisory_evidence_result_id(pilot_input.advisory_result)
@@ -272,6 +312,7 @@ def build_restart_capsule(
         handoff_id=handoff_id,
         candidate_packet=candidate_packet,
         approval_record=approval,
+        required_environment_spec=required_environment_spec,
         validation_bundle_json=bundle_json,
         validation_plan_id=pilot_input.expected_plan_id,
         validation_bundle_id=bundle_id,
@@ -307,7 +348,8 @@ def deserialize_restart_capsule(payload: bytes | bytearray | memoryview | str) -
         raise ValueError("governed-resume restart capsule must be an object")
     expected = {
         "schema_name", "schema_version", "handoff_id", "candidate_packet",
-        "approval_record", "validation_bundle_json", "validation_plan_id",
+        "approval_record", "required_environment_spec", "validation_bundle_json",
+        "validation_plan_id",
         "validation_bundle_id", "advisory_result_id", "advisory_render_id",
         "candidate_branch", "workspace_request_id", "invalidation_events",
         "created_at", "expires_at", "evaluated_at", "capsule_id",
@@ -333,6 +375,9 @@ def deserialize_restart_capsule(payload: bytes | bytearray | memoryview | str) -
         handoff_id=decoded["handoff_id"],
         candidate_packet=deserialize_candidate_packet(decoded["candidate_packet"]),
         approval_record=reconstruct_approval_record(decoded["approval_record"]),
+        required_environment_spec=reconstruct_required_environment_spec(
+            decoded["required_environment_spec"]
+        ),
         validation_bundle_json=decoded["validation_bundle_json"],
         validation_plan_id=decoded["validation_plan_id"],
         validation_bundle_id=decoded["validation_bundle_id"],
@@ -404,3 +449,37 @@ def load_restart_capsule(
             "persisted restart capsule does not match requested handoff identity"
         )
     return capsule
+
+
+def load_required_environment_spec(
+    store_root: Path | str,
+    descriptor: GovernedInvocationDescriptor,
+) -> RequiredEnvironmentSpec:
+    """Recover the immutable spec one descriptor asserts, or fail closed (#1320).
+
+    Declarative requirement data only. Recovering it proves nothing about current
+    runtime dependency readiness, which stays owned by #1185/#1197
+    ``DependencyReadinessEvidence`` and must be reacquired separately.
+    """
+    if type(descriptor) is not GovernedInvocationDescriptor:
+        raise TypeError("descriptor must be an exact GovernedInvocationDescriptor")
+    capsule = load_restart_capsule(store_root, descriptor.handoff_id)
+    spec = capsule.required_environment_spec
+    if spec.required_environment_id != descriptor.required_environment_id:
+        raise CheckpointStoreIntegrityConflict(
+            "persisted required environment specification does not match the "
+            "invocation descriptor"
+        )
+    return spec
+
+
+def build_required_environment_spec_reader(
+    store_root: Path | str,
+) -> Callable[[GovernedInvocationDescriptor], RequiredEnvironmentSpec]:
+    """Return the #1303 ``RequiredEnvironmentSpecReader`` over this exact store."""
+    root = Path(store_root)
+
+    def _read(descriptor: GovernedInvocationDescriptor) -> RequiredEnvironmentSpec:
+        return load_required_environment_spec(root, descriptor)
+
+    return _read
