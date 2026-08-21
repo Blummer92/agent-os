@@ -129,7 +129,10 @@ def test_human_decision_route_stays_a_human_decision():
 def test_post_selection_connector_failure_remains_owned_by_1237():
     decision = consume_executor_route_decision(_route())
 
-    assert decision.post_selection_continuation_owner == POST_SELECTION_CONTINUATION_OWNER
+    assert (
+        decision.post_selection_continuation_owner
+        == POST_SELECTION_CONTINUATION_OWNER
+    )
     assert POST_SELECTION_CONTINUATION_OWNER.endswith("post_selection_continuation")
 
 
