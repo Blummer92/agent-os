@@ -20,10 +20,47 @@ REPOSITORY_URL=https://github.com/Blummer92/agent-os.git
 CANONICAL_BRANCH=main
 STAGING_ROOT=/var/lib/agent-os/host-install-staging
 TARGET=/usr/local/libexec/agent-os-governed-resume
+HELPER_PATH=/usr/local/libexec/agent-os-host-install
 
 fail() {
   printf '%s\n' "host runtime install refused: $1" >&2
   exit 64
+}
+
+# sudo matches its rule on the path string and resolves that path at exec time,
+# so a symlinked or group/other-writable ancestor of this script would let the
+# unprivileged transport identity substitute what root executes. Verify that
+# assumption here, as root, rather than relying on it.
+require_trusted_path() {
+  _path=$1
+  _message=$2
+  if [ -L "$_path" ]; then
+    fail "$_message"
+  fi
+  [ -e "$_path" ] || fail "$_message"
+  _meta=$(stat -c '%U:%a' "$_path")
+  [ "${_meta%%:*}" = "root" ] || fail "$_message"
+  _mode=${_meta##*:}
+  _tail=${_mode#"${_mode%??}"}
+  case "${_tail%?}" in 2 | 3 | 6 | 7) fail "$_message" ;; esac
+  case "${_tail#?}" in 2 | 3 | 6 | 7) fail "$_message" ;; esac
+}
+
+require_trusted_ancestry() {
+  _target=$1
+  _message=$2
+  _cursor=$_target
+  set --
+  while [ "$_cursor" != "/" ]; do
+    set -- "$_cursor" "$@"
+    _parent=$(dirname "$_cursor")
+    [ "$_parent" != "$_cursor" ] || break
+    _cursor=$_parent
+  done
+  require_trusted_path / "$_message"
+  for _component in "$@"; do
+    require_trusted_path "$_component" "$_message"
+  done
 }
 
 if [ "$(id -u)" != "0" ]; then
@@ -37,15 +74,20 @@ source_sha=$2
 printf '%s\n' "$source_sha" | grep -Eq '^[0-9a-f]{40}$' ||
   fail "source SHA must be a lowercase 40-hex commit"
 
+# This script itself must not be substitutable through its own directory chain.
+require_trusted_ancestry "$HELPER_PATH" "privileged installer path is untrusted"
+
 # Root-owned staging. Refuse rather than follow a symlink an attacker planted,
 # and prove ownership/mode after creation rather than assuming it.
 staging_parent=$(dirname "$STAGING_ROOT")
+require_trusted_ancestry "$(dirname "$staging_parent")" "staging path is untrusted"
 if [ -L "$staging_parent" ]; then
-  fail "staging root must not be a symlink"
+  fail "staging path is untrusted"
 fi
 mkdir -p "$staging_parent"
 chown root:root "$staging_parent"
 chmod 0755 "$staging_parent"
+require_trusted_path "$staging_parent" "staging path is untrusted"
 
 if [ -L "$STAGING_ROOT" ]; then
   fail "staging root must not be a symlink"

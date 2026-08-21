@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -31,6 +32,8 @@ REFUSAL_REASONS = {
     "privileged installer evidence source mismatch": "host-privileged-installer-evidence-invalid",
     "staging root must not be a symlink": "host-staging-root-unsafe",
     "staging root is not root-owned 0700": "host-staging-root-unsafe",
+    "staging path is untrusted": "host-staging-root-unsafe",
+    "privileged installer path is untrusted": "host-privileged-installer-unsafe",
     "staged tree must be root-owned": "host-staged-source-unsafe",
     "staged entrypoint installer must not be a symlink": "host-staged-source-unsafe",
     "staged entrypoint installer missing": "host-staged-source-unsafe",
@@ -142,6 +145,20 @@ def test_repair_covers_every_refusal_the_installer_can_emit() -> None:
         text = script.read_text(encoding="utf-8")
         emitted.update(re.findall(r'fail "([^"$]+)"', text))
         emitted.update(re.findall(r'host runtime install refused: ([^"$\\]+)\\n', text))
+        # Messages handed to the trusted-path guards rather than to fail()
+        # directly. These lines nest shell quoting, so parse them as shell.
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped.startswith(
+                ("require_trusted_path ", "require_trusted_ancestry ")
+            ):
+                continue
+            try:
+                message = shlex.split(stripped)[-1]
+            except ValueError:
+                continue
+            if "$" not in message:
+                emitted.add(message)
     emitted.add("installer checksum mismatch")  # emitted by the remote preamble
     assert emitted == set(REFUSAL_REASONS)
 

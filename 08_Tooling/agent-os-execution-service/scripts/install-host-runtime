@@ -40,8 +40,11 @@ esac
 command -v sudo >/dev/null 2>&1 || fail "sudo unavailable"
 python3 -m pip --version >/dev/null 2>&1 || fail "python3 pip unavailable"
 
-# The privileged installer must already be present as a root-owned regular file
-# that this identity cannot rewrite. Refuse before invoking it otherwise.
+# Operator diagnostics, NOT a security boundary: this script runs as the
+# unprivileged transport identity, which could skip it and call sudo directly.
+# These checks only turn a misconfigured host into a legible finite reason code.
+# The real boundary is the no-wildcard sudoers rule, the privileged helper's own
+# validation of its argv and path ancestry, and filesystem permissions.
 if [ -L "$PRIVILEGED_INSTALLER" ]; then
   fail "privileged installer must be a root-owned regular file"
 fi

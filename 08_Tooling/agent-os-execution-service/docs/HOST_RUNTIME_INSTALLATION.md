@@ -125,10 +125,18 @@ privileged step:
    as well as on success.
 
 `scripts/install-host-runtime` keeps host preflight, the finite reason codes, and
-evidence emission, and now holds no privileged step of its own. Before delegating
-it verifies the helper is a root-owned, non-symlink, non-world-writable regular
-file, and afterwards it requires the returned evidence to be well formed and to
-report the exact expected source SHA.
+evidence emission, and now holds no privileged step of its own.
+
+Its checks on the helper — non-symlink, regular, executable, `root:root` mode —
+are **operator diagnostics, not the security boundary**. That script runs as the
+unprivileged transport identity, which could skip it entirely and invoke
+`sudo /usr/local/libexec/agent-os-host-install --source-sha <sha>` directly. Their
+only job is to turn a misconfigured host into a legible finite reason code. The
+security boundary is three things: the no-wildcard sudoers rule, the privileged
+helper's own validation of its argv and of its path ancestry, and filesystem
+permissions. The same applies to its evidence check — requiring the returned JSON
+to be well formed and to report the exact expected source SHA is a consistency
+guarantee for the workflow, not a privilege control.
 
 Its capability probe is `sudo -n -l <helper> --source-sha <sha>`, which asks the
 policy about the exact invocation it is about to make. The old `sudo -n true`
@@ -142,11 +150,23 @@ Both steps require an operator who already holds administrative access to the VM
 neither is performed by the transport identity. Install the helper from a trusted
 checkout, then authorize exactly it:
 
+`/usr/local/libexec` is not part of Debian's stock `/usr/local` tree, and GNU
+`install` does not create a missing parent, so establish the directory explicitly
+first. Its ownership and mode are load-bearing: sudo matches the rule below on the
+path string and resolves it at exec time, so a writable or symlinked ancestor
+would let the transport identity substitute what root executes.
+
 ```sh
+sudo install -d -o root -g root -m 0755 /usr/local/libexec
 sudo install -o root -g root -m 0755 \
   08_Tooling/agent-os-execution-service/scripts/agent-os-host-install \
   /usr/local/libexec/agent-os-host-install
 ```
+
+The helper does not take this on trust: at run time, as root, it walks every
+component of its own installed path and of the staging parent, and refuses with
+`host-privileged-installer-unsafe` or `host-staging-root-unsafe` if any component
+is a symlink, is not owned by root, or is group- or other-writable.
 
 The sudoers rule contains no `*` wildcard. Its only variable part is a
 fixed-length lowercase-hex character class, so it matches a 40-character commit id

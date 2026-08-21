@@ -110,7 +110,7 @@ jobs:
         shell: bash
         env:
           HOST_RUNTIME_SOURCE_SHA: 038fd018c8d132d07815d6e7e34a4f0eda8d2d8b
-          HOST_INSTALL_SCRIPT_SHA256: 7e60139d07056244645927594bccad65d7d60ac6bbeb28fa73a7ab528ebb5198
+          HOST_INSTALL_SCRIPT_SHA256: aafc7bb8288ee420e93040c9f882ea90aa0627af66975fce3f8415e65b949f19
         run: |
           set -euo pipefail
           evidence_root="$RUNNER_TEMP/agent-os-ingress"
@@ -204,10 +204,10 @@ jobs:
                 *"source SHA is not on canonical main") failure_reason=host-runtime-source-not-main ;;
                 *"checkout must be on main") failure_reason=host-runtime-source-not-main ;;
                 *"privileged installer unavailable") failure_reason=host-privileged-installer-unavailable ;;
-                *"privileged installer must be a root-owned regular file") failure_reason=host-privileged-installer-unsafe ;;
+                *"privileged installer must be a root-owned regular file"|*"privileged installer path is untrusted") failure_reason=host-privileged-installer-unsafe ;;
                 *"privileged installer must run as root"|*"privileged installer argv must be exactly --source-sha <sha>"|*"source SHA must be a lowercase 40-hex commit") failure_reason=host-privileged-installer-misuse ;;
                 *"privileged installer evidence malformed"|*"privileged installer evidence source mismatch") failure_reason=host-privileged-installer-evidence-invalid ;;
-                *"staging root must not be a symlink"|*"staging root is not root-owned 0700") failure_reason=host-staging-root-unsafe ;;
+                *"staging root must not be a symlink"|*"staging root is not root-owned 0700"|*"staging path is untrusted") failure_reason=host-staging-root-unsafe ;;
                 *"staged tree must be root-owned"|*"staged entrypoint installer must not be a symlink"|*"staged entrypoint installer missing") failure_reason=host-staged-source-unsafe ;;
                 *"host OS identity unavailable") failure_reason=host-os-identity-unavailable ;;
                 *"qualified host must be Debian") failure_reason=host-os-unqualified ;;

@@ -7,7 +7,9 @@ actually fires.
 
 from __future__ import annotations
 
+import hashlib
 import os
+import pwd
 import re
 import shutil
 import subprocess
@@ -106,12 +108,43 @@ def test_privileged_installer_refuses_to_run_unprivileged(tmp_path: Path) -> Non
 # --------------------------------------------------------------------------
 
 
-def _staged_copy(tmp_path: Path, staging_root: Path) -> Path:
-    """Real script, with only the staging root and build step redirected."""
+@pytest.fixture
+def trusted_root():
+    """A root-owned directory with trusted ancestry.
+
+    pytest's tmp_path sits under /tmp (1777), which the helper correctly rejects
+    as an untrusted ancestor, so fixtures that stand in for /usr/local/libexec or
+    /var/lib must live directly under /.
+    """
+    base = Path(tempfile.mkdtemp(prefix="agentos1341-", dir="/"))
+    os.chown(base, 0, 0)
+    base.chmod(0o755)
+    try:
+        yield base
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+def _install_helper_at(helper_path: Path, *, dir_mode=0o755, dir_owner=0) -> Path:
+    helper_path.parent.mkdir(parents=True, exist_ok=True)
+    helper_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    helper_path.chmod(0o755)
+    os.chown(helper_path, 0, 0)
+    os.chown(helper_path.parent, dir_owner, 0)
+    helper_path.parent.chmod(dir_mode)
+    return helper_path
+
+
+def _staged_copy(tmp_path: Path, staging_root: Path, helper_path: Path) -> Path:
+    """Real script, with only the two fixed paths and the build step redirected."""
     text = PRIVILEGED.read_text(encoding="utf-8")
     text = text.replace(
         "STAGING_ROOT=/var/lib/agent-os/host-install-staging",
         f"STAGING_ROOT={staging_root}",
+    )
+    text = text.replace(
+        f"HELPER_PATH={INSTALLED_PRIVILEGED_PATH}",
+        f"HELPER_PATH={helper_path}",
     )
     marker = "apt-get install -y build-essential python3-dev >&2"
     assert marker in text
@@ -172,10 +205,13 @@ def _run_staged(copy: Path, repo: Path, sha: str):
 @pytest.mark.skipif(
     os.geteuid() != 0, reason="staging ownership assertions require root"
 )
-def test_privileged_staging_is_root_owned_and_not_user_writable(tmp_path: Path) -> None:
+def test_privileged_staging_is_root_owned_and_not_user_writable(
+    tmp_path: Path, trusted_root: Path
+) -> None:
     repo, main_sha, _ = _origin_repo(tmp_path)
-    staging = tmp_path / "staging"
-    result = _run_staged(_staged_copy(tmp_path, staging), repo, main_sha)
+    staging = trusted_root / "staging"
+    helper = _install_helper_at(trusted_root / "libexec" / "agent-os-host-install")
+    result = _run_staged(_staged_copy(tmp_path, staging, helper), repo, main_sha)
 
     assert result.returncode == REACHED_BUILD, result.stderr
     staging_meta, checkout_meta = result.stdout.split()
@@ -189,14 +225,17 @@ def test_privileged_staging_is_root_owned_and_not_user_writable(tmp_path: Path) 
 
 
 @pytest.mark.skipif(os.geteuid() != 0, reason="staging assertions require root")
-def test_privileged_installer_refuses_a_symlinked_staging_root(tmp_path: Path) -> None:
+def test_privileged_installer_refuses_a_symlinked_staging_root(
+    tmp_path: Path, trusted_root: Path
+) -> None:
     repo, main_sha, _ = _origin_repo(tmp_path)
-    victim = tmp_path / "victim"
+    victim = trusted_root / "victim"
     victim.mkdir()
-    staging = tmp_path / "staging"
+    staging = trusted_root / "staging"
     staging.symlink_to(victim)
+    helper = _install_helper_at(trusted_root / "libexec" / "agent-os-host-install")
 
-    result = _run_staged(_staged_copy(tmp_path, staging), repo, main_sha)
+    result = _run_staged(_staged_copy(tmp_path, staging, helper), repo, main_sha)
 
     assert result.returncode == 64
     assert _refusal(result) == "staging root must not be a symlink"
@@ -207,34 +246,191 @@ def test_privileged_installer_refuses_a_symlinked_staging_root(tmp_path: Path) -
 
 @pytest.mark.skipif(os.geteuid() != 0, reason="staging assertions require root")
 def test_privileged_installer_refuses_source_not_on_canonical_main(
-    tmp_path: Path,
+    tmp_path: Path, trusted_root: Path
 ) -> None:
     repo, _, off_main_sha = _origin_repo(tmp_path)
-    staging = tmp_path / "staging"
-    result = _run_staged(_staged_copy(tmp_path, staging), repo, off_main_sha)
+    staging = trusted_root / "staging"
+    helper = _install_helper_at(trusted_root / "libexec" / "agent-os-host-install")
+    result = _run_staged(_staged_copy(tmp_path, staging, helper), repo, off_main_sha)
 
     assert result.returncode == 64
     assert _refusal(result) == "source SHA is not on canonical main"
 
 
 @pytest.mark.skipif(os.geteuid() != 0, reason="staging assertions require root")
-def test_privileged_installer_refuses_a_nonexistent_commit(tmp_path: Path) -> None:
+def test_privileged_installer_refuses_a_nonexistent_commit(
+    tmp_path: Path, trusted_root: Path
+) -> None:
     repo, _, _ = _origin_repo(tmp_path)
-    staging = tmp_path / "staging"
-    result = _run_staged(_staged_copy(tmp_path, staging), repo, "b" * 40)
+    staging = trusted_root / "staging"
+    helper = _install_helper_at(trusted_root / "libexec" / "agent-os-host-install")
+    result = _run_staged(_staged_copy(tmp_path, staging, helper), repo, "b" * 40)
 
     assert result.returncode == 64
     assert _refusal(result) == "source SHA is not on canonical main"
 
 
 @pytest.mark.skipif(os.geteuid() != 0, reason="staging assertions require root")
-def test_privileged_staging_is_removed_deterministically(tmp_path: Path) -> None:
+def test_privileged_staging_is_removed_deterministically(
+    tmp_path: Path, trusted_root: Path
+) -> None:
     repo, main_sha, _ = _origin_repo(tmp_path)
-    staging = tmp_path / "staging"
-    copy = _staged_copy(tmp_path, staging)
+    staging = trusted_root / "staging"
+    helper = _install_helper_at(trusted_root / "libexec" / "agent-os-host-install")
+    copy = _staged_copy(tmp_path, staging, helper)
     # Refusal path: the EXIT trap must still clear staging.
     _run_staged(copy, repo, "b" * 40)
     assert not staging.exists()
+
+
+# --------------------------------------------------------------------------
+# S2 — the helper must not be substitutable through its own directory chain
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("dir_mode", "label"),
+    [(0o777, "world-writable"), (0o775, "group-writable"), (0o757, "other-writable")],
+)
+@pytest.mark.skipif(os.geteuid() != 0, reason="ownership assertions require root")
+def test_privileged_installer_refuses_a_writable_parent_directory(
+    tmp_path: Path, trusted_root: Path, dir_mode, label
+) -> None:
+    """sudo resolves the rule's path at exec time, so a writable parent would let
+    the transport identity swap the helper and have root run the replacement."""
+    repo, main_sha, _ = _origin_repo(tmp_path)
+    helper = _install_helper_at(
+        trusted_root / "libexec" / "agent-os-host-install", dir_mode=dir_mode
+    )
+    staging = trusted_root / "staging"
+    result = _run_staged(_staged_copy(tmp_path, staging, helper), repo, main_sha)
+
+    assert result.returncode == 64, label
+    assert _refusal(result) == "privileged installer path is untrusted"
+    assert not staging.exists(), "must refuse before creating staging"
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="ownership assertions require root")
+def test_privileged_installer_refuses_a_non_root_owned_parent_directory(
+    tmp_path: Path, trusted_root: Path
+) -> None:
+    repo, main_sha, _ = _origin_repo(tmp_path)
+    nobody = pwd.getpwnam("nobody").pw_uid
+    helper = _install_helper_at(
+        trusted_root / "libexec" / "agent-os-host-install", dir_owner=nobody
+    )
+    staging = trusted_root / "staging"
+    result = _run_staged(_staged_copy(tmp_path, staging, helper), repo, main_sha)
+
+    assert result.returncode == 64
+    assert _refusal(result) == "privileged installer path is untrusted"
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="ownership assertions require root")
+def test_privileged_installer_refuses_a_symlinked_parent_directory(
+    tmp_path: Path, trusted_root: Path
+) -> None:
+    repo, main_sha, _ = _origin_repo(tmp_path)
+    real = trusted_root / "real-libexec"
+    _install_helper_at(real / "agent-os-host-install")
+    link = trusted_root / "libexec"
+    link.symlink_to(real)
+    staging = trusted_root / "staging"
+    result = _run_staged(
+        _staged_copy(tmp_path, staging, link / "agent-os-host-install"), repo, main_sha
+    )
+
+    assert result.returncode == 64
+    assert _refusal(result) == "privileged installer path is untrusted"
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="ownership assertions require root")
+def test_privileged_installer_refuses_an_untrusted_staging_ancestor(
+    tmp_path: Path, trusted_root: Path
+) -> None:
+    """An ancestor the helper does not own must fail closed, not be rewritten."""
+    repo, main_sha, _ = _origin_repo(tmp_path)
+    helper = _install_helper_at(trusted_root / "libexec" / "agent-os-host-install")
+    lib = trusted_root / "var" / "lib"
+    lib.mkdir(parents=True)
+    lib.chmod(0o777)
+    staging = lib / "agent-os" / "host-install-staging"
+    result = _run_staged(_staged_copy(tmp_path, staging, helper), repo, main_sha)
+
+    assert result.returncode == 64
+    assert _refusal(result) == "staging path is untrusted"
+    assert not staging.exists()
+    # The untrusted ancestor must be left exactly as found, never "fixed".
+    assert lib.stat().st_mode & 0o777 == 0o777
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="ownership assertions require root")
+def test_privileged_installer_normalizes_the_staging_directory_it_owns(
+    tmp_path: Path, trusted_root: Path
+) -> None:
+    """The staging parent is the helper's own directory: it is reset to
+    root:root 0755 and then re-verified, rather than refused."""
+    repo, main_sha, _ = _origin_repo(tmp_path)
+    helper = _install_helper_at(trusted_root / "libexec" / "agent-os-host-install")
+    parent = trusted_root / "agent-os"
+    parent.mkdir()
+    parent.chmod(0o777)
+    result = _run_staged(
+        _staged_copy(tmp_path, parent / "host-install-staging", helper), repo, main_sha
+    )
+
+    assert result.returncode == REACHED_BUILD, result.stderr
+    assert parent.stat().st_mode & 0o777 == 0o755
+    assert parent.owner() == "root"
+
+
+def test_privileged_installer_verifies_its_own_path_ancestry() -> None:
+    text = PRIVILEGED.read_text(encoding="utf-8")
+    assert f"HELPER_PATH={INSTALLED_PRIVILEGED_PATH}" in text
+    assert 'require_trusted_ancestry "$HELPER_PATH"' in text
+    # Group- and other-writable modes are the ones that must be rejected.
+    assert 'case "${_tail%?}" in 2 | 3 | 6 | 7) fail "$_message" ;; esac' in text
+    assert 'case "${_tail#?}" in 2 | 3 | 6 | 7) fail "$_message" ;; esac' in text
+
+
+# --------------------------------------------------------------------------
+# S1 — the bootstrap must establish that directory deterministically
+# --------------------------------------------------------------------------
+
+
+def test_workflow_digest_pin_matches_the_tracked_installer() -> None:
+    """The route refuses on mismatch, so a stale pin is a silent outage."""
+    digest = hashlib.sha256(UNPRIVILEGED.read_bytes()).hexdigest()
+    pinned = re.search(
+        r"HOST_INSTALL_SCRIPT_SHA256: ([0-9a-f]{64})",
+        WORKFLOW.read_text(encoding="utf-8"),
+    )
+    assert pinned is not None
+    assert pinned.group(1) == digest
+
+
+def test_documented_bootstrap_establishes_the_helper_directory_first() -> None:
+    """GNU install does not create a missing parent, and /usr/local/libexec is
+    not part of Debian's stock tree."""
+    text = DOCS.read_text(encoding="utf-8")
+    create = "sudo install -d -o root -g root -m 0755 /usr/local/libexec"
+    place = "sudo install -o root -g root -m 0755 \\"
+    assert create in text
+    assert place in text
+    assert text.index(create) < text.index(place), "directory must be created first"
+
+
+# --------------------------------------------------------------------------
+# S3 — preflight is diagnostics, not the security boundary
+# --------------------------------------------------------------------------
+
+
+def test_unprivileged_preflight_is_documented_as_diagnostics_only() -> None:
+    script = UNPRIVILEGED.read_text(encoding="utf-8")
+    assert "NOT a security boundary" in script
+    doc = DOCS.read_text(encoding="utf-8")
+    assert "operator diagnostics, not the security boundary" in doc
+    assert "could skip it entirely" in doc
 
 
 # --------------------------------------------------------------------------
