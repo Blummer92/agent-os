@@ -20,7 +20,9 @@ cannot trigger host configuration, credential, repository, process, or
 Scheduler work.  Explicitly injected bindings remain unchanged for tests and
 other governed callers, and ``_no_host_composition_bindings`` remains the
 explicit fail-closed stand-in when a caller intentionally wants no host
-composition.
+composition.  If the production factory itself cannot safely compose the host,
+the public entrypoint preserves #1238's established ``host-supplied``
+fail-closed diagnostic rather than exposing a new caller-visible error contract.
 """
 
 from __future__ import annotations
@@ -168,10 +170,17 @@ def main(
     if bindings is None:
         handoff_id = parse_handoff_argv(argv)
         from .production_governed_resume_factory import (
+            ProductionGovernedResumeFactoryError,
             build_production_governed_resume_bindings_for_handoff,
         )
 
-        bindings = build_production_governed_resume_bindings_for_handoff(handoff_id)
+        try:
+            bindings = build_production_governed_resume_bindings_for_handoff(handoff_id)
+        except ProductionGovernedResumeFactoryError as exc:
+            raise RuntimeError(
+                "governed-resume requires host-supplied #1218/#1253 composition; "
+                "production host composition failed closed"
+            ) from exc
     print(run_governed_resume(argv, bindings=bindings))
     return 0
 
