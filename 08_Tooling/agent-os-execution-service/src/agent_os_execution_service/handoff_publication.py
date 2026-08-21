@@ -15,6 +15,12 @@ recover the declarative requirement the descriptor's ``required_environment_id``
 asserts without a new store or a second environment model. The capsule is
 persisted before the descriptor and never substitutes for fresh #1218/#1253
 currentness, authorization, dependency readiness, or Scheduler lease admission.
+
+AOS-VALSHIFT1 (#1325) consumes the existing #1278 pre-PR runtime projection at
+this publication boundary. A ``pre-pr-developer-loop`` route may publish only
+when its already-declared capabilities and current evidence flags are closed
+under the #1278 projection for the supplied #1197 environment/readiness evidence.
+This adds no route, runner, validation lifecycle, or execution authority.
 """
 
 from __future__ import annotations
@@ -34,6 +40,9 @@ from scripts.agent_os_execution_checkpoint.store import (
     CheckpointQuarantined,
     CheckpointStoreUnavailable,
     load_checkpoint_by_id,
+)
+from scripts.agent_os_execution_interface.pre_pr_runtime_compatibility import (
+    project_pre_pr_runtime_capabilities,
 )
 from workflow_scheduler.execution.runtime_configuration import ConcreteRuntimeConfiguration
 from workflow_scheduler.execution.single_issue_pilot import SingleIssuePilotInput
@@ -61,12 +70,15 @@ from .models import ExecutionServiceRequest
 from .request_validation import validate_execution_service_request
 from .route_decision_store import append_route_decision
 
+_PRE_PR_DEVELOPER_LOOP_OPERATION = "pre-pr-developer-loop"
+
 _PUBLICATION_REASONS = frozenset(
     {
         "current-evidence-malformed",
         "request-invalid",
         "route-reselection-mismatch",
         "route-not-governed-runner",
+        "pre-pr-runtime-projection-mismatch",
         "request-binding-mismatch",
         "route-decision-persistence-failed",
         "route-decision-persistence-mismatch",
@@ -139,6 +151,41 @@ def _reselect(route: ExecutorRouteDecision) -> ExecutorRouteDecision:
     )
 
 
+def _pre_pr_runtime_projection_matches(
+    *,
+    route_decision: ExecutorRouteDecision,
+    runtime_configuration: ConcreteRuntimeConfiguration,
+    dependency_readiness: DependencyReadinessEvidence,
+    evaluated_at: str,
+) -> bool:
+    """Return whether one pre-PR route is closed under the canonical #1278 projection.
+
+    The route's already-declared capabilities are supplied as the projection's
+    base capabilities. #1278 may therefore add only missing mandatory pre-PR
+    runtime capabilities (plus dependency installation when #1197 requires it),
+    while legitimate operation-specific capabilities remain intact.
+    """
+
+    if route_decision.requested_operation != _PRE_PR_DEVELOPER_LOOP_OPERATION:
+        return True
+
+    projection = project_pre_pr_runtime_capabilities(
+        required_environment=runtime_configuration.required_environment_spec,
+        dependency_readiness=dependency_readiness,
+        evaluated_at=evaluated_at,
+        base_required_capabilities=route_decision.required_capabilities,
+    )
+    return all(
+        (
+            route_decision.required_capabilities == projection.required_capabilities,
+            route_decision.evidence_stale is projection.evidence_stale,
+            route_decision.evidence_contradictory is projection.evidence_contradictory,
+            route_decision.environment_health_evidence_id_or_none
+            == projection.environment_health_evidence_id,
+        )
+    )
+
+
 def _request_repository(request: ExecutionServiceRequest) -> str:
     return f"{request.repository_identity.owner}/{request.repository_identity.repository}"
 
@@ -192,6 +239,18 @@ def publish_governed_handoff(
         raise HandoffPublicationError("route-reselection-mismatch")
     if route_decision.selected_route is not ExecutorRoute.CHATGPT_GOVERNED_RUNNER:
         raise HandoffPublicationError("route-not-governed-runner")
+
+    try:
+        projection_matches = _pre_pr_runtime_projection_matches(
+            route_decision=route_decision,
+            runtime_configuration=runtime_configuration,
+            dependency_readiness=dependency_readiness,
+            evaluated_at=evaluated_at,
+        )
+    except (TypeError, ValueError) as exc:
+        raise HandoffPublicationError("current-evidence-malformed") from exc
+    if not projection_matches:
+        raise HandoffPublicationError("pre-pr-runtime-projection-mismatch")
 
     repository = _request_repository(request)
     if (
