@@ -350,6 +350,7 @@ def test_explicit_package_lists_still_cover_every_source_module(
     }
     for package in (
         "agent_os_candidate_packet",
+        "agent_os_candidate_packet_live_input",
         "agent_os_execution_capabilities",
         "agent_os_execution_checkpoint",
         "agent_os_github_issue_provider",
@@ -427,6 +428,8 @@ def test_isolated_installation_imports_the_production_governed_resume_graph(
                 "from scripts.agent_os_execution_checkpoint.invocation_descriptor "
                 "import load_invocation_descriptor; "
                 "import agent_os_execution_service.production_host_composition as phc; "
+                "import agent_os_execution_service.production_host_bootstrap as bootstrap; "
+                "import agent_os_execution_service.host_github_read_transport as ghread; "
                 "import agent_os_execution_service.governed_resume_entrypoint as entrypoint; "
                 "print(json.dumps({"
                 "'service': service.__file__, "
@@ -434,6 +437,8 @@ def test_isolated_installation_imports_the_production_governed_resume_graph(
                 "'native': _clone3_cgroup.__file__, "
                 "'loader': load_invocation_descriptor.__module__, "
                 "'composition': phc.__file__, "
+                "'bootstrap': bootstrap.__file__, "
+                "'github_read': ghread.__file__, "
                 "'entrypoint': entrypoint.__file__, "
                 "'one_loader': phc.load_invocation_descriptor is load_invocation_descriptor, "
                 "'sys_path': sys.path}))"
@@ -445,7 +450,17 @@ def test_isolated_installation_imports_the_production_governed_resume_graph(
 
     environment_root = python.parent.parent.resolve()
     repository_root = ROOT.resolve()
-    located = {key: observed[key] for key in ("service", "native", "composition", "entrypoint")}
+    located = {
+        key: observed[key]
+        for key in (
+            "service",
+            "native",
+            "composition",
+            "bootstrap",
+            "github_read",
+            "entrypoint",
+        )
+    }
     # ``workflow_scheduler`` is a namespace package, so it is located by its
     # search path rather than by a module file.
     located.update(
