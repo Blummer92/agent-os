@@ -204,8 +204,8 @@ jobs:
                 *"host OS identity unavailable") failure_reason=host-os-identity-unavailable ;;
                 *"qualified host must be Debian") failure_reason=host-os-unqualified ;;
                 *"qualified host must be Debian 12") failure_reason=host-os-version-unqualified ;;
-                *"sudo unavailable") failure_reason=host-sudo-unavailable ;;
                 *"passwordless bounded sudo unavailable") failure_reason=host-passwordless-sudo-unavailable ;;
+                *"sudo unavailable") failure_reason=host-sudo-unavailable ;;
                 *"python3 pip unavailable") failure_reason=host-python-pip-unavailable ;;
                 *"expected one reusable-capability-registry wheel"|*"expected one agent-memory-context-manager wheel"|*"expected one workflow-scheduler wheel"|*"expected one agent-os-execution-service wheel") failure_reason=host-runtime-wheel-shape-invalid ;;
                 *"entrypoint installer was not idempotent") failure_reason=host-entrypoint-idempotency-failed ;;

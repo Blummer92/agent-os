@@ -1,16 +1,73 @@
 from __future__ import annotations
 
+import re
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 WORKFLOW = ROOT / ".github/workflows/agent-os-governed-invocation.yml"
+INSTALLER = ROOT / "08_Tooling/agent-os-execution-service/scripts/install-host-runtime"
+
+# Installer refusal suffix -> the finite reason code the route must report.
+# `None` marks a refusal the route deliberately leaves on the generic default
+# because the workflow itself controls the precondition.
+REFUSAL_REASONS = {
+    "installer checksum mismatch": "host-installer-integrity-mismatch",
+    "EXPECTED_SHA must be a lowercase 40-hex commit": None,
+    "REPOSITORY_ROOT must be absolute": None,
+    "REPOSITORY_ROOT must be a git checkout": None,
+    "checkout does not match EXPECTED_SHA": "host-runtime-source-mismatch",
+    "checkout must be on main": "host-runtime-source-not-main",
+    "host OS identity unavailable": "host-os-identity-unavailable",
+    "qualified host must be Debian": "host-os-unqualified",
+    "qualified host must be Debian 12": "host-os-version-unqualified",
+    "sudo unavailable": "host-sudo-unavailable",
+    "passwordless bounded sudo unavailable": "host-passwordless-sudo-unavailable",
+    "python3 pip unavailable": "host-python-pip-unavailable",
+    "expected one reusable-capability-registry wheel": "host-runtime-wheel-shape-invalid",
+    "expected one agent-memory-context-manager wheel": "host-runtime-wheel-shape-invalid",
+    "expected one workflow-scheduler wheel": "host-runtime-wheel-shape-invalid",
+    "expected one agent-os-execution-service wheel": "host-runtime-wheel-shape-invalid",
+    "entrypoint installer was not idempotent": "host-entrypoint-idempotency-failed",
+    "entrypoint owner/group/mode mismatch": "host-entrypoint-integrity-mismatch",
+}
+
+DEFAULT_REASON = "host-runtime-install-failed"
+
+
+def _case_block() -> str:
+    """Extract the workflow's refusal-classification `case` block verbatim."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    body = text.split('case "$refusal" in', 1)[1].split("esac", 1)[0]
+    return 'case "$refusal" in' + body + "esac"
+
+
+def _classify(refusal: str) -> str:
+    """Run the workflow's own `case` block against one refusal line."""
+    program = (
+        'refusal="$1"\n'
+        f"failure_reason={DEFAULT_REASON}\n"
+        f"{_case_block()}\n"
+        'printf %s "$failure_reason"\n'
+    )
+    completed = subprocess.run(
+        ["/bin/sh", "-c", program, "sh", refusal],
+        env={"PATH": "/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return completed.stdout
 
 
 def test_repair_uses_sha_pinned_host_checkout_without_scp() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "HOST_RUNTIME_SOURCE_SHA: 038fd018c8d132d07815d6e7e34a4f0eda8d2d8b" in text
     assert "gcloud compute scp" not in text
-    assert 'installer="\\$root/08_Tooling/agent-os-execution-service/scripts/install-host-runtime"' in text
+    assert (
+        'installer="\\$root/08_Tooling/agent-os-execution-service/scripts/install-host-runtime"'
+        in text
+    )
     assert 'git -C "\\$root" checkout --quiet -B main $HOST_RUNTIME_SOURCE_SHA' in text
     assert "installer checksum mismatch" in text
 
@@ -33,6 +90,39 @@ def test_repair_maps_installer_refusals_to_finite_reason_codes() -> None:
     ):
         assert reason in text
     assert '"reason_codes": [os.environ["FAILURE_REASON"]]' in text
+
+
+def test_repair_classifies_every_installer_refusal_to_its_own_reason_code() -> None:
+    """Execute the route's own `case` block; string presence is not a mapping."""
+    for suffix, expected in REFUSAL_REASONS.items():
+        refusal = f"host runtime install refused: {suffix}"
+        assert _classify(refusal) == (expected or DEFAULT_REASON), suffix
+
+
+def test_repair_never_shadows_passwordless_sudo_with_generic_sudo() -> None:
+    """`*"sudo unavailable"` also matches the passwordless refusal, so the
+    specific pattern must be ordered first or the finite reason is wrong."""
+    assert (
+        _classify("host runtime install refused: passwordless bounded sudo unavailable")
+        == "host-passwordless-sudo-unavailable"
+    )
+    assert (
+        _classify("host runtime install refused: sudo unavailable")
+        == "host-sudo-unavailable"
+    )
+
+
+def test_repair_defaults_unknown_refusals_instead_of_guessing() -> None:
+    assert _classify("host runtime install refused: something new") == DEFAULT_REASON
+    assert _classify("") == DEFAULT_REASON
+
+
+def test_repair_covers_every_refusal_the_installer_can_emit() -> None:
+    """A new installer refusal must be classified deliberately, not silently."""
+    text = INSTALLER.read_text(encoding="utf-8")
+    emitted = set(re.findall(r'fail "([^"]+)"', text))
+    emitted.add("installer checksum mismatch")  # emitted by the remote preamble
+    assert emitted == set(REFUSAL_REASONS)
 
 
 def test_repair_keeps_diagnostics_bounded_and_non_authorizing() -> None:
