@@ -63,16 +63,18 @@ require_trusted_ancestry() {
   done
 }
 
-if [ "$(id -u)" != "0" ]; then
-  fail "privileged installer must run as root"
-fi
-
+# argv is parsed before the privilege check so the frozen contract stays
+# verifiable without root. Parsing is inert: both paths only ever refuse.
 if [ "$#" -ne 2 ] || [ "$1" != "--source-sha" ]; then
   fail "privileged installer argv must be exactly --source-sha <sha>"
 fi
 source_sha=$2
 printf '%s\n' "$source_sha" | grep -Eq '^[0-9a-f]{40}$' ||
   fail "source SHA must be a lowercase 40-hex commit"
+
+if [ "$(id -u)" != "0" ]; then
+  fail "privileged installer must run as root"
+fi
 
 # This script itself must not be substitutable through its own directory chain.
 require_trusted_ancestry "$HELPER_PATH" "privileged installer path is untrusted"
