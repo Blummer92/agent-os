@@ -5,6 +5,13 @@
 Retired canonical technical agent. This file is retained only as legacy
 compatibility guidance and is not listed in `agent-inheritance-registry.md`.
 
+## Inherited Standards
+
+See `_common-overlay-rules.md` plus:
+- `00_Governance/ownership-and-source-of-truth.md`
+- `01_Shared_Standards/navigation/navigation-registry-standard.md`
+- `01_Shared_Standards/global-engineering/reusable-capability-registry-standard.md`
+
 ## Legacy Resolution
 
 `Integration Manager` resolves to ChatGPT Orchestrator through
