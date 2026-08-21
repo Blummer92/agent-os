@@ -460,7 +460,9 @@ def test_repository_observation_is_derived_from_canonical_verifier_stdout(
     # Every Git fact comes from the verifier, none from ad hoc inspection.
     assert observation.head_ref == "main"
     assert observation.head_sha == HEAD_SHA
-    assert observation.base_ref == "origin/main"
+    # The verifier emits origin/main, but the observation adapter owns the one
+    # transport-to-canonical conversion before host state consumes it.
+    assert observation.base_ref == "main"
     assert observation.base_sha == BASE_SHA
     assert observation.observed_sha == HEAD_SHA
     assert observation.worktree_state is WorktreeState.CLEAN
