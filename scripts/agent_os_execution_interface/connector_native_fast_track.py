@@ -91,7 +91,9 @@ class ConnectorNativeFastTrackDecision:
         if self.action is not expected_action:
             raise ValueError("action does not match the supplied #918 route decision")
         if self.reason_codes != expected_reasons:
-            raise ValueError("reason_codes do not match the supplied #918 route decision")
+            raise ValueError(
+                "reason_codes do not match the supplied #918 route decision"
+            )
 
     @property
     def route_decision_id(self) -> str:
@@ -130,7 +132,8 @@ def _expected_consumption(
             return (
                 ConnectorNativeFastTrackAction.NEEDS_DECISION,
                 (
-                    ConnectorNativeFastTrackReason.UPSTREAM_REPOSITORY_WRITE_AUTHORITY_MISSING,
+                    ConnectorNativeFastTrackReason.
+                    UPSTREAM_REPOSITORY_WRITE_AUTHORITY_MISSING,
                 ),
             )
         return (
