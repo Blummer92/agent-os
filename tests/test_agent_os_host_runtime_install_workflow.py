@@ -48,7 +48,8 @@ def test_host_runtime_route_pins_source_and_installer_integrity() -> None:
     assert source is not None
     assert installer is not None
     assert "sha256sum -c -" in text
-    assert 'gcloud compute scp "$local_installer"' in text
+    assert "gcloud compute scp" not in text
+    assert 'installer="\\$root/08_Tooling/agent-os-execution-service/scripts/install-host-runtime"' in text
     assert 'git -C "\\$root" checkout --quiet -B main $HOST_RUNTIME_SOURCE_SHA' in text
     assert "COMMENT_BODY" not in text.split("remote_command=$(cat <<EOF_REMOTE", 1)[1]
 
