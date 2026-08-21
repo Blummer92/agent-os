@@ -8,7 +8,7 @@
   },
   "scripts": {
     "test": "node --test test/*.test.mjs",
-    "check": "node --check safe_recording.mjs && node --check replay_capture.mjs"
+    "check": "node --check safe_recording.mjs && node --check replay_capture.mjs && node --check recorder_conformance.mjs"
   },
   "dependencies": {
     "@puppeteer/replay": "4.0.2",

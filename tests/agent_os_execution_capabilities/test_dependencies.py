@@ -14,7 +14,9 @@ from scripts.agent_os_execution_capabilities.dependencies import (
     QualificationOnlyDependencyPin,
     ReproducibilityLevel,
     RequiredEnvironmentSpec,
+    LocalProjectRequirement,
     dependency_readiness_evidence_payload,
+    reconstruct_required_environment_spec,
     required_environment_spec_payload,
 )
 
@@ -123,3 +125,118 @@ def test_evidence_currentness_and_serialization_are_deterministic() -> None:
     assert not evidence.is_current("2026-08-15T21:00:00Z")
     assert dependency_readiness_evidence_payload(evidence)["execution_authorized"] is False
     assert required_environment_spec_payload(spec)["required_environment_id"] == spec.required_environment_id
+
+
+# --- AOS-GCE2F (#1320) canonical spec reconstruction --------------------------
+
+
+def test_reconstruction_round_trips_the_exact_canonical_spec() -> None:
+    spec = python_spec(
+        lock_or_constraints_identity=artifact("constraints.txt", "c" * 64),
+        local_project_requirements=(
+            LocalProjectRequirement(
+                relative_path="08_Tooling/workflow-scheduler",
+                sha256="d" * 64,
+                editable=True,
+            ),
+        ),
+        required_validation_command_ids=("pytest", "structural"),
+    )
+
+    rebuilt = reconstruct_required_environment_spec(
+        required_environment_spec_payload(spec)
+    )
+
+    assert type(rebuilt) is RequiredEnvironmentSpec
+    assert rebuilt == spec
+    assert rebuilt.required_environment_id == spec.required_environment_id
+
+
+def test_reconstruction_preserves_qualification_only_pins() -> None:
+    spec = python_spec(
+        install_mode=DependencyInstallMode.QUALIFICATION_ONLY,
+        qualification_only_pins=(
+            QualificationOnlyDependencyPin(package="hypothesis", version="6.165.9"),
+        ),
+    )
+
+    assert reconstruct_required_environment_spec(
+        required_environment_spec_payload(spec)
+    ) == spec
+
+
+def test_reconstruction_identity_changes_when_canonical_inputs_change() -> None:
+    baseline = python_spec()
+    changed = python_spec(dependency_manifest_identity=artifact("requirements-dev.txt", "e" * 64))
+
+    assert changed.required_environment_id != baseline.required_environment_id
+    assert (
+        reconstruct_required_environment_spec(
+            required_environment_spec_payload(changed)
+        ).required_environment_id
+        == changed.required_environment_id
+    )
+
+
+def test_reconstruction_rejects_a_content_mismatched_identity() -> None:
+    payload = required_environment_spec_payload(python_spec())
+    payload["runtime_requirement"] = ">=3.12"
+
+    with pytest.raises(ValueError, match="required_environment_id"):
+        reconstruct_required_environment_spec(payload)
+
+
+def test_reconstruction_requires_an_asserted_identity() -> None:
+    payload = required_environment_spec_payload(python_spec(), include_id=False)
+    payload["required_environment_id"] = ""
+
+    with pytest.raises(ValueError, match="required_environment_id"):
+        reconstruct_required_environment_spec(payload)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda payload: payload.pop("approved_source_identity"),
+        lambda payload: payload.__setitem__("unexpected", True),
+        lambda payload: payload.__setitem__("local_project_requirements", {}),
+        lambda payload: payload.__setitem__("qualification_only_pins", {}),
+        lambda payload: payload.__setitem__("required_validation_command_ids", "pytest"),
+        lambda payload: payload.__setitem__("ecosystem", "rust-cargo"),
+        lambda payload: payload.__setitem__("install_mode", "guess"),
+        lambda payload: payload.__setitem__("dependency_manifest_identity", {"sha256": SHA}),
+        lambda payload: payload.__setitem__(
+            "local_project_requirements", [{"relative_path": "x", "sha256": SHA}]
+        ),
+        lambda payload: payload.__setitem__("qualification_only_pins", [{"package": "x"}]),
+    ),
+)
+def test_reconstruction_fails_closed_on_malformed_payloads(mutate) -> None:
+    payload = required_environment_spec_payload(python_spec())
+    mutate(payload)
+
+    with pytest.raises((TypeError, ValueError)):
+        reconstruct_required_environment_spec(payload)
+
+
+def test_reconstruction_rejects_non_object_payloads() -> None:
+    for payload in (None, [], "required-environment:x", 7):
+        with pytest.raises((TypeError, ValueError)):
+            reconstruct_required_environment_spec(payload)
+
+
+def test_reconstructed_spec_carries_no_runtime_readiness_fields() -> None:
+    spec = reconstruct_required_environment_spec(
+        required_environment_spec_payload(python_spec())
+    )
+
+    for name in (
+        "preparation_status",
+        "cache_state",
+        "resolved_dependency_identity",
+        "reproducibility_level",
+        "observed_at",
+        "expires_at",
+        "dependency_readiness_evidence_id",
+    ):
+        assert not hasattr(spec, name)

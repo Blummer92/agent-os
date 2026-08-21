@@ -18,9 +18,7 @@ scripts/verify-repo-state.sh [--create-from-base] <branch> [base]
 Usage, branch-creation policy, dirty-tree policy, examples, and known
 limitations are documented in `scripts/verify-repo-state.md`. The stdout
 evidence format, stderr logging contract, exit codes, and retry behavior are in
-`scripts/verify-repo-state-contract.md`.
-
-Tests: `tests/test_verify_repo_state.py`.
+`scripts/verify-repo-state-contract.md`. Tests: `tests/test_verify_repo_state.py`.
 
 ## build-chatgpt-checkout-package.sh
 
@@ -35,10 +33,9 @@ scripts/build-chatgpt-checkout-package.sh \
   --output <absolute .zip path>
 ```
 
-Syntax, manifest fields, exclusions, and the determinism boundary are
-documented in `scripts/build-chatgpt-checkout-package.md`.
-
-Tests: `tests/test_build_chatgpt_checkout_package.py`.
+Syntax, manifest fields, exclusions, and the determinism boundary are documented
+in `scripts/build-chatgpt-checkout-package.md`. Tests:
+`tests/test_build_chatgpt_checkout_package.py`.
 
 ## agent-os-release-run.py
 
@@ -68,3 +65,30 @@ Bounded local Git Database adapter for Issue #920. It reads exact commit/tree/bl
 Local advisory guard against pushes to protected branches, installed as a
 `pre-push` hook. Policy lives in
 `01_Shared_Standards/github/protected-branch-governance.md`.
+
+## agent-os-execution-interface-preflight.py
+
+Pre-tool governed-route preflight for #1237, wired from `.claude/settings.json` as Claude Code `UserPromptSubmit` and `PreToolUse` hooks so a governed Agent OS request resolves the existing handoff-discovery/resume path before generic GitHub publish tooling checks local `git`/`gh`. It consumes the existing #1237 locator and introduces no second router, locator, descriptor store, transport, Scheduler, lease, or execution authority.
+
+```bash
+scripts/agent-os-execution-interface-preflight.py \
+  --repository Blummer92/agent-os --issue 1259 --store-root <path>
+```
+
+Contract, outcomes, configuration, boundary, and rollback are documented in
+`scripts/agent-os-execution-interface-preflight.md`. Tests:
+`tests/agent_os_execution_interface/`.
+
+## agent_os_execution_interface/post_selection_continuation.py
+
+Pure post-selection half of the same #1237 seam. When an already-selected tool/action turns out to be insufficient, it classifies the attempt into #1237's six fixed states and returns the obligations the caller must discharge, so a capable approved alternative is consumed on the same issue/branch/PR/checkpoint/lease lineage instead of being reported as a handoff. It consumes the existing #1039 `ExecutionSurfaceAvailabilityOutcome`, delegates repeated transitions to #1200 and cross-surface evidence to #1201, refuses #1209/#1235/#1251 lifecycles outright, and adds no router, retry engine, Scheduler, registry, or authority. See `scripts/agent-os-post-selection-continuation.md`; tests: `tests/agent_os_execution_interface/test_post_selection_continuation.py`.
+
+## agent_os_execution_interface/pre_pr_runtime_compatibility.py
+
+Pure pre-dispatch projection for #1278. It joins existing #1197
+`RequiredEnvironmentSpec`/`DependencyReadinessEvidence` into existing #918
+`ExecutorCapability` routing inputs so a declared pre-PR developer loop is never
+routed to a surface that only edits code or reads/writes GitHub. It adds no
+route, runner, Scheduler, registry, dependency framework, or authority. See
+`scripts/agent-os-prepr-runtime-compatibility.md`; tests:
+`tests/agent_os_execution_interface/test_pre_pr_runtime_compatibility.py`.

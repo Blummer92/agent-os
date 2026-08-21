@@ -2,12 +2,18 @@
 
 ## Purpose
 
-This file lists approved exceptions to the under-100-line Markdown rule used by
-`07_Agent_Tests/validate-repo-structure.sh`.
+Frequently loaded governance Markdown normally targets roughly 100-200 lines
+(#1309-O). `07_Agent_Tests/validate-repo-structure.sh` reports a file over
+200 lines as a non-blocking advisory maintainability note only; line count
+alone never fails that check, authorizes semantic deletion, or forces
+artificial modularity. This file lists files exempted from even that
+advisory review because they predate the cleanup or are canonical deep
+standards, dense registries, generated references, schemas, or history where
+splitting would reduce clarity or duplicate semantics.
 
 Exceptions must be explicit, narrow, and reviewed. New active Agent OS guidance
-should still be split into files under 100 lines unless a governance review
-approves an exception.
+should still target roughly 100-200 lines unless a governance review approves
+an exception.
 
 ## Current Exceptions
 
@@ -70,10 +76,11 @@ governance review.
 
 ## Version
 
-0.2.2
+0.3.0
 
 ## Changelog
 
+- 0.3.0 documents the #1309-O advisory-only ~100-200-line target: the structural check no longer fails on line count alone, and this exception list now scopes files exempt from even the non-blocking advisory review; no exception entry was added or removed.
 - 0.2.2 removed the temporary DMSC navigation map exceptions after Issue #150
   split the oversized maps into smaller indexed files.
 - 0.2.1 added 2 temporary DMSC navigation registry map exceptions to restore

@@ -25,9 +25,14 @@ from scripts.agent_os_execution_checkpoint.resume_planner import (
     AuthorityCeiling,
     ResumePlan,
     StageClassification,
+    StageDecision,
     authority_ceiling_from_decision,
     authority_permits_stage,
+    deserialize_resume_plan,
     plan_resume,
+    resume_plan_from_dict,
+    serialize_resume_plan,
+    stage_decision_from_dict,
 )
 from scripts.agent_os_issue_acceptance.issue_operational_state import (
     AuthorityProjection,
@@ -522,3 +527,69 @@ def test_plan_resume_rejects_non_binding_snapshot() -> None:
             repository=REPOSITORY, issue_number=ISSUE_NUMBER, execution_id=EXECUTION_ID,
             evaluated_at=EVALUATED_AT, current_bindings={}, stored_checkpoints=(),
         )
+
+
+# --- round-trip reconstruction (#1304) --------------------------------------
+
+
+def _sample_plan() -> ResumePlan:
+    return plan_resume(
+        repository=REPOSITORY, issue_number=ISSUE_NUMBER, execution_id=EXECUTION_ID,
+        evaluated_at=EVALUATED_AT, current_bindings=base_bindings(), stored_checkpoints=(),
+    )
+
+
+def test_stage_decision_round_trips_through_dict() -> None:
+    decision = StageDecision(
+        stage=CheckpointStage.PREFLIGHT_COMPLETE,
+        classification=StageClassification.REUSABLE,
+        evidence_checkpoint_id=None,
+        reason="matching evidence",
+    )
+    assert stage_decision_from_dict(decision.to_dict()) == decision
+
+
+def test_resume_plan_round_trips_through_dict() -> None:
+    plan = _sample_plan()
+    reconstructed = resume_plan_from_dict(plan.to_dict())
+    assert reconstructed == plan
+    assert reconstructed.plan_id == plan.plan_id
+
+
+def test_resume_plan_serialize_deserialize_round_trip_is_byte_exact() -> None:
+    plan = _sample_plan()
+    serialized = serialize_resume_plan(plan)
+    assert serialize_resume_plan(deserialize_resume_plan(serialized)) == serialized
+    assert deserialize_resume_plan(serialized) == plan
+
+
+def test_resume_plan_from_dict_rejects_unknown_or_missing_fields() -> None:
+    payload = _sample_plan().to_dict()
+    payload["unexpected"] = True
+    with pytest.raises(ValueError):
+        resume_plan_from_dict(payload)
+    del payload["unexpected"]
+    del payload["plan_id"]
+    with pytest.raises(ValueError):
+        resume_plan_from_dict(payload)
+
+
+def test_resume_plan_from_dict_rejects_claimed_authority() -> None:
+    payload = _sample_plan().to_dict()
+    payload["execution_authorized"] = True
+    with pytest.raises(ValueError):
+        resume_plan_from_dict(payload)
+
+
+def test_resume_plan_from_dict_rejects_tampered_content() -> None:
+    payload = _sample_plan().to_dict()
+    payload["plan_id"] = "agent-os.execution-checkpoint.resume-plan:" + "0" * 64
+    with pytest.raises(ValueError):
+        resume_plan_from_dict(payload)
+
+
+def test_deserialize_resume_plan_rejects_non_bytes_and_oversized() -> None:
+    with pytest.raises(TypeError):
+        deserialize_resume_plan("not bytes")
+    with pytest.raises(ValueError):
+        deserialize_resume_plan(b"x" * (64 * 1024 + 1))

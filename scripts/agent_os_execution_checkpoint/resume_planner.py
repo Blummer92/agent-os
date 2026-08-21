@@ -461,3 +461,108 @@ def plan_resume(
         resume_point=None if all_reusable else resume_point,
         evaluated_at=evaluated_at,
     )
+
+
+_STAGE_DECISION_DICT_KEYS = frozenset(
+    {"stage", "classification", "evidence_checkpoint_id", "reason"}
+)
+
+_RESUME_PLAN_DICT_KEYS = frozenset(
+    {
+        "schema_name",
+        "schema_version",
+        "repository",
+        "issue_number",
+        "execution_id",
+        "stage_decisions",
+        "resume_point",
+        "plan_id",
+        "evaluated_at",
+        "repository_implementation_authorized",
+        "execution_authorized",
+        "github_writes_authorized",
+        "merge_authorized",
+        "issue_closure_authorized",
+        "external_writes_authorized",
+    }
+)
+
+
+def stage_decision_from_dict(payload: object) -> StageDecision:
+    """Reconstruct one ``StageDecision`` from its exact ``to_dict()`` shape."""
+
+    if type(payload) is not dict:
+        raise TypeError("stage decision payload must be an exact dict")
+    if set(payload) != _STAGE_DECISION_DICT_KEYS:
+        raise ValueError("stage decision contains unknown or missing fields")
+    return StageDecision(
+        stage=CheckpointStage(payload["stage"]),
+        classification=StageClassification(payload["classification"]),
+        evidence_checkpoint_id=payload["evidence_checkpoint_id"],
+        reason=payload["reason"],
+    )
+
+
+def resume_plan_from_dict(payload: object) -> ResumePlan:
+    """Reconstruct one ``ResumePlan`` from its exact ``to_dict()`` shape (#1304).
+
+    Unknown or missing fields fail closed; deserialization re-runs full
+    ``__post_init__`` validation, including ``plan_id`` recomputation, so
+    tampered content is rejected here rather than trusted.
+    """
+
+    if type(payload) is not dict:
+        raise TypeError("resume plan payload must be an exact dict")
+    if set(payload) != _RESUME_PLAN_DICT_KEYS:
+        raise ValueError("resume plan contains unknown or missing fields")
+    for flag in (
+        "repository_implementation_authorized",
+        "execution_authorized",
+        "github_writes_authorized",
+        "merge_authorized",
+        "issue_closure_authorized",
+        "external_writes_authorized",
+    ):
+        if payload[flag] is not False:
+            raise ValueError(f"serialized resume plan cannot claim {flag}=true")
+    stage_decisions = payload["stage_decisions"]
+    if type(stage_decisions) is not list:
+        raise TypeError("stage_decisions must be an exact list")
+    resume_point = payload["resume_point"]
+    return ResumePlan(
+        schema_name=payload["schema_name"],
+        schema_version=payload["schema_version"],
+        repository=payload["repository"],
+        issue_number=payload["issue_number"],
+        execution_id=payload["execution_id"],
+        stage_decisions=tuple(
+            stage_decision_from_dict(item) for item in stage_decisions
+        ),
+        resume_point=None if resume_point is None else CheckpointStage(resume_point),
+        evaluated_at=payload["evaluated_at"],
+        plan_id=payload["plan_id"],
+    )
+
+
+def serialize_resume_plan(plan: ResumePlan) -> bytes:
+    """Canonical byte-exact serialization (ADR-0002 details-01b)."""
+
+    if type(plan) is not ResumePlan:
+        raise TypeError("plan must be an exact ResumePlan")
+    return canonical_json_bytes(plan.to_dict())
+
+
+def deserialize_resume_plan(serialized: object) -> ResumePlan:
+    if type(serialized) is not bytes:
+        raise TypeError("serialized resume plan must be built-in bytes")
+    if len(serialized) > MAX_SERIALIZED_BYTES:
+        raise ValueError("serialized resume plan exceeds its bound")
+    import json
+
+    try:
+        payload = json.loads(serialized.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("serialized resume plan is not valid UTF-8 JSON") from exc
+    except RecursionError as exc:
+        raise ValueError("serialized resume plan is nested too deeply") from exc
+    return resume_plan_from_dict(payload)

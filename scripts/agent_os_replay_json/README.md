@@ -33,29 +33,23 @@ Application-specific UX rules belong outside this parser. The analyzer reports e
 
 RJ2 consumes the RJ1 semantic timeline and produces a bounded proposed rewrite.
 
-Supported rewrite vocabulary:
+Supported rewrite vocabulary: `keep`, `remove-noise`, `replace-sequence`, `move-before`, `move-after`, `change-selector`, and `insert-assertion`.
 
-- `keep`
-- `remove-noise`
-- `replace-sequence`
-- `move-before`
-- `move-after`
-- `change-selector`
-- `insert-assertion`
-
-Safety rules:
-
-- preserve source-index provenance;
-- never invent selectors;
-- preserve unknown/unsupported steps;
-- preserve click versus double-click;
-- do not remove recovery behavior as noise;
-- reject instructional-action removal;
-- treat reorder requests as unproven without explicit dependency evidence;
-- return `proven`, `unproven`, or `rejected` rather than guessing.
+Safety rules: preserve source-index provenance; never invent selectors; preserve unknown/unsupported steps and click versus double-click; do not remove recovery behavior as noise; reject instructional-action removal; treat reorder requests as unproven without dependency evidence; return `proven`, `unproven`, or `rejected` rather than guessing.
 
 RJ2 does not prove Recorder-format conformance or browser replay equivalence.
 
-Canonical sequence:
+Canonical sequence: `RJ1 semantic analysis -> RJ2 rewrite -> RJ3 conformance -> RJ4 replay equivalence`.
 
-`RJ1 semantic analysis -> RJ2 rewrite -> RJ3 conformance -> RJ4 replay equivalence`
+## Recorder artifact reference contract (PP-RJ2 / #1135)
+
+`artifact_reference.py` keeps Recorder source evidence content-addressed and storage-provider-neutral.
+
+- `sha256` over the exact bytes is canonical content identity; filename, title, path, Drive file ID, and other `artifact_ref` values are location/display evidence only.
+- `recording_id` is derived from the content digest, so moving identical bytes does not create a new identity.
+- Originals have no parent. Derived artifacts require an exact `parent_sha256` plus a bounded `derivation_kind`; self-parent and mismatched lineage fail closed.
+- Retrieval must call `verify_artifact_bytes(...)` before a stored reference is trusted, which catches replacement-in-place and partial/truncated reads.
+- `RecorderPipelineStatuses` preserves RJ1-RJ4 states explicitly; pending or indeterminate evidence never becomes success by inference.
+- `build_notion_projection(...)` emits bounded reference/status metadata only. It has no raw Recorder payload input and therefore cannot copy `steps`, URLs, URNs, selector chains, or typed values into Notion projection data.
+
+The preferred future authentic-artifact location may be a separately approved private Drive evidence folder, with local-only storage as fallback. This pure core performs no upload/download and grants no Notion, Drive, browser, image-provider, or external-write authority.
