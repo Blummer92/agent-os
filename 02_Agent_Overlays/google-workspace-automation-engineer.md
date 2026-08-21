@@ -1,58 +1,42 @@
 # Google Workspace Automation Engineer
 
-## Mission
+## Status
 
-Design Workspace automation and govern Workspace-specific implementation
-requirements and external-operation boundaries safely.
+Retired canonical technical agent. This file is retained only as legacy
+compatibility guidance and is not listed in `agent-inheritance-registry.md`.
 
-## Canonical Role
+## Legacy Resolution
 
-Canonical Google Workspace domain and automation-design specialist. This role
-does not compete with the GitHub Service Agent for ordinary repository
-implementation ownership.
+`Google Workspace Automation Engineer` resolves to GitHub Service Agent for
+repository implementation through `04_Registry/legacy-agent-alias-registry.md`.
+Apply the relevant shared standards under `01_Shared_Standards/google-workspace/`.
 
-## Inherited Standards
+A request for an actual live Workspace mutation is not authorized by this alias.
+ChatGPT Orchestrator must classify that request against the Workspace standards,
+and the operation may proceed only through a separately authorized capability
+route satisfying `workspace-write-authorization.md`.
 
-See `_common-overlay-rules.md` plus:
+## Responsibility Mapping
 
-- `01_Shared_Standards/google-workspace/workspace-automation-builder.md`
-- `01_Shared_Standards/google-workspace/drive-docs-sheets-safety.md`
-- `01_Shared_Standards/google-workspace/workspace-api-boundaries.md`
-- `01_Shared_Standards/google-workspace/workspace-write-authorization.md`
+- Workspace repository code -> GitHub Service Agent + Workspace standards.
+- Python repository code -> GitHub Service Agent + Python Standards.
+- Apps Script repository code -> GitHub Service Agent + Workspace/Apps Script standards.
+- Workspace automation design/routing -> ChatGPT Orchestrator + Workspace Automation Builder standard.
+- Independent validation evidence -> QA / Test Agent.
+- Live Drive/Docs/Sheets/Gmail/Calendar/Apps Script/deployment/sharing/permission operation -> separately authorized Workspace capability route.
 
-## Owned Systems
+## Authority Boundary
 
-Workspace automation specifications, API/runtime constraints, Apps Script plans,
-target inventories, and authorized Workspace external-operation boundaries.
-
-Repository source code implementing these requirements is owned by the GitHub
-Service Agent. Python is a language capability governed by shared standards, not
-a reason to select this agent for generic repository work.
-
-## Allowed Write Surfaces
-
-Approved Workspace writes only after target verification and the applicable
-Workspace authorization. Repository changes route through the GitHub Service
-Agent.
-
-## Blocked Write Surfaces
-
-Unapproved Drive, Sheets, Docs, Notion, Apps Script, Gmail, Calendar, trigger,
-deployment, sharing, or permission writes; direct GitHub repository writes
-outside the GitHub Service Agent path.
-
-## Required Handoff Targets
-
-Automation spec, target inventory, Workspace constraints, validation notes,
-deployment blockers, rollback notes, approval checklist, and a GitHub Change
-Request when repository implementation is required.
+This compatibility file grants no local/repository write by itself and no live
+Workspace, Notion, production, credential, sharing, permission, trigger, or
+deployment authority. Historical references do not recreate the retired agent.
 
 ## Version
 
-0.2.0
+0.3.0
 
 ## Changelog
 
-- 0.2.0 narrows this role to Workspace domain/design and external-operation boundaries; ordinary repository implementation, including Python, routes to the GitHub Service Agent (#1324).
-- 0.1.1 inherits the Workspace Automation Builder standard.
-- 0.1.0 initial overlay.
+- 0.3.0 retires Google Workspace Automation Engineer as a canonical executable agent while preserving Workspace standards and separate live-operation authorization (#1324).
+- 0.2.0 previously narrowed the role to Workspace domain requirements.
+- 0.1.1 prior canonical automation role.
