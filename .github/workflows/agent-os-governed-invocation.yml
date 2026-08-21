@@ -109,7 +109,7 @@ jobs:
         if: ${{ steps.host_install.outputs.requested == 'true' }}
         shell: bash
         env:
-          HOST_RUNTIME_SOURCE_SHA: 87b33bb1b9487e1370f3d39fda85d5a32b82c334
+          HOST_RUNTIME_SOURCE_SHA: 038fd018c8d132d07815d6e7e34a4f0eda8d2d8b
           HOST_INSTALL_SCRIPT_SHA256: 4fd47315c98b525bac917fb3aa65e97300e8706ecf2e6a48ff0fcbdcd8f5f6b9
         run: |
           set -euo pipefail
@@ -119,7 +119,6 @@ jobs:
           zone="us-central1-a"
           instance="agent-os-test"
           local_installer="08_Tooling/agent-os-execution-service/scripts/install-host-runtime"
-          remote_installer="/tmp/agent-os-install-host-runtime-1238.sh"
           remote_root="/tmp/agent-os-host-runtime-1238"
 
           printf '%s  %s\n' "$HOST_INSTALL_SCRIPT_SHA256" "$local_installer" | sha256sum -c -
@@ -170,17 +169,19 @@ jobs:
             exit 1
           fi
 
-          gcloud compute scp "$local_installer" "$instance:$remote_installer" \
-            --project "$project" --zone "$zone" --tunnel-through-iap --quiet
-
           remote_command=$(cat <<EOF_REMOTE
           set -eu
           root=$remote_root
-          installer=$remote_installer
-          trap 'rm -rf "\$root" "\$installer"' EXIT HUP INT TERM
+          trap 'rm -rf "\$root"' EXIT HUP INT TERM
           rm -rf "\$root"
           git clone --quiet https://github.com/Blummer92/agent-os.git "\$root"
           git -C "\$root" checkout --quiet -B main $HOST_RUNTIME_SOURCE_SHA
+          installer="\$root/08_Tooling/agent-os-execution-service/scripts/install-host-runtime"
+          actual_installer_sha="\$(sha256sum "\$installer" | awk '{print \$1}')"
+          if [ "\$actual_installer_sha" != "$HOST_INSTALL_SCRIPT_SHA256" ]; then
+            echo 'host runtime install refused: installer checksum mismatch' >&2
+            exit 64
+          fi
           EXPECTED_SHA=$HOST_RUNTIME_SOURCE_SHA REPOSITORY_ROOT="\$root" sh "\$installer"
           EOF_REMOTE
           )
@@ -193,7 +194,25 @@ jobs:
           set -e
 
           if [ "$remote_status" -ne 0 ]; then
-            START_ISSUED="$start_issued" VM_STATE="$state" python - <<'PY'
+            failure_reason=host-runtime-install-failed
+            if [ "$remote_status" -eq 64 ]; then
+              refusal="$(grep -E '^host runtime install refused: ' "$evidence_root/host-install.stderr" | tail -n 1 || true)"
+              case "$refusal" in
+                *"installer checksum mismatch") failure_reason=host-installer-integrity-mismatch ;;
+                *"checkout does not match EXPECTED_SHA") failure_reason=host-runtime-source-mismatch ;;
+                *"checkout must be on main") failure_reason=host-runtime-source-not-main ;;
+                *"host OS identity unavailable") failure_reason=host-os-identity-unavailable ;;
+                *"qualified host must be Debian") failure_reason=host-os-unqualified ;;
+                *"qualified host must be Debian 12") failure_reason=host-os-version-unqualified ;;
+                *"sudo unavailable") failure_reason=host-sudo-unavailable ;;
+                *"passwordless bounded sudo unavailable") failure_reason=host-passwordless-sudo-unavailable ;;
+                *"python3 pip unavailable") failure_reason=host-python-pip-unavailable ;;
+                *"expected one reusable-capability-registry wheel"|*"expected one agent-memory-context-manager wheel"|*"expected one workflow-scheduler wheel"|*"expected one agent-os-execution-service wheel") failure_reason=host-runtime-wheel-shape-invalid ;;
+                *"entrypoint installer was not idempotent") failure_reason=host-entrypoint-idempotency-failed ;;
+                *"entrypoint owner/group/mode mismatch") failure_reason=host-entrypoint-integrity-mismatch ;;
+              esac
+            fi
+            FAILURE_REASON="$failure_reason" START_ISSUED="$start_issued" VM_STATE="$state" python - <<'PY'
           import json
           import os
           from pathlib import Path
@@ -202,7 +221,7 @@ jobs:
               "schema_version": "1.0",
               "maintenance": {
                   "status": "needs-decision",
-                  "reason_codes": ["host-runtime-install-failed"],
+                  "reason_codes": [os.environ["FAILURE_REASON"]],
                   "project": "agent-os-502614",
                   "zone": "us-central1-a",
                   "instance": "agent-os-test",
