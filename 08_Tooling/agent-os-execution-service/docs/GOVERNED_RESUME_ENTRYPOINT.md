@@ -29,8 +29,9 @@ with their existing canonical owners.
 `python3 -m agent_os_execution_service.governed_resume_entrypoint "$@"` (what the
 installed wrapper runs) genuinely parses argv, reconstructs, and dispatches at
 most once instead of silently completing as a no-op. Argv parsing (and its
-rejection of anything other than one canonical `--handoff-id`) still runs before
-`bindings.reconstruct` is ever called.
+rejection of anything other than one canonical `--handoff-id`) runs before any
+production factory import, host configuration read, GitHub transport creation,
+repository verification, reconstruction, or Scheduler dispatch.
 
 `build_governed_resume_bindings(...)` composes the real
 `reconstruct_governed_invocation` (#1218) and `run_single_issue_pilot` (#758/#1253)
@@ -41,13 +42,17 @@ executor/validator adapters, cancellation probe) is an existing canonical
 protocol implementation supplied by the caller; this function performs no
 reconstruction or dispatch logic of its own and invents no adapter.
 
-Concrete production instances of those adapters (real descriptor storage,
-GitHub-backed current-evidence readers, host-local lease/workspace/executor
-adapters) are host composition, not part of this repository-only slice -- see
-"Remaining risks" on the linked pull request. Run with no `bindings` supplied,
-`main()` uses a fail-closed stand-in that raises before any dispatch could
-occur, so the installed host command can no longer exit successfully without
-attempting governed resume.
+AOS-GCE1 (#1217) now gives normal installed execution its production default.
+When `bindings` is omitted, `main()` validates the immutable handoff ID and then
+calls `production_governed_resume_factory.build_production_governed_resume_bindings_for_handoff(...)`.
+That factory reconstructs only the canonical evidence required to instantiate
+the existing #1319 `ProductionHostBootstrap`, then returns the existing #1287
+production bindings. Explicit injected bindings remain unchanged for tests and
+governed callers. `_no_host_composition_bindings` remains the explicit
+fail-closed no-host-composition path, and unavailable or invalid production host
+composition is surfaced through that same fail-closed contract with zero
+Scheduler dispatch. See `PRODUCTION_GOVERNED_RESUME_FACTORY.md` for the exact
+#1217 evidence binding and rollback.
 
 ## Installation contract
 
