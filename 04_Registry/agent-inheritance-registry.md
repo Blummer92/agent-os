@@ -2,14 +2,16 @@
 
 Every registered agent overlay inherits the universal baseline from
 `02_Agent_Overlays/_common-overlay-rules.md`: `Global Engineering`,
-`Read-Only Default`, and `Source-of-Truth Checks`. Shared technical standards
-supply language, platform, integration, and provider constraints without creating
-additional executable agents.
+`Read-Only Default`, and `Source-of-Truth Checks`. The two universal safety
+modules are inherited through that common baseline and are not repeated in
+individual agent rows. Shared technical standards supply language, platform,
+integration, and provider constraints without creating additional executable
+agents.
 
 | Agent | Inherits | Overlay |
 |---|---|---|
 | ChatGPT Orchestrator | Global Engineering | chatgpt-orchestrator |
-| GitHub Service Agent | Global Engineering, Python Standards | github-service-agent |
+| GitHub Service Agent | Global Engineering | github-service-agent |
 | Modeling & Dashboard Governance Agent | Global Engineering, Dashboard Governance, Notion Standards | modeling-dashboard-governance-agent |
 | QA / Test Agent | Global Engineering, QA/Test Standards | qa-test-agent |
 | Agent Orchestrator | Global Engineering, Instructional Design Standards | agent-orchestrator |
@@ -23,7 +25,8 @@ Agent OS has two canonical technical execution roles:
 
 1. **GitHub Service Agent** — the single canonical owner for authorized repository
    implementation and GitHub delivery, regardless of programming language,
-   framework, provider, or integration domain.
+   framework, provider, or integration domain. Applicable technical standards are
+   selected per task rather than inherited as new agent identities.
 2. **QA / Test Agent** — independent technical validation and evidence.
 
 Google Workspace, Apps Script, Python, integration architecture, Cloud Build,
