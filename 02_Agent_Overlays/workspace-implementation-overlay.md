@@ -4,6 +4,12 @@
 
 Specialist Workspace capability guidance; not a canonical executable agent.
 
+## Inherited Standards
+
+See `_common-overlay-rules.md` plus:
+- `01_Shared_Standards/google-workspace/workspace-automation-builder.md`
+- `01_Shared_Standards/google-workspace/workspace-write-authorization.md`
+
 ## Mission
 
 Preserve scoped Workspace implementation and external-operation constraints
