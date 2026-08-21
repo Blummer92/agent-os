@@ -36,7 +36,9 @@ class _Packet:
 
 
 class _Configuration:
-    pass
+    required_environment_spec = SimpleNamespace(
+        required_environment_id="required-environment:" + "e" * 64
+    )
 
 
 class _Readiness:
@@ -716,3 +718,45 @@ def test_publication_point_is_after_descriptor_persistence() -> None:
 def test_no_retry_or_fallback_loop_exists() -> None:
     tree = ast.parse(inspect.getsource(publication.publish_governed_handoff))
     assert not any(isinstance(node, (ast.For, ast.While)) for node in ast.walk(tree))
+
+
+def test_restart_capsule_carries_the_runtime_configurations_bound_environment(
+    monkeypatch,
+) -> None:
+    """AOS-GCE2F (#1320): the seam persists the already-verified spec, not a new one."""
+    case = _case(monkeypatch)
+    seen: list[object] = []
+    original = publication.build_restart_capsule
+    monkeypatch.setattr(
+        publication,
+        "build_restart_capsule",
+        lambda **kwargs: seen.append(kwargs.get("required_environment_spec"))
+        or original(**kwargs),
+    )
+
+    publication.publish_governed_handoff(**case.kwargs)
+
+    configuration = case.kwargs["runtime_configuration"]
+    assert seen == [configuration.required_environment_spec]
+
+
+def test_missing_bound_environment_blocks_publication(monkeypatch) -> None:
+    """A runtime configuration with no bound spec never reaches persistence."""
+    case = _case(monkeypatch)
+    original = publication.build_restart_capsule
+    monkeypatch.setattr(
+        publication,
+        "build_restart_capsule",
+        lambda **kwargs: (_ for _ in ()).throw(
+            TypeError("required_environment_spec must be an exact RequiredEnvironmentSpec")
+        )
+        if kwargs.get("required_environment_spec") is None
+        else original(**kwargs),
+    )
+    case.kwargs["runtime_configuration"].required_environment_spec = None
+
+    with pytest.raises(publication.HandoffPublicationError) as exc:
+        publication.publish_governed_handoff(**case.kwargs)
+
+    assert exc.value.reason_codes == ("current-evidence-malformed",)
+    assert "persist" not in case.events

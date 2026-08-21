@@ -38,13 +38,23 @@ executor-handoff:<sha256>
 
 `governed_resume_restart_capsule.py` is the single static continuation artifact permitted by #1303's consolidation decision. It is keyed by the existing immutable handoff identity and lives under the existing checkpoint-store root using the same bounded atomic-write and symlink-safety primitives already reused by #1304.
 
-The capsule carries only evidence that cannot be recovered from the small descriptor alone: the immutable CandidatePacket, the immutable approval decision record, canonical validation observations, expected validation/advisory identities, candidate branch/workspace identity, and bounded invalidation/timing evidence. Every authority flag is fixed `False`.
+The capsule carries only evidence that cannot be recovered from the small descriptor alone: the immutable CandidatePacket, the immutable approval decision record, the immutable `RequiredEnvironmentSpec` (#1320), canonical validation observations, expected validation/advisory identities, candidate branch/workspace identity, and bounded invalidation/timing evidence. Every authority flag is fixed `False`.
 
 The capsule does **not** persist a `SingleIssuePilotInput`, current authorization, Scheduler lease/admission state, current issue state, current repository state, current proposal, or current projection. Stored presence never grants currentness or execution authority.
 
 Publication is fail-closed: `publish_governed_handoff(...)` persists the capsule after #1304's route/handoff/checkpoint/ResumePlan durability checks and before the descriptor becomes discoverable. A capsule write failure therefore cannot expose a runnable descriptor whose static restart evidence is missing.
 
 The capsule step extends the existing #1243/#1304 publication seam rather than adding a second publication path. Capsule construction stays inside the seam's existing current-evidence boundary, so unbuildable restart evidence fails closed as `current-evidence-malformed` before any artifact is persisted. Capsule persistence adds exactly two bounded reason codes, `restart-capsule-persistence-failed` and `restart-capsule-persistence-mismatch`; both block descriptor persistence and neither retries. `tests/test_handoff_publication.py` owns this ordering and fail-closed contract for every step in the seam.
+
+## Required-environment persistence and recovery (#1320)
+
+AOS-GCE2F (#1320) added the `RequiredEnvironmentSpec` slot through this one existing capsule and its existing atomic/path-safe store. No new store, database, service, registry, cache, daemon, or persistence directory was created, and the capsule schema version moved to `1.1` so an older payload fails closed rather than being reinterpreted.
+
+`publish_governed_handoff(...)` persists the exact specification already bound into the verified `ConcreteRuntimeConfiguration`; a configuration with no bound specification fails closed as `current-evidence-malformed` before any artifact is written. `build_restart_capsule(...)` additionally re-checks that the specification's `required_validation_command_ids` bind to the CandidatePacket's required tests, reusing the same canonical rule the runtime configuration and validation stage already enforce.
+
+Recovery is `build_required_environment_spec_reader(store_root)`, the `RequiredEnvironmentSpecReader` #1303 expects and #1319 can compose without learning any source-of-truth internals. It loads the capsule for the descriptor's exact handoff identity, rebuilds the specification through the one canonical `reconstruct_required_environment_spec(...)` transport in `scripts.agent_os_execution_capabilities.dependencies`, and fails closed when the payload is missing, malformed, field-drifted, content-mismatched, or asserts an identity other than the descriptor's `required_environment_id`. #1303 keeps its own descriptor identity gate; the reader adds no second one.
+
+The persisted specification is **declarative requirement data only**. It never proves that dependencies are installed or READY. #1185/#1197 `DependencyReadinessEvidence` remains the sole runtime dependency-readiness authority and is reacquired and currentness-checked independently, exactly as described under "Dependency-readiness recovery" below. Validation plans and evidence remain owned by the existing validation contracts; no GitHub check or CI status becomes canonical validation evidence.
 
 ## Current evidence reacquisition
 
@@ -104,4 +114,4 @@ Workflow Scheduler remains the sole admission/lease/execution authority. #1218/#
 
 ## Rollback
 
-Revert the #1303 production source module, restart-capsule module/tests, publication hook, and this documentation. Existing #1218/#1253 reconstruction/currentness, #1304 durable route/handoff/checkpoint/ResumePlan records, Scheduler leases, and external resources remain unchanged.
+Revert the #1303 production source module, restart-capsule module/tests, publication hook, the #1320 required-environment capsule slot/reader and its canonical spec-reconstruction helper, and this documentation. Existing #1218/#1253 reconstruction/currentness, #1304 durable route/handoff/checkpoint/ResumePlan records, Scheduler leases, and external resources remain unchanged.
