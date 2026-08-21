@@ -5,6 +5,11 @@
 Retired canonical technical agent. This file is retained only as legacy
 compatibility guidance and is not listed in `agent-inheritance-registry.md`.
 
+## Inherited Standards
+
+See `_common-overlay-rules.md` plus the relevant shared standards under
+`01_Shared_Standards/google-workspace/`.
+
 ## Legacy Resolution
 
 `Google Workspace Automation Engineer` resolves to GitHub Service Agent for
