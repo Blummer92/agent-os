@@ -129,12 +129,12 @@ def _expected_consumption(
             route_decision.execution_authorized
             and route_decision.github_writes_authorized
         ):
+            missing_authority_reason = (
+                ConnectorNativeFastTrackReason.UPSTREAM_REPOSITORY_WRITE_AUTHORITY_MISSING
+            )
             return (
                 ConnectorNativeFastTrackAction.NEEDS_DECISION,
-                (
-                    ConnectorNativeFastTrackReason.
-                    UPSTREAM_REPOSITORY_WRITE_AUTHORITY_MISSING,
-                ),
+                (missing_authority_reason,),
             )
         return (
             ConnectorNativeFastTrackAction.USE_CONNECTOR_NATIVE,
