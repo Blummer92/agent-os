@@ -93,10 +93,16 @@ fallback, and human-decision routes remain non-publishable through the existing
 `route-not-governed-runner` boundary. Non-pre-PR publication does not invoke this
 additional binding check.
 
-This closes the repository integration gap without changing Cloud Build. Local
-or VM developer-loop success remains non-final; the existing testing/release
-standard still requires the authoritative exact-head aggregate before
-Ready-for-Review.
+This closes the repository integration gap without changing any final-validation
+provider or trigger. Local or VM developer-loop success remains non-final; the
+existing testing/release standard still requires an authoritative exact-head
+aggregate before Ready-for-Review.
+
+Current `main` documents `Agent OS Validation Gate` as the repository-visible
+compatibility/validation path and Cloud Build as a supplemental Linux validation
+surface. #1325 intentionally leaves that relationship unchanged. Making Cloud
+Build the exclusive Ready-for-Review final gate would require a separate
+governed workflow/project-settings decision and is not implied by this change.
 
 #1251 remains the separate owner of recoverable red-CI checkpoint,
 classification, same-lineage repair, focused revalidation, and exact-head
@@ -111,7 +117,7 @@ the executor-route owner, #1197 the dependency/runtime readiness owner, #1201
 the cross-surface currentness owner, #1237 the same-lineage continuation owner,
 #1251 the red-CI continuation owner, and #1077 the pre-PR validation owner.
 Nothing here weakens pre-PR validation or permits a Draft PR opened merely to
-obtain a runtime. Cloud Build remains the authoritative final exact-head gate.
+obtain a runtime. Final-validation provider/trigger policy is unchanged.
 
 ## Rollback
 
@@ -126,7 +132,8 @@ remove
 `08_Tooling/agent-os-execution-service/tests/test_pre_pr_handoff_publication_binding.py`,
 and revert this production-consumption section. Existing executor routes,
 dependency readiness, environment-health evidence, Scheduler/checkpoint lineage,
-Cloud Build, branches, PRs, and external environments are untouched.
+final-validation providers/triggers, branches, PRs, and external environments
+are untouched.
 
 Tests:
 
