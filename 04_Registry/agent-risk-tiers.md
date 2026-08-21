@@ -3,7 +3,8 @@
 ## Purpose
 
 Define the canonical daily-use risk model for Agent OS. The tier describes the
-highest-risk write surface in a task; it does not grant authorization.
+highest-risk write surface in a task; it does not grant authorization and does
+not create a specialist executable agent.
 
 ## Tiers
 
@@ -17,52 +18,42 @@ highest-risk write surface in a task; it does not grant authorization.
 ## Classification Rules
 
 - Classify the whole task at the highest applicable tier.
-- Read-only access to sensitive or private data may require additional handling even
-  when the action itself is Tier 0.
-- A local artifact becomes Tier 2 when it is copied, published, sent, uploaded, or
-  written to an external system.
-- Any change to governed fields, source-of-truth records, permissions, sharing,
-  production systems, or irreversible artifacts is Tier 2 or Tier 3.
-- Validation, readiness, capability, labels, or a passing test never lower the tier
-  or create authorization.
+- Read-only access to sensitive or private data may require additional handling even when the action itself is Tier 0.
+- A local artifact becomes Tier 2 when it is copied, published, sent, uploaded, or written to an external system.
+- Any change to governed fields, source-of-truth records, permissions, sharing, production systems, or irreversible artifacts is Tier 2 or Tier 3.
+- Validation, readiness, capability, labels, a passing test, or legacy agent terminology never lowers the tier or creates authorization.
+- Programming language, framework, provider, or integration domain never changes the canonical technical execution owner by itself.
 
 ## Intake Routing
 
 ### Lightweight intake
 
-Allowed for Tier 0 and Tier 1 when the target, owner, source of truth, and local-only
-boundary are clear. Confirm scope, expected output, and prohibited write surfaces.
+Allowed for Tier 0 and Tier 1 when the target, owner, source of truth, and local-only boundary are clear. Confirm scope, expected output, and prohibited write surfaces.
 
 ### Full intake and live readiness
 
-Required for Tier 2 and Tier 3. Confirm:
-
-- exact target and system of record;
-- field or artifact owner;
-- allowed write surface;
-- required human approval;
-- validation and rollback;
-- audit or handoff destination;
-- stop conditions.
+Required for Tier 2 and Tier 3. Confirm exact target/system of record, artifact or field owner, exact operation, allowed write surface, required human approval, validation and rollback, audit/handoff destination, and stop conditions.
 
 ## Escalation
 
-Escalate immediately when scope expands, authorization becomes ambiguous, a local
-artifact is about to leave the local environment, or a task touches production,
-governed data, source-of-truth records, permissions, sharing, or irreversible state.
+Escalate immediately when scope expands, authorization becomes ambiguous, a local artifact is about to leave the local environment, or a task touches production, governed data, source-of-truth records, permissions, sharing, or irreversible state.
 
 ## Daily Mode
 
-`03_Templates/prompts/daily-agent-shortcuts.md` provides examples for low-friction
-work. Those shortcuts use this registry and do not override
-`00_Governance/write-authorization-policy.md`.
+`03_Templates/prompts/daily-agent-shortcuts.md` provides examples for low-friction work. Those shortcuts use this registry and do not override `00_Governance/write-authorization-policy.md`.
 
 ## Ownership
 
-The Integration Manager owns tier definitions and routing. The system owner retains
-approval authority for governed or production writes. The GitHub Service Agent owns
-approved repository changes.
+The ChatGPT Orchestrator owns risk-tier classification and routing. The actual
+system/artifact owner retains approval authority for governed or production
+writes. The GitHub Service Agent owns authorized repository implementation and
+repository writes. QA / Test Agent owns independent validation evidence.
 
 ## Version
 
-0.1.0
+0.2.0
+
+## Changelog
+
+- 0.2.0 moves risk-tier routing ownership from the retired Integration Manager to ChatGPT Orchestrator without changing authorization semantics (#1324).
+- 0.1.0 initial risk-tier registry.

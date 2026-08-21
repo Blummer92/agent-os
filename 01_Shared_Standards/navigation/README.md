@@ -3,7 +3,8 @@
 ## Purpose
 
 This folder contains the Version 0.9 Navigation Registry documentation stack.
-Read these files in order before implementation planning.
+Read these files in order before implementation planning. Navigation remains a
+shared cross-system capability, not a separate canonical technical agent.
 
 ## Document Order
 
@@ -19,7 +20,7 @@ Read these files in order before implementation planning.
 |---|---|
 | Source of truth | `navigation-registry-standard.md` |
 | Write boundary | `navigation-registry-standard.md` |
-| Registry ownership | `navigation-registry-standard.md` and `04_Registry/responsibility-matrix.md` |
+| Registry routing ownership | `navigation-registry-standard.md` and `04_Registry/responsibility-matrix.md` |
 | Component workflow | `navigation-registry-architecture.md` |
 | Cache lifecycle | `navigation-registry-architecture.md` |
 | Entities and fields | `navigation-registry-data-model.md` |
@@ -39,8 +40,11 @@ Implementation work must preserve these rules:
 - Live systems remain authoritative for their own resources.
 - Connector output is evidence, not authority.
 - Discovery recommends changes; it does not change live systems by default.
-- Integration Manager owns cross-system governance and routing.
+- ChatGPT Orchestrator owns cross-system navigation routing by consuming the shared standard.
+- GitHub Service Agent owns repository implementation of navigation code and governance.
+- QA / Test Agent owns independent validation evidence.
 - System owners retain live-system approval authority.
+- Historical `Integration Manager` references resolve through the legacy alias registry and do not recreate an executable agent.
 
 ## Bounded Notion Intent Projection
 
@@ -87,4 +91,9 @@ into companion files without changing the canonical authority map.
 
 ## Version
 
-0.1.0
+0.2.0
+
+## Changelog
+
+- 0.2.0 preserves the detailed Navigation Registry contracts while replacing Integration Manager execution ownership with ChatGPT Orchestrator + shared Navigation capability routing (#1324).
+- 0.1.0 initial navigation index.
