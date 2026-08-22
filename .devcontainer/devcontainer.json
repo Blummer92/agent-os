@@ -1,12 +1,15 @@
 {
   "name": "agent-os-codespaces-v1",
-  "image": "mcr.microsoft.com/devcontainers/python:1-3.11-bookworm",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
   "hostRequirements": {
     "cpus": 2
   },
   "workspaceFolder": "/workspaces/agent-os",
   "features": {
-    "ghcr.io/devcontainers/features/github-cli:1": {}
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/sshd:1": {}
   },
   "remoteEnv": {
     "AGENT_OS_NETWORK_MODE": "local-only"

@@ -1,9 +1,9 @@
 # Agent OS Codespaces Runbook — `agent-os-codespaces-v1`
 
 Operator guide for issue #891's persistent Agent OS execution profile
-(design approved in #857), extended additively by #972. Config:
-`.devcontainer/devcontainer.json`, `.devcontainer/post-create.sh`, and
-`scripts/agent-os-environment-health.py`.
+(design approved in #857), extended additively by #972 and #1212. Config:
+`.devcontainer/devcontainer.json`, `.devcontainer/Dockerfile`,
+`.devcontainer/post-create.sh`, and `scripts/agent-os-environment-health.py`.
 
 ## Create the Codespace
 
@@ -11,12 +11,41 @@ From `Blummer92/agent-os`, on `main`: GitHub UI → **Code → Codespaces →
 Create codespace on main**. This repo requests the 2-core Linux machine type
 (`hostRequirements.cpus: 2`); do not pick a larger type without a decision.
 
-## Bootstrap and dependency identity
+## Base image preparation and bootstrap
 
-`postCreateCommand` runs `.devcontainer/post-create.sh` once. It verifies the
-repository before installing `requirements-dev.txt` and the same editable
-`08_Tooling` packages used by validation. A failing step stops fail closed;
-the Codespace remains available for inspection.
+The local `.devcontainer/Dockerfile` inherits the existing Python 3.11 Bookworm
+Dev Container image and removes only its stale Yarn apt source before Dev
+Container features run. #1212 added this bounded preparation after live
+Codespaces creation evidence showed the official `sshd` feature's `apt-get
+update` failing on that inherited source with `NO_PUBKEY 62D54FD4003F6525`,
+which caused Codespaces to start its Alpine recovery container. Agent OS does
+not add a replacement Yarn key or package source and does not treat the recovery
+container as a supported execution runtime.
+
+`postCreateCommand` then runs `.devcontainer/post-create.sh` once. It verifies
+the repository before installing `requirements-dev.txt` and the same editable
+`08_Tooling` packages used by validation. A failing step stops fail closed; the
+Codespace remains available for inspection.
+
+## Bounded CLI SSH access (#1212)
+
+The profile includes the official Dev Container `sshd` feature so an authenticated
+GitHub CLI client can use `gh codespace ssh` for bounded remote commands. This is
+an access capability only: it does not grant implementation, GitHub-write,
+provider, production, lease-release, or lifecycle authority, and it does not
+change `AGENT_OS_NETWORK_MODE`.
+
+After changing devcontainer features or base preparation, rebuild the Codespace
+before treating the feature as present. A bounded health probe from an authorized
+client is:
+
+```bash
+gh codespace ssh -c <codespace> -- "cd /workspaces/agent-os && python3 scripts/agent-os-environment-health.py"
+```
+
+SSH availability is execution-surface capability evidence, not proof that the
+Codespace satisfies Workflow Scheduler containment, lease, checkpoint, or
+stop/start requirements. Those remain separately qualified under #1212.
 
 ## Environment health check
 
@@ -53,7 +82,9 @@ worktrees. The primary checkout cannot be reused as an issue worktree.
 ## Stop/start, disconnect, and process persistence
 
 Repository/worktree files survive browser disconnect and stop/start. Running
-processes do not; restart terminal processes after resume.
+processes do not; restart terminal processes after resume. Process disappearance
+caused by Codespaces stop is not by itself clean-termination evidence and must
+never authorize lease release or orphan recovery.
 
 ## Validation budgets
 
@@ -84,8 +115,10 @@ retained evidence after 14 days.
 
 ## Cleanup and rollback
 
-Rollback is a normal repository revert of the #972 changes. Deleting branches,
-worktrees, Codespaces, or credentials remains a separate manual operator action.
+Rollback for #1212 is a normal repository revert removing the bounded Dockerfile
+preparation, restoring the direct image declaration, removing the `sshd` feature,
+and reverting its bounded-access documentation. Deleting branches, worktrees,
+Codespaces, or credentials remains a separate manual operator action.
 
 ## Handoff to #858
 
@@ -94,6 +127,6 @@ semantics; checkpoint/resume remains owned there rather than redefined here.
 
 ## Non-authorization
 
-Health success never implies implementation, execution, Ready-for-Review,
-merge, issue closure, production, or external-write authority. Every authority
-field reported by the profile remains `false`.
+Health or SSH success never implies implementation, execution, Ready-for-Review,
+merge, issue closure, production, lease release, or external-write authority.
+Every authority field reported by the profile remains `false`.
