@@ -112,11 +112,15 @@ prefix, glob, regex, an older `main` commit, or a second allowed SHA.
 <!-- sudoers-begin -->
 ```sudoers
 # /etc/sudoers.d/agent-os-host-install   root:root 0440
-# Former unsafe matcher, retained only as an audit example; DO NOT use it:
-# [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]
 sa_<UNIQUE_ID> ALL=(root) NOPASSWD: /usr/local/libexec/agent-os-host-install --source-sha <AUTHORIZED_SOURCE_SHA>
 ```
 <!-- sudoers-end -->
+
+This fenced block is meant to be copied verbatim into the sudoers fragment. It
+deliberately contains nothing beyond the one authorized rule and its header
+comment -- not even an inert commented-out example of the earlier wildcard
+matcher -- so nothing pasteable in this file can reintroduce a character-class
+match over the source SHA.
 
 Validate the fully substituted file with `sudo visudo -c -f <file>` before
 installing it and `sudo visudo -c` afterwards. The active rule's literal SHA must
@@ -133,7 +137,10 @@ canonical `main` and fetches it into a `0700` root-owned hierarchy. Python build
 backend execution is explicit and hash-pinned; project builds run with build
 isolation disabled and no index, and system pip installs only the four locally
 built Agent OS wheels with `--no-index --no-deps`. No caller-controlled path is
-executed as root.
+executed as root, and `PYTHONPATH` is cleared before any privileged `python3`
+invocation, so an ambient `PYTHONPATH` cannot shadow the `pip`/`setuptools`
+modules root imports; the one intentional exception, the project wheel build,
+re-sets it explicitly and only for that command.
 
 ## Proof
 

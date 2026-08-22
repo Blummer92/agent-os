@@ -429,8 +429,11 @@ def test_unprivileged_preflight_is_documented_as_diagnostics_only() -> None:
     script = UNPRIVILEGED.read_text(encoding="utf-8")
     assert "NOT a security boundary" in script
     doc = DOCS.read_text(encoding="utf-8")
-    assert "operator diagnostics, not the security boundary" in doc
-    assert "could skip it entirely" in doc
+    # Collapse whitespace so a markdown reflow across the phrase's line break
+    # doesn't defeat this check; it must still require the literal words in order.
+    normalized = " ".join(doc.split())
+    assert "operator diagnostics, not the security boundary" in normalized
+    assert "could skip it entirely" in normalized
 
 
 # --------------------------------------------------------------------------
@@ -503,8 +506,13 @@ def test_documented_sudo_rule_uses_no_wildcard_over_any_path() -> None:
     assert "NOPASSWD: ALL" not in block
     assert "/tmp/" not in block
     assert INSTALLED_PRIVILEGED_PATH in block
-    # The only variable part is a fixed-length lowercase-hex character class.
-    assert block.count("[0-9a-f]") == 40
+    # The rule binds one literal authorized SHA (a placeholder an operator
+    # substitutes), not a character-class wildcard over any 40-hex value. The
+    # pasteable block must contain zero occurrences of that class -- not even
+    # as an inert comment, since a copy-pasted comment is still a live risk of
+    # confusion in an operational sudoers artifact.
+    assert block.count("[0-9a-f]") == 0
+    assert block.count("<AUTHORIZED_SOURCE_SHA>") == 1
 
 
 def test_documented_sudo_rule_authorizes_nothing_the_old_path_needed() -> None:

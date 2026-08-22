@@ -17,6 +17,12 @@ set -eu
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 umask 077
+# An ambient PYTHONPATH could shadow a stdlib or pip-internal module name and
+# hijack every privileged `python3` invocation below at import time, before any
+# hash check runs. Clear it once here rather than relying solely on sudo's
+# env_reset default. The one intentional exception (the project wheel build)
+# re-sets it explicitly, scoped to that single command.
+unset PYTHONPATH
 
 REPOSITORY_URL=https://github.com/Blummer92/agent-os.git
 CANONICAL_BRANCH=main

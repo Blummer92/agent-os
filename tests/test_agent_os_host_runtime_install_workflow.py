@@ -88,7 +88,12 @@ def test_privileged_host_installer_owns_the_bounded_install_and_never_dispatches
         "./08_Tooling/agent-os-execution-service",
     ):
         assert package in text
-    assert "--break-system-packages --force-reinstall" in text
+    # Flags now sit one per line so --no-index/--no-deps could be added
+    # legibly; check each token rather than an exact adjacent substring.
+    assert "--break-system-packages" in text
+    assert "--force-reinstall" in text
+    assert "--no-index" in text
+    assert "--no-deps" in text
     assert "agent_os_execution_service.handoff_discovery_entrypoint" in text
     assert "agent_os_execution_service.governed_resume_entrypoint" in text
     assert "workflow_scheduler.execution._clone3_cgroup" in text
