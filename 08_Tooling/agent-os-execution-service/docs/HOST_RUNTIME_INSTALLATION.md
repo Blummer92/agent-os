@@ -1,132 +1,182 @@
 # Governed Resume Host Runtime Installation
 
-Issue #1300 (AOS-GCE2C) freezes how the qualified Debian GCE host obtains the
-Python runtime behind `/usr/local/libexec/agent-os-governed-resume`. See
-`GOVERNED_RESUME_ENTRYPOINT.md` for the entrypoint and composition contracts.
-
-The wrapper runs `python3 -m agent_os_execution_service.governed_resume_entrypoint`,
-so the host interpreter must resolve the complete production import graph without
-a repository-root `PYTHONPATH`, an editable checkout, or the current working
-directory. Four existing distributions carry that graph.
+Issue #1300 (AOS-GCE2C) defines how the qualified Debian GCE host obtains the
+runtime behind `/usr/local/libexec/agent-os-governed-resume`. The wrapper runs
+`python3 -m agent_os_execution_service.governed_resume_entrypoint`; the installed
+host therefore needs the four canonical Agent OS distributions and their runtime
+dependencies without relying on a repository-root `PYTHONPATH` or editable
+checkout.
 
 | Distribution | Provides |
 | --- | --- |
-| `agent-os-execution-service` | `agent_os_execution_service`, `scripts.agent_os_candidate_packet`, `scripts.agent_os_github_issue_provider` |
-| `workflow-scheduler` | `workflow_scheduler` (incl. the native extension), `scripts.agent_os_execution_capabilities`, `scripts.agent_os_execution_checkpoint`, `scripts.agent_os_issue_acceptance`, `scripts.agent_os_remote_validation` |
-| `agent-memory-context-manager` | `agent_memory_context_manager` |
-| `reusable-capability-registry` | `reusable_capability_registry` |
+| `agent-os-execution-service` | governed discovery/resume entrypoints and provider packages |
+| `workflow-scheduler` | Workflow Scheduler runtime and `_clone3_cgroup` |
+| `agent-memory-context-manager` | context-manager runtime |
+| `reusable-capability-registry` | reusable-capability registry runtime |
 
-Each `scripts.*` package stays canonical exactly where it already lives: the
-distributions declare those directories rather than copying them, and no module
-is carried by two distributions. `scripts` is a namespace package, so the two
-distributions contribute disjoint subpackages to it. In particular there remains
-exactly one canonical checkpoint descriptor loader,
-`scripts/agent_os_execution_checkpoint/invocation_descriptor.py`.
-
-`agent-os-execution-service` declares `workflow-scheduler`,
-`agent-memory-context-manager`, `PyGithub`, and `requests`; `workflow-scheduler`
-declares `PyYAML` and `reusable-capability-registry`. An installation missing any
-of them fails with an explicit `ModuleNotFoundError` instead of silently
-selecting alternate code.
+The packages remain canonical in their existing locations; #1341 changes only
+the privileged host-install boundary, not Scheduler composition or ownership.
 
 ## Qualified Debian host
 
-The `_clone3_cgroup` C extension is built by the existing `workflow-scheduler`
-distribution -- no separate build system is involved -- so the host needs only
-the standard toolchain prerequisites before installing:
+The native Scheduler extension requires the standard Debian build prerequisites:
 
 ```sh
 sudo apt-get install -y build-essential python3-dev
 ```
 
-None of these distributions is published to an index, so build them from the
-checkout and install from those wheels:
-
-```sh
-python3 -m pip wheel --no-deps --wheel-dir /tmp/agent-os-wheels \
-  ./08_Tooling/reusable-capability-registry \
-  ./08_Tooling/agent-memory-context-manager \
-  ./08_Tooling/workflow-scheduler \
-  ./08_Tooling/agent-os-execution-service
-python3 -m pip install --find-links /tmp/agent-os-wheels agent-os-execution-service
-```
-
-The `workflow-scheduler` wheel is platform-tagged and contains the compiled
-`_clone3_cgroup` extension; if the toolchain is absent the wheel build fails
-loudly rather than producing a Scheduler whose containment is silently degraded.
-Build on the qualified host (or on a matching Debian/CPython pair): that wheel is
-not portable across interpreters or platforms.
-
-Containment behavior itself is unchanged. `cgroup_v2_containment` and
-`clone3_cgroup_launcher` already report "the `_clone3_cgroup` native extension is
-not built/importable" as a degraded reason when the extension is missing; #1300
-only gives the host a deterministic way to build it.
+For ordinary development, the four Agent OS wheels may be built from a checkout.
+The privileged #1341 path is stricter: root uses a transient root-owned build-tool
+directory containing exact hash-pinned `setuptools==83.0.0` and `wheel==0.47.0`,
+builds with `--no-build-isolation` and `PIP_NO_INDEX=1`, and performs the final
+system install with `--no-index --no-deps`. Runtime dependencies must therefore
+already be present on the qualified host; the post-install import proof fails
+closed if they are not.
 
 ## Bounded #1238 maintenance route
 
-The tracked `scripts/install-host-runtime` wrapper is the repository-owned host
-installation procedure for the separately authorized #1238 maintenance action.
-It accepts only an absolute repository checkout and an exact lowercase 40-hex
-`EXPECTED_SHA`, requires that checkout to be on `main`, verifies Debian 12 and
-passwordless bounded `sudo`, builds the four canonical distributions from that
-checkout, force-reinstalls only those wheels, verifies the discovery entrypoint,
-governed-resume entrypoint, and `_clone3_cgroup` native extension from outside the
-checkout with `PYTHONPATH` removed, then runs `scripts/install-governed-resume`
-twice to prove idempotency and root:root `0755` integrity. It emits bounded JSON
-with the installed target hash and explicitly reports that no Scheduler execution
-was authorized or invoked.
+`scripts/install-host-runtime` remains the unprivileged repository-owned wrapper
+for the separately authorized #1238 maintenance action. It validates the local
+checkout, Debian 12, the exact `EXPECTED_SHA`, the fixed privileged helper, and
+the exact bounded sudo capability. All root work is delegated to
+`/usr/local/libexec/agent-os-host-install`; returned JSON evidence must report the
+same source SHA and explicitly keeps `scheduler_invoked` and
+`execution_authorized` false.
 
-The existing `.github/workflows/agent-os-governed-invocation.yml` may route the
-exact repository-owner comment `/agent-os install-host-runtime` on issue #1238 to
-this installer only after that workflow change is itself reviewed and merged.
-The route reuses the existing `issue_comment`/`refs/heads/main` WIF trust envelope,
-existing `agent-os-transport` service account, exact resource tuple
-`agent-os-502614 / us-central1-a / agent-os-test`, IAP/OS Login path, and current
-GitHub permissions (`contents: read`, `id-token: write`). It adds no IAM/WIF
-configuration, no secret, no VM-stop authority, no repository-write permission,
-and no Scheduler/lease/retry/execution authority. Comment text is matched exactly
-and is never forwarded to the host; the workflow transfers only the tracked
-installer whose SHA-256 is pinned in the workflow and checks out the pinned
-canonical `main` source SHA on the host before installation.
+The existing `.github/workflows/agent-os-governed-invocation.yml` route remains
+bound to the exact repository-owner comment, identity, repository, issue,
+`refs/heads/main`, WIF transport, resource tuple, and current permissions. #1341
+does not add Scheduler, lease, retry, fallback, VM-stop, repository-write, or
+execution authority. The separately authorized workflow diff is limited to the
+tracked installer digest and finite refusal mappings; the post-merge source-SHA
+bump remains a separate mechanical follow-up already recorded on #1341.
 
-Because GitHub loads `issue_comment` workflows from the default branch and the
-WIF provider is bound to the exact workflow on `refs/heads/main`, this maintenance
-route cannot perform a live host mutation while it exists only on a feature
-branch. Merge remains separately authorized. Before merge, only offline syntax,
-policy, and regression validation can be performed. After merge, one exact owner
-comment can perform the already-authorized host installation, after which normal
-`/agent-os discover` should be reissued on #1238.
+## Bounded privileged installation (#1341)
+
+The original #1238 design would have required root to execute wheels and a shell
+script from paths writable by the unprivileged OS Login transport identity. The
+fixed helper closes that root-equivalent path:
+
+1. it accepts exactly `--source-sha <40-lowercase-hex>` and nothing else;
+2. it must run as root and verifies every component of its own installed path;
+3. sudoers authorizes exactly one literal source SHA, so the transport identity
+   cannot select an older or different canonical-main commit;
+4. it creates `/var/lib/agent-os/host-install-staging` as `root:root 0700`,
+   refusing symlinked or untrusted ancestry and re-verifying ownership/mode;
+5. it clones the fixed canonical repository URL itself, requires the authorized
+   SHA to be an ancestor of canonical `main`, checks it out detached, and proves
+   the staged tree is root-owned;
+6. it installs only exact hash-pinned Python build tools into root-owned staging,
+   disables PEP 518 build isolation, and prevents index resolution during the
+   project build and final Agent OS wheel installation;
+7. it installs the four locally built Agent OS wheels, runs
+   `install-governed-resume` twice, and verifies `root:root 0755` integrity; and
+8. an `EXIT`/`HUP`/`INT`/`TERM` trap removes staging on success and failure.
+
+The pinned privileged Python build-tool trust anchors are:
+
+- `setuptools==83.0.0` wheel SHA-256
+  `29b23c360f22f414dc7336bb39178cc7bcbf6021ed2733cde173f09dba19abb3`;
+- `wheel==0.47.0` wheel SHA-256
+  `212281cab4dff978f6cedd499cd893e1f620791ca6ff7107cf270781e587eced`.
+
+Changing those pins is security-sensitive. Debian's signed package channel
+remains the trust anchor for `build-essential` and `python3-dev`.
+
+The checks in `scripts/install-host-runtime` are **operator diagnostics, not the
+security boundary**. The unprivileged transport identity could skip it entirely
+and attempt to invoke the helper through sudo. The actual boundary is the literal
+exact-SHA sudo rule, the privileged helper's argv/canonical-main/path-ancestry
+checks, root-owned staging, and filesystem permissions.
+
+### Host bootstrap
+
+Live host application is separately gated. An administrator must establish the
+trusted helper directory and install the reviewed helper from a trusted checkout:
+
+```sh
+sudo install -d -o root -g root -m 0755 /usr/local/libexec
+sudo install -o root -g root -m 0755 \
+  08_Tooling/agent-os-execution-service/scripts/agent-os-host-install \
+  /usr/local/libexec/agent-os-host-install
+```
+
+The helper independently verifies that its path and ancestors are root-owned,
+non-symlink, and not group- or other-writable.
+
+The sudoers rule must authorize one literal source SHA only. Replace
+`<AUTHORIZED_SOURCE_SHA>` with the exact 40-lowercase-hex canonical source SHA
+that the workflow will pass as `HOST_RUNTIME_SOURCE_SHA`. Do not use a branch,
+prefix, glob, regex, an older `main` commit, or a second allowed SHA.
+
+<!-- sudoers-begin -->
+```sudoers
+# /etc/sudoers.d/agent-os-host-install   root:root 0440
+sa_<UNIQUE_ID> ALL=(root) NOPASSWD: /usr/local/libexec/agent-os-host-install --source-sha <AUTHORIZED_SOURCE_SHA>
+```
+<!-- sudoers-end -->
+
+This fenced block is meant to be copied verbatim into the sudoers fragment. It
+deliberately contains nothing beyond the one authorized rule and its header
+comment -- not even an inert commented-out example of the earlier wildcard
+matcher -- so nothing pasteable in this file can reintroduce a character-class
+match over the source SHA.
+
+Validate the fully substituted file with `sudo visudo -c -f <file>` before
+installing it and `sudo visudo -c` afterwards. The active rule's literal SHA must
+equal `HOST_RUNTIME_SOURCE_SHA`; a different syntactically valid SHA must be
+denied by sudo before the helper starts. Resolve `<UNIQUE_ID>` using the existing
+administrative process. Do not grant `roles/compute.osAdminLogin`; that would
+reintroduce broad passwordless sudo.
+
+### Why this is no longer root-equivalent
+
+The transport identity cannot choose privileged source code: sudo admits one
+literal source SHA, while the helper independently verifies that SHA is on
+canonical `main` and fetches it into a `0700` root-owned hierarchy. Python build
+backend execution is explicit and hash-pinned; project builds run with build
+isolation disabled and no index, and system pip installs only the four locally
+built Agent OS wheels with `--no-index --no-deps`. No caller-controlled path is
+executed as root, and `PYTHONPATH` is cleared before any privileged `python3`
+invocation, so an ambient `PYTHONPATH` cannot shadow the `pip`/`setuptools`
+modules root imports; the one intentional exception, the project wheel build,
+re-sets it explicitly and only for that command.
 
 ## Proof
 
-`tests/test_host_packaging.py` proves this contract offline. It builds the real
-wheels, installs them into an isolated environment that inherits no system site
-packages and no editable install, and then imports `agent_os_execution_service`,
-`workflow_scheduler`, the native extension, the canonical descriptor loader,
-`production_host_composition`, and the entrypoint module from a working directory
-outside the repository with `PYTHONPATH` scrubbed -- asserting every resolved
-path lies inside the installation and that no repository path is on `sys.path`.
-It also runs `python3 -m agent_os_execution_service.governed_resume_entrypoint`
-with no arguments and requires the frozen argv contract to reject it, proving the
-installed dependency graph loads before argv parsing without any dispatch.
+`tests/test_agent_os_host_privileged_install.py` exercises argv rejection,
+privilege dropping, root-owned staging, ancestry, symlinks refusal, off-main and
+nonexistent commits, deterministic cleanup, finite reason mappings, and the
+unchanged execution-authority invariants. Root-required cases are not weakened or
+deleted.
 
-`tests/test_agent_os_host_runtime_install_workflow.py` additionally proves the
-maintenance route is bound to owner ID `32861845`, repository ID `1289370915`,
-issue #1238, run-attempt 1, `issue_comment`, `refs/heads/main`, and the exact
-workflow reference; preserves the existing least-privilege GitHub permissions;
-pins the canonical source and installer digest; fixes the one GCE resource tuple;
-contains no VM-stop or Scheduler-dispatch path; and keeps the host installer free
-of gcloud, arbitrary command evaluation, or a second execution authority.
+`tests/test_agent_os_host_privilege_regressions.py` adds explicit regressions for
+the two independent-review findings: it parses the active sudoers rule and proves
+that only a literal source placeholder is admitted, and it proves the privileged
+Python build uses the exact backend hashes, `--require-hashes`,
+`--no-build-isolation`, `PIP_NO_INDEX=1`, and an offline/no-dependency final
+installation.
 
-This proves installation and import/startup only. No Scheduler job, lease
-acquisition, or reconstruction is executed by installation. Live GitHub-to-GCE
-invocation and replay qualification remain separately governed; host
-installation/verification remains #1238 until live evidence is green.
+`tests/test_agent_os_host_runtime_install_workflow.py` continues to prove the
+bounded GitHub-to-host maintenance route preserves its identity, resource,
+permission, and non-execution invariants. No Scheduler job, admission, lease,
+reconstruction, or replay is performed by installation.
 
 ## Rollback
 
-Repository rollback reverts the maintenance route, its bounded installer, tests,
-and this documentation. Host rollback removes `/usr/local/libexec/agent-os-governed-resume`
-and uninstalls the four Agent OS distributions if the installation itself must be
-reverted. Do not delete or alter checkpoint descriptors, ResumePlans,
-dependency-readiness evidence, Scheduler leases, workspaces, or audit records.
+Repository rollback reverts the maintenance-route changes, helper, tests, and
+this documentation. Live host rollback, when separately authorized, removes only
+the bounded host artifacts:
+
+```sh
+sudo rm -f /etc/sudoers.d/agent-os-host-install && sudo visudo -c
+sudo rm -f /usr/local/libexec/agent-os-host-install
+sudo rm -rf /var/lib/agent-os
+```
+
+If required, `/usr/local/libexec/agent-os-governed-resume` and the four Agent OS
+distributions can be removed under the separately governed host rollback. Do not
+delete or alter checkpoint descriptors, ResumePlans, dependency-readiness
+evidence, Scheduler leases, workspaces, or audit records. The transient
+hash-pinned build-tool directory exists only under staging and is removed by the
+installer trap.
