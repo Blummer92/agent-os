@@ -8,8 +8,10 @@
 # a path, so the unprivileged transport identity cannot substitute the code
 # that runs as root.
 #
-# The only caller input is a 40-lowercase-hex commit that must already be an
-# ancestor of canonical main in the fixed repository below.
+# The only caller input is a 40-lowercase-hex commit. The sudoers policy binds
+# that argument to one exact operator-authorized SHA; this helper independently
+# requires the same commit to be an ancestor of canonical main as defense in
+# depth before any source from it is built or installed.
 set -eu
 
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
@@ -21,6 +23,14 @@ CANONICAL_BRANCH=main
 STAGING_ROOT=/var/lib/agent-os/host-install-staging
 TARGET=/usr/local/libexec/agent-os-governed-resume
 HELPER_PATH=/usr/local/libexec/agent-os-host-install
+
+# The build backend is an explicit privileged trust anchor: exact versions and
+# exact wheel hashes are frozen here so root never executes a resolver-selected
+# Python build backend. Hashes are for the PyPI wheel artifacts named below.
+SETUPTOOLS_VERSION=83.0.0
+SETUPTOOLS_SHA256=29b23c360f22f414dc7336bb39178cc7bcbf6021ed2733cde173f09dba19abb3
+WHEEL_VERSION=0.47.0
+WHEEL_SHA256=212281cab4dff978f6cedd499cd893e1f620791ca6ff7107cf270781e587eced
 
 fail() {
   printf '%s\n' "host runtime install refused: $1" >&2
@@ -106,6 +116,8 @@ staging_metadata=$(stat -c '%U:%G:%a' "$STAGING_ROOT")
 
 checkout="$STAGING_ROOT/checkout"
 wheel_dir="$STAGING_ROOT/wheels"
+build_tools="$STAGING_ROOT/build-tools"
+build_requirements="$STAGING_ROOT/build-requirements.txt"
 
 # Fixed URL, never a caller-supplied location.
 git clone --quiet "$REPOSITORY_URL" "$checkout"
@@ -120,13 +132,36 @@ head_sha=$(git -C "$checkout" rev-parse HEAD)
 checkout_owner=$(stat -c '%U' "$checkout")
 [ "$checkout_owner" = "root" ] || fail "staged tree must be root-owned"
 
+# Debian's signed package channel is the host/toolchain trust anchor. Python
+# build tooling is not taken from the ambient interpreter and is never left to
+# an unconstrained resolver: root installs only two exact wheel artifacts into
+# transient root-owned staging, verified by pip's --require-hashes contract.
 apt-get install -y build-essential python3-dev >&2
+mkdir "$build_tools"
+chmod 0700 "$build_tools"
+cat > "$build_requirements" <<EOF_BUILD_REQUIREMENTS
+setuptools==${SETUPTOOLS_VERSION} --hash=sha256:${SETUPTOOLS_SHA256}
+wheel==${WHEEL_VERSION} --hash=sha256:${WHEEL_SHA256}
+EOF_BUILD_REQUIREMENTS
+python3 -m pip install \
+  --disable-pip-version-check \
+  --no-deps \
+  --require-hashes \
+  --target "$build_tools" \
+  -r "$build_requirements" >&2
 
 mkdir "$wheel_dir"
 chmod 0700 "$wheel_dir"
 (
   cd "$checkout"
-  python3 -m pip wheel --no-deps --wheel-dir "$wheel_dir" \
+  # Build isolation is deliberately disabled: otherwise pip is allowed to
+  # resolve pyproject build requirements itself. PIP_NO_INDEX then proves the
+  # project build cannot consult an index after the pinned backend is installed.
+  PYTHONPATH="$build_tools" PIP_NO_INDEX=1 python3 -m pip wheel \
+    --disable-pip-version-check \
+    --no-deps \
+    --no-build-isolation \
+    --wheel-dir "$wheel_dir" \
     ./08_Tooling/reusable-capability-registry \
     ./08_Tooling/agent-memory-context-manager \
     ./08_Tooling/workflow-scheduler \
@@ -146,7 +181,15 @@ set -- "$wheel_dir"/agent_os_execution_service-*.whl
 [ "$#" -eq 1 ] && [ -f "$1" ] || fail "expected one agent-os-execution-service wheel"
 service_wheel=$1
 
-python3 -m pip install --break-system-packages --force-reinstall \
+# Runtime dependencies must already be present on the qualified host. Root may
+# install only the four locally built Agent OS wheels; it may not resolve or
+# download a dependency from a Python package index.
+PIP_NO_INDEX=1 python3 -m pip install \
+  --disable-pip-version-check \
+  --no-deps \
+  --no-index \
+  --break-system-packages \
+  --force-reinstall \
   "$capability_wheel" \
   "$context_wheel" \
   "$scheduler_wheel" \
