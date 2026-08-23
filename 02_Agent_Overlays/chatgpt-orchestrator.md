@@ -102,11 +102,10 @@ Stop when a user asks for a nonexistent agent that does not resolve through `04_
 For finite multi-item missions, an item-local blocker is not a mission-level stop; record it and continue. A shared stop condition classifies all remaining requested items explicitly before handoff.
 Request-interpretation continuation stops follow `chatgpt-orchestrator-request-interpretation.md`; conversation memory never resolves missing, stale, or multiple-candidate canonical context.
 ## Version
-0.3.1
+0.3.0
 
 ## Changelog
-- 0.3.1 routes canonical Picture Perfect / PPUX tutorial prompt-artifact requests through the existing Instructional Materials Coach capability, preserves the current PPUX state including blockers/capture evidence, and forbids generic software-UI reconstruction fallback (#1280).
-- 0.3.0 composes Terminal Fast Lane through the canonical #924 structured request record and existing `operating_mode.py` release ceiling; the Orchestrator never reparses raw Fast Lane language and adds no second authority, router, or Scheduler (#1309).
+- 0.3.0 includes the bounded Picture Perfect / PPUX tutorial prompt-artifact route through the existing Instructional Materials Coach capability, preserving current PPUX state including blockers/capture evidence and forbidding generic software-UI reconstruction fallback (#1280), while retaining the Terminal Fast Lane composition through canonical #924 request interpretation and existing release-authority gates (#1309).
 - 0.2.1 consolidates Safe Implementation Lane activation, distinguishes durable artifact non-authority from later direct-owner authorization, and resumes automatically after one mechanical readiness intervention (#1274).
 - 0.2.0 wires the canonical compact Agent Interaction Output Standard into runtime-facing Orchestrator behavior for implementation, review, handoff, continuation, and PR-review turns; bounded progress is evidence-based, conditional fields remain conditional, and no new state, routing, or authority system is introduced (#1086).
 - 0.1.9 consumes canonical #924 structured request interpretation as upstream routing evidence and delegates detailed conformance/freshness rules to `chatgpt-orchestrator-request-interpretation.md` (#925).
