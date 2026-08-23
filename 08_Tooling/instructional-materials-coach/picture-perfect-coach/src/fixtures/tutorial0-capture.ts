@@ -61,6 +61,7 @@ function approval(sourceIndex: number, role: ScreenshotRole, visibleUiClaims: re
         rights_classification: 'cleared-internal',
         direct_use_status: 'student-ready',
         replacement_required: false,
+        transformations: [],
       },
     },
     compatibility: {
