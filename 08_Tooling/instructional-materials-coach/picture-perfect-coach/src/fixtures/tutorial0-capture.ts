@@ -48,21 +48,29 @@ function approval(sourceIndex: number, role: ScreenshotRole, visibleUiClaims: re
     },
     asset_reference: {
       asset_id: `screen-${suffix}`,
-      stable_reference: `artifact-manifest:tutorial0-screen-${suffix}#screen-${suffix}`,
+      stable_ref: `artifact-manifest:tutorial0-screen-${suffix}#screen-${suffix}`,
       content_fingerprint: syntheticSha(2000 + sourceIndex * 2 + (role === 'after' ? 1 : 0)),
     },
     artifact_manifest: {
       contract_version: 'curriculum-artifact-manifest-v1',
-      privacy_resolved: true,
-      rights_state: 'cleared-internal',
-      classroom_readiness: 'ready',
+      external_identity: { access_state: 'verified' },
+      statuses: { classroom_readiness: 'ready' },
+      asset: {
+        privacy_resolved: true,
+        residual_privacy_risk: false,
+        rights_classification: 'cleared-internal',
+        direct_use_status: 'student-ready',
+        replacement_required: false,
+      },
     },
     compatibility: {
       contract_version: 'curriculum-visual-asset-compatibility-v2',
       classification: 'eligible',
-      medium: 'screen-capture',
-      representation_class: 'interface-capture',
-      stale: false,
+      cohesion_profile: {
+        medium: 'screen-capture',
+        representation_class: 'interface-capture',
+      },
+      freshness: { stale: false },
     },
   };
 }
