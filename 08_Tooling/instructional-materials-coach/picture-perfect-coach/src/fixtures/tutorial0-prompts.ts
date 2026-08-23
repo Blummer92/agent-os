@@ -1,5 +1,6 @@
 import tutorial0Evidence from './tutorial0-evidence.json';
 import tutorial0Recording from './tutorial0-recording.json';
+import { tutorial0SyntheticCapture } from './tutorial0-capture';
 import { deriveReviewedTutorial } from '../review';
 import { deriveRecordingUiEvidence } from '../uiEvidence';
 import { projectReviewedTutorialToPromptCards, type PromptAuthoringInput } from '../promptIntent';
@@ -8,9 +9,6 @@ import type { ReviewDecision, UploadEvidenceProjection } from '../types';
 
 const projected = tutorial0Evidence as unknown as Omit<UploadEvidenceProjection, 'recording_evidence'>;
 
-// UI-claim evidence is derived from the approved recording, exactly as the upload
-// boundary derives it. The recording is source evidence and is never edited to make
-// authored prompt content validate.
 const evidence: UploadEvidenceProjection = {
   ...projected,
   recording_evidence: deriveRecordingUiEvidence(tutorial0Recording, projected.recording_sha256),
@@ -37,16 +35,6 @@ export const tutorial0ReviewedTutorial = reviewResult.tutorial;
 const commonMustNotShow = ['student data', 'private account information', 'DevTools', 'Recorder controls', 'invented Adobe controls'];
 const commonProvenance = ['Teacher Modeling: Tutorial 0', 'Recorder evidence: approved modeled actions'];
 
-// Authoring content (what to show, why) supplied by approved Teacher Modeling review.
-// Authoring can no longer declare which UI details evidence supports — that is derived
-// from the recording and narrowed to each frame's own source indexes.
-//
-// UI text below is corrected against the recording (PPUX-F1 / #1293):
-//   - the tutorial folder is `Tutorial 0 - Organize My Files` (recording index 9),
-//     not `Tutorial 0 - My Favorite Food`, which the recording never contains;
-//   - the recorded accessible name is `Create new` (index 13), not `Create new file`;
-//   - `Square` (index 14) and `Portrait` (index 26) belong to other steps, so the
-//     landscape frame claims only `Landscape` (index 20).
 const authoringByStepId = new Map<string, PromptAuthoringInput>([
   [
     'tutorial0-step-01-organize-location',
@@ -89,10 +77,31 @@ const authoringByStepId = new Map<string, PromptAuthoringInput>([
   ],
 ]);
 
-export const tutorial0PromptCards: readonly PromptCardModel[] = projectReviewedTutorialToPromptCards(
-  tutorial0ReviewedTutorial,
-  authoringByStepId,
-).map((card) => ({ ...card, provenance: [...commonProvenance, ...card.provenance] }));
+function withCommonProvenance(cards: readonly PromptCardModel[]): readonly PromptCardModel[] {
+  return cards.map((card) => ({ ...card, provenance: [...commonProvenance, ...card.provenance] }));
+}
+
+/**
+ * F1 regression projection: no capture bundle is supplied, so every real-interface
+ * frame must remain blocked. This preserves proof that missing capture never falls
+ * back to generative reconstruction.
+ */
+export const tutorial0PromptCards: readonly PromptCardModel[] = withCommonProvenance(
+  projectReviewedTutorialToPromptCards(tutorial0ReviewedTutorial, authoringByStepId),
+);
+
+/**
+ * F2 ready-path projection. The same authoring is bound to privacy-safe synthetic
+ * capture evidence. This proves only the offline contract and makes no claim about
+ * live Adobe selector, geometry, screenshot, authentication, or replay fidelity.
+ */
+export const tutorial0CapturedPromptCards: readonly PromptCardModel[] = withCommonProvenance(
+  projectReviewedTutorialToPromptCards(
+    tutorial0ReviewedTutorial,
+    authoringByStepId,
+    tutorial0SyntheticCapture,
+  ),
+);
 
 const blockedAuthoring = new Map<string, PromptAuthoringInput>([
   [
@@ -114,4 +123,5 @@ const blockedAuthoring = new Map<string, PromptAuthoringInput>([
 export const tutorial0BlockedFinalState: PromptCardModel = projectReviewedTutorialToPromptCards(
   tutorial0ReviewedTutorial,
   blockedAuthoring,
+  tutorial0SyntheticCapture,
 )[0];

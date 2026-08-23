@@ -1,4 +1,5 @@
 import { validateApplicationFidelity, type PromptCardModel } from './promptIntent';
+import type { BoundScreenEvidence, BoundScreenState } from './captureEvidence';
 import type { ReviewedTutorialProjection } from './types';
 
 export type PreflightState = 'pass' | 'fail' | 'needs-review' | 'not-applicable';
@@ -21,6 +22,22 @@ export type ReadyContext = {
 export type ReadyPreflightResult = {
   rows: readonly PreflightRow[];
   ready: boolean;
+};
+
+type HandoffScreenState = {
+  role: BoundScreenState['role'];
+  source_index: number;
+  source_fingerprint: string;
+  screenshot_reference: string;
+  visible_ui_claims: readonly string[];
+  manifest_reference: BoundScreenState['manifest_reference'];
+  asset_reference: BoundScreenState['asset_reference'];
+  target_geometry: BoundScreenState['target_geometry'];
+};
+
+type HandoffScreenEvidence = {
+  action: HandoffScreenState | null;
+  result: HandoffScreenState | null;
 };
 
 export type GitHubHandoffPacket = {
@@ -48,7 +65,9 @@ export type GitHubHandoffPacket = {
     must_not_show: readonly string[];
     provenance: readonly string[];
     requires_screen_fidelity: boolean;
-    captured_screen_ref: string | null;
+    /** Deprecated non-authoritative F1 projection retained for local packet compatibility. */
+    captured_screen_ref: null;
+    captured_screen_evidence: HandoffScreenEvidence | null;
     blocker_reasons: readonly string[];
   }[];
   provider_adapter_boundary: string;
@@ -64,7 +83,26 @@ function row(id: string, label: string, ok: boolean, detail: string): PreflightR
 }
 
 function modelingSourceRefs(cards: readonly PromptCardModel[]): string[] {
-  return [...new Set(cards.flatMap((card) => card.provenance.filter((item) => item.startsWith('Teacher Modeling:'))))];
+  return [...new Set(cards.flatMap((card) => card.provenance.filter((item) => item.startsWith('Teacher Modeling:'))) )];
+}
+
+function handoffState(state: BoundScreenState | null): HandoffScreenState | null {
+  if (!state) return null;
+  return {
+    role: state.role,
+    source_index: state.source_index,
+    source_fingerprint: state.source_fingerprint,
+    screenshot_reference: state.screenshot_reference,
+    visible_ui_claims: state.visible_ui_claims,
+    manifest_reference: state.manifest_reference,
+    asset_reference: state.asset_reference,
+    target_geometry: state.target_geometry,
+  };
+}
+
+function handoffEvidence(evidence: BoundScreenEvidence | null | undefined): HandoffScreenEvidence | null {
+  if (!evidence) return null;
+  return { action: handoffState(evidence.action), result: handoffState(evidence.result) };
 }
 
 export function runReadyPreflight(
@@ -92,7 +130,7 @@ export function runReadyPreflight(
   const architectureResolved = !context.unresolvedArchitectureDecision;
 
   const interfaceCards = cards.filter((card) => card.requiresScreenFidelity);
-  const unbackedInterfaceCards = interfaceCards.filter((card) => card.capturedScreenRef === null);
+  const unbackedInterfaceCards = interfaceCards.filter((card) => (card.capturedScreenEvidence ?? null) === null);
   const visualEvidenceRow: PreflightRow = interfaceCards.length === 0
     ? { id: 'visual-evidence', label: 'Captured screen evidence bound where required', state: 'not-applicable', detail: 'No frame claims the real software interface.' }
     : {
@@ -100,8 +138,8 @@ export function runReadyPreflight(
         label: 'Captured screen evidence bound where required',
         state: unbackedInterfaceCards.length === 0 ? 'pass' : 'fail',
         detail: unbackedInterfaceCards.length === 0
-          ? `${interfaceCards.length} software-interface frames are backed by approved capture evidence.`
-          : `${unbackedInterfaceCards.length} of ${interfaceCards.length} software-interface frames have no approved screen capture, so they cannot be produced from a generated stand-in.`,
+          ? `${interfaceCards.length} software-interface frames are backed by approved role-preserving capture evidence.`
+          : `${unbackedInterfaceCards.length} of ${interfaceCards.length} software-interface frames have no approved role-preserving screen evidence, so they cannot be produced from a generated stand-in.`,
       };
 
   const rows: PreflightRow[] = [
@@ -156,10 +194,11 @@ export function createGitHubHandoffPacket(
       must_not_show: card.mustNotShow,
       provenance: card.provenance,
       requires_screen_fidelity: card.requiresScreenFidelity,
-      captured_screen_ref: card.capturedScreenRef,
+      captured_screen_ref: null,
+      captured_screen_evidence: handoffEvidence(card.capturedScreenEvidence),
       blocker_reasons: card.blockerReasons,
     })),
-    provider_adapter_boundary: 'Provider adapters may change execution syntax/settings only; they may not change application identity, instructional meaning, target state, must-show/must-not-show constraints, provenance, or modeled sequence.',
+    provider_adapter_boundary: 'Provider adapters may change execution syntax/settings only; they may not change application identity, instructional meaning, target state, must-show/must-not-show constraints, provenance, modeled sequence, capture identity, or the requirement to use approved capture as the base visual.',
     presentation_evidence_only: true,
     required_tests: context.requiredTests,
     non_goals: context.nonGoals,
