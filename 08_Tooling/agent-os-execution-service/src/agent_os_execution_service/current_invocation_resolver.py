@@ -1,12 +1,13 @@
 """Composition-only current-evidence resolver for AOS-INV1 (#1218).
 
 This module joins existing canonical readers/builders around the small
-checkpoint-owned GovernedInvocationDescriptor.  It owns no new persistence
-other than invoking the already-approved descriptor append function, and it
-performs no GitHub/network/process/Scheduler/lease mutation itself.
+checkpoint-owned GovernedInvocationDescriptor. AOS-EXECSIMPL1 (#1338) keeps
+that descriptor as a compatibility mirror while also persisting the canonical
+RuntimeExecutionRequest through the same publication seam. It performs no
+GitHub/network/process/Scheduler/lease mutation itself.
 
 Execution authorization is reacquired through #1226's read-only source
-contract.  Every other evidence family remains owned by its existing reader or
+contract. Every other evidence family remains owned by its existing reader or
 pure rebuilder supplied through ``InvocationEvidenceSources``.
 """
 
@@ -41,10 +42,17 @@ from .execution_authorization_source import (
     reacquire_execution_authorization,
 )
 from .executor_routing import ExecutorHandoff, ExecutorRouteDecision
+from .governed_resume_restart_capsule import build_restart_capsule
 from .invocation_reconstruction import (
     CurrentInvocationEvidence,
     InvocationReconstructionReason,
     _cross_check,
+)
+from .runtime_execution_request import (
+    RuntimeExecutionRequestLoadResult,
+    append_runtime_execution_request,
+    build_runtime_execution_request,
+    load_runtime_execution_request_or_legacy,
 )
 
 
@@ -288,6 +296,18 @@ def validate_current_invocation_bindings(
     return _cross_check(descriptor, current, evaluated_at=evaluated_at)
 
 
+def load_current_invocation_descriptor(
+    store_root: Path | str,
+    handoff_id: str,
+) -> GovernedInvocationDescriptor:
+    """Prefer #1338's canonical request and fall back to the legacy record graph."""
+
+    loaded: RuntimeExecutionRequestLoadResult = load_runtime_execution_request_or_legacy(
+        store_root, handoff_id
+    )
+    return loaded.request.invocation_descriptor
+
+
 def persist_current_invocation_descriptor(
     store_root: Path | str,
     *,
@@ -301,11 +321,12 @@ def persist_current_invocation_descriptor(
     dependency_readiness: DependencyReadinessEvidence,
     pilot_input: SingleIssuePilotInput,
 ) -> AppendInvocationDescriptorOutcome:
-    """Write the small non-authorizing descriptor at the runnable-handoff seam.
+    """Persist the canonical runtime request plus the legacy descriptor mirror.
 
-    Complete route, authorization, checkpoint, candidate, runtime, dependency,
-    and pilot objects remain with their existing owners.  Only their bounded
-    identities are copied into the append-only checkpoint-owned descriptor.
+    The legacy descriptor remains the compatibility publication marker during
+    the additive #1338 migration. The canonical RuntimeExecutionRequest is
+    persisted through this same bounded seam and carries no authority of its
+    own. No old record is deleted or rewritten.
     """
 
     descriptor = build_current_invocation_descriptor(
@@ -319,4 +340,20 @@ def persist_current_invocation_descriptor(
         dependency_readiness=dependency_readiness,
         pilot_input=pilot_input,
     )
-    return append_invocation_descriptor(store_root, descriptor)
+    descriptor_outcome = append_invocation_descriptor(store_root, descriptor)
+    restart_capsule = build_restart_capsule(
+        handoff_id=handoff.handoff_id,
+        candidate_packet=candidate_packet,
+        pilot_input=pilot_input,
+        required_environment_spec=runtime_configuration.required_environment_spec,
+        created_at=route_decision.created_at,
+        expires_at=route_decision.expires_at,
+    )
+    request = build_runtime_execution_request(
+        route_decision=route_decision,
+        handoff=handoff,
+        invocation_descriptor=descriptor,
+        restart_capsule=restart_capsule,
+    )
+    append_runtime_execution_request(store_root, request)
+    return descriptor_outcome
