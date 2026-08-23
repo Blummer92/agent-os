@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+import agent_os_execution_service.production_governed_resume_factory as production_factory
 from agent_os_execution_service.governed_resume_entrypoint import (
     GovernedResumeBindings,
     build_governed_resume_bindings,
@@ -170,6 +171,46 @@ def test_main_rejects_arbitrary_shell_payload_in_handoff_position():
         )
 
 
+def test_default_main_selects_production_factory_after_argv_validation(monkeypatch, capsys):
+    calls = []
+    pilot = object()
+
+    def reconstruct(handoff_id):
+        calls.append(("reconstruct", handoff_id))
+        return Result(Status.ADMITTED, ("admitted",), pilot)
+
+    def dispatch(value):
+        calls.append(("dispatch", value))
+
+    def build(handoff_id):
+        calls.append(("factory", handoff_id))
+        return GovernedResumeBindings(reconstruct, dispatch)
+
+    monkeypatch.setattr(
+        production_factory,
+        "build_production_governed_resume_bindings_for_handoff",
+        build,
+    )
+
+    assert main(["--handoff-id", H]) == 0
+    assert calls == [("factory", H), ("reconstruct", H), ("dispatch", pilot)]
+    assert json.loads(capsys.readouterr().out)["scheduler_dispatch_count"] == 1
+
+
+def test_default_main_rejects_malformed_argv_before_production_factory(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        production_factory,
+        "build_production_governed_resume_bindings_for_handoff",
+        lambda handoff_id: calls.append(handoff_id),
+    )
+
+    with pytest.raises(ValueError):
+        main(["--command", "echo pwned"])
+
+    assert calls == []
+
+
 def test_build_governed_resume_bindings_reuses_canonical_functions_without_duplication():
     bindings = build_governed_resume_bindings(
         descriptor_loader=lambda handoff_id: None,
@@ -190,15 +231,16 @@ def test_build_governed_resume_bindings_reuses_canonical_functions_without_dupli
     assert bindings.dispatch.func is run_single_issue_pilot
 
 
-def test_module_invoked_as_cli_actually_executes_and_fails_closed_without_composition():
-    """Genuine ``python3 -m ...`` invocation, proving the module entrypoint runs.
-
-    With no host-supplied composition, this must fail closed (nonzero exit,
-    no silent success) rather than executing a no-op, which was the original
-    bug: the installed host command could exit 0 without performing governed
-    resume at all.
-    """
+def test_module_invoked_as_cli_executes_and_fails_closed_without_host_configuration():
+    """The installed module path executes production selection rather than a no-op."""
     env = os.environ | {"PYTHONPATH": str(PACKAGE_SRC)}
+    for name in (
+        "AGENT_OS_CHECKPOINT_STORE_ROOT",
+        "AGENT_OS_REPOSITORY_ROOT",
+        "AGENT_OS_WORKSPACE_PARENT",
+        "AGENT_OS_LEASE_DIRECTORY",
+    ):
+        env.pop(name, None)
     proc = subprocess.run(
         [
             sys.executable,
@@ -213,7 +255,8 @@ def test_module_invoked_as_cli_actually_executes_and_fails_closed_without_compos
         text=True,
     )
     assert proc.returncode != 0
-    assert "host-supplied" in proc.stderr
+    assert "production governed-resume composition failed closed" in proc.stderr
+    assert "scheduler_dispatch_count" not in proc.stdout
 
 
 def test_module_invoked_as_cli_rejects_malformed_argv_before_any_composition():

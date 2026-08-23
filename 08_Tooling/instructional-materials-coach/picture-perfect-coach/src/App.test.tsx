@@ -51,21 +51,30 @@ describe('Picture Perfect Coach review and Ready UX', () => {
     expect(screen.getByText(/Every modeled step needs an explicit review decision/i)).toBeTruthy();
   });
 
-  it('reaches Prompts then Ready and generates a local non-authorizing handoff packet', async () => {
+  it('reaches Prompts with role-preserving approved synthetic screen evidence', async () => {
     await reachPrompts();
-    expect(screen.getAllByText('Application: Adobe Express').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Application: Adobe Express').length).toBe(3);
     expect(screen.getByText('Prompts').closest('li')?.getAttribute('aria-current')).toBe('step');
+    expect(screen.getAllByText('Software interface — approved screen capture bound').length).toBe(3);
+    expect(screen.getAllByLabelText('Portable prompt').length).toBe(3);
+    expect(screen.getAllByRole('button', { name: 'Copy Prompt' }).length).toBe(3);
+    expect(screen.queryByText('Prompt blocked')).toBeNull();
+    expect(screen.getAllByText(/Approved captured screen evidence is the base visual/i).length).toBe(3);
+  });
+
+  it('passes Ready on synthetic capture and produces only a local non-authorizing handoff packet', async () => {
+    await reachPrompts();
     fireEvent.click(screen.getByRole('button', { name: 'Open Ready' }));
     expect(await screen.findByRole('heading', { name: 'Implementation handoff preflight' })).toBeTruthy();
     expect(screen.getByText('Ready').closest('li')?.getAttribute('aria-current')).toBe('step');
-    expect(screen.getAllByText(/^Pass ·/).length).toBeGreaterThan(5);
+    expect(screen.getByText(/^Pass · Captured screen evidence bound where required$/)).toBeTruthy();
+
     const create = screen.getByRole('button', { name: 'Create GitHub Handoff' });
     expect(create.hasAttribute('disabled')).toBe(false);
     fireEvent.click(create);
     const packet = screen.getByLabelText('GitHub handoff packet') as HTMLTextAreaElement;
+    expect(packet.value).toContain('"captured_screen_evidence"');
     expect(packet.value).toContain('"execution_authorized": false');
-    expect(packet.value).toContain('"modeled_application": "Adobe Express"');
-    expect(packet.value).toContain('tutorial0-step-08-incidental-shift');
     expect(screen.getByText(/No GitHub write occurred/i)).toBeTruthy();
   });
 });

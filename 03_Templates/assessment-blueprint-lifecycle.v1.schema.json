@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent-os://assessment-blueprint-lifecycle/v1",
+  "title": "Assessment Blueprint Lifecycle v1",
+  "type": "object",
+  "required": [
+    "lifecycle_contract_version",
+    "blueprint",
+    "last_validated_blueprint_version",
+    "last_validated_source_version",
+    "last_validated_design_record_id",
+    "changed_paths",
+    "change_origin",
+    "dependency_impact",
+    "shared_semantic_root_changed",
+    "change_impact_class",
+    "required_revalidation_scopes",
+    "stale_validation",
+    "stale_reasons",
+    "disposition",
+    "affected_objects",
+    "preserved_objects",
+    "invalidated_downstream_consumers",
+    "preserved_downstream_consumers"
+  ],
+  "properties": {
+    "lifecycle_contract_version": {"const": "1.0"},
+    "blueprint": {"$ref": "assessment-blueprint-core.v1.schema.json"},
+    "last_validated_blueprint_version": {"type": "string", "minLength": 1},
+    "last_validated_source_version": {"type": "string", "minLength": 1},
+    "last_validated_design_record_id": {"type": "string", "minLength": 1},
+    "changed_paths": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "change_origin": {"enum": ["system", "teacher_authorized", "source_update"]},
+    "dependency_impact": {"enum": ["resolved", "ambiguous"]},
+    "shared_semantic_root_changed": {"type": "boolean"},
+    "change_impact_class": {"enum": ["no_revalidation", "local_validation", "blueprint_validation", "qa_rerun", "teacher_review", "downstream_invalidation"]},
+    "required_revalidation_scopes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"enum": ["local_validation", "blueprint_validation", "qa_rerun", "teacher_review", "downstream_invalidation"]}
+    },
+    "stale_validation": {"type": "boolean"},
+    "stale_reasons": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"enum": ["blueprint-version-changed", "authoritative-source-version-changed", "upstream-design-record-changed", "handed-off-field-changed", "shared-semantic-root-changed", "dependency-impact-ambiguous"]}
+    },
+    "disposition": {"enum": ["current", "stale", "needs-decision"]},
+    "affected_objects": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "preserved_objects": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "invalidated_downstream_consumers": {"$ref": "#/$defs/consumerSet"},
+    "preserved_downstream_consumers": {"$ref": "#/$defs/consumerSet"}
+  },
+  "$defs": {
+    "consumerSet": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"enum": ["sequencing", "qa", "dashboard", "portability"]}
+    }
+  },
+  "additionalProperties": false
+}

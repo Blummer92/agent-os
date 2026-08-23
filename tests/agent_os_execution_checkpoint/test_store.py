@@ -534,3 +534,49 @@ def test_concurrent_different_publish_never_overwrites_existing_content(
 
     assert published_path is not None
     assert published_path.read_bytes() == competing_payload
+
+
+# --- exact checkpoint_id lookup (#1304) --------------------------------------
+
+
+def test_load_checkpoint_by_id_returns_the_exact_match(tmp_path: Path) -> None:
+    checkpoint = make_checkpoint()
+    store.append_checkpoint(tmp_path, checkpoint)
+    loaded = store.load_checkpoint_by_id(tmp_path, checkpoint.issue_number, checkpoint.checkpoint_id)
+    assert loaded == checkpoint
+
+
+def test_load_checkpoint_by_id_selects_among_multiple_records(tmp_path: Path) -> None:
+    genesis = make_checkpoint()
+    store.append_checkpoint(tmp_path, genesis)
+    child = make_mutating(genesis.checkpoint_id)
+    store.append_checkpoint(tmp_path, child)
+
+    assert store.load_checkpoint_by_id(
+        tmp_path, genesis.issue_number, genesis.checkpoint_id
+    ) == genesis
+    assert store.load_checkpoint_by_id(
+        tmp_path, child.issue_number, child.checkpoint_id
+    ) == child
+
+
+def test_load_checkpoint_by_id_fails_closed_when_missing(tmp_path: Path) -> None:
+    checkpoint = make_checkpoint()
+    store.append_checkpoint(tmp_path, checkpoint)
+    with pytest.raises(store.CheckpointNotFound):
+        store.load_checkpoint_by_id(
+            tmp_path, checkpoint.issue_number, "agent-os.execution-checkpoint:" + "0" * 64
+        )
+
+
+def test_load_checkpoint_by_id_fails_closed_when_quarantined(tmp_path: Path) -> None:
+    checkpoint = make_checkpoint()
+    outcome = store.append_checkpoint(tmp_path, checkpoint)
+    outcome.path.write_bytes(b'{"tampered": true}')
+    with pytest.raises(store.CheckpointQuarantined):
+        store.load_checkpoint_by_id(tmp_path, checkpoint.issue_number, checkpoint.checkpoint_id)
+
+
+def test_load_checkpoint_by_id_rejects_empty_id(tmp_path: Path) -> None:
+    with pytest.raises(TypeError):
+        store.load_checkpoint_by_id(tmp_path, 895, "")

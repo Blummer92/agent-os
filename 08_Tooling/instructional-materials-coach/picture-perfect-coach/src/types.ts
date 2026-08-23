@@ -1,3 +1,5 @@
+import type { ActionIdentity, RecordingUiEvidence } from './uiEvidence';
+
 export type EvidenceState = 'pending' | 'passed' | 'failed' | 'indeterminate' | 'unavailable';
 export type ModelingDisposition = 'keep' | 'combine' | 'not-instructional' | 'needs-review';
 export type ReviewChoice = 'keep' | 'combine-with-previous' | 'not-instructional';
@@ -58,6 +60,13 @@ export interface UploadEvidenceProjection {
   rj4_state: EvidenceState;
   modeling_candidates: ModelingCandidateProjection[];
   modeling_steps: ModelingStepProjection[];
+  /**
+   * UI-claim evidence derived from the approved recording itself (PPUX-F1).
+   * Never supplied by authoring content and never derived from modeling
+   * candidate `target`/`evidence` text, which are instructional descriptors
+   * rather than observed interface text.
+   */
+  recording_evidence: RecordingUiEvidence;
 }
 
 export interface ReviewDecision {
@@ -80,6 +89,13 @@ export interface ReviewedStepProjection {
    * Stage 4 must block software-UI prompts rather than infer or invent one.
    */
   modeled_application: string | null;
+  /**
+   * Action identity for this reviewed step's own source indexes. Array position
+   * alone is never sufficient identity; the fingerprint detects a recording edit
+   * that shifts or replaces an action. PPUX-F2 joins capture evidence on both.
+   * Combining steps concatenates identities and never flattens them.
+   */
+  action_identity: readonly ActionIdentity[];
   execution_authorized: false;
 }
 
@@ -89,6 +105,7 @@ export interface ReviewedTutorialProjection {
   retained_steps: ReviewedStepProjection[];
   excluded_step_ids: string[];
   review_decisions: ReviewDecision[];
+  recording_evidence: RecordingUiEvidence;
   execution_authorized: false;
 }
 

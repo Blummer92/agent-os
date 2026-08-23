@@ -1,10 +1,18 @@
-# Execution-interface governed-route preflight (#1237)
+# Execution-interface governed-route preflight (#1237 / #1330)
 
-## Failure removed
+## Failures removed
 
 ```text
 work on an Agent OS issue -> generic GitHub publish tooling selected first
 -> local `gh` prerequisite checked -> `gh` absent -> false blocker
+```
+
+and, for #1330:
+
+```text
+already-authorized exact repository operation
+-> #918 says zero runtime capabilities are required
+-> execution interface nevertheless routes through a runtime surface
 ```
 
 Hard invariant: missing local `gh` != Agent OS execution unavailable. Local CLI
@@ -22,7 +30,40 @@ tool. `.claude/settings.json` in this repository wires two of them to
 This is the concrete pre-tool routing hook #1237 required. It is repository
 configuration, so it lives with the contract it enforces.
 
-## Resolved path
+The #1330 zero-runtime consumer is
+`scripts/agent_os_execution_interface/connector_native_fast_track.py`. It runs
+only after upstream classification has already produced a valid #918
+`ExecutorRouteDecision` for the exact next operation. It never parses prompt
+text, infers capabilities from diff size, or selects a route itself.
+
+## Zero-runtime fast-track (#1330)
+
+```text
+already-authorized exact operation
+-> canonical #918 ExecutorRouteDecision
+-> chatgpt-connector-native
+-> connector_native_fast_track.consume_executor_route_decision(...)
+-> use connected GitHub API surface
+-> GitHub Service Agent reacquires current head/blob/authorization before write
+```
+
+For this path the adapter requires current upstream execution and GitHub-write
+authority, rejects merge or external-write authority, and reports that no local
+CLI prerequisite, governed runner, Cloud Build, mutation, or side effect was
+performed by the adapter itself. The adapter does not grant write authority;
+the GitHub Service Agent remains the sole repository writer and retains its
+existing exact-currentness checks before each mutation.
+
+Any non-empty runtime capability is still decided by #918. A governed-runner or
+explicit external-fallback route is returned as `delegate-selected-route`
+unchanged; the fast-track consumer cannot convert it into connector-native work.
+A #918 human-decision route remains `needs-decision`.
+
+If a connector-native action later proves insufficient, the existing #1237
+`scripts.agent_os_execution_interface.post_selection_continuation` seam owns the
+same-lineage capability transition. #1330 adds no retry or continuation engine.
+
+## Resolved governed-runner path (#1237)
 
 ```text
 governed Agent OS checkout + resolved repository + exactly one issue key
@@ -34,7 +75,7 @@ governed Agent OS checkout + resolved repository + exactly one issue key
    #1218/#1253 reconstruction, existing Workflow Scheduler
 ```
 
-## Outcomes
+## Governed-runner outcomes
 
 | Condition | Status |
 | --- | --- |
@@ -66,18 +107,22 @@ existing locator, never authorization or command input.
 
 ## Boundary
 
-The preflight is a locator consumer. It introduces no second router, locator,
-descriptor store, index, queue, transport, Scheduler, lease, retry system, or
-execution authority; it never synthesizes, ranks, or persists a handoff, never
-acquires a lease or invokes the Scheduler, and grants no implementation, cloud,
-merge, issue-closure, or publication authority. A discovered identity must still
-pass the existing #1218/#1253 reconstruction, authorization, source/scope,
-checkpoint, ResumePlan, environment, and lease checks before any execution.
+The #1237 preflight is a locator consumer. The #1330 adapter is a #918 route
+consumer. Neither introduces a second router, locator, descriptor store, index,
+queue, transport, Scheduler, lease, retry system, GitHub writer, validation
+authority, or execution authority. Neither synthesizes, ranks, or persists a
+handoff, acquires a lease, invokes the Scheduler, runs Cloud Build, or performs a
+repository mutation.
+
+The repository contract cannot manufacture ChatGPT product/plugin behavior. A
+host execution interface must consume the #918 decision and this bounded action
+at its own tool-selection seam. Product/plugin changes remain outside this
+repository implementation.
 
 The `PreToolUse` guard is advisory only: it never denies, rewrites, or
 pre-approves a tool call, and it emits no `permissionDecision`.
 
-## Direct invocation
+## Direct governed-resume invocation
 
 ```bash
 scripts/agent-os-execution-interface-preflight.py \
@@ -92,7 +137,8 @@ Tests: `tests/agent_os_execution_interface/`.
 
 ## Rollback
 
-Remove `.claude/settings.json`, `scripts/agent-os-execution-interface-preflight.py`,
-`scripts/agent_os_execution_interface/`, `tests/agent_os_execution_interface/`,
-and this note. The existing locator, descriptor store, handoff identities,
-reconstruction, Scheduler state, transport, branches, and PRs are untouched.
+For #1330, remove
+`scripts/agent_os_execution_interface/connector_native_fast_track.py` and its
+focused regression test, then restore this note. #1237's existing hook, locator,
+descriptor store, handoff identities, reconstruction, Scheduler state,
+transport, branches, and PRs remain untouched.

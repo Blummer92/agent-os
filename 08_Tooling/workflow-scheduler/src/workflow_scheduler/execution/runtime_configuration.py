@@ -22,12 +22,8 @@ from dataclasses import dataclass
 from typing import Literal
 
 from scripts.agent_os_execution_capabilities.dependencies import (
-    DependencyArtifactIdentity,
-    DependencyEcosystem,
-    DependencyInstallMode,
-    LocalProjectRequirement,
-    QualificationOnlyDependencyPin,
     RequiredEnvironmentSpec,
+    reconstruct_required_environment_spec,
     required_environment_spec_payload,
 )
 from scripts.agent_os_execution_capabilities.models import RepositoryIdentity
@@ -806,84 +802,10 @@ def _reconstruct_required_test_commands(value: object) -> tuple[FrozenTestComman
     return tuple(commands)
 
 
-def _reconstruct_artifact(value: object, name: str) -> DependencyArtifactIdentity:
-    if type(value) is not dict or set(value) != {"relative_path", "sha256"}:
-        raise ConcreteRuntimeConfigurationError(f"{name} payload fields drift")
-    try:
-        return DependencyArtifactIdentity(
-            relative_path=value["relative_path"], sha256=value["sha256"]
-        )
-    except (TypeError, ValueError) as exc:
-        raise ConcreteRuntimeConfigurationError(f"{name} is malformed: {exc}") from exc
-
-
 def _reconstruct_required_environment(value: object) -> RequiredEnvironmentSpec:
-    expected = {
-        "ecosystem",
-        "package_root",
-        "runtime_requirement",
-        "dependency_manifest_identity",
-        "lock_or_constraints_identity",
-        "install_mode",
-        "local_project_requirements",
-        "qualification_only_pins",
-        "approved_source_identity",
-        "required_validation_command_ids",
-        "required_environment_id",
-    }
-    if type(value) is not dict or set(value) != expected:
-        raise ConcreteRuntimeConfigurationError(
-            "required_environment_spec payload fields drift"
-        )
-    projects_value = value["local_project_requirements"]
-    pins_value = value["qualification_only_pins"]
-    command_ids = value["required_validation_command_ids"]
-    if type(projects_value) is not list or type(pins_value) is not list or type(command_ids) is not list:
-        raise ConcreteRuntimeConfigurationError(
-            "required_environment_spec nested lists are malformed"
-        )
+    """Delegate to the one canonical spec reconstructor owned by #1320."""
     try:
-        projects = tuple(
-            LocalProjectRequirement(
-                relative_path=item["relative_path"],
-                sha256=item["sha256"],
-                editable=item["editable"],
-            )
-            for item in projects_value
-            if type(item) is dict and set(item) == {"relative_path", "sha256", "editable"}
-        )
-        if len(projects) != len(projects_value):
-            raise ValueError("local-project payload fields drift")
-        pins = tuple(
-            QualificationOnlyDependencyPin(
-                package=item["package"], version=item["version"]
-            )
-            for item in pins_value
-            if type(item) is dict and set(item) == {"package", "version"}
-        )
-        if len(pins) != len(pins_value):
-            raise ValueError("qualification-pin payload fields drift")
-        lock_value = value["lock_or_constraints_identity"]
-        return RequiredEnvironmentSpec(
-            ecosystem=DependencyEcosystem(value["ecosystem"]),
-            package_root=value["package_root"],
-            runtime_requirement=value["runtime_requirement"],
-            dependency_manifest_identity=_reconstruct_artifact(
-                value["dependency_manifest_identity"],
-                "dependency_manifest_identity",
-            ),
-            lock_or_constraints_identity=(
-                None
-                if lock_value is None
-                else _reconstruct_artifact(lock_value, "lock_or_constraints_identity")
-            ),
-            install_mode=DependencyInstallMode(value["install_mode"]),
-            local_project_requirements=projects,
-            qualification_only_pins=pins,
-            approved_source_identity=value["approved_source_identity"],
-            required_validation_command_ids=tuple(command_ids),
-            required_environment_id=value["required_environment_id"],
-        )
+        return reconstruct_required_environment_spec(value)
     except (TypeError, ValueError, KeyError) as exc:
         raise ConcreteRuntimeConfigurationError(
             f"required_environment_spec is malformed: {exc}"

@@ -4,12 +4,43 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-os-execution-service"
+# Deliberately unchanged: this distribution version is bound to the runtime
+# identity constant ``EXECUTION_SERVICE_VERSION`` (surfaced in read-only service
+# results), and #1300 changes packaging metadata only -- never runtime identity.
 version = "0.6.0"
 description = "Agent OS execution-service package: immutable read-only request and inspection core, deterministic validation planning and non-executing executor routing, a governed non-authorizing validation-execution composition boundary over the canonical Workflow Scheduler runtime, and the end-to-end authorized-validation lifecycle entrypoint composing #757/#758/#759/#760/#761"
 requires-python = ">=3.11"
+# #1300 (AOS-GCE2C): the production governed-resume path
+# (``production_host_composition`` -> ``governed_resume_entrypoint``) imports the
+# Workflow Scheduler runtime, the canonical checkpoint descriptor loader that
+# Scheduler distribution now carries, and the local context-manager and GitHub
+# provider runtimes. Declaring them here is what makes a clean host installation
+# resolve the real import graph instead of a repository-root ``PYTHONPATH``.
+dependencies = [
+  "workflow-scheduler>=0.18.0,<0.19.0",
+  "agent-memory-context-manager>=0.2.0,<0.3.0",
+  "PyGithub>=2.9.1,<3",
+  "requests>=2.31,<3",
+]
 
+# The ``scripts.*`` packages below stay canonical where they are and are
+# imported only by this distribution's runtime (``agent_os_candidate_packet``,
+# the ``agent_os_github_issue_provider`` it depends on, and -- since #1319 --
+# ``agent_os_candidate_packet_live_input``, whose ``LiveIssueReader`` and
+# canonical ``verify-repo-state.sh`` observation assembler the production host
+# bootstrap reuses). Everything else under ``scripts.`` that this runtime
+# imports is distributed by ``workflow-scheduler``; no module is carried by two
+# distributions.
 [tool.setuptools]
-package-dir = {"" = "src"}
+packages = [
+  "agent_os_execution_service",
+  "scripts.agent_os_candidate_packet",
+  "scripts.agent_os_candidate_packet_live_input",
+  "scripts.agent_os_github_issue_provider",
+]
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.setuptools.package-dir]
+"" = "src"
+"scripts.agent_os_candidate_packet" = "../../scripts/agent_os_candidate_packet"
+"scripts.agent_os_candidate_packet_live_input" = "../../scripts/agent_os_candidate_packet_live_input"
+"scripts.agent_os_github_issue_provider" = "../../scripts/agent_os_github_issue_provider"

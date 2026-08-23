@@ -14,15 +14,42 @@ concurrency:
 
 jobs:
   ingress:
-    name: Validate and transport bounded Agent OS resume
+    name: Validate and transport bounded Agent OS invocation
     if: ${{ github.event.issue.pull_request == null }}
     runs-on: ubuntu-latest
     steps:
       - name: Check out canonical workflow source
         uses: actions/checkout@v7
 
+      - name: Classify bounded #1238 host-runtime installation
+        id: host_install
+        shell: bash
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_USER_ID: ${{ github.event.comment.user.id }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPOSITORY_ID: ${{ github.repository_id }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          requested=false
+          if [ "$GITHUB_RUN_ATTEMPT" = "1" ] && \
+             [ "$EVENT_NAME" = "issue_comment" ] && \
+             [ "$REPOSITORY_ID" = "1289370915" ] && \
+             [ "$COMMENT_USER_ID" = "32861845" ] && \
+             [ "$ISSUE_NUMBER" = "1238" ] && \
+             [ "$REF_NAME" = "refs/heads/main" ] && \
+             [ "$WORKFLOW_REF" = "Blummer92/agent-os/.github/workflows/agent-os-governed-invocation.yml@refs/heads/main" ] && \
+             [ "$COMMENT_BODY" = "/agent-os install-host-runtime" ]; then
+            requested=true
+          fi
+          echo "requested=$requested" >> "$GITHUB_OUTPUT"
+
       - name: Parse low-trust issue comment envelope
         id: transport
+        if: ${{ steps.host_install.outputs.requested != 'true' }}
         run: |
           mkdir -p "$RUNNER_TEMP/agent-os-ingress"
           PYTHONPATH=08_Tooling/workflow-scheduler/src \
@@ -44,7 +71,7 @@ jobs:
           PY
 
       - name: Record non-accepted bounded transport evidence
-        if: ${{ steps.transport.outputs.accepted != 'true' }}
+        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted != 'true' }}
         run: |
           python - <<'PY'
           import json
@@ -68,18 +95,192 @@ jobs:
           PY
 
       - name: Authenticate bounded Agent OS transport
-        if: ${{ steps.transport.outputs.accepted == 'true' }}
+        if: ${{ steps.host_install.outputs.requested == 'true' || steps.transport.outputs.accepted == 'true' }}
         uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: projects/966859826758/locations/global/workloadIdentityPools/agent-os-github/providers/agent-os-main
           service_account: agent-os-transport@agent-os-502614.iam.gserviceaccount.com
 
       - name: Install Google Cloud CLI
-        if: ${{ steps.transport.outputs.accepted == 'true' }}
+        if: ${{ steps.host_install.outputs.requested == 'true' || steps.transport.outputs.accepted == 'true' }}
         uses: google-github-actions/setup-gcloud@v3
 
+      - name: Install and verify bounded #1238 host runtime
+        if: ${{ steps.host_install.outputs.requested == 'true' }}
+        shell: bash
+        env:
+          HOST_RUNTIME_SOURCE_SHA: 2e974f0d0e31a39c61da766b04cdd72ac88cb578
+          HOST_INSTALL_SCRIPT_SHA256: aafc7bb8288ee420e93040c9f882ea90aa0627af66975fce3f8415e65b949f19
+        run: |
+          set -euo pipefail
+          evidence_root="$RUNNER_TEMP/agent-os-ingress"
+          mkdir -p "$evidence_root"
+          project="agent-os-502614"
+          zone="us-central1-a"
+          instance="agent-os-test"
+          local_installer="08_Tooling/agent-os-execution-service/scripts/install-host-runtime"
+          remote_root="/tmp/agent-os-host-runtime-1238"
+
+          printf '%s  %s\n' "$HOST_INSTALL_SCRIPT_SHA256" "$local_installer" | sha256sum -c -
+
+          state="$(gcloud compute instances describe "$instance" \
+            --project "$project" --zone "$zone" --format='value(status)')"
+          start_issued=false
+          if [ "$state" = "TERMINATED" ]; then
+            gcloud compute instances start "$instance" \
+              --project "$project" --zone "$zone" --quiet
+            start_issued=true
+            for _ in $(seq 1 30); do
+              state="$(gcloud compute instances describe "$instance" \
+                --project "$project" --zone "$zone" --format='value(status)')"
+              [ "$state" = "RUNNING" ] && break
+              [ "$state" = "STAGING" ] || break
+              sleep 2
+            done
+          fi
+
+          if [ "$state" != "RUNNING" ]; then
+            START_ISSUED="$start_issued" VM_STATE="$state" python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"]) / "agent-os-ingress"
+          payload = {
+              "schema_version": "1.0",
+              "maintenance": {
+                  "status": "needs-decision",
+                  "reason_codes": ["host-unavailable"],
+                  "project": "agent-os-502614",
+                  "zone": "us-central1-a",
+                  "instance": "agent-os-test",
+                  "source_sha": os.environ["HOST_RUNTIME_SOURCE_SHA"],
+                  "start_issued": os.environ["START_ISSUED"] == "true",
+                  "vm_state": os.environ["VM_STATE"],
+                  "scheduler_invoked": False,
+                  "execution_authorized": False,
+                  "side_effects_performed": os.environ["START_ISSUED"] == "true",
+              },
+          }
+          (root / "result.json").write_text(
+              json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n",
+              encoding="utf-8",
+          )
+          PY
+            exit 1
+          fi
+
+          remote_command=$(cat <<EOF_REMOTE
+          set -eu
+          root=$remote_root
+          trap 'rm -rf "\$root"' EXIT HUP INT TERM
+          rm -rf "\$root"
+          git clone --quiet https://github.com/Blummer92/agent-os.git "\$root"
+          git -C "\$root" checkout --quiet -B main $HOST_RUNTIME_SOURCE_SHA
+          installer="\$root/08_Tooling/agent-os-execution-service/scripts/install-host-runtime"
+          actual_installer_sha="\$(sha256sum "\$installer" | awk '{print \$1}')"
+          if [ "\$actual_installer_sha" != "$HOST_INSTALL_SCRIPT_SHA256" ]; then
+            echo 'host runtime install refused: installer checksum mismatch' >&2
+            exit 64
+          fi
+          EXPECTED_SHA=$HOST_RUNTIME_SOURCE_SHA REPOSITORY_ROOT="\$root" sh "\$installer"
+          EOF_REMOTE
+          )
+
+          set +e
+          remote_output="$(gcloud compute ssh "$instance" \
+            --project "$project" --zone "$zone" --tunnel-through-iap --quiet \
+            --command="$remote_command" 2>"$evidence_root/host-install.stderr")"
+          remote_status=$?
+          set -e
+
+          if [ "$remote_status" -ne 0 ]; then
+            failure_reason=host-runtime-install-failed
+            if [ "$remote_status" -eq 64 ]; then
+              refusal="$(grep -E '^host runtime install refused: ' "$evidence_root/host-install.stderr" | tail -n 1 || true)"
+              case "$refusal" in
+                *"installer checksum mismatch") failure_reason=host-installer-integrity-mismatch ;;
+                *"staged checkout does not match source SHA") failure_reason=host-runtime-source-mismatch ;;
+                *"checkout does not match EXPECTED_SHA") failure_reason=host-runtime-source-mismatch ;;
+                *"source SHA is not on canonical main") failure_reason=host-runtime-source-not-main ;;
+                *"checkout must be on main") failure_reason=host-runtime-source-not-main ;;
+                *"privileged installer unavailable") failure_reason=host-privileged-installer-unavailable ;;
+                *"privileged installer must be a root-owned regular file"|*"privileged installer path is untrusted") failure_reason=host-privileged-installer-unsafe ;;
+                *"privileged installer must run as root"|*"privileged installer argv must be exactly --source-sha <sha>"|*"source SHA must be a lowercase 40-hex commit") failure_reason=host-privileged-installer-misuse ;;
+                *"privileged installer evidence malformed"|*"privileged installer evidence source mismatch") failure_reason=host-privileged-installer-evidence-invalid ;;
+                *"staging root must not be a symlink"|*"staging root is not root-owned 0700"|*"staging path is untrusted") failure_reason=host-staging-root-unsafe ;;
+                *"staged tree must be root-owned"|*"staged entrypoint installer must not be a symlink"|*"staged entrypoint installer missing") failure_reason=host-staged-source-unsafe ;;
+                *"host OS identity unavailable") failure_reason=host-os-identity-unavailable ;;
+                *"qualified host must be Debian") failure_reason=host-os-unqualified ;;
+                *"qualified host must be Debian 12") failure_reason=host-os-version-unqualified ;;
+                *"passwordless bounded sudo unavailable") failure_reason=host-passwordless-sudo-unavailable ;;
+                *"sudo unavailable") failure_reason=host-sudo-unavailable ;;
+                *"python3 pip unavailable") failure_reason=host-python-pip-unavailable ;;
+                *"expected one reusable-capability-registry wheel"|*"expected one agent-memory-context-manager wheel"|*"expected one workflow-scheduler wheel"|*"expected one agent-os-execution-service wheel") failure_reason=host-runtime-wheel-shape-invalid ;;
+                *"entrypoint installer was not idempotent") failure_reason=host-entrypoint-idempotency-failed ;;
+                *"entrypoint owner/group/mode mismatch") failure_reason=host-entrypoint-integrity-mismatch ;;
+              esac
+            fi
+            FAILURE_REASON="$failure_reason" START_ISSUED="$start_issued" VM_STATE="$state" python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"]) / "agent-os-ingress"
+          payload = {
+              "schema_version": "1.0",
+              "maintenance": {
+                  "status": "needs-decision",
+                  "reason_codes": [os.environ["FAILURE_REASON"]],
+                  "project": "agent-os-502614",
+                  "zone": "us-central1-a",
+                  "instance": "agent-os-test",
+                  "source_sha": os.environ["HOST_RUNTIME_SOURCE_SHA"],
+                  "start_issued": os.environ["START_ISSUED"] == "true",
+                  "vm_state": os.environ["VM_STATE"],
+                  "scheduler_invoked": False,
+                  "execution_authorized": False,
+                  "side_effects_performed": True,
+              },
+          }
+          (root / "result.json").write_text(
+              json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n",
+              encoding="utf-8",
+          )
+          PY
+            exit "$remote_status"
+          fi
+
+          install_json="$(printf '%s\n' "$remote_output" | tail -n 1)"
+          INSTALL_JSON="$install_json" START_ISSUED="$start_issued" VM_STATE="$state" python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ["RUNNER_TEMP"]) / "agent-os-ingress"
+          install = json.loads(os.environ["INSTALL_JSON"])
+          payload = {
+              "schema_version": "1.0",
+              "maintenance": {
+                  "status": "installed",
+                  "reason_codes": ["host-runtime-installed"],
+                  "project": "agent-os-502614",
+                  "zone": "us-central1-a",
+                  "instance": "agent-os-test",
+                  "source_sha": os.environ["HOST_RUNTIME_SOURCE_SHA"],
+                  "start_issued": os.environ["START_ISSUED"] == "true",
+                  "vm_state": os.environ["VM_STATE"],
+                  "install": install,
+                  "scheduler_invoked": False,
+                  "execution_authorized": False,
+                  "side_effects_performed": True,
+              },
+          }
+          (root / "result.json").write_text(
+              json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
       - name: Invoke exact governed GCE control path
-        if: ${{ steps.transport.outputs.accepted == 'true' }}
+        if: ${{ steps.host_install.outputs.requested != 'true' && steps.transport.outputs.accepted == 'true' }}
         env:
           AGENT_OS_WIF_AUDIENCE: //iam.googleapis.com/projects/966859826758/locations/global/workloadIdentityPools/agent-os-github/providers/agent-os-main
         run: |
@@ -110,21 +311,35 @@ jobs:
                   summary.write(f"Transport: `{transport['status']}` / `{transport['reason']}`\n\n")
               if result_path.exists():
                   result = json.loads(result_path.read_text(encoding="utf-8"))
-                  control = result.get("control")
-                  if isinstance(control, dict):
-                      summary.write(f"Control status: `{control.get('status')}`\n\n")
-                      summary.write(f"Reasons: `{','.join(control.get('reason_codes', []))}`\n\n")
-                      summary.write(f"Scheduler accepted: `{control.get('host_accepted')}`\n\n")
-                      summary.write(f"Automatic shutdown issued: `{control.get('shutdown_issued')}`\n")
+                  maintenance = result.get("maintenance")
+                  if isinstance(maintenance, dict):
+                      summary.write(f"Host maintenance: `{maintenance.get('status')}`\n\n")
+                      summary.write(f"Reasons: `{','.join(maintenance.get('reason_codes', []))}`\n\n")
+                      summary.write(f"Runtime source: `{maintenance.get('source_sha')}`\n\n")
+                      summary.write("Scheduler invoked by maintenance: `False`\n")
                   else:
-                      summary.write(f"Dispatch: `{result.get('dispatch_status')}` / `{result.get('dispatch_reason')}`\n")
+                      control = result.get("control")
+                      if isinstance(control, dict):
+                          summary.write(f"Control status: `{control.get('status')}`\n\n")
+                          summary.write(f"Reasons: `{','.join(control.get('reason_codes', []))}`\n\n")
+                          summary.write(f"Scheduler accepted: `{control.get('host_accepted')}`\n\n")
+                          summary.write(f"Automatic shutdown issued: `{control.get('shutdown_issued')}`\n")
+                      else:
+                          discovery = result.get("discovery")
+                          if isinstance(discovery, dict):
+                              summary.write(f"Discovery status: `{discovery.get('status')}`\n\n")
+                              summary.write(f"Reasons: `{','.join(discovery.get('reason_codes', []))}`\n\n")
+                              summary.write(f"Handoff found: `{discovery.get('handoff_id') is not None}`\n\n")
+                              summary.write("Scheduler invoked by discovery: `False`\n")
+                          else:
+                              summary.write(f"Dispatch: `{result.get('dispatch_status')}` / `{result.get('dispatch_reason')}`\n")
               else:
                   summary.write("Result evidence unavailable; manual review required.\n")
           PY
 
       - name: Publish bounded ingress evidence
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: agent-os-ingress-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/agent-os-ingress/*.json

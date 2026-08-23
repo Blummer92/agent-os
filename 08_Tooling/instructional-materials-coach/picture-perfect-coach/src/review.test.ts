@@ -1,8 +1,14 @@
 import tutorialEvidence from './fixtures/tutorial0-evidence.json';
+import tutorialRecording from './fixtures/tutorial0-recording.json';
 import { deriveReviewedTutorial, needsAttention } from './review';
+import { deriveRecordingUiEvidence } from './uiEvidence';
 import type { ReviewDecision, UploadEvidenceProjection } from './types';
 
-const evidence = tutorialEvidence as unknown as UploadEvidenceProjection;
+const projected = tutorialEvidence as unknown as Omit<UploadEvidenceProjection, 'recording_evidence'>;
+const evidence: UploadEvidenceProjection = {
+  ...projected,
+  recording_evidence: deriveRecordingUiEvidence(tutorialRecording, projected.recording_sha256),
+};
 const keepAll: ReviewDecision[] = evidence.modeling_steps.map((step) => ({ step_id: step.step_id, choice: 'keep' }));
 
 describe('Picture Perfect review derivation', () => {

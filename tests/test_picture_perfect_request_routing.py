@@ -1,5 +1,4 @@
 """Regression coverage for the Picture Perfect / PPUX routing contract (#1280)."""
-
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,15 +12,15 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_orchestrator_routes_existing_picture_perfect_prompt_artifacts() -> None:
+def test_orchestrator_routes_resolved_picture_perfect_prompt_artifacts() -> None:
     overlay = read(ORCHESTRATOR)
-    assert "Picture Perfect / PPUX tutorial prompt artifact" in overlay
-    assert "canonical Instructional Materials Coach Picture Perfect capability" in overlay
+    assert "canonical request/context evidence resolves" in overlay
+    assert "registered Instructional Materials Coach" in overlay
     assert "chatgpt-orchestrator-picture-perfect-routing.md" in overlay
-    assert "generic image-prompt authoring" in overlay
+    assert "never reconstruct missing software UI as a fallback" in overlay
 
 
-def test_tutorial_zero_natural_language_regression_is_explicit() -> None:
+def test_tutorial_zero_acceptance_utterances_are_explicit_without_becoming_a_phrase_parser() -> None:
     routing = read(ROUTING)
     for intent in (
         "Show me what tutorial 0 looks like in image prompts",
@@ -30,18 +29,19 @@ def test_tutorial_zero_natural_language_regression_is_explicit() -> None:
         "show me Tutorial 0 prompts",
     ):
         assert intent in routing
-    assert "three ready Adobe Express prompt cards" in routing
-    assert "unsupported final-state details remain blocked" in routing
+    assert "regression inputs, not a new phrase-matching vocabulary" in routing
+    assert "routing provenance and state fidelity only" in routing
+    assert "does not assert a card count or specific interface text" in routing
 
 
-def test_routing_fails_closed_instead_of_fabricating_tutorial_steps() -> None:
+def test_routing_preserves_current_ppux_state_and_blockers_without_generic_fallback() -> None:
     routing = read(ROUTING)
     for invariant in (
+        "Return the current canonical PPUX state without rewriting it",
+        "Preserve blocked outcomes visibly",
+        "If PPUX returns no ready output, say so with the canonical reason",
         "Do not silently fall back to generic generation",
-        "Never replace missing evidence with plausible controls",
-        "unknown or ambiguous tutorial does not produce fabricated PPUX output",
-        "Missing approved application identity remains blocked",
-        "Unsupported UI details remain blocked",
+        "A fully blocked PPUX result does not trigger generic fallback",
     ):
         assert invariant in routing
 
@@ -54,19 +54,29 @@ def test_generic_image_requests_and_provider_execution_stay_separate() -> None:
     assert "Routing alone does not call an image provider" in routing
 
 
-def test_contract_reuses_existing_ppux_owners_and_tutorial_fixture() -> None:
+def test_contract_reuses_current_picture_perfect_capability_without_pinning_card_content() -> None:
     routing = read(ROUTING)
     readme = read(PPUX_README)
     fixture = read(PROMPT_FIXTURE)
-    assert "Do not duplicate the prompt engine or Tutorial 0 fixture" in routing
+    assert "Do not duplicate the prompt engine" in routing
     assert "Model -> Upload -> Review -> Prompts -> Ready" in routing
     assert "Model -> Upload -> Review -> Prompts -> Ready" in readme
-    assert "Adobe Express" in fixture
-    for ready_step in (
-        "tutorial0-step-01-organize-location",
-        "tutorial0-step-03-square-file",
-        "tutorial0-step-05-landscape-file",
-    ):
-        assert ready_step in fixture
-    assert "tutorial0BlockedFinalState" in fixture
-    assert "Exact favorite-food filenames" in fixture
+    assert "tutorial0PromptCards" in fixture
+    assert "tutorial0CapturedPromptCards" in fixture
+    assert "Do not pin a ready-card count" in routing
+
+
+def test_routing_preserves_capture_evidence_and_application_identity_when_present() -> None:
+    routing = read(ROUTING)
+    readme = read(PPUX_README)
+    assert "approved capture evidence" in routing
+    assert "application identity" in routing
+    assert "F2 captured-screen binding" in readme
+    assert "recording_sha256 + source_index + source_fingerprint" in readme
+
+
+def test_unknown_tutorial_and_missing_evidence_fail_visibly() -> None:
+    routing = read(ROUTING)
+    assert "unknown or ambiguous tutorial does not produce fabricated PPUX output" in routing
+    assert "Missing approved application identity or visual evidence remains blocked" in routing
+    assert "Blocked reason codes and teacher-facing explanations are not filtered out" in routing

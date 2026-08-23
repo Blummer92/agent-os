@@ -1,0 +1,245 @@
+#!/bin/sh
+# Privileged Agent OS host-runtime installer (#1341).
+#
+# Installed out of band as root:root 0755 at
+# /usr/local/libexec/agent-os-host-install. Every privileged step of the host
+# runtime installation happens here and reads only from a root-owned staging
+# directory that this script creates. No caller-supplied value is ever used as
+# a path, so the unprivileged transport identity cannot substitute the code
+# that runs as root.
+#
+# The only caller input is a 40-lowercase-hex commit. The sudoers policy binds
+# that argument to one exact operator-authorized SHA; this helper independently
+# requires the same commit to be an ancestor of canonical main as defense in
+# depth before any source from it is built or installed.
+set -eu
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+umask 077
+# An ambient PYTHONPATH could shadow a stdlib or pip-internal module name and
+# hijack every privileged `python3` invocation below at import time, before any
+# hash check runs. Clear it once here rather than relying solely on sudo's
+# env_reset default. The one intentional exception (the project wheel build)
+# re-sets it explicitly, scoped to that single command.
+unset PYTHONPATH
+
+REPOSITORY_URL=https://github.com/Blummer92/agent-os.git
+CANONICAL_BRANCH=main
+STAGING_ROOT=/var/lib/agent-os/host-install-staging
+TARGET=/usr/local/libexec/agent-os-governed-resume
+HELPER_PATH=/usr/local/libexec/agent-os-host-install
+
+# The build backend is an explicit privileged trust anchor: exact versions and
+# exact wheel hashes are frozen here so root never executes a resolver-selected
+# Python build backend. Hashes are for the PyPI wheel artifacts named below.
+SETUPTOOLS_VERSION=83.0.0
+SETUPTOOLS_SHA256=29b23c360f22f414dc7336bb39178cc7bcbf6021ed2733cde173f09dba19abb3
+WHEEL_VERSION=0.47.0
+WHEEL_SHA256=212281cab4dff978f6cedd499cd893e1f620791ca6ff7107cf270781e587eced
+
+fail() {
+  printf '%s\n' "host runtime install refused: $1" >&2
+  exit 64
+}
+
+# sudo matches its rule on the path string and resolves that path at exec time,
+# so a symlinked or group/other-writable ancestor of this script would let the
+# unprivileged transport identity substitute what root executes. Verify that
+# assumption here, as root, rather than relying on it.
+require_trusted_path() {
+  _path=$1
+  _message=$2
+  if [ -L "$_path" ]; then
+    fail "$_message"
+  fi
+  [ -e "$_path" ] || fail "$_message"
+  _meta=$(stat -c '%U:%a' "$_path")
+  [ "${_meta%%:*}" = "root" ] || fail "$_message"
+  _mode=${_meta##*:}
+  _tail=${_mode#"${_mode%??}"}
+  case "${_tail%?}" in 2 | 3 | 6 | 7) fail "$_message" ;; esac
+  case "${_tail#?}" in 2 | 3 | 6 | 7) fail "$_message" ;; esac
+}
+
+require_trusted_ancestry() {
+  _target=$1
+  _message=$2
+  _cursor=$_target
+  set --
+  while [ "$_cursor" != "/" ]; do
+    set -- "$_cursor" "$@"
+    _parent=$(dirname "$_cursor")
+    [ "$_parent" != "$_cursor" ] || break
+    _cursor=$_parent
+  done
+  require_trusted_path / "$_message"
+  for _component in "$@"; do
+    require_trusted_path "$_component" "$_message"
+  done
+}
+
+# argv is parsed before the privilege check so the frozen contract stays
+# verifiable without root. Parsing is inert: both paths only ever refuse.
+if [ "$#" -ne 2 ] || [ "$1" != "--source-sha" ]; then
+  fail "privileged installer argv must be exactly --source-sha <sha>"
+fi
+source_sha=$2
+printf '%s\n' "$source_sha" | grep -Eq '^[0-9a-f]{40}$' ||
+  fail "source SHA must be a lowercase 40-hex commit"
+
+if [ "$(id -u)" != "0" ]; then
+  fail "privileged installer must run as root"
+fi
+
+# This script itself must not be substitutable through its own directory chain.
+require_trusted_ancestry "$HELPER_PATH" "privileged installer path is untrusted"
+
+# Root-owned staging. Refuse rather than follow a symlink an attacker planted,
+# and prove ownership/mode after creation rather than assuming it.
+staging_parent=$(dirname "$STAGING_ROOT")
+require_trusted_ancestry "$(dirname "$staging_parent")" "staging path is untrusted"
+if [ -L "$staging_parent" ]; then
+  fail "staging path is untrusted"
+fi
+mkdir -p "$staging_parent"
+chown root:root "$staging_parent"
+chmod 0755 "$staging_parent"
+require_trusted_path "$staging_parent" "staging path is untrusted"
+
+if [ -L "$STAGING_ROOT" ]; then
+  fail "staging root must not be a symlink"
+fi
+rm -rf "$STAGING_ROOT"
+mkdir "$STAGING_ROOT"
+trap 'rm -rf "$STAGING_ROOT"' EXIT HUP INT TERM
+chown root:root "$STAGING_ROOT"
+chmod 0700 "$STAGING_ROOT"
+
+staging_metadata=$(stat -c '%U:%G:%a' "$STAGING_ROOT")
+[ "$staging_metadata" = "root:root:700" ] ||
+  fail "staging root is not root-owned 0700"
+
+checkout="$STAGING_ROOT/checkout"
+wheel_dir="$STAGING_ROOT/wheels"
+build_tools="$STAGING_ROOT/build-tools"
+build_requirements="$STAGING_ROOT/build-requirements.txt"
+
+# Fixed URL, never a caller-supplied location.
+git clone --quiet "$REPOSITORY_URL" "$checkout"
+git -C "$checkout" merge-base --is-ancestor \
+  "$source_sha" "origin/$CANONICAL_BRANCH" 2>/dev/null ||
+  fail "source SHA is not on canonical main"
+git -C "$checkout" checkout --quiet --detach "$source_sha"
+head_sha=$(git -C "$checkout" rev-parse HEAD)
+[ "$head_sha" = "$source_sha" ] ||
+  fail "staged checkout does not match source SHA"
+
+checkout_owner=$(stat -c '%U' "$checkout")
+[ "$checkout_owner" = "root" ] || fail "staged tree must be root-owned"
+
+# Debian's signed package channel is the host/toolchain trust anchor. Python
+# build tooling is not taken from the ambient interpreter and is never left to
+# an unconstrained resolver: root installs only two exact wheel artifacts into
+# transient root-owned staging, verified by pip's --require-hashes contract.
+apt-get install -y build-essential python3-dev >&2
+mkdir "$build_tools"
+chmod 0700 "$build_tools"
+cat > "$build_requirements" <<EOF_BUILD_REQUIREMENTS
+setuptools==${SETUPTOOLS_VERSION} --hash=sha256:${SETUPTOOLS_SHA256}
+wheel==${WHEEL_VERSION} --hash=sha256:${WHEEL_SHA256}
+EOF_BUILD_REQUIREMENTS
+python3 -m pip install \
+  --disable-pip-version-check \
+  --no-deps \
+  --require-hashes \
+  --target "$build_tools" \
+  -r "$build_requirements" >&2
+
+mkdir "$wheel_dir"
+chmod 0700 "$wheel_dir"
+(
+  cd "$checkout"
+  # Build isolation is deliberately disabled: otherwise pip is allowed to
+  # resolve pyproject build requirements itself. PIP_NO_INDEX then proves the
+  # project build cannot consult an index after the pinned backend is installed.
+  PYTHONPATH="$build_tools" PIP_NO_INDEX=1 python3 -m pip wheel \
+    --disable-pip-version-check \
+    --no-deps \
+    --no-build-isolation \
+    --wheel-dir "$wheel_dir" \
+    ./08_Tooling/reusable-capability-registry \
+    ./08_Tooling/agent-memory-context-manager \
+    ./08_Tooling/workflow-scheduler \
+    ./08_Tooling/agent-os-execution-service
+) >&2
+
+set -- "$wheel_dir"/reusable_capability_registry-*.whl
+[ "$#" -eq 1 ] && [ -f "$1" ] || fail "expected one reusable-capability-registry wheel"
+capability_wheel=$1
+set -- "$wheel_dir"/agent_memory_context_manager-*.whl
+[ "$#" -eq 1 ] && [ -f "$1" ] || fail "expected one agent-memory-context-manager wheel"
+context_wheel=$1
+set -- "$wheel_dir"/workflow_scheduler-*.whl
+[ "$#" -eq 1 ] && [ -f "$1" ] || fail "expected one workflow-scheduler wheel"
+scheduler_wheel=$1
+set -- "$wheel_dir"/agent_os_execution_service-*.whl
+[ "$#" -eq 1 ] && [ -f "$1" ] || fail "expected one agent-os-execution-service wheel"
+service_wheel=$1
+
+# Runtime dependencies must already be present on the qualified host. Root may
+# install only the four locally built Agent OS wheels; it may not resolve or
+# download a dependency from a Python package index.
+PIP_NO_INDEX=1 python3 -m pip install \
+  --disable-pip-version-check \
+  --no-deps \
+  --no-index \
+  --break-system-packages \
+  --force-reinstall \
+  "$capability_wheel" \
+  "$context_wheel" \
+  "$scheduler_wheel" \
+  "$service_wheel" >&2
+
+(
+  cd /
+  env -u PYTHONPATH python3 -c 'import agent_os_execution_service.handoff_discovery_entrypoint; import agent_os_execution_service.governed_resume_entrypoint; import workflow_scheduler.execution._clone3_cgroup'
+) >&2
+
+entrypoint_installer="$checkout/08_Tooling/agent-os-execution-service/scripts/install-governed-resume"
+if [ -L "$entrypoint_installer" ]; then
+  fail "staged entrypoint installer must not be a symlink"
+fi
+[ -f "$entrypoint_installer" ] || fail "staged entrypoint installer missing"
+
+sh "$entrypoint_installer"
+first_hash=$(sha256sum "$TARGET" | awk '{print $1}')
+sh "$entrypoint_installer"
+second_hash=$(sha256sum "$TARGET" | awk '{print $1}')
+[ "$first_hash" = "$second_hash" ] || fail "entrypoint installer was not idempotent"
+
+metadata=$(stat -c '%U:%G:%a' "$TARGET")
+[ "$metadata" = "root:root:755" ] || fail "entrypoint owner/group/mode mismatch"
+
+TARGET_HASH=$first_hash SOURCE_SHA=$head_sha STAGING_ROOT=$STAGING_ROOT python3 - <<'PY'
+import json
+import os
+
+print(json.dumps({
+    "status": "installed",
+    "source_sha": os.environ["SOURCE_SHA"],
+    "target": "/usr/local/libexec/agent-os-governed-resume",
+    "owner": "root",
+    "group": "root",
+    "mode": "755",
+    "sha256": os.environ["TARGET_HASH"],
+    "staging_root": os.environ["STAGING_ROOT"],
+    "privileged_source": "root-owned-staging",
+    "discovery_importable": True,
+    "governed_resume_importable": True,
+    "native_extension_importable": True,
+    "scheduler_invoked": False,
+    "execution_authorized": False,
+    "side_effects_performed": True,
+}, sort_keys=True, separators=(",", ":")))
+PY

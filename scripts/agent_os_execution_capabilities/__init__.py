@@ -14,9 +14,11 @@ from .dependencies import (
     DependencyReadinessEvidence,
     LocalProjectRequirement,
     QualificationOnlyDependencyPin,
+    REQUIRED_ENVIRONMENT_SPEC_PAYLOAD_FIELDS,
     ReproducibilityLevel,
     RequiredEnvironmentSpec,
     dependency_readiness_evidence_payload,
+    reconstruct_required_environment_spec,
     required_environment_spec_payload,
 )
 from .models import (
@@ -45,6 +47,7 @@ __all__ = [
     "CAPABILITY_EVIDENCE_SCHEMA_NAME",
     "CAPABILITY_EVIDENCE_SCHEMA_VERSION",
     "GOVERNED_PROJECTION_EVIDENCE_SCHEMA_VERSION",
+    "REQUIRED_ENVIRONMENT_SPEC_PAYLOAD_FIELDS",
     "CapabilityEvidence",
     "CapabilityEvidenceEnvelope",
     "CapabilityStatus",
@@ -69,6 +72,7 @@ __all__ = [
     "consume_approved_projection_evidence",
     "dependency_readiness_evidence_payload",
     "reconstruct_repository_state_validation_result",
+    "reconstruct_required_environment_spec",
     "required_environment_spec_payload",
     "serialize_capability_evidence",
     "serialize_repository_state_validation_result",
