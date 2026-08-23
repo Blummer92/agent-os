@@ -56,6 +56,19 @@ pytest suite.
 ./scripts/validate-all.sh
 ```
 
+After execution, `TIMING RESULTS` reports observational elapsed time for each
+check that already runs through the canonical runner boundary, including
+structural validation, optional focused checks, every discovered pytest suite,
+and `aggregate total`. Durations are reported in seconds to millisecond display
+precision. Timing does not change command selection, command order, failure
+handling, overall status, or exit authority. If the runner cannot obtain a safe
+timestamp, it reports `unavailable` for that timing rather than changing the
+validation result.
+
+The timing instrumentation does not add a second pytest collection or execution
+pass. Collection-versus-execution separation is therefore not reported by this
+runner unless it can be added later without changing validation behavior.
+
 ## agent_os_github_git_objects
 
 Bounded local Git Database adapter for Issue #920. It reads exact commit/tree/blob identities, plans a deterministic operation fingerprint, requires explicit matching confirmation, validates an unattached commit before ref movement, and updates only a non-protected branch with `force=false`. Tests use injected fakes; live execution requires separate authorization. See `scripts/agent_os_github_git_objects/README.md`.
