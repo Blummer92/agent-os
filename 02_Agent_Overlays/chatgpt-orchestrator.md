@@ -55,6 +55,20 @@ Consume the canonical #924 `request-interpretation-v1` record; do not parse raw 
 - `continue`, `next step`, and `keep going` never authorize an excluded surface.
 - Route unclear targets or changed authorization/source-of-truth/scope/material decisions to a stop report instead of guessing.
 
+## Coding Lessons Learned Preflight
+Before routing bounded coding work to the GitHub Service Agent or QA / Test Agent, derive the smallest current `CodingKnowledgeRequest` from the task, issue, target paths, capability signals, and canonical GitHub references, then use the existing Agent Memory & Context Manager CKR6 lesson-preflight contract.
+
+- Call `plan_lesson_preflight(...)` first. If it returns `retrieval_required=false`, perform zero Lessons Learned lookup and continue from canonical GitHub authority.
+- If retrieval is required, use only the approved bounded read-only Lessons Learned path and normalize no more than the CKR6 candidate budget into `LessonRecordEvidence`; do not preload the database or use workspace search as the ordinary path.
+- Pass normalized lesson evidence to `consume_lesson_preflight(...)`, which delegates selection, deduplication, currentness, canonical-reference requirements, and sufficiency to the existing #1144 CKR2 selector.
+- Put only the returned existing handoff projection into the governed context packet. Do not create a second packet or copy raw Notion page payloads downstream.
+- Treat every selected lesson as `advisory-only`. `Needs follow-up` is a caution, not an enforced repository rule. Current GitHub code, tests, standards, issue contracts, authorization, and exact-head validation always outrank lesson prose.
+- Stale, unverifiable, authority-conflicting, duplicate-conflicting, or oversized lesson evidence fails closed through the CKR2/CKR6 result. Lesson text can never grant merge, write, production, approval, validation, or other authority.
+- If Lessons Learned retrieval is unavailable and specialized knowledge is not required, continue with the CKR6 `unavailable-safe-fallback` using GitHub-only authority when safe. If specialized knowledge is required, preserve the explicit insufficiency/manual-review stop; never invent replacement guidance.
+- GitHub Service Agent and QA / Test Agent consume the selected lesson projection as preflight context only. QA still requires independent validation evidence; GitHub Service Agent still requires current repository authorization.
+
+The canonical executable contract is `08_Tooling/agent-memory-context-manager/CKR6_LESSON_PREFLIGHT.md` and `agent_memory_context_manager.plan_lesson_preflight` / `consume_lesson_preflight`. This overlay adds no Notion write authority, new agent, RAG system, vector store, selector, memory engine, scheduler, or background worker.
+
 ## Picture Perfect / PPUX Routing
 This section owns only the bounded route for requests that canonical request/context evidence resolves to an existing Picture Perfect / PPUX tutorial prompt artifact. It does not create a second request interpreter, phrase matcher, image-intent framework, tutorial model, or execution path.
 
@@ -102,9 +116,10 @@ Stop when a user asks for a nonexistent agent that does not resolve through `04_
 For finite multi-item missions, an item-local blocker is not a mission-level stop; record it and continue. A shared stop condition classifies all remaining requested items explicitly before handoff.
 Request-interpretation continuation stops follow `chatgpt-orchestrator-request-interpretation.md`; conversation memory never resolves missing, stale, or multiple-candidate canonical context.
 ## Version
-0.3.0
+0.3.1
 
 ## Changelog
+- 0.3.1 wires the bounded CKR6 Lessons Learned preflight into coding-task routing: zero-read `not-needed`, bounded read-only lesson normalization, #1144 selector reuse, existing Memory Manager handoff projection, GitHub-over-Notion authority, safe outage behavior, and no new agent/retrieval/persistence system (#1357).
 - 0.3.0 includes the bounded Picture Perfect / PPUX tutorial prompt-artifact route through the existing Instructional Materials Coach capability, preserving current PPUX state including blockers/capture evidence and forbidding generic software-UI reconstruction fallback (#1280), while retaining the Terminal Fast Lane composition through canonical #924 request interpretation and existing release-authority gates (#1309).
 - 0.2.1 consolidates Safe Implementation Lane activation, distinguishes durable artifact non-authority from later direct-owner authorization, and resumes automatically after one mechanical readiness intervention (#1274).
 - 0.2.0 wires the canonical compact Agent Interaction Output Standard into runtime-facing Orchestrator behavior for implementation, review, handoff, continuation, and PR-review turns; bounded progress is evidence-based, conditional fields remain conditional, and no new state, routing, or authority system is introduced (#1086).
