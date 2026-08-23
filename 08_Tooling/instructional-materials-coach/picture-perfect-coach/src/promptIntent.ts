@@ -3,6 +3,7 @@ import {
   bindCaptureEvidence,
   boundEvidenceSupportsClaims,
   type BoundScreenEvidence,
+  type BoundScreenState,
   type CaptureBlockerReason,
   type CaptureEvidenceBundle,
 } from './captureEvidence';
@@ -50,9 +51,18 @@ export type VisualSpecification = {
    * Role-preserving screen evidence bound by PPUX-F2. `action` is before-state
    * evidence and `result` is after-state evidence. A combined frame may require
    * both; the roles are never flattened into one opaque reference.
+   *
+   * Optional only for backwards-compatible construction of F1 regression
+   * fixtures. Absence is identical to null and never grants evidence authority.
    */
-  capturedScreenEvidence: BoundScreenEvidence | null;
-  captureBlockerReasons: readonly CaptureBlockerReason[];
+  capturedScreenEvidence?: BoundScreenEvidence | null;
+  captureBlockerReasons?: readonly CaptureBlockerReason[];
+  /**
+   * Deprecated F1 compatibility field. A string reference is intentionally
+   * non-authoritative and is ignored by F2 validation; only structured bound
+   * evidence can satisfy a software-interface frame.
+   */
+  capturedScreenRef?: string | null;
   evidence: FrameUiEvidence;
   uncertainty?: string;
 };
@@ -141,7 +151,8 @@ export function validateVisualSpecification(spec: VisualSpecification): BlockerR
   };
 
   const requiresScreenFidelity = derivesScreenFidelity(spec, spec.requiresScreenFidelity);
-  for (const reason of spec.captureBlockerReasons) push(reason);
+  const capturedScreenEvidence = spec.capturedScreenEvidence ?? null;
+  for (const reason of spec.captureBlockerReasons ?? []) push(reason);
 
   if (!spec.application.trim()) push(BLOCKER_REASONS.applicationIdentityMissing);
   if (!spec.targetState.trim() || spec.mustShow.length === 0 || spec.provenance.length === 0) {
@@ -162,7 +173,7 @@ export function validateVisualSpecification(spec: VisualSpecification): BlockerR
 
   const requests = effectiveUiRequests(spec);
   const captureSupports = requiresScreenFidelity &&
-    boundEvidenceSupportsClaims(spec.capturedScreenEvidence, spec.imageState, requests);
+    boundEvidenceSupportsClaims(capturedScreenEvidence, spec.imageState, requests);
 
   if (!captureSupports) {
     const observedAnywhere = new Set(spec.evidence.recordingClaimTexts);
@@ -178,16 +189,17 @@ export function validateVisualSpecification(spec: VisualSpecification): BlockerR
     }
   }
 
-  if (requiresScreenFidelity && spec.capturedScreenEvidence === null) {
+  if (requiresScreenFidelity && capturedScreenEvidence === null) {
     push(BLOCKER_REASONS.visualEvidenceMissing);
   }
   return reasons;
 }
 
 function captureReferences(evidence: BoundScreenEvidence): string[] {
-  return [evidence.action, evidence.result]
-    .filter((state): state is NonNullable<typeof state> => state !== null)
-    .map((state) => `${state.role}:${state.asset_reference.stable_reference}`);
+  const states: BoundScreenState[] = [];
+  if (evidence.action) states.push(evidence.action);
+  if (evidence.result) states.push(evidence.result);
+  return states.map((state) => `${state.role}:${state.asset_reference.stable_reference}`);
 }
 
 export function buildPortablePrompt(spec: VisualSpecification): PromptCardModel {
@@ -202,11 +214,12 @@ export function buildPortablePrompt(spec: VisualSpecification): PromptCardModel 
     };
   }
 
-  const prompt = spec.requiresScreenFidelity && spec.capturedScreenEvidence
+  const capturedScreenEvidence = spec.capturedScreenEvidence ?? null;
+  const prompt = spec.requiresScreenFidelity && capturedScreenEvidence
     ? [
         `Prepare an instructional presentation visual for the ${spec.application} workflow from approved captured screen evidence.`,
         CAPTURE_BASE_DIRECTIVE,
-        `Capture references: ${captureReferences(spec.capturedScreenEvidence).join('; ')}.`,
+        `Capture references: ${captureReferences(capturedScreenEvidence).join('; ')}.`,
         `Purpose: ${spec.imagePurpose}`,
         `Image state: ${spec.imageState}.`,
         `Target state: ${spec.targetState}`,
@@ -233,12 +246,13 @@ export function buildPortablePrompt(spec: VisualSpecification): PromptCardModel 
 export function validateApplicationFidelity(card: PromptCardModel): string[] {
   if (card.status === 'blocked') return [...card.blockerReasons];
   const errors: string[] = [];
+  const capturedScreenEvidence = card.capturedScreenEvidence ?? null;
   if (card.requiresScreenFidelity) {
-    if (!card.capturedScreenEvidence) errors.push('a software-interface frame cannot be ready without approved capture evidence');
+    if (!capturedScreenEvidence) errors.push('a software-interface frame cannot be ready without approved capture evidence');
     if (!card.portablePrompt.includes('approved captured screen evidence')) errors.push('screen-backed prompt lost capture-evidence boundary');
     if (!card.portablePrompt.includes(CAPTURE_BASE_DIRECTIVE)) errors.push('screen-backed prompt lost non-reconstruction boundary');
-    if (card.capturedScreenEvidence) {
-      for (const reference of captureReferences(card.capturedScreenEvidence)) {
+    if (capturedScreenEvidence) {
+      for (const reference of captureReferences(capturedScreenEvidence)) {
         if (!card.portablePrompt.includes(reference)) errors.push(`screen-backed prompt lost capture reference: ${reference}`);
       }
     }
@@ -313,6 +327,7 @@ export function projectReviewedStepToVisualSpecification(
     requiresScreenFidelity,
     capturedScreenEvidence: binding.evidence,
     captureBlockerReasons: binding.blocker_reasons,
+    capturedScreenRef: null,
     evidence,
     uncertainty: authoring.uncertainty,
   };
