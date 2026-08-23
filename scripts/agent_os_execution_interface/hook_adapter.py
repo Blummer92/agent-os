@@ -71,8 +71,9 @@ _PUBLICATION_CONTINUATION = (
     "evidence. If those current bindings select the governed runner, invoke the "
     "existing #1243 publish_governed_handoff(...) seam through the owning "
     "execution interface, then repeat discovery and resume only the exact "
-    "immutable handoff returned after durable publication. Do not fabricate a "
-    "descriptor or handoff and do not silently fall back to local git/gh tooling."
+    "immutable handoff returned after durable publication. Do not synthesize a "
+    "handoff identity, do not fabricate a descriptor or handoff, and do not "
+    "silently fall back to local git/gh tooling."
 )
 
 
