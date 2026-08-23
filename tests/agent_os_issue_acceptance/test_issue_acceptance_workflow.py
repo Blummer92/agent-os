@@ -100,10 +100,12 @@ def test_report_only_acceptance_workflow_collects_local_fixtures():
 def test_report_only_acceptance_workflow_bounds_issue_lookup_to_resolved_result():
     content = _content()
 
-    assert "result = parse_linked_issue_result(" in content
+    assert content.count("result = parse_linked_issue_result(") == 1
     assert "if result.status == LinkedIssueParseStatus.RESOLVED:" in content
     assert "print(result.issue_number or \"\")" in content
     assert "else:\n              print(\"\")" in content
+    assert 'printf \'%s\\n\' "$linked_issue" > "$out/linked_issue.txt"' in content
+    assert 'linked_issue="$(cat tmp/agent_os_issue_acceptance_report/linked_issue.txt 2>/dev/null || true)"' in content
     assert 'if [ -n "$linked_issue" ]; then' in content
     assert 'gh issue view "$linked_issue"' in content
 
@@ -173,15 +175,23 @@ def test_report_only_acceptance_workflow_routes_missing_pr_number_to_manual_revi
     ) in content
 
 
-def test_report_only_acceptance_workflow_tolerates_malformed_diff_payload():
+def test_report_only_acceptance_workflow_reconciles_changed_file_count():
     content = _content()
 
-    assert 'gh pr diff "$PR_NUMBER" --patch > "$out/diff.patch" || true' in content
-    assert ': > "$out/issue.md"' in content
-    assert ': > "$out/pr_body.md"' in content
-    assert ': > "$out/pr_title.txt"' in content
-    assert ': > "$out/changed_files.txt"' in content
-    assert ': > "$out/diff.patch"' in content
+    assert 'gh pr view "$PR_NUMBER" --json changedFiles --jq \'.changedFiles\'' in content
+    assert 'retrieved_changed_files="$(wc -l < "$out/changed_files.txt"' in content
+    assert 'if [ "$retrieved_changed_files" != "$authoritative_changed_files" ]; then' in content
+    assert 'printf \'%s\\n\' true > "$out/changed_files_incomplete.txt"' in content
+    assert "--changed-files-incomplete" in content
+
+
+def test_report_only_acceptance_workflow_records_diff_retrieval_failure():
+    content = _content()
+
+    assert 'gh pr diff "$PR_NUMBER" --patch > "$out/diff.patch" || true' not in content
+    assert 'if ! gh pr diff "$PR_NUMBER" --patch > "$out/diff.patch"; then' in content
+    assert 'printf \'%s\\n\' true > "$out/diff_retrieval_failed.txt"' in content
+    assert "--diff-retrieval-failed" in content
 
 
 def test_report_only_acceptance_workflow_enables_documentation_advisory_before_transport():
