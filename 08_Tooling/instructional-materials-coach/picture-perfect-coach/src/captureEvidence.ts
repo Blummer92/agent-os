@@ -39,7 +39,6 @@ export type SoftwareTutorialCapture = Readonly<{
   actions: readonly CaptureAction[];
 }>;
 
-/** Exact reference fields already owned by curriculum-visual-asset-compatibility-v2. */
 export type ManifestReference = Readonly<{
   manifest_id: string;
   record_revision: number;
@@ -54,7 +53,6 @@ export type AssetReference = Readonly<{
   content_fingerprint: string;
 }>;
 
-/** Package-local read-only projection of an already validated ArtifactManifest asset. */
 export type ArtifactManifestAssetEvidence = Readonly<{
   contract_version: 'curriculum-artifact-manifest-v1';
   external_identity: Readonly<{ access_state: string }>;
@@ -69,7 +67,6 @@ export type ArtifactManifestAssetEvidence = Readonly<{
   }>;
 }>;
 
-/** Package-local read-only projection of already validated compatibility-v2 evidence. */
 export type VisualAssetCompatibilityEvidence = Readonly<{
   contract_version: 'curriculum-visual-asset-compatibility-v2';
   classification: string;
@@ -184,11 +181,13 @@ function pickRole(
   role: ScreenshotRole,
   requestedUiClaims: readonly string[],
 ): { state: BoundScreenState | null; reasons: CaptureBlockerReason[] } {
+  const sourceIndexes = new Set(step.source_indexes);
   const identities = new Map(step.action_identity.map((identity) => [identity.sourceIndex, identity.sourceFingerprint]));
   const candidates: Array<{ approval: ApprovedScreenshotEvidence; action: CaptureAction }> = [];
   const observedReasons: CaptureBlockerReason[] = [];
 
   for (const approval of bundle.approved_screenshots) {
+    if (!sourceIndexes.has(approval.source_index)) continue;
     const expectedFingerprint = identities.get(approval.source_index);
     if (!expectedFingerprint || expectedFingerprint !== approval.source_fingerprint) continue;
     const action = capture.actions.find((item) => item.source_index === approval.source_index);
@@ -238,9 +237,9 @@ function pickRole(
 
 /**
  * Bind one reviewed frame to software-tutorial-capture-v1 without changing the
- * capture contract. Every reviewed action identity must exist byte-for-byte in the
- * capture. Each required screen-state role is satisfied by exactly one approved
- * screenshot from one action; claims and geometry are never unioned across actions.
+ * capture contract. Identity is the recording SHA plus a source index that belongs
+ * to the reviewed step plus the exact action fingerprint. Each screen-state role is
+ * satisfied by one approved screenshot; claims and geometry are never unioned.
  */
 export function bindCaptureEvidence(
   step: ReviewedStepProjection,
@@ -263,9 +262,18 @@ export function bindCaptureEvidence(
     return { status: 'stale', evidence: null, blocker_reasons: [CAPTURE_BLOCKER_REASONS.captureRecordingMismatch] };
   }
 
-  for (const identity of step.action_identity) {
-    const action = capture.actions.find((item) => item.source_index === identity.sourceIndex);
-    if (!action || action.source_fingerprint !== identity.sourceFingerprint) {
+  const sourceIndexes = new Set(step.source_indexes);
+  const identityByIndex = new Map(step.action_identity.map((identity) => [identity.sourceIndex, identity.sourceFingerprint]));
+  if (
+    identityByIndex.size !== sourceIndexes.size ||
+    [...sourceIndexes].some((sourceIndex) => !identityByIndex.has(sourceIndex)) ||
+    [...identityByIndex.keys()].some((sourceIndex) => !sourceIndexes.has(sourceIndex))
+  ) {
+    return { status: 'stale', evidence: null, blocker_reasons: [CAPTURE_BLOCKER_REASONS.captureActionIdentityMismatch] };
+  }
+  for (const [sourceIndex, sourceFingerprint] of identityByIndex) {
+    const action = capture.actions.find((item) => item.source_index === sourceIndex);
+    if (!action || action.source_fingerprint !== sourceFingerprint) {
       return { status: 'stale', evidence: null, blocker_reasons: [CAPTURE_BLOCKER_REASONS.captureActionIdentityMismatch] };
     }
   }
