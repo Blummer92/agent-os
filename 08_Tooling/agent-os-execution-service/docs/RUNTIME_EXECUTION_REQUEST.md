@@ -32,10 +32,15 @@ At the existing runnable-handoff descriptor persistence seam:
 
 ```text
 validated current evidence
--> legacy descriptor compatibility marker
 -> canonical RuntimeExecutionRequest
+-> legacy descriptor compatibility marker
 -> return only after both durable writes succeed
 ```
+
+The request is written first so a discoverable new compatibility descriptor can
+never exist without its canonical request. If descriptor publication later
+fails, the request may remain as immutable non-authorizing evidence and grants
+no Scheduler admission by itself.
 
 The already-existing route-decision, full-handoff, ResumePlan, checkpoint,
 restart-capsule, and descriptor writes are retained in this PR as compatibility
