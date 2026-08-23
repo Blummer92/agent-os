@@ -4,7 +4,7 @@ import type { PromptCardModel } from './promptIntent';
 function CaptureState({ state }: { state: BoundScreenState }) {
   return <li>
     <strong>{state.role === 'action' ? 'Action / before-state' : 'Result / after-state'}</strong>
-    {' · '}{state.asset_reference.stable_reference}
+    {' · '}{state.asset_reference.stable_ref}
     {' · '}source {state.source_index}
   </li>;
 }
