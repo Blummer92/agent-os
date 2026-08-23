@@ -321,12 +321,12 @@ def persist_current_invocation_descriptor(
     dependency_readiness: DependencyReadinessEvidence,
     pilot_input: SingleIssuePilotInput,
 ) -> AppendInvocationDescriptorOutcome:
-    """Persist the canonical runtime request plus the legacy descriptor mirror.
+    """Persist the canonical runtime request before its legacy descriptor marker.
 
     The legacy descriptor remains the compatibility publication marker during
     the additive #1338 migration. The canonical RuntimeExecutionRequest is
-    persisted through this same bounded seam and carries no authority of its
-    own. No old record is deleted or rewritten.
+    persisted first so a discoverable new descriptor never lacks its canonical
+    request. Both records are non-authorizing and no old record is deleted.
     """
 
     descriptor = build_current_invocation_descriptor(
@@ -340,7 +340,6 @@ def persist_current_invocation_descriptor(
         dependency_readiness=dependency_readiness,
         pilot_input=pilot_input,
     )
-    descriptor_outcome = append_invocation_descriptor(store_root, descriptor)
     restart_capsule = build_restart_capsule(
         handoff_id=handoff.handoff_id,
         candidate_packet=candidate_packet,
@@ -356,4 +355,4 @@ def persist_current_invocation_descriptor(
         restart_capsule=restart_capsule,
     )
     append_runtime_execution_request(store_root, request)
-    return descriptor_outcome
+    return append_invocation_descriptor(store_root, descriptor)
