@@ -2,7 +2,9 @@
 
 The product-level regression is `Work on #1259` with local `gh` unavailable:
 the interface must reach handoff discovery and the existing immutable governed
-resume ingress instead of a generic publish path gated on a local CLI.
+resume ingress instead of a generic publish path gated on a local CLI. When no
+handoff exists yet, the hook must continue toward the existing #1243 publication
+owner instead of presenting descriptor absence as a terminal mission blocker.
 """
 
 from __future__ import annotations
@@ -157,6 +159,23 @@ def test_work_on_1259_reaches_governed_resume_regardless_of_local_gh(
     assert f"/agent-os resume {descriptor.handoff_id}" in notice
     assert "Do not select generic GitHub publish tooling" in notice
     assert "never evidence that Agent OS execution is" in notice
+
+
+def test_missing_handoff_continues_to_existing_publication_owner(
+    governed_checkout, configured_env
+):
+    notice = hook_adapter.run_user_prompt_submit_hook(
+        json.dumps({"prompt": "Work on #1117", "cwd": str(governed_checkout)})
+    )
+
+    assert "status=publication-required" in notice
+    assert "continuation=publish-governed-handoff" in notice
+    assert "owner=#1243" in notice
+    assert "publish_governed_handoff(...)" in notice
+    assert "scheduler_invoked=false" in notice
+    assert "Do not fabricate a descriptor or handoff" in notice
+    assert "silently fall back to local git/gh tooling" in notice
+    assert "/agent-os resume executor-handoff:" not in notice
 
 
 def test_prompt_hook_is_silent_outside_a_governed_checkout(tmp_path, configured_env):
