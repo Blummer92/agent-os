@@ -7,13 +7,7 @@ from scripts.agent_os_issue_acceptance.cli import main
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-def _run_with_flag(tmp_path, capsys, flag: str) -> dict[str, object]:
-    changed_files = tmp_path / "changed_files.txt"
-    changed_files.write_text(
-        "\n".join(f"scripts/example_{index}.py" for index in range(100)) + "\n",
-        encoding="utf-8",
-    )
-
+def _run_with_flag(capsys, flag: str) -> dict[str, object]:
     exit_code = main(
         [
             "--issue",
@@ -21,7 +15,7 @@ def _run_with_flag(tmp_path, capsys, flag: str) -> dict[str, object]:
             "--pr-body",
             str(FIXTURES / "pr_body_valid.md"),
             "--changed-files",
-            str(changed_files),
+            str(FIXTURES / "changed_files_valid.txt"),
             "--diff",
             str(FIXTURES / "diff_clean.patch"),
             flag,
@@ -36,8 +30,8 @@ def _run_with_flag(tmp_path, capsys, flag: str) -> dict[str, object]:
     return output
 
 
-def test_incomplete_changed_file_evidence_forces_manual_review(tmp_path, capsys):
-    output = _run_with_flag(tmp_path, capsys, "--changed-files-incomplete")
+def test_incomplete_changed_file_evidence_forces_manual_review(capsys):
+    output = _run_with_flag(capsys, "--changed-files-incomplete")
 
     check = next(
         item for item in output["checks"] if item["name"] == "changed files completeness"
@@ -47,8 +41,8 @@ def test_incomplete_changed_file_evidence_forces_manual_review(tmp_path, capsys)
     assert "changed_files_incomplete=true" in output["evidence"]
 
 
-def test_diff_retrieval_failure_forces_manual_review(tmp_path, capsys):
-    output = _run_with_flag(tmp_path, capsys, "--diff-retrieval-failed")
+def test_diff_retrieval_failure_forces_manual_review(capsys):
+    output = _run_with_flag(capsys, "--diff-retrieval-failed")
 
     check = next(item for item in output["checks"] if item["name"] == "diff retrieval")
     assert check["status"] == "manual-review"
