@@ -54,11 +54,7 @@ export type AssetReference = Readonly<{
   content_fingerprint: string;
 }>;
 
-/**
- * Package-local read-only projection of an already validated ArtifactManifest asset.
- * Names mirror the canonical groups; this does not validate or redefine the
- * curriculum-artifact-manifest-v1 contract.
- */
+/** Package-local read-only projection of an already validated ArtifactManifest asset. */
 export type ArtifactManifestAssetEvidence = Readonly<{
   contract_version: 'curriculum-artifact-manifest-v1';
   external_identity: Readonly<{ access_state: string }>;
@@ -69,14 +65,11 @@ export type ArtifactManifestAssetEvidence = Readonly<{
     rights_classification: string;
     direct_use_status: string;
     replacement_required: boolean;
+    transformations: readonly string[];
   }>;
 }>;
 
-/**
- * Package-local read-only projection of an already validated compatibility-v2
- * record. The interface-capture/screen-capture constraint remains owned by that
- * canonical contract; this consumer only accepts its eligible result.
- */
+/** Package-local read-only projection of already validated compatibility-v2 evidence. */
 export type VisualAssetCompatibilityEvidence = Readonly<{
   contract_version: 'curriculum-visual-asset-compatibility-v2';
   classification: string;
@@ -122,6 +115,7 @@ export type BoundScreenEvidence = Readonly<{
 }>;
 
 export type CaptureBindingResult = Readonly<{
+  status: CaptureStatus;
   evidence: BoundScreenEvidence | null;
   blocker_reasons: readonly CaptureBlockerReason[];
 }>;
@@ -152,6 +146,7 @@ function assetBlockers(approval: ApprovedScreenshotEvidence): CaptureBlockerReas
     reasons.push(CAPTURE_BLOCKER_REASONS.capturePrivacyUnresolved);
   }
   if (
+    manifest.contract_version !== 'curriculum-artifact-manifest-v1' ||
     manifest.external_identity.access_state !== 'verified' ||
     manifest.statuses.classroom_readiness !== 'ready' ||
     !CLEARED_RIGHTS.has(asset.rights_classification) ||
@@ -166,6 +161,16 @@ function assetBlockers(approval: ApprovedScreenshotEvidence): CaptureBlockerReas
     compatibility.cohesion_profile.representation_class !== 'interface-capture'
   ) reasons.push(CAPTURE_BLOCKER_REASONS.captureAssetIneligible);
   return [...new Set(reasons)];
+}
+
+function bindingStatus(reasons: readonly CaptureBlockerReason[]): CaptureStatus {
+  if (
+    reasons.includes(CAPTURE_BLOCKER_REASONS.captureRecordingMismatch) ||
+    reasons.includes(CAPTURE_BLOCKER_REASONS.captureActionIdentityMismatch) ||
+    reasons.includes(CAPTURE_BLOCKER_REASONS.captureStale)
+  ) return 'stale';
+  if (reasons.includes(CAPTURE_BLOCKER_REASONS.capturePrivacyUnresolved)) return 'manual-review-required';
+  return 'blocked';
 }
 
 function roleName(role: ScreenshotRole): 'action' | 'result' {
@@ -234,9 +239,8 @@ function pickRole(
 /**
  * Bind one reviewed frame to software-tutorial-capture-v1 without changing the
  * capture contract. Every reviewed action identity must exist byte-for-byte in the
- * capture. Each required screen-state role is then satisfied by exactly one
- * approved screenshot from one action; claims and geometry are never unioned across
- * actions or combined reviewed steps.
+ * capture. Each required screen-state role is satisfied by exactly one approved
+ * screenshot from one action; claims and geometry are never unioned across actions.
  */
 export function bindCaptureEvidence(
   step: ReviewedStepProjection,
@@ -244,19 +248,25 @@ export function bindCaptureEvidence(
   requestedUiClaims: readonly string[],
   bundle: CaptureEvidenceBundle | null,
 ): CaptureBindingResult {
-  if (!bundle) return { evidence: null, blocker_reasons: [CAPTURE_BLOCKER_REASONS.captureScreenStateMissing] };
+  if (!bundle) {
+    return { status: 'blocked', evidence: null, blocker_reasons: [CAPTURE_BLOCKER_REASONS.captureScreenStateMissing] };
+  }
   if (bundle.status !== 'valid' || bundle.capture === null) {
-    return { evidence: null, blocker_reasons: [CAPTURE_BLOCKER_REASONS.captureStatusInvalid] };
+    const status = bundle.status === 'valid' ? 'invalid' : bundle.status;
+    return { status, evidence: null, blocker_reasons: [CAPTURE_BLOCKER_REASONS.captureStatusInvalid] };
   }
   const capture = bundle.capture;
-  if (capture.format_version !== 'software-tutorial-capture-v1' || capture.source.recording_sha256 !== step.recording_sha256) {
-    return { evidence: null, blocker_reasons: [CAPTURE_BLOCKER_REASONS.captureRecordingMismatch] };
+  if (capture.format_version !== 'software-tutorial-capture-v1') {
+    return { status: 'invalid', evidence: null, blocker_reasons: [CAPTURE_BLOCKER_REASONS.captureStatusInvalid] };
+  }
+  if (capture.source.recording_sha256 !== step.recording_sha256) {
+    return { status: 'stale', evidence: null, blocker_reasons: [CAPTURE_BLOCKER_REASONS.captureRecordingMismatch] };
   }
 
   for (const identity of step.action_identity) {
     const action = capture.actions.find((item) => item.source_index === identity.sourceIndex);
     if (!action || action.source_fingerprint !== identity.sourceFingerprint) {
-      return { evidence: null, blocker_reasons: [CAPTURE_BLOCKER_REASONS.captureActionIdentityMismatch] };
+      return { status: 'stale', evidence: null, blocker_reasons: [CAPTURE_BLOCKER_REASONS.captureActionIdentityMismatch] };
     }
   }
 
@@ -268,8 +278,10 @@ export function bindCaptureEvidence(
     states[roleName(role)] = bound.state;
   }
   const uniqueReasons = [...new Set(reasons)];
-  if (uniqueReasons.length > 0) return { evidence: null, blocker_reasons: uniqueReasons };
-  return { evidence: states, blocker_reasons: [] };
+  if (uniqueReasons.length > 0) {
+    return { status: bindingStatus(uniqueReasons), evidence: null, blocker_reasons: uniqueReasons };
+  }
+  return { status: 'valid', evidence: states, blocker_reasons: [] };
 }
 
 export function boundEvidenceSupportsClaims(
