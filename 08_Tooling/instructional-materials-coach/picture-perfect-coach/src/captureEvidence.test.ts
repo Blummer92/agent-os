@@ -145,7 +145,9 @@ describe('PPUX-F2 capture evidence binding', () => {
     const bundle = mutateBundle((value) => ({
       ...value,
       approved_screenshots: value.approved_screenshots.map((approval) =>
-        approval.source_index === 13 ? { ...approval, compatibility: { ...approval.compatibility, stale: true } } : approval),
+        approval.source_index === 13
+          ? { ...approval, compatibility: { ...approval.compatibility, freshness: { stale: true } } }
+          : approval),
     }));
     expect(bindCaptureEvidence(square, 'action', ['Create new'], bundle).blocker_reasons)
       .toContain(CAPTURE_BLOCKER_REASONS.captureStale);
@@ -156,7 +158,13 @@ describe('PPUX-F2 capture evidence binding', () => {
       ...value,
       approved_screenshots: value.approved_screenshots.map((approval) =>
         approval.source_index === 13
-          ? { ...approval, artifact_manifest: { ...approval.artifact_manifest, privacy_resolved: false } }
+          ? {
+              ...approval,
+              artifact_manifest: {
+                ...approval.artifact_manifest,
+                asset: { ...approval.artifact_manifest.asset, privacy_resolved: false },
+              },
+            }
           : approval),
     }));
     expect(bindCaptureEvidence(square, 'action', ['Create new'], bundle).blocker_reasons)
@@ -168,7 +176,13 @@ describe('PPUX-F2 capture evidence binding', () => {
       ...value,
       approved_screenshots: value.approved_screenshots.map((approval) =>
         approval.source_index === 13
-          ? { ...approval, compatibility: { ...approval.compatibility, medium: 'digital' } }
+          ? {
+              ...approval,
+              compatibility: {
+                ...approval.compatibility,
+                cohesion_profile: { ...approval.compatibility.cohesion_profile, medium: 'digital' },
+              },
+            }
           : approval),
     }));
     expect(bindCaptureEvidence(square, 'action', ['Create new'], bundle).blocker_reasons)
