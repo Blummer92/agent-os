@@ -82,8 +82,9 @@ test('Tutorial 0 traverses Model -> Upload -> Review -> Prompts -> Ready on appr
   await createHandoff.click();
   const packet = page.getByLabel('GitHub handoff packet');
   await expect(packet).toBeVisible();
-  await expect(packet).toContainText('"captured_screen_evidence"');
-  await expect(packet).toContainText('"execution_authorized": false');
+  const packetValue = await packet.inputValue();
+  expect(packetValue).toContain('"captured_screen_evidence"');
+  expect(packetValue).toContain('"execution_authorized": false');
   expect(externalRequests).toEqual([]);
 });
 
@@ -171,6 +172,7 @@ test('prompt/capture presentation evidence and local handoff never grant executi
   await expect(createHandoff).toBeEnabled();
   await createHandoff.click();
   await expect(page.getByText(/Local packet only\. execution_authorized: false\. No GitHub write occurred\./i)).toBeVisible();
-  await expect(page.getByLabel('GitHub handoff packet')).toContainText('"execution_authorized": false');
+  const packetValue = await page.getByLabel('GitHub handoff packet').inputValue();
+  expect(packetValue).toContain('"execution_authorized": false');
   await expect(page.getByRole('button', { name: /start implementation/i })).toHaveCount(0);
 });
