@@ -225,6 +225,9 @@ export function validateApplicationFidelity(card: PromptCardModel): string[] {
     errors.push('portable prompt lost the non-reconstruction directive');
   }
   if (!card.portablePrompt.includes(card.application)) errors.push('portable prompt lost modeled application identity');
+  if (/\b(?:screenshot|user interface|the interface of)\b/i.test(card.portablePrompt)) {
+    errors.push('portable prompt requests software-interface depiction without capture evidence');
+  }
   for (const wrongApp of KNOWN_WRONG_APPS) {
     if (wrongApp !== card.application && card.portablePrompt.includes(`depict ${wrongApp}`)) {
       errors.push(`portable prompt substituted wrong application: ${wrongApp}`);
@@ -276,7 +279,7 @@ export function projectReviewedStepToVisualSpecification(
   const requests = effectiveUiRequests(base);
   const binding = requiresScreenFidelity
     ? bindCaptureEvidence(step, authoring.imageState, requests, captureBundle)
-    : { evidence: null, blocker_reasons: [] as CaptureBlockerReason[] };
+    : { status: 'valid' as const, evidence: null, blocker_reasons: [] as CaptureBlockerReason[] };
   return {
     stepNumber: step.sequence,
     imagePurpose: authoring.imagePurpose,
