@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from instructional_workflow_contracts.image_intent import IMAGE_INTENT_CONTRACT_ID
+from instructional_workflow_contracts.image_intent import assemble_gemini_manual_prompt
 from instructional_workflow_contracts.picture_perfect_integration import (
     apply_modeling_decision,
     build_image_intent,
@@ -204,7 +204,7 @@ def test_visual_requirement_rejects_raw_recorder_selector_leakage():
         )
 
 
-def test_image_intent_is_canonical_provider_neutral_and_not_source_evidence():
+def test_software_interface_visual_cannot_build_generative_image_intent():
     _, _, _, candidates = _evidence()
     candidate = next(item for item in candidates if item["action_kind"] == "open_your_stuff")
     step = _decision(
@@ -223,16 +223,78 @@ def test_image_intent_is_canonical_provider_neutral_and_not_source_evidence():
         must_not_show=["student names", "email addresses", "support chat"],
     )
 
-    intent = build_image_intent(visual)
-    payload = intent.to_dict()
+    with pytest.raises(ValueError, match="screen-capture evidence"):
+        build_image_intent(visual)
 
-    assert intent.contract_version == IMAGE_INTENT_CONTRACT_ID
-    assert intent.authority.execution_authorized is False
-    assert intent.authority.external_write_authorized is False
-    assert payload["identity"]["contract_version"] == IMAGE_INTENT_CONTRACT_ID
-    assert "recording_id" not in json.dumps(payload)
-    assert "source_indexes" not in json.dumps(payload)
-    assert "provider_prompt" not in payload
+
+def test_manual_provider_prompt_is_unreachable_through_picture_perfect_ui_path():
+    _, _, _, candidates = _evidence()
+    candidate = next(item for item in candidates if item["action_kind"] == "open_your_stuff")
+    step = _decision(
+        candidate,
+        step_id="tutorial0-step-01-open-your-stuff",
+        sequence=1,
+        title="Open Your Stuff",
+        student_action="Open Your Stuff in Adobe Express.",
+        notice="Your Stuff is where class files are organized.",
+        check="The Your Stuff workspace is visible.",
+    )
+    visual = build_visual_requirement(
+        step,
+        visual_state="action",
+        must_show=["Adobe Express workspace", "Your Stuff navigation control"],
+        must_not_show=["student names"],
+    )
+
+    try:
+        intent = build_image_intent(visual)
+    except ValueError as exc:
+        assert "generative ImageIntent path is not allowed" in str(exc)
+    else:
+        pytest.fail(assemble_gemini_manual_prompt(intent))
+
+
+def test_application_identity_alone_cannot_unlock_generative_interface_path():
+    _, _, _, candidates = _evidence()
+    candidate = next(item for item in candidates if item["action_kind"] == "open_your_stuff")
+    step = _decision(
+        candidate,
+        step_id="tutorial0-step-01-open-your-stuff",
+        sequence=1,
+        title="Open Your Stuff",
+        student_action="Open Your Stuff in Adobe Express.",
+        notice="Your Stuff is where class files are organized.",
+        check="The Your Stuff workspace is visible.",
+    )
+    visual = build_visual_requirement(
+        step,
+        visual_state="action",
+        must_show=["Adobe Express workspace"],
+        must_not_show=["student names"],
+    )
+    visual["modeled_application"] = "Adobe Express"
+
+    with pytest.raises(ValueError, match="generative ImageIntent path is not allowed"):
+        build_image_intent(visual)
+
+
+def test_legacy_realistic_interface_prompt_text_is_removed_from_integration_source():
+    source = Path("src/instructional_workflow_contracts/picture_perfect_integration.py").read_text()
+
+    assert "clean realistic software-interface reference" not in source
+    assert "a privacy-safe creative-software workspace" not in source
+    assert "Adobe Express / Tutorial 0" not in source
+
+
+def test_screen_capture_compatibility_rule_stays_owned_by_visual_asset_contract():
+    canonical = Path("src/instructional_workflow_contracts/visual_asset_compatibility.py")
+    compact = " ".join(canonical.read_text().split())
+    integration = Path("src/instructional_workflow_contracts/picture_perfect_integration.py").read_text()
+
+    assert 'cohesion_profile[field] == "unspecified"' in compact
+    assert '== "interface-capture"' in compact
+    assert 'cohesion_profile["medium"] != "screen-capture"' in compact
+    assert "cohesion_profile" not in integration
 
 
 def test_visual_provenance_traces_frame_to_modeling_to_semantic_to_recording():
