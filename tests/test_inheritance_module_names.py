@@ -12,46 +12,25 @@ BASELINE_MODULES = {
     "Source-of-Truth Checks": "0.1.0",
 }
 
+RETIRED_TECHNICAL_AGENTS = {
+    "Integration Manager",
+    "Google Workspace Automation Engineer",
+}
+
 EXPECTED_AGENT_ROWS = {
-    "ChatGPT Orchestrator": (
-        ("Global Engineering",),
-        "chatgpt-orchestrator",
-    ),
-    "GitHub Service Agent": (
-        ("Global Engineering",),
-        "github-service-agent",
-    ),
-    "Google Workspace Automation Engineer": (
-        (
-            "Global Engineering",
-            "Python Standards",
-            "Google Workspace Standards",
-            "Notion Standards",
-        ),
-        "google-workspace-automation-engineer",
-    ),
+    "ChatGPT Orchestrator": (("Global Engineering",), "chatgpt-orchestrator"),
+    "GitHub Service Agent": (("Global Engineering",), "github-service-agent"),
     "Modeling & Dashboard Governance Agent": (
         ("Global Engineering", "Dashboard Governance", "Notion Standards"),
         "modeling-dashboard-governance-agent",
     ),
-    "Integration Manager": (
-        ("Global Engineering", "Google Workspace Standards", "Notion Standards"),
-        "integration-manager",
-    ),
-    "QA / Test Agent": (
-        ("Global Engineering", "QA/Test Standards"),
-        "qa-test-agent",
-    ),
+    "QA / Test Agent": (("Global Engineering", "QA/Test Standards"), "qa-test-agent"),
     "Agent Orchestrator": (
         ("Global Engineering", "Instructional Design Standards"),
         "agent-orchestrator",
     ),
     "Unit Alignment Agent": (
-        (
-            "Global Engineering",
-            "Instructional Design Standards",
-            "Notion Standards",
-        ),
+        ("Global Engineering", "Instructional Design Standards", "Notion Standards"),
         "unit-alignment-agent",
     ),
     "Teacher Modeling Coach": (
@@ -59,12 +38,7 @@ EXPECTED_AGENT_ROWS = {
         "teacher-modeling-coach",
     ),
     "Instructional Materials Coach": (
-        (
-            "Global Engineering",
-            "Google Workspace Standards",
-            "Python Standards",
-            "Instructional Design Standards",
-        ),
+        ("Global Engineering", "Google Workspace Standards", "Python Standards", "Instructional Design Standards"),
         "instructional-materials-coach",
     ),
 }
@@ -72,7 +46,7 @@ EXPECTED_AGENT_ROWS = {
 
 def _registry_rows() -> dict[str, tuple[tuple[str, ...], str]]:
     text = REGISTRY.read_text(encoding="utf-8")
-    first_section = text.split("## Legacy Alias Resolution", 1)[0]
+    first_section = text.split("## Technical Execution Architecture", 1)[0]
     rows: dict[str, tuple[tuple[str, ...], str]] = {}
     for line in first_section.splitlines():
         if not line.startswith("|") or line.startswith("|---") or "| Agent |" in line:
@@ -80,19 +54,13 @@ def _registry_rows() -> dict[str, tuple[tuple[str, ...], str]]:
         columns = [part.strip() for part in line.strip("|").split("|")]
         if len(columns) != 3:
             continue
-        tokens = tuple(
-            token.strip() for token in columns[1].split(",") if token.strip()
-        )
+        tokens = tuple(token.strip() for token in columns[1].split(",") if token.strip())
         rows[columns[0]] = (tokens, columns[2])
     return rows
 
 
 def _inheritance_tokens() -> list[str]:
-    return [
-        token
-        for tokens, _overlay in _registry_rows().values()
-        for token in tokens
-    ]
+    return [token for tokens, _overlay in _registry_rows().values() for token in tokens]
 
 
 def _module_versions() -> dict[str, str]:
@@ -108,22 +76,14 @@ def _module_versions() -> dict[str, str]:
 
 def test_no_shorthand_in_inheritance_registry() -> None:
     shorthand = {
-        "Global",
-        "Source-of-Truth",
-        "Testing/Release",
-        "Python",
-        "Workspace",
-        "Notion",
-        "QA/Test",
-        "Instructional Design",
-        "Navigation Registry",
+        "Global", "Source-of-Truth", "Testing/Release", "Python", "Workspace",
+        "Notion", "QA/Test", "Instructional Design", "Navigation Registry",
     }
     assert shorthand.isdisjoint(_inheritance_tokens())
 
 
 def test_inheritance_tokens_are_canonical_modules() -> None:
-    canonical = set(_module_versions())
-    assert set(_inheritance_tokens()).issubset(canonical)
+    assert set(_inheritance_tokens()).issubset(set(_module_versions()))
 
 
 def test_baseline_modules_remain_standalone_and_versioned() -> None:
@@ -152,8 +112,20 @@ def test_individual_rows_do_not_repeat_universal_safety_modules() -> None:
         assert safety_modules.isdisjoint(tokens), agent
 
 
-def test_canonical_agent_rows_preserve_expected_inheritance() -> None:
+def test_canonical_agent_rows_match_consolidated_architecture() -> None:
     assert _registry_rows() == EXPECTED_AGENT_ROWS
+
+
+def test_retired_technical_agents_are_not_canonical_rows() -> None:
+    assert RETIRED_TECHNICAL_AGENTS.isdisjoint(_registry_rows())
+
+
+def test_exactly_two_canonical_technical_execution_roles_are_documented() -> None:
+    content = REGISTRY.read_text(encoding="utf-8")
+    assert "Agent OS has two canonical technical execution roles" in content
+    assert "**GitHub Service Agent**" in content
+    assert "**QA / Test Agent**" in content
+    assert "compatibility guidance only" in content
 
 
 def test_every_canonical_agent_overlay_inherits_common_rules() -> None:

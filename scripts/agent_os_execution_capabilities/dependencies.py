@@ -406,6 +406,104 @@ def required_environment_spec_payload(
     return payload
 
 
+REQUIRED_ENVIRONMENT_SPEC_PAYLOAD_FIELDS = frozenset(
+    {
+        "ecosystem",
+        "package_root",
+        "runtime_requirement",
+        "dependency_manifest_identity",
+        "lock_or_constraints_identity",
+        "install_mode",
+        "local_project_requirements",
+        "qualification_only_pins",
+        "approved_source_identity",
+        "required_validation_command_ids",
+        "required_environment_id",
+    }
+)
+
+
+def _reconstruct_artifact_identity(value: object, name: str) -> DependencyArtifactIdentity:
+    if type(value) is not dict or set(value) != {"relative_path", "sha256"}:
+        raise ValueError(f"{name} payload fields drift")
+    return DependencyArtifactIdentity(
+        relative_path=value["relative_path"], sha256=value["sha256"]
+    )
+
+
+def reconstruct_required_environment_spec(payload: object) -> RequiredEnvironmentSpec:
+    """Rebuild the exact canonical spec from ``required_environment_spec_payload``.
+
+    This is the one canonical inverse of the payload serializer above, so no
+    consumer needs a second reconstruction owner. It is pure: no filesystem,
+    network, process, or environment access, and it grants no authority. The
+    payload must carry its asserted ``required_environment_id``; a missing,
+    malformed, drifted, or content-mismatched payload fails closed rather than
+    yielding a recomputed identity.
+    """
+    if (
+        type(payload) is not dict
+        or set(payload) != REQUIRED_ENVIRONMENT_SPEC_PAYLOAD_FIELDS
+    ):
+        raise ValueError("required_environment_spec payload fields drift")
+    asserted_id = payload["required_environment_id"]
+    if type(asserted_id) is not str or not asserted_id:
+        raise ValueError("required_environment_id must be asserted by the payload")
+    projects_value = payload["local_project_requirements"]
+    pins_value = payload["qualification_only_pins"]
+    command_ids = payload["required_validation_command_ids"]
+    if (
+        type(projects_value) is not list
+        or type(pins_value) is not list
+        or type(command_ids) is not list
+    ):
+        raise ValueError("required_environment_spec nested lists are malformed")
+
+    projects: list[LocalProjectRequirement] = []
+    for item in projects_value:
+        if type(item) is not dict or set(item) != {"relative_path", "sha256", "editable"}:
+            raise ValueError("local_project_requirements payload fields drift")
+        projects.append(
+            LocalProjectRequirement(
+                relative_path=item["relative_path"],
+                sha256=item["sha256"],
+                editable=item["editable"],
+            )
+        )
+    pins: list[QualificationOnlyDependencyPin] = []
+    for item in pins_value:
+        if type(item) is not dict or set(item) != {"package", "version"}:
+            raise ValueError("qualification_only_pins payload fields drift")
+        pins.append(
+            QualificationOnlyDependencyPin(
+                package=item["package"], version=item["version"]
+            )
+        )
+
+    lock_value = payload["lock_or_constraints_identity"]
+    return RequiredEnvironmentSpec(
+        ecosystem=DependencyEcosystem(payload["ecosystem"]),
+        package_root=payload["package_root"],
+        runtime_requirement=payload["runtime_requirement"],
+        dependency_manifest_identity=_reconstruct_artifact_identity(
+            payload["dependency_manifest_identity"], "dependency_manifest_identity"
+        ),
+        lock_or_constraints_identity=(
+            None
+            if lock_value is None
+            else _reconstruct_artifact_identity(
+                lock_value, "lock_or_constraints_identity"
+            )
+        ),
+        install_mode=DependencyInstallMode(payload["install_mode"]),
+        local_project_requirements=tuple(projects),
+        qualification_only_pins=tuple(pins),
+        approved_source_identity=payload["approved_source_identity"],
+        required_validation_command_ids=tuple(command_ids),
+        required_environment_id=asserted_id,
+    )
+
+
 def dependency_readiness_evidence_payload(
     evidence: DependencyReadinessEvidence, *, include_id: bool = True
 ) -> dict[str, Any]:

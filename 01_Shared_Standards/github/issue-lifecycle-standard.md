@@ -26,11 +26,15 @@ Owns implementation evidence: files changed, exact source head, tested SHA or sy
 
 ## Safe Implementation Lane
 
-Eligible Tier 0 and Tier 1 repository work may use `safe-implementation-lane.md`. The bounded lane accepts directly necessary support files and environment-assigned non-protected branch names, and may include Ready-for-Review after exact-head validation; merge and all excluded surfaces remain separately authorized.
+Eligible Tier 0 and Tier 1 repository work may use `safe-implementation-lane.md`. The bounded lane accepts directly necessary support files and environment-assigned non-protected branch names, and may include Ready-for-Review after exact-head validation; ordinary Safe Lane merge and all excluded surfaces remain separately authorized unless the opt-in Terminal Fast Lane contract applies.
 
 ## Child-Issue Creation Test
 
 Split a child issue only when all are true: independent objective; different allowlist; independently mergeable; standalone value; combining would make one PR unsafe or oversized. Otherwise use acceptance criteria, checklist items, or regression tests in the existing issue.
+
+## Promotion In Place
+
+A planning/design issue may be promoted in place to Level 2 instead of superseded by a successor when the canonical issue body still proves the same objective, ownership, bounded scope, source of truth, and risk tier and no material architecture, compatibility, external-effect, protected-surface, or objective change has been introduced. Apply the existing Child-Issue Creation Test above against that canonical issue evidence; do not construct a second issue-scope snapshot, parser, or promotion state model. When a material change is present, a successor is required. Closed historical issues are immutable and are never promoted.
 
 ## Canonical Boilerplate By Reference
 
@@ -39,6 +43,8 @@ Link, do not paste: write authorization (`00_Governance/write-authorization-poli
 ## Issue-Body Maintenance
 
 The issue body is authoritative for durable objective, ownership, scope, non-goals, and protected surfaces. When a durable decision changes the contract, edit the body and add one concise dated comment naming what changed and why; edit history preserves prior text. A dated operational authorization comment may activate or pause work only when the body permits that route and the comment does not broaden or contradict the durable contract. Do not leave a stale body behind contradictory comments.
+
+Volatile execution facts -- current `main`/PR/head SHA, branch freshness, CI/check conclusion, executor availability, lease generation, or other transient runtime state -- are never embedded as durable contract requirements in any issue body at any level. Store them in current evidence, checkpoints, PR records, or dated operational comments instead; the Level 1 roadmap restriction above is one instance of this general rule.
 
 ## Risk Ownership
 
@@ -74,4 +80,8 @@ Do not add a legacy label to a new issue. Do not claim a disposition beyond this
 
 ## Version
 
-0.2.0
+0.3.0
+
+## Changelog
+
+- 0.3.0 adds Promotion In Place as a canonical issue-body/Child-Issue Creation Test classification without a parallel issue-state model, and generalizes the volatile-execution-facts restriction beyond Level 1 roadmap issues (#1309).

@@ -36,7 +36,9 @@ class _Packet:
 
 
 class _Configuration:
-    pass
+    required_environment_spec = SimpleNamespace(
+        required_environment_id="required-environment:" + "e" * 64
+    )
 
 
 class _Readiness:
@@ -71,6 +73,7 @@ def _case(monkeypatch, *, events: list[str] | None = None):
     request_fp = "execution-request:" + "1" * 64
     handoff_id = "executor-handoff:" + "2" * 64
     descriptor_id = "agent-os.governed-invocation-descriptor:" + "3" * 64
+    capsule_id = "governed-resume-restart-capsule:" + "7" * 64
 
     route = _Route()
     route.repository = repository
@@ -111,6 +114,7 @@ def _case(monkeypatch, *, events: list[str] | None = None):
     route.external_writes_authorized = False
     route.merge_authorized = False
     route.selected_route = ExecutorRoute.CHATGPT_GOVERNED_RUNNER
+    route.decision_id = "executor-route-decision:" + "6" * 64
 
     request = _Request()
     request.repository_identity = SimpleNamespace(owner="Blummer92", repository="agent-os")
@@ -124,6 +128,7 @@ def _case(monkeypatch, *, events: list[str] | None = None):
     authorization = _Authorization()
     checkpoint = _Checkpoint()
     checkpoint.checkpoint_id = route.checkpoint_id_or_none
+    checkpoint.issue_number = 1243
     resume = _ResumePlan()
     resume.plan_id = route.resume_plan_id_or_none
     packet = _Packet()
@@ -132,6 +137,7 @@ def _case(monkeypatch, *, events: list[str] | None = None):
     pilot = _Pilot()
 
     handoff = SimpleNamespace(handoff_id=handoff_id)
+    capsule = SimpleNamespace(handoff_id=handoff_id, capsule_id=capsule_id)
     descriptor = _Descriptor()
     descriptor.repository = repository
     descriptor.issue_or_handoff_identity = route.issue_or_handoff_identity
@@ -190,6 +196,41 @@ def _case(monkeypatch, *, events: list[str] | None = None):
         "persist_current_invocation_descriptor",
         lambda *_args, **_kwargs: events.append("persist") or outcome,
     )
+    monkeypatch.setattr(
+        publication,
+        "append_route_decision",
+        lambda *_args, **_kwargs: events.append("route-decision-persist")
+        or SimpleNamespace(decision_id=route.decision_id),
+    )
+    monkeypatch.setattr(
+        publication,
+        "append_executor_handoff",
+        lambda *_args, **_kwargs: events.append("handoff-persist")
+        or SimpleNamespace(handoff_id=handoff.handoff_id),
+    )
+    monkeypatch.setattr(
+        publication,
+        "append_resume_plan",
+        lambda *_args, **_kwargs: events.append("resume-plan-persist")
+        or SimpleNamespace(plan_id=resume.plan_id),
+    )
+    monkeypatch.setattr(
+        publication,
+        "load_checkpoint_by_id",
+        lambda *_args, **_kwargs: events.append("checkpoint-durability-check")
+        or checkpoint,
+    )
+    monkeypatch.setattr(
+        publication,
+        "build_restart_capsule",
+        lambda **_kwargs: events.append("restart-capsule-build") or capsule,
+    )
+    monkeypatch.setattr(
+        publication,
+        "append_restart_capsule",
+        lambda *_args, **_kwargs: events.append("restart-capsule-persist")
+        or SimpleNamespace(handoff_id=handoff.handoff_id, capsule_id=capsule.capsule_id),
+    )
 
     kwargs = dict(
         store_root="/tmp/checkpoints",
@@ -214,6 +255,7 @@ def _case(monkeypatch, *, events: list[str] | None = None):
         handoff=handoff,
         outcome=outcome,
         checkpoint=checkpoint,
+        capsule=capsule,
         events=events,
     )
 
@@ -228,6 +270,12 @@ def test_success_orders_route_handoff_validation_persistence_then_return(monkeyp
         "descriptor-preview",
         "current-evidence",
         "validate-bindings",
+        "restart-capsule-build",
+        "route-decision-persist",
+        "handoff-persist",
+        "resume-plan-persist",
+        "checkpoint-durability-check",
+        "restart-capsule-persist",
         "persist",
     ]
 
@@ -363,6 +411,223 @@ def test_persistence_outcome_must_match_preview_descriptor_and_handoff(monkeypat
     assert exc.value.reason_codes == ("descriptor-persistence-mismatch",)
 
 
+def test_route_decision_persistence_failure_blocks_before_handoff_persistence(monkeypatch) -> None:
+    case = _case(monkeypatch)
+
+    def fail(*_args, **_kwargs):
+        raise OSError("store unavailable")
+
+    monkeypatch.setattr(publication, "append_route_decision", fail)
+    with pytest.raises(publication.HandoffPublicationError) as exc:
+        publication.publish_governed_handoff(**case.kwargs)
+    assert exc.value.reason_codes == ("route-decision-persistence-failed",)
+    assert "handoff-persist" not in case.events
+    assert "persist" not in case.events
+
+
+def test_route_decision_persistence_mismatch_blocks_before_handoff_persistence(monkeypatch) -> None:
+    case = _case(monkeypatch)
+    monkeypatch.setattr(
+        publication,
+        "append_route_decision",
+        lambda *_args, **_kwargs: SimpleNamespace(decision_id="executor-route-decision:" + "f" * 64),
+    )
+    with pytest.raises(publication.HandoffPublicationError) as exc:
+        publication.publish_governed_handoff(**case.kwargs)
+    assert exc.value.reason_codes == ("route-decision-persistence-mismatch",)
+    assert "handoff-persist" not in case.events
+
+
+def test_handoff_persistence_failure_blocks_before_resume_plan_persistence(monkeypatch) -> None:
+    case = _case(monkeypatch)
+
+    def fail(*_args, **_kwargs):
+        raise OSError("store unavailable")
+
+    monkeypatch.setattr(publication, "append_executor_handoff", fail)
+    with pytest.raises(publication.HandoffPublicationError) as exc:
+        publication.publish_governed_handoff(**case.kwargs)
+    assert exc.value.reason_codes == ("handoff-persistence-failed",)
+    assert "route-decision-persist" in case.events
+    assert "resume-plan-persist" not in case.events
+    assert "persist" not in case.events
+
+
+def test_handoff_persistence_mismatch_blocks_before_resume_plan_persistence(monkeypatch) -> None:
+    case = _case(monkeypatch)
+    monkeypatch.setattr(
+        publication,
+        "append_executor_handoff",
+        lambda *_args, **_kwargs: SimpleNamespace(handoff_id="executor-handoff:" + "f" * 64),
+    )
+    with pytest.raises(publication.HandoffPublicationError) as exc:
+        publication.publish_governed_handoff(**case.kwargs)
+    assert exc.value.reason_codes == ("handoff-persistence-mismatch",)
+    assert "resume-plan-persist" not in case.events
+
+
+def test_resume_plan_persistence_failure_blocks_before_checkpoint_check(monkeypatch) -> None:
+    case = _case(monkeypatch)
+
+    def fail(*_args, **_kwargs):
+        raise OSError("store unavailable")
+
+    monkeypatch.setattr(publication, "append_resume_plan", fail)
+    with pytest.raises(publication.HandoffPublicationError) as exc:
+        publication.publish_governed_handoff(**case.kwargs)
+    assert exc.value.reason_codes == ("resume-plan-persistence-failed",)
+    assert "handoff-persist" in case.events
+    assert "checkpoint-durability-check" not in case.events
+    assert "persist" not in case.events
+
+
+def test_resume_plan_persistence_mismatch_blocks_before_checkpoint_check(monkeypatch) -> None:
+    case = _case(monkeypatch)
+    monkeypatch.setattr(
+        publication,
+        "append_resume_plan",
+        lambda *_args, **_kwargs: SimpleNamespace(plan_id="resume-plan:different"),
+    )
+    with pytest.raises(publication.HandoffPublicationError) as exc:
+        publication.publish_governed_handoff(**case.kwargs)
+    assert exc.value.reason_codes == ("resume-plan-persistence-mismatch",)
+    assert "checkpoint-durability-check" not in case.events
+
+
+@pytest.mark.parametrize(
+    "raised",
+    [
+        lambda: publication.CheckpointNotFound("checkpoint:current"),
+        lambda: publication.CheckpointQuarantined("checkpoint:current"),
+        lambda: publication.CheckpointStoreUnavailable("store unavailable"),
+    ],
+)
+def test_checkpoint_not_durable_blocks_before_descriptor_persistence(monkeypatch, raised) -> None:
+    case = _case(monkeypatch)
+
+    def fail(*_args, **_kwargs):
+        raise raised()
+
+    monkeypatch.setattr(publication, "load_checkpoint_by_id", fail)
+    with pytest.raises(publication.HandoffPublicationError) as exc:
+        publication.publish_governed_handoff(**case.kwargs)
+    assert exc.value.reason_codes == ("checkpoint-not-durable",)
+    assert "resume-plan-persist" in case.events
+    assert "persist" not in case.events
+
+
+def test_checkpoint_durability_read_back_mismatch_blocks_before_descriptor_persistence(
+    monkeypatch,
+) -> None:
+    case = _case(monkeypatch)
+    monkeypatch.setattr(
+        publication,
+        "load_checkpoint_by_id",
+        lambda *_args, **_kwargs: object(),
+    )
+    with pytest.raises(publication.HandoffPublicationError) as exc:
+        publication.publish_governed_handoff(**case.kwargs)
+    assert exc.value.reason_codes == ("checkpoint-not-durable",)
+    assert "persist" not in case.events
+
+
+def test_restart_capsule_persistence_failure_blocks_before_descriptor_persistence(
+    monkeypatch,
+) -> None:
+    case = _case(monkeypatch)
+    calls = 0
+
+    def fail(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        raise OSError("capsule store unavailable")
+
+    monkeypatch.setattr(publication, "append_restart_capsule", fail)
+    with pytest.raises(publication.HandoffPublicationError) as exc:
+        publication.publish_governed_handoff(**case.kwargs)
+    assert exc.value.reason_codes == ("restart-capsule-persistence-failed",)
+    assert calls == 1
+    assert "checkpoint-durability-check" in case.events
+    assert "persist" not in case.events
+
+
+def test_restart_capsule_persistence_mismatch_blocks_before_descriptor_persistence(
+    monkeypatch,
+) -> None:
+    case = _case(monkeypatch)
+    monkeypatch.setattr(
+        publication,
+        "append_restart_capsule",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            handoff_id=case.handoff.handoff_id,
+            capsule_id="governed-resume-restart-capsule:" + "f" * 64,
+        ),
+    )
+    with pytest.raises(publication.HandoffPublicationError) as exc:
+        publication.publish_governed_handoff(**case.kwargs)
+    assert exc.value.reason_codes == ("restart-capsule-persistence-mismatch",)
+    assert "persist" not in case.events
+
+
+def test_restart_capsule_handoff_drift_blocks_before_descriptor_persistence(
+    monkeypatch,
+) -> None:
+    case = _case(monkeypatch)
+    monkeypatch.setattr(
+        publication,
+        "append_restart_capsule",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            handoff_id="executor-handoff:" + "f" * 64,
+            capsule_id=case.capsule.capsule_id,
+        ),
+    )
+    with pytest.raises(publication.HandoffPublicationError) as exc:
+        publication.publish_governed_handoff(**case.kwargs)
+    assert exc.value.reason_codes == ("restart-capsule-persistence-mismatch",)
+    assert "persist" not in case.events
+
+
+def test_restart_capsule_build_failure_is_bounded_and_blocks_all_persistence(
+    monkeypatch,
+) -> None:
+    case = _case(monkeypatch)
+    monkeypatch.setattr(
+        publication,
+        "build_restart_capsule",
+        lambda **_kwargs: (_ for _ in ()).throw(ValueError("capsule evidence drift")),
+    )
+    with pytest.raises(publication.HandoffPublicationError) as exc:
+        publication.publish_governed_handoff(**case.kwargs)
+    assert exc.value.reason_codes == ("current-evidence-malformed",)
+    assert "route-decision-persist" not in case.events
+    assert "persist" not in case.events
+
+
+def test_recoverable_artifact_persistence_happens_between_validation_and_descriptor(
+    monkeypatch,
+) -> None:
+    case = _case(monkeypatch)
+    publication.publish_governed_handoff(**case.kwargs)
+    validate_index = case.events.index("validate-bindings")
+    persist_index = case.events.index("persist")
+    for step in (
+        "route-decision-persist",
+        "handoff-persist",
+        "resume-plan-persist",
+        "checkpoint-durability-check",
+        "restart-capsule-persist",
+    ):
+        assert validate_index < case.events.index(step) < persist_index
+    # #1303: the bounded restart capsule must be durable only after the four
+    # #1304 recoverable artifacts and still before the descriptor is published,
+    # so a discoverable descriptor never lacks its required restart evidence.
+    assert (
+        case.events.index("checkpoint-durability-check")
+        < case.events.index("restart-capsule-persist")
+        < persist_index
+    )
+
+
 def test_malformed_current_evidence_is_bounded_failure(monkeypatch) -> None:
     case = _case(monkeypatch)
     case.kwargs["authorization"] = object()
@@ -453,3 +718,45 @@ def test_publication_point_is_after_descriptor_persistence() -> None:
 def test_no_retry_or_fallback_loop_exists() -> None:
     tree = ast.parse(inspect.getsource(publication.publish_governed_handoff))
     assert not any(isinstance(node, (ast.For, ast.While)) for node in ast.walk(tree))
+
+
+def test_restart_capsule_carries_the_runtime_configurations_bound_environment(
+    monkeypatch,
+) -> None:
+    """AOS-GCE2F (#1320): the seam persists the already-verified spec, not a new one."""
+    case = _case(monkeypatch)
+    seen: list[object] = []
+    original = publication.build_restart_capsule
+    monkeypatch.setattr(
+        publication,
+        "build_restart_capsule",
+        lambda **kwargs: seen.append(kwargs.get("required_environment_spec"))
+        or original(**kwargs),
+    )
+
+    publication.publish_governed_handoff(**case.kwargs)
+
+    configuration = case.kwargs["runtime_configuration"]
+    assert seen == [configuration.required_environment_spec]
+
+
+def test_missing_bound_environment_blocks_publication(monkeypatch) -> None:
+    """A runtime configuration with no bound spec never reaches persistence."""
+    case = _case(monkeypatch)
+    original = publication.build_restart_capsule
+    monkeypatch.setattr(
+        publication,
+        "build_restart_capsule",
+        lambda **kwargs: (_ for _ in ()).throw(
+            TypeError("required_environment_spec must be an exact RequiredEnvironmentSpec")
+        )
+        if kwargs.get("required_environment_spec") is None
+        else original(**kwargs),
+    )
+    case.kwargs["runtime_configuration"].required_environment_spec = None
+
+    with pytest.raises(publication.HandoffPublicationError) as exc:
+        publication.publish_governed_handoff(**case.kwargs)
+
+    assert exc.value.reason_codes == ("current-evidence-malformed",)
+    assert "persist" not in case.events

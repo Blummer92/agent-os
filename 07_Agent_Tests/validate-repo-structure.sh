@@ -28,24 +28,31 @@ is_line_limit_exception() {
   grep -Fxq "$path" "$exceptions_file"
 }
 
-# 1. Every Markdown file except CLAUDE.md and documented exceptions must stay
-#    under 100 lines.
-over_limit=""
+# 1. Frequently loaded governance Markdown (except CLAUDE.md and documented
+#    exceptions) normally targets roughly 100-200 lines. A file over 200
+#    lines is surfaced as a non-blocking advisory maintainability note only
+#    (#1309-O): line count alone never fails this check, authorizes
+#    semantic deletion, or forces artificial modularity. Canonical deep
+#    standards, dense registries/tables, generated references, schemas, and
+#    history may exceed the target when splitting would reduce clarity or
+#    duplicate semantics.
+over_target=""
 while IFS= read -r f; do
   rel="${f#./}"
   if is_line_limit_exception "$rel"; then
     continue
   fi
   lines=$(wc -l < "$f")
-  if [ "$lines" -ge 100 ]; then
-    over_limit="${over_limit}${f}: ${lines} lines
+  if [ "$lines" -gt 200 ]; then
+    over_target="${over_target}${f}: ${lines} lines
 "
   fi
 done < <(find . -name "*.md" -not -path "./.git/*" -not -name "CLAUDE.md" | sort)
-if [ -n "$over_limit" ]; then
-  printf "%b" "$over_limit"
+if [ -n "$over_target" ]; then
+  echo "ADVISORY - Markdown files over the ~200-line target (non-blocking; review for splitting or a documented exception):"
+  printf "%b" "$over_target"
 fi
-check "All non-exempt Markdown files (except CLAUDE.md) are under 100 lines" "$([ -z "$over_limit" ] && echo 0 || echo 1)"
+check "Markdown line-count advisory reviewed (non-blocking; see 00_Governance/markdown-line-limit-exceptions.md)" 0
 
 # 2. Every overlay must reference _common-overlay-rules.md instead of
 #    repeating the shared blocks (regression guard for overlay dedup).

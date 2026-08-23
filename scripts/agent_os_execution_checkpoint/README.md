@@ -4,8 +4,8 @@ AOS-RESUME1A (#895), implementing the design approved for #858. Pure-local
 `ExecutionCheckpoint` record, content-addressed identity, append-only
 local store, and a resume planner -- a checkpoint records evidence only
 and never authorizes the next stage. No subprocess, network, GitHub,
-Scheduler, retry, or credential access anywhere; only local filesystem
-I/O in `store.py`. Owner: Integration Manager / GitHub Service Agent.
+Scheduler, retry, or credential access anywhere; only local filesystem I/O
+in `store.py`. Owner: Integration Manager / GitHub Service Agent.
 
 ## Public interface
 
@@ -37,10 +37,8 @@ Byte-exact canonical JSON, reused verbatim from ADR-0002 details-01b
 (`sort_keys=True, separators=(",", ":"), ensure_ascii=False`). SHA-256,
 domain-separated (`agent-os.execution-checkpoint:<hex>`). Semantic identity
 covers every Binding/Stage/Evidence/State field, including `lifecycle_state`;
-`recorded_at`, `actor_id`, and `diagnostic_refs` are **observational only** and
-excluded (mirrors ADR-0002 details-02's timestamp-semantics rule). `reuse_key` excludes
-`invocation_id`/`execution_id`, so identical evidence from separate
-invocations is recognized as interchangeable.
+`recorded_at`, `actor_id`, and `diagnostic_refs` are **observational only** and excluded (mirrors ADR-0002 details-02's timestamp-semantics rule). `reuse_key`
+excludes `invocation_id`/`execution_id`, so identical evidence from separate invocations is recognized as interchangeable.
 
 ## Storage (`store.py`)
 
@@ -91,6 +89,7 @@ intent, different for different content. An uncertain outcome always
 classifies `manual-review`, never a blind retry. Zero matches on a
 stable-key re-read proves an operation did not take effect, so a fresh
 attempt is new, not a retry; unprovable state goes to manual review.
+#1304 (AOS-GCE2E) added `store.load_checkpoint_by_id` (bounded exact-`checkpoint_id` lookup over `load_checkpoints`) and `resume_plan_store.py` (persist/read-by-`plan_id`, reusing the new `resume_plan_from_dict`/(de)`serialize_resume_plan` in `resume_planner.py`); the sibling full #918 route-decision/handoff stores live one-way in `agent-os-execution-service` per #1300. All four are evidence only -- never currentness, authorization, or Scheduler admission.
 
 ## Authority boundary and rollback
 

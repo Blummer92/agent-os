@@ -1,9 +1,26 @@
-"""Publish one governed-runner handoff only after descriptor durability.
+"""Publish one governed-runner handoff only after restart evidence is durable.
 
 This thin Execution Service composition seam reuses #918 route/handoff
 construction and #1218/#1228 descriptor/current-binding contracts. It performs
 no Scheduler admission or execution, lease operation, process launch, provider
 selection, transport, retry, GitHub write, or cloud operation.
+
+AOS-GCE2E (#1304) made route decision, full handoff, checkpoint, and ResumePlan
+recoverable before descriptor publication. AOS-GCE2D (#1303) adds exactly one
+bounded, non-authorizing restart capsule for the static validation/approval
+observations that cannot be regenerated from the descriptor alone. AOS-GCE2F
+(#1320) carries the immutable ``RequiredEnvironmentSpec`` already bound into the
+verified runtime configuration through that same capsule, so governed resume can
+recover the declarative requirement the descriptor's ``required_environment_id``
+asserts without a new store or a second environment model. The capsule is
+persisted before the descriptor and never substitutes for fresh #1218/#1253
+currentness, authorization, dependency readiness, or Scheduler lease admission.
+
+AOS-VALSHIFT1 (#1325) consumes the existing #1278 pre-PR runtime projection at
+this publication boundary. A ``pre-pr-developer-loop`` route may publish only
+when its already-declared capabilities and current evidence flags are closed
+under the #1278 projection for the supplied #1197 environment/readiness evidence.
+This adds no route, runner, validation lifecycle, or execution authority.
 """
 
 from __future__ import annotations
@@ -16,7 +33,17 @@ from scripts.agent_os_execution_checkpoint.invocation_descriptor import (
     AppendInvocationDescriptorOutcome,
 )
 from scripts.agent_os_execution_checkpoint.models import ExecutionCheckpoint
+from scripts.agent_os_execution_checkpoint.resume_plan_store import append_resume_plan
 from scripts.agent_os_execution_checkpoint.resume_planner import ResumePlan
+from scripts.agent_os_execution_checkpoint.store import (
+    CheckpointNotFound,
+    CheckpointQuarantined,
+    CheckpointStoreUnavailable,
+    load_checkpoint_by_id,
+)
+from scripts.agent_os_execution_interface.pre_pr_runtime_compatibility import (
+    project_pre_pr_runtime_capabilities,
+)
 from workflow_scheduler.execution.runtime_configuration import ConcreteRuntimeConfiguration
 from workflow_scheduler.execution.single_issue_pilot import SingleIssuePilotInput
 
@@ -33,9 +60,17 @@ from .executor_routing import (
     build_executor_handoff,
     select_executor_route,
 )
+from .governed_resume_restart_capsule import (
+    append_restart_capsule,
+    build_restart_capsule,
+)
+from .handoff_store import append_executor_handoff
 from .invocation_reconstruction import CurrentInvocationEvidence, InvocationReconstructionReason
 from .models import ExecutionServiceRequest
 from .request_validation import validate_execution_service_request
+from .route_decision_store import append_route_decision
+
+_PRE_PR_DEVELOPER_LOOP_OPERATION = "pre-pr-developer-loop"
 
 _PUBLICATION_REASONS = frozenset(
     {
@@ -43,7 +78,17 @@ _PUBLICATION_REASONS = frozenset(
         "request-invalid",
         "route-reselection-mismatch",
         "route-not-governed-runner",
+        "pre-pr-runtime-projection-mismatch",
         "request-binding-mismatch",
+        "route-decision-persistence-failed",
+        "route-decision-persistence-mismatch",
+        "handoff-persistence-failed",
+        "handoff-persistence-mismatch",
+        "resume-plan-persistence-failed",
+        "resume-plan-persistence-mismatch",
+        "checkpoint-not-durable",
+        "restart-capsule-persistence-failed",
+        "restart-capsule-persistence-mismatch",
         "descriptor-persistence-failed",
         "descriptor-persistence-mismatch",
     }
@@ -106,6 +151,41 @@ def _reselect(route: ExecutorRouteDecision) -> ExecutorRouteDecision:
     )
 
 
+def _pre_pr_runtime_projection_matches(
+    *,
+    route_decision: ExecutorRouteDecision,
+    runtime_configuration: ConcreteRuntimeConfiguration,
+    dependency_readiness: DependencyReadinessEvidence,
+    evaluated_at: str,
+) -> bool:
+    """Return whether one pre-PR route is closed under the canonical #1278 projection.
+
+    The route's already-declared capabilities are supplied as the projection's
+    base capabilities. #1278 may therefore add only missing mandatory pre-PR
+    runtime capabilities (plus dependency installation when #1197 requires it),
+    while legitimate operation-specific capabilities remain intact.
+    """
+
+    if route_decision.requested_operation != _PRE_PR_DEVELOPER_LOOP_OPERATION:
+        return True
+
+    projection = project_pre_pr_runtime_capabilities(
+        required_environment=runtime_configuration.required_environment_spec,
+        dependency_readiness=dependency_readiness,
+        evaluated_at=evaluated_at,
+        base_required_capabilities=route_decision.required_capabilities,
+    )
+    return all(
+        (
+            route_decision.required_capabilities == projection.required_capabilities,
+            route_decision.evidence_stale is projection.evidence_stale,
+            route_decision.evidence_contradictory is projection.evidence_contradictory,
+            route_decision.environment_health_evidence_id_or_none
+            == projection.environment_health_evidence_id,
+        )
+    )
+
+
 def _request_repository(request: ExecutionServiceRequest) -> str:
     return f"{request.repository_identity.owner}/{request.repository_identity.repository}"
 
@@ -126,7 +206,7 @@ def publish_governed_handoff(
     required_return_evidence: tuple[str, ...],
     stop_conditions: tuple[str, ...],
 ) -> ExecutorHandoff:
-    """Return the existing immutable handoff only after descriptor persistence."""
+    """Return the existing immutable handoff only after all restart artifacts persist."""
 
     exact = (
         (request, ExecutionServiceRequest),
@@ -159,6 +239,18 @@ def publish_governed_handoff(
         raise HandoffPublicationError("route-reselection-mismatch")
     if route_decision.selected_route is not ExecutorRoute.CHATGPT_GOVERNED_RUNNER:
         raise HandoffPublicationError("route-not-governed-runner")
+
+    try:
+        projection_matches = _pre_pr_runtime_projection_matches(
+            route_decision=route_decision,
+            runtime_configuration=runtime_configuration,
+            dependency_readiness=dependency_readiness,
+            evaluated_at=evaluated_at,
+        )
+    except (TypeError, ValueError) as exc:
+        raise HandoffPublicationError("current-evidence-malformed") from exc
+    if not projection_matches:
+        raise HandoffPublicationError("pre-pr-runtime-projection-mismatch")
 
     repository = _request_repository(request)
     if (
@@ -209,6 +301,14 @@ def publish_governed_handoff(
             current,
             evaluated_at=evaluated_at,
         )
+        restart_capsule = build_restart_capsule(
+            handoff_id=handoff.handoff_id,
+            candidate_packet=candidate_packet,
+            pilot_input=pilot_input,
+            required_environment_spec=runtime_configuration.required_environment_spec,
+            created_at=route_decision.created_at,
+            expires_at=route_decision.expires_at,
+        )
     except (TypeError, ValueError) as exc:
         raise HandoffPublicationError("current-evidence-malformed") from exc
     if binding_reasons:
@@ -222,6 +322,54 @@ def publish_governed_handoff(
         or descriptor.source_sha != request.expected_sha
     ):
         raise HandoffPublicationError("request-binding-mismatch")
+
+    try:
+        route_decision_outcome = append_route_decision(store_root, route_decision)
+    except (KeyboardInterrupt, SystemExit, GeneratorExit):
+        raise
+    except Exception as exc:  # noqa: BLE001 - persistence is the fail-closed boundary
+        raise HandoffPublicationError("route-decision-persistence-failed") from exc
+    if route_decision_outcome.decision_id != route_decision.decision_id:
+        raise HandoffPublicationError("route-decision-persistence-mismatch")
+
+    try:
+        handoff_outcome = append_executor_handoff(store_root, handoff)
+    except (KeyboardInterrupt, SystemExit, GeneratorExit):
+        raise
+    except Exception as exc:  # noqa: BLE001 - persistence is the fail-closed boundary
+        raise HandoffPublicationError("handoff-persistence-failed") from exc
+    if handoff_outcome.handoff_id != handoff.handoff_id:
+        raise HandoffPublicationError("handoff-persistence-mismatch")
+
+    try:
+        resume_plan_outcome = append_resume_plan(store_root, resume_plan)
+    except (KeyboardInterrupt, SystemExit, GeneratorExit):
+        raise
+    except Exception as exc:  # noqa: BLE001 - persistence is the fail-closed boundary
+        raise HandoffPublicationError("resume-plan-persistence-failed") from exc
+    if resume_plan_outcome.plan_id != resume_plan.plan_id:
+        raise HandoffPublicationError("resume-plan-persistence-mismatch")
+
+    try:
+        durable_checkpoint = load_checkpoint_by_id(
+            store_root, checkpoint.issue_number, checkpoint.checkpoint_id
+        )
+    except (CheckpointNotFound, CheckpointQuarantined, CheckpointStoreUnavailable) as exc:
+        raise HandoffPublicationError("checkpoint-not-durable") from exc
+    if durable_checkpoint != checkpoint:
+        raise HandoffPublicationError("checkpoint-not-durable")
+
+    try:
+        capsule_outcome = append_restart_capsule(store_root, restart_capsule)
+    except (KeyboardInterrupt, SystemExit, GeneratorExit):
+        raise
+    except Exception as exc:  # noqa: BLE001 - persistence is the fail-closed boundary
+        raise HandoffPublicationError("restart-capsule-persistence-failed") from exc
+    if (
+        capsule_outcome.handoff_id != handoff.handoff_id
+        or capsule_outcome.capsule_id != restart_capsule.capsule_id
+    ):
+        raise HandoffPublicationError("restart-capsule-persistence-mismatch")
 
     try:
         outcome = persist_current_invocation_descriptor(
