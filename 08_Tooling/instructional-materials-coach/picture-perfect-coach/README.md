@@ -42,11 +42,9 @@ Screen-state roles remain distinct:
 
 ```text
 action        -> screenshot_before
-aresult       -> screenshot_after
+result        -> screenshot_after
 action+result -> both roles independently
 ```
-
-(`aresult` above means the `result` image state; the label is intentionally textual only and is not a new runtime state.)
 
 A bound state keeps the exact action-local target geometry. Combined reviewed steps never union geometry or UI claims across actions. All requested UI claims for one required screen state must be supported by one approved screenshot.
 
