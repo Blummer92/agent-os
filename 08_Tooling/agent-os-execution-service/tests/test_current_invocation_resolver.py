@@ -152,7 +152,7 @@ def test_descriptor_writer_dual_writes_canonical_request_and_legacy_mirror(monke
     assert captured["runtime_request"] is request
     assert captured["request_kwargs"]["invocation_descriptor"] is descriptor
     assert captured["request_kwargs"]["restart_capsule"] is capsule
-    assert events == ["descriptor", "capsule", "runtime-request"]
+    assert events == ["capsule", "runtime-request", "descriptor"]
 
 
 def test_descriptor_loader_prefers_runtime_request_dual_read(monkeypatch) -> None:
