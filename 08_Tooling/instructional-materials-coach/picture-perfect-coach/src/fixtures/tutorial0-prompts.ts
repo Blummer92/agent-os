@@ -77,16 +77,31 @@ const authoringByStepId = new Map<string, PromptAuthoringInput>([
   ],
 ]);
 
+function withCommonProvenance(cards: readonly PromptCardModel[]): readonly PromptCardModel[] {
+  return cards.map((card) => ({ ...card, provenance: [...commonProvenance, ...card.provenance] }));
+}
+
 /**
- * F2 binds the three supported Tutorial 0 frames to privacy-safe synthetic capture
- * evidence. This proves the offline contract only; it does not assert live Adobe
- * selector, geometry, screenshot, authentication, or replay fidelity.
+ * F1 regression projection: no capture bundle is supplied, so every real-interface
+ * frame must remain blocked. This preserves proof that missing capture never falls
+ * back to generative reconstruction.
  */
-export const tutorial0PromptCards: readonly PromptCardModel[] = projectReviewedTutorialToPromptCards(
-  tutorial0ReviewedTutorial,
-  authoringByStepId,
-  tutorial0SyntheticCapture,
-).map((card) => ({ ...card, provenance: [...commonProvenance, ...card.provenance] }));
+export const tutorial0PromptCards: readonly PromptCardModel[] = withCommonProvenance(
+  projectReviewedTutorialToPromptCards(tutorial0ReviewedTutorial, authoringByStepId),
+);
+
+/**
+ * F2 ready-path projection. The same authoring is bound to privacy-safe synthetic
+ * capture evidence. This proves only the offline contract and makes no claim about
+ * live Adobe selector, geometry, screenshot, authentication, or replay fidelity.
+ */
+export const tutorial0CapturedPromptCards: readonly PromptCardModel[] = withCommonProvenance(
+  projectReviewedTutorialToPromptCards(
+    tutorial0ReviewedTutorial,
+    authoringByStepId,
+    tutorial0SyntheticCapture,
+  ),
+);
 
 const blockedAuthoring = new Map<string, PromptAuthoringInput>([
   [
