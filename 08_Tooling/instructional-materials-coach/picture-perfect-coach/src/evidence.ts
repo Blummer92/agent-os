@@ -1,5 +1,6 @@
 import tutorialRecording from './fixtures/tutorial0-recording.json';
 import tutorialEvidence from './fixtures/tutorial0-evidence.json';
+import { deriveRecordingUiEvidence } from './uiEvidence';
 import type {
   EvidenceState,
   ModelingCandidateProjection,
@@ -132,10 +133,16 @@ export function validateUploadText(text: string): UploadValidationResult {
   if (canonicalize(parsed) !== canonicalize(tutorialRecording)) {
     return { ok: false, message: 'The recording parsed, but this offline slice has no Teacher Modeling evidence for it yet. No instructional counts were guessed.' };
   }
-  const evidence = evidenceProjection(tutorialEvidence);
-  if (evidence === null || evidence.recorder_step_count !== parsed.steps.length) {
+  const projected = evidenceProjection(tutorialEvidence);
+  if (projected === null || projected.recorder_step_count !== parsed.steps.length) {
     return { ok: false, message: 'The synthetic recording evidence is incomplete or mismatched, so Picture Perfect stopped safely.' };
   }
+  // UI-claim evidence is derived from the approved recording itself, never from the
+  // modeling projection's descriptive fields and never from authoring content.
+  const evidence: UploadEvidenceProjection = {
+    ...projected,
+    recording_evidence: deriveRecordingUiEvidence(tutorialRecording, projected.recording_sha256),
+  };
   return { ok: true, summary: summarizeEvidence(evidence), technical: safeTechnicalDetails(evidence), evidence };
 }
 

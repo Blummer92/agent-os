@@ -2,8 +2,8 @@
 
 RJ1/RJ2 provide evidence. Teacher Modeling owns instructional disposition and
 sequence. Picture Perfect owns visual-state planning. ImageIntent remains the
-provider-neutral visual contract. This module performs no Recorder parsing,
-browser execution, provider call, or external write.
+provider-neutral visual contract for non-interface imagery. This module performs
+no Recorder parsing, browser execution, provider call, or external write.
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ import re
 from typing import Any
 
 from .common import validate_sha256, validate_stable_id, validate_text
-from .image_intent import IMAGE_INTENT_CONTRACT_ID, validate_image_intent
 
 RJ_EVIDENCE_STATES = frozenset({"pending", "passed", "failed", "indeterminate"})
 MODELING_DISPOSITIONS = frozenset({"keep", "combine", "not-instructional", "needs-review"})
@@ -21,6 +20,10 @@ ORIENTATIONS = frozenset({"portrait", "landscape", "square", "wide", "tall", "un
 _TECHNICAL_MARKER_RE = re.compile(
     r"(?:data-testid|aria/|xpath/|pierce/|css/|urn:aaid:|x-loading|folder-asset-card-)",
     re.IGNORECASE,
+)
+_SOFTWARE_UI_GENERATION_ERROR = (
+    "Picture Perfect software-tutorial visuals require approved screen-capture evidence; "
+    "the generative ImageIntent path is not allowed"
 )
 
 
@@ -217,54 +220,9 @@ def build_visual_requirement(
 
 
 def build_image_intent(visual_requirement: dict[str, Any]) -> Any:
-    """Build and validate the canonical ImageIntent for one visual requirement."""
+    """Reject generative reconstruction of Picture Perfect software-tutorial UI."""
     _visual_requirement(visual_requirement)
-    state = visual_requirement["visual_state"]
-    state_phrase = {
-        "action": "the control or location for the next student action",
-        "result": "the expected screen state after the student action",
-        "action+result": "both the next action and its resulting screen state",
-    }[state]
-    payload = {
-        "identity": {
-            "contract_version": IMAGE_INTENT_CONTRACT_ID,
-            "intent_id": f"image-intent:{visual_requirement['step_id']}",
-            "asset_id": None,
-            "concept": visual_requirement["step_id"],
-            "purpose": f"show {state_phrase} without changing the modeled instruction",
-        },
-        "scene": {
-            "subject": "a privacy-safe creative-software workspace",
-            "action": visual_requirement["student_action"] if state != "result" else None,
-            "environment": "a clean instructional software-tutorial frame",
-        },
-        "visual_direction": {
-            "composition": "clear application context with the intended target or state visually dominant",
-            "viewpoint": "straight-on screen view",
-            "look": "clean realistic software-interface reference",
-        },
-        "control": {
-            "must_show": list(visual_requirement["must_show"]),
-            "avoid": list(visual_requirement["must_not_show"]),
-            "creative_freedom": ["minor non-instructional spacing and neutral visual cleanup"],
-        },
-        "output": {
-            "orientation": visual_requirement["orientation"],
-            "aspect_target": visual_requirement["aspect_target"],
-            "add_later": [visual_requirement["annotation_space"]],
-        },
-        "library_handoff": {
-            "unit_lesson": "Adobe Express / Tutorial 0",
-            "asset_role": "Picture Perfect software-tutorial frame",
-            "intended_reuse": ["teacher modeling", "student tutorial"],
-            "candidate_status": "needs governed review",
-            "review_notes": "Derived from Teacher Modeling; never instructional source evidence.",
-        },
-    }
-    result = validate_image_intent(payload)
-    if result.record is None:
-        raise ValueError("derived ImageIntent failed canonical validation")
-    return result.record
+    raise ValueError(_SOFTWARE_UI_GENERATION_ERROR)
 
 
 def visual_provenance(visual_requirement: dict[str, Any]) -> dict[str, Any]:

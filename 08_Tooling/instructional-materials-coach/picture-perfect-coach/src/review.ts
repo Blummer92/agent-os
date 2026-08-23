@@ -1,3 +1,4 @@
+import type { ActionIdentity } from './uiEvidence';
 import type {
   ModelingStepProjection,
   ReviewDecision,
@@ -37,7 +38,15 @@ function validateEvidence(evidence: UploadEvidenceProjection): string | null {
   return null;
 }
 
-function retainedStep(step: ModelingStepProjection): ReviewedStepProjection {
+function actionIdentityFor(
+  evidence: UploadEvidenceProjection,
+  sourceIndexes: readonly number[],
+): ActionIdentity[] {
+  const scope = new Set(sourceIndexes);
+  return evidence.recording_evidence.actionIdentity.filter((item) => scope.has(item.sourceIndex));
+}
+
+function retainedStep(step: ModelingStepProjection, evidence: UploadEvidenceProjection): ReviewedStepProjection {
   return {
     review_step_id: step.step_id,
     sequence: step.sequence,
@@ -48,6 +57,7 @@ function retainedStep(step: ModelingStepProjection): ReviewedStepProjection {
     recording_id: step.source.recording_id,
     recording_sha256: step.source.recording_sha256,
     modeled_application: step.source.modeled_application,
+    action_identity: actionIdentityFor(evidence, step.source.source_indexes),
     execution_authorized: false,
   };
 }
@@ -85,9 +95,15 @@ export function deriveReviewedTutorial(evidence: UploadEvidenceProjection, decis
       previous.source_steps = [...previous.source_steps, step];
       previous.semantic_action_ids = [...previous.semantic_action_ids, ...step.semantic_action_ids];
       previous.source_indexes = [...previous.source_indexes, ...step.source.source_indexes];
+      // Identities concatenate; each stays bound to its own source index so combining
+      // widens which states are in scope without flattening action-local evidence.
+      previous.action_identity = [
+        ...previous.action_identity,
+        ...actionIdentityFor(evidence, step.source.source_indexes),
+      ];
       continue;
     }
-    retained.push(retainedStep(step));
+    retained.push(retainedStep(step, evidence));
   }
   if (retained.length === 0) return { ok: false, reason: 'Review must retain at least one instructional step.' };
 
@@ -99,6 +115,7 @@ export function deriveReviewedTutorial(evidence: UploadEvidenceProjection, decis
       retained_steps: retained.map((step, index) => ({ ...step, sequence: index + 1 })),
       excluded_step_ids: excluded,
       review_decisions: evidence.modeling_steps.map((step) => ({ step_id: step.step_id, choice: decisionMap.get(step.step_id)! })),
+      recording_evidence: evidence.recording_evidence,
       execution_authorized: false,
     },
   };

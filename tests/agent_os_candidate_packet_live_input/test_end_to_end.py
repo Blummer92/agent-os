@@ -241,3 +241,156 @@ def test_issue_number_mismatch_from_the_live_transport_fails_closed_through_the_
         IssueReadinessStageStatus.INCOMPLETE_EVIDENCE,
     )
     assert result.packet is None
+
+
+# --- AOS-GCE2F (#1320) structured evidence reaches the unchanged entrypoint ----
+
+
+def _structured_repository_reader(
+    *,
+    preparation_status=None,
+    advisory_status: str = "passed",
+):
+    from scripts.agent_os_execution_capabilities.dependencies import (
+        DependencyArtifactIdentity,
+        DependencyCacheState,
+        DependencyEcosystem,
+        DependencyInstallMode,
+        DependencyPreparationStatus,
+        DependencyReadinessEvidence,
+        ReproducibilityLevel,
+        RequiredEnvironmentSpec,
+    )
+    from scripts.agent_os_execution_capabilities.models import RepositoryIdentity as _Identity
+    from scripts.agent_os_remote_validation.advisory_gate import AdvisoryEvidenceResult
+
+    spec = RequiredEnvironmentSpec(
+        ecosystem=DependencyEcosystem.PYTHON_PIP,
+        package_root=".",
+        runtime_requirement=">=3.11",
+        dependency_manifest_identity=DependencyArtifactIdentity(
+            relative_path="requirements-dev.txt", sha256="a" * 64
+        ),
+        lock_or_constraints_identity=None,
+        install_mode=DependencyInstallMode.NORMAL,
+        approved_source_identity="pypi.org/simple",
+        required_validation_command_ids=("pytest",),
+    )
+    status = preparation_status or DependencyPreparationStatus.READY
+    readiness = DependencyReadinessEvidence(
+        execution_surface_id="execution-surface:governed-runner",
+        workspace_identity="workspace:1320",
+        source_sha=_HEAD_SHA,
+        required_environment_id=spec.required_environment_id,
+        package_root=spec.package_root,
+        ecosystem=spec.ecosystem,
+        runtime_version="3.11.15",
+        package_manager_version="25.2",
+        declared_dependency_identity="declared:" + "c" * 64,
+        lock_or_constraints_identity=None,
+        install_mode=spec.install_mode,
+        source_or_registry_identity="pypi.org/simple",
+        cache_state=DependencyCacheState.CURRENT_COMPLETE,
+        preparation_status=status,
+        resolved_dependency_identity=(
+            "resolved:" + "d" * 64
+            if status is DependencyPreparationStatus.READY
+            else None
+        ),
+        environment_health_evidence_id="environment-health:" + "f" * 64,
+        observed_at="2026-08-15T00:00:00Z",
+        expires_at="2026-08-15T02:00:00Z",
+        reproducibility_level=ReproducibilityLevel.LOCKED,
+    )
+    advisory = AdvisoryEvidenceResult(
+        schema_name="agent-os.advisory-evidence",
+        schema_version="1.0",
+        status=advisory_status,
+        result_id="advisory-evidence:" + "1" * 64,
+        repository_identity=_Identity(
+            host="github.com", owner="Blummer92", repository="agent-os"
+        ),
+        pull_request=1321,
+        base_branch="main",
+        base_sha=_HEAD_SHA,
+        source_head_sha=_HEAD_SHA,
+        tested_sha=_HEAD_SHA,
+        repository_evidence_type=None,
+        projection_id="projection:" + "4" * 64,
+        proposal_id="proposal:" + "5" * 64,
+        approval_id="approval:" + "6" * 64,
+        repository_state_evidence_id="repository-state:" + "7" * 64,
+        implementation_contract_fingerprint="contract:" + "8" * 64,
+        selector_version="v1",
+        profile="python",
+        command_set_digest="9" * 64,
+        plan_id="validation-plan:" + "e" * 64,
+        bundle_id="validation-evidence-bundle:" + "a" * 64,
+        runner_id="runner:governed",
+        invocation_id="invocation:" + "b" * 64,
+        command_result_ids=(),
+        command_result_statuses=(),
+        reason_codes=(),
+        details=(),
+    )
+    return LiveRepositoryEvidenceReader(
+        repository=_REPOSITORY,
+        issue_number=_ISSUE_NUMBER,
+        required_environment_spec=spec,
+        dependency_readiness=readiness,
+        validation_result=advisory,
+        evaluated_at="2026-08-15T00:05:00Z",
+    )
+
+
+def _prepare(repository_reader) -> PreparedCandidatePacket:
+    return prepare_candidate_packet(
+        repository=_REPOSITORY,
+        issue_number=_ISSUE_NUMBER,
+        issue_reader=LiveIssueReader(transport=_FakeSingleIssueTransport()),
+        repository_reader=repository_reader,
+        observed_at="2026-08-15T00:05:00Z",
+        base_branch="main",
+        evaluated_repository_sha=_HEAD_SHA,
+        invocation_id="candidate-packet-live-input-e2e-1320",
+        evaluator_sha="a" * 40,
+    )
+
+
+def test_structured_evidence_no_longer_blocks_on_no_structured_source() -> None:
+    """The production reader stops being unconditionally UNAVAILABLE (#1320)."""
+    result = _prepare(_structured_repository_reader())
+
+    reasons = result.readiness_stage_result.reason_codes
+    assert "dependency.no-structured-source-configured" not in reasons
+    assert "validation.no-structured-source-configured" not in reasons
+    assert result.readiness_stage_result.status is IssueReadinessStageStatus.READY
+    # Readiness is not authorization: the pipeline still stops on its own gate.
+    assert "authorization.not-granted" in reasons
+    assert result.execution_authorized is False
+    assert result.merge_authorized is False
+    assert result.side_effects_performed is False
+
+
+def test_blocked_dependency_preparation_still_blocks_the_pipeline() -> None:
+    from scripts.agent_os_execution_capabilities.dependencies import (
+        DependencyPreparationStatus,
+    )
+
+    result = _prepare(
+        _structured_repository_reader(
+            preparation_status=DependencyPreparationStatus.BLOCKED
+        )
+    )
+
+    assert "dependency.preparation-blocked" in result.readiness_stage_result.reason_codes
+    assert result.disposition == "blocked"
+    assert result.packet is None
+
+
+def test_stale_validation_evidence_still_fails_closed_end_to_end() -> None:
+    result = _prepare(_structured_repository_reader(advisory_status="stale"))
+
+    assert "validation.advisory-stale" in result.readiness_stage_result.reason_codes
+    assert result.disposition == "blocked"
+    assert result.packet is None

@@ -9,8 +9,11 @@ caller already captured from a successful verifier run.
 
 Automatically derived from verifier stdout: ``head_ref``, ``head_sha``,
 ``base_ref``, ``base_sha``, and ``observed_sha`` (the SHA the verifier proved
-was actually checked out at ``HEAD``). ``worktree_state`` is set to
-``WorktreeState.CLEAN`` only because a successful verifier run already
+was actually checked out at ``HEAD``). The verifier's transport-specific
+``BASE_REF=origin/<base>`` value is canonicalized here, exactly once, to the
+short branch vocabulary consumed by repository-stage semantics; the raw parser
+continues to expose the documented verifier value unchanged. ``worktree_state``
+is set to ``WorktreeState.CLEAN`` only because a successful verifier run already
 guarantees a clean tracked tree (the script exits 3 on uncommitted tracked
 changes before ever printing evidence) -- never inferred beyond what the
 script proved.
@@ -46,6 +49,7 @@ _CHANGED_FILES_BEGIN = "CHANGED_FILES_BEGIN"
 _CHANGED_FILES_END = "CHANGED_FILES_END"
 _HEX_DIGITS = frozenset("0123456789abcdef")
 _SHA_LENGTH = 40
+_VERIFIER_REMOTE = "origin"
 
 
 class VerifierStdoutError(ValueError):
@@ -138,9 +142,13 @@ def build_repository_observation_from_verifier_stdout(
 ) -> RepositoryObservation:
     """Assemble one ``RepositoryObservation`` from verifier stdout plus caller facts.
 
-    ``head_ref``/``head_sha``/``base_ref``/``base_sha``/``observed_sha`` come
-    from the parsed verifier stdout (``observed_sha`` is the same
-    ``head_sha`` the verifier proved was actually checked out).
+    ``head_ref``/``head_sha``/``base_sha``/``observed_sha`` come directly from
+    the parsed verifier stdout. ``base_ref`` is the same verified base identity
+    expressed in the repository-stage canonical short-branch vocabulary: the
+    documented raw ``origin/<base>`` transport form is stripped exactly once at
+    this adapter boundary. No downstream validator, proposal stage, or host
+    bootstrap needs to understand the local remote name.
+
     ``worktree_state`` is always ``CLEAN``: a verifier run that did not prove
     a clean tracked tree never reaches stdout at all (it exits 3 first), so
     this function has nothing else to set it from. Every other argument is
@@ -154,7 +162,7 @@ def build_repository_observation_from_verifier_stdout(
         producer_adapter_version=producer_adapter_version,
         correlation_id=correlation_id,
         repository_identity=repository_identity,
-        base_ref=evidence.base_ref,
+        base_ref=_canonical_base_ref(evidence.base_ref),
         base_sha=evidence.base_sha,
         head_ref=evidence.head_ref,
         head_sha=evidence.head_sha,
@@ -173,6 +181,30 @@ def build_repository_observation_from_verifier_stdout(
         freshness_boundary=freshness_boundary,
         worktree_reason_codes=worktree_reason_codes,
     )
+
+
+def _canonical_base_ref(value: str) -> str:
+    """Convert the verifier's fixed ``origin/<base>`` transport to ``<base>``.
+
+    This validates only the verifier transport shape. Git branch-name validity
+    remains owned by ``verify-repo-state.sh``; reproducing Git ref semantics in
+    Python would create the duplicate repository-state logic this adapter exists
+    to avoid.
+    """
+    prefix = f"{_VERIFIER_REMOTE}/"
+    if not value.startswith(prefix):
+        raise VerifierStdoutError(
+            f"BASE_REF must use the verifier form {_VERIFIER_REMOTE}/<branch>: {value!r}"
+        )
+    branch = value[len(prefix) :]
+    if (
+        not branch
+        or branch.startswith("/")
+        or branch.startswith("refs/")
+        or branch.startswith(prefix)
+    ):
+        raise VerifierStdoutError(f"BASE_REF is malformed: {value!r}")
+    return branch
 
 
 def _validate_ref(value: str, field_name: str) -> str:

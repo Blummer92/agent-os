@@ -81,7 +81,7 @@ def test_orchestrator_fixtures_cover_continuation_and_stop_boundaries() -> None:
                    "unresolved blocking review conversation"):
         assert phrase in continuous
 
-    boundary = section(ORCHESTRATOR_TESTS, "Test 10 - Real Authorization Boundary Still Stops")
+    boundary = section(ORCHESTRATOR_TESTS, "Test 10 - Ordinary Authorization Boundary Still Stops")
     for phrase in ("merge", "issue closure", "credentials", "unapproved external write",
                    "stops with the controlling boundary"):
         assert phrase in boundary
@@ -160,7 +160,7 @@ def test_orchestrator_fixtures_cover_capability_routing_and_reroute_boundaries()
     assert "governed runner" in runner
     assert "does not expand existing authorization" in runner
 
-    missing_gh = section(ORCHESTRATOR_TESTS, "Test 22 - Missing Local Gh Recomputes Instead Of Failing The Issue")
+    missing_gh = section(ORCHESTRATOR_TESTS, "Test 22 - Missing Local Gh Recomputation")
     for phrase in (
         "local `gh` unavailable",
         "capability mismatch",
