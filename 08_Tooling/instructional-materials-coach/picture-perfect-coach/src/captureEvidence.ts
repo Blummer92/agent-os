@@ -39,6 +39,7 @@ export type SoftwareTutorialCapture = Readonly<{
   actions: readonly CaptureAction[];
 }>;
 
+/** Exact reference fields already owned by curriculum-visual-asset-compatibility-v2. */
 export type ManifestReference = Readonly<{
   manifest_id: string;
   record_revision: number;
@@ -49,16 +50,43 @@ export type ManifestReference = Readonly<{
 
 export type AssetReference = Readonly<{
   asset_id: string;
-  stable_reference: string;
+  stable_ref: string;
   content_fingerprint: string;
 }>;
 
 /**
- * Package-local projection of already-validated ArtifactManifest and
- * curriculum-visual-asset-compatibility-v2 evidence. It is not a second asset
- * record or schema: identity remains owned by manifest_reference/asset_reference,
- * and interface suitability remains owned by the compatibility classification.
+ * Package-local read-only projection of an already validated ArtifactManifest asset.
+ * Names mirror the canonical groups; this does not validate or redefine the
+ * curriculum-artifact-manifest-v1 contract.
  */
+export type ArtifactManifestAssetEvidence = Readonly<{
+  contract_version: 'curriculum-artifact-manifest-v1';
+  external_identity: Readonly<{ access_state: string }>;
+  statuses: Readonly<{ classroom_readiness: string }>;
+  asset: Readonly<{
+    privacy_resolved: boolean;
+    residual_privacy_risk: boolean;
+    rights_classification: string;
+    direct_use_status: string;
+    replacement_required: boolean;
+  }>;
+}>;
+
+/**
+ * Package-local read-only projection of an already validated compatibility-v2
+ * record. The interface-capture/screen-capture constraint remains owned by that
+ * canonical contract; this consumer only accepts its eligible result.
+ */
+export type VisualAssetCompatibilityEvidence = Readonly<{
+  contract_version: 'curriculum-visual-asset-compatibility-v2';
+  classification: string;
+  cohesion_profile: Readonly<{
+    medium: string;
+    representation_class: string;
+  }>;
+  freshness: Readonly<{ stale: boolean }>;
+}>;
+
 export type ApprovedScreenshotEvidence = Readonly<{
   source_index: number;
   source_fingerprint: string;
@@ -67,19 +95,8 @@ export type ApprovedScreenshotEvidence = Readonly<{
   visible_ui_claims: readonly string[];
   manifest_reference: ManifestReference;
   asset_reference: AssetReference;
-  artifact_manifest: Readonly<{
-    contract_version: 'curriculum-artifact-manifest-v1';
-    privacy_resolved: boolean;
-    rights_state: string;
-    classroom_readiness: string;
-  }>;
-  compatibility: Readonly<{
-    contract_version: 'curriculum-visual-asset-compatibility-v2';
-    classification: string;
-    medium: string;
-    representation_class: string;
-    stale: boolean;
-  }>;
+  artifact_manifest: ArtifactManifestAssetEvidence;
+  compatibility: VisualAssetCompatibilityEvidence;
 }>;
 
 export type CaptureEvidenceBundle = Readonly<{
@@ -127,15 +144,26 @@ function screenshotFor(action: CaptureAction, role: ScreenshotRole): string | nu
 
 function assetBlockers(approval: ApprovedScreenshotEvidence): CaptureBlockerReason[] {
   const reasons: CaptureBlockerReason[] = [];
-  if (!approval.artifact_manifest.privacy_resolved) reasons.push(CAPTURE_BLOCKER_REASONS.capturePrivacyUnresolved);
-  if (!CLEARED_RIGHTS.has(approval.artifact_manifest.rights_state)) reasons.push(CAPTURE_BLOCKER_REASONS.captureAssetIneligible);
-  if (approval.artifact_manifest.classroom_readiness !== 'ready') reasons.push(CAPTURE_BLOCKER_REASONS.captureAssetIneligible);
-  if (approval.compatibility.stale) reasons.push(CAPTURE_BLOCKER_REASONS.captureStale);
+  const manifest = approval.artifact_manifest;
+  const asset = manifest.asset;
+  const compatibility = approval.compatibility;
+
+  if (!asset.privacy_resolved || asset.residual_privacy_risk) {
+    reasons.push(CAPTURE_BLOCKER_REASONS.capturePrivacyUnresolved);
+  }
   if (
-    approval.compatibility.contract_version !== 'curriculum-visual-asset-compatibility-v2' ||
-    approval.compatibility.classification !== 'eligible' ||
-    approval.compatibility.medium !== 'screen-capture' ||
-    approval.compatibility.representation_class !== 'interface-capture'
+    manifest.external_identity.access_state !== 'verified' ||
+    manifest.statuses.classroom_readiness !== 'ready' ||
+    !CLEARED_RIGHTS.has(asset.rights_classification) ||
+    asset.direct_use_status !== 'student-ready' ||
+    asset.replacement_required
+  ) reasons.push(CAPTURE_BLOCKER_REASONS.captureAssetIneligible);
+  if (compatibility.freshness.stale) reasons.push(CAPTURE_BLOCKER_REASONS.captureStale);
+  if (
+    compatibility.contract_version !== 'curriculum-visual-asset-compatibility-v2' ||
+    compatibility.classification !== 'eligible' ||
+    compatibility.cohesion_profile.medium !== 'screen-capture' ||
+    compatibility.cohesion_profile.representation_class !== 'interface-capture'
   ) reasons.push(CAPTURE_BLOCKER_REASONS.captureAssetIneligible);
   return [...new Set(reasons)];
 }
