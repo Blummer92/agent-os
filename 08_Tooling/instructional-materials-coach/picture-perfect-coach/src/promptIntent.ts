@@ -12,10 +12,6 @@ import type { ReviewedStepProjection, ReviewedTutorialProjection } from './types
 
 export type ImageState = 'action' | 'result' | 'action+result';
 
-/**
- * Machine-readable blocker reasons. Card runtime state stays binary
- * (`ready | blocked`); nuance is expressed here rather than as new states.
- */
 export const BLOCKER_REASONS = {
   applicationIdentityMissing: 'application-identity-missing',
   visualEvidenceMissing: 'visual-evidence-missing',
@@ -41,27 +37,14 @@ export type VisualSpecification = {
   annotationSpace: string;
   provenance: readonly string[];
   requestedUiDetails: readonly string[];
-  /**
-   * Derived, never authored: true when the frame asks for any interface text,
-   * control, location, or application context. Authors may raise this and can
-   * never lower it, so a frame cannot be relabelled out of the gate.
-   */
   requiresScreenFidelity: boolean;
   /**
-   * Role-preserving screen evidence bound by PPUX-F2. `action` is before-state
-   * evidence and `result` is after-state evidence. A combined frame may require
-   * both; the roles are never flattened into one opaque reference.
-   *
-   * Optional only for backwards-compatible construction of F1 regression
-   * fixtures. Absence is identical to null and never grants evidence authority.
+   * Role-preserving F2 evidence. Optional only so older F1 regression fixtures can
+   * still be constructed; absence is identical to null and grants no authority.
    */
   capturedScreenEvidence?: BoundScreenEvidence | null;
   captureBlockerReasons?: readonly CaptureBlockerReason[];
-  /**
-   * Deprecated F1 compatibility field. A string reference is intentionally
-   * non-authoritative and is ignored by F2 validation; only structured bound
-   * evidence can satisfy a software-interface frame.
-   */
+  /** Deprecated opaque F1 field. It is ignored by F2 evidence validation. */
   capturedScreenRef?: string | null;
   evidence: FrameUiEvidence;
   uncertainty?: string;
@@ -76,13 +59,11 @@ export type PromptCardModel = VisualSpecification & {
 
 const KNOWN_WRONG_APPS = ['Canva', 'Figma', 'Photoshop'];
 const PROVIDER_SPECIFIC_MARKERS = ['Midjourney', 'Gemini', 'Adobe Firefly', 'ChatGPT image generation', '--ar ', '--stylize '];
-
 const NON_RECONSTRUCTION_DIRECTIVE =
   'Do not depict, imitate, or reconstruct the real software interface; this is a non-interface instructional visual.';
 const CAPTURE_BASE_DIRECTIVE =
   'Use only the approved captured screen evidence as the base visual. Do not redraw, imitate, reconstruct, or invent any software interface content.';
 
-/** Teacher-facing explanation for each machine-readable blocker reason. */
 export function explainBlocker(reason: BlockerReason): string {
   switch (reason) {
     case BLOCKER_REASONS.visualEvidenceMissing:
@@ -120,20 +101,12 @@ export function explainBlocker(reason: BlockerReason): string {
   }
 }
 
-/**
- * UI texts this frame effectively claims.
- *
- * Requested details are explicit claims. A `mustShow` entry that exactly matches
- * observed recording text is also a claim — otherwise an author could move an
- * interface label from `requestedUiDetails` into `mustShow` to slip past the gate.
- */
 export function effectiveUiRequests(spec: Pick<VisualSpecification, 'requestedUiDetails' | 'mustShow' | 'evidence'>): string[] {
   const observed = new Set(spec.evidence.recordingClaimTexts);
   const fromMustShow = spec.mustShow.filter((item) => observed.has(item));
   return [...new Set([...spec.requestedUiDetails, ...fromMustShow])];
 }
 
-/** Derived software-interface determination. Authors may only raise it. */
 export function derivesScreenFidelity(
   spec: Pick<VisualSpecification, 'mustShow' | 'requestedUiDetails' | 'applicationContext' | 'evidence'>,
   authorRaised = false,
@@ -149,7 +122,6 @@ export function validateVisualSpecification(spec: VisualSpecification): BlockerR
   const push = (reason: BlockerReason) => {
     if (!reasons.includes(reason)) reasons.push(reason);
   };
-
   const requiresScreenFidelity = derivesScreenFidelity(spec, spec.requiresScreenFidelity);
   const capturedScreenEvidence = spec.capturedScreenEvidence ?? null;
   for (const reason of spec.captureBlockerReasons ?? []) push(reason);
@@ -158,9 +130,7 @@ export function validateVisualSpecification(spec: VisualSpecification): BlockerR
   if (!spec.targetState.trim() || spec.mustShow.length === 0 || spec.provenance.length === 0) {
     push(BLOCKER_REASONS.specificationIncomplete);
   }
-  if (requiresScreenFidelity && !spec.applicationContext.trim()) {
-    push(BLOCKER_REASONS.specificationIncomplete);
-  }
+  if (requiresScreenFidelity && !spec.applicationContext.trim()) push(BLOCKER_REASONS.specificationIncomplete);
 
   const fingerprintByIndex = new Map(
     spec.evidence.actionIdentity.map((item) => [item.sourceIndex, item.sourceFingerprint]),
@@ -182,16 +152,12 @@ export function validateVisualSpecification(spec: VisualSpecification): BlockerR
       if (!observedAnywhere.has(request)) push(BLOCKER_REASONS.uiClaimUnsupported);
       else if (!observedHere.has(request)) push(BLOCKER_REASONS.uiClaimNotStateLocal);
     }
-
     const allLocal = requests.length > 0 && requests.every((request) => observedHere.has(request));
     if (requests.length > 1 && allLocal && coVisibleIndexes(spec.evidence.stateLocalClaims, requests).length === 0) {
       push(BLOCKER_REASONS.uiClaimNotCoVisible);
     }
   }
-
-  if (requiresScreenFidelity && capturedScreenEvidence === null) {
-    push(BLOCKER_REASONS.visualEvidenceMissing);
-  }
+  if (requiresScreenFidelity && capturedScreenEvidence === null) push(BLOCKER_REASONS.visualEvidenceMissing);
   return reasons;
 }
 
@@ -199,7 +165,7 @@ function captureReferences(evidence: BoundScreenEvidence): string[] {
   const states: BoundScreenState[] = [];
   if (evidence.action) states.push(evidence.action);
   if (evidence.result) states.push(evidence.result);
-  return states.map((state) => `${state.role}:${state.asset_reference.stable_reference}`);
+  return states.map((state) => `${state.role}:${state.asset_reference.stable_ref}`);
 }
 
 export function buildPortablePrompt(spec: VisualSpecification): PromptCardModel {
@@ -239,7 +205,6 @@ export function buildPortablePrompt(spec: VisualSpecification): PromptCardModel 
         `Leave annotation space: ${spec.annotationSpace}.`,
         'Do not invent controls, labels, locations, states, or workflow steps.',
       ].filter(Boolean).join(' ');
-
   return { ...spec, portablePrompt: prompt, status: 'ready', blockerReasons: [] };
 }
 
