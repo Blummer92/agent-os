@@ -40,6 +40,7 @@ const squareAuthoring: PromptAuthoringInput = {
 describe('PPUX-F2 capture evidence binding', () => {
   it('binds action to before-state, result to after-state, and action+result to both without flattening', () => {
     const action = bindCaptureEvidence(square, 'action', ['Create new'], tutorial0SyntheticCapture);
+    expect(action.status).toBe('valid');
     expect(action.blocker_reasons).toEqual([]);
     expect(action.evidence?.action?.role).toBe('action');
     expect(action.evidence?.action?.source_index).toBe(13);
@@ -51,12 +52,14 @@ describe('PPUX-F2 capture evidence binding', () => {
       ['Your stuff', 'Digital Media', 'Tutorial 0 - Organize My Files'],
       tutorial0SyntheticCapture,
     );
+    expect(result.status).toBe('valid');
     expect(result.blocker_reasons).toEqual([]);
     expect(result.evidence?.action).toBeNull();
     expect(result.evidence?.result?.role).toBe('result');
     expect(result.evidence?.result?.source_index).toBe(12);
 
     const both = bindCaptureEvidence(landscape, 'action+result', ['Landscape'], tutorial0SyntheticCapture);
+    expect(both.status).toBe('valid');
     expect(both.blocker_reasons).toEqual([]);
     expect(both.evidence?.action?.source_index).toBe(20);
     expect(both.evidence?.result?.source_index).toBe(20);
@@ -64,7 +67,7 @@ describe('PPUX-F2 capture evidence binding', () => {
     expect(both.evidence?.result?.screenshot_reference).toBe('020-after.png');
   });
 
-  it('fails closed when source_index matches but source_fingerprint differs', () => {
+  it('fails stale when source_index matches but source_fingerprint differs', () => {
     const bundle = mutateBundle((value) => ({
       ...value,
       capture: value.capture && {
@@ -73,25 +76,27 @@ describe('PPUX-F2 capture evidence binding', () => {
           action.source_index === 13 ? { ...action, source_fingerprint: 'f'.repeat(64) } : action),
       },
     }));
-    expect(bindCaptureEvidence(square, 'action', ['Create new'], bundle).blocker_reasons)
-      .toContain(CAPTURE_BLOCKER_REASONS.captureActionIdentityMismatch);
+    const result = bindCaptureEvidence(square, 'action', ['Create new'], bundle);
+    expect(result.status).toBe('stale');
+    expect(result.blocker_reasons).toContain(CAPTURE_BLOCKER_REASONS.captureActionIdentityMismatch);
   });
 
-  it('fails closed as stale on recording identity mismatch and never rebinds by index', () => {
+  it('fails stale on recording identity mismatch and never rebinds by index', () => {
     const bundle = mutateBundle((value) => ({
       ...value,
       capture: value.capture && { ...value.capture, source: { recording_sha256: 'e'.repeat(64) } },
     }));
-    expect(bindCaptureEvidence(square, 'action', ['Create new'], bundle).blocker_reasons)
-      .toEqual([CAPTURE_BLOCKER_REASONS.captureRecordingMismatch]);
+    const result = bindCaptureEvidence(square, 'action', ['Create new'], bundle);
+    expect(result.status).toBe('stale');
+    expect(result.blocker_reasons).toEqual([CAPTURE_BLOCKER_REASONS.captureRecordingMismatch]);
   });
 
   it.each(['invalid', 'blocked', 'stale', 'manual-review-required'] as const)(
     'refuses capture preflight status %s entirely',
     (status) => {
-      const bundle = { ...tutorial0SyntheticCapture, status };
-      expect(bindCaptureEvidence(square, 'action', ['Create new'], bundle).blocker_reasons)
-        .toEqual([CAPTURE_BLOCKER_REASONS.captureStatusInvalid]);
+      const result = bindCaptureEvidence(square, 'action', ['Create new'], { ...tutorial0SyntheticCapture, status });
+      expect(result.status).toBe(status);
+      expect(result.blocker_reasons).toEqual([CAPTURE_BLOCKER_REASONS.captureStatusInvalid]);
     },
   );
 
@@ -103,6 +108,7 @@ describe('PPUX-F2 capture evidence binding', () => {
       ),
     }));
     const result = bindCaptureEvidence(landscape, 'action+result', ['Landscape'], bundle);
+    expect(result.status).toBe('blocked');
     expect(result.evidence).toBeNull();
     expect(result.blocker_reasons).toContain(CAPTURE_BLOCKER_REASONS.captureScreenStateMissing);
   });
@@ -137,11 +143,12 @@ describe('PPUX-F2 capture evidence binding', () => {
       ['Your stuff', 'Digital Media', 'Tutorial 0 - Organize My Files'],
       bundle,
     );
+    expect(result.status).toBe('blocked');
     expect(result.evidence).toBeNull();
     expect(result.blocker_reasons).toContain(CAPTURE_BLOCKER_REASONS.captureClaimsNotCoVisible);
   });
 
-  it('keeps stale capture evidence out of Ready', () => {
+  it('keeps stale compatibility evidence out of Ready', () => {
     const bundle = mutateBundle((value) => ({
       ...value,
       approved_screenshots: value.approved_screenshots.map((approval) =>
@@ -149,11 +156,12 @@ describe('PPUX-F2 capture evidence binding', () => {
           ? { ...approval, compatibility: { ...approval.compatibility, freshness: { stale: true } } }
           : approval),
     }));
-    expect(bindCaptureEvidence(square, 'action', ['Create new'], bundle).blocker_reasons)
-      .toContain(CAPTURE_BLOCKER_REASONS.captureStale);
+    const result = bindCaptureEvidence(square, 'action', ['Create new'], bundle);
+    expect(result.status).toBe('stale');
+    expect(result.blocker_reasons).toContain(CAPTURE_BLOCKER_REASONS.captureStale);
   });
 
-  it('keeps unresolved privacy out of Ready and does not treat a stored crop/reference as clearance', () => {
+  it('keeps unresolved privacy out of Ready and proves cropping alone cannot establish clearance', () => {
     const bundle = mutateBundle((value) => ({
       ...value,
       approved_screenshots: value.approved_screenshots.map((approval) =>
@@ -162,13 +170,18 @@ describe('PPUX-F2 capture evidence binding', () => {
               ...approval,
               artifact_manifest: {
                 ...approval.artifact_manifest,
-                asset: { ...approval.artifact_manifest.asset, privacy_resolved: false },
+                asset: {
+                  ...approval.artifact_manifest.asset,
+                  privacy_resolved: false,
+                  transformations: ['crop'],
+                },
               },
             }
           : approval),
     }));
-    expect(bindCaptureEvidence(square, 'action', ['Create new'], bundle).blocker_reasons)
-      .toContain(CAPTURE_BLOCKER_REASONS.capturePrivacyUnresolved);
+    const result = bindCaptureEvidence(square, 'action', ['Create new'], bundle);
+    expect(result.status).toBe('manual-review-required');
+    expect(result.blocker_reasons).toContain(CAPTURE_BLOCKER_REASONS.capturePrivacyUnresolved);
   });
 
   it('reuses the canonical interface-capture/screen-capture eligibility result instead of accepting another medium', () => {
@@ -185,16 +198,13 @@ describe('PPUX-F2 capture evidence binding', () => {
             }
           : approval),
     }));
-    expect(bindCaptureEvidence(square, 'action', ['Create new'], bundle).blocker_reasons)
-      .toContain(CAPTURE_BLOCKER_REASONS.captureAssetIneligible);
+    const result = bindCaptureEvidence(square, 'action', ['Create new'], bundle);
+    expect(result.status).toBe('blocked');
+    expect(result.blocker_reasons).toContain(CAPTURE_BLOCKER_REASONS.captureAssetIneligible);
   });
 
   it('keeps missing capture fail-closed and ignores the legacy opaque capturedScreenRef escape hatch', () => {
-    const spec = projectReviewedStepToVisualSpecification(
-      square,
-      squareAuthoring,
-      tutorial0ReviewedTutorial,
-    );
+    const spec = projectReviewedStepToVisualSpecification(square, squareAuthoring, tutorial0ReviewedTutorial);
     const card = buildPortablePrompt({ ...spec, capturedScreenRef: 'legacy-opaque-reference' });
     expect(card.status).toBe('blocked');
     expect(card.blockerReasons).toContain(CAPTURE_BLOCKER_REASONS.captureScreenStateMissing);
