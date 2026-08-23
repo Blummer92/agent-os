@@ -25,7 +25,7 @@ def _run_with_flag(capsys, flag: str) -> dict[str, object]:
     )
 
     output = json.loads(capsys.readouterr().out)
-    assert exit_code == 1
+    assert exit_code == 0
     assert output["overall_status"] == "manual-review"
     return output
 
