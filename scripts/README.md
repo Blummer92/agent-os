@@ -88,7 +88,8 @@ scripts/agent-os-execution-interface-preflight.py \
   --repository Blummer92/agent-os --issue 1259 --store-root <path>
 ```
 
-Contract, outcomes, configuration, boundary, and rollback are documented in `scripts/agent-os-execution-interface-preflight.md`. Tests:
+Contract, outcomes, configuration, boundary, and rollback are documented in
+`scripts/agent-os-execution-interface-preflight.md`. Tests:
 `tests/agent_os_execution_interface/`.
 
 ## agent_os_execution_interface/post_selection_continuation.py
