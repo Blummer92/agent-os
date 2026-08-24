@@ -12,7 +12,7 @@ It does not read or write Notion itself.
 coding task signals
 -> plan_lesson_preflight(...)
 -> not-needed: zero Notion retrieval
--> otherwise caller performs bounded read-only Lessons Learned query
+-> otherwise caller follows the bounded CKR2 retrieval escalation
 -> LessonRecordEvidence
 -> consume_lesson_preflight(...)
 -> existing CKR2 select_coding_knowledge(...)
@@ -30,11 +30,17 @@ A lesson marked `Needs follow-up` may be surfaced as a caution. It is not eviden
 
 ## Retrieval planning
 
-`plan_lesson_preflight()` delegates the initial need decision to CKR2 by evaluating the request with zero candidates.
+`plan_lesson_preflight()` delegates the initial need decision and retrieval escalation to the existing CKR2 contract by evaluating the request with zero candidates.
 
 If CKR2 reports `not-needed`, the plan returns `retrieval_required=false`; callers should perform no Notion lookup.
 
-Otherwise the plan recommends the existing bounded filtered-data-source query path. It does not perform retrieval and does not create a second selector.
+When retrieval is required, callers use the cheapest bounded existing path first:
+
+1. `known-reference` when the request already carries a stable lesson/knowledge reference;
+2. otherwise `filtered-data-source-query`;
+3. after an insufficient supplied result, the existing CKR2 escalation continues through `exact-narrow-lookup`, then bounded `workspace-search`, then `manual-review` only as needed.
+
+CKR6 does not perform retrieval, invent a second escalation order, or create a second selector. Workspace search is an escalation path, not the ordinary retrieval path.
 
 ## Eligible lesson evidence
 
@@ -124,4 +130,4 @@ The caller owns bounded retrieval through an already-approved read surface. Any 
 
 ## Validation
 
-Focused tests in `tests/test_lesson_preflight.py` cover matching and unrelated tasks, zero-retrieval planning, `Surface Before Work` filtering, archived rows, advisory `Needs follow-up`, GitHub authority conflicts, stale evidence, Notion-unavailable fallback, required-specialized-knowledge outage behavior, duplicate identity handling, bounded candidate sets, authority-claim rejection, determinism, existing handoff projection, and fixed no-write/no-authority behavior.
+Focused tests in `tests/test_lesson_preflight.py` cover matching and unrelated tasks, zero-retrieval planning, known-reference-first planning, filtered-query fallback, `Surface Before Work` filtering, archived rows, advisory `Needs follow-up`, GitHub authority conflicts, stale evidence, Notion-unavailable fallback, required-specialized-knowledge outage behavior, duplicate identity handling, bounded candidate sets, authority-claim rejection, determinism, existing handoff projection, and fixed no-write/no-authority behavior.
