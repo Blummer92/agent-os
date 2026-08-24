@@ -162,6 +162,7 @@ fi
 commands_executed=()
 check_results=()
 failed_packages=()
+timing_results=()
 overall_status="PASS"
 exit_code=0
 
@@ -172,6 +173,42 @@ record_failure() {
   failed_packages+=("$name|$command_text|$code")
   overall_status="FAIL"
   exit_code=1
+}
+
+timer_now_us() {
+  if [ -n "${EPOCHREALTIME:-}" ]; then
+    local seconds="${EPOCHREALTIME%.*}"
+    local fraction="${EPOCHREALTIME#*.}000000"
+    printf '%s%s\n' "$seconds" "${fraction:0:6}"
+    return 0
+  fi
+
+  "$PYTHON_BIN" - <<'PY' 2>/dev/null
+import time
+print(time.monotonic_ns() // 1000)
+PY
+}
+
+record_timing() {
+  local name="$1"
+  local started_us="$2"
+  local ended_us="$3"
+
+  if [[ "$started_us" =~ ^[0-9]+$ ]] && [[ "$ended_us" =~ ^[0-9]+$ ]] && [ "$ended_us" -ge "$started_us" ]; then
+    timing_results+=("$name|$((ended_us - started_us))")
+  else
+    timing_results+=("$name|unavailable")
+  fi
+}
+
+format_duration_us() {
+  local duration_us="$1"
+  if [ "$duration_us" = "unavailable" ]; then
+    printf 'unavailable'
+    return
+  fi
+
+  printf '%d.%03d s' "$((duration_us / 1000000))" "$(((duration_us % 1000000) / 1000))"
 }
 
 python_path_separator() {
@@ -205,6 +242,8 @@ run_check() {
   local name="$1"
   local workdir="$2"
   local command_text="$3"
+  local started_us
+  local ended_us
   shift 3
 
   commands_executed+=("$command_text")
@@ -212,8 +251,11 @@ run_check() {
   echo "==> $name"
   echo "    $command_text"
 
+  started_us="$(timer_now_us || true)"
   (cd "$workdir" && "$@")
   local code=$?
+  ended_us="$(timer_now_us || true)"
+  record_timing "$name" "$started_us" "$ended_us"
 
   if [ "$code" -eq 0 ]; then
     check_results+=("PASS|$name|$command_text|$code")
@@ -293,6 +335,8 @@ run_pytest_suite() {
   fi
 }
 
+aggregate_started_us="$(timer_now_us || true)"
+
 echo "AGGREGATE VALIDATION START"
 echo "Repository: $ROOT_DIR"
 echo "Python: $PYTHON_BIN"
@@ -332,6 +376,9 @@ for test_dir in "${test_dirs[@]}"; do
   run_pytest_suite "$suite_dir" "$suite_name"
 done
 
+aggregate_ended_us="$(timer_now_us || true)"
+record_timing "aggregate total" "$aggregate_started_us" "$aggregate_ended_us"
+
 echo
 echo "COMMANDS EXECUTED"
 for command_text in "${commands_executed[@]}"; do
@@ -343,6 +390,13 @@ echo "CHECK RESULTS"
 for result in "${check_results[@]}"; do
   IFS='|' read -r status name command_text code <<< "$result"
   echo "- $status | $name | exit $code | $command_text"
+done
+
+echo
+echo "TIMING RESULTS"
+for timing in "${timing_results[@]}"; do
+  IFS='|' read -r name duration_us <<< "$timing"
+  echo "- $name | $(format_duration_us "$duration_us")"
 done
 
 echo
