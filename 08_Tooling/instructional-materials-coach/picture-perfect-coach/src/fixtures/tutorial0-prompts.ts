@@ -36,140 +36,93 @@ export const tutorial0ReviewedTutorial = reviewResult.tutorial;
 const commonMustNotShow = ['student data', 'private account information', 'DevTools', 'Recorder controls', 'invented Adobe controls'];
 const commonProvenance = ['Teacher Modeling: Tutorial 0', 'Recorder evidence: approved modeled actions'];
 
-const authoringByStepId = new Map<string, PromptAuthoringInput>([
-  [
-    'tutorial0-step-01-organize-location',
-    {
-      imagePurpose: 'Show the organized destination before collecting reference imagery.',
-      imageState: 'result',
-      applicationContext: 'Adobe Express Your stuff workspace and location context',
-      targetState: 'Tutorial 0 - Organize My Files location is visibly organized under Digital Media',
-      mustShow: ['Adobe Express', 'Your stuff', 'Digital Media', 'Tutorial 0 - Organize My Files'],
-      mustNotShow: commonMustNotShow,
-      annotationSpace: 'beside the visible location indicator for one teacher-added callout',
-      requestedUiDetails: ['Your stuff', 'Digital Media', 'Tutorial 0 - Organize My Files'],
-      currentVisualReference: {
-        applicationVariant: 'Education',
-        contextState: 'navigation/your-stuff/files',
-        requiredUiClaims: ['Your stuff', 'Files', 'Digital Media'],
-        reconciledRecordedUiClaims: ['Your stuff', 'Files', 'Digital Media'],
-      },
-    },
-  ],
-  [
-    'tutorial0-step-03-square-file',
-    {
-      imagePurpose: 'Show where a student starts a new reference file.',
-      imageState: 'action',
-      applicationContext: 'Adobe Express workspace with enough surrounding navigation for orientation',
-      targetState: 'Create file is the clear next action from the Create menu',
-      mustShow: ['Adobe Express', 'Create', 'Create file'],
-      mustNotShow: commonMustNotShow,
-      annotationSpace: 'around Create and Create file for an arrow and step number',
-      requestedUiDetails: ['Create new'],
-      currentVisualReference: {
-        applicationVariant: 'Education',
-        contextState: 'navigation/create-menu',
-        requiredUiClaims: ['Create', 'Create file'],
-      },
-    },
-  ],
-  [
-    'tutorial0-step-05-landscape-file',
-    {
-      imagePurpose: 'Help students recognize the landscape canvas choice during file creation.',
-      imageState: 'action+result',
-      applicationContext: 'Adobe Express new-file creation context',
-      targetState: 'the Landscape 16:9 choice is visible and distinguishable',
-      mustShow: ['Adobe Express', 'Landscape', '16:9'],
-      mustNotShow: commonMustNotShow,
-      annotationSpace: 'near the format choice for a short teacher-added label',
-      requestedUiDetails: ['Landscape'],
-      currentVisualReference: {
-        applicationVariant: 'Education',
-        contextState: 'creation/get-started',
-        requiredUiClaims: ['Landscape', '16:9'],
-        reconciledRecordedUiClaims: ['Landscape', '16:9'],
-      },
-    },
-  ],
+const historicalAuthoringByStepId = new Map<string, PromptAuthoringInput>([
+  ['tutorial0-step-01-organize-location', {
+    imagePurpose: 'Show the organized destination before collecting reference imagery.',
+    imageState: 'result', applicationContext: 'Adobe Express Your stuff workspace and location context',
+    targetState: 'Tutorial 0 - Organize My Files location is visibly organized under Digital Media',
+    mustShow: ['Adobe Express', 'Your stuff', 'Digital Media', 'Tutorial 0 - Organize My Files'], mustNotShow: commonMustNotShow,
+    annotationSpace: 'beside the visible location indicator for one teacher-added callout',
+    requestedUiDetails: ['Your stuff', 'Digital Media', 'Tutorial 0 - Organize My Files'],
+  }],
+  ['tutorial0-step-03-square-file', {
+    imagePurpose: 'Show where a student starts a new reference file.', imageState: 'action',
+    applicationContext: 'Adobe Express workspace with enough surrounding navigation for orientation',
+    targetState: 'Create new is the clear next action', mustShow: ['Adobe Express', 'Create new'], mustNotShow: commonMustNotShow,
+    annotationSpace: 'around Create new for an arrow and step number', requestedUiDetails: ['Create new'],
+  }],
+  ['tutorial0-step-05-landscape-file', {
+    imagePurpose: 'Help students recognize the landscape canvas choice during file creation.', imageState: 'action+result',
+    applicationContext: 'Adobe Express new-file creation context', targetState: 'the Landscape choice is visible and distinguishable',
+    mustShow: ['Adobe Express', 'Landscape'], mustNotShow: commonMustNotShow,
+    annotationSpace: 'near the format choice for a short teacher-added label', requestedUiDetails: ['Landscape'],
+  }],
+]);
+
+const currentAuthoringByStepId = new Map<string, PromptAuthoringInput>([
+  ['tutorial0-step-01-organize-location', {
+    ...historicalAuthoringByStepId.get('tutorial0-step-01-organize-location')!,
+    currentVisualReference: { applicationVariant: 'Education', contextState: 'navigation/your-stuff/files', requiredUiClaims: ['Your stuff', 'Files', 'Digital Media'], reconciledRecordedUiClaims: ['Your stuff', 'Files', 'Digital Media'] },
+  }],
+  ['tutorial0-step-03-square-file', {
+    ...historicalAuthoringByStepId.get('tutorial0-step-03-square-file')!,
+    targetState: 'Create file is the clear next action from the Create menu',
+    mustShow: ['Adobe Express', 'Create', 'Create file'],
+    annotationSpace: 'around Create and Create file for an arrow and step number',
+    currentVisualReference: { applicationVariant: 'Education', contextState: 'navigation/create-menu', requiredUiClaims: ['Create', 'Create file'] },
+  }],
+  ['tutorial0-step-05-landscape-file', {
+    ...historicalAuthoringByStepId.get('tutorial0-step-05-landscape-file')!,
+    targetState: 'the Landscape 16:9 choice is visible and distinguishable',
+    mustShow: ['Adobe Express', 'Landscape', '16:9'],
+    currentVisualReference: { applicationVariant: 'Education', contextState: 'creation/get-started', requiredUiClaims: ['Landscape', '16:9'], reconciledRecordedUiClaims: ['Landscape', '16:9'] },
+  }],
 ]);
 
 function withCommonProvenance(cards: readonly PromptCardModel[]): readonly PromptCardModel[] {
   return cards.map((card) => ({ ...card, provenance: [...commonProvenance, ...card.provenance] }));
 }
 
-/** F1 regression projection: no capture or current-reference library is supplied. */
+/** F1 regression projection: no capture bundle or current-reference requirement. */
 export const tutorial0PromptCards: readonly PromptCardModel[] = withCommonProvenance(
-  projectReviewedTutorialToPromptCards(tutorial0ReviewedTutorial, authoringByStepId),
+  projectReviewedTutorialToPromptCards(tutorial0ReviewedTutorial, historicalAuthoringByStepId),
 );
 
-/** F2 regression projection: historical capture evidence remains independently testable. */
+/** F2 regression projection: preserves the existing historical capture-backed UI demo path. */
 export const tutorial0CapturedPromptCards: readonly PromptCardModel[] = withCommonProvenance(
-  projectReviewedTutorialToPromptCards(
-    tutorial0ReviewedTutorial,
-    authoringByStepId,
-    tutorial0SyntheticCapture,
-  ),
+  projectReviewedTutorialToPromptCards(tutorial0ReviewedTutorial, historicalAuthoringByStepId, tutorial0SyntheticCapture),
 );
 
-/**
- * Canonical VRL2 projection. Current approved application-state references are
- * selected before prompt generation while F2 capture evidence remains bound as
- * historical action/state authority.
- */
+/** Canonical VRL2 projection: current references participate before Ready. */
 export const tutorial0CurrentReferencePromptCards: readonly PromptCardModel[] = withCommonProvenance(
-  projectReviewedTutorialToPromptCards(
-    tutorial0ReviewedTutorial,
-    authoringByStepId,
-    tutorial0SyntheticCapture,
-    tutorial0CurrentVisualReferences,
-  ),
+  projectReviewedTutorialToPromptCards(tutorial0ReviewedTutorial, currentAuthoringByStepId, tutorial0SyntheticCapture, tutorial0CurrentVisualReferences),
 );
 
-/** Explicitly reconciled Create fixture; historical capture remains unchanged. */
-const reconciledCreateAuthoring = new Map<string, PromptAuthoringInput>([
-  [
-    'tutorial0-step-03-square-file',
-    {
-      ...authoringByStepId.get('tutorial0-step-03-square-file')!,
-      currentVisualReference: {
-        applicationVariant: 'Education',
-        contextState: 'navigation/create-menu',
-        requiredUiClaims: ['Create', 'Create file'],
-        reconciledRecordedUiClaims: ['Create', 'Create file'],
-      },
-    },
-  ],
-]);
+const reconciledCreateAuthoring = new Map<string, PromptAuthoringInput>([[
+  'tutorial0-step-03-square-file',
+  {
+    ...currentAuthoringByStepId.get('tutorial0-step-03-square-file')!,
+    currentVisualReference: { applicationVariant: 'Education', contextState: 'navigation/create-menu', requiredUiClaims: ['Create', 'Create file'], reconciledRecordedUiClaims: ['Create', 'Create file'] },
+  },
+]]);
 
 export const tutorial0ReconciledCreatePromptCard: PromptCardModel = projectReviewedTutorialToPromptCards(
-  tutorial0ReviewedTutorial,
-  reconciledCreateAuthoring,
-  tutorial0SyntheticCapture,
-  tutorial0CurrentVisualReferences,
+  tutorial0ReviewedTutorial, reconciledCreateAuthoring, tutorial0SyntheticCapture, tutorial0CurrentVisualReferences,
 )[0];
 
-const blockedAuthoring = new Map<string, PromptAuthoringInput>([
-  [
-    'tutorial0-step-07-verify-location',
-    {
-      imagePurpose: 'Show the completed favorite-food reference setup.',
-      imageState: 'result',
-      applicationContext: 'Adobe Express final organized reference location',
-      targetState: 'favorite-food reference files are organized in the intended Tutorial 0 location',
-      mustShow: ['Adobe Express', 'Tutorial 0 - Organize My Files'],
-      mustNotShow: commonMustNotShow,
-      annotationSpace: 'beside the final location for a Check your location callout',
-      requestedUiDetails: ['Tutorial 0 - Organize My Files', 'exact favorite-food filenames'],
-      uncertainty: 'Exact favorite-food filenames and final file arrangement are not established by approved evidence.',
-    },
-  ],
-]);
+const blockedAuthoring = new Map<string, PromptAuthoringInput>([[
+  'tutorial0-step-07-verify-location',
+  {
+    imagePurpose: 'Show the completed favorite-food reference setup.', imageState: 'result',
+    applicationContext: 'Adobe Express final organized reference location',
+    targetState: 'favorite-food reference files are organized in the intended Tutorial 0 location',
+    mustShow: ['Adobe Express', 'Tutorial 0 - Organize My Files'], mustNotShow: commonMustNotShow,
+    annotationSpace: 'beside the final location for a Check your location callout',
+    requestedUiDetails: ['Tutorial 0 - Organize My Files', 'exact favorite-food filenames'],
+    uncertainty: 'Exact favorite-food filenames and final file arrangement are not established by approved evidence.',
+  },
+]]);
 
 export const tutorial0BlockedFinalState: PromptCardModel = projectReviewedTutorialToPromptCards(
-  tutorial0ReviewedTutorial,
-  blockedAuthoring,
-  tutorial0SyntheticCapture,
-  tutorial0CurrentVisualReferences,
+  tutorial0ReviewedTutorial, blockedAuthoring, tutorial0SyntheticCapture, tutorial0CurrentVisualReferences,
 )[0];
