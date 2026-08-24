@@ -29,7 +29,16 @@ export const BLOCKER_REASONS = {
   uiClaimIdentityMismatch: 'ui-claim-identity-mismatch',
   specificationIncomplete: 'specification-incomplete',
   ...CAPTURE_BLOCKER_REASONS,
-  ...VISUAL_REFERENCE_BLOCKER_REASONS,
+  visualReferenceApplicationIdentityMissing: VISUAL_REFERENCE_BLOCKER_REASONS.applicationIdentityMissing,
+  visualReferenceContextStateMissing: VISUAL_REFERENCE_BLOCKER_REASONS.contextStateMissing,
+  visualReferenceSourceProvenanceMissing: VISUAL_REFERENCE_BLOCKER_REASONS.sourceProvenanceMissing,
+  visualReferenceSanitizedDerivativeMissing: VISUAL_REFERENCE_BLOCKER_REASONS.sanitizedDerivativeMissing,
+  visualReferencePrivacyUnresolved: VISUAL_REFERENCE_BLOCKER_REASONS.privacyUnresolved,
+  visualReferenceAssetIneligible: VISUAL_REFERENCE_BLOCKER_REASONS.assetIneligible,
+  visualReferenceStale: VISUAL_REFERENCE_BLOCKER_REASONS.stale,
+  visualReferenceMissing: VISUAL_REFERENCE_BLOCKER_REASONS.referenceMissing,
+  visualReferenceClaimsNotCoVisible: VISUAL_REFERENCE_BLOCKER_REASONS.claimsNotCoVisible,
+  visualReferenceCurrentRecordedUiConflict: VISUAL_REFERENCE_BLOCKER_REASONS.currentRecordedUiConflict,
 } as const;
 
 export type BlockerReason = (typeof BLOCKER_REASONS)[keyof typeof BLOCKER_REASONS];
