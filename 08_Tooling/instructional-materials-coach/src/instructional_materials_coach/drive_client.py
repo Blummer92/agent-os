@@ -91,11 +91,21 @@ def duplicate_template(
     *,
     idempotency_key: str | None = None,
     role: str | None = None,
-) -> dict[str, Any]:
+) -> Any:
     if not target_folder_id:
         raise ValueError("target_folder_id is required -- refusing to guess a destination.")
+
+    if idempotency_key is None and role is None:
+        result = service.files().copy(
+            fileId=template_id,
+            body={"name": new_name, "parents": [target_folder_id]},
+            fields="id, webViewLink",
+        ).execute()
+        return result["id"]
+
     if not idempotency_key or not role:
-        raise ValueError("idempotency_key and role are required")
+        raise ValueError("idempotency_key and role must be supplied together")
+
     body = {
         "name": new_name,
         "parents": [target_folder_id],
