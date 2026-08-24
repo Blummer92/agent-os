@@ -33,6 +33,19 @@ class LessonRetrievalStatus(str, Enum):
     UNAVAILABLE_SAFE_FALLBACK = "unavailable-safe-fallback"
 
 
+class LessonPreflightContext(str, Enum):
+    """Finite caller-supplied work context for material-use planning."""
+
+    CODING_TASK = "coding-task"
+    FAILED_PR_REPAIR = "failed-pr-repair"
+    CI_DIAGNOSIS = "ci-diagnosis"
+
+
+_MATERIAL_REPAIR_CONTEXTS = frozenset(
+    {LessonPreflightContext.FAILED_PR_REPAIR, LessonPreflightContext.CI_DIAGNOSIS}
+)
+
+
 @dataclass(frozen=True, slots=True)
 class LessonRecordEvidence:
     """Provider-neutral bounded evidence for one Lessons Learned row."""
@@ -118,8 +131,30 @@ class LessonPreflightResult:
         }
 
 
-def plan_lesson_preflight(request: CodingKnowledgeRequest) -> LessonPreflightPlan:
-    """Use CKR2 to decide whether a caller should retrieve lesson evidence."""
+def plan_lesson_preflight(
+    request: CodingKnowledgeRequest,
+    *,
+    context: LessonPreflightContext = LessonPreflightContext.CODING_TASK,
+) -> LessonPreflightPlan:
+    """Decide whether a caller should retrieve lesson evidence.
+
+    Ordinary coding tasks retain CKR2's zero-candidate material-use decision.
+    Failed-PR repair and CI-diagnosis contexts are material by contract because
+    historical testing/repair lessons can directly prevent repeated diagnosis
+    and compute, even when the initial request contains sparse task signals.
+    """
+    if type(request) is not CodingKnowledgeRequest:
+        raise TypeError("request must be a CodingKnowledgeRequest")
+    if type(context) is not LessonPreflightContext:
+        raise TypeError("context must be a LessonPreflightContext value")
+
+    if context in _MATERIAL_REPAIR_CONTEXTS:
+        return LessonPreflightPlan(
+            True,
+            (f"lesson-retrieval-required:{context.value}",),
+            RetrievalEscalation.FILTERED_DATA_SOURCE_QUERY,
+        )
+
     selection = select_coding_knowledge(request, ())
     if selection.sufficiency_status is SufficiencyStatus.NOT_NEEDED:
         return LessonPreflightPlan(False, selection.reason_codes, RetrievalEscalation.NONE)
@@ -135,6 +170,7 @@ def consume_lesson_preflight(
     lessons: tuple[LessonRecordEvidence, ...] = (),
     *,
     retrieval_available: bool = True,
+    context: LessonPreflightContext = LessonPreflightContext.CODING_TASK,
 ) -> LessonPreflightResult:
     """Normalize eligible lesson evidence and delegate selection to CKR2."""
     if type(request) is not CodingKnowledgeRequest:
@@ -143,8 +179,10 @@ def consume_lesson_preflight(
         raise TypeError("lessons must be a tuple of LessonRecordEvidence values")
     if type(retrieval_available) is not bool:
         raise TypeError("retrieval_available must be bool")
+    if type(context) is not LessonPreflightContext:
+        raise TypeError("context must be a LessonPreflightContext value")
 
-    plan = plan_lesson_preflight(request)
+    plan = plan_lesson_preflight(request, context=context)
     if not plan.retrieval_required:
         selection = select_coding_knowledge(request, ())
         return _from_selection(selection, (), 0)
