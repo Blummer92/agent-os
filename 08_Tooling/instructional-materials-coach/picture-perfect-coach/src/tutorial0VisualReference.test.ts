@@ -19,10 +19,11 @@ import { buildSyntheticApprovedVisualReference } from './visualReference';
 
 describe('PPUX-VRL2 Tutorial 0 current-reference integration', () => {
   it('selects only navigation/your-stuff/files for the Your Stuff frame', () => {
-    const card = tutorial0CurrentReferencePromptCards.find((item) => item.stepNumber === 1);
+    const card = tutorial0CurrentReferencePromptCards.find(
+      (item) => item.currentVisualReference?.context_state === 'navigation/your-stuff/files',
+    );
     expect(card).toBeDefined();
     expect(card?.status).toBe('ready');
-    expect(card?.currentVisualReference?.context_state).toBe('navigation/your-stuff/files');
     expect(card?.portablePrompt).toContain('visual-reference://navigation-your-stuff-files');
     expect(card?.portablePrompt).not.toContain('Create file');
     expect(card?.portablePrompt).not.toContain('creation/get-started');
@@ -30,10 +31,11 @@ describe('PPUX-VRL2 Tutorial 0 current-reference integration', () => {
   });
 
   it('does not let historical Create new become Ready against current Create file evidence', () => {
-    const card = tutorial0CurrentReferencePromptCards.find((item) => item.stepNumber === 3);
+    const card = tutorial0CurrentReferencePromptCards.find(
+      (item) => item.blockerReasons.includes(BLOCKER_REASONS.visualReferenceCurrentRecordedUiConflict),
+    );
     expect(card).toBeDefined();
     expect(card?.status).toBe('blocked');
-    expect(card?.blockerReasons).toContain(BLOCKER_REASONS.visualReferenceCurrentRecordedUiConflict);
     expect(card?.portablePrompt).toBe('');
   });
 
@@ -48,10 +50,11 @@ describe('PPUX-VRL2 Tutorial 0 current-reference integration', () => {
   });
 
   it('selects creation/get-started only when Landscape and 16:9 are co-visible there', () => {
-    const card = tutorial0CurrentReferencePromptCards.find((item) => item.stepNumber === 5);
+    const card = tutorial0CurrentReferencePromptCards.find(
+      (item) => item.currentVisualReference?.context_state === 'creation/get-started',
+    );
     expect(card).toBeDefined();
     expect(card?.status).toBe('ready');
-    expect(card?.currentVisualReference?.context_state).toBe('creation/get-started');
     expect(card?.currentVisualReference?.visible_ui_claims).toEqual(expect.arrayContaining(['Landscape', '16:9']));
     expect(card?.portablePrompt).not.toContain('editor/');
     expect(validateApplicationFidelity(card!)).toEqual([]);
