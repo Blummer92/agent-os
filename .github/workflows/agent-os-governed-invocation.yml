@@ -109,7 +109,7 @@ jobs:
         if: ${{ steps.host_install.outputs.requested == 'true' }}
         shell: bash
         env:
-          HOST_RUNTIME_SOURCE_SHA: 2e974f0d0e31a39c61da766b04cdd72ac88cb578
+          HOST_RUNTIME_SOURCE_SHA: 8ff48b3f59020326dadf255e05d6140d8ea6d9d0
           HOST_INSTALL_SCRIPT_SHA256: aafc7bb8288ee420e93040c9f882ea90aa0627af66975fce3f8415e65b949f19
         run: |
           set -euo pipefail
