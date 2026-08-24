@@ -127,11 +127,30 @@ class EvidenceCompatibilityDecision:
     schema_version: str = EVIDENCE_COMPATIBILITY_SCHEMA_VERSION
     context: CompatibilityContext
     outcome: CompatibilityOutcome
+    expected_bindings: tuple[tuple[str, str], ...]
     reason_codes: tuple[str, ...]
     reacquire_owners: tuple[str, ...]
     decision_id: str
     authority_created: Literal[False] = field(default=False, init=False)
     side_effects_performed: Literal[False] = field(default=False, init=False)
+
+    def __post_init__(self) -> None:
+        if self.schema_version != EVIDENCE_COMPATIBILITY_SCHEMA_VERSION:
+            raise ValueError("unsupported evidence compatibility schema version")
+        if type(self.context) is not CompatibilityContext:
+            raise TypeError("context must be an exact CompatibilityContext")
+        if type(self.outcome) is not CompatibilityOutcome:
+            raise TypeError("outcome must be an exact CompatibilityOutcome")
+        object.__setattr__(self, "expected_bindings", _bindings(self.expected_bindings, "decision expected bindings"))
+        if not self.expected_bindings:
+            raise ValueError("decision expected bindings must not be empty")
+        if type(self.reason_codes) is not tuple or any(type(value) is not str or not value for value in self.reason_codes):
+            raise TypeError("reason_codes must be a tuple of non-empty strings")
+        if type(self.reacquire_owners) is not tuple or any(type(value) is not str or not value for value in self.reacquire_owners):
+            raise TypeError("reacquire_owners must be a tuple of non-empty strings")
+        _text(self.decision_id, "decision_id")
+        if self.authority_created is not False or self.side_effects_performed is not False:
+            raise ValueError("compatibility decision cannot create authority or side effects")
 
 
 def _decision_id(
@@ -232,6 +251,7 @@ def evaluate_evidence_compatibility(
     return EvidenceCompatibilityDecision(
         context=context,
         outcome=outcome,
+        expected_bindings=expected.bindings,
         reason_codes=reasons,
         reacquire_owners=reacquire_owners,
         decision_id=_decision_id(
