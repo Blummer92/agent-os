@@ -87,6 +87,34 @@ def test_explicit_known_decision_reference_uses_ckr2_known_reference_escalation_
     assert result.retrieval_escalation is RetrievalEscalation.KNOWN_REFERENCE
 
 
+def test_explicit_known_decision_reference_outranks_generic_keyword_matches():
+    explicit = decision(decision_id="decision:explicit", title="Explicit Decision")
+    generic = decision(decision_id="decision:generic", title="Generic Decision")
+    req = request(known_knowledge_refs=("decision:explicit",))
+    result = consume_decision_preflight(req, (generic, explicit))
+    assert result.decision_retrieval_status is DecisionRetrievalStatus.SUFFICIENT
+    assert result.selected_decision_ids == ("decision:explicit",)
+
+
+def test_exact_canonical_github_reference_outranks_generic_keyword_matches():
+    exact_ref = "00_Governance/architecture-decisions/adr-exact.md"
+    exact = decision(
+        decision_id="decision:exact-ref",
+        title="Exact GitHub Decision",
+        canonical_github_refs=(exact_ref,),
+    )
+    generic = decision(
+        decision_id="decision:generic",
+        title="Generic Decision",
+        canonical_github_refs=("00_Governance/architecture-decisions/adr-generic.md",),
+    )
+    req = request(canonical_rule_refs=(exact_ref,))
+    result = consume_decision_preflight(req, (generic, exact))
+    assert result.decision_retrieval_status is DecisionRetrievalStatus.SUFFICIENT
+    assert result.selected_decision_ids == ("decision:exact-ref",)
+    assert exact_ref in result.canonical_github_refs
+
+
 def test_canonical_github_reference_is_exposed_for_inspect_first():
     result = consume_decision_preflight(request(), (decision(),))
     assert result.canonical_github_refs == (
