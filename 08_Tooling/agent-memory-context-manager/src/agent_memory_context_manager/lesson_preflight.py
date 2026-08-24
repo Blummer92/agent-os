@@ -119,10 +119,16 @@ class LessonPreflightResult:
 
 
 def plan_lesson_preflight(request: CodingKnowledgeRequest) -> LessonPreflightPlan:
-    """Use CKR2 to decide whether a caller should retrieve lesson evidence."""
+    """Use CKR2 to decide whether and how a caller should retrieve lesson evidence."""
     selection = select_coding_knowledge(request, ())
     if selection.sufficiency_status is SufficiencyStatus.NOT_NEEDED:
         return LessonPreflightPlan(False, selection.reason_codes, RetrievalEscalation.NONE)
+    if selection.recommended_escalation is RetrievalEscalation.KNOWN_REFERENCE:
+        return LessonPreflightPlan(
+            True,
+            ("lesson-known-reference-retrieval-required",),
+            RetrievalEscalation.KNOWN_REFERENCE,
+        )
     return LessonPreflightPlan(
         True,
         ("lesson-retrieval-required",),
