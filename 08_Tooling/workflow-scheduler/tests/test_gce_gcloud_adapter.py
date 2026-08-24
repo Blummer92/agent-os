@@ -193,10 +193,12 @@ def test_discovery_probe_imports_tracked_module_without_second_host_wrapper(
     assert live.GcloudIapAdapter().probe_discovery_ready(live.RESOURCE) is True
     command = calls[0]
     assert "--tunnel-through-iap" in command
+    assert live.HOST_PYTHON == "/usr/bin/python3"
     assert command[-1] == (
-        "/usr/bin/env python3 -c 'import "
+        "/usr/bin/python3 -c 'import "
         "agent_os_execution_service.handoff_discovery_entrypoint'"
     )
+    assert "/usr/bin/env python3" not in command[-1]
     assert "/usr/local/libexec/agent-os-handoff-discovery" not in command[-1]
 
 
@@ -206,10 +208,11 @@ def test_discovery_command_is_fixed_module_invocation() -> None:
         issue_number=1284,
     )
     assert command == (
-        "/usr/bin/env python3 -m "
+        "/usr/bin/python3 -m "
         "agent_os_execution_service.handoff_discovery_entrypoint "
         "--repository Blummer92/agent-os --issue-number 1284"
     )
+    assert "/usr/bin/env python3" not in command
     assert "/usr/local/libexec/agent-os-handoff-discovery" not in command
 
 
