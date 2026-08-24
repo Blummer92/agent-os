@@ -8,11 +8,13 @@ module owns none of that logic: it is a thin ordering and evidence-assembly
 layer only, and performs no execution, admission, or status-precedence
 decision of its own.
 
-No validation is ever spawned unless #757 admission is ACCEPTED. #759
-containment preflight (when the caller's runtime configuration names a
-``delegated_parent_cgroup``) happens inside the single, already-canonical
-``compose_and_run_validation`` call -- before the #758 lease or the worktree
-exist for this invocation -- see
+No validation is ever spawned unless #757 admission is ACCEPTED. #1201 may
+additionally require a caller-supplied execution-dispatch compatibility decision;
+that decision is consumed here only as a fail-closed pre-dispatch guard and does
+not alter #757 admission semantics. #759 containment preflight (when the caller's
+runtime configuration names a ``delegated_parent_cgroup``) happens inside the
+single, already-canonical ``compose_and_run_validation`` call -- before the #758
+lease or the worktree exist for this invocation -- see
 ``workflow_scheduler.execution.concrete_runtime_adapters._preflight_containment``.
 
 Do not add a second orchestrator, lease/containment/workspace/evidence
@@ -28,6 +30,12 @@ from workflow_scheduler.execution.single_issue_pilot import (
     SingleIssuePilotInput,
 )
 
+from scripts.agent_os_issue_acceptance.evidence_compatibility import (
+    CompatibilityContext,
+    CompatibilityOutcome,
+    EvidenceCompatibilityDecision,
+)
+
 from .authorized_validation import (
     AuthorizedValidationAdmissionStatus,
     AuthorizedValidationLifecycleRequest,
@@ -41,12 +49,34 @@ from .validation_lifecycle_evidence import (
 )
 
 
+def _require_dispatch_compatibility(
+    decision: EvidenceCompatibilityDecision | None,
+) -> None:
+    """Fail closed before execution when #1201 evidence is mixed-generation."""
+
+    if decision is None:
+        return
+    if type(decision) is not EvidenceCompatibilityDecision:
+        raise TypeError("compatibility_decision must be exact EvidenceCompatibilityDecision")
+    if decision.context is not CompatibilityContext.EXECUTION_DISPATCH:
+        raise ValueError("compatibility_decision must use execution-dispatch context")
+    if decision.outcome is not CompatibilityOutcome.COMPATIBLE:
+        reasons = ",".join(decision.reason_codes)
+        owners = ",".join(decision.reacquire_owners) or "none"
+        raise RuntimeError(
+            "execution dispatch blocked by evidence compatibility: "
+            f"outcome={decision.outcome.value}; reasons={reasons}; "
+            f"reacquire={owners}; decision={decision.decision_id}"
+        )
+
+
 def run_authorized_validation_lifecycle(
     *,
     admission_request: AuthorizedValidationLifecycleRequest,
     evaluated_at: str,
     pilot_input: SingleIssuePilotInput,
     cancelled: CancellationProbe,
+    compatibility_decision: EvidenceCompatibilityDecision | None = None,
     git_runner: object | None = None,
     process_cancelled: object | None = None,
     changed_paths_inspector: object | None = None,
@@ -56,15 +86,18 @@ def run_authorized_validation_lifecycle(
     1. Verify #757 admission. A non-accepted admission returns immediately
        with zero runtime evidence and zero side effects: no lease, no
        worktree, no #759 containment, no validation spawn.
-    2. When accepted, delegate exactly once to the canonical
-       ``compose_and_run_validation`` (which itself delegates exactly once
-       to ``run_concrete_runtime_entrypoint_with_validation_evidence``): #759
+    2. When accepted, require any caller-supplied #1201 execution-dispatch
+       compatibility decision to be COMPATIBLE before delegating to runtime.
+       The compatibility decision never grants admission or execution authority.
+    3. Delegate exactly once to the canonical ``compose_and_run_validation``
+       (which itself delegates exactly once to
+       ``run_concrete_runtime_entrypoint_with_validation_evidence``): #759
        containment preflight, #758 lease acquisition, worktree creation,
        #760 initial capture, the one authorized validation run, #760 final
        capture, cleanup, and release all happen inside that one call, in
        that fixed order, through the unmodified Workflow Scheduler
        lifecycle -- never duplicated here.
-    3. Assemble the #761 bundle from exactly the evidence that single call
+    4. Assemble the #761 bundle from exactly the evidence that single call
        produced, and project the one terminal result from it. #761's
        precedence table is reused unmodified; this function adds no status
        of its own.
@@ -87,6 +120,7 @@ def run_authorized_validation_lifecycle(
 
     execution_composition = None
     if admission_result.status is AuthorizedValidationAdmissionStatus.ACCEPTED:
+        _require_dispatch_compatibility(compatibility_decision)
         execution_stage = admission_request.execution_packet_stage
         execution_composition = compose_and_run_validation(
             request=execution_stage.request,
