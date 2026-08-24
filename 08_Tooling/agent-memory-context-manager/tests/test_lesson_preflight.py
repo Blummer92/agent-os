@@ -4,6 +4,7 @@ from agent_memory_context_manager.coding_knowledge_selection import (
     RetrievalEscalation,
 )
 from agent_memory_context_manager.lesson_preflight import (
+    LessonPreflightContext,
     LessonRecordEvidence,
     LessonRetrievalStatus,
     consume_lesson_preflight,
@@ -65,6 +66,68 @@ def test_unrelated_task_is_not_needed_without_retrieval():
     result = consume_lesson_preflight(req, (lesson(),))
     assert result.lesson_retrieval_status is LessonRetrievalStatus.NOT_NEEDED
     assert result.candidate_count == 0
+
+
+def test_failed_pr_repair_requires_bounded_retrieval_even_with_sparse_signals():
+    req = request(
+        task_reference="pr:#1350",
+        ecosystem_hints=(),
+        capability_keywords=(),
+        target_path_hints=(),
+        known_knowledge_refs=(),
+        specialized_knowledge_required=None,
+    )
+    plan = plan_lesson_preflight(req, context=LessonPreflightContext.FAILED_PR_REPAIR)
+    assert plan.retrieval_required is True
+    assert plan.reason_codes == ("lesson-retrieval-required:failed-pr-repair",)
+    assert plan.recommended_escalation is RetrievalEscalation.FILTERED_DATA_SOURCE_QUERY
+    assert plan.notion_read_performed is False
+
+
+def test_ci_diagnosis_requires_bounded_retrieval_even_with_sparse_signals():
+    req = request(
+        task_reference="workflow-run:32663704875/job:97253664878",
+        ecosystem_hints=(),
+        capability_keywords=(),
+        target_path_hints=(),
+        known_knowledge_refs=(),
+        specialized_knowledge_required=None,
+    )
+    plan = plan_lesson_preflight(req, context=LessonPreflightContext.CI_DIAGNOSIS)
+    assert plan.retrieval_required is True
+    assert plan.reason_codes == ("lesson-retrieval-required:ci-diagnosis",)
+
+
+def test_failed_pr_repair_unavailable_retrieval_uses_safe_github_fallback():
+    req = request(
+        task_reference="pr:#1350",
+        ecosystem_hints=(),
+        capability_keywords=(),
+        target_path_hints=(),
+        known_knowledge_refs=(),
+        specialized_knowledge_required=None,
+    )
+    result = consume_lesson_preflight(
+        req,
+        retrieval_available=False,
+        context=LessonPreflightContext.FAILED_PR_REPAIR,
+    )
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.UNAVAILABLE_SAFE_FALLBACK
+    assert result.source_authority == "advisory-only"
+    assert result.authority_created is False
+
+
+def test_failed_pr_repair_context_does_not_override_explicit_not_needed_task():
+    req = request(
+        ecosystem_hints=(),
+        capability_keywords=(),
+        target_path_hints=(),
+        specialized_knowledge_required=False,
+    )
+    ordinary = plan_lesson_preflight(req)
+    repair = plan_lesson_preflight(req, context=LessonPreflightContext.FAILED_PR_REPAIR)
+    assert ordinary.retrieval_required is False
+    assert repair.retrieval_required is True
 
 
 def test_surface_before_work_false_is_not_candidate():
