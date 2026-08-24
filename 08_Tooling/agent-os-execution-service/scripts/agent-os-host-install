@@ -16,12 +16,14 @@ set -eu
 
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
+PYTHON=/usr/bin/python3
 umask 077
 # An ambient PYTHONPATH could shadow a stdlib or pip-internal module name and
-# hijack every privileged `python3` invocation below at import time, before any
-# hash check runs. Clear it once here rather than relying solely on sudo's
-# env_reset default. The one intentional exception (the project wheel build)
-# re-sets it explicitly, scoped to that single command.
+# hijack privileged Python imports at startup, before any hash check runs. Clear
+# it once here rather than relying solely on sudo's env_reset default. The one
+# intentional exception (the project wheel build) re-sets it explicitly, scoped
+# to that single command. Every `python3` call below is also bound to the same
+# qualified Debian system interpreter, independent of caller or OS Login PATH.
 unset PYTHONPATH
 
 REPOSITORY_URL=https://github.com/Blummer92/agent-os.git
@@ -41,6 +43,10 @@ WHEEL_SHA256=212281cab4dff978f6cedd499cd893e1f620791ca6ff7107cf270781e587eced
 fail() {
   printf '%s\n' "host runtime install refused: $1" >&2
   exit 64
+}
+
+python3() {
+  "$PYTHON" "$@"
 }
 
 # sudo matches its rule on the path string and resolves that path at exec time,
@@ -203,7 +209,7 @@ PIP_NO_INDEX=1 python3 -m pip install \
 
 (
   cd /
-  env -u PYTHONPATH python3 -c 'import agent_os_execution_service.handoff_discovery_entrypoint; import agent_os_execution_service.governed_resume_entrypoint; import workflow_scheduler.execution._clone3_cgroup'
+  env -u PYTHONPATH "$PYTHON" -c 'import agent_os_execution_service.handoff_discovery_entrypoint; import agent_os_execution_service.governed_resume_entrypoint; import workflow_scheduler.execution._clone3_cgroup'
 ) >&2
 
 entrypoint_installer="$checkout/08_Tooling/agent-os-execution-service/scripts/install-governed-resume"
