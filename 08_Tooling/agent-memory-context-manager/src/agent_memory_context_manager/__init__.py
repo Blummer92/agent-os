@@ -39,6 +39,7 @@ from .handoff_packet import (
 )
 from .lesson_preflight import (
     MAX_LESSON_RECORDS,
+    LessonPreflightContext,
     LessonPreflightPlan,
     LessonPreflightResult,
     LessonRecordEvidence,
@@ -114,6 +115,7 @@ __all__ = [
     "KnowledgeCurrentness",
     "LessonDisposition",
     "LessonLearningResult",
+    "LessonPreflightContext",
     "LessonPreflightPlan",
     "LessonPreflightResult",
     "LessonPublicationProposal",
