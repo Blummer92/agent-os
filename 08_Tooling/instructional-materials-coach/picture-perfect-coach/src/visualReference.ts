@@ -144,11 +144,6 @@ function statusForAdmission(reasons: readonly VisualReferenceBlockerReason[]): C
   return 'blocked';
 }
 
-/**
- * Admit one reusable application-state reference. Raw teacher screenshots are
- * evidence only: a distinct sanitized derivative with explicit privacy clearance
- * and existing ArtifactManifest/compatibility eligibility is required.
- */
 export function admitVisualReference(candidate: VisualReferenceCandidate): VisualReferenceAdmissionResult {
   const reasons = eligibilityReasons(candidate);
   if (reasons.length > 0) {
@@ -196,11 +191,6 @@ function compareCurrentAndRecordedClaims(
   return requiredClaims.some((claim) => current.has(claim) !== recorded.has(claim));
 }
 
-/**
- * Retrieve exactly one approved application/context-state reference. Claims from
- * multiple references are never unioned. A historical/current claim disagreement
- * is explicit manual review rather than silent normalization.
- */
 export function selectVisualReference(
   library: VisualReferenceLibrary,
   request: VisualReferenceSelectionRequest,
@@ -268,4 +258,38 @@ export function buildVisualReferenceDirective(reference: ApprovedVisualReference
     'Preserve the supplied interface appearance and state.',
     'Do not redraw, reconstruct, invent, or merge controls, labels, geometry, or states from another reference.',
   ].join(' ');
+}
+
+/** Privacy-safe synthetic current-reference fixture for canonical offline integration tests. */
+export function buildSyntheticApprovedVisualReference(
+  contextState: string,
+  visibleUiClaims: readonly string[],
+  overrides: Partial<ApprovedVisualReference> = {},
+): ApprovedVisualReference {
+  const id = contextState.replaceAll('/', '-');
+  return {
+    reference_id: `adobe-${id}`,
+    application: 'Adobe Express',
+    application_variant: 'Education',
+    context_state: contextState,
+    captured_at: '2026-08-24T14:57:20Z',
+    verified_at: '2026-08-24T15:00:00Z',
+    sanitized_derivative_reference: `sanitized://${id}`,
+    source_reference: `synthetic-test-fixture://${id}`,
+    provenance: ['PPUX live test 2026-08-24', `source-state:${contextState}`, 'privacy-safe synthetic metadata fixture'],
+    visible_ui_claims: uniqueSorted(visibleUiClaims),
+    manifest_reference: {
+      manifest_id: 'manifest-adobe-current-ui',
+      record_revision: 1,
+      fingerprint: `manifest-fingerprint-${id}`,
+      verified_at: '2026-08-24T15:00:00Z',
+      external_file_id: `sanitized-${id}`,
+    },
+    asset_reference: {
+      asset_id: `asset-${id}`,
+      stable_ref: `visual-reference://${id}`,
+      content_fingerprint: `fingerprint-${id}`,
+    },
+    ...overrides,
+  };
 }
