@@ -13,7 +13,7 @@ def test_chatgpt_orchestrator_wires_ckr10_before_substantial_coding_reasoning() 
 
     required = (
         "Before substantial reasoning",
-        "plan_decision_preflight(...) first",
+        "`plan_decision_preflight(...)` first",
         "zero Decision Log lookup",
         "explicit known Decision identity/relation/reference first",
         "exact canonical GitHub ADR/issue/path reference",
