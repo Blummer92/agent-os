@@ -241,8 +241,42 @@ def consume_decision_preflight(
             superseded_or_stale_count=stale_or_superseded,
         )
 
-    selection = select_coding_knowledge(request, tuple(_candidate(item) for item in active))
-    return _from_selection(selection, tuple(active), stale_or_superseded)
+    active_for_selection = _apply_explicit_precedence(request, tuple(active))
+    selection = select_coding_knowledge(
+        request,
+        tuple(_candidate(item) for item in active_for_selection),
+    )
+    return _from_selection(selection, active_for_selection, stale_or_superseded)
+
+
+def _apply_explicit_precedence(
+    request: CodingKnowledgeRequest,
+    active: tuple[DecisionRecordEvidence, ...],
+) -> tuple[DecisionRecordEvidence, ...]:
+    """Narrow candidates only for exact caller-supplied Decision/GitHub references.
+
+    This is an adapter-specific evidence-precedence seam, not a second relevance
+    selector. Once exact references are applied, CKR2 remains the sole selector
+    for relevance, currentness, deduplication, sufficiency, and max-3 retention.
+    """
+    known_ids = {_norm(value) for value in request.known_knowledge_refs}
+    if known_ids:
+        matches = tuple(item for item in active if _norm(item.decision_id) in known_ids)
+        if matches:
+            return matches
+
+    canonical_refs = {_norm(value) for value in request.canonical_rule_refs}
+    if canonical_refs:
+        matches = tuple(
+            item
+            for item in active
+            if canonical_refs
+            & {_norm(reference) for reference in item.canonical_github_refs}
+        )
+        if matches:
+            return matches
+
+    return active
 
 
 def _candidate(decision: DecisionRecordEvidence) -> CodingKnowledgeCandidate:
