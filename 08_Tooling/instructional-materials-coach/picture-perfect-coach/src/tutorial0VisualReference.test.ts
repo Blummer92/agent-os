@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { assertProviderAdapterPreservesIntent, BLOCKER_REASONS } from './promptIntent';
+import { VISUAL_REFERENCE_BLOCKER_REASONS } from './visualReference';
 import {
   tutorial0BlockedFinalState,
   tutorial0CurrentReferencePromptCards,
@@ -23,7 +24,7 @@ describe('PPUX-VRL2 Tutorial 0 current-reference integration', () => {
   it('blocks stale historical Create new against current Create / Create file', () => {
     const result = card(2);
     expect(result.status).toBe('blocked');
-    expect(result.blockerReasons).toContain(BLOCKER_REASONS.currentRecordedUiConflict);
+    expect(result.blockerReasons).toContain(VISUAL_REFERENCE_BLOCKER_REASONS.currentRecordedUiConflict);
     expect(result.portablePrompt).toBe('');
   });
 
