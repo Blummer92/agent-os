@@ -55,6 +55,21 @@ Consume the canonical #924 `request-interpretation-v1` record; do not parse raw 
 - `continue`, `next step`, and `keep going` never authorize an excluded surface.
 - Route unclear targets or changed authorization/source-of-truth/scope/material decisions to a stop report instead of guessing.
 
+## Coding Decision / ADR Preflight
+Before substantial reasoning or routing bounded coding work to the GitHub Service Agent or QA / Test Agent, derive the smallest current `CodingKnowledgeRequest` from the task, issue, target paths, capability signals, canonical GitHub references, and any explicit Decision/Lesson/Pattern references, then use the existing Agent Memory & Context Manager CKR10 Decision-preflight contract.
+
+- Call `plan_decision_preflight(...)` first. If it returns `retrieval_required=false`, perform zero Decision Log lookup and continue from canonical GitHub authority.
+- If retrieval is required, prefer explicit known Decision identity/relation/reference first, then an exact canonical GitHub ADR/issue/path reference, then a bounded filtered Decision Log query, then exact narrow lookup; workspace-wide search is a bounded escalation only when the earlier paths cannot resolve the required evidence.
+- Normalize no more than five supplied Decision records into `DecisionRecordEvidence`, preserve status/currentness/provenance/supersession/authority-conflict evidence, and pass them to `consume_decision_preflight(...)`. After exact-reference narrowing, the existing #1144 CKR2 contract remains the sole relevance/sufficiency selector and retains no more than three decisions.
+- Put only the returned existing handoff projection into the governed context packet: selected identities in `prior_decisions`, canonical GitHub inspect-first references in `allowed_inspect_first`, bounded source/currentness facts in `known_facts`, and explicit insufficiency/manual-review reasons in `stop_conditions`. Do not create a second packet or copy raw Notion page payloads downstream.
+- Reuse the same `CodingKnowledgeRequest` when Decision and Lessons Learned preflights both apply. Preserve explicit Decision/Lesson/Pattern references in one compact bounded packet; do not recursively crawl relations or independently broad-search each knowledge type.
+- Treat Decision Log / ADR records as `secondary-index` or working evidence only. Verify the smallest required canonical GitHub references before relying on a selected GitHub-backed decision. A Notion `Accepted` value never overrides current GitHub standards, code/tests, issue contracts, ownership/authorization, supersession, or exact-head validation.
+- Proposed/Exploratory/Working decisions remain unresolved context and cannot become repository authority. Superseded/Deprecated decisions cannot be active guidance. Stale, unverifiable, authority-conflicting, duplicate-conflicting, oversized, or conflicting-active evidence fails closed through CKR2/CKR10.
+- If Decision retrieval is unavailable and specialized prior-decision knowledge is not required, continue only when the CKR10 `unavailable-safe-fallback` permits GitHub-only work. If specialized prior-decision knowledge is required, preserve explicit insufficiency/manual review and never invent replacement guidance.
+- Decision text can never grant merge, write, production, approval, validation, or other authority. GitHub Service Agent and QA / Test Agent consume the projection as preflight context only; their existing authorization and independent-validation contracts remain unchanged.
+
+The canonical executable contract is `08_Tooling/agent-memory-context-manager/CKR10_DECISION_PREFLIGHT.md` and `agent_memory_context_manager.plan_decision_preflight` / `consume_decision_preflight`. This overlay adds no Notion write authority, new connector/client, agent, selector, Memory Manager, context packet, RAG/vector system, persistence path, scheduler, or background worker.
+
 ## Coding Lessons Learned Preflight
 Before routing bounded coding work to the GitHub Service Agent or QA / Test Agent, derive the smallest current `CodingKnowledgeRequest` from the task, issue, target paths, capability signals, and canonical GitHub references, then use the existing Agent Memory & Context Manager CKR6 lesson-preflight contract.
 
@@ -116,9 +131,11 @@ Stop when a user asks for a nonexistent agent that does not resolve through `04_
 For finite multi-item missions, an item-local blocker is not a mission-level stop; record it and continue. A shared stop condition classifies all remaining requested items explicitly before handoff.
 Request-interpretation continuation stops follow `chatgpt-orchestrator-request-interpretation.md`; conversation memory never resolves missing, stale, or multiple-candidate canonical context.
 ## Version
-0.3.1
+0.3.2
+Compatibility lineage: 0.3.1
 
 ## Changelog
+- 0.3.2 wires the bounded CKR10 Decision/ADR preflight into coding-task routing as a completion repair for #1369: Decision-sensitive classification before substantial reasoning, zero-read `not-needed`, exact-reference-first bounded lookup, #1144 selector reuse, existing Memory Manager projection, GitHub-over-Notion authority, nonrecursive coexistence with Lessons/Patterns, and safe outage behavior.
 - 0.3.1 wires the bounded CKR6 Lessons Learned preflight into coding-task routing: zero-read `not-needed`, bounded read-only lesson normalization, #1144 selector reuse, existing Memory Manager handoff projection, GitHub-over-Notion authority, safe outage behavior, and no new agent/retrieval/persistence system (#1357).
 - 0.3.0 includes the bounded Picture Perfect / PPUX tutorial prompt-artifact route through the existing Instructional Materials Coach capability, preserving current PPUX state including blockers/capture evidence and forbidding generic software-UI reconstruction fallback (#1280), while retaining the Terminal Fast Lane composition through canonical #924 request interpretation and existing release-authority gates (#1309).
 - 0.2.1 consolidates Safe Implementation Lane activation, distinguishes durable artifact non-authority from later direct-owner authorization, and resumes automatically after one mechanical readiness intervention (#1274).
