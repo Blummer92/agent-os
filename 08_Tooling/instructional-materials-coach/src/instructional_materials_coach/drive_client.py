@@ -89,11 +89,13 @@ def duplicate_template(
     target_folder_id: str,
     new_name: str,
     *,
-    idempotency_key: str,
-    role: str,
+    idempotency_key: str | None = None,
+    role: str | None = None,
 ) -> dict[str, Any]:
     if not target_folder_id:
         raise ValueError("target_folder_id is required -- refusing to guess a destination.")
+    if not idempotency_key or not role:
+        raise ValueError("idempotency_key and role are required")
     body = {
         "name": new_name,
         "parents": [target_folder_id],
