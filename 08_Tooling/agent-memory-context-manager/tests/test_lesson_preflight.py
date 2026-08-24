@@ -67,6 +67,24 @@ def test_unrelated_task_is_not_needed_without_retrieval():
     assert result.candidate_count == 0
 
 
+def test_known_lesson_reference_is_retrieved_before_filtered_query():
+    plan = plan_lesson_preflight(
+        request(known_knowledge_refs=("python:hypothesis:property-based-testing",))
+    )
+    assert plan.retrieval_required is True
+    assert plan.recommended_escalation is RetrievalEscalation.KNOWN_REFERENCE
+    assert plan.reason_codes == ("lesson-known-reference-retrieval-required",)
+    assert plan.notion_read_performed is False
+
+
+def test_filtered_query_remains_default_without_known_lesson_reference():
+    plan = plan_lesson_preflight(request())
+    assert plan.retrieval_required is True
+    assert plan.recommended_escalation is RetrievalEscalation.FILTERED_DATA_SOURCE_QUERY
+    assert plan.reason_codes == ("lesson-retrieval-required",)
+    assert plan.notion_read_performed is False
+
+
 def test_surface_before_work_false_is_not_candidate():
     result = consume_lesson_preflight(request(), (lesson(surface_before_work=False),))
     assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
