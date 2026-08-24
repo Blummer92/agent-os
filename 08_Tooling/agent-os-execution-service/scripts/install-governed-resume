@@ -17,7 +17,7 @@ cat > "$wrapper" <<'EOF'
 #!/bin/sh
 set -eu
 exec systemd-run --user --scope -p Delegate=yes --quiet \
-  /usr/bin/env python3 -m agent_os_execution_service.governed_resume_entrypoint "$@"
+  /usr/bin/python3 -m agent_os_execution_service.governed_resume_entrypoint "$@"
 EOF
 
 if [ -f "$TARGET" ] && cmp -s "$wrapper" "$TARGET"; then
