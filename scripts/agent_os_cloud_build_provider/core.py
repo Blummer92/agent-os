@@ -204,6 +204,18 @@ def prepare_cloud_build_provider_invocation(
             execution_authorized=False,
         )
 
+    # GitHub Actions owns the ordinary authoritative exact-head aggregate.
+    # Cloud Build remains available for focused/provider-specific work, but a
+    # fully valid aggregate must be declined here before an accepted provider
+    # invocation exists. All fail-closed identity, authorization, dispatch,
+    # SHA, and configuration checks above therefore retain precedence.
+    if command_plan.profile == "aggregate":
+        return _result(
+            status=ProviderStatus.SKIPPED,
+            reasons={ProviderReason.PROVIDER_AGGREGATE_REDUNDANT_EQUIVALENT},
+            execution_authorized=False,
+        )
+
     provider_entries = tuple(
         ProviderCommandEntry(operation=entry.operation.value, argv=entry.argv)
         for entry in command_plan.entries
@@ -379,6 +391,7 @@ def _overall_result(status: ProviderObservationStatus) -> tuple[OverallResult, P
         ProviderObservationStatus.FAILURE: (OverallResult.FAILURE, ProviderReason.PROVIDER_FAILURE),
         ProviderObservationStatus.TIMEOUT: (OverallResult.TIMEOUT, ProviderReason.PROVIDER_TIMEOUT),
         ProviderObservationStatus.CANCELLED: (OverallResult.CANCELLED, ProviderReason.PROVIDER_CANCELLED),
+        ProviderObservationStatus.EXPIRED: (OverallResult.EXPIRED, ProviderReason.PROVIDER_EXPIRED),
         ProviderObservationStatus.INTERNAL_ERROR: (OverallResult.INTERNAL_ERROR, ProviderReason.PROVIDER_INTERNAL_ERROR),
     }
     return mapping[status]

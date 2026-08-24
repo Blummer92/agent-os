@@ -317,13 +317,26 @@ def plan_execution_continuation(
     if evidence.branch_conflicted:
         return _decision(evidence, ContinuationDisposition.NEEDS_DECISION, resume_plan, lease_fields, ("branch.conflicted",))
     if evidence.base_behind:
+        if evidence.primary_pr_count == 1 or evidence.draft_pr_present:
+            return _decision(
+                evidence,
+                ContinuationDisposition.STALE_EXISTING_WORK,
+                resume_plan,
+                lease_fields,
+                ("branch.base-behind-route-gh-life3",),
+                recommended_action="route to the separately governed #1187 branch-refresh path; do not treat base-behind as same-branch HEAD_ADVANCED",
+            )
         return _decision(
             evidence,
             ContinuationDisposition.STALE_EXISTING_WORK,
             resume_plan,
             lease_fields,
-            ("branch.base-behind-route-gh-life3",),
-            recommended_action="route to the separately governed #1187 branch-refresh path; do not treat base-behind as same-branch HEAD_ADVANCED",
+            ("branch.base-behind-pre-pr-replan",),
+            recommended_action=(
+                "rebind current base and merge-base evidence, recompute the canonical ResumePlan, "
+                "and run every issue-required developer-loop check on a capable route before Draft PR creation; "
+                "do not invoke #1187 without a primary PR"
+            ),
         )
 
     existing = evidence.existing_execution

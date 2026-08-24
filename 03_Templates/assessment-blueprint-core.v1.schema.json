@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent-os://assessment-blueprint-core/v1",
+  "title": "Assessment Blueprint Core v1",
+  "type": "object",
+  "required": ["blueprint_contract_version","blueprint_id","blueprint_version","assessment_design_record","created_from_source_version","current_source_version","provenance","task_format","student_time","complexity","scoring","accessibility","ai_conditions","validation","blockers","unresolved_uncertainties","next_owner","authority"],
+  "properties": {
+    "blueprint_contract_version": {"const":"1.0"},
+    "blueprint_id": {"type":"string","minLength":1},
+    "blueprint_version": {"type":"string","minLength":1},
+    "assessment_design_record": {"$ref":"#/$defs/designRecord"},
+    "created_from_source_version": {"type":"string","minLength":1},
+    "current_source_version": {"type":"string","minLength":1},
+    "context": {"type":"object"},
+    "provenance": {"$ref":"#/$defs/provenance"},
+    "task_format": {"type":"object","required":["format","editable_downstream","preserves_evidence_requirements"],"properties":{"format":{"type":"string","minLength":1},"editable_downstream":{"type":"boolean"},"preserves_evidence_requirements":{"const":true}},"additionalProperties":true},
+    "student_time": {"type":"object","required":["estimate_minutes","feasibility"],"properties":{"estimate_minutes":{"type":["integer","null"],"minimum":0},"feasibility":{"enum":["feasible","unreasonable","unresolved"]}},"additionalProperties":true},
+    "complexity": {"type":"object","required":["description","construct_relevant_demands","construct_irrelevant_demands"],"properties":{"description":{"type":"string"},"construct_relevant_demands":{"type":"array"},"construct_irrelevant_demands":{"type":"array"}},"additionalProperties":true},
+    "scoring": {"type":"object","required":["applies","evidence_classification","method","success_criteria","interpretation_limits","survey_only_handling","grading_authorized"],"properties":{"applies":{"type":"boolean"},"evidence_classification":{"enum":["mastery_capable","supporting_only","survey_only"]},"method":{"type":["string","null"]},"success_criteria":{"type":"array"},"interpretation_limits":{"type":"array"},"survey_only_handling":{"type":"string"},"grading_authorized":{"const":false}},"additionalProperties":true},
+    "accessibility": {"type":"object","required":["intended_construct","language_demand","motor_sensory_demand","technology_demand","response_format_demand","background_knowledge_demand","time_demand","unrelated_reading_burden","conflict_state"],"properties":{"conflict_state":{"enum":["none","resolved","unresolved"]}},"additionalProperties":true},
+    "ai_conditions": {"type":"object","required":["applicable","policy_ref","allowed_uses","prohibited_uses","conflict_state","non_authorizing"],"properties":{"applicable":{"type":"boolean"},"policy_ref":{"type":["string","null"]},"allowed_uses":{"type":"array"},"prohibited_uses":{"type":"array"},"conflict_state":{"enum":["none","resolved","unresolved"]},"non_authorizing":{"const":true}},"additionalProperties":true},
+    "validation": {"type":"object","required":["outcome","rules_executed","blocking_failures","teacher_decision_failures","revision_required_failures"],"properties":{"outcome":{"enum":["blocked","needs_teacher_decision","revision_required","valid"]},"rules_executed":{"type":"array"},"blocking_failures":{"type":"array"},"teacher_decision_failures":{"type":"array"},"revision_required_failures":{"type":"array"}},"additionalProperties":false},
+    "blockers": {"type":"array"},
+    "unresolved_uncertainties": {"type":"array"},
+    "next_owner": {"type":"string","minLength":1},
+    "authority": {"$ref":"#/$defs/authority"}
+  },
+  "$defs": {
+    "designRecord": {
+      "type":"object",
+      "required":["assessment_design_contract_version","design_record_id","source_context","assessment_purpose","intended_instructional_decision","approved_target_ref","target_source_state","claim_id","claim_statement","primary_target_classification","supporting_target_classifications","observable_evidence","evidence_sufficiency_rule","evidence_exclusions","selected_method","supporting_methods","method_rationale","method_limitations","survey_mastery_classification","scoring_or_observation_requirement","success_evidence_features","likely_misconceptions","possible_instructional_responses","accessibility_considerations","authenticity_requirement","provenance","blockers","unresolved_uncertainties","next_owner","authority"],
+      "properties":{"assessment_design_contract_version":{"const":"1.0"},"design_record_id":{"type":"string","minLength":1}},
+      "additionalProperties":true
+    },
+    "provenance": {"type":"array","minItems":1,"items":{"type":"object","required":["source_type","identifier","version","approval_state","owner","conflict_state"],"properties":{"source_type":{"type":"string"},"identifier":{"type":"string"},"version":{"type":"string"},"approval_state":{"type":"string"},"owner":{"type":"string"},"conflict_state":{"enum":["none","resolved","unresolved"]}},"additionalProperties":true}},
+    "authority": {"type":"object","required":["report_only","execution_authorized","classroom_use_authorized","grading_authorized","readiness_authorized","production_authorized","publication_authorized","external_write_authorized","source_of_truth_write_authorized"],"properties":{"report_only":{"const":true},"execution_authorized":{"const":false},"classroom_use_authorized":{"const":false},"grading_authorized":{"const":false},"readiness_authorized":{"const":false},"production_authorized":{"const":false},"publication_authorized":{"const":false},"external_write_authorized":{"const":false},"source_of_truth_write_authorized":{"const":false}},"additionalProperties":false}
+  },
+  "additionalProperties":false
+}

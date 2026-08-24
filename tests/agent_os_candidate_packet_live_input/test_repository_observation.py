@@ -1,10 +1,14 @@
-"""AOS-AUTO1H verify-repo-state.sh stdout assembler tests (#1155)."""
+"""AOS-AUTO1H verify-repo-state.sh stdout assembler tests (#1155, #1327)."""
 
 from __future__ import annotations
 
 import pytest
 
-from scripts.agent_os_candidate_packet.repository_stage import RepositoryObservation
+from scripts.agent_os_candidate_packet.repository_stage import (
+    RepositoryObservation,
+    RepositoryStageStatus,
+    prepare_repository_state_evidence,
+)
 from scripts.agent_os_candidate_packet_live_input.repository_observation import (
     VerifierStdoutError,
     build_repository_observation_from_verifier_stdout,
@@ -74,15 +78,36 @@ def _assemble(**overrides):
 # --------------------------------------------------------------------------
 
 
+def test_parser_preserves_documented_raw_verifier_base_ref() -> None:
+    evidence = parse_verifier_stdout(_valid_stdout())
+    assert evidence.base_ref == "origin/main"
+
+
 def test_valid_stdout_plus_explicit_fields_produces_canonical_observation() -> None:
     observation = _assemble()
 
     assert isinstance(observation, RepositoryObservation)
     assert observation.head_ref == "agent/1155-live-candidate-input-adapter"
     assert observation.head_sha == _HEAD_SHA
-    assert observation.base_ref == "origin/main"
+    assert observation.base_ref == "main"
     assert observation.base_sha == _BASE_SHA
     assert observation.observed_sha == _HEAD_SHA
+
+
+def test_canonicalized_base_ref_validates_against_short_branch_vocabulary() -> None:
+    observation = _assemble(tested_sha=_HEAD_SHA)
+
+    result = prepare_repository_state_evidence(
+        observation,
+        expected_base_ref="main",
+        expected_head_ref="agent/1155-live-candidate-input-adapter",
+        expected_head_sha=_HEAD_SHA,
+        expected_requested_sha=_HEAD_SHA,
+        expected_contract_fingerprint="3" * 64,
+    )
+
+    assert result.status is RepositoryStageStatus.VALID
+    assert "ref.base-mismatch" not in result.reason_codes
 
 
 def test_worktree_state_is_exactly_clean() -> None:
@@ -202,9 +227,9 @@ def test_missing_verifier_field_fails_closed() -> None:
 def test_missing_changed_files_markers_fails_closed() -> None:
     stdout = "\n".join(
         [
-            f"HEAD_REF=main",
+            "HEAD_REF=main",
             f"HEAD_SHA={_HEAD_SHA}",
-            f"BASE_REF=origin/main",
+            "BASE_REF=origin/main",
             f"BASE_SHA={_BASE_SHA}",
         ]
     )
@@ -242,6 +267,22 @@ def test_unexpected_verifier_key_fails_closed() -> None:
     )
     with pytest.raises(VerifierStdoutError):
         parse_verifier_stdout(stdout)
+
+
+@pytest.mark.parametrize(
+    "base_ref",
+    (
+        "main",
+        "upstream/main",
+        "origin/",
+        "origin//main",
+        "origin/origin/main",
+        "origin/refs/heads/main",
+    ),
+)
+def test_assembler_rejects_noncanonical_verifier_base_ref_forms(base_ref: str) -> None:
+    with pytest.raises(VerifierStdoutError):
+        _assemble(verifier_stdout=_valid_stdout(base_ref=base_ref))
 
 
 @pytest.mark.parametrize(

@@ -1,7 +1,6 @@
 # Daily Agent Shortcuts
 
-Use these shortcuts for common low-friction agent work. They operate under
-`00_Governance/agent-os-advisory-mode.md` during pilot review and do not override
+Use these shortcuts for common low-friction Agent OS work. They do not override
 `00_Governance/write-authorization-policy.md`; they clarify safe daily lanes.
 
 Canonical routing:
@@ -13,20 +12,18 @@ Canonical routing:
 ## Daily Mode Rule
 
 For read-only, local-only, planning, QA notes, routing, draft specs, and local
-documentation tasks, complete Lightweight Intake and proceed when the boundary is clear.
+documentation tasks, complete Lightweight Intake and proceed when the boundary is
+clear. Tier 0 and Tier 1 tasks should proceed without production-style gates while
+they stay read-only or local-only.
 
-Tier 0 and Tier 1 tasks should proceed without production-style gates while they stay
-read-only or local-only.
-
-Use Full Intake and Live Readiness for Tier 2 and Tier 3 work. Escalate when a task
-touches external writes, production systems, governed fields, sharing or permissions,
-source-of-truth records, sensitive student or private data, or irreversible actions.
-
+Use Full Intake and Live Readiness for Tier 2 and Tier 3 work. Escalate when a
+task touches external writes, production systems, governed fields, sharing or
+permissions, source-of-truth records, sensitive data, or irreversible actions.
 Ambiguous write authority fails closed to human decision.
 
 ## Dashboard Draft
 
-Use Dashboard Builder Overlay.
+Use ChatGPT Orchestrator with Dashboard Builder Overlay.
 Mode: Tier 1 local spec only.
 No canonical field writes.
 Output: dashboard map plus governed-field notes.
@@ -39,9 +36,17 @@ Output: pass/fail, evidence, risks, recommended next steps.
 
 ## Python Local Fix
 
-Use Python Development Overlay.
-Mode: Tier 1 local files only.
+Use GitHub Service Agent with `01_Shared_Standards/python/`.
+Mode: Tier 1 local/repository engineering; any GitHub mutation still requires the
+governed repository write path.
 Output: files changed, tests run, limitations.
+
+## Workspace Automation
+
+Use ChatGPT Orchestrator with Google Workspace standards to classify the request.
+Repository implementation routes to GitHub Service Agent. Live Workspace writes
+require separate exact-target authorization and do not become authorized from a
+legacy Workspace agent name.
 
 ## Instructional Material Draft
 

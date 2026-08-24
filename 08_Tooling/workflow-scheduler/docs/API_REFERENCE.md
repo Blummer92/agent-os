@@ -318,10 +318,77 @@ before reporting success.
 Existing, malformed, stale, orphaned, oversized, symlinked, or otherwise
 ambiguous metadata is fail-closed. The adapter never infers safe ownership from
 file age, TTL, process absence, or clock expiry and never steals, renews,
-force-releases, automatically retries, or takes over a lease. Crash recovery and
-manual cleanup of ambiguous metadata remain separately authorized operator work.
+force-releases, automatically retries, or takes over a lease.
 The existing `InMemoryLeaseAdapter` remains supported for process-local tests;
 real runtime selection/wiring of the host-local adapter belongs to #762.
+
+#### When the pilot may release a lease (#1202)
+
+`run_single_issue_pilot` teardown releases the lease only when the release would
+be truthful. Two conditions permit it:
+
+- nothing was ever dispatched — neither the executor nor the validation adapter
+  — so no governed worker can exist (for example, cancellation or a hard stop
+  before executor dispatch); or
+- every lane that *was* dispatched proved terminal: the executor lane through
+  `termination_confirmed`, and the validation lane through the bounded one-shot
+  validation call handing control back.
+
+Otherwise release is withheld. No release is attempted, `lease_release_attempts`
+stays `0`, `lease.release-withheld-unproven-termination` is recorded, the result
+is quarantined, and exact active lease ownership is retained for governed
+recovery. Process-control exceptions still propagate unchanged; they are never
+converted into an ordinary result status to simplify teardown.
+
+The two lanes are evaluated separately on purpose. `executor_called == False` is
+**not** proof that no process is alive: validation-only mode dispatches no
+executor, yet its validation adapter can still start a bounded subprocess.
+
+#### Orphaned-lease recovery (#1202)
+
+`recover_orphaned_lease` is the one bounded, exact-identity operation that can
+clear a genuinely orphaned host-local lease. It is not a force-release, steal,
+takeover, expiry, or retry, and there is no background worker that calls it.
+
+```python
+from workflow_scheduler.execution import (
+    OrphanedLeaseRecoveryRequest,
+    contained_termination_evidence,
+)
+
+observation = lease.recover_orphaned_lease(
+    OrphanedLeaseRecoveryRequest(
+        lease_identity=grant.lease_identity,
+        expected_holder_identity=grant.holder_identity,
+        expected_generation=grant.generation,
+        original_invocation_id=pilot_input.invocation_id,
+        termination_evidence=contained_termination_evidence(posix_result),
+        workspace_disposition="workspace-removed-and-verified",
+        review_evidence_identity=review_event.event_id,
+    )
+)
+```
+
+Every precondition must be bound explicitly: the exact lease, the exact holder
+and generation being removed, the invocation that ownership came from,
+independently proven prior termination, a resolved workspace/repository
+disposition, and the review evidence identity authorizing the recovery.
+
+Termination proof is the canonical `ContainedTerminationEvidence` from
+`posix_process_adapter` (#759): direct child exit/reap, final pipe drain,
+recursive `cgroup.events` `populated=0`, and exact invocation-cgroup cleanup.
+Lease age, TTL, wall-clock expiry, heartbeat absence, PID absence, `ESRCH`,
+process names, host reachability, and operator belief are not merely rejected —
+there is no field through which they can be supplied.
+
+Immediately before the only mutation the adapter re-reads active lease state and
+requires an exact match on lease identity, holder identity, and generation. Any
+mismatch, ambiguity, or uncertainty performs zero mutation and fails closed.
+
+Recovery removes only the exact active ownership record. The durable generation
+record is preserved, never rewritten and never reset to `1`, so the next
+ordinary acquisition receives a strictly newer generation and a delayed release
+from the recovered generation can never free the new owner.
 
 ## Executor
 
@@ -381,6 +448,13 @@ timeout/cancellation, process-group `SIGTERM`, one bounded escalation, and
 `termination_confirmed` only once the child's exit and the final pipe
 drain/reap are directly observed. `PosixProcessExecutor` is the thin
 one-shot `PilotExecutor` adapter around it.
+
+`contained_termination_evidence(result)` projects one contained result onto
+`ContainedTerminationEvidence`, whose `termination_proven` property mirrors
+`termination_confirmed` exactly. This keeps the containment proof defined once,
+here, so the #1202 lease-recovery precondition cannot drift toward a weaker
+generic process check. It raises for an uncontained attempt, which has no
+recursive-emptiness or cgroup-cleanup observation to project.
 
 An optional `containment: ContainmentConfig | None` parameter (also
 `PosixProcessExecutorConfig.containment`) adds exact per-invocation Linux
@@ -452,6 +526,83 @@ result = run_bounded_posix_process(
     ),
 )
 ```
+
+## Frozen-Test Validation
+
+### FrozenTestValidationAdapter and Explicit Termination Evidence (AOS-VALTERM1 / #1205)
+
+`FrozenTestValidationAdapter` (`execution/frozen_test_validation_adapter.py`)
+is the one-shot `ValidationAdapter` that runs a caller-frozen, immutable set
+of required-test commands through an injected `BoundedCommandRunner` and
+returns a `PilotValidationObservation`. Command execution stays fully
+delegated -- this module owns bounding, aggregation, and evidence, never a
+process runner of its own.
+
+`CommandRunObservation`, `FrozenTestValidationResult`, and
+`PilotValidationObservation` each carry `started`/`termination_confirmed`/
+`possible_partial_effects` -- the same #759 vocabulary
+`PosixProcessExecutionResult`/`PilotExecutionObservation` already use for the
+executor lane, now threaded through the validation lane too. Before #1205
+this evidence stopped at `CommandRunObservation.started`; a validator
+returning control (`attempted=True`, `passed=True`) was not, by itself,
+proof that every dispatched command's process actually terminated.
+
+`termination_confirmed`/`possible_partial_effects` are always independent of
+`outcome`/`return_code`: a command can be `outcome="failed"` (or
+`"timed-out"`, `"cancelled"`) while still confirmed terminal, and
+`outcome="succeeded"` while termination remains unconfirmed. Neither field
+is ever inferred from the other.
+
+```python
+from workflow_scheduler.execution.frozen_test_validation_adapter import (
+    FrozenTestValidationAdapter, FrozenTestCommand,
+)
+
+adapter = FrozenTestValidationAdapter(
+    required_test_commands=(FrozenTestCommand(test_id="pytest", argv=("pytest",)),),
+    runner=my_bound_posix_command_runner,
+)
+observation = adapter.validate(request)
+if observation.attempted and not observation.termination_confirmed:
+    # A command may have started and never confirmed termination even
+    # though validate() returned normally -- this is not "safe by default".
+    ...
+```
+
+**Aggregation** (`_aggregate_command_termination`): conservative over every
+command actually dispatched. A command that never started (excluded by an
+earlier cancellation, timeout, or budget exhaustion) requires no termination
+proof and can never make an otherwise-terminal result look unresolved; zero
+started commands is vacuously terminal. `termination_confirmed` requires
+every started command to confirm it explicitly; `possible_partial_effects` is
+set by any started command reporting it directly, or lacking the required
+proof.
+
+**Fail-closed evidence**: a non-bool `termination_confirmed`/
+`possible_partial_effects`, or a `started=False` command claiming confirmed
+termination, is rejected as malformed -- never silently accepted or defaulted
+toward "terminal". Both fields default `False` on `CommandRunObservation`,
+so a `BoundedCommandRunner` written before #1205 is read as having proven
+nothing, not as having proven safety.
+
+**`BoundPosixCommandRunner`** (`concrete_runtime_adapters.py`) maps
+`termination_confirmed`/`possible_partial_effects` straight from the real
+`PosixProcessExecutionResult` it obtains via `run_bounded_posix_process`,
+unchanged -- the same #759 evidence the executor lane already trusts.
+
+**Scope**: this is evidence only. `PilotValidationObservation` decides no
+lease-release policy; #1202 remains the sole owner of when a lease may be
+released, and its release fence is not implemented by this module. #1205
+makes the explicit validation-termination evidence available for a future
+#1202 refresh to consume in place of a weaker call-return proxy.
+
+**Known gap**: `agent-os-execution-service`'s
+`validation_lifecycle_evidence.py` serialize/reconstruct round-trip for
+`CommandRunObservation`/`FrozenTestValidationResult` does not yet carry these
+fields -- a reconstructed evidence bundle reads the conservative default
+regardless of what was actually observed. That module's own tests could not
+be collected in this environment (pre-existing missing `github` dependency),
+so this was flagged rather than fixed here.
 
 ## Workspace State Evidence (WSC-AUTO1D)
 
