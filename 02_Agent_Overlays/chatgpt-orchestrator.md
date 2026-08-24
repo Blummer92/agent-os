@@ -132,6 +132,7 @@ For finite multi-item missions, an item-local blocker is not a mission-level sto
 Request-interpretation continuation stops follow `chatgpt-orchestrator-request-interpretation.md`; conversation memory never resolves missing, stale, or multiple-candidate canonical context.
 ## Version
 0.3.2
+Compatibility lineage: 0.3.1
 
 ## Changelog
 - 0.3.2 wires the bounded CKR10 Decision/ADR preflight into coding-task routing as a completion repair for #1369: Decision-sensitive classification before substantial reasoning, zero-read `not-needed`, exact-reference-first bounded lookup, #1144 selector reuse, existing Memory Manager projection, GitHub-over-Notion authority, nonrecursive coexistence with Lessons/Patterns, and safe outage behavior.
