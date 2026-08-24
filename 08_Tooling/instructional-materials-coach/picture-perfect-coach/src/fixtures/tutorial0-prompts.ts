@@ -1,6 +1,7 @@
 import tutorial0Evidence from './tutorial0-evidence.json';
 import tutorial0Recording from './tutorial0-recording.json';
 import { tutorial0SyntheticCapture } from './tutorial0-capture';
+import { tutorial0CurrentVisualReferences } from './tutorial0-visual-references';
 import { deriveReviewedTutorial } from '../review';
 import { deriveRecordingUiEvidence } from '../uiEvidence';
 import { projectReviewedTutorialToPromptCards, type PromptAuthoringInput } from '../promptIntent';
@@ -47,6 +48,12 @@ const authoringByStepId = new Map<string, PromptAuthoringInput>([
       mustNotShow: commonMustNotShow,
       annotationSpace: 'beside the visible location indicator for one teacher-added callout',
       requestedUiDetails: ['Your stuff', 'Digital Media', 'Tutorial 0 - Organize My Files'],
+      currentVisualReference: {
+        applicationVariant: 'Education',
+        contextState: 'navigation/your-stuff/files',
+        requiredUiClaims: ['Your stuff', 'Files', 'Digital Media'],
+        reconciledRecordedUiClaims: ['Your stuff', 'Files', 'Digital Media'],
+      },
     },
   ],
   [
@@ -55,11 +62,16 @@ const authoringByStepId = new Map<string, PromptAuthoringInput>([
       imagePurpose: 'Show where a student starts a new reference file.',
       imageState: 'action',
       applicationContext: 'Adobe Express workspace with enough surrounding navigation for orientation',
-      targetState: 'Create new is the clear next action',
-      mustShow: ['Adobe Express', 'Create new'],
+      targetState: 'Create file is the clear next action from the Create menu',
+      mustShow: ['Adobe Express', 'Create', 'Create file'],
       mustNotShow: commonMustNotShow,
-      annotationSpace: 'around Create new for an arrow and step number',
+      annotationSpace: 'around Create and Create file for an arrow and step number',
       requestedUiDetails: ['Create new'],
+      currentVisualReference: {
+        applicationVariant: 'Education',
+        contextState: 'navigation/create-menu',
+        requiredUiClaims: ['Create', 'Create file'],
+      },
     },
   ],
   [
@@ -68,11 +80,17 @@ const authoringByStepId = new Map<string, PromptAuthoringInput>([
       imagePurpose: 'Help students recognize the landscape canvas choice during file creation.',
       imageState: 'action+result',
       applicationContext: 'Adobe Express new-file creation context',
-      targetState: 'the Landscape choice is visible and distinguishable',
-      mustShow: ['Adobe Express', 'Landscape'],
+      targetState: 'the Landscape 16:9 choice is visible and distinguishable',
+      mustShow: ['Adobe Express', 'Landscape', '16:9'],
       mustNotShow: commonMustNotShow,
       annotationSpace: 'near the format choice for a short teacher-added label',
       requestedUiDetails: ['Landscape'],
+      currentVisualReference: {
+        applicationVariant: 'Education',
+        contextState: 'creation/get-started',
+        requiredUiClaims: ['Landscape', '16:9'],
+        reconciledRecordedUiClaims: ['Landscape', '16:9'],
+      },
     },
   ],
 ]);
@@ -81,20 +99,12 @@ function withCommonProvenance(cards: readonly PromptCardModel[]): readonly Promp
   return cards.map((card) => ({ ...card, provenance: [...commonProvenance, ...card.provenance] }));
 }
 
-/**
- * F1 regression projection: no capture bundle is supplied, so every real-interface
- * frame must remain blocked. This preserves proof that missing capture never falls
- * back to generative reconstruction.
- */
+/** F1 regression projection: no capture or current-reference library is supplied. */
 export const tutorial0PromptCards: readonly PromptCardModel[] = withCommonProvenance(
   projectReviewedTutorialToPromptCards(tutorial0ReviewedTutorial, authoringByStepId),
 );
 
-/**
- * F2 ready-path projection. The same authoring is bound to privacy-safe synthetic
- * capture evidence. This proves only the offline contract and makes no claim about
- * live Adobe selector, geometry, screenshot, authentication, or replay fidelity.
- */
+/** F2 regression projection: historical capture evidence remains independently testable. */
 export const tutorial0CapturedPromptCards: readonly PromptCardModel[] = withCommonProvenance(
   projectReviewedTutorialToPromptCards(
     tutorial0ReviewedTutorial,
@@ -102,6 +112,43 @@ export const tutorial0CapturedPromptCards: readonly PromptCardModel[] = withComm
     tutorial0SyntheticCapture,
   ),
 );
+
+/**
+ * Canonical VRL2 projection. Current approved application-state references are
+ * selected before prompt generation while F2 capture evidence remains bound as
+ * historical action/state authority.
+ */
+export const tutorial0CurrentReferencePromptCards: readonly PromptCardModel[] = withCommonProvenance(
+  projectReviewedTutorialToPromptCards(
+    tutorial0ReviewedTutorial,
+    authoringByStepId,
+    tutorial0SyntheticCapture,
+    tutorial0CurrentVisualReferences,
+  ),
+);
+
+/** Explicitly reconciled Create fixture; historical capture remains unchanged. */
+const reconciledCreateAuthoring = new Map<string, PromptAuthoringInput>([
+  [
+    'tutorial0-step-03-square-file',
+    {
+      ...authoringByStepId.get('tutorial0-step-03-square-file')!,
+      currentVisualReference: {
+        applicationVariant: 'Education',
+        contextState: 'navigation/create-menu',
+        requiredUiClaims: ['Create', 'Create file'],
+        reconciledRecordedUiClaims: ['Create', 'Create file'],
+      },
+    },
+  ],
+]);
+
+export const tutorial0ReconciledCreatePromptCard: PromptCardModel = projectReviewedTutorialToPromptCards(
+  tutorial0ReviewedTutorial,
+  reconciledCreateAuthoring,
+  tutorial0SyntheticCapture,
+  tutorial0CurrentVisualReferences,
+)[0];
 
 const blockedAuthoring = new Map<string, PromptAuthoringInput>([
   [
@@ -124,4 +171,5 @@ export const tutorial0BlockedFinalState: PromptCardModel = projectReviewedTutori
   tutorial0ReviewedTutorial,
   blockedAuthoring,
   tutorial0SyntheticCapture,
+  tutorial0CurrentVisualReferences,
 )[0];
