@@ -29,7 +29,6 @@ export const BLOCKER_REASONS = {
   uiClaimIdentityMismatch: 'ui-claim-identity-mismatch',
   specificationIncomplete: 'specification-incomplete',
   ...CAPTURE_BLOCKER_REASONS,
-  ...VISUAL_REFERENCE_BLOCKER_REASONS,
 } as const;
 
 export type BlockerReason =
@@ -104,15 +103,15 @@ export function explainBlocker(reason: BlockerReason): string {
       return 'The stored screenshot compatibility evidence is stale and must be reverified before use.';
     case BLOCKER_REASONS.captureClaimsNotCoVisible:
       return 'No single approved screenshot for the required state supports all interface claims in this frame.';
-    case BLOCKER_REASONS.referenceMissing:
+    case VISUAL_REFERENCE_BLOCKER_REASONS.referenceMissing:
       return 'A current approved application-state reference is required for this screen-fidelity frame but none matched the requested state.';
-    case BLOCKER_REASONS.claimsNotCoVisible:
+    case VISUAL_REFERENCE_BLOCKER_REASONS.claimsNotCoVisible:
       return 'No single current visual reference proves all required interface claims together.';
-    case BLOCKER_REASONS.currentRecordedUiConflict:
+    case VISUAL_REFERENCE_BLOCKER_REASONS.currentRecordedUiConflict:
       return 'Current application-state evidence conflicts with the historical recorded UI and requires explicit reconciliation before this frame can become Ready.';
-    case BLOCKER_REASONS.privacyUnresolved:
+    case VISUAL_REFERENCE_BLOCKER_REASONS.privacyUnresolved:
       return 'The selected current visual reference has unresolved privacy evidence and cannot become Ready.';
-    case BLOCKER_REASONS.stale:
+    case VISUAL_REFERENCE_BLOCKER_REASONS.stale:
       return 'The selected current visual reference is stale and must be reverified before use.';
     default:
       return 'This frame is blocked.';
