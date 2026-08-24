@@ -191,7 +191,7 @@ def _validate_bindings(value: RuntimeExecutionRequest) -> None:
     if packet.invocation_id != descriptor.invocation_id:
         raise ValueError("restart capsule invocation binding drifted")
     if packet.candidate_sha != descriptor.source_sha:
-        raise ValueError("restart capsule source SHA binding drifted")
+        raise ValueError("restart capsule source binding drifted: SHA mismatch")
     if packet.packet_id != descriptor.candidate_packet_id:
         raise ValueError("restart capsule candidate packet binding drifted")
     if capsule.required_environment_spec.required_environment_id != descriptor.required_environment_id:
