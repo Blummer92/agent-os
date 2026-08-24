@@ -9,6 +9,14 @@ import {
 } from './captureEvidence';
 import { coVisibleIndexes, frameUiEvidence, type FrameUiEvidence } from './uiEvidence';
 import type { ReviewedStepProjection, ReviewedTutorialProjection } from './types';
+import {
+  VISUAL_REFERENCE_BLOCKER_REASONS,
+  buildVisualReferenceDirective,
+  selectVisualReference,
+  type ApprovedVisualReference,
+  type VisualReferenceBlockerReason,
+  type VisualReferenceLibrary,
+} from './visualReference';
 
 export type ImageState = 'action' | 'result' | 'action+result';
 
@@ -21,9 +29,12 @@ export const BLOCKER_REASONS = {
   uiClaimIdentityMismatch: 'ui-claim-identity-mismatch',
   specificationIncomplete: 'specification-incomplete',
   ...CAPTURE_BLOCKER_REASONS,
+  ...VISUAL_REFERENCE_BLOCKER_REASONS,
 } as const;
 
-export type BlockerReason = (typeof BLOCKER_REASONS)[keyof typeof BLOCKER_REASONS];
+export type BlockerReason =
+  | (typeof BLOCKER_REASONS)[keyof typeof BLOCKER_REASONS]
+  | VisualReferenceBlockerReason;
 
 export type VisualSpecification = {
   stepNumber: number;
@@ -38,14 +49,11 @@ export type VisualSpecification = {
   provenance: readonly string[];
   requestedUiDetails: readonly string[];
   requiresScreenFidelity: boolean;
-  /**
-   * Role-preserving F2 evidence. Optional only so older F1 regression fixtures can
-   * still be constructed; absence is identical to null and grants no authority.
-   */
   capturedScreenEvidence?: BoundScreenEvidence | null;
   captureBlockerReasons?: readonly CaptureBlockerReason[];
-  /** Deprecated opaque F1 field. It is ignored by F2 evidence validation. */
   capturedScreenRef?: string | null;
+  currentVisualReference?: ApprovedVisualReference | null;
+  currentVisualReferenceBlockerReasons?: readonly VisualReferenceBlockerReason[];
   evidence: FrameUiEvidence;
   uncertainty?: string;
 };
@@ -96,6 +104,16 @@ export function explainBlocker(reason: BlockerReason): string {
       return 'The stored screenshot compatibility evidence is stale and must be reverified before use.';
     case BLOCKER_REASONS.captureClaimsNotCoVisible:
       return 'No single approved screenshot for the required state supports all interface claims in this frame.';
+    case BLOCKER_REASONS.referenceMissing:
+      return 'A current approved application-state reference is required for this screen-fidelity frame but none matched the requested state.';
+    case BLOCKER_REASONS.claimsNotCoVisible:
+      return 'No single current visual reference proves all required interface claims together.';
+    case BLOCKER_REASONS.currentRecordedUiConflict:
+      return 'Current application-state evidence conflicts with the historical recorded UI and requires explicit reconciliation before this frame can become Ready.';
+    case BLOCKER_REASONS.privacyUnresolved:
+      return 'The selected current visual reference has unresolved privacy evidence and cannot become Ready.';
+    case BLOCKER_REASONS.stale:
+      return 'The selected current visual reference is stale and must be reverified before use.';
     default:
       return 'This frame is blocked.';
   }
@@ -125,6 +143,7 @@ export function validateVisualSpecification(spec: VisualSpecification): BlockerR
   const requiresScreenFidelity = derivesScreenFidelity(spec, spec.requiresScreenFidelity);
   const capturedScreenEvidence = spec.capturedScreenEvidence ?? null;
   for (const reason of spec.captureBlockerReasons ?? []) push(reason);
+  for (const reason of spec.currentVisualReferenceBlockerReasons ?? []) push(reason);
 
   if (!spec.application.trim()) push(BLOCKER_REASONS.applicationIdentityMissing);
   if (!spec.targetState.trim() || spec.mustShow.length === 0 || spec.provenance.length === 0) {
@@ -181,18 +200,26 @@ export function buildPortablePrompt(spec: VisualSpecification): PromptCardModel 
   }
 
   const capturedScreenEvidence = spec.capturedScreenEvidence ?? null;
+  const currentVisualReference = spec.currentVisualReference ?? null;
   const prompt = spec.requiresScreenFidelity && capturedScreenEvidence
     ? [
-        `Prepare an instructional presentation visual for the ${spec.application} workflow from approved captured screen evidence.`,
-        CAPTURE_BASE_DIRECTIVE,
+        currentVisualReference
+          ? `Prepare an instructional presentation visual for the ${spec.application} workflow from the selected approved current application-state reference.`
+          : `Prepare an instructional presentation visual for the ${spec.application} workflow from approved captured screen evidence.`,
+        currentVisualReference ? buildVisualReferenceDirective(currentVisualReference) : CAPTURE_BASE_DIRECTIVE,
         `Capture references: ${captureReferences(capturedScreenEvidence).join('; ')}.`,
+        currentVisualReference
+          ? 'Treat capture references as historical action/state authority only; they do not override the selected current application appearance.'
+          : '',
         `Purpose: ${spec.imagePurpose}`,
         `Image state: ${spec.imageState}.`,
         `Target state: ${spec.targetState}`,
         `Must show: ${spec.mustShow.join('; ')}.`,
         spec.mustNotShow.length ? `Must not show: ${spec.mustNotShow.join('; ')}.` : '',
         `Leave annotation space: ${spec.annotationSpace}.`,
-        'Do not add controls, labels, locations, states, or workflow steps that are absent from the approved capture evidence.',
+        currentVisualReference
+          ? 'Do not add controls, labels, geometry, locations, states, or workflow steps that are absent from the selected current reference or independently authorized historical evidence.'
+          : 'Do not add controls, labels, locations, states, or workflow steps that are absent from the approved capture evidence.',
       ].filter(Boolean).join(' ')
     : [
         `Create an instructional visual for the ${spec.application} workflow.`,
@@ -212,10 +239,21 @@ export function validateApplicationFidelity(card: PromptCardModel): string[] {
   if (card.status === 'blocked') return [...card.blockerReasons];
   const errors: string[] = [];
   const capturedScreenEvidence = card.capturedScreenEvidence ?? null;
+  const currentVisualReference = card.currentVisualReference ?? null;
   if (card.requiresScreenFidelity) {
     if (!capturedScreenEvidence) errors.push('a software-interface frame cannot be ready without approved capture evidence');
-    if (!card.portablePrompt.includes('approved captured screen evidence')) errors.push('screen-backed prompt lost capture-evidence boundary');
-    if (!card.portablePrompt.includes(CAPTURE_BASE_DIRECTIVE)) errors.push('screen-backed prompt lost non-reconstruction boundary');
+    if (currentVisualReference) {
+      const directive = buildVisualReferenceDirective(currentVisualReference);
+      if (!card.portablePrompt.includes(currentVisualReference.asset_reference.stable_ref)) {
+        errors.push('screen-backed prompt lost current visual-reference identity');
+      }
+      if (!card.portablePrompt.includes(directive)) {
+        errors.push('screen-backed prompt lost current visual-reference non-reconstruction boundary');
+      }
+    } else {
+      if (!card.portablePrompt.includes('approved captured screen evidence')) errors.push('screen-backed prompt lost capture-evidence boundary');
+      if (!card.portablePrompt.includes(CAPTURE_BASE_DIRECTIVE)) errors.push('screen-backed prompt lost non-reconstruction boundary');
+    }
     if (capturedScreenEvidence) {
       for (const reference of captureReferences(capturedScreenEvidence)) {
         if (!card.portablePrompt.includes(reference)) errors.push(`screen-backed prompt lost capture reference: ${reference}`);
@@ -243,6 +281,13 @@ export function validateApplicationFidelity(card: PromptCardModel): string[] {
   return errors;
 }
 
+export type CurrentVisualReferenceRequirement = {
+  contextState: string;
+  requiredUiClaims: readonly string[];
+  applicationVariant?: string | null;
+  reconciledRecordedUiClaims?: readonly string[];
+};
+
 export type PromptAuthoringInput = {
   imagePurpose: string;
   imageState: ImageState;
@@ -252,6 +297,7 @@ export type PromptAuthoringInput = {
   mustNotShow: readonly string[];
   annotationSpace: string;
   requestedUiDetails: readonly string[];
+  currentVisualReference?: CurrentVisualReferenceRequirement;
   screenFidelityRequired?: true;
   uncertainty?: string;
 };
@@ -261,6 +307,7 @@ export function projectReviewedStepToVisualSpecification(
   authoring: PromptAuthoringInput,
   tutorial: ReviewedTutorialProjection,
   captureBundle: CaptureEvidenceBundle | null = null,
+  visualReferenceLibrary: VisualReferenceLibrary | null = null,
 ): VisualSpecification {
   const provenance = [
     `recording:${step.recording_id}`,
@@ -280,6 +327,18 @@ export function projectReviewedStepToVisualSpecification(
   const binding = requiresScreenFidelity
     ? bindCaptureEvidence(step, authoring.imageState, requests, captureBundle)
     : { status: 'valid' as const, evidence: null, blocker_reasons: [] as CaptureBlockerReason[] };
+
+  const currentRequirement = authoring.currentVisualReference;
+  const currentSelection = currentRequirement && requiresScreenFidelity
+    ? selectVisualReference(visualReferenceLibrary ?? { references: [] }, {
+        application: step.modeled_application ?? '',
+        application_variant: currentRequirement.applicationVariant,
+        context_state: currentRequirement.contextState,
+        required_ui_claims: currentRequirement.requiredUiClaims,
+        recorded_ui_claims: currentRequirement.reconciledRecordedUiClaims ?? evidence.recordingClaimTexts,
+      })
+    : { status: 'valid' as const, reference: null, blocker_reasons: [] as VisualReferenceBlockerReason[] };
+
   return {
     stepNumber: step.sequence,
     imagePurpose: authoring.imagePurpose,
@@ -290,12 +349,16 @@ export function projectReviewedStepToVisualSpecification(
     mustShow: authoring.mustShow,
     mustNotShow: authoring.mustNotShow,
     annotationSpace: authoring.annotationSpace,
-    provenance,
+    provenance: currentSelection.reference
+      ? [...provenance, ...currentSelection.reference.provenance.map((item) => `visual_reference:${item}`)]
+      : provenance,
     requestedUiDetails: authoring.requestedUiDetails,
     requiresScreenFidelity,
     capturedScreenEvidence: binding.evidence,
     captureBlockerReasons: binding.blocker_reasons,
     capturedScreenRef: null,
+    currentVisualReference: currentSelection.reference,
+    currentVisualReferenceBlockerReasons: currentSelection.blocker_reasons,
     evidence,
     uncertainty: authoring.uncertainty,
   };
@@ -305,12 +368,15 @@ export function projectReviewedTutorialToPromptCards(
   tutorial: ReviewedTutorialProjection,
   authoringByStepId: ReadonlyMap<string, PromptAuthoringInput>,
   captureBundle: CaptureEvidenceBundle | null = null,
+  visualReferenceLibrary: VisualReferenceLibrary | null = null,
 ): PromptCardModel[] {
   const cards: PromptCardModel[] = [];
   for (const step of tutorial.retained_steps) {
     const authoring = authoringByStepId.get(step.review_step_id);
     if (!authoring) continue;
-    cards.push(buildPortablePrompt(projectReviewedStepToVisualSpecification(step, authoring, tutorial, captureBundle)));
+    cards.push(buildPortablePrompt(
+      projectReviewedStepToVisualSpecification(step, authoring, tutorial, captureBundle, visualReferenceLibrary),
+    ));
   }
   return cards;
 }
@@ -323,8 +389,18 @@ export function assertProviderAdapterPreservesIntent(source: PromptCardModel, ad
   for (const item of source.mustShow) {
     if (!adaptedPrompt.includes(item)) errors.push(`provider adapter removed must-show evidence: ${item}`);
   }
-  if (source.requiresScreenFidelity && !adaptedPrompt.includes(CAPTURE_BASE_DIRECTIVE)) {
-    errors.push('provider adapter removed capture non-reconstruction boundary');
+  if (source.requiresScreenFidelity) {
+    if (source.currentVisualReference) {
+      const directive = buildVisualReferenceDirective(source.currentVisualReference);
+      if (!adaptedPrompt.includes(source.currentVisualReference.asset_reference.stable_ref)) {
+        errors.push('provider adapter removed current visual-reference identity');
+      }
+      if (!adaptedPrompt.includes(directive)) {
+        errors.push('provider adapter removed current visual-reference non-reconstruction boundary');
+      }
+    } else if (!adaptedPrompt.includes(CAPTURE_BASE_DIRECTIVE)) {
+      errors.push('provider adapter removed capture non-reconstruction boundary');
+    }
   }
   return errors;
 }
