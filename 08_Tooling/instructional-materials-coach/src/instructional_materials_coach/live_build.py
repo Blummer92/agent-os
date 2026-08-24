@@ -116,6 +116,18 @@ def build_live_materials(
     )
     if slides.state == "ambiguous":
         return LiveBuildReceipt(slides, ArtifactReceipt("worksheet"), True)
+
+    worksheet = _resolve_copy(
+        drive_service,
+        template_id=build.doc_template_id,
+        target_folder_id=build.target_folder_id,
+        name=build.doc_name,
+        key=build.idempotency_key,
+        role="worksheet",
+    )
+    if worksheet.state == "ambiguous":
+        return LiveBuildReceipt(slides, worksheet, True)
+
     try:
         revision = get_slides_revision_id(slides_service, slides.file_id)
         apply_slides_requests(slides_service, slides.file_id, list(build.slides_requests), required_revision_id=revision)
@@ -129,18 +141,8 @@ def build_live_materials(
         )
         slides = _receipt("slides", "updated", final)
     except Exception as exc:
-        return LiveBuildReceipt(replace(slides, state="failed", error=str(exc)), ArtifactReceipt("worksheet"))
+        return LiveBuildReceipt(replace(slides, state="failed", error=str(exc)), worksheet)
 
-    worksheet = _resolve_copy(
-        drive_service,
-        template_id=build.doc_template_id,
-        target_folder_id=build.target_folder_id,
-        name=build.doc_name,
-        key=build.idempotency_key,
-        role="worksheet",
-    )
-    if worksheet.state == "ambiguous":
-        return LiveBuildReceipt(slides, worksheet, True)
     try:
         revision = get_docs_revision_id(docs_service, worksheet.file_id)
         apply_docs_requests(docs_service, worksheet.file_id, list(build.docs_requests), required_revision_id=revision)
