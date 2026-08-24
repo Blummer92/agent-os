@@ -20,7 +20,7 @@ def test_chatgpt_orchestrator_wires_ckr10_before_substantial_coding_reasoning() 
         "bounded filtered Decision Log query",
         "workspace-wide search is a bounded escalation only",
         "five supplied Decision records",
-        "consume_decision_preflight(...)ِ",
+        "consume_decision_preflight(...)",
         "existing #1144 CKR2 contract remains the sole relevance/sufficiency selector",
         "no more than three decisions",
         "prior_decisions",
