@@ -143,4 +143,4 @@ def verify_final_copy(
 
 
 def get_file_link(service: Any, file_id: str) -> str:
-    return get_file_metadata(service, file_id)["webViewLink"]
+    return service.files().get(fileId=file_id, fields="webViewLink").execute()["webViewLink"]
