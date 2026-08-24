@@ -27,19 +27,37 @@ def get_docs_revision_id(service: Any, document_id: str) -> str:
     return revision
 
 
-def apply_slides_requests(service: Any, presentation_id: str, requests: list[dict], *, required_revision_id: str) -> None:
+def apply_slides_requests(
+    service: Any,
+    presentation_id: str,
+    requests: list[dict],
+    *,
+    required_revision_id: str | None = None,
+) -> None:
     if not requests:
         return
+    body: dict[str, Any] = {"requests": requests}
+    if required_revision_id is not None:
+        body["writeControl"] = {"requiredRevisionId": required_revision_id}
     service.presentations().batchUpdate(
         presentationId=presentation_id,
-        body={"requests": requests, "writeControl": {"requiredRevisionId": required_revision_id}},
+        body=body,
     ).execute()
 
 
-def apply_docs_requests(service: Any, document_id: str, requests: list[dict], *, required_revision_id: str) -> None:
+def apply_docs_requests(
+    service: Any,
+    document_id: str,
+    requests: list[dict],
+    *,
+    required_revision_id: str | None = None,
+) -> None:
     if not requests:
         return
+    body: dict[str, Any] = {"requests": requests}
+    if required_revision_id is not None:
+        body["writeControl"] = {"requiredRevisionId": required_revision_id}
     service.documents().batchUpdate(
         documentId=document_id,
-        body={"requests": requests, "writeControl": {"requiredRevisionId": required_revision_id}},
+        body=body,
     ).execute()
