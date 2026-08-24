@@ -1,15 +1,15 @@
 # CKR6 Lessons Learned Preflight Contract
 
-Issue: #1357
+Issues: #1357, #1362
 
 ## Purpose
 
-`lesson_preflight.py` is the bounded consumer seam that turns already-read, provider-neutral Lessons Learned evidence into the existing CKR2 coding-knowledge selection path before coding work begins.
+`lesson_preflight.py` is the bounded consumer seam that turns already-read, provider-neutral Lessons Learned evidence into the existing CKR2 coding-knowledge selection path before coding work begins or a failed implementation is repaired.
 
 It does not read or write Notion itself.
 
 ```text
-coding task signals
+coding task / failed-PR repair / CI-diagnosis signals
 -> plan_lesson_preflight(...)
 -> not-needed: zero Notion retrieval
 -> otherwise caller performs bounded read-only Lessons Learned query
@@ -30,11 +30,15 @@ A lesson marked `Needs follow-up` may be surfaced as a caution. It is not eviden
 
 ## Retrieval planning
 
-`plan_lesson_preflight()` delegates the initial need decision to CKR2 by evaluating the request with zero candidates.
+`plan_lesson_preflight()` accepts a finite caller-supplied `LessonPreflightContext`.
 
-If CKR2 reports `not-needed`, the plan returns `retrieval_required=false`; callers should perform no Notion lookup.
+For ordinary `coding-task` work it delegates the initial need decision to CKR2 by evaluating the request with zero candidates. If CKR2 reports `not-needed`, the plan returns `retrieval_required=false`; callers should perform no Notion lookup.
 
-Otherwise the plan recommends the existing bounded filtered-data-source query path. It does not perform retrieval and does not create a second selector.
+`failed-pr-repair` and `ci-diagnosis` are explicit material-use contexts. They require the existing bounded filtered-data-source lesson query even when the initial request has sparse library/path/capability signals. This prevents repair flows like #1350 from silently bypassing relevant testing, lineage, or failure-pattern lessons simply because diagnosis began from a PR/run/job identity rather than a fresh coding-task request.
+
+The context is caller-supplied deterministic evidence; CKR6 does not parse free-form language to infer it and does not add a second request interpreter.
+
+The plan does not perform retrieval and does not create a second selector.
 
 ## Eligible lesson evidence
 
@@ -87,9 +91,13 @@ If the read surface is unavailable:
 - when specialized knowledge is explicitly required, result is `insufficient` with manual-review escalation;
 - otherwise result is `unavailable-safe-fallback`, allowing a caller to continue using current GitHub authority alone when safe.
 
+This applies to repair/diagnosis contexts too. A required lookup does not turn advisory Notion availability into repository authority or an unconditional blocker.
+
 Missing retrieval never authorizes fabricated replacement guidance.
 
 ## Deterministic evidence
+
+`LessonPreflightPlan` records whether retrieval is required and emits context-specific reason codes such as `lesson-retrieval-required:failed-pr-repair` and `lesson-retrieval-required:ci-diagnosis`.
 
 `LessonPreflightResult` exposes:
 
@@ -124,4 +132,4 @@ The caller owns bounded retrieval through an already-approved read surface. Any 
 
 ## Validation
 
-Focused tests in `tests/test_lesson_preflight.py` cover matching and unrelated tasks, zero-retrieval planning, `Surface Before Work` filtering, archived rows, advisory `Needs follow-up`, GitHub authority conflicts, stale evidence, Notion-unavailable fallback, required-specialized-knowledge outage behavior, duplicate identity handling, bounded candidate sets, authority-claim rejection, determinism, existing handoff projection, and fixed no-write/no-authority behavior.
+Focused tests in `tests/test_lesson_preflight.py` cover matching and unrelated tasks, zero-retrieval planning, explicit failed-PR/CI-diagnosis material-use planning, #1350-style sparse repair signals, repair-path unavailable fallback, `Surface Before Work` filtering, archived rows, advisory `Needs follow-up`, GitHub authority conflicts, stale evidence, required-specialized-knowledge outage behavior, duplicate identity handling, bounded candidate sets, authority-claim rejection, determinism, existing handoff projection, and fixed no-write/no-authority behavior.
