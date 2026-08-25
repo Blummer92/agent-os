@@ -100,6 +100,7 @@ class GitHubPullRequestBranchRefreshBackingProvider(PullRequestBranchRefreshBack
     validation_executor: BranchRefreshValidationExecutor
     review_threads_reader: BlockingReviewThreadsReader
     _validation_state_by_head: dict[str, str] = field(default_factory=dict, init=False)
+    _label_reconciliation_blocked: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
         if not hasattr(self.github_client, "get_repo"):
@@ -153,12 +154,16 @@ class GitHubPullRequestBranchRefreshBackingProvider(PullRequestBranchRefreshBack
 
     def read(self, repository: str, pr_number: int) -> LivePullRequestSnapshot:
         branch = self.read_branch(repository, pr_number)
+        self._label_reconciliation_blocked = (
+            branch.branch_state == "unknown" or branch.mergeability == "unknown"
+        )
         try:
             repo = self.github_client.get_repo(repository)
             pr = repo.get_pull(pr_number)
             labels = tuple(sorted({str(item.name) for item in repo.get_issue(pr_number).labels}))
             draft = bool(getattr(pr, "draft", True))
         except Exception:
+            self._label_reconciliation_blocked = True
             labels = ()
             draft = True
 
@@ -169,6 +174,7 @@ class GitHubPullRequestBranchRefreshBackingProvider(PullRequestBranchRefreshBack
             if type(blocking_review_threads) is not int or blocking_review_threads < 0:
                 raise ValueError("blocking review-thread count is malformed")
         except Exception:
+            self._label_reconciliation_blocked = True
             blocking_review_threads = 1
 
         validation_state = self._validation_state_by_head.get(branch.head_sha, "pending")
@@ -186,6 +192,8 @@ class GitHubPullRequestBranchRefreshBackingProvider(PullRequestBranchRefreshBack
         )
 
     def available_labels(self, repository: str) -> tuple[str, ...]:
+        if self._label_reconciliation_blocked:
+            return ()
         try:
             repo = self.github_client.get_repo(repository)
             return tuple(sorted({str(item.name) for item in repo.get_labels()}))
