@@ -87,14 +87,18 @@ class GcloudIapAdapter:
  def probe_discovery_ready(self,resource:GceResourceTuple)->bool:return self._ssh(resource,DISCOVERY_PROBE_COMMAND).returncode==0
  def inspect_runtime(self,resource:GceResourceTuple)->dict[str,object]:
   result=self._ssh(resource,RUNTIME_INSPECTION_COMMAND)
-  if result.returncode!=0:raise GcloudCommandError("fixed runtime inspection failed")
+  if result.returncode!=0:return _inspection_failure("needs-decision","inspection-command-failed",exit_code=result.returncode,stderr=result.stderr)
   try:payload=json.loads(result.stdout)
-  except json.JSONDecodeError as exc:raise GcloudCommandError("runtime inspection evidence was not JSON") from exc
-  if type(payload) is not dict:raise GcloudCommandError("runtime inspection evidence must be an object")
+  except json.JSONDecodeError:return _inspection_failure("needs-decision","inspection-evidence-not-json",exit_code=result.returncode,stderr=result.stderr)
+  if type(payload) is not dict:return _inspection_failure("needs-decision","inspection-evidence-malformed",exit_code=result.returncode,stderr=result.stderr)
   fixed={"project":PROJECT,"zone":ZONE,"instance":INSTANCE,"interpreter":HOST_PYTHON,"execution_authorized":False,"scheduler_invoked":False,"discovery_invoked":False,"resume_invoked":False,"side_effects_performed":False}
-  if any(payload.get(k)!=v for k,v in fixed.items()):raise GcloudCommandError("runtime inspection evidence violated fixed contract")
+  if any(payload.get(k)!=v for k,v in fixed.items()):return _inspection_failure("needs-decision","inspection-contract-violation",exit_code=result.returncode,stderr=result.stderr)
   probe=payload.get("import_probe")
-  if type(probe) is not dict or type(probe.get("stderr")) is not str or len(probe["stderr"])>MAX_DIAGNOSTIC_STDERR:raise GcloudCommandError("runtime inspection stderr exceeded bound")
+  if type(probe) is not dict or type(probe.get("stderr")) is not str:return _inspection_failure("needs-decision","inspection-contract-violation",exit_code=result.returncode,stderr=result.stderr)
+  if len(probe["stderr"])>MAX_DIAGNOSTIC_STDERR:
+   payload=dict(payload);payload["import_probe"]=dict(probe)
+   payload["import_probe"]["stderr"]=probe["stderr"][-MAX_DIAGNOSTIC_STDERR:]
+   payload["import_probe"]["stderr_truncated"]=True
   return payload
  def discover(self,resource:GceResourceTuple,*,repository:str,issue_number:int)->dict[str,object]:
   result=self._ssh(resource,_discovery_command(repository=repository,issue_number=issue_number))
@@ -124,6 +128,17 @@ def _ingress_from_file(path:Path)->IssueCommentIngressResult:
  return IssueCommentIngressResult(**{key:payload[key] for key in ("schema_version","status","reason","repository","issue_number","comment_id","actor","handoff_id_or_none","logical_trigger_id_or_none","run_attempt")})
 def _policy()->OidcTrustPolicy:return OidcTrustPolicy(repository="Blummer92/agent-os",repository_owner="Blummer92",workflow_ref=WORKFLOW_REF,ref="refs/heads/main",audience=WIF_PROVIDER)
 def _non_authorizing(status:str,reason:str)->dict[str,object]:return {"schema_version":"1.0","status":status,"reason_codes":[reason],"project":PROJECT,"zone":ZONE,"instance":INSTANCE,"interpreter":HOST_PYTHON,"execution_authorized":False,"scheduler_invoked":False,"discovery_invoked":False,"resume_invoked":False,"side_effects_performed":False}
+def _bounded_diagnostic_text(text:str)->tuple[str,bool]:
+ if type(text) is not str:text=""
+ if len(text)>MAX_DIAGNOSTIC_STDERR:return text[-MAX_DIAGNOSTIC_STDERR:],True
+ return text,False
+def _inspection_failure(status:str,reason:str,*,exit_code:int,stderr:str)->dict[str,object]:
+ bounded_stderr,truncated=_bounded_diagnostic_text(stderr)
+ envelope=_non_authorizing(status,reason)
+ envelope["ssh_exit_code"]=exit_code
+ envelope["ssh_stderr"]=bounded_stderr
+ envelope["ssh_stderr_truncated"]=truncated
+ return envelope
 
 def execute_transport(ingress:IssueCommentIngressResult,*,claims:Mapping[str,object],adapter:GcloudIapAdapter)->dict[str,object]:
  if ingress.reason=="accepted-runtime-inspection-envelope":

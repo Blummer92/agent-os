@@ -138,9 +138,12 @@ def test_fixed_command_uses_iap_and_has_no_comment_or_handoff_input(
     assert "executor-handoff:" not in command[-1]
 
 
-def test_adapter_rejects_unbounded_probe_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_oversized_probe_stderr_is_truncated_and_flagged_not_raised(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     payload = InspectionAdapter().inspect_runtime(live.RESOURCE)
-    payload["import_probe"]["stderr"] = "x" * (live.MAX_DIAGNOSTIC_STDERR + 1)
+    payload["import_probe"]["stderr"] = "x" * (live.MAX_DIAGNOSTIC_STDERR + 500)
+    payload["import_probe"]["stderr_truncated"] = False
 
     def fake_run(argv, *, timeout=60):
         class Result:
@@ -151,5 +154,173 @@ def test_adapter_rejects_unbounded_probe_stderr(monkeypatch: pytest.MonkeyPatch)
         return Result()
 
     monkeypatch.setattr(live, "_run", fake_run)
-    with pytest.raises(live.GcloudCommandError, match="stderr exceeded bound"):
-        live.GcloudIapAdapter().inspect_runtime(live.RESOURCE)
+    result = live.GcloudIapAdapter().inspect_runtime(live.RESOURCE)
+
+    assert result["status"] == "observed"
+    assert "ssh_exit_code" not in result
+    assert len(result["import_probe"]["stderr"]) == live.MAX_DIAGNOSTIC_STDERR
+    assert result["import_probe"]["stderr_truncated"] is True
+
+
+def test_command_failure_returns_bounded_result_with_exit_code_and_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(argv, *, timeout=60):
+        class Result:
+            returncode = 1
+            stdout = ""
+            stderr = "Traceback (most recent call last):\nImportError: no module\n"
+
+        return Result()
+
+    monkeypatch.setattr(live, "_run", fake_run)
+    result = live.GcloudIapAdapter().inspect_runtime(live.RESOURCE)
+
+    assert result["status"] == "needs-decision"
+    assert result["reason_codes"] == ["inspection-command-failed"]
+    assert result["ssh_exit_code"] == 1
+    assert "ImportError" in result["ssh_stderr"]
+    assert result["ssh_stderr_truncated"] is False
+    assert result["project"] == live.PROJECT
+    assert result["zone"] == live.ZONE
+    assert result["instance"] == live.INSTANCE
+    assert result["interpreter"] == live.HOST_PYTHON
+    assert result["execution_authorized"] is False
+    assert result["scheduler_invoked"] is False
+    assert result["discovery_invoked"] is False
+    assert result["resume_invoked"] is False
+    assert result["side_effects_performed"] is False
+
+
+def test_command_failure_ssh_stderr_is_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(argv, *, timeout=60):
+        class Result:
+            returncode = 1
+            stdout = ""
+            stderr = "z" * (live.MAX_DIAGNOSTIC_STDERR + 999)
+
+        return Result()
+
+    monkeypatch.setattr(live, "_run", fake_run)
+    result = live.GcloudIapAdapter().inspect_runtime(live.RESOURCE)
+
+    assert len(result["ssh_stderr"]) == live.MAX_DIAGNOSTIC_STDERR
+    assert result["ssh_stderr_truncated"] is True
+
+
+def test_empty_stdout_returns_bounded_not_json_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(argv, *, timeout=60):
+        class Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(live, "_run", fake_run)
+    result = live.GcloudIapAdapter().inspect_runtime(live.RESOURCE)
+
+    assert result["status"] == "needs-decision"
+    assert result["reason_codes"] == ["inspection-evidence-not-json"]
+    assert result["ssh_exit_code"] == 0
+
+
+def test_non_json_stdout_returns_bounded_not_json_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(argv, *, timeout=60):
+        class Result:
+            returncode = 0
+            stdout = "not json at all"
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(live, "_run", fake_run)
+    result = live.GcloudIapAdapter().inspect_runtime(live.RESOURCE)
+
+    assert result["reason_codes"] == ["inspection-evidence-not-json"]
+
+
+def test_non_object_payload_returns_bounded_malformed_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(argv, *, timeout=60):
+        class Result:
+            returncode = 0
+            stdout = json.dumps(["not", "an", "object"])
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(live, "_run", fake_run)
+    result = live.GcloudIapAdapter().inspect_runtime(live.RESOURCE)
+
+    assert result["reason_codes"] == ["inspection-evidence-malformed"]
+
+
+def test_fixed_contract_violation_returns_bounded_result_without_leaking_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = InspectionAdapter().inspect_runtime(live.RESOURCE)
+    payload["project"] = "some-other-project"
+    payload["python_context"] = {"secret": "leaked-if-echoed"}
+
+    def fake_run(argv, *, timeout=60):
+        class Result:
+            returncode = 0
+            stdout = json.dumps(payload)
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(live, "_run", fake_run)
+    result = live.GcloudIapAdapter().inspect_runtime(live.RESOURCE)
+
+    assert result["reason_codes"] == ["inspection-contract-violation"]
+    assert "python_context" not in result
+    assert "secret" not in json.dumps(result)
+
+
+def test_malformed_import_probe_shape_returns_bounded_contract_violation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = InspectionAdapter().inspect_runtime(live.RESOURCE)
+    payload["import_probe"] = "not-an-object"
+
+    def fake_run(argv, *, timeout=60):
+        class Result:
+            returncode = 0
+            stdout = json.dumps(payload)
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(live, "_run", fake_run)
+    result = live.GcloudIapAdapter().inspect_runtime(live.RESOURCE)
+
+    assert result["reason_codes"] == ["inspection-contract-violation"]
+
+
+def test_execute_transport_returns_bounded_result_without_raising_on_crash() -> None:
+    class CrashingAdapter:
+        def observe_state(self, resource):
+            return VmState.RUNNING
+
+        def inspect_runtime(self, resource):
+            return live._inspection_failure(
+                "needs-decision", "inspection-command-failed", exit_code=1, stderr="boom"
+            )
+
+    result = live.execute_transport(_ingress(), claims=_claims(), adapter=CrashingAdapter())
+    evidence = result["runtime_inspection"]
+    assert evidence["reason_codes"] == ["inspection-command-failed"]
+    assert evidence["execution_authorized"] is False
+    assert evidence["scheduler_invoked"] is False
+    assert evidence["discovery_invoked"] is False
+    assert evidence["resume_invoked"] is False
+    assert evidence["side_effects_performed"] is False
