@@ -16,6 +16,7 @@ OLD = "1" * 40
 BASE = "2" * 40
 MAIN = "3" * 40
 NEW = "4" * 40
+MERGE_BASE = "0" * 40
 
 
 @dataclass
@@ -124,6 +125,7 @@ def test_rebase_preparation_then_expected_head_transport_updates_once():
     backing = FakeBacking(snapshot())
     runner = FakeRunner(
         [
+            observation(stdout=f"{MERGE_BASE}\n"),
             observation(),
             observation(stdout=f"{NEW}\n"),
             observation(stdout=f"{OLD}\trefs/heads/agent/1237-publication-required-continuation\n"),
@@ -138,24 +140,25 @@ def test_rebase_preparation_then_expected_head_transport_updates_once():
     assert result.old_head_sha == OLD
     assert result.new_head_sha == NEW
     assert result.reason_code == "branch-updated"
-    assert runner.calls[0][0] == (
+    assert runner.calls[0][0] == ("git", "merge-base", OLD, MAIN)
+    assert runner.calls[1][0] == (
         "git",
         "rebase",
         "--no-autostash",
         "--onto",
         MAIN,
-        BASE,
+        MERGE_BASE,
         OLD,
     )
-    assert runner.calls[1][0] == ("git", "rev-parse", "--verify", "HEAD^{commit}")
-    assert runner.calls[2][0] == (
+    assert runner.calls[2][0] == ("git", "rev-parse", "--verify", "HEAD^{commit}")
+    assert runner.calls[3][0] == (
         "git",
         "ls-remote",
         "--heads",
         "origin",
         "refs/heads/agent/1237-publication-required-continuation",
     )
-    assert runner.calls[3][0] == (
+    assert runner.calls[4][0] == (
         "git",
         "push",
         f"--force-with-lease=refs/heads/agent/1237-publication-required-continuation:{OLD}",
@@ -198,38 +201,60 @@ def test_conflicted_branch_blocks_before_any_git_command():
     assert runner.calls == []
 
 
-def test_rebase_failure_is_bounded_and_does_not_attempt_push():
+def test_missing_merge_base_blocks_before_rebase_or_push():
     backing = FakeBacking(snapshot())
     runner = FakeRunner([observation(return_code=1)])
 
     result = invoke(provider(backing, runner))
 
     assert result.status == "blocked"
+    assert result.reason_code == "merge-base-unavailable"
+    assert runner.calls == [(('git', 'merge-base', OLD, MAIN), '/workspace/agent-os', {'GIT_CONFIG_NOSYSTEM': '1'})]
+
+
+def test_rebase_failure_is_bounded_and_does_not_attempt_push():
+    backing = FakeBacking(snapshot())
+    runner = FakeRunner([observation(stdout=f"{MERGE_BASE}\n"), observation(return_code=1)])
+
+    result = invoke(provider(backing, runner))
+
+    assert result.status == "blocked"
     assert result.reason_code == "rebase-rejected"
-    assert len(runner.calls) == 1
+    assert len(runner.calls) == 2
     assert all("push" not in call[0] for call in runner.calls)
 
 
 def test_rebase_timeout_is_ambiguous_and_does_not_retry():
     backing = FakeBacking(snapshot())
-    runner = FakeRunner([observation(return_code=None, timed_out=True, termination_confirmed=False)])
+    runner = FakeRunner(
+        [
+            observation(stdout=f"{MERGE_BASE}\n"),
+            observation(return_code=None, timed_out=True, termination_confirmed=False),
+        ]
+    )
 
     result = invoke(provider(backing, runner))
 
     assert result.status == "ambiguous"
     assert result.reason_code == "rebase-outcome-uncertain"
-    assert len(runner.calls) == 1
+    assert len(runner.calls) == 2
 
 
 def test_unproven_rebased_head_blocks_before_remote_transport():
     backing = FakeBacking(snapshot())
-    runner = FakeRunner([observation(), observation(stdout="not-a-sha\n")])
+    runner = FakeRunner(
+        [
+            observation(stdout=f"{MERGE_BASE}\n"),
+            observation(),
+            observation(stdout="not-a-sha\n"),
+        ]
+    )
 
     result = invoke(provider(backing, runner))
 
     assert result.status == "blocked"
     assert result.reason_code == "rebased-head-unavailable"
-    assert len(runner.calls) == 2
+    assert len(runner.calls) == 3
     assert all("push" not in call[0] for call in runner.calls)
 
 
@@ -237,6 +262,7 @@ def test_transport_uncertainty_maps_to_ambiguous_without_retry():
     backing = FakeBacking(snapshot())
     runner = FakeRunner(
         [
+            observation(stdout=f"{MERGE_BASE}\n"),
             observation(),
             observation(stdout=f"{NEW}\n"),
             observation(stdout=f"{OLD}\trefs/heads/agent/1237-publication-required-continuation\n"),
