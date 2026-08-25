@@ -142,7 +142,7 @@ def test_rebuild_advisory_fails_closed_on_capsule_identity_drift():
         _rebuild_advisory_result(descriptor, capsule)
 
 
-def test_factory_composes_one_reader_and_one_transport_into_1319(monkeypatch, tmp_path):
+def test_factory_consumes_canonical_runtime_request_into_1319(monkeypatch, tmp_path):
     descriptor = SimpleNamespace(
         handoff_id=HANDOFF_ID,
         repository="Blummer92/agent-os",
@@ -167,6 +167,8 @@ def test_factory_composes_one_reader_and_one_transport_into_1319(monkeypatch, tm
         required_environment_spec=spec,
         validation_plan_id="validation-plan:test",
     )
+    request = SimpleNamespace(invocation_descriptor=descriptor, restart_capsule=capsule)
+    loaded = SimpleNamespace(request=request, source="runtime-execution-request")
     configuration = SimpleNamespace(checkpoint_store_root=tmp_path)
     readiness = object()
     advisory = object()
@@ -177,8 +179,12 @@ def test_factory_composes_one_reader_and_one_transport_into_1319(monkeypatch, tm
 
     monkeypatch.setattr(factory, "load_production_host_configuration", lambda: configuration)
     monkeypatch.setattr(factory, "canonical_evaluated_at", lambda: "2026-08-21T12:00:00Z")
-    monkeypatch.setattr(factory, "load_invocation_descriptor", lambda root, handoff: descriptor)
-    monkeypatch.setattr(factory, "load_restart_capsule", lambda root, handoff: capsule)
+
+    def load_runtime(root, handoff):
+        captured["runtime_load"] = (root, handoff)
+        return loaded
+
+    monkeypatch.setattr(factory, "load_runtime_execution_request_or_legacy", load_runtime)
     monkeypatch.setattr(factory, "_bind_descriptor_and_capsule", lambda *args: None)
     monkeypatch.setattr(factory, "load_dependency_readiness", lambda root, identity: readiness)
     monkeypatch.setattr(factory, "_rebuild_advisory_result", lambda *args: advisory)
@@ -208,6 +214,7 @@ def test_factory_composes_one_reader_and_one_transport_into_1319(monkeypatch, tm
     result = build_production_governed_resume_bindings_for_handoff(HANDOFF_ID)
 
     assert result is bindings
+    assert captured["runtime_load"] == (tmp_path, HANDOFF_ID)
     reader_kwargs = captured["reader_kwargs"]
     assert reader_kwargs["repository"] == descriptor.repository
     assert reader_kwargs["issue_number"] == descriptor.issue_number
@@ -219,3 +226,22 @@ def test_factory_composes_one_reader_and_one_transport_into_1319(monkeypatch, tm
     assert bootstrap_kwargs["authorization_transport"] is transport
     assert bootstrap_kwargs["run_verifier"] is verifier
     assert captured["cancelled"]() is False
+
+
+def test_factory_fails_closed_when_canonical_or_legacy_runtime_load_fails(
+    monkeypatch, tmp_path
+):
+    configuration = SimpleNamespace(checkpoint_store_root=tmp_path)
+    monkeypatch.setattr(factory, "load_production_host_configuration", lambda: configuration)
+    monkeypatch.setattr(factory, "canonical_evaluated_at", lambda: "2026-08-21T12:00:00Z")
+
+    def fail_load(root, handoff):
+        raise ValueError("canonical runtime request integrity failure")
+
+    monkeypatch.setattr(factory, "load_runtime_execution_request_or_legacy", fail_load)
+
+    with pytest.raises(
+        ProductionGovernedResumeFactoryError,
+        match="production governed-resume composition failed closed",
+    ):
+        build_production_governed_resume_bindings_for_handoff(HANDOFF_ID)
