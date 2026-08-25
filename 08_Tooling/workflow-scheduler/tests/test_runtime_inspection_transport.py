@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 
 import pytest
@@ -227,11 +228,24 @@ def test_empty_stdout_returns_bounded_not_json_result(
     assert result["status"] == "needs-decision"
     assert result["reason_codes"] == ["inspection-evidence-not-json"]
     assert result["ssh_exit_code"] == 0
+    evidence = result["stdout_evidence"]
+    assert evidence["length"] == 0
+    assert evidence["empty"] is True
+    assert evidence["json_object_span_present"] is False
+    assert evidence["leading_text_before_json"] is False
+    assert evidence["trailing_text_after_json"] is False
+    assert evidence["prefix"] == ""
+    assert evidence["prefix_truncated"] is False
+    assert evidence["suffix"] == ""
+    assert evidence["suffix_truncated"] is False
+    assert evidence["sha256"] == hashlib.sha256(b"").hexdigest()
 
 
 def test_non_json_stdout_returns_bounded_not_json_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    stdout = "not json at all"
+
     def fake_run(argv, *, timeout=60):
         class Result:
             returncode = 0
@@ -244,6 +258,143 @@ def test_non_json_stdout_returns_bounded_not_json_result(
     result = live.GcloudIapAdapter().inspect_runtime(live.RESOURCE)
 
     assert result["reason_codes"] == ["inspection-evidence-not-json"]
+    evidence = result["stdout_evidence"]
+    assert evidence["length"] == len(stdout)
+    assert evidence["empty"] is False
+    assert evidence["json_object_span_present"] is False
+    assert evidence["prefix"] == stdout
+    assert evidence["prefix_truncated"] is False
+    assert evidence["suffix"] == ""
+    assert evidence["suffix_truncated"] is False
+    assert evidence["sha256"] == hashlib.sha256(stdout.encode()).hexdigest()
+
+
+def test_banner_then_json_stdout_remains_fail_closed_with_bounded_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    valid_payload = InspectionAdapter().inspect_runtime(live.RESOURCE)
+    stdout = "Warning: MOTD banner line before the real output\n" + json.dumps(valid_payload)
+
+    def fake_run(argv, *, timeout=60):
+        class Result:
+            returncode = 0
+            stdout = "Warning: MOTD banner line before the real output\n" + json.dumps(valid_payload)
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(live, "_run", fake_run)
+    result = live.GcloudIapAdapter().inspect_runtime(live.RESOURCE)
+
+    assert result["status"] == "needs-decision"
+    assert result["reason_codes"] == ["inspection-evidence-not-json"]
+    evidence = result["stdout_evidence"]
+    assert evidence["json_object_span_present"] is True
+    assert evidence["leading_text_before_json"] is True
+    assert evidence["trailing_text_after_json"] is False
+    assert "Warning: MOTD banner line" in evidence["prefix"]
+    assert evidence["sha256"] == hashlib.sha256(stdout.encode()).hexdigest()
+    # The embedded valid payload must never be silently accepted as authoritative.
+    assert "status" not in result or result["status"] == "needs-decision"
+    assert "effective_identity" not in result
+
+
+def test_json_then_trailing_junk_remains_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    valid_payload = InspectionAdapter().inspect_runtime(live.RESOURCE)
+    stdout = json.dumps(valid_payload) + "\ntrailing junk after the real output"
+
+    def fake_run(argv, *, timeout=60):
+        class Result:
+            returncode = 0
+            stdout = json.dumps(valid_payload) + "\ntrailing junk after the real output"
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(live, "_run", fake_run)
+    result = live.GcloudIapAdapter().inspect_runtime(live.RESOURCE)
+
+    assert result["reason_codes"] == ["inspection-evidence-not-json"]
+    evidence = result["stdout_evidence"]
+    assert evidence["json_object_span_present"] is True
+    assert evidence["leading_text_before_json"] is False
+    assert evidence["trailing_text_after_json"] is True
+    assert "trailing junk" in evidence["suffix"] or "trailing junk" in evidence["prefix"]
+
+
+def test_very_large_stdout_is_tightly_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stdout = "x" * 5000
+
+    def fake_run(argv, *, timeout=60):
+        class Result:
+            returncode = 0
+            stdout = "x" * 5000
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(live, "_run", fake_run)
+    result = live.GcloudIapAdapter().inspect_runtime(live.RESOURCE)
+
+    evidence = result["stdout_evidence"]
+    assert evidence["length"] == 5000
+    assert len(evidence["prefix"]) == live._STDOUT_EVIDENCE_PREFIX_CAP
+    assert len(evidence["suffix"]) == live._STDOUT_EVIDENCE_SUFFIX_CAP
+    assert evidence["prefix_truncated"] is True
+    assert evidence["suffix_truncated"] is True
+    assert evidence["sha256"] == hashlib.sha256(stdout.encode()).hexdigest()
+    # Total emitted raw content stays tightly bounded regardless of source size.
+    assert len(evidence["prefix"]) + len(evidence["suffix"]) <= 2 * live._STDOUT_EVIDENCE_PREFIX_CAP
+
+
+def test_content_beyond_the_bound_is_never_emitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "SECRET-TOKEN-abc123"
+    stdout = ("A" * 250) + secret + ("B" * 250)
+
+    def fake_run(argv, *, timeout=60):
+        class Result:
+            returncode = 0
+            stdout = ("A" * 250) + secret + ("B" * 250)
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(live, "_run", fake_run)
+    result = live.GcloudIapAdapter().inspect_runtime(live.RESOURCE)
+
+    assert secret not in json.dumps(result)
+
+
+def test_unprintable_stdout_bytes_are_sanitized_in_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stdout = "before\x00\x01\x02control-bytes-after"
+
+    def fake_run(argv, *, timeout=60):
+        class Result:
+            returncode = 0
+            stdout = "before\x00\x01\x02control-bytes-after"
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(live, "_run", fake_run)
+    result = live.GcloudIapAdapter().inspect_runtime(live.RESOURCE)
+
+    evidence = result["stdout_evidence"]
+    assert "\x00" not in evidence["prefix"]
+    assert "\x01" not in evidence["prefix"]
+    assert "\x02" not in evidence["prefix"]
+    assert "before" in evidence["prefix"]
+    assert "control-bytes-after" in evidence["prefix"]
+    # sha256 still fingerprints the real, unsanitized stdout.
+    assert evidence["sha256"] == hashlib.sha256(stdout.encode()).hexdigest()
 
 
 def test_non_object_payload_returns_bounded_malformed_result(
