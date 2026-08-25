@@ -343,11 +343,24 @@ def test_rejects_a_non_exact_admission_request_type() -> None:
 
 
 def test_reuses_every_canonical_call_exactly_once() -> None:
+    """Scoped to this function's own body: #1409 added a second, independently
+    fail-closed admission re-verification inside ``publish_authorized_validation_handoff``
+    (proven by ``test_authorized_handoff_publication_entrypoint.py``), so a
+    whole-module occurrence count no longer distinguishes "duplicated within
+    this function" from "a different function also re-verifies admission"."""
     source = MODULE_PATH.read_text(encoding="utf-8")
-    assert source.count("verify_authorized_validation_admission(") == 1
-    assert source.count("compose_and_run_validation(") == 1
-    assert source.count("build_validation_lifecycle_evidence_bundle(") == 1
-    assert source.count("project_validation_lifecycle_result(") == 1
+    tree = ast.parse(source)
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "run_authorized_validation_lifecycle"
+    )
+    function_source = ast.get_source_segment(source, function) or ""
+    assert function_source.count("verify_authorized_validation_admission(") == 1
+    assert function_source.count("compose_and_run_validation(") == 1
+    assert function_source.count("build_validation_lifecycle_evidence_bundle(") == 1
+    assert function_source.count("project_validation_lifecycle_result(") == 1
 
 
 def test_defines_no_second_orchestrator_lease_containment_or_status_model() -> None:

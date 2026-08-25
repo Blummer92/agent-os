@@ -8,6 +8,13 @@ module owns none of that logic: it is a thin ordering and evidence-assembly
 layer only, and performs no execution, admission, or status-precedence
 decision of its own.
 
+#1409 also exposes the production publication boundary for an admitted
+lifecycle. It reuses the exact admission request objects already owned here and
+accepts only the missing canonical #1243 references (route decision, checkpoint,
+ResumePlan, and dependency readiness) before delegating exactly once to
+``publish_governed_handoff``. It creates no descriptor, handoff, persistence,
+authorization, retry, lease, or Scheduler semantics of its own.
+
 No validation is ever spawned unless #757 admission is ACCEPTED. #1201 may
 additionally require a caller-supplied execution-dispatch compatibility decision;
 that decision is consumed here only as a fail-closed pre-dispatch guard and does
@@ -25,6 +32,11 @@ table in ``validation_lifecycle_evidence.project_validation_lifecycle_result``.
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from scripts.agent_os_execution_capabilities.dependencies import DependencyReadinessEvidence
+from scripts.agent_os_execution_checkpoint.models import ExecutionCheckpoint
+from scripts.agent_os_execution_checkpoint.resume_planner import ResumePlan
 from workflow_scheduler.execution.single_issue_pilot import (
     CancellationProbe,
     SingleIssuePilotInput,
@@ -42,6 +54,8 @@ from .authorized_validation import (
     verify_authorized_validation_admission,
 )
 from .execution_composition import compose_and_run_validation
+from .executor_routing import ExecutorHandoff, ExecutorRouteDecision
+from .handoff_publication import publish_governed_handoff
 from .validation_lifecycle_evidence import (
     ValidationLifecycleResult,
     build_validation_lifecycle_evidence_bundle,
@@ -68,6 +82,60 @@ def _require_dispatch_compatibility(
             f"outcome={decision.outcome.value}; reasons={reasons}; "
             f"reacquire={owners}; decision={decision.decision_id}"
         )
+
+
+def publish_authorized_validation_handoff(
+    store_root: Path | str,
+    *,
+    admission_request: AuthorizedValidationLifecycleRequest,
+    route_decision: ExecutorRouteDecision,
+    checkpoint: ExecutionCheckpoint,
+    resume_plan: ResumePlan,
+    dependency_readiness: DependencyReadinessEvidence,
+    evaluated_at: str,
+    pilot_input: SingleIssuePilotInput,
+    required_return_evidence: tuple[str, ...],
+    stop_conditions: tuple[str, ...],
+    compatibility_decision: EvidenceCompatibilityDecision | None = None,
+) -> ExecutorHandoff:
+    """Publish one admitted lifecycle through the existing #1243 seam.
+
+    The admission request already owns the current request, execution
+    authorization, CandidatePacket, and concrete runtime configuration. The
+    caller supplies only the canonical references not carried by #757. No
+    publication object is reconstructed here and no runnable handoff is exposed
+    unless ``publish_governed_handoff`` completes successfully.
+    """
+    if not isinstance(admission_request, AuthorizedValidationLifecycleRequest):
+        raise TypeError(
+            "admission_request must be exact AuthorizedValidationLifecycleRequest"
+        )
+
+    admission_result = verify_authorized_validation_admission(
+        admission_request, evaluated_at=evaluated_at
+    )
+    if admission_result.status is not AuthorizedValidationAdmissionStatus.ACCEPTED:
+        raise RuntimeError(
+            "governed handoff publication requires accepted authorized-validation admission"
+        )
+
+    _require_dispatch_compatibility(compatibility_decision)
+    execution_stage = admission_request.execution_packet_stage
+    return publish_governed_handoff(
+        store_root,
+        request=execution_stage.request,
+        route_decision=route_decision,
+        authorization=admission_request.execution_authorization,
+        checkpoint=checkpoint,
+        resume_plan=resume_plan,
+        candidate_packet=admission_request.candidate_packet,
+        runtime_configuration=execution_stage.runtime_configuration,
+        dependency_readiness=dependency_readiness,
+        pilot_input=pilot_input,
+        evaluated_at=evaluated_at,
+        required_return_evidence=required_return_evidence,
+        stop_conditions=stop_conditions,
+    )
 
 
 def run_authorized_validation_lifecycle(
