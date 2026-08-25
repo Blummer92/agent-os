@@ -2,12 +2,12 @@
 
 This module implements the concrete ``PullRequestBranchRefreshProvider`` seam
 without owning refresh admission, scope checks, validation ordering, label
-reconciliation, or final branch-current proof.  Those semantics remain in
+reconciliation, or final branch-current proof. Those semantics remain in
 ``pr_branch_refresh.refresh_pull_request_branch``.
 
 The provider prepares exactly one rebased candidate head with fixed Git argv and
 then delegates the only remote non-fast-forward mutation to #1381
-``update_branch_with_expected_head``.  It performs no retry, merge-main fallback,
+``update_branch_with_expected_head``. It performs no retry, merge-main fallback,
 unconditional force push, protected-branch mutation, or alternate refresh path.
 """
 
@@ -83,7 +83,6 @@ class ProductionPullRequestBranchRefreshProvider(PullRequestBranchRefreshProvide
         if type(self.branch_update_authorized) is not bool:
             raise TypeError("branch_update_authorized must be bool")
 
-    # PullRequestLabelProvider delegation.  Label lifecycle remains #1187-owned.
     def read(self, repository: str, pr_number: int) -> LivePullRequestSnapshot:
         return self.backing.read(repository, pr_number)
 
@@ -96,7 +95,6 @@ class ProductionPullRequestBranchRefreshProvider(PullRequestBranchRefreshProvide
     def remove_label(self, repository: str, pr_number: int, label: str) -> None:
         self.backing.remove_label(repository, pr_number, label)
 
-    # #1187 read/validation delegation.
     def read_branch(self, repository: str, pr_number: int) -> PullRequestBranchSnapshot:
         return self.backing.read_branch(repository, pr_number)
 
@@ -129,8 +127,11 @@ class ProductionPullRequestBranchRefreshProvider(PullRequestBranchRefreshProvide
         ``refresh_pull_request_branch`` has already performed canonical admission.
         This method still reacquires the live branch immediately before local
         preparation so a moved head/base/main fails before any remote mutation.
-        The fixed rebase operates on commit identities, not caller-supplied flags
-        or shell text.  A failed/ambiguous local preparation is never retried.
+        #1187's ``expected_base_sha`` is the admitted current base identity, not
+        the historical merge-base, so the merge-base is derived from the exact
+        admitted head/main commits with fixed argv before rebasing only PR-local
+        commits. No caller-supplied flags or shell text are accepted and no failed
+        or ambiguous operation is retried.
         """
 
         snapshot = self.backing.read_branch(repository, pr_number)
@@ -149,6 +150,17 @@ class ProductionPullRequestBranchRefreshProvider(PullRequestBranchRefreshProvide
                 reason_code=blocker,
             )
 
+        merge_base_result = self.runner.run(
+            (self.git_binary, "merge-base", expected_head_sha, current_main_sha),
+            cwd=self.repository_root,
+            env=dict(self.environment),
+        )
+        merge_base_sha = _exact_head(merge_base_result)
+        if merge_base_sha is None:
+            return _blocked(expected_head_sha, "merge-base-unavailable")
+        if merge_base_sha == current_main_sha:
+            return _blocked(expected_head_sha, "branch.refresh-not-required-after-merge-base")
+
         rebase = self.runner.run(
             (
                 self.git_binary,
@@ -156,7 +168,7 @@ class ProductionPullRequestBranchRefreshProvider(PullRequestBranchRefreshProvide
                 "--no-autostash",
                 "--onto",
                 current_main_sha,
-                expected_base_sha,
+                merge_base_sha,
                 expected_head_sha,
             ),
             cwd=self.repository_root,
