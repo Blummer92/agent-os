@@ -2,9 +2,9 @@
 
 ## Purpose
 
-`runtime_execution_request.py` introduces the additive migration target for the
-governed runtime path: one immutable, content-addressed, non-authorizing request
-record keyed by the existing `executor-handoff:<sha256>` identity.
+`runtime_execution_request.py` is the additive migration target for the governed
+runtime path: one immutable, content-addressed, non-authorizing request record
+keyed by the existing `executor-handoff:<sha256>` identity.
 
 The request bundles the immutable recovery artifacts that were previously
 reachable only through separate route-decision, handoff, invocation-descriptor,
@@ -26,8 +26,6 @@ Scheduler admission.
 
 ## Migration behavior
 
-This first implementation is intentionally additive.
-
 At the existing runnable-handoff descriptor persistence seam:
 
 ```text
@@ -43,9 +41,9 @@ fails, the request may remain as immutable non-authorizing evidence and grants
 no Scheduler admission by itself.
 
 The already-existing route-decision, full-handoff, ResumePlan, checkpoint,
-restart-capsule, and descriptor writes are retained in this PR as compatibility
-mirrors. No existing record is deleted, rewritten, migrated in place, or made
-less strict.
+restart-capsule, and descriptor writes remain compatibility mirrors during this
+phase. No existing record is deleted, rewritten, migrated in place, or made less
+strict.
 
 `load_runtime_execution_request_or_legacy(...)` implements the bounded dual-read
 transition:
@@ -57,8 +55,20 @@ transition:
    hide the integrity failure by falling back to legacy records.
 
 `load_current_invocation_descriptor(...)` projects the compatibility descriptor
-from that dual-read result. This gives later host-composition work a stable seam
-to switch from the old record graph without changing Scheduler semantics.
+from that dual-read result.
+
+Phase 2 moves the installed production governed-resume factory onto the same
+canonical read seam. `build_production_governed_resume_bindings_for_handoff(...)`
+loads `RuntimeExecutionRequest-or-legacy`, consumes the embedded invocation
+descriptor and restart capsule, then performs the existing dependency-readiness,
+advisory reconstruction, GitHub read transport, and host-bootstrap composition.
+The loader's source is not authority: current authorization and all other live
+admission evidence remain reacquired by their existing owners downstream.
+
+This means a valid canonical request is now the preferred production recovery
+packet, while old persisted invocations remain resumable through the bounded
+legacy reconstruction path. A present malformed canonical request remains a
+fail-closed integrity error and cannot silently downgrade to legacy evidence.
 
 ## Canonical ownership
 
@@ -88,22 +98,25 @@ lock, retry system, daemon, Scheduler, or database is introduced.
 
 ## Compatibility and rollback
 
-Rollback is repository-only for this phase: revert the #1338 request module,
-resolver integration, tests, and this document. Existing legacy records remain
-untouched and continue to be sufficient for the pre-#1338 recovery path.
-Already-written runtime-request records are immutable, non-authorizing evidence
-and do not require deletion.
+Legacy writes remain intact in Phase 2. No historical record migration or
+retirement is performed.
+
+Rollback of the production-read migration is repository-only: restore the
+production governed-resume factory to its prior standalone descriptor and
+restart-capsule reads. Existing legacy records remain sufficient for that path;
+already-written runtime-request records are immutable non-authorizing evidence
+and require no destructive cleanup.
 
 A later removal phase may stop writing legacy route/handoff/descriptor/capsule
 mirrors only after exact-head tests prove the host path consumes the canonical
 request directly and old persisted invocations remain readable through bounded
-compatibility logic. This PR does not perform that destructive transition.
+compatibility logic. Phase 2 deliberately does not perform that destructive
+transition.
 
 ## Expected simplification after migration
 
-Current publication/recovery uses separate durable records for route decision,
-handoff, ResumePlan, checkpoint, restart capsule, and invocation descriptor.
-The target after compatibility retirement is:
+Current publication still writes separate compatibility records, but production
+recovery now has one preferred durable packet:
 
 ```text
 ExecutorRouteDecision
