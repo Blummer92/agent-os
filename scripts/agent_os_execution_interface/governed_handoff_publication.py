@@ -32,7 +32,6 @@ from scripts.agent_os_candidate_packet.execution_packet_stage import (
 from scripts.agent_os_execution_capabilities.dependencies import DependencyReadinessEvidence
 from scripts.agent_os_execution_checkpoint.models import ExecutionCheckpoint
 from scripts.agent_os_execution_checkpoint.resume_planner import ResumePlan
-from workflow_scheduler.execution.single_issue_pilot import SingleIssuePilotInput
 
 PRE_PR_DEVELOPER_LOOP_OPERATION = "pre-pr-developer-loop"
 
