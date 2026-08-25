@@ -82,6 +82,17 @@ use and require Navigation Alias Registry review.
 | Files to read in order | 1. `01_Shared_Standards/global-engineering/agent-interaction-output-standard.md`<br>2. `01_Shared_Standards/global-engineering/final-report-standard.md`<br>3. `02_Agent_Overlays/_common-overlay-rules.md`<br>4. `07_Agent_Tests/agent-output-schema.md` |
 | Stop condition | Stop after profile, required fields, and ordering are clear. Presentation grants no execution, approval, or write authority. |
 
+### @typescript-react
+
+| Field | Value |
+|---|---|
+| Alias | `@typescript-react` |
+| Purpose | Shared TypeScript + React engineering guidance for web and React Native/Expo UI work. |
+| Owner | GitHub Service Agent |
+| Source of truth | GitHub shared TypeScript + React standard |
+| Files to read in order | 1. `01_Shared_Standards/typescript-react/README.md`<br>2. `04_Registry/responsibility-matrix.md`<br>3. `02_Agent_Overlays/github-service-agent.md` when repository implementation is required |
+| Stop condition | Stop after the common TypeScript/React baseline and the platform-specific follow-up boundary are clear. Do not infer a framework, production write, or new executable agent from this alias. |
+
 ### @classroom-artifact-routing
 
 | Field | Value |
@@ -95,8 +106,9 @@ use and require Navigation Alias Registry review.
 
 ## Version
 
-0.2.0
+0.3.0
 
 ## Changelog
 
+- 0.3.0 adds `@typescript-react` as the stable lookup path for the shared TypeScript + React engineering standard without creating a new agent or framework mandate (#1117).
 - 0.2.0 moves Navigation Registry and interaction-output alias ownership from retired Integration Manager references to ChatGPT Orchestrator (#1324).
