@@ -142,22 +142,36 @@ def plan_lesson_preflight(
     Failed-PR repair and CI-diagnosis contexts are material by contract because
     historical testing/repair lessons can directly prevent repeated diagnosis
     and compute, even when the initial request contains sparse task signals.
+    Known references are always consulted before a filtered data-source query.
     """
     if type(request) is not CodingKnowledgeRequest:
         raise TypeError("request must be a CodingKnowledgeRequest")
     if type(context) is not LessonPreflightContext:
         raise TypeError("context must be a LessonPreflightContext value")
 
+    selection = select_coding_knowledge(request, ())
+
     if context in _MATERIAL_REPAIR_CONTEXTS:
+        if selection.recommended_escalation is RetrievalEscalation.KNOWN_REFERENCE:
+            return LessonPreflightPlan(
+                True,
+                (f"lesson-known-reference-retrieval-required:{context.value}",),
+                RetrievalEscalation.KNOWN_REFERENCE,
+            )
         return LessonPreflightPlan(
             True,
             (f"lesson-retrieval-required:{context.value}",),
             RetrievalEscalation.FILTERED_DATA_SOURCE_QUERY,
         )
 
-    selection = select_coding_knowledge(request, ())
     if selection.sufficiency_status is SufficiencyStatus.NOT_NEEDED:
         return LessonPreflightPlan(False, selection.reason_codes, RetrievalEscalation.NONE)
+    if selection.recommended_escalation is RetrievalEscalation.KNOWN_REFERENCE:
+        return LessonPreflightPlan(
+            True,
+            ("lesson-known-reference-retrieval-required",),
+            RetrievalEscalation.KNOWN_REFERENCE,
+        )
     return LessonPreflightPlan(
         True,
         ("lesson-retrieval-required",),
