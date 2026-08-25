@@ -7,8 +7,12 @@ reconciliation, or final branch-current proof. Those semantics remain in
 
 The provider prepares exactly one rebased candidate head with fixed Git argv and
 then delegates the only remote non-fast-forward mutation to #1381
-``update_branch_with_expected_head``. It performs no retry, merge-main fallback,
-unconditional force push, protected-branch mutation, or alternate refresh path.
+``update_branch_with_expected_head``. The live backing provider reacquires GitHub
+PR/base/head/scope evidence and performs only the managed-label operations that
+#1187/#1038 authorize. Validation and bounded process execution remain injected
+from their existing canonical owners. There is no retry, merge-main fallback,
+unconditional force push, protected-branch mutation, credential acquisition, or
+alternate refresh path here.
 """
 
 from __future__ import annotations
@@ -28,7 +32,10 @@ from .pr_branch_refresh import (
     BranchRefreshMutationResult,
     BranchRefreshValidationResult,
     PullRequestBranchRefreshProvider,
+    PullRequestBranchRefreshRequest,
+    PullRequestBranchRefreshResult,
     PullRequestBranchSnapshot,
+    refresh_pull_request_branch,
 )
 from .pr_reconciler import LivePullRequestSnapshot, PullRequestLabelProvider
 
@@ -37,7 +44,7 @@ _SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 
 @runtime_checkable
 class PullRequestBranchRefreshBackingProvider(PullRequestLabelProvider, Protocol):
-    """Existing live PR/read/validation capabilities composed by this provider."""
+    """Live PR/read/validation capabilities consumed by the concrete provider."""
 
     def read_branch(self, repository: str, pr_number: int) -> PullRequestBranchSnapshot: ...
 
@@ -49,6 +56,189 @@ class PullRequestBranchRefreshBackingProvider(PullRequestLabelProvider, Protocol
         head_sha: str,
         command_ids: tuple[str, ...],
     ) -> BranchRefreshValidationResult: ...
+
+
+@runtime_checkable
+class BranchRefreshValidationExecutor(Protocol):
+    """Existing validation owner used by the live GitHub backing provider."""
+
+    def run_required_validation(
+        self,
+        repository: str,
+        pr_number: int,
+        *,
+        head_sha: str,
+        command_ids: tuple[str, ...],
+    ) -> BranchRefreshValidationResult: ...
+
+
+@runtime_checkable
+class BlockingReviewThreadsReader(Protocol):
+    """Existing review-evidence owner used only for lifecycle label projection."""
+
+    def blocking_review_threads(self, repository: str, pr_number: int) -> int: ...
+
+
+@dataclass(slots=True)
+class GitHubPullRequestBranchRefreshBackingProvider(PullRequestBranchRefreshBackingProvider):
+    """Concrete live GitHub reads/managed-label writes for #1187.
+
+    ``github_client`` is an already-authenticated PyGithub-compatible client. This
+    module never acquires credentials. ``validation_executor`` and
+    ``review_threads_reader`` are canonical owners supplied by the execution
+    surface; this class does not reimplement validation or review-thread logic.
+
+    Read failures are projected into fail-closed evidence using the exact
+    request-bound identities: branch state becomes ``unknown``, mergeability
+    becomes ``unknown``, labels are unavailable, and review state is blocking.
+    That prevents a provider/library exception from turning into mutation
+    authority while preserving #1187's own admission and post-write decisions.
+    """
+
+    github_client: object
+    request: PullRequestBranchRefreshRequest
+    validation_executor: BranchRefreshValidationExecutor
+    review_threads_reader: BlockingReviewThreadsReader
+    _validation_state_by_head: dict[str, str] = field(default_factory=dict, init=False)
+
+    def __post_init__(self) -> None:
+        if not hasattr(self.github_client, "get_repo"):
+            raise TypeError("github_client must provide get_repo")
+        if not isinstance(self.validation_executor, BranchRefreshValidationExecutor):
+            raise TypeError("validation_executor does not satisfy BranchRefreshValidationExecutor")
+        if not isinstance(self.review_threads_reader, BlockingReviewThreadsReader):
+            raise TypeError("review_threads_reader does not satisfy BlockingReviewThreadsReader")
+        if not isinstance(self.request, PullRequestBranchRefreshRequest):
+            raise TypeError("request must be exact PullRequestBranchRefreshRequest")
+
+    def read_branch(self, repository: str, pr_number: int) -> PullRequestBranchSnapshot:
+        try:
+            repo = self.github_client.get_repo(repository)
+            pr = repo.get_pull(pr_number)
+            base_branch = str(pr.base.ref)
+            head_branch = str(pr.head.ref)
+            head_sha = _require_sha40(str(pr.head.sha), "head_sha")
+            base_sha = _require_sha40(str(repo.get_branch(base_branch).commit.sha), "base_sha")
+            current_main_sha = _require_sha40(
+                str(repo.get_branch("main").commit.sha), "current_main_sha"
+            )
+            mergeability = _mergeability(pr)
+            comparison = repo.compare(current_main_sha, head_sha)
+            comparison_status = str(getattr(comparison, "status", "unknown"))
+            if mergeability == "conflicted":
+                branch_state = "conflicted"
+            elif comparison_status in {"ahead", "identical"}:
+                branch_state = "current"
+            elif comparison_status in {"behind", "diverged"}:
+                branch_state = "behind"
+            else:
+                branch_state = "unknown"
+            changed_paths = tuple(
+                sorted({str(item.filename) for item in pr.get_files() if getattr(item, "filename", None)})
+            )
+            return PullRequestBranchSnapshot(
+                repository=repository,
+                pr_number=pr_number,
+                base_branch=base_branch,
+                base_sha=base_sha,
+                head_branch=head_branch,
+                head_sha=head_sha,
+                current_main_sha=current_main_sha,
+                branch_state=branch_state,
+                mergeability=mergeability,
+                changed_paths=changed_paths,
+            )
+        except Exception:
+            return self._unknown_branch(repository, pr_number)
+
+    def read(self, repository: str, pr_number: int) -> LivePullRequestSnapshot:
+        branch = self.read_branch(repository, pr_number)
+        try:
+            repo = self.github_client.get_repo(repository)
+            pr = repo.get_pull(pr_number)
+            labels = tuple(sorted({str(item.name) for item in repo.get_issue(pr_number).labels}))
+            draft = bool(getattr(pr, "draft", True))
+        except Exception:
+            labels = ()
+            draft = True
+
+        try:
+            blocking_review_threads = self.review_threads_reader.blocking_review_threads(
+                repository, pr_number
+            )
+            if type(blocking_review_threads) is not int or blocking_review_threads < 0:
+                raise ValueError("blocking review-thread count is malformed")
+        except Exception:
+            blocking_review_threads = 1
+
+        validation_state = self._validation_state_by_head.get(branch.head_sha, "pending")
+        return LivePullRequestSnapshot(
+            repository=repository,
+            pr_number=pr_number,
+            head_sha=branch.head_sha,
+            draft=draft,
+            mergeable=branch.mergeability == "mergeable",
+            conflicted=branch.mergeability == "conflicted",
+            behind=branch.branch_state == "behind",
+            validation_state=validation_state,
+            blocking_review_threads=blocking_review_threads,
+            labels=labels,
+        )
+
+    def available_labels(self, repository: str) -> tuple[str, ...]:
+        try:
+            repo = self.github_client.get_repo(repository)
+            return tuple(sorted({str(item.name) for item in repo.get_labels()}))
+        except Exception:
+            return ()
+
+    def add_label(self, repository: str, pr_number: int, label: str) -> None:
+        self.github_client.get_repo(repository).get_issue(pr_number).add_to_labels(label)
+
+    def remove_label(self, repository: str, pr_number: int, label: str) -> None:
+        self.github_client.get_repo(repository).get_issue(pr_number).remove_from_labels(label)
+
+    def run_required_validation(
+        self,
+        repository: str,
+        pr_number: int,
+        *,
+        head_sha: str,
+        command_ids: tuple[str, ...],
+    ) -> BranchRefreshValidationResult:
+        try:
+            result = self.validation_executor.run_required_validation(
+                repository,
+                pr_number,
+                head_sha=head_sha,
+                command_ids=command_ids,
+            )
+        except Exception:
+            result = BranchRefreshValidationResult(
+                head_sha=head_sha,
+                status="failing",
+                command_ids=command_ids,
+            )
+        if result.head_sha == head_sha:
+            self._validation_state_by_head[head_sha] = (
+                "green" if result.status == "green" else "failing"
+            )
+        return result
+
+    def _unknown_branch(self, repository: str, pr_number: int) -> PullRequestBranchSnapshot:
+        request = self.request
+        return PullRequestBranchSnapshot(
+            repository=repository,
+            pr_number=pr_number,
+            base_branch=request.base_branch,
+            base_sha=request.expected_base_sha,
+            head_branch="unknown",
+            head_sha=request.expected_head_sha,
+            current_main_sha=request.current_main_sha,
+            branch_state="unknown",
+            mergeability="unknown",
+            changed_paths=(),
+        )
 
 
 @dataclass(slots=True)
@@ -122,17 +312,7 @@ class ProductionPullRequestBranchRefreshProvider(PullRequestBranchRefreshProvide
         expected_base_sha: str,
         current_main_sha: str,
     ) -> BranchRefreshMutationResult:
-        """Prepare one candidate rebase and publish it only through #1381.
-
-        ``refresh_pull_request_branch`` has already performed canonical admission.
-        This method still reacquires the live branch immediately before local
-        preparation so a moved head/base/main fails before any remote mutation.
-        #1187's ``expected_base_sha`` is the admitted current base identity, not
-        the historical merge-base, so the merge-base is derived from the exact
-        admitted head/main commits with fixed argv before rebasing only PR-local
-        commits. No caller-supplied flags or shell text are accepted and no failed
-        or ambiguous operation is retried.
-        """
+        """Prepare one candidate rebase and publish it only through #1381."""
 
         snapshot = self.backing.read_branch(repository, pr_number)
         blocker = _preparation_blocker(
@@ -144,11 +324,9 @@ class ProductionPullRequestBranchRefreshProvider(PullRequestBranchRefreshProvide
             current_main_sha=current_main_sha,
         )
         if blocker is not None:
-            return BranchRefreshMutationResult(
-                status="blocked",
-                old_head_sha=expected_head_sha,
-                reason_code=blocker,
-            )
+            return _blocked(expected_head_sha, blocker)
+        if not self.authorization_current or not self.branch_update_authorized:
+            return _blocked(expected_head_sha, "authorization.refresh-required-before-preparation")
 
         merge_base_result = self.runner.run(
             (self.git_binary, "merge-base", expected_head_sha, current_main_sha),
@@ -221,6 +399,48 @@ class ProductionPullRequestBranchRefreshProvider(PullRequestBranchRefreshProvide
         return _blocked(expected_head_sha, f"transport.{update.reason}")
 
 
+def run_production_pull_request_branch_refresh(
+    *,
+    github_client: object,
+    runner: BranchUpdateRunner,
+    validation_executor: BranchRefreshValidationExecutor,
+    review_threads_reader: BlockingReviewThreadsReader,
+    request: PullRequestBranchRefreshRequest,
+    repository_root: str,
+    invocation_id: str,
+    environment: Mapping[str, str] | None = None,
+    git_binary: str = "git",
+) -> PullRequestBranchRefreshResult:
+    """Reacquire live GitHub evidence and delegate exactly once to #1187.
+
+    The caller supplies already-established credentialed GitHub, validation,
+    review-evidence, and bounded-process capabilities. This function creates no
+    alternate authority. Request authorization is passed through unchanged to
+    both #1187 and the #1381 branch-update transport.
+    """
+
+    if not isinstance(request, PullRequestBranchRefreshRequest):
+        raise TypeError("request must be exact PullRequestBranchRefreshRequest")
+    backing = GitHubPullRequestBranchRefreshBackingProvider(
+        github_client=github_client,
+        request=request,
+        validation_executor=validation_executor,
+        review_threads_reader=review_threads_reader,
+    )
+    provider = ProductionPullRequestBranchRefreshProvider(
+        backing=backing,
+        runner=runner,
+        repository_root=repository_root,
+        invocation_id=invocation_id,
+        authorization_id=request.authorization_id,
+        authorization_current=request.authorization_current,
+        branch_update_authorized=request.branch_refresh_authorized,
+        environment=dict(environment or {}),
+        git_binary=git_binary,
+    )
+    return refresh_pull_request_branch(provider, request)
+
+
 def _preparation_blocker(
     snapshot: PullRequestBranchSnapshot,
     *,
@@ -239,6 +459,23 @@ def _preparation_blocker(
     if snapshot.branch_state != "behind" or snapshot.mergeability in {"conflicted", "unknown"}:
         return "branch.refresh-not-eligible-before-preparation"
     return None
+
+
+def _mergeability(pr: object) -> str:
+    mergeable_state = str(getattr(pr, "mergeable_state", "unknown") or "unknown")
+    mergeable = getattr(pr, "mergeable", None)
+    if mergeable_state == "dirty" or mergeable is False:
+        return "conflicted"
+    if mergeable is None or mergeable_state == "unknown":
+        return "unknown"
+    return "mergeable"
+
+
+def _require_sha40(value: str, name: str) -> str:
+    normalized = value.lower()
+    if _SHA40_RE.fullmatch(normalized) is None:
+        raise ValueError(f"{name} must be a full lowercase commit SHA")
+    return normalized
 
 
 def _exact_head(observation: object) -> str | None:
