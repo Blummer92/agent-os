@@ -68,6 +68,24 @@ def test_unrelated_task_is_not_needed_without_retrieval():
     assert result.candidate_count == 0
 
 
+def test_known_lesson_reference_is_retrieved_before_filtered_query():
+    plan = plan_lesson_preflight(
+        request(known_knowledge_refs=("python:hypothesis:property-based-testing",))
+    )
+    assert plan.retrieval_required is True
+    assert plan.recommended_escalation is RetrievalEscalation.KNOWN_REFERENCE
+    assert plan.reason_codes == ("lesson-known-reference-retrieval-required",)
+    assert plan.notion_read_performed is False
+
+
+def test_filtered_query_remains_default_without_known_lesson_reference():
+    plan = plan_lesson_preflight(request())
+    assert plan.retrieval_required is True
+    assert plan.recommended_escalation is RetrievalEscalation.FILTERED_DATA_SOURCE_QUERY
+    assert plan.reason_codes == ("lesson-retrieval-required",)
+    assert plan.notion_read_performed is False
+
+
 def test_failed_pr_repair_requires_bounded_retrieval_even_with_sparse_signals():
     req = request(
         task_reference="pr:#1350",
@@ -96,6 +114,37 @@ def test_ci_diagnosis_requires_bounded_retrieval_even_with_sparse_signals():
     plan = plan_lesson_preflight(req, context=LessonPreflightContext.CI_DIAGNOSIS)
     assert plan.retrieval_required is True
     assert plan.reason_codes == ("lesson-retrieval-required:ci-diagnosis",)
+    assert plan.recommended_escalation is RetrievalEscalation.FILTERED_DATA_SOURCE_QUERY
+
+
+def test_failed_pr_repair_known_reference_precedes_filtered_query():
+    plan = plan_lesson_preflight(
+        request(
+            task_reference="pr:#1350",
+            known_knowledge_refs=("python:hypothesis:property-based-testing",),
+        ),
+        context=LessonPreflightContext.FAILED_PR_REPAIR,
+    )
+    assert plan.retrieval_required is True
+    assert plan.recommended_escalation is RetrievalEscalation.KNOWN_REFERENCE
+    assert plan.reason_codes == (
+        "lesson-known-reference-retrieval-required:failed-pr-repair",
+    )
+
+
+def test_ci_diagnosis_known_reference_precedes_filtered_query():
+    plan = plan_lesson_preflight(
+        request(
+            task_reference="workflow-run:32663704875/job:97253664878",
+            known_knowledge_refs=("python:hypothesis:property-based-testing",),
+        ),
+        context=LessonPreflightContext.CI_DIAGNOSIS,
+    )
+    assert plan.retrieval_required is True
+    assert plan.recommended_escalation is RetrievalEscalation.KNOWN_REFERENCE
+    assert plan.reason_codes == (
+        "lesson-known-reference-retrieval-required:ci-diagnosis",
+    )
 
 
 def test_failed_pr_repair_unavailable_retrieval_uses_safe_github_fallback():
