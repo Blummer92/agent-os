@@ -9,9 +9,11 @@ from scripts.agent_os_issue_labels.pr_branch_refresh import (
     PullRequestBranchRefreshRequest,
     PullRequestBranchSnapshot,
 )
+import scripts.agent_os_issue_labels.pr_branch_refresh_provider as provider_module
 from scripts.agent_os_issue_labels.pr_branch_refresh_provider import (
     GitHubPullRequestBranchRefreshBackingProvider,
     ProductionPullRequestBranchRefreshProvider,
+    run_production_pull_request_branch_refresh,
 )
 from scripts.agent_os_issue_labels.pr_reconciler import LivePullRequestSnapshot
 
@@ -339,7 +341,25 @@ def test_live_github_read_failure_is_fail_closed_unknown_not_authority():
     branch = backing.read_branch("Blummer92/agent-os", 1363)
     assert branch.branch_state == "unknown" and branch.mergeability == "unknown"
     assert branch.changed_paths == ()
+    live = backing.read("Blummer92/agent-os", 1363)
+    assert live.mergeable is False and live.behind is False
     assert backing.available_labels("Blummer92/agent-os") == ()
+
+
+def test_uncertain_branch_evidence_blocks_managed_label_catalog_before_write():
+    repo = FakeRepo()
+    repo.pull.mergeable = None
+    repo.pull.mergeable_state = "unknown"
+    backing = GitHubPullRequestBranchRefreshBackingProvider(
+        github_client=FakeGithub(repo),
+        request=request(),
+        validation_executor=FakeValidationExecutor(),
+        review_threads_reader=FakeReviewThreadsReader(),
+    )
+    live = backing.read("Blummer92/agent-os", 1363)
+    assert live.mergeable is False
+    assert backing.available_labels("Blummer92/agent-os") == ()
+    assert repo.issue.added == [] and repo.issue.removed == []
 
 
 def test_validation_failure_is_projected_for_existing_lifecycle_owner():
@@ -351,3 +371,37 @@ def test_validation_failure_is_projected_for_existing_lifecycle_owner():
     )
     result = backing.run_required_validation("Blummer92/agent-os", 1363, head_sha=NEW, command_ids=("focused",))
     assert result.status == "failing"
+
+
+def test_production_entrypoint_delegates_exactly_once_to_1187(monkeypatch):
+    calls = []
+    sentinel = object()
+
+    def fake_refresh(provider, supplied_request):
+        calls.append((provider, supplied_request))
+        return sentinel
+
+    monkeypatch.setattr(provider_module, "refresh_pull_request_branch", fake_refresh)
+    supplied_request = request()
+    runner = FakeRunner([])
+    result = run_production_pull_request_branch_refresh(
+        github_client=FakeGithub(),
+        runner=runner,
+        validation_executor=FakeValidationExecutor(),
+        review_threads_reader=FakeReviewThreadsReader(),
+        request=supplied_request,
+        repository_root="/workspace/agent-os",
+        invocation_id="invocation-1365",
+        environment={"GIT_CONFIG_NOSYSTEM": "1"},
+    )
+
+    assert result is sentinel
+    assert len(calls) == 1
+    delegated_provider, delegated_request = calls[0]
+    assert isinstance(delegated_provider, ProductionPullRequestBranchRefreshProvider)
+    assert isinstance(delegated_provider.backing, GitHubPullRequestBranchRefreshBackingProvider)
+    assert delegated_request is supplied_request
+    assert delegated_provider.authorization_id == supplied_request.authorization_id
+    assert delegated_provider.authorization_current is supplied_request.authorization_current
+    assert delegated_provider.branch_update_authorized is supplied_request.branch_refresh_authorized
+    assert runner.calls == []
