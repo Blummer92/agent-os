@@ -620,11 +620,14 @@ class ExecutorRouteDecision:
         if type(payload) is not dict:
             raise TypeError("route decision must be an exact object")
         expected = {item.name for item in fields(cls)}
-        if set(payload) != expected:
+        optional_legacy_field = "external_fallback_capabilities"
+        payload_fields = set(payload)
+        if payload_fields not in {expected, expected - {optional_legacy_field}}:
             raise ValueError("route decision contains unknown or missing fields")
         if payload["side_effects_performed"] is not False:
             raise ValueError("side_effects_performed must be false")
         values = dict(payload)
+        values.setdefault(optional_legacy_field, None)
         values.pop("side_effects_performed")
         values["required_capabilities"] = tuple(
             ExecutorCapability(item)
