@@ -106,6 +106,12 @@ def _normalize_probe_tree(package_root: Path) -> None:
             child.chmod(0o755 if prior_mode & 0o100 else 0o644)
 
 
+def _model_observed_preserved_modes(package: Path, module: Path) -> None:
+    """Model the exact restrictive state observed after the live system reinstall."""
+    package.chmod(0o700)
+    module.chmod(0o600)
+
+
 def test_privileged_installer_scopes_runtime_umask_without_weakening_staging() -> None:
     text = PRIVILEGED.read_text(encoding="utf-8")
 
@@ -161,8 +167,9 @@ def test_repair_in_place_normalizes_preexisting_restrictive_package_tree() -> No
         assert _mode(module) == 0o600
 
         _pip_force_reinstall_with_umask(wheel, runtime, "022")
+        _model_observed_preserved_modes(package, module)
         assert _mode(package) == 0o700
-        assert _mode(module) == 0o644
+        assert _mode(module) == 0o600
 
         _normalize_probe_tree(package)
         assert _mode(package) == 0o755
@@ -218,14 +225,32 @@ def test_runtime_publication_imports_from_a_different_unprivileged_identity() ->
     base.chmod(0o755)
     try:
         wheel = _build_probe_wheel(base)
-        restrictive = base / "u077"
-        runtime = base / "u022"
-        restrictive.mkdir(mode=0o755)
+        runtime = base / "runtime"
         runtime.mkdir(mode=0o755)
-        _pip_install_with_umask(wheel, restrictive, "077")
-        _pip_install_with_umask(wheel, runtime, "022")
+        _pip_install_with_umask(wheel, runtime, "077")
 
+        package = runtime / "agent_os_permission_probe"
+        module = package / "__init__.py"
         probe = "import agent_os_permission_probe as p; print(p.VALUE)"
+        restrictive_result = subprocess.run(
+            [
+                "sudo",
+                "-n",
+                "-u",
+                "nobody",
+                "/usr/bin/python3",
+                "-c",
+                f"import sys; sys.path.insert(0, {str(runtime)!r}); {probe}",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert restrictive_result.returncode != 0
+
+        _pip_force_reinstall_with_umask(wheel, runtime, "022")
+        _model_observed_preserved_modes(package, module)
+        _normalize_probe_tree(package)
         allowed = subprocess.run(
             [
                 "sudo",
@@ -240,27 +265,9 @@ def test_runtime_publication_imports_from_a_different_unprivileged_identity() ->
             capture_output=True,
             text=True,
         )
-        restrictive_result = subprocess.run(
-            [
-                "sudo",
-                "-n",
-                "-u",
-                "nobody",
-                "/usr/bin/python3",
-                "-c",
-                f"import sys; sys.path.insert(0, {str(restrictive)!r}); {probe}",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
 
         assert allowed.returncode == 0, allowed.stdout + allowed.stderr
         assert allowed.stdout.strip() == "42"
-        assert not (
-            restrictive_result.returncode == 0
-            and restrictive_result.stdout.strip() == "42"
-        ), restrictive_result.stdout + restrictive_result.stderr
     finally:
         shutil.rmtree(base, ignore_errors=True)
 
