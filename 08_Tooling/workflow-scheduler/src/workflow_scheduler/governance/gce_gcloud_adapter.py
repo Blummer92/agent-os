@@ -7,7 +7,9 @@ retry loop for invocation, and no stop capability in the first activation.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import re
 import shlex
 import subprocess
 import time
@@ -89,7 +91,10 @@ class GcloudIapAdapter:
   result=self._ssh(resource,RUNTIME_INSPECTION_COMMAND)
   if result.returncode!=0:return _inspection_failure("needs-decision","inspection-command-failed",exit_code=result.returncode,stderr=result.stderr)
   try:payload=json.loads(result.stdout)
-  except json.JSONDecodeError:return _inspection_failure("needs-decision","inspection-evidence-not-json",exit_code=result.returncode,stderr=result.stderr)
+  except json.JSONDecodeError:
+   envelope=_inspection_failure("needs-decision","inspection-evidence-not-json",exit_code=result.returncode,stderr=result.stderr)
+   envelope["stdout_evidence"]=_stdout_contamination_evidence(result.stdout)
+   return envelope
   if type(payload) is not dict:return _inspection_failure("needs-decision","inspection-evidence-malformed",exit_code=result.returncode,stderr=result.stderr)
   fixed={"project":PROJECT,"zone":ZONE,"instance":INSTANCE,"interpreter":HOST_PYTHON,"execution_authorized":False,"scheduler_invoked":False,"discovery_invoked":False,"resume_invoked":False,"side_effects_performed":False}
   if any(payload.get(k)!=v for k,v in fixed.items()):return _inspection_failure("needs-decision","inspection-contract-violation",exit_code=result.returncode,stderr=result.stderr)
@@ -139,6 +144,28 @@ def _inspection_failure(status:str,reason:str,*,exit_code:int,stderr:str)->dict[
  envelope["ssh_stderr"]=bounded_stderr
  envelope["ssh_stderr_truncated"]=truncated
  return envelope
+
+_STDOUT_EVIDENCE_PREFIX_CAP=200
+_STDOUT_EVIDENCE_SUFFIX_CAP=200
+_UNSAFE_SNIPPET_CHAR_RE=re.compile(r'[^\x09\x0a\x0d\x20-\x7e]')
+def _sanitize_stdout_snippet(text:str)->str:return _UNSAFE_SNIPPET_CHAR_RE.sub("?",text)
+def _stdout_contamination_evidence(stdout:str)->dict[str,object]:
+ if type(stdout) is not str:stdout=""
+ length=len(stdout)
+ first_brace=stdout.find("{");last_brace=stdout.rfind("}")
+ json_span_present=first_brace!=-1 and last_brace!=-1 and first_brace<last_brace
+ return {
+  "length":length,
+  "empty":length==0,
+  "json_object_span_present":json_span_present,
+  "leading_text_before_json":json_span_present and first_brace>0,
+  "trailing_text_after_json":json_span_present and last_brace<length-1,
+  "prefix":_sanitize_stdout_snippet(stdout[:_STDOUT_EVIDENCE_PREFIX_CAP]),
+  "prefix_truncated":length>_STDOUT_EVIDENCE_PREFIX_CAP,
+  "suffix":_sanitize_stdout_snippet(stdout[-_STDOUT_EVIDENCE_SUFFIX_CAP:]) if length>_STDOUT_EVIDENCE_PREFIX_CAP else "",
+  "suffix_truncated":length>_STDOUT_EVIDENCE_PREFIX_CAP+_STDOUT_EVIDENCE_SUFFIX_CAP,
+  "sha256":hashlib.sha256(stdout.encode("utf-8",errors="replace")).hexdigest(),
+ }
 
 def execute_transport(ingress:IssueCommentIngressResult,*,claims:Mapping[str,object],adapter:GcloudIapAdapter)->dict[str,object]:
  if ingress.reason=="accepted-runtime-inspection-envelope":
