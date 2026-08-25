@@ -132,6 +132,8 @@ def test_schema_and_closed_vocabularies() -> None:
         "git-reconciliation",
         "exact-head-validation",
         "checkpointed-resume",
+        "github-api-read",
+        "github-api-write",
     ]
 
 
@@ -197,6 +199,109 @@ def test_fallback_requires_availability_and_permission(
     assert result.selected_route is ExecutorRoute.HUMAN_DECISION_REQUIRED
     assert reason in result.route_reasons
     assert ExecutorRouteReason.NO_CAPABLE_APPROVED_ROUTE in result.route_reasons
+
+
+def test_fallback_with_unasserted_capability_evidence_preserves_prior_behavior() -> None:
+    """``external_fallback_capabilities`` omitted (``None``) is unasserted
+    evidence, not proof of zero capability: existing callers that never
+    supply it keep today's available+permitted routing unchanged."""
+    result = decision(
+        required_capabilities=(ExecutorCapability.CHECKOUT,),
+        governed_runner_capabilities=(),
+        external_fallback_available=True,
+        external_fallback_explicitly_permitted=True,
+    )
+    assert result.selected_route is ExecutorRoute.EXTERNAL_CODING_AGENT_FALLBACK
+    assert result.external_fallback_capabilities is None
+
+
+def test_fallback_selected_when_asserted_capabilities_satisfy_requirement() -> None:
+    result = decision(
+        required_capabilities=(ExecutorCapability.CHECKOUT,),
+        governed_runner_capabilities=(),
+        external_fallback_available=True,
+        external_fallback_explicitly_permitted=True,
+        external_fallback_capabilities=(ExecutorCapability.CHECKOUT,),
+    )
+    assert result.selected_route is ExecutorRoute.EXTERNAL_CODING_AGENT_FALLBACK
+
+
+def test_fallback_rejected_when_asserted_capabilities_are_missing_one() -> None:
+    result = decision(
+        required_capabilities=(
+            ExecutorCapability.CHECKOUT,
+            ExecutorCapability.GITHUB_API_READ,
+        ),
+        governed_runner_capabilities=(),
+        external_fallback_available=True,
+        external_fallback_explicitly_permitted=True,
+        external_fallback_capabilities=(ExecutorCapability.CHECKOUT,),
+    )
+    assert result.selected_route is ExecutorRoute.HUMAN_DECISION_REQUIRED
+    assert (
+        ExecutorRouteReason.EXTERNAL_FALLBACK_MISSING_REQUIRED_CAPABILITY
+        in result.route_reasons
+    )
+    assert ExecutorRouteReason.NO_CAPABLE_APPROVED_ROUTE in result.route_reasons
+    assert not any(
+        (
+            result.execution_authorized,
+            result.github_writes_authorized,
+            result.external_writes_authorized,
+            result.merge_authorized,
+        )
+    )
+
+
+def test_1363_external_surface_without_direct_github_api_capability_is_rejected() -> None:
+    """Regression for #1363: an external coding-agent surface that has
+    checkout/process/tests/git but lacks direct authenticated GitHub API
+    capability must be rejected before execution, even though it is
+    available and explicitly permitted, and even though the governed
+    runner is also unavailable for this operation."""
+    required = (
+        ExecutorCapability.CHECKOUT,
+        ExecutorCapability.GIT_RECONCILIATION,
+        ExecutorCapability.PROCESS_EXECUTION,
+        ExecutorCapability.TEST_EXECUTION,
+        ExecutorCapability.GITHUB_API_WRITE,
+    )
+    required = tuple(sorted(required, key=lambda item: item.value))
+    surface_b_capabilities = tuple(
+        sorted(
+            (
+                ExecutorCapability.CHECKOUT,
+                ExecutorCapability.GIT_RECONCILIATION,
+                ExecutorCapability.PROCESS_EXECUTION,
+                ExecutorCapability.TEST_EXECUTION,
+            ),
+            key=lambda item: item.value,
+        )
+    )
+    result = decision(
+        required_capabilities=required,
+        governed_runner_capabilities=(),
+        governed_runner_available=False,
+        external_fallback_available=True,
+        external_fallback_explicitly_permitted=True,
+        external_fallback_capabilities=surface_b_capabilities,
+    )
+    assert result.selected_route is ExecutorRoute.HUMAN_DECISION_REQUIRED
+    assert (
+        ExecutorRouteReason.EXTERNAL_FALLBACK_MISSING_REQUIRED_CAPABILITY
+        in result.route_reasons
+    )
+
+    capable_result = decision(
+        required_capabilities=required,
+        governed_runner_capabilities=(),
+        governed_runner_available=False,
+        external_fallback_available=True,
+        external_fallback_explicitly_permitted=True,
+        external_fallback_capabilities=required,
+        validation_command_plan_id_or_none="command-plan:1363",
+    )
+    assert capable_result.selected_route is ExecutorRoute.EXTERNAL_CODING_AGENT_FALLBACK
 
 
 @pytest.mark.parametrize(
