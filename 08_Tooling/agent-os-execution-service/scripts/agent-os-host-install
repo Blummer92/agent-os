@@ -212,6 +212,65 @@ PIP_NO_INDEX=1 python3 -m pip install \
   "$service_wheel" >&2
 umask 077
 
+# pip --force-reinstall may preserve restrictive modes on existing package
+# directories. Normalize only the four fixed Agent OS package roots. Refuse
+# symlinked roots or descendants instead of following them into unrelated paths.
+python3 - <<'PY_RUNTIME_PERMISSIONS'
+from __future__ import annotations
+
+import os
+import stat
+import sysconfig
+from pathlib import Path
+
+site_root = Path(sysconfig.get_path("purelib")).resolve()
+package_roots = (
+    "reusable_capability_registry",
+    "agent_memory_context_manager",
+    "workflow_scheduler",
+    "agent_os_execution_service",
+)
+
+for package_name in package_roots:
+    package_root = site_root / package_name
+    if package_root.is_symlink() or not package_root.is_dir():
+        raise SystemExit(
+            f"host runtime install refused: runtime package root unavailable: {package_name}"
+        )
+    resolved_root = package_root.resolve()
+    if resolved_root.parent != site_root:
+        raise SystemExit(
+            f"host runtime install refused: runtime package root escaped site root: {package_name}"
+        )
+
+    for current_root, dir_names, file_names in os.walk(package_root, followlinks=False):
+        current = Path(current_root)
+        if current.is_symlink():
+            raise SystemExit(
+                f"host runtime install refused: runtime package symlink directory: {package_name}"
+            )
+        os.chown(current, 0, 0)
+        os.chmod(current, 0o755)
+
+        for dir_name in dir_names:
+            child = current / dir_name
+            if child.is_symlink():
+                raise SystemExit(
+                    f"host runtime install refused: runtime package symlink directory: {package_name}"
+                )
+
+        for file_name in file_names:
+            child = current / file_name
+            if child.is_symlink() or not child.is_file():
+                raise SystemExit(
+                    f"host runtime install refused: runtime package unsafe file: {package_name}"
+                )
+            prior_mode = stat.S_IMODE(child.stat().st_mode)
+            target_mode = 0o755 if prior_mode & 0o100 else 0o644
+            os.chown(child, 0, 0)
+            os.chmod(child, target_mode)
+PY_RUNTIME_PERMISSIONS
+
 (
   cd /
   env -u PYTHONPATH "$PYTHON" -c 'import agent_os_execution_service.handoff_discovery_entrypoint; import agent_os_execution_service.governed_resume_entrypoint; import workflow_scheduler.execution._clone3_cgroup'
