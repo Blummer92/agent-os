@@ -83,7 +83,7 @@ def _classify(refusal: str) -> str:
 
 def test_repair_uses_sha_pinned_host_checkout_without_scp() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "HOST_RUNTIME_SOURCE_SHA: 8ff48b3f59020326dadf255e05d6140d8ea6d9d0" in text
+    assert "HOST_RUNTIME_SOURCE_SHA: 75065e858a15e0c38d25f9c13bf08a32be78b42f" in text
     assert "gcloud compute scp" not in text
     assert (
         'installer="\\$root/08_Tooling/agent-os-execution-service/scripts/install-host-runtime"'
