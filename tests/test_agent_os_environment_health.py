@@ -7,6 +7,7 @@ simulated by controlling `PATH`.
 """
 from __future__ import annotations
 
+import http.server
 import importlib.util
 import json
 import os
@@ -14,6 +15,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -240,40 +242,137 @@ def test_validation_commands_check_passes_against_real_repository() -> None:
 
 
 # --- GitHub authentication capability, without revealing token contents ----
+#
+# #1401 hardening: token presence alone is never authentication proof.
+# `local-only` never opens a network connection; `github-connected` performs
+# exactly one bounded, read-only, direct GitHub API probe (never `gh auth
+# status`, which only proves generic connector/CLI access -- the #1363 root
+# cause). A loopback HTTP server stands in for api.github.com so these tests
+# stay fully offline and deterministic.
 
 
-def test_github_auth_capability_reports_env_source_without_leaking_token(repo: Path) -> None:
+class _FixedResponseHandler(http.server.BaseHTTPRequestHandler):
+    status_code = 200
+    request_count = 0
+
+    def do_GET(self) -> None:  # noqa: N802 -- stdlib handler method name
+        type(self).request_count += 1
+        self.send_response(self.status_code)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b"{}")
+
+    def log_message(self, *_args: object) -> None:
+        return
+
+
+@pytest.fixture
+def fake_github_api():
+    servers: list[http.server.HTTPServer] = []
+    handlers: list[type] = []
+
+    def _make(status_code: int):
+        handler = type(
+            "Handler", (_FixedResponseHandler,), {"status_code": status_code, "request_count": 0}
+        )
+        server = http.server.HTTPServer(("127.0.0.1", 0), handler)
+        servers.append(server)
+        handlers.append(handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        return f"http://127.0.0.1:{server.server_port}/user", handler
+
+    yield _make
+    for server in servers:
+        server.shutdown()
+        server.server_close()
+
+
+def test_github_auth_capability_local_only_never_probes_and_never_leaks_token(repo: Path) -> None:
     fake_token = "ghp_totallyfaketokenvalue1234567890"
     env = _env(repo.parent, GITHUB_TOKEN=fake_token)
     result = run_cli(repo, env=env)
     payload = json.loads(result.stdout)
     auth = next(c for c in payload["checks"] if c["name"] == "github-auth-capability")
     assert auth["passed"] is True
-    assert auth["detail"]["source"] == "env"
+    assert auth["detail"] == {
+        "capable": False,
+        "state": "not-applicable",
+        "source": "not-applicable",
+    }
     assert fake_token not in result.stdout
     assert fake_token not in result.stderr
 
 
-def test_github_auth_capability_fails_closed_with_no_token_and_no_gh(
+def test_github_auth_capability_fails_closed_with_no_credential_in_github_connected_mode(
     repo: Path, tmp_path: Path
 ) -> None:
     env = _env(repo.parent, PATH=str(_bin_without_gh(tmp_path)))
-    result = run_cli(repo, env=env)
+    result = run_cli(repo, "--network-mode", "github-connected", env=env)
     payload = json.loads(result.stdout)
     auth = next(c for c in payload["checks"] if c["name"] == "github-auth-capability")
     assert auth["passed"] is False
-    assert auth["detail"]["source"] == "none"
+    assert auth["detail"] == {"capable": False, "state": "no-credential", "source": "none"}
 
 
-def test_github_auth_capability_uses_gh_cli_status_when_no_token(repo: Path, tmp_path: Path) -> None:
-    fake_bin = tmp_path / "fake-bin-gh"
-    _write_stub(fake_bin, "gh", 'if [ "$1" = "auth" ]; then exit 0; fi\necho "gh version 2.99.0 (fake)"')
-    env = _env(repo.parent, PATH=f"{fake_bin}{os.pathsep}{os.environ['PATH']}")
-    result = run_cli(repo, env=env)
+def test_github_auth_capability_github_connected_probe_succeeds_and_never_leaks_token(
+    repo: Path, fake_github_api
+) -> None:
+    fake_token = "ghp_totallyfaketokenvalue1234567890"
+    probe_url, _handler = fake_github_api(200)
+    env = _env(repo.parent, GITHUB_TOKEN=fake_token, AGENT_OS_GITHUB_API_PROBE_URL=probe_url)
+    result = run_cli(repo, "--network-mode", "github-connected", env=env)
     payload = json.loads(result.stdout)
     auth = next(c for c in payload["checks"] if c["name"] == "github-auth-capability")
     assert auth["passed"] is True
-    assert auth["detail"]["source"] == "gh-cli"
+    assert auth["detail"] == {"capable": True, "state": "authenticated", "source": "direct-api"}
+    assert fake_token not in result.stdout
+    assert fake_token not in result.stderr
+
+
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_github_auth_capability_github_connected_probe_fails_closed_on_401_403(
+    repo: Path, fake_github_api, status_code: int
+) -> None:
+    fake_token = "ghp_totallyfaketokenvalue1234567890"
+    probe_url, _handler = fake_github_api(status_code)
+    env = _env(repo.parent, GITHUB_TOKEN=fake_token, AGENT_OS_GITHUB_API_PROBE_URL=probe_url)
+    result = run_cli(repo, "--network-mode", "github-connected", env=env)
+    payload = json.loads(result.stdout)
+    auth = next(c for c in payload["checks"] if c["name"] == "github-auth-capability")
+    assert auth["passed"] is False
+    assert auth["detail"] == {
+        "capable": False,
+        "state": "unauthenticated",
+        "source": "direct-api",
+    }
+
+
+def test_github_auth_capability_github_connected_probe_fails_closed_on_network_error(
+    repo: Path,
+) -> None:
+    fake_token = "ghp_totallyfaketokenvalue1234567890"
+    env = _env(
+        repo.parent,
+        GITHUB_TOKEN=fake_token,
+        AGENT_OS_GITHUB_API_PROBE_URL="http://127.0.0.1:1/user",
+    )
+    result = run_cli(repo, "--network-mode", "github-connected", env=env)
+    payload = json.loads(result.stdout)
+    auth = next(c for c in payload["checks"] if c["name"] == "github-auth-capability")
+    assert auth["passed"] is False
+    assert auth["detail"] == {"capable": False, "state": "unknown", "source": "direct-api"}
+
+
+def test_github_auth_capability_no_retry_is_attempted(repo: Path, fake_github_api) -> None:
+    """A failing probe must be attempted exactly once -- no retry."""
+    fake_token = "ghp_totallyfaketokenvalue1234567890"
+    probe_url, handler = fake_github_api(401)
+    env = _env(repo.parent, GITHUB_TOKEN=fake_token, AGENT_OS_GITHUB_API_PROBE_URL=probe_url)
+    result = run_cli(repo, "--network-mode", "github-connected", env=env)
+    payload = json.loads(result.stdout)
+    auth = next(c for c in payload["checks"] if c["name"] == "github-auth-capability")
+    assert auth["detail"]["state"] == "unauthenticated"
+    assert handler.request_count == 1
 
 
 # --- authority fields always false ------------------------------------------
