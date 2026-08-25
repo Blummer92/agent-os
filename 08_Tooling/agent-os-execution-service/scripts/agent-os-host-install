@@ -195,7 +195,11 @@ service_wheel=$1
 
 # Runtime dependencies must already be present on the qualified host. Root may
 # install only the four locally built Agent OS wheels; it may not resolve or
-# download a dependency from a Python package index.
+# download a dependency from a Python package index. Staging stays under the
+# restrictive 077 mask above; only the final root-owned runtime publication uses
+# the ordinary 022 system-install mask so the governed non-root runtime can
+# traverse package directories and read modules. Restore 077 immediately after.
+umask 022
 PIP_NO_INDEX=1 python3 -m pip install \
   --disable-pip-version-check \
   --no-deps \
@@ -206,6 +210,7 @@ PIP_NO_INDEX=1 python3 -m pip install \
   "$context_wheel" \
   "$scheduler_wheel" \
   "$service_wheel" >&2
+umask 077
 
 (
   cd /
