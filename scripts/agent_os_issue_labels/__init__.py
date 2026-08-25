@@ -40,6 +40,10 @@ from .pr_branch_refresh import (
     PullRequestBranchSnapshot,
     refresh_pull_request_branch,
 )
+from .pr_branch_refresh_provider import (
+    ProductionPullRequestBranchRefreshProvider,
+    PullRequestBranchRefreshBackingProvider,
+)
 from .pr_lifecycle import (
     PullRequestLifecycleReconciliationResult,
     lifecycle_invocation_reasons,
@@ -86,6 +90,8 @@ __all__ = [
     "LabelApplicationPlan",
     "LivePullRequestSnapshot",
     "MutationState",
+    "ProductionPullRequestBranchRefreshProvider",
+    "PullRequestBranchRefreshBackingProvider",
     "PullRequestBranchRefreshProvider",
     "PullRequestBranchRefreshRequest",
     "PullRequestBranchRefreshResult",
