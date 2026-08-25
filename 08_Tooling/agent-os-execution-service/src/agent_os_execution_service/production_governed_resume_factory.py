@@ -1,13 +1,14 @@
 """Production factory for the installed governed-resume module path (#1217).
 
 This is the smallest bridge from the fixed #1238 argv contract to the already
-canonical #1319 host bootstrap.  It does not own currentness, authorization,
+canonical #1319 host bootstrap. It does not own currentness, authorization,
 dependency readiness, validation semantics, Scheduler admission, leases,
-retries, or execution.  It only reacquires the immutable evidence needed to
-construct #1320's ``LiveRepositoryEvidenceReader`` and then delegates to #1319.
+retries, or execution. AOS-EXECSIMPL1 (#1338) now consumes the canonical
+RuntimeExecutionRequest first, with bounded legacy reconstruction only when that
+request is genuinely absent, then delegates to #1319.
 
 The restart capsule already persists the canonical validation bundle and the
-expected advisory identity.  Rebuilding that advisory uses the existing
+expected advisory identity. Rebuilding that advisory uses the existing
 ``evaluate_advisory_pre_pr_evidence`` function and requires the recomputed
 identity to equal the capsule; no second validation store or status mapping is
 introduced here.
@@ -33,7 +34,6 @@ from scripts.agent_os_execution_checkpoint.dependency_readiness_store import (
 )
 from scripts.agent_os_execution_checkpoint.invocation_descriptor import (
     GovernedInvocationDescriptor,
-    load_invocation_descriptor,
 )
 from scripts.agent_os_remote_validation.advisory_gate import (
     advisory_evidence_result_id,
@@ -44,10 +44,7 @@ from scripts.agent_os_remote_validation.models import ValidationPlan
 from scripts.agent_os_remote_validation.selector import validation_plan_id
 
 from .governed_resume_entrypoint import GovernedResumeBindings
-from .governed_resume_restart_capsule import (
-    GovernedResumeRestartCapsule,
-    load_restart_capsule,
-)
+from .governed_resume_restart_capsule import GovernedResumeRestartCapsule
 from .host_github_read_transport import build_host_github_read_transport_from_environment
 from .production_host_bootstrap import (
     ProductionHostBootstrapError,
@@ -56,6 +53,7 @@ from .production_host_bootstrap import (
     canonical_evaluated_at,
     load_production_host_configuration,
 )
+from .runtime_execution_request import load_runtime_execution_request_or_legacy
 
 
 class ProductionGovernedResumeFactoryError(RuntimeError):
@@ -69,10 +67,11 @@ def build_production_governed_resume_bindings_for_handoff(
     try:
         configuration = load_production_host_configuration()
         evaluated_at = canonical_evaluated_at()
-        descriptor = load_invocation_descriptor(
+        loaded = load_runtime_execution_request_or_legacy(
             configuration.checkpoint_store_root, handoff_id
         )
-        capsule = load_restart_capsule(configuration.checkpoint_store_root, handoff_id)
+        descriptor = loaded.request.invocation_descriptor
+        capsule = loaded.request.restart_capsule
         _bind_descriptor_and_capsule(descriptor, capsule, handoff_id)
 
         readiness = load_dependency_readiness(
