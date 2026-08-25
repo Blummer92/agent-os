@@ -3,7 +3,7 @@ from __future__ import annotations
 import ast
 import inspect
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from types import SimpleNamespace
 
 import pytest
@@ -118,7 +118,7 @@ def _patch_nested_transports(monkeypatch):
                 "approval_id": value.approval_id,
                 "approval_revision": value.approval_revision,
                 "state": value.state.value,
-                "binding": value.binding.__dict__,
+                "binding": asdict(value.binding),
             },
             default=list,
         ),
@@ -143,7 +143,11 @@ def _patch_nested_transports(monkeypatch):
     monkeypatch.setattr(
         capsule_module,
         "required_environment_spec_payload",
-        lambda value: {"required_validation_command_ids": list(value.required_validation_command_ids)},
+        lambda value: {
+            "required_validation_command_ids": list(
+                value.required_validation_command_ids
+            )
+        },
     )
     monkeypatch.setattr(
         capsule_module,
@@ -266,15 +270,11 @@ def test_capsule_rejects_tampered_content_identity(monkeypatch):
 
 def test_capsule_rejects_approval_and_validation_binding_drift(monkeypatch):
     baseline = _capsule(monkeypatch)
-    bad_approval = FakeApproval(
-        approval_id=baseline.approval_record.approval_id,
-        approval_revision=baseline.approval_record.approval_revision,
-        state=ApprovalState.APPROVED,
-        binding=FakeBinding(
-            **{
-                **baseline.approval_record.binding.__dict__,
-                "tested_repository_sha": "9" * 40,
-            }
+    bad_approval = replace(
+        baseline.approval_record,
+        binding=replace(
+            baseline.approval_record.binding,
+            tested_repository_sha="9" * 40,
         ),
     )
     with pytest.raises(ValueError, match="approval record"):
@@ -293,7 +293,9 @@ def test_store_requires_exact_durable_checkpoint_before_write(tmp_path, monkeypa
     monkeypatch.setattr(
         store_module,
         "load_checkpoint_by_id",
-        lambda *_args: (_ for _ in ()).throw(CheckpointNotFound(capsule.checkpoint_id)),
+        lambda *_args: (_ for _ in ()).throw(
+            CheckpointNotFound(capsule.checkpoint_id)
+        ),
     )
     with pytest.raises(CheckpointNotFound):
         store_module.append_pre_publication_evidence(tmp_path, capsule)
@@ -316,7 +318,10 @@ def test_store_round_trip_is_idempotent_and_tamper_fails_closed(tmp_path, monkey
     second = store_module.append_pre_publication_evidence(tmp_path, capsule)
     assert first.already_present is False
     assert second.already_present is True
-    assert store_module.load_pre_publication_evidence(tmp_path, capsule.capsule_id) == capsule
+    assert (
+        store_module.load_pre_publication_evidence(tmp_path, capsule.capsule_id)
+        == capsule
+    )
     payload = json.loads(first.path.read_text())
     payload["workspace_request_id"] = "workspace-request:tampered"
     first.path.write_text(json.dumps(payload, sort_keys=True, separators=(",", ":")))
@@ -343,7 +348,15 @@ def test_exactly_one_persistence_owner_and_no_external_side_effect_surface():
         assert not [
             name
             for name in imports
-            if name.startswith(("subprocess", "requests", "httpx", "github", "google.cloud", "paramiko"))
+            if name.startswith(
+                ("subprocess", "requests", "httpx", "github", "google.cloud", "paramiko")
+            )
         ]
-        for banned in ("Scheduler(", "acquire_lease", "retry", "execution_authorized=True", "publication_authorized=True"):
+        for banned in (
+            "Scheduler(",
+            "acquire_lease",
+            "retry",
+            "execution_authorized=True",
+            "publication_authorized=True",
+        ):
             assert banned not in source
