@@ -1,8 +1,9 @@
 """Checkpoint-root persistence adapter for #1412 producer evidence.
 
-This module intentionally reuses the same private atomic/content-addressed store
-primitives already consumed by ``governed_resume_restart_capsule``.  It adds no
-store root, database, mutable head, retry path, or authority semantics.
+This is the sole persistence owner for ``PrePublicationEvidenceCapsule``. It
+reuses the existing checkpoint-store root and the same atomic/content-addressed
+primitives already used by governed-resume restart capsules. It adds no store
+root, database, mutable head, retry path, or authority semantics.
 """
 from __future__ import annotations
 
@@ -21,13 +22,18 @@ from scripts.agent_os_execution_checkpoint.store import (
 )
 
 from .pre_publication_evidence_capsule import (
-    MAX_CAPSULES,
-    MAX_CAPSULE_STORE_BYTES,
     PrePublicationEvidenceCapsule,
-    PrePublicationEvidenceNotFound,
     deserialize_pre_publication_evidence,
     serialize_pre_publication_evidence,
 )
+
+MAX_CAPSULES = 4096
+MAX_CAPSULE_STORE_BYTES = 256 * 1024 * 1024
+STORE_NAMESPACE = "pre-publication-producer-evidence"
+
+
+class PrePublicationEvidenceNotFound(LookupError):
+    """Raised when an exact capsule identity is not present in the store."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,7 +44,7 @@ class AppendPrePublicationEvidenceOutcome:
 
 
 def _directory(store_root: Path | str) -> Path:
-    return Path(store_root) / "pre-publication-producer-evidence"
+    return Path(store_root) / STORE_NAMESPACE
 
 
 def _filename(capsule_id: str) -> str:
@@ -55,25 +61,24 @@ def append_pre_publication_evidence(
     store_root: Path | str,
     capsule: PrePublicationEvidenceCapsule,
 ) -> AppendPrePublicationEvidenceOutcome:
+    """Persist one capsule only after its exact #895 checkpoint is durable."""
     if type(capsule) is not PrePublicationEvidenceCapsule:
         raise TypeError("capsule must be an exact PrePublicationEvidenceCapsule")
 
-    # Publication evidence is never allowed to outrun its independently durable
-    # #895 checkpoint.  The exact lookup reuses full checkpoint chain and
-    # quarantine verification before any capsule write occurs.
-    durable_checkpoint = load_checkpoint_by_id(
+    durable = load_checkpoint_by_id(
         store_root,
         capsule.candidate_packet.issue_number,
         capsule.checkpoint_id,
     )
+    packet = capsule.candidate_packet
     if (
-        durable_checkpoint.checkpoint_id != capsule.checkpoint_id
-        or durable_checkpoint.repository.casefold()
-        != capsule.candidate_packet.repository.casefold()
-        or durable_checkpoint.issue_number != capsule.candidate_packet.issue_number
-        or durable_checkpoint.invocation_id != capsule.candidate_packet.invocation_id
-        or durable_checkpoint.source_sha != capsule.candidate_packet.candidate_sha
-        or durable_checkpoint.tested_sha != capsule.candidate_packet.tested_sha
+        durable.checkpoint_id != capsule.checkpoint_id
+        or durable.repository.casefold() != packet.repository.casefold()
+        or durable.issue_number != packet.issue_number
+        or durable.invocation_id != packet.invocation_id
+        or durable.branch != capsule.candidate_branch
+        or durable.source_sha != packet.candidate_sha
+        or durable.tested_sha != packet.tested_sha
     ):
         raise CheckpointStoreIntegrityConflict(
             "durable checkpoint does not bind to producer evidence"
@@ -102,6 +107,7 @@ def load_pre_publication_evidence(
     store_root: Path | str,
     capsule_id: str,
 ) -> PrePublicationEvidenceCapsule:
+    """Load and content-reverify one exact producer-evidence capsule."""
     directory = _directory(store_root)
     _reject_symlink(directory)
     path = directory / _filename(capsule_id)
