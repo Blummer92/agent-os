@@ -69,13 +69,21 @@ production composition behind #1187's existing `PullRequestBranchRefreshProvider
 protocol. It does not replace #1187 admission, scope checking, validation ordering,
 managed-label reconciliation, or final `branch:current` proof.
 
+`GitHubPullRequestBranchRefreshBackingProvider` uses one already-authenticated
+PyGithub-compatible client to reacquire the exact PR head/base/main identities,
+mergeability, changed paths, labels, and managed-label catalog. It never acquires
+credentials. Review-thread evidence and required validation remain injected from their
+existing canonical owners. Read failures become `unknown`/unavailable/blocking evidence
+so they cannot produce refresh or lifecycle authority.
+
 Immediately before preparation the provider reacquires the exact PR branch evidence.
 Because #1187's `expected_base_sha` is the admitted current base/main identity rather
 than a historical merge-base, the provider derives the exact merge-base from the bound
 head and admitted main with fixed Git argv. It then performs one fixed local
 `git rebase --no-autostash --onto <admitted-main> <merge-base> <expected-head>` and
 proves the resulting detached `HEAD` commit identity. Caller-supplied Git flags, shell
-text, refspecs, and arbitrary commands are never accepted.
+text, refspecs, and arbitrary commands are never accepted. The separate #1381 transport
+authorization is checked before local preparation begins.
 
 The remote non-fast-forward write remains exclusively #1381-owned. The provider builds
 one `ExpectedHeadBranchUpdateRequest` and delegates to
@@ -86,8 +94,10 @@ ambiguous mutation fails closed. Neither local preparation nor remote mutation i
 retried, and there is no plain force push, merge-main fallback, protected-branch path,
 or second refresh lifecycle.
 
-Live PR reads, required validation, and managed-label operations are supplied by the
-existing backing provider and remain owned by their current contracts.
+`run_production_pull_request_branch_refresh(...)` is the production caller: it composes
+the live GitHub backing and concrete provider, passes through the existing #1187
+request authorization unchanged, and delegates exactly once to
+`refresh_pull_request_branch(...)`.
 
 ## Issue-label tooling
 
