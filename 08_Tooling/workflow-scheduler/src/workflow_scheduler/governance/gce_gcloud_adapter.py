@@ -25,6 +25,14 @@ HOST_PYTHON="/usr/bin/python3";DISCOVERY_MODULE="agent_os_execution_service.hand
 WORKFLOW_REF="Blummer92/agent-os/.github/workflows/agent-os-governed-invocation.yml@refs/heads/main"
 WIF_PROVIDER="//iam.googleapis.com/projects/966859826758/locations/global/workloadIdentityPools/agent-os-github/providers/agent-os-main"
 
+# Fixed repository-owned sentinels framing the trusted runtime-inspection JSON.
+# gcloud compute ssh can interleave its own local SSH-keygen chatter into the
+# captured stdout stream (proven live in run 32896154122); these markers let
+# the adapter isolate exactly the bytes the remote diagnostic itself printed
+# instead of scanning for "{"/"}" in arbitrary transport noise.
+_FRAME_START="===AGENT-OS-RUNTIME-INSPECTION-JSON-BEGIN==="
+_FRAME_END="===AGENT-OS-RUNTIME-INSPECTION-JSON-END==="
+
 _RUNTIME_INSPECTION_SOURCE=r'''import grp,importlib.util,json,os,pwd,site,stat,subprocess,sys,sysconfig
 M="agent_os_execution_service.handoff_discovery_entrypoint"
 def spec(n):
@@ -52,7 +60,7 @@ for g in os.getgroups():
  try:groups.append(grp.getgrgid(g).gr_name)
  except KeyError:groups.append(str(g))
 out={"schema_version":"1.0","status":"observed","reason_codes":["runtime-context-observed"],"project":"agent-os-502614","zone":"us-central1-a","instance":"agent-os-test","interpreter":"/usr/bin/python3","effective_identity":{"username":pwd.getpwuid(os.geteuid()).pw_name,"uid":os.geteuid(),"gid":os.getegid(),"groups":groups},"python_context":{"version":sys.version.split()[0],"executable":sys.executable,"prefix":sys.prefix,"base_prefix":sys.base_prefix,"sys_path":sys.path,"site_packages":site.getsitepackages() if hasattr(site,"getsitepackages") else [],"user_site":site.getusersitepackages(),"purelib":sysconfig.get_path("purelib"),"platlib":sysconfig.get_path("platlib"),"pythonpath_set":"PYTHONPATH" in os.environ},"package_resolution":{"package":base,"submodule":sub},"filesystem_visibility":paths,"import_probe":{"exit_code":probe.returncode,"stderr":probe.stderr[-2048:],"stderr_truncated":len(probe.stderr)>2048},"execution_authorized":False,"scheduler_invoked":False,"discovery_invoked":False,"resume_invoked":False,"side_effects_performed":False}
-print(json.dumps(out,sort_keys=True,separators=(",",":")))'''
+'''+("print(%r);print(json.dumps(out,sort_keys=True,separators=(\",\",\":\")));print(%r)"%(_FRAME_START,_FRAME_END))
 RUNTIME_INSPECTION_COMMAND=f"{HOST_PYTHON} -c {shlex.quote(_RUNTIME_INSPECTION_SOURCE)}"
 
 class GcloudCommandError(RuntimeError):pass
@@ -90,7 +98,12 @@ class GcloudIapAdapter:
  def inspect_runtime(self,resource:GceResourceTuple)->dict[str,object]:
   result=self._ssh(resource,RUNTIME_INSPECTION_COMMAND)
   if result.returncode!=0:return _inspection_failure("needs-decision","inspection-command-failed",exit_code=result.returncode,stderr=result.stderr)
-  try:payload=json.loads(result.stdout)
+  framed,frame_reason=_extract_framed_payload(result.stdout)
+  if framed is None:
+   envelope=_inspection_failure("needs-decision",frame_reason,exit_code=result.returncode,stderr=result.stderr)
+   envelope["stdout_evidence"]=_stdout_contamination_evidence(result.stdout)
+   return envelope
+  try:payload=json.loads(framed)
   except json.JSONDecodeError:
    envelope=_inspection_failure("needs-decision","inspection-evidence-not-json",exit_code=result.returncode,stderr=result.stderr)
    envelope["stdout_evidence"]=_stdout_contamination_evidence(result.stdout)
@@ -166,6 +179,25 @@ def _stdout_contamination_evidence(stdout:str)->dict[str,object]:
   "suffix_truncated":length>_STDOUT_EVIDENCE_PREFIX_CAP+_STDOUT_EVIDENCE_SUFFIX_CAP,
   "sha256":hashlib.sha256(stdout.encode("utf-8",errors="replace")).hexdigest(),
  }
+
+def _extract_framed_payload(stdout:str)->tuple[str|None,str|None]:
+ """Return only the bytes between exactly one valid sentinel pair, or a fail-closed reason.
+
+ Requires exactly one start marker and exactly one end marker, with the start
+ strictly before the end. This is a structural boundary match on fixed
+ repository-owned literals only -- it never scans for "{"/"}" and cannot be
+ influenced by braces or any other content in surrounding transport chatter.
+ """
+ if type(stdout) is not str:stdout=""
+ start_count=stdout.count(_FRAME_START)
+ if start_count==0:return None,"inspection-frame-start-missing"
+ if start_count>1:return None,"inspection-frame-start-duplicate"
+ end_count=stdout.count(_FRAME_END)
+ if end_count==0:return None,"inspection-frame-end-missing"
+ if end_count>1:return None,"inspection-frame-end-duplicate"
+ start_idx=stdout.find(_FRAME_START);end_idx=stdout.find(_FRAME_END)
+ if end_idx<=start_idx:return None,"inspection-frame-order-invalid"
+ return stdout[start_idx+len(_FRAME_START):end_idx].strip(),None
 
 def execute_transport(ingress:IssueCommentIngressResult,*,claims:Mapping[str,object],adapter:GcloudIapAdapter)->dict[str,object]:
  if ingress.reason=="accepted-runtime-inspection-envelope":
