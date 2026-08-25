@@ -140,12 +140,16 @@ def test_pip_runtime_publication_mask_is_nonroot_readable_without_write_bits() -
 
 @pytest.mark.skipif(shutil.which("sudo") is None, reason="needs sudo for cross-user import")
 def test_runtime_publication_imports_from_a_different_unprivileged_identity() -> None:
-    if subprocess.run(
-        ["sudo", "-n", "true"], check=False, capture_output=True
-    ).returncode != 0:
-        pytest.skip("passwordless sudo unavailable for cross-user import")
     if shutil.which("/usr/bin/python3") is None:
         pytest.skip("qualified system interpreter unavailable")
+    exact_probe = subprocess.run(
+        ["sudo", "-n", "-u", "nobody", "/usr/bin/true"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if exact_probe.returncode != 0:
+        pytest.skip("passwordless sudo to nobody unavailable for cross-user import")
 
     base = Path(tempfile.mkdtemp(prefix="agent-os-1238-runtime-user-", dir="/tmp"))
     base.chmod(0o755)
