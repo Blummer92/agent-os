@@ -615,18 +615,35 @@ class ExecutorRouteDecision:
 
     @classmethod
     def from_dict(cls, payload: object) -> "ExecutorRouteDecision":
-        """Validate and deserialize one strict decision object."""
+        """Validate and deserialize one strict decision object.
+
+        Schema-1.0 payloads produced before ``external_fallback_capabilities``
+        existed remain accepted. Their legacy content ID is verified against
+        the legacy wire shape before the record is normalized to the current
+        canonical shape (field ``None``) and receives its current deterministic
+        content ID. All other missing or unknown fields remain rejected.
+        """
 
         if type(payload) is not dict:
             raise TypeError("route decision must be an exact object")
         expected = {item.name for item in fields(cls)}
         optional_legacy_field = "external_fallback_capabilities"
         payload_fields = set(payload)
-        if payload_fields not in {expected, expected - {optional_legacy_field}}:
+        legacy_shape = payload_fields == expected - {optional_legacy_field}
+        if not legacy_shape and payload_fields != expected:
             raise ValueError("route decision contains unknown or missing fields")
         if payload["side_effects_performed"] is not False:
             raise ValueError("side_effects_performed must be false")
         values = dict(payload)
+        if legacy_shape:
+            legacy_id = values["decision_id"]
+            legacy_identity_payload = dict(values)
+            legacy_identity_payload.pop("decision_id")
+            if legacy_id != _digest(
+                "executor-route-decision", legacy_identity_payload
+            ):
+                raise ValueError("decision_id does not match legacy decision content")
+            values["decision_id"] = ""
         values.setdefault(optional_legacy_field, None)
         values.pop("side_effects_performed")
         values["required_capabilities"] = tuple(
