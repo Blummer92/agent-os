@@ -89,12 +89,8 @@ def test_no_scheduler_lease_or_second_persistence_owner_surface() -> None:
 
 
 def test_capsule_remains_non_authorizing() -> None:
-    capsule_source = inspect.getsource(publication.load_pre_publication_evidence.__module__)
-    # The activation does not mutate or replace capsule authority. Its own source
-    # must never assign any capsule authority field true.
     source = inspect.getsource(publication)
     assert "publication_authorized=True" not in source
     assert "execution_authorized=True" not in source
     assert "merge_authorized=True" not in source
     assert "external_writes_authorized=True" not in source
-    assert capsule_source
