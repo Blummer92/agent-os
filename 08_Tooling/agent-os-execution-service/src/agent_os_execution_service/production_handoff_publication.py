@@ -83,7 +83,7 @@ from .production_host_bootstrap import (
     canonical_evaluated_at,
     load_production_host_configuration,
 )
-from .production_host_repository_observation import (
+from scripts.agent_os_candidate_packet_live_input.repository_observation import (
     build_repository_observation_from_verifier_stdout,
 )
 from .route_decision_store import load_route_decision
