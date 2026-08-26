@@ -272,18 +272,21 @@ def render_coding_command_center_handoff(
 
 
 def _state_next_action(state: IssueOperationalState) -> str:
-    if state.outcome is OperationalOutcome.BLOCKED:
-        return "clear the primary canonical blocker before continuing"
-    if state.outcome is OperationalOutcome.NEEDS_DECISION:
-        return "obtain the required human decision before continuing"
+    # Fail-closed currentness outranks every other projection.
     if state.outcome in {OperationalOutcome.STALE, OperationalOutcome.CONFLICTING, OperationalOutcome.INVALID}:
         return "reacquire current canonical evidence; do not continue from stale or conflicting state"
     if state.outcome is OperationalOutcome.TERMINAL:
         return "no implementation action; preserve terminal state"
-    if state.validation_state.value == "failed":
+    # The canonical primary blocker owns ordering; this only reads it, never reranks.
+    primary_blocker = state.blocker_codes[0] if state.blocker_codes else None
+    if primary_blocker == "validation.failed":
         return "classify the validation failure before repair or retry"
-    if state.validation_state.value == "pending":
+    if primary_blocker == "validation.pending":
         return "await current validation evidence"
+    if state.outcome is OperationalOutcome.BLOCKED:
+        return "clear the primary canonical blocker before continuing"
+    if state.outcome is OperationalOutcome.NEEDS_DECISION:
+        return "obtain the required human decision before continuing"
     return "continue with the canonical action for the current lifecycle stage"
 
 
