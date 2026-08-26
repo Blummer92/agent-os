@@ -3,7 +3,7 @@
 This is the sole persistence owner for ``PrePublicationEvidenceCapsule``. It
 reuses the existing checkpoint-store root and the same atomic/content-addressed
 primitives already used by governed-resume restart capsules. It adds no store
-root, database, mutable head, retry path, or authority semantics.
+root, database, mutable head, re-attempt path, or authority semantics.
 """
 from __future__ import annotations
 
