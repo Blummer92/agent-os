@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shlex
 from pathlib import Path
 from typing import Mapping
@@ -34,6 +35,7 @@ HOST_PYTHON = "/usr/bin/python3"
 _FRAME_START = "===AGENT-OS-DEV-VALIDATION-JSON-BEGIN==="
 _FRAME_END = "===AGENT-OS-DEV-VALIDATION-JSON-END==="
 MAX_RESULT_LOG_CHARS = 4096
+_UNSAFE_DIAGNOSTIC_CHAR_RE = re.compile(r"[^\x09\x0a\x0d\x20-\x7e]")
 
 # The host program is fixed in canonical workflow source. Candidate-branch files
 # never choose this program, its argv, repository, timeout, or output contract.
@@ -172,6 +174,27 @@ def _failure(request: DevValidationRequest, reason: str) -> dict[str, object]:
     }
 
 
+def _bounded_ssh_stderr(stderr: object) -> tuple[str, bool]:
+    text = stderr if type(stderr) is str else ""
+    sanitized = _UNSAFE_DIAGNOSTIC_CHAR_RE.sub("?", text)
+    truncated = len(sanitized) > MAX_RESULT_LOG_CHARS
+    return sanitized[-MAX_RESULT_LOG_CHARS:], truncated
+
+
+def _ssh_failure(request: DevValidationRequest, completed: object) -> dict[str, object]:
+    evidence = _failure(request, "dev-validation-ssh-failed")
+    stderr_tail, stderr_truncated = _bounded_ssh_stderr(getattr(completed, "stderr", ""))
+    returncode = getattr(completed, "returncode", None)
+    evidence.update(
+        {
+            "ssh_exit_code": returncode if type(returncode) is int else None,
+            "ssh_stderr_tail": stderr_tail,
+            "ssh_stderr_truncated": stderr_truncated,
+        }
+    )
+    return evidence
+
+
 def run_dev_validation_over_ssh(
     adapter: GcloudIapAdapter,
     request: DevValidationRequest,
@@ -179,7 +202,7 @@ def run_dev_validation_over_ssh(
     command = _host_command(request)
     completed = adapter._ssh(RESOURCE, command)
     if completed.returncode != 0:
-        return _failure(request, "dev-validation-ssh-failed")
+        return _ssh_failure(request, completed)
     framed = _extract_framed_payload(completed.stdout)
     if framed is None:
         return _failure(request, "dev-validation-frame-invalid")
