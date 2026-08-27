@@ -97,6 +97,43 @@ def test_provider_read_page_success_emits_no_diagnostic(caplog):
     )
 
 
+
+def test_provider_accepts_mixed_case_next_without_extra_request(caplog):
+    transport = _transport_for_link(
+        '<https://api.github.com/repos/owner/repo/issues?page=2>; rel="NeXt"'
+    )
+
+    with caplog.at_level(logging.WARNING):
+        response = _read(transport)
+
+    assert response.complete is True
+    assert response.next_page == 2
+    assert response.terminal_page_proven is False
+    assert "github issue-page provider diagnostic=" not in caplog.text
+    transport.get_issue_page.assert_called_once_with(
+        "owner/repo", page=1, per_page=100, state="open"
+    )
+
+
+def test_provider_malformed_canonicalization_is_fixed_failure_without_leakage(caplog):
+    secret = "DO-NOT-LEAK-552"
+    transport = _transport_for_link(
+        '<https://api.github.com/repos/owner/repo/issues?'
+        f'page=02&state={secret}>; rel="NEXT"'
+    )
+
+    with caplog.at_level(logging.WARNING):
+        response = _read(transport)
+
+    assert response.complete is False
+    assert response.items == ()
+    assert response.next_page is None
+    assert response.error_kind == "malformed-response"
+    assert secret not in caplog.text
+    transport.get_issue_page.assert_called_once_with(
+        "owner/repo", page=1, per_page=100, state="open"
+    )
+
 def test_provider_accepts_verified_numeric_path_without_extra_request(caplog):
     transport = _transport_for_link(
         '<https://api.github.com/repositories/123/issues?'
