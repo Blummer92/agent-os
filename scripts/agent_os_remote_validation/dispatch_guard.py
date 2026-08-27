@@ -146,6 +146,12 @@ def evaluate_pre_pr_dispatch_decision(
     duplicate, reuse, and supersession tracking remain Workflow Scheduler
     lifecycle ownership (#330) and are out of scope here: this seam only ever
     returns ``launch-eligible``, ``stale-skipped``, or ``manual-review``.
+
+    Only a candidate-bound subject (#1030) can become launch-eligible. A
+    non-candidate-bound/historical subject (e.g. the #726 default binding)
+    is a distinct, non-launching workflow: it always yields ``manual-review``
+    here, regardless of head freshness, so it can never reach an accepted
+    Cloud Build provider invocation.
     """
     reasons: set[str] = set()
     plan_ok = type(plan) is PrePrValidationPlan
@@ -171,6 +177,13 @@ def evaluate_pre_pr_dispatch_decision(
             plan=None,
             status="manual-review",
             reason_codes=tuple(sorted(reasons)) or ("plan.invalid",),
+        )
+
+    if valid_plan.subject.candidate_bound is not True:
+        return _pre_pr_decision(
+            plan=valid_plan,
+            status="manual-review",
+            reason_codes=("plan.not-candidate-bound",),
         )
 
     if current_source_sha != valid_plan.subject.expected_source_sha:

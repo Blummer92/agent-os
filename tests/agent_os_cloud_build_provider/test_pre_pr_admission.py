@@ -232,13 +232,42 @@ def test_dispatch_decision_represents_absence_of_pull_request_natively():
     assert dispatch.dispatch_identity == pre_pr_validation_dispatch_identity(plan)
 
 
-def test_historical_non_candidate_bound_subject_is_accepted_when_fully_matched():
-    """#726-style default-bound subjects get no weaker treatment."""
-    result = _accepted(_historical_subject())
-    assert result.invocation.repository == "Blummer92/agent-os"
+def test_historical_non_candidate_bound_subject_never_becomes_launch_eligible():
+    """#1210 requires launch admission to be candidate-bound: a non-candidate-
+    bound/historical pre-PR plan (e.g. the #726 default binding) must fail
+    closed with zero provider invocation, even when every other identity,
+    authorization, and dispatch field exactly matches.
+    """
+    subject = _historical_subject()
+    assert subject.candidate_bound is False
+    _plan_obj, request, command_plan, dispatch, authorization, configuration = _pipeline(
+        subject
+    )
+    assert dispatch.status == "manual-review"
+    assert dispatch.launch_recommended is False
+    assert "plan.not-candidate-bound" in dispatch.reason_codes
+
+    result = prepare_cloud_build_provider_invocation(
+        request,
+        command_plan,
+        dispatch,
+        authorization,
+        configuration,
+        resolved_sha=subject.expected_source_sha,
+        evaluated_at=EVALUATED_AT,
+    )
+    assert result.status is ProviderStatus.SKIPPED
+    assert result.reason_codes == (ProviderReason.DISPATCH_NON_LAUNCH,)
+    assert result.invocation is None
+    assert result.execution_authorized is False
+    assert result.merge_authorized is False
 
 
 def test_historical_non_candidate_bound_subject_still_requires_exact_identity_match():
+    """On top of the unconditional candidate-bound rejection above, a
+    historical plan's authorization/dispatch must not carry over to a
+    *different* historical plan identity either.
+    """
     subject = _historical_subject()
     _plan_obj, request, command_plan, dispatch, authorization, configuration = _pipeline(
         subject
