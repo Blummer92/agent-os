@@ -43,6 +43,7 @@ _HOST_RUNNER_SOURCE = r'''import json,os,re,shutil,subprocess,sys,tempfile
 REPOSITORY="Blummer92/agent-os"
 REPO_URL="https://github.com/Blummer92/agent-os.git"
 VALIDATION_ID="remote-validation-suite"
+HOST_PYTHON="/usr/bin/python3"
 TEST_ARGS=("-m","pytest","tests/agent_os_remote_validation")
 SHA40=re.compile(r"^[0-9a-f]{40}$",re.ASCII)
 BRANCH=re.compile(r"^agent/[A-Za-z0-9._/-]{1,180}$",re.ASCII)
@@ -94,8 +95,8 @@ try:
    if checkout.returncode!=0 or head.returncode!=0 or head.stdout.strip()!=sha:
     result["reason_codes"]=["checkout-head-mismatch"]
    else:
-    python=shutil.which("python")
-    if python is None:
+    python=HOST_PYTHON
+    if not os.path.isfile(python) or not os.access(python,os.X_OK):
      result["reason_codes"]=["runtime-python-unavailable"]
     else:
      home=os.path.join(root,"home");tmp=os.path.join(root,"tmp")
