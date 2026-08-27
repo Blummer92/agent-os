@@ -265,6 +265,24 @@ def test_transport_file_drops_authority_fields(tmp_path: Path) -> None:
     assert loaded.side_effects_performed is False
 
 
+def test_transport_file_preserves_dev_validation_identity(tmp_path: Path) -> None:
+    payload = ingress(
+        reason="accepted-dev-validation-envelope",
+        handoff_id_or_none=None,
+        dev_validation_branch_or_none="agent/1271-validation-profile-path-coverage",
+        dev_validation_sha_or_none="a" * 40,
+        dev_validation_id_or_none="remote-validation-suite",
+    ).to_dict()
+    path = tmp_path / "transport.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    loaded = live._ingress_from_file(path)
+    assert loaded.dev_validation_branch_or_none == "agent/1271-validation-profile-path-coverage"
+    assert loaded.dev_validation_sha_or_none == "a" * 40
+    assert loaded.dev_validation_id_or_none == "remote-validation-suite"
+    assert loaded.execution_authorized is False
+    assert loaded.scheduler_invoked is False
+
+
 def test_frozen_resource_and_provider_are_exact() -> None:
     assert live.RESOURCE.project == "agent-os-502614"
     assert live.RESOURCE.zone == "us-central1-a"
