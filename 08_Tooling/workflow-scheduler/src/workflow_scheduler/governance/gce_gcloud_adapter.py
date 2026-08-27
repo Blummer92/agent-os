@@ -143,7 +143,10 @@ class GcloudIapAdapter:
 def _ingress_from_file(path:Path)->IssueCommentIngressResult:
  payload=json.loads(path.read_text(encoding="utf-8"))
  if type(payload) is not dict:raise ValueError("transport evidence must be an object")
- return IssueCommentIngressResult(**{key:payload[key] for key in ("schema_version","status","reason","repository","issue_number","comment_id","actor","handoff_id_or_none","logical_trigger_id_or_none","run_attempt")})
+ values={key:payload[key] for key in ("schema_version","status","reason","repository","issue_number","comment_id","actor","handoff_id_or_none","logical_trigger_id_or_none","run_attempt")}
+ for key in ("dev_validation_branch_or_none","dev_validation_sha_or_none","dev_validation_id_or_none"):
+  values[key]=payload.get(key)
+ return IssueCommentIngressResult(**values)
 def _policy()->OidcTrustPolicy:return OidcTrustPolicy(repository="Blummer92/agent-os",repository_owner="Blummer92",workflow_ref=WORKFLOW_REF,ref="refs/heads/main",audience=WIF_PROVIDER)
 def _non_authorizing(status:str,reason:str)->dict[str,object]:return {"schema_version":"1.0","status":status,"reason_codes":[reason],"project":PROJECT,"zone":ZONE,"instance":INSTANCE,"interpreter":HOST_PYTHON,"execution_authorized":False,"scheduler_invoked":False,"discovery_invoked":False,"resume_invoked":False,"side_effects_performed":False}
 def _bounded_diagnostic_text(text:str)->tuple[str,bool]:
@@ -200,6 +203,9 @@ def _extract_framed_payload(stdout:str)->tuple[str|None,str|None]:
  return stdout[start_idx+len(_FRAME_START):end_idx].strip(),None
 
 def execute_transport(ingress:IssueCommentIngressResult,*,claims:Mapping[str,object],adapter:GcloudIapAdapter)->dict[str,object]:
+ if ingress.reason=="accepted-dev-validation-envelope":
+  from .dev_validation_gce import execute_dev_validation_transport
+  return execute_dev_validation_transport(ingress,claims=claims,adapter=adapter)
  if ingress.reason=="accepted-runtime-inspection-envelope":
   if ingress.status!="accepted" or ingress.issue_number is None:raise ValueError("runtime inspection requires accepted canonical issue evidence")
   if ingress.handoff_id_or_none is not None:raise ValueError("runtime inspection must not carry a handoff identity")
