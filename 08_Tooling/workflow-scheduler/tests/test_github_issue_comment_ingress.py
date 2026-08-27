@@ -11,6 +11,8 @@ from workflow_scheduler.governance.github_issue_comment_ingress import (
 REPOSITORY = "Blummer92/agent-os"
 ACTOR = "Blummer92"
 HANDOFF = "executor-handoff:" + "a" * 64
+DEV_SHA = "b" * 40
+DEV_TRIGGER = f"/agent-os dev-validate agent/1271-validation-profile-path-coverage {DEV_SHA} remote-validation-suite"
 
 
 def event(body: str, *, action: str = "created", actor: str = ACTOR) -> dict[str, object]:
@@ -151,3 +153,36 @@ def test_duplicate_discovery_comments_share_logical_identity() -> None:
     second = event("/agent-os discover")
     second["comment"]["id"] = 9982
     assert admit(first).logical_trigger_id_or_none == admit(second).logical_trigger_id_or_none
+
+
+def test_exact_dev_validation_trigger_is_accepted_but_non_authorizing() -> None:
+    result = admit(event(DEV_TRIGGER))
+    assert result.status == "accepted"
+    assert result.reason == "accepted-dev-validation-envelope"
+    assert result.dev_validation_branch_or_none == "agent/1271-validation-profile-path-coverage"
+    assert result.dev_validation_sha_or_none == DEV_SHA
+    assert result.dev_validation_id_or_none == "remote-validation-suite"
+    assert result.handoff_id_or_none is None
+    assert result.logical_trigger_id_or_none is not None
+    assert result.execution_authorized is False
+    assert result.scheduler_invoked is False
+    assert result.side_effects_performed is False
+
+
+def test_dev_validation_rejects_arbitrary_command_and_protected_branch() -> None:
+    arbitrary = admit(event(f"{DEV_TRIGGER} ; rm -rf /"))
+    protected = admit(event(f"/agent-os dev-validate main {DEV_SHA} remote-validation-suite"))
+    unknown = admit(event(f"/agent-os dev-validate agent/x {DEV_SHA} arbitrary-suite"))
+    assert (arbitrary.status, arbitrary.reason) == ("ignored", "malformed-trigger")
+    assert (protected.status, protected.reason) == ("ignored", "malformed-trigger")
+    assert (unknown.status, unknown.reason) == ("ignored", "malformed-trigger")
+
+
+def test_duplicate_dev_validation_comments_share_identity_but_sha_change_does_not() -> None:
+    first = admit(event(DEV_TRIGGER))
+    duplicate_event = event(DEV_TRIGGER)
+    duplicate_event["comment"]["id"] = 9982
+    duplicate = admit(duplicate_event)
+    changed = admit(event(DEV_TRIGGER.replace(DEV_SHA, "c" * 40)))
+    assert first.logical_trigger_id_or_none == duplicate.logical_trigger_id_or_none
+    assert first.logical_trigger_id_or_none != changed.logical_trigger_id_or_none
