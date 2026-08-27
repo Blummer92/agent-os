@@ -17,7 +17,9 @@ dependencies = [
 # ``workflow_scheduler.execution.continuation`` imports
 # ``scripts.agent_os_execution_checkpoint.resume_planner``). Those packages stay
 # canonical where they are -- they are declared here, not copied, so a clean host
-# installation resolves them without repository-root ``PYTHONPATH``.
+# installation resolves them without repository-root ``PYTHONPATH``. #1426 adds
+# the execution-interface contract package required by the installed #1411
+# publication path under the same single-owner distribution boundary.
 # ``packages`` must be explicit because ``packages.find`` only discovers packages
 # under a single ``where`` root and ignores out-of-tree ``package-dir`` entries.
 [tool.setuptools]
@@ -34,6 +36,7 @@ packages = [
   "workflow_scheduler.repository",
   "scripts.agent_os_execution_capabilities",
   "scripts.agent_os_execution_checkpoint",
+  "scripts.agent_os_execution_interface",
   "scripts.agent_os_issue_acceptance",
   "scripts.agent_os_issue_acceptance.checks",
   "scripts.agent_os_remote_validation",
@@ -46,5 +49,6 @@ ext-modules = [
 "" = "src"
 "scripts.agent_os_execution_capabilities" = "../../scripts/agent_os_execution_capabilities"
 "scripts.agent_os_execution_checkpoint" = "../../scripts/agent_os_execution_checkpoint"
+"scripts.agent_os_execution_interface" = "../../scripts/agent_os_execution_interface"
 "scripts.agent_os_issue_acceptance" = "../../scripts/agent_os_issue_acceptance"
 "scripts.agent_os_remote_validation" = "../../scripts/agent_os_remote_validation"
