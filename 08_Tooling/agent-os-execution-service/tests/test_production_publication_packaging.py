@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from test_host_packaging import ROOT, _run, installed_runtime  # noqa: F401
+from test_host_packaging import ROOT, _run, built_wheels, installed_runtime  # noqa: F401
 
 
 def test_installed_wheels_import_production_handoff_publication(
