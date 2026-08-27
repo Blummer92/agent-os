@@ -1,8 +1,8 @@
 """Bounded GitHub issue-comment transport parsing for Agent OS Scheduler ingress.
 
-This module validates only the low-trust GitHub event envelope for #1203. A
-successful parse is transport evidence, not implementation authorization and
-not Scheduler admission. Canonical authorization, handoff reconstruction,
+This module validates only the low-trust GitHub event envelope for #1203 and
+#1432. A successful parse is transport evidence, not implementation authorization
+and not Scheduler admission. Canonical authorization, handoff reconstruction,
 lease state, exact-head state, dependency readiness, and runtime dispatch remain
 owned by their existing Agent OS components.
 
@@ -29,6 +29,11 @@ _TRIGGER_RE = re.compile(
     r"/agent-os resume (?P<handoff>executor-handoff:[0-9a-f]{64})",
     re.ASCII,
 )
+_DEV_VALIDATE_RE = re.compile(
+    r"/agent-os dev-validate (?P<branch>agent/[A-Za-z0-9._/-]{1,180}) "
+    r"(?P<sha>[0-9a-f]{40}) (?P<validation_id>remote-validation-suite)",
+    re.ASCII,
+)
 _REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", re.ASCII)
 _ACTOR_RE = re.compile(r"[A-Za-z0-9-]{1,39}", re.ASCII)
 
@@ -37,6 +42,7 @@ IngressReason = Literal[
     "accepted-envelope",
     "accepted-discovery-envelope",
     "accepted-runtime-inspection-envelope",
+    "accepted-dev-validation-envelope",
     "event-not-created",
     "pull-request-comment",
     "repository-mismatch",
@@ -62,6 +68,9 @@ class IssueCommentIngressResult:
     handoff_id_or_none: str | None
     logical_trigger_id_or_none: str | None
     run_attempt: int
+    dev_validation_branch_or_none: str | None = None
+    dev_validation_sha_or_none: str | None = None
+    dev_validation_id_or_none: str | None = None
     execution_authorized: Literal[False] = field(default=False, init=False)
     scheduler_invoked: Literal[False] = field(default=False, init=False)
     side_effects_performed: Literal[False] = field(default=False, init=False)
@@ -78,6 +87,9 @@ class IssueCommentIngressResult:
             "handoff_id_or_none": self.handoff_id_or_none,
             "logical_trigger_id_or_none": self.logical_trigger_id_or_none,
             "run_attempt": self.run_attempt,
+            "dev_validation_branch_or_none": self.dev_validation_branch_or_none,
+            "dev_validation_sha_or_none": self.dev_validation_sha_or_none,
+            "dev_validation_id_or_none": self.dev_validation_id_or_none,
             "execution_authorized": False,
             "scheduler_invoked": False,
             "side_effects_performed": False,
@@ -94,6 +106,19 @@ def _operation_trigger_id(repository: str, issue_number: int, operation: str) ->
     return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
 
 
+def _dev_validation_trigger_id(
+    repository: str,
+    issue_number: int,
+    branch: str,
+    sha: str,
+    validation_id: str,
+) -> str:
+    material = (
+        f"{repository}\0{issue_number}\0dev-validate\0{branch}\0{sha}\0{validation_id}"
+    ).encode("ascii")
+    return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
+
+
 def _result(
     *,
     status: IngressStatus,
@@ -105,10 +130,26 @@ def _result(
     actor: str | None = None,
     handoff_id: str | None = None,
     operation: str | None = None,
+    dev_validation_branch: str | None = None,
+    dev_validation_sha: str | None = None,
+    dev_validation_id: str | None = None,
 ) -> IssueCommentIngressResult:
     logical_id = None
     if handoff_id is not None and issue_number is not None:
         logical_id = _logical_trigger_id(repository, issue_number, handoff_id)
+    elif (
+        dev_validation_branch is not None
+        and dev_validation_sha is not None
+        and dev_validation_id is not None
+        and issue_number is not None
+    ):
+        logical_id = _dev_validation_trigger_id(
+            repository,
+            issue_number,
+            dev_validation_branch,
+            dev_validation_sha,
+            dev_validation_id,
+        )
     elif operation is not None and issue_number is not None:
         logical_id = _operation_trigger_id(repository, issue_number, operation)
     return IssueCommentIngressResult(
@@ -122,6 +163,19 @@ def _result(
         handoff_id_or_none=handoff_id,
         logical_trigger_id_or_none=logical_id,
         run_attempt=run_attempt,
+        dev_validation_branch_or_none=dev_validation_branch,
+        dev_validation_sha_or_none=dev_validation_sha,
+        dev_validation_id_or_none=dev_validation_id,
+    )
+
+
+def _valid_dev_branch(branch: str) -> bool:
+    return (
+        branch.startswith("agent/")
+        and branch not in {"agent/", "agent/main"}
+        and ".." not in branch
+        and "//" not in branch
+        and not branch.endswith(("/", "."))
     )
 
 
@@ -192,6 +246,20 @@ def admit_issue_comment_event(
         return _result(status="accepted", reason="accepted-discovery-envelope", operation="discover", **common)
     if body == "/agent-os inspect-runtime":
         return _result(status="accepted", reason="accepted-runtime-inspection-envelope", operation="inspect-runtime", **common)
+
+    dev_match = _DEV_VALIDATE_RE.fullmatch(body)
+    if dev_match is not None:
+        branch = dev_match.group("branch")
+        if not _valid_dev_branch(branch):
+            return _result(status="ignored", reason="malformed-trigger", **common)
+        return _result(
+            status="accepted",
+            reason="accepted-dev-validation-envelope",
+            dev_validation_branch=branch,
+            dev_validation_sha=dev_match.group("sha"),
+            dev_validation_id=dev_match.group("validation_id"),
+            **common,
+        )
 
     match = _TRIGGER_RE.fullmatch(body)
     if match is None:
