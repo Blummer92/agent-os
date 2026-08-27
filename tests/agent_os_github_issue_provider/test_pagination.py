@@ -102,6 +102,7 @@ def test_duplicate_rel_and_normalized_next_fail_closed(header: str):
         ("pagination:next-page-invalid", "page=%202"),
         ("pagination:next-page-invalid", "page=02"),
         ("pagination:next-page-invalid", "page=0"),
+        ("pagination:next-page-invalid", "page="),
         ("pagination:next-page-invalid", "page=2.0"),
         ("pagination:next-page-invalid", "page=2e0"),
         ("pagination:next-page-invalid", "page=%32"),
