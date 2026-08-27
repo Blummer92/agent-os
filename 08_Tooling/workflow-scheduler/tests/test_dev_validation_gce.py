@@ -190,6 +190,15 @@ def test_log_over_bound_is_rejected() -> None:
     assert result["dev_validation"]["reason_codes"] == ["dev-validation-log-bound-invalid"]
 
 
+def test_host_runner_source_uses_canonical_python3_runtime() -> None:
+    source = live._HOST_RUNNER_SOURCE
+    assert 'HOST_PYTHON="/usr/bin/python3"' in source
+    assert 'python=HOST_PYTHON' in source
+    assert 'shutil.which("python")' not in source
+    assert 'os.path.isfile(python)' in source
+    assert 'os.access(python,os.X_OK)' in source
+
+
 def test_host_runner_source_has_fixed_validation_and_no_privileged_mutation() -> None:
     source = live._HOST_RUNNER_SOURCE
     assert 'TEST_ARGS=("-m","pytest","tests/agent_os_remote_validation")' in source
