@@ -6,8 +6,8 @@ import re
 from dataclasses import dataclass, field, replace
 from typing import Literal
 
-from .models import ValidationPlan
-from .selector import validate_validation_plan, validation_plan_id
+from .models import PrePrValidationPlan, ValidationPlan
+from .selector import pre_pr_validation_plan_id, validate_validation_plan, validation_plan_id
 
 VALIDATION_DISPATCH_DECISION_SCHEMA_NAME = "agent-os-validation-dispatch-decision"
 VALIDATION_DISPATCH_DECISION_SCHEMA_VERSION = "1.0"
@@ -106,6 +106,85 @@ def validation_dispatch_identity(plan: ValidationPlan) -> str:
         selector_version=plan.selector_version,
         command_set_digest=plan.command_set_digest,
         plan_id=validation_plan_id(plan),
+    )
+
+
+def pre_pr_validation_dispatch_identity(plan: object) -> str:
+    """Return the exact canonical dispatch identity for one valid pre-PR plan.
+
+    Uses the subject's ``expected_source_sha`` in place of a pull request's
+    head SHA -- a pre-PR candidate never has a pull request -- and the
+    subject's own repository. ``pre_pr_validation_plan_id`` re-verifies the
+    full plan (and its carried subject) before its identity is trusted here,
+    so a malformed plan raises instead of silently hashing bad content.
+    """
+    if type(plan) is not PrePrValidationPlan:
+        raise TypeError("plan must be an exact PrePrValidationPlan")
+    plan_id = pre_pr_validation_plan_id(plan)
+    return _identity(
+        repository=plan.subject.repository,
+        head_sha=plan.subject.expected_source_sha,
+        profile=plan.profile,
+        selector_version=plan.selector_version,
+        command_set_digest=plan.command_set_digest,
+        plan_id=plan_id,
+    )
+
+
+def evaluate_pre_pr_dispatch_decision(
+    plan: object,
+    *,
+    current_source_sha: object,
+    schema_version: object = VALIDATION_DISPATCH_DECISION_SCHEMA_VERSION,
+) -> DispatchDecision:
+    """Return a deterministic, non-authorizing pre-PR dispatch recommendation.
+
+    Mirrors ``evaluate_dispatch_decision``'s stale-head and launch-eligible
+    contract for one candidate-bound pre-PR plan that has no pull request and
+    therefore no ``current_pr_head_sha`` to compare against; the caller's
+    current source SHA plays that role instead. Dispatch-evidence retry,
+    duplicate, reuse, and supersession tracking remain Workflow Scheduler
+    lifecycle ownership (#330) and are out of scope here: this seam only ever
+    returns ``launch-eligible``, ``stale-skipped``, or ``manual-review``.
+    """
+    reasons: set[str] = set()
+    plan_ok = type(plan) is PrePrValidationPlan
+    if not plan_ok:
+        reasons.add("plan.invalid-type")
+    if schema_version != VALIDATION_DISPATCH_DECISION_SCHEMA_VERSION:
+        reasons.add("decision.schema-version")
+    if not _fullmatch(_SHA40, current_source_sha):
+        reasons.add("decision.current-source")
+
+    valid_plan: PrePrValidationPlan | None = None
+    if plan_ok:
+        try:
+            pre_pr_validation_dispatch_identity(plan)
+        except (TypeError, ValueError) as exc:
+            reasons.add("plan.invalid")
+            reasons.add(f"plan-detail.{exc.__class__.__name__.lower()}")
+        else:
+            valid_plan = plan
+
+    if reasons or valid_plan is None:
+        return _pre_pr_decision(
+            plan=None,
+            status="manual-review",
+            reason_codes=tuple(sorted(reasons)) or ("plan.invalid",),
+        )
+
+    if current_source_sha != valid_plan.subject.expected_source_sha:
+        return _pre_pr_decision(
+            plan=valid_plan,
+            status="stale-skipped",
+            reason_codes=("head.stale",),
+        )
+
+    return _pre_pr_decision(
+        plan=valid_plan,
+        status="launch-eligible",
+        launch_recommended=True,
+        reason_codes=("dispatch.no-prior-exact-result",),
     )
 
 
@@ -347,6 +426,54 @@ def _decision(
         retry_recommended=retry_recommended,
         retry_attempt=retry_attempt,
         matched_record_ids=tuple(sorted(matched_record_ids)),
+        reason_codes=tuple(sorted(reason_codes)),
+    )
+    digest = _semantic_digest(
+        "agent-os-validation-dispatch-decision:v1", _decision_payload(preliminary)
+    )
+    return replace(
+        preliminary,
+        decision_id=f"validation-dispatch-decision:{digest}",
+    )
+
+
+def _pre_pr_decision(
+    *,
+    plan: PrePrValidationPlan | None,
+    status: DispatchStatus,
+    reason_codes: tuple[str, ...],
+    launch_recommended: bool = False,
+) -> DispatchDecision:
+    """Build one pre-PR ``DispatchDecision`` with the same identity/decision-ID
+    hashing this module already uses for positive-PR decisions in ``_decision``.
+
+    ``pull_request`` stays ``None``: a pre-PR candidate represents the absence
+    of a pull request natively instead of inventing a placeholder number.
+    """
+    if len(reason_codes) == 0 or len(reason_codes) > MAX_DISPATCH_REASON_CODES:
+        raise ValueError("reason codes outside bounded contract")
+
+    plan_id = pre_pr_validation_plan_id(plan) if plan is not None else None
+    dispatch_identity = (
+        pre_pr_validation_dispatch_identity(plan) if plan is not None else None
+    )
+    preliminary = DispatchDecision(
+        schema_name=VALIDATION_DISPATCH_DECISION_SCHEMA_NAME,
+        schema_version=VALIDATION_DISPATCH_DECISION_SCHEMA_VERSION,
+        status=status,
+        decision_id="",
+        dispatch_identity=dispatch_identity,
+        repository=plan.subject.repository if plan is not None else None,
+        pull_request=None,
+        head_sha=plan.subject.expected_source_sha if plan is not None else None,
+        profile=plan.profile if plan is not None else None,
+        selector_version=plan.selector_version if plan is not None else None,
+        command_set_digest=plan.command_set_digest if plan is not None else None,
+        plan_id=plan_id,
+        launch_recommended=launch_recommended,
+        retry_recommended=False,
+        retry_attempt=None,
+        matched_record_ids=(),
         reason_codes=tuple(sorted(reason_codes)),
     )
     digest = _semantic_digest(
