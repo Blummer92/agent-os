@@ -141,6 +141,27 @@ def test_stopped_host_does_not_start_for_dev_validation() -> None:
     assert result["dev_validation"]["reason_codes"] == ["host-not-running"]
 
 
+def test_ssh_failure_preserves_bounded_sanitized_diagnostics() -> None:
+    class FailedAdapter(Adapter):
+        def _ssh(self, resource, command):
+            self.calls.append(("ssh", command))
+            stderr = "prefix\x00" + ("x" * (live.MAX_RESULT_LOG_CHARS + 20)) + " permission denied"
+            return SimpleNamespace(returncode=255, stdout="", stderr=stderr)
+
+    result = live.execute_dev_validation_transport(ingress(), claims=claims(), adapter=FailedAdapter())
+    evidence = result["dev_validation"]
+    assert evidence["status"] == "needs-decision"
+    assert evidence["reason_codes"] == ["dev-validation-ssh-failed"]
+    assert evidence["ssh_exit_code"] == 255
+    assert len(evidence["ssh_stderr_tail"]) == live.MAX_RESULT_LOG_CHARS
+    assert evidence["ssh_stderr_tail"].endswith(" permission denied")
+    assert "\x00" not in evidence["ssh_stderr_tail"]
+    assert evidence["ssh_stderr_truncated"] is True
+    assert evidence["workspace_side_effects_performed"] is False
+    assert evidence["scheduler_invoked"] is False
+    assert evidence["execution_authorized"] is False
+
+
 def test_identity_mismatch_in_host_evidence_fails_closed() -> None:
     req = request()
     bad = payload(req)
