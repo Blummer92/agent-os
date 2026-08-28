@@ -54,7 +54,7 @@ Classify failures before changing code:
 
 Cloud Build can be bypassed as a supplemental lane by not submitting it or by disabling the project-side trigger through the authorized Google Cloud owner. Do not delete `cloudbuild.yaml`, weaken validation, or change branch protection as a workaround. If unavailable, run the same commands in another approved Linux environment and record exact-SHA evidence.
 
-Ownership: GitHub Service Agent owns repository configuration and documentation; QA / Test Agent owns validation evidence; Integration Manager supports cross-system routing; the authorized Google Cloud owner controls project triggers, service accounts, IAM, logs, and timeouts.
+Ownership: GitHub Service Agent owns repository configuration and documentation; QA / Test Agent owns independent validation evidence; ChatGPT Orchestrator owns cross-system, source-of-truth, Navigation Registry, and reusable-capability routing using the applicable shared standards; the authorized Google Cloud owner controls project triggers, service accounts, IAM, logs, and timeouts.
 
 ### GitHub Actions Validation
 
