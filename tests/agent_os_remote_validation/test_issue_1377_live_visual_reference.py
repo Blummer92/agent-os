@@ -20,6 +20,7 @@ LIBRARY_PAGE_ID = "3c67ac78-3131-81da-bb80-e256a36fd3de"
 MANIFEST_ID = "standalone-manifest-1377-add-content"
 MANIFEST_FINGERPRINT = "4310b3c44c71f129cfec3d144c6abc27954cd29c378390a3f6bc70819f685588"
 VERIFIED_AT = "2026-08-28T21:15:00Z"
+DERIVATIVE_MODIFIED_AT = "2026-08-24T21:33:35Z"
 
 
 def identity_evidence(*, file_id, fingerprint, evidence_reference, lineage):
@@ -91,7 +92,7 @@ def real_evidence():
             "exact_reference": f"drive:{DERIVATIVE_FILE_ID}",
             "web_view_link": f"https://drive.google.com/file/d/{DERIVATIVE_FILE_ID}/view",
             "external_revision": None,
-            "modified_time": "2026-08-24T21:33:35.764Z",
+            "modified_time": DERIVATIVE_MODIFIED_AT,
             "last_verified_at": VERIFIED_AT,
             "verification_scope": "provider-readback",
             "access_state": "verified",
@@ -109,7 +110,7 @@ def real_evidence():
                     "preserved_sections": ["interface-identity", "tool-identity", "visible-ui-claims"],
                     "resulting_file_ref": derivative_identity["stable_ref"],
                     "reviewer_owner": "repository-owner",
-                    "timestamp": "2026-08-24T21:33:35.764Z",
+                    "timestamp": DERIVATIVE_MODIFIED_AT,
                     "rollback_kind": "retained-prior-file",
                     "rollback_ref": source_identity["stable_ref"],
                     "rollback_verified": True,
