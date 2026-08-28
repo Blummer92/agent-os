@@ -13,6 +13,7 @@ ACTOR = "Blummer92"
 HANDOFF = "executor-handoff:" + "a" * 64
 DEV_SHA = "b" * 40
 DEV_TRIGGER = f"/agent-os dev-validate agent/1271-validation-profile-path-coverage {DEV_SHA} remote-validation-suite"
+MATERIALS_DEV_TRIGGER = f"/agent-os dev-validate agent/1416-curriculum-evidence-materials-context {DEV_SHA} instructional-materials-current-curriculum"
 
 
 def event(body: str, *, action: str = "created", actor: str = ACTOR) -> dict[str, object]:
@@ -169,13 +170,27 @@ def test_exact_dev_validation_trigger_is_accepted_but_non_authorizing() -> None:
     assert result.side_effects_performed is False
 
 
+def test_fixed_materials_dev_validation_trigger_is_accepted_but_non_authorizing() -> None:
+    result = admit(event(MATERIALS_DEV_TRIGGER))
+    assert result.status == "accepted"
+    assert result.reason == "accepted-dev-validation-envelope"
+    assert result.dev_validation_branch_or_none == "agent/1416-curriculum-evidence-materials-context"
+    assert result.dev_validation_sha_or_none == DEV_SHA
+    assert result.dev_validation_id_or_none == "instructional-materials-current-curriculum"
+    assert result.execution_authorized is False
+    assert result.scheduler_invoked is False
+    assert result.side_effects_performed is False
+
+
 def test_dev_validation_rejects_arbitrary_command_and_protected_branch() -> None:
     arbitrary = admit(event(f"{DEV_TRIGGER} ; rm -rf /"))
     protected = admit(event(f"/agent-os dev-validate main {DEV_SHA} remote-validation-suite"))
     unknown = admit(event(f"/agent-os dev-validate agent/x {DEV_SHA} arbitrary-suite"))
+    materials_extra = admit(event(f"{MATERIALS_DEV_TRIGGER} tests/test_other.py"))
     assert (arbitrary.status, arbitrary.reason) == ("ignored", "malformed-trigger")
     assert (protected.status, protected.reason) == ("ignored", "malformed-trigger")
     assert (unknown.status, unknown.reason) == ("ignored", "malformed-trigger")
+    assert (materials_extra.status, materials_extra.reason) == ("ignored", "malformed-trigger")
 
 
 def test_duplicate_dev_validation_comments_share_identity_but_sha_change_does_not() -> None:
@@ -186,3 +201,9 @@ def test_duplicate_dev_validation_comments_share_identity_but_sha_change_does_no
     changed = admit(event(DEV_TRIGGER.replace(DEV_SHA, "c" * 40)))
     assert first.logical_trigger_id_or_none == duplicate.logical_trigger_id_or_none
     assert first.logical_trigger_id_or_none != changed.logical_trigger_id_or_none
+
+
+def test_validation_identity_is_part_of_logical_trigger_identity() -> None:
+    remote = admit(event(DEV_TRIGGER))
+    materials = admit(event(MATERIALS_DEV_TRIGGER.replace("agent/1416-curriculum-evidence-materials-context", "agent/1271-validation-profile-path-coverage")))
+    assert remote.logical_trigger_id_or_none != materials.logical_trigger_id_or_none
