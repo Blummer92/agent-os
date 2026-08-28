@@ -225,6 +225,7 @@ def test_factory_consumes_canonical_runtime_request_into_1319(monkeypatch, tmp_p
     assert bootstrap_kwargs["issue_transport"] is transport
     assert bootstrap_kwargs["authorization_transport"] is transport
     assert bootstrap_kwargs["run_verifier"] is verifier
+    assert bootstrap_kwargs["runtime_request"] is request
     assert captured["cancelled"]() is False
 
 
