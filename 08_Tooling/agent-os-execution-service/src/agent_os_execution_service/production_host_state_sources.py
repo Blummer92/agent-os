@@ -67,6 +67,7 @@ from .governed_resume_restart_capsule import (
 )
 from .handoff_store import load_executor_handoff
 from .route_decision_store import load_route_decision
+from .runtime_execution_request import RuntimeExecutionRequest
 
 RepositoryObservationReader = Callable[[GovernedInvocationDescriptor], RepositoryObservation]
 RequiredEnvironmentSpecReader = Callable[[GovernedInvocationDescriptor], RequiredEnvironmentSpec]
@@ -107,6 +108,7 @@ class ProductionHostStateSources:
         lease_directory: Path | str,
         delegated_parent_cgroup: Path | str | None = None,
         dependency_identity_evidence_reader: DependencyIdentityEvidenceReader | None = None,
+        runtime_request: RuntimeExecutionRequest | None = None,
     ) -> None:
         self.checkpoint_store_root = Path(checkpoint_store_root)
         self.issue_reader = issue_reader
@@ -121,6 +123,7 @@ class ProductionHostStateSources:
         self.delegated_parent_cgroup = (
             None if delegated_parent_cgroup is None else str(Path(delegated_parent_cgroup))
         )
+        self.runtime_request = runtime_request
         for name in (
             "repository_observation_reader",
             "required_environment_spec_reader",
@@ -136,6 +139,9 @@ class ProductionHostStateSources:
 
     def route_decision(self, descriptor: GovernedInvocationDescriptor) -> object:
         descriptor = _descriptor(descriptor)
+        if self.runtime_request is not None:
+            _check_descriptor_matches_request(descriptor, self.runtime_request)
+            return self.runtime_request.route_decision
         return load_route_decision(self.checkpoint_store_root, descriptor.route_decision_id)
 
     def handoff(
@@ -145,6 +151,9 @@ class ProductionHostStateSources:
     ) -> object:
         del route_decision
         descriptor = _descriptor(descriptor)
+        if self.runtime_request is not None:
+            _check_descriptor_matches_request(descriptor, self.runtime_request)
+            return self.runtime_request.handoff
         return load_executor_handoff(self.checkpoint_store_root, descriptor.handoff_id)
 
     def checkpoint(self, descriptor: GovernedInvocationDescriptor) -> object:
@@ -411,7 +420,11 @@ class ProductionHostStateSources:
         return state
 
     def _rebuild_current_state(self, descriptor: GovernedInvocationDescriptor) -> _CurrentState:
-        capsule = load_restart_capsule(self.checkpoint_store_root, descriptor.handoff_id)
+        if self.runtime_request is not None:
+            _check_descriptor_matches_request(descriptor, self.runtime_request)
+            capsule = self.runtime_request.restart_capsule
+        else:
+            capsule = load_restart_capsule(self.checkpoint_store_root, descriptor.handoff_id)
         packet = capsule.candidate_packet
         if (
             packet.packet_id != descriptor.candidate_packet_id
@@ -674,3 +687,11 @@ def _supplied_command_results(payload: dict[str, object]) -> tuple[SuppliedComma
                 "restart capsule validation command result is malformed"
             ) from exc
     return tuple(results)
+
+def _check_descriptor_matches_request(
+    descriptor: GovernedInvocationDescriptor, request: RuntimeExecutionRequest
+) -> None:
+    if descriptor.handoff_id != request.handoff_id:
+        raise CurrentInvocationResolutionError(
+            "invocation descriptor does not match canonical runtime request"
+        )

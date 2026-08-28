@@ -16,6 +16,7 @@ import hashlib
 from dataclasses import dataclass
 from enum import Enum
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -469,7 +470,16 @@ def test_composed_reconstruct_is_a_partial_of_the_canonical_function(store_root,
     assert isinstance(
         bindings.reconstruct.keywords["resolver"], CanonicalCurrentInvocationResolver
     )
-    assert bindings.reconstruct.keywords["descriptor_loader"].func is load_invocation_descriptor
+    # With no canonical runtime request bound, the descriptor loader falls
+    # back to the real canonical loader over the exact composed store root
+    # (#1338): it is no longer a bare functools.partial of that loader, since
+    # a canonical-present request must be able to short-circuit it entirely.
+    descriptor_loader = bindings.reconstruct.keywords["descriptor_loader"]
+    with patch(
+        "agent_os_execution_service.production_host_composition.load_invocation_descriptor"
+    ) as mock_load:
+        descriptor_loader(H)
+        mock_load.assert_called_once_with(str(store_root), H)
 
 
 # ---------------------------------------------------------------------------
