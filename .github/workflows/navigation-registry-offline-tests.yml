@@ -4,6 +4,10 @@ on:
   pull_request:
   push:
 
+concurrency:
+  group: navigation-registry-offline-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.run_attempt == 1 }}
+
 jobs:
   offline-notion-connector-tests:
     runs-on: ubuntu-latest
