@@ -412,7 +412,7 @@ class ProductionPullRequestBranchRefreshProvider(PullRequestBranchRefreshProvide
                 return _blocked(expected_head_sha, "rebased-head-unavailable")
 
         if proposed_head_sha == expected_head_sha:
-            return _blocked(expected_head_sha, "candidate-head-unchanged")
+            return _blocked(expected_head_sha, "rebased-head-unchanged")
 
         update = update_branch_with_expected_head(
             ExpectedHeadBranchUpdateRequest(
