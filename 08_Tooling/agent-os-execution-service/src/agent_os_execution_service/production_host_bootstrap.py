@@ -90,6 +90,7 @@ from .production_host_state_sources import (
     ProductionHostStateSources,
     RepositoryObservationReader,
 )
+from .runtime_execution_request import RuntimeExecutionRequest
 
 #: Static host locations. ``AGENT_OS_CHECKPOINT_STORE_ROOT`` is the existing
 #: variable ``production_host_composition`` already binds; the rest follow the
@@ -275,6 +276,7 @@ def build_repository_observation_reader(
     configuration: ProductionHostConfiguration,
     evaluated_at: str,
     run_verifier: VerifierRunner,
+    runtime_request: RuntimeExecutionRequest | None = None,
 ) -> RepositoryObservationReader:
     """Return the #1303 ``RepositoryObservationReader`` over the canonical verifier.
 
@@ -313,9 +315,17 @@ def build_repository_observation_reader(
             raise ProductionHostBootstrapError(
                 "descriptor must be an exact GovernedInvocationDescriptor"
             )
-        capsule = load_restart_capsule(
-            configuration.checkpoint_store_root, descriptor.handoff_id
-        )
+        if runtime_request is not None:
+            if runtime_request.handoff_id != descriptor.handoff_id:
+                from .production_host_state_sources import CurrentInvocationResolutionError
+                raise CurrentInvocationResolutionError(
+                    "invocation descriptor does not match canonical runtime request"
+                )
+            capsule = runtime_request.restart_capsule
+        else:
+            capsule = load_restart_capsule(
+                configuration.checkpoint_store_root, descriptor.handoff_id
+            )
         packet = capsule.candidate_packet
         stdout = run_verifier(
             VerifierInvocation(
@@ -391,8 +401,6 @@ class _InvocationRuntimeConfigurationBinding:
             )
         return self._configuration
 
-
-from .runtime_execution_request import RuntimeExecutionRequest
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ProductionHostBootstrap:
@@ -504,9 +512,11 @@ def build_production_host_bootstrap(
             configuration=bound,
             evaluated_at=moment,
             run_verifier=run_verifier,
+            runtime_request=runtime_request,
         ),
         required_environment_spec_reader=build_required_environment_spec_reader(
-            bound.checkpoint_store_root
+            bound.checkpoint_store_root,
+            runtime_request=runtime_request,
         ),
         evaluated_at=moment,
         repository_root=bound.repository_root,

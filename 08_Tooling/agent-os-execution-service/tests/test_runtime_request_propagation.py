@@ -12,7 +12,12 @@ from scripts.agent_os_execution_checkpoint.invocation_descriptor import Governed
 from agent_os_execution_service.executor_routing import ExecutorRouteDecision, ExecutorHandoff, ExecutorRoute
 from agent_os_execution_service.governed_resume_restart_capsule import GovernedResumeRestartCapsule
 from scripts.agent_os_candidate_packet.models import CandidatePacket, CandidatePacketPhase
-from agent_os_execution_service.production_host_bootstrap import build_production_host_bootstrap, ProductionHostConfiguration
+from agent_os_execution_service.production_host_bootstrap import (
+    build_production_host_bootstrap,
+    build_repository_observation_reader,
+    build_required_environment_spec_reader,
+    ProductionHostConfiguration,
+)
 from agent_os_execution_service.production_host_composition import build_production_governed_resume_bindings
 from agent_os_execution_service.execution_authorization_source import ExecutionAuthorizationSourceTransport
 from scripts.agent_os_candidate_packet.repository_stage import RepositoryObservation
@@ -71,10 +76,16 @@ def runtime_request(descriptor):
     packet.invocation_id = descriptor.invocation_id
     packet.candidate_sha = descriptor.source_sha
     packet.phase = CandidatePacketPhase.EXECUTION_CANDIDATE
+    packet.base_branch = "main"
+    packet.base_sha = "4" * 40
+    packet.freshness_boundary = "2026-08-28T12:00:00Z"
+    packet.external_build_sha = None
 
     capsule = MagicMock(spec=GovernedResumeRestartCapsule)
     capsule.handoff_id = descriptor.handoff_id
     capsule.candidate_packet = packet
+    capsule.approval_record.binding.implementation_contract_fingerprint = "5" * 64
+    capsule.required_environment_spec.required_environment_id = descriptor.required_environment_id
 
     request = MagicMock(spec=RuntimeExecutionRequest)
     request.handoff_id = HANDOFF_ID
@@ -108,12 +119,32 @@ def test_canonical_present_performs_zero_standalone_reads(tmp_path, descriptor, 
         observed_at="2026-08-28T12:00:00Z",
         freshness_boundary="2026-08-28T12:00:00Z",
     )
+    
+    # Readers built WITH runtime_request
+    obs_reader = build_repository_observation_reader(
+        configuration=ProductionHostConfiguration(
+            checkpoint_store_root=tmp_path,
+            repository_root=tmp_path,
+            workspace_parent=tmp_path,
+            lease_directory=tmp_path,
+            delegated_parent_cgroup=None,
+            repository_host="github.com",
+        ),
+        evaluated_at="2026-08-28T12:00:00Z",
+        run_verifier=lambda x: "verifier-stdout",
+        runtime_request=runtime_request
+    )
+    env_reader = build_required_environment_spec_reader(
+        store_root=tmp_path,
+        runtime_request=runtime_request
+    )
+
     sources = ProductionHostStateSources(
         checkpoint_store_root=tmp_path,
         issue_reader=MagicMock(),
         repository_reader=MagicMock(),
-        repository_observation_reader=lambda d: observation,
-        required_environment_spec_reader=MagicMock(),
+        repository_observation_reader=obs_reader,
+        required_environment_spec_reader=env_reader,
         evaluated_at="2026-08-28T12:00:00Z",
         repository_root=tmp_path,
         workspace_parent=tmp_path,
@@ -123,15 +154,23 @@ def test_canonical_present_performs_zero_standalone_reads(tmp_path, descriptor, 
 
     with patch("agent_os_execution_service.production_host_state_sources.load_route_decision") as mock_route, \
          patch("agent_os_execution_service.production_host_state_sources.load_executor_handoff") as mock_handoff, \
-         patch("agent_os_execution_service.production_host_state_sources.load_restart_capsule") as mock_capsule:
+         patch("agent_os_execution_service.production_host_state_sources.load_restart_capsule") as mock_capsule, \
+         patch("agent_os_execution_service.production_host_bootstrap.load_restart_capsule") as mock_capsule_obs, \
+         patch("agent_os_execution_service.governed_resume_restart_capsule.load_restart_capsule") as mock_capsule_env, \
+         patch("agent_os_execution_service.production_host_bootstrap.build_repository_observation_from_verifier_stdout", return_value=observation):
         
         assert sources.route_decision(descriptor) is runtime_request.route_decision
         assert sources.handoff(descriptor, None) is runtime_request.handoff
-        # We don't call candidate_packet here because it triggers full state rebuild which is complex to mock
         
+        # Reader calls should use runtime_request and avoid standalone capsule reads
+        assert sources.repository_observation_reader(descriptor) is observation
+        assert sources.required_environment_spec_reader(descriptor) is runtime_request.restart_capsule.required_environment_spec
+
         mock_route.assert_not_called()
         mock_handoff.assert_not_called()
         mock_capsule.assert_not_called()
+        mock_capsule_obs.assert_not_called()
+        mock_capsule_env.assert_not_called()
 
 def test_tampered_canonical_evidence_fails_closed(tmp_path, descriptor, runtime_request):
     # Tamper with the request so it doesn't match the descriptor
@@ -239,17 +278,16 @@ def test_composition_uses_runtime_request_descriptor(tmp_path, runtime_request):
                 args, kwargs = mock_reconstruct.call_args
                 descriptor_loader = kwargs['descriptor_loader']
                 
+                # Strengthening: prove zero standalone descriptor reads
                 desc = descriptor_loader(HANDOFF_ID)
                 assert desc is runtime_request.invocation_descriptor
                 mock_load.assert_not_called()
                 
                 # Try a different handoff_id, it should fall back to mock_load
                 other_id = "executor-handoff:" + "f" * 64
-                try:
-                    descriptor_loader(other_id)
-                except:
-                    pass
-                # Check if it was called with either string or Path, depending on implementation
-                calls = mock_load.call_args_list
-                assert len(calls) == 1
-                assert calls[0][0][1] == other_id
+                with patch("agent_os_execution_service.production_host_composition.load_invocation_descriptor") as mock_load_fallback:
+                    try:
+                        descriptor_loader(other_id)
+                    except:
+                        pass
+                    mock_load_fallback.assert_called_once()

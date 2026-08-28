@@ -27,7 +27,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Literal
+from typing import TYPE_CHECKING, Callable, Literal
 
 from scripts.agent_os_candidate_packet.models import (
     CandidatePacket,
@@ -473,13 +473,37 @@ def load_required_environment_spec(
     return spec
 
 
+if TYPE_CHECKING:  # pragma: no cover - import-cycle-free type hint only
+    from .runtime_execution_request import RuntimeExecutionRequest
+
+
 def build_required_environment_spec_reader(
     store_root: Path | str,
+    runtime_request: "RuntimeExecutionRequest | None" = None,
 ) -> Callable[[GovernedInvocationDescriptor], RequiredEnvironmentSpec]:
-    """Return the #1303 ``RequiredEnvironmentSpecReader`` over this exact store."""
+    """Return the #1303 ``RequiredEnvironmentSpecReader`` over this exact store.
+
+    When a canonical #1338 ``RuntimeExecutionRequest`` is bound, the spec is
+    read from its embedded restart capsule instead of a standalone capsule
+    load, and a descriptor/environment-identity mismatch fails closed rather
+    than silently falling back to the legacy store read.
+    """
     root = Path(store_root)
 
     def _read(descriptor: GovernedInvocationDescriptor) -> RequiredEnvironmentSpec:
+        if runtime_request is not None:
+            if runtime_request.handoff_id != descriptor.handoff_id:
+                from .current_invocation_resolver import CurrentInvocationResolutionError
+                raise CurrentInvocationResolutionError(
+                    "invocation descriptor does not match canonical runtime request"
+                )
+            spec = runtime_request.restart_capsule.required_environment_spec
+            if spec.required_environment_id != descriptor.required_environment_id:
+                raise CheckpointStoreIntegrityConflict(
+                    "persisted required environment specification does not match the "
+                    "invocation descriptor"
+                )
+            return spec
         return load_required_environment_spec(root, descriptor)
 
     return _read
