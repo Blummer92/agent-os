@@ -106,13 +106,27 @@ def test_request_builder_rejects_caller_supplied_command_surface() -> None:
 def test_host_runner_owns_both_test_selections_and_uses_validated_identity() -> None:
     source = dev_validation_gce._HOST_RUNNER_SOURCE
     assert '"remote-validation-suite":("-m","pytest","tests/agent_os_remote_validation")' in source
-    assert '"instructional-materials-current-curriculum-suite":(' in source
+    assert '"instructional-materials-current-curriculum-suite"' in source
     assert "test_args=VALIDATION_ARGS[validation_id]" in source
     assert "(TEST_PYTHON,*test_args)" in source
     assert "sys.argv[7:]" not in source
     assert "shell=True" not in source
     assert "pip install" not in source
     assert "sudo" not in source
+
+
+def test_materials_identity_uses_only_fixed_repository_import_roots() -> None:
+    source = dev_validation_gce._HOST_RUNNER_SOURCE
+    assert 'MATERIALS_ID="instructional-materials-current-curriculum-suite"' in source
+    assert 'MATERIALS_IMPORT_ROOTS=("src","08_Tooling/instructional-materials-coach/src")' in source
+    assert 'if validation_id==MATERIALS_ID:' in source
+    assert 'env["PYTHONPATH"]=os.pathsep.join(os.path.join(repo,path) for path in MATERIALS_IMPORT_ROOTS)' in source
+    assert 'import instructional_materials_coach, instructional_workflow_contracts' in source
+    assert 'validation-import-preflight-failed' in source
+    assert 'os.environ.get("PYTHONPATH"' not in source
+    assert 'sys.argv[7:]' not in source
+    assert 'pip install' not in source
+    assert 'shell=True' not in source
 
 
 def test_host_command_carries_only_fixed_runner_plus_identity_arguments() -> None:
@@ -128,3 +142,5 @@ def test_existing_remote_validation_mapping_is_behaviorally_unchanged() -> None:
     assert dev_validation.VALIDATION_ARGV == (
         "python", "-m", "pytest", "tests/agent_os_remote_validation"
     )
+    source = dev_validation_gce._HOST_RUNNER_SOURCE
+    assert '"remote-validation-suite":("-m","pytest","tests/agent_os_remote_validation")' in source
