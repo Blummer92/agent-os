@@ -41,8 +41,11 @@ invalidation, and revalidation scope then use
 `assessment-blueprint-lifecycle-standard.md`. A current validated blueprint then
 uses `assessment-sequencing-student-experience-standard.md` for section order,
 dependencies, student language, cognitive flow, accessibility, engagement, time,
-and teacher workload. All remain report-only and do not authorize grading,
-readiness, classroom use, production, or writes.
+and teacher workload. QA then uses `assessment-qa-evidence-review-standard.md`
+to evaluate alignment, evidence, method/task quality, sequencing findings,
+accessibility, fairness, AI-policy alignment, workload, and instructional
+usefulness. All remain report-only and do not authorize grading, readiness,
+classroom use, production, publication, or writes.
 
 ## Files
 
@@ -54,6 +57,7 @@ readiness, classroom use, production, or writes.
 - `assessment-blueprint-core-standard.md` — #837-preserving blueprint schema and fail-closed core validation
 - `assessment-blueprint-lifecycle-standard.md` — #1192 lifecycle, stale-state, change-impact, bounded-invalidation, and revalidation contract
 - `assessment-sequencing-student-experience-standard.md` — #839 section sequencing, dependencies, student language, cognitive flow, accessibility, engagement, time, and workload contract
+- `assessment-qa-evidence-review-standard.md` — #841 QA categories, evidence validity, fairness/accessibility review, finite dispositions, and non-authorizing QA report contract
 - `student-language-standard.md` — reusable student-facing language artifacts
 - `learning-science-rules.md` — classroom design rules for materials
 - `production-gates-and-compute.md` — hard-stop gates and efficiency rules
@@ -70,4 +74,4 @@ fields, standards, and output keys.
 
 ## Version
 
-0.13.0
+0.14.0
