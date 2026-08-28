@@ -1,10 +1,11 @@
 """Bounded GitHub issue-comment transport parsing for Agent OS Scheduler ingress.
 
-This module validates only the low-trust GitHub event envelope for #1203 and
-#1432. A successful parse is transport evidence, not implementation authorization
-and not Scheduler admission. Canonical authorization, handoff reconstruction,
-lease state, exact-head state, dependency readiness, and runtime dispatch remain
-owned by their existing Agent OS components.
+This module validates only the low-trust GitHub event envelope for #1203,
+#1432, and fixed developer-validation identities such as #1416. A successful
+parse is transport evidence, not implementation authorization and not Scheduler
+admission. Canonical authorization, handoff reconstruction, lease state,
+exact-head state, dependency readiness, and runtime dispatch remain owned by
+their existing Agent OS components.
 
 The parser never executes comment text, constructs shell commands from comment
 text, performs network I/O, mutates a repository, acquires a lease, or invokes a
@@ -31,7 +32,8 @@ _TRIGGER_RE = re.compile(
 )
 _DEV_VALIDATE_RE = re.compile(
     r"/agent-os dev-validate (?P<branch>agent/[A-Za-z0-9._/-]{1,180}) "
-    r"(?P<sha>[0-9a-f]{40}) (?P<validation_id>remote-validation-suite)",
+    r"(?P<sha>[0-9a-f]{40}) "
+    r"(?P<validation_id>remote-validation-suite|instructional-materials-current-curriculum)",
     re.ASCII,
 )
 _REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", re.ASCII)
