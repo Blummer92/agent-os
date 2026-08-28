@@ -114,6 +114,7 @@ def main(argv: list[str] | None = None) -> int:
                 material_requirement=material_requirement,
                 current_curriculum_evidence=_load_json(args.current_curriculum_evidence, default=None),
                 selected_asset_ids=tuple(visual_plan.selected_asset_ids),
+                governed_visual_plan=visual_plan.cohesive_visual_plan_result,
             )
             context["generation_context_tokens"] = sorted(content.context_tokens)
 
