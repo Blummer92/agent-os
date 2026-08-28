@@ -206,6 +206,7 @@ def test_context_cannot_replace_authored_tokens():
 
 
 def test_typography_teacher_reference_projection_does_not_widen_1416_visual_approval():
+    """Keep worksheet approval visible while refusing to widen it to teacher-reference use."""
     visual_plan = _governed_visual_plan()
     context = compose_generation_context(
         _content(),
@@ -271,10 +272,13 @@ def test_typography_teacher_reference_projection_does_not_widen_1416_visual_appr
         ],
         governed_visual_assignments=context.context_tokens["context_selected_visual_assignments"],
     )
-    assert examples["rows"][0]["visual_status"] == "explicit-gap"
-    assert examples["rows"][0]["visual_preview"] is None
-    assert examples["rows"][0]["visual_prompt"] == prompt
-    assert "approved_use=" not in examples["rows"][0]["source_reuse_safe_use_constraints"]
+    row = examples["rows"][0]
+    assert row["visual_status"] == "explicit-gap"
+    assert row["visual_preview"] is None
+    assert row["visual_prompt"] == prompt
+    assert '"material_types":["worksheet"]' in row["source_reuse_safe_use_constraints"]
+    assert '"role_types":["worked-example"]' in row["source_reuse_safe_use_constraints"]
+    assert "approved_use=" in row["source_reuse_safe_use_constraints"]
     assert not any(vocabulary["authority"].values())
     assert not any(examples["authority"].values())
 
@@ -282,4 +286,5 @@ def test_typography_teacher_reference_projection_does_not_widen_1416_visual_appr
     assert "Typography & Visual Communication" in rendered
     assert "hierarchy" in rendered
     assert "font menu" in rendered
+    assert "useful-but-missing" in rendered
     assert "grants no readiness" in rendered
