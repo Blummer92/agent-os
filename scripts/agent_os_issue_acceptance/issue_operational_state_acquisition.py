@@ -6,6 +6,12 @@ issue snapshot through an injected read owner, delegates every derived meaning t
 its existing canonical evaluator/owner, validates exact identity joins, and then
 invokes the unchanged #1441 producer exactly once.
 
+Repository revision and issue revision are deliberately separate identities. The
+#1441 operational-state contract requires a 40-character repository SHA as
+``source_revision``; the existing GitHub issue provider emits the content-addressed
+``github-issue-v1:<sha256>`` revision for the issue itself. The latter is retained
+as evidence identity and must never be substituted for the repository SHA.
+
 The module creates no GitHub client, performs no mutation, persists nothing, and
 never treats issue prose or labels as authorization/dependency/validation truth.
 """
@@ -13,6 +19,7 @@ never treats issue prose or labels as authorization/dependency/validation truth.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Callable, Protocol
 
 from .approval_records import ApprovalApplicabilityResult
@@ -37,14 +44,19 @@ from .merge_authorization import MergeAuthorizationApplicabilityResult
 from .readiness import ReadinessResult, evaluate_issue_readiness
 
 
+_REPOSITORY_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_ISSUE_REVISION_RE = re.compile(r"^github-issue-v1:[0-9a-f]{64}$")
+
+
 @dataclass(frozen=True, slots=True)
 class CurrentIssueSnapshot:
-    """Bounded current issue/source facts supplied by the existing read owner."""
+    """Bounded current issue/source facts supplied by existing read owners."""
 
     repository: str
     issue_number: int
     body: str
     source_revision: str
+    issue_source_revision: str
     observed_at: str
     evidence_ids: tuple[str, ...]
     source_state: SourceState
@@ -60,8 +72,21 @@ class CurrentIssueSnapshot:
             raise TypeError("issue_number must be a positive built-in integer")
         if type(self.body) is not str:
             raise TypeError("body must be a built-in string")
+        if type(self.source_revision) is not str or not _REPOSITORY_SHA_RE.fullmatch(
+            self.source_revision
+        ):
+            raise ValueError("source_revision must be the lowercase 40-character repository SHA")
+        if (
+            type(self.issue_source_revision) is not str
+            or not _ISSUE_REVISION_RE.fullmatch(self.issue_source_revision)
+        ):
+            raise ValueError(
+                "issue_source_revision must use github-issue-v1:<64 lowercase hex>"
+            )
         if type(self.evidence_ids) is not tuple:
             raise TypeError("evidence_ids must be an exact tuple")
+        if self.issue_source_revision not in self.evidence_ids:
+            raise ValueError("issue_source_revision must be preserved in evidence_ids")
         if type(self.observed_labels) is not tuple:
             raise TypeError("observed_labels must be an exact tuple")
         for name, enum_type in (
