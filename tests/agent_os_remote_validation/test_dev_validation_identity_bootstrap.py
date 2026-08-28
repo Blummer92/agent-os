@@ -122,21 +122,28 @@ def test_materials_identity_uses_only_fixed_repository_import_roots() -> None:
     source = dev_validation_gce._HOST_RUNNER_SOURCE
     assert 'MATERIALS_ID="instructional-materials-current-curriculum-suite"' in source
     assert 'MATERIALS_IMPORT_ROOTS=("src","08_Tooling/instructional-materials-coach/src")' in source
-    assert 'if validation_id==MATERIALS_ID:' in source
-    assert 'env["PYTHONPATH"]=os.pathsep.join(os.path.join(repo,path) for path in MATERIALS_IMPORT_ROOTS)' in source
-    assert 'import instructional_materials_coach, instructional_workflow_contracts' in source
+    assert 'MATERIALS_IMPORT_PRELUDE=' in source
+    assert "sys.path[:0]=[os.path.join(repo,path)" in source
+    assert 'import instructional_materials_coach,instructional_workflow_contracts' in source
     assert 'validation-import-preflight-failed' in source
+    assert '(TEST_PYTHON,"-c",MATERIALS_PYTEST_RUNNER,*test_args[2:])' in source
+    assert 'env["PYTHONPATH"]' not in source
     assert 'os.environ.get("PYTHONPATH"' not in source
     assert 'sys.argv[7:]' not in source
     assert 'pip install' not in source
     assert 'shell=True' not in source
 
 
-def test_fixed_materials_import_environment_executes_bounded_suite() -> None:
-    import_roots = (
-        ROOT / "src",
-        ROOT / "08_Tooling" / "instructional-materials-coach" / "src",
+def test_fixed_materials_import_bootstrap_executes_bounded_suite() -> None:
+    bootstrap = (
+        "import os,sys;repo=os.getcwd();"
+        "sys.path[:0]=[os.path.join(repo,path) for path in "
+        "('src','08_Tooling/instructional-materials-coach/src')];"
+        "import instructional_materials_coach,instructional_workflow_contracts;"
+        "import pytest;raise SystemExit(pytest.main(tuple(sys.argv[1:])))"
     )
+    runtime = Path(dev_validation_gce.DEV_VALIDATION_PYTHON)
+    executable = str(runtime) if runtime.is_file() else sys.executable
     with tempfile.TemporaryDirectory(prefix="agent-os-materials-bootstrap-") as temp_dir:
         env = {
             "PATH": os.environ.get("PATH", ""),
@@ -144,10 +151,14 @@ def test_fixed_materials_import_environment_executes_bounded_suite() -> None:
             "TMPDIR": temp_dir,
             "PYTHONDONTWRITEBYTECODE": "1",
             "PYTHONNOUSERSITE": "1",
-            "PYTHONPATH": os.pathsep.join(str(path) for path in import_roots),
         }
         completed = subprocess.run(
-            (sys.executable, *dev_validation.MATERIALS_VALIDATION_ARGV[1:]),
+            (
+                executable,
+                "-c",
+                bootstrap,
+                *dev_validation.MATERIALS_VALIDATION_ARGV[3:],
+            ),
             cwd=ROOT,
             env=env,
             check=False,
