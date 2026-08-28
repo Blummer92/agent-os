@@ -8,10 +8,11 @@ Scheduler admission, lease, retry, transport, or persistence semantics.
 The caller must already hold current canonical evidence from the existing
 owners. This adapter unwraps the request/runtime/candidate objects already
 produced by ``prepare_candidate_packet(...)``, requires a CURRENT result from
-the existing execution-authorization source, preserves the supplied #918 route
-and #895 checkpoint/ResumePlan, and delegates exactly once to #1243. #1243
-remains the exact-type/current-binding validator and the sole publication
-ordering/persistence owner.
+the existing execution-authorization source bound specifically to the
+``pre-pr-developer-loop`` operation, preserves the supplied #918 route and #895
+checkpoint/ResumePlan, and delegates exactly once to #1243. #1243 remains the
+exact-type/current-binding validator and the sole publication ordering/
+persistence owner.
 """
 
 from __future__ import annotations
@@ -60,8 +61,9 @@ def publish_current_pre_pr_handoff(
     authority/currentness inputs. ``PreparedCandidatePacket`` supplies the
     already-canonical candidate, execution request, and runtime configuration;
     ``authorization_read`` must be the CURRENT result from the existing
-    execution-authorization source; route/checkpoint/ResumePlan/dependency/pilot
-    evidence stays owned by its existing modules.
+    execution-authorization source for exactly ``pre-pr-developer-loop``;
+    route/checkpoint/ResumePlan/dependency/pilot evidence stays owned by its
+    existing modules.
 
     The nested objects are not semantically revalidated here. #1243 performs
     the canonical deterministic route replay, pre-PR runtime projection,
@@ -104,6 +106,10 @@ def publish_current_pre_pr_handoff(
     ):
         raise ExecutionInterfacePublicationError(
             "execution authorization is not current"
+        )
+    if authorization_read.authorized_operation != PRE_PR_DEVELOPER_LOOP_OPERATION:
+        raise ExecutionInterfacePublicationError(
+            "execution authorization is not bound to pre-pr-developer-loop"
         )
 
     packet_id = getattr(candidate_packet, "packet_id", None)
