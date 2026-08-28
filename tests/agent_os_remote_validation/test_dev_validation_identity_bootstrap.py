@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 import sys
 from pathlib import Path
 
@@ -114,14 +115,12 @@ def test_host_runner_owns_both_test_selections_and_uses_validated_identity() -> 
     assert "sudo" not in source
 
 
-def test_host_command_carries_identity_not_test_argv() -> None:
+def test_host_command_carries_only_fixed_runner_plus_identity_arguments() -> None:
     request = _request(MATERIALS_ID)
     command = dev_validation_gce._host_command(request)
-    assert MATERIALS_ID in command
-    assert BRANCH in command
-    assert SHA in command
-    assert "test_generation_context.py" not in command
-    assert "tests/test_current_curriculum_state.py" not in command
+    argv = shlex.split(command)
+    assert argv[0:3] == [dev_validation_gce.HOST_PYTHON, "-c", dev_validation_gce._HOST_RUNNER_SOURCE]
+    assert argv[3:] == [REPOSITORY, "1454", BRANCH, SHA, MATERIALS_ID, request.request_id]
 
 
 def test_existing_remote_validation_mapping_is_behaviorally_unchanged() -> None:
