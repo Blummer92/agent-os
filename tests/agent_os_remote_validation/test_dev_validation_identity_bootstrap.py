@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import os
 import shlex
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -106,13 +109,65 @@ def test_request_builder_rejects_caller_supplied_command_surface() -> None:
 def test_host_runner_owns_both_test_selections_and_uses_validated_identity() -> None:
     source = dev_validation_gce._HOST_RUNNER_SOURCE
     assert '"remote-validation-suite":("-m","pytest","tests/agent_os_remote_validation")' in source
-    assert '"instructional-materials-current-curriculum-suite":(' in source
+    assert '"instructional-materials-current-curriculum-suite"' in source
     assert "test_args=VALIDATION_ARGS[validation_id]" in source
     assert "(TEST_PYTHON,*test_args)" in source
     assert "sys.argv[7:]" not in source
     assert "shell=True" not in source
     assert "pip install" not in source
     assert "sudo" not in source
+
+
+def test_materials_identity_uses_only_fixed_repository_import_roots() -> None:
+    source = dev_validation_gce._HOST_RUNNER_SOURCE
+    assert 'MATERIALS_ID="instructional-materials-current-curriculum-suite"' in source
+    assert 'MATERIALS_IMPORT_ROOTS=("src","08_Tooling/instructional-materials-coach/src")' in source
+    assert 'MATERIALS_IMPORT_PRELUDE=' in source
+    assert "sys.path[:0]=[os.path.join(repo,path)" in source
+    assert 'import instructional_materials_coach,instructional_workflow_contracts' in source
+    assert 'validation-import-preflight-failed' in source
+    assert '(TEST_PYTHON,"-c",MATERIALS_PYTEST_RUNNER,*test_args[2:])' in source
+    assert 'env["PYTHONPATH"]' not in source
+    assert 'os.environ.get("PYTHONPATH"' not in source
+    assert 'sys.argv[7:]' not in source
+    assert 'pip install' not in source
+    assert 'shell=True' not in source
+
+
+def test_fixed_materials_import_bootstrap_executes_bounded_suite() -> None:
+    bootstrap = (
+        "import os,sys;repo=os.getcwd();"
+        "sys.path[:0]=[os.path.join(repo,path) for path in "
+        "('src','08_Tooling/instructional-materials-coach/src')];"
+        "import instructional_materials_coach,instructional_workflow_contracts;"
+        "import pytest;raise SystemExit(pytest.main(list(sys.argv[1:])))"
+    )
+    runtime = Path(dev_validation_gce.DEV_VALIDATION_PYTHON)
+    executable = str(runtime) if runtime.is_file() else sys.executable
+    with tempfile.TemporaryDirectory(prefix="agent-os-materials-bootstrap-") as temp_dir:
+        env = {
+            "PATH": os.environ.get("PATH", ""),
+            "HOME": temp_dir,
+            "TMPDIR": temp_dir,
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONNOUSERSITE": "1",
+        }
+        completed = subprocess.run(
+            (
+                executable,
+                "-c",
+                bootstrap,
+                *dev_validation.MATERIALS_VALIDATION_ARGV[3:],
+            ),
+            cwd=ROOT,
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "passed" in completed.stdout
 
 
 def test_host_command_carries_only_fixed_runner_plus_identity_arguments() -> None:
@@ -128,3 +183,5 @@ def test_existing_remote_validation_mapping_is_behaviorally_unchanged() -> None:
     assert dev_validation.VALIDATION_ARGV == (
         "python", "-m", "pytest", "tests/agent_os_remote_validation"
     )
+    source = dev_validation_gce._HOST_RUNNER_SOURCE
+    assert '"remote-validation-suite":("-m","pytest","tests/agent_os_remote_validation")' in source

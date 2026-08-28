@@ -1,4 +1,4 @@
-"""Fixed GitHub-to-GCE dev-validation transport for #1432/#1436/#1454."""
+"""Fixed GitHub-to-GCE dev-validation transport for #1432/#1436/#1454/#1455."""
 from __future__ import annotations
 
 import argparse
@@ -30,9 +30,14 @@ _HOST_RUNNER_SOURCE = r'''import json,os,re,shutil,subprocess,sys,tempfile
 REPOSITORY="Blummer92/agent-os"
 REPO_URL="https://github.com/Blummer92/agent-os.git"
 TEST_PYTHON="/usr/local/libexec/agent-os-dev-validation-python"
+MATERIALS_ID="instructional-materials-current-curriculum-suite"
+MATERIALS_IMPORT_ROOTS=("src","08_Tooling/instructional-materials-coach/src")
+MATERIALS_IMPORT_PRELUDE="import os,sys;repo=os.getcwd();sys.path[:0]=[os.path.join(repo,path) for path in ('src','08_Tooling/instructional-materials-coach/src')]"
+MATERIALS_IMPORT_PROBE=MATERIALS_IMPORT_PRELUDE+";import instructional_materials_coach,instructional_workflow_contracts"
+MATERIALS_PYTEST_RUNNER=MATERIALS_IMPORT_PROBE+";import pytest;raise SystemExit(pytest.main(list(sys.argv[1:])))"
 VALIDATION_ARGS={
  "remote-validation-suite":("-m","pytest","tests/agent_os_remote_validation"),
- "instructional-materials-current-curriculum-suite":(
+ MATERIALS_ID:(
   "-m","pytest",
   "08_Tooling/instructional-materials-coach/tests/test_generation_context.py",
   "08_Tooling/instructional-materials-coach/tests/test_content_spec.py",
@@ -90,13 +95,21 @@ try:
     else:
      home=os.path.join(root,"home");tmp=os.path.join(root,"tmp");os.mkdir(home);os.mkdir(tmp)
      env={"PATH":os.environ.get("PATH",""),"HOME":home,"TMPDIR":tmp,"PYTHONDONTWRITEBYTECODE":"1","PYTHONNOUSERSITE":"1"}
-     try:
-      completed=run((TEST_PYTHON,*test_args),cwd=repo,env=env,timeout=TEST_TIMEOUT)
-      out,out_truncated=bounded(completed.stdout);err,err_truncated=bounded(completed.stderr)
-      result.update({"status":"success" if completed.returncode==0 else "failure","reason_codes":["validation-passed" if completed.returncode==0 else "validation-failed"],"exit_code":completed.returncode,"stdout_tail":out,"stderr_tail":err,"stdout_truncated":out_truncated,"stderr_truncated":err_truncated})
-     except subprocess.TimeoutExpired as exc:
-      out,out_truncated=bounded(exc.stdout if isinstance(exc.stdout,str) else "");err,err_truncated=bounded(exc.stderr if isinstance(exc.stderr,str) else "")
-      result.update({"status":"timeout","reason_codes":["validation-timeout"],"stdout_tail":out,"stderr_tail":err,"stdout_truncated":out_truncated,"stderr_truncated":err_truncated})
+     import_ready=True
+     if validation_id==MATERIALS_ID:
+      probe=run((TEST_PYTHON,"-c",MATERIALS_IMPORT_PROBE),cwd=repo,env=env,timeout=10)
+      if probe.returncode!=0:
+       out,out_truncated=bounded(probe.stdout);err,err_truncated=bounded(probe.stderr)
+       result.update({"status":"failure","reason_codes":["validation-import-preflight-failed"],"exit_code":probe.returncode,"stdout_tail":out,"stderr_tail":err,"stdout_truncated":out_truncated,"stderr_truncated":err_truncated});import_ready=False
+     if import_ready:
+      try:
+       command=(TEST_PYTHON,"-c",MATERIALS_PYTEST_RUNNER,*test_args[2:]) if validation_id==MATERIALS_ID else (TEST_PYTHON,*test_args)
+       completed=run(command,cwd=repo,env=env,timeout=TEST_TIMEOUT)
+       out,out_truncated=bounded(completed.stdout);err,err_truncated=bounded(completed.stderr)
+       result.update({"status":"success" if completed.returncode==0 else "failure","reason_codes":["validation-passed" if completed.returncode==0 else "validation-failed"],"exit_code":completed.returncode,"stdout_tail":out,"stderr_tail":err,"stdout_truncated":out_truncated,"stderr_truncated":err_truncated})
+      except subprocess.TimeoutExpired as exc:
+       out,out_truncated=bounded(exc.stdout if isinstance(exc.stdout,str) else "");err,err_truncated=bounded(exc.stderr if isinstance(exc.stderr,str) else "")
+       result.update({"status":"timeout","reason_codes":["validation-timeout"],"stdout_tail":out,"stderr_tail":err,"stdout_truncated":out_truncated,"stderr_truncated":err_truncated})
 finally:
  try: shutil.rmtree(root);result["cleanup_complete"]=True
  except OSError: result["cleanup_complete"]=False;result["status"]="needs-decision";result["reason_codes"]=["workspace-cleanup-failed"]
