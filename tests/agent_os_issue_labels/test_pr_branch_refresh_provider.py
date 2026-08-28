@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import os
+import subprocess
 from types import SimpleNamespace
 
 from scripts.agent_os_github_git_objects import BranchUpdateObservation
@@ -24,6 +26,7 @@ NEW = "4" * 40
 MERGED_TREE = "5" * 40
 MERGE_COMMIT = "6" * 40
 MERGE_BASE = "0" * 40
+MAIN_EPOCH = "1700000000"
 
 
 @dataclass
@@ -249,6 +252,7 @@ def test_merge_shaped_candidate_uses_final_tree_and_expected_head_transport_once
         observation(stdout=f"{MERGE_BASE}\n"),
         observation(stdout=f"{MERGE_COMMIT}\n"),
         observation(stdout=f"{MERGED_TREE}\n"),
+        observation(stdout=f"{MAIN_EPOCH}\n"),
         observation(stdout=f"{NEW}\n"),
         observation(),
         observation(stdout=f"{NEW}\n"),
@@ -261,9 +265,12 @@ def test_merge_shaped_candidate_uses_final_tree_and_expected_head_transport_once
     assert result.status == "updated"
     assert result.new_head_sha == NEW
     assert runner.calls[2][0] == ("git", "merge-tree", "--write-tree", MAIN, OLD)
-    assert runner.calls[3][0][:5] == ("git", "commit-tree", MERGED_TREE, "-p", MAIN)
-    assert runner.calls[4][0] == ("git", "checkout", "--detach", NEW)
-    assert runner.calls[6][0] == ("git", "diff", "--name-only", "--no-renames", MAIN, NEW)
+    assert runner.calls[3][0] == ("git", "show", "-s", "--format=%ct", MAIN)
+    assert runner.calls[4][0][:5] == ("git", "commit-tree", MERGED_TREE, "-p", MAIN)
+    assert runner.calls[4][2]["GIT_AUTHOR_DATE"] == f"@{MAIN_EPOCH} +0000"
+    assert runner.calls[4][2]["GIT_COMMITTER_DATE"] == f"@{MAIN_EPOCH} +0000"
+    assert runner.calls[5][0] == ("git", "checkout", "--detach", NEW)
+    assert runner.calls[7][0] == ("git", "diff", "--name-only", "--no-renames", MAIN, NEW)
     assert all("rebase" not in call[0] for call in runner.calls)
     assert sum("push" in call[0] for call in runner.calls) == 1
 
@@ -292,11 +299,25 @@ def test_merge_shaped_uncertain_tree_blocks_without_transport():
     assert all("push" not in call[0] for call in runner.calls)
 
 
+def test_merge_shaped_missing_main_timestamp_blocks_before_candidate_commit():
+    runner = FakeRunner([
+        observation(stdout=f"{MERGE_BASE}\n"),
+        observation(stdout=f"{MERGE_COMMIT}\n"),
+        observation(stdout=f"{MERGED_TREE}\n"),
+        observation(stdout="not-a-timestamp\n"),
+    ])
+    result = invoke(provider(FakeBacking(snapshot()), runner))
+    assert result.reason_code == "topology-main-timestamp-unavailable"
+    assert all("commit-tree" not in call[0] for call in runner.calls)
+    assert all("push" not in call[0] for call in runner.calls)
+
+
 def test_merge_shaped_scope_mismatch_blocks_before_transport():
     runner = FakeRunner([
         observation(stdout=f"{MERGE_BASE}\n"),
         observation(stdout=f"{MERGE_COMMIT}\n"),
         observation(stdout=f"{MERGED_TREE}\n"),
+        observation(stdout=f"{MAIN_EPOCH}\n"),
         observation(stdout=f"{NEW}\n"),
         observation(),
         observation(stdout=f"{NEW}\n"),
@@ -500,3 +521,156 @@ def test_production_entrypoint_delegates_exactly_once_to_1187(monkeypatch):
     assert delegated_provider.authorization_current is supplied_request.authorization_current
     assert delegated_provider.branch_update_authorized is supplied_request.branch_refresh_authorized
     assert runner.calls == []
+
+
+@dataclass
+class LocalGitRunner:
+    calls: list[tuple[str, ...]] = field(default_factory=list)
+
+    def run(self, argv, *, cwd, env):
+        self.calls.append(tuple(argv))
+        try:
+            completed = subprocess.run(
+                list(argv),
+                cwd=cwd,
+                env=dict(env),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+        except subprocess.TimeoutExpired as error:
+            return BranchUpdateObservation(
+                started=True,
+                return_code=None,
+                timed_out=True,
+                termination_confirmed=False,
+                stdout=str(error.stdout or ""),
+                stderr=str(error.stderr or ""),
+            )
+        return BranchUpdateObservation(
+            started=True,
+            return_code=completed.returncode,
+            timed_out=False,
+            termination_confirmed=True,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+        )
+
+
+def _git(repo, *args, check=True):
+    completed = subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        env=dict(os.environ),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if check and completed.returncode != 0:
+        raise AssertionError(completed.stderr)
+    return completed
+
+
+def _git_out(repo, *args):
+    return _git(repo, *args).stdout.strip()
+
+
+def test_merge_shaped_local_git_fixture_reproduces_old_rebase_rejection_and_v2_succeeds(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.name", "Agent OS Test")
+    _git(repo, "config", "user.email", "agent-os-test@example.invalid")
+
+    (repo / "base.txt").write_text("base\n", encoding="utf-8")
+    _git(repo, "add", "base.txt")
+    _git(repo, "commit", "-qm", "base")
+    base = _git_out(repo, "rev-parse", "HEAD")
+
+    _git(repo, "switch", "-qc", "feature-a")
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "example.py").write_text("A\n", encoding="utf-8")
+    _git(repo, "add", "scripts/example.py")
+    _git(repo, "commit", "-qm", "feature A")
+    feature_a = _git_out(repo, "rev-parse", "HEAD")
+
+    _git(repo, "switch", "-qc", "feature-b", base)
+    (repo / "scripts").mkdir(exist_ok=True)
+    (repo / "scripts" / "example.py").write_text("B\n", encoding="utf-8")
+    _git(repo, "add", "scripts/example.py")
+    _git(repo, "commit", "-qm", "feature B")
+    feature_b = _git_out(repo, "rev-parse", "HEAD")
+
+    tree_b = _git_out(repo, "rev-parse", f"{feature_b}^{{tree}}")
+    reconciled = _git_out(
+        repo,
+        "commit-tree",
+        tree_b,
+        "-p",
+        feature_a,
+        "-p",
+        feature_b,
+        "-m",
+        "reconcile selected B",
+    )
+    _git(repo, "reset", "-q", "--hard", reconciled)
+    (repo / "scripts" / "example.py").write_text("B\nrepair\n", encoding="utf-8")
+    _git(repo, "add", "scripts/example.py")
+    _git(repo, "commit", "-qm", "repair")
+    feature_head = _git_out(repo, "rev-parse", "HEAD")
+
+    _git(repo, "switch", "-qc", "main-new", base)
+    (repo / "main.txt").write_text("main\n", encoding="utf-8")
+    _git(repo, "add", "main.txt")
+    _git(repo, "commit", "-qm", "main advance")
+    current_main = _git_out(repo, "rev-parse", "HEAD")
+    merge_base = _git_out(repo, "merge-base", feature_head, current_main)
+
+    _git(repo, "checkout", "-q", "--detach", feature_head)
+    old_rebase = _git(
+        repo,
+        "rebase",
+        "--no-autostash",
+        "--onto",
+        current_main,
+        merge_base,
+        feature_head,
+        check=False,
+    )
+    assert old_rebase.returncode != 0
+    _git(repo, "rebase", "--abort")
+
+    live = PullRequestBranchSnapshot(
+        repository="Blummer92/agent-os",
+        pr_number=1397,
+        base_branch="main",
+        base_sha=current_main,
+        head_branch="agent/1387-governed-visual-identity",
+        head_sha=feature_head,
+        current_main_sha=current_main,
+        branch_state="behind",
+        mergeability="mergeable",
+        changed_paths=("scripts/example.py",),
+    )
+    subject = ProductionPullRequestBranchRefreshProvider(
+        backing=FakeBacking(live),
+        runner=LocalGitRunner(),
+        repository_root=str(repo),
+        invocation_id="invocation-1463",
+        authorization_id="authorization-1463",
+        authorization_current=True,
+        branch_update_authorized=True,
+        environment=dict(os.environ),
+    )
+    candidate = subject._prepare_merge_shaped_candidate(
+        expected_head_sha=feature_head,
+        current_main_sha=current_main,
+        admitted_paths=live.changed_paths,
+    )
+
+    assert isinstance(candidate, str)
+    assert _git_out(repo, "rev-parse", f"{candidate}^1") == current_main
+    assert _git_out(repo, "diff", "--name-only", "--no-renames", current_main, candidate) == "scripts/example.py"
+    assert (repo / "scripts" / "example.py").read_text(encoding="utf-8") == "B\nrepair\n"
