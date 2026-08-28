@@ -44,8 +44,12 @@ dependencies, student language, cognitive flow, accessibility, engagement, time,
 and teacher workload. QA then uses `assessment-qa-evidence-review-standard.md`
 to evaluate alignment, evidence, method/task quality, sequencing findings,
 accessibility, fairness, AI-policy alignment, workload, and instructional
-usefulness. All remain report-only and do not authorize grading, readiness,
-classroom use, production, publication, or writes.
+usefulness. Teacher workspace presentation then uses
+`assessment-dashboard-workspace-standard.md` for dashboard overview, focused
+section editing, contextual guided assistance, warning-to-repair behavior, and
+progressive disclosure while consuming lifecycle, sequencing, and QA evidence by
+reference. All remain report/planning-only and do not authorize grading,
+readiness, classroom use, production, publication, or writes.
 
 ## Files
 
@@ -58,6 +62,7 @@ classroom use, production, publication, or writes.
 - `assessment-blueprint-lifecycle-standard.md` — #1192 lifecycle, stale-state, change-impact, bounded-invalidation, and revalidation contract
 - `assessment-sequencing-student-experience-standard.md` — #839 section sequencing, dependencies, student language, cognitive flow, accessibility, engagement, time, and workload contract
 - `assessment-qa-evidence-review-standard.md` — #841 QA categories, evidence validity, fairness/accessibility review, finite dispositions, and non-authorizing QA report contract
+- `assessment-dashboard-workspace-standard.md` — #843 dashboard-first workspace, focused section editor, contextual guidance, warning-to-repair, progressive-disclosure, and planning-only status contract
 - `student-language-standard.md` — reusable student-facing language artifacts
 - `learning-science-rules.md` — classroom design rules for materials
 - `production-gates-and-compute.md` — hard-stop gates and efficiency rules
@@ -74,4 +79,4 @@ fields, standards, and output keys.
 
 ## Version
 
-0.14.0
+0.15.0

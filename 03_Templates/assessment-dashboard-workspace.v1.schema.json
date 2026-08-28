@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent-os://assessment-dashboard-workspace/v1",
+  "title": "Assessment Dashboard Workspace v1",
+  "type": "object",
+  "required": ["workspace_contract_version","workspace_id","blueprint_id","blueprint_version","lifecycle_version","sequencing_result_id","qa_report_id","dashboard","sections","evidence_mix","target_coverage","warnings","blockers","uncertainties","preserved_section_ids","revalidation_refs","authority"],
+  "properties": {
+    "workspace_contract_version": {"const":"1.0"},
+    "workspace_id": {"type":"string","minLength":1},
+    "blueprint_id": {"type":"string","minLength":1},
+    "blueprint_version": {"type":"string","minLength":1},
+    "lifecycle_version": {"type":"string","minLength":1},
+    "sequencing_result_id": {"type":"string","minLength":1},
+    "qa_report_id": {"type":"string","minLength":1},
+    "dashboard": {
+      "type":"object",
+      "required":["title","purpose","assessment_type","estimated_total_minutes","section_count","overall_status","primary_next_action","technical_details_expanded"],
+      "properties": {
+        "title":{"type":"string","minLength":1},
+        "purpose":{"type":"string","minLength":1},
+        "assessment_type":{"type":"string","minLength":1},
+        "estimated_total_minutes":{"type":"number","minimum":0},
+        "section_count":{"type":"integer","minimum":0},
+        "overall_status":{"$ref":"#/$defs/status"},
+        "primary_next_action":{"type":["string","null"]},
+        "technical_details_expanded":{"type":"boolean"}
+      },
+      "additionalProperties":false
+    },
+    "sections":{"type":"array","items":{"$ref":"#/$defs/section"}},
+    "evidence_mix":{"type":"array","items":{"$ref":"#/$defs/evidence"}},
+    "target_coverage":{"type":"array","items":{"$ref":"#/$defs/target"}},
+    "warnings":{"type":"array","items":{"$ref":"#/$defs/warning"}},
+    "blockers":{"type":"array","items":{"type":"string"}},
+    "uncertainties":{"type":"array","items":{"type":"string"}},
+    "preserved_section_ids":{"type":"array","items":{"type":"string","minLength":1},"uniqueItems":true},
+    "revalidation_refs":{"type":"array","items":{"type":"string","minLength":1},"uniqueItems":true},
+    "authority":{"$ref":"#/$defs/authority"}
+  },
+  "$defs": {
+    "status":{"enum":["not_started","draft","needs_teacher_decision","needs_revision","blocked","approved_section_draft","revalidation_required"]},
+    "section": {
+      "type":"object",
+      "required":["section_id","section_version","name","purpose","student_action","evidence_type","evidence_classification","estimated_minutes","target_refs","status","warning_ids","permitted_actions","alignment_ref","qa_ref","revalidation_ref"],
+      "properties": {
+        "section_id":{"type":"string","minLength":1},"section_version":{"type":"string","minLength":1},"name":{"type":"string","minLength":1},"purpose":{"type":"string","minLength":1},"student_action":{"type":"string","minLength":1},"evidence_type":{"type":"string","minLength":1},"evidence_classification":{"enum":["survey_only","mastery","practice_only","reflection_only","observation"]},"estimated_minutes":{"type":"number","minimum":0},"target_refs":{"type":"array","items":{"type":"string","minLength":1}},"status":{"$ref":"#/$defs/status"},"warning_ids":{"type":"array","items":{"type":"string","minLength":1}},"permitted_actions":{"type":"array","items":{"enum":["open","edit","replace","remove","duplicate","request_guided_help","view_alignment","view_qa","return_to_dashboard"]},"uniqueItems":true},"alignment_ref":{"type":"string","minLength":1},"qa_ref":{"type":"string","minLength":1},"revalidation_ref":{"type":["string","null"]}
+      },
+      "additionalProperties":false
+    },
+    "evidence":{"type":"object","required":["type","classification","section_ids"],"properties":{"type":{"type":"string","minLength":1},"classification":{"enum":["survey_only","mastery","practice_only","reflection_only","observation"]},"section_ids":{"type":"array","items":{"type":"string","minLength":1}}},"additionalProperties":false},
+    "target":{"type":"object","required":["target_ref","coverage","section_ids"],"properties":{"target_ref":{"type":"string","minLength":1},"coverage":{"enum":["covered","partial","missing"]},"section_ids":{"type":"array","items":{"type":"string","minLength":1}}},"additionalProperties":false},
+    "warning":{"type":"object","required":["warning_id","problem","why_it_matters","affected_section_id","repair_action","severity","revalidation_ref"],"properties":{"warning_id":{"type":"string","minLength":1},"problem":{"type":"string","minLength":1},"why_it_matters":{"type":"string","minLength":1},"affected_section_id":{"type":"string","minLength":1},"repair_action":{"type":"string","minLength":1},"severity":{"enum":["info","warning","blocker"]},"revalidation_ref":{"type":["string","null"]}},"additionalProperties":false},
+    "authority":{"type":"object","required":["report_only","execution_authorized","classroom_use_authorized","grading_authorized","readiness_authorized","production_authorized","publication_authorized","external_write_authorized","source_of_truth_write_authorized"],"properties":{"report_only":{"const":true},"execution_authorized":{"const":false},"classroom_use_authorized":{"const":false},"grading_authorized":{"const":false},"readiness_authorized":{"const":false},"production_authorized":{"const":false},"publication_authorized":{"const":false},"external_write_authorized":{"const":false},"source_of_truth_write_authorized":{"const":false}},"additionalProperties":false}
+  },
+  "additionalProperties":false
+}
