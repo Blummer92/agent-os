@@ -57,9 +57,13 @@ class IssueCommentIngressResult:
         return {"schema_version":self.schema_version,"status":self.status,"reason":self.reason,"repository":self.repository,"issue_number":self.issue_number,"comment_id":self.comment_id,"actor":self.actor,"handoff_id_or_none":self.handoff_id_or_none,"logical_trigger_id_or_none":self.logical_trigger_id_or_none,"run_attempt":self.run_attempt,"dev_validation_branch_or_none":self.dev_validation_branch_or_none,"dev_validation_sha_or_none":self.dev_validation_sha_or_none,"dev_validation_id_or_none":self.dev_validation_id_or_none,"execution_authorized":False,"scheduler_invoked":False,"side_effects_performed":False}
 
 def _logical_trigger_id(repository: str, issue_number: int, handoff_id: str) -> str:
-    return f"issue-comment-trigger:{hashlib.sha256(f'{repository}\0{issue_number}\0{handoff_id}'.encode('ascii')).hexdigest()}"
+    material = f"{repository}\0{issue_number}\0{handoff_id}".encode("ascii")
+    return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
+
 def _operation_trigger_id(repository: str, issue_number: int, operation: str) -> str:
-    return f"issue-comment-trigger:{hashlib.sha256(f'{repository}\0{issue_number}\0{operation}'.encode('ascii')).hexdigest()}"
+    material = f"{repository}\0{issue_number}\0{operation}".encode("ascii")
+    return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
+
 def _dev_validation_trigger_id(repository: str, issue_number: int, branch: str, sha: str, validation_id: str) -> str:
     material=f"{repository}\0{issue_number}\0dev-validate\0{branch}\0{sha}\0{validation_id}".encode("ascii")
     return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
