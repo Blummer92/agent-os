@@ -1,0 +1,128 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from instructional_materials_coach.content_spec import content_from_dict
+from instructional_materials_coach.generation_context import (
+    GenerationContextError,
+    compose_generation_context,
+)
+
+ROOT = Path(__file__).parents[3]
+FIXTURES = ROOT / "tests" / "fixtures" / "instructional_workflow_contracts"
+
+
+def _requirement():
+    return json.loads((FIXTURES / "valid_material_requirement_v2.json").read_text())
+
+
+def _ref(stable_id: str):
+    return {
+        "system": "notion",
+        "stable_id": stable_id,
+        "exact_location": f"collection://fixture/{stable_id}",
+        "verification_evidence": "fixture-read-back",
+    }
+
+
+def _owner(evidence_id: str, decision_key: str, value: str, *, classification="owner-governed"):
+    return {
+        "evidence_id": evidence_id,
+        "owner": "instructional-materials-coach",
+        "decision_key": decision_key,
+        "value": value,
+        "classification": classification,
+        "source_revision": 1,
+        "observed_at": "2026-08-28T12:00:00Z",
+        "currentness": "current",
+        "material": True,
+        "relation_resolved": True,
+        "reference": _ref(evidence_id),
+    }
+
+
+def _photography_evidence():
+    gate_keys = (
+        "unit-generation-approval",
+        "packet-generation-gate",
+        "instructional-materials-readiness",
+        "source-control-gate",
+        "production-authorized",
+    )
+    owners = [_owner(f"gate-{i}", key, "ready") for i, key in enumerate(gate_keys)]
+    owners.extend(
+        [
+            _owner("unit-purpose", "unit-purpose", "Use composition to make intentional visual decisions."),
+            _owner("lesson-position", "lesson-position", "Photography Foundations — Elements & Composition"),
+            _owner("warmup", "warm-up", "Notice what changes when the photographer moves closer."),
+            _owner("vocab", "vocabulary", "framing | focal point | negative space"),
+            _owner("exit", "exit-ticket", "Explain one framing decision you made today."),
+            _owner("crop", "teacher-confirmed-cropping", "Compose with the camera first; teach cropping explicitly.", classification="teacher-entered"),
+        ]
+    )
+    return {
+        "contract_version": "curriculum-current-state-evidence-v1",
+        "canonical_unit": {"stable_id": "photography-foundations", "status": "active"},
+        "request": {
+            "action": "make",
+            "artifact_type": "worksheet",
+            "relative_time": "none",
+            "requires_reusable_assets": False,
+        },
+        "required_decision_keys": list(gate_keys),
+        "owner_evidence": owners,
+        "asset_evidence": [],
+    }
+
+
+def _content():
+    return content_from_dict(
+        {
+            "title": "Elements & Composition",
+            "objectives": ["Make intentional composition choices."],
+            "slides": [],
+            "worksheet_questions": ["What did you change and why?"],
+        }
+    )
+
+
+def test_photography_context_augments_instead_of_replacing_authored_content():
+    content = compose_generation_context(
+        _content(),
+        material_requirement=_requirement(),
+        current_curriculum_evidence=_photography_evidence(),
+        selected_asset_ids=("asset-1",),
+    )
+    tokens = content.placeholder_tokens()
+    assert tokens["title"] == "Elements & Composition"
+    assert tokens["objective_1"] == "Make intentional composition choices."
+    assert tokens["curriculum_unit_purpose"] == "Use composition to make intentional visual decisions."
+    assert "Photography Foundations" in tokens["curriculum_lesson_position"]
+    assert "moves closer" in tokens["curriculum_warm_up"]
+    assert "focal point" in tokens["curriculum_vocabulary"]
+    assert "framing decision" in tokens["curriculum_exit_ticket"]
+    assert "cropping explicitly" in tokens["curriculum_teacher_confirmed_cropping"]
+    assert tokens["context_selected_asset_ids"] == "asset-1"
+    assert tokens["context_production_authorized"] == "false"
+
+
+def test_unresolved_current_curriculum_evidence_fails_closed():
+    evidence = _photography_evidence()
+    evidence["owner_evidence"] = [
+        item for item in evidence["owner_evidence"] if item["decision_key"] != "packet-generation-gate"
+    ]
+    with pytest.raises(GenerationContextError, match="requires resolution"):
+        compose_generation_context(
+            _content(),
+            material_requirement=_requirement(),
+            current_curriculum_evidence=evidence,
+        )
+
+
+def test_context_cannot_replace_authored_tokens():
+    content = _content().with_context_tokens({"title": "replacement"})
+    with pytest.raises(ValueError, match="collides"):
+        content.placeholder_tokens()
