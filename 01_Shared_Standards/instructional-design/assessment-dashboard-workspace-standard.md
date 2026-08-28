@@ -6,7 +6,7 @@ Define the provider-neutral teacher-workspace contract for assessment planning. 
 ## Upstream Boundary
 The workspace consumes #837 assessment-design semantics, #838 blueprint structure, #1192 lifecycle/change-impact/stale-validation evidence, #839 sequencing/student-experience findings, and #841 QA findings by reference. It also consumes Teacher Decision Studio for bounded teacher decisions and Artifact-First Response for artifact/usable-content-first presentation.
 
-It must not create a second lifecycle, sequencing, QA, grading, readiness, approval, recommendation-engine, accommodation, AI-policy, or authority model. #840 is retired and is not an active implementation dependency.
+It does not create a second lifecycle, sequencing, QA, grading, readiness, approval, recommendation-engine, accommodation, AI-policy, or authority model. #840 is retired and is not an active implementation dependency.
 
 ## Canonical Interaction Pattern
 Use:
