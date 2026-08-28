@@ -213,7 +213,7 @@ def test_vocabulary_markdown_is_deterministic_and_includes_clear_key():
     )
     assert "approved-existing" in first
     assert "drive-asset-type-icon" in first
-    assert "Instructional scaffolds kept out of vocabulary: font menu" in first
+    assert "**Instructional scaffolds kept out of vocabulary:** font menu" in first
     assert "audience fit" in first
     assert "revision" in first
     assert "grants no readiness" in first
@@ -258,7 +258,7 @@ def _modeling_rows():
             "day_lesson": "Day 4",
             "skill_learning_purpose": "Critique a design and make a purposeful revision.",
             "example_role": "worked-example",
-            "teacher_modeling_purpose": "Name one communication problem, revise it, and explain why the revision improves audience fit.",
+            "teacher_modeling_purpose": "Model a critique aloud: name one communication problem, revise it, and explain why the revision improves audience fit.",
             "artifact_location": "critique / revision model",
             "tutorial_step": "Revise after critique",
             "visual_role_id": "revision-example",
