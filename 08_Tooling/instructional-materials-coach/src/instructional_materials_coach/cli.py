@@ -91,10 +91,7 @@ def main(argv: list[str] | None = None) -> int:
         context["content_title"] = content.title
         if not args.material_requirement:
             raise RuntimeError("Governed MaterialRequirement JSON is required before a connected build.")
-        if not args.current_curriculum_evidence:
-            raise RuntimeError("Bounded current curriculum evidence is required before a connected build.")
         material_requirement = _load_json(args.material_requirement, default=None)
-        current_curriculum_evidence = _load_json(args.current_curriculum_evidence, default=None)
         visual_plan = plan_governed_visual_reuse(
             material_requirement,
             artifact_manifests=_load_json(args.artifact_manifests, default=[]),
@@ -108,13 +105,17 @@ def main(argv: list[str] | None = None) -> int:
         if visual_plan.final_production_blocked:
             raise RuntimeError(f"Governed visual reuse gate blocked final production: {visual_plan.outcome}; image_gap_briefs={len(visual_plan.image_gap_briefs)}")
 
-        content = compose_generation_context(
-            content,
-            material_requirement=material_requirement,
-            current_curriculum_evidence=current_curriculum_evidence,
-            selected_asset_ids=tuple(visual_plan.selected_asset_ids),
-        )
-        context["generation_context_tokens"] = sorted(content.context_tokens)
+        # CW7C adoption is additive for existing direct CLI callers. The teacher-request
+        # orchestration path supplies this packet; legacy explicit CLI builds continue
+        # to operate until their callers are migrated rather than fabricating evidence.
+        if args.current_curriculum_evidence:
+            content = compose_generation_context(
+                content,
+                material_requirement=material_requirement,
+                current_curriculum_evidence=_load_json(args.current_curriculum_evidence, default=None),
+                selected_asset_ids=tuple(visual_plan.selected_asset_ids),
+            )
+            context["generation_context_tokens"] = sorted(content.context_tokens)
 
         credentials = get_credentials(args.client_secret, args.token_path)
         receipt = build_live_materials(
