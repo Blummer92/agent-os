@@ -205,7 +205,7 @@ def test_context_cannot_replace_authored_tokens():
         content.placeholder_tokens()
 
 
-def test_typography_teacher_reference_projection_reuses_1416_visual_identity_and_preserves_prompt():
+def test_typography_teacher_reference_projection_does_not_widen_1416_visual_approval():
     visual_plan = _governed_visual_plan()
     context = compose_generation_context(
         _content(),
@@ -241,9 +241,8 @@ def test_typography_teacher_reference_projection_reuses_1416_visual_identity_and
         ],
         governed_visual_assignments=context.context_tokens["context_selected_visual_assignments"],
     )
-    assert vocabulary["rows"][0]["icon_status"] == "approved-existing"
-    assert vocabulary["rows"][0]["icon_preview"]["asset_id"] == "asset-1"
-    assert vocabulary["rows"][0]["icon_preview"]["external_file_id"] == "file-1"
+    assert vocabulary["rows"][0]["icon_status"] == "useful-but-missing"
+    assert vocabulary["rows"][0]["icon_preview"] is None
     assert vocabulary["excluded_scaffolds"] == ["font menu"]
 
     prompt = "Create a non-UI business-card comparison showing strong and weak hierarchy."
@@ -272,9 +271,10 @@ def test_typography_teacher_reference_projection_reuses_1416_visual_identity_and
         ],
         governed_visual_assignments=context.context_tokens["context_selected_visual_assignments"],
     )
-    assert examples["rows"][0]["visual_status"] == "approved-existing"
+    assert examples["rows"][0]["visual_status"] == "explicit-gap"
+    assert examples["rows"][0]["visual_preview"] is None
     assert examples["rows"][0]["visual_prompt"] == prompt
-    assert "approved_use=" in examples["rows"][0]["source_reuse_safe_use_constraints"]
+    assert "approved_use=" not in examples["rows"][0]["source_reuse_safe_use_constraints"]
     assert not any(vocabulary["authority"].values())
     assert not any(examples["authority"].values())
 
