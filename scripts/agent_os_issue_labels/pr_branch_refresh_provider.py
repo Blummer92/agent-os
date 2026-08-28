@@ -355,7 +355,6 @@ class ProductionPullRequestBranchRefreshProvider(PullRequestBranchRefreshProvide
                 self.git_binary,
                 "rev-list",
                 "--merges",
-                "--max-count=1",
                 f"{merge_base_sha}..{expected_head_sha}",
             ),
             cwd=self.repository_root,
@@ -476,10 +475,10 @@ class ProductionPullRequestBranchRefreshProvider(PullRequestBranchRefreshProvide
             return _blocked(expected_head_sha, "topology-main-timestamp-unavailable")
 
         commit_env = dict(self.environment)
-        commit_env.setdefault("GIT_AUTHOR_NAME", "Agent OS Branch Refresh")
-        commit_env.setdefault("GIT_AUTHOR_EMAIL", "agent-os-branch-refresh@localhost")
-        commit_env.setdefault("GIT_COMMITTER_NAME", "Agent OS Branch Refresh")
-        commit_env.setdefault("GIT_COMMITTER_EMAIL", "agent-os-branch-refresh@localhost")
+        commit_env["GIT_AUTHOR_NAME"] = "Agent OS Branch Refresh"
+        commit_env["GIT_AUTHOR_EMAIL"] = "agent-os-branch-refresh@localhost"
+        commit_env["GIT_COMMITTER_NAME"] = "Agent OS Branch Refresh"
+        commit_env["GIT_COMMITTER_EMAIL"] = "agent-os-branch-refresh@localhost"
         deterministic_date = f"@{main_epoch} +0000"
         commit_env["GIT_AUTHOR_DATE"] = deterministic_date
         commit_env["GIT_COMMITTER_DATE"] = deterministic_date
