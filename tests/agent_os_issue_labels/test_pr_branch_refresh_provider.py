@@ -21,6 +21,8 @@ OLD = "1" * 40
 BASE = "2" * 40
 MAIN = "3" * 40
 NEW = "4" * 40
+MERGED_TREE = "5" * 40
+MERGE_COMMIT = "6" * 40
 MERGE_BASE = "0" * 40
 
 
@@ -225,6 +227,7 @@ def test_rebase_preparation_then_expected_head_transport_updates_once():
     runner = FakeRunner([
         observation(stdout=f"{MERGE_BASE}\n"),
         observation(),
+        observation(),
         observation(stdout=f"{NEW}\n"),
         observation(stdout=f"{OLD}\trefs/heads/agent/1237-publication-required-continuation\n"),
         observation(),
@@ -234,8 +237,84 @@ def test_rebase_preparation_then_expected_head_transport_updates_once():
     assert result.status == "updated"
     assert result.old_head_sha == OLD and result.new_head_sha == NEW
     assert runner.calls[0][0] == ("git", "merge-base", OLD, MAIN)
-    assert runner.calls[1][0] == ("git", "rebase", "--no-autostash", "--onto", MAIN, MERGE_BASE, OLD)
+    assert runner.calls[1][0] == ("git", "rev-list", "--merges", "--max-count=1", f"{MERGE_BASE}..{OLD}")
+    assert runner.calls[2][0] == ("git", "rebase", "--no-autostash", "--onto", MAIN, MERGE_BASE, OLD)
+    assert all("merge-tree" not in call[0] for call in runner.calls)
     assert sum("push" in call[0] for call in runner.calls) == 1
+
+
+def test_merge_shaped_candidate_uses_final_tree_and_expected_head_transport_once():
+    backing = FakeBacking(snapshot())
+    runner = FakeRunner([
+        observation(stdout=f"{MERGE_BASE}\n"),
+        observation(stdout=f"{MERGE_COMMIT}\n"),
+        observation(stdout=f"{MERGED_TREE}\n"),
+        observation(stdout=f"{NEW}\n"),
+        observation(),
+        observation(stdout=f"{NEW}\n"),
+        observation(stdout="scripts/example.py\n"),
+        observation(stdout=f"{OLD}\trefs/heads/agent/1237-publication-required-continuation\n"),
+        observation(),
+        observation(stdout=f"{NEW}\trefs/heads/agent/1237-publication-required-continuation\n"),
+    ])
+    result = invoke(provider(backing, runner))
+    assert result.status == "updated"
+    assert result.new_head_sha == NEW
+    assert runner.calls[2][0] == ("git", "merge-tree", "--write-tree", MAIN, OLD)
+    assert runner.calls[3][0][:5] == ("git", "commit-tree", MERGED_TREE, "-p", MAIN)
+    assert runner.calls[4][0] == ("git", "checkout", "--detach", NEW)
+    assert runner.calls[6][0] == ("git", "diff", "--name-only", "--no-renames", MAIN, NEW)
+    assert all("rebase" not in call[0] for call in runner.calls)
+    assert sum("push" in call[0] for call in runner.calls) == 1
+
+
+def test_merge_shaped_tree_conflict_blocks_without_transport_or_retry():
+    runner = FakeRunner([
+        observation(stdout=f"{MERGE_BASE}\n"),
+        observation(stdout=f"{MERGE_COMMIT}\n"),
+        observation(return_code=1),
+    ])
+    result = invoke(provider(FakeBacking(snapshot()), runner))
+    assert result.reason_code == "topology-merge-tree-rejected"
+    assert all("push" not in call[0] for call in runner.calls)
+    assert len(runner.calls) == 3
+
+
+def test_merge_shaped_uncertain_tree_blocks_without_transport():
+    runner = FakeRunner([
+        observation(stdout=f"{MERGE_BASE}\n"),
+        observation(stdout=f"{MERGE_COMMIT}\n"),
+        observation(return_code=None, timed_out=True, termination_confirmed=False),
+    ])
+    result = invoke(provider(FakeBacking(snapshot()), runner))
+    assert result.status == "ambiguous"
+    assert result.reason_code == "topology-merge-tree-outcome-uncertain"
+    assert all("push" not in call[0] for call in runner.calls)
+
+
+def test_merge_shaped_scope_mismatch_blocks_before_transport():
+    runner = FakeRunner([
+        observation(stdout=f"{MERGE_BASE}\n"),
+        observation(stdout=f"{MERGE_COMMIT}\n"),
+        observation(stdout=f"{MERGED_TREE}\n"),
+        observation(stdout=f"{NEW}\n"),
+        observation(),
+        observation(stdout=f"{NEW}\n"),
+        observation(stdout="scripts/other.py\n"),
+    ])
+    result = invoke(provider(FakeBacking(snapshot()), runner))
+    assert result.reason_code == "topology-candidate-scope-mismatch"
+    assert all("push" not in call[0] for call in runner.calls)
+
+
+def test_ambiguous_topology_marker_fails_closed_before_candidate_preparation():
+    runner = FakeRunner([
+        observation(stdout=f"{MERGE_BASE}\n"),
+        observation(stdout="not-a-sha\n"),
+    ])
+    result = invoke(provider(FakeBacking(snapshot()), runner))
+    assert result.reason_code == "topology-history-ambiguous"
+    assert len(runner.calls) == 2
 
 
 def test_moved_head_blocks_before_any_git_command():
@@ -271,20 +350,33 @@ def test_missing_merge_base_blocks_before_rebase_or_push():
 
 
 def test_rebase_failure_is_bounded_and_does_not_attempt_push():
-    runner = FakeRunner([observation(stdout=f"{MERGE_BASE}\n"), observation(return_code=1)])
+    runner = FakeRunner([
+        observation(stdout=f"{MERGE_BASE}\n"),
+        observation(),
+        observation(return_code=1),
+    ])
     result = invoke(provider(FakeBacking(snapshot()), runner))
     assert result.reason_code == "rebase-rejected"
     assert all("push" not in call[0] for call in runner.calls)
 
 
 def test_rebase_timeout_is_ambiguous_and_does_not_retry():
-    runner = FakeRunner([observation(stdout=f"{MERGE_BASE}\n"), observation(return_code=None, timed_out=True, termination_confirmed=False)])
+    runner = FakeRunner([
+        observation(stdout=f"{MERGE_BASE}\n"),
+        observation(),
+        observation(return_code=None, timed_out=True, termination_confirmed=False),
+    ])
     result = invoke(provider(FakeBacking(snapshot()), runner))
-    assert result.status == "ambiguous" and len(runner.calls) == 2
+    assert result.status == "ambiguous" and len(runner.calls) == 3
 
 
 def test_unproven_rebased_head_blocks_before_remote_transport():
-    runner = FakeRunner([observation(stdout=f"{MERGE_BASE}\n"), observation(), observation(stdout="not-a-sha\n")])
+    runner = FakeRunner([
+        observation(stdout=f"{MERGE_BASE}\n"),
+        observation(),
+        observation(),
+        observation(stdout="not-a-sha\n"),
+    ])
     result = invoke(provider(FakeBacking(snapshot()), runner))
     assert result.reason_code == "rebased-head-unavailable"
     assert all("push" not in call[0] for call in runner.calls)
@@ -292,7 +384,10 @@ def test_unproven_rebased_head_blocks_before_remote_transport():
 
 def test_transport_uncertainty_maps_to_ambiguous_without_retry():
     runner = FakeRunner([
-        observation(stdout=f"{MERGE_BASE}\n"), observation(), observation(stdout=f"{NEW}\n"),
+        observation(stdout=f"{MERGE_BASE}\n"),
+        observation(),
+        observation(),
+        observation(stdout=f"{NEW}\n"),
         observation(stdout=f"{OLD}\trefs/heads/agent/1237-publication-required-continuation\n"),
         observation(return_code=None, timed_out=True, termination_confirmed=False),
     ])
