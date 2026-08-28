@@ -16,3 +16,9 @@ def test_runtime_publication_is_separate_from_dev_validation():
 
 def test_runtime_installer_has_bounded_rollback_targets_only():
  text=source();assert "rm -rf \"$RUNTIME_ROOT\"" in text;assert "agent-os-governed-resume" not in text;assert "sudoers" not in text;assert "gcloud" not in text
+
+def test_runtime_installer_verifies_versions_via_package_metadata():
+ text=source()
+ assert "from importlib.metadata import version" in text
+ assert 'version(name)' in text
+ assert "iniconfig.__version__" not in text
