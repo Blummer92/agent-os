@@ -121,6 +121,14 @@ describe('PPUX-VRL1 current application visual-reference library', () => {
     expect(rawOnly.blocker_reasons).toContain(VISUAL_REFERENCE_BLOCKER_REASONS.sanitizedDerivativeMissing);
   });
 
+  it('admits the governed standalone manifest v2 path without weakening eligibility gates', () => {
+    const result = admitVisualReference(candidate('editor/add-content', ['Adobe Express', 'Add content'], {
+      artifact_manifest: { ...artifactManifest, contract_version: 'curriculum-artifact-manifest-v2' },
+    }));
+    expect(result.status).toBe('valid');
+    expect(result.reference?.context_state).toBe('editor/add-content');
+  });
+
   it('keeps crop-only privacy unresolved out of Ready', () => {
     const result = admitVisualReference(candidate('navigation/home', ['Adobe Express'], {
       artifact_manifest: {

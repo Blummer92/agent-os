@@ -7,6 +7,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/agent-os-validation.yml"
 SCHEDULER_WORKFLOW = ROOT / ".github/workflows/workflow-scheduler-validation.yml"
+NAVIGATION_WORKFLOW = ROOT / ".github/workflows/navigation-registry-offline-tests.yml"
 CLOUD_BUILD = ROOT / "cloudbuild.yaml"
 SHARED_ACTION = ROOT / ".github/actions/setup-python-dev/action.yml"
 
@@ -177,3 +178,28 @@ def test_cloud_build_does_not_use_github_actions_cache_configuration():
     assert "actions/setup-python" not in content
     assert "cache-dependency-path" not in content
     assert 'cache: "pip"' not in content
+
+
+def test_navigation_registry_workflow_uses_bounded_same_lineage_concurrency():
+    content = NAVIGATION_WORKFLOW.read_text(encoding="utf-8")
+    assert (
+        "group: navigation-registry-offline-${{ github.event.pull_request.number || github.ref }}"
+        in content
+    )
+    assert "cancel-in-progress: ${{ github.run_attempt == 1 }}" in content
+
+
+def test_navigation_registry_workflow_preserves_triggers_job_and_test_command():
+    content = NAVIGATION_WORKFLOW.read_text(encoding="utf-8")
+    assert "name: Navigation Registry Offline Tests" in content
+    assert "pull_request:" in content
+    assert "push:" in content
+    assert "offline-notion-connector-tests:" in content
+    assert "pytest tests/navigation_registry/test_notion_read_only_connector.py" in content
+
+
+def test_navigation_registry_workflow_does_not_cross_event_dedupe():
+    content = NAVIGATION_WORKFLOW.read_text(encoding="utf-8")
+    assert "github.event.pull_request.number || github.ref" in content
+    assert "github.sha" not in content
+    assert "github.head_ref" not in content
