@@ -31,6 +31,10 @@ export type VisualReferenceSource = Readonly<{
   provenance: readonly string[];
 }>;
 
+export type VisualReferenceArtifactManifestEvidence = Omit<ArtifactManifestAssetEvidence, 'contract_version'> & Readonly<{
+  contract_version: 'curriculum-artifact-manifest-v1' | 'curriculum-artifact-manifest-v2';
+}>;
+
 export type VisualReferenceCandidate = Readonly<{
   reference_id: string;
   application: string;
@@ -45,7 +49,7 @@ export type VisualReferenceCandidate = Readonly<{
   visible_ui_claims: readonly string[];
   manifest_reference: ManifestReference;
   asset_reference: AssetReference;
-  artifact_manifest: ArtifactManifestAssetEvidence;
+  artifact_manifest: VisualReferenceArtifactManifestEvidence;
   compatibility: VisualAssetCompatibilityEvidence;
 }>;
 
@@ -89,6 +93,7 @@ export type VisualReferenceSelectionResult = Readonly<{
 }>;
 
 const CLEARED_RIGHTS = new Set(['cleared-internal', 'licensed', 'public-domain', 'permission-documented']);
+const SUPPORTED_MANIFEST_VERSIONS = new Set(['curriculum-artifact-manifest-v1', 'curriculum-artifact-manifest-v2']);
 
 function uniqueSorted(values: readonly string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))].sort((left, right) => left.localeCompare(right));
@@ -120,7 +125,7 @@ function eligibilityReasons(candidate: VisualReferenceCandidate): VisualReferenc
   }
 
   if (
-    candidate.artifact_manifest.contract_version !== 'curriculum-artifact-manifest-v1' ||
+    !SUPPORTED_MANIFEST_VERSIONS.has(candidate.artifact_manifest.contract_version) ||
     candidate.artifact_manifest.external_identity.access_state !== 'verified' ||
     candidate.artifact_manifest.statuses.classroom_readiness !== 'ready' ||
     !CLEARED_RIGHTS.has(asset.rights_classification) ||
