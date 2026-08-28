@@ -117,6 +117,8 @@ def _host_local_lease_adapter(lease_directory: str) -> HostLocalLeaseAdapter:
     )
 
 
+from .runtime_execution_request import RuntimeExecutionRequest
+
 def build_production_governed_resume_bindings(
     *,
     lease_directory: str,
@@ -135,6 +137,7 @@ def build_production_governed_resume_bindings(
     process_cancelled: ProcessCancellationCheck | None = None,
     changed_paths_inspector: ChangedPathsInspector | None = None,
     dependency_command_runner: DependencyCommandRunner | None = None,
+    runtime_request: RuntimeExecutionRequest | None = None,
 ) -> GovernedResumeBindings:
     """Compose the real #1218 seam and the real #758/#1253 dispatch boundary.
 
@@ -161,9 +164,10 @@ def build_production_governed_resume_bindings(
 
     checkpoint_store_root = _checkpoint_store_root()
 
-    descriptor_loader = functools.partial(
-        load_invocation_descriptor, checkpoint_store_root
-    )
+    def descriptor_loader(handoff_id: str) -> GovernedInvocationDescriptor:
+        if runtime_request is not None and runtime_request.handoff_id == handoff_id:
+            return runtime_request.invocation_descriptor
+        return load_invocation_descriptor(checkpoint_store_root, handoff_id)
 
     sources = HostCurrentInvocationSources(
         checkpoint_store_root=checkpoint_store_root,

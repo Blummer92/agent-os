@@ -392,6 +392,8 @@ class _InvocationRuntimeConfigurationBinding:
         return self._configuration
 
 
+from .runtime_execution_request import RuntimeExecutionRequest
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ProductionHostBootstrap:
     """One composed production host binding for exactly one host process."""
@@ -400,6 +402,7 @@ class ProductionHostBootstrap:
     evaluated_at: str
     sources: ProductionHostStateSources
     authorization_transport: ExecutionAuthorizationSourceTransport
+    runtime_request: RuntimeExecutionRequest | None = None
 
     def governed_resume_bindings(
         self,
@@ -441,6 +444,7 @@ class ProductionHostBootstrap:
             process_cancelled=process_cancelled,
             changed_paths_inspector=changed_paths_inspector,
             dependency_command_runner=dependency_command_runner,
+            runtime_request=self.runtime_request,
         )
 
 
@@ -453,6 +457,7 @@ def build_production_host_bootstrap(
     configuration: ProductionHostConfiguration | None = None,
     evaluated_at: str | None = None,
     dependency_identity_evidence_reader: DependencyIdentityEvidenceReader | None = None,
+    runtime_request: RuntimeExecutionRequest | None = None,
 ) -> ProductionHostBootstrap:
     """Compose #1303's ``ProductionHostStateSources`` from trusted host state.
 
@@ -509,12 +514,14 @@ def build_production_host_bootstrap(
         lease_directory=bound.lease_directory,
         delegated_parent_cgroup=bound.delegated_parent_cgroup,
         dependency_identity_evidence_reader=dependency_identity_evidence_reader,
+        runtime_request=runtime_request,
     )
     return ProductionHostBootstrap(
         configuration=bound,
         evaluated_at=moment,
         sources=sources,
         authorization_transport=authorization_transport,
+        runtime_request=runtime_request,
     )
 
 
