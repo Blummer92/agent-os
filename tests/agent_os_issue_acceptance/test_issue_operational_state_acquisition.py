@@ -28,7 +28,7 @@ from scripts.agent_os_issue_acceptance.issue_operational_state_acquisition impor
 
 SHA = "a" * 40
 HEAD = "b" * 40
-EVIDENCE_ID = "github-issue:" + "c" * 64
+ISSUE_REVISION = "github-issue-v1:" + "c" * 64
 
 
 class Reader:
@@ -47,8 +47,9 @@ def snapshot(**changes: object) -> CurrentIssueSnapshot:
         issue_number=1359,
         body="""## Objective\nMeasure aggregate validation timing.\n\n## Value\nReduce compute waste.\n\n## Primary owner\nGitHub Service Agent\n\n## Scope\nBounded instrumentation.\n\n## Non-goals\nNo workflow changes.\n\n## Allowed files or areas\nTests only.\n\n## Validation\nFocused tests.\n\n## Documentation\ndocs-not-required\n\n## Dependencies\nNone.\n\n## Acceptance criteria\nDeterministic evidence.\n\n## Definition of done\nEvidence produced.\n\n## Prior scope, duplicate, and supersession review\nNo duplicate owner.\n\nTier: 1\n""",
         source_revision=SHA,
+        issue_source_revision=ISSUE_REVISION,
         observed_at="2026-08-28T03:30:00Z",
-        evidence_ids=(EVIDENCE_ID,),
+        evidence_ids=(ISSUE_REVISION,),
         source_state=SourceState.COMPLETE,
         issue_state=IssueState.OPEN,
         lifecycle_stage=LifecycleStage.MERGED,
@@ -103,6 +104,9 @@ def test_acquires_exact_issue_once_and_preserves_merged_pr_open_issue_truth() ->
 
     assert reader.calls == 1
     assert result.operational_state.issue_number == 1359
+    assert result.operational_state.source_revision == SHA
+    assert result.snapshot.issue_source_revision == ISSUE_REVISION
+    assert ISSUE_REVISION in result.operational_state.evidence_ids
     assert result.operational_state.lifecycle_stage is LifecycleStage.MERGED
     assert "reconciliation.merged-pr-open-issue" in result.operational_state.blocker_codes
     assert result.operational_state.primary_pr_numbers == (1360,)
@@ -135,6 +139,13 @@ def test_identity_mismatch_fails_closed_before_projection() -> None:
     reader = Reader(snapshot(issue_number=1360))
     with pytest.raises(ValueError, match="issue identity mismatch"):
         acquire(reader)
+
+
+def test_repository_and_issue_revisions_cannot_be_conflated() -> None:
+    with pytest.raises(ValueError, match="40-character repository SHA"):
+        snapshot(source_revision=ISSUE_REVISION)
+    with pytest.raises(ValueError, match="issue_source_revision"):
+        snapshot(issue_source_revision="github-issue-v1:" + "d" * 64)
 
 
 def test_conflicting_primary_claims_remain_conflicting() -> None:
