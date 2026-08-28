@@ -11,6 +11,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 DEVCONTAINER_DIR = ROOT / ".devcontainer"
 HEALTH_SCRIPT = ROOT / "scripts" / "agent-os-environment-health.py"
@@ -265,10 +267,10 @@ def _stub_health_checks(health: dict, monkeypatch) -> None:
     monkeypatch.setitem(
         health,
         "check_github_auth_capability",
-        lambda: {
+        lambda _network_mode: {
             "name": "github-auth-capability",
             "passed": True,
-            "detail": {"capable": True, "state": "authenticated", "source": "gh-cli"},
+            "detail": {"capable": True, "state": "authenticated", "source": "direct-api"},
         },
     )
 
@@ -364,33 +366,150 @@ def test_972_missing_gh_and_auth_probe_fail_closed(monkeypatch) -> None:
         "state": "unavailable",
         "version": None,
     }
-    auth = health["check_github_auth_capability"]()
-    assert auth["detail"] == {"capable": False, "state": "unknown", "source": "none"}
+    auth = health["check_github_auth_capability"]("github-connected")
+    assert auth["detail"] == {"capable": False, "state": "no-credential", "source": "none"}
 
 
-def test_972_github_auth_distinguishes_unauthenticated_and_unknown(monkeypatch) -> None:
+# --- #1401 direct-authenticated-GitHub-API probe hardening (#1363 root cause) -
+
+
+def test_1401_local_only_never_probes_the_network(monkeypatch) -> None:
+    """Token presence must never substitute for a live probe, and local-only
+    must never attempt one at all -- regardless of ambient credentials."""
+    health = _load_health_contract()
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_totallyfaketokenvalue1234567890")
+
+    def _forbidden(*_args, **_kwargs):
+        raise AssertionError("local-only must not open a network connection")
+
+    monkeypatch.setattr(health["urllib"].request, "urlopen", _forbidden)
+    auth = health["check_github_auth_capability"]("local-only")
+    assert auth == {
+        "name": "github-auth-capability",
+        "passed": True,
+        "detail": {
+            "capable": False,
+            "state": "not-applicable",
+            "source": "not-applicable",
+        },
+    }
+
+
+def test_1401_github_connected_without_credential_never_probes(monkeypatch) -> None:
     health = _load_health_contract()
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GH_TOKEN", raising=False)
-    monkeypatch.setattr(health["shutil"], "which", lambda _name: "/fake/gh")
-    monkeypatch.setattr(
-        health["subprocess"],
-        "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 1, "", "not authenticated"),
-    )
-    auth = health["check_github_auth_capability"]()
-    assert auth["detail"] == {
-        "capable": False,
-        "state": "unauthenticated",
-        "source": "gh-cli",
+
+    def _forbidden(*_args, **_kwargs):
+        raise AssertionError("no credential means nothing to probe with")
+
+    monkeypatch.setattr(health["urllib"].request, "urlopen", _forbidden)
+    auth = health["check_github_auth_capability"]("github-connected")
+    assert auth == {
+        "name": "github-auth-capability",
+        "passed": False,
+        "detail": {"capable": False, "state": "no-credential", "source": "none"},
     }
 
-    def timeout(*args, **kwargs):
-        raise subprocess.TimeoutExpired(args[0], health["SUBPROCESS_TIMEOUT_SECONDS"])
 
-    monkeypatch.setattr(health["subprocess"], "run", timeout)
-    auth = health["check_github_auth_capability"]()
-    assert auth["detail"] == {"capable": False, "state": "unknown", "source": "gh-cli"}
+def test_1401_github_connected_successful_probe_proves_capability(monkeypatch) -> None:
+    health = _load_health_contract()
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_totallyfaketokenvalue1234567890")
+    calls = []
+
+    class _Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    def _urlopen(request, timeout=None):
+        calls.append((request.full_url, timeout))
+        assert "ghp_totallyfaketokenvalue1234567890" not in request.full_url
+        return _Response()
+
+    monkeypatch.setattr(health["urllib"].request, "urlopen", _urlopen)
+    auth = health["check_github_auth_capability"]("github-connected")
+    assert auth == {
+        "name": "github-auth-capability",
+        "passed": True,
+        "detail": {"capable": True, "state": "authenticated", "source": "direct-api"},
+    }
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_1401_github_connected_probe_fails_closed_on_401_403(monkeypatch, status_code) -> None:
+    health = _load_health_contract()
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_totallyfaketokenvalue1234567890")
+
+    def _urlopen(request, timeout=None):
+        raise health["urllib"].error.HTTPError(
+            request.full_url, status_code, "denied", None, None
+        )
+
+    monkeypatch.setattr(health["urllib"].request, "urlopen", _urlopen)
+    auth = health["check_github_auth_capability"]("github-connected")
+    assert auth == {
+        "name": "github-auth-capability",
+        "passed": False,
+        "detail": {"capable": False, "state": "unauthenticated", "source": "direct-api"},
+    }
+
+
+def test_1401_github_connected_probe_fails_closed_on_network_error_and_timeout(monkeypatch) -> None:
+    health = _load_health_contract()
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_totallyfaketokenvalue1234567890")
+
+    def _network_error(request, timeout=None):
+        raise health["urllib"].error.URLError("connection refused")
+
+    monkeypatch.setattr(health["urllib"].request, "urlopen", _network_error)
+    auth = health["check_github_auth_capability"]("github-connected")
+    assert auth == {
+        "name": "github-auth-capability",
+        "passed": False,
+        "detail": {"capable": False, "state": "unknown", "source": "direct-api"},
+    }
+
+    def _timeout(request, timeout=None):
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(health["urllib"].request, "urlopen", _timeout)
+    auth = health["check_github_auth_capability"]("github-connected")
+    assert auth == {
+        "name": "github-auth-capability",
+        "passed": False,
+        "detail": {"capable": False, "state": "unknown", "source": "direct-api"},
+    }
+
+
+def test_1401_probe_never_discloses_the_token(monkeypatch) -> None:
+    """The token must reach the outgoing request (that is how auth works)
+    but must never leak back out through the returned evidence."""
+    health = _load_health_contract()
+    token = "ghp_totallyfaketokenvalue1234567890"
+    monkeypatch.setenv("GITHUB_TOKEN", token)
+
+    class _Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    def _urlopen(request, timeout=None):
+        assert request.headers.get("Authorization") == f"Bearer {token}"
+        return _Response()
+
+    monkeypatch.setattr(health["urllib"].request, "urlopen", _urlopen)
+    auth = health["check_github_auth_capability"]("github-connected")
+    assert token not in json.dumps(auth)
 
 
 def test_972_contract_bookkeeping_and_boundaries() -> None:

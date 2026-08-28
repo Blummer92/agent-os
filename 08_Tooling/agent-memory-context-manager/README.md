@@ -77,6 +77,13 @@ The result exposes finite sufficiency (`not-needed`, `sufficient`, `insufficient
 
 `CodingKnowledgeSelectionResult.to_handoff_projection()` maps only into existing Memory Manager concepts: `known_facts`, `prior_decisions`, `allowed_inspect_first`, and `stop_conditions`. It does not create or modify the canonical handoff-packet schema. Benchmark counters are available through the result (`candidate_count`, `selected_count`, knowledge/canonical refs, sufficiency, and recommended escalation) for #1146; unit tests do not establish compute savings.
 
+## CKR10 — Decision / ADR Retrieval Preflight
+`decision_preflight.plan_decision_preflight(...)` and `consume_decision_preflight(...)` extend the existing CKR2/CKR6 preflight pattern to already-read Decision Log / ADR evidence. Decision-sensitive tasks use bounded retrieval; routine mechanical work returns `not-needed` with zero Decision Log lookup. The adapter accepts at most five records and CKR2 retains at most three.
+
+Accepted/current decisions may become secondary-index context only when canonical GitHub provenance is present. Proposed/working decisions remain unresolved; superseded/deprecated decisions cannot become active guidance and may only route to a known successor. Stale, unverifiable, authority-conflicting, duplicate-conflicting, or oversized evidence fails closed. Retrieval outage degrades to GitHub-only safe fallback when specialized prior-decision knowledge is not required, otherwise to explicit insufficiency/manual review.
+
+Selected decision identities project into the existing `prior_decisions` field, canonical GitHub references into `allowed_inspect_first`, and no new packet, selector, Memory Manager, connector, database, RAG/vector system, persistence path, Scheduler behavior, or agent is introduced. `source_authority` is always `secondary-index`; GitHub remains authoritative before reliance. See `CKR10_DECISION_PREFLIGHT.md` for the full contract and #1146 benchmark handoff scenarios.
+
 ## Future Scheduler Integration
 Pre-task context packet generation; per-task file allowlist and budget declarations; per-task test recommendations based on changed modules; audit log entries for context used; memory cache invalidation after file changes; approval gate when requested work exceeds the declared budget.
 

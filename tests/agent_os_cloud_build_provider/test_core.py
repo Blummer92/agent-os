@@ -531,7 +531,37 @@ def test_unregistered_argv_never_reaches_an_accepted_invocation():
     assert result.invocation is None
 
 
-def test_pre_pr_schema_command_plan_is_rejected():
+def test_unrecognized_validation_plan_schema_fails_closed():
+    """Neither the standard positive-PR nor the #1210 pre-PR schema: the
+    shared ``validate_validation_command_plan`` boundary rejects it before
+    this module's own supported-prefix gate is ever reached.
+    """
+    request, command_plan, dispatch, authorization, configuration = _inputs()
+    unrecognized = replace(
+        command_plan,
+        validation_plan_id="mystery-validation-plan:" + "a" * 64,
+    )
+    result = prepare_cloud_build_provider_invocation(
+        request,
+        unrecognized,
+        dispatch,
+        authorization,
+        configuration,
+        resolved_sha=SHA,
+        evaluated_at="2026-07-30T20:00:00Z",
+    )
+    assert result.status is ProviderStatus.MANUAL_REVIEW
+    assert ProviderReason.COMMAND_PLAN_INVALID in result.reason_codes
+    assert ProviderReason.PROVIDER_AGGREGATE_REDUNDANT_EQUIVALENT not in result.reason_codes
+    assert result.invocation is None
+
+
+def test_pre_pr_shaped_plan_with_stale_dispatch_identity_fails_closed():
+    """A pre-PR-schema command plan paired with a dispatch decision computed
+    for a *different* plan (stale/forged ``dispatch_identity``) must never
+    reach an accepted invocation, even though #1210 now admits genuine
+    pre-PR schema IDs.
+    """
     request, command_plan, dispatch, authorization, configuration = _inputs()
     pre_pr_shaped = replace(
         command_plan,
@@ -564,7 +594,7 @@ def test_pre_pr_schema_command_plan_is_rejected():
         evaluated_at="2026-07-30T20:00:00Z",
     )
     assert result.status is ProviderStatus.MANUAL_REVIEW
-    assert ProviderReason.COMMAND_PLAN_UNSUPPORTED_SCHEMA in result.reason_codes
+    assert ProviderReason.DISPATCH_INVALID in result.reason_codes
     assert result.invocation is None
 
 

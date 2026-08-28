@@ -1,8 +1,8 @@
 """Bounded GitHub issue-comment transport parsing for Agent OS Scheduler ingress.
 
-This module validates only the low-trust GitHub event envelope for #1203.  A
-successful parse is *transport evidence*, not implementation authorization and
-not Scheduler admission.  Canonical authorization, handoff reconstruction,
+This module validates only the low-trust GitHub event envelope for #1203 and
+#1432. A successful parse is transport evidence, not implementation authorization
+and not Scheduler admission. Canonical authorization, handoff reconstruction,
 lease state, exact-head state, dependency readiness, and runtime dispatch remain
 owned by their existing Agent OS components.
 
@@ -29,6 +29,11 @@ _TRIGGER_RE = re.compile(
     r"/agent-os resume (?P<handoff>executor-handoff:[0-9a-f]{64})",
     re.ASCII,
 )
+_DEV_VALIDATE_RE = re.compile(
+    r"/agent-os dev-validate (?P<branch>agent/[A-Za-z0-9._/-]{1,180}) "
+    r"(?P<sha>[0-9a-f]{40}) (?P<validation_id>remote-validation-suite)",
+    re.ASCII,
+)
 _REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", re.ASCII)
 _ACTOR_RE = re.compile(r"[A-Za-z0-9-]{1,39}", re.ASCII)
 
@@ -36,6 +41,8 @@ IngressStatus = Literal["accepted", "blocked", "ignored"]
 IngressReason = Literal[
     "accepted-envelope",
     "accepted-discovery-envelope",
+    "accepted-runtime-inspection-envelope",
+    "accepted-dev-validation-envelope",
     "event-not-created",
     "pull-request-comment",
     "repository-mismatch",
@@ -61,6 +68,9 @@ class IssueCommentIngressResult:
     handoff_id_or_none: str | None
     logical_trigger_id_or_none: str | None
     run_attempt: int
+    dev_validation_branch_or_none: str | None = None
+    dev_validation_sha_or_none: str | None = None
+    dev_validation_id_or_none: str | None = None
     execution_authorized: Literal[False] = field(default=False, init=False)
     scheduler_invoked: Literal[False] = field(default=False, init=False)
     side_effects_performed: Literal[False] = field(default=False, init=False)
@@ -77,6 +87,9 @@ class IssueCommentIngressResult:
             "handoff_id_or_none": self.handoff_id_or_none,
             "logical_trigger_id_or_none": self.logical_trigger_id_or_none,
             "run_attempt": self.run_attempt,
+            "dev_validation_branch_or_none": self.dev_validation_branch_or_none,
+            "dev_validation_sha_or_none": self.dev_validation_sha_or_none,
+            "dev_validation_id_or_none": self.dev_validation_id_or_none,
             "execution_authorized": False,
             "scheduler_invoked": False,
             "side_effects_performed": False,
@@ -88,8 +101,21 @@ def _logical_trigger_id(repository: str, issue_number: int, handoff_id: str) -> 
     return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
 
 
-def _discovery_trigger_id(repository: str, issue_number: int) -> str:
-    material = f"{repository}\0{issue_number}\0discover".encode("ascii")
+def _operation_trigger_id(repository: str, issue_number: int, operation: str) -> str:
+    material = f"{repository}\0{issue_number}\0{operation}".encode("ascii")
+    return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
+
+
+def _dev_validation_trigger_id(
+    repository: str,
+    issue_number: int,
+    branch: str,
+    sha: str,
+    validation_id: str,
+) -> str:
+    material = (
+        f"{repository}\0{issue_number}\0dev-validate\0{branch}\0{sha}\0{validation_id}"
+    ).encode("ascii")
     return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
 
 
@@ -103,13 +129,29 @@ def _result(
     comment_id: int | None = None,
     actor: str | None = None,
     handoff_id: str | None = None,
-    discovery: bool = False,
+    operation: str | None = None,
+    dev_validation_branch: str | None = None,
+    dev_validation_sha: str | None = None,
+    dev_validation_id: str | None = None,
 ) -> IssueCommentIngressResult:
     logical_id = None
     if handoff_id is not None and issue_number is not None:
         logical_id = _logical_trigger_id(repository, issue_number, handoff_id)
-    elif discovery and issue_number is not None:
-        logical_id = _discovery_trigger_id(repository, issue_number)
+    elif (
+        dev_validation_branch is not None
+        and dev_validation_sha is not None
+        and dev_validation_id is not None
+        and issue_number is not None
+    ):
+        logical_id = _dev_validation_trigger_id(
+            repository,
+            issue_number,
+            dev_validation_branch,
+            dev_validation_sha,
+            dev_validation_id,
+        )
+    elif operation is not None and issue_number is not None:
+        logical_id = _operation_trigger_id(repository, issue_number, operation)
     return IssueCommentIngressResult(
         schema_version=INGRESS_SCHEMA_VERSION,
         status=status,
@@ -121,6 +163,19 @@ def _result(
         handoff_id_or_none=handoff_id,
         logical_trigger_id_or_none=logical_id,
         run_attempt=run_attempt,
+        dev_validation_branch_or_none=dev_validation_branch,
+        dev_validation_sha_or_none=dev_validation_sha,
+        dev_validation_id_or_none=dev_validation_id,
+    )
+
+
+def _valid_dev_branch(branch: str) -> bool:
+    return (
+        branch.startswith("agent/")
+        and branch not in {"agent/", "agent/main"}
+        and ".." not in branch
+        and "//" not in branch
+        and not branch.endswith(("/", "."))
     )
 
 
@@ -141,12 +196,7 @@ def admit_issue_comment_event(
         raise ValueError("run_attempt must be a positive integer")
 
     if type(event) is not dict:
-        return _result(
-            status="blocked",
-            reason="invalid-event-envelope",
-            repository=expected_repository,
-            run_attempt=run_attempt,
-        )
+        return _result(status="blocked", reason="invalid-event-envelope", repository=expected_repository, run_attempt=run_attempt)
 
     action = event.get("action")
     repository = event.get("repository")
@@ -154,12 +204,7 @@ def admit_issue_comment_event(
     comment = event.get("comment")
     sender = event.get("sender")
     if not all(type(value) is dict for value in (repository, issue, comment, sender)):
-        return _result(
-            status="blocked",
-            reason="invalid-event-envelope",
-            repository=expected_repository,
-            run_attempt=run_attempt,
-        )
+        return _result(status="blocked", reason="invalid-event-envelope", repository=expected_repository, run_attempt=run_attempt)
 
     repo_name = repository.get("full_name")
     issue_number = issue.get("number")
@@ -175,132 +220,54 @@ def admit_issue_comment_event(
         or type(comment_user) is not dict
         or type(sender_login) is not str
     ):
-        return _result(
-            status="blocked",
-            reason="invalid-event-envelope",
-            repository=expected_repository,
-            run_attempt=run_attempt,
-        )
+        return _result(status="blocked", reason="invalid-event-envelope", repository=expected_repository, run_attempt=run_attempt)
 
     comment_login = comment_user.get("login")
     actor = comment_login if type(comment_login) is str else None
 
+    common = dict(repository=expected_repository, run_attempt=run_attempt, issue_number=issue_number, comment_id=comment_id, actor=actor)
     if action != "created":
-        return _result(
-            status="blocked",
-            reason="event-not-created",
-            repository=expected_repository,
-            run_attempt=run_attempt,
-            issue_number=issue_number,
-            comment_id=comment_id,
-            actor=actor,
-        )
+        return _result(status="blocked", reason="event-not-created", **common)
     if "pull_request" in issue:
-        return _result(
-            status="ignored",
-            reason="pull-request-comment",
-            repository=expected_repository,
-            run_attempt=run_attempt,
-            issue_number=issue_number,
-            comment_id=comment_id,
-            actor=actor,
-        )
+        return _result(status="ignored", reason="pull-request-comment", **common)
     if repo_name != expected_repository:
-        return _result(
-            status="blocked",
-            reason="repository-mismatch",
-            repository=expected_repository,
-            run_attempt=run_attempt,
-            issue_number=issue_number,
-            comment_id=comment_id,
-            actor=actor,
-        )
+        return _result(status="blocked", reason="repository-mismatch", **common)
     if run_attempt != 1:
-        return _result(
-            status="blocked",
-            reason="workflow-rerun",
-            repository=expected_repository,
-            run_attempt=run_attempt,
-            issue_number=issue_number,
-            comment_id=comment_id,
-            actor=actor,
-        )
+        return _result(status="blocked", reason="workflow-rerun", **common)
     if actor != allowed_actor:
-        return _result(
-            status="blocked",
-            reason="actor-not-allowed",
-            repository=expected_repository,
-            run_attempt=run_attempt,
-            issue_number=issue_number,
-            comment_id=comment_id,
-            actor=actor,
-        )
+        return _result(status="blocked", reason="actor-not-allowed", **common)
     if sender_login != actor:
-        return _result(
-            status="blocked",
-            reason="actor-evidence-mismatch",
-            repository=expected_repository,
-            run_attempt=run_attempt,
-            issue_number=issue_number,
-            comment_id=comment_id,
-            actor=actor,
-        )
+        return _result(status="blocked", reason="actor-evidence-mismatch", **common)
 
     body = comment.get("body")
     if type(body) is not str or len(body.encode("utf-8")) > MAX_COMMENT_BYTES:
-        return _result(
-            status="ignored",
-            reason="malformed-trigger",
-            repository=expected_repository,
-            run_attempt=run_attempt,
-            issue_number=issue_number,
-            comment_id=comment_id,
-            actor=actor,
-        )
+        return _result(status="ignored", reason="malformed-trigger", **common)
     if body == "/agent-os discover":
+        return _result(status="accepted", reason="accepted-discovery-envelope", operation="discover", **common)
+    if body == "/agent-os inspect-runtime":
+        return _result(status="accepted", reason="accepted-runtime-inspection-envelope", operation="inspect-runtime", **common)
+
+    dev_match = _DEV_VALIDATE_RE.fullmatch(body)
+    if dev_match is not None:
+        branch = dev_match.group("branch")
+        if not _valid_dev_branch(branch):
+            return _result(status="ignored", reason="malformed-trigger", **common)
         return _result(
             status="accepted",
-            reason="accepted-discovery-envelope",
-            repository=expected_repository,
-            run_attempt=run_attempt,
-            issue_number=issue_number,
-            comment_id=comment_id,
-            actor=actor,
-            discovery=True,
+            reason="accepted-dev-validation-envelope",
+            dev_validation_branch=branch,
+            dev_validation_sha=dev_match.group("sha"),
+            dev_validation_id=dev_match.group("validation_id"),
+            **common,
         )
 
     match = _TRIGGER_RE.fullmatch(body)
     if match is None:
-        return _result(
-            status="ignored",
-            reason="malformed-trigger",
-            repository=expected_repository,
-            run_attempt=run_attempt,
-            issue_number=issue_number,
-            comment_id=comment_id,
-            actor=actor,
-        )
+        return _result(status="ignored", reason="malformed-trigger", **common)
     handoff_id = match.group("handoff")
     if _HANDOFF_RE.fullmatch(handoff_id) is None:
-        return _result(
-            status="ignored",
-            reason="malformed-trigger",
-            repository=expected_repository,
-            run_attempt=run_attempt,
-            issue_number=issue_number,
-            comment_id=comment_id,
-            actor=actor,
-        )
-    return _result(
-        status="accepted",
-        reason="accepted-envelope",
-        repository=expected_repository,
-        run_attempt=run_attempt,
-        issue_number=issue_number,
-        comment_id=comment_id,
-        actor=actor,
-        handoff_id=handoff_id,
-    )
+        return _result(status="ignored", reason="malformed-trigger", **common)
+    return _result(status="accepted", reason="accepted-envelope", handoff_id=handoff_id, **common)
 
 
 def _read_event(path: Path) -> object:

@@ -16,12 +16,14 @@ set -eu
 
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
+PYTHON=/usr/bin/python3
 umask 077
 # An ambient PYTHONPATH could shadow a stdlib or pip-internal module name and
-# hijack every privileged `python3` invocation below at import time, before any
-# hash check runs. Clear it once here rather than relying solely on sudo's
-# env_reset default. The one intentional exception (the project wheel build)
-# re-sets it explicitly, scoped to that single command.
+# hijack privileged Python imports at startup, before any hash check runs. Clear
+# it once here rather than relying solely on sudo's env_reset default. The one
+# intentional exception (the project wheel build) re-sets it explicitly, scoped
+# to that single command. Every `python3` call below is also bound to the same
+# qualified Debian system interpreter, independent of caller or OS Login PATH.
 unset PYTHONPATH
 
 REPOSITORY_URL=https://github.com/Blummer92/agent-os.git
@@ -41,6 +43,10 @@ WHEEL_SHA256=212281cab4dff978f6cedd499cd893e1f620791ca6ff7107cf270781e587eced
 fail() {
   printf '%s\n' "host runtime install refused: $1" >&2
   exit 64
+}
+
+python3() {
+  "$PYTHON" "$@"
 }
 
 # sudo matches its rule on the path string and resolves that path at exec time,
@@ -189,7 +195,11 @@ service_wheel=$1
 
 # Runtime dependencies must already be present on the qualified host. Root may
 # install only the four locally built Agent OS wheels; it may not resolve or
-# download a dependency from a Python package index.
+# download a dependency from a Python package index. Staging stays under the
+# restrictive 077 mask above; only the final root-owned runtime publication uses
+# the ordinary 022 system-install mask so the governed non-root runtime can
+# traverse package directories and read modules. Restore 077 immediately after.
+umask 022
 PIP_NO_INDEX=1 python3 -m pip install \
   --disable-pip-version-check \
   --no-deps \
@@ -200,10 +210,70 @@ PIP_NO_INDEX=1 python3 -m pip install \
   "$context_wheel" \
   "$scheduler_wheel" \
   "$service_wheel" >&2
+umask 077
+
+# pip --force-reinstall may preserve restrictive modes on existing package
+# directories. Normalize only the four fixed Agent OS package roots. Refuse
+# symlinked roots or descendants instead of following them into unrelated paths.
+python3 - <<'PY_RUNTIME_PERMISSIONS'
+from __future__ import annotations
+
+import os
+import stat
+import sysconfig
+from pathlib import Path
+
+site_root = Path(sysconfig.get_path("purelib")).resolve()
+package_roots = (
+    "reusable_capability_registry",
+    "agent_memory_context_manager",
+    "workflow_scheduler",
+    "agent_os_execution_service",
+)
+
+for package_name in package_roots:
+    package_root = site_root / package_name
+    if package_root.is_symlink() or not package_root.is_dir():
+        raise SystemExit(
+            f"host runtime install refused: runtime package root unavailable: {package_name}"
+        )
+    resolved_root = package_root.resolve()
+    if resolved_root.parent != site_root:
+        raise SystemExit(
+            f"host runtime install refused: runtime package root escaped site root: {package_name}"
+        )
+
+    for current_root, dir_names, file_names in os.walk(package_root, followlinks=False):
+        current = Path(current_root)
+        if current.is_symlink():
+            raise SystemExit(
+                f"host runtime install refused: runtime package symlink directory: {package_name}"
+            )
+        os.chown(current, 0, 0)
+        os.chmod(current, 0o755)
+
+        for dir_name in dir_names:
+            child = current / dir_name
+            if child.is_symlink():
+                raise SystemExit(
+                    f"host runtime install refused: runtime package symlink directory: {package_name}"
+                )
+
+        for file_name in file_names:
+            child = current / file_name
+            if child.is_symlink() or not child.is_file():
+                raise SystemExit(
+                    f"host runtime install refused: runtime package unsafe file: {package_name}"
+                )
+            prior_mode = stat.S_IMODE(child.stat().st_mode)
+            target_mode = 0o755 if prior_mode & 0o100 else 0o644
+            os.chown(child, 0, 0)
+            os.chmod(child, target_mode)
+PY_RUNTIME_PERMISSIONS
 
 (
   cd /
-  env -u PYTHONPATH python3 -c 'import agent_os_execution_service.handoff_discovery_entrypoint; import agent_os_execution_service.governed_resume_entrypoint; import workflow_scheduler.execution._clone3_cgroup'
+  env -u PYTHONPATH "$PYTHON" -c 'import agent_os_execution_service.handoff_discovery_entrypoint; import agent_os_execution_service.governed_resume_entrypoint; import workflow_scheduler.execution._clone3_cgroup'
 ) >&2
 
 entrypoint_installer="$checkout/08_Tooling/agent-os-execution-service/scripts/install-governed-resume"

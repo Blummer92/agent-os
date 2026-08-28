@@ -82,12 +82,19 @@ def test_final_install_names_exactly_the_four_built_wheels_and_nothing_else() ->
     assert "$wheel_dir" not in system_install
 
 
+def test_privileged_python_is_bound_to_qualified_system_interpreter() -> None:
+    text = PRIVILEGED.read_text(encoding="utf-8")
+    assert "PYTHON=/usr/bin/python3" in text
+    assert 'python3() {\n  "$PYTHON" "$@"\n}' in text
+    assert "/usr/bin/env python3" not in text
+
+
 def test_import_verification_is_not_suppressed_and_precedes_publication() -> None:
     """`set -eu` makes the import-check subshell fail closed, but only if
     nothing swallows its exit status and nothing publishes before it runs."""
     text = PRIVILEGED.read_text(encoding="utf-8")
     assert any(line.strip() == "set -eu" for line in text.splitlines())
-    import_line = "env -u PYTHONPATH python3 -c 'import agent_os_execution_service"
+    import_line = 'env -u PYTHONPATH "$PYTHON" -c \'import agent_os_execution_service'
     assert import_line in text
     # The subshell around the import check must not have its failure discarded.
     subshell = text.split(import_line, 1)[0].rsplit("(", 1)[1] + import_line
@@ -101,12 +108,11 @@ def test_import_verification_is_not_suppressed_and_precedes_publication() -> Non
 
 
 def test_import_check_actually_fails_closed_on_a_missing_dependency() -> None:
-    """Execute the script's own import-check idiom (not a rewritten copy) with
-    a module name guaranteed absent, and confirm `set -eu` aborts before a
-    marker that stands in for entrypoint installation would run."""
+    """Execute the script's own import-check idiom with a module name guaranteed
+    absent and confirm `set -eu` aborts before publication can run."""
     text = PRIVILEGED.read_text(encoding="utf-8")
     real_import = (
-        "env -u PYTHONPATH python3 -c 'import agent_os_execution_service."
+        "env -u PYTHONPATH \"$PYTHON\" -c 'import agent_os_execution_service."
         "handoff_discovery_entrypoint; import agent_os_execution_service."
         "governed_resume_entrypoint; import workflow_scheduler.execution."
         "_clone3_cgroup'"
@@ -116,32 +122,45 @@ def test_import_check_actually_fails_closed_on_a_missing_dependency() -> None:
         "agent_os_execution_service.handoff_discovery_entrypoint",
         "agent_os_1341_definitely_missing_module_xyz",
     )
-    probe = f"set -eu\n(\n  cd /\n  {hostile_import}\n) >&2\necho UNREACHABLE\n"
+    probe = (
+        "set -eu\nPYTHON=/usr/bin/python3\n(\n  cd /\n  "
+        f"{hostile_import}\n) >&2\necho UNREACHABLE\n"
+    )
     result = subprocess.run(["/bin/sh", "-c", probe], capture_output=True, text=True)
     assert result.returncode != 0
     assert "UNREACHABLE" not in result.stdout
 
 
-def test_privileged_installer_clears_pythonpath_before_any_privileged_python() -> None:
-    """An ambient PYTHONPATH could shadow pip/setuptools at import time and
-    hijack every privileged `python3` call. Execute the script's own header
-    (not a rewritten copy) up through its `unset PYTHONPATH` line with a
-    hostile ambient PYTHONPATH and confirm it does not survive."""
+def test_privileged_installer_clears_pythonpath_and_ignores_hostile_path(
+    tmp_path: Path,
+) -> None:
+    """Ambient PYTHONPATH and PATH cannot select privileged Python imports."""
     text = PRIVILEGED.read_text(encoding="utf-8")
     marker = "unset PYTHONPATH"
     assert marker in text, "helper must explicitly clear PYTHONPATH"
     header = text.split(marker, 1)[0] + marker + "\n"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    hostile = fake_bin / "python3"
+    hostile.write_text("#!/bin/sh\necho HOSTILE\nexit 97\n", encoding="utf-8")
+    hostile.chmod(0o755)
     probe = (
-        header + "python3 -c 'import sys; "
-        'print("HOSTILE" if "/hostile-pythonpath-1341" in sys.path else "CLEAN")\''
+        header + '"$PYTHON" -c \'import sys; '
+        'print("HOSTILE" if "/hostile-pythonpath-1341" in sys.path else sys.executable)\''
     )
     result = subprocess.run(
         ["/bin/sh", "-c", probe],
-        env={**os.environ, "PYTHONPATH": "/hostile-pythonpath-1341"},
+        env={
+            **os.environ,
+            "PYTHONPATH": "/hostile-pythonpath-1341",
+            "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
+        },
         capture_output=True,
         text=True,
     )
-    assert result.stdout.strip() == "CLEAN", result.stderr
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "/usr/bin/python3"
+    assert "HOSTILE" not in result.stdout
     assert text.index(marker) < text.index('PYTHONPATH="$build_tools"'), (
         "the global clear must precede the one intentional, command-scoped re-set"
     )

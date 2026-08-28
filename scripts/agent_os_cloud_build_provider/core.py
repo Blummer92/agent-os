@@ -32,10 +32,19 @@ from .models import (
 )
 
 _SHA40_RE = re.compile(r"^[0-9a-f]{40}$", re.ASCII)
-# The standard positive-PR command-plan schema only. Pre-PR command plans
-# (``pre-pr-validation-plan:``) are a distinct, non-launching workflow and
-# are never eligible for a Cloud Build provider invocation.
+# The standard positive-PR command-plan schema, and the canonical
+# candidate-bound pre-PR command-plan schema (#1210) produced by
+# ``build_validation_command_plan``'s pre-PR branch. Both remain equally
+# subject to every identity, authorization, and dispatch-eligibility check
+# below -- a pre-PR plan is never treated as its own launch authority, and it
+# never fabricates a pull request. Any other ``validation_plan_id`` prefix
+# stays an unsupported, non-launching schema.
 _STANDARD_VALIDATION_PLAN_ID_PREFIX = "validation-plan:"
+_PRE_PR_VALIDATION_PLAN_ID_PREFIX = "pre-pr-validation-plan:"
+_SUPPORTED_VALIDATION_PLAN_ID_PREFIXES = (
+    _STANDARD_VALIDATION_PLAN_ID_PREFIX,
+    _PRE_PR_VALIDATION_PLAN_ID_PREFIX,
+)
 _PROFILE_OPERATION = {
     "static": "validation.static",
     "focused": "validation.focused",
@@ -115,7 +124,7 @@ def prepare_cloud_build_provider_invocation(
             reasons=reasons,
             execution_authorized=False,
         )
-    if not command_plan.validation_plan_id.startswith(_STANDARD_VALIDATION_PLAN_ID_PREFIX):
+    if not command_plan.validation_plan_id.startswith(_SUPPORTED_VALIDATION_PLAN_ID_PREFIXES):
         reasons.add(ProviderReason.COMMAND_PLAN_UNSUPPORTED_SCHEMA)
         return _result(
             status=ProviderStatus.MANUAL_REVIEW,
