@@ -21,7 +21,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 | Unit Alignment Agent | 0.6.0 |
 | Teacher Modeling Coach | 0.6.0 |
 | Instructional Materials Coach | 0.5.1 |
-| QA / Test Agent | 0.1.3 |
+| QA / Test Agent | 0.2.1 |
 | Student Language Standard | 0.3.0 |
 | Workflow Scheduler | 0.18.0 |
 | Workspace Automation Builder Tooling | 0.1.1 |
@@ -49,7 +49,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 
 **Instructional Design Standards** `0.14.0` adds the Assessment QA and Evidence Review Standard (#841): currentness-bound QA over #837/#838/#1192/#839, independent alignment/evidence/method/accessibility/fairness/AI/workload/instructional-usefulness findings, deterministic blocked/manual-review/revision-required/valid outcomes, and synthetic Unit 0 regression evidence. `0.13.0` added the Assessment Sequencing and Student Experience Standard (#839); `0.12.0` added the Assessment Blueprint Lifecycle Standard (#1192); `0.11.0` added the Assessment Blueprint Core Standard (#838); `0.10.0` integrated the Unit Creation Conversational Contract (#1214). These changes create no Assessment Agent and authorize no grading, readiness, classroom use, production, publication, or external writes.
 
-**QA / Test Agent** `0.1.3` binds assessment QA work to the #841 Assessment QA and Evidence Review Standard while preserving its canonical validation/evidence role and existing non-production write boundary.
+**QA / Test Agent** `0.2.1` binds assessment QA work to the #841 Assessment QA and Evidence Review Standard while preserving the post-#1324 canonical technical validation/evidence role, GitHub Service Agent repository-write ownership, and existing non-authorizing boundaries. `0.2.0` aligned the overlay with the post-#1324 technical architecture (#1342).
 
 **Dashboard Migration Verification** (`08_Tooling/dashboard-migration-verification/`) is a verification-only migration evidence toolkit for registry examples, placeholder snapshots, dependency graphs, conservative validation results, and reports. It never authorizes live Notion, Workspace, trigger, sharing, source-of-truth, or production dashboard writes. Standard packaging metadata was completed by D2 (#123).
 
