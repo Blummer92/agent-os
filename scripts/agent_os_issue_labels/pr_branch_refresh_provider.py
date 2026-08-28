@@ -466,11 +466,23 @@ class ProductionPullRequestBranchRefreshProvider(PullRequestBranchRefreshProvide
         if merged_tree_sha is None:
             return _blocked(expected_head_sha, "topology-merged-tree-unavailable")
 
+        main_epoch_result = self.runner.run(
+            (self.git_binary, "show", "-s", "--format=%ct", current_main_sha),
+            cwd=self.repository_root,
+            env=dict(self.environment),
+        )
+        main_epoch = _exact_epoch(main_epoch_result)
+        if main_epoch is None:
+            return _blocked(expected_head_sha, "topology-main-timestamp-unavailable")
+
         commit_env = dict(self.environment)
         commit_env.setdefault("GIT_AUTHOR_NAME", "Agent OS Branch Refresh")
         commit_env.setdefault("GIT_AUTHOR_EMAIL", "agent-os-branch-refresh@localhost")
         commit_env.setdefault("GIT_COMMITTER_NAME", "Agent OS Branch Refresh")
         commit_env.setdefault("GIT_COMMITTER_EMAIL", "agent-os-branch-refresh@localhost")
+        deterministic_date = f"@{main_epoch} +0000"
+        commit_env["GIT_AUTHOR_DATE"] = deterministic_date
+        commit_env["GIT_COMMITTER_DATE"] = deterministic_date
         commit = self.runner.run(
             (
                 self.git_binary,
@@ -625,6 +637,19 @@ def _exact_head(observation: object) -> str | None:
     if len(lines) != 1 or _SHA40_RE.fullmatch(lines[0]) is None:
         return None
     return lines[0]
+
+
+def _exact_epoch(observation: object) -> str | None:
+    if (
+        not hasattr(observation, "succeeded")
+        or not bool(getattr(observation, "succeeded"))
+        or not isinstance(getattr(observation, "stdout", None), str)
+    ):
+        return None
+    value = observation.stdout.strip()
+    if not value.isdigit():
+        return None
+    return value
 
 
 def _exact_paths(observation: object) -> tuple[str, ...] | None:
