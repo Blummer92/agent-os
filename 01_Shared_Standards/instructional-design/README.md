@@ -38,8 +38,11 @@ planning then packages that approved design through
 `assessment-blueprint-core-standard.md` without redefining its semantics.
 Lifecycle version transitions, change impact, stale validation, bounded
 invalidation, and revalidation scope then use
-`assessment-blueprint-lifecycle-standard.md`. All remain report-only and do not
-authorize grading, readiness, classroom use, production, or writes.
+`assessment-blueprint-lifecycle-standard.md`. A current validated blueprint then
+uses `assessment-sequencing-student-experience-standard.md` for section order,
+dependencies, student language, cognitive flow, accessibility, engagement, time,
+and teacher workload. All remain report-only and do not authorize grading,
+readiness, classroom use, production, or writes.
 
 ## Files
 
@@ -50,6 +53,7 @@ authorize grading, readiness, classroom use, production, or writes.
 - `assessment-design-standard.md` — target → claim → evidence → method contract and survey/mastery boundary
 - `assessment-blueprint-core-standard.md` — #837-preserving blueprint schema and fail-closed core validation
 - `assessment-blueprint-lifecycle-standard.md` — #1192 lifecycle, stale-state, change-impact, bounded-invalidation, and revalidation contract
+- `assessment-sequencing-student-experience-standard.md` — #839 section sequencing, dependencies, student language, cognitive flow, accessibility, engagement, time, and workload contract
 - `student-language-standard.md` — reusable student-facing language artifacts
 - `learning-science-rules.md` — classroom design rules for materials
 - `production-gates-and-compute.md` — hard-stop gates and efficiency rules
@@ -66,4 +70,4 @@ fields, standards, and output keys.
 
 ## Version
 
-0.12.0
+0.13.0
