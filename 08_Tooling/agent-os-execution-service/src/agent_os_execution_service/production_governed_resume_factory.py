@@ -97,6 +97,7 @@ def build_production_governed_resume_bindings_for_handoff(
             run_verifier=build_subprocess_verifier_runner(),
             configuration=configuration,
             evaluated_at=evaluated_at,
+            runtime_request=loaded.request,
         )
         return bootstrap.governed_resume_bindings(cancelled=_no_cancellation_requested)
     except ProductionGovernedResumeFactoryError:
