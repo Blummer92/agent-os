@@ -8,6 +8,7 @@ See `_common-overlay-rules.md` plus:
 - `01_Shared_Standards/notion/notion-navigation-index-standard.md`
 - `01_Shared_Standards/instructional-design/student-language-standard.md`
 - `01_Shared_Standards/instructional-design/material-quality-rubric.md`
+- `01_Shared_Standards/instructional-design/assessment-qa-evidence-review-standard.md` when assessment QA is in scope
 ## Owned Systems
 Test reports, regression evidence, release checklists.
 ## Allowed Write Surfaces
@@ -17,8 +18,9 @@ Production code changes unless explicitly scoped.
 ## Required Handoff Targets
 Test evidence, residual risk, pass/fail decision.
 ## Version
-0.1.2
+0.1.3
 ## Changelog
+- 0.1.3 binds assessment QA work to the canonical #841 Assessment QA and Evidence Review Standard without creating a new agent, generation authority, classroom-use authority, or external-write capability.
 - 0.1.2 inherits the student-language and material-quality rubric standards
   to run the focused rubric-language and completeness check required by
   #822.
