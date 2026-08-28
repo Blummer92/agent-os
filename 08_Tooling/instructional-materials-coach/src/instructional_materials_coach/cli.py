@@ -11,6 +11,7 @@ import sys
 from .content_spec import load_lesson_content
 from .docs_requests import build_docs_replace_requests
 from .drive_client import build_drive_service, get_credentials
+from .generation_context import compose_generation_context
 from .lesson_record import LEARNING_TYPES, SEVERITIES, LessonRecord, lesson_from_exception, record_lesson
 from .live_build import LiveBuildInput, build_live_materials
 from .slides_requests import build_slides_replace_requests
@@ -29,6 +30,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     build.add_argument("--doc-template", required=True)
     build.add_argument("--target-folder", required=True)
     build.add_argument("--material-requirement", default="")
+    build.add_argument("--current-curriculum-evidence", default="")
     build.add_argument("--artifact-manifests", default="")
     build.add_argument("--visual-candidates", default="")
     build.add_argument("--visual-source-revision", default="")
@@ -83,14 +85,15 @@ def main(argv: list[str] | None = None) -> int:
         print("Refusing to run: set ALLOW_WRITE=true to confirm this should write to Drive.", file=sys.stderr)
         return 1
 
-    context = {"slides_template": args.slides_template, "doc_template": args.doc_template, "target_folder": args.target_folder, "content_path": args.content, "material_requirement_path": args.material_requirement}
+    context = {"slides_template": args.slides_template, "doc_template": args.doc_template, "target_folder": args.target_folder, "content_path": args.content, "material_requirement_path": args.material_requirement, "current_curriculum_evidence_path": args.current_curriculum_evidence}
     try:
         content = load_lesson_content(args.content)
         context["content_title"] = content.title
         if not args.material_requirement:
             raise RuntimeError("Governed MaterialRequirement JSON is required before a connected build.")
+        material_requirement = _load_json(args.material_requirement, default=None)
         visual_plan = plan_governed_visual_reuse(
-            _load_json(args.material_requirement, default=None),
+            material_requirement,
             artifact_manifests=_load_json(args.artifact_manifests, default=[]),
             visual_candidates=_load_json(args.visual_candidates, default=[]),
             source_revision=args.visual_source_revision,
@@ -101,6 +104,19 @@ def main(argv: list[str] | None = None) -> int:
         context["selected_asset_ids"] = list(visual_plan.selected_asset_ids)
         if visual_plan.final_production_blocked:
             raise RuntimeError(f"Governed visual reuse gate blocked final production: {visual_plan.outcome}; image_gap_briefs={len(visual_plan.image_gap_briefs)}")
+
+        # CW7C adoption is additive for existing direct CLI callers. The teacher-request
+        # orchestration path supplies this packet; legacy explicit CLI builds continue
+        # to operate until their callers are migrated rather than fabricating evidence.
+        if args.current_curriculum_evidence:
+            content = compose_generation_context(
+                content,
+                material_requirement=material_requirement,
+                current_curriculum_evidence=_load_json(args.current_curriculum_evidence, default=None),
+                selected_asset_ids=tuple(visual_plan.selected_asset_ids),
+                governed_visual_plan=visual_plan.cohesive_visual_plan_result,
+            )
+            context["generation_context_tokens"] = sorted(content.context_tokens)
 
         credentials = get_credentials(args.client_secret, args.token_path)
         receipt = build_live_materials(
