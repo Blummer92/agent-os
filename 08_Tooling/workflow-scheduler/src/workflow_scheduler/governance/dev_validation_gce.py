@@ -32,6 +32,9 @@ REPO_URL="https://github.com/Blummer92/agent-os.git"
 TEST_PYTHON="/usr/local/libexec/agent-os-dev-validation-python"
 MATERIALS_ID="instructional-materials-current-curriculum-suite"
 MATERIALS_IMPORT_ROOTS=("src","08_Tooling/instructional-materials-coach/src")
+MATERIALS_IMPORT_PRELUDE="import os,sys;repo=os.getcwd();sys.path[:0]=[os.path.join(repo,path) for path in ('src','08_Tooling/instructional-materials-coach/src')]"
+MATERIALS_IMPORT_PROBE=MATERIALS_IMPORT_PRELUDE+";import instructional_materials_coach,instructional_workflow_contracts"
+MATERIALS_PYTEST_RUNNER=MATERIALS_IMPORT_PROBE+";import pytest;raise SystemExit(pytest.main(tuple(sys.argv[1:])))"
 VALIDATION_ARGS={
  "remote-validation-suite":("-m","pytest","tests/agent_os_remote_validation"),
  MATERIALS_ID:(
@@ -94,14 +97,14 @@ try:
      env={"PATH":os.environ.get("PATH",""),"HOME":home,"TMPDIR":tmp,"PYTHONDONTWRITEBYTECODE":"1","PYTHONNOUSERSITE":"1"}
      import_ready=True
      if validation_id==MATERIALS_ID:
-      env["PYTHONPATH"]=os.pathsep.join(os.path.join(repo,path) for path in MATERIALS_IMPORT_ROOTS)
-      probe=run((TEST_PYTHON,"-c","import instructional_materials_coach, instructional_workflow_contracts"),cwd=repo,env=env,timeout=10)
+      probe=run((TEST_PYTHON,"-c",MATERIALS_IMPORT_PROBE),cwd=repo,env=env,timeout=10)
       if probe.returncode!=0:
        out,out_truncated=bounded(probe.stdout);err,err_truncated=bounded(probe.stderr)
        result.update({"status":"failure","reason_codes":["validation-import-preflight-failed"],"exit_code":probe.returncode,"stdout_tail":out,"stderr_tail":err,"stdout_truncated":out_truncated,"stderr_truncated":err_truncated});import_ready=False
      if import_ready:
       try:
-       completed=run((TEST_PYTHON,*test_args),cwd=repo,env=env,timeout=TEST_TIMEOUT)
+       command=(TEST_PYTHON,"-c",MATERIALS_PYTEST_RUNNER,*test_args[2:]) if validation_id==MATERIALS_ID else (TEST_PYTHON,*test_args)
+       completed=run(command,cwd=repo,env=env,timeout=TEST_TIMEOUT)
        out,out_truncated=bounded(completed.stdout);err,err_truncated=bounded(completed.stderr)
        result.update({"status":"success" if completed.returncode==0 else "failure","reason_codes":["validation-passed" if completed.returncode==0 else "validation-failed"],"exit_code":completed.returncode,"stdout_tail":out,"stderr_tail":err,"stdout_truncated":out_truncated,"stderr_truncated":err_truncated})
       except subprocess.TimeoutExpired as exc:
