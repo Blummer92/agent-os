@@ -1,0 +1,3 @@
+# Instructional Design Standards Changelog
+
+- 0.13.0 / #839 — Added the bounded Assessment Sequencing and Student Experience standard and schema. The contract consumes #837 assessment-design semantics, #838 blueprint structure, and #1192 lifecycle/change-impact behavior; defines deterministic dependency-aware sequencing, survey/mastery separation, student-language and vocabulary eligibility, cognitive-flow/accessibility/engagement review, student-time and teacher-workload feasibility, finite validation outcomes, structured output, bounded preservation, and downstream handoffs; and preserves report-only authority with no classroom-use, grading, readiness, production, publication, source-of-truth, or external-write authorization.
