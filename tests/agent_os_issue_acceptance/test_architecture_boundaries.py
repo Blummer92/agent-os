@@ -88,6 +88,7 @@ DOMAIN_RULES: tuple[tuple[str, frozenset[str], tuple[str, ...]], ...] = (
                 "documentation_metrics",
                 "issue_operational_state_acquisition",
                 "issue_operational_state_producer",
+                "live_compute_control_binding",
                 "post_pr_state_audit",
                 "sprint_dashboard",
                 "sprint_evidence_ingestion",
