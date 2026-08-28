@@ -58,26 +58,16 @@ chmod 0600 "$requirements"
 # the qualified host's existing runtime dependencies but cannot consume user-site
 # packages or caller PYTHONPATH.
 PYTHONPATH="$STAGING_ROOT/site" PYTHONNOUSERSITE=1 "$PYTHON" - <<'PY_VERIFY'
-import iniconfig
-import packaging
-import pluggy
-import pygments
-import pytest
+from importlib.metadata import version
 
 expected = {
     "pytest": "8.3.5",
     "iniconfig": "2.1.0",
     "packaging": "25.0",
     "pluggy": "1.5.0",
-    "pygments": "2.19.2",
+    "Pygments": "2.19.2",
 }
-actual = {
-    "pytest": pytest.__version__,
-    "iniconfig": iniconfig.__version__,
-    "packaging": packaging.__version__,
-    "pluggy": pluggy.__version__,
-    "pygments": pygments.__version__,
-}
+actual = {name: version(name) for name in expected}
 if actual != expected:
     raise SystemExit(f"dev-validation runtime install refused: version mismatch: {actual!r}")
 PY_VERIFY
