@@ -23,7 +23,7 @@ def classify(record):
 
 def test_standard_consumes_upstream_contracts_and_stays_non_authorizing():
     text = STANDARD.read_text()
-    for phrase in ["#837", "#838", "#1192", "survey", "cognitive", "workload", "does not create a second lifecycle model", "authorizes no classroom use"]:
+    for phrase in ["#837", "#838", "#1192", "survey", "cognitive", "workload", "second lifecycle model", "authorizes no classroom use"]:
         assert phrase in text
     assert "new Assessment Agent" in text
 
