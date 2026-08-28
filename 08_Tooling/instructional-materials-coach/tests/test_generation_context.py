@@ -6,17 +6,24 @@ from pathlib import Path
 import pytest
 
 from instructional_materials_coach.content_spec import content_from_dict
+from instructional_materials_coach.docs_requests import build_docs_replace_requests
 from instructional_materials_coach.generation_context import (
     GenerationContextError,
     compose_generation_context,
 )
+from instructional_materials_coach.slides_requests import build_slides_replace_requests
+from instructional_materials_coach.visual_reuse import plan_governed_visual_reuse
 
 ROOT = Path(__file__).parents[3]
 FIXTURES = ROOT / "tests" / "fixtures" / "instructional_workflow_contracts"
 
 
+def _fixture(name: str):
+    return json.loads((FIXTURES / name).read_text())
+
+
 def _requirement():
-    return json.loads((FIXTURES / "valid_material_requirement_v2.json").read_text())
+    return _fixture("valid_material_requirement_v2.json")
 
 
 def _ref(stable_id: str):
@@ -89,12 +96,28 @@ def _content():
     )
 
 
+def _governed_visual_plan():
+    plan = plan_governed_visual_reuse(
+        _requirement(),
+        artifact_manifests=[_fixture("valid_artifact_manifest.json")],
+        visual_candidates=[_fixture("valid_visual_asset_compatibility_v2.json")],
+        source_revision="visual-library-snapshot-v2",
+        changed_dependency_keys=[],
+        impact_map={},
+    )
+    assert plan.outcome == "visuals-ready"
+    assert plan.cohesive_visual_plan_result is not None
+    return plan
+
+
 def test_photography_context_augments_instead_of_replacing_authored_content():
+    visual_plan = _governed_visual_plan()
     content = compose_generation_context(
         _content(),
         material_requirement=_requirement(),
         current_curriculum_evidence=_photography_evidence(),
-        selected_asset_ids=("asset-1",),
+        selected_asset_ids=visual_plan.selected_asset_ids,
+        governed_visual_plan=visual_plan.cohesive_visual_plan_result,
     )
     tokens = content.placeholder_tokens()
     assert tokens["title"] == "Elements & Composition"
@@ -107,6 +130,55 @@ def test_photography_context_augments_instead_of_replacing_authored_content():
     assert "cropping explicitly" in tokens["curriculum_teacher_confirmed_cropping"]
     assert tokens["context_selected_asset_ids"] == "asset-1"
     assert tokens["context_production_authorized"] == "false"
+
+    assignments = json.loads(tokens["context_selected_visual_assignments"])
+    assert assignments[0]["role_type"] == "worked-example"
+    assert assignments[0]["intended_placement"]
+    assert assignments[0]["selected_candidate"]["asset_reference"]["asset_id"] == "asset-1"
+    assert assignments[0]["selected_candidate"]["manifest_reference"]["external_file_id"] == "file-1"
+    assert assignments[0]["compatibility_evidence"]["approved_use"]["material_types"] == ["worksheet"]
+    assert assignments[0]["compatibility_evidence"]["approved_use"]["role_types"] == ["worked-example"]
+
+
+def test_governed_visual_assignment_tokens_reach_docs_and_slides_request_builders():
+    visual_plan = _governed_visual_plan()
+    content = compose_generation_context(
+        _content(),
+        material_requirement=_requirement(),
+        current_curriculum_evidence=_photography_evidence(),
+        selected_asset_ids=visual_plan.selected_asset_ids,
+        governed_visual_plan=visual_plan.cohesive_visual_plan_result,
+    )
+    expected = content.context_tokens["context_selected_visual_assignments"]
+    for requests in (build_docs_replace_requests(content), build_slides_replace_requests(content)):
+        by_token = {
+            request["replaceAllText"]["containsText"]["text"]: request["replaceAllText"]["replaceText"]
+            for request in requests
+        }
+        assert by_token["{{context_selected_visual_assignments}}"] == expected
+        assert by_token["{{context_selected_asset_ids}}"] == "asset-1"
+
+
+def test_selected_asset_ids_without_governed_visual_plan_fail_closed():
+    with pytest.raises(GenerationContextError, match="require governed #944 visual-plan evidence"):
+        compose_generation_context(
+            _content(),
+            material_requirement=_requirement(),
+            current_curriculum_evidence=_photography_evidence(),
+            selected_asset_ids=("asset-1",),
+        )
+
+
+def test_selected_asset_identity_mismatch_fails_closed():
+    visual_plan = _governed_visual_plan()
+    with pytest.raises(GenerationContextError, match="does not match governed visual plan"):
+        compose_generation_context(
+            _content(),
+            material_requirement=_requirement(),
+            current_curriculum_evidence=_photography_evidence(),
+            selected_asset_ids=("different-asset",),
+            governed_visual_plan=visual_plan.cohesive_visual_plan_result,
+        )
 
 
 def test_unresolved_current_curriculum_evidence_fails_closed():
