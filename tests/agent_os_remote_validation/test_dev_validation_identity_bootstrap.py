@@ -140,7 +140,7 @@ def test_fixed_materials_import_bootstrap_executes_bounded_suite() -> None:
         "sys.path[:0]=[os.path.join(repo,path) for path in "
         "('src','08_Tooling/instructional-materials-coach/src')];"
         "import instructional_materials_coach,instructional_workflow_contracts;"
-        "import pytest;raise SystemExit(pytest.main(tuple(sys.argv[1:])))"
+        "import pytest;raise SystemExit(pytest.main(list(sys.argv[1:])))"
     )
     runtime = Path(dev_validation_gce.DEV_VALIDATION_PYTHON)
     executable = str(runtime) if runtime.is_file() else sys.executable
