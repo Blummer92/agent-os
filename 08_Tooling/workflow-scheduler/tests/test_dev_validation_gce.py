@@ -28,7 +28,7 @@ def test_host_command_contains_only_fixed_runner_and_validated_identity():
  command=live._host_command(request());assert live.DEV_VALIDATION_PYTHON in command;assert "tests/agent_os_remote_validation" in command;assert BRANCH in command;assert SHA in command;assert "sudo" not in command;assert "pip install" not in command
 
 def test_host_runner_uses_only_governed_test_runtime():
- source=live._HOST_RUNNER_SOURCE;assert 'TEST_PYTHON="/usr/local/libexec/agent-os-dev-validation-python"' in source;assert '(TEST_PYTHON,*TEST_ARGS)' in source;assert "pip install" not in source;assert "sudo" not in source;assert "shutil.which" not in source;assert "test-runtime-unavailable" in source;assert "test-runtime-invalid" in source
+ source=live._HOST_RUNNER_SOURCE;assert 'TEST_PYTHON="/usr/local/libexec/agent-os-dev-validation-python"' in source;assert "test_args=VALIDATION_ARGS[validation_id]" in source;assert "(TEST_PYTHON,*test_args)" in source;assert "pip install" not in source;assert "sudo" not in source;assert "shutil.which" not in source;assert "test-runtime-unavailable" in source;assert "test-runtime-invalid" in source
 
 def test_successful_transport_remains_non_authorizing():
  result=live.execute_dev_validation_transport(ingress(),claims=claims(),adapter=Adapter());e=result["dev_validation"];assert e["status"]=="success";assert e["tested_sha"]==SHA;assert e["cleanup_complete"] is True;assert e["scheduler_invoked"] is False;assert e["execution_authorized"] is False;assert e["publication_invoked"] is False;assert e["merge_authorized"] is False

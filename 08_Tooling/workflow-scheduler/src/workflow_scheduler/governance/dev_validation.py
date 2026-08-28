@@ -1,7 +1,7 @@
-"""Fixed, non-authorizing developer-validation contract for #1432.
+"""Fixed, non-authorizing developer-validation contract for #1432/#1454.
 
 This module deliberately exposes no caller-supplied command or argv surface.
-One validation identity maps to one repository-owned argv tuple.  The GCE
+Each validation identity maps to one repository-owned argv tuple. The GCE
 transport may carry only the validated repository/issue/branch/SHA/identity
 bindings produced here.
 """
@@ -17,7 +17,23 @@ from typing import Literal
 REPOSITORY = "Blummer92/agent-os"
 VALIDATION_ID = "remote-validation-suite"
 VALIDATION_ARGV = ("python", "-m", "pytest", "tests/agent_os_remote_validation")
-VALIDATION_REGISTRY = MappingProxyType({VALIDATION_ID: VALIDATION_ARGV})
+MATERIALS_VALIDATION_ID = "instructional-materials-current-curriculum-suite"
+MATERIALS_VALIDATION_ARGV = (
+    "python",
+    "-m",
+    "pytest",
+    "08_Tooling/instructional-materials-coach/tests/test_generation_context.py",
+    "08_Tooling/instructional-materials-coach/tests/test_content_spec.py",
+    "08_Tooling/instructional-materials-coach/tests/test_cli.py",
+    "tests/test_current_curriculum_state.py",
+    "tests/test_current_curriculum_evidence.py",
+)
+VALIDATION_REGISTRY = MappingProxyType(
+    {
+        VALIDATION_ID: VALIDATION_ARGV,
+        MATERIALS_VALIDATION_ID: MATERIALS_VALIDATION_ARGV,
+    }
+)
 _SHA40 = re.compile(r"^[0-9a-f]{40}$", re.ASCII)
 _BRANCH = re.compile(r"^agent/[A-Za-z0-9._/-]{1,180}$", re.ASCII)
 
