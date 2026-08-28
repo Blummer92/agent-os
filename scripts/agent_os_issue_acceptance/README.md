@@ -41,7 +41,31 @@ Use `--format json` for stable machine-readable report fields.
 | IssuePlan current-state evidence | `issueplan_current_state.py` |
 | Canonical issue operational-state projection and operating-mode decision | `issue_operational_state.py`, `operating_mode.py` |
 | Approval records and approved-execution projection | `approval_records.py`, `approved_execution_projection.py` |
-| Reporting | `acceptance_report_transport.py`, `documentation_advisory.py`, `documentation_gap_report.py`, `documentation_metrics.py`, `sprint_dashboard.py`, `coding_command_center_handoff.py`, `compute_control_projection.py`, `compute_control_producer.py` |
+| Reporting | `acceptance_report_transport.py`, `documentation_advisory.py`, `documentation_gap_report.py`, `documentation_metrics.py`, `sprint_dashboard.py`, `coding_command_center_handoff.py`, `compute_control_projection.py`, `compute_control_producer.py`, `issue_operational_state_acquisition.py`, `live_compute_control_binding.py` |
+
+## Live compute-control binding (#1460)
+
+`live_compute_control_binding.py` is the production caller for
+`issue_operational_state_acquisition.py` (#1451): given already-acquired
+canonical evidence, it performs the one live GitHub issue read, wires every
+#1451 injected-evidence input, and invokes the unchanged
+#1451 -> #1441 -> #1439/#1419 chain to return one serialized
+`agent-os-compute-control-projection/1.0`. Canonical owner for each #1451
+input:
+
+| #1451 input | Canonical owner |
+|---|---|
+| `CurrentIssueSnapshot` | `LiveCurrentIssueSnapshotReader`, composing `agent_os_candidate_packet_live_input.LiveIssueReader` (one live issue read over a caller-injected `SingleIssueTransport`) with `agent_os_github_issue_provider.revision.issue_source_revision`. `source_revision` and `lifecycle_stage` remain caller-supplied (no canonical PR-linkage/lifecycle-stage classifier exists yet). |
+| Approval applicability | Caller-supplied, from the existing `approval_records.evaluate_approval_applicability`. |
+| `DependencyState` / `ValidationState` | `dependency_state_from_evidence` / `validation_state_from_evidence`, translating the existing `DependencyEvidence`/`ValidationEvidence` produced by a caller-injected `agent_os_candidate_packet_live_input.LiveRepositoryEvidenceReader` (or any other conforming `RepositoryEvidenceReader`). |
+| `PrimaryIssueClaim` tuple | Caller-supplied. No canonical live PR-linkage reader exists. |
+| `FreshnessState` | Caller-supplied. No general-purpose currentness authority exists outside the domain-specific ones already reused above. |
+| Merge / Ready-for-Review / closure / execution / external-write authority | Caller-supplied, from `merge_authorization.py`, `lifecycle_mutation_guard.py`, and the existing execution/external-write authorization owners; passed through unchanged. |
+
+No GitHub client, evidence model, or authority is created by this module; see
+its docstring for the full reasoning, including why
+`08_Tooling/agent-os-execution-service`'s `HostGitHubReadTransport` cannot be
+imported here (the dependency direction runs the other way).
 
 `documentation_metrics.py` is bounded, pure-local, supplied-evidence-only, deterministic, report-only, non-scheduling, non-retaining, and non-authoritative; this map creates no API or physical split.
 
