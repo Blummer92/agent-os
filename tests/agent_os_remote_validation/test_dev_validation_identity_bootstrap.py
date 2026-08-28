@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import os
 import shlex
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -127,6 +130,33 @@ def test_materials_identity_uses_only_fixed_repository_import_roots() -> None:
     assert 'sys.argv[7:]' not in source
     assert 'pip install' not in source
     assert 'shell=True' not in source
+
+
+def test_fixed_materials_import_environment_executes_bounded_suite() -> None:
+    import_roots = (
+        ROOT / "src",
+        ROOT / "08_Tooling" / "instructional-materials-coach" / "src",
+    )
+    with tempfile.TemporaryDirectory(prefix="agent-os-materials-bootstrap-") as temp_dir:
+        env = {
+            "PATH": os.environ.get("PATH", ""),
+            "HOME": temp_dir,
+            "TMPDIR": temp_dir,
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONPATH": os.pathsep.join(str(path) for path in import_roots),
+        }
+        completed = subprocess.run(
+            (sys.executable, *dev_validation.MATERIALS_VALIDATION_ARGV[1:]),
+            cwd=ROOT,
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "passed" in completed.stdout
 
 
 def test_host_command_carries_only_fixed_runner_plus_identity_arguments() -> None:
