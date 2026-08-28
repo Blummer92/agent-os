@@ -15,7 +15,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 | QA/Test Standards | 0.1.0 |
 | Dashboard Governance | 0.1.0 |
 | Dashboard Migration Verification | 0.1.0 |
-| Instructional Design Standards | 0.15.0 |
+| Instructional Design Standards | 0.16.0 |
 | Agent Orchestrator | 0.3.0 |
 | GitHub Service Agent | 0.7.0 |
 | Unit Alignment Agent | 0.6.0 |
@@ -47,7 +47,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 
 **Notion Standards** `0.4.0` defines the canonical Draft Mode, Append-Only Safe Log Mode, and Canonical Update Mode write-safety vocabulary in `notion-record-update-safety.md` (#1103). Mode classification never creates authority; existing write authorization remains canonical in `00_Governance/write-authorization-policy.md`.
 
-**Instructional Design Standards** `0.15.0` adds the Assessment Dashboard Workspace Standard (#843): provider-neutral dashboard/section state, planning-only statuses, nonlinear editing, contextual guidance, warning-to-repair behavior, progressive disclosure, and bounded preservation while consuming #1192/#839/#841 by reference. `0.14.0` added the Assessment QA and Evidence Review Standard (#841); `0.13.0` added the Assessment Sequencing and Student Experience Standard (#839); `0.12.0` added the Assessment Blueprint Lifecycle Standard (#1192); `0.11.0` added the Assessment Blueprint Core Standard (#838); `0.10.0` integrated the Unit Creation Conversational Contract (#1214). These changes create no Assessment Agent and authorize no grading, readiness, classroom use, production, publication, or external writes.
+**Instructional Design Standards** `0.16.0` adds the synthetic/noncanonical Unit 0 Assessment Reference Validation Standard (#842), composing #837/#838/#1192/#839/#841/#843 through focused integration fixtures without redefining upstream semantics or creating canonical curriculum content. `0.15.0` added the Assessment Dashboard Workspace Standard (#843); `0.14.0` added the Assessment QA and Evidence Review Standard (#841); `0.13.0` added the Assessment Sequencing and Student Experience Standard (#839); `0.12.0` added the Assessment Blueprint Lifecycle Standard (#1192); `0.11.0` added the Assessment Blueprint Core Standard (#838); `0.10.0` integrated the Unit Creation Conversational Contract (#1214). These changes create no Assessment Agent and authorize no grading, readiness, classroom use, production, publication, or external writes.
 
 **QA / Test Agent** `0.2.1` binds assessment QA work to the #841 Assessment QA and Evidence Review Standard while preserving the post-#1324 canonical technical validation/evidence role, GitHub Service Agent repository-write ownership, and existing non-authorizing boundaries. `0.2.0` aligned the overlay with the post-#1324 technical architecture (#1342).
 
