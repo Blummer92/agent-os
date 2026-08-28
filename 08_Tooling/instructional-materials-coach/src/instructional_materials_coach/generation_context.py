@@ -7,8 +7,13 @@ existing #975 evidence packet, #973 resolver, MaterialRequirement validator, and
 """
 from __future__ import annotations
 
-from typing import Any, Mapping
+import json
+from typing import Any
 
+from instructional_workflow_contracts import ValidationResult, ValidationStatus
+from instructional_workflow_contracts.cohesive_visual_plan import (
+    CONTRACT_ID as COHESIVE_VISUAL_PLAN_CONTRACT_ID,
+)
 from instructional_workflow_contracts.current_curriculum_state import (
     resolve_current_curriculum_state,
 )
@@ -29,14 +34,15 @@ def compose_generation_context(
     material_requirement: object,
     current_curriculum_evidence: object,
     selected_asset_ids: tuple[str, ...] = (),
+    governed_visual_plan: object | None = None,
 ) -> LessonContent:
     """Augment lesson content with current governed evidence without replacing it.
 
     Existing authored lesson tokens always remain present. Current owner/context
     evidence is added as namespaced tokens, MaterialRequirement identity and
-    requirements are preserved, and selected governed visual identities are
-    carried forward. Any blocked/manual-review #973 state fails closed before
-    generation.
+    requirements are preserved, and selected governed visual identities plus
+    their existing #944 assignment/use evidence are carried forward. Any
+    blocked/manual-review #973 state fails closed before generation.
     """
     requirement_result = validate_material_requirement(material_requirement)
     if requirement_result.record is None:
@@ -54,6 +60,15 @@ def compose_generation_context(
             "Current curriculum evidence requires resolution before generation"
             + (f": {reasons}" if reasons else "")
         )
+
+    visual_asset_ids, visual_assignments = _visual_context(governed_visual_plan)
+    supplied_asset_ids = tuple(sorted(set(selected_asset_ids)))
+    if supplied_asset_ids and governed_visual_plan is None:
+        raise GenerationContextError(
+            "Selected visual identities require governed #944 visual-plan evidence"
+        )
+    if supplied_asset_ids and supplied_asset_ids != visual_asset_ids:
+        raise GenerationContextError("Selected visual identity does not match governed visual plan")
 
     requirement = requirement_result.record.to_dict()
     tokens: dict[str, str] = {}
@@ -75,7 +90,8 @@ def compose_generation_context(
             ),
             "context_template_ids": _join(item["template_id"] for item in requirement["templates"]),
             "context_requirement_asset_ids": _join(item["asset_id"] for item in requirement["assets"]),
-            "context_selected_asset_ids": _join(sorted(set(selected_asset_ids))),
+            "context_selected_asset_ids": _join(visual_asset_ids),
+            "context_selected_visual_assignments": visual_assignments,
         }
     )
 
@@ -96,6 +112,41 @@ def compose_generation_context(
     tokens["context_external_write_authorized"] = "false"
 
     return content.with_context_tokens(tokens)
+
+
+def _visual_context(value: object | None) -> tuple[tuple[str, ...], str]:
+    if value is None:
+        return (), "[]"
+    if type(value) is not ValidationResult:
+        raise GenerationContextError("Governed visual plan must be exact validated #944 evidence")
+    if value.status is not ValidationStatus.VALID or value.record is None:
+        raise GenerationContextError("Governed visual plan is not usable")
+    if value.record.contract_version != COHESIVE_VISUAL_PLAN_CONTRACT_ID:
+        raise GenerationContextError("Governed visual plan contract is incompatible")
+
+    payload = value.record.to_dict()
+    if payload.get("outcome") != "complete-set" or payload.get("manual_review_required") is not False:
+        raise GenerationContextError("Governed visual plan is not complete for generation")
+    authority = payload.get("authority")
+    if type(authority) is not dict or any(authority.values()):
+        raise GenerationContextError("Governed visual plan authority must remain false")
+
+    assignments = [
+        *payload.get("required_role_assignments", []),
+        *payload.get("optional_role_assignments", []),
+    ]
+    asset_ids: set[str] = set()
+    for assignment in assignments:
+        try:
+            asset_id = assignment["selected_candidate"]["asset_reference"]["asset_id"]
+        except (KeyError, TypeError):
+            raise GenerationContextError("Governed visual assignment identity is incomplete") from None
+        if not isinstance(asset_id, str) or not asset_id:
+            raise GenerationContextError("Governed visual assignment asset identity is invalid")
+        asset_ids.add(asset_id)
+
+    encoded = json.dumps(assignments, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return tuple(sorted(asset_ids)), encoded
 
 
 def _decision_token(decision_key: str) -> str:
