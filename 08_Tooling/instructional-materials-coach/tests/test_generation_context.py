@@ -12,6 +12,11 @@ from instructional_materials_coach.generation_context import (
     compose_generation_context,
 )
 from instructional_materials_coach.slides_requests import build_slides_replace_requests
+from instructional_materials_coach.teacher_reference import (
+    build_unit_vocabulary_reference,
+    build_worked_examples_reference,
+    render_teacher_reference_markdown,
+)
 from instructional_materials_coach.visual_reuse import plan_governed_visual_reuse
 
 ROOT = Path(__file__).parents[3]
@@ -198,3 +203,83 @@ def test_context_cannot_replace_authored_tokens():
     content = _content().with_context_tokens({"title": "replacement"})
     with pytest.raises(ValueError, match="collides"):
         content.placeholder_tokens()
+
+
+def test_typography_teacher_reference_projection_reuses_1416_visual_identity_and_preserves_prompt():
+    visual_plan = _governed_visual_plan()
+    context = compose_generation_context(
+        _content(),
+        material_requirement=_requirement(),
+        current_curriculum_evidence=_photography_evidence(),
+        selected_asset_ids=visual_plan.selected_asset_ids,
+        governed_visual_plan=visual_plan.cohesive_visual_plan_result,
+    )
+    assignments = json.loads(context.context_tokens["context_selected_visual_assignments"])
+    role_id = assignments[0]["role_id"]
+
+    vocabulary = build_unit_vocabulary_reference(
+        unit_title="Typography & Visual Communication",
+        vocabulary_rows=[
+            {
+                "kind": "vocabulary",
+                "day_lesson": "Day 2",
+                "term": "hierarchy",
+                "student_friendly_definition": "Visual order that shows what to notice first, next, and last.",
+                "expectation": "core",
+                "icon_requirement": "required",
+                "icon_role_id": role_id,
+                "source_reference": "unit-alignment:hierarchy",
+            },
+            {
+                "kind": "scaffold",
+                "day_lesson": "Day 1",
+                "term": "font menu",
+                "student_friendly_definition": "A bounded font-choice scaffold.",
+                "expectation": "unspecified",
+                "icon_requirement": "not-needed",
+            },
+        ],
+        governed_visual_assignments=context.context_tokens["context_selected_visual_assignments"],
+    )
+    assert vocabulary["rows"][0]["icon_status"] == "approved-existing"
+    assert vocabulary["rows"][0]["icon_preview"]["asset_id"] == "asset-1"
+    assert vocabulary["rows"][0]["icon_preview"]["external_file_id"] == "file-1"
+    assert vocabulary["excluded_scaffolds"] == ["font menu"]
+
+    prompt = "Create a non-UI business-card comparison showing strong and weak hierarchy."
+    examples = build_worked_examples_reference(
+        unit_title="Typography & Visual Communication",
+        modeling_rows=[
+            {
+                "day_lesson": "Day 2",
+                "skill_learning_purpose": "Compare strong and weak hierarchy.",
+                "example_role": "comparison",
+                "teacher_modeling_purpose": "Think aloud about what the eye notices first.",
+                "artifact_location": "tutorial step 3",
+                "tutorial_step": "Build business-card comparison",
+                "visual_role_id": role_id,
+                "expected_visual_description": "Strong and weak hierarchy examples.",
+                "source_constraints": "Teacher reference only.",
+            }
+        ],
+        visual_prompt_rows=[
+            {
+                "visual_role_id": role_id,
+                "generative": True,
+                "prompt": prompt,
+                "source_constraints": "current-prompt-evidence",
+            }
+        ],
+        governed_visual_assignments=context.context_tokens["context_selected_visual_assignments"],
+    )
+    assert examples["rows"][0]["visual_status"] == "approved-existing"
+    assert examples["rows"][0]["visual_prompt"] == prompt
+    assert "approved_use=" in examples["rows"][0]["source_reuse_safe_use_constraints"]
+    assert not any(vocabulary["authority"].values())
+    assert not any(examples["authority"].values())
+
+    rendered = render_teacher_reference_markdown(vocabulary)
+    assert "Typography & Visual Communication" in rendered
+    assert "hierarchy" in rendered
+    assert "font menu" in rendered
+    assert "grants no readiness" in rendered
