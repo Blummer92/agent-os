@@ -55,6 +55,7 @@ def _case(monkeypatch):
     authorization = _AuthorizationRead()
     authorization.status = publication.ExecutionAuthorizationSourceStatus.CURRENT
     authorization.evidence = authorization_evidence
+    authorization.authorized_operation = publication.PRE_PR_DEVELOPER_LOOP_OPERATION
     authorization.authorized_candidate_packet_id = candidate_packet.packet_id
     authorization.authorized_invocation_id = candidate_packet.invocation_id
 
@@ -187,6 +188,19 @@ def test_non_current_authorization_fails_before_publication(monkeypatch):
     with pytest.raises(
         publication.ExecutionInterfacePublicationError,
         match="execution authorization is not current",
+    ):
+        publication.publish_current_pre_pr_handoff(**case.kwargs)
+
+    assert case.calls == []
+
+
+def test_authorization_must_bind_pre_pr_operation(monkeypatch):
+    case = _case(monkeypatch)
+    case.authorization.authorized_operation = "aggregate-validation"
+
+    with pytest.raises(
+        publication.ExecutionInterfacePublicationError,
+        match="execution authorization is not bound to pre-pr-developer-loop",
     ):
         publication.publish_current_pre_pr_handoff(**case.kwargs)
 
