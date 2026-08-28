@@ -1,3 +1,9 @@
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "src"))
+
 from instructional_workflow_contracts.reusable_visual_identity import (
     IDENTITY_CONTRACT_ID,
     issue_reusable_visual_identity,
