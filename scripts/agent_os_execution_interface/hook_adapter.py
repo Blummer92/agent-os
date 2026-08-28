@@ -68,10 +68,12 @@ _PUBLICATION_CONTINUATION = (
     "that the Agent OS mission is unavailable. Reacquire the current authorized "
     "mission and its canonical request, route, authorization, checkpoint, "
     "ResumePlan, CandidatePacket, runtime, dependency-readiness, and pilot "
-    "evidence. If those current bindings select the governed runner, invoke the "
-    "existing #1243 publish_governed_handoff(...) seam through the owning "
-    "execution interface, then repeat discovery and resume only the exact "
-    "immutable handoff returned after durable publication. Do not synthesize a "
+    "evidence. If those current bindings select the governed runner, call the "
+    "repository execution-interface adapter publish_current_pre_pr_handoff(...), "
+    "which delegates to the existing #1243 publish_governed_handoff(...) owner. "
+    "This advisory hook does not itself publish a handoff or complete external "
+    "ChatGPT product integration. After durable publication, repeat discovery "
+    "and resume only the exact immutable handoff returned. Do not synthesize a "
     "handoff identity. Do not fabricate a descriptor or handoff and do not "
     "silently fall back to local git/gh tooling."
 )
@@ -177,7 +179,7 @@ def render_preflight_notice(result: GovernedRoutePreflightResult) -> str:
     elif result.status is GovernedRoutePreflightStatus.NOT_FOUND:
         body = (
             f"status=publication-required {target} ({reasons})\n"
-            "continuation=publish-governed-handoff owner=#1243 scheduler_invoked=false\n"
+            "continuation=execution-interface-adapter owner=#1237 publication-owner=#1243 scheduler_invoked=false\n"
             f"{_PUBLICATION_CONTINUATION}"
         )
     else:
