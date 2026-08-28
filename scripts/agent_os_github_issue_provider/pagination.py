@@ -27,6 +27,14 @@ PAGINATION_DIAGNOSTIC_KINDS = frozenset(
 )
 
 _MAX_REPOSITORY_ID_DIGITS = 20
+_MAX_QUERY_FIELDS = 3
+_MAX_QUERY_INTEGER_DIGITS = 10
+_REGISTERED_RELATION_RE = re.compile(r"[A-Za-z][A-Za-z0-9.-]*\Z")
+_CANONICAL_POSITIVE_INTEGER_RE = re.compile(r"[1-9][0-9]*\Z", re.ASCII)
+_LINK_RE = re.compile(r"\s*<([^>]*)>\s*(?:;\s*(.*))?\s*")
+_PARAM_RE = re.compile(
+    r"([a-zA-Z0-9!#$%&\'*+\-.^_`|~]+)\s*=\s*(?:([^\",;]+)|\"((?:[^\"\\]|\\.)*)\")"
+)
 
 
 class PaginationDiagnosticError(ValueError):
@@ -43,6 +51,51 @@ def _fail(kind: str, message: str) -> None:
     raise PaginationDiagnosticError(kind, message)
 
 
+def _normalize_relation(relation: str) -> str:
+    if _REGISTERED_RELATION_RE.fullmatch(relation):
+        return relation.lower()
+    return relation
+
+
+def _split_parameters(value: str) -> list[str]:
+    parameters: list[str] = []
+    current: list[str] = []
+    in_quotes = False
+    escaped = False
+
+    for char in value:
+        if in_quotes:
+            current.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_quotes = False
+            continue
+
+        if char == '"':
+            in_quotes = True
+            current.append(char)
+        elif char == ";":
+            parameter = "".join(current).strip()
+            if not parameter:
+                _fail("pagination:link-parse", "malformed Link parameter")
+            parameters.append(parameter)
+            current = []
+        else:
+            current.append(char)
+
+    if in_quotes:
+        _fail("pagination:link-parse", "malformed Link parameter")
+
+    parameter = "".join(current).strip()
+    if not parameter:
+        _fail("pagination:link-parse", "malformed Link parameter")
+    parameters.append(parameter)
+    return parameters
+
+
 def parse_link_header(value: str | None) -> dict[str, str]:
     if value is None:
         return {}
@@ -51,37 +104,45 @@ def parse_link_header(value: str | None) -> dict[str, str]:
     if not value.strip():
         _fail("pagination:link-empty", "Link header is present but empty")
 
-    link_regex = re.compile(r"\s*<([^>]*)>\s*(?:;\s*(.*))?\s*")
-    param_regex = re.compile(
-        r"([a-zA-Z0-9!#$%&\'*+\-.^_`|~]+)\s*=\s*(?:([^\",;]+)|\"([^\"]*)\")"
-    )
-
     relations: dict[str, str] = {}
 
     for part in _split_links(value):
-        match = link_regex.fullmatch(part)
+        match = _LINK_RE.fullmatch(part)
         if not match:
             _fail("pagination:link-parse", "malformed Link header")
 
         url, params_str = match.groups()
-        rel_found = False
-        if params_str:
-            for param_match in param_regex.finditer(params_str):
-                name, token_val, quoted_val = param_match.groups()
-                if name.lower() == "rel":
-                    rel_val = token_val or quoted_val
-                    if not rel_val:
-                        continue
-                    rel_found = True
-                    for rel in rel_val.split():
-                        if rel in relations:
-                            _fail(
-                                "pagination:link-parse",
-                                "duplicate or ambiguous Link relation",
-                            )
-                        relations[rel] = url
-        if not rel_found:
+        if not params_str:
             _fail("pagination:link-parse", "missing Link relation")
+
+        rel_values: list[str] = []
+        rel_parameter_count = 0
+        for parameter in _split_parameters(params_str):
+            param_match = _PARAM_RE.fullmatch(parameter)
+            if not param_match:
+                _fail("pagination:link-parse", "malformed Link parameter")
+            name, token_val, quoted_val = param_match.groups()
+            if name.lower() != "rel":
+                continue
+            rel_parameter_count += 1
+            if rel_parameter_count > 1:
+                _fail("pagination:link-parse", "duplicate Link rel parameter")
+            rel_val = token_val if token_val is not None else quoted_val
+            if not rel_val:
+                _fail("pagination:link-parse", "missing Link relation")
+            rel_values.extend(rel_val.split())
+
+        if rel_parameter_count != 1 or not rel_values:
+            _fail("pagination:link-parse", "missing Link relation")
+
+        for relation in rel_values:
+            normalized_relation = _normalize_relation(relation)
+            if normalized_relation in relations:
+                _fail(
+                    "pagination:link-parse",
+                    "duplicate or ambiguous Link relation",
+                )
+            relations[normalized_relation] = url
 
     return relations
 
@@ -139,11 +200,52 @@ def _split_links(value: str) -> list[str]:
     return links
 
 
-def _query_values(query: str) -> dict[str, list[str]]:
+def _query_values(query: str) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    if not query:
+        return {}, {}
+
+    raw_fields = query.split("&")
+    if len(raw_fields) > _MAX_QUERY_FIELDS or any(not field for field in raw_fields):
+        _fail("pagination:link-parse", "malformed or excessive next-link query")
+
+    try:
+        parsed_fields = parse_qsl(
+            query,
+            keep_blank_values=True,
+            strict_parsing=True,
+            max_num_fields=_MAX_QUERY_FIELDS,
+        )
+    except ValueError as error:
+        raise PaginationDiagnosticError(
+            "pagination:link-parse", "malformed or excessive next-link query"
+        ) from error
+
+    if len(parsed_fields) != len(raw_fields):
+        _fail("pagination:link-parse", "malformed next-link query")
+
     values: dict[str, list[str]] = {}
-    for name, value in parse_qsl(query, keep_blank_values=True):
+    raw_values: dict[str, list[str]] = {}
+    allowed_names = {"page", "per_page", "state"}
+
+    for raw_field, (name, value) in zip(raw_fields, parsed_fields):
+        raw_name, separator, raw_value = raw_field.partition("=")
+        if not separator or name not in allowed_names:
+            _fail("pagination:link-parse", "unexpected next-link query parameter")
+        if not raw_name:
+            _fail("pagination:link-parse", "malformed next-link query parameter")
         values.setdefault(name, []).append(value)
-    return values
+        raw_values.setdefault(name, []).append(raw_value)
+
+    return values, raw_values
+
+
+def _parse_canonical_positive_integer(raw_value: str, *, kind: str, message: str) -> int:
+    if (
+        len(raw_value) > _MAX_QUERY_INTEGER_DIGITS
+        or _CANONICAL_POSITIVE_INTEGER_RE.fullmatch(raw_value) is None
+    ):
+        _fail(kind, message)
+    return int(raw_value)
 
 
 def _validate_repository_path(
@@ -191,6 +293,8 @@ def validated_next_page(
         _fail("pagination:next-scheme", "next link must use HTTPS")
     if parsed.netloc != "api.github.com":
         _fail("pagination:next-host", "next link changed the API authority")
+    if parsed.fragment:
+        _fail("pagination:link-parse", "next link must not contain a fragment")
 
     _validate_repository_path(
         parsed.path,
@@ -198,18 +302,17 @@ def validated_next_page(
         trusted_repository_identity=trusted_repository_identity,
     )
 
-    query = _query_values(parsed.query)
+    query, raw_query = _query_values(parsed.query)
     page_values = query.get("page")
     if page_values is None:
         _fail("pagination:next-page-missing", "next link is missing page")
     if len(page_values) != 1:
         _fail("pagination:next-page-ambiguous", "next link has multiple page values")
-    try:
-        page = int(page_values[0])
-    except (TypeError, ValueError) as error:
-        raise PaginationDiagnosticError(
-            "pagination:next-page-invalid", "next link has invalid page"
-        ) from error
+    page = _parse_canonical_positive_integer(
+        raw_query["page"][0],
+        kind="pagination:next-page-invalid",
+        message="next link has invalid page",
+    )
     if page <= current_page:
         _fail("pagination:next-page-non-advancing", "next link does not advance")
 
@@ -222,13 +325,11 @@ def validated_next_page(
             )
         linked_per_page_value = linked_per_page_values[0]
         if linked_per_page_value:
-            try:
-                linked_per_page = int(linked_per_page_value)
-            except (TypeError, ValueError) as error:
-                raise PaginationDiagnosticError(
-                    "pagination:next-per-page-invalid",
-                    "next link has invalid per_page",
-                ) from error
+            linked_per_page = _parse_canonical_positive_integer(
+                raw_query["per_page"][0],
+                kind="pagination:next-per-page-invalid",
+                message="next link has invalid per_page",
+            )
             if linked_per_page != per_page:
                 _fail(
                     "pagination:next-per-page-changed",

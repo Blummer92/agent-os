@@ -33,7 +33,15 @@ An issue number, branch name, profile, previous success, build ID, or gateway re
 An accepted invocation requires agreement across repository, requested ref, expected SHA, resolved SHA, request fingerprint and revision, validation-plan ID, command-plan ID, dispatch decision ID and identity, authorization ID and active interval, profile, selector version, command-set digest, ordered fixed argv, and provider-configuration fingerprint.
 The resolved SHA must equal the expected SHA before invocation acceptance.
 
-`prepare_cloud_build_provider_invocation` (#804) calls the public `validate_validation_command_plan` before touching any command-plan field or deriving an ID: `ValidationCommandPlan` performs no field validation of its own, so an exact-type plan with a malformed field would otherwise reach an unguarded comparison and raise. A malformed plan, or one whose `validation_plan_id` is not the standard positive-PR `validation-plan:` schema (pre-PR candidate plans are a distinct, non-launching workflow), fails closed to a bounded manual-review result instead. `dispatch_identity` is likewise never trusted as supplied: the dispatch-guard boundary independently recomputes it from repository, head SHA, profile, selector version, command-set digest, and validation-plan ID before a decision ID is accepted, so changing `dispatch_identity` and recomputing a self-consistent decision ID around it still fails.
+`prepare_cloud_build_provider_invocation` (#804) calls the public `validate_validation_command_plan` before touching any command-plan field or deriving an ID: `ValidationCommandPlan` performs no field validation of its own, so an exact-type plan with a malformed field would otherwise reach an unguarded comparison and raise. A malformed plan, or one whose `validation_plan_id` uses neither the standard positive-PR `validation-plan:` schema nor the canonical candidate-bound pre-PR `pre-pr-validation-plan:` schema (#1210), fails closed to a bounded manual-review result instead. `dispatch_identity` is likewise never trusted as supplied: the dispatch-guard boundary independently recomputes it from repository, head SHA, profile, selector version, command-set digest, and validation-plan ID before a decision ID is accepted, so changing `dispatch_identity` and recomputing a self-consistent decision ID around it still fails.
+
+## Pre-PR admission (#1210)
+
+A canonical candidate-bound pre-PR validation plan (`PrePrValidationPlan`, #723/#1030) already converts to the standard `ValidationCommandPlan` transport through `build_validation_command_plan`'s existing pre-PR branch, keyed by its `pre-pr-validation-plan:` validation-plan ID. `prepare_cloud_build_provider_invocation` admits that converted plan through the exact same identity, authorization, and dispatch-eligibility gate used for a positive-PR plan -- it is never treated as its own authority, and no PR number is invented, required, or mutated to make the positive-PR schema fit; the absence of a pull request is represented natively (`DispatchDecision.pull_request=None`, no PR field on `CloudBuildProviderInvocation`).
+
+`evaluate_pre_pr_dispatch_decision` and `pre_pr_validation_dispatch_identity` (`agent_os_remote_validation.dispatch_guard`, #369) are the one narrow additive seam this required: the existing `evaluate_dispatch_decision`/`validation_dispatch_identity` pair is defined over `ValidationPlan`'s mandatory `pull_request`, so a pre-PR-shaped decision needs its own identity/eligibility entry point rather than a weakened positive-PR one. It reuses the same `DispatchDecision` type, the same decision-ID/dispatch-identity hashing, and the same finite `DispatchStatus` vocabulary, and only ever returns `launch-eligible`, `stale-skipped`, or `manual-review` -- dispatch-evidence retry, duplicate, reuse, and supersession tracking remain Workflow Scheduler lifecycle ownership (#330) and stay out of this seam's scope.
+
+Launch eligibility itself additionally requires `candidate_bound=True` on the pre-PR subject: `evaluate_pre_pr_dispatch_decision` returns `manual-review` for any non-candidate-bound (historical, e.g. the #726 default binding) subject before it ever reaches the stale-head check, regardless of how exactly its identity, authorization, and dispatch evidence otherwise match. A historical subject therefore never becomes launch-eligible and can never reach an accepted Cloud Build provider invocation.
 
 ## Fixed commands only
 
@@ -93,6 +101,7 @@ Validation success does not authorize Ready-for-Review, merge, issue closure, pr
 - #805: injected connected provider adapter (`adapter.py`, this package)
 - #806: future external activation
 - #803: temporary-gateway retirement after replacement proof
+- #1210: candidate-bound pre-PR plan admission through this existing provider path (no second provider, planner, or authorization model)
 
 ## Rollback
 

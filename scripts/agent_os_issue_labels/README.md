@@ -62,6 +62,43 @@ Failing validation may reconcile `validation:failing` / `pr:blocked`, but grants
 Ready-for-Review, merge, closure, workflow, repository-setting, production, or external
 system authority.
 
+## Production branch-refresh composition
+
+`scripts/agent_os_issue_labels/pr_branch_refresh_provider.py` is the GH-LIFE4 / #1365
+production composition behind #1187's existing `PullRequestBranchRefreshProvider`
+protocol. It does not replace #1187 admission, scope checking, validation ordering,
+managed-label reconciliation, or final `branch:current` proof.
+
+`GitHubPullRequestBranchRefreshBackingProvider` uses one already-authenticated
+PyGithub-compatible client to reacquire the exact PR head/base/main identities,
+mergeability, changed paths, labels, and managed-label catalog. It never acquires
+credentials. Review-thread evidence and required validation remain injected from their
+existing canonical owners. Read failures become `unknown`/unavailable/blocking evidence
+so they cannot produce refresh or lifecycle authority.
+
+Immediately before preparation the provider reacquires the exact PR branch evidence.
+Because #1187's `expected_base_sha` is the admitted current base/main identity rather
+than a historical merge-base, the provider derives the exact merge-base from the bound
+head and admitted main with fixed Git argv. It then performs one fixed local
+`git rebase --no-autostash --onto <admitted-main> <merge-base> <expected-head>` and
+proves the resulting detached `HEAD` commit identity. Caller-supplied Git flags, shell
+text, refspecs, and arbitrary commands are never accepted. The separate #1381 transport
+authorization is checked before local preparation begins.
+
+The remote non-fast-forward write remains exclusively #1381-owned. The provider builds
+one `ExpectedHeadBranchUpdateRequest` and delegates to
+`update_branch_with_expected_head(...)`, which performs the exact expected-old-head
+force-with-lease mutation and post-write verification. A moved head/base/main, missing
+merge-base, failed rebase, unproven rebased head, rejected expected-head update, or
+ambiguous mutation fails closed. Neither local preparation nor remote mutation is
+retried, and there is no plain force push, merge-main fallback, protected-branch path,
+or second refresh lifecycle.
+
+`run_production_pull_request_branch_refresh(...)` is the production caller: it composes
+the live GitHub backing and concrete provider, passes through the existing #1187
+request authorization unchanged, and delegates exactly once to
+`refresh_pull_request_branch(...)`.
+
 ## Issue-label tooling
 
 The checker reads Agent OS issue-form output and the declarative label map, computes
@@ -78,6 +115,8 @@ PR-label reconciliation, lifecycle integration, or branch refresh.
 
 ```bash
 python -m pytest tests/agent_os_issue_labels/test_pr_branch_refresh.py -q
+python -m pytest tests/agent_os_issue_labels/test_pr_branch_refresh_provider.py -q
+python -m pytest tests/agent_os_github_git_objects/test_branch_update.py -q
 python -m pytest tests/agent_os_issue_labels/test_pr_lifecycle.py -q
 python -m pytest tests/agent_os_issue_labels/test_github_service_agent_draft_pr_contract.py -q
 python -m pytest tests/agent_os_issue_labels -q

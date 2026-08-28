@@ -63,6 +63,20 @@ _NON_AUTHORITY = (
     "authorization, source/scope, checkpoint, ResumePlan, environment, and "
     "Scheduler lease checks before any execution."
 )
+_PUBLICATION_CONTINUATION = (
+    "No existing handoff is a predecessor-publication condition, not evidence "
+    "that the Agent OS mission is unavailable. Reacquire the current authorized "
+    "mission and its canonical request, route, authorization, checkpoint, "
+    "ResumePlan, CandidatePacket, runtime, dependency-readiness, and pilot "
+    "evidence. If those current bindings select the governed runner, call the "
+    "repository execution-interface adapter publish_current_pre_pr_handoff(...), "
+    "which delegates to the existing #1243 publish_governed_handoff(...) owner. "
+    "This advisory hook does not itself publish a handoff or complete external "
+    "ChatGPT product integration. After durable publication, repeat discovery "
+    "and resume only the exact immutable handoff returned. Do not synthesize a "
+    "handoff identity. Do not fabricate a descriptor or handoff and do not "
+    "silently fall back to local git/gh tooling."
+)
 
 
 def extract_issue_numbers(text: object) -> tuple[int, ...]:
@@ -164,10 +178,9 @@ def render_preflight_notice(result: GovernedRoutePreflightResult) -> str:
         )
     elif result.status is GovernedRoutePreflightStatus.NOT_FOUND:
         body = (
-            f"status=not-found {target} ({reasons})\n"
-            "No existing immutable handoff matches this repository and issue. Stop "
-            "with a bounded not-found. Do not synthesize a handoff identity and do "
-            "not silently fall back to local git/gh tooling."
+            f"status=publication-required {target} ({reasons})\n"
+            "continuation=execution-interface-adapter owner=#1237 publication-owner=#1243 scheduler_invoked=false\n"
+            f"{_PUBLICATION_CONTINUATION}"
         )
     else:
         body = (

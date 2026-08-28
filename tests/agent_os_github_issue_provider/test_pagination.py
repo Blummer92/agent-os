@@ -63,6 +63,93 @@ def test_parse_link_header_handles_rfc_delimiters_and_multiple_relations():
     assert parsed["last"] == parsed["next"]
 
 
+
+@pytest.mark.parametrize("relation", ["Next", "NEXT", "nExT"])
+def test_registered_next_relation_is_case_insensitive(relation: str):
+    header = (
+        '<https://api.github.com/repos/owner/repo/issues?page=2>; '
+        f'rel="{relation}"'
+    )
+    parsed = parse_link_header(header)
+    assert parsed["next"].endswith("page=2")
+
+
+def test_multiple_mixed_case_registered_relations_are_normalized():
+    parsed = parse_link_header(
+        '<https://api.github.com/repos/owner/repo/issues?page=2>; rel="Next LAST"'
+    )
+    assert parsed["next"].endswith("page=2")
+    assert parsed["last"] == parsed["next"]
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        '<https://example.com>; rel="next"; rel="last"',
+        '<https://ex.com/1>; rel="Next", <https://ex.com/2>; rel="NEXT"',
+    ],
+)
+def test_duplicate_rel_and_normalized_next_fail_closed(header: str):
+    with pytest.raises(PaginationDiagnosticError) as caught:
+        parse_link_header(header)
+    assert caught.value.kind == "pagination:link-parse"
+
+
+@pytest.mark.parametrize(
+    ("kind", "query"),
+    [
+        ("pagination:next-page-invalid", "page=+2"),
+        ("pagination:next-page-invalid", "page=%202"),
+        ("pagination:next-page-invalid", "page=02"),
+        ("pagination:next-page-invalid", "page=0"),
+        ("pagination:next-page-invalid", "page="),
+        ("pagination:next-page-invalid", "page=2.0"),
+        ("pagination:next-page-invalid", "page=2e0"),
+        ("pagination:next-page-invalid", "page=%32"),
+        ("pagination:next-page-invalid", "page=２"),
+        ("pagination:next-page-invalid", "page=12345678901"),
+        ("pagination:next-per-page-invalid", "page=2&per_page=0100"),
+        ("pagination:link-parse", "page=2&unexpected=value"),
+        ("pagination:next-page-invalid", "page=2;state=open"),
+        ("pagination:link-parse", "page=2&per_page=100&state=open&extra=x"),
+    ],
+)
+def test_query_canonicalization_fail_closed(kind: str, query: str):
+    _assert_kind(
+        kind,
+        f'<https://api.github.com/repos/owner/repo/issues?{query}>; rel="next"',
+    )
+
+
+
+def test_percent_encoded_allowed_query_name_decodes_once():
+    assert validated_next_page(
+        '<https://api.github.com/repos/owner/repo/issues?'
+        'page=2&%73tate=open>; rel="next"',
+        repository="owner/repo",
+        current_page=1,
+        per_page=100,
+        state="open",
+    ) == (2, False)
+
+
+def test_exact_query_field_ceiling_is_accepted():
+    assert validated_next_page(
+        '<https://api.github.com/repos/owner/repo/issues?'
+        'page=2&per_page=100&state=open>; rel="next"',
+        repository="owner/repo",
+        current_page=1,
+        per_page=100,
+        state="open",
+    ) == (2, False)
+
+
+def test_next_link_fragment_fails_closed():
+    _assert_kind(
+        "pagination:link-parse",
+        '<https://api.github.com/repos/owner/repo/issues?page=2#fragment>; rel="next"',
+    )
+
 def test_parse_link_header_absent_is_not_present_empty():
     assert parse_link_header(None) == {}
     with pytest.raises(PaginationDiagnosticError) as caught:

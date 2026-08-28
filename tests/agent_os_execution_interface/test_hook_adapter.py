@@ -2,7 +2,10 @@
 
 The product-level regression is `Work on #1259` with local `gh` unavailable:
 the interface must reach handoff discovery and the existing immutable governed
-resume ingress instead of a generic publish path gated on a local CLI.
+resume ingress instead of a generic publish path gated on a local CLI. When no
+handoff exists yet, the hook must continue toward the existing bounded execution-
+interface publication adapter instead of presenting descriptor absence as a
+terminal mission blocker or implying that the advisory hook publishes directly.
 """
 
 from __future__ import annotations
@@ -86,9 +89,6 @@ def configured_env(monkeypatch, tmp_path):
     return store_root
 
 
-# --- issue-key extraction is a lookup key, never authority ------------------
-
-
 @pytest.mark.parametrize(
     "prompt,expected",
     [
@@ -123,16 +123,8 @@ def test_repository_identity_is_none_without_a_remote(tmp_path, monkeypatch):
     assert hook_adapter.resolve_repository_identity(tmp_path) is None
 
 
-# --- key regression: `Work on #1259`, with and without a local `gh` ---------
-
-
 @pytest.fixture(params=("gh-absent", "gh-present"))
 def local_gh(request, tmp_path, monkeypatch):
-    """Control whether a local `gh` is on PATH, instead of trusting the runner.
-
-    The governed route must win either way, so both cases are asserted
-    deterministically rather than inherited from whatever CI happens to install.
-    """
     path_dir = tmp_path / f"bin-{request.param}"
     path_dir.mkdir()
     if request.param == "gh-present":
@@ -157,6 +149,26 @@ def test_work_on_1259_reaches_governed_resume_regardless_of_local_gh(
     assert f"/agent-os resume {descriptor.handoff_id}" in notice
     assert "Do not select generic GitHub publish tooling" in notice
     assert "never evidence that Agent OS execution is" in notice
+
+
+def test_missing_handoff_continues_to_existing_publication_adapter(
+    governed_checkout, configured_env
+):
+    notice = hook_adapter.run_user_prompt_submit_hook(
+        json.dumps({"prompt": "Work on #1117", "cwd": str(governed_checkout)})
+    )
+
+    assert "status=publication-required" in notice
+    assert "continuation=execution-interface-adapter" in notice
+    assert "owner=#1237" in notice
+    assert "publication-owner=#1243" in notice
+    assert "publish_current_pre_pr_handoff(...)" in notice
+    assert "publish_governed_handoff(...)" in notice
+    assert "advisory hook does not itself publish" in notice
+    assert "scheduler_invoked=false" in notice
+    assert "Do not fabricate a descriptor or handoff" in notice
+    assert "silently fall back to local git/gh tooling" in notice
+    assert "/agent-os resume executor-handoff:" not in notice
 
 
 def test_prompt_hook_is_silent_outside_a_governed_checkout(tmp_path, configured_env):
@@ -202,9 +214,6 @@ def test_prompt_hook_tolerates_malformed_payloads(configured_env):
     assert hook_adapter.run_user_prompt_submit_hook("[]") == ""
 
 
-# --- pre-tool guard: missing local gh never becomes an Agent OS blocker -----
-
-
 @pytest.mark.parametrize(
     "command,expected",
     [
@@ -238,7 +247,6 @@ def test_pre_tool_guard_restates_the_invariant_for_gh_probes(governed_checkout):
     assert decoded["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
     assert "never evidence that Agent OS execution is" in context
     assert "/agent-os resume" in context
-    # advisory only: the guard must never deny or pre-approve a tool call
     assert "permissionDecision" not in json.dumps(decoded)
 
 

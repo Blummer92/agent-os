@@ -74,3 +74,31 @@ Remove this package, its tests, and the `scripts/README.md` entry. Historical Gi
 ## Limitations
 
 The first version supports ordinary UTF-8 repository file blobs only. It does not support executable files, symlinks, submodules, tree entries, deletions, merge commits as the publication parent, protected branches, generic repository administration, or live #917 publication as part of its tests.
+
+## Expected-head-bound PR branch update
+
+`branch_update.py` provides the specialized GH-LIFE4A / #1381 publication
+primitive used by the governed #1187 branch-refresh lifecycle.
+
+It accepts one exact non-protected branch, expected old remote head, proposed
+new head, admitted main identity, invocation identity, and explicit current
+authorization evidence. Before mutation it reads the exact remote branch and
+requires the observed head to equal the expected old head.
+
+The only mutation command constructed by this capability is equivalent to:
+
+`git push --force-with-lease=refs/heads/<branch>:<expected-old-sha> origin <new-sha>:refs/heads/<branch>`
+
+The branch/ref, expected SHA, and proposed SHA come only from validated typed
+inputs. Plain `--force`, caller-supplied refspecs/flags, protected branches,
+automatic retries, merge-main fallback, workflow/settings mutation, and #568
+behavior are not supported.
+
+After the one admitted push attempt, the remote branch is read again.
+Success is confirmed only when the observed remote head exactly equals the
+proposed new head. A moved pre-write head performs zero mutation; an ambiguous
+write or post-write mismatch returns `mutation-uncertain` and is never retried.
+
+The module accepts an injected bounded runner rather than creating a second
+process/subprocess framework. Production composition must supply an existing
+approved bounded Git runner.

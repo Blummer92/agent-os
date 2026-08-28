@@ -467,6 +467,9 @@ def select_validation_plan(
     matched_rules: set[str] = set()
     covered: set[str] = set()
     for path in paths:
+        if path.startswith(doc_prefixes) and path.endswith(doc_suffixes):
+            covered.add(path)
+            continue
         path_matches = _focused_matches(path, rules["focused_rules"])
         distinct_command_sets = {commands for _, commands in path_matches}
         if len(distinct_command_sets) > 1:

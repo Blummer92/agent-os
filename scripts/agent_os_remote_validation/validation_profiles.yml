@@ -3,8 +3,8 @@
   "repository": "Blummer92/agent-os",
   "documentation_suffixes": [".md", ".txt", ".rst"],
   "documentation_prefixes": ["00_Governance/", "01_Shared_Standards/", "02_Agent_Overlays/", "03_Templates/", "04_Registry/", "05_Roadmap/", "06_Archive/"],
-  "aggregate_paths": ["cloudbuild.yaml", "pyproject.toml", "requirements.txt", "pytest.ini"],
-  "aggregate_prefixes": [".github/workflows/", "scripts/run_", "tests/test_agent_os_validation_workflow.py"],
+  "aggregate_paths": ["cloudbuild.yaml", "pyproject.toml", "requirements-dev.txt", "pytest.ini"],
+  "aggregate_prefixes": [".github/workflows/", "tests/test_agent_os_validation_workflow.py"],
   "focused_rules": [
     {
       "name": "issue-acceptance",

@@ -24,18 +24,17 @@ Run `python3 scripts/agent-os-environment-health.py`. The existing v1 schema
 remains backward compatible and now adds current-attempt evidence:
 `execution_surface_id`, canonical UTC `observed_at`, content-addressed
 `environment_health_evidence_id`, explicit `process-execution`, tool
-`available|unavailable|unknown` states, and GitHub-auth
-`authenticated|unauthenticated|unknown|not-applicable` states. Existing
-`available` / `capable` booleans remain present.
+`available|unavailable|unknown` states, and GitHub-auth states
+`authenticated|unauthenticated|unknown|no-credential|not-applicable`.
+Existing `available` / `capable` booleans remain present.
 
 The evidence ID binds the complete redacted observation, including surface and
 observation time. Evidence from another surface is not current-surface proof.
 `AGENT_OS_EXECUTION_SURFACE_ID` may explicitly name the governed surface;
 Codespaces otherwise use `CODESPACE_NAME`, with a bounded opaque local fallback.
 
-The checker observes only its governed terminal/runtime environment. It does
-not probe ChatGPT connectors, browsers, Google Drive, Notion, or application
-providers, and it never installs tools or logs in.
+The checker observes only its governed terminal/runtime environment: no
+ChatGPT connector, browser, Drive, Notion probing; no tool install or login.
 
 ## Network modes
 
@@ -61,19 +60,20 @@ Focused validation budget: 15 min; aggregate validation: 45 min; single
 command: 20 min; retained stdout/stderr: 256 KiB each. Run
 `./scripts/validate-all.sh` for aggregate validation.
 
-## Authentication boundaries
+## Authentication boundaries (#1401)
 
-Existing environment-token presence may prove `authenticated` with source
-`env` without revealing token contents. `gh auth status` may prove
-`authenticated` or `unauthenticated`. Missing `gh` or an unobservable auth
-probe fails closed to `unknown`. No token or credential value is emitted.
+Token presence alone never proves authentication. `local-only` makes no
+GitHub network probe (`not-applicable`). `github-connected` makes exactly one
+bounded, read-only, direct GitHub API read via `GITHUB_TOKEN`/`GH_TOKEN` --
+distinct from generic connector/CLI evidence, the #1363 root cause. Success
+proves `authenticated`; a missing credential is `no-credential`; `401`/`403`/
+network error/timeout fail closed. No retry; no token or response is emitted.
 
 ## #918 compatibility boundary
 
-Issue #918 consumes environment-health identity only as opaque upstream evidence.
-Issue #972 does not probe capabilities for #918 and does not implement routing.
-Connector access never substitutes for required process execution, a real
-`gh` executable, or authenticated CLI evidence.
+Issue #918 consumes environment-health identity only as opaque upstream
+evidence and does not probe capabilities or implement routing here. Connector
+access never substitutes for required process execution or a real `gh`.
 
 ## Cost, idle timeout, and retention (operator actions)
 

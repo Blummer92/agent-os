@@ -1,6 +1,11 @@
 """Guarded local GitHub Git-object publication capability."""
 
 from .atomic_commit import execute_atomic_commit_from_blobs, prepare_atomic_commit_from_blobs
+from .branch_update import (
+    BranchUpdateObservation,
+    BranchUpdateRunner,
+    update_branch_with_expected_head,
+)
 from .models import (
     AtomicCommitConfirmation,
     AtomicCommitPlan,
@@ -8,6 +13,9 @@ from .models import (
     AtomicCommitRequest,
     AtomicCommitResult,
     AtomicCommitStatus,
+    ExpectedHeadBranchUpdateRequest,
+    ExpectedHeadBranchUpdateResult,
+    ExpectedHeadBranchUpdateStatus,
     GitBlobSnapshot,
     GitChangedFile,
     GitCommitSnapshot,
@@ -26,6 +34,11 @@ __all__ = [
     "AtomicCommitRequest",
     "AtomicCommitResult",
     "AtomicCommitStatus",
+    "BranchUpdateObservation",
+    "BranchUpdateRunner",
+    "ExpectedHeadBranchUpdateRequest",
+    "ExpectedHeadBranchUpdateResult",
+    "ExpectedHeadBranchUpdateStatus",
     "GitBlobSnapshot",
     "GitChangedFile",
     "GitCommitSnapshot",
@@ -39,4 +52,5 @@ __all__ = [
     "PyGithubGitObjectTransport",
     "execute_atomic_commit_from_blobs",
     "prepare_atomic_commit_from_blobs",
+    "update_branch_with_expected_head",
 ]

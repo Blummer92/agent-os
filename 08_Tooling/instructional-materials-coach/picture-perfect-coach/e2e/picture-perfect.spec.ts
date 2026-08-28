@@ -49,7 +49,7 @@ function currentStage(page: Page, label: string) {
   return page.getByRole('navigation', { name: 'Picture Perfect stages' }).locator('li[aria-current="step"]').filter({ hasText: label });
 }
 
-test('Tutorial 0 traverses Model -> Upload -> Review -> Prompts -> Ready and fails closed without screen evidence', async ({ page }) => {
+test('Tutorial 0 traverses Model -> Upload -> Review -> Prompts -> Ready on approved synthetic capture evidence', async ({ page }) => {
   const externalRequests: string[] = [];
   page.on('request', (request) => {
     const url = new URL(request.url());
@@ -61,30 +61,30 @@ test('Tutorial 0 traverses Model -> Upload -> Review -> Prompts -> Ready and fai
   await expect(page.getByText(/things need your attention/i)).toBeVisible();
   await approveTutorial(page);
 
-  // Stage 4 — every Tutorial 0 frame claims the real Adobe Express interface, and no
-  // approved capture evidence is bound, so each one blocks instead of offering a
-  // generated stand-in for the software screen.
   await expect(currentStage(page, 'Prompts')).toHaveCount(1);
   const promptCards = page.locator('article.prompt-card');
-  expect(await promptCards.count()).toBeGreaterThan(0);
+  await expect(promptCards).toHaveCount(3);
   await expect(promptCards.first().getByText('Application: Adobe Express')).toBeVisible();
-  await expect(promptCards.first().getByText('Software interface — needs screen capture')).toBeVisible();
-  await expect(promptCards.first().getByText('Prompt blocked')).toBeVisible();
-  await expect(promptCards.first().getByText('visual-evidence-missing')).toBeVisible();
-  await expect(page.getByLabel('Portable prompt')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Copy Prompt' })).toHaveCount(0);
+  await expect(promptCards.first().getByText('Software interface — approved screen capture bound')).toBeVisible();
+  await expect(page.getByText(/Approved captured screen evidence is the base visual/i).first()).toBeVisible();
+  await expect(page.getByLabel('Portable prompt')).toHaveCount(3);
+  await expect(page.getByRole('button', { name: 'Copy Prompt' })).toHaveCount(3);
   await expect(page.getByText('These prompts are derived presentation guidance. They never become instructional source evidence.')).toBeVisible();
 
-  // Stage 5 — the visual-evidence row blocks, so no handoff packet can be produced.
   await page.getByRole('button', { name: 'Open Ready' }).click();
   await expect(page.getByRole('heading', { name: 'Implementation handoff preflight' })).toBeVisible();
   await expect(currentStage(page, 'Ready')).toHaveCount(1);
-  await expect(page.getByText('Blocked · Captured screen evidence bound where required')).toBeVisible();
+  await expect(page.getByText('Pass · Captured screen evidence bound where required')).toBeVisible();
+  await expect(page.getByText('Pass · Provider-neutral prompt contract validates')).toBeVisible();
 
   const createHandoff = page.getByRole('button', { name: 'Create GitHub Handoff' });
-  await expect(createHandoff).toBeDisabled();
-  await expect(page.getByText(/Create GitHub Handoff stays disabled until every required preflight row passes/i)).toBeVisible();
-  await expect(page.getByLabel('GitHub handoff packet')).toHaveCount(0);
+  await expect(createHandoff).toBeEnabled();
+  await createHandoff.click();
+  const packet = page.getByLabel('GitHub handoff packet');
+  await expect(packet).toBeVisible();
+  const packetValue = await packet.inputValue();
+  expect(packetValue).toContain('"captured_screen_evidence"');
+  expect(packetValue).toContain('"execution_authorized": false');
   expect(externalRequests).toEqual([]);
 });
 
@@ -137,34 +137,42 @@ test('unresolved Review keeps approval and downstream handoff disabled', async (
   await expect(page.getByRole('button', { name: 'Create GitHub Handoff' })).toHaveCount(0);
 });
 
-test('provider-neutral prompt UI preserves application identity and exposes no meaning-changing provider control', async ({ page }) => {
+test('provider-neutral capture-backed prompt UI preserves application identity without provider execution controls', async ({ page }) => {
   await reachReview(page);
   await approveTutorial(page);
-  const promptCards = page.locator('article.prompt-card');
-  await expect(promptCards.first().getByText('Application: Adobe Express')).toBeVisible();
-  // No prompt text exists to carry provider syntax while the frames are blocked.
-  await expect(page.getByLabel('Portable prompt')).toHaveCount(0);
+  const prompts = page.getByLabel('Portable prompt');
+  await expect(prompts).toHaveCount(3);
+  for (let index = 0; index < await prompts.count(); index += 1) {
+    const value = await prompts.nth(index).inputValue();
+    expect(value).toContain('Adobe Express');
+    expect(value).toContain('approved captured screen evidence');
+    expect(value).not.toMatch(/Midjourney|Gemini|Adobe Firefly|ChatGPT image generation|--ar |--stylize /);
+  }
   await expect(page.getByRole('combobox')).toHaveCount(0);
   await expect(page.getByRole('button', { name: /provider/i })).toHaveCount(0);
 });
 
-test('a blocked software-interface frame offers no reconstruction prompt to copy', async ({ page }) => {
+test('capture-backed software-interface cards forbid reconstruction and expose role-specific evidence', async ({ page }) => {
   await reachReview(page);
   await approveTutorial(page);
   const promptCards = page.locator('article.prompt-card');
-  const blockedCount = await promptCards.getByText('Prompt blocked').count();
-  expect(blockedCount).toBeGreaterThan(0);
-  await expect(page.getByLabel('Portable prompt')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Copy Prompt' })).toHaveCount(0);
-  await expect(promptCards.first().getByText(/will not generate a stand-in for the real software interface/i)).toBeVisible();
+  await expect(promptCards.first().getByText(/approved screen capture bound/i)).toBeVisible();
+  const prompt = await page.getByLabel('Portable prompt').first().inputValue();
+  expect(prompt).toContain('Do not redraw, imitate, reconstruct, or invent any software interface content.');
+  await promptCards.first().getByText('View prompt evidence').click();
+  await expect(promptCards.first().getByText(/Result \/ after-state/)).toBeVisible();
 });
 
-test('prompt/image presentation evidence never grants execution authority', async ({ page }) => {
+test('prompt/capture presentation evidence and local handoff never grant execution authority', async ({ page }) => {
   await reachReview(page);
   await approveTutorial(page);
   await expect(page.getByText('These prompts are derived presentation guidance. They never become instructional source evidence.')).toBeVisible();
   await page.getByRole('button', { name: 'Open Ready' }).click();
-  await expect(page.getByRole('button', { name: 'Create GitHub Handoff' })).toBeDisabled();
-  await expect(page.getByLabel('GitHub handoff packet')).toHaveCount(0);
+  const createHandoff = page.getByRole('button', { name: 'Create GitHub Handoff' });
+  await expect(createHandoff).toBeEnabled();
+  await createHandoff.click();
+  await expect(page.getByText(/Local packet only\. execution_authorized: false\. No GitHub write occurred\./i)).toBeVisible();
+  const packetValue = await page.getByLabel('GitHub handoff packet').inputValue();
+  expect(packetValue).toContain('"execution_authorized": false');
   await expect(page.getByRole('button', { name: /start implementation/i })).toHaveCount(0);
 });
