@@ -34,7 +34,7 @@ MATERIALS_ID="instructional-materials-current-curriculum-suite"
 MATERIALS_IMPORT_ROOTS=("src","08_Tooling/instructional-materials-coach/src")
 MATERIALS_IMPORT_PRELUDE="import os,sys;repo=os.getcwd();sys.path[:0]=[os.path.join(repo,path) for path in ('src','08_Tooling/instructional-materials-coach/src')]"
 MATERIALS_IMPORT_PROBE=MATERIALS_IMPORT_PRELUDE+";import instructional_materials_coach,instructional_workflow_contracts"
-MATERIALS_PYTEST_RUNNER=MATERIALS_IMPORT_PROBE+";import pytest;raise SystemExit(pytest.main(tuple(sys.argv[1:])))"
+MATERIALS_PYTEST_RUNNER=MATERIALS_IMPORT_PROBE+";import pytest;raise SystemExit(pytest.main(list(sys.argv[1:])))"
 VALIDATION_ARGS={
  "remote-validation-suite":("-m","pytest","tests/agent_os_remote_validation"),
  MATERIALS_ID:(
