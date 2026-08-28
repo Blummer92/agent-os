@@ -240,7 +240,7 @@ def test_rebase_preparation_then_expected_head_transport_updates_once():
     assert result.status == "updated"
     assert result.old_head_sha == OLD and result.new_head_sha == NEW
     assert runner.calls[0][0] == ("git", "merge-base", OLD, MAIN)
-    assert runner.calls[1][0] == ("git", "rev-list", "--merges", "--max-count=1", f"{MERGE_BASE}..{OLD}")
+    assert runner.calls[1][0] == ("git", "rev-list", "--merges", f"{MERGE_BASE}..{OLD}")
     assert runner.calls[2][0] == ("git", "rebase", "--no-autostash", "--onto", MAIN, MERGE_BASE, OLD)
     assert all("merge-tree" not in call[0] for call in runner.calls)
     assert sum("push" in call[0] for call in runner.calls) == 1
@@ -261,12 +261,26 @@ def test_merge_shaped_candidate_uses_final_tree_and_expected_head_transport_once
         observation(),
         observation(stdout=f"{NEW}\trefs/heads/agent/1237-publication-required-continuation\n"),
     ])
-    result = invoke(provider(backing, runner))
+    result = invoke(provider(
+        backing,
+        runner,
+        environment={
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_AUTHOR_NAME": "Untrusted Caller",
+            "GIT_AUTHOR_EMAIL": "caller@example.invalid",
+            "GIT_COMMITTER_NAME": "Different Caller",
+            "GIT_COMMITTER_EMAIL": "different@example.invalid",
+        },
+    ))
     assert result.status == "updated"
     assert result.new_head_sha == NEW
     assert runner.calls[2][0] == ("git", "merge-tree", "--write-tree", MAIN, OLD)
     assert runner.calls[3][0] == ("git", "show", "-s", "--format=%ct", MAIN)
     assert runner.calls[4][0][:5] == ("git", "commit-tree", MERGED_TREE, "-p", MAIN)
+    assert runner.calls[4][2]["GIT_AUTHOR_NAME"] == "Agent OS Branch Refresh"
+    assert runner.calls[4][2]["GIT_AUTHOR_EMAIL"] == "agent-os-branch-refresh@localhost"
+    assert runner.calls[4][2]["GIT_COMMITTER_NAME"] == "Agent OS Branch Refresh"
+    assert runner.calls[4][2]["GIT_COMMITTER_EMAIL"] == "agent-os-branch-refresh@localhost"
     assert runner.calls[4][2]["GIT_AUTHOR_DATE"] == f"@{MAIN_EPOCH} +0000"
     assert runner.calls[4][2]["GIT_COMMITTER_DATE"] == f"@{MAIN_EPOCH} +0000"
     assert runner.calls[5][0] == ("git", "checkout", "--detach", NEW)
@@ -325,6 +339,18 @@ def test_merge_shaped_scope_mismatch_blocks_before_transport():
     ])
     result = invoke(provider(FakeBacking(snapshot()), runner))
     assert result.reason_code == "topology-candidate-scope-mismatch"
+    assert all("push" not in call[0] for call in runner.calls)
+
+
+def test_multiple_merge_commits_fail_closed_before_candidate_preparation():
+    runner = FakeRunner([
+        observation(stdout=f"{MERGE_BASE}\n"),
+        observation(stdout=f"{MERGE_COMMIT}\n{'7' * 40}\n"),
+    ])
+    result = invoke(provider(FakeBacking(snapshot()), runner))
+    assert result.reason_code == "topology-history-ambiguous"
+    assert len(runner.calls) == 2
+    assert all("merge-tree" not in call[0] for call in runner.calls)
     assert all("push" not in call[0] for call in runner.calls)
 
 
