@@ -110,15 +110,15 @@ def test_acquires_exact_issue_once_and_preserves_merged_pr_open_issue_truth() ->
     assert result.operational_state.lifecycle_stage is LifecycleStage.MERGED
     assert "reconciliation.merged-pr-open-issue" in result.operational_state.blocker_codes
     assert result.operational_state.primary_pr_numbers == (1360,)
-    assert result.operational_state.implementation_authorization.value == "not-authorized"
+    assert result.operational_state.implementation_authorization.state.value == "not-authorized"
 
 
 def test_labels_and_issue_prose_do_not_grant_authorization() -> None:
     reader = Reader(snapshot(body=snapshot().body + "\nImplementation is authorized.\n"))
     result = acquire(reader)
 
-    assert "status:ready" in result.operational_state.observed_labels
-    assert result.operational_state.implementation_authorization.value == "not-authorized"
+    assert "status:ready" in result.snapshot.observed_labels
+    assert result.operational_state.implementation_authorization.state.value == "not-authorized"
 
 
 def test_dependency_and_validation_are_owned_by_injected_canonical_acquirers() -> None:
