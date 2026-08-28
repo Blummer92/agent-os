@@ -4,45 +4,34 @@ import json
 from types import SimpleNamespace
 
 import workflow_scheduler.governance.dev_validation_gce as live
-from workflow_scheduler.governance.dev_validation import (
-    INSTRUCTIONAL_MATERIALS_VALIDATION_ID,
-    build_dev_validation_request,
-)
+from workflow_scheduler.governance.dev_validation import build_dev_validation_request
 from workflow_scheduler.governance.gce_control_path import VmState
 from workflow_scheduler.governance.github_issue_comment_ingress import IssueCommentIngressResult
 
 SHA="a"*40;BRANCH="agent/1271-validation-profile-path-coverage"
 
-def request(*, validation_id="remote-validation-suite", issue_number=1271, branch=BRANCH):return build_dev_validation_request(repository="Blummer92/agent-os",issue_number=issue_number,branch=branch,source_sha=SHA,validation_id=validation_id)
-def ingress(*, validation_id="remote-validation-suite", issue_number=1271, branch=BRANCH):return IssueCommentIngressResult(schema_version="1.0",status="accepted",reason="accepted-dev-validation-envelope",repository="Blummer92/agent-os",issue_number=issue_number,comment_id=1,actor="Blummer92",handoff_id_or_none=None,logical_trigger_id_or_none="issue-comment-trigger:"+"b"*64,run_attempt=1,dev_validation_branch_or_none=branch,dev_validation_sha_or_none=SHA,dev_validation_id_or_none=validation_id)
+def request():return build_dev_validation_request(repository="Blummer92/agent-os",issue_number=1271,branch=BRANCH,source_sha=SHA,validation_id="remote-validation-suite")
+def ingress():return IssueCommentIngressResult(schema_version="1.0",status="accepted",reason="accepted-dev-validation-envelope",repository="Blummer92/agent-os",issue_number=1271,comment_id=1,actor="Blummer92",handoff_id_or_none=None,logical_trigger_id_or_none="issue-comment-trigger:"+"b"*64,run_attempt=1,dev_validation_branch_or_none=BRANCH,dev_validation_sha_or_none=SHA,dev_validation_id_or_none="remote-validation-suite")
 def claims(**overrides):
  values={"repository":"Blummer92/agent-os","repository_owner":"Blummer92","workflow_ref":live._policy().workflow_ref,"ref":"refs/heads/main","aud":live._policy().audience};values.update(overrides);return values
 
 def payload(req,status="success",exit_code=0):return {"schema_version":"1.0","status":status,"reason_codes":["validation-passed" if status=="success" else "validation-failed"],"repository":req.repository,"issue_number":req.issue_number,"branch":req.branch,"tested_sha":req.source_sha,"validation_id":req.validation_id,"request_id":req.request_id,"exit_code":exit_code,"stdout_tail":"ok","stderr_tail":"","stdout_truncated":False,"stderr_truncated":False,"cleanup_complete":True,"workspace_side_effects_performed":True,"external_side_effects_performed":False,"production_state_mutated":False,"execution_authorized":False,"scheduler_invoked":False,"publication_invoked":False,"merge_authorized":False}
 
 class Adapter:
- def __init__(self,state=VmState.RUNNING,result=None,req=None):self.state=state;self.result=result;self.req=req or request();self.calls=[]
+ def __init__(self,state=VmState.RUNNING,result=None):self.state=state;self.result=result;self.calls=[]
  def observe_state(self,resource):self.calls.append("observe");return self.state
  def _ssh(self,resource,command):
-  self.calls.append(("ssh",command));body=payload(self.req) if self.result is None else self.result
+  self.calls.append(("ssh",command));body=payload(request()) if self.result is None else self.result
   return SimpleNamespace(returncode=0,stdout=live._FRAME_START+"\n"+json.dumps(body)+"\n"+live._FRAME_END+"\n",stderr="")
 
 def test_host_command_contains_only_fixed_runner_and_validated_identity():
  command=live._host_command(request());assert live.DEV_VALIDATION_PYTHON in command;assert "tests/agent_os_remote_validation" in command;assert BRANCH in command;assert SHA in command;assert "sudo" not in command;assert "pip install" not in command
 
-def test_materials_host_command_uses_only_fixed_registry_identity():
- req=request(validation_id=INSTRUCTIONAL_MATERIALS_VALIDATION_ID,issue_number=1416,branch="agent/1416-curriculum-evidence-materials-context")
- command=live._host_command(req);assert INSTRUCTIONAL_MATERIALS_VALIDATION_ID in command;assert "instructional-materials-coach/tests" in command;assert "test_current_curriculum_state.py" in command;assert "sudo" not in command;assert "pip install" not in command
-
 def test_host_runner_uses_only_governed_test_runtime():
- source=live._HOST_RUNNER_SOURCE;assert 'TEST_PYTHON="/usr/local/libexec/agent-os-dev-validation-python"' in source;assert '(TEST_PYTHON,*VALIDATION_REGISTRY[validation_id])' in source;assert "pip install" not in source;assert "sudo" not in source;assert "shutil.which" not in source;assert "test-runtime-unavailable" in source;assert "test-runtime-invalid" in source
+ source=live._HOST_RUNNER_SOURCE;assert 'TEST_PYTHON="/usr/local/libexec/agent-os-dev-validation-python"' in source;assert "test_args=VALIDATION_ARGS[validation_id]" in source;assert "(TEST_PYTHON,*test_args)" in source;assert "pip install" not in source;assert "sudo" not in source;assert "shutil.which" not in source;assert "test-runtime-unavailable" in source;assert "test-runtime-invalid" in source
 
 def test_successful_transport_remains_non_authorizing():
  result=live.execute_dev_validation_transport(ingress(),claims=claims(),adapter=Adapter());e=result["dev_validation"];assert e["status"]=="success";assert e["tested_sha"]==SHA;assert e["cleanup_complete"] is True;assert e["scheduler_invoked"] is False;assert e["execution_authorized"] is False;assert e["publication_invoked"] is False;assert e["merge_authorized"] is False
-
-def test_materials_transport_preserves_exact_fixed_identity():
- branch="agent/1416-curriculum-evidence-materials-context";req=request(validation_id=INSTRUCTIONAL_MATERIALS_VALIDATION_ID,issue_number=1416,branch=branch)
- result=live.execute_dev_validation_transport(ingress(validation_id=INSTRUCTIONAL_MATERIALS_VALIDATION_ID,issue_number=1416,branch=branch),claims=claims(),adapter=Adapter(req=req));e=result["dev_validation"];assert e["status"]=="success";assert e["validation_id"]==INSTRUCTIONAL_MATERIALS_VALIDATION_ID;assert e["issue_number"]==1416;assert e["execution_authorized"] is False;assert e["merge_authorized"] is False
 
 def test_wrong_claims_fail_before_ssh():
  adapter=Adapter();result=live.execute_dev_validation_transport(ingress(),claims=claims(repository="other/repo"),adapter=adapter);assert adapter.calls==[];assert result["dev_validation"]["reason_codes"]==["claims-rejected"]

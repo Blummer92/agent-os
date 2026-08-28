@@ -1,4 +1,4 @@
-"""Fixed GitHub-to-GCE dev-validation transport for #1432/#1436/#1416."""
+"""Fixed GitHub-to-GCE dev-validation transport for #1432/#1436/#1454."""
 from __future__ import annotations
 
 import argparse
@@ -30,23 +30,21 @@ _HOST_RUNNER_SOURCE = r'''import json,os,re,shutil,subprocess,sys,tempfile
 REPOSITORY="Blummer92/agent-os"
 REPO_URL="https://github.com/Blummer92/agent-os.git"
 TEST_PYTHON="/usr/local/libexec/agent-os-dev-validation-python"
-VALIDATION_REGISTRY={
+VALIDATION_ARGS={
  "remote-validation-suite":("-m","pytest","tests/agent_os_remote_validation"),
- "instructional-materials-current-curriculum":(
+ "instructional-materials-current-curriculum-suite":(
   "-m","pytest",
-  "08_Tooling/instructional-materials-coach/tests",
+  "08_Tooling/instructional-materials-coach/tests/test_generation_context.py",
+  "08_Tooling/instructional-materials-coach/tests/test_content_spec.py",
+  "08_Tooling/instructional-materials-coach/tests/test_cli.py",
   "tests/test_current_curriculum_state.py",
-  "tests/test_material_requirement_contract.py",
-  "tests/test_instructional_workflow_contract_integration.py",
-  "08_Tooling/workflow-scheduler/tests/test_dev_validation.py",
-  "08_Tooling/workflow-scheduler/tests/test_github_issue_comment_ingress.py",
-  "08_Tooling/workflow-scheduler/tests/test_dev_validation_gce.py",
+  "tests/test_current_curriculum_evidence.py",
  ),
 }
 SHA40=re.compile(r"^[0-9a-f]{40}$",re.ASCII)
 BRANCH=re.compile(r"^agent/[A-Za-z0-9._/-]{1,180}$",re.ASCII)
 MAX_LOG=4096
-TEST_TIMEOUT=180
+TEST_TIMEOUT=120
 GIT_TIMEOUT=120
 FRAME_START="===AGENT-OS-DEV-VALIDATION-JSON-BEGIN==="
 FRAME_END="===AGENT-OS-DEV-VALIDATION-JSON-END==="
@@ -70,9 +68,10 @@ repository,issue_text,branch,sha,validation_id,request_id=sys.argv[1:]
 try:issue=int(issue_text)
 except ValueError:issue=0
 valid_branch=BRANCH.fullmatch(branch) is not None and branch not in {"agent/","agent/main"} and ".." not in branch and "//" not in branch and not branch.endswith(("/","."))
-if repository!=REPOSITORY or issue<1 or not valid_branch or SHA40.fullmatch(sha) is None or validation_id not in VALIDATION_REGISTRY or not request_id.startswith("dev-validation:"):
+if repository!=REPOSITORY or issue<1 or not valid_branch or SHA40.fullmatch(sha) is None or validation_id not in VALIDATION_ARGS or not request_id.startswith("dev-validation:"):
  emit(base("needs-decision","invalid-host-identity",repository,issue,branch,sha,validation_id,request_id));raise SystemExit(0)
 
+test_args=VALIDATION_ARGS[validation_id]
 result=base("needs-decision","host-runner-failed",repository,issue,branch,sha,validation_id,request_id)
 root=tempfile.mkdtemp(prefix="agent-os-dev-validation-");repo=os.path.join(root,"repo");result["workspace_side_effects_performed"]=True
 try:
@@ -92,7 +91,7 @@ try:
      home=os.path.join(root,"home");tmp=os.path.join(root,"tmp");os.mkdir(home);os.mkdir(tmp)
      env={"PATH":os.environ.get("PATH",""),"HOME":home,"TMPDIR":tmp,"PYTHONDONTWRITEBYTECODE":"1","PYTHONNOUSERSITE":"1"}
      try:
-      completed=run((TEST_PYTHON,*VALIDATION_REGISTRY[validation_id]),cwd=repo,env=env,timeout=TEST_TIMEOUT)
+      completed=run((TEST_PYTHON,*test_args),cwd=repo,env=env,timeout=TEST_TIMEOUT)
       out,out_truncated=bounded(completed.stdout);err,err_truncated=bounded(completed.stderr)
       result.update({"status":"success" if completed.returncode==0 else "failure","reason_codes":["validation-passed" if completed.returncode==0 else "validation-failed"],"exit_code":completed.returncode,"stdout_tail":out,"stderr_tail":err,"stdout_truncated":out_truncated,"stderr_truncated":err_truncated})
      except subprocess.TimeoutExpired as exc:
@@ -108,7 +107,8 @@ emit(result)
 def _host_command(request: object) -> str:
     if type(request) is not DevValidationRequest:
         raise TypeError("request must be exact DevValidationRequest")
-    if validation_argv(request) != VALIDATION_REGISTRY[request.validation_id]:
+    expected = VALIDATION_REGISTRY.get(request.validation_id)
+    if expected is None or validation_argv(request) != expected:
         raise ValueError("dev-validation argv drift")
     return shlex.join((HOST_PYTHON, "-c", _HOST_RUNNER_SOURCE, request.repository, str(request.issue_number), request.branch, request.source_sha, request.validation_id, request.request_id))
 

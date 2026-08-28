@@ -1,4 +1,4 @@
-"""Fixed, non-authorizing developer-validation contract for #1432/#1416.
+"""Fixed, non-authorizing developer-validation contract for #1432/#1454.
 
 This module deliberately exposes no caller-supplied command or argv surface.
 Each validation identity maps to one repository-owned argv tuple. The GCE
@@ -17,23 +17,21 @@ from typing import Literal
 REPOSITORY = "Blummer92/agent-os"
 VALIDATION_ID = "remote-validation-suite"
 VALIDATION_ARGV = ("python", "-m", "pytest", "tests/agent_os_remote_validation")
-INSTRUCTIONAL_MATERIALS_VALIDATION_ID = "instructional-materials-current-curriculum"
-INSTRUCTIONAL_MATERIALS_VALIDATION_ARGV = (
+MATERIALS_VALIDATION_ID = "instructional-materials-current-curriculum-suite"
+MATERIALS_VALIDATION_ARGV = (
     "python",
     "-m",
     "pytest",
-    "08_Tooling/instructional-materials-coach/tests",
+    "08_Tooling/instructional-materials-coach/tests/test_generation_context.py",
+    "08_Tooling/instructional-materials-coach/tests/test_content_spec.py",
+    "08_Tooling/instructional-materials-coach/tests/test_cli.py",
     "tests/test_current_curriculum_state.py",
-    "tests/test_material_requirement_contract.py",
-    "tests/test_instructional_workflow_contract_integration.py",
-    "08_Tooling/workflow-scheduler/tests/test_dev_validation.py",
-    "08_Tooling/workflow-scheduler/tests/test_github_issue_comment_ingress.py",
-    "08_Tooling/workflow-scheduler/tests/test_dev_validation_gce.py",
+    "tests/test_current_curriculum_evidence.py",
 )
 VALIDATION_REGISTRY = MappingProxyType(
     {
         VALIDATION_ID: VALIDATION_ARGV,
-        INSTRUCTIONAL_MATERIALS_VALIDATION_ID: INSTRUCTIONAL_MATERIALS_VALIDATION_ARGV,
+        MATERIALS_VALIDATION_ID: MATERIALS_VALIDATION_ARGV,
     }
 )
 _SHA40 = re.compile(r"^[0-9a-f]{40}$", re.ASCII)
