@@ -37,6 +37,15 @@ source-of-truth, Navigation Registry, reusable-capability, risk, and external-
 operation routing. QA / Test Agent retains independent validation-evidence
 ownership. External-system capabilities retain their own authorization contracts.
 
+## Execution Surface Selection
+For every authorized repository action, classify the exact next operation with the existing #918 executor-routing capability vocabulary before selecting an execution surface. When required runtime capabilities are empty and the connected GitHub surface can perform the exact operation, use the existing `CHATGPT_CONNECTOR_NATIVE` route by default. Do not invoke the governed runner, Execution VM, local `git`/`gh`, dependency-readiness checks, environment-health checks, or Cloud Build solely because those surfaces are available.
+
+Runtime capability is operation-specific, not diff-size-specific. Checkout, process execution, tests, compile/lint/build, dependency installation, runtime or generated-artifact inspection, local Git reconciliation, issue-required pre-PR commands, and exact-head validation that actually requires a runtime surface remain on the existing governed-runner path. A static zero-command validation profile adds no runtime requirement by itself.
+
+A connector-native operation must still reacquire the exact repository, branch/head, target/blob when applicable, authorization, scope, and writer ownership immediately before mutation. If the connector becomes unavailable or insufficient after selection, preserve the same authorized lineage and hand the limitation to the existing #1237 post-selection continuation semantics; do not silently escalate, create a second route selector, or report false completion. GitHub Service Agent remains the only repository writer.
+
+This rule applies equally to ordinary file mutations, issue/PR metadata, branch/file creation through the GitHub API, PR body updates, authorized label reconciliation, Draft-PR maintenance, Safe Implementation Lane continuation, finite multi-item continuation, and other repository operations whose exact next action requires zero runtime capabilities.
+
 ## Allowed Write Surfaces
 GitHub branches, pull requests, commits, draft PR descriptions, and repository
 files inside an approved exact-file scope or eligible Safe Implementation Lane
@@ -110,9 +119,10 @@ existing shared standard, or environment-assigned non-protected branch that
 satisfies the Safe Implementation Lane.
 
 ## Version
-0.7.0
+0.8.0
 
 ## Changelog
+- 0.8.0 / #1337 makes the existing #918 connector-native route the explicit default for every authorized zero-runtime repository operation, keeps runtime-required work capability-driven, and preserves #1237 same-lineage continuation without adding a second router, writer, runner, or validation authority.
 - #1324 consolidates all ordinary repository engineering under this canonical role while retiring Integration Manager and Google Workspace Automation Engineer as executable technical agents; shared standards preserve their routing/domain constraints without transferring external-write authority.
 - 0.7.0 consumes the canonical Terminal Fast Lane request interpretation as a bounded owner-decision input for eligible Tier 0/1 `no-external-write` work and records any merge/closure authority through the existing content-bound authorization contracts; `IssueOperationalState`, `operating_mode.py`, exact-head, merge/review, closure, and excluded-surface gates remain authoritative, with no Fast-Lane-specific parser or second authority system (#1309).
 - 0.6.0 requires immediate bounded post-create managed-label reconciliation using #1022/#1023/#1038 with fresh-head, convergence, idempotency, unmanaged-label preservation, and non-authorizing failure semantics (#1076); 0.5.1 references the shared excluded-surface baseline added for #901 without changing authorization behavior.
