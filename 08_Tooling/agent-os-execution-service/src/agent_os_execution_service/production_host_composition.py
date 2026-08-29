@@ -93,7 +93,7 @@ def _checkpoint_store_root() -> str:
     """Resolve the checkpoint store root strictly from the environment.
 
     No default and no caller-supplied override: this is the canonical host
-    binding convention already used by ``scripts.agent_os_execution_interface``.
+    binding convention already used by ``scripts/agent_os_execution_interface``.
     """
     value = os.environ.get(CHECKPOINT_STORE_ROOT_ENV_VAR)
     if value is None or not value.strip():
