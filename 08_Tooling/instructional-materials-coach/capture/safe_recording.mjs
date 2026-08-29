@@ -1,8 +1,31 @@
 import { createHash } from 'node:crypto';
 
 export const CAPTURE_FORMAT_VERSION = 'software-tutorial-capture-v1';
+export const CAPTURE_FORMAT_VERSION_V2 = 'software-tutorial-capture-v2';
 export const REPLAY_VERSION = '4.0.2';
 export const PUPPETEER_VERSION = '25.3.0';
+
+/**
+ * Frozen `getComputedStyle` allowlist for optional capture-v2 target-style
+ * evidence (#1485). No DOM traversal and no per-child style trees: this reads
+ * only the already-resolved target handle.
+ */
+export const TARGET_STYLE_PROPERTY_ALLOWLIST = Object.freeze([
+  'color',
+  'backgroundColor',
+  'opacity',
+  'fontFamily',
+  'fontSize',
+  'fontWeight',
+  'fontStyle',
+  'lineHeight',
+  'letterSpacing',
+  'borderRadius',
+  'backgroundImage',
+  'boxShadow',
+  'textShadow',
+  'transform',
+]);
 
 export const AUTH_STATUSES = Object.freeze([
   'AUTH_READY',
@@ -101,6 +124,118 @@ function canonicalize(value) {
 
 export function fingerprintAction(step) {
   return createHash('sha256').update(JSON.stringify(canonicalize(step))).digest('hex');
+}
+
+const RGBA_COMMA_RE = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)$/i;
+const RGBA_SLASH_RE = /^rgba?\(\s*(\d+)\s+(\d+)\s+(\d+)\s*(?:\/\s*([\d.]+%?)\s*)?\)$/i;
+
+/**
+ * Parse a `getComputedStyle` color string into canonical RGBA. Browsers resolve
+ * `color`/`background-color` to `rgb()`/`rgba()` forms, so this recognizes only
+ * those exact canonical shapes; it is not a general CSS color parser and returns
+ * null rather than guessing at anything else (including named colors, which a
+ * resolved computed style never emits).
+ */
+export function parseComputedColorToRgba(rawValue) {
+  if (typeof rawValue !== 'string') return null;
+  const value = rawValue.trim();
+  if (value === 'transparent') return Object.freeze([0, 0, 0, 0]);
+  const match = RGBA_COMMA_RE.exec(value) ?? RGBA_SLASH_RE.exec(value);
+  if (!match) return null;
+  const [, r, g, b, a] = match;
+  const channels = [r, g, b].map(Number);
+  if (channels.some((channel) => !Number.isInteger(channel) || channel < 0 || channel > 255)) return null;
+  let alpha = 1;
+  if (a !== undefined) {
+    alpha = a.endsWith('%') ? Number(a.slice(0, -1)) / 100 : Number(a);
+    if (!Number.isFinite(alpha) || alpha < 0 || alpha > 1) return null;
+  }
+  return Object.freeze([...channels, alpha]);
+}
+
+function splitTopLevelCommas(value) {
+  const parts = [];
+  let depth = 0;
+  let current = '';
+  for (const char of value) {
+    if (char === '(') depth += 1;
+    if (char === ')') depth -= 1;
+    if (char === ',' && depth === 0) {
+      parts.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  if (current.trim().length > 0) parts.push(current.trim());
+  return parts;
+}
+
+const GRADIENT_LAYER_RE = /^(?:repeating-)?(?:linear|radial|conic)-gradient\(.*\)$/i;
+
+/**
+ * Sanitize a `background-image` computed value before persistence (#1485).
+ * Bounded CSS gradients are retained as raw computed strings; `url(...)`,
+ * `blob:`, `data:`, and any other unsupported function become null rather than
+ * persisting external/private resource identity. This intentionally does not
+ * parse gradient stops or build a general CSS value parser: it only splits
+ * top-level comma-separated layers so multi-layer backgrounds cannot smuggle an
+ * unsafe layer past a safe one.
+ */
+export function sanitizeBackgroundImage(rawValue) {
+  if (typeof rawValue !== 'string') return null;
+  const value = rawValue.trim();
+  if (value.length === 0) return null;
+  if (value === 'none') return 'none';
+  const layers = splitTopLevelCommas(value);
+  if (layers.length === 0) return null;
+  for (const layer of layers) {
+    if (/url\(|blob:|data:/i.test(layer)) return null;
+    if (!GRADIENT_LAYER_RE.test(layer)) return null;
+  }
+  return value;
+}
+
+/**
+ * Normalize raw bounded `getComputedStyle` strings into persisted
+ * `TargetStyleEvidence` (#1485). Only `TARGET_STYLE_PROPERTY_ALLOWLIST`
+ * properties are read. A missing/unavailable property becomes null; nothing
+ * here fabricates a value the browser did not report.
+ */
+export function buildTargetStyleEvidence(rectNormalized, rawComputedStyle) {
+  if (
+    !Array.isArray(rectNormalized) ||
+    rectNormalized.length !== 4 ||
+    rectNormalized.some((value) => typeof value !== 'number' || !Number.isFinite(value))
+  ) {
+    throw new TypeError('rectNormalized must be four finite numbers');
+  }
+  const raw = rawComputedStyle && typeof rawComputedStyle === 'object' ? rawComputedStyle : {};
+  const str = (key) => (typeof raw[key] === 'string' && raw[key].trim().length > 0 ? raw[key] : null);
+  const num = (key) => {
+    const value = str(key);
+    if (value === null) return null;
+    const parsed = Number.parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  return Object.freeze({
+    rect_normalized: Object.freeze([...rectNormalized]),
+    color_rgba: parseComputedColorToRgba(raw.color),
+    background_rgba: parseComputedColorToRgba(raw.backgroundColor),
+    opacity: num('opacity'),
+    font_family: str('fontFamily'),
+    font_size_px: num('fontSize'),
+    font_weight: num('fontWeight'),
+    font_style: str('fontStyle'),
+    line_height: str('lineHeight'),
+    letter_spacing: str('letterSpacing'),
+    border_radius: str('borderRadius'),
+    background_image: sanitizeBackgroundImage(raw.backgroundImage),
+    box_shadow: str('boxShadow'),
+    text_shadow: str('textShadow'),
+    transform: str('transform'),
+  });
 }
 
 function issue(status, reasonCode, detail, sourceIndex = null) {
@@ -220,18 +355,41 @@ export function validateRecording(rawRecording, { approvedOrigins } = {}) {
   return Object.freeze({ status, recording_sha256: recordingSha256, recording: parsed === undefined ? null : structuredClone(parsed), actions: Object.freeze(actions), findings: Object.freeze(findings) });
 }
 
-export function buildCaptureEnvelope({ captureId, capturedAt, validation, actionEvidence = [] }) {
+function stripTargetStyle(action) {
+  const { target_style, ...rest } = action;
+  return rest;
+}
+
+/**
+ * Build the capture envelope. Defaults to v1 with byte-identical shape to
+ * before #1485: `formatVersion` must be passed explicitly to opt into v2, and
+ * v1 output never carries `target_style` even if the caller's `actionEvidence`
+ * happens to include it, so v1 stays unaffected by v2 support existing.
+ */
+export function buildCaptureEnvelope({
+  captureId,
+  capturedAt,
+  validation,
+  actionEvidence = [],
+  formatVersion = CAPTURE_FORMAT_VERSION,
+}) {
+  if (formatVersion !== CAPTURE_FORMAT_VERSION && formatVersion !== CAPTURE_FORMAT_VERSION_V2) {
+    throw new TypeError(`unsupported capture format version: ${formatVersion}`);
+  }
   if (validation?.status !== 'valid') throw new Error('capture envelope requires a valid preflight result');
   if (typeof captureId !== 'string' || captureId.length === 0) throw new TypeError('captureId is required');
   if (typeof capturedAt !== 'string' || Number.isNaN(Date.parse(capturedAt))) throw new TypeError('capturedAt must be an ISO timestamp string');
   const viewportAction = validation.actions.find((action) => action.type === 'setViewport');
+  const actions = formatVersion === CAPTURE_FORMAT_VERSION_V2
+    ? actionEvidence.map((action) => ({ ...action, target_style: action.target_style ?? null }))
+    : actionEvidence.map(stripTargetStyle);
   return Object.freeze({
-    format_version: CAPTURE_FORMAT_VERSION,
+    format_version: formatVersion,
     capture_id: captureId,
     captured_at: capturedAt,
     source: Object.freeze({ kind: 'chrome-devtools-recorder', recording_sha256: validation.recording_sha256 }),
     runtime: Object.freeze({ replay_version: REPLAY_VERSION, puppeteer_version: PUPPETEER_VERSION }),
     viewport: viewportAction?.viewport ?? null,
-    actions: Object.freeze(structuredClone(actionEvidence)),
+    actions: Object.freeze(structuredClone(actions)),
   });
 }

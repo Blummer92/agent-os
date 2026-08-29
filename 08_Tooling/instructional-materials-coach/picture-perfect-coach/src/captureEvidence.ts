@@ -39,6 +39,47 @@ export type SoftwareTutorialCapture = Readonly<{
   actions: readonly CaptureAction[];
 }>;
 
+export type RgbaColor = readonly [number, number, number, number];
+
+/**
+ * Optional bounded target-style evidence (#1485). Captured only from the
+ * already-resolved target handle in `capture/replay_capture.mjs` using a frozen
+ * `getComputedStyle` allowlist. `rect_normalized` is `[x, y, width, height]`
+ * normalized against the capture viewport -- the repository's one rectangle
+ * ordering, shared with `TargetGeometry` and with `ReferenceRegion.rect` (in
+ * `./visualReference`). Only the coordinate space differs: capture/viewport
+ * here, sanitized derivative there, and nothing in this module converts one
+ * space into the other.
+ */
+export type TargetStyleEvidence = Readonly<{
+  rect_normalized: readonly [number, number, number, number];
+  color_rgba: RgbaColor | null;
+  background_rgba: RgbaColor | null;
+  opacity: number | null;
+  font_family: string | null;
+  font_size_px: number | null;
+  font_weight: number | null;
+  font_style: string | null;
+  line_height: string | null;
+  letter_spacing: string | null;
+  border_radius: string | null;
+  background_image: string | null;
+  box_shadow: string | null;
+  text_shadow: string | null;
+  transform: string | null;
+}>;
+
+export type CaptureActionV2 = CaptureAction & Readonly<{ target_style?: TargetStyleEvidence | null }>;
+
+export type SoftwareTutorialCaptureV2 = Readonly<{
+  format_version: 'software-tutorial-capture-v2';
+  capture_id: string;
+  source: Readonly<{ recording_sha256: string }>;
+  actions: readonly CaptureActionV2[];
+}>;
+
+export type AnySoftwareTutorialCapture = SoftwareTutorialCapture | SoftwareTutorialCaptureV2;
+
 export type ManifestReference = Readonly<{
   manifest_id: string;
   record_revision: number;
@@ -91,7 +132,7 @@ export type ApprovedScreenshotEvidence = Readonly<{
 
 export type CaptureEvidenceBundle = Readonly<{
   status: CaptureStatus;
-  capture: SoftwareTutorialCapture | null;
+  capture: AnySoftwareTutorialCapture | null;
   approved_screenshots: readonly ApprovedScreenshotEvidence[];
 }>;
 
@@ -104,6 +145,7 @@ export type BoundScreenState = Readonly<{
   manifest_reference: ManifestReference;
   asset_reference: AssetReference;
   target_geometry: TargetGeometry | null;
+  target_style: TargetStyleEvidence | null;
 }>;
 
 export type BoundScreenEvidence = Readonly<{
@@ -174,16 +216,20 @@ function roleName(role: ScreenshotRole): 'action' | 'result' {
   return role === 'before' ? 'action' : 'result';
 }
 
+function targetStyleOf(action: CaptureAction | CaptureActionV2): TargetStyleEvidence | null {
+  return ('target_style' in action ? action.target_style : null) ?? null;
+}
+
 function pickRole(
   step: ReviewedStepProjection,
-  capture: SoftwareTutorialCapture,
+  capture: AnySoftwareTutorialCapture,
   bundle: CaptureEvidenceBundle,
   role: ScreenshotRole,
   requestedUiClaims: readonly string[],
 ): { state: BoundScreenState | null; reasons: CaptureBlockerReason[] } {
   const sourceIndexes = new Set(step.source_indexes);
   const identities = new Map(step.action_identity.map((identity) => [identity.sourceIndex, identity.sourceFingerprint]));
-  const candidates: Array<{ approval: ApprovedScreenshotEvidence; action: CaptureAction }> = [];
+  const candidates: Array<{ approval: ApprovedScreenshotEvidence; action: CaptureAction | CaptureActionV2 }> = [];
   const observedReasons: CaptureBlockerReason[] = [];
 
   for (const approval of bundle.approved_screenshots) {
@@ -230,6 +276,7 @@ function pickRole(
       manifest_reference: approval.manifest_reference,
       asset_reference: approval.asset_reference,
       target_geometry: action.target_geometry,
+      target_style: targetStyleOf(action),
     },
     reasons: [],
   };
@@ -255,7 +302,7 @@ export function bindCaptureEvidence(
     return { status, evidence: null, blocker_reasons: [CAPTURE_BLOCKER_REASONS.captureStatusInvalid] };
   }
   const capture = bundle.capture;
-  if (capture.format_version !== 'software-tutorial-capture-v1') {
+  if (capture.format_version !== 'software-tutorial-capture-v1' && capture.format_version !== 'software-tutorial-capture-v2') {
     return { status: 'invalid', evidence: null, blocker_reasons: [CAPTURE_BLOCKER_REASONS.captureStatusInvalid] };
   }
   if (capture.source.recording_sha256 !== step.recording_sha256) {
