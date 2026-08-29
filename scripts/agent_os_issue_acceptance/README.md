@@ -151,3 +151,13 @@ This package does not provide network transport or a concrete live GitHub reader
 ## Workflow and write boundary
 Metadata validation and scanning remain offline and report-only. Connected retrieval consumes caller-supplied readers and preserves provenance. The package does not authorize issue, label, readiness, workflow, Scheduler, credential, production, or external-system writes.
 Outcome meaning remains governed by `01_Shared_Standards/github/issue-acceptance-automation.md`. Package boundaries and facade decisions are governed by issue #464 and the applicable Agent OS governance standards.
+
+## Authorization drift review (#1157)
+
+`authorization_drift_review.py` implements `agent-os-authorization-drift-review/1.0` as a pure, deterministic, content-addressed classifier over caller-supplied immutable base-to-current evidence. It returns exactly one of `no-relevant-drift`, `revalidation-required`, `contract-conflict`, `authorization-expired`, `evidence-incomplete`, or `manual-decision-required` using the frozen fail-closed precedence from #854; reason codes are finite, sorted, deduplicated, and bounded.
+
+The reviewer binds repository/issue/original-authorization identity, exact original base branch and SHA, supplied current-main SHA, authorization applicability/state, range/provenance evidence, scope and contract fingerprint, dependency identities/public-interface evidence, governance contract revisions, validation requirements/profile/policy, and optional current `IssueOperationalState` identity. It performs no Git/GitHub retrieval, filesystem access, subprocesses, network calls, clock lookup, Scheduler/provider/persistence work, model judgment, or external mutation.
+
+Existing `IssueOperationalState`, approval applicability, merge authorization, lifecycle mutation admission, candidate-packet freshness/invalidation, provenance verification, and #543 stale-authority/retired-scope risk ownership remain canonical. The reviewer does not recreate or override those meanings and is consumed by direct-module import rather than a package-facade expansion.
+
+`AuthorizationRefreshHandoff` is evidence for the existing authorization owner only. It may be built from an eligible review result (and completed revalidation evidence when required), preserves the original scope/allowlist/forbidden paths/tests, and always carries `authorization_granted=false` and `side_effects_performed=false`. No consumer may treat that handoff, a passing test, branch existence, or a `no-relevant-drift` result as authorization.
