@@ -86,6 +86,12 @@ class AuthorizationStateEvidence:
     applicable: bool = True
     applicability_current: bool = True
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.state, AuthorizationState):
+            raise TypeError("state must be AuthorizationState")
+        if type(self.applicable) is not bool or type(self.applicability_current) is not bool:
+            raise TypeError("authorization applicability flags must be bool")
+
 
 @dataclass(frozen=True, slots=True)
 class RangeEvidence:
@@ -98,8 +104,13 @@ class RangeEvidence:
     provenance_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        _text(self.base_sha, "base_sha")
+        _text(self.head_sha, "head_sha")
         object.__setattr__(self, "changed_paths", _paths(self.changed_paths, "changed_paths"))
         object.__setattr__(self, "provenance_ids", _evidence_ids(self.provenance_ids))
+        for name in ("present", "complete", "provenance_current"):
+            if type(getattr(self, name)) is not bool:
+                raise TypeError(f"{name} must be bool")
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +125,10 @@ class DependencyEvidence:
         _text(self.dependency_id, "dependency_id")
         _text(self.original_revision, "original_revision")
         _text(self.current_revision, "current_revision")
+        if self.public_interface_changed is not None and type(self.public_interface_changed) is not bool:
+            raise TypeError("public_interface_changed must be bool or None")
+        if type(self.complete) is not bool:
+            raise TypeError("complete must be bool")
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +144,10 @@ class GovernanceContractEvidence:
             raise ValueError("unsupported governance contract kind")
         _text(self.original_revision, "original_revision")
         _text(self.current_revision, "current_revision")
+        if not isinstance(self.compatibility, CompatibilityState):
+            raise TypeError("compatibility must be CompatibilityState")
+        if type(self.complete) is not bool:
+            raise TypeError("complete must be bool")
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,19 +200,36 @@ class AuthorizationDriftReviewRequest:
             _text(getattr(self, name), name)
         _positive_int(self.issue_number, "issue_number")
         _positive_int(self.authorization_issue_number, "authorization_issue_number")
+        if not isinstance(self.authorization_state, AuthorizationStateEvidence):
+            raise TypeError("authorization_state must be AuthorizationStateEvidence")
+        if self.range_evidence is not None and not isinstance(self.range_evidence, RangeEvidence):
+            raise TypeError("range_evidence must be RangeEvidence or None")
+        if not isinstance(self.contract_compatibility, CompatibilityState):
+            raise TypeError("contract_compatibility must be CompatibilityState")
+        if type(self.forbidden_surface_implicated) is not bool:
+            raise TypeError("forbidden_surface_implicated must be bool")
         object.__setattr__(self, "allowed_paths", _paths(self.allowed_paths, "allowed_paths"))
         object.__setattr__(self, "forbidden_paths", _paths(self.forbidden_paths, "forbidden_paths"))
         object.__setattr__(self, "expected_paths", _paths(self.expected_paths, "expected_paths"))
         if type(self.dependencies) is not tuple or len(self.dependencies) > MAX_ITEMS:
             raise ValueError("dependencies outside bounds")
+        if any(not isinstance(item, DependencyEvidence) for item in self.dependencies):
+            raise TypeError("dependencies must contain DependencyEvidence")
         if len({item.dependency_id for item in self.dependencies}) != len(self.dependencies):
             raise ValueError("duplicate dependency_id")
         object.__setattr__(self, "dependencies", tuple(sorted(self.dependencies, key=lambda item: item.dependency_id)))
         if type(self.governance_contracts) is not tuple or len(self.governance_contracts) > len(REQUIRED_GOVERNANCE_KINDS):
             raise ValueError("governance_contracts outside bounds")
+        if any(not isinstance(item, GovernanceContractEvidence) for item in self.governance_contracts):
+            raise TypeError("governance_contracts must contain GovernanceContractEvidence")
         if len({item.kind for item in self.governance_contracts}) != len(self.governance_contracts):
             raise ValueError("duplicate governance contract kind")
         object.__setattr__(self, "governance_contracts", tuple(sorted(self.governance_contracts, key=lambda item: item.kind)))
+        if not isinstance(self.validation, ValidationContractEvidence):
+            raise TypeError("validation must be ValidationContractEvidence")
+        for name in ("issue_operational_state_current", "relevance_resolved"):
+            if type(getattr(self, name)) is not bool:
+                raise TypeError(f"{name} must be bool")
         if self.issue_operational_state_id is not None and not EVIDENCE_ID_RE.fullmatch(self.issue_operational_state_id):
             raise ValueError("issue_operational_state_id malformed")
 
@@ -361,7 +397,7 @@ def evaluate_authorization_drift(request: AuthorizationDriftReviewRequest) -> Au
     conflict: set[str] = set()
     revalidation: set[str] = set()
     unresolved: set[str] = set()
-    if request.forbidden_surface_implicated:
+    if request.forbidden_surface_implicated or _overlap(range_evidence.changed_paths, request.forbidden_paths):
         conflict.add("scope.forbidden-surface-implicated")
     if request.original_contract_fingerprint != request.current_contract_fingerprint:
         if request.contract_compatibility is CompatibilityState.INCOMPATIBLE:
