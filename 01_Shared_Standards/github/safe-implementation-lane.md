@@ -42,6 +42,7 @@ authorizes a previously excluded surface.
 For a currently authorized Safe Implementation Lane issue, discovery of one existing valid issue-linked branch, Draft PR, or checkpoint lineage is normally a resume target, not a stop condition. Reacquire current repository, authorization, scope, ownership, checkpoint, exact-head, and canonical Scheduler lease evidence; consume the existing `ResumePlan`; and continue from the newest valid checkpoint when no active conflict exists.
 An existing active Scheduler lease is the concurrency authority. Do not create a competing branch, PR, execution, or lease; do not steal, force-release, expire by age, or automatically retry an active or ambiguous lease. When the same authorized branch advances from SHA A to SHA B, reacquire B, inspect the head change, rebind current exact-head evidence, invalidate only the head-bound evidence required by existing contracts, and continue when authorization, ownership, and bounded scope remain valid. If `main` advanced and the PR branch is behind, route to the separately governed branch-refresh path rather than treating base drift as ordinary `HEAD_ADVANCED`.
 Cancelled validation on stale SHA A may be projected as `SUPERSEDED_BY_NEW_HEAD` only when bounded evidence proves the old run was cancelled, the current PR head is different SHA B, a newer run/check for B exists in the same validation lane/concurrency group, and replacement/supersession evidence is current. A genuine test or configuration failure on A remains genuine failure evidence. Only validation bound to the current exact head may satisfy Ready-for-Review.
+For each exact next repository operation in a continuing lane, consume the existing #918 capability classification. When that operation requires zero runtime capabilities and the connected GitHub surface is sufficient, preserve `CHATGPT_CONNECTOR_NATIVE`; continuation, an available VM, or an earlier runtime-required step is not evidence that the next zero-runtime operation requires the governed runner. If the selected connector action later proves insufficient, preserve the same lineage and use the existing #1237 post-selection continuation path after fresh currentness/capability reacquisition. Do not silently escalate or create a competing route, writer, retry loop, or execution authority.
 ## Validation Loop
 Follow the canonical focused-local and authoritative exact-head aggregate policy in
 `01_Shared_Standards/global-engineering/testing-and-release.md`.
@@ -52,6 +53,7 @@ a capable authorized surface before opening the PR; if no such route exists, sto
 with `needs-decision`. `aggregate-pending` means only the authoritative final
 exact-head aggregate remains pending, never an unexecuted issue-required
 pre-PR check. Ready-for-Review still requires all required exact-head checks to pass.
+A zero-command static validation plan adds no runtime capability requirement and must not trigger the governed runner, VM, dependency/environment-health setup, or Cloud Build solely to validate or mutate the static work. This does not bypass an executable developer-loop or exact-head check required by the governing profile.
 ## Bounded Scope Envelope
 An eligible issue may name bounded areas instead of an exhaustive file list. The
 envelope includes only changes directly necessary for the stated objective:
@@ -99,8 +101,9 @@ risks, rollback, and the applicable authorization boundary. Prefer one
 consolidated user-facing result for routine internal routing while preserving
 required handoff artifacts for owners and auditability.
 ## Version
-0.7.0
+0.8.0
 ## Changelog
+- 0.8.0 / #1337 preserves the existing #918 connector-native route across Safe Implementation Lane continuation for every zero-runtime next operation, keeps zero-command static validation off runtime/Cloud Build, and delegates connector insufficiency to #1237 without weakening executable validation gates.
 - 0.7.0 adds opt-in Terminal Fast Lane (#1309) by composing the canonical `request-interpretation-v1` record, existing content-bound merge/lifecycle authorization records, `operating_mode.py` release ceiling, #1187 branch refresh, and `agent-os-release-run.py` terminal progression. No second raw-language parser, lifecycle stage, router, authority model, or terminal controller is introduced.
 - 0.6.0 distinguishes artifact non-authority from later direct-owner authorization, consolidates activation preflight, and carries one current instruction across a single mechanical readiness intervention without weakening fail-closed stops (#1274).
 - 0.5.0 makes existing authorized branch/PR/checkpoint lineage resumable through the canonical #895 ResumePlan and #758 Scheduler lease, separates same-branch `HEAD_ADVANCED` from #1187 base-behind refresh, and requires current replacement evidence before cancelled stale-head validation is classified as superseded (#1188).
