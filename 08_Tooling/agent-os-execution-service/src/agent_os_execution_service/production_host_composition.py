@@ -102,7 +102,6 @@ class ProductionHostCompositionError(RuntimeError):
 
 
 def _checkpoint_store_root() -> str:
-    """Resolve the checkpoint store root strictly from the environment."""
     value = os.environ.get(CHECKPOINT_STORE_ROOT_ENV_VAR)
     if value is None or not value.strip():
         raise ProductionHostCompositionError(
@@ -143,13 +142,7 @@ def build_production_governed_resume_bindings(
     dependency_command_runner: DependencyCommandRunner | None = None,
     runtime_request: RuntimeExecutionRequest | None = None,
 ) -> GovernedResumeBindings:
-    """Compose the real #1218 seam and the real #758/#1253 dispatch boundary.
-
-    The compute-control provider is an injected read/composition seam: it must
-    return the canonical #1419 projection for the exact admitted pilot input.
-    The projection is checked before the runtime-configuration provider, so a
-    blocked/stale/duplicate/reuse/unavailable decision spends no runtime setup.
-    """
+    """Compose production reconstruction and dispatch with #1419 admission first."""
     if not callable(runtime_configuration_provider):
         raise TypeError("runtime_configuration_provider must be callable")
     if not callable(compute_control_projection_provider):
@@ -201,7 +194,7 @@ def build_production_governed_resume_bindings(
                 projection,
                 repository=pilot_input.repository,
                 current_head_sha=pilot_input.source_head_sha,
-                validation_class=pilot_input.validation_profile,
+                validation_class=pilot_input.validation_plan.profile,
             )
         except (TypeError, ValueError, RuntimeError) as exc:
             raise ProductionHostCompositionError(
