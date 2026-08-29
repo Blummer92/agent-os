@@ -7,10 +7,12 @@ import type {
 } from './captureEvidence';
 import {
   VISUAL_REFERENCE_BLOCKER_REASONS,
+  admitReferenceRegions,
   admitVisualReference,
   buildVisualReferenceDirective,
   selectVisualReference,
   type ApprovedVisualReference,
+  type ReferenceRegion,
   type VisualReferenceCandidate,
   type VisualReferenceLibrary,
 } from './visualReference';
@@ -283,5 +285,156 @@ describe('PPUX-VRL1 current application visual-reference library', () => {
     expect(directive).toContain('visual-reference://editor-shape-border-color');
     expect(directive).toContain('editor/shape/border-color');
     expect(directive).toContain('Do not redraw, reconstruct, invent, or merge');
+  });
+});
+
+describe('PPUX-VRL6 addressable visual-reference regions (#1485)', () => {
+  const reference = approved('editor/text/edit', ['Adobe Express', 'Text', 'Edit', 'Title']);
+  const fingerprint = reference.asset_reference.content_fingerprint;
+
+  function anchor(region_id: string, rect: ReferenceRegion['rect'], claim: string | null = null): ReferenceRegion {
+    return { region_id, claim, rect, fill_allowed: false };
+  }
+
+  function fill(region_id: string, rect: ReferenceRegion['rect'], claim: string | null = null): ReferenceRegion {
+    return { region_id, claim, rect, fill_allowed: true };
+  }
+
+  it('admits valid flat regions bound to the exact reference/fingerprint', () => {
+    const result = admitReferenceRegions(reference, {
+      reference_id: reference.reference_id,
+      content_fingerprint: fingerprint,
+      regions: [anchor('title-label', [0.1, 0.1, 0.2, 0.1], 'Title'), fill('title-input', [0.1, 0.2, 0.5, 0.1])],
+    });
+    expect(result.status).toBe('valid');
+    expect(result.regions).toHaveLength(2);
+    expect(result.blocker_reasons).toEqual([]);
+  });
+
+  it('blocks an out-of-bounds rect', () => {
+    const result = admitReferenceRegions(reference, {
+      reference_id: reference.reference_id,
+      content_fingerprint: fingerprint,
+      regions: [anchor('oob', [0.1, 0.1, 1.2, 0.5])], // x + width = 1.3 exceeds the derivative box
+    });
+    expect(result.status).toBe('blocked');
+    expect(result.blocker_reasons).toEqual([VISUAL_REFERENCE_BLOCKER_REASONS.regionOutOfBounds]);
+    expect(result.regions).toBeNull();
+  });
+
+  it('blocks a degenerate rect', () => {
+    const zeroWidth = admitReferenceRegions(reference, {
+      reference_id: reference.reference_id,
+      content_fingerprint: fingerprint,
+      regions: [anchor('zero-width', [0.5, 0.1, 0, 0.4])],
+    });
+    expect(zeroWidth.blocker_reasons).toEqual([VISUAL_REFERENCE_BLOCKER_REASONS.regionDegenerate]);
+
+    const zeroHeight = admitReferenceRegions(reference, {
+      reference_id: reference.reference_id,
+      content_fingerprint: fingerprint,
+      regions: [anchor('zero-height', [0.5, 0.1, 0.2, 0])],
+    });
+    expect(zeroHeight.blocker_reasons).toEqual([VISUAL_REFERENCE_BLOCKER_REASONS.regionDegenerate]);
+
+    const negativeExtent = admitReferenceRegions(reference, {
+      reference_id: reference.reference_id,
+      content_fingerprint: fingerprint,
+      regions: [anchor('negative-extent', [0.5, 0.4, -0.2, 0.1])],
+    });
+    expect(negativeExtent.blocker_reasons).toEqual([VISUAL_REFERENCE_BLOCKER_REASONS.regionDegenerate]);
+  });
+
+  it('blocks a duplicate region_id', () => {
+    const result = admitReferenceRegions(reference, {
+      reference_id: reference.reference_id,
+      content_fingerprint: fingerprint,
+      regions: [anchor('dup', [0.1, 0.1, 0.2, 0.2]), fill('dup', [0.5, 0.5, 0.2, 0.2])],
+    });
+    expect(result.blocker_reasons).toEqual([VISUAL_REFERENCE_BLOCKER_REASONS.regionDuplicateId]);
+  });
+
+  it('blocks a non-null claim absent from that exact reference\'s visible_ui_claims', () => {
+    const result = admitReferenceRegions(reference, {
+      reference_id: reference.reference_id,
+      content_fingerprint: fingerprint,
+      regions: [anchor('missing-claim', [0.1, 0.1, 0.2, 0.2], 'Nonexistent Claim')],
+    });
+    expect(result.blocker_reasons).toEqual([VISUAL_REFERENCE_BLOCKER_REASONS.regionClaimNotVisible]);
+  });
+
+  it('blocks a fill region that intersects an anchor region with the explicit overlap blocker', () => {
+    const result = admitReferenceRegions(reference, {
+      reference_id: reference.reference_id,
+      content_fingerprint: fingerprint,
+      regions: [anchor('label', [0.1, 0.1, 0.4, 0.4]), fill('input', [0.3, 0.3, 0.6, 0.6])],
+    });
+    expect(result.status).toBe('blocked');
+    expect(result.blocker_reasons).toEqual([VISUAL_REFERENCE_BLOCKER_REASONS.fillRegionOverlapsAnchor]);
+  });
+
+  it('permits anchored regions to overlap other anchored regions', () => {
+    const result = admitReferenceRegions(reference, {
+      reference_id: reference.reference_id,
+      content_fingerprint: fingerprint,
+      regions: [anchor('label-a', [0.1, 0.1, 0.4, 0.4]), anchor('label-b', [0.3, 0.3, 0.6, 0.6])],
+    });
+    expect(result.status).toBe('valid');
+  });
+
+  it('permits distinct non-overlapping fill regions', () => {
+    const result = admitReferenceRegions(reference, {
+      reference_id: reference.reference_id,
+      content_fingerprint: fingerprint,
+      regions: [fill('field-a', [0.1, 0.1, 0.3, 0.2]), fill('field-b', [0.4, 0.1, 0.6, 0.2])],
+    });
+    expect(result.status).toBe('valid');
+    expect(result.regions).toHaveLength(2);
+  });
+
+  it('fails closed when the region set targets a different reference_id or a stale content_fingerprint', () => {
+    const wrongReference = admitReferenceRegions(reference, {
+      reference_id: 'some-other-reference',
+      content_fingerprint: fingerprint,
+      regions: [anchor('a', [0.1, 0.1, 0.2, 0.2])],
+    });
+    expect(wrongReference.blocker_reasons).toEqual([VISUAL_REFERENCE_BLOCKER_REASONS.regionIdentityMismatch]);
+
+    const staleFingerprint = admitReferenceRegions(reference, {
+      reference_id: reference.reference_id,
+      content_fingerprint: `${fingerprint}-recaptured`,
+      regions: [anchor('a', [0.1, 0.1, 0.2, 0.2])],
+    });
+    expect(staleFingerprint.blocker_reasons).toEqual([VISUAL_REFERENCE_BLOCKER_REASONS.regionIdentityMismatch]);
+    expect(staleFingerprint.regions).toBeNull();
+  });
+
+  it('capture-space geometry cannot silently become sanitized-reference-space geometry', () => {
+    // Coordinate-space rule (#1485): every rectangle in this package uses one ordering,
+    // [x, y, width, height]. TargetGeometry is raw capture-viewport pixels and
+    // TargetStyleEvidence.rect_normalized is normalized to the capture viewport (see
+    // captureEvidence.ts), while ReferenceRegion.rect is normalized to the sanitized
+    // derivative's own pixel box. Only the space differs, so rect shape can never be the
+    // thing that keeps them apart; this proves misuse fails closed anyway.
+    const rawCaptureViewportPixels = [53, 73, 180, 44] as const; // real TargetGeometry shape/values (captureEvidence.test.ts)
+    const rawPixelsAsRegion = admitReferenceRegions(reference, {
+      reference_id: reference.reference_id,
+      content_fingerprint: fingerprint,
+      regions: [anchor('leaked-capture-pixels', rawCaptureViewportPixels)],
+    });
+    expect(rawPixelsAsRegion.status).toBe('blocked');
+    expect(rawPixelsAsRegion.blocker_reasons).toEqual([VISUAL_REFERENCE_BLOCKER_REASONS.regionOutOfBounds]);
+
+    // An already-normalized capture-space tuple is numerically plausible as a region rect, so
+    // the real guarantee is identity binding, not rect shape: capture/action evidence carries
+    // no reference_id/content_fingerprint of its own, so nothing upstream can key an implicit
+    // capture-to-derivative conversion off this exact reference's identity.
+    const captureStyleRectNormalized = [0.1, 0.2, 0.3, 0.4] as const; // real TargetStyleEvidence.rect_normalized shape/values
+    const unboundToThisReference = admitReferenceRegions(reference, {
+      reference_id: 'some-other-reference',
+      content_fingerprint: fingerprint,
+      regions: [anchor('leaked-capture-normalized', captureStyleRectNormalized)],
+    });
+    expect(unboundToThisReference.blocker_reasons).toEqual([VISUAL_REFERENCE_BLOCKER_REASONS.regionIdentityMismatch]);
   });
 });

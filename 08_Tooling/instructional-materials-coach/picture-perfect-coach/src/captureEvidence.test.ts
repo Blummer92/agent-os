@@ -3,6 +3,7 @@ import {
   CAPTURE_BLOCKER_REASONS,
   bindCaptureEvidence,
   type CaptureEvidenceBundle,
+  type TargetStyleEvidence,
 } from './captureEvidence';
 import { buildPortablePrompt, projectReviewedStepToVisualSpecification, type PromptAuthoringInput } from './promptIntent';
 import { tutorial0SyntheticCapture } from './fixtures/tutorial0-capture';
@@ -222,5 +223,84 @@ describe('PPUX-F2 capture evidence binding', () => {
       expect(card.portablePrompt).not.toMatch(/live Adobe|screen-accurate|selector stability/i);
     }
     expect(tutorial0BlockedFinalState.status).toBe('blocked');
+  });
+});
+
+describe('PPUX-VRL6 capture v1/v2 coexistence (#1485)', () => {
+  const sampleTargetStyle: TargetStyleEvidence = {
+    rect_normalized: [0.1, 0.2, 0.3, 0.4],
+    color_rgba: [0, 0, 0, 1],
+    background_rgba: null,
+    opacity: 1,
+    font_family: 'Arial',
+    font_size_px: 16,
+    font_weight: 400,
+    font_style: 'normal',
+    line_height: '24px',
+    letter_spacing: 'normal',
+    border_radius: '4px',
+    background_image: null,
+    box_shadow: 'none',
+    text_shadow: 'none',
+    transform: 'none',
+  };
+
+  function v2BundleWithStyle(sourceIndex: number, targetStyle: TargetStyleEvidence | null): CaptureEvidenceBundle {
+    const bundle = structuredClone(tutorial0SyntheticCapture);
+    return {
+      ...bundle,
+      capture: bundle.capture && {
+        ...bundle.capture,
+        format_version: 'software-tutorial-capture-v2',
+        actions: bundle.capture.actions.map((action) =>
+          action.source_index === sourceIndex ? { ...action, target_style: targetStyle } : action),
+      },
+    };
+  }
+
+  it('binds capture v1 exactly as before v2 support existed', () => {
+    const result = bindCaptureEvidence(square, 'action', ['Create new'], tutorial0SyntheticCapture);
+    expect(result.status).toBe('valid');
+    expect(result.evidence?.action?.target_style).toBeNull();
+  });
+
+  it('binds capture v2 and carries optional target_style through to bound evidence', () => {
+    const bundle = v2BundleWithStyle(13, sampleTargetStyle);
+    const result = bindCaptureEvidence(square, 'action', ['Create new'], bundle);
+    expect(result.status).toBe('valid');
+    expect(result.evidence?.action?.target_style).toEqual(sampleTargetStyle);
+    expect(result.evidence?.action?.target_geometry).toEqual({
+      target_x: 53,
+      target_y: 73,
+      target_width: 180,
+      target_height: 44,
+    });
+  });
+
+  it('binds capture v2 with a missing/null target_style without fabricating one', () => {
+    const bundle = v2BundleWithStyle(13, null);
+    const result = bindCaptureEvidence(square, 'action', ['Create new'], bundle);
+    expect(result.status).toBe('valid');
+    expect(result.evidence?.action?.target_style).toBeNull();
+  });
+
+  it('leaves the action fingerprint and recording identity byte-identical whether or not target_style is present', () => {
+    const withStyle = v2BundleWithStyle(13, sampleTargetStyle);
+    const withoutStyle = v2BundleWithStyle(13, null);
+    const boundWithStyle = bindCaptureEvidence(square, 'action', ['Create new'], withStyle);
+    const boundWithoutStyle = bindCaptureEvidence(square, 'action', ['Create new'], withoutStyle);
+    expect(boundWithStyle.evidence?.action?.source_fingerprint).toBe(boundWithoutStyle.evidence?.action?.source_fingerprint);
+    expect(withStyle.capture?.source.recording_sha256).toBe(withoutStyle.capture?.source.recording_sha256);
+    expect(boundWithStyle.evidence?.action?.target_geometry).toEqual(boundWithoutStyle.evidence?.action?.target_geometry);
+  });
+
+  it('fails closed on an unknown capture format version rather than guessing at its shape', () => {
+    const bundle = mutateBundle((value) => ({
+      ...value,
+      capture: value.capture && { ...value.capture, format_version: 'software-tutorial-capture-v3' as never },
+    }));
+    const result = bindCaptureEvidence(square, 'action', ['Create new'], bundle);
+    expect(result.status).toBe('invalid');
+    expect(result.blocker_reasons).toEqual([CAPTURE_BLOCKER_REASONS.captureStatusInvalid]);
   });
 });

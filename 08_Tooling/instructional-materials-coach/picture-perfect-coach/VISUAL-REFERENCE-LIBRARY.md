@@ -84,6 +84,24 @@ An approved reference may produce a bounded presentation directive that names it
 
 This contract does not authorize image generation, live Adobe access, browser automation, external writes, or publication.
 
+## Addressable regions and fill safety (#1485)
+
+An approved reference's sanitized derivative may carry a `ReferenceRegionSet`: bounded, flat, non-nested `ReferenceRegion` entries (`region_id`, optional `claim`, `rect`, `fill_allowed`). There are no region roles, parent/child nesting, policy enum beyond `fill_allowed`, icon taxonomy, typography taxonomy, or fidelity enum.
+
+`ReferenceRegion.rect` is `[x, y, width, height]`, normalized `[0,1]` against the sanitized derivative's own pixel box. That is the repository's existing rectangle ordering, shared with `TargetGeometry`'s `target_x/target_y/target_width/target_height` and with `TargetStyleEvidence.rect_normalized` in `src/captureEvidence.ts`, so #1485 introduces no second rectangle convention. Only the evidence space differs: capture geometry is raw capture-viewport pixels or normalized against the capture viewport, region geometry is normalized against the sanitized derivative. Nothing converts one space into the other, and both files carry an explicit cross-reference comment. Because the two spaces are numerically indistinguishable by rect shape alone, the enforced guarantee is identity binding (`reference_id` + `content_fingerprint`), not rect ordering.
+
+`admitReferenceRegions()` fails closed unless: the region set's `reference_id` and `content_fingerprint` match the exact approved reference (so a recaptured derivative, whose `asset_reference.content_fingerprint` changes, can never silently inherit stale region geometry); every rect is in-bounds and non-degenerate; `region_id` values are unique; every non-null `claim` is present in that exact reference's `visible_ui_claims`; and no `fill_allowed:true` rect intersects a `fill_allowed:false` rect (`visual-reference-fill-region-overlaps-anchor`). Anchored (`fill_allowed:false`) regions may overlap other anchored regions; separate non-overlapping fill regions may coexist.
+
+## Capture-v2 target style evidence (#1485)
+
+Capture format v2 (`software-tutorial-capture-v2`, `src/captureEvidence.ts` and `capture/safe_recording.mjs`) adds one optional bounded `target_style: TargetStyleEvidence | null` on resolved action evidence, captured only from the already-resolved target handle in `capture/replay_capture.mjs` using a frozen `getComputedStyle` property allowlist (`TARGET_STYLE_PROPERTY_ALLOWLIST`). There is no DOM traversal and no per-child style trees.
+
+RGBA is canonical for captured colors (`parseComputedColorToRgba`); hex is never persisted. Gradients, shadows, transforms, line height, letter spacing, and border radius remain bounded raw computed strings; no parsed style subsystem is introduced. `background_image` is sanitized before persistence (`sanitizeBackgroundImage`): bounded CSS gradient layers are retained, while `url(...)`, `blob:`, and `data:` layers (and any unsupported function) become `null` rather than persisting external/private resource identity.
+
+Adding `target_style` does not change `fingerprintAction()` output, recording SHA/digest, source fingerprint joins, or F1/F2 identity binding — this is covered by a required regression test, not an assumption. Capture v1 remains supported unchanged (`buildCaptureEnvelope()` defaults to v1 and strips `target_style` from v1 output even if the caller's evidence happens to include it); `bindCaptureEvidence()` accepts both v1 and v2 and fails closed on any other `format_version`.
+
+Canvas, WebGL, raster artwork, photographs, and other surfaces without trustworthy computed style are unaffected: source pixels remain authoritative, and no CV/OCR/texture inference is added.
+
 ## Validation
 
 Focused acceptance coverage lives in `src/visualReference.test.ts`. The governing #1372 developer loop remains mandatory before Draft PR creation:
@@ -105,3 +123,5 @@ The tests are offline and use metadata/synthetic references only.
 ## Rollback
 
 Remove `src/visualReference.ts`, `src/visualReference.test.ts`, and this document. Existing F1/F2 capture evidence, ArtifactManifest, visual-asset compatibility, Recorder evidence, and prompt behavior remain unchanged.
+
+For #1485 specifically: reverting `admitReferenceRegions`/`ReferenceRegion`/`ReferenceRegionSet` from `src/visualReference.ts` (and their tests) leaves the pre-#1485 reference-admission/selection contract unchanged. Reverting `target_style`/`TargetStyleEvidence`/`buildTargetStyleEvidence`/`sanitizeBackgroundImage`/`parseComputedColorToRgba` from `capture/safe_recording.mjs`, `capture/replay_capture.mjs`, and `src/captureEvidence.ts` (and their tests) leaves capture format v1 as the only supported format again; no action fingerprint, recording identity, or F1/F2 join depends on either addition.
