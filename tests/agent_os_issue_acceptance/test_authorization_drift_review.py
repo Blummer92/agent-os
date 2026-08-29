@@ -171,6 +171,25 @@ def test_forbidden_surface_implication_is_contract_conflict():
     assert result.reason_codes == ("scope.forbidden-surface-implicated",)
 
 
+def test_changed_path_crossing_forbidden_scope_is_contract_conflict():
+    result = evaluate_authorization_drift(
+        _request(
+            range_evidence=RangeEvidence(
+                A, B, (".github/workflows/agent-os.yml",), provenance_ids=(EVIDENCE,)
+            )
+        )
+    )
+    assert result.outcome is DriftOutcome.CONTRACT_CONFLICT
+    assert result.reason_codes == ("scope.forbidden-surface-implicated",)
+
+
+def test_malformed_typed_evidence_is_rejected_before_evaluation():
+    with pytest.raises(TypeError):
+        DependencyEvidence("dep:x", "v1", "v1", "yes")
+    with pytest.raises(TypeError):
+        AuthorizationStateEvidence("active")
+
+
 @pytest.mark.parametrize(
     ("state", "reason"),
     [
@@ -247,6 +266,7 @@ def test_reason_codes_are_sorted_and_deduplicated():
     result = evaluate_authorization_drift(request)
     assert result.reason_codes == tuple(sorted(set(result.reason_codes)))
     assert len(result.reason_codes) == 3
+
 
 
 def test_missing_required_governance_revision_set_fails_closed():
