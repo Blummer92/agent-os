@@ -21,6 +21,7 @@ from scripts.agent_os_issue_labels.issue_create import (
     MutationState,
     SubprocessGhRunner,
     build_issue_create_argv,
+    build_issue_readback_argv,
     execute_issue_creation,
     issue_create_result_to_dict,
     plan_issue_creation,
@@ -37,13 +38,17 @@ TARGET = GitHubRepositoryTarget.parse("Blummer92/agent-os")
 
 
 class Runner:
-    def __init__(self, *, executable="gh", create=None, overrides=None):
+    def __init__(self, *, executable="gh", create=None, readback=None, overrides=None):
         self.executable = executable
         self.create = create or IssueCreateProcessResult(
             0, "https://github.com/Blummer92/agent-os/issues/700\n", ""
         )
+        self.readback = readback
         self.overrides = overrides or {}
         self.calls = []
+        self.submitted_title = None
+        self.submitted_body = None
+        self.submitted_labels = ()
 
     def resolve_executable(self):
         return self.executable
@@ -59,6 +64,9 @@ class Runner:
             ),
             (self.executable, "issue", "create", "--help"): IssueCreateProcessResult(
                 0, "--repo --title --body-file --label\n", ""
+            ),
+            (self.executable, "issue", "view", "--help"): IssueCreateProcessResult(
+                0, "--repo --json\n", ""
             ),
             (
                 self.executable, "auth", "status", "--active", "--hostname",
@@ -83,6 +91,13 @@ class Runner:
         if key in defaults:
             return defaults[key]
         if "--body-file=-" in key:
+            self.submitted_title = next(
+                value[len("--title=") :] for value in key if value.startswith("--title=")
+            )
+            self.submitted_body = input_text or ""
+            self.submitted_labels = tuple(
+                value[len("--label=") :] for value in key if value.startswith("--label=")
+            )
             expected = len((input_text or "").encode("utf-8"))
             updates = {}
             if self.create.stdin_bytes_expected is None:
@@ -92,6 +107,23 @@ class Runner:
             if self.create.stdin_delivery_completed is None:
                 updates["stdin_delivery_completed"] = not self.create.stdin_error
             return replace(self.create, **updates)
+        if len(key) >= 4 and key[1:3] == ("issue", "view"):
+            if self.readback is not None:
+                return self.readback
+            number = int(key[3])
+            return IssueCreateProcessResult(
+                0,
+                json.dumps(
+                    {
+                        "number": number,
+                        "url": f"https://github.com/Blummer92/agent-os/issues/{number}",
+                        "title": self.submitted_title,
+                        "body": self.submitted_body,
+                        "labels": [{"name": label} for label in self.submitted_labels],
+                    }
+                ),
+                "",
+            )
         raise AssertionError(key)
 
 
@@ -189,6 +221,28 @@ def request(*, result=None, invocation="inv-1", prior=(), optional=()):
 
 def creates(runner):
     return [call for call in runner.calls if "--body-file=-" in call[0]]
+
+
+def readbacks(runner):
+    return [
+        call for call in runner.calls
+        if len(call[0]) >= 4
+        and call[0][1:3] == ("issue", "view")
+        and call[0][3] != "--help"
+    ]
+
+
+def readback_process(**changes):
+    baseline = validation().draft
+    payload = {
+        "number": 700,
+        "url": "https://github.com/Blummer92/agent-os/issues/700",
+        "title": baseline.title,
+        "body": baseline.body,
+        "labels": [{"name": label} for label in baseline.proposed_labels],
+    }
+    payload.update(changes)
+    return IssueCreateProcessResult(0, json.dumps(payload), "")
 
 
 def warned():
@@ -291,6 +345,192 @@ def test_warning_success_body_repeat_and_serializers():
     payload = issue_create_result_to_dict(result)
     assert payload["reason_code"] == result.reason_code.value
     assert result.operation_identity in render_issue_create_result(result)
+
+
+def test_readback_builder_is_bounded_and_success_is_verified():
+    argv = build_issue_readback_argv(TARGET, 700, executable="/opt/gh")
+    assert argv == (
+        "/opt/gh",
+        "issue",
+        "view",
+        "700",
+        "--repo=github.com/Blummer92/agent-os",
+        "--json",
+        "number,url,title,body,labels",
+    )
+    with pytest.raises(ValueError):
+        build_issue_readback_argv(TARGET, 0)
+    with pytest.raises(ValueError):
+        build_issue_readback_argv(TARGET, True)
+
+    runner = Runner()
+    result = execute_issue_creation(request(), runner, Confirm())
+    assert result.reason_code == IssueCreateReasonCode.CREATE_CONFIRMED
+    assert result.reason_codes == (
+        IssueCreateReasonCode.CREATE_CONFIRMED,
+        IssueCreateReasonCode.READBACK_VERIFIED,
+    )
+    assert result.mutation_state == MutationState.CONFIRMED
+    assert result.mutation_performed is True
+    assert result.readback_attempted is True
+    assert result.readback_verified is True
+    assert result.readback_reason == IssueCreateReasonCode.READBACK_VERIFIED.value
+    assert result.readback_raw_process_exit_code == 0
+    assert result.readback_output_digest.startswith("sha256=")
+    assert len(readbacks(runner)) == 1
+    assert readbacks(runner)[0][1] is None
+    payload = issue_create_result_to_dict(result)
+    rendered = render_issue_create_result(result)
+    assert payload["readback_verified"] is True
+    assert payload["readback_reason"] == "readback-verified"
+    assert "Read-back verified: yes" in rendered
+    assert "Read-back reason: readback-verified" in rendered
+
+
+@pytest.mark.parametrize(
+    "process, reason",
+    (
+        (IssueCreateProcessResult(1, "", "network"), IssueCreateReasonCode.READBACK_COMMAND_FAILED),
+        (IssueCreateProcessResult(None, timed_out=True), IssueCreateReasonCode.READBACK_TIMEOUT),
+        (IssueCreateProcessResult(None, interrupted=True), IssueCreateReasonCode.READBACK_INTERRUPTED),
+        (IssueCreateProcessResult(0, "{", ""), IssueCreateReasonCode.READBACK_MALFORMED),
+        (IssueCreateProcessResult(0, "[]", ""), IssueCreateReasonCode.READBACK_MALFORMED),
+    ),
+)
+def test_readback_failures_preserve_confirmed_creation(process, reason):
+    runner = Runner(readback=process)
+    result = execute_issue_creation(request(), runner, Confirm())
+    assert result.reason_code == reason
+    assert result.exit_code == IssueCreateExitCode.READBACK_FAILURE
+    assert result.reason_codes == (reason, IssueCreateReasonCode.CREATE_CONFIRMED)
+    assert result.mutation_state == MutationState.CONFIRMED
+    assert result.mutation_performed is True
+    assert result.created_issue_number == 700
+    assert result.readback_attempted is True
+    assert result.readback_verified is False
+    assert result.readback_reason == reason.value
+    assert result.retry_allowed is False
+    assert "do not retry or mutate automatically" in result.recovery_evidence[0]
+    assert len(creates(runner)) == 1
+    assert len(readbacks(runner)) == 1
+
+
+@pytest.mark.parametrize(
+    "changes",
+    (
+        {"number": 701},
+        {"url": "https://github.com/other/repo/issues/700"},
+        {"url": "https://github.com/Blummer92/agent-os/issues/701"},
+        {"number": True},
+    ),
+)
+def test_readback_identity_mismatch_fails_closed(changes):
+    process = readback_process(**changes)
+    result = execute_issue_creation(request(), Runner(readback=process), Confirm())
+    expected = (
+        IssueCreateReasonCode.READBACK_MALFORMED
+        if changes.get("number") is True
+        else IssueCreateReasonCode.READBACK_IDENTITY_MISMATCH
+    )
+    assert result.reason_code == expected
+    assert result.mutation_state == MutationState.CONFIRMED
+    assert result.readback_verified is False
+
+
+@pytest.mark.parametrize("field", ("title", "body"))
+def test_readback_content_mismatch_fails_closed(field):
+    process = readback_process(**{field: "unexpected persisted content"})
+    result = execute_issue_creation(request(), Runner(readback=process), Confirm())
+    assert result.reason_code == IssueCreateReasonCode.READBACK_CONTENT_MISMATCH
+    assert result.mutation_performed is True
+    assert result.readback_verified is False
+
+
+@pytest.mark.parametrize(
+    "labels",
+    (
+        [],
+        [{"name": "unexpected"}],
+        [{"name": label} for label in validation().draft.proposed_labels] + [
+            {"name": validation().draft.proposed_labels[0]}
+        ],
+    ),
+)
+def test_readback_label_mismatch_including_duplicates(labels):
+    result = execute_issue_creation(
+        request(), Runner(readback=readback_process(labels=labels)), Confirm()
+    )
+    assert result.reason_code == IssueCreateReasonCode.READBACK_LABEL_MISMATCH
+    assert result.mutation_performed is True
+    assert result.readback_verified is False
+
+
+@pytest.mark.parametrize(
+    "labels",
+    (None, ["label"], [{"name": None}], [{}]),
+)
+def test_readback_malformed_label_shape_fails_closed(labels):
+    result = execute_issue_creation(
+        request(), Runner(readback=readback_process(labels=labels)), Confirm()
+    )
+    assert result.reason_code == IssueCreateReasonCode.READBACK_MALFORMED
+    assert result.mutation_performed is True
+
+
+def test_readback_diagnostics_do_not_expose_submitted_content():
+    base = validation()
+    protected = replace(
+        base,
+        draft=replace(
+            base.draft,
+            title="private title",
+            body="private body\nsecond line",
+            proposed_labels=("private-label",),
+        ),
+    )
+    escaped_body = json.dumps(protected.draft.body, ensure_ascii=False)[1:-1]
+    diagnostic = (
+        "private title\nprivate-label\nprivate body\nsecond line\n" + escaped_body
+    )
+    result = execute_issue_creation(
+        request(result=protected),
+        Runner(readback=IssueCreateProcessResult(1, diagnostic, diagnostic)),
+        Confirm(),
+    )
+    combined = render_issue_create_result(result) + json.dumps(
+        issue_create_result_to_dict(result), ensure_ascii=False
+    )
+    for value in (
+        "private title",
+        "private-label",
+        "private body",
+        "second line",
+        escaped_body,
+    ):
+        assert value not in combined
+    assert result.readback_output_digest.startswith("sha256=")
+    assert "[REDACTED]" in result.readback_sanitized_stderr
+
+
+def test_failed_or_uncertain_create_never_reads_back_or_corrects():
+    for create in (
+        IssueCreateProcessResult(1, "", "failed"),
+        IssueCreateProcessResult(0, "created", ""),
+    ):
+        runner = Runner(create=create)
+        result = execute_issue_creation(request(), runner, Confirm())
+        assert result.mutation_state != MutationState.CONFIRMED
+        assert readbacks(runner) == []
+        assert result.readback_attempted is False
+
+    runner = Runner(readback=readback_process(title="mismatch"))
+    result = execute_issue_creation(request(), runner, Confirm())
+    assert result.reason_code == IssueCreateReasonCode.READBACK_CONTENT_MISMATCH
+    assert len(readbacks(runner)) == 1
+    commands = [call[0][1:3] for call in runner.calls if len(call[0]) >= 3]
+    assert ("issue", "edit") not in commands
+    assert ("issue", "close") not in commands
+    assert ("issue", "delete") not in commands
 
 
 def test_success_parsing_precedes_sensitive_output_redaction():
@@ -421,13 +661,16 @@ def test_uncertain_results(process, reason, code):
     (
         ({("gh", "--version"): IssueCreateProcessResult(1, "", "missing")}, IssueCreateReasonCode.GH_UNAVAILABLE),
         ({("gh", "issue", "create", "--help"): IssueCreateProcessResult(0, "--repository --title --body-file --label\n", "")}, IssueCreateReasonCode.GH_CAPABILITY_UNSUPPORTED),
+        ({("gh", "issue", "view", "--help"): IssueCreateProcessResult(0, "--repo\n", "")}, IssueCreateReasonCode.GH_CAPABILITY_UNSUPPORTED),
         ({("gh", "auth", "status", "--active", "--hostname", "github.com"): IssueCreateProcessResult(4, "", "no auth")}, IssueCreateReasonCode.AUTHENTICATION_UNAVAILABLE),
         ({("gh", "auth", "status", "--active", "--hostname", "github.com"): IssueCreateProcessResult(0, "Logged in to github.com account one\nLogged in to github.com account two\n", "")}, IssueCreateReasonCode.ACCOUNT_AMBIGUOUS_OR_MISMATCHED),
     ),
 )
 def test_capability_auth(overrides, reason):
-    plan, failure = plan_issue_creation(request(), Runner(overrides=overrides))
+    runner = Runner(overrides=overrides)
+    plan, failure = plan_issue_creation(request(), runner)
     assert plan is None and failure.reason_code == reason
+    assert creates(runner) == []
 
 
 @pytest.mark.parametrize(

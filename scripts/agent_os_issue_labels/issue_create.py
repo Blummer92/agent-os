@@ -44,6 +44,7 @@ _SECRET_PATTERNS = (
     re.compile(r"https?://[^\s/@:]+:[^\s/@]+@"),
 )
 _REQUIRED_CREATE_FLAGS = ("--repo", "--title", "--body-file", "--label")
+_REQUIRED_READBACK_FLAGS = ("--repo", "--json")
 
 
 class IssueCreateReasonCode(str, Enum):
@@ -66,6 +67,14 @@ class IssueCreateReasonCode(str, Enum):
     COMMAND_INTERRUPTED = "command-interrupted"
     STDIN_DELIVERY_INCOMPLETE = "stdin-delivery-incomplete"
     MALFORMED_SUCCESS_OUTPUT = "malformed-success-output"
+    READBACK_VERIFIED = "readback-verified"
+    READBACK_COMMAND_FAILED = "readback-command-failed"
+    READBACK_TIMEOUT = "readback-timeout"
+    READBACK_INTERRUPTED = "readback-interrupted"
+    READBACK_MALFORMED = "readback-malformed"
+    READBACK_IDENTITY_MISMATCH = "readback-identity-mismatch"
+    READBACK_CONTENT_MISMATCH = "readback-content-mismatch"
+    READBACK_LABEL_MISMATCH = "readback-label-mismatch"
     WRONG_TARGET_SUCCESS_OUTPUT = "wrong-target-success-output"
     MUTATION_UNCERTAIN = "mutation-uncertain"
     REPEAT_INVOCATION_DETECTED = "repeat-invocation-detected"
@@ -84,6 +93,7 @@ class IssueCreateExitCode(IntEnum):
     MALFORMED_SUCCESS = 78
     UNCERTAIN = 79
     REPEATED = 80
+    READBACK_FAILURE = 81
 
 
 class MutationState(str, Enum):
@@ -221,6 +231,12 @@ class IssueCreateAdapterResult:
     stdin_bytes_written: int | None = None
     stdin_delivery_completed: bool | None = None
     stdin_error: str = ""
+    readback_attempted: bool = False
+    readback_verified: bool = False
+    readback_reason: str = "not-attempted"
+    readback_raw_process_exit_code: int | None = None
+    readback_output_digest: str | None = None
+    readback_sanitized_stderr: str = ""
 
 
 class GhRunner(Protocol):
@@ -421,6 +437,25 @@ def build_issue_create_argv(
         f"--title={title}",
         "--body-file=-",
         *(f"--label={label}" for label in ordered_labels),
+    )
+
+
+def build_issue_readback_argv(
+    target: GitHubRepositoryTarget,
+    issue_number: int,
+    *,
+    executable: str = "gh",
+) -> tuple[str, ...]:
+    if type(issue_number) is not int or issue_number <= 0:
+        raise ValueError("issue number must be a positive integer")
+    return (
+        executable,
+        "issue",
+        "view",
+        str(issue_number),
+        f"--repo={target.canonical}",
+        "--json",
+        "number,url,title,body,labels",
     )
 
 
@@ -689,14 +724,73 @@ def execute_issue_creation(
             **common,
         )
     url, number = parsed
+    readback_argv = build_issue_readback_argv(
+        request.target,
+        number,
+        executable=plan.capability.executable_path,
+    )
+    readback = runner.run(readback_argv, timeout=_DEFAULT_TIMEOUT)
+    readback_output_digest = _bounded_output_digest(readback.stdout)
+    readback_stderr = _sanitize_readback_diagnostic(
+        readback.stderr,
+        request,
+    )
+    readback_common = dict(
+        mutation=MutationState.CONFIRMED,
+        created_url=url,
+        created_number=number,
+        readback_attempted=True,
+        readback_raw_exit=readback.returncode,
+        readback_output_digest=readback_output_digest,
+        readback_stderr=readback_stderr,
+        **common,
+    )
+    if readback.timed_out:
+        return _result(
+            request,
+            IssueCreateReasonCode.READBACK_TIMEOUT,
+            IssueCreateExitCode.READBACK_FAILURE,
+            readback_reason=IssueCreateReasonCode.READBACK_TIMEOUT.value,
+            **readback_common,
+        )
+    if readback.interrupted:
+        return _result(
+            request,
+            IssueCreateReasonCode.READBACK_INTERRUPTED,
+            IssueCreateExitCode.READBACK_FAILURE,
+            readback_reason=IssueCreateReasonCode.READBACK_INTERRUPTED.value,
+            **readback_common,
+        )
+    if readback.returncode != 0:
+        return _result(
+            request,
+            IssueCreateReasonCode.READBACK_COMMAND_FAILED,
+            IssueCreateExitCode.READBACK_FAILURE,
+            readback_reason=IssueCreateReasonCode.READBACK_COMMAND_FAILED.value,
+            **readback_common,
+        )
+
+    readback_reason = _verify_issue_readback(
+        readback.stdout,
+        request,
+        expected_url=url,
+        expected_number=number,
+    )
+    if readback_reason is not None:
+        return _result(
+            request,
+            readback_reason,
+            IssueCreateExitCode.READBACK_FAILURE,
+            readback_reason=readback_reason.value,
+            **readback_common,
+        )
     return _result(
         request,
         IssueCreateReasonCode.CREATE_CONFIRMED,
         IssueCreateExitCode.CONFIRMED,
-        mutation=MutationState.CONFIRMED,
-        created_url=url,
-        created_number=number,
-        **common,
+        readback_verified=True,
+        readback_reason=IssueCreateReasonCode.READBACK_VERIFIED.value,
+        **readback_common,
     )
 
 
@@ -737,6 +831,12 @@ def render_issue_create_result(result: IssueCreateAdapterResult) -> str:
         f"Stdin delivery completed: {_optional_yes_no(result.stdin_delivery_completed)}",
         f"Stdin error: {result.stdin_error or 'none'}",
         f"Created issue: {result.created_issue_url or 'none'}",
+        f"Read-back attempted: {_yes_no(result.readback_attempted)}",
+        f"Read-back verified: {_yes_no(result.readback_verified)}",
+        f"Read-back reason: {result.readback_reason}",
+        f"Read-back process exit code: {_optional_number(result.readback_raw_process_exit_code)}",
+        f"Read-back output: {result.readback_output_digest or 'none'}",
+        f"Read-back sanitized stderr: {result.readback_sanitized_stderr or 'none'}",
         "Recovery evidence:",
         *(f"- {item}" for item in result.recovery_evidence or ("none",)),
         "Sanitized stdout:",
@@ -777,6 +877,17 @@ def _probe_capabilities(
             IssueCreateReasonCode.GH_CAPABILITY_UNSUPPORTED,
             IssueCreateExitCode.CAPABILITY,
             stderr=sanitize_diagnostic_text(help_result.stderr),
+        )
+    readback_help = runner.run((executable, "issue", "view", "--help"))
+    if readback_help.returncode != 0 or any(
+        not _help_has_flag(readback_help.stdout, flag)
+        for flag in _REQUIRED_READBACK_FLAGS
+    ):
+        return None, _result(
+            request,
+            IssueCreateReasonCode.GH_CAPABILITY_UNSUPPORTED,
+            IssueCreateExitCode.CAPABILITY,
+            stderr=sanitize_diagnostic_text(readback_help.stderr),
         )
     auth = runner.run(
         (executable, "auth", "status", "--active", "--hostname", request.target.host)
@@ -869,8 +980,13 @@ def _probe_capabilities(
         "executable_path": executable,
         "executable_identity": _bounded_executable_identity(executable),
         "required_flags": _REQUIRED_CREATE_FLAGS,
-        "required_capability_decision": "supported: "
-        + ",".join(_REQUIRED_CREATE_FLAGS),
+        "required_readback_flags": _REQUIRED_READBACK_FLAGS,
+        "required_capability_decision": (
+            "supported: create="
+            + ",".join(_REQUIRED_CREATE_FLAGS)
+            + ";readback="
+            + ",".join(_REQUIRED_READBACK_FLAGS)
+        ),
         "optional_metadata_decision": "none-requested",
     }
     fingerprint = _sha256(
@@ -944,6 +1060,83 @@ def _parse_created_issue(
     return canonical_url, number
 
 
+def _verify_issue_readback(
+    stdout: str,
+    request: IssueCreateRequest,
+    *,
+    expected_url: str,
+    expected_number: int,
+) -> IssueCreateReasonCode | None:
+    try:
+        metadata = json.loads(stdout)
+    except (json.JSONDecodeError, TypeError):
+        return IssueCreateReasonCode.READBACK_MALFORMED
+    if not isinstance(metadata, Mapping):
+        return IssueCreateReasonCode.READBACK_MALFORMED
+
+    observed_number = metadata.get("number")
+    observed_url = metadata.get("url")
+    if type(observed_number) is not int or not isinstance(observed_url, str):
+        return IssueCreateReasonCode.READBACK_MALFORMED
+    parsed = _parse_created_issue(observed_url + "\n", request.target)
+    if (
+        not isinstance(parsed, tuple)
+        or observed_number != expected_number
+        or parsed != (expected_url, expected_number)
+    ):
+        return IssueCreateReasonCode.READBACK_IDENTITY_MISMATCH
+
+    title = metadata.get("title")
+    body = metadata.get("body")
+    if not isinstance(title, str) or not isinstance(body, str):
+        return IssueCreateReasonCode.READBACK_MALFORMED
+    if title != request.validation.draft.title or body != request.validation.draft.body:
+        return IssueCreateReasonCode.READBACK_CONTENT_MISMATCH
+
+    labels = metadata.get("labels")
+    if not isinstance(labels, list):
+        return IssueCreateReasonCode.READBACK_MALFORMED
+    observed_labels: list[str] = []
+    for item in labels:
+        if not isinstance(item, Mapping):
+            return IssueCreateReasonCode.READBACK_MALFORMED
+        name = item.get("name")
+        if not isinstance(name, str) or not name:
+            return IssueCreateReasonCode.READBACK_MALFORMED
+        observed_labels.append(name)
+    expected_labels = tuple(sorted(dict.fromkeys(request.validation.draft.proposed_labels)))
+    if len(observed_labels) != len(set(observed_labels)):
+        return IssueCreateReasonCode.READBACK_LABEL_MISMATCH
+    if tuple(sorted(observed_labels)) != expected_labels:
+        return IssueCreateReasonCode.READBACK_LABEL_MISMATCH
+    return None
+
+
+def _bounded_output_digest(value: str) -> str:
+    payload = _coerce_text(value).encode("utf-8")
+    return f"sha256={hashlib.sha256(payload).hexdigest()[:16]} bytes={len(payload)}"
+
+
+def _sanitize_readback_diagnostic(
+    value: str,
+    request: IssueCreateRequest,
+) -> str:
+    sensitive = (
+        request.validation.draft.title,
+        request.validation.draft.body,
+        *request.validation.draft.proposed_labels,
+    )
+    json_encoded = tuple(
+        json.dumps(item, ensure_ascii=False)[1:-1]
+        for item in sensitive
+        if item
+    )
+    return sanitize_diagnostic_text(
+        value,
+        sensitive_values=(*sensitive, *json_encoded),
+    )
+
+
 def _result(
     request: IssueCreateRequest,
     reason: IssueCreateReasonCode,
@@ -968,13 +1161,22 @@ def _result(
     stdin_bytes_written: int | None = None,
     stdin_delivery_completed: bool | None = None,
     stdin_error: str = "",
+    readback_attempted: bool = False,
+    readback_verified: bool = False,
+    readback_reason: str = "not-attempted",
+    readback_raw_exit: int | None = None,
+    readback_output_digest: str | None = None,
+    readback_stderr: str = "",
 ) -> IssueCreateAdapterResult:
     uncertain = mutation == MutationState.UNCERTAIN
-    reason_codes = (
-        (reason, IssueCreateReasonCode.MUTATION_UNCERTAIN)
-        if uncertain and reason != IssueCreateReasonCode.MUTATION_UNCERTAIN
-        else (reason,)
-    )
+    if uncertain and reason != IssueCreateReasonCode.MUTATION_UNCERTAIN:
+        reason_codes = (reason, IssueCreateReasonCode.MUTATION_UNCERTAIN)
+    elif readback_verified and reason == IssueCreateReasonCode.CREATE_CONFIRMED:
+        reason_codes = (reason, IssueCreateReasonCode.READBACK_VERIFIED)
+    elif readback_attempted and mutation == MutationState.CONFIRMED:
+        reason_codes = (reason, IssueCreateReasonCode.CREATE_CONFIRMED)
+    else:
+        reason_codes = (reason,)
     retry_allowed = (
         mutation == MutationState.NOT_ATTEMPTED
         and not execution_attempted
@@ -1002,10 +1204,16 @@ def _result(
         mutation_performed=mutation == MutationState.CONFIRMED,
         retry_allowed=retry_allowed,
         recovery_evidence=(
-            "Do not retry automatically; verify the target manually using the operation identity."
-            if uncertain
-            else "No recovery action required."
-        ,),
+            (
+                "Do not retry automatically; verify the target manually using the operation identity."
+                if uncertain
+                else (
+                    "Creation was confirmed but read-back verification failed; do not retry or mutate automatically; inspect the created issue manually."
+                    if readback_attempted and mutation == MutationState.CONFIRMED and not readback_verified
+                    else "No recovery action required."
+                )
+            ),
+        ),
         validation_status=request.validation.status.value,
         validation_reason_codes=tuple(
             code.value for code in request.validation.reason_codes
@@ -1033,6 +1241,12 @@ def _result(
         stdin_bytes_written=stdin_bytes_written,
         stdin_delivery_completed=stdin_delivery_completed,
         stdin_error=sanitize_diagnostic_text(stdin_error, limit=256),
+        readback_attempted=readback_attempted,
+        readback_verified=readback_verified,
+        readback_reason=readback_reason,
+        readback_raw_process_exit_code=readback_raw_exit,
+        readback_output_digest=readback_output_digest,
+        readback_sanitized_stderr=sanitize_diagnostic_text(readback_stderr, limit=512),
     )
 
 
