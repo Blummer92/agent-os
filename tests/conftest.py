@@ -5,6 +5,7 @@ This module provides fixtures for testing Agent OS standards, documentation,
 and governance implementations.
 """
 import os
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Generator
@@ -132,22 +133,6 @@ class TestExample:
 
 
 # ============================================================================
-# FIXTURES: Validation
-# ============================================================================
-
-@pytest.fixture
-def markdown_files(repo_root: Path) -> list[Path]:
-    """Get all markdown files in the repository."""
-    return list(repo_root.rglob("*.md"))
-
-
-@pytest.fixture
-def standard_files(python_standards_dir: Path) -> list[Path]:
-    """Get all standard markdown files."""
-    return list(python_standards_dir.glob("*.md"))
-
-
-# ============================================================================
 # PYTEST CONFIGURATION
 # ============================================================================
 
@@ -168,15 +153,58 @@ def pytest_configure(config):
 # PYTEST HOOKS
 # ============================================================================
 
+_HOST_PRIVILEGE_TOOLCHAIN_TESTS = {
+    "test_privileged_installer_refuses_to_run_unprivileged": ("sudo",),
+    "test_sudo_authorizes_exactly_the_one_rendered_invocation": (
+        "sudo",
+        "visudo",
+        "useradd",
+        "userdel",
+    ),
+    "test_sudo_denies_every_syntactically_close_but_wrong_invocation": (
+        "sudo",
+        "visudo",
+        "useradd",
+        "userdel",
+    ),
+    "test_sudo_denies_every_unrelated_privileged_command": (
+        "sudo",
+        "visudo",
+        "useradd",
+        "userdel",
+    ),
+}
+
+
+def _missing_host_privilege_tools(item) -> tuple[str, ...]:
+    """Return required host-privilege executables absent from this test environment."""
+    test_name = getattr(item, "originalname", None) or item.name.split("[", 1)[0]
+    required = _HOST_PRIVILEGE_TOOLCHAIN_TESTS.get(test_name, ())
+    return tuple(tool for tool in required if shutil.which(tool) is None)
+
+
 def pytest_collection_modifyitems(config, items):
     """
-    Automatically mark tests based on their path.
+    Automatically mark tests based on their path and host capabilities.
 
     - tests/unit/* marked as @pytest.mark.unit
     - tests/integration/* marked as @pytest.mark.integration
+    - host privilege tests requiring sudo/sudoers tooling are skipped only when
+      the exact external executables they exercise are unavailable
     """
     for item in items:
         if "unit" in str(item.fspath):
             item.add_marker(pytest.mark.unit)
         if "integration" in str(item.fspath):
             item.add_marker(pytest.mark.integration)
+
+        missing_tools = _missing_host_privilege_tools(item)
+        if missing_tools:
+            item.add_marker(
+                pytest.mark.skip(
+                    reason=(
+                        "requires host privilege toolchain: "
+                        + ", ".join(missing_tools)
+                    )
+                )
+            )
