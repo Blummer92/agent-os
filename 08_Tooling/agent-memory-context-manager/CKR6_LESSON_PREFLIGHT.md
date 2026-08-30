@@ -71,6 +71,8 @@ Each eligible row becomes the existing `CodingKnowledgeCandidate` type with:
 
 All ranking, deduplication, candidate-budget behavior, relevant-candidate selection, currentness handling, canonical-reference requirements, and sufficiency disposition remain owned by `select_coding_knowledge()` from #1144.
 
+Per #1520, `sufficient` requires each retained selected Lesson candidate to carry its own `canonical_github_refs`; the caller's `request.canonical_rule_refs` is task/inspect-first evidence only and cannot satisfy a Lesson candidate's missing provenance. CKR6 adds no local duplicate provenance guard -- it inherits this invariant unchanged from CKR2.
+
 CKR6 does not implement fuzzy ranking, embeddings, model scoring, a vector store, another RAG system, or a second context manager.
 
 ## Existing handoff packet

@@ -328,12 +328,12 @@ def select_coding_knowledge(
         )
 
     refs = _canonical_refs(request, selected)
-    if not refs:
+    if _missing_candidate_provenance(selected):
         return _result(
             SufficiencyStatus.INSUFFICIENT,
             _next_escalation(request),
             selected,
-            (),
+            refs,
             ("canonical-reference-missing",),
             candidate_count,
         )
@@ -425,6 +425,16 @@ def _uncovered_library_hints(
             covered.add(_norm(candidate.library_name))
         covered.add(_norm(candidate.name))
     return tuple(sorted(required - covered))
+
+
+def _missing_candidate_provenance(selected: tuple[SelectedKnowledge, ...]) -> bool:
+    """Every retained candidate must carry its own canonical_github_refs.
+
+    Request-owned canonical_rule_refs are task/inspect-first evidence and can
+    never satisfy a selected candidate's own provenance requirement, and one
+    candidate's refs can never satisfy another candidate's absence.
+    """
+    return any(not item.candidate.canonical_github_refs for item in selected)
 
 
 def _canonical_refs(
