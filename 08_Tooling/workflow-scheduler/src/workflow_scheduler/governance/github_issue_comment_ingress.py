@@ -1,8 +1,8 @@
 """Bounded GitHub issue-comment transport parsing for Agent OS Scheduler ingress.
 
 This module validates only the low-trust GitHub event envelope for #1203,
-#1432, and #1454. A successful parse is transport evidence, not implementation
-authorization and not Scheduler admission.
+#1432, #1454, and #1495. A successful parse is transport evidence, not
+implementation authorization and not Scheduler admission.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ _TRIGGER_RE = re.compile(r"/agent-os resume (?P<handoff>executor-handoff:[0-9a-f
 _VALIDATION_IDS = (
     "remote-validation-suite",
     "instructional-materials-current-curriculum-suite",
+    "ppux-picture-perfect-ts-vitest",
 )
 _DEV_VALIDATE_RE = re.compile(
     r"/agent-os dev-validate (?P<branch>agent/[A-Za-z0-9._/-]{1,180}) "

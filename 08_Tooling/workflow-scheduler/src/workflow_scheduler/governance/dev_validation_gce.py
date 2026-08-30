@@ -1,4 +1,4 @@
-"""Fixed GitHub-to-GCE dev-validation transport for #1432/#1436/#1454/#1455."""
+"""Fixed GitHub-to-GCE dev-validation transport for #1432/#1436/#1454/#1455/#1495."""
 from __future__ import annotations
 
 import argparse
@@ -21,6 +21,13 @@ from .github_issue_comment_ingress import IssueCommentIngressResult
 
 HOST_PYTHON = "/usr/bin/python3"
 DEV_VALIDATION_PYTHON = "/usr/local/libexec/agent-os-dev-validation-python"
+# DEVVAL3 (#1495): the TypeScript/Vitest identity cannot run under the pinned
+# CPython test runtime, so it binds a second fixed root-owned runtime published
+# by the same separately authorized administrator installer pattern. It adds no
+# caller-selectable interpreter, package, or argv surface.
+DEV_VALIDATION_NODE = "/usr/local/libexec/agent-os-dev-validation-node"
+DEV_VALIDATION_NODE_MODULES = "/opt/agent-os/dev-validation-node-runtime/node_modules"
+DEV_VALIDATION_VITEST_VERSION = "4.1.10"
 _FRAME_START = "===AGENT-OS-DEV-VALIDATION-JSON-BEGIN==="
 _FRAME_END = "===AGENT-OS-DEV-VALIDATION-JSON-END==="
 MAX_RESULT_LOG_CHARS = 4096
@@ -35,6 +42,12 @@ MATERIALS_IMPORT_ROOTS=("src","08_Tooling/instructional-materials-coach/src")
 MATERIALS_IMPORT_PRELUDE="import os,sys;repo=os.getcwd();sys.path[:0]=[os.path.join(repo,path) for path in ('src','08_Tooling/instructional-materials-coach/src')]"
 MATERIALS_IMPORT_PROBE=MATERIALS_IMPORT_PRELUDE+";import instructional_materials_coach,instructional_workflow_contracts"
 MATERIALS_PYTEST_RUNNER=MATERIALS_IMPORT_PROBE+";import pytest;raise SystemExit(pytest.main(list(sys.argv[1:])))"
+PPUX_ID="ppux-picture-perfect-ts-vitest"
+PPUX_PACKAGE_DIR="08_Tooling/instructional-materials-coach/picture-perfect-coach"
+NODE="/usr/local/libexec/agent-os-dev-validation-node"
+NODE_MODULES="/opt/agent-os/dev-validation-node-runtime/node_modules"
+VITEST_CLI=NODE_MODULES+"/vitest/vitest.mjs"
+NODE_PROBE="const v=require(process.argv[1]+'/vitest/package.json').version;if(v!=='4.1.10'||!process.versions.node.startsWith('22.'))process.exit(1)"
 VALIDATION_ARGS={
  "remote-validation-suite":("-m","pytest","tests/agent_os_remote_validation"),
  MATERIALS_ID:(
@@ -44,6 +57,15 @@ VALIDATION_ARGS={
   "08_Tooling/instructional-materials-coach/tests/test_cli.py",
   "tests/test_current_curriculum_state.py",
   "tests/test_current_curriculum_evidence.py",
+ ),
+ PPUX_ID:(
+  "vitest","run",
+  "src/overlayIntegrity.test.ts",
+  "src/exactComposite.test.ts",
+  "src/exactCompositeSuite.test.ts",
+  "src/framePlan.test.ts",
+  "src/executorContract.test.ts",
+  "src/provenanceValidator.test.ts",
  ),
 }
 SHA40=re.compile(r"^[0-9a-f]{40}$",re.ASCII)
@@ -63,6 +85,18 @@ def run(argv,*,cwd=None,env=None,timeout=GIT_TIMEOUT):
 
 def emit(payload):
  print(FRAME_START);print(json.dumps(payload,sort_keys=True,separators=(",",":")));print(FRAME_END)
+
+def fixed_env(root):
+ home=os.path.join(root,"home");tmp=os.path.join(root,"tmp");os.mkdir(home);os.mkdir(tmp)
+ return {"PATH":os.environ.get("PATH",""),"HOME":home,"TMPDIR":tmp,"PYTHONDONTWRITEBYTECODE":"1","PYTHONNOUSERSITE":"1"}
+
+def record(result,completed):
+ out,out_truncated=bounded(completed.stdout);err,err_truncated=bounded(completed.stderr)
+ result.update({"status":"success" if completed.returncode==0 else "failure","reason_codes":["validation-passed" if completed.returncode==0 else "validation-failed"],"exit_code":completed.returncode,"stdout_tail":out,"stderr_tail":err,"stdout_truncated":out_truncated,"stderr_truncated":err_truncated})
+
+def record_timeout(result,exc):
+ out,out_truncated=bounded(exc.stdout if isinstance(exc.stdout,str) else "");err,err_truncated=bounded(exc.stderr if isinstance(exc.stderr,str) else "")
+ result.update({"status":"timeout","reason_codes":["validation-timeout"],"stdout_tail":out,"stderr_tail":err,"stdout_truncated":out_truncated,"stderr_truncated":err_truncated})
 
 def base(status,reason,repository,issue,branch,sha,validation_id,request_id):
  return {"schema_version":"1.0","status":status,"reason_codes":[reason],"repository":repository,"issue_number":issue,"branch":branch,"tested_sha":sha,"validation_id":validation_id,"request_id":request_id,"exit_code":None,"stdout_tail":"","stderr_tail":"","stdout_truncated":False,"stderr_truncated":False,"cleanup_complete":False,"workspace_side_effects_performed":False,"external_side_effects_performed":False,"production_state_mutated":False,"execution_authorized":False,"scheduler_invoked":False,"publication_invoked":False,"merge_authorized":False}
@@ -88,13 +122,25 @@ try:
   else:
    checkout=run(("git","-C",repo,"checkout","--quiet","--detach",sha));head=run(("git","-C",repo,"rev-parse","HEAD")) if checkout.returncode==0 else checkout
    if checkout.returncode!=0 or head.returncode!=0 or head.stdout.strip()!=sha: result["reason_codes"]=["checkout-head-mismatch"]
+   elif validation_id==PPUX_ID:
+    package=os.path.join(repo,PPUX_PACKAGE_DIR);link=os.path.join(package,"node_modules")
+    if not os.path.isfile(NODE) or not os.access(NODE,os.X_OK) or not os.path.isfile(VITEST_CLI): result["reason_codes"]=["test-runtime-unavailable"]
+    elif run((NODE,"-e",NODE_PROBE,NODE_MODULES),timeout=20).returncode!=0: result["reason_codes"]=["test-runtime-invalid"]
+    elif not os.path.isdir(package) or os.path.lexists(link): result["reason_codes"]=["validation-workspace-unavailable"]
+    else:
+     env=fixed_env(root)
+     # Node resolves dependencies by walking up from the test file, so the fixed
+     # root-owned overlay is linked into the ephemeral checkout. rmtree removes
+     # the link rather than descending it, so the overlay itself is untouched.
+     os.symlink(NODE_MODULES,link)
+     try:record(result,run((NODE,VITEST_CLI,*test_args[1:]),cwd=package,env=env,timeout=TEST_TIMEOUT))
+     except subprocess.TimeoutExpired as exc:record_timeout(result,exc)
    elif not os.path.isfile(TEST_PYTHON) or not os.access(TEST_PYTHON,os.X_OK): result["reason_codes"]=["test-runtime-unavailable"]
    else:
     runtime=run((TEST_PYTHON,"-c","import pytest; assert pytest.__version__ == '8.3.5'"),timeout=10)
     if runtime.returncode!=0: result["reason_codes"]=["test-runtime-invalid"]
     else:
-     home=os.path.join(root,"home");tmp=os.path.join(root,"tmp");os.mkdir(home);os.mkdir(tmp)
-     env={"PATH":os.environ.get("PATH",""),"HOME":home,"TMPDIR":tmp,"PYTHONDONTWRITEBYTECODE":"1","PYTHONNOUSERSITE":"1"}
+     env=fixed_env(root)
      import_ready=True
      if validation_id==MATERIALS_ID:
       probe=run((TEST_PYTHON,"-c",MATERIALS_IMPORT_PROBE),cwd=repo,env=env,timeout=10)
@@ -104,12 +150,8 @@ try:
      if import_ready:
       try:
        command=(TEST_PYTHON,"-c",MATERIALS_PYTEST_RUNNER,*test_args[2:]) if validation_id==MATERIALS_ID else (TEST_PYTHON,*test_args)
-       completed=run(command,cwd=repo,env=env,timeout=TEST_TIMEOUT)
-       out,out_truncated=bounded(completed.stdout);err,err_truncated=bounded(completed.stderr)
-       result.update({"status":"success" if completed.returncode==0 else "failure","reason_codes":["validation-passed" if completed.returncode==0 else "validation-failed"],"exit_code":completed.returncode,"stdout_tail":out,"stderr_tail":err,"stdout_truncated":out_truncated,"stderr_truncated":err_truncated})
-      except subprocess.TimeoutExpired as exc:
-       out,out_truncated=bounded(exc.stdout if isinstance(exc.stdout,str) else "");err,err_truncated=bounded(exc.stderr if isinstance(exc.stderr,str) else "")
-       result.update({"status":"timeout","reason_codes":["validation-timeout"],"stdout_tail":out,"stderr_tail":err,"stdout_truncated":out_truncated,"stderr_truncated":err_truncated})
+       record(result,run(command,cwd=repo,env=env,timeout=TEST_TIMEOUT))
+      except subprocess.TimeoutExpired as exc:record_timeout(result,exc)
 finally:
  try: shutil.rmtree(root);result["cleanup_complete"]=True
  except OSError: result["cleanup_complete"]=False;result["status"]="needs-decision";result["reason_codes"]=["workspace-cleanup-failed"]
