@@ -1,4 +1,4 @@
-"""Fixed GitHub-to-GCE dev-validation transport for #1432/#1436/#1454/#1455."""
+"""Fixed GitHub-to-GCE dev-validation transport for #1432/#1436/#1454/#1455/#1515."""
 from __future__ import annotations
 
 import argparse
@@ -45,6 +45,7 @@ VALIDATION_ARGS={
   "tests/test_current_curriculum_state.py",
   "tests/test_current_curriculum_evidence.py",
  ),
+ "semantic-ownership-advisory":("07_Agent_Tests/run-semantic-ownership-advisory-validation.py",),
 }
 SHA40=re.compile(r"^[0-9a-f]{40}$",re.ASCII)
 BRANCH=re.compile(r"^agent/[A-Za-z0-9._/-]{1,180}$",re.ASCII)
@@ -103,7 +104,12 @@ try:
        result.update({"status":"failure","reason_codes":["validation-import-preflight-failed"],"exit_code":probe.returncode,"stdout_tail":out,"stderr_tail":err,"stdout_truncated":out_truncated,"stderr_truncated":err_truncated});import_ready=False
      if import_ready:
       try:
-       command=(TEST_PYTHON,"-c",MATERIALS_PYTEST_RUNNER,*test_args[2:]) if validation_id==MATERIALS_ID else (TEST_PYTHON,*test_args)
+       if validation_id==MATERIALS_ID:
+        command=(TEST_PYTHON,"-c",MATERIALS_PYTEST_RUNNER,*test_args[2:])
+       elif validation_id=="semantic-ownership-advisory":
+        command=(TEST_PYTHON,*test_args)
+       else:
+        command=(TEST_PYTHON,*test_args)
        completed=run(command,cwd=repo,env=env,timeout=TEST_TIMEOUT)
        out,out_truncated=bounded(completed.stdout);err,err_truncated=bounded(completed.stderr)
        result.update({"status":"success" if completed.returncode==0 else "failure","reason_codes":["validation-passed" if completed.returncode==0 else "validation-failed"],"exit_code":completed.returncode,"stdout_tail":out,"stderr_tail":err,"stdout_truncated":out_truncated,"stderr_truncated":err_truncated})

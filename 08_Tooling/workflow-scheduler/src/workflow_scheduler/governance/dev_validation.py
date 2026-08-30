@@ -1,4 +1,4 @@
-"""Fixed, non-authorizing developer-validation contract for #1432/#1454.
+"""Fixed, non-authorizing developer-validation contract for #1432/#1454/#1515.
 
 This module deliberately exposes no caller-supplied command or argv surface.
 Each validation identity maps to one repository-owned argv tuple. The GCE
@@ -28,10 +28,16 @@ MATERIALS_VALIDATION_ARGV = (
     "tests/test_current_curriculum_state.py",
     "tests/test_current_curriculum_evidence.py",
 )
+SEMANTIC_OWNERSHIP_VALIDATION_ID = "semantic-ownership-advisory"
+SEMANTIC_OWNERSHIP_VALIDATION_ARGV = (
+    "python",
+    "07_Agent_Tests/run-semantic-ownership-advisory-validation.py",
+)
 VALIDATION_REGISTRY = MappingProxyType(
     {
         VALIDATION_ID: VALIDATION_ARGV,
         MATERIALS_VALIDATION_ID: MATERIALS_VALIDATION_ARGV,
+        SEMANTIC_OWNERSHIP_VALIDATION_ID: SEMANTIC_OWNERSHIP_VALIDATION_ARGV,
     }
 )
 _SHA40 = re.compile(r"^[0-9a-f]{40}$", re.ASCII)
