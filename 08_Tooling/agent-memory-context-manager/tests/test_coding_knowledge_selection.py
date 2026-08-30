@@ -275,6 +275,51 @@ def test_missing_canonical_reference_is_insufficient():
     assert result.reason_codes == ("canonical-reference-missing",)
 
 
+def test_missing_candidate_reference_is_insufficient_even_with_unrelated_request_ref():
+    req = request(canonical_rule_refs=("01_Shared_Standards/unrelated-standard.md",))
+    result = select_coding_knowledge(req, (candidate(canonical_github_refs=()),))
+    assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+    assert result.reason_codes == ("canonical-reference-missing",)
+
+
+def test_missing_candidate_reference_is_insufficient_with_related_request_ref():
+    req = request(
+        canonical_rule_refs=("01_Shared_Standards/python/testing-standard.md",)
+    )
+    result = select_coding_knowledge(req, (candidate(canonical_github_refs=()),))
+    assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+    assert result.reason_codes == ("canonical-reference-missing",)
+
+
+def test_candidate_reference_is_sufficient_without_request_refs():
+    req = request(canonical_rule_refs=())
+    result = select_coding_knowledge(req, (candidate(),))
+    assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
+
+
+def test_candidate_reference_is_sufficient_alongside_request_refs():
+    req = request(canonical_rule_refs=("01_Shared_Standards/unrelated-standard.md",))
+    result = select_coding_knowledge(req, (candidate(),))
+    assert result.sufficiency_status is SufficiencyStatus.SUFFICIENT
+    assert "01_Shared_Standards/unrelated-standard.md" in result.canonical_github_refs
+    assert "01_Shared_Standards/python/testing-standard.md" in result.canonical_github_refs
+
+
+def test_one_candidates_refs_do_not_satisfy_anothers_missing_provenance():
+    req = request(library_hints=("hypothesis", "pydantic"))
+    with_refs = candidate()
+    without_refs = candidate(
+        "pydantic",
+        library_name="pydantic",
+        capability_kind="validation",
+        keywords=("validation",),
+        canonical_github_refs=(),
+    )
+    result = select_coding_knowledge(req, (with_refs, without_refs))
+    assert result.sufficiency_status is SufficiencyStatus.INSUFFICIENT
+    assert result.reason_codes == ("canonical-reference-missing",)
+
+
 def test_missing_one_of_multiple_required_libraries_is_insufficient():
     req = request(library_hints=("hypothesis", "pydantic"))
     result = select_coding_knowledge(req, (candidate(),))
