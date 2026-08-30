@@ -42,8 +42,7 @@ The explicit target is `[HOST/]OWNER/REPOSITORY`; it is never inferred from git,
 - `gh auth status --active --hostname HOST` without token display;
 - matching, non-archived repository metadata with issues enabled.
 
-Before confirmation, text and JSON show the bounded account identity, exact
-version, sanitized executable basename plus a digest of its full path, and required/optional capability decisions.
+Before confirmation, text and JSON show bounded account, version, executable identity, and required/optional capability decisions.
 A stable operation identity binds target, title/body identity, labels, validation,
 and command semantics for repeat detection. A separate fresh confirmation
 fingerprint also binds invocation ID, account, capabilities, and executable path.
@@ -53,24 +52,23 @@ Changing either operation or execution evidence invalidates confirmation.
 
 ```text
 gh issue create --repo=TARGET --title=TITLE --body-file=- --label=LABEL...
+gh issue view ISSUE --repo=TARGET --json number,url,title,body,labels
 ```
 
-The argv is immutable; user values use `--flag=value`; the UTF-8 body uses stdin.
-Confirmed success requires matching expected/written byte counts, successful
-writer completion, and no write or close error; body content is never evidence.
-The runner uses `shell=False`, bounded timeout and concurrent bounded capture,
-terminates timed-out/interrupted children, and performs no retry, auth refresh,
-account switch, scope escalation, or temporary-file baseline. Unsupported
-assignees, milestones, types, relationships, projects, and recovery are blocked.
+The immutable create argv uses `--flag=value`; the UTF-8 body uses stdin. Confirmed
+creation requires complete stdin delivery and one canonical issue URL. The same
+`GhRunner` then performs exactly one read-only issue-view and verifies number, URL,
+title, body, and labels before final success. The runner uses `shell=False`, bounded
+timeout/capture, no automatic retry or corrective mutation, no auth refresh/account
+switch, and no scope escalation. Unsupported optional metadata remains blocked.
 
 ## Mutation and recovery
 
-Mutation states are `not-attempted`, `uncertain`, and `confirmed`. Only exit zero
-plus complete stdin delivery and exactly one canonical HTTPS issue URL sets
-`mutation_performed=true`. Userinfo, ports, encoded ambiguity, leading-zero
-numbers, duplicate URLs, no URL, wrong-target output, nonzero exit, incomplete
-stdin, timeout, or interruption remain uncertain,
-include `mutation-uncertain`, preserve recovery evidence, and disable retry.
+Mutation states remain `not-attempted`, `uncertain`, and `confirmed`. A confirmed
+create keeps `mutation_performed=true` even if post-create read-back fails. Read-back
+failure blocks verification, preserves the created issue identity, disables retry,
+and requires manual inspection; it never edits, closes, deletes, or relabels the
+issue. Pre-confirmation/create ambiguity still uses `mutation-uncertain`.
 
 | Exit | Meaning |
 |---:|---|
@@ -86,14 +84,15 @@ include `mutation-uncertain`, preserve recovery evidence, and disable retry.
 | `78` | malformed success output |
 | `79` | wrong-target or uncertain mutation |
 | `80` | repeated stable operation identity |
+| `81` | confirmed creation but read-back verification failed |
 
 ## Evidence safety and #605
 
 Diagnostics redact token formats, authorization values, credential assignments,
 private keys, credential URLs, ANSI/control sequences, submitted title/body/
 labels, and excess output. Confirmation displays digests and counts, not raw
-content. Public success URLs are reconstructed from the validated target and
-canonical issue number rather than copied from process output. #605 must reuse
-`issue_create.py` identity, runner, confirmation, redaction, executor, and parser;
-it must not create a parallel live path.
+content. Public success URLs are reconstructed from the validated target. #605
+must reuse this create-plus-read-back production path, including the same runner,
+identity, confirmation, redaction, parser, and verifier; no parallel live path or
+ad hoc `gh issue view` command is permitted.
 Passing tests do not authorize a live create or merge.
