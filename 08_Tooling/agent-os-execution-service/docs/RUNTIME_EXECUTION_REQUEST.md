@@ -15,6 +15,7 @@ ExecutorRouteDecision
 + ExecutorHandoff
 + GovernedInvocationDescriptor compatibility projection
 + GovernedResumeRestartCapsule
++ canonical #1419 ComputeControlProjection (current schema only)
 = RuntimeExecutionRequest
 ```
 
@@ -30,6 +31,7 @@ At the existing runnable-handoff descriptor persistence seam:
 
 ```text
 validated current evidence
++ already-produced canonical #1419 projection
 -> canonical RuntimeExecutionRequest
 -> legacy descriptor compatibility marker
 -> return only after both durable writes succeed
@@ -70,10 +72,50 @@ packet, while old persisted invocations remain resumable through the bounded
 legacy reconstruction path. A present malformed canonical request remains a
 fail-closed integrity error and cannot silently downgrade to legacy evidence.
 
+## Compute-control transport — AOS-NCCE5 (#1487)
+
+The current write schema is `agent-os.runtime-execution-request/1.1`. It carries
+exactly one already-produced canonical
+`agent-os-compute-control-projection/1.0` `ComputeControlProjection` supplied by
+the upstream #1419 producer path. The runtime-request publication seam only
+transports that object; it does not derive, upgrade, downgrade, or reinterpret a
+compute disposition.
+
+The request constructor binds the supplied projection to the runtime subject:
+
+- projection repository must match the runtime request repository;
+- projection issue number must match the invocation issue;
+- projection `current_head_sha` must match the invocation descriptor source SHA;
+- the canonical projection ID and source revision are preserved rather than
+  recomputed heuristically;
+- malformed, unsupported-version, noncanonical, or tampered projection content
+  fails closed.
+
+The projection is part of the canonical request payload, so replacing it changes
+the `RuntimeExecutionRequest.request_id`. All request-level authority fields
+remain hard-coded `False`; the presence of a projection does not grant execution,
+GitHub write, merge, closure, or external-write authority.
+
+Legacy `agent-os.runtime-execution-request/1.0` records remain readable and carry
+no compute-control projection. Their payload shape and content identity remain
+unchanged. Legacy reconstruction is used only when the canonical request is
+truly absent; a present malformed current request never falls back silently.
+
+Production governed-resume already propagates the complete canonical runtime
+request through the host factory/bootstrap path. Therefore #1486 can consume the
+embedded `compute_control_projection` at the final pre-runtime dispatch seam
+without deriving missing #1419 claim/freshness/authority semantics locally.
+#1487 itself adds no dispatch decision or Scheduler behavior.
+
+Notion is not an input to this runtime request and cannot grant compute admission.
+This transport performs no Notion, network, cloud, process, Scheduler, workflow,
+or production side effect.
+
 ## Canonical ownership
 
 - #918 remains the owner of `ExecutorRouteDecision` and `ExecutorHandoff` routing semantics.
 - #895 remains the owner of checkpoint and `ResumePlan` semantics.
+- #1419 remains the owner of compute-control decision/projection semantics.
 - current execution authorization remains reacquired from its existing source.
 - dependency readiness remains current runtime evidence and is not persisted as
   authority inside this request.
@@ -98,19 +140,19 @@ lock, retry system, daemon, Scheduler, or database is introduced.
 
 ## Compatibility and rollback
 
-Legacy writes remain intact in Phase 2. No historical record migration or
-retirement is performed.
+Legacy writes remain intact. No historical record migration or retirement is
+performed.
 
-Rollback of the production-read migration is repository-only: restore the
-production governed-resume factory to its prior standalone descriptor and
-restart-capsule reads. Existing legacy records remain sufficient for that path;
-already-written runtime-request records are immutable non-authorizing evidence
-and require no destructive cleanup.
+Rollback of #1487 is repository-only: revert the runtime-request `1.1` transport,
+publication-seam parameter, focused tests, and this documentation section. The
+pre-#1487 `1.0` reader and legacy record graph remain the compatibility baseline;
+already-written request records are immutable non-authorizing evidence and do not
+require destructive cleanup.
 
 A later removal phase may stop writing legacy route/handoff/descriptor/capsule
 mirrors only after exact-head tests prove the host path consumes the canonical
 request directly and old persisted invocations remain readable through bounded
-compatibility logic. Phase 2 deliberately does not perform that destructive
+compatibility logic. This change deliberately does not perform that destructive
 transition.
 
 ## Expected simplification after migration
@@ -120,8 +162,9 @@ recovery now has one preferred durable packet:
 
 ```text
 ExecutorRouteDecision
--> RuntimeExecutionRequest
+-> RuntimeExecutionRequest (+ canonical #1419 projection)
 -> fresh authorization/currentness/dependency checks
+-> #1486 compute-control admission guard
 -> existing Workflow Scheduler
 -> execution/validation result
 ```
