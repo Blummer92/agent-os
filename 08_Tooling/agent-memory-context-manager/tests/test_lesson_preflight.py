@@ -52,6 +52,11 @@ def test_matching_lesson_is_selected_and_projects_to_existing_handoff_fields():
     assert result.source_authority == "advisory-only"
 
 
+def test_lesson_without_candidate_provenance_is_insufficient_despite_request_refs():
+    result = consume_lesson_preflight(request(), (lesson(canonical_github_refs=()),))
+    assert result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
+
+
 def test_unrelated_task_is_not_needed_without_retrieval():
     req = request(
         ecosystem_hints=(),

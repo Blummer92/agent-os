@@ -48,6 +48,10 @@ Every result fixes `source_authority` to `secondary-index`. Selected Decision Lo
 
 Decision text cannot grant merge, write, production, approval, validation, or other authority. The module performs no Notion or GitHub mutation.
 
+## Request/task authority vs. candidate-owned provenance (#1520)
+
+`request.canonical_rule_refs` is caller-owned task-authority / inspect-first evidence and never satisfies a Decision candidate's own provenance requirement. `sufficient` requires each retained selected Decision candidate to carry its own `canonical_github_refs`; CKR10 inherits this from CKR2 without an adapter-local duplicate guard. `DecisionPreflightResult.verification_required` is derived from the selected candidates' own references, not from the merged/request-inclusive `canonical_github_refs` field, so it does not become `True` merely because `request.canonical_rule_refs` is non-empty.
+
 ## Outage behavior
 
 When Decision retrieval is unavailable and specialized prior-decision knowledge is not explicitly required, CKR10 returns `unavailable-safe-fallback` so the caller may continue from GitHub-only authority when safe. When specialized knowledge is required, it returns explicit insufficiency/manual review and never fabricates replacement guidance.
