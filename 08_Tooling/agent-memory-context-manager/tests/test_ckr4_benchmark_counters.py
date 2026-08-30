@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+from agent_memory_context_manager.measurement import measured_reduction
+
 
 FIXTURE = Path(__file__).parent / "fixtures" / "ckr4_hypothesis_benchmark.json"
 FROZEN_TASK_IDS = tuple(f"T{index}" for index in range(1, 11))
@@ -8,13 +10,6 @@ FROZEN_TASK_IDS = tuple(f"T{index}" for index in range(1, 11))
 
 def load_fixture():
     return json.loads(FIXTURE.read_text(encoding="utf-8"))
-
-
-def measured_reduction(before, after):
-    """Return a fractional reduction only for measured, comparable values."""
-    if before is None or after is None or before == 0:
-        return None
-    return (before - after) / before
 
 
 def observation(data, observation_id):
