@@ -190,7 +190,12 @@ def test_existing_identities_and_their_bindings_are_behaviorally_unchanged() -> 
     assert dev_validation.VALIDATION_ARGV == ("python", "-m", "pytest", "tests/agent_os_remote_validation")
     assert dev_validation.MATERIALS_VALIDATION_ID == MATERIALS_ID
     assert dev_validation.MATERIALS_VALIDATION_ARGV[0:3] == ("python", "-m", "pytest")
-    assert set(dev_validation.VALIDATION_REGISTRY) == {REMOTE_ID, MATERIALS_ID, PPUX_ID}
+    assert set(dev_validation.VALIDATION_REGISTRY) == {
+        REMOTE_ID,
+        MATERIALS_ID,
+        PPUX_ID,
+        "semantic-ownership-advisory",
+    }
     source = dev_validation_gce._HOST_RUNNER_SOURCE
     assert '"remote-validation-suite":("-m","pytest","tests/agent_os_remote_validation")' in source
     assert "(TEST_PYTHON,*test_args)" in source
