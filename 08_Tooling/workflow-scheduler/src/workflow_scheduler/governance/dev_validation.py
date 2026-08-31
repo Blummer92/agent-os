@@ -1,4 +1,4 @@
-"""Fixed, non-authorizing developer-validation contract for #1432/#1454/#1515.
+"""Fixed, non-authorizing developer-validation contract for #1432/#1454/#1495/#1515.
 
 This module deliberately exposes no caller-supplied command or argv surface.
 Each validation identity maps to one repository-owned argv tuple. The GCE
@@ -33,11 +33,27 @@ SEMANTIC_OWNERSHIP_VALIDATION_ARGV = (
     "python",
     "07_Agent_Tests/run-semantic-ownership-advisory-validation.py",
 )
+PPUX_VALIDATION_ID = "ppux-picture-perfect-ts-vitest"
+# Vitest resolves its config and test paths from the package root, so the fixed
+# package directory is part of the identity rather than something a caller picks.
+PPUX_VALIDATION_PACKAGE_DIR = "08_Tooling/instructional-materials-coach/picture-perfect-coach"
+PPUX_VALIDATION_ARGV = (
+    "node",
+    "vitest",
+    "run",
+    "src/overlayIntegrity.test.ts",
+    "src/exactComposite.test.ts",
+    "src/exactCompositeSuite.test.ts",
+    "src/framePlan.test.ts",
+    "src/executorContract.test.ts",
+    "src/provenanceValidator.test.ts",
+)
 VALIDATION_REGISTRY = MappingProxyType(
     {
         VALIDATION_ID: VALIDATION_ARGV,
         MATERIALS_VALIDATION_ID: MATERIALS_VALIDATION_ARGV,
         SEMANTIC_OWNERSHIP_VALIDATION_ID: SEMANTIC_OWNERSHIP_VALIDATION_ARGV,
+        PPUX_VALIDATION_ID: PPUX_VALIDATION_ARGV,
     }
 )
 _SHA40 = re.compile(r"^[0-9a-f]{40}$", re.ASCII)
