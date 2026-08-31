@@ -332,10 +332,27 @@ jobs:
                               summary.write(f"Handoff found: `{discovery.get('handoff_id') is not None}`\n\n")
                               summary.write("Scheduler invoked by discovery: `False`\n")
                           else:
-                              summary.write(f"Dispatch: `{result.get('dispatch_status')}` / `{result.get('dispatch_reason')}`\n")
+                              dev_validation = result.get("dev_validation")
+                              if isinstance(dev_validation, dict):
+                                  summary.write(f"Developer validation: `{dev_validation.get('status')}`\n\n")
+                                  summary.write(f"Reasons: `{','.join(dev_validation.get('reason_codes', []))}`\n\n")
+                                  summary.write(f"Tested SHA: `{dev_validation.get('tested_sha')}`\n\n")
+                                  summary.write(f"Validation identity: `{dev_validation.get('validation_id')}`\n\n")
+                                  summary.write(f"Exit code: `{dev_validation.get('exit_code')}`\n\n")
+                                  summary.write(f"Cleanup complete: `{dev_validation.get('cleanup_complete')}`\n")
+                              else:
+                                  summary.write(f"Dispatch: `{result.get('dispatch_status')}` / `{result.get('dispatch_reason')}`\n")
               else:
                   summary.write("Result evidence unavailable; manual review required.\n")
           PY
+
+      - name: Enforce developer-validation result gate
+        if: ${{ always() && steps.host_install.outputs.requested != 'true' }}
+        run: |
+          PYTHONPATH=08_Tooling/workflow-scheduler/src \
+            python -m workflow_scheduler.governance.dev_validation_gate \
+              --transport "$RUNNER_TEMP/agent-os-ingress/transport.json" \
+              --result "$RUNNER_TEMP/agent-os-ingress/result.json"
 
       - name: Publish bounded ingress evidence
         if: ${{ always() }}
