@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -44,6 +45,33 @@ DESCRIPTOR = _Descriptor()
 CAPSULE = _Capsule()
 
 
+def _projection(
+    *,
+    repository: str = "Blummer92/agent-os",
+    issue_number: int = 1338,
+    current_head_sha: str | None = "a" * 40,
+    measured_compute_metadata_reference: str | None = None,
+):
+    return runtime_request.ComputeControlProjection(
+        schema_name="agent-os-compute-control-projection",
+        schema_version="1.0",
+        repository=repository,
+        issue_number=issue_number,
+        pull_request_number=None,
+        current_head_sha=current_head_sha,
+        base_handoff_projection_reference="coding-command-center-handoff:" + "e" * 64,
+        compute_disposition=runtime_request.ComputeDisposition.RUN_NOW,
+        recommended_validation_or_execution_class="static",
+        primary_blocker=None,
+        duplicate_or_stale_risk=False,
+        active_execution_reference=None,
+        last_applicable_validation_reference=None,
+        measured_compute_metadata_reference=measured_compute_metadata_reference,
+        reason_codes=("compute.profile-static",),
+        source_revision="d" * 40,
+    )
+
+
 def _bind_fakes(monkeypatch):
     governed = SimpleNamespace(value="chatgpt-governed-runner")
     monkeypatch.setattr(runtime_request, "ExecutorRouteDecision", _Route)
@@ -72,7 +100,9 @@ def _bind_fakes(monkeypatch):
     HANDOFF.handoff_id = "executor-handoff:" + "9" * 64
     HANDOFF.repository = ROUTE.repository
     HANDOFF.issue_or_handoff_identity = "issue:1338"
-    HANDOFF.execution_service_request_fingerprint_or_none = ROUTE.execution_service_request_fingerprint_or_none
+    HANDOFF.execution_service_request_fingerprint_or_none = (
+        ROUTE.execution_service_request_fingerprint_or_none
+    )
     HANDOFF.authorization_id_or_none = ROUTE.authorization_id_or_none
     HANDOFF.source_ref_or_none = "refs/heads/agent/1338-runtime-request"
     HANDOFF.source_sha_or_none = "a" * 40
@@ -87,7 +117,9 @@ def _bind_fakes(monkeypatch):
     DESCRIPTOR.repository = ROUTE.repository
     DESCRIPTOR.issue_number = 1338
     DESCRIPTOR.issue_or_handoff_identity = HANDOFF.issue_or_handoff_identity
-    DESCRIPTOR.execution_service_request_fingerprint = ROUTE.execution_service_request_fingerprint_or_none
+    DESCRIPTOR.execution_service_request_fingerprint = (
+        ROUTE.execution_service_request_fingerprint_or_none
+    )
     DESCRIPTOR.authorization_id = ROUTE.authorization_id_or_none
     DESCRIPTOR.source_ref = HANDOFF.source_ref_or_none
     DESCRIPTOR.source_sha = HANDOFF.source_sha_or_none
@@ -130,8 +162,9 @@ def _bind_fakes(monkeypatch):
     )
 
 
-def _request(monkeypatch):
+def _request(monkeypatch, *, projection=None):
     _bind_fakes(monkeypatch)
+    projection = _projection() if projection is None else projection
     return runtime_request.RuntimeExecutionRequest(
         schema_name=runtime_request.RUNTIME_EXECUTION_REQUEST_SCHEMA_NAME,
         schema_version=runtime_request.RUNTIME_EXECUTION_REQUEST_SCHEMA_VERSION,
@@ -139,6 +172,20 @@ def _request(monkeypatch):
         handoff=HANDOFF,
         invocation_descriptor=DESCRIPTOR,
         restart_capsule=CAPSULE,
+        compute_control_projection=projection,
+    )
+
+
+def _legacy_request(monkeypatch):
+    _bind_fakes(monkeypatch)
+    return runtime_request.RuntimeExecutionRequest(
+        schema_name=runtime_request.RUNTIME_EXECUTION_REQUEST_SCHEMA_NAME,
+        schema_version=runtime_request.RUNTIME_EXECUTION_REQUEST_LEGACY_SCHEMA_VERSION,
+        route_decision=ROUTE,
+        handoff=HANDOFF,
+        invocation_descriptor=DESCRIPTOR,
+        restart_capsule=CAPSULE,
+        compute_control_projection=None,
     )
 
 
@@ -146,11 +193,100 @@ def test_request_is_content_addressed_and_non_authorizing(monkeypatch) -> None:
     request = _request(monkeypatch)
     assert request.request_id.startswith("runtime-execution-request:")
     assert request.handoff_id == HANDOFF.handoff_id
+    assert request.compute_control_projection.projection_id.startswith(
+        "compute-control-projection:"
+    )
     assert request.execution_authorized is False
     assert request.github_writes_authorized is False
     assert request.merge_authorized is False
     assert request.issue_closure_authorized is False
     assert request.external_writes_authorized is False
+
+
+def test_request_id_covers_compute_projection_identity(monkeypatch) -> None:
+    first = _request(monkeypatch, projection=_projection())
+    second = _request(
+        monkeypatch,
+        projection=_projection(measured_compute_metadata_reference="metrics:changed"),
+    )
+    assert (
+        first.compute_control_projection.projection_id
+        != second.compute_control_projection.projection_id
+    )
+    assert first.request_id != second.request_id
+
+
+def test_current_schema_round_trips_exact_projection(monkeypatch) -> None:
+    request = _request(monkeypatch)
+    restored = runtime_request.deserialize_runtime_execution_request(
+        runtime_request.serialize_runtime_execution_request(request)
+    )
+    assert restored.schema_version == runtime_request.RUNTIME_EXECUTION_REQUEST_SCHEMA_VERSION
+    assert restored.compute_control_projection == request.compute_control_projection
+    assert restored.request_id == request.request_id
+
+
+def test_legacy_schema_round_trips_without_projection(monkeypatch) -> None:
+    request = _legacy_request(monkeypatch)
+    restored = runtime_request.deserialize_runtime_execution_request(
+        runtime_request.serialize_runtime_execution_request(request)
+    )
+    assert (
+        restored.schema_version
+        == runtime_request.RUNTIME_EXECUTION_REQUEST_LEGACY_SCHEMA_VERSION
+    )
+    assert restored.compute_control_projection is None
+    assert restored.request_id == request.request_id
+
+
+def test_current_schema_requires_projection(monkeypatch) -> None:
+    _bind_fakes(monkeypatch)
+    with pytest.raises(TypeError, match="requires exact ComputeControlProjection"):
+        runtime_request.RuntimeExecutionRequest(
+            schema_name=runtime_request.RUNTIME_EXECUTION_REQUEST_SCHEMA_NAME,
+            schema_version=runtime_request.RUNTIME_EXECUTION_REQUEST_SCHEMA_VERSION,
+            route_decision=ROUTE,
+            handoff=HANDOFF,
+            invocation_descriptor=DESCRIPTOR,
+            restart_capsule=CAPSULE,
+        )
+
+
+def test_projection_repository_binding_mismatch_fails_closed(monkeypatch) -> None:
+    with pytest.raises(ValueError, match="projection repository binding drifted"):
+        _request(monkeypatch, projection=_projection(repository="Blummer92/other"))
+
+
+def test_projection_issue_binding_mismatch_fails_closed(monkeypatch) -> None:
+    with pytest.raises(ValueError, match="projection issue binding drifted"):
+        _request(monkeypatch, projection=_projection(issue_number=1487))
+
+
+def test_projection_head_binding_mismatch_fails_closed(monkeypatch) -> None:
+    with pytest.raises(ValueError, match="projection source-head binding drifted"):
+        _request(monkeypatch, projection=_projection(current_head_sha="f" * 40))
+
+
+def test_tampered_projection_id_is_rejected_on_deserialize(monkeypatch) -> None:
+    request = _request(monkeypatch)
+    payload = json.loads(runtime_request.serialize_runtime_execution_request(request))
+    payload["compute_control_projection"]["projection_id"] = (
+        "compute-control-projection:" + "0" * 64
+    )
+    with pytest.raises(ValueError, match="projection_id does not match canonical content"):
+        runtime_request.deserialize_runtime_execution_request(
+            runtime_request.canonical_json_bytes(payload)
+        )
+
+
+def test_unsupported_projection_schema_is_rejected(monkeypatch) -> None:
+    request = _request(monkeypatch)
+    payload = json.loads(runtime_request.serialize_runtime_execution_request(request))
+    payload["compute_control_projection"]["schema_version"] = "9.9"
+    with pytest.raises(ValueError, match="unsupported compute-control projection schema"):
+        runtime_request.deserialize_runtime_execution_request(
+            runtime_request.canonical_json_bytes(payload)
+        )
 
 
 def test_request_store_is_idempotent(monkeypatch, tmp_path) -> None:
@@ -175,6 +311,7 @@ def test_binding_drift_fails_closed(monkeypatch) -> None:
                 handoff=HANDOFF,
                 invocation_descriptor=DESCRIPTOR,
                 restart_capsule=CAPSULE,
+                compute_control_projection=_projection(),
             )
     finally:
         DESCRIPTOR.source_sha = original
@@ -182,19 +319,24 @@ def test_binding_drift_fails_closed(monkeypatch) -> None:
 
 def test_dual_read_prefers_canonical_request(monkeypatch) -> None:
     sentinel = object()
-    monkeypatch.setattr(runtime_request, "load_runtime_execution_request", lambda *_args: sentinel)
+    monkeypatch.setattr(
+        runtime_request, "load_runtime_execution_request", lambda *_args: sentinel
+    )
     monkeypatch.setattr(
         runtime_request,
         "load_invocation_descriptor",
         lambda *_args: (_ for _ in ()).throw(AssertionError("legacy fallback used")),
     )
-    result = runtime_request.load_runtime_execution_request_or_legacy("/tmp/store", HANDOFF.handoff_id)
+    result = runtime_request.load_runtime_execution_request_or_legacy(
+        "/tmp/store", HANDOFF.handoff_id
+    )
     assert result.request is sentinel
     assert result.source == "runtime-execution-request"
 
 
 def test_dual_read_falls_back_only_when_canonical_request_is_absent(monkeypatch) -> None:
     sentinel = object()
+    _bind_fakes(monkeypatch)
     monkeypatch.setattr(
         runtime_request,
         "load_runtime_execution_request",
@@ -203,12 +345,20 @@ def test_dual_read_falls_back_only_when_canonical_request_is_absent(monkeypatch)
         ),
     )
     descriptor = SimpleNamespace(route_decision_id="route-id")
-    monkeypatch.setattr(runtime_request, "load_invocation_descriptor", lambda *_args: descriptor)
+    monkeypatch.setattr(
+        runtime_request, "load_invocation_descriptor", lambda *_args: descriptor
+    )
     monkeypatch.setattr(runtime_request, "load_route_decision", lambda *_args: object())
     monkeypatch.setattr(runtime_request, "load_executor_handoff", lambda *_args: object())
     monkeypatch.setattr(runtime_request, "load_restart_capsule", lambda *_args: object())
-    monkeypatch.setattr(runtime_request, "build_runtime_execution_request", lambda **_kwargs: sentinel)
-    result = runtime_request.load_runtime_execution_request_or_legacy("/tmp/store", HANDOFF.handoff_id)
+    monkeypatch.setattr(
+        runtime_request,
+        "_build_legacy_runtime_execution_request",
+        lambda **_kwargs: sentinel,
+    )
+    result = runtime_request.load_runtime_execution_request_or_legacy(
+        "/tmp/store", HANDOFF.handoff_id
+    )
     assert result.request is sentinel
     assert result.source == "legacy-artifacts"
 
@@ -227,7 +377,9 @@ def test_integrity_failure_never_silently_falls_back(monkeypatch) -> None:
         lambda *_args: (_ for _ in ()).throw(AssertionError("legacy fallback used")),
     )
     with pytest.raises(runtime_request.RuntimeExecutionRequestIntegrityError):
-        runtime_request.load_runtime_execution_request_or_legacy("/tmp/store", HANDOFF.handoff_id)
+        runtime_request.load_runtime_execution_request_or_legacy(
+            "/tmp/store", HANDOFF.handoff_id
+        )
 
 
 def test_module_has_no_execution_or_external_io_imports() -> None:
@@ -244,4 +396,5 @@ def test_module_has_no_execution_or_external_io_imports() -> None:
         for token in ("subprocess", "socket", "requests", "google.cloud", "github")
     )
     assert "run_single_issue_pilot(" not in source
+    assert "build_compute_control_projection" not in source
     assert "execution_authorized=True" not in source

@@ -30,6 +30,7 @@ def test_resolver_module_is_composition_only() -> None:
     for forbidden_call in (
         "run_single_issue_pilot(",
         "run_single_issue_runtime_entrypoint(",
+        "build_compute_control_projection(",
         ".acquire(",
         ".release(",
         "subprocess.",
@@ -89,6 +90,8 @@ def test_descriptor_writer_dual_writes_canonical_request_and_legacy_mirror(monke
     pilot.branch = "agent/1338-runtime-request"
     pilot.source_head_sha = handoff.source_sha_or_none
 
+    compute_control_projection = object()
+
     monkeypatch.setattr(
         resolver_module,
         "candidate_packet_id",
@@ -138,6 +141,7 @@ def test_descriptor_writer_dual_writes_canonical_request_and_legacy_mirror(monke
         runtime_configuration=runtime,
         dependency_readiness=readiness,
         pilot_input=pilot,
+        compute_control_projection=compute_control_projection,
     )
     assert result == "written"
     descriptor = captured["descriptor"]
@@ -152,6 +156,10 @@ def test_descriptor_writer_dual_writes_canonical_request_and_legacy_mirror(monke
     assert captured["runtime_request"] is request
     assert captured["request_kwargs"]["invocation_descriptor"] is descriptor
     assert captured["request_kwargs"]["restart_capsule"] is capsule
+    assert (
+        captured["request_kwargs"]["compute_control_projection"]
+        is compute_control_projection
+    )
     assert events == ["capsule", "runtime-request", "descriptor"]
 
 
