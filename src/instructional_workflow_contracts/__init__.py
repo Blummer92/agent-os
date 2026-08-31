@@ -31,6 +31,11 @@ from .common import (
     validate_stable_id,
     validate_version,
 )
+from .experiment_evidence import (
+    AVAILABILITIES as EXPERIMENT_EVIDENCE_AVAILABILITIES,
+    CONTRACT_VERSION as EXPERIMENT_EVIDENCE_VERSION,
+    validate_experiment_evidence,
+)
 from .handoff import (
     CANONICAL_OWNERS,
     CONTRACT_ID,
@@ -64,6 +69,8 @@ __all__ = [
     "ContractReference",
     "ContractValidationError",
     "DEPRECATED_FIELD_ALIASES",
+    "EXPERIMENT_EVIDENCE_AVAILABILITIES",
+    "EXPERIMENT_EVIDENCE_VERSION",
     "FINGERPRINT_ALGORITHM",
     "FORBIDDEN_IMPORT_PREFIXES",
     "IMAGE_INTENT_CONTRACT_ID",
@@ -99,6 +106,7 @@ __all__ = [
     "validate_and_normalize_json",
     "validate_curriculum_handoff",
     "validate_dependency_key",
+    "validate_experiment_evidence",
     "validate_image_intent",
     "validate_imported_asset_context",
     "validate_reason_code",
