@@ -36,6 +36,22 @@ Exact helper-overlay exemptions include the registered helper overlays plus the 
 
 Exact Responsibility Matrix support surfaces include Apps Script Sync Test Overlay, Dashboard Builder Overlay, Python Development Overlay, Workspace Implementation Overlay, Python Standards, Google Workspace Standards, Navigation Registry Standard, Reusable Capability Registry Standard, and Source-of-Truth Checks. Support surfaces are valid Matrix values but do not satisfy canonical-agent assignment coverage.
 
+## Semantic Ownership Validation
+
+Implementation: `validate_semantic_ownership()` in `07_Agent_Tests/validate_registry_consistency.py`
+Focused tests: `tests/test_registry_consistency.py` (SO-1 through SO-8 fixture matrix)
+Status: **advisory only, non-blocking** (#1511). The focused test always passes; findings print to stdout and never fail a caller.
+
+This closes a blind spot the Registry Consistency Audit above does not cover: `validate()` never reads `04_Registry/navigation/**` or any `.yml`/`.yaml` file under `04_Registry/`. `validate_semantic_ownership()` scans three bounded surfaces for two finding types — **stale retired owner** (names a retired technical agent directly, with no resolution through the Legacy Agent Alias Registry) and **unknown canonical owner** (names a value that is neither a current canonical agent, a retired agent, nor a documented support surface):
+
+1. `04_Registry/navigation/**/*.md` — ownership assertions matching `Owner agent: `, `Owned by the `, `governance is owned by the `, or a table row `| Review owner | <value> |`.
+2. `04_Registry/lp-reason-code-catalog.yaml` — `semantic_owners[].role` and each family record's `semantic_owner` field.
+3. `01_Shared_Standards/instructional-design/lp-reason-code-catalog.md` — the named owners in `## ownership-single-semantic-owner`.
+
+Explicit exclusions: `04_Registry/reusable-capabilities.yml` (already validated by `08_Tooling/reusable-capability-registry/src/reusable_capability_registry/validation.py`, which this validator defers to entirely and never re-flags), `06_Archive/**`, the Legacy Agent Alias Registry's own Alias Table and Ambiguous Legacy Values table, and ordinary prose that resolves a legacy name rather than asserting current ownership.
+
+This validator never modifies an ownership value. Blocking enforcement is a separate, dependent follow-up issue.
+
 ## Structural Validation Checks
 
 `07_Agent_Tests/validate-repo-structure.sh` checks:
