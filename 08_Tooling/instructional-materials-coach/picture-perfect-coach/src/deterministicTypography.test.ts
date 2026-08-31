@@ -13,11 +13,13 @@ import {
   type ExactStraightTextPlan,
 } from './deterministicTypography';
 
+// TEST-ONLY FIXTURE: these values are synthetic inputs chosen only to exercise renderer behavior.
+// They are not tutorial defaults, typography recommendations, or production design settings.
 const validPlan: ExactStraightTextPlan = {
   text: 'MUMFORD MARKET',
   font_identity: BUILTIN_TEST_FONT_IDENTITY,
   font_asset_fingerprint: BUILTIN_TEST_FONT_FINGERPRINT,
-  font_size_px: 14,
+  font_size_px: 7,
   font_weight: 700,
   font_style: 'normal',
   line_height_px: 14,
@@ -148,7 +150,11 @@ describe('approved font-asset adapter and deterministic rasterization', () => {
   });
 
   it('fails closed for unsupported compositing colour space instead of ignoring it', () => {
-    const result = renderExactStraightText({ ...validPlan, compositing_colour_space: 'linear-srgb' });
+    const invalidExternalPlan = {
+      ...validPlan,
+      compositing_colour_space: 'linear-srgb',
+    } as unknown as ExactStraightTextPlan;
+    const result = renderExactStraightText(invalidExternalPlan);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reasons).toContain(TYPOGRAPHY_BLOCKER_REASONS.unsupportedColourSpace);
   });

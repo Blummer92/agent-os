@@ -131,7 +131,7 @@ export const BUILTIN_TEST_FONT_ASSET: ApprovedGlyphFontAsset = Object.freeze({
   glyph_width: 5,
   glyph_height: 7,
   supported_weights: Object.freeze([700]),
-  supported_styles: Object.freeze(['normal']),
+  supported_styles: Object.freeze(['normal'] as const),
   glyphs: BUILTIN_GLYPHS,
 });
 
