@@ -189,11 +189,11 @@ def test_navigation_registry_workflow_uses_bounded_same_lineage_concurrency():
     assert "cancel-in-progress: ${{ github.run_attempt == 1 }}" in content
 
 
-def test_navigation_registry_workflow_preserves_triggers_job_and_test_command():
+def test_navigation_registry_workflow_is_pr_only_and_preserves_job_and_test_command():
     content = NAVIGATION_WORKFLOW.read_text(encoding="utf-8")
     assert "name: Navigation Registry Offline Tests" in content
     assert "pull_request:" in content
-    assert "push:" in content
+    assert "\n  push:" not in content
     assert "offline-notion-connector-tests:" in content
     assert "pytest tests/navigation_registry/test_notion_read_only_connector.py" in content
 
