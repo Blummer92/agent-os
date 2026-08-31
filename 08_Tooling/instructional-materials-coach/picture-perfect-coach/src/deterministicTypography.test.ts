@@ -13,6 +13,8 @@ import {
   type ExactStraightTextPlan,
 } from './deterministicTypography';
 
+// TEST-ONLY FIXTURE: these values are synthetic inputs chosen only to exercise renderer behavior.
+// They are not tutorial defaults, typography recommendations, or production design settings.
 const validPlan: ExactStraightTextPlan = {
   text: 'MUMFORD MARKET',
   font_identity: BUILTIN_TEST_FONT_IDENTITY,
