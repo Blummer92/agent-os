@@ -148,7 +148,11 @@ describe('approved font-asset adapter and deterministic rasterization', () => {
   });
 
   it('fails closed for unsupported compositing colour space instead of ignoring it', () => {
-    const result = renderExactStraightText({ ...validPlan, compositing_colour_space: 'linear-srgb' });
+    const invalidExternalPlan = {
+      ...validPlan,
+      compositing_colour_space: 'linear-srgb',
+    } as unknown as ExactStraightTextPlan;
+    const result = renderExactStraightText(invalidExternalPlan);
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reasons).toContain(TYPOGRAPHY_BLOCKER_REASONS.unsupportedColourSpace);
   });
