@@ -17,6 +17,7 @@ from scripts.agent_os_candidate_packet.validation_stage import (
     validation_stage_result_from_dict,
     validation_stage_result_to_dict,
 )
+from scripts.agent_os_execution_capabilities import RepositoryIdentity
 from scripts.agent_os_issue_acceptance import ApprovalState
 from scripts.agent_os_issue_acceptance.approved_execution_projection import (
     ApprovedExecutionProjectionResult,
@@ -158,6 +159,107 @@ def test_path_scope_drift_fails_closed(tmp_path) -> None:
 
     assert result.disposition is ValidationStageDisposition.BLOCKED
     assert result.reason_codes == ("expected-changed-paths-outside-allowlist",)
+
+
+def test_upstream_projection_not_complete_fails_closed(tmp_path) -> None:
+    """#754/#1030 candidate-bound admission requires the upstream approval
+    projection itself to be complete: matching runtime evidence alone (the
+    exact repository, tested SHA, evaluator SHA, and command set a completed
+    projection would have carried) must never substitute for a still-pending
+    human approval decision. Cross-contract seam: approval_stage -> validation_stage.
+    """
+    approved, repository_evidence = _approved()
+    pending_upstream = _prepare()
+    pending = prepare_approval_projection(
+        pending_upstream,
+        candidate_context=_context(),
+        evaluated_at="2026-08-06T04:15:00Z",
+        projected_at="2026-08-06T04:15:00Z",
+    )
+    assert pending.status is not ApprovalProjectionStageStatus.COMPLETE
+    assert pending.projection is None
+
+    inputs = _inputs(tmp_path, approved.projection, repository_evidence)
+    result = prepare_validation_stage(pending, inputs)
+
+    assert result.disposition is ValidationStageDisposition.BLOCKED
+    assert result.reason_codes == ("upstream-projection-not-complete",)
+    assert result.subject is None
+    assert result.validation_plan is None
+
+
+def test_repository_binding_mismatch_fails_closed(tmp_path) -> None:
+    """A different candidate's runtime-supplied repository identity must not
+    be admitted just because every other field (tested SHA, evaluator SHA,
+    required tests) matches the approved projection. One object's identity
+    can never satisfy another object's binding requirement.
+    """
+    approved, repository_evidence = _approved()
+    other_identity = RepositoryIdentity(
+        host="github.com", owner="other-owner", repository="other-repo"
+    )
+    other_evidence = replace(
+        repository_evidence, repository_identity=other_identity, evidence_id=""
+    )
+    inputs = _inputs(
+        tmp_path,
+        approved.projection,
+        repository_evidence,
+        repository_identity=other_identity,
+        repository_state_evidence=other_evidence,
+    )
+
+    result = prepare_validation_stage(approved, inputs)
+
+    assert result.disposition is ValidationStageDisposition.BLOCKED
+    assert result.reason_codes == ("repository-binding-mismatch",)
+    assert result.subject is None
+
+
+def test_evaluator_sha_mismatch_fails_closed(tmp_path) -> None:
+    """The evaluator commit SHA is candidate-owned evidence from the approved
+    projection; a runtime-supplied evaluator SHA that drifts from it must
+    fail closed rather than being silently accepted.
+    """
+    approved, repository_evidence = _approved()
+    drifted_evaluator_sha = "9" * 40
+    assert drifted_evaluator_sha != approved.projection.evaluator_commit_sha
+    inputs = _inputs(
+        tmp_path,
+        approved.projection,
+        repository_evidence,
+        evaluator_sha=drifted_evaluator_sha,
+    )
+
+    result = prepare_validation_stage(approved, inputs)
+
+    assert result.disposition is ValidationStageDisposition.BLOCKED
+    assert result.reason_codes == ("evaluator-sha-mismatch",)
+    assert result.subject is None
+
+
+def test_repository_evidence_tested_sha_mismatch_fails_closed(tmp_path) -> None:
+    """Runtime inputs can agree with the approved projection's tested SHA on
+    their own ``tested_sha`` field while the attached repository-state
+    evidence still carries a different tested SHA; the two independent
+    tested-SHA checks must not be satisfiable by only one of them matching.
+    """
+    approved, repository_evidence = _approved()
+    drifted_evidence = replace(repository_evidence, tested_sha="8" * 40, evidence_id="")
+    assert drifted_evidence.tested_sha != approved.projection.tested_repository_sha
+    inputs = _inputs(
+        tmp_path,
+        approved.projection,
+        repository_evidence,
+        repository_state_evidence=drifted_evidence,
+    )
+    assert inputs.tested_sha == approved.projection.tested_repository_sha
+
+    result = prepare_validation_stage(approved, inputs)
+
+    assert result.disposition is ValidationStageDisposition.BLOCKED
+    assert result.reason_codes == ("repository-evidence-tested-sha-mismatch",)
+    assert result.subject is None
 
 
 def test_runtime_bounds_fail_before_packet_construction(tmp_path) -> None:
