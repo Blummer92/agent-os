@@ -116,3 +116,88 @@ def test_github_sole_writer_rule_remains(tmp_path: Path) -> None:
     root = baseline(tmp_path)
     replace(root, "AGENTS.md", "Only the GitHub Service Agent may write to GitHub.", "GitHub writes require approval.")
     assert "AGENTS access rules must name GitHub Service Agent as the sole GitHub writer" in MODULE.validate(root)
+
+
+# --- Semantic ownership advisory (#1511) fixture matrix ---------------------
+
+
+def semantic_baseline(tmp_path: Path) -> Path:
+    root = baseline(tmp_path)
+    write(root, "04_Registry/navigation/README.md", (
+        "# Navigation Registry\n\n"
+        "Navigation Registry governance is owned by the ChatGPT Orchestrator.\n\n"
+        "Use GitHub Service Agent instead of Google Workspace Automation Engineer.\n"
+    ))
+    write(root, "04_Registry/lp-reason-code-catalog.yaml", (
+        "semantic_owners:\n"
+        "- id: chatgpt-orchestrator\n"
+        "  role: ChatGPT Orchestrator\n"
+        "families:\n"
+        "- id: routing\n"
+        "  semantic_owner: chatgpt-orchestrator\n"
+    ))
+    write(root, "01_Shared_Standards/instructional-design/lp-reason-code-catalog.md", (
+        "# LP Reason Code Catalog\n\n"
+        "## ownership-single-semantic-owner\n"
+        "ChatGPT Orchestrator for routing meaning.\n"
+    ))
+    write(root, "04_Registry/reusable-capabilities.yml", "records:\n- owner_agent: Integration Manager\n")
+    write(root, "04_Registry/navigation/06_Archive/legacy.md", "Owner agent: Integration Manager\n")
+    return root
+
+
+def test_so1_stale_retired_owner_navigation(tmp_path: Path) -> None:
+    root = semantic_baseline(tmp_path)
+    replace(root, "04_Registry/navigation/README.md", "owned by the ChatGPT Orchestrator", "owned by the Integration Manager")
+    findings = MODULE.validate_semantic_ownership(root)
+    assert any("stale retired owner" in e and "navigation/README.md" in e for e in findings)
+
+
+def test_so2_stale_retired_owner_catalog(tmp_path: Path) -> None:
+    root = semantic_baseline(tmp_path)
+    replace(root, "04_Registry/lp-reason-code-catalog.yaml", "role: ChatGPT Orchestrator", "role: Integration Manager")
+    replace(root, "04_Registry/lp-reason-code-catalog.yaml", "semantic_owner: chatgpt-orchestrator", "semantic_owner: integration-manager")
+    findings = MODULE.validate_semantic_ownership(root)
+    assert any("stale retired owner" in e and "semantic_owners[].role" in e for e in findings)
+    assert any("stale retired owner" in e and "semantic_owner ->" in e for e in findings)
+
+
+def test_so3_unknown_canonical_owner(tmp_path: Path) -> None:
+    root = semantic_baseline(tmp_path)
+    replace(root, "04_Registry/navigation/README.md", "owned by the ChatGPT Orchestrator", "owned by the Random Agent")
+    findings = MODULE.validate_semantic_ownership(root)
+    assert any("unknown canonical owner" in e and "Random Agent" in e for e in findings)
+
+
+def test_so4_reusable_capabilities_alias_allowed_not_scanned(tmp_path: Path) -> None:
+    root = semantic_baseline(tmp_path)
+    findings = MODULE.validate_semantic_ownership(root)
+    assert not any("reusable-capabilities.yml" in e for e in findings)
+
+
+def test_so5_archive_reference_ignored(tmp_path: Path) -> None:
+    root = semantic_baseline(tmp_path)
+    findings = MODULE.validate_semantic_ownership(root)
+    assert not any("06_Archive" in e for e in findings)
+
+
+def test_so6_ordinary_prose_resolving_legacy_name_ignored(tmp_path: Path) -> None:
+    root = semantic_baseline(tmp_path)
+    findings = MODULE.validate_semantic_ownership(root)
+    assert not any("Google Workspace Automation Engineer" in e for e in findings)
+
+
+def test_so7_current_canonical_owner_no_finding(tmp_path: Path) -> None:
+    root = semantic_baseline(tmp_path)
+    assert MODULE.validate_semantic_ownership(root) == []
+
+
+def test_so8_no_ownership_field_present_no_finding(tmp_path: Path) -> None:
+    root = semantic_baseline(tmp_path)
+    write(root, "04_Registry/navigation/no-owner.md", "# Just a page\n\nNo ownership assertion here.\n")
+    assert MODULE.validate_semantic_ownership(root) == []
+
+
+def test_semantic_ownership_advisory_is_non_blocking_on_current_repository() -> None:
+    findings = MODULE.validate_semantic_ownership(MODULE.ROOT)
+    assert isinstance(findings, list)
