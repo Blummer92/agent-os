@@ -256,3 +256,90 @@ surface, and bounded rollback targets.
 uses only the fixed test wrapper, contains no package-install/sudo surface, fails
 closed for runtime readiness, preserves exact branch/SHA identity, and keeps all
 authority flags false.
+
+## DEVVAL3 TypeScript/Vitest validation identity
+
+Issue #1495 adds the third fixed developer-validation identity:
+
+```text
+ppux-picture-perfect-ts-vitest
+```
+
+It exists because the two pytest identities cannot execute the Picture Perfect
+Coach TypeScript suite the #1495 developer loop requires. It reuses the existing
+registry, the existing issue-comment grammar, and the existing GCE/IAP transport;
+it adds no second executor, no second validation framework, and no alternate
+control path.
+
+The identity resolves entirely from repository-owned configuration:
+
+| Fixed binding | Value |
+| --- | --- |
+| package directory | `08_Tooling/instructional-materials-coach/picture-perfect-coach` |
+| runner configuration | the package's own `vite.config.ts` |
+| argv | `node vitest run` plus six fixed `src/*.test.ts` paths |
+
+The fixed test scope is the #1495 authorized-overlay integrity suite plus the
+#1484 exact-composite seam it must not regress: `overlayIntegrity`,
+`exactComposite`, `exactCompositeSuite`, `framePlan`, `executorContract`, and
+`provenanceValidator`. A request cannot choose the interpreter, package set,
+package directory, config file, test paths, filters, globs, reporters, argv, or
+environment. An unknown identity, a supplied argument, a protected branch, or a
+malformed SHA is refused by the ingress grammar before any transport occurs.
+
+### DEVVAL3 host runtime
+
+Vitest cannot run under the pinned DEVVAL2 CPython runtime, so the identity binds
+a second fixed root-owned runtime published at:
+
+```text
+/usr/local/libexec/agent-os-dev-validation-node
+/opt/agent-os/dev-validation-node-runtime/node_modules
+```
+
+After exact branch/SHA checkout the host runner requires that fixed wrapper and
+that fixed overlay, proves the overlay resolves Vitest `4.1.10` on a Node `22.x`
+interpreter, links the root-owned overlay into the ephemeral checkout so Node can
+resolve the package's declared dependencies, and runs only the fixed argv above
+from the fixed package directory. Cleanup removes the ephemeral link, never the
+overlay. The runner has no package-install, index-selection, `sudo`, or shell
+surface, and the transport carries only the validated
+repository/issue/branch/SHA/identity binding.
+
+Fail-closed reason codes are:
+
+| Reason | Meaning |
+| --- | --- |
+| `test-runtime-unavailable` | fixed wrapper or Vitest CLI missing or not executable |
+| `test-runtime-invalid` | overlay does not resolve the pinned Vitest/Node identity |
+| `validation-workspace-unavailable` | fixed package directory missing, or the checkout already carries `node_modules` |
+
+**Publishing that host runtime is not authorized by #1495 and is not performed by
+this repository change.** No installer for it is added here. Until an
+administrator publishes it under separate authorization, a DEVVAL3 request over
+GCE/IAP fails closed as `test-runtime-unavailable`, and the identity's fixed test
+scope is executed on another capable authorized surface. Validation remains
+non-authorizing on every path: `execution_authorized`, `scheduler_invoked`,
+`publication_invoked`, and `merge_authorized` stay false.
+
+### DEVVAL3 rollback
+
+Repository rollback reverts the registry entry, the ingress grammar entry, the
+host-runner binding, the #1495 tests, and this appended documentation. It does
+not touch DEVVAL1, DEVVAL2, the governed-resume runtime, workflows, IAM/WIF, OS
+Login, or host state. If the DEVVAL3 host runtime is ever published under
+separate authorization, its live rollback removes only:
+
+```sh
+sudo rm -f /usr/local/libexec/agent-os-dev-validation-node
+sudo rm -rf /opt/agent-os/dev-validation-node-runtime
+```
+
+### DEVVAL3 proof
+
+`tests/agent_os_remote_validation/test_ppux_dev_validation_identity.py` proves the
+identity is admitted by the existing grammar, maps to one fixed repository-owned
+argv whose test paths exist in the fixed package, rejects supplied commands,
+argv, paths, filters, globs, and shell text, pins the same Vitest/Node identity
+the package declares, keeps the host runner free of install and shell surface,
+preserves both existing identities unchanged, and stays non-authorizing.

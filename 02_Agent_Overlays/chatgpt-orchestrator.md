@@ -132,7 +132,7 @@ For finite multi-item missions, an item-local blocker is not a mission-level sto
 Request-interpretation continuation stops follow `chatgpt-orchestrator-request-interpretation.md`; conversation memory never resolves missing, stale, or multiple-candidate canonical context.
 ## Version
 0.3.3
-Compatibility lineage: 0.3.2
+Compatibility lineage: 0.3.2, 0.3.1
 
 ## Changelog
 - 0.3.3 points the CKR6 Lessons Learned preflight route at the now-instantiated live activation bridge, `agent_memory_context_manager.orchestrate_lesson_activation(...)` (#1516 / CKR11): bounded known-reference-first or filtered live Notion retrieval, deterministic finite-vocabulary row normalization with explicit fail-closed non-ready outcomes, and unchanged reuse of the #1144 CKR2 selector and the #1520 shared candidate-owned provenance invariant with no Lessons-specific duplicate guard.
