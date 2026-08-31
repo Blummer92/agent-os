@@ -17,7 +17,7 @@ const validPlan: ExactStraightTextPlan = {
   text: 'MUMFORD MARKET',
   font_identity: BUILTIN_TEST_FONT_IDENTITY,
   font_asset_fingerprint: BUILTIN_TEST_FONT_FINGERPRINT,
-  font_size_px: 14,
+  font_size_px: 7,
   font_weight: 700,
   font_style: 'normal',
   line_height_px: 14,
