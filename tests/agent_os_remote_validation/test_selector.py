@@ -507,6 +507,16 @@ def test_documentation_and_focused_selection_ignores_changed_file_order() -> Non
     assert only.commands == ("python -m pytest tests/agent_os_issue_acceptance",)
 
 
+def test_aggregate_and_focused_selection_ignores_changed_file_order() -> None:
+    paths = [AGGREGATE_CONFIG_PATH, FOCUSED_PATH]
+    outcomes = {_select(_input(list(order))) for order in permutations(paths)}
+    assert len(outcomes) == 1
+    only = outcomes.pop()
+    assert only.profile == "aggregate"
+    assert only.commands == ("python -m pytest",)
+    assert only.reason_codes == ("profile.aggregate-configuration",)
+
+
 def test_documentation_and_focused_selection_ignores_rule_order() -> None:
     paths = [DOC_PATH, FOCUSED_PATH]
     baseline = _select(_input(paths))
