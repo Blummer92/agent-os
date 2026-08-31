@@ -56,6 +56,9 @@ def test_ordinary_code_change_gets_one_normal_review():
     assert decision.depth is ReviewDepth.NORMAL
     assert decision.execution_authorized is False
     assert decision.merge_authorized is False
+    assert decision.closure_authorized is False
+    assert decision.production_authorized is False
+    assert decision.external_write_authorized is False
 
 
 def test_parser_authorization_change_escalates_to_adversarial():
@@ -74,6 +77,17 @@ def test_workflow_permission_change_escalates_to_adversarial():
         risk_evidence=[_risk("workflow-ci-authority"), _risk("permissions")],
     )
     assert decision.depth is ReviewDepth.ADVERSARIAL
+
+
+def test_ambiguous_or_conflicting_risk_classes_require_manual_decision():
+    for risk_class in ("ambiguous-evidence", "conflicting-evidence"):
+        decision = select_review_depth(
+            changed_files=["src/a.py"],
+            change_kinds=["implementation"],
+            risk_evidence=[_risk(risk_class)],
+        )
+        assert decision.depth is ReviewDepth.MANUAL
+        assert decision.reasons == ("risk-evidence-stale-ambiguous-or-conflicting",)
 
 
 def test_markdown_only_change_uses_no_ai():
@@ -135,7 +149,11 @@ def test_packet_is_bounded_and_excludes_unrequested_history():
     assert "unrelated_comments" not in data
     assert len(packet.bounded_diff) < 64_000
     assert packet.execution_authorized is False
+    assert packet.merge_authorized is False
+    assert packet.closure_authorized is False
+    assert packet.production_authorized is False
     assert packet.external_write_authorized is False
+    assert packet.side_effects_performed is False
 
 
 def test_oversized_diff_is_rejected():

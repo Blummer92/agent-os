@@ -41,12 +41,12 @@ ADVERSARIAL_RISKS = frozenset(
         "external-api-semantics",
         "production-impact",
         "architecture-ownership-interface",
-        "ambiguous-evidence",
-        "conflicting-evidence",
         "repeated-repair-failure",
         "post-merge-regression-repair",
     }
 )
+
+MANUAL_RISKS = frozenset({"ambiguous-evidence", "conflicting-evidence"})
 
 NO_AI_CHANGE_KINDS = frozenset(
     {
@@ -84,6 +84,8 @@ class ReviewDepthDecision:
     reasons: tuple[str, ...]
     execution_authorized: bool = False
     merge_authorized: bool = False
+    closure_authorized: bool = False
+    production_authorized: bool = False
     external_write_authorized: bool = False
     side_effects_performed: bool = False
 
@@ -120,6 +122,8 @@ class ReviewEvidencePacket:
     review_depth: ReviewDepth
     execution_authorized: bool = False
     merge_authorized: bool = False
+    closure_authorized: bool = False
+    production_authorized: bool = False
     external_write_authorized: bool = False
     side_effects_performed: bool = False
 
@@ -191,17 +195,22 @@ def select_review_depth(
         risks.append(risk)
         reasons.extend(f"{risk}:{entry}" for entry in evidence)
 
-    if stale_or_conflicting_risk_evidence:
-        return ReviewDepthDecision(ReviewDepth.MANUAL, tuple(sorted(set(risks))), ("risk-evidence-stale-or-conflicting",))
+    canonical_risks = tuple(sorted(set(risks)))
+    if stale_or_conflicting_risk_evidence or any(risk in MANUAL_RISKS for risk in risks):
+        return ReviewDepthDecision(
+            ReviewDepth.MANUAL,
+            canonical_risks,
+            ("risk-evidence-stale-ambiguous-or-conflicting",),
+        )
     if deterministic_failure:
-        return ReviewDepthDecision(ReviewDepth.NO_AI, tuple(sorted(set(risks))), ("deterministic-failure-first",))
+        return ReviewDepthDecision(ReviewDepth.NO_AI, canonical_risks, ("deterministic-failure-first",))
     if any(risk in ADVERSARIAL_RISKS for risk in risks):
-        return ReviewDepthDecision(ReviewDepth.ADVERSARIAL, tuple(sorted(set(risks))), tuple(sorted(set(reasons))))
+        return ReviewDepthDecision(ReviewDepth.ADVERSARIAL, canonical_risks, tuple(sorted(set(reasons))))
     if not code_changed or (kinds and set(kinds).issubset(NO_AI_CHANGE_KINDS)):
-        return ReviewDepthDecision(ReviewDepth.NO_AI, tuple(sorted(set(risks))), ("no-semantic-code-review-needed",))
+        return ReviewDepthDecision(ReviewDepth.NO_AI, canonical_risks, ("no-semantic-code-review-needed",))
     if not files:
-        return ReviewDepthDecision(ReviewDepth.MANUAL, tuple(sorted(set(risks))), ("changed-file-evidence-missing",))
-    return ReviewDepthDecision(ReviewDepth.NORMAL, tuple(sorted(set(risks))), tuple(sorted(set(reasons))) or ("ordinary-code-change",))
+        return ReviewDepthDecision(ReviewDepth.MANUAL, canonical_risks, ("changed-file-evidence-missing",))
+    return ReviewDepthDecision(ReviewDepth.NORMAL, canonical_risks, tuple(sorted(set(reasons))) or ("ordinary-code-change",))
 
 
 def review_invalidation_scope(
@@ -223,7 +232,8 @@ def review_invalidation_scope(
         return ()
     if set(kinds) & FULL_REVIEW_INVALIDATORS:
         return reviewed
-    return tuple(path for path in changed if path in set(reviewed))
+    reviewed_set = set(reviewed)
+    return tuple(path for path in changed if path in reviewed_set)
 
 
 def build_review_evidence_packet(**payload: Any) -> ReviewEvidencePacket:
