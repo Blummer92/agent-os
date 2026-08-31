@@ -1,8 +1,9 @@
 name: Navigation Registry Offline Tests
 
 on:
+  # PR-only by #1530: the protected main branch already requires PR flow, while
+  # post-merge push runs repeated this same focused validation after merge.
   pull_request:
-  push:
 
 concurrency:
   group: navigation-registry-offline-${{ github.event.pull_request.number || github.ref }}
