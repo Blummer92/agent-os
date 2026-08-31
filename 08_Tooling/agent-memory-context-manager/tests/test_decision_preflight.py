@@ -57,6 +57,17 @@ def test_architecture_sensitive_task_requires_retrieval_and_selects_current_deci
     assert result.handoff_projection["allowed_inspect_first"]
 
 
+def test_decision_without_candidate_provenance_is_insufficient_despite_request_refs():
+    req = request(
+        canonical_rule_refs=("01_Shared_Standards/navigation/connector-contract-adr.md",)
+    )
+    result = consume_decision_preflight(
+        req, (decision(canonical_github_refs=()),)
+    )
+    assert result.decision_retrieval_status is DecisionRetrievalStatus.INSUFFICIENT
+    assert result.verification_required is False
+
+
 def test_routine_mechanical_task_is_not_needed_and_ignores_supplied_rows():
     req = request(
         capability_keywords=(),
