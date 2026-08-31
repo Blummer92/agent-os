@@ -13,9 +13,9 @@ Review depths are finite:
 - `no-ai-review-required` for non-semantic changes or a deterministic failure that should be repaired first;
 - `normal-review-required` for ordinary code changes;
 - `adversarial-review-required` for supplied risk evidence covering parsers/resolvers/selectors, authorization/security, state/persistence, external mutation, concurrency/retry, workflow authority, cross-system/API semantics, production impact, material architecture/interface change, repeated repair failure, or post-merge regression repair;
-- `manual-decision-required` when risk evidence is stale or conflicting.
+- `manual-decision-required` when risk evidence is stale, ambiguous, or conflicting.
 
-High reasoning is therefore risk-triggered rather than a universal default. The projection performs no provider invocation and grants no execution, merge, or external-write authority.
+High reasoning is therefore risk-triggered rather than a universal default. The projection performs no provider invocation and grants no execution, merge, issue-closure, production, or external-write authority.
 
 `ReviewEvidencePacket` bounds the context supplied to a later reviewer. It contains only current identity, issue contract, changed files and bounded diff, changed contracts/dependencies/workflows, deterministic risk evidence, selected validation/results, finding identities, prior reviewed head, changed paths since review, and activated architecture/governance references. Full repository history, unrelated governance prose, unchanged test suites, giant logs, unrelated historical comments, and resolved unaffected threads are not packet fields.
 
