@@ -93,17 +93,20 @@ def _check_file(repo_root: Path, relative_path: str) -> PreflightCheck:
             reason="changed-file-missing",
         )
 
+    kind = {
+        ".py": "python-compile",
+        ".json": "json-parse",
+        ".yml": "yaml-parse",
+        ".yaml": "yaml-parse",
+    }[suffix]
     try:
         text = path.read_text(encoding="utf-8")
         if suffix == ".py":
             compile(text, relative_path, "exec")
-            kind = "python-compile"
         elif suffix == ".json":
             json.loads(text)
-            kind = "json-parse"
         else:
             yaml.safe_load(text)
-            kind = "yaml-parse"
     except (OSError, UnicodeError, SyntaxError, json.JSONDecodeError, yaml.YAMLError) as exc:
         return PreflightCheck(
             path=relative_path,
