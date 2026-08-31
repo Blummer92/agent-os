@@ -48,11 +48,14 @@ jobs:
 
       - name: Publish validation summary
         if: always()
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           {
             echo "## Agent OS Validation Gate"
             echo
-            echo "- Commit: \`$GITHUB_SHA\`"
+            echo "- Head SHA (pull request head): \`${PR_HEAD_SHA:-not applicable for this event}\`"
+            echo "- Checked-out (merge) SHA: \`$GITHUB_SHA\`"
             echo "- Event: \`$GITHUB_EVENT_NAME\`"
             echo "- Aggregate validation, including repository structure validation, executed in GitHub Actions."
             echo "- Cloud Build remains the canonical external comparison lane through \`cloudbuild.yaml\`."
