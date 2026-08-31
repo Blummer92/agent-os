@@ -21,6 +21,7 @@ zblumstein@cloudshell:~ (agent-os-502614)$
     assert parsed.newest_actionable_failure == "fatal: not a git repository (or any parent up to mount point /)"
     assert parsed.current_directory == "~"
     assert parsed.cloud_project == "agent-os-502614"
+    assert parsed.branch is None
 
 
 def test_parenthesized_prompt_is_context_not_a_command():

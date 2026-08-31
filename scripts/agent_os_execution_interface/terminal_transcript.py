@@ -15,6 +15,7 @@ _PROMPT_RE = re.compile(
 )
 _BRANCH_RE = re.compile(r"\((?P<branch>[A-Za-z0-9._/-]+)\)\s*[$#]")
 _PYTHON_RE = re.compile(r"\bPython\s+(?P<version>\d+\.\d+(?:\.\d+)?)\b")
+_PROJECT_RE = re.compile(r"gcloud config set project\s+(?P<project>[A-Za-z0-9._:-]+)")
 _ERROR_PREFIXES = (
     "fatal:",
     "error:",
@@ -96,21 +97,27 @@ def parse_terminal_transcript(text: str) -> TerminalTranscript:
         prompt_match = _PROMPT_RE.match(line)
         if prompt_match:
             latest_prompt = prompt_match.group("prompt")
-            parsed_directory, parsed_branch = _parse_prompt(latest_prompt)
+            parsed_directory, parsed_context = _parse_prompt(latest_prompt)
             current_directory = parsed_directory or current_directory
-            branch = parsed_branch or branch
             command = prompt_match.group("command").strip()
             if command:
                 commands.append(command)
+                command_project = _PROJECT_RE.search(command)
+                if command_project:
+                    cloud_project = command_project.group("project")
+            # A parenthesized prompt segment is the Cloud project when it matches a
+            # project the transcript already established, and a git branch otherwise.
+            if parsed_context and parsed_context != cloud_project:
+                branch = parsed_context
             continue
 
         if line.startswith("Updated property [core/project]."):
             output.append(line)
             continue
 
-        project_match = re.search(r"gcloud config set project\s+([A-Za-z0-9._:-]+)", line)
+        project_match = _PROJECT_RE.search(line)
         if project_match:
-            cloud_project = project_match.group(1)
+            cloud_project = project_match.group("project")
 
         python_match = _PYTHON_RE.search(line)
         if python_match:
