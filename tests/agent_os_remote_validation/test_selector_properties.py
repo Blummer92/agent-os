@@ -1,7 +1,32 @@
+"""Bounded property-based pilot for the remote-validation selector (#1554).
+
+Hypothesis is a qualification-only dependency
+(`08_Tooling/workflow-scheduler/docs/DEPENDENCY_READINESS.md`), not a permanent
+entry in `requirements-dev.txt`, so it is absent on the governed
+remote-validation host. This module must therefore never make its absence a
+collection error for the governed aggregate suite: a collection error exits 2
+and stops every other test in the run. The `importorskip` guard below precedes
+every Hypothesis import, matching
+`tests/agent_os_issue_acceptance/test_parse_pr_hypothesis.py` (#1477) and
+`08_Tooling/agent-os-execution-service/tests/test_hypothesis_qualification.py`
+(#1138).
+
+Generation stays offline and deterministic per the #1554 constraints:
+`derandomize=True` fixes the seed and `database=None` suppresses the
+`.hypothesis` example database, so a run adds no workspace side effect and no
+non-reproducible failure.
+"""
 from __future__ import annotations
 
 import copy
-from itertools import permutations
+from importlib.metadata import version
+
+import pytest
+
+pytest.importorskip(
+    "hypothesis",
+    reason="Hypothesis is qualification-only and is not a permanent repository dependency",
+)
 
 from hypothesis import given, settings, strategies as st
 
@@ -11,6 +36,8 @@ from scripts.agent_os_remote_validation import (
     select_validation_plan,
     validate_validation_plan,
 )
+
+QUALIFIED_HYPOTHESIS_VERSION = "6.165.9"
 
 BASE_SHA = "a" * 40
 HEAD_SHA = "b" * 40
@@ -44,7 +71,12 @@ def _owned_paths() -> tuple[str, ...]:
 OWNED_PATHS = _owned_paths()
 
 
-@settings(max_examples=250, deadline=None)
+def test_hypothesis_uses_exact_qualified_version() -> None:
+    """Qualification-only pins are exact; a range would drift the qualified run."""
+    assert version("hypothesis") == QUALIFIED_HYPOTHESIS_VERSION
+
+
+@settings(max_examples=250, deadline=None, database=None, derandomize=True)
 @given(st.lists(st.sampled_from(OWNED_PATHS), min_size=1, max_size=8, unique=True))
 def test_changed_file_permutation_preserves_plan(paths: list[str]) -> None:
     """Selection identity must depend on the changed-file set, never its order."""
@@ -54,7 +86,7 @@ def test_changed_file_permutation_preserves_plan(paths: list[str]) -> None:
     assert validate_validation_plan(forward) == ()
 
 
-@settings(max_examples=200, deadline=None)
+@settings(max_examples=200, deadline=None, database=None, derandomize=True)
 @given(st.lists(st.sampled_from(OWNED_PATHS), min_size=1, max_size=8, unique=True))
 def test_focused_rule_permutation_preserves_plan(paths: list[str]) -> None:
     """Rule declaration order must not change canonical selection identity."""
@@ -66,7 +98,7 @@ def test_focused_rule_permutation_preserves_plan(paths: list[str]) -> None:
     assert validate_validation_plan(candidate) == ()
 
 
-@settings(max_examples=150, deadline=None)
+@settings(max_examples=150, deadline=None, database=None, derandomize=True)
 @given(st.sampled_from(OWNED_PATHS))
 def test_duplicate_changed_paths_do_not_change_semantic_plan(path: str) -> None:
     """Repeated evidence for the same changed path must not create new commands."""
