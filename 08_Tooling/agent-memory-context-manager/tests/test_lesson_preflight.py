@@ -4,10 +4,14 @@ from agent_memory_context_manager.coding_knowledge_selection import (
     RetrievalEscalation,
 )
 from agent_memory_context_manager.lesson_preflight import (
+    FailedRepairAttempt,
     LessonRecordEvidence,
     LessonRetrievalStatus,
+    RepairContext,
+    RetryReentryOutcome,
     consume_lesson_preflight,
     plan_lesson_preflight,
+    plan_repair_retry_boundary,
 )
 
 
@@ -184,3 +188,130 @@ def test_no_write_capability_is_created():
     assert result.notion_write_performed is False
     assert result.github_write_performed is False
     assert result.authority_created is False
+
+
+def sparse_repair_request(**overrides):
+    """A sparse failed-PR/CI request with no explicit signals that would
+    otherwise make CKR2 report ``not-needed`` on its own (#1350 shape)."""
+    data = dict(
+        task_reference="pr:#1350",
+        ecosystem_hints=(),
+        capability_keywords=(),
+        target_path_hints=(),
+        canonical_rule_refs=(),
+        known_knowledge_refs=(),
+        specialized_knowledge_required=None,
+    )
+    data.update(overrides)
+    return CodingKnowledgeRequest(**data)
+
+
+def test_1350_sparse_failed_pr_repair_without_repair_context_skips_ckr6():
+    """Reproduces #1350: a sparse failing-PR request entered without
+    ``repair_context`` bypasses CKR6 material-use evaluation entirely."""
+    plan = plan_lesson_preflight(sparse_repair_request())
+    assert plan.retrieval_required is False
+
+
+def test_1350_failed_pr_repair_forces_ckr6_material_use_evaluation():
+    plan = plan_lesson_preflight(
+        sparse_repair_request(), repair_context=RepairContext.FAILED_PR_REPAIR
+    )
+    assert plan.retrieval_required is True
+    assert plan.recommended_escalation is RetrievalEscalation.FILTERED_DATA_SOURCE_QUERY
+    assert plan.reason_codes == ("failed-pr-repair-material-use-evaluation-required",)
+
+
+def test_1350_ci_diagnosis_forces_ckr6_material_use_evaluation():
+    plan = plan_lesson_preflight(
+        sparse_repair_request(), repair_context=RepairContext.CI_DIAGNOSIS
+    )
+    assert plan.retrieval_required is True
+    assert plan.recommended_escalation is RetrievalEscalation.FILTERED_DATA_SOURCE_QUERY
+
+
+def test_1350_failed_pr_repair_with_known_reference_is_known_reference_first():
+    plan = plan_lesson_preflight(
+        sparse_repair_request(known_knowledge_refs=("python:ci:aggregate-validation-retry",)),
+        repair_context=RepairContext.FAILED_PR_REPAIR,
+    )
+    assert plan.retrieval_required is True
+    assert plan.recommended_escalation is RetrievalEscalation.KNOWN_REFERENCE
+
+
+def test_1350_ordinary_material_request_ignores_repair_context():
+    plan = plan_lesson_preflight(request(), repair_context=RepairContext.FAILED_PR_REPAIR)
+    assert plan.retrieval_required is True
+    assert plan.recommended_escalation is RetrievalEscalation.FILTERED_DATA_SOURCE_QUERY
+    assert plan.reason_codes == ("lesson-retrieval-required",)
+
+
+def test_consume_lesson_preflight_plumbs_repair_context():
+    result = consume_lesson_preflight(
+        sparse_repair_request(),
+        (lesson(),),
+        repair_context=RepairContext.FAILED_PR_REPAIR,
+    )
+    # Retrieval was forced (candidate was evaluated) instead of skipped as
+    # not-needed, even though the bare sparse request carries no hints.
+    assert result.candidate_count == 1
+    assert result.lesson_retrieval_status is not LessonRetrievalStatus.NOT_NEEDED
+
+
+def failed_attempt(**overrides):
+    data = dict(
+        attempt_id="attempt:1",
+        failed_hypothesis="Relax the timeout guard.",
+        result_summary="Aggregate validation remained red after relaxing the guard.",
+        retry_reentry_outcome=None,
+    )
+    data.update(overrides)
+    return FailedRepairAttempt(**data)
+
+
+def test_1510_no_prior_attempts_admits_first_mutation():
+    plan = plan_repair_retry_boundary(RepairContext.FAILED_PR_REPAIR, ())
+    assert plan.mutation_admissible is True
+    assert plan.reason_codes == ("no-retry-boundary-applicable",)
+
+
+def test_1510_failed_attempt_without_reentry_blocks_next_mutation():
+    """Reproduces #1510: a failed repair attempt was followed by another
+    repair hypothesis/mutation without retry-specific CKR6 re-entry."""
+    plan = plan_repair_retry_boundary(RepairContext.FAILED_PR_REPAIR, (failed_attempt(),))
+    assert plan.mutation_admissible is False
+    assert plan.blocking_attempt_id == "attempt:1"
+    assert plan.reason_codes == ("retry-ckr6-reentry-required",)
+
+
+def test_1510_recorded_reentry_admits_next_mutation():
+    attempt = failed_attempt(retry_reentry_outcome=RetryReentryOutcome.CONSUMED)
+    plan = plan_repair_retry_boundary(RepairContext.FAILED_PR_REPAIR, (attempt,))
+    assert plan.mutation_admissible is True
+    assert plan.reason_codes == ("retry-ckr6-reentry-consumed",)
+
+
+def test_1510_not_material_and_unavailable_outcomes_also_admit_mutation():
+    for outcome in (RetryReentryOutcome.NOT_MATERIAL, RetryReentryOutcome.UNAVAILABLE_OR_FAILED):
+        attempt = failed_attempt(retry_reentry_outcome=outcome)
+        plan = plan_repair_retry_boundary(RepairContext.FAILED_PR_REPAIR, (attempt,))
+        assert plan.mutation_admissible is True
+
+
+def test_1510_earlier_reentry_does_not_satisfy_later_failed_attempt():
+    """An earlier attempt's CKR6 re-entry must not satisfy a later boundary."""
+    first = failed_attempt(attempt_id="attempt:1", retry_reentry_outcome=RetryReentryOutcome.CONSUMED)
+    second = failed_attempt(
+        attempt_id="attempt:2",
+        failed_hypothesis="Widen the retry window instead.",
+        result_summary="Aggregate validation remained red after widening the retry window.",
+    )
+    plan = plan_repair_retry_boundary(RepairContext.FAILED_PR_REPAIR, (first, second))
+    assert plan.mutation_admissible is False
+    assert plan.blocking_attempt_id == "attempt:2"
+
+
+def test_1510_no_repair_context_has_no_retry_boundary():
+    plan = plan_repair_retry_boundary(RepairContext.NONE, (failed_attempt(),))
+    assert plan.mutation_admissible is True
+    assert plan.reason_codes == ("no-retry-boundary-applicable",)

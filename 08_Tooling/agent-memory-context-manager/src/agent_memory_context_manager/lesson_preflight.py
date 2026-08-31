@@ -7,7 +7,7 @@ Notion reads or writes and delegates relevance/sufficiency to CKR2's canonical
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any
 
@@ -31,6 +31,54 @@ class LessonRetrievalStatus(str, Enum):
     INSUFFICIENT = "insufficient"
     MANUAL_REVIEW = "manual-review"
     UNAVAILABLE_SAFE_FALLBACK = "unavailable-safe-fallback"
+
+
+class RepairContext(str, Enum):
+    """Finite repair/diagnostic contexts where CKR6 material-use is forced."""
+
+    NONE = "none"
+    FAILED_PR_REPAIR = "failed-pr-repair"
+    CI_DIAGNOSIS = "ci-diagnosis"
+
+
+class RetryReentryOutcome(str, Enum):
+    """Finite disposition of a retry-boundary CKR6 re-entry for one failed attempt."""
+
+    CONSUMED = "consumed"
+    NOT_MATERIAL = "not-material"
+    UNAVAILABLE_OR_FAILED = "unavailable-or-failed"
+
+
+@dataclass(frozen=True, slots=True)
+class FailedRepairAttempt:
+    """One preserved failed-hypothesis/result record in a repair lineage.
+
+    ``retry_reentry_outcome`` is ``None`` until this specific attempt's CKR6
+    material-use re-entry has been recorded; an outcome recorded against an
+    earlier attempt never satisfies a later attempt's boundary.
+    """
+
+    attempt_id: str
+    failed_hypothesis: str
+    result_summary: str
+    retry_reentry_outcome: RetryReentryOutcome | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("attempt_id", "failed_hypothesis", "result_summary"):
+            _text(getattr(self, name), name)
+        if self.retry_reentry_outcome is not None and type(
+            self.retry_reentry_outcome
+        ) is not RetryReentryOutcome:
+            raise TypeError("retry_reentry_outcome must be a RetryReentryOutcome value or None")
+
+
+@dataclass(frozen=True, slots=True)
+class RepairRetryBoundaryPlan:
+    """Whether the next repository mutation is admissible for this repair lineage."""
+
+    mutation_admissible: bool
+    blocking_attempt_id: str | None
+    reason_codes: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,22 +166,58 @@ class LessonPreflightResult:
         }
 
 
-def plan_lesson_preflight(request: CodingKnowledgeRequest) -> LessonPreflightPlan:
-    """Use CKR2 to decide whether and how a caller should retrieve lesson evidence."""
-    selection = select_coding_knowledge(request, ())
+def _forced_material_request(
+    request: CodingKnowledgeRequest, repair_context: RepairContext
+) -> CodingKnowledgeRequest:
+    """Return a request that forces CKR2 material-use evaluation when a
+    failed-PR-repair/CI-diagnosis request would otherwise be sparse enough to
+    report ``not-needed`` on its bare signals (#1350).
+
+    An explicit ``specialized_knowledge_required=False`` on the request is a
+    caller opt-out and is always respected unchanged.
+    """
+    if repair_context not in (RepairContext.FAILED_PR_REPAIR, RepairContext.CI_DIAGNOSIS):
+        return request
+    if request.specialized_knowledge_required is False:
+        return request
+    if select_coding_knowledge(request, ()).sufficiency_status is not SufficiencyStatus.NOT_NEEDED:
+        return request
+    return replace(request, specialized_knowledge_required=True)
+
+
+def plan_lesson_preflight(
+    request: CodingKnowledgeRequest,
+    *,
+    repair_context: RepairContext = RepairContext.NONE,
+) -> LessonPreflightPlan:
+    """Use CKR2 to decide whether and how a caller should retrieve lesson evidence.
+
+    ``repair_context`` forces material-use evaluation for failed-PR-repair and
+    CI-diagnosis requests even when the bare request signals would otherwise be
+    sparse enough for CKR2 to report ``not-needed`` (#1350).
+    """
+    if type(repair_context) is not RepairContext:
+        raise TypeError("repair_context must be a RepairContext value")
+
+    effective_request = _forced_material_request(request, repair_context)
+    forced = effective_request is not request
+    selection = select_coding_knowledge(effective_request, ())
+
     if selection.sufficiency_status is SufficiencyStatus.NOT_NEEDED:
         return LessonPreflightPlan(False, selection.reason_codes, RetrievalEscalation.NONE)
     if selection.recommended_escalation is RetrievalEscalation.KNOWN_REFERENCE:
-        return LessonPreflightPlan(
-            True,
-            ("lesson-known-reference-retrieval-required",),
-            RetrievalEscalation.KNOWN_REFERENCE,
+        reason = (
+            f"{repair_context.value}-known-reference-retrieval-required"
+            if forced
+            else "lesson-known-reference-retrieval-required"
         )
-    return LessonPreflightPlan(
-        True,
-        ("lesson-retrieval-required",),
-        RetrievalEscalation.FILTERED_DATA_SOURCE_QUERY,
+        return LessonPreflightPlan(True, (reason,), RetrievalEscalation.KNOWN_REFERENCE)
+    reason = (
+        f"{repair_context.value}-material-use-evaluation-required"
+        if forced
+        else "lesson-retrieval-required"
     )
+    return LessonPreflightPlan(True, (reason,), RetrievalEscalation.FILTERED_DATA_SOURCE_QUERY)
 
 
 def consume_lesson_preflight(
@@ -141,6 +225,7 @@ def consume_lesson_preflight(
     lessons: tuple[LessonRecordEvidence, ...] = (),
     *,
     retrieval_available: bool = True,
+    repair_context: RepairContext = RepairContext.NONE,
 ) -> LessonPreflightResult:
     """Normalize eligible lesson evidence and delegate selection to CKR2."""
     if type(request) is not CodingKnowledgeRequest:
@@ -150,9 +235,10 @@ def consume_lesson_preflight(
     if type(retrieval_available) is not bool:
         raise TypeError("retrieval_available must be bool")
 
-    plan = plan_lesson_preflight(request)
+    plan = plan_lesson_preflight(request, repair_context=repair_context)
+    effective_request = _forced_material_request(request, repair_context)
     if not plan.retrieval_required:
-        selection = select_coding_knowledge(request, ())
+        selection = select_coding_knowledge(effective_request, ())
         return _from_selection(selection, (), 0)
 
     if not retrieval_available:
@@ -186,8 +272,43 @@ def consume_lesson_preflight(
         eligible.append(lesson)
 
     candidates = tuple(_candidate(item) for item in eligible)
-    selection = select_coding_knowledge(request, candidates)
+    selection = select_coding_knowledge(effective_request, candidates)
     return _from_selection(selection, tuple(eligible), stale_or_conflicting)
+
+
+def plan_repair_retry_boundary(
+    repair_context: RepairContext,
+    prior_attempts: tuple[FailedRepairAttempt, ...] = (),
+) -> RepairRetryBoundaryPlan:
+    """Gate the next repository mutation on retry-specific CKR6 re-entry (#1510).
+
+    Only the most recent failed attempt's own recorded re-entry outcome can
+    admit the next mutation. A re-entry outcome recorded earlier in the same
+    lineage, or omitted for the most recent attempt, never satisfies a later
+    failed-attempt boundary -- each new failure re-opens the gate.
+    """
+    if type(repair_context) is not RepairContext:
+        raise TypeError("repair_context must be a RepairContext value")
+    if type(prior_attempts) is not tuple or any(
+        type(item) is not FailedRepairAttempt for item in prior_attempts
+    ):
+        raise TypeError("prior_attempts must be a tuple of FailedRepairAttempt values")
+
+    if repair_context is RepairContext.NONE or not prior_attempts:
+        return RepairRetryBoundaryPlan(True, None, ("no-retry-boundary-applicable",))
+
+    latest = prior_attempts[-1]
+    if latest.retry_reentry_outcome is None:
+        return RepairRetryBoundaryPlan(
+            False,
+            latest.attempt_id,
+            ("retry-ckr6-reentry-required",),
+        )
+    return RepairRetryBoundaryPlan(
+        True,
+        None,
+        (f"retry-ckr6-reentry-{latest.retry_reentry_outcome.value}",),
+    )
 
 
 def _candidate(lesson: LessonRecordEvidence) -> CodingKnowledgeCandidate:
