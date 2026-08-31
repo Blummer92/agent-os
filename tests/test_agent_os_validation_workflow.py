@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/agent-os-validation.yml"
 SCHEDULER_WORKFLOW = ROOT / ".github/workflows/workflow-scheduler-validation.yml"
 NAVIGATION_WORKFLOW = ROOT / ".github/workflows/navigation-registry-offline-tests.yml"
+ISSUE_ACCEPTANCE_WORKFLOW = ROOT / ".github/workflows/agent-os-issue-acceptance-report.yml"
 CLOUD_BUILD = ROOT / "cloudbuild.yaml"
 SHARED_ACTION = ROOT / ".github/actions/setup-python-dev/action.yml"
 
@@ -170,7 +171,7 @@ def test_cache_configuration_does_not_replace_install_or_validation_commands():
         "PYTHONPATH=src python3 -m pytest tests/ -v --cov=src/workflow_scheduler"
     )
     assert scheduler_test_command in scheduler
-    assert "bash 07_Agent_Tests/validate-repo-structure.sh" in scheduler
+    assert "bash 07_Agent_Tests/validate-repo-structure.sh" not in scheduler
 
 
 def test_cloud_build_does_not_use_github_actions_cache_configuration():
@@ -189,11 +190,15 @@ def test_navigation_registry_workflow_uses_bounded_same_lineage_concurrency():
     assert "cancel-in-progress: ${{ github.run_attempt == 1 }}" in content
 
 
-def test_navigation_registry_workflow_is_pr_only_and_preserves_job_and_test_command():
+def test_navigation_registry_workflow_is_pr_only_path_triggered_and_preserves_job_and_test_command():
     content = NAVIGATION_WORKFLOW.read_text(encoding="utf-8")
     assert "name: Navigation Registry Offline Tests" in content
     assert "pull_request:" in content
     assert "\n  push:" not in content
+    assert '"08_Tooling/notion-navigation-client/**"' in content
+    assert '"tests/navigation_registry/**"' in content
+    assert '"04_Registry/navigation-alias-registry.md"' in content
+    assert '".github/workflows/navigation-registry-offline-tests.yml"' in content
     assert "offline-notion-connector-tests:" in content
     assert "pytest tests/navigation_registry/test_notion_read_only_connector.py" in content
 
@@ -203,3 +208,15 @@ def test_navigation_registry_workflow_does_not_cross_event_dedupe():
     assert "github.event.pull_request.number || github.ref" in content
     assert "github.sha" not in content
     assert "github.head_ref" not in content
+
+
+def test_issue_acceptance_preserves_metadata_sensitive_triggers_and_supersedes_stale_runs():
+    content = ISSUE_ACCEPTANCE_WORKFLOW.read_text(encoding="utf-8")
+    assert "types: [opened, edited, reopened, synchronize, ready_for_review]" in content
+    assert (
+        "group: issue-acceptance-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}"
+        in content
+    )
+    assert "cancel-in-progress: true" in content
+    assert "pull-requests: read" in content
+    assert "Report-only boundary" in content
