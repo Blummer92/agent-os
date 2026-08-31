@@ -2,7 +2,26 @@
 
 ## Purpose
 
-This package exposes pure-local, read-only contracts for PR review remediation and CI evidence recovery. It evaluates supplied evidence only: it does not fetch GitHub, edit source, execute remediation or validation, resolve threads, merge, or perform external writes.
+This package exposes pure-local, read-only contracts for PR review remediation, risk-triggered review selection, bounded review evidence, and CI evidence recovery. It evaluates supplied evidence only: it does not fetch GitHub, edit source, execute remediation or validation, invoke an AI reviewer, resolve threads, merge, or perform external writes.
+
+## Risk-triggered code review
+
+`scripts/agent_os_pr_remediation/review_evidence.py` provides a deterministic provider-neutral review projection before any AI reviewer is selected.
+
+Review depths are finite:
+
+- `no-ai-review-required` for non-semantic changes or a deterministic failure that should be repaired first;
+- `normal-review-required` for ordinary code changes;
+- `adversarial-review-required` for supplied risk evidence covering parsers/resolvers/selectors, authorization/security, state/persistence, external mutation, concurrency/retry, workflow authority, cross-system/API semantics, production impact, material architecture/interface change, repeated repair failure, or post-merge regression repair;
+- `manual-decision-required` when risk evidence is stale or conflicting.
+
+High reasoning is therefore risk-triggered rather than a universal default. The projection performs no provider invocation and grants no execution, merge, or external-write authority.
+
+`ReviewEvidencePacket` bounds the context supplied to a later reviewer. It contains only current identity, issue contract, changed files and bounded diff, changed contracts/dependencies/workflows, deterministic risk evidence, selected validation/results, finding identities, prior reviewed head, changed paths since review, and activated architecture/governance references. Full repository history, unrelated governance prose, unchanged test suites, giant logs, unrelated historical comments, and resolved unaffected threads are not packet fields.
+
+`review_invalidation_scope(...)` keeps head identity strict while allowing proportional semantic re-review. A new head invalidates changed reviewed paths; material public-interface, architecture/ownership, authorization/security, dependency, workflow, issue-scope, or unrelated-surface changes invalidate the full previously reviewed surface. An unchanged head invalidates nothing.
+
+This contract reuses the existing remediation/high-reasoning vocabulary and exact-head evidence model. It does not create a second validation selector, authorization system, provenance system, executable review agent, or provider-specific review ontology.
 
 ## PR Review Remediation CLI
 
@@ -66,13 +85,14 @@ If governed paths are exhausted without an actionable failure, the plan requires
 
 ## GitHub Write Handoff
 
-Any separately authorized source change, thread mutation, PR update, merge, issue lifecycle action, credential change, or workflow change remains owned by the appropriate Agent OS owner. Recovery planning itself grants none of those authorities.
+Any separately authorized source change, thread mutation, PR update, merge, issue lifecycle action, credential change, or workflow change remains owned by the appropriate Agent OS owner. Recovery and review planning themselves grant none of those authorities.
 
 ## Validation
 
 Focused tests:
 
 ```bash
+python -m pytest tests/agent_os_pr_remediation/test_review_evidence.py
 python -m pytest tests/agent_os_pr_remediation/test_ci_evidence_recovery.py
 python -m pytest tests/agent_os_pr_remediation
 ```
