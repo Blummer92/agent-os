@@ -37,17 +37,13 @@ describe('procedure-grounded synthesis', () => {
   });
 
   it('fails closed when semantic prior content adds forbidden tomato', () => {
-    const result = admitProcedureSynthesis({
-      ...hamburger,
-      components: [...hamburger.components, { ...hamburger.components[1], component_id: 'tomato' }],
-    });
+    const result = admitProcedureSynthesis({ ...hamburger, components: [...hamburger.components, { ...hamburger.components[1], component_id: 'tomato' }] });
     expect(result.status).toBe('needs-review');
     if (result.status === 'needs-review') expect(result.reasons).toContain('procedure-synthesis-forbidden-component-present:tomato');
   });
 
   it('fails closed when procedure evidence is missing', () => {
-    const result = admitProcedureSynthesis({ ...hamburger, evidence_id: null });
-    expect(result).toEqual({ status: 'needs-review', reasons: ['procedure-synthesis-evidence-required'] });
+    expect(admitProcedureSynthesis({ ...hamburger, evidence_id: null })).toEqual({ status: 'needs-review', reasons: ['procedure-synthesis-evidence-required'] });
   });
 
   it('does not allow procedure synthesis to impersonate exact/authentic reproduction', () => {
@@ -66,7 +62,7 @@ describe('procedure-grounded synthesis', () => {
     expect(prompt).toContain('manual drawing');
     expect(prompt).toContain('Dimensionality: flat-2d.');
     expect(prompt).toContain('not authentic captured source evidence');
-    expect(prompt).not.toMatch(/Gemini|Flash|Pro|price/i);
+    expect(prompt).not.toMatch(/\b(?:Gemini|Flash|Pro|price)\b/i);
   });
 
   it('does not infer unsupported components from the semantic object label', () => {
