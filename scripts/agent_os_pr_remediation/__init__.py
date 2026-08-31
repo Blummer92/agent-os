@@ -31,20 +31,34 @@ from .models import EvidenceValidationError, NormalizedPRSnapshot, NormalizedRev
 from .normalization import classify_review_thread_payload, normalize_pr_snapshot, normalize_review_thread, normalize_review_threads
 from .planning import COMPUTE_ROUTES, FINDING_CLASSIFICATIONS, FindingCandidate, PlannedFinding, RemediationPlan, RemediationTask, plan_remediation
 from .preflight import PreflightResult, preflight
+from .review_evidence import (
+    ADVERSARIAL_RISKS,
+    FULL_REVIEW_INVALIDATORS,
+    NO_AI_CHANGE_KINDS,
+    ReviewDepth,
+    ReviewDepthDecision,
+    ReviewEvidencePacket,
+    ReviewRiskEvidence,
+    build_review_evidence_packet,
+    review_invalidation_scope,
+    select_review_depth,
+)
 
 __all__ = [
-    "CIEvidenceIdentity", "CIEvidenceRecoveryPlan", "COMPUTE_ROUTES",
+    "ADVERSARIAL_RISKS", "CIEvidenceIdentity", "CIEvidenceRecoveryPlan", "COMPUTE_ROUTES",
     "DEFAULT_DIAGNOSTIC_EXCERPT_LINES", "DIAGNOSTIC_EXCERPT_EXPANSION_LINES",
     "EvidenceAssemblyResult", "EvidenceValidationError", "FINDING_CLASSIFICATIONS",
-    "FindingCandidate", "FindingFixEvidence", "GitHubEvidenceReader",
-    "MAX_DIAGNOSTIC_EXCERPT_LINES", "MIN_DIAGNOSTIC_EXCERPT_LINES",
+    "FULL_REVIEW_INVALIDATORS", "FindingCandidate", "FindingFixEvidence", "GitHubEvidenceReader",
+    "MAX_DIAGNOSTIC_EXCERPT_LINES", "MIN_DIAGNOSTIC_EXCERPT_LINES", "NO_AI_CHANGE_KINDS",
     "NormalizedPRSnapshot", "NormalizedReviewThread", "PlannedFinding", "PreflightResult",
     "RECOVERY_FAILURE_REASONS", "RECOVERY_PATHS", "RecoveryObservation", "RemediationPlan",
-    "RemediationTask", "ResolutionPlan", "SUGGESTED_ACTIONS", "ThreadResolutionEvidence",
-    "VALIDATION_STATES", "ValidationCategoryResult", "ValidationEvidenceBinding",
-    "assemble_prr_evidence", "canonical_json", "classify_review_thread_payload",
+    "RemediationTask", "ResolutionPlan", "ReviewDepth", "ReviewDepthDecision", "ReviewEvidencePacket",
+    "ReviewRiskEvidence", "SUGGESTED_ACTIONS", "ThreadResolutionEvidence", "VALIDATION_STATES",
+    "ValidationCategoryResult", "ValidationEvidenceBinding", "assemble_prr_evidence",
+    "build_review_evidence_packet", "canonical_json", "classify_review_thread_payload",
     "coordinate_resolution", "deterministic_id", "diagnostic_excerpt_lines",
     "expand_diagnostic_excerpt_lines", "normalize_pr_snapshot", "normalize_review_thread",
     "normalize_review_threads", "plan_ci_evidence_recovery", "plan_remediation", "preflight",
-    "resolution_plan_id", "serialize_resolution_plan",
+    "resolution_plan_id", "review_invalidation_scope", "select_review_depth",
+    "serialize_resolution_plan",
 ]
