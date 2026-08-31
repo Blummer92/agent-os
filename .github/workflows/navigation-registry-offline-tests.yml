@@ -1,9 +1,12 @@
 name: Navigation Registry Offline Tests
 
 on:
-  # PR-only by #1530: the protected main branch already requires PR flow, while
-  # post-merge push runs repeated this same focused validation after merge.
   pull_request:
+    paths:
+      - "04_Registry/navigation-alias-registry.md"
+      - "08_Tooling/notion-navigation-client/**"
+      - "tests/navigation_registry/**"
+      - ".github/workflows/navigation-registry-offline-tests.yml"
 
 concurrency:
   group: navigation-registry-offline-${{ github.event.pull_request.number || github.ref }}
