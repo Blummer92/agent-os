@@ -20,7 +20,15 @@ const TUTORIAL0_READY_CONTEXT: ReadyContext = {
 type UploadEvidence = { summary: UploadSummary; technical: SafeTechnicalDetails; evidence: UploadEvidenceProjection };
 
 function StageIndicator({ state }: { state: string }) {
-  const activeStage = state === 'model_guidance' ? 0 : state.includes('upload') || state === 'awaiting_upload' ? 1 : state.includes('review') ? 2 : state === 'tutorial_approved' ? 3 : 4;
+  const activeStage = state === 'model_guidance'
+    ? 0
+    : state.includes('upload') || state === 'awaiting_upload'
+      ? 1
+      : state === 'ready_for_review' || state === 'reviewing_steps' || state === 'review_attention_required'
+        ? 2
+        : state === 'tutorial_approved' || state === 'generating_prompts' || state === 'reviewing_prompts'
+          ? 3
+          : 4;
   return <nav className="stage-nav" aria-label="Picture Perfect stages"><ol>{STAGES.map((label, index) => {
     const current = index === activeStage;
     return <li key={label} className={current ? 'stage current' : 'stage'} aria-current={current ? 'step' : undefined}>
@@ -71,6 +79,11 @@ export function App() {
   };
   const decide = (stepId: string, choice: ReviewChoice) => setDecisions((current) => [...current.filter((item) => item.step_id !== stepId), { step_id: stepId, choice }]);
   const approve = () => { if (!uploadEvidence) return; const result = deriveReviewedTutorial(uploadEvidence.evidence, decisions); if (!result.ok) return; setApprovedCount(result.tutorial.retained_steps.length); setReviewedTutorial(result.tutorial); send({ type: 'APPROVE_TUTORIAL' }); };
+  const generatePrompts = () => {
+    if (!reviewedTutorial) return;
+    send({ type: 'GENERATE_PROMPTS' });
+    if (reviewedTutorial.recording_id === tutorial0ReviewedTutorial.recording_id && reviewedTutorial.recording_sha256 === tutorial0ReviewedTutorial.recording_sha256) send({ type: 'PROMPTS_VALID' });
+  };
   const openReady = () => {
     if (!reviewedTutorial || reviewedTutorial.recording_id !== tutorial0ReviewedTutorial.recording_id || reviewedTutorial.recording_sha256 !== tutorial0ReviewedTutorial.recording_sha256) return;
     send({ type: 'OPEN_READY' });
@@ -87,7 +100,9 @@ export function App() {
       {state.matches('upload_valid') && uploadEvidence && <div className="panel"><p className="step-kicker">Stage 2 · Upload</p><h2>Recording loaded</h2><div className="summary-grid" aria-label="Recording summary"><article><strong>{uploadEvidence.summary.actionsFound}</strong><span>actions found</span></article><article><strong>{uploadEvidence.summary.instructionalCandidates}</strong><span>instructional candidates</span></article><article><strong>{uploadEvidence.summary.likelyNoiseRecovery}</strong><span>likely noise/recovery</span></article><article><strong>{uploadEvidence.summary.needsReview}</strong><span>needs your review</span></article></div><TechnicalDetails technical={uploadEvidence.technical}/><button className="primary" onClick={() => send({ type: 'CONTINUE_TO_REVIEW' })}>Continue to Review</button></div>}
       {state.matches('ready_for_review') && uploadEvidence && <div className="panel"><p className="step-kicker">Stage 3 · Review</p><h2>Ready to review the tutorial.</h2><button className="primary" onClick={() => send({ type: 'START_REVIEW' })}>Start Review</button></div>}
       {(state.matches('reviewing_steps') || state.matches('review_attention_required')) && uploadEvidence && <ReviewWorkspace evidence={uploadEvidence.evidence} decisions={decisions} decide={decide} approve={approve}/>} 
-      {state.matches('tutorial_approved') && reviewedTutorial && (reviewedTutorial.recording_id === tutorial0ReviewedTutorial.recording_id && reviewedTutorial.recording_sha256 === tutorial0ReviewedTutorial.recording_sha256 ? <section><PromptCards cards={tutorial0CapturedPromptCards}/><div className="panel"><button className="primary" type="button" onClick={openReady}>Open Ready</button></div></section> : <div className="panel"><p className="step-kicker">Stage 4 boundary · Prompts</p><h2>Tutorial review approved.</h2><p>{approvedCount} reviewed instructional steps are ready for the Prompts slice. This offline slice has approved prompt-authoring content only for the Tutorial 0 recording, so no prompts were generated here.</p></div>)}
+      {state.matches('tutorial_approved') && reviewedTutorial && <div className="panel"><p className="step-kicker">Stage 4 · Prompts</p><h2>Tutorial review approved.</h2><p>{approvedCount} reviewed instructional steps are ready for prompt authoring.</p><button className="primary" type="button" onClick={generatePrompts}>Generate Prompts</button></div>}
+      {state.matches('generating_prompts') && <div className="panel" role="status"><h2>Preparing provider-neutral prompts…</h2></div>}
+      {state.matches('reviewing_prompts') && reviewedTutorial && <section><PromptCards cards={tutorial0CapturedPromptCards}/><div className="panel"><button className="primary" type="button" onClick={openReady}>Open Ready</button></div></section>}
       {state.matches('running_preflight') && <div className="panel" role="status"><h2>Running deterministic preflight…</h2></div>}
       {(state.matches('ready_for_handoff') || state.matches('preflight_failed')) && reviewedTutorial && preflight && <ReadyPanel tutorial={reviewedTutorial} cards={tutorial0CapturedPromptCards} context={TUTORIAL0_READY_CONTEXT} preflight={preflight}/>} 
     </section></main>;

@@ -14,7 +14,11 @@ export function PromptCards({ cards }: { cards: readonly PromptCardModel[] }) {
     <section aria-labelledby="prompt-cards-title">
       <p className="step-kicker">Stage 4 · Prompts</p>
       <h2 id="prompt-cards-title">Picture Perfect prompts</h2>
-      <p>These prompts are derived presentation guidance. They never become instructional source evidence.</p>
+      <p>These are reviewable provider-neutral prompt artifacts. Picture Perfect does not submit them to an image provider or generate images.</p>
+      <div className="boundary-note" role="note">
+        <strong>Prompt-only authoring boundary</strong>
+        <p>Review or copy the prompt for a separate manual handoff. Image-provider execution is not available in this stage.</p>
+      </div>
       <div className="prompt-card-list">
         {cards.map((card) => {
           const capture = card.capturedScreenEvidence ?? null;
@@ -32,10 +36,7 @@ export function PromptCards({ cards }: { cards: readonly PromptCardModel[] }) {
               <div role="status" className="boundary-note">
                 <strong>Prompt blocked</strong>
                 <p>{card.blocker}</p>
-                <p>
-                  No prompt is offered for a blocked frame. Picture Perfect will not generate a
-                  stand-in for the real software interface.
-                </p>
+                <p>No prompt is offered for a blocked frame. Picture Perfect will not generate a stand-in for the real software interface.</p>
                 <ul aria-label={`Blocker reasons for image ${card.stepNumber}`}>
                   {card.blockerReasons.map((reason) => <li key={reason}><code>{reason}</code></li>)}
                 </ul>
@@ -46,11 +47,7 @@ export function PromptCards({ cards }: { cards: readonly PromptCardModel[] }) {
                 {capture && <p className="boundary-note">Approved captured screen evidence is the base visual. The prompt may not redraw or invent interface content.</p>}
                 <label htmlFor={`prompt-${card.stepNumber}`}>Portable prompt</label>
                 <textarea id={`prompt-${card.stepNumber}`} readOnly rows={8} value={card.portablePrompt} />
-                <button
-                  className="secondary"
-                  type="button"
-                  onClick={() => void navigator.clipboard?.writeText(card.portablePrompt)}
-                >
+                <button className="secondary" type="button" onClick={() => void navigator.clipboard?.writeText(card.portablePrompt)}>
                   Copy Prompt
                 </button>
               </>
