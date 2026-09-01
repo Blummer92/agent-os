@@ -21,7 +21,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: agent-os-validation-${{ github.event.pull_request.number || inputs.pr_number || github.ref }}
+  group: agent-os-validation-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -81,8 +81,15 @@ jobs:
 
       - name: Check out repository
         uses: actions/checkout@v7
-        with:
-          ref: ${{ steps.candidate.outputs.head_sha || '' }}
+
+      - name: Check out admitted candidate commit
+        if: ${{ github.event_name == 'workflow_dispatch' && steps.candidate.outputs.mode == 'final-candidate' }}
+        env:
+          CANDIDATE_HEAD_SHA: ${{ steps.candidate.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --depth=1 origin "$CANDIDATE_HEAD_SHA"
+          git checkout --detach "$CANDIDATE_HEAD_SHA"
 
       - name: Verify admitted candidate checkout
         if: ${{ github.event_name == 'workflow_dispatch' && steps.candidate.outputs.mode == 'final-candidate' }}
@@ -123,14 +130,15 @@ jobs:
       - name: Publish validation summary
         if: always()
         env:
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || steps.candidate.outputs.head_sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DISPATCH_HEAD_SHA: ${{ steps.candidate.outputs.head_sha }}
           DISPATCH_MODE: ${{ steps.candidate.outputs.mode }}
         run: |
           {
             echo "## Agent OS Validation Gate"
             echo
-            echo "- Head SHA (pull request head): \`${PR_HEAD_SHA:-not applicable for this event}\`"
-            echo "- Checked-out SHA: \`$(git rev-parse HEAD 2>/dev/null || printf 'checkout unavailable')\`"
+            echo "- Head SHA (pull request head): \`${PR_HEAD_SHA:-${DISPATCH_HEAD_SHA:-not applicable for this event}}\`"
+            echo "- Checked-out (merge) SHA: \`$GITHUB_SHA\`"
             echo "- Event: \`$GITHUB_EVENT_NAME\`"
             if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
               echo "- Dispatch mode: \`${DISPATCH_MODE:-diagnostic}\`"

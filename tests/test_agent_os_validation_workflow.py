@@ -140,7 +140,7 @@ def test_validation_gate_uses_read_only_permissions_and_bounded_execution():
     assert "timeout-minutes: 30" in content
     assert "cancel-in-progress: true" in content
     assert (
-        "group: agent-os-validation-${{ github.event.pull_request.number || inputs.pr_number || github.ref }}"
+        "group: agent-os-validation-${{ github.event.pull_request.number || github.ref }}"
         in content
     )
 
