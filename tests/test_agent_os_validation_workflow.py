@@ -113,6 +113,12 @@ def test_validation_gate_dispatch_checks_out_and_verifies_admitted_candidate_onl
     assert 'if [ "$checked_out_sha" != "$EXPECTED_HEAD_SHA" ]' in content
 
 
+def test_cloud_build_executes_only_canonical_aggregate_command():
+    content = CLOUD_BUILD.read_text(encoding="utf-8")
+    assert content.count("./scripts/validate-all.sh") == 1
+    assert "bash 07_Agent_Tests/validate-repo-structure.sh" not in content
+
+
 def test_validation_gate_preserves_required_workflow_and_job_names():
     content = WORKFLOW.read_text(encoding="utf-8")
     assert "name: Agent OS Validation Gate" in content
