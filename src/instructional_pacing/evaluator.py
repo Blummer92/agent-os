@@ -14,6 +14,7 @@ from instructional_workflow_contracts import (
     sha256_hex,
 )
 
+from .adaptation import plan_lesson_adaptation
 from .comparability import filter_comparable_runs
 from .diagnosis import diagnose_dimensions
 from .packet import NON_AUTHORITY_FIELDS, validate_pacing_packet
@@ -75,10 +76,6 @@ def evaluate_lesson_pacing(value: object) -> ValidationResult:
         if packet["implementation_stage"] == "suspended":
             reasons.append("lp-calibration-revision-suspended")
             classification, routing = "insufficient-evidence", "hold"
-        if classification == "not-feasible":
-            reasons.append("lp-pacing-instruction-time-insufficient")
-        elif classification == "split-required":
-            reasons.append("lp-pacing-split-required")
 
         confidence = comparison["comparability_confidence"]
         if diagnosis["evidence_uncertainty"]["level"] == "high":
@@ -87,6 +84,32 @@ def evaluate_lesson_pacing(value: object) -> ValidationResult:
             classification, routing = "insufficient-evidence", "hold"
         if packet["implementation_stage"] in {"design-only", "shadow-mode"}:
             confidence = "low"
+
+        adaptation = {
+            "adapted_range": timing,
+            "compressed_instances": [],
+            "changed_formats": [],
+            "deferred_functions": [],
+            "split_plan": None,
+            "split_unresolved": False,
+            "manual_review_required": False,
+        }
+        if classification != "insufficient-evidence":
+            adaptation = plan_lesson_adaptation(packet, timing, available)
+            classification, routing = _classification(
+                adaptation["adapted_range"], available, packet["continuation_allowed"]
+            )
+            if adaptation["split_plan"] is not None:
+                classification, routing = "split-required", "review-recommended"
+            elif adaptation["split_unresolved"]:
+                classification, routing = "not-feasible", "hold"
+
+        if classification == "not-feasible":
+            reasons.append("lp-pacing-instruction-time-insufficient")
+        elif classification == "split-required":
+            reasons.append("lp-pacing-split-required")
+        if adaptation["split_unresolved"]:
+            reasons.append("lp-pacing-continuation-unresolved")
 
         preserved = sorted(item["name"] for item in packet["instructional_functions"] if item["protected"])
         payload = {
@@ -97,7 +120,7 @@ def evaluate_lesson_pacing(value: object) -> ValidationResult:
             "success_criteria_ref": packet["success_criteria_ref"],
             "available_lesson_minutes": available,
             "unadapted_range": declared,
-            "adapted_range": timing,
+            "adapted_range": adaptation["adapted_range"],
             "advisory_assessment_outcome": classification,
             "routing_recommendation": routing,
             "confidence": confidence,
@@ -106,14 +129,18 @@ def evaluate_lesson_pacing(value: object) -> ValidationResult:
                 dimension for dimension, item in diagnosis.items() if item["level"] == "high"
             ),
             "preserved_functions": preserved,
-            "compressed_instances": [],
-            "changed_formats": [],
-            "deferred_functions": [],
-            "split_plan": None,
+            "compressed_instances": adaptation["compressed_instances"],
+            "changed_formats": adaptation["changed_formats"],
+            "deferred_functions": adaptation["deferred_functions"],
+            "split_plan": adaptation["split_plan"],
             "teacher_decision": packet.get("teacher_decision"),
             "what_supported": packet.get("what_supported", []),
             "what_remains_unmeasured": packet.get("what_remains_unmeasured", []),
-            "manual_review_required": bool(reasons) or routing != "proceed-to-owner-review",
+            "manual_review_required": (
+                bool(reasons)
+                or adaptation["manual_review_required"]
+                or routing != "proceed-to-owner-review"
+            ),
             "unresolved_uncertainties": sorted(set(reasons)),
             "next_owner_recommendation": "Unit Alignment Agent",
             "evidence_summary": {
@@ -124,7 +151,11 @@ def evaluate_lesson_pacing(value: object) -> ValidationResult:
             },
             "implementation_stage": packet["implementation_stage"],
             "interval_coverage": "declared-and-observed-bounds" if comparison["included_count"] else "declared-bounds-only",
-            "directional_risk": "underestimation-possible" if timing["upper"] > available else "bounded-within-supplied-evidence",
+            "directional_risk": (
+                "underestimation-possible"
+                if adaptation["adapted_range"]["upper"] > available
+                else "bounded-within-supplied-evidence"
+            ),
             **NON_AUTHORITY_FIELDS,
         }
         record = ValidatedRecord(
