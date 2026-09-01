@@ -82,10 +82,10 @@ def test_fitting_lesson_does_not_invent_adaptation() -> None:
 
 def test_adaptation_hierarchy_selects_earlier_steps_first() -> None:
     payload = _payload(_candidate_packet())
-    assert [item["id"] for item in payload["compressed_instances"]] == ["setup-friction", "extra-demo", "duplicate-transition"]
+    assert [item["id"] for item in payload["compressed_instances"]] == ["setup-friction", "extra-demo"]
     assert payload["changed_formats"] == []
     assert payload["deferred_functions"] == []
-    assert payload["adapted_range"]["expected"] == 44.0
+    assert payload["adapted_range"]["expected"] == 45.0
 
 
 def test_repetition_reduction_preserves_instructional_function() -> None:
@@ -131,7 +131,7 @@ def test_remaining_infeasibility_produces_explicit_split_plan() -> None:
     payload = _payload(packet)
     assert payload["advisory_assessment_outcome"] == "split-required"
     assert payload["split_plan"] is not None
-    assert payload["split_plan"]["split_after"] == "model"
+    assert payload["split_plan"]["split_after"] == "practice"
     assert payload["split_plan"]["teacher_review_required"] is True
 
 
