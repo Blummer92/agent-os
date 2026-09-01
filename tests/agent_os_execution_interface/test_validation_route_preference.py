@@ -123,6 +123,61 @@ def test_final_aggregate_can_use_governed_runner_when_ci_unavailable() -> None:
     assert decision.selected_route is ValidationRoute.GOVERNED_EXECUTOR
 
 
+def test_ci_diagnosis_reuses_connected_evidence_before_manual_reproduction() -> None:
+    decision = choose_validation_route(
+        timing=ValidationTiming.CI_FAILURE_DIAGNOSIS,
+        executor_route=route(runner=False),
+        exact_head_ci_available=True,
+        connected_ci_evidence_available=True,
+        manual_terminal_available=True,
+        manual_terminal_appropriate=True,
+    )
+    assert decision.selected_route is ValidationRoute.EXACT_HEAD_CI
+    assert decision.connected_evidence_reused is True
+    assert decision.duplicate_aggregate_avoided is True
+    assert decision.manual_fallback_justified is False
+
+
+def test_ci_diagnosis_uses_governed_route_when_connected_evidence_unavailable() -> None:
+    decision = choose_validation_route(
+        timing=ValidationTiming.CI_FAILURE_DIAGNOSIS,
+        executor_route=route(runner=True),
+        exact_head_ci_available=False,
+        connected_ci_evidence_available=False,
+        manual_terminal_available=True,
+        manual_terminal_appropriate=True,
+    )
+    assert decision.selected_route is ValidationRoute.GOVERNED_EXECUTOR
+    assert decision.connected_evidence_reused is False
+    assert decision.manual_fallback_justified is False
+
+
+def test_ci_diagnosis_manual_terminal_requires_separate_appropriateness() -> None:
+    decision = choose_validation_route(
+        timing=ValidationTiming.CI_FAILURE_DIAGNOSIS,
+        executor_route=route(runner=False),
+        exact_head_ci_available=False,
+        connected_ci_evidence_available=False,
+        manual_terminal_available=True,
+        manual_terminal_appropriate=False,
+    )
+    assert decision.selected_route is ValidationRoute.NEEDS_DECISION
+    assert decision.manual_fallback_justified is False
+
+
+def test_ci_diagnosis_can_use_manual_terminal_only_as_proven_last_resort() -> None:
+    decision = choose_validation_route(
+        timing=ValidationTiming.CI_FAILURE_DIAGNOSIS,
+        executor_route=route(runner=False),
+        exact_head_ci_available=False,
+        connected_ci_evidence_available=False,
+        manual_terminal_available=True,
+        manual_terminal_appropriate=True,
+    )
+    assert decision.selected_route is ValidationRoute.MANUAL_TERMINAL
+    assert decision.manual_fallback_justified is True
+
+
 def test_projection_never_grants_authority() -> None:
     decision = choose_validation_route(
         timing=ValidationTiming.PRE_PR_DEVELOPER_LOOP,
