@@ -8,7 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = ROOT / "01_Shared_Standards/github/tool-discovery-continuation.md"
-FIXTURES = ROOT / "07_Agent_Tests/tool-discovery-continuation.tests.md"
+FIXTURES = ROOT / "07_Agent_Tests/chatgpt-orchestrator.tests.md"
 ORCHESTRATOR = ROOT / "02_Agent_Overlays/chatgpt-orchestrator.md"
 SAFE_LANE = ROOT / "01_Shared_Standards/github/safe-implementation-lane.md"
 
@@ -78,6 +78,11 @@ def test_continuation_preserves_authority_ceiling() -> None:
 
     assert "Continuation Never Widens Authority" in fixtures
     assert "never synthesize the missing authority" in fixtures
+
+
+def test_orchestrator_consumes_continuation_contract() -> None:
+    orchestrator = normalized(ORCHESTRATOR)
+    assert "01_Shared_Standards/github/tool-discovery-continuation.md" in orchestrator
 
 
 def test_external_integration_boundary_is_explicit() -> None:
