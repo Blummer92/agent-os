@@ -22,6 +22,12 @@ Stage 5 performs deterministic local preflight and can generate a local implemen
 - TypeScript types here are bounded consumer projections, not new canonical schemas.
 - Prompt/image output is presentation guidance, never source instructional evidence.
 
+## Fidelity evaluation boundary (#1542)
+
+`fidelityEvaluation.ts` evaluates already-observed provider output without executing a provider and without rewriting canonical ImageIntent. It keeps independent outcomes for instructional-state fidelity, interface fidelity, artifact-state fidelity, explicit negative constraints, and execution completion. Provider/model identity and an optional prompt-strategy label are retained only as evaluation evidence.
+
+A visually polished or instructionally useful image cannot hide a stricter failure on another axis. Planning text, software coaching, SVG/ASCII/specification output, or other non-image mode collapse can fail `execution_completion` independently. Ambiguous visual evidence routes to manual review rather than guessed certainty, and every result permanently records that generated output is not source instructional evidence.
+
 ## F1 UI-claim boundary
 
 `uiEvidence.ts` derives UI claims only from approved Recorder evidence: accessible names and entered values. Semantic targets, titles, student-action text, branding, and tutorial names cannot manufacture UI evidence.
