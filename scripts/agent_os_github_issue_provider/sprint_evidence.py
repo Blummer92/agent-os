@@ -28,6 +28,7 @@ from datetime import datetime
 from typing import Mapping, Protocol, Sequence
 from urllib.parse import parse_qsl, urlparse
 
+from .check_run_resolution import authoritative_check_runs
 from .models import TransportResponse, TrustedRepositoryIdentity
 from .pagination import PaginationDiagnosticError, parse_link_header
 from .revision import issue_source_revision
@@ -1312,11 +1313,22 @@ def _check_runs(
     if not read.complete:
         return None, "unknown", (*read.reason_codes, "checks:unknown"), source
 
-    checks: list[CheckEvidence] = []
+    raw_runs: list[Mapping[str, object]] = []
     for item in read.items:
         mapping = _mapping(item)
-        name = _text_or_none(mapping.get("name")) if mapping is not None else None
-        status = _text_or_none(mapping.get("status")) if mapping is not None else None
+        if mapping is None:
+            return None, "unknown", ("source:malformed", "checks:unknown"), source
+        raw_runs.append(mapping)
+
+    try:
+        authoritative_runs = authoritative_check_runs(raw_runs)
+    except ValueError:
+        return None, "unknown", ("source:malformed", "checks:unknown"), source
+
+    checks: list[CheckEvidence] = []
+    for mapping in authoritative_runs:
+        name = _text_or_none(mapping.get("name"))
+        status = _text_or_none(mapping.get("status"))
         if name is None or status is None:
             return None, "unknown", ("source:malformed", "checks:unknown"), source
         checks.append(
