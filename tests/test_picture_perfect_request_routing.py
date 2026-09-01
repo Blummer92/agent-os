@@ -1,10 +1,11 @@
-"""Regression coverage for the Picture Perfect / PPUX routing contract (#1280)."""
+"""Regression coverage for the Picture Perfect / PPUX routing contract (#1280, #1492)."""
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ORCHESTRATOR = ROOT / "02_Agent_Overlays/chatgpt-orchestrator.md"
 PPUX_README = ROOT / "08_Tooling/instructional-materials-coach/picture-perfect-coach/README.md"
 PROMPT_FIXTURE = ROOT / "08_Tooling/instructional-materials-coach/picture-perfect-coach/src/fixtures/tutorial0-prompts.ts"
+ROUTING_STANDARD = ROOT / "01_Shared_Standards/instructional-design/canonical-classroom-artifact-resolution.md"
 
 
 def read(path: Path) -> str:
@@ -86,3 +87,27 @@ def test_unknown_tutorial_and_missing_evidence_fail_visibly() -> None:
     assert "Unknown or ambiguous tutorials do not produce fabricated PPUX output" in routing
     assert "Never replace missing evidence with plausible controls" in routing
     assert "blocker reason codes" in routing
+
+
+def test_named_classroom_artifact_resolution_continues_across_governed_sources() -> None:
+    standard = read(ROUTING_STANDARD)
+    assert "Notion planning/workflow context -> Google Drive companion artifacts" in standard
+    assert "an empty exact-name search is not terminal evidence" in standard
+    assert "bounded canonical folder" in standard
+    assert "Do not ask the user to locate or restate" in standard
+
+
+def test_legacy_or_semantic_matches_cannot_override_canonical_application_identity() -> None:
+    standard = read(ROUTING_STANDARD)
+    assert "application identity" in standard
+    assert "legacy" in standard
+    assert "plausible filename" in standard
+    assert "reject the candidate" in standard
+
+
+def test_screenshot_chronology_does_not_create_instructional_identity() -> None:
+    standard = read(ROUTING_STANDARD)
+    assert "chronology alone" in standard
+    assert "Image 1" in standard
+    assert "image count" in standard
+    assert "fail closed" in standard

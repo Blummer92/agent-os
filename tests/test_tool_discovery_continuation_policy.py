@@ -41,6 +41,18 @@ def test_live_1573_complete_handoff_regression_is_pinned() -> None:
         assert phrase in fixtures
 
 
+def test_live_1582_red_pr_diagnostic_regression_is_pinned() -> None:
+    fixtures = normalized(FIXTURES)
+    for phrase in (
+        "Live #1582 Red-PR Diagnostic Regression",
+        "failed aggregate run: known",
+        "workflow/job/log GitHub capability successfully loaded",
+        "authorized actionable diagnostic read of the failed run",
+        "the first actionable workflow/job/log diagnostic read executes in the same interaction without another user prompt",
+    ):
+        assert phrase in fixtures
+
+
 def test_existing_same_lineage_and_terminal_reconciliation_contracts_are_reused() -> None:
     orchestrator = normalized(ORCHESTRATOR)
     safe_lane = normalized(SAFE_LANE)
