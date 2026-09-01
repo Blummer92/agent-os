@@ -9,7 +9,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from .common import ContractValidationError, ValidationResult, validate_stable_id, validate_text
+from .common import (
+    ContractValidationError,
+    ValidationResult,
+    ValidationStatus,
+    validate_stable_id,
+    validate_text,
+)
 from .experiment_evidence import CONTRACT_VERSION, validate_experiment_evidence
 
 ADAPTER_ID = "assessment-cross-unit-portability"
@@ -72,10 +78,7 @@ def adapt_assessment_experiment_evidence(
         # Preserve the shared finite validation/result shape; do not add an EXH or
         # Assessment-specific reason namespace.
         return ValidationResult(
-            status=__import__(
-                "src.instructional_workflow_contracts.common",
-                fromlist=["ValidationStatus"],
-            ).ValidationStatus.INVALID,
+            status=ValidationStatus.INVALID,
             record=None,
             reason_codes=(exc.reason_code,),
             details=(exc.detail,),
