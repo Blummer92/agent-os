@@ -1,5 +1,4 @@
 import type { PromptCardModel } from './promptIntent';
-import type { ReviewedTutorialProjection } from './types';
 
 export const PROMPT_ARTIFACT_BLOCKER_REASONS = {
   missingAuthoring: 'prompt-artifact-missing-authoring',
@@ -10,6 +9,10 @@ export const PROMPT_ARTIFACT_BLOCKER_REASONS = {
 export type PromptArtifactBlockerReason =
   (typeof PROMPT_ARTIFACT_BLOCKER_REASONS)[keyof typeof PROMPT_ARTIFACT_BLOCKER_REASONS];
 
+export type PromptArtifactTutorialSequence = Readonly<{
+  retained_steps: readonly Readonly<{ sequence: number }>[];
+}>;
+
 export type PromptArtifactSequence = Readonly<{
   status: 'ready' | 'blocked';
   cards: readonly PromptCardModel[];
@@ -19,12 +22,13 @@ export type PromptArtifactSequence = Readonly<{
 
 /**
  * Admit Stage 4 prompt artifacts only when they preserve the reviewed tutorial's
- * exact retained-step sequence. This is deliberately structural: it never invents
- * an orientation/setup frame and never sorts cards to make a bad projection look
- * valid.
+ * exact retained-step sequence. This boundary intentionally consumes only the
+ * sequence field it owns instead of coupling sequence validation to the full
+ * reviewed-tutorial evidence schema. It never invents an orientation/setup frame
+ * and never sorts cards to make a bad projection look valid.
  */
 export function admitPromptArtifactSequence(
-  tutorial: ReviewedTutorialProjection,
+  tutorial: PromptArtifactTutorialSequence,
   cards: readonly PromptCardModel[],
 ): PromptArtifactSequence {
   const expectedStepNumbers = tutorial.retained_steps.map((step) => step.sequence);
