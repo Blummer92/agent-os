@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This package exposes pure-local, read-only contracts for PR review remediation, risk-triggered review selection, bounded review evidence, and CI evidence recovery. It evaluates supplied evidence only: it does not fetch GitHub, edit source, execute remediation or validation, invoke an AI reviewer, resolve threads, merge, or perform external writes.
+This package exposes pure-local, read-only contracts for PR review remediation, risk-triggered review selection, bounded review evidence, truthful review/merge-evidence summaries, and CI evidence recovery. It evaluates supplied evidence only: it does not fetch GitHub, edit source, execute remediation or validation, invoke an AI reviewer, resolve threads, merge, or perform external writes.
 
 ## Risk-triggered code review
 
@@ -22,6 +22,20 @@ High reasoning is therefore risk-triggered rather than a universal default. The 
 `review_invalidation_scope(...)` keeps head identity strict while allowing proportional semantic re-review. A new head invalidates changed reviewed paths; material public-interface, architecture/ownership, authorization/security, dependency, workflow, issue-scope, or unrelated-surface changes invalidate the full previously reviewed surface. An unchanged head invalidates nothing.
 
 This contract reuses the existing remediation/high-reasoning vocabulary and exact-head evidence model. It does not create a second validation selector, authorization system, provenance system, executable review agent, or provider-specific review ontology.
+
+## Truthful review and merge evidence
+
+`scripts/agent_os_pr_remediation/merge_evidence_summary.py` projects already-owned validation, acceptance, and review evidence into one bounded provider-neutral summary for the current PR lineage.
+
+The summary keeps source head, base SHA, synthetic merge SHA, final merge commit SHA, local tested SHA, focused/aggregate/language/specialized tested SHAs, AI-reviewed SHA, and metadata fingerprint as distinct identities. A passing result on another SHA is stale for the current source head rather than silently combined into an exact-head claim.
+
+Issue Acceptance keeps workflow transport separate from its internal semantic result. A completed workflow cannot turn internal `failed`, `manual-review`, `stale`, or unavailable acceptance evidence into a pass. Metadata fingerprint drift stales acceptance without staling code validation on an unchanged source head.
+
+AI review status is explicit: `performed-clear`, `performed-blocked`, `skipped`, `unavailable`, `stale`, or `not-required`. Provider check success is not a substitute for `performed-clear`. A reviewed SHA that differs from the current source head becomes stale; invalidated finding evidence also stales a previously clear review, while resolved findings remain resolved when no supplied invalidation applies.
+
+The final evidence state is one of `complete`, `incomplete`, `stale`, or `blocked`. It is evidence only: execution, merge, issue closure, production, external-write authority, and side-effect fields remain false.
+
+`classify_post_merge_evidence(...)` distinguishes `merge-sha-independent-evidence`, `pre-merge-run-draining`, `duplicate-nonunique-evidence`, `superseded`, and `manual-review` from exact supplied run/merge identities. It never guesses a classification from timing alone.
 
 ## PR Review Remediation CLI
 
@@ -93,6 +107,7 @@ Focused tests:
 
 ```bash
 python -m pytest tests/agent_os_pr_remediation/test_review_evidence.py
+python -m pytest tests/agent_os_pr_remediation/test_merge_evidence_summary.py
 python -m pytest tests/agent_os_pr_remediation/test_ci_evidence_recovery.py
 python -m pytest tests/agent_os_pr_remediation
 ```
