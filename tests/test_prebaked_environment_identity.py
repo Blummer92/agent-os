@@ -1,5 +1,3 @@
-from dataclasses import replace
-
 from scripts.agent_os_execution_capabilities.dependencies import (
     DependencyArtifactIdentity,
     DependencyEcosystem,
@@ -41,10 +39,10 @@ def image(current=None, *, build=A, manager="pip-25.2", repository="Blummer92/ag
         package_manager_version=manager,
         build_definition_sha256=build,
         stable_dependency_inputs=(
-            StableDependencyInput(relative_path="requirements-dev.txt", sha256=A),
             StableDependencyInput(
                 relative_path="08_Tooling/workflow-scheduler/requirements.txt", sha256=B
             ),
+            StableDependencyInput(relative_path="requirements-dev.txt", sha256=A),
         ),
     )
 
