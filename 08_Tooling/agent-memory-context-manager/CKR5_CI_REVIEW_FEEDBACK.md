@@ -25,6 +25,12 @@ environment failures are rejected before CKR5. A surviving mutation is test-suit
 quality evidence only unless a reusable rule is independently proven. Oversized
 structured fields are rejected rather than treated as raw-log input.
 
+The producer also enforces CKR5's downstream text and collection budgets before
+constructing `FailureObservation`. If combining future-use hints with affected
+paths, or adding a permanent regression reference, would exceed CKR5's bounded
+20-item contract, the outcome routes to manual review instead of raising during
+observation construction or silently truncating evidence.
+
 Stale or authority-conflicting evidence routes to manual review. Missing bounded
 references or reusable guidance is insufficient evidence.
 
