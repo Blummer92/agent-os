@@ -145,6 +145,11 @@ def validation_argv(request: object) -> tuple[str, ...]:
         raise ValueError("dev-validation request identity drift")
     if request.profile_id not in {"", expected.profile_id}:
         raise ValueError("dev-validation request identity drift")
+    # Legacy consumers also rely on the registry tuple itself (not merely an
+    # equal reconstructed tuple). Preserve that object identity while new
+    # canonical profiles resolve through the catalog-owned finite runner.
+    if request.validation_id in VALIDATION_REGISTRY:
+        return VALIDATION_REGISTRY[request.validation_id]
     return profile_argv(expected.profile_id)
 
 
