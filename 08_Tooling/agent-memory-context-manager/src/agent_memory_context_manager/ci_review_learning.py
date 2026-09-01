@@ -13,7 +13,8 @@ from enum import Enum
 from .coding_failure_learning import FailureKind, FailureObservation
 from .coding_knowledge_selection import KnowledgeCurrentness
 
-MAX_OUTCOME_TEXT_CHARS = 1024
+MAX_OUTCOME_TEXT_CHARS = 512
+MAX_OUTCOME_DETAIL_CHARS = 1024
 MAX_OUTCOME_REFS = 20
 
 
@@ -63,9 +64,10 @@ class StructuredLearningOutcome:
     def __post_init__(self) -> None:
         for name in (
             "source_reference", "failure_signature", "ecosystem", "capability_kind",
-            "lesson_summary", "what_happened", "severity", "owner_agent",
+            "lesson_summary", "severity", "owner_agent",
         ):
             _bounded_text(getattr(self, name), name)
+        _bounded_text(self.what_happened, "what_happened", MAX_OUTCOME_DETAIL_CHARS)
         for name in ("library_name", "what_to_do_next_time", "guardrail", "permanent_regression_ref"):
             value = getattr(self, name)
             if value is not None:
@@ -122,9 +124,11 @@ def normalize_learning_outcome(outcome: StructuredLearningOutcome) -> LearningPr
     if not outcome.canonical_github_refs or not outcome.evidence_refs:
         return _result(ProducerDisposition.INSUFFICIENT, "bounded-references-missing")
 
-    canonical_refs = outcome.canonical_github_refs
-    if outcome.permanent_regression_ref and outcome.permanent_regression_ref not in canonical_refs:
-        canonical_refs = canonical_refs + (outcome.permanent_regression_ref,)
+    regression_refs = (outcome.permanent_regression_ref,) if outcome.permanent_regression_ref else ()
+    canonical_refs = _bounded_union(outcome.canonical_github_refs, regression_refs)
+    future_hints = _bounded_union(outcome.future_use_hints, outcome.affected_paths)
+    if canonical_refs is None or future_hints is None:
+        return _result(ProducerDisposition.MANUAL_REVIEW, "ckr5-reference-budget-exceeded")
 
     observation = FailureObservation(
         source_reference=outcome.source_reference,
@@ -140,9 +144,9 @@ def normalize_learning_outcome(outcome: StructuredLearningOutcome) -> LearningPr
         learning_type="ci-review-feedback",
         severity=outcome.severity,
         owner_agent=outcome.owner_agent,
-        canonical_github_refs=tuple(sorted(set(canonical_refs))),
+        canonical_github_refs=canonical_refs,
         evidence_refs=tuple(sorted(set(outcome.evidence_refs))),
-        future_use_hints=tuple(sorted(set(outcome.future_use_hints + outcome.affected_paths))),
+        future_use_hints=future_hints,
         currentness=outcome.currentness,
         reusable_rule=True,
         authority_conflict=False,
@@ -168,10 +172,15 @@ def _result(disposition: ProducerDisposition, reason: str) -> LearningProducerRe
     return LearningProducerResult(disposition=disposition, reason_codes=(reason,))
 
 
-def _bounded_text(value: str, name: str) -> None:
+def _bounded_union(*groups: tuple[str, ...]) -> tuple[str, ...] | None:
+    values = tuple(sorted(set(item for group in groups for item in group)))
+    return values if len(values) <= MAX_OUTCOME_REFS else None
+
+
+def _bounded_text(value: str, name: str, limit: int = MAX_OUTCOME_TEXT_CHARS) -> None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be non-empty text")
-    if len(value) > MAX_OUTCOME_TEXT_CHARS:
+    if len(value) > limit:
         raise ValueError(f"{name} exceeds bounded structured-evidence size")
 
 
