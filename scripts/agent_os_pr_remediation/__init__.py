@@ -23,23 +23,29 @@ from .review_evidence import (
     ReviewDepthDecision, ReviewEvidencePacket, ReviewRiskEvidence,
     build_review_evidence_packet, review_invalidation_scope, select_review_depth,
 )
+from .review_findings import (
+    ClearingCondition, ClearingEvidenceClass, EvidenceBackedReviewFinding,
+    FindingSeverity, FindingStatus, ReviewSuggestion, build_review_finding,
+    build_review_suggestion, reevaluate_finding, unresolved_finding_ids,
+)
 
 __all__ = [
     "ADVERSARIAL_RISKS", "CIEvidenceIdentity", "CIEvidenceRecoveryPlan", "COMPUTE_ROUTES",
-    "DEFAULT_DIAGNOSTIC_EXCERPT_LINES", "DIAGNOSTIC_EXCERPT_EXPANSION_LINES",
-    "EvidenceAssemblyResult", "EvidenceValidationError", "FINDING_CLASSIFICATIONS",
-    "FULL_REVIEW_INVALIDATORS", "FindingCandidate", "FindingFixEvidence", "GitHubEvidenceReader",
+    "ClearingCondition", "ClearingEvidenceClass", "DEFAULT_DIAGNOSTIC_EXCERPT_LINES",
+    "DIAGNOSTIC_EXCERPT_EXPANSION_LINES", "EvidenceAssemblyResult", "EvidenceBackedReviewFinding",
+    "EvidenceValidationError", "FINDING_CLASSIFICATIONS", "FULL_REVIEW_INVALIDATORS",
+    "FindingCandidate", "FindingFixEvidence", "FindingSeverity", "FindingStatus", "GitHubEvidenceReader",
     "MAX_DIAGNOSTIC_EXCERPT_LINES", "MIN_DIAGNOSTIC_EXCERPT_LINES", "NO_AI_CHANGE_KINDS",
     "NormalizedPRSnapshot", "NormalizedReviewThread", "PlannedFinding", "PreflightResult",
     "RECOVERY_FAILURE_REASONS", "RECOVERY_PATHS", "RecoveryObservation", "RemediationPlan",
     "RemediationTask", "RequiredAttack", "ResolutionPlan", "ReviewAttackPlan", "ReviewDepth",
-    "ReviewDepthDecision", "ReviewEvidencePacket", "ReviewRiskEvidence", "SUGGESTED_ACTIONS",
-    "ThreadResolutionEvidence", "VALIDATION_STATES", "ValidationCategoryResult",
+    "ReviewDepthDecision", "ReviewEvidencePacket", "ReviewRiskEvidence", "ReviewSuggestion",
+    "SUGGESTED_ACTIONS", "ThreadResolutionEvidence", "VALIDATION_STATES", "ValidationCategoryResult",
     "ValidationEvidenceBinding", "assemble_prr_evidence", "build_review_attack_plan",
-    "build_review_evidence_packet", "canonical_json", "classify_review_thread_payload",
-    "coordinate_resolution", "deterministic_id", "diagnostic_excerpt_lines",
+    "build_review_evidence_packet", "build_review_finding", "build_review_suggestion", "canonical_json",
+    "classify_review_thread_payload", "coordinate_resolution", "deterministic_id", "diagnostic_excerpt_lines",
     "expand_diagnostic_excerpt_lines", "normalize_pr_snapshot", "normalize_review_thread",
     "normalize_review_threads", "plan_ci_evidence_recovery", "plan_remediation", "preflight",
-    "resolution_plan_id", "review_invalidation_scope", "select_review_depth",
-    "serialize_resolution_plan",
+    "reevaluate_finding", "resolution_plan_id", "review_invalidation_scope", "select_review_depth",
+    "serialize_resolution_plan", "unresolved_finding_ids",
 ]
