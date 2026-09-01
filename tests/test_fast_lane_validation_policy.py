@@ -3,6 +3,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TESTING = ROOT / "01_Shared_Standards/global-engineering/testing-and-release.md"
 SAFE_LANE = ROOT / "01_Shared_Standards/github/safe-implementation-lane.md"
+WORKFLOW = ROOT / ".github/workflows/agent-os-validation.yml"
 
 
 def normalized_text(path: Path) -> str:
@@ -19,79 +20,88 @@ def normalized_section(path: Path, heading: str) -> str:
     return " ".join(section.split())
 
 
-def test_focused_local_validation_is_non_final() -> None:
-    developer_loop = normalized_section(TESTING, "Developer Loop Validation")
-    authoritative = normalized_section(TESTING, "Authoritative Final Validation")
-    lane = normalized_section(SAFE_LANE, "Validation Loop")
-
-    assert (
-        "A focused pass is non-final evidence: treat it as `aggregate-pending`, "
-        "not as final validation success; `aggregate-pending` means only the "
-        "authoritative final aggregate remains pending, not any unexecuted "
-        "issue-required developer-loop check."
-    ) in developer_loop
-    assert (
-        "A focused pass never suppresses, replaces, or impersonates the required "
-        "final exact-head aggregate."
-    ) in authoritative
-    assert "01_Shared_Standards/global-engineering/testing-and-release.md" in lane
-    assert "Ready-for-Review still requires all required exact-head checks to pass." in lane
-
-
-def test_issue_required_developer_loop_checks_gate_draft_pr_creation() -> None:
+def test_validation_obligation_is_separate_from_execution_location() -> None:
     developer_loop = normalized_section(TESTING, "Developer Loop Validation")
     lane = normalized_section(SAFE_LANE, "Validation Loop")
 
-    assert (
-        "Issue-required focused, structural, compile or lint, line-count, and diff "
-        "checks designated for the developer loop are pre-PR gates and must run "
-        "before Draft PR creation."
-    ) in developer_loop
-    assert (
-        "Draft PR creation must not be used as the first execution of an "
-        "issue-required developer-loop check."
-    ) in developer_loop
-    assert (
-        "Issue-required focused or other developer-loop validation must be proven "
-        "before Draft PR creation."
-    ) in lane
+    assert "Validation obligation and validation execution location are separate decisions." in developer_loop
+    assert "it is not inherently a local/manual or pre-Draft-PR command" in developer_loop
+    assert "it is not inherently a local/manual pre-Draft-PR command" in lane
 
 
-def test_runtime_validation_requires_capable_executor_route() -> None:
+def test_local_executor_remains_preferred_when_capable() -> None:
     developer_loop = normalized_section(TESTING, "Developer Loop Validation")
     lane = normalized_section(SAFE_LANE, "Validation Loop")
 
-    assert (
-        "When the active execution surface cannot run a required developer-loop "
-        "check, reroute through the canonical executor-routing contract before "
-        "Draft PR creation; if no capable authorized route exists, stop with "
-        "`needs-decision`."
-    ) in developer_loop
+    assert "Prefer the active/local execution surface when it can run them safely" in developer_loop
+    assert "Prefer the active/local route when available" in lane
     assert "reuse the canonical executor-routing contract" in lane
-    assert "if no such route exists, stop with `needs-decision`" in lane
-    assert (
-        "`aggregate-pending` means only the authoritative final exact-head aggregate "
-        "remains pending, never an unexecuted issue-required pre-PR check."
-    ) in lane
 
 
-def test_clean_exact_head_ci_may_satisfy_full_suite_requirement() -> None:
+def test_governed_ci_can_stage_required_validation_after_draft_creation() -> None:
+    developer_loop = normalized_section(TESTING, "Developer Loop Validation")
+    lane = normalized_section(SAFE_LANE, "Validation Loop")
+
+    assert "Draft PR creation may stage that CI-routed validation" in developer_loop
+    assert "A Draft PR may therefore exist while CI-routed developer-loop evidence is pending" in developer_loop
+    assert "Draft PR creation may stage the validation" in lane
+    assert "Do not require the user to copy/paste shell commands" in lane
+
+
+def test_no_capable_executor_still_requires_decision() -> None:
+    developer_loop = normalized_section(TESTING, "Developer Loop Validation")
+    lane = normalized_section(SAFE_LANE, "Validation Loop")
+
+    assert "stop with `needs-decision`" in developer_loop
+    assert "stop with `needs-decision`" in lane
+
+
+def test_exact_head_evidence_is_required_for_ready_for_review() -> None:
+    authoritative = normalized_section(TESTING, "Authoritative Final Validation")
+    lane = normalized_section(SAFE_LANE, "Validation Loop")
+
+    assert "CI evidence from any SHA other than the current required head is stale" in authoritative
+    assert "Ready-for-Review" in authoritative
+    assert "Only required evidence bound to the current exact head may satisfy Ready-for-Review" in lane
+    assert "stale-head CI is insufficient" in lane
+
+
+def test_exact_head_ci_may_subsume_focused_and_aggregate_obligations() -> None:
     developer_loop = normalized_section(TESTING, "Developer Loop Validation")
     authoritative = normalized_section(TESTING, "Authoritative Final Validation")
+    lane = normalized_section(SAFE_LANE, "Validation Loop")
 
-    assert (
-        "Do not run another local full aggregate solely before pushing when a clean "
-        "exact-head CI aggregate will run the full suite."
-    ) in developer_loop
-    assert (
-        "One clean aggregate run bound to the exact final pull-request head may satisfy "
-        "the full-suite requirement, including when that run is performed by GitHub CI."
-    ) in authoritative
-    assert (
-        "The full suite remains required before release or Ready-for-Review when the "
-        "governing repository workflow requires aggregate validation."
-    ) in authoritative
-    assert "Release only with required exact-head evidence and checklist status." in authoritative
+    assert "exact-head governed CI aggregate may provide both the required focused behavior evidence and the authoritative final aggregate evidence" in developer_loop
+    assert "One clean aggregate run bound to the exact final pull-request head may satisfy the full-suite requirement" in authoritative
+    assert "one clean exact-head aggregate may satisfy both obligations without duplicate local execution" in lane
+
+
+def test_ci_routing_does_not_grant_lifecycle_or_external_authority() -> None:
+    developer_loop = normalized_section(TESTING, "Developer Loop Validation")
+    lane = normalized_section(SAFE_LANE, "Validation Loop")
+
+    for phrase in (
+        "Ready-for-Review",
+        "merge",
+        "closure",
+        "production",
+        "credential",
+        "permission",
+        "external-write",
+    ):
+        assert phrase in developer_loop
+    assert "A CI-routed pending state grants no Ready-for-Review or later authority" in lane
+
+
+def test_current_draft_ready_aggregate_trigger_policy_is_preserved() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    lane = normalized_section(SAFE_LANE, "Validation Loop")
+
+    assert "types: [opened, reopened, synchronize, ready_for_review]" in workflow
+    assert "github.event.pull_request.draft == false" in workflow
+    assert "workflow_dispatch:" in workflow
+    assert "this lane does not require aggregate validation on ordinary Draft PR updates" in lane
+    assert "does not create or modify a workflow to obtain validation" in lane
 
 
 def test_broader_local_validation_remains_available_for_diagnosis() -> None:
