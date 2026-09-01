@@ -12,6 +12,8 @@ from instructional_workflow_contracts import (
     validate_version,
 )
 
+from .adaptation import validate_adaptation_candidates
+
 CONTRACT_VERSION = "1.0"
 MAX_EVIDENCE_SOURCES = 20
 MAX_INSTRUCTIONAL_FUNCTIONS = 16
@@ -156,5 +158,8 @@ def validate_pacing_packet(value: object) -> dict[str, Any]:
         refs = _bounded_list(normalized["route_references"], "route_references", MAX_ROUTE_REFERENCES)
         for ref in refs:
             validate_stable_id(ref, "route reference")
+
+    if "adaptations" in normalized:
+        normalized["adaptations"] = validate_adaptation_candidates(normalized["adaptations"], functions)
 
     return normalized
