@@ -91,6 +91,36 @@ def test_oversized_structured_payload_is_rejected_instead_of_becoming_raw_log_in
         raise AssertionError("oversized evidence must be rejected")
 
 
+def test_ckr5_text_bounds_are_enforced_before_observation_construction():
+    try:
+        outcome(lesson_summary="x" * 513)
+    except ValueError as exc:
+        assert "bounded structured-evidence size" in str(exc)
+    else:
+        raise AssertionError("CKR5-incompatible text must be rejected")
+
+
+def test_combined_hints_over_ckr5_budget_fail_closed():
+    produced = normalize_learning_outcome(outcome(
+        future_use_hints=tuple(f"hint-{index}" for index in range(20)),
+        affected_paths=("scripts/extra.py",),
+    ))
+    assert produced.disposition is ProducerDisposition.MANUAL_REVIEW
+    assert produced.reason_codes == ("ckr5-reference-budget-exceeded",)
+    assert produced.observation is None
+
+
+def test_regression_ref_over_ckr5_budget_fails_closed():
+    produced = normalize_learning_outcome(outcome(
+        LearningSignal.PROPERTY_COUNTEREXAMPLE,
+        canonical_github_refs=tuple(f"issue:{index}" for index in range(20)),
+        permanent_regression_ref="test:test_regression_case",
+    ))
+    assert produced.disposition is ProducerDisposition.MANUAL_REVIEW
+    assert produced.reason_codes == ("ckr5-reference-budget-exceeded",)
+    assert produced.observation is None
+
+
 def test_identical_bounded_evidence_is_deterministic_and_non_authorizing():
     left = normalize_learning_outcome(outcome())
     right = normalize_learning_outcome(outcome())
