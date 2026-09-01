@@ -51,7 +51,7 @@ the active connector, reuse the canonical executor-routing contract and reroute 
 a capable authorized surface before opening the PR; if no such route exists, stop
 with `needs-decision`. `aggregate-pending` means only the authoritative final
 exact-head aggregate remains pending, never an unexecuted issue-required
-pre-PR check. Ready-for-Review still requires all required exact-head checks to pass.
+developer-loop check. Ready-for-Review still requires all required exact-head checks to pass.
 ## Bounded Scope Envelope
 An eligible issue may name bounded areas instead of an exhaustive file list. The
 envelope includes only changes directly necessary for the stated objective:
@@ -64,6 +64,37 @@ A support change must remain behaviorally subordinate and be listed in the pull
 request report. It may not introduce a new subsystem, owner, schema,
 compatibility break, credential, workflow, persistence path, or external effect.
 Those are material changes and require `needs-decision`.
+## Bounded Diagnosis Correction
+A corrected diagnosis, target component, or implementation seam discovered during
+an already-authorized issue is not by itself a material scope change. Reacquire the
+live issue, current authorization, source of truth, objective, owner, bounded scope,
+and excluded-surface evidence before deciding whether to continue.
+
+Classify the discovery as a bounded correction and continue under the same current
+implementation instruction when all of these remain true:
+- the underlying issue objective is unchanged;
+- the corrected target is directly necessary to solve the same proven defect;
+- GitHub remains the source of truth and the same canonical implementation owner
+  applies;
+- directly corresponding tests and documentation remain behaviorally subordinate;
+- no new subsystem, material architecture/schema/compatibility/ownership change,
+  persistence path, credential, workflow, protected setting, production action,
+  external write, irreversible action, merge authority, or issue-closure authority
+  is required; and
+- no stale, conflicting, blocked, or ambiguous evidence invalidates the current
+  authorization envelope.
+
+For a bounded correction, update the issue or handoff with the corrected root
+cause, target, and authorization-basis evidence when GitHub is the canonical source
+of truth, then continue without requiring ritual user phrases such as `re-scope and
+continue`, `continue`, or a second `work on` instruction. The correction must be
+reported in the pull request so the changed implementation seam remains auditable.
+
+Classify the discovery as a material scope change and stop with `needs-decision`
+when it changes the underlying objective, source of truth, canonical owner,
+authority envelope, architecture/schema/compatibility contract, persistence or
+external effects, or enters an excluded surface. Conversation continuity never
+converts a material scope change into authorization.
 ## Terminal Fast Lane
 The exact repository-owner instruction `work on #<issue> in fast lane` is interpreted only through the canonical `request-interpretation-v1` path. The ChatGPT Orchestrator must not re-parse raw language downstream. For the exact already-bound GitHub issue, a fresh direct-user interpretation may carry the structured constraint `operating-mode=release`; ordinary `work on #<issue>`, `continue`, `next step`, `keep going`, a mismatched target, Tier 2, or any declared external write must not produce that constraint.
 
@@ -90,8 +121,9 @@ Stop for `needs-decision` when evidence is ambiguous, stale, blocked, closed, or
 conflicting, or when work would materially change architecture, ownership,
 schema, compatibility, authority, external effects, protected settings, or the
 issue objective. Do not stop solely for a registered-owner transition, a directly
-corresponding test, in-scope repair, mechanical registration, required changelog
-entry, or environment-assigned non-protected branch.
+corresponding test, in-scope repair, bounded diagnosis correction under the
+contract above, mechanical registration, required changelog entry, or
+environment-assigned non-protected branch.
 ## Reporting
 The pull request records the actual branch, all files changed, why each support
 file was necessary, tests and exact-head evidence, docs, blockers, handoffs,
@@ -99,8 +131,9 @@ risks, rollback, and the applicable authorization boundary. Prefer one
 consolidated user-facing result for routine internal routing while preserving
 required handoff artifacts for owners and auditability.
 ## Version
-0.7.0
+0.8.0
 ## Changelog
+- 0.8.0 defines evidence-backed bounded diagnosis correction (#1594): same-objective corrections may update the canonical issue/handoff and continue under the still-current implementation instruction, while objective, authority, source-of-truth, ownership, architecture/schema/compatibility, persistence/external-effect, and excluded-surface changes still fail closed with `needs-decision`.
 - 0.7.0 adds opt-in Terminal Fast Lane (#1309) by composing the canonical `request-interpretation-v1` record, existing content-bound merge/lifecycle authorization records, `operating_mode.py` release ceiling, #1187 branch refresh, and `agent-os-release-run.py` terminal progression. No second raw-language parser, lifecycle stage, router, authority model, or terminal controller is introduced.
 - 0.6.0 distinguishes artifact non-authority from later direct-owner authorization, consolidates activation preflight, and carries one current instruction across a single mechanical readiness intervention without weakening fail-closed stops (#1274).
 - 0.5.0 makes existing authorized branch/PR/checkpoint lineage resumable through the canonical #895 ResumePlan and #758 Scheduler lease, separates same-branch `HEAD_ADVANCED` from #1187 base-behind refresh, and requires current replacement evidence before cancelled stale-head validation is classified as superseded (#1188).
