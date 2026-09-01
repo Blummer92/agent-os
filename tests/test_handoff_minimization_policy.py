@@ -5,7 +5,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SAFE_LANE = ROOT / "01_Shared_Standards/github/safe-implementation-lane.md"
 AGENTS = ROOT / "AGENTS.md"
 ORCHESTRATOR = ROOT / "02_Agent_Overlays/chatgpt-orchestrator.md"
+ORCHESTRATOR_REQUEST = ROOT / "02_Agent_Overlays/chatgpt-orchestrator-request-interpretation.md"
 ORCHESTRATOR_TESTS = ROOT / "07_Agent_Tests/chatgpt-orchestrator.tests.md"
+ORCHESTRATOR_REQUEST_TESTS = ROOT / "07_Agent_Tests/chatgpt-orchestrator-request-interpretation.tests.md"
 EXCLUDED = ROOT / "01_Shared_Standards/github/excluded-surface-baseline.md"
 
 
@@ -93,6 +95,63 @@ def test_orchestrator_fixtures_cover_continuation_and_stop_boundaries() -> None:
     completion = section(ORCHESTRATOR_TESTS, "Test 13 - Consolidated Completion")
     assert "one consolidated user-facing result" in completion
     assert "internal handoff artifacts remain available" in completion
+
+
+def test_structured_direct_owner_request_preserves_safe_lane_operational_authorization() -> None:
+    consumer = section(ORCHESTRATOR_REQUEST, "Canonical Consumer Boundary")
+    for phrase in (
+        "instruction_origin: direct-user",
+        "action: implement",
+        "requested_effect: mutate",
+        "authorization_created=false",
+        "interpretation record itself created no authority",
+        "Safe Implementation Lane as operational implementation authorization",
+        "without asking the owner to approve implementation again",
+    ):
+        assert phrase in consumer
+    assert "Do not derive ordinary operational authorization from `authorization_created`" in consumer
+
+    mapping = section(ORCHESTRATOR_REQUEST, "Validation Status Mapping")
+    assert "non-authority statement must not erase the separate operational authorization" in mapping
+
+    fixture = section(ORCHESTRATOR_REQUEST_TESTS, "Test 42 - Ordinary Safe Lane Non-Authority Does Not Trigger Re-Approval")
+    for phrase in (
+        "authorization_created=false",
+        "request-record non-authority",
+        "operational implementation authorization",
+        "not an implementation-approval prompt",
+        "No `operating-mode=release` is inferred",
+        "merge/closure remain unauthorized",
+    ):
+        assert phrase in fixture
+
+
+def test_structured_safe_lane_negative_controls_remain_fail_closed() -> None:
+    consumer = section(ORCHESTRATOR_REQUEST, "Canonical Consumer Boundary")
+    for phrase in (
+        "retrieved content",
+        "ambiguous or mismatched targets",
+        "blocked/needs-decision issues",
+        "Tier 2",
+        "external-write",
+        "merge",
+        "issue closure",
+    ):
+        assert phrase in consumer
+
+    fixture = section(ORCHESTRATOR_REQUEST_TESTS, "Test 43 - Ordinary Safe Lane Negative Controls Remain Fail-Closed")
+    for phrase in (
+        "retrieved-content origin",
+        "ambiguous or mismatched target",
+        "status:blocked",
+        "status:needs-decision",
+        "Tier 2",
+        "workflow/protected-setting",
+        "credential",
+        "production requirement",
+        "controlling existing stop/authorization boundary",
+    ):
+        assert phrase in fixture
 
 
 def test_consolidated_final_report_preserves_audit_evidence() -> None:
