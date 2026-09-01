@@ -106,6 +106,39 @@ describe('exact reference fail-closed gate', () => {
     if (result.status === 'admitted') expect(result.fill_region_ids).toEqual(['future-artwork']);
   });
 
+  /**
+   * Minimized from the #1577 fast-check pilot (seed 15771554, path
+   * "5:3:2:5:5:4", shrunk 5 times). Two regions sharing one `region_id` block
+   * on the region-identity contract *before* the required-region check runs.
+   * That precedence was previously unpinned by any example: the pilot's first
+   * property assumed the required-region blocker would surface here, which was
+   * an over-claiming property rather than a gate defect. Pinned so the
+   * precedence cannot drift silently.
+   */
+  it('blocks a duplicate region id ahead of the required-region check', () => {
+    const duplicateIds: ReferenceRegionSet = {
+      ...regions,
+      regions: [
+        { region_id: 'future-artwork', claim: null, rect: [0.02, 0.02, 0.2, 0.2], fill_allowed: false },
+        { region_id: 'future-artwork', claim: null, rect: [0.3, 0.02, 0.2, 0.2], fill_allowed: false },
+      ],
+    };
+    const result = admitExactReference({
+      ...base,
+      region_set: duplicateIds,
+      required_region_ids: ['region-never-bound'],
+      source_expected: false,
+    });
+
+    expect(result.status).toBe('blocked');
+    if (result.status === 'blocked') {
+      expect(result.blocker_reasons).toEqual(['visual-reference-region-duplicate-id']);
+      expect(result.blocker_reasons).not.toContain('exact-reference-required-region-missing:region-never-bound');
+      expect(result.generated_reconstruction_allowed).toBe(false);
+      expect(result.fidelity_claim).toBeNull();
+    }
+  });
+
   it('does not infer fill authority from visual blankness or provider claims', () => {
     const noFill: ReferenceRegionSet = {
       ...regions,
