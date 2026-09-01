@@ -105,3 +105,19 @@ routed to a surface that only edits code or reads/writes GitHub. It adds no
 route, runner, Scheduler, registry, dependency framework, or authority. See
 `scripts/agent-os-prepr-runtime-compatibility.md`; tests:
 `tests/agent_os_execution_interface/test_pre_pr_runtime_compatibility.py`.
+
+## agent_os_execution_interface/validation_route_preference.py
+
+Pure validation-surface policy projection for #1573. It consumes the existing
+#918 `ExecutorRouteDecision` after pre-PR runtime capabilities have already been
+projected. For pre-PR developer-loop checks, a capable governed runner or an
+explicitly permitted capable fallback is preferred before any user terminal
+handoff; PR CI is never used merely to obtain the first execution of a required
+pre-PR check. Manual terminal execution is represented only after canonical
+routing has found no capable approved automated route and the caller separately
+proves manual execution is available and appropriate. For the final full
+aggregate, authoritative exact-head CI is preferred when available so the same
+aggregate is not redundantly requested from the user. The projection performs no
+execution and grants no GitHub, merge, closure, production, or external-write
+authority. Tests:
+`tests/agent_os_execution_interface/test_validation_route_preference.py`.
