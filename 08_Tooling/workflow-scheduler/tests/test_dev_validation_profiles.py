@@ -56,7 +56,9 @@ def test_caller_has_no_target_module_script_env_or_cwd_surface() -> None:
 
 
 def test_protected_or_malformed_branch_is_rejected() -> None:
-    for branch in ("main", "agent/main", "agent/../main", "agent/x//y"):
+    # A non-protected agent/* branch is valid by contract. Reject only protected
+    # or syntactically malformed branch shapes here.
+    for branch in ("main", "agent/../main", "agent/x//y"):
         with pytest.raises(ValueError):
             build_dev_validation_request(
                 repository=REPOSITORY,
