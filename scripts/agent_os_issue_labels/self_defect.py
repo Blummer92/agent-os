@@ -63,12 +63,7 @@ class SelfDefectDecision:
 
 
 def build_defect_identity(observation: DefectObservation) -> str:
-    """Return a stable semantic identity without inventing recovery state.
-
-    #1200 remains the owner of semantic recovery fingerprints. This adjacent
-    identity is limited to issue deduplication when a self-observed contract
-    violation cannot be represented by a recovery transition alone.
-    """
+    """Return a stable semantic identity without inventing recovery state."""
     payload = {
         "domain": "agent-os.self-defect.v1",
         "repository": _required(observation.repository, "repository"),
@@ -92,6 +87,10 @@ def decide_self_defect(
 ) -> SelfDefectDecision:
     """Project one bounded handoff decision; never perform a mutation."""
     _validate_observation(observation)
+    if type(classification) is not SelfDefectClass:
+        raise ValueError("classification must be SelfDefectClass")
+    for candidate in candidates:
+        _validate_candidate(candidate)
 
     if classification is SelfDefectClass.EXPECTED_DOMAIN_FAILURE:
         return _decision(classification, SelfDefectAction.NO_META_BUG, observation)
@@ -109,7 +108,10 @@ def decide_self_defect(
             observation,
             reasons=("authority-boundary",),
         )
-    if classification is SelfDefectClass.INSUFFICIENT_EVIDENCE or not observation.evidence_sufficient:
+    if (
+        classification is SelfDefectClass.INSUFFICIENT_EVIDENCE
+        or not observation.evidence_sufficient
+    ):
         return _decision(
             SelfDefectClass.INSUFFICIENT_EVIDENCE,
             SelfDefectAction.MANUAL_REVIEW,
@@ -124,8 +126,21 @@ def decide_self_defect(
         if candidate.governing_contract == observation.governing_contract
         and candidate.failure_signature == observation.failure_signature
     )
-    issue_numbers = tuple(sorted({candidate.issue_number for candidate in matches}))
+    closed_matches = tuple(candidate for candidate in matches if candidate.state == "closed")
+    if closed_matches:
+        return SelfDefectDecision(
+            classification=classification,
+            action=SelfDefectAction.MANUAL_REVIEW,
+            defect_identity=identity,
+            existing_issue_number=None,
+            continue_original_mission=False,
+            mutation_allowed=False,
+            reason_codes=("closed-match-requires-regression-lifecycle-decision",),
+        )
 
+    issue_numbers = tuple(
+        sorted({candidate.issue_number for candidate in matches if candidate.state == "open"})
+    )
     if len(issue_numbers) > 1:
         return SelfDefectDecision(
             classification=classification,
@@ -137,18 +152,18 @@ def decide_self_defect(
             reason_codes=("ambiguous-existing-issue-ownership",),
         )
 
-    mutation_identity = _mutation_identity(identity, issue_numbers[0] if issue_numbers else None)
-    repeated = mutation_identity in prior_mutation_identities
-    if repeated:
+    target_number = issue_numbers[0] if issue_numbers else None
+    mutation_identity = _mutation_identity(identity, target_number)
+    if mutation_identity in prior_mutation_identities:
         return SelfDefectDecision(
             classification=classification,
             action=(
                 SelfDefectAction.HARDEN_EXISTING_ISSUE
-                if issue_numbers
+                if target_number is not None
                 else SelfDefectAction.CREATE_FOCUSED_ISSUE
             ),
             defect_identity=identity,
-            existing_issue_number=issue_numbers[0] if issue_numbers else None,
+            existing_issue_number=target_number,
             continue_original_mission=observation.original_mission_actionable,
             mutation_allowed=False,
             reason_codes=("equivalent-mutation-already-recorded",),
@@ -158,15 +173,15 @@ def decide_self_defect(
         classification=classification,
         action=(
             SelfDefectAction.HARDEN_EXISTING_ISSUE
-            if issue_numbers
+            if target_number is not None
             else SelfDefectAction.CREATE_FOCUSED_ISSUE
         ),
         defect_identity=identity,
-        existing_issue_number=issue_numbers[0] if issue_numbers else None,
+        existing_issue_number=target_number,
         continue_original_mission=observation.original_mission_actionable,
         mutation_allowed=True,
         reason_codes=(
-            "known-defect" if issue_numbers else "novel-defect",
+            "known-defect" if target_number is not None else "novel-defect",
             "github-service-agent-write-owner",
             "mutation-is-intermediate-not-terminal",
         ),
@@ -193,7 +208,8 @@ def _decision(
         existing_issue_number=None,
         continue_original_mission=(
             observation.original_mission_actionable
-            and action not in {SelfDefectAction.STOP_EXPLICITLY, SelfDefectAction.MANUAL_REVIEW}
+            and action
+            not in {SelfDefectAction.STOP_EXPLICITLY, SelfDefectAction.MANUAL_REVIEW}
         ),
         mutation_allowed=False,
         reason_codes=reasons,
@@ -216,6 +232,17 @@ def _validate_observation(observation: DefectObservation) -> None:
         raise ValueError("evidence_sufficient must be a boolean")
     if type(observation.original_mission_actionable) is not bool:
         raise ValueError("original_mission_actionable must be a boolean")
+
+
+def _validate_candidate(candidate: IssueCandidate) -> None:
+    if type(candidate) is not IssueCandidate:
+        raise ValueError("candidates must contain IssueCandidate values")
+    if type(candidate.issue_number) is not int or candidate.issue_number <= 0:
+        raise ValueError("candidate issue_number must be a positive integer")
+    _required(candidate.governing_contract, "candidate governing_contract")
+    _required(candidate.failure_signature, "candidate failure_signature")
+    if candidate.state not in {"open", "closed"}:
+        raise ValueError("candidate state must be open or closed")
 
 
 def _required(value: str, name: str) -> str:
