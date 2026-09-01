@@ -71,6 +71,20 @@ def test_validation_gate_executes_only_canonical_aggregate_command():
     assert "Cloud Build validation migration notice" not in content
 
 
+def test_validation_gate_defers_aggregate_until_pr_is_ready():
+    content = WORKFLOW.read_text(encoding="utf-8")
+    assert "types: [opened, reopened, synchronize, ready_for_review]" in content
+    assert (
+        "if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}"
+        in content
+    )
+    assert "workflow_dispatch:" in content
+    assert "synchronize" in content
+    assert "ready_for_review" in content
+    assert "paths:" not in content
+    assert "paths-ignore:" not in content
+
+
 def test_cloud_build_executes_only_canonical_aggregate_command():
     content = CLOUD_BUILD.read_text(encoding="utf-8")
     assert content.count("./scripts/validate-all.sh") == 1
@@ -95,6 +109,10 @@ def test_validation_gate_uses_read_only_permissions_and_bounded_execution():
     assert "contents: write" not in content
     assert "timeout-minutes: 30" in content
     assert "cancel-in-progress: true" in content
+    assert (
+        "group: agent-os-validation-${{ github.event.pull_request.number || github.ref }}"
+        in content
+    )
 
 
 def test_validation_gate_installs_same_dependencies_as_cloud_build():

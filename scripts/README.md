@@ -33,8 +33,8 @@ scripts/build-chatgpt-checkout-package.sh \
   --output <absolute .zip path>
 ```
 
-Syntax, manifest fields, exclusions, and the determinism boundary are documented in
-`scripts/build-chatgpt-checkout-package.md`. Tests:
+Syntax, manifest fields, exclusions, and the determinism boundary are documented
+in `scripts/build-chatgpt-checkout-package.md`. Tests:
 `tests/test_build_chatgpt_checkout_package.py`.
 
 ## agent-os-release-run.py
@@ -105,22 +105,3 @@ routed to a surface that only edits code or reads/writes GitHub. It adds no
 route, runner, Scheduler, registry, dependency framework, or authority. See
 `scripts/agent-os-prepr-runtime-compatibility.md`; tests:
 `tests/agent_os_execution_interface/test_pre_pr_runtime_compatibility.py`.
-
-## agent_os_execution_interface/validation_route_preference.py
-
-Pure validation-surface policy projection for #1573. It consumes the existing
-#918 `ExecutorRouteDecision` after runtime capabilities have already been
-projected. For pre-PR developer-loop checks, a capable governed runner or an
-explicitly permitted capable fallback is preferred before any user terminal
-handoff; PR CI is never used merely to obtain the first execution of a required
-pre-PR check. For diagnosis of an already-run CI failure, available connected
-run/check/job evidence is inspected first and suppresses redundant manual
-aggregate reproduction; asking to fix code manually does not itself make manual
-validation execution appropriate. Manual terminal execution is represented only
-after connected evidence and canonical capable automated routes are unavailable
-and the caller separately proves manual execution is available and appropriate.
-For the final full aggregate, authoritative exact-head CI is preferred when
-available so the same aggregate is not redundantly requested from the user. The
-projection performs no execution and grants no GitHub, merge, closure,
-production, or external-write authority. Tests:
-`tests/agent_os_execution_interface/test_validation_route_preference.py`.
