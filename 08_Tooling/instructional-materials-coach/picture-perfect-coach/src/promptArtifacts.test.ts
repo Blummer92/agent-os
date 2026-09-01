@@ -20,7 +20,8 @@ function tutorial(sequences: readonly number[]): ReviewedTutorialProjection {
     excluded_step_ids: [],
     review_decisions: [],
     recording_evidence: { recordingSha256: 'a'.repeat(64), actionIdentity: [], stateLocalClaims: [], recordingClaimTexts: [] },
-  } as ReviewedTutorialProjection;
+    execution_authorized: false,
+  };
 }
 
 function card(stepNumber: number, purpose: string): PromptCardModel {
