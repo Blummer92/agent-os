@@ -142,4 +142,16 @@ next operation: authorized GitHub evidence read
 ```
 Expect: the next GitHub evidence read occurs without a new user message. A response ending after step A or B with no admitted operation and no explicit blocker fails this test.
 
+## Test 40 - Live #1582 Red-PR Diagnostic Regression
+Fixture:
+```text
+owner: fix the still-red PR #1582
+mission: continue the already-authorized same-lineage red-PR repair
+current PR/head: known
+failed aggregate run: known
+step A: workflow/job/log GitHub capability successfully loaded
+next operation: authorized actionable diagnostic read of the failed run
+```
+Expect: the first actionable workflow/job/log diagnostic read executes in the same interaction without another user prompt. A response that ends after capability discovery or a status-only statement, with no diagnostic read and no explicit terminal blocker naming owner/reason plus clearing condition, fails this test.
+
 #1086 compact runtime fixtures continue in `chatgpt-orchestrator-tests-details.md`; structured #924/#925 fixtures continue in `chatgpt-orchestrator-request-interpretation.tests.md`. Safe Lane activation and Terminal Fast Lane behavior are owned here and by the canonical shared standard; no second Fast-Lane fixture file is authoritative.
