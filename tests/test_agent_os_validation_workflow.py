@@ -84,24 +84,31 @@ def test_validation_gate_suppresses_routine_draft_aggregate_and_preserves_ready_
     assert "paths-ignore:" not in content
 
 
-def test_validation_gate_dispatch_is_bound_to_pr_and_expected_exact_head():
+def test_validation_gate_dispatch_supports_diagnostic_and_exact_head_candidate_modes():
     content = WORKFLOW.read_text(encoding="utf-8")
     assert "workflow_dispatch:" in content
     assert "pr_number:" in content
     assert "expected_head_sha:" in content
+    assert content.count("required: false") >= 2
     assert "PR_NUMBER: ${{ inputs.pr_number }}" in content
     assert "EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}" in content
+    assert 'if [ -z "$PR_NUMBER" ] && [ -z "$EXPECTED_HEAD_SHA" ]' in content
+    assert 'echo "mode=diagnostic" >> "$GITHUB_OUTPUT"' in content
+    assert 'if [ -z "$PR_NUMBER" ] || [ -z "$EXPECTED_HEAD_SHA" ]' in content
+    assert "must be provided together for final-candidate validation" in content
     assert 'gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json state,isDraft,headRefOid' in content
     assert 'if [ "$state" != "OPEN" ]' in content
     assert 'if [ "$is_draft" != "true" ]' in content
     assert 'if [ "$current_head" != "$EXPECTED_HEAD_SHA" ]' in content
     assert "stale final-candidate request" in content
     assert "^[0-9a-f]{40}$" in content
+    assert 'echo "mode=final-candidate" >> "$GITHUB_OUTPUT"' in content
 
 
-def test_validation_gate_dispatch_checks_out_and_verifies_admitted_candidate():
+def test_validation_gate_dispatch_checks_out_and_verifies_admitted_candidate_only():
     content = WORKFLOW.read_text(encoding="utf-8")
     assert "steps.candidate.outputs.head_sha" in content
+    assert "steps.candidate.outputs.mode == 'final-candidate'" in content
     assert "checked_out_sha=\"$(git rev-parse HEAD)\"" in content
     assert 'if [ "$checked_out_sha" != "$EXPECTED_HEAD_SHA" ]' in content
 
