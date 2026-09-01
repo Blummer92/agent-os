@@ -43,15 +43,24 @@ For a currently authorized Safe Implementation Lane issue, discovery of one exis
 An existing active Scheduler lease is the concurrency authority. Do not create a competing branch, PR, execution, or lease; do not steal, force-release, expire by age, or automatically retry an active or ambiguous lease. When the same authorized branch advances from SHA A to SHA B, reacquire B, inspect the head change, rebind current exact-head evidence, invalidate only the head-bound evidence required by existing contracts, and continue when authorization, ownership, and bounded scope remain valid. If `main` advanced and the PR branch is behind, route to the separately governed branch-refresh path rather than treating base drift as ordinary `HEAD_ADVANCED`.
 Cancelled validation on stale SHA A may be projected as `SUPERSEDED_BY_NEW_HEAD` only when bounded evidence proves the old run was cancelled, the current PR head is different SHA B, a newer run/check for B exists in the same validation lane/concurrency group, and replacement/supersession evidence is current. A genuine test or configuration failure on A remains genuine failure evidence. Only validation bound to the current exact head may satisfy Ready-for-Review.
 ## Validation Loop
-Follow the canonical focused-local and authoritative exact-head aggregate policy in
+Follow the canonical validation-obligation and execution-location policy in
 `01_Shared_Standards/global-engineering/testing-and-release.md`.
-Issue-required focused or other developer-loop validation must be proven before
-Draft PR creation. When those checks require runtime capabilities unavailable on
-the active connector, reuse the canonical executor-routing contract and reroute to
-a capable authorized surface before opening the PR; if no such route exists, stop
-with `needs-decision`. `aggregate-pending` means only the authoritative final
-exact-head aggregate remains pending, never an unexecuted issue-required
-developer-loop check. Ready-for-Review still requires all required exact-head checks to pass.
+Required validation must be routed to a capable authorized executor; it is not
+inherently a local/manual pre-Draft-PR command. Prefer the active/local route when
+available. When runtime capability is unavailable there, reuse the canonical
+executor-routing contract. If an existing governed CI route is the capable route,
+Draft PR creation may stage the validation and the lane may remain Draft while
+that evidence is pending. Do not require the user to copy/paste shell commands
+solely because the active connector cannot execute them. If no capable authorized
+local, governed-runner, or existing governed CI route exists, stop with
+`needs-decision`.
+A CI-routed pending state grants no Ready-for-Review or later authority. Only
+required evidence bound to the current exact head may satisfy Ready-for-Review;
+stale-head CI is insufficient. When the existing exact-head CI aggregate subsumes
+the focused checks, one clean exact-head aggregate may satisfy both obligations
+without duplicate local execution. Preserve the repository's current CI trigger
+policy: this lane does not require aggregate validation on ordinary Draft PR
+updates and does not create or modify a workflow to obtain validation.
 ## Bounded Scope Envelope
 An eligible issue may name bounded areas instead of an exhaustive file list. The
 envelope includes only changes directly necessary for the stated objective:
@@ -131,9 +140,10 @@ risks, rollback, and the applicable authorization boundary. Prefer one
 consolidated user-facing result for routine internal routing while preserving
 required handoff artifacts for owners and auditability.
 ## Version
-0.8.0
+0.9.0
 ## Changelog
-- 0.8.0 defines evidence-backed bounded diagnosis correction (#1594): same-objective corrections may update the canonical issue/handoff and continue under the still-current implementation instruction, while objective, authority, source-of-truth, ownership, architecture/schema/compatibility, persistence/external-effect, and excluded-surface changes still fail closed with `needs-decision`.
+- 0.9.0 defines evidence-backed bounded diagnosis correction (#1594): same-objective corrections may update the canonical issue/handoff and continue under the still-current implementation instruction, while objective, authority, source-of-truth, ownership, architecture/schema/compatibility, persistence/external-effect, and excluded-surface changes still fail closed with `needs-decision`.
+- 0.8.0 separates required validation from its execution location, allows Draft PR staging when existing governed CI is the capable executor, forbids false manual-command stops, preserves current Draft/Ready CI trigger semantics, and keeps exact-head evidence mandatory before Ready-for-Review (#1595).
 - 0.7.0 adds opt-in Terminal Fast Lane (#1309) by composing the canonical `request-interpretation-v1` record, existing content-bound merge/lifecycle authorization records, `operating_mode.py` release ceiling, #1187 branch refresh, and `agent-os-release-run.py` terminal progression. No second raw-language parser, lifecycle stage, router, authority model, or terminal controller is introduced.
 - 0.6.0 distinguishes artifact non-authority from later direct-owner authorization, consolidates activation preflight, and carries one current instruction across a single mechanical readiness intervention without weakening fail-closed stops (#1274).
 - 0.5.0 makes existing authorized branch/PR/checkpoint lineage resumable through the canonical #895 ResumePlan and #758 Scheduler lease, separates same-branch `HEAD_ADVANCED` from #1187 base-behind refresh, and requires current replacement evidence before cancelled stale-head validation is classified as superseded (#1188).
