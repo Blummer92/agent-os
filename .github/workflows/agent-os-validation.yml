@@ -8,12 +8,12 @@ on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: "Draft pull request number for final-candidate validation"
-        required: true
+        description: "Draft pull request number for final-candidate validation; leave blank for diagnostic dispatch"
+        required: false
         type: string
       expected_head_sha:
-        description: "Exact current pull request head SHA to validate"
-        required: true
+        description: "Exact current pull request head SHA to validate; leave blank for diagnostic dispatch"
+        required: false
         type: string
 
 permissions:
@@ -40,6 +40,15 @@ jobs:
           EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
         run: |
           set -euo pipefail
+
+          if [ -z "$PR_NUMBER" ] && [ -z "$EXPECTED_HEAD_SHA" ]; then
+            echo "mode=diagnostic" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "$PR_NUMBER" ] || [ -z "$EXPECTED_HEAD_SHA" ]; then
+            echo "pr_number and expected_head_sha must be provided together for final-candidate validation" >&2
+            exit 1
+          fi
           if ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
             echo "pr_number must be a positive integer" >&2
             exit 1
@@ -67,15 +76,16 @@ jobs:
             exit 1
           fi
 
+          echo "mode=final-candidate" >> "$GITHUB_OUTPUT"
           echo "head_sha=$current_head" >> "$GITHUB_OUTPUT"
 
       - name: Check out repository
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && steps.candidate.outputs.head_sha || '' }}
+          ref: ${{ steps.candidate.outputs.head_sha || '' }}
 
       - name: Verify admitted candidate checkout
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && steps.candidate.outputs.mode == 'final-candidate' }}
         env:
           EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
         run: |
@@ -114,6 +124,7 @@ jobs:
         if: always()
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || steps.candidate.outputs.head_sha }}
+          DISPATCH_MODE: ${{ steps.candidate.outputs.mode }}
         run: |
           {
             echo "## Agent OS Validation Gate"
@@ -121,6 +132,9 @@ jobs:
             echo "- Head SHA (pull request head): \`${PR_HEAD_SHA:-not applicable for this event}\`"
             echo "- Checked-out SHA: \`$(git rev-parse HEAD 2>/dev/null || printf 'checkout unavailable')\`"
             echo "- Event: \`$GITHUB_EVENT_NAME\`"
+            if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+              echo "- Dispatch mode: \`${DISPATCH_MODE:-diagnostic}\`"
+            fi
             echo "- Aggregate validation, including repository structure validation, executed in GitHub Actions."
             echo "- Cloud Build remains the canonical external comparison lane through \`cloudbuild.yaml\`."
           } >> "$GITHUB_STEP_SUMMARY"
