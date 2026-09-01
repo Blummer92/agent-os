@@ -36,13 +36,17 @@ MATERIALS_VALIDATION_ARGV = profile_argv(MATERIALS_VALIDATION_ID)
 SEMANTIC_OWNERSHIP_VALIDATION_ARGV = profile_argv(SEMANTIC_OWNERSHIP_VALIDATION_ID)
 PPUX_VALIDATION_ARGV = profile_argv(PPUX_VALIDATION_ID)
 
-# Compatibility registry exposes both canonical reusable profile ids and stable
-# legacy aliases, but every value is derived from the one canonical catalog.
-_registry: dict[str, tuple[str, ...]] = {
-    profile_id: profile_argv(profile_id) for profile_id in PROFILE_CATALOG
-}
-_registry.update({alias: profile_argv(alias) for alias in PROFILE_ALIASES})
-VALIDATION_REGISTRY = MappingProxyType(_registry)
+# Keep the legacy execution registry exactly compatible. New reusable profiles
+# live in PROFILE_CATALOG and are selected through the profile projection API;
+# widening this registry would silently change existing host/consumer behavior.
+VALIDATION_REGISTRY = MappingProxyType(
+    {
+        VALIDATION_ID: VALIDATION_ARGV,
+        MATERIALS_VALIDATION_ID: MATERIALS_VALIDATION_ARGV,
+        PPUX_VALIDATION_ID: PPUX_VALIDATION_ARGV,
+        SEMANTIC_OWNERSHIP_VALIDATION_ID: SEMANTIC_OWNERSHIP_VALIDATION_ARGV,
+    }
+)
 
 _SHA40 = re.compile(r"^[0-9a-f]{40}$", re.ASCII)
 _BRANCH = re.compile(r"^agent/[A-Za-z0-9._/-]{1,180}$", re.ASCII)
@@ -55,8 +59,10 @@ class DevValidationRequest:
     branch: str
     source_sha: str
     validation_id: str
-    profile_id: str
     request_id: str
+    # Optional only for construction compatibility with pre-DEVVAL5 callers.
+    # Canonical requests built below always bind the resolved profile explicitly.
+    profile_id: str = ""
     execution_authorized: Literal[False] = field(default=False, init=False)
     scheduler_invoked: Literal[False] = field(default=False, init=False)
     publication_invoked: Literal[False] = field(default=False, init=False)
@@ -132,9 +138,14 @@ def validation_argv(request: object) -> tuple[str, ...]:
         source_sha=request.source_sha,
         validation_id=request.validation_id,
     )
-    if expected.request_id != request.request_id or expected.profile_id != request.profile_id:
+    # Legacy manually-constructed requests did not carry profile_id. Preserve
+    # that constructor shape while still requiring the content-bound request id;
+    # newly built requests must also match their canonical profile binding.
+    if expected.request_id != request.request_id:
         raise ValueError("dev-validation request identity drift")
-    return profile_argv(request.profile_id)
+    if request.profile_id not in {"", expected.profile_id}:
+        raise ValueError("dev-validation request identity drift")
+    return profile_argv(expected.profile_id)
 
 
 __all__ = [
