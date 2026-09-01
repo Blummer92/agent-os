@@ -1,27 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { admitPromptArtifactSequence, canonicalPromptBodies, PROMPT_ARTIFACT_BLOCKER_REASONS } from './promptArtifacts';
 import type { PromptCardModel } from './promptIntent';
-import type { ReviewedTutorialProjection } from './types';
 
-function tutorial(sequences: readonly number[]): ReviewedTutorialProjection {
-  return {
-    recording_id: 'tutorial-1',
-    recording_sha256: 'a'.repeat(64),
-    retained_steps: sequences.map((sequence) => ({
-      review_step_id: `step-${sequence}`,
-      sequence,
-      source_step_ids: [`source-${sequence}`],
-      semantic_action_ids: [`action-${sequence}`],
-      source_indexes: [sequence],
-      recording_id: 'tutorial-1',
-      recording_sha256: 'a'.repeat(64),
-      modeled_application: 'Adobe Express',
-    })),
-    excluded_step_ids: [],
-    review_decisions: [],
-    recording_evidence: { recordingSha256: 'a'.repeat(64), actionIdentity: [], stateLocalClaims: [], recordingClaimTexts: [] },
-    execution_authorized: false,
-  };
+function tutorial(sequences: readonly number[]) {
+  return { retained_steps: sequences.map((sequence) => ({ sequence })) };
 }
 
 function card(stepNumber: number, purpose: string): PromptCardModel {
