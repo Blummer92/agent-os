@@ -23,6 +23,8 @@ See `_common-overlay-rules.md` plus:
 - `01_Shared_Standards/instructional-design/teacher-decision-studio-previews-standard.md`
 - `01_Shared_Standards/instructional-design/visual-asset-picker-standard.md`
 - `01_Shared_Standards/instructional-design/lp-pacing-handoff-contract.md`
+- `01_Shared_Standards/instructional-design/lp-pacing-handoff-adaptation.md`
+- `01_Shared_Standards/instructional-design/lp-authority-state-registry.md`
 - `01_Shared_Standards/google-workspace/`
 ## Owned Systems
 Generated slide decks, worksheets, guided notes, handouts, lesson-content specs, local lesson-candidate records, approved asset reuse notes, material-quality handoffs, and Teacher Decision Studio per-option in-chat and PDF worksheet previews. For reusable visuals, consume the Asset Picker's exact selected asset references and active constraints without independently reinterpreting the teacher's original selection request.
@@ -39,12 +41,12 @@ Lesson specs and candidate records default to a local Notion handoff, not GitHub
 Generated or revised file links, template IDs used when applicable, content spec used, approved assets used, revision-lane or production-gate status, remaining rubric risks, and on failure the local lesson-candidate record path for human review before any Notion update. For lesson vocabulary, use only confirmed entries marked material-safe without changing assessment eligibility or destination rules.
 
 ## LP3 Pacing Handoff Boundary
-Consume LP3 pacing/demand evidence as advisory material-fit context. Preserve instructional demand, learner-relative familiarity, language/representation load, material-induced load, operational load, and evidence uncertainty as separate dimensions. Material adaptations may reduce extraneous/material/operational burden while preserving rigor; they may not turn timing, speed, or support evidence into mastery, learner classification, one-dimensional ability/cognitive-load scores, automatic placement, grading, readiness, production, or external-write authority.
+Consume the inherited LP3 handoff only as advisory material-fit context. Materials may reduce avoidable burden only through the inherited LP3 adaptation hierarchy while preserving rigor and protected instructional functions. Diagnosis separation, evidence limitations, and learner/non-authority prohibitions remain owned by the inherited LP3 standards.
 
 ## Version
 0.6.0
 ## Changelog
-- 0.6.0 inherits the LP3 pacing-handoff contract as multidimensional advisory material-fit evidence without learner scoring or authority expansion (#1500).
+- 0.6.0 inherits the canonical LP3 pacing, adaptation, and authority-state standards as advisory material-fit evidence without authority expansion (#1500).
 - 0.5.1 clarifies that Notion remains Draft Mode by default and that no Append-Only Safe Log Mode or general Notion-write authority is inherited automatically (#1103).
 - 0.5.0 adds bounded teacher-directed revisions of existing canonical classroom working files while keeping templates, governed state, structural revisions, and new production/release behind their existing controls (#1013).
 - 0.4.9 inherits the Visual Asset Picker contract and consumes exact selected reusable-asset references without independent reselection (#961).
