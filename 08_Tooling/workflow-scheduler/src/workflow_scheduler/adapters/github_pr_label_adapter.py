@@ -31,6 +31,7 @@ ever invoked after that gate has already passed.
 from __future__ import annotations
 
 import json
+import math
 import os
 import urllib.error
 import urllib.request
@@ -116,6 +117,10 @@ class GitHubPRLabelAdapter(TaskAdapter):
             live GitHub access or real token is ever required in tests.
         timeout: Per-request timeout in seconds.
         """
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+            raise TypeError("timeout must be a finite positive number")
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("timeout must be a finite positive number")
         self.token = token if token is not None else os.environ.get("GITHUB_TOKEN")
         self._http_post_label = http_post_label or _default_http_post_label
         self.timeout = timeout
@@ -134,8 +139,6 @@ class GitHubPRLabelAdapter(TaskAdapter):
             if exc.is_transient:
                 return {"status": "retryable", "message": str(exc), "retry_after": exc.retry_after}
             return {"status": "failure", "message": str(exc)}
-
-    # -- payload helpers ------------------------------------------------
 
     def _require(self, payload: Dict[str, Any], field: str) -> Any:
         if field not in payload or payload[field] in (None, ""):
@@ -166,18 +169,11 @@ class GitHubPRLabelAdapter(TaskAdapter):
         return value
 
     def _post_label(self, repository_full_name: str, pr_number: int, label: str) -> Any:
-        """The only HTTP call site in this module -- always POST, always
-        this one fixed URL template. repository_full_name and pr_number
-        are substituted into the template; nothing else about the
-        request (path or method) is caller-controlled. GitHub treats a
-        PR as an issue for labeling purposes, hence the /issues/ path."""
         url = f"{GITHUB_API_BASE}/repos/{repository_full_name}/issues/{pr_number}/labels"
         headers = {"Accept": "application/vnd.github+json", "Content-Type": "application/json"}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
         return self._http_post_label(url, headers, {"labels": [label]}, self.timeout)
-
-    # -- action handlers --------------------------------------------------
 
     def _action_add_pr_label(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         repository_full_name = self._require_repository_full_name(payload)
