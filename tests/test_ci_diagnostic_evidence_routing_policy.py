@@ -2,7 +2,8 @@
 
 The repository cannot manufacture connector capabilities, but the ChatGPT Orchestrator
 contract must prefer canonical connected evidence and existing capable execution routes
-before shifting CI-log transport onto a mobile user.
+before shifting CI-log transport onto a mobile user. The #1614 cases also pin bounded
+alternate-route behavior against the current orchestrator fixture numbering.
 """
 from pathlib import Path
 
