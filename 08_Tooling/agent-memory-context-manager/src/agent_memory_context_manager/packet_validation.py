@@ -46,7 +46,9 @@ def validate_handoff_packet(packet: Mapping[str, Any]) -> list[str]:
 
     if "pr_number" in packet:
         pr_number = packet["pr_number"]
-        if pr_number is not None and not isinstance(pr_number, int):
+        if pr_number is not None and (
+            isinstance(pr_number, bool) or not isinstance(pr_number, int)
+        ):
             errors.append("pr_number must be an integer or None")
         elif isinstance(pr_number, int) and pr_number < 0:
             errors.append("pr_number must not be negative")
@@ -86,7 +88,7 @@ def _validate_compute_limits(
             errors.append(f"compute_limits.{field} is missing")
 
     max_files_to_inspect = compute_limits.get("max_files_to_inspect")
-    if not isinstance(max_files_to_inspect, int):
+    if isinstance(max_files_to_inspect, bool) or not isinstance(max_files_to_inspect, int):
         errors.append("compute_limits.max_files_to_inspect must be an integer")
     elif max_files_to_inspect <= 0:
         errors.append("compute_limits.max_files_to_inspect must be positive")

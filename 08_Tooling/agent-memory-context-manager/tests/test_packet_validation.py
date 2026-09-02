@@ -79,6 +79,13 @@ def test_non_integer_pr_number_is_rejected():
     assert "pr_number must be an integer or None" in validate_handoff_packet(packet)
 
 
+def test_boolean_pr_number_is_rejected():
+    packet = sample_packet()
+    packet["pr_number"] = True
+
+    assert "pr_number must be an integer or None" in validate_handoff_packet(packet)
+
+
 def test_invalid_compute_limits_return_clear_errors():
     packet = sample_packet()
     packet["compute_limits"] = {
@@ -92,6 +99,16 @@ def test_invalid_compute_limits_return_clear_errors():
     assert "compute_limits.max_files_to_inspect must be positive" in errors
     assert "compute_limits.targeted_tests_only must be a boolean" in errors
     assert "compute_limits.no_full_scheduler_suite must be a boolean" in errors
+
+
+def test_boolean_max_files_to_inspect_is_rejected():
+    packet = sample_packet()
+    packet["compute_limits"]["max_files_to_inspect"] = True
+
+    assert (
+        "compute_limits.max_files_to_inspect must be an integer"
+        in validate_handoff_packet(packet)
+    )
 
 
 def test_assert_valid_handoff_packet_raises_for_invalid_packet():
