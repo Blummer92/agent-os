@@ -20,6 +20,9 @@ from .common import (
     freeze_json,
     sha256_hex,
     validate_and_normalize_json,
+    validate_bounded_list,
+    validate_exact_fields,
+    validate_mapping,
     validate_stable_id,
     validate_text,
 )
@@ -125,27 +128,6 @@ AUTHORITY_FIELDS = frozenset(
 )
 
 
-def _mapping(value: Any, name: str) -> dict[str, Any]:
-    if type(value) is not dict:
-        raise ContractValidationError("handoff-wrong-type", f"{name} must be a built-in mapping")
-    return value
-
-
-def _list(value: Any, name: str, maximum: int) -> list[Any]:
-    if type(value) is not list:
-        raise ContractValidationError("handoff-wrong-type", f"{name} must be a built-in list")
-    if len(value) > maximum:
-        raise ContractValidationError("handoff-oversized", f"{name} exceeds its collection bound")
-    return value
-
-
-def _exact_fields(value: dict[str, Any], expected: frozenset[str], name: str) -> None:
-    if set(value) != expected:
-        if set(value) - expected:
-            raise ContractValidationError("handoff-unknown-field", f"{name} contains unknown fields")
-        raise ContractValidationError("handoff-invalid", f"{name} is missing required fields")
-
-
 def _choice(value: Any, enum_type: type[Enum], name: str) -> Any:
     if type(value) is not str:
         raise ContractValidationError("handoff-wrong-type", f"{name} must be a built-in string")
@@ -162,9 +144,9 @@ def _optional_text(value: Any, name: str) -> str | None:
 
 
 def _reference(value: Any) -> ContractReference:
-    ref = _mapping(value, "source_reference")
+    ref = validate_mapping(value, "source_reference")
     expected = frozenset({"system", "stable_id", "exact_location", "verification_evidence"})
-    _exact_fields(ref, expected, "source_reference")
+    validate_exact_fields(ref, expected, "source_reference")
     return ContractReference(
         system=ref["system"],
         stable_id=ref["stable_id"],
@@ -174,8 +156,8 @@ def _reference(value: Any) -> ContractReference:
 
 
 def _validate_authority(value: Any) -> None:
-    authority = _mapping(value, "authority")
-    _exact_fields(authority, AUTHORITY_FIELDS, "authority")
+    authority = validate_mapping(value, "authority")
+    validate_exact_fields(authority, AUTHORITY_FIELDS, "authority")
     for name, flag in authority.items():
         if type(flag) is not bool or flag is not False:
             raise ContractValidationError("authority-invalid", f"authority.{name} must be built-in false")
@@ -232,28 +214,28 @@ def decide_conversational_unit_knowledge(value: object) -> ValidationResult:
     """Project supplied resolved meaning into deterministic authority-false decisions."""
     try:
         normalized = validate_and_normalize_json(value, max_bytes=MAX_INPUT_BYTES)
-        payload = _mapping(normalized, "conversation knowledge input")
-        _exact_fields(payload, TOP_LEVEL_FIELDS, "conversation knowledge input")
+        payload = validate_mapping(normalized, "conversation knowledge input")
+        validate_exact_fields(payload, TOP_LEVEL_FIELDS, "conversation knowledge input")
         _validate_authority(payload["authority"])
 
-        context = _mapping(payload["context"], "context")
-        _exact_fields(context, CONTEXT_FIELDS, "context")
+        context = validate_mapping(payload["context"], "context")
+        validate_exact_fields(context, CONTEXT_FIELDS, "context")
         current = context["current_entity_ref"]
         if current is not None:
             context["current_entity_ref"] = validate_stable_id(current, "current_entity_ref")
-        plausible = _list(context["plausible_entity_refs"], "plausible_entity_refs", MAX_TARGETS)
+        plausible = validate_bounded_list(context["plausible_entity_refs"], "plausible_entity_refs", MAX_TARGETS)
         context["plausible_entity_refs"] = sorted(
             {validate_stable_id(item, "plausible_entity_ref") for item in plausible}
         )
 
-        _list(payload["existing_knowledge"], "existing_knowledge", MAX_EXISTING)
-        candidates = _list(payload["candidates"], "candidates", MAX_CANDIDATES)
+        validate_bounded_list(payload["existing_knowledge"], "existing_knowledge", MAX_EXISTING)
+        candidates = validate_bounded_list(payload["candidates"], "candidates", MAX_CANDIDATES)
         decisions: list[CandidateDecision] = []
         candidate_ids: set[str] = set()
 
         for raw_candidate in candidates:
-            candidate = _mapping(raw_candidate, "candidate")
-            _exact_fields(candidate, CANDIDATE_FIELDS, "candidate")
+            candidate = validate_mapping(raw_candidate, "candidate")
+            validate_exact_fields(candidate, CANDIDATE_FIELDS, "candidate")
             candidate_id = validate_stable_id(candidate["candidate_id"], "candidate_id")
             if candidate_id in candidate_ids:
                 raise ContractValidationError("identity-duplicate", "candidate_id must be unique")
@@ -282,7 +264,7 @@ def decide_conversational_unit_knowledge(value: object) -> ValidationResult:
                 sorted(
                     {
                         validate_stable_id(item, "outbound_route")
-                        for item in _list(candidate["outbound_routes"], "outbound_routes", MAX_ROUTES)
+                        for item in validate_bounded_list(candidate["outbound_routes"], "outbound_routes", MAX_ROUTES)
                     }
                 )
             )
