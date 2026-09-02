@@ -5,11 +5,14 @@ from dataclasses import replace
 import pytest
 
 from scripts.agent_os_issue_acceptance.approval_records import ApprovalApplicabilityResult
-from scripts.agent_os_issue_acceptance.compute_control_producer import (
-    ComputeControlProductionEvidence,
-    produce_compute_control_projection,
+from scripts.agent_os_issue_acceptance.compute_control_projection import (
+    ComputeControlEvidence,
+    build_compute_control_projection,
 )
-from scripts.agent_os_issue_acceptance.coding_command_center_handoff import CodingCommandCenterEvidence
+from scripts.agent_os_issue_acceptance.coding_command_center_handoff import (
+    CodingCommandCenterEvidence,
+    build_coding_command_center_handoff,
+)
 from scripts.agent_os_issue_acceptance.issue_operational_state import (
     DependencyState,
     FreshnessState,
@@ -174,20 +177,20 @@ def test_deterministic_equivalent_snapshot_produces_same_state_identity() -> Non
     assert first.state_id == second.state_id
 
 
-def test_1359_shape_flows_through_1441_and_1439_without_special_case() -> None:
+def test_1359_shape_flows_through_1441_and_1419_without_special_case() -> None:
     acquired = acquire(Reader(snapshot()))
     state = acquired.operational_state
-    primary_claim = acquired.primary_claims[0]
-    projection = produce_compute_control_projection(
-        ComputeControlProductionEvidence(
+    projection = build_compute_control_projection(
+        ComputeControlEvidence(
+            handoff=build_coding_command_center_handoff(
+                CodingCommandCenterEvidence(
+                    operational_state=state,
+                    source_revision=state.source_revision,
+                    observed_head_sha=HEAD,
+                )
+            ),
             operational_state=state,
             current_head_sha=HEAD,
-            primary_claim=primary_claim,
-            handoff_evidence=CodingCommandCenterEvidence(
-                operational_state=state,
-                source_revision=state.source_revision,
-                observed_head_sha=HEAD,
-            ),
         )
     )
 
