@@ -7,6 +7,7 @@ module adds no fields or reason codes to the shared EXH core.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from .common import (
@@ -137,7 +138,13 @@ def adapt_ppux_experiment_evidence(
                     "stable_id": "issue-1542",
                     "exact_location": location,
                     "verification_evidence": validate_text(
-                        str(provenance), "PPUX evaluation provenance"
+                        json.dumps(
+                            provenance,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                            ensure_ascii=False,
+                        ),
+                        "PPUX evaluation provenance",
                     ),
                 }
             ],
