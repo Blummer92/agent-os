@@ -102,7 +102,12 @@ class GitHubReadOnlyAdapter(TaskAdapter):
     def _action_get_pr_info(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         full_name = self._require_repository_full_name(payload)
         data = self._get(f"/repos/{full_name}/pulls/{self._require_pr_number(payload)}")
-        return {"number": data.get("number"), "title": data.get("title"), "state": data.get("state"), "body": data.get("body"), "user": (data.get("user") or {}).get("login"), "merged": data.get("merged"), "created_at": data.get("created_at"), "updated_at": data.get("updated_at")}
+        user = data.get("user")
+        if user is not None and not isinstance(user, dict):
+            raise GitHubReadOnlyAdapterError(
+                f"GitHub PR response field 'user' must be an object or null, got {user!r}"
+            )
+        return {"number": data.get("number"), "title": data.get("title"), "state": data.get("state"), "body": data.get("body"), "user": (user or {}).get("login"), "merged": data.get("merged"), "created_at": data.get("created_at"), "updated_at": data.get("updated_at")}
 
     def _action_list_pr_changed_filenames(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         full_name = self._require_repository_full_name(payload)
