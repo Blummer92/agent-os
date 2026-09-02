@@ -87,6 +87,7 @@ from .stage_models import (
     STAGE_SCHEMA_VERSION,
     issueplan_current_state_evidence_from_dict,
     issueplan_current_state_evidence_to_dict,
+    require_exact_keys,
 )
 
 WSC3_STATUS_UNMAPPED = "wsc3-status-unmapped"
@@ -317,7 +318,7 @@ def draft_task_proposal_to_dict(proposal: DraftTaskProposal) -> dict[str, Any]:
 
 
 def draft_task_proposal_from_dict(payload: Mapping[str, Any]) -> DraftTaskProposal:
-    _require_exact_keys(payload, _DRAFT_TASK_PROPOSAL_PAYLOAD_KEYS, "draft task proposal")
+    require_exact_keys(payload, _DRAFT_TASK_PROPOSAL_PAYLOAD_KEYS, "draft task proposal")
     if payload["execution_authorized"] is not False:
         raise ValueError("execution_authorized must be false")
     if payload["eligibility_status"] != "eligible":
@@ -330,7 +331,7 @@ def draft_task_proposal_from_dict(payload: Mapping[str, Any]) -> DraftTaskPropos
         raise ValueError("cohort_summaries must be a list")
     parsed_cohorts = []
     for item in cohorts:
-        _require_exact_keys(item, _COHORT_PAYLOAD_KEYS, "cohort summary")
+        require_exact_keys(item, _COHORT_PAYLOAD_KEYS, "cohort summary")
         classification = item["classification"]
         if not isinstance(classification, str):
             raise ValueError("cohort summary classification must be a string")
@@ -434,7 +435,7 @@ def repository_proposal_stage_result_from_dict(
         raise ValueError("repository proposal stage result must be a mapping")
     if payload.get("schema_version") != STAGE_SCHEMA_VERSION:
         raise ValueError("unsupported stage schema_version")
-    _require_exact_keys(
+    require_exact_keys(
         payload,
         _REPOSITORY_PROPOSAL_STAGE_RESULT_PAYLOAD_KEYS,
         "repository proposal stage result",
@@ -497,19 +498,6 @@ def repository_proposal_stage_result_from_dict(
         issueplan_current_state_evidence=issueplan,
         planning_binding=planning_binding,
     )
-
-
-def _require_exact_keys(payload: object, keys: frozenset[str], label: str) -> Mapping[str, Any]:
-    if not isinstance(payload, Mapping):
-        raise ValueError(f"{label} must be a mapping")
-    supplied = set(payload)
-    missing = sorted(keys - supplied)
-    if missing:
-        raise ValueError(f"{label} is missing field(s): " + ", ".join(missing))
-    unsupported = sorted(supplied - keys)
-    if unsupported:
-        raise ValueError(f"{label} has unsupported field(s): " + ", ".join(unsupported))
-    return payload
 
 
 def _string_list(value: object, label: str) -> tuple[str, ...]:

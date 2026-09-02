@@ -20,7 +20,7 @@ from typing import Any, Literal
 from .approval_stage import ApprovalProjectionStageResult
 from .planning_stage import PlanningHandoffStageResult
 from .proposal_stage import RepositoryProposalStageResult
-from .stage_models import IssueReadinessStageResult, canonical_bytes
+from .stage_models import IssueReadinessStageResult, canonical_bytes, require_exact_keys
 
 COMPILER_SCHEMA_NAME = "agent-os-candidate-packet-compiler"
 COMPILER_SCHEMA_VERSION = "1.0"
@@ -110,19 +110,6 @@ def _string_tuple(value: object, field_name: str) -> tuple[str, ...]:
     if isinstance(value, (str, bytes, Mapping)) or not isinstance(value, Iterable):
         raise TypeError(f"{field_name} must be an iterable of strings")
     return tuple(_text(item, field_name) for item in value)
-
-
-def _require_exact_keys(payload: object, keys: frozenset[str], label: str) -> Mapping[str, Any]:
-    if not isinstance(payload, Mapping):
-        raise ValueError(f"{label} must be a mapping")
-    supplied = set(payload)
-    missing = sorted(keys - supplied)
-    if missing:
-        raise ValueError(f"{label} is missing field(s): " + ", ".join(missing))
-    unsupported = sorted(supplied - keys)
-    if unsupported:
-        raise ValueError(f"{label} has unsupported field(s): " + ", ".join(unsupported))
-    return payload
 
 
 def _payload_list(value: object, label: str) -> list[Any]:
@@ -447,7 +434,7 @@ def serialize_candidate_packet(packet: CandidatePacket) -> dict[str, object]:
 
 def deserialize_candidate_packet(payload: Mapping[str, object]) -> CandidatePacket:
     """Reconstruct one canonical CandidatePacket, failing closed on any drift."""
-    _require_exact_keys(payload, _CANDIDATE_PACKET_PAYLOAD_KEYS, "candidate packet")
+    require_exact_keys(payload, _CANDIDATE_PACKET_PAYLOAD_KEYS, "candidate packet")
     for name in (
         "execution_authorized",
         "merge_authorized",

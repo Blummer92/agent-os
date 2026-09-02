@@ -34,7 +34,7 @@ from .approval_stage import (
     ApprovalProjectionStageResult,
     ApprovalProjectionStageStatus,
 )
-from .stage_models import STAGE_SCHEMA_VERSION
+from .stage_models import STAGE_SCHEMA_VERSION, require_exact_keys
 
 _SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 
@@ -265,7 +265,7 @@ def validation_stage_result_from_dict(payload: Mapping[str, Any]) -> ValidationS
         raise ValueError("validation stage result must be a mapping")
     if payload.get("schema_version") != STAGE_SCHEMA_VERSION:
         raise ValueError("unsupported stage schema_version")
-    _require_exact_keys(
+    require_exact_keys(
         payload, _VALIDATION_STAGE_RESULT_PAYLOAD_KEYS, "validation stage result"
     )
     for name in (
@@ -351,22 +351,6 @@ def validation_stage_result_from_dict(payload: Mapping[str, Any]) -> ValidationS
         candidate_sha=None,
         reason_codes=tuple(reason_codes),
     )
-
-
-def _require_exact_keys(
-    payload: object, keys: frozenset[str], label: str
-) -> Mapping[str, Any]:
-    """Closed-schema key check, mirroring the repository-stage transport rule."""
-    if not isinstance(payload, Mapping):
-        raise ValueError(f"{label} must be a mapping")
-    supplied = set(payload)
-    missing = sorted(keys - supplied)
-    if missing:
-        raise ValueError(f"{label} is missing field(s): " + ", ".join(missing))
-    unsupported = sorted(supplied - keys)
-    if unsupported:
-        raise ValueError(f"{label} has unsupported field(s): " + ", ".join(unsupported))
-    return payload
 
 
 def prepare_validation_stage(
