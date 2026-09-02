@@ -13,6 +13,7 @@ from .common import (
     ValidationStatus,
     canonical_size,
     freeze_json,
+    invalid_result,
     sanitize_detail,
     sha256_hex,
     validate_and_normalize_json,
@@ -272,9 +273,9 @@ def plan_cohesive_visual_set(
             )
         return ValidationResult(status=ValidationStatus.VALID, record=record)
     except ContractValidationError as exc:
-        return _invalid(exc.reason_code, exc.detail)
+        return invalid_result(exc.reason_code, exc.detail)
     except (KeyError, TypeError, ValueError) as exc:
-        return _invalid("asset-cohesive-plan-invalid", sanitize_detail(str(exc)))
+        return invalid_result("asset-cohesive-plan-invalid", sanitize_detail(str(exc)))
 
 
 def _plan_record(value: object) -> ValidatedRecord:
@@ -719,13 +720,4 @@ def _plan_id(
             }
         )[:24],
         "cohesive_visual_plan_id",
-    )
-
-
-def _invalid(reason: str, detail: str) -> ValidationResult:
-    return ValidationResult(
-        status=ValidationStatus.INVALID,
-        record=None,
-        reason_codes=(reason,),
-        details=(sanitize_detail(detail),),
     )

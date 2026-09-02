@@ -17,9 +17,11 @@ from .common import (
     canonical_size,
     canonical_strings,
     freeze_json,
+    invalid_result,
     sanitize_detail,
     sha256_hex,
     validate_and_normalize_json,
+    validate_mapping,
     validate_stable_id,
     validate_text,
     validate_version,
@@ -70,12 +72,12 @@ def validate_image_intent(value: object) -> ValidationResult:
             raise ContractValidationError("handoff-wrong-type", "image intent must be a built-in mapping")
         _fields(data, INTENT_TOP_LEVEL_FIELDS, "image intent")
 
-        identity = _mapping(data["identity"], "identity")
-        scene = _mapping(data["scene"], "scene")
-        visual_direction = _mapping(data["visual_direction"], "visual_direction")
-        control = _mapping(data["control"], "control")
-        output = _mapping(data["output"], "output")
-        library_handoff = _mapping(data["library_handoff"], "library_handoff")
+        identity = validate_mapping(data["identity"], "identity")
+        scene = validate_mapping(data["scene"], "scene")
+        visual_direction = validate_mapping(data["visual_direction"], "visual_direction")
+        control = validate_mapping(data["control"], "control")
+        output = validate_mapping(data["output"], "output")
+        library_handoff = validate_mapping(data["library_handoff"], "library_handoff")
 
         _fields(identity, IDENTITY_FIELDS, "identity")
         _fields(scene, SCENE_FIELDS, "scene")
@@ -137,9 +139,9 @@ def validate_image_intent(value: object) -> ValidationResult:
         )
         return ValidationResult(status=ValidationStatus.VALID, record=record)
     except ContractValidationError as exc:
-        return _invalid(exc.reason_code, exc.detail)
+        return invalid_result(exc.reason_code, exc.detail)
     except (TypeError, ValueError) as exc:
-        return _invalid("handoff-invalid", sanitize_detail(str(exc)))
+        return invalid_result("handoff-invalid", sanitize_detail(str(exc)))
 
 
 def validate_imported_asset_context(value: object) -> ValidationResult:
@@ -189,9 +191,9 @@ def validate_imported_asset_context(value: object) -> ValidationResult:
         )
         return ValidationResult(status=ValidationStatus.VALID, record=record)
     except ContractValidationError as exc:
-        return _invalid(exc.reason_code, exc.detail)
+        return invalid_result(exc.reason_code, exc.detail)
     except (TypeError, ValueError) as exc:
-        return _invalid("handoff-invalid", sanitize_detail(str(exc)))
+        return invalid_result("handoff-invalid", sanitize_detail(str(exc)))
 
 
 def assemble_gemini_manual_prompt(intent: ValidatedRecord) -> str:
@@ -254,12 +256,6 @@ def assemble_gemini_manual_prompt(intent: ValidatedRecord) -> str:
     return " ".join(sentences)
 
 
-def _mapping(value: object, name: str) -> dict[str, Any]:
-    if type(value) is not dict:
-        raise ContractValidationError("handoff-wrong-type", f"{name} must be a built-in mapping")
-    return value
-
-
 def _fields(value: dict[str, Any], expected: frozenset[str], name: str) -> None:
     if set(value) != expected:
         raise ContractValidationError("handoff-unknown-field", f"{name} fields are not exact")
@@ -284,13 +280,4 @@ def _text_list(value: object, name: str, *, allow_empty: bool = True) -> tuple[s
         maximum=MAX_LIST_ITEMS,
         validator=lambda item: validate_text(item, name),
         allow_empty=allow_empty,
-    )
-
-
-def _invalid(reason_code: str, detail: str) -> ValidationResult:
-    return ValidationResult(
-        status=ValidationStatus.INVALID,
-        record=None,
-        reason_codes=(reason_code,),
-        details=(sanitize_detail(detail),),
     )

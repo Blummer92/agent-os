@@ -21,6 +21,7 @@ from .common import (
     canonical_size,
     canonical_strings,
     freeze_json,
+    invalid_result,
     resolve_status,
     sanitize_detail,
     sha256_hex,
@@ -255,18 +256,9 @@ def validate_curriculum_handoff(value: object) -> ValidationResult:
             details=(),
         )
     except ContractValidationError as exc:
-        return _invalid(exc.reason_code, exc.detail)
+        return invalid_result(exc.reason_code, exc.detail)
     except (TypeError, ValueError) as exc:
-        return _invalid("handoff-invalid", sanitize_detail(str(exc)))
-
-
-def _invalid(reason_code: str, detail: str) -> ValidationResult:
-    return ValidationResult(
-        status=ValidationStatus.INVALID,
-        record=None,
-        reason_codes=(reason_code,),
-        details=(sanitize_detail(detail),),
-    )
+        return invalid_result("handoff-invalid", sanitize_detail(str(exc)))
 
 
 def _group(payload: dict[str, Any], name: str) -> dict[str, Any]:

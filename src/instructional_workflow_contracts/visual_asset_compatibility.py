@@ -21,9 +21,11 @@ from .common import (
     canonical_size,
     canonical_strings,
     freeze_json,
+    invalid_result,
     sanitize_detail,
     sha256_hex,
     validate_and_normalize_json,
+    validate_mapping,
     validate_sha256,
     validate_stable_id,
     validate_text,
@@ -244,7 +246,7 @@ def validate_visual_asset_compatibility_evidence(
         library = _library_record(envelope["library_record"])
         manifest_record = _manifest_record(envelope["artifact_manifest"])
         manifest = manifest_record.to_dict()
-        evidence = _mapping(
+        evidence = validate_mapping(
             envelope["compatibility_evidence"],
             "compatibility_evidence",
         )
@@ -275,7 +277,7 @@ def validate_visual_asset_compatibility_evidence(
             "compatibility_evidence",
         )
 
-        manifest_reference = _mapping(
+        manifest_reference = validate_mapping(
             evidence["manifest_reference"],
             "manifest_reference",
         )
@@ -293,7 +295,7 @@ def validate_visual_asset_compatibility_evidence(
             "manifest_reference",
         )
 
-        asset_reference = _mapping(
+        asset_reference = validate_mapping(
             evidence["asset_reference"],
             "asset_reference",
         )
@@ -309,7 +311,7 @@ def validate_visual_asset_compatibility_evidence(
             "asset_reference",
         )
 
-        library_reference = _mapping(
+        library_reference = validate_mapping(
             evidence["library_reference"],
             "library_reference",
         )
@@ -435,9 +437,9 @@ def validate_visual_asset_compatibility_evidence(
             record=record,
         )
     except ContractValidationError as exc:
-        return _invalid(exc.reason_code, exc.detail)
+        return invalid_result(exc.reason_code, exc.detail)
     except (TypeError, ValueError) as exc:
-        return _invalid(
+        return invalid_result(
             "asset-compatibility-invalid",
             sanitize_detail(str(exc)),
         )
@@ -545,7 +547,7 @@ def _manifest_record(value: object) -> ValidatedRecord:
 
 
 def _purpose(value: object) -> dict[str, Any]:
-    data = _mapping(value, "purpose")
+    data = validate_mapping(value, "purpose")
     _fields(
         data,
         frozenset({"role_types", "decorative_only"}),
@@ -570,7 +572,7 @@ def _purpose(value: object) -> dict[str, Any]:
 
 
 def _accessibility(value: object) -> dict[str, Any]:
-    data = _mapping(value, "accessibility")
+    data = validate_mapping(value, "accessibility")
     _fields(
         data,
         frozenset(
@@ -614,7 +616,7 @@ def _accessibility(value: object) -> dict[str, Any]:
 
 
 def _orientation(value: object) -> dict[str, Any]:
-    data = _mapping(value, "orientation")
+    data = validate_mapping(value, "orientation")
     _fields(
         data,
         frozenset({"orientation", "aspect_state"}),
@@ -635,7 +637,7 @@ def _orientation(value: object) -> dict[str, Any]:
 
 
 def _approved_use(value: object) -> dict[str, Any]:
-    data = _mapping(value, "approved_use")
+    data = validate_mapping(value, "approved_use")
     _fields(
         data,
         frozenset({"state", "role_types", "material_types"}),
@@ -670,7 +672,7 @@ def _approved_use(value: object) -> dict[str, Any]:
 
 
 def _freshness(value: object) -> dict[str, Any]:
-    data = _mapping(value, "freshness")
+    data = validate_mapping(value, "freshness")
     _fields(
         data,
         frozenset(
@@ -714,7 +716,7 @@ def _freshness(value: object) -> dict[str, Any]:
 
 
 def _cohesion_profile(value: object) -> dict[str, Any]:
-    data = _mapping(value, "cohesion_profile")
+    data = validate_mapping(value, "cohesion_profile")
     _fields(data, COHESION_PROFILE_FIELDS, "cohesion_profile")
 
     return {
@@ -787,7 +789,7 @@ def _cohesion_rating(value: object, name: str) -> int:
 
 
 def _audience_compatibility(value: object) -> dict[str, Any]:
-    data = _mapping(value, "audience_compatibility")
+    data = validate_mapping(value, "audience_compatibility")
     _fields(
         data,
         AUDIENCE_COMPATIBILITY_FIELDS,
@@ -842,7 +844,7 @@ def _audience_compatibility(value: object) -> dict[str, Any]:
 
 
 def _authority(value: object) -> dict[str, bool]:
-    data = _mapping(value, "authority")
+    data = validate_mapping(value, "authority")
     expected = frozenset(
         {
             "execution_authorized",
@@ -1148,15 +1150,6 @@ def _visual_role_type(value: object) -> str:
     return role
 
 
-def _mapping(value: object, name: str) -> dict[str, Any]:
-    if type(value) is not dict:
-        raise ContractValidationError(
-            "handoff-wrong-type",
-            f"{name} must be a built-in mapping",
-        )
-    return value
-
-
 def _fields(
     value: dict[str, Any],
     expected: frozenset[str],
@@ -1181,12 +1174,3 @@ def _enum(
             f"{name} is unsupported",
         )
     return text
-
-
-def _invalid(reason: str, detail: str) -> ValidationResult:
-    return ValidationResult(
-        status=ValidationStatus.INVALID,
-        record=None,
-        reason_codes=(reason,),
-        details=(sanitize_detail(detail),),
-    )

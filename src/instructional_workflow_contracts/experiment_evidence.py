@@ -16,6 +16,9 @@ from .common import (
     freeze_json,
     sha256_hex,
     validate_and_normalize_json,
+    validate_bounded_list,
+    validate_exact_fields,
+    validate_mapping,
     validate_revision,
     validate_stable_id,
     validate_version,
@@ -44,40 +47,9 @@ REFERENCE_FIELDS = frozenset(
 )
 
 
-def _mapping(value: Any, name: str) -> dict[str, Any]:
-    if type(value) is not dict:
-        raise ContractValidationError(
-            "handoff-wrong-type", f"{name} must be a built-in mapping"
-        )
-    return value
-
-
-def _list(value: Any, name: str, maximum: int) -> list[Any]:
-    if type(value) is not list:
-        raise ContractValidationError(
-            "handoff-wrong-type", f"{name} must be a built-in list"
-        )
-    if len(value) > maximum:
-        raise ContractValidationError(
-            "handoff-oversized", f"{name} exceeds its collection bound"
-        )
-    return value
-
-
-def _exact(value: dict[str, Any], expected: frozenset[str], name: str) -> None:
-    if set(value) != expected:
-        if set(value) - expected:
-            raise ContractValidationError(
-                "handoff-unknown-field", f"{name} contains unknown fields"
-            )
-        raise ContractValidationError(
-            "handoff-invalid", f"{name} is missing required fields"
-        )
-
-
 def _reference(value: Any, name: str) -> ContractReference:
-    reference = _mapping(value, name)
-    _exact(reference, REFERENCE_FIELDS, name)
+    reference = validate_mapping(value, name)
+    validate_exact_fields(reference, REFERENCE_FIELDS, name)
     return ContractReference(
         system=reference["system"],
         stable_id=reference["stable_id"],
@@ -99,8 +71,8 @@ def validate_experiment_evidence(value: object) -> ValidationResult:
     """Validate one provider-neutral observation without assigning domain meaning."""
     try:
         normalized = validate_and_normalize_json(value, max_bytes=MAX_INPUT_BYTES)
-        payload = _mapping(normalized, "experiment evidence")
-        _exact(payload, TOP_LEVEL_FIELDS, "experiment evidence")
+        payload = validate_mapping(normalized, "experiment evidence")
+        validate_exact_fields(payload, TOP_LEVEL_FIELDS, "experiment evidence")
 
         if validate_version(payload["contract_version"]) != CONTRACT_VERSION:
             raise ContractValidationError(
@@ -136,7 +108,7 @@ def validate_experiment_evidence(value: object) -> ValidationResult:
 
         references = [
             _reference(item, "reference")
-            for item in _list(payload["references"], "references", MAX_REFERENCES)
+            for item in validate_bounded_list(payload["references"], "references", MAX_REFERENCES)
         ]
         reference_payloads = sorted(
             (_reference_dict(reference) for reference in references),

@@ -6,17 +6,19 @@ from typing import Any
 
 from .common import (
     FINGERPRINT_ALGORITHM,
-    MAX_RESULT_BYTES as SHARED_MAX_RESULT_BYTES,
     ContractValidationError,
+    MAX_RESULT_BYTES as SHARED_MAX_RESULT_BYTES,
     ValidatedRecord,
     ValidationResult,
     ValidationStatus,
     canonical_size,
     canonical_strings,
     freeze_json,
+    invalid_result,
     sanitize_detail,
     sha256_hex,
     validate_and_normalize_json,
+    validate_mapping,
     validate_stable_id,
     validate_text,
 )
@@ -48,14 +50,14 @@ def plan_visual_needs(requirement: object) -> ValidationResult:
     try:
         source = _validated_requirement(requirement)
         source_payload = source.to_dict()
-        artifact = _mapping(source_payload.get("artifact"), "artifact")
+        artifact = validate_mapping(source_payload.get("artifact"), "artifact")
         material_type = validate_text(
             artifact.get("artifact_type"),
             "artifact_type",
             max_length=64,
         )
 
-        requirements = _mapping(source_payload.get("requirements"), "requirements")
+        requirements = validate_mapping(source_payload.get("requirements"), "requirements")
         accessibility = canonical_strings(
             requirements.get("accessibility_requirements"),
             name="accessibility requirements",
@@ -72,7 +74,7 @@ def plan_visual_needs(requirement: object) -> ValidationResult:
         visual_direction: dict[str, Any] | None = None
 
         if source.contract_version == V2_CONTRACT_ID:
-            visual_direction = _mapping(
+            visual_direction = validate_mapping(
                 source_payload.get("visual_direction"),
                 "visual_direction",
             )
@@ -210,9 +212,9 @@ def plan_visual_needs(requirement: object) -> ValidationResult:
             )
         return ValidationResult(status=ValidationStatus.VALID, record=record)
     except ContractValidationError as exc:
-        return _invalid(exc.reason_code, exc.detail)
+        return invalid_result(exc.reason_code, exc.detail)
     except (TypeError, ValueError) as exc:
-        return _invalid("material-visual-needs-invalid", sanitize_detail(str(exc)))
+        return invalid_result("material-visual-needs-invalid", sanitize_detail(str(exc)))
 
 
 def _validated_requirement(value: object) -> ValidatedRecord:
@@ -255,15 +257,6 @@ def _validated_requirement(value: object) -> ValidatedRecord:
     return record
 
 
-def _mapping(value: object, name: str) -> dict[str, Any]:
-    if type(value) is not dict:
-        raise ContractValidationError(
-            "handoff-wrong-type",
-            f"{name} must be a built-in mapping",
-        )
-    return value
-
-
 def _visual_count(value: object) -> int:
     if type(value) is not int or value < 0 or value > MAX_VISUAL_ROLES:
         raise ContractValidationError(
@@ -286,7 +279,7 @@ def _roles(value: object, *, source_fingerprint: str) -> list[dict[str, Any]]:
         )
     roles: list[dict[str, Any]] = []
     for raw in value:
-        role = _mapping(raw, "visual role")
+        role = validate_mapping(raw, "visual role")
         requirement_state = validate_text(
             role.get("requirement_state"),
             "visual requirement state",
@@ -369,12 +362,3 @@ def _plan_id(
     }
     plan_id = "visual-needs-plan-" + sha256_hex(identity)[:24]
     return validate_stable_id(plan_id, "visual-needs plan_id")
-
-
-def _invalid(reason: str, detail: str) -> ValidationResult:
-    return ValidationResult(
-        status=ValidationStatus.INVALID,
-        record=None,
-        reason_codes=(reason,),
-        details=(sanitize_detail(detail),),
-    )

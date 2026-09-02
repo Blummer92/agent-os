@@ -22,6 +22,7 @@ from .common import (
     sha256_hex,
     validate_and_normalize_json,
     validate_dependency_key,
+    validate_mapping,
     validate_reason_code,
     validate_revision,
     validate_sha256,
@@ -252,7 +253,7 @@ def validate_artifact_manifest(value: object) -> ValidationResult:
             raise ContractValidationError("handoff-wrong-type", "manifest must be a built-in mapping")
         _fields(data, TOP_LEVEL_FIELDS, "manifest")
         groups = {
-            name: _mapping(data[name], name)
+            name: validate_mapping(data[name], name)
             for name in TOP_LEVEL_FIELDS - {"quality_rows", "assets", "references"}
         }
         quality_rows = _list(data["quality_rows"], "quality_rows")
@@ -332,12 +333,6 @@ def _invalid(reason: str, detail: str) -> ValidationResult:
         reason_codes=(reason,),
         details=(sanitize_detail(detail),),
     )
-
-
-def _mapping(value: object, name: str) -> dict[str, Any]:
-    if type(value) is not dict:
-        raise ContractValidationError("handoff-wrong-type", f"{name} must be a built-in mapping")
-    return value
 
 
 def _list(value: object, name: str) -> list[Any]:
@@ -458,7 +453,7 @@ def _source(value: dict[str, Any]) -> None:
     keys = canonical_strings(
         value["dependency_keys"], name="dependency keys", maximum=MAX_DEPENDENCY_KEYS, validator=validate_dependency_key
     )
-    values = _mapping(value["dependency_values"], "dependency_values")
+    values = validate_mapping(value["dependency_values"], "dependency_values")
     if set(keys) != set(values):
         raise ContractValidationError("dependency-invalid", "dependency keys and values must match exactly")
     expected_fingerprint = sha256_hex({"dependency_keys": list(keys), "dependency_values": values})
@@ -515,7 +510,7 @@ def _duplicates(value: dict[str, Any], operation: dict[str, Any]) -> set[str]:
         {"candidate_id", "relationship", "disposition", "canonical_asset_ref", "comparison_evidence", "confidence", "compatible", "conflicting"}
     )
     for raw in candidates:
-        candidate = _mapping(raw, "duplicate candidate")
+        candidate = validate_mapping(raw, "duplicate candidate")
         _fields(candidate, fields, "duplicate candidate")
         candidate_id = validate_stable_id(candidate["candidate_id"], "candidate_id")
         if candidate_id in seen:
@@ -566,7 +561,7 @@ def _lineage(value: dict[str, Any], operation: dict[str, Any]) -> set[str]:
         }
     )
     for raw in revisions:
-        revision = _mapping(raw, "revision")
+        revision = validate_mapping(raw, "revision")
         _fields(revision, fields, "revision")
         revision_id = validate_stable_id(revision["revision_id"], "revision_id")
         if revision_id in seen_ids:
@@ -630,7 +625,7 @@ def _quality_rows(values: list[Any], statuses: dict[str, Any]) -> None:
     unresolved = False
     fields = frozenset({"row_id", "state", "reason_codes"})
     for raw in values:
-        row = _mapping(raw, "quality row")
+        row = validate_mapping(raw, "quality row")
         _fields(row, fields, "quality row")
         row_id = validate_stable_id(row["row_id"], "quality row_id")
         if row_id in seen:
@@ -664,7 +659,7 @@ def _assets(values: list[Any], statuses: dict[str, Any]) -> set[str]:
         }
     )
     for raw in values:
-        asset = _mapping(raw, "asset")
+        asset = validate_mapping(raw, "asset")
         _fields(asset, fields, "asset")
         asset_id = validate_stable_id(asset["asset_id"], "asset_id")
         if asset_id in seen:
@@ -769,7 +764,7 @@ def _references(values: list[Any]) -> None:
     seen: set[str] = set()
     fields = frozenset({"reference_id", "kind", "stable_ref", "fingerprint"})
     for raw in values:
-        ref = _mapping(raw, "reference")
+        ref = validate_mapping(raw, "reference")
         _fields(ref, fields, "reference")
         reference_id = validate_stable_id(ref["reference_id"], "reference_id")
         if reference_id in seen:
