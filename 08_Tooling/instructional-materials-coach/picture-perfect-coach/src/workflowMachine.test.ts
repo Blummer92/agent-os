@@ -37,4 +37,31 @@ describe('Picture Perfect workflow machine', () => {
     expect(actor.getSnapshot().value).toBe('tutorial_approved');
     actor.stop();
   });
+
+  it('requires explicit prompt generation and review before Ready', () => {
+    const actor = createActor(picturePerfectMachine).start();
+    actor.send({ type: 'CONTINUE_TO_UPLOAD' });
+    actor.send({ type: 'UPLOAD_SELECTED' });
+    actor.send({ type: 'UPLOAD_VALID' });
+    actor.send({ type: 'CONTINUE_TO_REVIEW' });
+    actor.send({ type: 'START_REVIEW' });
+    actor.send({ type: 'APPROVE_TUTORIAL' });
+    actor.send({ type: 'OPEN_READY' });
+    expect(actor.getSnapshot().value).toBe('tutorial_approved');
+    actor.send({ type: 'GENERATE_PROMPTS' });
+    expect(actor.getSnapshot().value).toBe('generating_prompts');
+    actor.send({ type: 'PROMPTS_VALID' });
+    expect(actor.getSnapshot().value).toBe('reviewing_prompts');
+    actor.send({ type: 'OPEN_READY' });
+    expect(actor.getSnapshot().value).toBe('running_preflight');
+    actor.stop();
+  });
+
+  it('has no image/provider execution event or state', () => {
+    const config = picturePerfectMachine.config;
+    const stateNames = Object.keys(config.states ?? {});
+    expect(stateNames).not.toContain('generating_image');
+    expect(stateNames).not.toContain('provider_execution');
+    expect(JSON.stringify(config)).not.toMatch(/GENERATE_IMAGE|EXECUTE_PROVIDER|SUBMIT_PROMPT|provider_execution/);
+  });
 });

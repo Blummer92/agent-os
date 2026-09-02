@@ -35,6 +35,14 @@ describe('PromptCards', () => {
     expect(screen.getByText('View prompt evidence')).toBeTruthy();
   });
 
+  it('makes the prompt-only authoring boundary explicit and exposes no image execution action', () => {
+    render(<PromptCards cards={[readyCard]} />);
+    expect(screen.getByText('Prompt-only authoring boundary')).toBeTruthy();
+    expect(screen.getByText(/does not submit them to an image provider or generate images/i)).toBeTruthy();
+    expect(screen.getByText(/separate manual handoff/i)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /generate image|run provider|submit prompt/i })).toBeNull();
+  });
+
   it('shows a blocked state instead of a fabricated prompt', () => {
     render(<PromptCards cards={[tutorial0BlockedFinalState]} />);
     expect(screen.getByText('Prompt blocked')).toBeTruthy();

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent-os://assessment-qa-evidence-review/v1",
+  "title": "Assessment QA and Evidence Review v1",
+  "type": "object",
+  "required": ["qa_contract_version","qa_report_id","blueprint_id","blueprint_version","lifecycle_version","sequencing_result_id","sequencing_contract_version","overall_disposition","category_findings","blockers","required_revisions","manual_review_items","remaining_risks","next_owner","authority"],
+  "properties": {
+    "qa_contract_version": {"const":"1.0"},
+    "qa_report_id": {"type":"string","minLength":1},
+    "blueprint_id": {"type":"string","minLength":1},
+    "blueprint_version": {"type":"string","minLength":1},
+    "lifecycle_version": {"type":"string","minLength":1},
+    "sequencing_result_id": {"type":"string","minLength":1},
+    "sequencing_contract_version": {"type":"string","minLength":1},
+    "overall_disposition": {"enum":["blocked","manual_review","revision_required","valid"]},
+    "category_findings": {
+      "type":"object",
+      "required":["alignment","evidence","method_task_quality","survey_mastery","sequencing","language","accessibility","fairness","engagement","teacher_workload","instructional_usefulness","ai_policy"],
+      "properties": {
+        "alignment":{"$ref":"#/$defs/finding"},"evidence":{"$ref":"#/$defs/finding"},"method_task_quality":{"$ref":"#/$defs/finding"},"survey_mastery":{"$ref":"#/$defs/finding"},"sequencing":{"$ref":"#/$defs/finding"},"language":{"$ref":"#/$defs/finding"},"accessibility":{"$ref":"#/$defs/finding"},"fairness":{"$ref":"#/$defs/finding"},"engagement":{"$ref":"#/$defs/finding"},"teacher_workload":{"$ref":"#/$defs/finding"},"instructional_usefulness":{"$ref":"#/$defs/finding"},"ai_policy":{"$ref":"#/$defs/finding"}
+      },
+      "additionalProperties":false
+    },
+    "blockers":{"type":"array","items":{"type":"string"}},
+    "required_revisions":{"type":"array","items":{"type":"string"}},
+    "manual_review_items":{"type":"array","items":{"type":"string"}},
+    "remaining_risks":{"type":"array","items":{"type":"string"}},
+    "next_owner":{"type":["string","null"]},
+    "authority":{"$ref":"#/$defs/authority"}
+  },
+  "$defs": {
+    "finding": {
+      "type":"object",
+      "required":["state","evidence"],
+      "properties":{"state":{"enum":["pass","fail","manual_review","not_applicable"]},"evidence":{"type":"array","items":{"type":"string"}},"required_action":{"type":["string","null"]}},
+      "additionalProperties":false
+    },
+    "authority": {
+      "type":"object",
+      "required":["report_only","execution_authorized","classroom_use_authorized","grading_authorized","readiness_authorized","production_authorized","publication_authorized","external_write_authorized","source_of_truth_write_authorized"],
+      "properties":{"report_only":{"const":true},"execution_authorized":{"const":false},"classroom_use_authorized":{"const":false},"grading_authorized":{"const":false},"readiness_authorized":{"const":false},"production_authorized":{"const":false},"publication_authorized":{"const":false},"external_write_authorized":{"const":false},"source_of_truth_write_authorized":{"const":false}},
+      "additionalProperties":false
+    }
+  },
+  "additionalProperties":false
+}

@@ -74,6 +74,26 @@ accepted ingress
 
 The workflow has only `contents: read` and `id-token: write`. GitHub Actions concurrency is transport noise reduction only; deterministic handoff/control-request identity plus the existing Scheduler lease remain the execution/idempotency authority.
 
+### Developer-validation outcome semantics
+
+For an accepted developer-validation envelope, transport success and validation success are separate evidence dimensions:
+
+```text
+transport-success != validation-success
+```
+
+The workflow summary reports the developer-validation status, reason codes, exact tested SHA, validation identity, exit code, and cleanup state from the bounded result. A dedicated fail-closed developer-validation gate then evaluates that evidence against the accepted transport envelope. Only `status=success` with the exact requested branch/SHA/validation identity, `exit_code=0`, and `cleanup_complete=true` satisfies the developer-validation gate. `failure`, `timeout`, `needs-decision`, malformed/missing result evidence, identity drift, nonzero success exit codes, or incomplete cleanup fail the workflow gate while preserving transport evidence for diagnosis.
+
+This gate does not turn transport into validation authority and does not grant Ready-for-Review, merge, issue-closure, Scheduler, production, repository-write, or external-write authority. Non-developer-validation ingress remains unaffected.
+
+### Reusable governed validation profiles
+
+DEVVAL5 (#1566) replaces one-off validation-id growth with a main-owned finite profile catalog. A caller may provide only repository, issue, non-protected `agent/*` branch, exact SHA, and a canonical profile identity. The profile catalog owns runner kind, fixed targets, fixed working directory, runtime identity, timeout class, and selector-requirement binding. Trusted code constructs argv; caller-supplied paths, modules, scripts, environment, cwd, package-install commands, and shell text remain unavailable.
+
+Initial reusable package profiles are `pr-remediation`, `workflow-scheduler`, and `issue-acceptance`. Existing identities remain stable compatibility aliases for `remote-validation`, `instructional-materials-current-curriculum`, `picture-perfect`, and `semantic-ownership-advisory`. The selector projection consumes already-selected canonical validation requirement names; it does not rematch changed paths and never executes selector command strings.
+
+A profile added on a feature branch is not executable merely because it exists on that branch. The executable trust rule remains **main-owned profiles only**: a new profile must first merge canonically before a consumer branch may rely on it. The repository contract does not claim network isolation of branch-owned test code; no IAM, WIF, VM, OS Login, credential, or network-sandbox change is introduced by DEVVAL5.
+
 ## Bounded result
 The result carries bounded request/handoff identity, exact resource tuple, start/invoke observations, bounded Scheduler invocation/execution identities returned by the host, terminal status, and finite reason codes. Authority fields remain false: transport evidence cannot authorize Scheduler work, lease operations, GitHub writes, readiness, merge, or issue closure.
 

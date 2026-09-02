@@ -19,6 +19,7 @@ async function reachPrompts() {
   for (let index = 2; index < cards.length - 1; index += 1) fireEvent.click(within(cards[index]!).getByRole('button', { name: 'Keep & Continue' }));
   fireEvent.click(within(cards[cards.length - 1]!).getByRole('button', { name: 'Not Instructional' }));
   fireEvent.click(screen.getByRole('button', { name: 'Approve Tutorial' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'Generate Prompts' }));
   await screen.findByRole('heading', { name: 'Picture Perfect prompts' });
 }
 
@@ -58,6 +59,7 @@ describe('Picture Perfect Coach review and Ready UX', () => {
     expect(screen.getAllByText('Software interface — approved screen capture bound').length).toBe(3);
     expect(screen.getAllByLabelText('Portable prompt').length).toBe(3);
     expect(screen.getAllByRole('button', { name: 'Copy Prompt' }).length).toBe(3);
+    expect(screen.queryByRole('button', { name: /generate image|submit prompt|run provider/i })).toBeNull();
     expect(screen.queryByText('Prompt blocked')).toBeNull();
     expect(screen.getAllByText(/Approved captured screen evidence is the base visual/i).length).toBe(3);
   });

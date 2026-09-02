@@ -5,7 +5,10 @@ import puppeteer from 'puppeteer';
 import {
   authenticationBlocker,
   buildCaptureEnvelope,
+  buildTargetStyleEvidence,
+  CAPTURE_FORMAT_VERSION_V2,
   fingerprintAction,
+  TARGET_STYLE_PROPERTY_ALLOWLIST,
   validateRecording,
 } from './safe_recording.mjs';
 
@@ -24,9 +27,37 @@ function selectorAsPuppeteer(selector) {
   return null;
 }
 
-export async function resolveTargetEvidence(page, step) {
+/**
+ * Capture optional bounded target-style evidence (#1485) from the
+ * already-resolved handle only. Style evidence is optional/non-authoritative:
+ * any resolution failure leaves it null rather than blocking or fabricating,
+ * since replay stays authoritative for execution regardless.
+ */
+async function resolveTargetStyleEvidence(page, handle, geometry) {
+  try {
+    const viewport = page.viewport();
+    if (!viewport || viewport.width <= 0 || viewport.height <= 0) return null;
+    const raw = await handle.evaluate((element, properties) => {
+      const computed = window.getComputedStyle(element);
+      const result = {};
+      for (const property of properties) result[property] = computed[property] ?? null;
+      return result;
+    }, TARGET_STYLE_PROPERTY_ALLOWLIST);
+    const rectNormalized = [
+      geometry.target_x / viewport.width,
+      geometry.target_y / viewport.height,
+      geometry.target_width / viewport.width,
+      geometry.target_height / viewport.height,
+    ];
+    return buildTargetStyleEvidence(rectNormalized, raw);
+  } catch {
+    return null;
+  }
+}
+
+export async function resolveTargetEvidence(page, step, { captureTargetStyle = false } = {}) {
   if (!SELECTOR_STEP_TYPES.has(step.type) || !Array.isArray(step.selectors)) {
-    return Object.freeze({ selector_resolved: null, selector_classification: null, target_type: 'UNKNOWN', geometry: null, derived_click: null, reason_code: null });
+    return Object.freeze({ selector_resolved: null, selector_classification: null, target_type: 'UNKNOWN', geometry: null, derived_click: null, reason_code: null, target_style: null });
   }
 
   const matches = [];
@@ -35,7 +66,7 @@ export async function resolveTargetEvidence(page, step) {
     if (!candidate) continue;
     try {
       const handle = await page.$(candidate);
-      if (handle) matches.push({ selector, box: await handle.boundingBox() });
+      if (handle) matches.push({ selector, handle, box: await handle.boundingBox() });
     } catch {
       // Replay remains authoritative for execution. Unsupported inspection selectors
       // are retained as evidence and simply cannot be pre-resolved here.
@@ -43,7 +74,7 @@ export async function resolveTargetEvidence(page, step) {
   }
 
   if (matches.length === 0) {
-    return Object.freeze({ selector_resolved: null, selector_classification: null, target_type: 'UNKNOWN', geometry: null, derived_click: null, reason_code: 'quality-target-unresolved' });
+    return Object.freeze({ selector_resolved: null, selector_classification: null, target_type: 'UNKNOWN', geometry: null, derived_click: null, reason_code: 'quality-target-unresolved', target_style: null });
   }
 
   const first = matches[0];
@@ -51,14 +82,18 @@ export async function resolveTargetEvidence(page, step) {
   const derivedClick = geometry && typeof step.offsetX === 'number' && typeof step.offsetY === 'number'
     ? Object.freeze({ derived_click_x: geometry.target_x + step.offsetX, derived_click_y: geometry.target_y + step.offsetY })
     : null;
+  const targetStyle = captureTargetStyle && geometry
+    ? await resolveTargetStyleEvidence(page, first.handle, geometry)
+    : null;
 
-  return Object.freeze({ selector_resolved: structuredClone(first.selector), selector_classification: 'ACCEPTABLE', target_type: 'DOM', geometry, derived_click: derivedClick, reason_code: null });
+  return Object.freeze({ selector_resolved: structuredClone(first.selector), selector_classification: 'ACCEPTABLE', target_type: 'DOM', geometry, derived_click: derivedClick, reason_code: null, target_style: targetStyle });
 }
 
 class EvidenceCaptureExtension extends PuppeteerRunnerExtension {
-  constructor(browser, page, { screenshotDir, timeout }) {
+  constructor(browser, page, { screenshotDir, timeout, captureTargetStyle = false }) {
     super(browser, page, { timeout });
     this.screenshotDir = screenshotDir;
+    this.captureTargetStyle = captureTargetStyle;
     this.actionEvidence = [];
     this.currentIndex = -1;
   }
@@ -67,7 +102,7 @@ class EvidenceCaptureExtension extends PuppeteerRunnerExtension {
     this.currentIndex += 1;
     const beforeName = `${String(this.currentIndex).padStart(3, '0')}-before.png`;
     await this.page.screenshot({ path: resolve(this.screenshotDir, beforeName), fullPage: false });
-    const target = await resolveTargetEvidence(this.page, step);
+    const target = await resolveTargetEvidence(this.page, step, { captureTargetStyle: this.captureTargetStyle });
     this.actionEvidence[this.currentIndex] = {
       source_index: this.currentIndex,
       source_fingerprint: fingerprintAction(step),
@@ -77,6 +112,7 @@ class EvidenceCaptureExtension extends PuppeteerRunnerExtension {
       selector_classification: target.selector_classification,
       target_type: target.target_type,
       target_geometry: target.geometry,
+      target_style: target.target_style,
       recorded_offset_x: typeof step.offsetX === 'number' ? step.offsetX : null,
       recorded_offset_y: typeof step.offsetY === 'number' ? step.offsetY : null,
       derived_click_x: target.derived_click?.derived_click_x ?? null,
@@ -108,6 +144,7 @@ export async function captureFlow({
   headless = false,
   timeout = 7000,
   launchOptions = {},
+  captureTargetStyle = false,
 }) {
   const validation = validateRecording(rawRecording, { approvedOrigins });
   if (validation.status !== 'valid') return Object.freeze({ status: validation.status, validation, capture: null });
@@ -125,7 +162,7 @@ export async function captureFlow({
   const browser = await puppeteer.launch({ ...launchOptions, userDataDir, headless });
   const pages = await browser.pages();
   const page = pages[0] ?? await browser.newPage();
-  const extension = new EvidenceCaptureExtension(browser, page, { screenshotDir, timeout });
+  const extension = new EvidenceCaptureExtension(browser, page, { screenshotDir, timeout, captureTargetStyle });
 
   try {
     const runner = await createRunner(parsed, extension);
@@ -133,7 +170,13 @@ export async function captureFlow({
     return Object.freeze({
       status: 'valid',
       validation,
-      capture: buildCaptureEnvelope({ captureId, capturedAt, validation, actionEvidence: extension.actionEvidence }),
+      capture: buildCaptureEnvelope({
+        captureId,
+        capturedAt,
+        validation,
+        actionEvidence: extension.actionEvidence,
+        formatVersion: captureTargetStyle ? CAPTURE_FORMAT_VERSION_V2 : undefined,
+      }),
     });
   } catch (error) {
     return Object.freeze({ status: 'blocked', validation, capture: null, failure: Object.freeze({ reason_code: 'quality-replay-failed', error_name: error instanceof Error ? error.name : 'Error' }) });

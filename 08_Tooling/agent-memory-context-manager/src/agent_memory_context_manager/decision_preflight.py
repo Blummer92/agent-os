@@ -324,7 +324,9 @@ def _from_selection(
         knowledge_refs=selection.knowledge_refs,
         superseded_or_stale_count=superseded_or_stale_count,
         retrieval_escalation=selection.recommended_escalation,
-        verification_required=bool(selection.canonical_github_refs),
+        verification_required=any(
+            item.candidate.canonical_github_refs for item in selection.selected
+        ),
         source_authority="secondary-index",
         handoff_projection=projection,
         selection=selection,

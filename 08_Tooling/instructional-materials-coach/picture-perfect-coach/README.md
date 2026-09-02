@@ -22,6 +22,12 @@ Stage 5 performs deterministic local preflight and can generate a local implemen
 - TypeScript types here are bounded consumer projections, not new canonical schemas.
 - Prompt/image output is presentation guidance, never source instructional evidence.
 
+## Fidelity evaluation boundary (#1542)
+
+`fidelityEvaluation.ts` evaluates already-observed provider output without executing a provider and without rewriting canonical ImageIntent. It keeps independent outcomes for instructional-state fidelity, interface fidelity, artifact-state fidelity, explicit negative constraints, and execution completion. Provider/model identity and an optional prompt-strategy label are retained only as evaluation evidence.
+
+A visually polished or instructionally useful image cannot hide a stricter failure on another axis. Planning text, software coaching, SVG/ASCII/specification output, or other non-image mode collapse can fail `execution_completion` independently. Ambiguous visual evidence routes to manual review rather than guessed certainty, and every result permanently records that generated output is not source instructional evidence.
+
 ## F1 UI-claim boundary
 
 `uiEvidence.ts` derives UI claims only from approved Recorder evidence: accessible names and entered values. Semantic targets, titles, student-action text, branding, and tutorial names cannot manufacture UI evidence.
@@ -77,6 +83,24 @@ Invariant:
 ready_for_handoff != implementation_authorized != external_write_authorized
 ```
 
+## Authorized-overlay integrity (#1495)
+
+`overlayIntegrity.ts` is Gate C. Gate A asks whether the pixels match the plan and Gate B asks whether the provenance report can be believed; Gate C asks whether an element was allowed to be drawn at all:
+
+```text
+only the resolved plan authorizes PPUX-added pixels
+```
+
+A zero-overlay plan authorizes zero PPUX overlay pixels, and an artifact-only output gains no editor window, layer panel, toolbar, control, tutorial UI, or explanatory framing — the exact-composite plan has no record that authorizes application chrome, so it is unrepresentable rather than merely discouraged.
+
+Conversation history, tutorial-looking source state, application identity, procedure provenance, provider inference, and provider helpfulness are enumerated as authority claims only so a refusal can name which leakage class it rejected. None of them authorizes a pixel.
+
+The declared element inventory is evidence, never authority: it can only convict. A declared element with no plan record is unauthorized, a plan overlay with no declared element is an incomplete execution, and an executor's self-report — narrative, step trace, recovered spotlight estimate, or an acknowledgement that unrequested UI was added — is recorded verbatim and consulted for nothing.
+
+Overlay masks are fixed by the plan before execution. An element drawn wider than its plan record cannot widen its own footprint, a report cannot widen the overlay bleed after output, and a plan edited after output breaks the #1484 plan digest. Planned target geometry stays tied to admitted geometry: a spotlight boundary must be the admitted target rect and an arrow tip must land inside it, so a neighbouring control fails. Arrows, badges, icons, and editor chrome already present in admitted source evidence remain source pixels.
+
+There is no OCR, computer vision, model scoring, or editor-UI detection anywhere in this gate. #1484 exact-composite planning, execution, and validation are consumed unchanged; #1496 source admission, #1497 bounded fill, and #1501 procedure-grounded synthesis are not duplicated or widened.
+
 ## Commands
 
 ```bash
@@ -91,3 +115,5 @@ npm run test:e2e
 ```
 
 The package targets Node `>=22.12 <23`. Repository structural and aggregate validation are also required before Ready-for-Review.
+
+The governed developer-validation identity `ppux-picture-perfect-ts-vitest` (#1495) runs a fixed subset of this package's suite — `overlayIntegrity`, `exactComposite`, `exactCompositeSuite`, `framePlan`, `executorContract`, `provenanceValidator` — from repository-owned configuration only. It is documented in `08_Tooling/agent-os-execution-service/docs/HOST_RUNTIME_INSTALLATION.md`; it selects no argv, path, filter, or reporter, and it authorizes nothing.

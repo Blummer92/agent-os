@@ -163,6 +163,51 @@ def test_batch_continues_after_item_local_read_failure():
     assert batch.results[1].convergence_status == "dry-run"
 
 
+class FlakyOnceProvider(FakeProvider):
+    """Raises on a single named label's first add, then behaves normally.
+
+    Models a transient provider failure mid-mutation: the label is not
+    added on that call, but earlier labels in the same batch already
+    succeeded and must not be re-added on a later re-invocation.
+    """
+
+    def __init__(self, *args, fail_label, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fail_label = fail_label
+        self._has_failed = False
+
+    def add_label(self, repository, pr_number, label):
+        if label == self.fail_label and not self._has_failed:
+            self._has_failed = True
+            raise RuntimeError("transient add failure")
+        super().add_label(repository, pr_number, label)
+
+
+def test_second_invocation_after_partial_failure_converges_without_duplicate_adds():
+    # labels_to_add for this evidence, sorted: branch:current, pr:draft,
+    # review:clear, validation:pending. Failing on "pr:draft" guarantees
+    # "branch:current" is already added (and live) before the failure.
+    labels = ("pr:ready-for-review", "validation:failing", "branch:behind", "review:needs-attention", "human:keep")
+    provider = FlakyOnceProvider([snap(labels=labels)] * 6, fail_label="pr:draft")
+
+    first = reconcile_pull_request_labels(provider, "Blummer92/agent-os", 1023, dry_run=False,
+                                           label_write_authorized=True)
+    assert first.convergence_status == "partial-failure"
+    assert first.labels_added == ("branch:current",)
+    assert "branch:current" in provider.labels
+
+    second = reconcile_pull_request_labels(provider, "Blummer92/agent-os", 1023, dry_run=False,
+                                            label_write_authorized=True)
+    assert second.convergence_status == "converged"
+    # The label already applied by the first (partial) attempt must not be
+    # re-added: the retry boundary re-plans from live state instead of
+    # blindly repeating the prior batch.
+    assert "branch:current" not in second.labels_added
+    assert set(second.labels_added) == {"pr:draft", "review:clear", "validation:pending"}
+    assert provider.added.count("branch:current") == 1
+    assert "human:keep" in provider.labels
+
+
 def test_result_never_grants_lifecycle_merge_production_or_external_authority():
     provider = FakeProvider([snap()])
     result = reconcile_pull_request_labels(provider, "Blummer92/agent-os", 1023)

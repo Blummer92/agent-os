@@ -38,8 +38,25 @@ planning then packages that approved design through
 `assessment-blueprint-core-standard.md` without redefining its semantics.
 Lifecycle version transitions, change impact, stale validation, bounded
 invalidation, and revalidation scope then use
-`assessment-blueprint-lifecycle-standard.md`. All remain report-only and do not
-authorize grading, readiness, classroom use, production, or writes.
+`assessment-blueprint-lifecycle-standard.md`. A current validated blueprint then
+uses `assessment-sequencing-student-experience-standard.md` for section order,
+dependencies, student language, cognitive flow, accessibility, engagement, time,
+and teacher workload. QA then uses `assessment-qa-evidence-review-standard.md`
+to evaluate alignment, evidence, method/task quality, sequencing findings,
+accessibility, fairness, AI-policy alignment, workload, and instructional
+usefulness. Teacher workspace presentation then uses
+`assessment-dashboard-workspace-standard.md` for dashboard overview, focused
+section editing, contextual guided assistance, warning-to-repair behavior, and
+progressive disclosure while consuming lifecycle, sequencing, and QA evidence by
+reference. Synthetic Unit 0 integration validation then uses
+`unit0-assessment-reference-validation-standard.md` to verify that these contracts
+compose without turning fixture identities into canonical curriculum content.
+Cross-unit portability validation then uses
+`assessment-cross-unit-validation-standard.md` to verify that the same architecture
+generalizes across Photography, Typography, Graphic Design, Branding, Video
+Production, and AI Media without domain-name defaults or cross-domain rule leakage.
+All remain report/planning/test-only and do not authorize grading, readiness,
+classroom use, production, publication, or writes.
 
 ## Files
 
@@ -50,6 +67,11 @@ authorize grading, readiness, classroom use, production, or writes.
 - `assessment-design-standard.md` — target → claim → evidence → method contract and survey/mastery boundary
 - `assessment-blueprint-core-standard.md` — #837-preserving blueprint schema and fail-closed core validation
 - `assessment-blueprint-lifecycle-standard.md` — #1192 lifecycle, stale-state, change-impact, bounded-invalidation, and revalidation contract
+- `assessment-sequencing-student-experience-standard.md` — #839 section sequencing, dependencies, student language, cognitive flow, accessibility, engagement, time, and workload contract
+- `assessment-qa-evidence-review-standard.md` — #841 QA categories, evidence validity, fairness/accessibility review, finite dispositions, and non-authorizing QA report contract
+- `assessment-dashboard-workspace-standard.md` — #843 dashboard-first workspace, focused section editor, contextual guidance, warning-to-repair, progressive-disclosure, and planning-only status contract
+- `unit0-assessment-reference-validation-standard.md` — #842 synthetic/noncanonical Unit 0 integration and regression contract over the existing assessment stack
+- `assessment-cross-unit-validation-standard.md` — #846 synthetic cross-unit portability/regression contract that rejects domain-name defaults and cross-domain assessment-rule leakage
 - `student-language-standard.md` — reusable student-facing language artifacts
 - `learning-science-rules.md` — classroom design rules for materials
 - `production-gates-and-compute.md` — hard-stop gates and efficiency rules
@@ -66,4 +88,4 @@ fields, standards, and output keys.
 
 ## Version
 
-0.12.0
+0.17.0

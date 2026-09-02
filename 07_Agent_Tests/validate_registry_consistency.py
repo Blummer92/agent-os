@@ -4,11 +4,18 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 
 RETIRED_TECHNICAL_AGENTS = {
     "Integration Manager",
     "Google Workspace Automation Engineer",
+}
+
+RETIRED_OWNER_SLUGS = {
+    "integration-manager",
+    "google-workspace-automation-engineer",
 }
 
 HELPER_OVERLAYS = {
@@ -327,8 +334,146 @@ def validate(root: Path = ROOT) -> list[str]:
     return sorted(set(errors))
 
 
+# --- Semantic ownership advisory (#1511) -----------------------------------
+#
+# Advisory (non-blocking) only. Detects stale-retired-owner and
+# unknown-canonical-owner assertions in the three bounded in-scope surfaces
+# below. Never reassigns an ownership value. Never reads
+# `04_Registry/reusable-capabilities.yml` — that file's owner values are
+# already validated by
+# `08_Tooling/reusable-capability-registry/src/reusable_capability_registry/validation.py`
+# and this validator must defer to that logic entirely.
+
+_NAV_OWNER_MARKERS = ("Owner agent:", "Owned by the", "governance is owned by the")
+_REVIEW_OWNER_ROW_RE = re.compile(r"^\|\s*Review owner\s*\|\s*([^|]+?)\s*\|")
+_LP_STANDARD_OWNER_RE = re.compile(r"^\s*([A-Z][\w/ ]*?)\s+(?:for|owns)\b")
+
+
+def _semantic_owner_agents(root: Path) -> tuple[set[str], set[str]]:
+    registry = root / "04_Registry/agent-inheritance-registry.md"
+    if not registry.is_file():
+        return set(), set()
+    rows = table_rows(registry.read_text(encoding="utf-8"), ("Agent", "Inherits", "Overlay"), "## Technical Execution Architecture")
+    agents: set[str] = set()
+    slugs: set[str] = set()
+    for row in rows:
+        if len(row) != 3 or not all(row):
+            continue
+        agent, _, overlay = row
+        agents.add(agent)
+        slugs.add(overlay.strip("`"))
+    return agents, slugs
+
+
+def _classify_unknown(value: str, known: set[str], retired: set[str]) -> str | None:
+    value = value.strip()
+    if not value or value in known:
+        return None
+    if value in retired:
+        return "stale retired owner"
+    return "unknown canonical owner"
+
+
+def _is_archived(path: Path, root: Path) -> bool:
+    return "06_Archive" in path.relative_to(root).parts
+
+
+def _navigation_ownership_findings(root: Path, agents: set[str], errors: list[str]) -> None:
+    nav_root = root / "04_Registry/navigation"
+    if not nav_root.is_dir():
+        return
+    for path in sorted(nav_root.rglob("*.md")):
+        if _is_archived(path, root):
+            continue
+        rel = path.relative_to(root).as_posix()
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            value: str | None = None
+            for marker in _NAV_OWNER_MARKERS:
+                idx = line.find(marker)
+                if idx != -1:
+                    value = line[idx + len(marker):].strip().rstrip(".").strip()
+                    break
+            if value is None:
+                match = _REVIEW_OWNER_ROW_RE.match(line.strip())
+                if match:
+                    value = match.group(1).strip()
+            if not value:
+                continue
+            kind = _classify_unknown(value, agents, RETIRED_TECHNICAL_AGENTS)
+            if kind:
+                errors.append(f"Semantic ownership advisory ({kind}): {rel}:{lineno} -> {value}")
+
+
+def _catalog_ownership_findings(root: Path, agents: set[str], slugs: set[str], errors: list[str]) -> None:
+    path = root / "04_Registry/lp-reason-code-catalog.yaml"
+    if not path.is_file():
+        return
+    rel = path.relative_to(root).as_posix()
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        errors.append(f"Semantic ownership advisory (unreadable catalog): {rel} -> {exc}")
+        return
+    if not isinstance(data, dict):
+        return
+    for owner in data.get("semantic_owners") or []:
+        if not isinstance(owner, dict):
+            continue
+        role = str(owner.get("role") or "").strip()
+        kind = _classify_unknown(role, agents, RETIRED_TECHNICAL_AGENTS)
+        if kind:
+            errors.append(f"Semantic ownership advisory ({kind}): {rel} semantic_owners[].role -> {role}")
+    for family in data.get("families") or []:
+        if not isinstance(family, dict):
+            continue
+        owner_slug = str(family.get("semantic_owner") or "").strip()
+        family_id = family.get("id", "?")
+        kind = _classify_unknown(owner_slug, slugs, RETIRED_OWNER_SLUGS)
+        if kind:
+            errors.append(f"Semantic ownership advisory ({kind}): {rel} families[{family_id}].semantic_owner -> {owner_slug}")
+
+
+def _lp_standard_ownership_findings(root: Path, agents: set[str], errors: list[str]) -> None:
+    path = root / "01_Shared_Standards/instructional-design/lp-reason-code-catalog.md"
+    if not path.is_file():
+        return
+    rel = path.relative_to(root).as_posix()
+    section = section_text(path.read_text(encoding="utf-8"), "ownership-single-semantic-owner")
+    if not section:
+        return
+    for clause in re.split(r"[;.]\s+", section):
+        match = _LP_STANDARD_OWNER_RE.match(clause)
+        if not match:
+            continue
+        value = match.group(1).strip()
+        kind = _classify_unknown(value, agents, RETIRED_TECHNICAL_AGENTS)
+        if kind:
+            errors.append(f"Semantic ownership advisory ({kind}): {rel} ownership-single-semantic-owner -> {value}")
+
+
+def validate_semantic_ownership(root: Path = ROOT) -> list[str]:
+    """Advisory-only scan for stale or unknown semantic-ownership assertions.
+
+    Non-blocking (#1511): findings are informational only and never fail a
+    caller. Detection only; no ownership value is ever modified here.
+    """
+    errors: list[str] = []
+    agents, slugs = _semantic_owner_agents(root)
+    if not agents:
+        return errors
+    _navigation_ownership_findings(root, agents, errors)
+    _catalog_ownership_findings(root, agents, slugs, errors)
+    _lp_standard_ownership_findings(root, agents, errors)
+    return sorted(set(errors))
+
+
 def main() -> int:
     errors = validate()
+    advisory = validate_semantic_ownership()
+    if advisory:
+        print("ADVISORY - Semantic ownership assertions to review (non-blocking; see #1511):")
+        for finding in advisory:
+            print(finding)
     if errors:
         for error in errors:
             print(f"FAIL - {error}")

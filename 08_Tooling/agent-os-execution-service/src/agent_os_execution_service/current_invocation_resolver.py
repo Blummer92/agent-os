@@ -3,7 +3,10 @@
 This module joins existing canonical readers/builders around the small
 checkpoint-owned GovernedInvocationDescriptor. AOS-EXECSIMPL1 (#1338) keeps
 that descriptor as a compatibility mirror while also persisting the canonical
-RuntimeExecutionRequest through the same publication seam. It performs no
+RuntimeExecutionRequest through the same publication seam. AOS-NCCE5 (#1487)
+adds one already-produced canonical #1419 compute-control projection to that
+immutable request; this module transports the supplied projection and never
+derives compute-control semantics itself. It performs no
 GitHub/network/process/Scheduler/lease mutation itself.
 
 Execution authorization is reacquired through #1226's read-only source
@@ -28,6 +31,9 @@ from scripts.agent_os_execution_checkpoint.invocation_descriptor import (
 )
 from scripts.agent_os_execution_checkpoint.models import ExecutionCheckpoint
 from scripts.agent_os_execution_checkpoint.resume_planner import ResumePlan
+from scripts.agent_os_issue_acceptance.compute_control_projection import (
+    ComputeControlProjection,
+)
 from workflow_scheduler.execution.runtime_configuration import ConcreteRuntimeConfiguration
 from workflow_scheduler.execution.single_issue_pilot import (
     SingleIssuePilotInput,
@@ -320,11 +326,18 @@ def persist_current_invocation_descriptor(
     runtime_configuration: ConcreteRuntimeConfiguration,
     dependency_readiness: DependencyReadinessEvidence,
     pilot_input: SingleIssuePilotInput,
+    compute_control_projection: ComputeControlProjection,
 ) -> AppendInvocationDescriptorOutcome:
-    """Persist the canonical runtime request before its legacy descriptor marker.
+    """Persist the current runtime request before its legacy descriptor marker.
+
+    The caller must supply the already-produced canonical #1419 compute-control
+    projection for the same repository, issue, and source head. This seam only
+    transports that immutable projection into RuntimeExecutionRequest 1.1; the
+    request constructor owns exact identity binding and this module does not
+    derive, reinterpret, or upgrade the compute disposition.
 
     The legacy descriptor remains the compatibility publication marker during
-    the additive #1338 migration. The canonical RuntimeExecutionRequest is
+    the additive #1338/#1487 migration. The canonical RuntimeExecutionRequest is
     persisted first so a discoverable new descriptor never lacks its canonical
     request. Both records are non-authorizing and no old record is deleted.
     """
@@ -353,6 +366,7 @@ def persist_current_invocation_descriptor(
         handoff=handoff,
         invocation_descriptor=descriptor,
         restart_capsule=restart_capsule,
+        compute_control_projection=compute_control_projection,
     )
     append_runtime_execution_request(store_root, request)
     return append_invocation_descriptor(store_root, descriptor)

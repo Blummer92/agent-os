@@ -17,6 +17,12 @@ export const VISUAL_REFERENCE_BLOCKER_REASONS = {
   referenceMissing: 'visual-reference-missing',
   claimsNotCoVisible: 'visual-reference-claims-not-co-visible',
   currentRecordedUiConflict: 'visual-reference-current-recorded-ui-conflict',
+  regionIdentityMismatch: 'visual-reference-region-identity-mismatch',
+  regionOutOfBounds: 'visual-reference-region-out-of-bounds',
+  regionDegenerate: 'visual-reference-region-degenerate',
+  regionDuplicateId: 'visual-reference-region-duplicate-id',
+  regionClaimNotVisible: 'visual-reference-region-claim-not-visible',
+  fillRegionOverlapsAnchor: 'visual-reference-fill-region-overlaps-anchor',
 } as const;
 
 export type VisualReferenceBlockerReason =
@@ -29,6 +35,10 @@ export type VisualReferenceSource = Readonly<{
   source_kind: 'teacher-supplied-screenshot' | 'approved-capture' | 'synthetic-test-fixture';
   captured_at: string;
   provenance: readonly string[];
+}>;
+
+export type VisualReferenceArtifactManifestEvidence = Omit<ArtifactManifestAssetEvidence, 'contract_version'> & Readonly<{
+  contract_version: 'curriculum-artifact-manifest-v1' | 'curriculum-artifact-manifest-v2';
 }>;
 
 export type VisualReferenceCandidate = Readonly<{
@@ -45,7 +55,7 @@ export type VisualReferenceCandidate = Readonly<{
   visible_ui_claims: readonly string[];
   manifest_reference: ManifestReference;
   asset_reference: AssetReference;
-  artifact_manifest: ArtifactManifestAssetEvidence;
+  artifact_manifest: VisualReferenceArtifactManifestEvidence;
   compatibility: VisualAssetCompatibilityEvidence;
 }>;
 
@@ -89,6 +99,7 @@ export type VisualReferenceSelectionResult = Readonly<{
 }>;
 
 const CLEARED_RIGHTS = new Set(['cleared-internal', 'licensed', 'public-domain', 'permission-documented']);
+const SUPPORTED_MANIFEST_VERSIONS = new Set(['curriculum-artifact-manifest-v1', 'curriculum-artifact-manifest-v2']);
 
 function uniqueSorted(values: readonly string[]): string[] {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))].sort((left, right) => left.localeCompare(right));
@@ -120,7 +131,7 @@ function eligibilityReasons(candidate: VisualReferenceCandidate): VisualReferenc
   }
 
   if (
-    candidate.artifact_manifest.contract_version !== 'curriculum-artifact-manifest-v1' ||
+    !SUPPORTED_MANIFEST_VERSIONS.has(candidate.artifact_manifest.contract_version) ||
     candidate.artifact_manifest.external_identity.access_state !== 'verified' ||
     candidate.artifact_manifest.statuses.classroom_readiness !== 'ready' ||
     !CLEARED_RIGHTS.has(asset.rights_classification) ||
@@ -268,4 +279,125 @@ export function buildVisualReferenceDirective(reference: ApprovedVisualReference
     'Preserve the supplied interface appearance and state.',
     'Do not redraw, reconstruct, invent, or merge controls, labels, geometry, or states from another reference.',
   ].join(' ');
+}
+
+/**
+ * One bounded flat addressable region on an approved reference's sanitized
+ * derivative (#1485). `rect` is `[x, y, width, height]` -- the ordering the
+ * repository already uses for `TargetGeometry` and
+ * `TargetStyleEvidence.rect_normalized` (in `./captureEvidence`), so #1485
+ * introduces no second rectangle convention. Only the coordinate space differs:
+ * these values are normalized (`[0,1]` on every axis) to the sanitized
+ * derivative's own pixel box, never the capture/viewport space that capture
+ * evidence occupies, and nothing converts one space into the other. Because the
+ * two spaces are therefore indistinguishable by rect shape alone, the enforced
+ * guarantee is identity binding, not ordering. No region roles, nesting,
+ * parent/child tree, policy enum beyond `fill_allowed`, icon taxonomy,
+ * typography taxonomy, or fidelity enum: this is intentionally the smallest
+ * additive model.
+ */
+export type ReferenceRegion = Readonly<{
+  region_id: string;
+  claim: string | null;
+  rect: readonly [number, number, number, number];
+  fill_allowed: boolean;
+}>;
+
+/**
+ * A region set is bound to one exact reference identity and content
+ * fingerprint. Admission fails closed on any mismatch so a recaptured
+ * derivative (whose `asset_reference.content_fingerprint` changes) can never
+ * silently inherit stale region geometry.
+ */
+export type ReferenceRegionSet = Readonly<{
+  reference_id: string;
+  content_fingerprint: string;
+  regions: readonly ReferenceRegion[];
+}>;
+
+export type ReferenceRegionAdmissionResult = Readonly<{
+  status: CaptureStatus;
+  regions: readonly ReferenceRegion[] | null;
+  blocker_reasons: readonly VisualReferenceBlockerReason[];
+}>;
+
+function isOutOfBoundsRect(rect: readonly [number, number, number, number]): boolean {
+  const [x, y, width, height] = rect;
+  if (!rect.every((value) => Number.isFinite(value))) return true;
+  if (x < 0 || x > 1 || y < 0 || y > 1) return true;
+  if (width > 1 || height > 1) return true;
+  return x + width > 1 || y + height > 1;
+}
+
+function isDegenerateRect(rect: readonly [number, number, number, number]): boolean {
+  const [, , width, height] = rect;
+  return !(width > 0) || !(height > 0);
+}
+
+function rectsIntersect(
+  a: readonly [number, number, number, number],
+  b: readonly [number, number, number, number],
+): boolean {
+  const [ax, ay, aw, ah] = a;
+  const [bx, by, bw, bh] = b;
+  return ax < bx + bw && bx < ax + aw && ay < by + bh && by < ay + ah;
+}
+
+/**
+ * Admit one set of flat addressable regions against one exact approved
+ * reference. Fails closed unless every rect is in-bounds and non-degenerate,
+ * `region_id` values are unique, every non-null `claim` is present in that
+ * exact reference's `visible_ui_claims`, no `fill_allowed:true` rect
+ * intersects a `fill_allowed:false` rect, and the region set's identity/content
+ * fingerprint matches the reference exactly. Anchored (`fill_allowed:false`)
+ * regions may overlap other anchored regions; separate non-overlapping fill
+ * regions may coexist.
+ */
+export function admitReferenceRegions(
+  reference: ApprovedVisualReference,
+  regionSet: ReferenceRegionSet,
+): ReferenceRegionAdmissionResult {
+  if (
+    regionSet.reference_id !== reference.reference_id ||
+    regionSet.content_fingerprint !== reference.asset_reference.content_fingerprint
+  ) {
+    return {
+      status: 'blocked',
+      regions: null,
+      blocker_reasons: [VISUAL_REFERENCE_BLOCKER_REASONS.regionIdentityMismatch],
+    };
+  }
+
+  const reasons = new Set<VisualReferenceBlockerReason>();
+  const seenIds = new Set<string>();
+  for (const region of regionSet.regions) {
+    if (seenIds.has(region.region_id)) reasons.add(VISUAL_REFERENCE_BLOCKER_REASONS.regionDuplicateId);
+    seenIds.add(region.region_id);
+
+    if (isOutOfBoundsRect(region.rect)) {
+      reasons.add(VISUAL_REFERENCE_BLOCKER_REASONS.regionOutOfBounds);
+    } else if (isDegenerateRect(region.rect)) {
+      reasons.add(VISUAL_REFERENCE_BLOCKER_REASONS.regionDegenerate);
+    }
+
+    if (region.claim !== null && !reference.visible_ui_claims.includes(region.claim)) {
+      reasons.add(VISUAL_REFERENCE_BLOCKER_REASONS.regionClaimNotVisible);
+    }
+  }
+
+  const fillRegions = regionSet.regions.filter((region) => region.fill_allowed);
+  const anchorRegions = regionSet.regions.filter((region) => !region.fill_allowed);
+  for (const fill of fillRegions) {
+    for (const anchor of anchorRegions) {
+      if (rectsIntersect(fill.rect, anchor.rect)) {
+        reasons.add(VISUAL_REFERENCE_BLOCKER_REASONS.fillRegionOverlapsAnchor);
+      }
+    }
+  }
+
+  if (reasons.size > 0) {
+    return { status: 'blocked', regions: null, blocker_reasons: [...reasons] };
+  }
+
+  return { status: 'valid', regions: regionSet.regions, blocker_reasons: [] };
 }

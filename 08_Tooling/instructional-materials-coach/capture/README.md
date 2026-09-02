@@ -46,6 +46,12 @@ The capture extension records bounded selector/geometry evidence and viewport sc
 
 No real unsanitized screenshot or Recorder capture belongs in Git. Repository fixtures must remain synthetic or sanitized and human-reviewed.
 
+### Capture format v2 / optional target-style evidence (#1485)
+
+`captureFlow({ ..., captureTargetStyle: true })` opts into `software-tutorial-capture-v2`, which adds one optional bounded `target_style` snapshot per resolved action from a frozen `getComputedStyle` property allowlist on the already-resolved target handle only (no DOM traversal). Colors persist as canonical RGBA; `background_image` retains bounded CSS gradients and blocks `url(...)`/`blob:`/`data:` resource identity. Style resolution failure leaves `target_style: null` rather than blocking or fabricating a value, since Replay stays authoritative for execution regardless.
+
+`captureTargetStyle` defaults to `false`, which keeps `format_version: software-tutorial-capture-v1` and its existing shape byte-identical. Adding `target_style` never changes `fingerprintAction()` output or recording identity.
+
 ## Local checks
 
 ```bash

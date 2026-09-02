@@ -2,7 +2,15 @@ name: Navigation Registry Offline Tests
 
 on:
   pull_request:
-  push:
+    paths:
+      - "04_Registry/navigation-alias-registry.md"
+      - "08_Tooling/notion-navigation-client/**"
+      - "tests/navigation_registry/**"
+      - ".github/workflows/navigation-registry-offline-tests.yml"
+
+concurrency:
+  group: navigation-registry-offline-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.run_attempt == 1 }}
 
 jobs:
   offline-notion-connector-tests:

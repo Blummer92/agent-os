@@ -11,6 +11,7 @@ See `_common-overlay-rules.md` plus:
 - `04_Registry/legacy-agent-alias-registry.md`
 - `04_Registry/responsibility-matrix.md`
 - `01_Shared_Standards/github/safe-implementation-lane.md`
+- `01_Shared_Standards/github/tool-discovery-continuation.md`
 - `01_Shared_Standards/global-engineering/agent-interaction-output-standard.md`
 - `01_Shared_Standards/instructional-design/artifact-first-response-standard.md`
 - `01_Shared_Standards/instructional-design/teacher-decision-studio-standard.md`
@@ -47,6 +48,7 @@ Consume the canonical #924 `request-interpretation-v1` record; do not parse raw 
 - For a direct repository-owner Safe Implementation Lane request, make one consolidated activation decision from freshly fetched issue eligibility/readiness, the validated canonical request interpretation, excluded surfaces, and existing lineage. Durable `execution_authorized=false` evidence means the issue or packet does not self-authorize; it does not erase a later fresh direct-owner instruction recognized by the Safe Implementation Lane.
 - If an otherwise eligible Tier 0/1 issue is missing only the mechanical `status:ready` prerequisite, surface that readiness intervention at most once. After the authorized mutation converges to `status:ready`, carry the same still-current direct instruction forward and continue internally; do not require another `authorized`, `continue`, or `work on` prompt. Never carry it across blocked/needs-decision state, stale/conflicting scope or ownership, excluded surfaces, or active/ambiguous execution.
 - For eligible, already-authorized Safe Implementation Lane work, route owner transitions internally and continue the same interaction through bounded implementation, QA support, in-scope repair, validation, Draft PR work, and Ready-for-Review while current authorization remains applicable.
+- Successful tool/schema/capability discovery during an unfinished authorized mission is intermediate evidence under `01_Shared_Standards/github/tool-discovery-continuation.md`; continue to the next admitted operation in the same lineage, consume #1237 reroute semantics when capability is insufficient, or return an explicit terminal blocker. Never silently stop merely because discovery succeeded.
 - Terminal Fast Lane consumes only the canonical structured constraint `operating-mode=release` described by `chatgpt-orchestrator-request-interpretation.md`; route that requested ceiling to the existing `operating_mode.py` evaluator after current eligibility/evidence reacquisition. Do not parse the raw phrase here. A missing constraint leaves ordinary Safe Implementation Lane behavior unchanged; `continue`, `next step`, and `keep going` never imply merge or closure authority.
 - For an explicitly bounded finite multi-item mission, preserve the supplied item order and maintain a mission cursor until every requested item has a terminal mission state. An item-local blocker does not stop independently actionable later items. Stop remaining items only for a shared authorization, source-of-truth, bounded-scope, excluded-surface, or material-decision blocker, and classify each stopped item explicitly.
 - Final finite-mission reconciliation must account for every requested identity exactly once as `completed`, `blocked-item-local`, `blocked-shared`, `deferred-by-explicit-policy`, or `not-applicable-after-reconciliation`. `untouched` is intermediate only and must be zero before reporting the bounded mission complete. Do not silently substitute, omit, or duplicate requested identities.
@@ -74,7 +76,7 @@ The canonical executable contract is `08_Tooling/agent-memory-context-manager/CK
 Before routing bounded coding work to the GitHub Service Agent or QA / Test Agent, derive the smallest current `CodingKnowledgeRequest` from the task, issue, target paths, capability signals, and canonical GitHub references, then use the existing Agent Memory & Context Manager CKR6 lesson-preflight contract.
 
 - Call `plan_lesson_preflight(...)` first. If it returns `retrieval_required=false`, perform zero Lessons Learned lookup and continue from canonical GitHub authority.
-- If retrieval is required, use only the approved bounded read-only Lessons Learned path and normalize no more than the CKR6 candidate budget into `LessonRecordEvidence`; do not preload the database or use workspace search as the ordinary path.
+- If retrieval is required, use the existing `agent_memory_context_manager.orchestrate_lesson_activation(...)` bridge (#1516 / CKR11) with an injected read-only Notion executor; it builds the bounded known-reference or filtered query, normalizes no more than the CKR6 candidate budget into `LessonRecordEvidence` through a finite deterministic vocabulary, and fails a row closed as non-ready rather than inventing missing activation metadata. Do not preload the database, use workspace search as the ordinary path, or build a second read/normalization mechanism.
 - Pass normalized lesson evidence to `consume_lesson_preflight(...)`, which delegates selection, deduplication, currentness, canonical-reference requirements, and sufficiency to the existing #1144 CKR2 selector.
 - Put only the returned existing handoff projection into the governed context packet. Do not create a second packet or copy raw Notion page payloads downstream.
 - Treat every selected lesson as `advisory-only`. `Needs follow-up` is a caution, not an enforced repository rule. Current GitHub code, tests, standards, issue contracts, authorization, and exact-head validation always outrank lesson prose.
@@ -82,7 +84,7 @@ Before routing bounded coding work to the GitHub Service Agent or QA / Test Agen
 - If Lessons Learned retrieval is unavailable and specialized knowledge is not required, continue with the CKR6 `unavailable-safe-fallback` using GitHub-only authority when safe. If specialized knowledge is required, preserve the explicit insufficiency/manual-review stop; never invent replacement guidance.
 - GitHub Service Agent and QA / Test Agent consume the selected lesson projection as preflight context only. QA still requires independent validation evidence; GitHub Service Agent still requires current repository authorization.
 
-The canonical executable contract is `08_Tooling/agent-memory-context-manager/CKR6_LESSON_PREFLIGHT.md` and `agent_memory_context_manager.plan_lesson_preflight` / `consume_lesson_preflight`. This overlay adds no Notion write authority, new agent, RAG system, vector store, selector, memory engine, scheduler, or background worker.
+The canonical executable contract is `08_Tooling/agent-memory-context-manager/CKR6_LESSON_PREFLIGHT.md` and `agent_memory_context_manager.plan_lesson_preflight` / `consume_lesson_preflight` / `orchestrate_lesson_activation`. This overlay adds no Notion write authority, new agent, RAG system, vector store, selector, memory engine, scheduler, or background worker.
 
 ## Picture Perfect / PPUX Routing
 This section owns only the bounded route for requests that canonical request/context evidence resolves to an existing Picture Perfect / PPUX tutorial prompt artifact. It does not create a second request interpreter, phrase matcher, image-intent framework, tutorial model, or execution path.
@@ -127,14 +129,17 @@ Classroom-material responses follow `artifact-first-response-standard.md`: lead 
 
 ## Stop Conditions
 Stop when the target, source of truth, permission, owner, or requested write surface is unclear, or when current Safe Implementation Lane authorization no longer covers the next action.
-Stop when a user asks for a nonexistent agent that does not resolve through `04_Registry/legacy-agent-alias-registry.md`.
-For finite multi-item missions, an item-local blocker is not a mission-level stop; record it and continue. A shared stop condition classifies all remaining requested items explicitly before handoff.
-Request-interpretation continuation stops follow `chatgpt-orchestrator-request-interpretation.md`; conversation memory never resolves missing, stale, or multiple-candidate canonical context.
+Stop when canonical request interpretation is invalid, stale, target-mismatched, or materially ambiguous, or when a material schema/architecture/ownership decision is required.
+Do not stop merely because an internal owner changes while the next action remains authorized and bounded.
+Do not stop merely because tool/schema/capability discovery succeeded while the authorized mission remains unfinished; apply `01_Shared_Standards/github/tool-discovery-continuation.md`.
+
 ## Version
-0.3.2
-Compatibility lineage: 0.3.1
+0.3.4
+Compatibility lineage: 0.3.3, 0.3.2, 0.3.1
 
 ## Changelog
+- 0.3.4 wires the bounded #1608 tool/schema discovery continuation contract into runtime routing and stop conditions: successful discovery during an unfinished authorized mission is intermediate evidence, not a stop condition, per `01_Shared_Standards/github/tool-discovery-continuation.md`, reusing existing #1237 reroute, #1524 terminal reconciliation, and #1200 no-progress ownership with no new agent, overlay, framework, or scheduler.
+- 0.3.3 points the CKR6 Lessons Learned preflight route at the now-instantiated live activation bridge, `agent_memory_context_manager.orchestrate_lesson_activation(...)` (#1516 / CKR11): bounded known-reference-first or filtered live Notion retrieval, deterministic finite-vocabulary row normalization with explicit fail-closed non-ready outcomes, and unchanged reuse of the #1144 CKR2 selector and the #1520 shared candidate-owned provenance invariant with no Lessons-specific duplicate guard.
 - 0.3.2 wires the bounded CKR10 Decision/ADR preflight into coding-task routing as a completion repair for #1369: Decision-sensitive classification before substantial reasoning, zero-read `not-needed`, exact-reference-first bounded lookup, #1144 selector reuse, existing Memory Manager projection, GitHub-over-Notion authority, nonrecursive coexistence with Lessons/Patterns, and safe outage behavior.
 - 0.3.1 wires the bounded CKR6 Lessons Learned preflight into coding-task routing: zero-read `not-needed`, bounded read-only lesson normalization, #1144 selector reuse, existing Memory Manager handoff projection, GitHub-over-Notion authority, safe outage behavior, and no new agent/retrieval/persistence system (#1357).
 - 0.3.0 includes the bounded Picture Perfect / PPUX tutorial prompt-artifact route through the existing Instructional Materials Coach capability, preserving current PPUX state including blockers/capture evidence and forbidding generic software-UI reconstruction fallback (#1280), while retaining the Terminal Fast Lane composition through canonical #924 request interpretation and existing release-authority gates (#1309).
@@ -150,3 +155,15 @@ Compatibility lineage: 0.3.1
 - 0.1.2 added legacy agent alias resolution before nonexistent-agent stop.
 - 0.1.1 clarified Notion, Drive, and GitHub destination routing.
 - 0.1.0 initial ChatGPT bridge overlay.
+
+## Terminal Fast Lane
+Terminal Fast Lane is the explicit release-mode extension of an otherwise eligible Safe Implementation Lane issue. The ChatGPT Orchestrator does not parse raw wording for this authority; it consumes canonical `request-interpretation-v1` evidence with `operating-mode=release` and routes that ceiling to `operating_mode.py`.
+
+Before terminal progression, reacquire current issue/PR/head/check/review evidence and require all of the following to remain true: Tier 0/1, `status:ready`, `no-external-write`, resolved ownership, no material architecture/schema/ownership decision, one valid same-lineage PR, exact-head validation success, no unresolved blocking review conversation, and current structured release-mode evidence bound to the same issue.
+
+Terminal Fast Lane may authorize only the merge and issue closure of that exact eligible issue/PR lineage. It does not authorize workflow/protected-setting changes, credentials/IAM, production, external writes, unrelated issues/PRs, or any other excluded surface. If any prerequisite is stale, conflicting, blocked, or mismatched, fail closed and return to ordinary Safe Lane or the controlling decision path.
+
+After an authorized merge, verify the server-side merge result, verify the issue's terminal state, and reconcile the requested mission before reporting completion. Merge success alone is not terminal if closure or reconciliation remains unresolved.
+
+## Response Shape
+Use the selected presentation profile from `01_Shared_Standards/global-engineering/agent-interaction-output-standard.md` and keep the Base Report Contract recoverable without dumping routing internals by default.
