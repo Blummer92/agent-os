@@ -13,6 +13,9 @@ from workflow_scheduler.models import Task
 GITHUB_API_BASE = "https://api.github.com"
 _TRANSIENT_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
 
+_VALID_PR_LIST_STATES = {"open", "closed", "all"}
+_MAX_RECENT_PRS_LIMIT = 100
+
 
 class GitHubReadOnlyAdapterError(Exception):
     def __init__(self, message: str, is_transient: bool = False):
@@ -92,7 +95,15 @@ class GitHubReadOnlyAdapter(TaskAdapter):
     def _action_list_recent_prs(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         full_name = self._require(payload, "repository_full_name")
         state = payload.get("state", "all")
+        if not isinstance(state, str) or state not in _VALID_PR_LIST_STATES:
+            raise GitHubReadOnlyAdapterError(
+                f"'state' must be one of {sorted(_VALID_PR_LIST_STATES)}, got {state!r}"
+            )
         limit = payload.get("limit", 10)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not (1 <= limit <= _MAX_RECENT_PRS_LIMIT):
+            raise GitHubReadOnlyAdapterError(
+                f"'limit' must be an integer between 1 and {_MAX_RECENT_PRS_LIMIT}, got {limit!r}"
+            )
         data = self._get(f"/repos/{full_name}/pulls?state={state}&sort=created&direction=desc&per_page={limit}")
         return {"pull_requests": [{"number": pr.get("number"), "title": pr.get("title"), "state": pr.get("state")} for pr in data if isinstance(pr, dict)]}
 
