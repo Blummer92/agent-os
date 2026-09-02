@@ -12,6 +12,7 @@ must not be expanded.
 from __future__ import annotations
 
 import json
+import math
 import os
 import urllib.error
 import urllib.parse
@@ -52,6 +53,8 @@ def _retry_after_seconds(headers: Any) -> Optional[float]:
     try:
         parsed = float(value)
     except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
         return None
     return parsed if parsed >= 0 else None
 
