@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from scripts.agent_os_issue_acceptance.evidence_compatibility import (
     CompatibilityEvidenceRecord,
     CompatibilityOutcome,
@@ -26,9 +24,7 @@ from scripts.agent_os_issue_acceptance.issue_operational_state import (
 from scripts.agent_os_issue_acceptance.lifecycle_reconciliation import (
     LifecycleReconciliationInput,
     ReconciliationOutcome,
-)
-from scripts.agent_os_issue_acceptance.ready_for_review_compatibility import (
-    reconcile_ready_for_review,
+    reconcile_lifecycle,
 )
 
 SOURCE = "a" * 40
@@ -120,23 +116,18 @@ def test_decision_retains_current_expected_bindings_for_consumer_diagnostics() -
     assert decision.side_effects_performed is False
 
 
-def test_ready_for_review_consumer_rejects_old_review_before_reconciliation() -> None:
-    decision = evaluate_ready_for_review_compatibility(
+def test_ready_for_review_invariants_use_canonical_compatibility_and_reconciliation() -> None:
+    stale = evaluate_ready_for_review_compatibility(
         expected=_expected(),
         records=(
             _record("validation:current", "validation", head_sha="b" * 40),
             _record("review:old", "review", head_sha="c" * 40),
         ),
     )
-    assert decision.outcome is CompatibilityOutcome.REACQUIRE_REQUIRED
-    with pytest.raises(RuntimeError, match="reacquire=review"):
-        reconcile_ready_for_review(
-            _reconciliation_input(), compatibility_decision=decision
-        )
+    assert stale.outcome is CompatibilityOutcome.REACQUIRE_REQUIRED
+    assert stale.reacquire_owners == ("review",)
 
-
-def test_ready_for_review_consumer_rejects_authorization_drift() -> None:
-    decision = evaluate_ready_for_review_compatibility(
+    authorization_drift = evaluate_ready_for_review_compatibility(
         expected=_expected(),
         records=(
             _record(
@@ -146,15 +137,9 @@ def test_ready_for_review_consumer_rejects_authorization_drift() -> None:
             ),
         ),
     )
-    assert decision.outcome is CompatibilityOutcome.NEEDS_DECISION
-    with pytest.raises(RuntimeError, match="needs-decision"):
-        reconcile_ready_for_review(
-            _reconciliation_input(), compatibility_decision=decision
-        )
+    assert authorization_drift.outcome is CompatibilityOutcome.NEEDS_DECISION
 
-
-def test_compatible_ready_for_review_decision_reuses_existing_reconciliation() -> None:
-    decision = evaluate_ready_for_review_compatibility(
+    current = evaluate_ready_for_review_compatibility(
         expected=_expected(),
         records=(
             _record(
@@ -166,9 +151,8 @@ def test_compatible_ready_for_review_decision_reuses_existing_reconciliation() -
             ),
         ),
     )
-    result = reconcile_ready_for_review(
-        _reconciliation_input(), compatibility_decision=decision
-    )
+    assert current.outcome is CompatibilityOutcome.COMPATIBLE
+    result = reconcile_lifecycle(_reconciliation_input())
     assert result.outcome is ReconciliationOutcome.CONSISTENT
     assert result.merge_authorization is AuthorizationState.NOT_AUTHORIZED
     assert result.side_effects_performed is False
