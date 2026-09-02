@@ -40,6 +40,7 @@ result shape changed.
 from __future__ import annotations
 
 import json
+import math
 import os
 import urllib.error
 import urllib.request
@@ -117,6 +118,10 @@ class GitHubPRCommentAdapter(TaskAdapter):
             live GitHub access or real token is ever required in tests.
         timeout: Per-request timeout in seconds.
         """
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+            raise TypeError("timeout must be a finite positive number")
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("timeout must be a finite positive number")
         self.token = token if token is not None else os.environ.get("GITHUB_TOKEN")
         self._http_post_comment = http_post_comment or _default_http_post_comment
         self.timeout = timeout
@@ -137,8 +142,6 @@ class GitHubPRCommentAdapter(TaskAdapter):
                 return {"status": "retryable", "message": str(exc), "retry_after": retry_after}
             return {"status": "failure", "message": str(exc)}
 
-    # -- payload helpers ------------------------------------------------
-
     def _require(self, payload: Dict[str, Any], field: str) -> Any:
         if field not in payload or payload[field] in (None, ""):
             raise GitHubPRCommentAdapterError(f"Missing required payload field: {field!r}")
@@ -157,17 +160,11 @@ class GitHubPRCommentAdapter(TaskAdapter):
         return value
 
     def _post_comment(self, repository_full_name: str, pr_number: int, body: str) -> Any:
-        """The only HTTP call site in this module -- always POST, always
-        this one fixed URL template. repository_full_name and pr_number
-        are substituted into the template; nothing else about the
-        request (path or method) is caller-controlled."""
         url = f"{GITHUB_API_BASE}/repos/{repository_full_name}/issues/{pr_number}/comments"
         headers = {"Accept": "application/vnd.github+json", "Content-Type": "application/json"}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
         return self._http_post_comment(url, headers, {"body": body}, self.timeout)
-
-    # -- action handlers --------------------------------------------------
 
     def _action_post_pr_comment(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         repository_full_name = self._require(payload, "repository_full_name")
