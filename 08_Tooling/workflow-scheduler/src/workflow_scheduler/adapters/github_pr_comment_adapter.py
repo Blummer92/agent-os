@@ -190,6 +190,11 @@ class GitHubPRCommentAdapter(TaskAdapter):
         pr_number = self._require_pr_number(payload)
         body = self._require_body(payload)
         data = self._post_comment(repository_full_name, pr_number, body)
+        if not isinstance(data, dict):
+            raise GitHubPRCommentAdapterError(
+                "GitHub comment POST completed but returned malformed response evidence; "
+                "manual reconciliation is required before any retry"
+            )
         return {
             "status": "success",
             "message": f"Posted comment on {repository_full_name}#{pr_number}",
