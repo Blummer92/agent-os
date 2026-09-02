@@ -36,6 +36,18 @@ def test_no_action():
     assert result.disposition is Disposition.NO_ACTION
 
 
+def test_no_action_is_not_overridden_by_supplied_target():
+    target = candidate(TargetKind.EXISTING_ISSUE, "issue:10", Relationship.EQUIVALENT)
+    result = triage_risk(
+        RiskTriageInput(
+            finding=finding(action_required=False),
+            existing_issue_candidates=(target,),
+        )
+    )
+    assert result.disposition is Disposition.NO_ACTION
+    assert result.target_identity is None
+
+
 def test_unambiguous_canonical_owner_wins_and_preserves_evidence():
     owner = candidate(
         TargetKind.CANONICAL_RISK_OWNER,
@@ -52,6 +64,16 @@ def test_unambiguous_canonical_owner_wins_and_preserves_evidence():
     assert result.disposition is Disposition.LINK_CANONICAL_RISK_OWNER
     assert result.target_identity == "issue:543"
     assert result.target_evidence == ("risk-owner-map supplied by caller",)
+
+
+def test_duplicate_canonical_owner_evidence_resolves_same_identity():
+    owners = (
+        candidate(TargetKind.CANONICAL_RISK_OWNER, "issue:543", Relationship.EQUIVALENT),
+        candidate(TargetKind.CANONICAL_RISK_OWNER, "issue:543", Relationship.OVERLAPS),
+    )
+    result = triage_risk(RiskTriageInput(finding=finding(), canonical_risk_owners=owners))
+    assert result.disposition is Disposition.LINK_CANONICAL_RISK_OWNER
+    assert result.target_identity == "issue:543"
 
 
 def test_conflicting_canonical_owners_need_decision():
@@ -71,6 +93,16 @@ def test_record_in_current_work():
     assert result.target_identity == "pr:10"
 
 
+def test_duplicate_current_work_evidence_resolves_same_identity():
+    targets = (
+        candidate(TargetKind.CURRENT_WORK, "pr:10", Relationship.EQUIVALENT),
+        candidate(TargetKind.CURRENT_WORK, "pr:10", Relationship.OVERLAPS),
+    )
+    result = triage_risk(RiskTriageInput(finding=finding(), current_work_candidates=targets))
+    assert result.disposition is Disposition.RECORD_IN_CURRENT_WORK
+    assert result.target_identity == "pr:10"
+
+
 def test_update_existing_issue_candidate():
     target = candidate(TargetKind.EXISTING_ISSUE, "issue:10", Relationship.EQUIVALENT)
     result = triage_risk(RiskTriageInput(finding=finding(), existing_issue_candidates=(target,)))
@@ -80,6 +112,16 @@ def test_update_existing_issue_candidate():
 def test_create_child_issue_candidate_from_explicit_relationship():
     parent = candidate(TargetKind.EXISTING_ISSUE, "issue:10", Relationship.CHILD)
     result = triage_risk(RiskTriageInput(finding=finding(), existing_issue_candidates=(parent,)))
+    assert result.disposition is Disposition.CREATE_CHILD_ISSUE_CANDIDATE
+    assert result.target_identity == "issue:10"
+
+
+def test_duplicate_child_evidence_resolves_same_identity():
+    parents = (
+        candidate(TargetKind.EXISTING_ISSUE, "issue:10", Relationship.CHILD),
+        candidate(TargetKind.EXISTING_ISSUE, "issue:10", Relationship.CHILD),
+    )
+    result = triage_risk(RiskTriageInput(finding=finding(), existing_issue_candidates=parents))
     assert result.disposition is Disposition.CREATE_CHILD_ISSUE_CANDIDATE
     assert result.target_identity == "issue:10"
 
