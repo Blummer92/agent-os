@@ -40,6 +40,7 @@ result shape changed.
 from __future__ import annotations
 
 import json
+import math
 import os
 import urllib.error
 import urllib.request
@@ -117,6 +118,10 @@ class GitHubPRCommentAdapter(TaskAdapter):
             live GitHub access or real token is ever required in tests.
         timeout: Per-request timeout in seconds.
         """
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+            raise TypeError("timeout must be a finite positive number")
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("timeout must be a finite positive number")
         self.token = token if token is not None else os.environ.get("GITHUB_TOKEN")
         self._http_post_comment = http_post_comment or _default_http_post_comment
         self.timeout = timeout

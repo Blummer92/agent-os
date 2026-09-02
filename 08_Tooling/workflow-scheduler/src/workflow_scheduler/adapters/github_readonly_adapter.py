@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import urllib.error
 import urllib.request
@@ -43,6 +44,10 @@ def _default_http_get(url: str, headers: Dict[str, str], timeout: float) -> Any:
 
 class GitHubReadOnlyAdapter(TaskAdapter):
     def __init__(self, token: Optional[str] = None, http_get: Optional[Callable[[str, Dict[str, str], float], Any]] = None, timeout: float = 10.0):
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+            raise TypeError("timeout must be a finite positive number")
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("timeout must be a finite positive number")
         self.token = token if token is not None else os.environ.get("GITHUB_TOKEN")
         self._http_get = http_get or _default_http_get
         self.timeout = timeout
