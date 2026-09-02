@@ -592,10 +592,10 @@ _STAGE_RESULT_PAYLOAD_KEYS = frozenset(
 )
 
 
-def _require_exact_payload_keys(
+def require_exact_keys(
     payload: object, keys: frozenset[str], label: str
 ) -> Mapping[str, Any]:
-    """Closed-schema key check, mirroring the AcceptanceReport transport rule."""
+    """The one closed-schema key check every stage transport payload reuses."""
     if not isinstance(payload, Mapping):
         raise ValueError(f"{label} must be a mapping")
     supplied = set(payload)
@@ -632,7 +632,7 @@ def dependency_identity_evidence_from_dict(
 ) -> DependencyIdentityEvidence:
     """Reconstruct dependency-identity evidence, failing closed on any drift."""
     label = "dependency identity evidence"
-    _require_exact_payload_keys(payload, _DEPENDENCY_IDENTITY_PAYLOAD_KEYS, label)
+    require_exact_keys(payload, _DEPENDENCY_IDENTITY_PAYLOAD_KEYS, label)
     if payload["execution_authorized"] is not False:
         raise ValueError("execution_authorized must be false")
     if payload["side_effects_performed"] is not False:
@@ -846,7 +846,7 @@ def issue_readiness_stage_result_from_dict(
         raise ValueError("readiness stage result must be a mapping")
     if payload.get("schema_version") != STAGE_SCHEMA_VERSION:
         raise ValueError("unsupported stage schema_version")
-    _require_exact_payload_keys(
+    require_exact_keys(
         payload, _STAGE_RESULT_PAYLOAD_KEYS, "readiness stage result"
     )
     if payload["execution_authorized"] is not False:
