@@ -144,6 +144,17 @@ class GitHubPRCommentAdapter(TaskAdapter):
             raise GitHubPRCommentAdapterError(f"Missing required payload field: {field!r}")
         return payload[field]
 
+    def _require_repository_full_name(self, payload: Dict[str, Any]) -> str:
+        value = self._require(payload, "repository_full_name")
+        if not isinstance(value, str):
+            raise GitHubPRCommentAdapterError(f"'repository_full_name' must be a string, got {value!r}")
+        parts = value.split("/")
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            raise GitHubPRCommentAdapterError(
+                f"'repository_full_name' must be in 'owner/repo' shape, got {value!r}"
+            )
+        return value
+
     def _require_pr_number(self, payload: Dict[str, Any]) -> int:
         value = self._require(payload, "pr_number")
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
@@ -170,7 +181,7 @@ class GitHubPRCommentAdapter(TaskAdapter):
     # -- action handlers --------------------------------------------------
 
     def _action_post_pr_comment(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        repository_full_name = self._require(payload, "repository_full_name")
+        repository_full_name = self._require_repository_full_name(payload)
         pr_number = self._require_pr_number(payload)
         body = self._require_body(payload)
         data = self._post_comment(repository_full_name, pr_number, body)
