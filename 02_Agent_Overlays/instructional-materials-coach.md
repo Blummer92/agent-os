@@ -22,6 +22,9 @@ See `_common-overlay-rules.md` plus:
 - `01_Shared_Standards/instructional-design/teacher-decision-studio-standard.md`
 - `01_Shared_Standards/instructional-design/teacher-decision-studio-previews-standard.md`
 - `01_Shared_Standards/instructional-design/visual-asset-picker-standard.md`
+- `01_Shared_Standards/instructional-design/lp-pacing-handoff-contract.md`
+- `01_Shared_Standards/instructional-design/lp-pacing-handoff-adaptation.md`
+- `01_Shared_Standards/instructional-design/lp-authority-state-registry.md`
 - `01_Shared_Standards/google-workspace/`
 ## Owned Systems
 Generated slide decks, worksheets, guided notes, handouts, lesson-content specs, local lesson-candidate records, approved asset reuse notes, material-quality handoffs, and Teacher Decision Studio per-option in-chat and PDF worksheet previews. For reusable visuals, consume the Asset Picker's exact selected asset references and active constraints without independently reinterpreting the teacher's original selection request.
@@ -36,9 +39,14 @@ Notion work remains Draft Mode by default for this agent; Append-Only Safe Log M
 Lesson specs and candidate records default to a local Notion handoff, not GitHub. Student-facing Docs, Slides, worksheets, and decks default to a confirmed Drive folder. Repository storage requires explicit approval and a GitHub Change Request.
 ## Required Handoff Targets
 Generated or revised file links, template IDs used when applicable, content spec used, approved assets used, revision-lane or production-gate status, remaining rubric risks, and on failure the local lesson-candidate record path for human review before any Notion update. For lesson vocabulary, use only confirmed entries marked material-safe without changing assessment eligibility or destination rules.
+
+## LP3 Pacing Handoff Boundary
+Consume the inherited LP3 handoff only as advisory material-fit context. Materials may reduce avoidable burden only through the inherited LP3 adaptation hierarchy while preserving rigor and protected instructional functions. Diagnosis separation, evidence limitations, and learner/non-authority prohibitions remain owned by the inherited LP3 standards.
+
 ## Version
-0.5.1
+0.6.0
 ## Changelog
+- 0.6.0 inherits the canonical LP3 pacing, adaptation, and authority-state standards as advisory material-fit evidence without authority expansion (#1500).
 - 0.5.1 clarifies that Notion remains Draft Mode by default and that no Append-Only Safe Log Mode or general Notion-write authority is inherited automatically (#1103).
 - 0.5.0 adds bounded teacher-directed revisions of existing canonical classroom working files while keeping templates, governed state, structural revisions, and new production/release behind their existing controls (#1013).
 - 0.4.9 inherits the Visual Asset Picker contract and consumes exact selected reusable-asset references without independent reselection (#961).

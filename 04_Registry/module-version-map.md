@@ -18,9 +18,9 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 | Instructional Design Standards | 0.17.0 |
 | Agent Orchestrator | 0.3.0 |
 | GitHub Service Agent | 0.7.0 |
-| Unit Alignment Agent | 0.6.0 |
-| Teacher Modeling Coach | 0.6.0 |
-| Instructional Materials Coach | 0.5.1 |
+| Unit Alignment Agent | 0.7.0 |
+| Teacher Modeling Coach | 0.7.0 |
+| Instructional Materials Coach | 0.6.0 |
 | QA / Test Agent | 0.2.1 |
 | Student Language Standard | 0.3.0 |
 | Workflow Scheduler | 0.18.0 |
@@ -56,6 +56,8 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 **Workspace Automation Builder Tooling** (`08_Tooling/workspace-automation-builder/`) includes an Apps Script safety bridge, offline tests, sync safety docs, sanitized sample handoff fixture, JSON schemas, validation fixtures, and a local-only fixture validator. It does not authorize live Workspace, Notion, trigger, sharing, or production writes.
 
 **Workflow Scheduler**, **Agent Memory & Context Budget Manager**, **IA4D-to-Scheduler Handoff Contract**, and **Agent OS Execution Service** extended descriptions live in `04_Registry/module-version-map-details.md`. Workflow Scheduler moved to `0.10.0` under #758 for the additive host-local concurrency-1 lease adapter, `0.11.0` under #759 for opt-in Linux cgroup v2 containment, `0.12.0` under #760 for complete workspace-state evidence, `0.13.0` under #762 for authorized-validation runtime composition, `0.14.0` under #722 for the pure bounded Claude Code invocation/result adapter, `0.15.0` under #1185 for task-scoped dependency readiness and deterministic Python/npm preparation, and `0.16.0` under #1205 (AOS-VALTERM1) for explicit validation-process termination evidence (`CommandRunObservation`/`FrozenTestValidationResult`/`PilotValidationObservation` additive fields); it moved to `0.18.0` under #1300 (AOS-GCE2C) for packaging only, declaring the canonical repository-root `scripts.*` contract packages its runtime already imports plus its `PyYAML`/`reusable-capability-registry` dependencies. Agent OS Execution Service stays `0.6.0` under #762 because that version is bound to the runtime identity constant `EXECUTION_SERVICE_VERSION`; #1300 changed only its packaging metadata, adding deterministic `workflow-scheduler`/`agent-memory-context-manager`/`PyGithub`/`requests` runtime dependencies and distributing `scripts.agent_os_candidate_packet`/`scripts.agent_os_github_issue_provider`.
+
+**Unit Alignment Agent** `0.7.0`, **Teacher Modeling Coach** `0.7.0`, and **Instructional Materials Coach** `0.6.0` inherit the canonical LP3 pacing, adaptation, and authority-state standards for their existing LP3-owned responsibilities (#1500). The overlays add only owner-specific consumption boundaries; shared diagnosis, adaptation, evidence, and non-authority policy remains canonical in LP3.
 
 **Instructional Materials Coach** `0.4.0` adds `curriculum-visual-asset-compatibility-v2` and `curriculum-visual-asset-candidates-v2` (#871), preserving v1 mappings, defaults, identities, and non-authorizing behavior. `0.5.0` adds `curriculum-image-intent-v1` and `curriculum-imported-asset-context-v1` (#955), keeping provider prompt prose noncanonical and provenance user-claimed. `0.5.1` clarifies that Notion remains Draft Mode by default and no Append-Only Safe Log Mode or general Notion-write authority is inherited automatically (#1103).
 
