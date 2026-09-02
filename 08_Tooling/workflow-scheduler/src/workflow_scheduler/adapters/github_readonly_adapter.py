@@ -141,7 +141,31 @@ class GitHubReadOnlyAdapter(TaskAdapter):
                 f"'limit' must be an integer between 1 and {_MAX_RECENT_PRS_LIMIT}, got {limit!r}"
             )
         data = self._get(f"/repos/{full_name}/pulls?state={state}&sort=created&direction=desc&per_page={limit}")
-        return {"pull_requests": [{"number": pr.get("number"), "title": pr.get("title"), "state": pr.get("state")} for pr in data if isinstance(pr, dict)]}
+        if not isinstance(data, list):
+            raise GitHubReadOnlyAdapterError("GitHub recent-PR response must be a list")
+        pull_requests = []
+        for pr in data:
+            if not isinstance(pr, dict):
+                raise GitHubReadOnlyAdapterError(
+                    "GitHub recent-PR response contains a malformed non-object entry"
+                )
+            number = pr.get("number")
+            title = pr.get("title")
+            pr_state = pr.get("state")
+            if isinstance(number, bool) or not isinstance(number, int) or number <= 0:
+                raise GitHubReadOnlyAdapterError(
+                    "GitHub recent-PR response contains an invalid PR number"
+                )
+            if not isinstance(title, str) or not title:
+                raise GitHubReadOnlyAdapterError(
+                    "GitHub recent-PR response contains an invalid title"
+                )
+            if not isinstance(pr_state, str) or pr_state not in {"open", "closed"}:
+                raise GitHubReadOnlyAdapterError(
+                    "GitHub recent-PR response contains an invalid state"
+                )
+            pull_requests.append({"number": number, "title": title, "state": pr_state})
+        return {"pull_requests": pull_requests}
 
     def _action_get_commit(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         full_name = self._require_repository_full_name(payload)
