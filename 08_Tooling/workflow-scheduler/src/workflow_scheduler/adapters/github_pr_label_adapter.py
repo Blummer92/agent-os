@@ -140,6 +140,8 @@ class GitHubPRLabelAdapter(TaskAdapter):
                 return {"status": "retryable", "message": str(exc), "retry_after": exc.retry_after}
             return {"status": "failure", "message": str(exc)}
 
+    # -- payload helpers ------------------------------------------------
+
     def _require(self, payload: Dict[str, Any], field: str) -> Any:
         if field not in payload or payload[field] in (None, ""):
             raise GitHubPRLabelAdapterError(f"Missing required payload field: {field!r}")
@@ -169,11 +171,18 @@ class GitHubPRLabelAdapter(TaskAdapter):
         return value
 
     def _post_label(self, repository_full_name: str, pr_number: int, label: str) -> Any:
+        """The only HTTP call site in this module -- always POST, always
+        this one fixed URL template. repository_full_name and pr_number
+        are substituted into the template; nothing else about the
+        request (path or method) is caller-controlled. GitHub treats a
+        PR as an issue for labeling purposes, hence the /issues/ path."""
         url = f"{GITHUB_API_BASE}/repos/{repository_full_name}/issues/{pr_number}/labels"
         headers = {"Accept": "application/vnd.github+json", "Content-Type": "application/json"}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
         return self._http_post_label(url, headers, {"labels": [label]}, self.timeout)
+
+    # -- action handlers --------------------------------------------------
 
     def _action_add_pr_label(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         repository_full_name = self._require_repository_full_name(payload)

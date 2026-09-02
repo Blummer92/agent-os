@@ -12,6 +12,7 @@ must not be expanded.
 from __future__ import annotations
 
 import json
+import math
 import os
 import urllib.error
 import urllib.parse
@@ -141,6 +142,10 @@ class NotionReadOnlyAdapter(TaskAdapter):
         timeout: float = 10.0,
         notion_version: str = NOTION_VERSION,
     ):
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+            raise TypeError("timeout must be a finite positive number")
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("timeout must be a finite positive number")
         self.token = token if token is not None else os.environ.get("NOTION_TOKEN")
         self._http_get = http_get or _default_http_get
         self._http_post_query_database = http_post_query_database or _default_http_post_read
