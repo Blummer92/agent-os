@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -11,6 +12,18 @@ MIN_DIAGNOSTIC_EXCERPT_LINES = 50
 DEFAULT_DIAGNOSTIC_EXCERPT_LINES = 50
 MAX_DIAGNOSTIC_EXCERPT_LINES = 150
 DIAGNOSTIC_EXCERPT_EXPANSION_LINES = 50
+MAX_ACTIONABLE_FAILURE_CHARS = 12_000
+
+_SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"(?i)bearer\s+[a-z0-9\-_.]+"),
+    re.compile(r"(?i)authorization\s*[:=]\s*\S+"),
+    re.compile(r"(?i)(api[_-]?key|token|secret|password|passwd)\s*[:=]\s*\S+"),
+    re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"),
+    re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(r"(?i)https?://\S*[?&](?:sig|signature|token|x-goog-signature)=\S+"),
+    re.compile(r"(?i)\S*(?:\.ssh|\.aws|\.gnupg|\.pem|\.env|id_rsa|credentials)\S*"),
+)
+_CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 RECOVERY_FAILURE_REASONS = frozenset({
     "cli-unavailable", "cli-unauthenticated", "insufficient-permission",
@@ -29,6 +42,19 @@ def _text(value: Any, field: str) -> str:
     return value.strip()
 
 
+def sanitize_actionable_failure(value: Any) -> str:
+    """Return deterministic public-safe failure text bounded by lines and chars."""
+    text = _text(value, "actionable_failure").replace("\r\n", "\n").replace("\r", "\n")
+    text = _CONTROL_CHARACTERS.sub("�", text)
+    for pattern in _SECRET_PATTERNS:
+        text = pattern.sub("[REDACTED]", text)
+    lines = text.split("\n")[:MAX_DIAGNOSTIC_EXCERPT_LINES]
+    text = "\n".join(lines)
+    if len(text) > MAX_ACTIONABLE_FAILURE_CHARS:
+        text = text[:MAX_ACTIONABLE_FAILURE_CHARS] + "…[truncated]"
+    return text
+
+
 def _sha40(value: Any, field: str) -> str:
     text = _text(value, field).lower()
     if len(text) != 40 or any(char not in "0123456789abcdef" for char in text):
@@ -38,28 +64,16 @@ def _sha40(value: Any, field: str) -> str:
 
 def diagnostic_excerpt_lines(value: int = DEFAULT_DIAGNOSTIC_EXCERPT_LINES) -> int:
     """Validate one routine diagnostic excerpt target."""
-    if (
-        type(value) is not int
-        or value < MIN_DIAGNOSTIC_EXCERPT_LINES
-        or value > MAX_DIAGNOSTIC_EXCERPT_LINES
-    ):
-        raise EvidenceValidationError(
-            "diagnostic excerpt lines must be an integer from 50 through 150"
-        )
+    if type(value) is not int or value < MIN_DIAGNOSTIC_EXCERPT_LINES or value > MAX_DIAGNOSTIC_EXCERPT_LINES:
+        raise EvidenceValidationError("diagnostic excerpt lines must be an integer from 50 through 150")
     return value
 
 
-def expand_diagnostic_excerpt_lines(
-    current_lines: int,
-    *,
-    increment: int = DIAGNOSTIC_EXCERPT_EXPANSION_LINES,
-) -> int:
+def expand_diagnostic_excerpt_lines(current_lines: int, *, increment: int = DIAGNOSTIC_EXCERPT_EXPANSION_LINES) -> int:
     """Expand a routine excerpt deterministically without exceeding 150 lines."""
     current = diagnostic_excerpt_lines(current_lines)
     if type(increment) is not int or increment < 1:
-        raise EvidenceValidationError(
-            "diagnostic excerpt expansion increment must be a positive integer"
-        )
+        raise EvidenceValidationError("diagnostic excerpt expansion increment must be a positive integer")
     return min(MAX_DIAGNOSTIC_EXCERPT_LINES, current + increment)
 
 
@@ -109,7 +123,7 @@ class RecoveryObservation:
         if self.succeeded and self.reason_code not in {None, "log-association-failed"}:
             raise EvidenceValidationError("successful recovery cannot carry a blocking reason")
         if self.actionable_failure is not None:
-            object.__setattr__(self, "actionable_failure", _text(self.actionable_failure, "actionable_failure"))
+            object.__setattr__(self, "actionable_failure", sanitize_actionable_failure(self.actionable_failure))
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,11 +146,9 @@ class CIEvidenceRecoveryPlan:
 
     def __post_init__(self) -> None:
         diagnostic_excerpt_lines(self.diagnostic_excerpt_target_lines)
-        if any(value is not False for value in (
-            self.repair_authorized,
-            self.external_write_authorized,
-            self.side_effects_performed,
-        )):
+        if self.actionable_failure is not None:
+            object.__setattr__(self, "actionable_failure", sanitize_actionable_failure(self.actionable_failure))
+        if any(value is not False for value in (self.repair_authorized, self.external_write_authorized, self.side_effects_performed)):
             raise EvidenceValidationError("CI evidence recovery authority fields must be exactly false")
 
     @property
