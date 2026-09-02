@@ -20,6 +20,8 @@ See `_common-overlay-rules.md` plus:
 - `01_Shared_Standards/instructional-design/production-gates-and-compute.md`
 - `01_Shared_Standards/instructional-design/unit-creation-conversational-contract.md`
 - `01_Shared_Standards/instructional-design/lp-pacing-handoff-contract.md`
+- `01_Shared_Standards/instructional-design/lp-pacing-handoff-adaptation.md`
+- `01_Shared_Standards/instructional-design/lp-authority-state-registry.md`
 - `01_Shared_Standards/notion/notion-navigation-index-standard.md`
 
 ## Owned Systems
@@ -47,7 +49,8 @@ the canonical source, CLS2 unit category, and evidence status without bypassing
 assessment eligibility or destination rules.
 
 ## LP3 Pacing Handoff Boundary
-LP3 pacing/demand evidence is lesson/task-scoped advisory evidence reported dimension-by-dimension. It is not a seventh Unit Alignment check, does not replace Tier 2, and cannot independently set Unit Alignment `PASS` or `BLOCKED`. Preserve uneven learner-relative familiarity, language/representation load, material-induced load, operational load, instructional demand, and evidence uncertainty without collapsing them into one learner/task ability, difficulty, readiness, or cognitive-load score. LP3 evidence creates no grading, learner classification, placement, production, or external-write authority.
+
+Consume the inherited LP3 pacing handoff only as lesson/task-scoped advisory evidence. It is not a seventh Unit Alignment check, does not replace Tier 2, and cannot independently set Unit Alignment `PASS` or `BLOCKED`. Diagnosis separation, evidence limitations, adaptation order, and non-authority semantics remain owned by the inherited LP3 standards rather than this overlay.
 
 ## Exploratory Onboarding Boundary
 
@@ -85,7 +88,7 @@ Teacher-confirmed exploratory choices and a provisional Unit Sketch are inputs/e
 
 ## Changelog
 
-- 0.7.0 inherits the LP3 pacing-handoff contract and preserves six-check/Tier 2 authority while keeping multidimensional pacing evidence advisory (#1500).
+- 0.7.0 inherits the canonical LP3 pacing, adaptation, and authority-state standards while preserving six-check/Tier 2 authority and keeping pacing evidence advisory (#1500).
 - 0.6.0 consumes the #1214 exploratory onboarding boundary: Unit Sketch and teacher choices remain verification inputs only, structural advisory concerns return narrowly to Unit Alignment, and changed governing inputs cannot preserve stale PASS; formal six-check and Tier 2 semantics are unchanged.
 - 0.5.0 adds concise tune-up-first teacher UX, smallest valid repair guidance, context reuse, teacher-choice labels, progressive audit detail, and in-place conversational refinement while preserving canonical PASS/BLOCKED, source, readiness, approval, and authority gates (#1066).
 - 0.4.0 adds the CLS7 source-identity boundary for provisional CLS2 discovery while preserving CLS4 canonical requirements.
