@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
+from .aggregate_failure_provenance import AggregateFailureEvidence, classify_aggregate_failure
 from .coordination import coordinate_resolution, serialize_resolution_plan
 from .models import AUTHORITY_FIELDS, EvidenceValidationError, canonical_json
 from .normalization import normalize_pr_snapshot, normalize_review_threads
@@ -28,7 +29,7 @@ _REQUIRED_FIELDS = {
     "current_head_sha",
     "final_captured_head_sha",
 }
-_OPTIONAL_FIELDS = {"failure_evidence", "repair_handoff"}
+_OPTIONAL_FIELDS = {"failure_evidence", "repair_handoff", "aggregate_failure_provenance"}
 
 
 def _input_envelope(payload: Any) -> dict[str, Any]:
@@ -76,8 +77,65 @@ def _preflight_to_dict(result: PreflightResult) -> dict[str, Any]:
     }
 
 
+def _aggregate_failure_to_dict(result: AggregateFailureEvidence) -> dict[str, Any]:
+    return {
+        "provenance": result.provenance.value,
+        "tested_sha": result.tested_sha,
+        "current_head_sha": result.current_head_sha,
+        "main_sha": result.main_sha,
+        "failure_fingerprint": result.failure_fingerprint,
+        "blocking_pr_failure": result.blocking_pr_failure,
+        "requires_manual_review": result.requires_manual_review,
+        "reason_codes": list(result.reason_codes),
+        "execution_authorized": result.execution_authorized,
+        "merge_authorized": result.merge_authorized,
+        "closure_authorized": result.closure_authorized,
+        "production_authorized": result.production_authorized,
+        "external_write_authorized": result.external_write_authorized,
+        "side_effects_performed": result.side_effects_performed,
+    }
+
+
+def _aggregate_failure(payload: object, *, current_head_sha: str) -> AggregateFailureEvidence | None:
+    if payload is None:
+        return None
+    if type(payload) is not dict or any(type(key) is not str for key in payload):
+        raise EvidenceValidationError("aggregate_failure_provenance must be exactly dict")
+    required = {
+        "tested_sha",
+        "main_sha",
+        "failure_fingerprint",
+        "same_failure_on_current_main",
+        "environment_or_bootstrap_failure",
+        "required_repository_invariant",
+        "changed_contract_reaches_failure",
+        "synthetic_merge_only_failure",
+    }
+    missing = required - set(payload)
+    unknown = set(payload) - required
+    if missing:
+        raise EvidenceValidationError(
+            "missing aggregate provenance fields: " + ", ".join(sorted(missing))
+        )
+    if unknown:
+        raise EvidenceValidationError(
+            "unknown aggregate provenance fields: " + ", ".join(sorted(unknown))
+        )
+    return classify_aggregate_failure(
+        tested_sha=payload["tested_sha"],
+        current_head_sha=current_head_sha,
+        main_sha=payload["main_sha"],
+        failure_fingerprint=payload["failure_fingerprint"],
+        same_failure_on_current_main=payload["same_failure_on_current_main"],
+        environment_or_bootstrap_failure=payload["environment_or_bootstrap_failure"],
+        required_repository_invariant=payload["required_repository_invariant"],
+        changed_contract_reaches_failure=payload["changed_contract_reaches_failure"],
+        synthetic_merge_only_failure=payload["synthetic_merge_only_failure"],
+    )
+
+
 def evaluate(payload: Any) -> dict[str, Any]:
-    """Compose PRR1-3 from supplied local evidence without performing side effects."""
+    """Compose PRR1-3 plus optional aggregate provenance without side effects."""
 
     data = _input_envelope(payload)
     snapshot = normalize_pr_snapshot(data["snapshot"])
@@ -108,11 +166,18 @@ def evaluate(payload: Any) -> dict[str, Any]:
         current_head_sha=data["current_head_sha"],
         final_captured_head_sha=data["final_captured_head_sha"],
     )
+    aggregate_failure = _aggregate_failure(
+        data.get("aggregate_failure_provenance"),
+        current_head_sha=data["current_head_sha"],
+    )
     report = {
         "contract_version": "agent-os-pr-remediation-cli/v1",
         "preflight": _preflight_to_dict(preflight_result),
         "remediation_plan": remediation_plan.to_dict(),
         "resolution_plan": serialize_resolution_plan(resolution_plan),
+        "aggregate_failure_provenance": (
+            None if aggregate_failure is None else _aggregate_failure_to_dict(aggregate_failure)
+        ),
         **{field: False for field in AUTHORITY_FIELDS},
     }
     canonical_json(report)
@@ -132,6 +197,18 @@ def render_text(report: dict[str, Any]) -> str:
         f"tasks: {len(remediation['tasks'])}",
         f"threads: {len(resolution['thread_results'])}",
     ]
+    aggregate_failure = report.get("aggregate_failure_provenance")
+    if aggregate_failure is not None:
+        lines.append(
+            "aggregate provenance: "
+            f"{aggregate_failure['provenance']} "
+            f"(PR-blocking={str(aggregate_failure['blocking_pr_failure']).lower()}, "
+            f"manual-review={str(aggregate_failure['requires_manual_review']).lower()})"
+        )
+        if aggregate_failure["reason_codes"]:
+            lines.append(
+                "aggregate provenance reasons: " + ", ".join(aggregate_failure["reason_codes"])
+            )
     for thread in resolution["thread_results"]:
         lines.append(
             "thread "
