@@ -159,15 +159,17 @@ def test_fixed_materials_import_bootstrap_executes_bounded_suite() -> None:
         "import pytest;raise SystemExit(pytest.main(list(sys.argv[1:])))"
     )
     runtime = Path(dev_validation_gce.DEV_VALIDATION_PYTHON)
-    executable = str(runtime) if runtime.is_file() else sys.executable
+    fixed_runtime_available = runtime.is_file()
+    executable = str(runtime) if fixed_runtime_available else sys.executable
     with tempfile.TemporaryDirectory(prefix="agent-os-materials-bootstrap-") as temp_dir:
         env = {
             "PATH": os.environ.get("PATH", ""),
             "HOME": temp_dir,
             "TMPDIR": temp_dir,
             "PYTHONDONTWRITEBYTECODE": "1",
-            "PYTHONNOUSERSITE": "1",
         }
+        if fixed_runtime_available:
+            env["PYTHONNOUSERSITE"] = "1"
         completed = subprocess.run(
             (
                 executable,
