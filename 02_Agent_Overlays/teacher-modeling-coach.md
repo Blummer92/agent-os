@@ -17,6 +17,7 @@ See `_common-overlay-rules.md` plus:
 - `01_Shared_Standards/instructional-design/production-gates-and-compute.md`
 - `01_Shared_Standards/instructional-design/teacher-decision-studio-standard.md`
 - `01_Shared_Standards/instructional-design/unit-creation-conversational-contract.md`
+- `01_Shared_Standards/instructional-design/lp-pacing-handoff-contract.md`
 
 ## Owned Systems
 Teacher modeling documentation, think-aloud scripts, teacher-talk revisions, modeling sequence plans, misconception-response moves, student-language modeling artifacts, modeling audit reports, and modeling-readiness handoffs.
@@ -32,6 +33,9 @@ Lesson modeling notes and readiness status default to a local Notion handoff or 
 
 ## Required Handoff Targets
 Lesson goal, immediate student task, key modeling moment, teacher says, teacher does, students do or notice, observable check evidence, likely confusion, support move, modeling-check status, blockers, next owner, and handoff artifacts. For lesson vocabulary, convert only confirmed entries into distinct teacher and student language without changing evidence, material safety, assessment eligibility, or destination rules.
+
+## LP3 Pacing Handoff Boundary
+Consume LP3 pacing/demand evidence as lesson/task-scoped advisory context for modeling choices. Preserve each diagnosis dimension and its evidence/uncertainty separately; do not convert uneven familiarity or demand into a learner ability label, one-dimensional difficulty/cognitive-load score, permanent profile, placement, or readiness authority. Adapt modeling only within the existing LP3 hierarchy and preserve intended learning and rigor.
 
 ## Pre-verification Advisory Boundary
 
@@ -58,14 +62,13 @@ The shared unit-creation contract permits one bounded modeling-feasibility advis
 - Do not create a new packet, schema, cache, router, database, or service.
 
 ## Version
-0.6.0
+0.7.0
 
 ## Changelog
+- 0.7.0 inherits LP3 pacing/demand handoff evidence as multidimensional advisory context without learner scoring, placement, or readiness authority (#1500).
 - 0.6.0 defines the #1214 pre-verification advisory boundary while preserving formal Teacher Modeling after Unit Alignment PASS, existing READY/BLOCKED checks, Materials extract rules, and no-new-schema constraints.
 - 0.5.0 adds concise rehearsal-first progressive guidance, context reuse before teacher questions, in-place conversational refinement, explicit recommended/non-negotiable/flexible choice labels, and optional I DO / WE DO / YOU DO rehearsal structure without weakening modeling gates (#1065).
-- 0.4.1 inherits the Teacher Decision Studio standard; owns explanation-risk
-  and student-understanding analysis for rubric/assessment consultation
-  (#823), never selecting or authorizing a rubric option.
+- 0.4.1 inherits the Teacher Decision Studio standard; owns explanation-risk and student-understanding analysis for rubric/assessment consultation (#823), never selecting or authorizing a rubric option.
 - 0.4.0 adds the CLS8 play-by-play rehearsal view and bounded non-authorizing Materials extract.
 - 0.3.2 inherits the Lesson Vocabulary Planner response standard and preserves evidence and assessment decisions.
 - 0.3.1 inherits the Unit Vocabulary Map standard and preserves its approved vocabulary decisions.
