@@ -82,12 +82,12 @@ def test_privileged_host_installer_owns_the_bounded_install_and_never_dispatches
     assert "STAGING_ROOT=/var/lib/agent-os/host-install-staging" in text
     assert "apt-get install -y build-essential python3-dev" in text
     for package in (
-        "./08_Tooling/reusable-capability-registry",
         "./08_Tooling/agent-memory-context-manager",
         "./08_Tooling/workflow-scheduler",
         "./08_Tooling/agent-os-execution-service",
     ):
         assert package in text
+    assert "./08_Tooling/reusable-capability-registry" not in text
     # Flags now sit one per line so --no-index/--no-deps could be added
     # legibly; check each token rather than an exact adjacent substring.
     assert "--break-system-packages" in text
