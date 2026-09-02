@@ -104,6 +104,12 @@ def main(argv: list[str] | None = None) -> int:
         context["selected_asset_ids"] = list(visual_plan.selected_asset_ids)
         if visual_plan.final_production_blocked:
             raise RuntimeError(f"Governed visual reuse gate blocked final production: {visual_plan.outcome}; image_gap_briefs={len(visual_plan.image_gap_briefs)}")
+        if visual_plan.selected_asset_ids:
+            selected_assets = ", ".join(visual_plan.selected_asset_ids)
+            raise RuntimeError(
+                "Governed visual placement unavailable: selected reusable visual assets "
+                f"cannot be placed by the current Docs/Slides text-replacement request path; selected_asset_ids={selected_assets}"
+            )
 
         # CW7C adoption is additive for existing direct CLI callers. The teacher-request
         # orchestration path supplies this packet; legacy explicit CLI builds continue
@@ -136,8 +142,6 @@ def main(argv: list[str] | None = None) -> int:
         )
         if not receipt.succeeded:
             raise RuntimeError(f"Live build incomplete: slides={receipt.slides.state}; worksheet={receipt.worksheet.state}; manual_reconciliation_required={receipt.manual_reconciliation_required}")
-        if visual_plan.selected_asset_ids:
-            print(f"Approved visual assets: {', '.join(visual_plan.selected_asset_ids)}")
         print(f"Slides: {receipt.slides.web_view_link}")
         print(f"Worksheet: {receipt.worksheet.web_view_link}")
         return 0
