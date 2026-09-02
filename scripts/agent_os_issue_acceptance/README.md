@@ -41,7 +41,7 @@ Use `--format json` for stable machine-readable report fields.
 | IssuePlan current-state evidence | `issueplan_current_state.py` |
 | Canonical issue operational-state projection and operating-mode decision | `issue_operational_state.py`, `operating_mode.py` |
 | Approval records and approved-execution projection | `approval_records.py`, `approved_execution_projection.py` |
-| Reporting | `acceptance_report_transport.py`, `documentation_advisory.py`, `documentation_gap_report.py`, `documentation_metrics.py`, `sprint_dashboard.py`, `coding_command_center_handoff.py`, `compute_control_projection.py`, `compute_control_producer.py`, `issue_operational_state_acquisition.py`, `live_compute_control_binding.py` |
+| Reporting | `acceptance_report_transport.py`, `documentation_advisory.py`, `documentation_gap_report.py`, `documentation_metrics.py`, `sprint_dashboard.py`, `coding_command_center_handoff.py`, `compute_control_projection.py`, `issue_operational_state_acquisition.py`, `live_compute_control_binding.py` |
 
 ## Live compute-control binding (#1460)
 
@@ -49,7 +49,7 @@ Use `--format json` for stable machine-readable report fields.
 `issue_operational_state_acquisition.py` (#1451): given already-acquired
 canonical evidence, it performs the one live GitHub issue read, wires every
 #1451 injected-evidence input, and invokes the unchanged
-#1451 -> #1441 -> #1439/#1419 chain to return one serialized
+#1451 -> #1441 -> #1097 -> #1419 chain to return one serialized
 `agent-os-compute-control-projection/1.0`. Canonical owner for each #1451
 input:
 
@@ -61,6 +61,14 @@ input:
 | `PrimaryIssueClaim` tuple | Caller-supplied. No canonical live PR-linkage reader exists. |
 | `FreshnessState` | Caller-supplied. No general-purpose currentness authority exists outside the domain-specific ones already reused above. |
 | Merge / Ready-for-Review / closure / execution / external-write authority | Caller-supplied, from `merge_authorization.py`, `lifecycle_mutation_guard.py`, and the existing execution/external-write authorization owners; passed through unchanged. |
+
+The one join this boundary owns is the single-claim lineage check: when the
+acquired state has one primary claim, the caller's exact `PrimaryIssueClaim`
+and observed current head must describe that same claim, so a well-formed head
+SHA can never be paired with a different PR/branch lineage. It re-derives the
+claim's content-addressed `claim_id` before comparing, so a tampered frozen
+claim fails closed. It verifies an identity join only; claim authority stays
+with the canonical claim evidence owners.
 
 No GitHub client, evidence model, or authority is created by this module; see
 its docstring for the full reasoning, including why
@@ -115,11 +123,7 @@ The module creates no executor router, validation selector or classifier, author
 
 `VALIDATION_HEAD_DISPOSITIONS` mirrors the canonical vocabulary owned by `agent_os_execution_service.validation_supersession` without importing it: that module lives in a separately installed distribution absent from the root developer environment, and it imports this package, so a direct import would both break root validation and invert the dependency direction. Only its already-projected decision is consumed, by reference; a focused test asserts the mirrored vocabulary still matches the canonical enum. Like #1097 this module is not exported from `__init__.py` per the direct-import policy below, and the architecture domain map classifies it in the existing `reporting` domain.
 
-### Canonical compute-control production seam
-
-`compute_control_producer.py` (#1439, AOS-NCCE5) is the smallest production composition boundary for callers that have reacquired current canonical evidence. It accepts one exact `IssueOperationalState`, the exact `PrimaryIssueClaim` when that state has a single PR lineage, the caller-observed current head, and already-owned validation/applicability/head/active-run/measurement evidence. The producer either consumes an existing #1097 `CodingCommandCenterHandoff` or builds #1097 from supplied `CodingCommandCenterEvidence`, then calls #1419 `build_compute_control_projection()` unchanged and can serialize the resulting canonical `agent-os-compute-control-projection/1.0`.
-
-The producer adds only join validation needed to prevent cross-lineage evidence composition: a single-claim state must be paired with the exact claim ID, PR, branch, and head already represented by that state. It does not fetch GitHub, parse issue prose, select validation, evaluate authorization, determine evidence applicability, project validation-head status, discover active executions, interpret compute measurements, or write Notion. Those facts remain owned upstream and are supplied by the caller. Missing or conflicting evidence fails closed through the existing owner invariants and #1419 semantics; no substitute evidence is fabricated. The module is direct-import only and remains in the reporting domain.
+Callers compose this projection directly: build the #1097 handoff from already-owned canonical evidence, pass it with the same `IssueOperationalState` into `ComputeControlEvidence`, then call `build_compute_control_projection()` and `serialize_compute_control_projection()`. `live_compute_control_binding.py` (#1460) is the production caller and the only place the single-claim lineage join is applied; #1731 removed the separate `compute_control_producer.py` composition seam, which forwarded to this module and owned nothing else.
 
 ## Linked-issue parsing
 A linked issue resolves only when exactly one unique same-repository target is introduced by a supported closing keyword: `close`, `closes`, `closed`, `fix`, `fixes`, `fixed`, `resolve`, `resolves`, or `resolved`. Optional colon and whitespace forms are supported.

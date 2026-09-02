@@ -58,10 +58,12 @@ def issue_item(**changes: object) -> dict[str, object]:
 @dataclass
 class FakeTransport:
     result: SingleIssueTransportResult
+    calls: int = 0
 
     def get_issue(
         self, repository: str, issue_number: int
     ) -> SingleIssueTransportResult:
+        self.calls += 1
         return self.result
 
 
@@ -155,6 +157,19 @@ def test_happy_path_produces_exact_current_serialized_projection() -> None:
     assert payload["notion_write_performed"] is False
 
 
+def test_canonical_operational_state_is_acquired_exactly_once() -> None:
+    transport = ok_transport()
+    acquire_live_compute_control_projection(base_evidence(issue_transport=transport))
+    assert transport.calls == 1
+
+
+def test_equivalent_evidence_produces_an_identical_payload() -> None:
+    evidence = base_evidence()
+    assert acquire_live_compute_control_projection(
+        evidence
+    ) == acquire_live_compute_control_projection(evidence)
+
+
 def test_dependency_and_validation_come_from_injected_repository_evidence_reader() -> (
     None
 ):
@@ -217,6 +232,46 @@ def test_unsupported_issue_state_fails_closed() -> None:
     evidence = base_evidence(issue_transport=ok_transport(state="merged"))
     with pytest.raises(ValueError, match="issue state field"):
         acquire_live_compute_control_projection(evidence)
+
+
+# -- single-claim lineage join -------------------------------------------------
+
+
+def test_single_claim_state_requires_its_exact_primary_claim() -> None:
+    with pytest.raises(ValueError, match="requires its exact PrimaryIssueClaim"):
+        acquire_live_compute_control_projection(base_evidence(primary_claim=None))
+
+
+def test_current_head_must_match_the_canonical_primary_claim() -> None:
+    with pytest.raises(ValueError, match="current head conflicts"):
+        acquire_live_compute_control_projection(base_evidence(current_head_sha=SHA))
+
+
+def test_claim_identity_cannot_be_swapped_between_lineages() -> None:
+    other_lineage = PrimaryIssueClaim(
+        pull_request_number=1360,
+        branch="agent/1359-other-lineage",
+        head_sha=HEAD,
+        state="merged",
+    )
+    with pytest.raises(ValueError, match="identity conflicts"):
+        acquire_live_compute_control_projection(
+            base_evidence(primary_claim=other_lineage)
+        )
+
+
+def test_tampered_primary_claim_fails_closed_on_reidentification() -> None:
+    tampered = merged_claim()
+    object.__setattr__(tampered, "head_sha", SHA)
+    with pytest.raises(ValueError, match="claim_id does not match"):
+        acquire_live_compute_control_projection(
+            base_evidence(primary_claim=tampered, current_head_sha=SHA)
+        )
+
+
+def test_primary_claim_is_rejected_without_a_single_claim_state() -> None:
+    with pytest.raises(ValueError, match="only valid for a single-claim"):
+        acquire_live_compute_control_projection(base_evidence(primary_claims=()))
 
 
 # -- LiveCurrentIssueSnapshotReader --------------------------------------------

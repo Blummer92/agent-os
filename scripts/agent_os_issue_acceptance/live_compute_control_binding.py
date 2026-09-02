@@ -1,6 +1,6 @@
-"""Live production binding into the #1451 -> #1441 -> #1439/#1419 chain (#1460).
+"""Live production binding into the #1451 -> #1441 -> #1419 chain (#1460).
 
-Target flow (unchanged from the issue):
+Target flow:
 
 ```text
 Live GitHub/runtime evidence
@@ -8,7 +8,7 @@ Live GitHub/runtime evidence
   -> thin exact-type production adapters (this module)
   -> #1451 acquire_issue_operational_state(...)
   -> #1441 IssueOperationalState
-  -> #1439 compute-control producer
+  -> #1097 CodingCommandCenterHandoff
   -> #1419 agent-os-compute-control-projection/1.0
 ```
 
@@ -16,8 +16,8 @@ This module owns no readiness, authorization, dependency, claim, validation,
 freshness, or compute-control semantics of its own. It is a binding/adapter
 boundary only: it performs (or accepts pre-performed) reads through existing
 canonical evidence owners, translates their already-typed results into the
-exact #1451 injected-evidence shapes, and invokes the unchanged #1451/#1439
-composition functions exactly once each.
+exact #1451 injected-evidence shapes, and invokes the unchanged #1451/#1097/
+#1419 composition functions exactly once each.
 
 ## Canonical owner for each #1451 input
 
@@ -101,10 +101,17 @@ it only accepts one.
 governed production/runtime callable #1420 needs: given one
 ``LiveComputeControlEvidence`` bundle of already-acquired canonical evidence,
 it performs the one live issue read, translates every #1451 input, invokes
-the unchanged #1451 -> #1441 -> #1439/#1419 chain exactly once, and returns
-the serialized ``agent-os-compute-control-projection/1.0`` payload. It
-performs no Notion write, no merge, no closure, and no other external-system
+the unchanged #1451 -> #1441 -> #1419 chain exactly once, and returns the
+serialized ``agent-os-compute-control-projection/1.0`` payload. It performs
+no Notion write, no merge, no closure, and no other external-system
 mutation; #1424 remains the sole destination writer.
+
+The one join this composition boundary owns is the single-claim lineage
+check below: when the acquired state has one primary claim, the caller's
+exact ``primary_claim`` and observed ``current_head_sha`` must describe that
+same claim, so a well-formed head SHA can never be paired with a different
+PR/branch lineage. It verifies an identity join only; claim authority stays
+with the canonical claim evidence owners.
 """
 
 from __future__ import annotations
@@ -130,18 +137,21 @@ from scripts.agent_os_remote_validation.provenance import (
 )
 
 from .approval_records import ApprovalApplicabilityResult
-from .coding_command_center_handoff import CodingCommandCenterEvidence
-from .compute_control_producer import (
-    ComputeControlProductionEvidence,
-    produce_serialized_compute_control_projection,
+from .coding_command_center_handoff import (
+    CodingCommandCenterEvidence,
+    build_coding_command_center_handoff,
 )
 from .compute_control_projection import (
     ActiveExecutionReference,
+    ComputeControlEvidence,
     ValidationHeadReference,
+    build_compute_control_projection,
+    serialize_compute_control_projection,
 )
 from .executor_route import ExecutorRouteDecision
 from .issue_operational_state import (
     AuthorityProjection,
+    ClaimState,
     DependencyState,
     FreshnessState,
     IssueState,
@@ -405,12 +415,12 @@ def acquire_live_compute_control_projection(
 
     This is the smallest governed production/runtime callable #1420 needs: it
     performs the one live issue read, wires every already-acquired canonical
-    evidence input into the exact #1451 shapes, invokes
-    ``acquire_issue_operational_state`` and the unchanged #1439/#1419
-    composition exactly once each, and returns the serialized projection.
-    Missing or malformed required evidence raises rather than fabricating a
-    projection; no GitHub write, Notion write, or other external-system
-    mutation is performed.
+    evidence input into the exact #1451 shapes, verifies the single-claim
+    lineage join, invokes ``acquire_issue_operational_state`` and the
+    unchanged #1097/#1419 composition exactly once each, and returns the
+    serialized projection. Missing, conflicting, or malformed required
+    evidence raises rather than fabricating a projection; no GitHub write,
+    Notion write, or other external-system mutation is performed.
     """
     if type(evidence) is not LiveComputeControlEvidence:
         raise TypeError("evidence must be exact LiveComputeControlEvidence")
@@ -509,27 +519,46 @@ def acquire_live_compute_control_projection(
     )
     state = acquired.operational_state
 
-    handoff_evidence = CodingCommandCenterEvidence(
-        operational_state=state,
-        source_revision=state.source_revision,
-        observed_head_sha=evidence.current_head_sha,
-        executor_route_decision=evidence.executor_route_decision,
-        validation_classification=evidence.validation_classification,
-        validation_evidence_reference=evidence.validation_evidence_reference,
-        post_pr_lane_plan=evidence.post_pr_lane_plan,
-        handoff_target=evidence.handoff_target,
+    claim = evidence.primary_claim
+    if state.claim_state is ClaimState.SINGLE:
+        if type(claim) is not PrimaryIssueClaim:
+            raise ValueError("single-claim operational state requires its exact PrimaryIssueClaim")
+        # ``claim_id`` is the content digest over exactly the claim's pull
+        # request, branch, head, and state, so re-deriving it and comparing it
+        # to the state's own claim identity proves all four at once and fails
+        # closed on a tampered frozen claim.
+        claim.__post_init__()
+        if (claim.claim_id,) != state.primary_claim_ids:
+            raise ValueError("primary claim identity conflicts with operational state")
+        if evidence.current_head_sha != claim.head_sha:
+            raise ValueError("current head conflicts with the canonical primary claim")
+    elif claim is not None:
+        raise ValueError("primary_claim is only valid for a single-claim operational state")
+
+    handoff = build_coding_command_center_handoff(
+        CodingCommandCenterEvidence(
+            operational_state=state,
+            source_revision=state.source_revision,
+            observed_head_sha=evidence.current_head_sha,
+            executor_route_decision=evidence.executor_route_decision,
+            validation_classification=evidence.validation_classification,
+            validation_evidence_reference=evidence.validation_evidence_reference,
+            post_pr_lane_plan=evidence.post_pr_lane_plan,
+            handoff_target=evidence.handoff_target,
+        )
     )
 
-    projection_evidence = ComputeControlProductionEvidence(
-        operational_state=state,
-        current_head_sha=evidence.current_head_sha,
-        primary_claim=evidence.primary_claim,
-        handoff_evidence=handoff_evidence,
-        validation_plan=evidence.validation_plan,
-        evidence_applicability=evidence.evidence_applicability,
-        validation_head_reference=evidence.validation_head_reference,
-        active_execution=evidence.active_execution,
-        measured_compute_metadata_reference=evidence.measured_compute_metadata_reference,
+    return serialize_compute_control_projection(
+        build_compute_control_projection(
+            ComputeControlEvidence(
+                handoff=handoff,
+                operational_state=state,
+                current_head_sha=evidence.current_head_sha,
+                validation_plan=evidence.validation_plan,
+                evidence_applicability=evidence.evidence_applicability,
+                validation_head_reference=evidence.validation_head_reference,
+                active_execution=evidence.active_execution,
+                measured_compute_metadata_reference=evidence.measured_compute_metadata_reference,
+            )
+        )
     )
-
-    return produce_serialized_compute_control_projection(projection_evidence)
