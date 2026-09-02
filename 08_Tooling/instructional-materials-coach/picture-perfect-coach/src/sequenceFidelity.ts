@@ -29,6 +29,7 @@ export type SequenceFrameSnapshot = Readonly<{
   tutorialPanelState: string;
   themeState: string;
   controlState: string;
+  controlGrammarState: string;
   unrelatedObjectState: string;
   sessionId?: string;
   continuityConfidence: 'resolved' | 'ambiguous';
@@ -56,6 +57,7 @@ const trackedFields = [
   'tutorialPanelState',
   'themeState',
   'controlState',
+  'controlGrammarState',
   'unrelatedObjectState',
   'sessionId',
 ] as const;
@@ -81,7 +83,9 @@ function reasonFor(field: TrackedField): SequenceFidelityReason {
     case 'uiState': return SEQUENCE_FIDELITY_REASONS.uiDrift;
     case 'tutorialPanelState': return SEQUENCE_FIDELITY_REASONS.tutorialPanelDrift;
     case 'themeState': return SEQUENCE_FIDELITY_REASONS.themeDrift;
-    case 'controlState': return SEQUENCE_FIDELITY_REASONS.controlDrift;
+    case 'controlState':
+    case 'controlGrammarState':
+      return SEQUENCE_FIDELITY_REASONS.controlDrift;
     case 'unrelatedObjectState': return SEQUENCE_FIDELITY_REASONS.unrelatedObjectDrift;
     case 'sessionId': return SEQUENCE_FIDELITY_REASONS.sessionIdentityDrift;
   }

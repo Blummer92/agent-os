@@ -66,7 +66,7 @@ from scripts.agent_os_execution_capabilities import (
     validate_repository_state_evidence,
 )
 
-from .stage_models import STAGE_SCHEMA_VERSION
+from .stage_models import STAGE_SCHEMA_VERSION, require_exact_keys
 
 REPOSITORY_OBSERVATION_REJECTED = "repository-observation-rejected"
 """The observation could not form canonical evidence at all."""
@@ -331,7 +331,7 @@ def repository_state_evidence_from_dict(
     ``RepositoryStateEvidence``: a payload whose identity no longer matches its
     own content is rejected rather than silently re-derived.
     """
-    _require_exact_keys(
+    require_exact_keys(
         payload, _REPOSITORY_STATE_EVIDENCE_PAYLOAD_KEYS, "repository state evidence"
     )
     if payload["execution_authorized"] is not False:
@@ -433,7 +433,7 @@ def repository_stage_result_from_dict(payload: Mapping[str, Any]) -> RepositoryS
         raise ValueError("repository stage result must be a mapping")
     if payload.get("schema_version") != STAGE_SCHEMA_VERSION:
         raise ValueError("unsupported stage schema_version")
-    _require_exact_keys(
+    require_exact_keys(
         payload, _REPOSITORY_STAGE_RESULT_PAYLOAD_KEYS, "repository stage result"
     )
     if payload["execution_authorized"] is not False:
@@ -472,28 +472,12 @@ def repository_stage_result_from_dict(payload: Mapping[str, Any]) -> RepositoryS
 
 
 def _repository_identity_from_dict(payload: Mapping[str, Any]) -> RepositoryIdentity:
-    _require_exact_keys(
+    require_exact_keys(
         payload, _REPOSITORY_IDENTITY_PAYLOAD_KEYS, "repository identity"
     )
     return RepositoryIdentity(
         **{name: payload[name] for name in _REPOSITORY_IDENTITY_PAYLOAD_KEYS}
     )
-
-
-def _require_exact_keys(
-    payload: object, keys: frozenset[str], label: str
-) -> Mapping[str, Any]:
-    """Closed-schema key check, mirroring the readiness-stage transport rule."""
-    if not isinstance(payload, Mapping):
-        raise ValueError(f"{label} must be a mapping")
-    supplied = set(payload)
-    missing = sorted(keys - supplied)
-    if missing:
-        raise ValueError(f"{label} is missing field(s): " + ", ".join(missing))
-    unsupported = sorted(supplied - keys)
-    if unsupported:
-        raise ValueError(f"{label} has unsupported field(s): " + ", ".join(unsupported))
-    return payload
 
 
 def _canonical_evidence(observation: RepositoryObservation) -> RepositoryStateEvidence:
