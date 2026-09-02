@@ -189,7 +189,23 @@ class GitHubPRLabelAdapter(TaskAdapter):
         pr_number = self._require_pr_number(payload)
         label = self._require_label(payload)
         data = self._post_label(repository_full_name, pr_number, label)
-        labels = [item.get("name") for item in data if isinstance(item, dict)] if isinstance(data, list) else []
+
+        if not isinstance(data, list):
+            raise GitHubPRLabelAdapterError("GitHub API returned malformed label response: expected a list")
+
+        labels = []
+        for index, item in enumerate(data):
+            if not isinstance(item, dict):
+                raise GitHubPRLabelAdapterError(
+                    f"GitHub API returned malformed label response: entry {index} is not an object"
+                )
+            name = item.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise GitHubPRLabelAdapterError(
+                    f"GitHub API returned malformed label response: entry {index} has invalid 'name'"
+                )
+            labels.append(name)
+
         return {
             "status": "success",
             "message": f"Added label {label!r} to {repository_full_name}#{pr_number}",
