@@ -333,8 +333,13 @@ class NotionReadOnlyAdapter(TaskAdapter):
         block_id = self._require(payload, "block_id")
         page_size = self._bounded_int(payload, "page_size", 100, 1, _MAX_PAGE_SIZE)
         params = {"page_size": page_size}
-        if payload.get("start_cursor") is not None:
-            params["start_cursor"] = str(payload["start_cursor"])
+        if "start_cursor" in payload and payload["start_cursor"] is not None:
+            start_cursor = payload["start_cursor"]
+            if not isinstance(start_cursor, str) or not start_cursor:
+                raise NotionReadOnlyAdapterError(
+                    "'start_cursor' must be a non-empty opaque string"
+                )
+            params["start_cursor"] = start_cursor
         data = self._get(
             f"/blocks/{block_id}/children?{urllib.parse.urlencode(params)}"
         )
