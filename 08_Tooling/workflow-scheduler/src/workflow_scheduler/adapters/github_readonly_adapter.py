@@ -71,6 +71,17 @@ class GitHubReadOnlyAdapter(TaskAdapter):
             raise GitHubReadOnlyAdapterError(f"Missing required payload field: {field!r}")
         return payload[field]
 
+    def _require_repository_full_name(self, payload: Dict[str, Any]) -> str:
+        value = self._require(payload, "repository_full_name")
+        if not isinstance(value, str):
+            raise GitHubReadOnlyAdapterError(f"'repository_full_name' must be a string, got {value!r}")
+        parts = value.split("/")
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            raise GitHubReadOnlyAdapterError(
+                f"'repository_full_name' must be in 'owner/repo' shape, got {value!r}"
+            )
+        return value
+
     def _require_pr_number(self, payload: Dict[str, Any]) -> int:
         value = self._require(payload, "pr_number")
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
@@ -84,21 +95,22 @@ class GitHubReadOnlyAdapter(TaskAdapter):
         return self._http_get(f"{GITHUB_API_BASE}{path}", headers, self.timeout)
 
     def _action_get_repo(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        data = self._get(f"/repos/{self._require(payload, 'repository_full_name')}")
+        full_name = self._require_repository_full_name(payload)
+        data = self._get(f"/repos/{full_name}")
         return {key: data.get(key) for key in ("full_name", "description", "default_branch", "stargazers_count", "open_issues_count", "private")}
 
     def _action_get_pr_info(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        full_name = self._require(payload, "repository_full_name")
+        full_name = self._require_repository_full_name(payload)
         data = self._get(f"/repos/{full_name}/pulls/{self._require_pr_number(payload)}")
         return {"number": data.get("number"), "title": data.get("title"), "state": data.get("state"), "body": data.get("body"), "user": (data.get("user") or {}).get("login"), "merged": data.get("merged"), "created_at": data.get("created_at"), "updated_at": data.get("updated_at")}
 
     def _action_list_pr_changed_filenames(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        full_name = self._require(payload, "repository_full_name")
+        full_name = self._require_repository_full_name(payload)
         data = self._get(f"/repos/{full_name}/pulls/{self._require_pr_number(payload)}/files")
         return {"filenames": [item.get("filename") for item in data if isinstance(item, dict)]}
 
     def _action_list_recent_prs(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        full_name = self._require(payload, "repository_full_name")
+        full_name = self._require_repository_full_name(payload)
         state = payload.get("state", "all")
         if not isinstance(state, str) or state not in _VALID_PR_LIST_STATES:
             raise GitHubReadOnlyAdapterError(
@@ -113,7 +125,7 @@ class GitHubReadOnlyAdapter(TaskAdapter):
         return {"pull_requests": [{"number": pr.get("number"), "title": pr.get("title"), "state": pr.get("state")} for pr in data if isinstance(pr, dict)]}
 
     def _action_get_commit(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        full_name = self._require(payload, "repository_full_name")
+        full_name = self._require_repository_full_name(payload)
         data = self._get(f"/repos/{full_name}/commits/{self._require(payload, 'sha')}")
         commit = data.get("commit") or {}
         author = commit.get("author") or {}
