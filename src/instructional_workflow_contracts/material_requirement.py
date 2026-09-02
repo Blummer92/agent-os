@@ -14,6 +14,7 @@ from .common import (
     canonical_size,
     canonical_strings,
     freeze_json,
+    invalid_result,
     sanitize_detail,
     sha256_hex,
     validate_and_normalize_json,
@@ -247,18 +248,9 @@ def validate_material_requirement(value: object) -> ValidationResult:
         )
         return ValidationResult(status=ValidationStatus.VALID, record=record)
     except ContractValidationError as exc:
-        return _invalid(exc.reason_code, exc.detail)
+        return invalid_result(exc.reason_code, exc.detail)
     except (TypeError, ValueError) as exc:
-        return _invalid("material-invalid", sanitize_detail(str(exc)))
-
-
-def _invalid(reason: str, detail: str) -> ValidationResult:
-    return ValidationResult(
-        status=ValidationStatus.INVALID,
-        record=None,
-        reason_codes=(reason,),
-        details=(sanitize_detail(detail),),
-    )
+        return invalid_result("material-invalid", sanitize_detail(str(exc)))
 
 
 def _mapping(value: object, name: str) -> dict[str, Any]:

@@ -34,6 +34,8 @@ from .common import (
     freeze_json,
     sha256_hex,
     validate_and_normalize_json,
+    validate_exact_fields,
+    validate_mapping,
     validate_revision,
     validate_stable_id,
     validate_text,
@@ -174,19 +176,6 @@ def _invalid(reason: str, detail: str) -> ValidationResult:
     )
 
 
-def _mapping(value: Any, name: str) -> dict[str, Any]:
-    if type(value) is not dict:
-        raise ContractValidationError("handoff-wrong-type", f"{name} must be a built-in mapping")
-    return value
-
-
-def _exact_fields(value: dict[str, Any], expected: frozenset[str], name: str) -> None:
-    if set(value) != expected:
-        if set(value) - expected:
-            raise ContractValidationError("handoff-unknown-field", f"{name} contains unknown fields")
-        raise ContractValidationError("handoff-invalid", f"{name} is missing required fields")
-
-
 def _choice(value: Any, allowed: frozenset[str], name: str) -> str:
     if type(value) is not str or value not in allowed:
         raise ContractValidationError("handoff-invalid", f"{name} is unsupported")
@@ -222,7 +211,7 @@ def _stable_id_list(value: Any, name: str, *, maximum: int = MAX_LIST_ITEMS) -> 
 
 
 def _validate_authority(authority: dict[str, Any]) -> None:
-    _exact_fields(authority, AUTHORITY_FIELDS, "authority")
+    validate_exact_fields(authority, AUTHORITY_FIELDS, "authority")
     for name, value in authority.items():
         if type(value) is not bool or value is not False:
             raise ContractValidationError("authority-invalid", f"{name} must be built-in false")
@@ -240,8 +229,8 @@ def _evidence_items(value: Any) -> list[dict[str, str]]:
     checked: list[dict[str, str]] = []
     seen_ids: set[str] = set()
     for item in value:
-        mapped = _mapping(item, "compacting.objective_mastery_evidence item")
-        _exact_fields(mapped, EVIDENCE_ITEM_FIELDS, "compacting.objective_mastery_evidence item")
+        mapped = validate_mapping(item, "compacting.objective_mastery_evidence item")
+        validate_exact_fields(mapped, EVIDENCE_ITEM_FIELDS, "compacting.objective_mastery_evidence item")
         evidence_id = validate_stable_id(mapped["evidence_id"], "objective_mastery_evidence.evidence_id")
         if evidence_id in seen_ids:
             raise ContractValidationError(
@@ -302,21 +291,21 @@ def validate_mixed_class_pathway(value: object) -> ValidationResult:
     """
     try:
         normalized = validate_and_normalize_json(value, max_bytes=MAX_INPUT_BYTES)
-        payload = _mapping(normalized, "pathway record")
-        _exact_fields(payload, TOP_LEVEL_FIELDS, "pathway record")
+        payload = validate_mapping(normalized, "pathway record")
+        validate_exact_fields(payload, TOP_LEVEL_FIELDS, "pathway record")
 
-        identity = _mapping(payload["identity"], "identity")
-        pathway = _mapping(payload["pathway"], "pathway")
-        grouping = _mapping(payload["grouping"], "grouping")
-        accessibility = _mapping(payload["accessibility"], "accessibility")
-        external_source = _mapping(payload["external_source"], "external_source")
-        authority = _mapping(payload["authority"], "authority")
+        identity = validate_mapping(payload["identity"], "identity")
+        pathway = validate_mapping(payload["pathway"], "pathway")
+        grouping = validate_mapping(payload["grouping"], "grouping")
+        accessibility = validate_mapping(payload["accessibility"], "accessibility")
+        external_source = validate_mapping(payload["external_source"], "external_source")
+        authority = validate_mapping(payload["authority"], "authority")
 
-        _exact_fields(identity, IDENTITY_FIELDS, "identity")
-        _exact_fields(pathway, PATHWAY_FIELDS, "pathway")
-        _exact_fields(grouping, GROUPING_FIELDS, "grouping")
-        _exact_fields(accessibility, ACCESSIBILITY_FIELDS, "accessibility")
-        _exact_fields(external_source, EXTERNAL_SOURCE_FIELDS, "external_source")
+        validate_exact_fields(identity, IDENTITY_FIELDS, "identity")
+        validate_exact_fields(pathway, PATHWAY_FIELDS, "pathway")
+        validate_exact_fields(grouping, GROUPING_FIELDS, "grouping")
+        validate_exact_fields(accessibility, ACCESSIBILITY_FIELDS, "accessibility")
+        validate_exact_fields(external_source, EXTERNAL_SOURCE_FIELDS, "external_source")
         _validate_authority(authority)
 
         if validate_version(identity["contract_version"]) != CONTRACT_ID:
@@ -372,8 +361,8 @@ def validate_mixed_class_pathway(value: object) -> ValidationResult:
         advanced_work: dict[str, Any] | None = None
 
         if compacting_raw is not None:
-            compacting_mapping = _mapping(compacting_raw, "compacting")
-            _exact_fields(compacting_mapping, COMPACTING_FIELDS, "compacting")
+            compacting_mapping = validate_mapping(compacting_raw, "compacting")
+            validate_exact_fields(compacting_mapping, COMPACTING_FIELDS, "compacting")
             eligibility_basis_raw = compacting_mapping["eligibility_basis"]
             if type(eligibility_basis_raw) is not list or not eligibility_basis_raw:
                 raise ContractValidationError(
@@ -401,8 +390,8 @@ def validate_mixed_class_pathway(value: object) -> ValidationResult:
             }
 
         if advanced_work_raw is not None:
-            advanced_work_mapping = _mapping(advanced_work_raw, "advanced_work")
-            _exact_fields(advanced_work_mapping, ADVANCED_WORK_FIELDS, "advanced_work")
+            advanced_work_mapping = validate_mapping(advanced_work_raw, "advanced_work")
+            validate_exact_fields(advanced_work_mapping, ADVANCED_WORK_FIELDS, "advanced_work")
             advanced_work = {
                 "advanced_dimensions": _text_list(
                     advanced_work_mapping["advanced_dimensions"], "advanced_work.advanced_dimensions"

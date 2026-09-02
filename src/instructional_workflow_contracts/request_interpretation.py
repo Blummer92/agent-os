@@ -18,6 +18,9 @@ from .common import (
     is_secret_like_key,
     sha256_hex,
     validate_and_normalize_json,
+    validate_bounded_list,
+    validate_exact_fields,
+    validate_mapping,
     validate_revision,
     validate_stable_id,
     validate_text,
@@ -63,27 +66,6 @@ class RequestInterpretation:
     authority: AuthorityEvidence = field(default_factory=AuthorityEvidence, init=False)
 
 
-def _mapping(value: Any, name: str) -> dict[str, Any]:
-    if type(value) is not dict:
-        raise ContractValidationError("handoff-wrong-type", f"{name} must be a built-in mapping")
-    return value
-
-
-def _list(value: Any, name: str, maximum: int) -> list[Any]:
-    if type(value) is not list:
-        raise ContractValidationError("handoff-wrong-type", f"{name} must be a built-in list")
-    if len(value) > maximum:
-        raise ContractValidationError("handoff-oversized", f"{name} exceeds its collection bound")
-    return value
-
-
-def _exact(value: dict[str, Any], expected: frozenset[str], name: str) -> None:
-    if set(value) != expected:
-        if set(value) - expected:
-            raise ContractValidationError("handoff-unknown-field", f"{name} contains unknown fields")
-        raise ContractValidationError("handoff-invalid", f"{name} is missing required fields")
-
-
 def _choice(value: Any, allowed: frozenset[str], name: str) -> str:
     text = validate_text(value, name, max_length=64)
     if text not in allowed:
@@ -98,8 +80,8 @@ def _optional_stable_id(value: Any, name: str) -> str | None:
 
 
 def _reference(value: Any) -> ContractReference:
-    ref = _mapping(value, "evidence reference")
-    _exact(ref, REFERENCE_FIELDS, "evidence reference")
+    ref = validate_mapping(value, "evidence reference")
+    validate_exact_fields(ref, REFERENCE_FIELDS, "evidence reference")
     return ContractReference(
         system=ref["system"], stable_id=ref["stable_id"], exact_location=ref["exact_location"],
         verification_evidence=ref["verification_evidence"],
@@ -107,8 +89,8 @@ def _reference(value: Any) -> ContractReference:
 
 
 def _target(value: Any) -> dict[str, Any]:
-    target = _mapping(value, "target")
-    _exact(target, TARGET_FIELDS, "target")
+    target = validate_mapping(value, "target")
+    validate_exact_fields(target, TARGET_FIELDS, "target")
     system = _choice(target["system"], SYSTEMS, "target.system")
     resource_kind = _choice(target["resource_kind"], RESOURCE_KINDS, "target.resource_kind")
     repository = _optional_stable_id(target["repository"], "target.repository")
@@ -119,9 +101,9 @@ def _target(value: Any) -> dict[str, Any]:
 def _constraints(values: Any) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for raw in _list(values, "constraints", MAX_CONSTRAINTS):
-        item = _mapping(raw, "constraint")
-        _exact(item, CONSTRAINT_FIELDS, "constraint")
+    for raw in validate_bounded_list(values, "constraints", MAX_CONSTRAINTS):
+        item = validate_mapping(raw, "constraint")
+        validate_exact_fields(item, CONSTRAINT_FIELDS, "constraint")
         name = validate_stable_id(item["name"], "constraint.name")
         if is_secret_like_key(name):
             raise ContractValidationError("authority-secret-field", "constraint.name is secret-like")
@@ -163,8 +145,8 @@ def _semantic_reasons(origin: str, action: str, effect: str, continuation: str, 
 def validate_request_interpretation(value: object) -> ValidationResult:
     try:
         normalized = validate_and_normalize_json(value, max_bytes=MAX_INPUT_BYTES)
-        payload = _mapping(normalized, "request interpretation")
-        _exact(payload, TOP_LEVEL_FIELDS, "request interpretation")
+        payload = validate_mapping(normalized, "request interpretation")
+        validate_exact_fields(payload, TOP_LEVEL_FIELDS, "request interpretation")
         if validate_text(payload["schema_name"], "schema_name", max_length=64) != SCHEMA_NAME:
             raise ContractValidationError("handoff-invalid", "schema_name is unsupported")
         if validate_version(payload["contract_version"]) != CONTRACT_VERSION:
@@ -180,12 +162,12 @@ def validate_request_interpretation(value: object) -> ValidationResult:
         effect = _choice(payload["requested_effect"], EFFECTS, "requested_effect")
         continuation = _choice(payload["continuation_mode"], CONTINUATIONS, "continuation_mode")
         target = _target(payload["target"])
-        outputs = sorted({validate_stable_id(item, "requested_output") for item in _list(payload["requested_outputs"], "requested_outputs", MAX_OUTPUTS)})
+        outputs = sorted({validate_stable_id(item, "requested_output") for item in validate_bounded_list(payload["requested_outputs"], "requested_outputs", MAX_OUTPUTS)})
         constraints = _constraints(payload["constraints"])
-        supplied_reasons = {validate_text(item, "reason_code", max_length=128) for item in _list(payload["reason_codes"], "reason_codes", len(REASON_CODES))}
+        supplied_reasons = {validate_text(item, "reason_code", max_length=128) for item in validate_bounded_list(payload["reason_codes"], "reason_codes", len(REASON_CODES))}
         if not supplied_reasons <= REASON_CODES:
             raise ContractValidationError("handoff-invalid", "reason_codes contain an unknown governed code")
-        references = [_reference(item) for item in _list(payload["evidence_references"], "evidence_references", MAX_REFERENCES)]
+        references = [_reference(item) for item in validate_bounded_list(payload["evidence_references"], "evidence_references", MAX_REFERENCES)]
         reasons = tuple(sorted(supplied_reasons | _semantic_reasons(origin, action, effect, continuation, target)))
         record_payload = {
             "schema_name": SCHEMA_NAME, "contract_version": CONTRACT_VERSION, "record_revision": revision,
