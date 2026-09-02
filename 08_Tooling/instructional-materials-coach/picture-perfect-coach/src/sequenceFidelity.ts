@@ -104,10 +104,11 @@ export function evaluateSequenceFidelity(
 
     if (!delta) {
       reasons.push(SEQUENCE_FIDELITY_REASONS.ambiguousContinuity);
-      continue;
     }
 
-    const allowed = new Set<TrackedField>(delta.allowedFields as readonly TrackedField[]);
+    const allowed = new Set<TrackedField>(
+      delta?.allowedFields as readonly TrackedField[] | undefined,
+    );
     for (const field of trackedFields) {
       if (!allowed.has(field) && !equalValue(current[field], next[field])) {
         reasons.push(reasonFor(field));
@@ -116,6 +117,12 @@ export function evaluateSequenceFidelity(
   }
 
   const unique = Object.freeze([...new Set(reasons)]);
+  if (
+    unique.includes(SEQUENCE_FIDELITY_REASONS.frameCountMismatch) ||
+    unique.includes(SEQUENCE_FIDELITY_REASONS.frameIdentityMismatch)
+  ) {
+    return Object.freeze({ status: 'fail', reasons: unique });
+  }
   if (unique.includes(SEQUENCE_FIDELITY_REASONS.ambiguousContinuity)) {
     return Object.freeze({ status: 'manual-review', reasons: unique });
   }
