@@ -174,15 +174,11 @@ chmod 0700 "$wheel_dir"
     --no-deps \
     --no-build-isolation \
     --wheel-dir "$wheel_dir" \
-    ./08_Tooling/reusable-capability-registry \
     ./08_Tooling/agent-memory-context-manager \
     ./08_Tooling/workflow-scheduler \
     ./08_Tooling/agent-os-execution-service
 ) >&2
 
-set -- "$wheel_dir"/reusable_capability_registry-*.whl
-[ "$#" -eq 1 ] && [ -f "$1" ] || fail "expected one reusable-capability-registry wheel"
-capability_wheel=$1
 set -- "$wheel_dir"/agent_memory_context_manager-*.whl
 [ "$#" -eq 1 ] && [ -f "$1" ] || fail "expected one agent-memory-context-manager wheel"
 context_wheel=$1
@@ -194,7 +190,7 @@ set -- "$wheel_dir"/agent_os_execution_service-*.whl
 service_wheel=$1
 
 # Runtime dependencies must already be present on the qualified host. Root may
-# install only the four locally built Agent OS wheels; it may not resolve or
+# install only the three locally built Agent OS wheels; it may not resolve or
 # download a dependency from a Python package index. Staging stays under the
 # restrictive 077 mask above; only the final root-owned runtime publication uses
 # the ordinary 022 system-install mask so the governed non-root runtime can
@@ -206,14 +202,13 @@ PIP_NO_INDEX=1 python3 -m pip install \
   --no-index \
   --break-system-packages \
   --force-reinstall \
-  "$capability_wheel" \
   "$context_wheel" \
   "$scheduler_wheel" \
   "$service_wheel" >&2
 umask 077
 
 # pip --force-reinstall may preserve restrictive modes on existing package
-# directories. Normalize only the four fixed Agent OS package roots. Refuse
+# directories. Normalize only the three fixed Agent OS package roots. Refuse
 # symlinked roots or descendants instead of following them into unrelated paths.
 python3 - <<'PY_RUNTIME_PERMISSIONS'
 from __future__ import annotations
@@ -225,7 +220,6 @@ from pathlib import Path
 
 site_root = Path(sysconfig.get_path("purelib")).resolve()
 package_roots = (
-    "reusable_capability_registry",
     "agent_memory_context_manager",
     "workflow_scheduler",
     "agent_os_execution_service",
