@@ -15,6 +15,8 @@ from .models import EvidenceValidationError, deterministic_id
 
 MAX_ITEMS = 256
 MAX_TEXT = 10_000
+MAX_RENDERED_SUMMARY_CHARS = 6_000
+MAX_RENDERED_FINDING_IDS = 8
 
 
 class EvidenceStatus(str, Enum):
@@ -123,6 +125,10 @@ class ReviewMergeEvidenceSummary:
     @property
     def summary_id(self) -> str:
         return deterministic_id(self.to_dict())
+
+    @property
+    def rendered_summary(self) -> str:
+        return render_review_merge_evidence_summary(self)
 
 
 def _text(value: object, field: str) -> str:
@@ -347,6 +353,85 @@ def build_review_merge_evidence_summary(
         merge_evidence_status=status,
         reason_codes=tuple(sorted(reasons)),
     )
+
+
+def _short_sha(value: str | None) -> str:
+    return "unavailable" if value is None else value[:12]
+
+
+def _validation_line(label: str, evidence: ValidationEvidence) -> str:
+    profile = f"/{evidence.profile}" if evidence.profile else ""
+    return f"- {label}{profile}: {evidence.status.value} @ {_short_sha(evidence.tested_sha)}"
+
+
+def _review_line(label: str, evidence: AIReviewEvidence) -> str:
+    return (
+        f"- {label}: {evidence.status.value}"
+        f" @ {_short_sha(evidence.reviewed_sha)}"
+        f" ({evidence.provider})"
+    )
+
+
+def render_review_merge_evidence_summary(summary: ReviewMergeEvidenceSummary) -> str:
+    """Render one bounded, deterministic, mobile-first non-authorizing summary.
+
+    This function renders only evidence already present in #1540's canonical
+    projection. It does not fetch checks/logs, classify aggregate provenance,
+    recommend repairs, publish comments, or infer authority.
+    """
+    if type(summary) is not ReviewMergeEvidenceSummary:
+        raise EvidenceValidationError("summary must be ReviewMergeEvidenceSummary")
+
+    findings = summary.unresolved_finding_ids[:MAX_RENDERED_FINDING_IDS]
+    finding_text = "none"
+    if findings:
+        finding_text = ", ".join(findings)
+        hidden = len(summary.unresolved_finding_ids) - len(findings)
+        if hidden:
+            finding_text += f" (+{hidden} more)"
+
+    lines = [
+        "## Agent OS PR Evidence Summary",
+        "",
+        f"PR: #{summary.pr_number}",
+        f"Head: {_short_sha(summary.source_head_sha)} — CURRENT SUMMARY IDENTITY",
+        f"Evidence state: {summary.merge_evidence_status.value.upper()}",
+        "",
+        "### Validation",
+        f"- issue acceptance: {summary.acceptance.status.value}",
+    ]
+    lines.extend(_validation_line("focused", item) for item in summary.focused_validation)
+    lines.append(_validation_line("aggregate", summary.aggregate_validation))
+    lines.extend(_validation_line("language", item) for item in summary.language_validation)
+    lines.extend(_validation_line("specialized", item) for item in summary.specialized_validation)
+    lines.extend(
+        [
+            "",
+            "### Review",
+            _review_line("normal", summary.normal_review),
+            _review_line("adversarial", summary.adversarial_review),
+            f"- unresolved findings: {finding_text}",
+            "",
+            "### Evidence identity",
+            f"- base: {_short_sha(summary.base_sha)}",
+            f"- synthetic merge: {_short_sha(summary.synthetic_merge_sha)}",
+            f"- local test: {_short_sha(summary.locally_tested_sha)}",
+            f"- merge commit: {_short_sha(summary.merge_commit_sha)}",
+            f"- summary id: {summary.summary_id}",
+        ]
+    )
+    if summary.reason_codes:
+        lines.extend(("", "### Why", "- " + ", ".join(summary.reason_codes)))
+    lines.extend(
+        (
+            "",
+            "Informational evidence only. This summary does not authorize readiness, approval, merge, closure, execution, production, or external writes.",
+        )
+    )
+    rendered = "\n".join(lines)
+    if len(rendered) > MAX_RENDERED_SUMMARY_CHARS:
+        raise EvidenceValidationError("rendered evidence summary exceeds the bounded mobile projection")
+    return rendered
 
 
 def classify_post_merge_evidence(
