@@ -37,7 +37,16 @@ Agents should consult `04_Registry/navigation-alias-registry.md` before manually
 3. `04_Registry/agent-inheritance-registry.md`
 4. `04_Registry/responsibility-matrix.md`
 5. the relevant file in `02_Agent_Overlays/`
-6. any shared standards referenced by that overlay
+6. any shared standards referenced by that overlay that are applicable to the exact next action
+
+Do not preload every standard referenced by an overlay merely because the reference exists. Determine applicability from the resolved task, canonical owner, current issue/lineage evidence, and exact next action; load conditional standards only when their existing canonical trigger applies.
+
+### Routine Repository Coding Hot Context
+For one ordinary Tier 0/1 `status:ready`, `no-external-write` GitHub issue with one focused objective, resolved ownership, no material blocker, no active/ambiguous execution conflict, and a fresh direct repository-owner implementation instruction, the routine pre-implementation context is bounded to: canonical request interpretation; live issue/readiness/scope/source-of-truth evidence; canonical owner/write boundary; Safe Implementation Lane and excluded-surface admission; existing branch/PR lineage when present; and the validation obligations needed for the next lifecycle transition.
+
+The following are conditional side paths, not routine preload requirements: Decision/ADR retrieval only when CKR10 returns `retrieval_required=true`; Lessons Learned retrieval only when CKR6/CKR11 requires material use; runtime/executor details only when the exact next action needs capabilities unavailable on the connected surface; checkpoint/`ResumePlan` and Scheduler lease only for existing runtime/resume/concurrency lineage; branch-refresh rules only when live evidence proves the branch needs the governed refresh path; PR-remediation rules only for actual PR/CI/review repair; finite-mission rules only for explicit multi-item missions; Terminal Fast Lane only for canonical structured release mode; and classroom/PPUX routing only for requests resolved to those domains.
+
+Reuse immutable same-lineage facts instead of rediscovering them. Reacquire mutable evidence when its canonical contract requires freshness, including issue state, authorization applicability, PR/head/base, validation, reviews, and active execution/lease state. Do not create a second task-state packet, cache, router, authorization model, or context manager to implement this boundary.
 
 ## Agent Selection
 Use agents for repeatable jobs, not every subject area. Video production,
@@ -64,7 +73,7 @@ truth records, or irreversible artifacts without explicit approval.
 ## ChatGPT Workflow
 1. Identify the task owner.
 2. Resolve any legacy agent aliases through `04_Registry/legacy-agent-alias-registry.md`.
-3. Read the owner overlay and referenced standards.
+3. Read the owner overlay and only the referenced standards applicable to the exact task/next action.
 4. Confirm allowed and blocked write surfaces.
 5. Use the smallest useful context packet.
 6. Stop if authorization or source of truth is unclear.
@@ -83,7 +92,7 @@ alias resolution. If no alias exists, stop and recommend a registry update.
 the canonical owner of report field ownership, presentation profiles, visible
 ordering, and progress labeling. This entry point restates only its minimum:
 every implementation or review report must include files changed, tests run,
-docs updated, unresolved blockers, handoff recommendations, and remaining risks.
+docs updated, blockers, handoff recommendations, and remaining risks.
 For eligible Safe Implementation Lane work, also follow the `Reporting` contract
 in `01_Shared_Standards/github/safe-implementation-lane.md`: actual branch,
 exact-head evidence, rollback, and authorization/excluded-surface confirmation.
