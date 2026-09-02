@@ -9,6 +9,8 @@ from scripts.agent_os_pr_remediation.cli import evaluate, render_text
 from scripts.agent_os_pr_remediation.models import AUTHORITY_FIELDS, EvidenceValidationError
 
 FIXTURE_PATH = Path(__file__).parents[1] / "fixtures" / "agent_os_pr_remediation" / "e2e.json"
+HEAD = "2" * 40
+MAIN = "1" * 40
 
 
 def _fixture() -> dict:
@@ -17,8 +19,8 @@ def _fixture() -> dict:
 
 def _provenance(**overrides: object) -> dict:
     payload = {
-        "tested_sha": "1" * 40,
-        "main_sha": "2" * 40,
+        "tested_sha": HEAD,
+        "main_sha": MAIN,
         "failure_fingerprint": "pytest:tests/package_b/test_contract.py::test_shared_contract",
         "same_failure_on_current_main": True,
         "environment_or_bootstrap_failure": False,
@@ -105,7 +107,7 @@ def test_stale_aggregate_tested_sha_is_operator_visible_as_ambiguous():
 
 def test_malformed_aggregate_provenance_fails_closed():
     payload = _fixture()
-    payload["aggregate_failure_provenance"] = {"tested_sha": "1" * 40}
+    payload["aggregate_failure_provenance"] = {"tested_sha": HEAD}
 
     with pytest.raises(EvidenceValidationError, match="missing aggregate provenance fields"):
         evaluate(payload)
