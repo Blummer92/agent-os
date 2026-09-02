@@ -22,6 +22,7 @@ result shape changed.
 from __future__ import annotations
 
 import json
+import math
 import os
 import urllib.error
 import urllib.request
@@ -89,6 +90,10 @@ class GitHubReadOnlyAdapter(TaskAdapter):
             urllib-based implementation; tests inject a fake here.
         timeout: Per-request timeout in seconds.
         """
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+            raise TypeError("timeout must be a finite positive number")
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("timeout must be a finite positive number")
         self.token = token if token is not None else os.environ.get("GITHUB_TOKEN")
         self._http_get = http_get or _default_http_get
         self.timeout = timeout
