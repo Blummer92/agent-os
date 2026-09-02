@@ -2,11 +2,11 @@
 
 ## Purpose
 
-This package exposes pure-local, read-only contracts for PR review remediation, risk-triggered review selection, bounded review evidence, deterministic Review Attack Plans, truthful review/merge-evidence summaries, and CI evidence recovery. It evaluates supplied evidence only and performs no provider invocation, source edit, validation execution, merge, or external write.
+This package exposes pure-local, read-only contracts for PR review remediation, risk-triggered review selection, bounded review evidence, deterministic Review Attack Plans, evidence-backed substantive findings, truthful review/merge-evidence summaries, and CI evidence recovery. It evaluates supplied evidence only and performs no provider invocation, source edit, validation execution, merge, or external write.
 
 ## Risk-triggered code review
 
-`scripts/agent_os_pr_remediation/review_evidence.py` owns CRH1 review depth and the bounded `ReviewEvidencePacket`. Review depths remain `no-ai-review-required`, `normal-review-required`, `adversarial-review-required`, and `manual-decision-required`. `review_invalidation_scope(...)` remains the proportional currentness owner; CRH5 does not create another risk classifier, evidence packet, test selector, provenance model, or currentness engine.
+`scripts/agent_os_pr_remediation/review_evidence.py` owns CRH1 review depth and the bounded `ReviewEvidencePacket`. Review depths remain `no-ai-review-required`, `normal-review-required`, `adversarial-review-required`, and `manual-decision-required`. `review_invalidation_scope(...)` remains the proportional currentness owner; downstream review contracts do not create another risk classifier, evidence packet, test selector, provenance model, or currentness engine.
 
 ## Deterministic Review Attack Plans
 
@@ -16,9 +16,21 @@ Attack families are bounded to parser/resolver/selector, authorization/permissio
 
 Every `RequiredAttack` carries an `attack_family`, invariant, exact `reviewed_head_sha`, CRH1-supplied affected-surface references, bounded evidence requirements, and finite reason codes. `attack_id` is content-addressed from those canonical semantics, so it is independent of provider prompt wording, model name, output order, or prose formatting. The plan itself has a deterministic `plan_id` and preserves CRH1 activated references.
 
-The historical defect-oriented attacks include parser first-match ambiguity, authorization evidence mistaken for authority, workflow transport-success versus semantic-success (#1564), wrong exact-head SHA, stale/skipped/cancelled/duplicate/conflicting validation evidence, and state-machine partial-effect/retry/idempotency failures. These are review obligations, not one-model-call-per-attack requirements: one substantive review may cover several attack IDs while downstream #1585 findings and #1586 coverage evidence reference each stable ID independently.
+## Evidence-backed substantive findings
 
-All plan authority fields remain false. A Review Attack Plan grants no execution, readiness, merge, closure, protected-setting, production, or external-write authority and performs no side effects. Provider integration/execution remains outside this contract.
+`scripts/agent_os_pr_remediation/review_findings.py` owns CRH6 finding meaning. A `SubstantiveReviewFinding` is a falsifiable defect claim tied to one existing CRH5 `RequiredAttack.attack_id`. It carries the reviewed exact-head SHA, the attack invariant, a bounded affected surface, a concrete failure scenario, finite severity (`low`, `medium`, `high`, `critical`), bounded supporting evidence references, and a deterministic clearing condition. The stable `finding_id` is content-addressed from those defect semantics rather than provider prose length, confidence, comment ordering, or lifecycle state.
+
+A substantive finding cannot be built without a concrete failure scenario, supporting evidence, or clearing evidence. Its invariant must match the originating CRH5 attack and its affected surface must stay within that attack's CRH1-derived surface. Suggestions use the separate `ReviewSuggestion` model; they are non-blocking, do not satisfy required attacks, do not count as discovered defects, and create no authority.
+
+Clearing conditions use a finite evidence-class vocabulary: `regression-test`, `exact-head-validation`, `invariant-proof`, `surface-absent`, or `superseded-contract`. Resolution requires the named evidence class, all required bounded evidence references, and evidence bound to the finding's reviewed exact head. A prose assertion such as “reviewer says fixed” cannot substitute for a required regression test or exact-head result.
+
+Finding currentness deliberately delegates to CRH1 `review_invalidation_scope(...)`. A changed affected surface becomes `stale`; an unrelated later change may preserve compatible resolved evidence; CRH1 full invalidators such as public-interface, architecture/ownership, authorization/security, dependency, workflow, or issue-scope changes invalidate the full reviewed finding surface. CRH6 does not introduce a second currentness or invalidation engine.
+
+Finding lifecycle vocabulary is `current`, `resolved`, `stale`, `superseded`, and `manual-review`. All finding authority fields remain explicitly false. Findings and clearing evidence grant no execution, readiness, merge, closure, protected-setting, production, or external-write authority and perform no side effects.
+
+CRH7 (#1586) may later use `attack_id` plus current finding state to prove review coverage/test adequacy; CRH8 (#1587) may later benchmark review effectiveness from substantive outcomes. Neither coverage scoring nor benchmark answer keys belong in CRH6.
+
+Historical regression fixtures cover parser first-match ambiguity, transport success versus semantic failure, wrong-issue/cross-identity evidence consumption, authorization evidence mistaken for authority, and state/reconciliation failure without embedding product-specific repair logic.
 
 ## Truthful review and merge evidence
 
@@ -38,14 +50,14 @@ The CLI remains non-authorizing and composes existing remediation evidence only.
 
 ## GitHub Write Handoff
 
-Any separately authorized source change, thread mutation, PR update, merge, issue lifecycle action, credential change, workflow change, or external operation remains owned by the appropriate Agent OS owner. Review planning itself grants none of those authorities.
+Any separately authorized source change, thread mutation, PR update, merge, issue lifecycle action, credential change, workflow change, or external operation remains owned by the appropriate Agent OS owner. Review planning and findings themselves grant none of those authorities.
 
 ## Validation
 
 Focused tests:
 
 ```bash
-python -m pytest tests/agent_os_pr_remediation/test_review_evidence.py tests/agent_os_pr_remediation/test_review_attack_plan.py
+python -m pytest tests/agent_os_pr_remediation/test_review_evidence.py tests/agent_os_pr_remediation/test_review_attack_plan.py tests/agent_os_pr_remediation/test_review_findings.py
 python -m pytest tests/agent_os_pr_remediation/test_merge_evidence_summary.py
 python -m pytest tests/agent_os_pr_remediation/test_ci_evidence_recovery.py
 python -m pytest tests/agent_os_pr_remediation
