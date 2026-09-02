@@ -132,19 +132,19 @@ def test_privileged_installer_scopes_runtime_umask_without_weakening_staging() -
 
     runtime_block = text[runtime_022:restored_077]
     for wheel_name in (
-        '"$capability_wheel"',
         '"$context_wheel"',
         '"$scheduler_wheel"',
         '"$service_wheel"',
     ):
         assert wheel_name in runtime_block
+    assert '"$capability_wheel"' not in runtime_block
     assert "--no-index" in runtime_block
     assert "--no-deps" in runtime_block
     assert "chmod" not in runtime_block
     assert "setfacl" not in text
     assert "chmod -R" not in text
     assert "777" not in runtime_block
-    assert '"reusable_capability_registry"' in text
+    assert '"reusable_capability_registry"' not in text
     assert '"agent_memory_context_manager"' in text
     assert '"workflow_scheduler"' in text
     assert '"agent_os_execution_service"' in text
