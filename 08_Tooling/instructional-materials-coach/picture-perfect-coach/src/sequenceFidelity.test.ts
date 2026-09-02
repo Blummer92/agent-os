@@ -13,8 +13,11 @@ function frame(overrides: Partial<SequenceFrameSnapshot> = {}): SequenceFrameSna
     cameraState: 'camera-1',
     workplaneState: 'workplane-1',
     uiState: 'ui-1',
+    tutorialPanelState: 'tutorial-step-1',
+    themeState: 'theme-1',
     controlState: 'rotation:0',
     unrelatedObjectState: 'bun@1,patty@1',
+    sessionId: 'session-1',
     continuityConfidence: 'resolved',
     ...overrides,
   };
@@ -28,15 +31,20 @@ const rotationDelta = [{
 
 describe('cross-frame sequence fidelity', () => {
   it('passes when only the evidence-authorized rotation state changes', () => {
-    const result = evaluateSequenceFidelity(
+    expect(evaluateSequenceFidelity(
       ['A', 'B'],
       [frame(), frame({ frameId: 'B', controlState: 'rotation:120' })],
       rotationDelta,
-    );
-    expect(result).toEqual({ status: 'pass', reasons: [] });
+    )).toEqual({ status: 'pass', reasons: [], singleFrameFindings: [] });
   });
 
-  it('fails object inventory drift such as an extra bun in Frame B', () => {
+  it('treats object inventory as an unordered inventory and fails an extra bun', () => {
+    expect(evaluateSequenceFidelity(
+      ['A', 'B'],
+      [frame(), frame({ frameId: 'B', objectIds: ['lettuce-copy', 'bun', 'patty'], controlState: 'rotation:120' })],
+      rotationDelta,
+    ).status).toBe('pass');
+
     const result = evaluateSequenceFidelity(
       ['A', 'B'],
       [frame(), frame({ frameId: 'B', objectIds: ['bun', 'patty', 'lettuce-copy', 'extra-bun'], controlState: 'rotation:120' })],
@@ -46,33 +54,42 @@ describe('cross-frame sequence fidelity', () => {
     expect(result.reasons).toContain(SEQUENCE_FIDELITY_REASONS.objectInventoryDrift);
   });
 
-  it('reports camera, UI/control grammar, and unrelated-object drift independently', () => {
+  it('reports camera, panel placement, control grammar, workplane, theme, and unrelated-object drift independently', () => {
     const result = evaluateSequenceFidelity(
       ['A', 'B'],
       [frame(), frame({
         frameId: 'B',
         cameraState: 'camera-2',
+        workplaneState: 'workplane-2',
         uiState: 'ui-panel-moved',
+        tutorialPanelState: 'tutorial-panel-wider',
+        themeState: 'theme-2',
         controlState: 'two-rotation-boxes:120',
         unrelatedObjectState: 'bun@2,patty@1',
       })],
-      [],
+      rotationDelta,
     );
-    expect(result.status).toBe('manual-review');
+    expect(result.status).toBe('fail');
     expect(result.reasons).toEqual(expect.arrayContaining([
-      SEQUENCE_FIDELITY_REASONS.ambiguousContinuity,
       SEQUENCE_FIDELITY_REASONS.cameraDrift,
+      SEQUENCE_FIDELITY_REASONS.workplaneDrift,
       SEQUENCE_FIDELITY_REASONS.uiDrift,
+      SEQUENCE_FIDELITY_REASONS.tutorialPanelDrift,
+      SEQUENCE_FIDELITY_REASONS.themeDrift,
       SEQUENCE_FIDELITY_REASONS.controlDrift,
       SEQUENCE_FIDELITY_REASONS.unrelatedObjectDrift,
     ]));
   });
 
-  it('allows explicitly evidenced tutorial UI changes', () => {
+  it('allows explicitly evidenced tutorial text/UI changes', () => {
     const result = evaluateSequenceFidelity(
       ['A', 'B'],
-      [frame(), frame({ frameId: 'B', uiState: 'ui-step-2', controlState: 'rotation:120' })],
-      [{ fromFrameId: 'A', toFrameId: 'B', allowedFields: ['uiState', 'controlState'] }],
+      [frame(), frame({
+        frameId: 'B',
+        tutorialPanelState: 'tutorial-step-2',
+        controlState: 'rotation:120',
+      })],
+      [{ fromFrameId: 'A', toFrameId: 'B', allowedFields: ['tutorialPanelState', 'controlState'] }],
     );
     expect(result.status).toBe('pass');
   });
@@ -100,6 +117,16 @@ describe('cross-frame sequence fidelity', () => {
     expect(result.reasons).toContain(SEQUENCE_FIDELITY_REASONS.frameIdentityMismatch);
   });
 
+  it('fails two plausible standalone frames that represent different persistent sessions', () => {
+    const result = evaluateSequenceFidelity(
+      ['A', 'B'],
+      [frame(), frame({ frameId: 'B', sessionId: 'session-2', controlState: 'rotation:120' })],
+      rotationDelta,
+    );
+    expect(result.status).toBe('fail');
+    expect(result.reasons).toContain(SEQUENCE_FIDELITY_REASONS.sessionIdentityDrift);
+  });
+
   it('does not infer sequence pass from standalone plausibility when target identity changes', () => {
     const result = evaluateSequenceFidelity(
       ['A', 'B'],
@@ -108,5 +135,37 @@ describe('cross-frame sequence fidelity', () => {
     );
     expect(result.status).toBe('fail');
     expect(result.reasons).toContain(SEQUENCE_FIDELITY_REASONS.targetIdentityDrift);
+  });
+
+  it('composes #1542 single-frame findings without replacing sequence evaluation', () => {
+    const result = evaluateSequenceFidelity(
+      ['A', 'B'],
+      [frame({ singleFrameFindings: ['single-frame-control-invalid'] }), frame({ frameId: 'B', controlState: 'rotation:120' })],
+      rotationDelta,
+    );
+    expect(result.status).toBe('fail');
+    expect(result.reasons).toContain(SEQUENCE_FIDELITY_REASONS.singleFrameFinding);
+    expect(result.singleFrameFindings).toEqual(['single-frame-control-invalid']);
+  });
+
+  it('distinguishes missing transition evidence from a proven unauthorized delta', () => {
+    const ambiguous = evaluateSequenceFidelity(
+      ['A', 'B'],
+      [frame(), frame({ frameId: 'B' })],
+      [],
+    );
+    expect(ambiguous.status).toBe('manual-review');
+    expect(ambiguous.reasons).toContain(SEQUENCE_FIDELITY_REASONS.missingTransitionEvidence);
+
+    const unauthorized = evaluateSequenceFidelity(
+      ['A', 'B'],
+      [frame(), frame({ frameId: 'B', cameraState: 'camera-2' })],
+      [],
+    );
+    expect(unauthorized.status).toBe('fail');
+    expect(unauthorized.reasons).toEqual(expect.arrayContaining([
+      SEQUENCE_FIDELITY_REASONS.missingTransitionEvidence,
+      SEQUENCE_FIDELITY_REASONS.cameraDrift,
+    ]));
   });
 });
