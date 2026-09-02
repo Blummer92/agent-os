@@ -170,8 +170,22 @@ class GitHubReadOnlyAdapter(TaskAdapter):
     def _action_get_commit(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         full_name = self._require_repository_full_name(payload)
         data = self._get(f"/repos/{full_name}/commits/{self._require(payload, 'sha')}")
-        commit = data.get("commit") or {}
-        author = commit.get("author") or {}
+        if not isinstance(data, dict):
+            raise GitHubReadOnlyAdapterError(
+                f"GitHub commit response must be an object, got {data!r}"
+            )
+        commit = data.get("commit")
+        if commit is not None and not isinstance(commit, dict):
+            raise GitHubReadOnlyAdapterError(
+                f"GitHub commit response field 'commit' must be an object or null, got {commit!r}"
+            )
+        commit = commit or {}
+        author = commit.get("author")
+        if author is not None and not isinstance(author, dict):
+            raise GitHubReadOnlyAdapterError(
+                f"GitHub commit response field 'author' must be an object or null, got {author!r}"
+            )
+        author = author or {}
         return {"sha": data.get("sha"), "message": commit.get("message"), "author": author.get("name"), "date": author.get("date")}
 
     ACTIONS: Dict[str, Callable[["GitHubReadOnlyAdapter", Dict[str, Any]], Dict[str, Any]]] = {
