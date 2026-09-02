@@ -40,9 +40,32 @@ def _active_aliases() -> set[str]:
     return {row[0] for row in rows if len(row) == 5 and "active alias" in row[3].lower()}
 
 
+def _owner_identities(owner_value: str, known_identities: set[str]) -> list[str]:
+    """Parse slash-separated owner lists without splitting slashes inside identities."""
+    if owner_value in known_identities:
+        return [owner_value]
+
+    identities = sorted(known_identities, key=len, reverse=True)
+
+    def parse(remaining: str) -> list[str] | None:
+        for identity in identities:
+            if remaining == identity:
+                return [identity]
+            prefix = f"{identity} / "
+            if remaining.startswith(prefix):
+                tail = parse(remaining[len(prefix) :])
+                if tail is not None:
+                    return [identity, *tail]
+        return None
+
+    parsed = parse(owner_value)
+    return parsed if parsed is not None else [owner_value]
+
+
 def test_live_capability_roadmap_uses_only_canonical_primary_owners():
     agents = _canonical_agents()
     aliases = _active_aliases()
+    known_identities = agents | aliases
     rows = _table_rows(
         ROADMAP.read_text(encoding="utf-8"),
         (
@@ -61,7 +84,7 @@ def test_live_capability_roadmap_uses_only_canonical_primary_owners():
     for row in rows:
         assert len(row) == 8
         capability_id, owner_value = row[0], row[3]
-        owners = [owner.strip() for owner in owner_value.split("/")]
+        owners = _owner_identities(owner_value, known_identities)
         assert owners and all(owners)
         for owner in owners:
             assert owner not in aliases, (
