@@ -92,6 +92,12 @@ from .packet_validation import (
     is_valid_handoff_packet,
     validate_handoff_packet,
 )
+from .risk_lesson_activation import (
+    MAX_PROJECTED_LESSONS,
+    RiskLessonProjection,
+    load_risk_lesson_activation_map,
+    project_risks_to_lessons,
+)
 from .summary_cache import (
     CACHE_ENTRY_V2_FIELDS,
     DEFAULT_SUMMARY_CACHE_VERSION,
@@ -176,6 +182,7 @@ __all__ = [
     "MAX_DECISION_RECORDS",
     "MAX_EXISTING_LESSONS",
     "MAX_LESSON_RECORDS",
+    "MAX_PROJECTED_LESSONS",
     "MAX_RELATED_EVIDENCE",
     "MAX_SELECTED",
     "MISS_IDENTITY_MISMATCH",
@@ -194,6 +201,7 @@ __all__ = [
     "RepairRetryBoundaryPlan",
     "RetrievalEscalation",
     "RetryReentryOutcome",
+    "RiskLessonProjection",
     "SUMMARY_CACHE_MISS_REASONS",
     "SUPPORTED_PACKET_SCHEMA_VERSION",
     "SelectedKnowledge",
@@ -217,6 +225,7 @@ __all__ = [
     "evaluate_lesson_enrichment",
     "handoff_packet_source_fingerprint",
     "is_valid_handoff_packet",
+    "load_risk_lesson_activation_map",
     "lookup_summary_cache_entry",
     "lookup_summary_cache_v2",
     "normalize_lesson_row",
@@ -224,6 +233,7 @@ __all__ = [
     "plan_decision_preflight",
     "plan_lesson_preflight",
     "plan_repair_retry_boundary",
+    "project_risks_to_lessons",
     "read_summary_cache_entry",
     "select_coding_knowledge",
     "summarize_handoff_packet",
