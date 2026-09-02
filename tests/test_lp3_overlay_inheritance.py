@@ -14,6 +14,14 @@ LP3_ADAPTATION = "01_Shared_Standards/instructional-design/lp-pacing-handoff-ada
 LP_AUTHORITY = "01_Shared_Standards/instructional-design/lp-authority-state-registry.md"
 REGISTRY = ROOT / "04_Registry/lp-pacing-handoff-contract.yaml"
 UNIT_RULES = ROOT / "01_Shared_Standards/instructional-design/unit-alignment-rules.md"
+CANONICAL_CHECKS = (
+    "standards",
+    "learning objectives",
+    "assessments",
+    "instructional strategies",
+    "horizontal alignment",
+    "vertical alignment",
+)
 
 
 def _registry():
@@ -84,13 +92,13 @@ def test_unit_alignment_preserves_six_check_and_tier2_authority():
     assert "not a seventh Unit Alignment check" in text
     assert "does not replace Tier 2" in text
     assert "cannot independently set Unit Alignment `PASS` or `BLOCKED`" in text
-    assert UNIT_RULES.read_text().count("### Check ") == 6
+    rules = UNIT_RULES.read_text()
+    section = rules.split("Required checks:\n", 1)[1].split("\n\nAllowed output keys:", 1)[0]
+    assert tuple(line.removeprefix("- ") for line in section.splitlines()) == CANONICAL_CHECKS
 
 
 def test_overlays_reference_shared_lp3_policy_instead_of_repeating_it():
-    shared_dimensions = {
-        item["value"] for item in _registry()["diagnosis_dimensions"]
-    }
+    shared_dimensions = {item["value"] for item in _registry()["diagnosis_dimensions"]}
     for path in OVERLAYS:
         boundary = path.read_text().split("## LP3 Pacing Handoff Boundary", 1)[1].split("\n## ", 1)[0]
         assert not shared_dimensions.intersection(boundary.split())
