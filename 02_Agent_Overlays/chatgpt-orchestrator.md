@@ -109,6 +109,8 @@ Before selecting a GitHub execution path for already-authorized work, classify t
 - Use the connected GitHub surface directly when its available actions are sufficient for the exact next action and no local/runtime capability is required.
 - When checkout, local Git, dependency installation, process execution, tests, build/lint, runtime inspection, generated-artifact inspection, Git reconciliation, exact-head validation, or checkpoint/resume is required, consume fresh governed-runner/environment-health evidence for the selected execution surface. Do not assume `git`, `gh`, GitHub authentication, process execution, network reachability, or validation capability exists.
 - Apply the existing executor-route semantics from #918. This overlay does not define a second route selector, runner, capability registry, GitHub client, or authorization framework.
+- If a selected diagnostic read is unavailable or returns insufficient evidence, treat that result as action/surface evidence rather than mission failure. Before returning `BLOCKED_DIAGNOSTIC_SURFACE` or assigning evidence transport to the repository owner, boundedly inspect another known or discoverable already-authorized canonical GitHub evidence route for the same exact diagnostic operation. Reacquire the current PR/head or other operation identity before consuming head-bound evidence after a route transition. Continue same-lineage diagnosis when an alternative route can provide actionable evidence; stop only after the bounded authorized alternatives are exhausted or another genuine stop condition applies. Do not retry the same unsupported route indefinitely.
+- A repository owner must not be used as a manual copy/paste transport for CI logs, check annotations, or equivalent diagnostic evidence that the connected GitHub surface can retrieve itself. If the connected surface proves that actionable evidence exists but exposes no supported read action for it, report the missing connector/integration capability and its owning integration surface as the blocker rather than assigning ordinary evidence retrieval to the repository owner.
 - If the selected execution surface becomes unavailable before execution, reacquire capability evidence and recompute the route. A missing tool such as local `gh` is capability-mismatch evidence, not by itself evidence that the governing repository issue or implementation is defective.
 - Preserve eligible Safe Implementation Lane work across an internal execution-surface reroute when authorization, source of truth, ownership, and bounded scope remain unchanged. A route change never widens authority.
 - Use an external coding-agent fallback only when the existing route contract permits it or the repository owner explicitly selects that surface. Do not silently substitute an unavailable explicitly selected surface.
@@ -134,10 +136,11 @@ Do not stop merely because an internal owner changes while the next action remai
 Do not stop merely because tool/schema/capability discovery succeeded while the authorized mission remains unfinished; apply `01_Shared_Standards/github/tool-discovery-continuation.md`.
 
 ## Version
-0.3.4
-Compatibility lineage: 0.3.3, 0.3.2, 0.3.1
+0.3.5
+Compatibility lineage: 0.3.4, 0.3.3, 0.3.2, 0.3.1
 
 ## Changelog
+- 0.3.5 prevents false owner handoff during failed-CI diagnosis: an insufficient diagnostic read is action/surface evidence, bounded alternate canonical GitHub evidence routes must be inspected before `BLOCKED_DIAGNOSTIC_SURFACE`, current head identity is reacquired across route transitions, repository owners are not used as manual CI-evidence transports, and a connector that can prove annotations/equivalent evidence exist but cannot read them reports an integration-capability blocker instead (#1614). This consumes #1237 reroute semantics and completed #1251 red-CI boundedness without adding another router, CI state machine, retry system, or authority model.
 - 0.3.4 wires the bounded #1608 tool/schema discovery continuation contract into runtime routing and stop conditions: successful discovery during an unfinished authorized mission is intermediate evidence, not a stop condition, per `01_Shared_Standards/github/tool-discovery-continuation.md`, reusing existing #1237 reroute, #1524 terminal reconciliation, and #1200 no-progress ownership with no new agent, overlay, framework, or scheduler.
 - 0.3.3 points the CKR6 Lessons Learned preflight route at the now-instantiated live activation bridge, `agent_memory_context_manager.orchestrate_lesson_activation(...)` (#1516 / CKR11): bounded known-reference-first or filtered live Notion retrieval, deterministic finite-vocabulary row normalization with explicit fail-closed non-ready outcomes, and unchanged reuse of the #1144 CKR2 selector and the #1520 shared candidate-owned provenance invariant with no Lessons-specific duplicate guard.
 - 0.3.2 wires the bounded CKR10 Decision/ADR preflight into coding-task routing as a completion repair for #1369: Decision-sensitive classification before substantial reasoning, zero-read `not-needed`, exact-reference-first bounded lookup, #1144 selector reuse, existing Memory Manager projection, GitHub-over-Notion authority, nonrecursive coexistence with Lessons/Patterns, and safe outage behavior.
@@ -148,22 +151,3 @@ Compatibility lineage: 0.3.3, 0.3.2, 0.3.1
 - 0.1.9 consumes canonical #924 structured request interpretation as upstream routing evidence and delegates detailed conformance/freshness rules to `chatgpt-orchestrator-request-interpretation.md` (#925).
 - 0.1.8 inherits the canonical Agent Interaction Output Standard (#926) for presentation-profile selection, visible ordering, and progress labeling, while preserving existing execution-surface preflight, Safe-Lane, finite-mission, artifact-first, and Teacher Decision Studio behavior.
 - 0.1.7 requires a live execution-surface capability preflight before GitHub execution routing, reuses #918 route semantics and environment-health evidence, treats missing surface tooling as a capability mismatch rather than repository-issue failure, and preserves Safe-Lane authorization across internal reroutes without widening authority (#1039).
-- 0.1.6 adds bounded finite multi-item execution continuity and zero-untouched final reconciliation (#1020) without widening authorization or adding background execution.
-- 0.1.5 inherits the Visual Asset Picker semantic-intent and reuse-selection contract (#961) without adding connected asset lookup or write authority.
-- 0.1.4 routes already-authorized Safe Implementation Lane owner transitions internally and keeps required handoff evidence without forcing serial user copy/paste handoffs (#986).
-- 0.1.3 added the Response Ordering Rule: artifact-first response ordering (#821) and the Teacher Decision Studio consultation protocol (#823/#824).
-- 0.1.2 added legacy agent alias resolution before nonexistent-agent stop.
-- 0.1.1 clarified Notion, Drive, and GitHub destination routing.
-- 0.1.0 initial ChatGPT bridge overlay.
-
-## Terminal Fast Lane
-Terminal Fast Lane is the explicit release-mode extension of an otherwise eligible Safe Implementation Lane issue. The ChatGPT Orchestrator does not parse raw wording for this authority; it consumes canonical `request-interpretation-v1` evidence with `operating-mode=release` and routes that ceiling to `operating_mode.py`.
-
-Before terminal progression, reacquire current issue/PR/head/check/review evidence and require all of the following to remain true: Tier 0/1, `status:ready`, `no-external-write`, resolved ownership, no material architecture/schema/ownership decision, one valid same-lineage PR, exact-head validation success, no unresolved blocking review conversation, and current structured release-mode evidence bound to the same issue.
-
-Terminal Fast Lane may authorize only the merge and issue closure of that exact eligible issue/PR lineage. It does not authorize workflow/protected-setting changes, credentials/IAM, production, external writes, unrelated issues/PRs, or any other excluded surface. If any prerequisite is stale, conflicting, blocked, or mismatched, fail closed and return to ordinary Safe Lane or the controlling decision path.
-
-After an authorized merge, verify the server-side merge result, verify the issue's terminal state, and reconcile the requested mission before reporting completion. Merge success alone is not terminal if closure or reconciliation remains unresolved.
-
-## Response Shape
-Use the selected presentation profile from `01_Shared_Standards/global-engineering/agent-interaction-output-standard.md` and keep the Base Report Contract recoverable without dumping routing internals by default.

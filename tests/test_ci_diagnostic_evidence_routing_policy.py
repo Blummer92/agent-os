@@ -1,8 +1,9 @@
-"""Regression guards for #1605 failed-CI diagnostic evidence routing.
+"""Regression guards for #1605/#1614 failed-CI diagnostic evidence routing.
 
 The repository cannot manufacture connector capabilities, but the ChatGPT Orchestrator
 contract must prefer canonical connected evidence and existing capable execution routes
-before shifting CI-log transport onto a mobile user.
+before shifting CI-log transport onto a mobile user. The #1614 cases also pin bounded
+alternate-route behavior against the current orchestrator fixture numbering.
 """
 from pathlib import Path
 
@@ -30,10 +31,6 @@ def test_failed_ci_diagnosis_prefers_connected_canonical_evidence_before_manual_
     safe_lane = section(SAFE_LANE, "Validation Loop")
     testing = section(TESTING_RELEASE, "Developer Loop Validation")
 
-    # The existing contracts already establish the governing rule. #1605 makes the
-    # cross-contract implication executable for failed-CI diagnosis: use the connected
-    # surface when it can satisfy the next evidence action and do not make the user a
-    # shell/log transport merely because another local capability is absent.
     assert "Use the connected GitHub surface directly when its available actions are sufficient for the exact next action" in preflight
     assert "Do not assume `git`, `gh`, GitHub authentication" in preflight
     assert "reacquire capability evidence and recompute the route" in preflight
@@ -51,7 +48,6 @@ def test_missing_local_gh_is_a_reroute_signal_not_a_mobile_log_request() -> None
     ):
         assert phrase in fixture
 
-    # A missing local CLI cannot justify skipping an already-capable connected route.
     preflight = section(ORCHESTRATOR, "Execution-Surface Capability Preflight")
     assert "A missing tool such as local `gh` is capability-mismatch evidence" in preflight
     assert "not by itself evidence that the governing repository issue or implementation is defective" in preflight
@@ -95,12 +91,6 @@ def test_diagnostic_routing_does_not_widen_authority() -> None:
 
 
 def test_1605_regression_shape_is_covered_by_existing_canonical_contracts() -> None:
-    """Pin the exact failure shape observed while repairing PR #1599.
-
-    Red CI plus missing local gh must not imply: ask the mobile user to authenticate gh,
-    scrape Actions, or manually isolate log text when the connected GitHub surface or an
-    existing capable governed route can satisfy the diagnostic next action.
-    """
     all_text = " ".join(
         normalized(path)
         for path in (ORCHESTRATOR, ORCHESTRATOR_TESTS, SAFE_LANE, TESTING_RELEASE)
@@ -114,3 +104,46 @@ def test_1605_regression_shape_is_covered_by_existing_canonical_contracts() -> N
         "route change never widens authority",
     ):
         assert required in all_text
+
+
+def test_1614_insufficient_log_read_cannot_be_the_only_blocker_evidence() -> None:
+    preflight = section(ORCHESTRATOR, "Execution-Surface Capability Preflight")
+    fixture = section(ORCHESTRATOR_TESTS, "Test 41 - Insufficient CI Log Read Uses Alternate Canonical Evidence")
+
+    for phrase in (
+        "insufficient evidence",
+        "action/surface evidence rather than mission failure",
+        "another known or discoverable already-authorized canonical GitHub evidence route",
+        "Before returning `BLOCKED_DIAGNOSTIC_SURFACE`",
+    ):
+        assert phrase in preflight
+
+    assert "does not emit `BLOCKED_DIAGNOSTIC_SURFACE` from the first insufficient read" in fixture
+    assert "does not ask the repository owner to copy logs" in fixture
+
+
+def test_1614_owner_is_not_manual_transport_for_internally_retrievable_ci_evidence() -> None:
+    preflight = section(ORCHESTRATOR, "Execution-Surface Capability Preflight")
+    assert "must not be used as a manual copy/paste transport for CI logs, check annotations, or equivalent diagnostic evidence" in preflight
+    assert "the connected GitHub surface can retrieve itself" in preflight
+
+
+def test_1614_annotation_read_gap_is_named_as_integration_capability() -> None:
+    preflight = section(ORCHESTRATOR, "Execution-Surface Capability Preflight")
+    fixture = section(ORCHESTRATOR_TESTS, "Test 42 - Failed Check Annotation Gap Is An Integration Blocker Not Owner Transport")
+
+    assert "proves that actionable evidence exists but exposes no supported read action" in preflight
+    assert "missing connector/integration capability" in preflight
+    assert "missing connector/integration annotation-read capability" in fixture
+    assert "repository owner is not assigned ordinary log/annotation copy-paste transport" in fixture
+
+
+def test_1614_diagnostic_reroute_reacquires_head_and_is_bounded() -> None:
+    preflight = section(ORCHESTRATOR, "Execution-Surface Capability Preflight")
+    fixture = section(ORCHESTRATOR_TESTS, "Test 43 - Diagnostic Route Transition Preserves Authority And Terminates")
+
+    assert "Reacquire the current PR/head or other operation identity before consuming head-bound evidence after a route transition" in preflight
+    assert "Do not retry the same unsupported route indefinitely" in preflight
+    assert "reacquires the current PR/head before consuming diagnostics" in fixture
+    assert "never retries the same unsupported route indefinitely" in fixture
+    assert "If all bounded routes are exhausted, returns one explicit integration blocker" in fixture
