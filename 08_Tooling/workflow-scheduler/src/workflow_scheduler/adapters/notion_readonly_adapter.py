@@ -240,7 +240,11 @@ class NotionReadOnlyAdapter(TaskAdapter):
             raise NotionReadOnlyAdapterError(
                 "Notion API response is missing required list field 'results'"
             )
-        return [item for item in data["results"] if isinstance(item, dict)]
+        if any(not isinstance(item, dict) for item in data["results"]):
+            raise NotionReadOnlyAdapterError(
+                "Notion API response 'results' contains a malformed non-object entry"
+            )
+        return data["results"]
 
     def _bounded_int(
         self, payload: Dict[str, Any], field: str, default: int, minimum: int, maximum: int
