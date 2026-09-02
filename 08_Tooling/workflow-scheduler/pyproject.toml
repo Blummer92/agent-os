@@ -9,7 +9,6 @@ description = "Agent OS Workflow Scheduler: dependency-ordered task execution, g
 requires-python = ">=3.11"
 dependencies = [
   "PyYAML>=6.0,<7",
-  "reusable-capability-registry>=0.2.0,<0.3.0",
 ]
 
 # #1300 (AOS-GCE2C): the Scheduler runtime already imports canonical
