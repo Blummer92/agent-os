@@ -112,7 +112,21 @@ class GitHubReadOnlyAdapter(TaskAdapter):
     def _action_list_pr_changed_filenames(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         full_name = self._require_repository_full_name(payload)
         data = self._get(f"/repos/{full_name}/pulls/{self._require_pr_number(payload)}/files")
-        return {"filenames": [item.get("filename") for item in data if isinstance(item, dict)]}
+        if not isinstance(data, list):
+            raise GitHubReadOnlyAdapterError("GitHub changed-files response must be a list")
+        filenames = []
+        for item in data:
+            if not isinstance(item, dict):
+                raise GitHubReadOnlyAdapterError(
+                    "GitHub changed-files response contains a malformed non-object entry"
+                )
+            filename = item.get("filename")
+            if not isinstance(filename, str) or not filename:
+                raise GitHubReadOnlyAdapterError(
+                    "GitHub changed-files response contains an invalid filename"
+                )
+            filenames.append(filename)
+        return {"filenames": filenames}
 
     def _action_list_recent_prs(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         full_name = self._require_repository_full_name(payload)
