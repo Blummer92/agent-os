@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 from email.parser import Parser
+import importlib.util
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 import venv
 import zipfile
-
-import pytest
 
 ROOT = Path(__file__).parents[3]
 PROJECTS = (
@@ -47,6 +45,15 @@ def _metadata(wheel: Path) -> Parser:
 
 def _venv_python(environment: Path) -> Path:
     return environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+
+
+def _packaging_helpers():
+    path = Path(__file__).with_name("test_host_packaging.py")
+    spec = importlib.util.spec_from_file_location("agent_os_host_packaging_helpers", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_scheduler_metadata_does_not_require_reusable_capability_registry(tmp_path: Path) -> None:
@@ -103,26 +110,13 @@ def test_clean_three_wheel_runtime_imports_without_registry(tmp_path: Path) -> N
     venv.EnvBuilder(with_pip=True, system_site_packages=False).create(environment)
     python = _venv_python(environment)
 
-    # The governed host uses --no-deps and relies on qualified third-party
-    # runtime dependencies already being present. Copy PyYAML into this isolated
-    # environment without consulting an index so the test remains offline.
-    try:
-        yaml_distribution = __import__("importlib.metadata", fromlist=["distribution"]).distribution("PyYAML")
-    except Exception:  # pragma: no cover - environment capability gap
-        pytest.skip("PyYAML is not installed in the developer environment")
-    site = Path(
-        _run(
-            [str(python), "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"],
-            cwd=tmp_path,
-        ).stdout.strip()
+    # Reuse #1300's offline dependency-vendoring proof so the isolated runtime
+    # contains only the third-party distributions declared by these three Agent
+    # OS wheels, never repository-root or editable-install leakage.
+    helpers = _packaging_helpers()
+    helpers._vendor_offline(
+        helpers._third_party_requirements(wheels), helpers._venv_site_packages(python)
     )
-    for relative in yaml_distribution.files or ():
-        source = Path(yaml_distribution.locate_file(relative))
-        if not source.is_file():
-            continue
-        destination = site / str(relative)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination)
 
     _run(
         [
