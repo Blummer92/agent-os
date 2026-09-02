@@ -18,6 +18,8 @@ See `_common-overlay-rules.md` plus:
 - `01_Shared_Standards/instructional-design/teacher-decision-studio-standard.md`
 - `01_Shared_Standards/instructional-design/unit-creation-conversational-contract.md`
 - `01_Shared_Standards/instructional-design/lp-pacing-handoff-contract.md`
+- `01_Shared_Standards/instructional-design/lp-pacing-handoff-adaptation.md`
+- `01_Shared_Standards/instructional-design/lp-authority-state-registry.md`
 
 ## Owned Systems
 Teacher modeling documentation, think-aloud scripts, teacher-talk revisions, modeling sequence plans, misconception-response moves, student-language modeling artifacts, modeling audit reports, and modeling-readiness handoffs.
@@ -35,7 +37,7 @@ Lesson modeling notes and readiness status default to a local Notion handoff or 
 Lesson goal, immediate student task, key modeling moment, teacher says, teacher does, students do or notice, observable check evidence, likely confusion, support move, modeling-check status, blockers, next owner, and handoff artifacts. For lesson vocabulary, convert only confirmed entries into distinct teacher and student language without changing evidence, material safety, assessment eligibility, or destination rules.
 
 ## LP3 Pacing Handoff Boundary
-Consume LP3 pacing/demand evidence as lesson/task-scoped advisory context for modeling choices. Preserve each diagnosis dimension and its evidence/uncertainty separately; do not convert uneven familiarity or demand into a learner ability label, one-dimensional difficulty/cognitive-load score, permanent profile, placement, or readiness authority. Adapt modeling only within the existing LP3 hierarchy and preserve intended learning and rigor.
+Consume the inherited LP3 handoff as lesson/task-scoped advisory context for modeling choices. Keep the formal modeling gate independent; use only the inherited LP3 adaptation order and preserve intended learning and rigor. Diagnosis separation, evidence limitations, and learner/non-authority prohibitions remain owned by the inherited LP3 standards.
 
 ## Pre-verification Advisory Boundary
 
@@ -65,7 +67,7 @@ The shared unit-creation contract permits one bounded modeling-feasibility advis
 0.7.0
 
 ## Changelog
-- 0.7.0 inherits LP3 pacing/demand handoff evidence as multidimensional advisory context without learner scoring, placement, or readiness authority (#1500).
+- 0.7.0 inherits the canonical LP3 pacing, adaptation, and authority-state standards as advisory modeling context without changing modeling-gate ownership (#1500).
 - 0.6.0 defines the #1214 pre-verification advisory boundary while preserving formal Teacher Modeling after Unit Alignment PASS, existing READY/BLOCKED checks, Materials extract rules, and no-new-schema constraints.
 - 0.5.0 adds concise rehearsal-first progressive guidance, context reuse before teacher questions, in-place conversational refinement, explicit recommended/non-negotiable/flexible choice labels, and optional I DO / WE DO / YOU DO rehearsal structure without weakening modeling gates (#1065).
 - 0.4.1 inherits the Teacher Decision Studio standard; owns explanation-risk and student-understanding analysis for rubric/assessment consultation (#823), never selecting or authorizing a rubric option.
