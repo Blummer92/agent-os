@@ -89,6 +89,12 @@ def triage_risk(request: RiskTriageInput) -> RiskTriageResult:
     if request.explicit_uncertainty:
         return _decision("uncertainty.explicit")
 
+    if not request.finding.action_required:
+        return RiskTriageResult(
+            disposition=Disposition.NO_ACTION,
+            reason_codes=("finding.no-action-required",),
+        )
+
     owner_result = _canonical_owner_result(request.canonical_risk_owners)
     if owner_result is not None:
         return owner_result
@@ -124,25 +130,19 @@ def triage_risk(request: RiskTriageInput) -> RiskTriageResult:
     ):
         return _decision("candidate.relationship-unproven")
 
-    if not request.finding.action_required:
-        return RiskTriageResult(
-            disposition=Disposition.NO_ACTION,
-            reason_codes=("finding.no-action-required",),
-        )
-
     child_candidates = tuple(
         candidate
         for candidate in request.existing_issue_candidates
         if candidate.state in _VALID_STATES and candidate.relationship is Relationship.CHILD
     )
-    if len(child_candidates) > 1:
+    child_identities = {candidate.identity for candidate in child_candidates}
+    if len(child_identities) > 1:
         return _decision("child.multiple-candidates")
-    if len(child_candidates) == 1:
-        candidate = child_candidates[0]
+    if child_candidates:
         return _target_result(
             Disposition.CREATE_CHILD_ISSUE_CANDIDATE,
             "child.explicit-relationship",
-            candidate,
+            child_candidates[0],
         )
 
     if _has_conflicting_distinct_targets(
@@ -169,7 +169,7 @@ def _canonical_owner_result(
     identities = {candidate.identity for candidate in valid}
     if len(identities) > 1:
         return _decision("canonical-owner.conflict")
-    if len(valid) == 1:
+    if valid:
         return _target_result(
             Disposition.LINK_CANONICAL_RISK_OWNER,
             "canonical-owner.unambiguous",
@@ -194,7 +194,7 @@ def _candidate_result(
     identities = {candidate.identity for candidate in valid}
     if len(identities) > 1:
         return _decision(f"{kind.value}.multiple-matches")
-    if len(valid) == 1:
+    if valid:
         return _target_result(disposition, reason, valid[0])
     return None
 
