@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 import re
 from typing import Any
@@ -15,6 +16,10 @@ REWRITE_KINDS = {
 }
 
 _ACTION_ID_RE = re.compile(r"action-(0|[1-9][0-9]*)\Z")
+
+
+def _isolated_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    return deepcopy(payload)
 
 
 @dataclass(frozen=True)
@@ -87,7 +92,7 @@ def rewrite_replay(payload: dict[str, Any]) -> RewriteResult:
             if not change_steps:
                 warnings.append(f"action-{action_index}: no change step found")
                 return RewriteResult(
-                    rewritten_recording=dict(payload),
+                    rewritten_recording=_isolated_payload(payload),
                     operations=tuple(operations),
                     provenance=provenance,
                     warnings=tuple(warnings),
@@ -96,7 +101,7 @@ def rewrite_replay(payload: dict[str, Any]) -> RewriteResult:
 
             _, final_change = change_steps[-1]
             output_index = len(rewritten_steps)
-            rewritten_steps.append(dict(final_change))
+            rewritten_steps.append(deepcopy(final_change))
             provenance[output_index] = source_indexes
             operations.append(
                 RewriteOperation(
@@ -114,7 +119,7 @@ def rewrite_replay(payload: dict[str, Any]) -> RewriteResult:
             if not isinstance(step, dict):
                 raise ValueError(f"steps[{source_index}] must be an object")
             output_index = len(rewritten_steps)
-            rewritten_steps.append(dict(step))
+            rewritten_steps.append(deepcopy(step))
             provenance[output_index] = (source_index,)
             operations.append(
                 RewriteOperation(
@@ -127,7 +132,7 @@ def rewrite_replay(payload: dict[str, Any]) -> RewriteResult:
                 )
             )
 
-    rewritten = dict(payload)
+    rewritten = _isolated_payload(payload)
     rewritten["steps"] = rewritten_steps
 
     return RewriteResult(
@@ -176,7 +181,7 @@ def apply_request(
     match = _ACTION_ID_RE.fullmatch(request.semantic_action_id)
     if match is None:
         return RewriteResult(
-            rewritten_recording=dict(payload),
+            rewritten_recording=_isolated_payload(payload),
             operations=(),
             provenance={},
             warnings=("unknown semantic action id",),
@@ -186,7 +191,7 @@ def apply_request(
     action_index = int(match.group(1))
     if action_index >= len(actions):
         return RewriteResult(
-            rewritten_recording=dict(payload),
+            rewritten_recording=_isolated_payload(payload),
             operations=(),
             provenance={},
             warnings=("unknown semantic action id",),
@@ -196,7 +201,7 @@ def apply_request(
 
     if tuple(request.source_indexes) != tuple(action.source_indexes):
         return RewriteResult(
-            rewritten_recording=dict(payload),
+            rewritten_recording=_isolated_payload(payload),
             operations=(),
             provenance={},
             warnings=("source indexes do not match semantic action",),
@@ -206,7 +211,7 @@ def apply_request(
     if request.kind == "remove-noise":
         if action.recovery:
             return RewriteResult(
-                rewritten_recording=dict(payload),
+                rewritten_recording=_isolated_payload(payload),
                 operations=(),
                 provenance={},
                 warnings=("recovery behavior cannot be removed as noise",),
@@ -214,7 +219,7 @@ def apply_request(
             )
         if action.instructional:
             return RewriteResult(
-                rewritten_recording=dict(payload),
+                rewritten_recording=_isolated_payload(payload),
                 operations=(),
                 provenance={},
                 warnings=("instructional action cannot be removed as noise",),
@@ -222,7 +227,7 @@ def apply_request(
             )
         if action.kind != "keyboard_noise":
             return RewriteResult(
-                rewritten_recording=dict(payload),
+                rewritten_recording=_isolated_payload(payload),
                 operations=(),
                 provenance={},
                 warnings=("only proven keyboard noise may be removed automatically",),
@@ -231,7 +236,7 @@ def apply_request(
 
         removed = set(action.source_indexes)
         rewritten_steps = [
-            dict(step) for index, step in enumerate(steps) if index not in removed
+            deepcopy(step) for index, step in enumerate(steps) if index not in removed
         ]
         provenance = {}
         output_index = 0
@@ -241,7 +246,7 @@ def apply_request(
             provenance[output_index] = (source_index,)
             output_index += 1
 
-        rewritten = dict(payload)
+        rewritten = _isolated_payload(payload)
         rewritten["steps"] = rewritten_steps
 
         operation = RewriteOperation(
@@ -263,7 +268,7 @@ def apply_request(
 
     if request.kind != "change-selector":
         return RewriteResult(
-            rewritten_recording=dict(payload),
+            rewritten_recording=_isolated_payload(payload),
             operations=(),
             provenance={},
             warnings=(f"request kind not implemented safely: {request.kind}",),
@@ -273,7 +278,7 @@ def apply_request(
     replacement = request.replacement_selector
     if replacement is None or replacement not in action.evidence:
         return RewriteResult(
-            rewritten_recording=dict(payload),
+            rewritten_recording=_isolated_payload(payload),
             operations=(),
             provenance={},
             warnings=("replacement selector is not present in recorded evidence",),
@@ -282,7 +287,7 @@ def apply_request(
 
     if len(action.source_indexes) != 1:
         return RewriteResult(
-            rewritten_recording=dict(payload),
+            rewritten_recording=_isolated_payload(payload),
             operations=(),
             provenance={},
             warnings=("selector change requires one source step",),
@@ -294,12 +299,12 @@ def apply_request(
     if not isinstance(source_step, dict):
         raise ValueError(f"steps[{source_index}] must be an object")
 
-    rewritten_steps = [dict(step) for step in steps]
-    rewritten_step = dict(source_step)
+    rewritten_steps = deepcopy(steps)
+    rewritten_step = deepcopy(source_step)
     rewritten_step["selectors"] = [[replacement]]
     rewritten_steps[source_index] = rewritten_step
 
-    rewritten = dict(payload)
+    rewritten = _isolated_payload(payload)
     rewritten["steps"] = rewritten_steps
 
     provenance = {index: (index,) for index in range(len(steps))}
