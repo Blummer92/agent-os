@@ -46,6 +46,25 @@ def test_cursor_noise_collapses_into_one_rename_with_evidence():
     assert action.source_indexes[-1] == 241
 
 
+def test_missing_change_value_is_not_invented_as_empty_text():
+    action = analyze_replay({"steps": [{
+        "type": "change",
+        "selectors": [["[data-testid='editor-document-title']"]],
+    }]})[0]
+    assert action.value is None
+    assert not any(item.startswith("value=") for item in action.evidence)
+
+
+def test_explicit_empty_change_value_remains_empty_text():
+    action = analyze_replay({"steps": [{
+        "type": "change",
+        "value": "",
+        "selectors": [["[data-testid='editor-document-title']"]],
+    }]})[0]
+    assert action.value == ""
+    assert "value=" in action.evidence
+
+
 def test_click_and_double_click_remain_distinct():
     payload = {"steps": [
         {"type": "click", "selectors": [["aria/Your Stuff"]]},
