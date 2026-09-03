@@ -76,6 +76,21 @@ def test_account_specific_urn_and_search_history_are_fragile():
     assert actions[1].fragile is True
 
 
+def test_malformed_selector_members_are_not_stringified_into_evidence():
+    action = analyze_replay({"steps": [{
+        "type": "click",
+        "selectors": [["aria/Folder", 123, {"fake": "selector"}], 456],
+    }]})[0]
+    assert action.evidence == ("aria/Folder",)
+    assert action.target == "aria/Folder"
+
+
+def test_non_list_selector_container_fails_closed_to_no_selector_evidence():
+    action = analyze_replay({"steps": [{"type": "click", "selectors": {"bad": "shape"}}]})[0]
+    assert action.evidence == ()
+    assert action.target is None
+
+
 def test_missing_steps_fails_closed():
     try:
         analyze_replay({})
