@@ -3,8 +3,10 @@ from dataclasses import replace
 import pytest
 
 from scripts.agent_os_issue_labels.pr_lifecycle import (
+    PullRequestCreationExpectation,
     lifecycle_invocation_reasons,
     reconcile_pull_request_lifecycle,
+    verify_pull_request_creation,
 )
 from scripts.agent_os_issue_labels.pr_planner import managed_labels
 from scripts.agent_os_issue_labels.pr_reconciler import LivePullRequestSnapshot
@@ -14,11 +16,12 @@ NEW_SHA = "b" * 40
 
 
 class MutableProvider:
-    def __init__(self, snapshot, *, fail_add=False, fail_remove=False):
+    def __init__(self, snapshot, *, fail_add=False, fail_remove=False, fail_read=False):
         self.snapshot = snapshot
         self.available = tuple(managed_labels())
         self.fail_add = fail_add
         self.fail_remove = fail_remove
+        self.fail_read = fail_read
         self.labels = set(snapshot.labels)
         self.added = []
         self.removed = []
@@ -26,6 +29,8 @@ class MutableProvider:
 
     def read(self, repository, pr_number):
         self.read_count += 1
+        if self.fail_read:
+            raise RuntimeError("read failed")
         return replace(self.snapshot, labels=tuple(sorted(self.labels)))
 
     def available_labels(self, repository):
@@ -56,12 +61,36 @@ def snap(**overrides):
         validation_state="pending",
         blocking_review_threads=0,
         labels=("human:keep",),
+        state="open",
+        merged=False,
+        base_ref="main",
+        head_ref="agent/1038-test",
     )
     values.update(overrides)
     return LivePullRequestSnapshot(**values)
 
 
-def invoke(provider, reason="draft-pr-created"):
+def creation_expectation(**overrides):
+    values = dict(
+        repository="Blummer92/agent-os",
+        pr_number=1038,
+        base_ref="main",
+        head_ref="agent/1038-test",
+        head_sha=SHA,
+        draft_requested=True,
+        merge_authorized=False,
+    )
+    values.update(overrides)
+    return PullRequestCreationExpectation(**values)
+
+
+def invoke(provider, reason="draft-pr-created", *, verify_creation=False, discoverable=True):
+    kwargs = {}
+    if verify_creation:
+        kwargs = {
+            "creation_expectation": creation_expectation(),
+            "creation_discoverable": discoverable,
+        }
     return reconcile_pull_request_lifecycle(
         provider,
         "Blummer92/agent-os",
@@ -71,6 +100,7 @@ def invoke(provider, reason="draft-pr-created"):
         caller_result_evidence="result:1038",
         dry_run=False,
         label_write_authorized=True,
+        **kwargs,
     )
 
 
@@ -80,6 +110,75 @@ def test_all_required_lifecycle_invocation_points_are_representable(reason):
     result = reconcile_pull_request_lifecycle(provider, "Blummer92/agent-os", 1038, invocation_reason=reason)
     assert result.invocation_reason == reason
     assert result.reconciliation_status == "skipped"
+
+
+def test_post_create_exact_readback_verifies_draft_before_label_followup():
+    provider = MutableProvider(snap())
+    result = invoke(provider, verify_creation=True)
+    assert result.creation_verification.status == "verified"
+    assert result.creation_verification.reportable_state == "draft"
+    assert result.reconciliation_status == "converged"
+    assert "canonical-readback-verified" in result.reason_codes
+
+
+def test_post_create_ready_drift_blocks_all_followup_mutation():
+    provider = MutableProvider(snap(draft=False))
+    result = invoke(provider, verify_creation=True)
+    assert result.reconciliation_status == "blocked"
+    assert result.creation_verification.status == "state-drift"
+    assert result.creation_verification.reportable_state == "ready-for-review"
+    assert "draft-ready-state-drift" in result.reason_codes
+    assert not provider.added and not provider.removed
+
+
+def test_post_create_unauthorized_merge_is_terminal_incident_and_blocks_mutation():
+    provider = MutableProvider(snap(draft=False, state="closed", merged=True))
+    result = invoke(provider, verify_creation=True)
+    assert result.reconciliation_status == "blocked"
+    assert result.creation_verification.status == "unauthorized-terminal-state"
+    assert result.creation_verification.reportable_state == "merged"
+    assert "unauthorized-terminal-state" in result.reason_codes
+    assert result.merge_authorized is False
+    assert not provider.added and not provider.removed
+
+
+def test_post_create_missing_canonical_readback_is_uncertain_and_never_retried_as_create():
+    provider = MutableProvider(snap(), fail_read=True)
+    verification = verify_pull_request_creation(provider, creation_expectation(), discoverable=False)
+    assert verification.status == "uncertain"
+    assert verification.mutation_allowed is False
+    assert verification.reportable_state == "creation-uncertain"
+    assert verification.reason_codes == ("canonical-readback-failed:RuntimeError",)
+    assert provider.read_count == 1
+
+
+def test_exact_canonical_lookup_can_establish_discoverability_despite_secondary_list_lag():
+    provider = MutableProvider(snap())
+    verified = verify_pull_request_creation(provider, creation_expectation(), discoverable=True)
+    assert verified.status == "verified"
+    assert verified.discoverable is True
+
+    unproven = verify_pull_request_creation(provider, creation_expectation(), discoverable=False)
+    assert unproven.status == "state-drift"
+    assert "canonical-discoverability-unproven" in unproven.reason_codes
+
+
+@pytest.mark.parametrize(
+    ("override", "reason"),
+    [
+        ({"repository": "other/repo"}, "repository-mismatch"),
+        ({"pr_number": 999}, "pr-number-mismatch"),
+        ({"head_sha": NEW_SHA}, "head-sha-mismatch"),
+        ({"base_ref": "release"}, "base-ref-mismatch"),
+        ({"head_ref": "agent/other"}, "head-ref-mismatch"),
+    ],
+)
+def test_post_create_identity_mismatch_fails_closed(override, reason):
+    provider = MutableProvider(snap(**override))
+    verification = verify_pull_request_creation(provider, creation_expectation(), discoverable=True)
+    assert verification.status == "state-drift"
+    assert reason in verification.reason_codes
+    assert verification.mutation_allowed is False
 
 
 def test_draft_pr_creation_reconciles_managed_labels_and_preserves_unmanaged():
@@ -205,6 +304,19 @@ def test_invalid_invocation_reason_fails_closed():
         reconcile_pull_request_lifecycle(provider, "Blummer92/agent-os", 1038, invocation_reason="merge")
 
 
+def test_creation_verification_requires_explicit_discoverability_evidence():
+    provider = MutableProvider(snap())
+    with pytest.raises(ValueError, match="canonical discoverability evidence"):
+        reconcile_pull_request_lifecycle(
+            provider,
+            "Blummer92/agent-os",
+            1038,
+            invocation_reason="draft-pr-created",
+            creation_expectation=creation_expectation(),
+        )
+    assert provider.read_count == 0
+
+
 @pytest.mark.parametrize("evidence_field", ["caller_operation_evidence", "caller_result_evidence"])
 def test_invalid_caller_evidence_fails_before_provider_reads_or_writes(evidence_field):
     provider = MutableProvider(snap())
@@ -229,7 +341,7 @@ def test_invalid_caller_evidence_fails_before_provider_reads_or_writes(evidence_
 
 def test_result_preserves_caller_evidence_and_never_grants_lifecycle_authority():
     provider = MutableProvider(snap())
-    result = invoke(provider)
+    result = invoke(provider, verify_creation=True)
     assert result.caller_operation_evidence == "operation:1038"
     assert result.caller_result_evidence == "result:1038"
     assert result.ready_for_review_authorized is False
@@ -239,3 +351,5 @@ def test_result_preserves_caller_evidence_and_never_grants_lifecycle_authority()
     assert result.protected_setting_authorized is False
     assert result.production_authorized is False
     assert result.external_system_write_authorized is False
+    assert result.creation_verification.merge_authorized is False
+    assert result.creation_verification.issue_closure_authorized is False
