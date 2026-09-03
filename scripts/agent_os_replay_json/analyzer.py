@@ -172,7 +172,7 @@ def analyze_replay(payload: dict[str, Any]) -> list[SemanticAction]:
                     break
                 nxt_type = nxt.get("type")
                 nxt_identity = _identity(nxt)
-                if nxt_type in _KEY_TYPES:
+                if nxt_type in _KEY_TYPES and (nxt_identity is None or nxt_identity == target):
                     indexes.append(j)
                     combined_evidence.extend(_evidence(nxt))
                     j += 1
