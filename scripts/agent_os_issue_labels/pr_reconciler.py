@@ -25,6 +25,10 @@ class LivePullRequestSnapshot:
     validation_state: str
     blocking_review_threads: int
     labels: tuple[str, ...] = ()
+    state: str = "open"
+    merged: bool = False
+    base_ref: str | None = None
+    head_ref: str | None = None
 
     def evidence(self) -> PullRequestLabelEvidence:
         return PullRequestLabelEvidence(
