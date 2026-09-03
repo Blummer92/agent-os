@@ -63,6 +63,36 @@ def test_main_full_flow_delegates_to_live_build(monkeypatch, tmp_path, capsys):
     assert "https://example/slides" in output and "https://example/doc" in output
 
 
+def test_idempotency_key_uses_loaded_requirement_snapshot_without_reread(tmp_path):
+    from instructional_materials_coach import cli
+    requirement_file = _no_visual_requirement_file(tmp_path)
+    loaded = json.loads(requirement_file.read_text(encoding="utf-8"))
+    args = SimpleNamespace(
+        material_requirement=str(requirement_file),
+        slides_template="slides-template-id",
+        doc_template="doc-template-id",
+        target_folder="folder-id",
+    )
+    requirement_file.unlink()
+    key = cli._build_idempotency_key(args, "Fractions Intro", loaded)
+    assert len(key) == 64
+
+
+def test_idempotency_key_changes_with_requirement_identity(tmp_path):
+    from instructional_materials_coach import cli
+    requirement_file = _no_visual_requirement_file(tmp_path)
+    first = json.loads(requirement_file.read_text(encoding="utf-8"))
+    second = json.loads(requirement_file.read_text(encoding="utf-8"))
+    second["identity"]["record_revision"] = first["identity"]["record_revision"] + 1
+    args = SimpleNamespace(
+        material_requirement=str(requirement_file),
+        slides_template="slides-template-id",
+        doc_template="doc-template-id",
+        target_folder="folder-id",
+    )
+    assert cli._build_idempotency_key(args, "Fractions Intro", first) != cli._build_idempotency_key(args, "Fractions Intro", second)
+
+
 def test_main_requires_material_requirement_before_credentials(monkeypatch, tmp_path, capsys):
     from instructional_materials_coach import cli
     monkeypatch.setenv("ALLOW_WRITE", "true")
