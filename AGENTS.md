@@ -65,8 +65,9 @@ truth records, or irreversible artifacts without explicit approval.
 1. Identify the task owner and resolve legacy aliases only when present.
 2. Read the owner overlay and only applicable standards; use the smallest useful context packet.
 3. Confirm allowed/blocked write surfaces and stop if authorization or source of truth is unclear.
-4. For eligible Safe Implementation Lane work, route registered-owner transitions internally while authorization, source of truth, and bounded scope remain applicable; do not require a user copy/paste handoff only because the owner changes.
-5. Surface a handoff or decision only when authorization, source of truth, bounded scope, or a material decision changes.
+4. For bounded bug-work requests, reconcile the existing discovered/open bug backlog before fresh defect discovery. Exclude stale, duplicate, already-fixed, active-implementation, non-repository, blocked, or unauthorized candidates; use eligible existing bugs first, and discover new bugs only when the reconciled backlog cannot satisfy the requested count or the user explicitly requests new bugs. Do not create issues merely to pad a requested count.
+5. For eligible Safe Implementation Lane work, route registered-owner transitions internally while authorization, source of truth, and bounded scope remain applicable; do not require a user copy/paste handoff only because the owner changes.
+6. Surface a handoff or decision only when authorization, source of truth, bounded scope, or a material decision changes.
 
 ## Required Final Report
 `01_Shared_Standards/global-engineering/agent-interaction-output-standard.md` is the canonical owner of report field ownership and presentation. Implementation/review reports must include files changed, tests run, docs updated, unresolved blockers, handoff recommendations, and remaining risks. Eligible Safe Implementation Lane work also follows its `Reporting` contract for actual branch, exact-head evidence, rollback, and authorization/excluded-surface confirmation.
