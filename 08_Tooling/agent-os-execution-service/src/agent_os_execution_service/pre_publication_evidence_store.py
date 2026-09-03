@@ -1,9 +1,10 @@
-"""Checkpoint-root persistence adapter for #1412 producer evidence.
+"""Checkpoint-root persistence adapter for #1412/#1799 producer evidence.
 
-This is the sole persistence owner for ``PrePublicationEvidenceCapsule``. It
-reuses the existing checkpoint-store root and the same atomic/content-addressed
-primitives already used by governed-resume restart capsules. It adds no store
-root, database, mutable head, re-attempt path, or authority semantics.
+Both v1.1 phases reuse the existing ``pre-publication-producer-evidence``
+namespace. Source evidence may be persisted before a checkpoint exists;
+checkpoint-bound evidence (including legacy v1.0) still requires the exact
+matching durable #895 checkpoint. No second root, pointer, index, or authority
+surface is introduced.
 """
 from __future__ import annotations
 
@@ -22,6 +23,8 @@ from scripts.agent_os_execution_checkpoint.store import (
 )
 
 from .pre_publication_evidence_capsule import (
+    CHECKPOINT_BOUND_PHASE,
+    SOURCE_PHASE,
     PrePublicationEvidenceCapsule,
     deserialize_pre_publication_evidence,
     serialize_pre_publication_evidence,
@@ -33,7 +36,7 @@ STORE_NAMESPACE = "pre-publication-producer-evidence"
 
 
 class PrePublicationEvidenceNotFound(LookupError):
-    """Raised when an exact capsule identity is not present in the store."""
+    """Raised when one exact capsule identity is not present in the store."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,19 +60,10 @@ def _filename(capsule_id: str) -> str:
     return f"{digest}.json"
 
 
-def append_pre_publication_evidence(
-    store_root: Path | str,
-    capsule: PrePublicationEvidenceCapsule,
-) -> AppendPrePublicationEvidenceOutcome:
-    """Persist one capsule only after its exact #895 checkpoint is durable."""
-    if type(capsule) is not PrePublicationEvidenceCapsule:
-        raise TypeError("capsule must be an exact PrePublicationEvidenceCapsule")
-
-    durable = load_checkpoint_by_id(
-        store_root,
-        capsule.candidate_packet.issue_number,
-        capsule.checkpoint_id,
-    )
+def _verify_durable_checkpoint(store_root: Path | str, capsule: PrePublicationEvidenceCapsule) -> None:
+    if capsule.phase != CHECKPOINT_BOUND_PHASE or capsule.checkpoint_id is None:
+        raise CheckpointStoreIntegrityConflict("checkpoint-bound producer evidence is required")
+    durable = load_checkpoint_by_id(store_root, capsule.candidate_packet.issue_number, capsule.checkpoint_id)
     packet = capsule.candidate_packet
     if (
         durable.checkpoint_id != capsule.checkpoint_id
@@ -79,10 +73,19 @@ def append_pre_publication_evidence(
         or durable.branch != capsule.candidate_branch
         or durable.source_sha != packet.candidate_sha
         or durable.tested_sha != packet.tested_sha
+        or (capsule.execution_id is not None and durable.execution_id != capsule.execution_id)
     ):
-        raise CheckpointStoreIntegrityConflict(
-            "durable checkpoint does not bind to producer evidence"
-        )
+        raise CheckpointStoreIntegrityConflict("durable checkpoint does not bind to producer evidence")
+
+
+def append_pre_publication_evidence(store_root: Path | str, capsule: PrePublicationEvidenceCapsule) -> AppendPrePublicationEvidenceOutcome:
+    """Persist one source or checkpoint-bound capsule in the existing namespace."""
+    if type(capsule) is not PrePublicationEvidenceCapsule:
+        raise TypeError("capsule must be an exact PrePublicationEvidenceCapsule")
+    if capsule.phase == CHECKPOINT_BOUND_PHASE:
+        _verify_durable_checkpoint(store_root, capsule)
+    elif capsule.phase != SOURCE_PHASE:
+        raise CheckpointStoreIntegrityConflict("unsupported producer evidence phase")
 
     directory = _directory(store_root)
     _reject_symlink(directory)
@@ -92,21 +95,12 @@ def append_pre_publication_evidence(
     if not destination.exists():
         count, total_bytes = _existing_records_footprint(directory)
         if count + 1 > MAX_CAPSULES or total_bytes + len(payload) > MAX_CAPSULE_STORE_BYTES:
-            raise CheckpointStoreCapacityExceeded(
-                "pre-publication evidence store is at capacity"
-            )
+            raise CheckpointStoreCapacityExceeded("pre-publication evidence store is at capacity")
     path, already_present = _atomic_write(directory, destination.name, payload)
-    return AppendPrePublicationEvidenceOutcome(
-        capsule_id=capsule.capsule_id,
-        path=path,
-        already_present=already_present,
-    )
+    return AppendPrePublicationEvidenceOutcome(capsule_id=capsule.capsule_id, path=path, already_present=already_present)
 
 
-def load_pre_publication_evidence(
-    store_root: Path | str,
-    capsule_id: str,
-) -> PrePublicationEvidenceCapsule:
+def load_pre_publication_evidence(store_root: Path | str, capsule_id: str) -> PrePublicationEvidenceCapsule:
     """Load and content-reverify one exact producer-evidence capsule."""
     directory = _directory(store_root)
     _reject_symlink(directory)
@@ -123,7 +117,5 @@ def load_pre_publication_evidence(
     except (TypeError, ValueError) as exc:
         raise CheckpointStoreIntegrityConflict(str(exc)) from exc
     if capsule.capsule_id != capsule_id or path.name != _filename(capsule.capsule_id):
-        raise CheckpointStoreIntegrityConflict(
-            "persisted producer evidence does not match requested identity"
-        )
+        raise CheckpointStoreIntegrityConflict("persisted producer evidence does not match requested identity")
     return capsule
