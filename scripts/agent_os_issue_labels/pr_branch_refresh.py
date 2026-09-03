@@ -127,11 +127,16 @@ def refresh_pull_request_branch(
         current_main_sha=request.current_main_sha,
     )
     if mutation.status != "updated" or mutation.new_head_sha is None:
+        # #1403 single-consumption boundary: once the mutation provider is invoked,
+        # the one authorized attempt is consumed even when transport/rebase returns
+        # conflict, remote-race, ambiguity, or another non-updated terminal result.
+        # Fail closed and never make that authorization reusable for a retry.
         return _result(
             request,
             "manual-review" if mutation.status == "ambiguous" else "blocked",
             mutation.old_head_sha,
             reasons=(mutation.reason_code or f"refresh.{mutation.status}",),
+            side_effects=True,
         )
 
     after = provider.read_branch(request.repository, request.pr_number)
