@@ -25,10 +25,13 @@ function packageWith(disposition: TutorialPackage['steps'][number]['disposition'
       disposition,
       ...(disposition === 'new-visual' ? { authoring: {
         imagePurpose: 'Model the approved step.',
-        application: 'Adobe Express',
+        imageState: 'action' as const,
+        applicationContext: 'Adobe Express editor layout workflow',
         targetState: 'editor/layout',
         mustShow: ['Layout controls'],
         mustNotShow: ['invented controls'],
+        annotationSpace: 'right side',
+        requestedUiDetails: [],
       } } : {}),
       ...(disposition === 'reuse-existing-visual' || disposition === 'resurface-prior-visual'
         ? { approvedAssetRef: 'asset://tutorial/step-1' } : {}),
