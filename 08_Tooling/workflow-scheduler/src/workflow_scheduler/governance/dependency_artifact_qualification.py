@@ -42,27 +42,29 @@ def inspect_wheelhouse(wheelhouse:Path)->tuple[Artifact,...]:
 def hash_lock(artifacts:Sequence[Artifact])->tuple[str,...]:
  if not artifacts:raise ValueError("artifact-lock-empty")
  return tuple(f"{a.name}=={a.version} --hash=sha256:{a.sha256}" for a in sorted(artifacts,key=lambda item:(item.name,item.version)))
+def _qualify_workspace(root:Path,execute:Callable[[Sequence[str],int],subprocess.CompletedProcess[str]])->QualificationResult:
+ wheelhouse=root/"wheelhouse";wheelhouse.mkdir();target=root/"offline-target";lock_path=root/"requirements.lock"
+ try:resolved=execute(resolver_argv(wheelhouse),RESOLVE_TIMEOUT_SECONDS)
+ except subprocess.TimeoutExpired:return QualificationResult("blocked",("resolver-timeout",),(),(),True,False,False)
+ if resolved.returncode!=0:return QualificationResult("blocked",("resolver-download-failed",),(),(),True,False,False)
+ try:artifacts=inspect_wheelhouse(wheelhouse);lock=hash_lock(artifacts)
+ except(OSError,ValueError,zipfile.BadZipFile)as exc:return QualificationResult("blocked",(str(exc),),(),(),True,False,False)
+ reasons=[]
+ if any(a.license_expression is None for a in artifacts):reasons.append("license-metadata-incomplete")
+ lock_path.write_text("\n".join(lock)+"\n",encoding="utf-8")
+ try:verified=execute(offline_verify_argv(wheelhouse,target,lock_path),VERIFY_TIMEOUT_SECONDS)
+ except subprocess.TimeoutExpired:return QualificationResult("blocked",("offline-verification-timeout",),artifacts,lock,True,False,False)
+ offline_ok=verified.returncode==0
+ if not offline_ok:reasons.append("offline-verification-failed")
+ if not reasons:reasons.append("wheelhouse-qualified")
+ return QualificationResult("ready" if reasons==["wheelhouse-qualified"] else "blocked",tuple(reasons),artifacts,lock,True,offline_ok,False)
 def qualify(*,runner:Callable[[Sequence[str],int],subprocess.CompletedProcess[str]]|None=None)->QualificationResult:
- execute=runner or(lambda argv,timeout:_run(argv,timeout=timeout));root=Path(tempfile.mkdtemp(prefix="agent-os-wheelhouse-"));wheelhouse=root/"wheelhouse";wheelhouse.mkdir();target=root/"offline-target";lock_path=root/"requirements.lock";result=QualificationResult("blocked",("qualification-incomplete",),(),(),False,False,False)
- try:
-  try:resolved=execute(resolver_argv(wheelhouse),RESOLVE_TIMEOUT_SECONDS)
-  except subprocess.TimeoutExpired:result=replace(result,reason_codes=("resolver-timeout",),resolver_network_used=True);return result
-  if resolved.returncode!=0:result=replace(result,reason_codes=("resolver-download-failed",),resolver_network_used=True);return result
-  try:artifacts=inspect_wheelhouse(wheelhouse);lock=hash_lock(artifacts)
-  except(OSError,ValueError,zipfile.BadZipFile)as exc:result=QualificationResult("blocked",(str(exc),),(),(),True,False,False);return result
-  reasons=[]
-  if any(a.license_expression is None for a in artifacts):reasons.append("license-metadata-incomplete")
-  lock_path.write_text("\n".join(lock)+"\n",encoding="utf-8")
-  try:verified=execute(offline_verify_argv(wheelhouse,target,lock_path),VERIFY_TIMEOUT_SECONDS)
-  except subprocess.TimeoutExpired:result=QualificationResult("blocked",("offline-verification-timeout",),artifacts,lock,True,False,False);return result
-  offline_ok=verified.returncode==0
-  if not offline_ok:reasons.append("offline-verification-failed")
-  if not reasons:reasons.append("wheelhouse-qualified")
-  result=QualificationResult("ready" if reasons==["wheelhouse-qualified"] else "blocked",tuple(reasons),artifacts,lock,True,offline_ok,False);return result
+ execute=runner or(lambda argv,timeout:_run(argv,timeout=timeout));root=Path(tempfile.mkdtemp(prefix="agent-os-wheelhouse-"))
+ try:result=_qualify_workspace(root,execute)
  finally:
   try:shutil.rmtree(root);cleanup=True
   except OSError:cleanup=False
-  result=replace(result,cleanup_complete=cleanup,status=result.status if cleanup else "blocked",reason_codes=result.reason_codes if cleanup else("workspace-cleanup-failed",))
+ return replace(result,cleanup_complete=cleanup,status=result.status if cleanup else"blocked",reason_codes=result.reason_codes if cleanup else("workspace-cleanup-failed",))
 def main()->int:
  result=qualify();payload=result.to_dict();encoded=json.dumps(payload,sort_keys=True,separators=(",",":"))
  if len(encoded)>MAX_LOG_CHARS*8:payload={"schema_version":"1.0","profile_id":PROFILE_ID,"status":"blocked","reason_codes":["evidence-size-bound-exceeded"],"execution_authorized":False,"host_mutation_authorized":False,"scheduler_invoked":False,"production_authorized":False,"classroom_data_authorized":False};encoded=json.dumps(payload,sort_keys=True)
