@@ -1,6 +1,12 @@
 import pytest
 
-from scripts.agent_os_replay_json.rewriter import REWRITE_KINDS, RewriteOperation
+from scripts.agent_os_replay_json.rewriter import (
+    CONFIDENCE_STATES,
+    REWRITE_KINDS,
+    SEMANTIC_EQUIVALENCE_STATES,
+    RewriteOperation,
+    RewriteResult,
+)
 
 
 def test_rewrite_vocabulary_is_finite():
@@ -13,6 +19,8 @@ def test_rewrite_vocabulary_is_finite():
         "change-selector",
         "insert-assertion",
     }
+    assert CONFIDENCE_STATES == {"proven", "unproven"}
+    assert SEMANTIC_EQUIVALENCE_STATES == {"proven", "unproven", "rejected"}
 
 
 def test_rewrite_operation_preserves_provenance():
@@ -43,6 +51,27 @@ def test_missing_source_indexes_fails_closed():
             kind="keep",
             semantic_action_id="action-1",
             source_indexes=(),
+        )
+
+
+def test_invalid_rewrite_confidence_fails_closed():
+    with pytest.raises(ValueError, match="unsupported rewrite confidence"):
+        RewriteOperation(
+            kind="keep",
+            semantic_action_id="action-1",
+            source_indexes=(1,),
+            confidence="maybe",
+        )
+
+
+def test_invalid_semantic_equivalence_fails_closed():
+    with pytest.raises(ValueError, match="unsupported semantic equivalence"):
+        RewriteResult(
+            rewritten_recording={"steps": []},
+            operations=(),
+            provenance={},
+            warnings=(),
+            semantic_equivalence="maybe",
         )
 
 
@@ -134,48 +163,6 @@ def test_missing_steps_fails_closed():
 
     with pytest.raises(ValueError, match="steps"):
         rewrite_replay({})
-
-
-from scripts.agent_os_replay_json.rewriter import RewriteRequest
-
-
-def test_selector_change_requires_explicit_selector():
-    with pytest.raises(ValueError, match="replacement selector"):
-        RewriteRequest(
-            kind="change-selector",
-            semantic_action_id="action-1",
-            source_indexes=(1,),
-        )
-
-
-def test_reorder_requires_explicit_target():
-    with pytest.raises(ValueError, match="target action id"):
-        RewriteRequest(
-            kind="move-before",
-            semantic_action_id="action-1",
-            source_indexes=(1,),
-        )
-
-
-def test_valid_explicit_selector_request():
-    request = RewriteRequest(
-        kind="change-selector",
-        semantic_action_id="action-1",
-        source_indexes=(1,),
-        evidence=("recorded selector alternative",),
-        replacement_selector="[data-testid='folder-card']",
-    )
-
-    assert request.replacement_selector == "[data-testid='folder-card']"
-
-
-def test_guessing_is_not_a_valid_request():
-    with pytest.raises(ValueError, match="unsupported rewrite request"):
-        RewriteRequest(
-            kind="guess",
-            semantic_action_id="action-1",
-            source_indexes=(1,),
-        )
 
 
 from scripts.agent_os_replay_json.rewriter import RewriteRequest
