@@ -13,6 +13,7 @@ export type PicturePerfectEvent =
   | { type: 'APPROVE_TUTORIAL' }
   | { type: 'GENERATE_PROMPTS' }
   | { type: 'PROMPTS_VALID' }
+  | { type: 'PROMPTS_BLOCKED' }
   | { type: 'OPEN_READY' }
   | { type: 'PREFLIGHT_PASS' }
   | { type: 'PREFLIGHT_FAIL' }
@@ -33,7 +34,7 @@ export const picturePerfectMachine = setup({
     reviewing_steps: { on: { ATTENTION_REQUIRED: 'review_attention_required', APPROVE_TUTORIAL: 'tutorial_approved' } },
     review_attention_required: { on: { ATTENTION_RESOLVED: 'reviewing_steps' } },
     tutorial_approved: { on: { GENERATE_PROMPTS: 'generating_prompts' } },
-    generating_prompts: { on: { PROMPTS_VALID: 'reviewing_prompts' } },
+    generating_prompts: { on: { PROMPTS_VALID: 'reviewing_prompts', PROMPTS_BLOCKED: 'tutorial_approved' } },
     reviewing_prompts: { on: { OPEN_READY: 'running_preflight' } },
     running_preflight: { on: { PREFLIGHT_PASS: 'ready_for_handoff', PREFLIGHT_FAIL: 'preflight_failed' } },
     preflight_failed: { on: { RERUN_PREFLIGHT: 'running_preflight' } },
