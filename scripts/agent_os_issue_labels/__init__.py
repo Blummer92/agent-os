@@ -40,6 +40,19 @@ from .pr_branch_refresh import (
     PullRequestBranchSnapshot,
     refresh_pull_request_branch,
 )
+from .pr_branch_refresh_authorization_source import (
+    AUTHORIZATION_MARKER,
+    RECEIPT_MARKER,
+    RefreshAuthorizationCommentSnapshot,
+    RefreshAuthorizationReceipt,
+    RefreshAuthorizationSourceSnapshot,
+    RefreshAuthorizationSourceStatus,
+    RefreshAuthorizationSourceTransport,
+    RefreshAuthorizationSourceResult,
+    reacquire_refresh_authorization_source,
+    serialize_refresh_authorization_comment,
+    serialize_refresh_authorization_receipt,
+)
 from .pr_branch_refresh_operator import (
     PullRequestBranchRefreshReceipt,
     refresh_pr,
@@ -76,6 +89,7 @@ from .validation import (
 )
 
 __all__ = [
+    "AUTHORIZATION_MARKER",
     "BatchPullRequestLabelReconciliationResult",
     "BlockingReviewThreadsReader",
     "BranchRefreshMutationResult",
@@ -111,6 +125,13 @@ __all__ = [
     "PullRequestLabelProvider",
     "PullRequestLabelReconciliationResult",
     "PullRequestLifecycleReconciliationResult",
+    "RECEIPT_MARKER",
+    "RefreshAuthorizationCommentSnapshot",
+    "RefreshAuthorizationReceipt",
+    "RefreshAuthorizationSourceResult",
+    "RefreshAuthorizationSourceSnapshot",
+    "RefreshAuthorizationSourceStatus",
+    "RefreshAuthorizationSourceTransport",
     "SubprocessGhRunner",
     "build_issue_create_argv",
     "build_issue_draft",
@@ -122,6 +143,7 @@ __all__ = [
     "lifecycle_invocation_reasons",
     "plan_issue_creation",
     "plan_label_application",
+    "reacquire_refresh_authorization_source",
     "reconcile_pull_request_batch",
     "reconcile_pull_request_labels",
     "reconcile_pull_request_lifecycle",
@@ -130,6 +152,8 @@ __all__ = [
     "render_issue_create_result",
     "render_validation_preview",
     "sanitize_diagnostic_text",
+    "serialize_refresh_authorization_comment",
+    "serialize_refresh_authorization_receipt",
     "validate_issue_draft",
     "validation_exit_code",
     "validation_result_to_dict",
