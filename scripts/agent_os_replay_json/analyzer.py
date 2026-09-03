@@ -29,12 +29,15 @@ class SemanticAction:
 
 
 def _selector_strings(step: dict[str, Any]) -> list[str]:
+    selectors = step.get("selectors", []) or []
+    if not isinstance(selectors, list):
+        return []
     out: list[str] = []
-    for chain in step.get("selectors", []) or []:
+    for chain in selectors:
         if isinstance(chain, list):
-            out.extend(str(part) for part in chain)
-        elif chain is not None:
-            out.append(str(chain))
+            out.extend(part for part in chain if isinstance(part, str))
+        elif isinstance(chain, str):
+            out.append(chain)
     return out
 
 
