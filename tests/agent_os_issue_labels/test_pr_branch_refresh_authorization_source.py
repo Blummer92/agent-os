@@ -1,3 +1,6 @@
+import hashlib
+import json
+
 import pytest
 
 from scripts.agent_os_issue_labels.pr_branch_refresh_authorization import (
@@ -7,6 +10,7 @@ from scripts.agent_os_issue_labels.pr_branch_refresh_authorization_source import
     AUTHORIZATION_MARKER, RECEIPT_MARKER,
     RefreshAuthorizationCommentSnapshot, RefreshAuthorizationReceipt,
     RefreshAuthorizationSourceSnapshot, RefreshAuthorizationSourceStatus,
+    _identity_digest_material,
     reacquire_refresh_authorization_source,
     serialize_refresh_authorization_comment, serialize_refresh_authorization_receipt,
 )
@@ -158,7 +162,24 @@ def test_duplicate_comment_identity_and_malformed_trusted_record_fail_closed():
 def test_receipt_tamper_is_detected_and_receipt_never_grants_authority():
     consumed = receipt()
     values = consumed.to_dict()
+    # `to_dict()` is the JSON-serialization surface, so it emits a list; the
+    # parse path reconstructs the exact tuple field type before validation.
+    values["reason_codes"] = tuple(values["reason_codes"])
     values["receipt_id"] = "refresh-authorization-receipt:" + "0" * 64
     with pytest.raises(ValueError, match="receipt_id does not match content"):
         RefreshAuthorizationReceipt(**values)
     assert consumed.side_effects_performed is False
+
+
+def test_identity_digest_material_is_version_scoped_and_null_separated():
+    payload = {"b": 2, "a": [1, "x"]}
+    material = _identity_digest_material("refresh-authorization-receipt", payload)
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    assert material == "refresh-authorization-receipt:v1\0" + canonical
+    expected = hashlib.sha256(material.encode()).hexdigest()
+    assert receipt().receipt_id == "refresh-authorization-receipt:" + hashlib.sha256(
+        _identity_digest_material("refresh-authorization-receipt", receipt()._identity_payload()).encode()
+    ).hexdigest()
+    assert expected != hashlib.sha256(
+        _identity_digest_material("refresh-authorization-receipt", {"a": [1, "x"], "b": 3}).encode()
+    ).hexdigest()

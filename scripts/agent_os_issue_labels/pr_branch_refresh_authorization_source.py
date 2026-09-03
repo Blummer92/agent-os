@@ -24,6 +24,11 @@ MAX_COMMENT_BYTES = 32 * 1024
 MAX_TOTAL_COMMENT_BYTES = 256 * 1024
 _SHA40 = re.compile(r"^[0-9a-f]{40}$")
 _REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+# Domain separator between the versioned identity prefix and the canonical
+# payload.  Kept as a module constant so the digest material never places a
+# backslash escape inside an f-string expression, which is a syntax error on
+# the supported Python 3.11 runtime.
+_IDENTITY_SEPARATOR = "\0"
 
 
 class RefreshAuthorizationSourceStatus(str, Enum):
@@ -157,8 +162,13 @@ def _canonical(payload: object) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
 
 
+def _identity_digest_material(prefix: str, payload: object) -> str:
+    return prefix + ":v1" + _IDENTITY_SEPARATOR + _canonical(payload)
+
+
 def _identity(prefix: str, payload: object) -> str:
-    return f"{prefix}:{hashlib.sha256((prefix + ':v1\0' + _canonical(payload)).encode()).hexdigest()}"
+    digest = hashlib.sha256(_identity_digest_material(prefix, payload).encode()).hexdigest()
+    return f"{prefix}:{digest}"
 
 
 def serialize_refresh_authorization_comment(authorization: RefreshAuthorization) -> str:
