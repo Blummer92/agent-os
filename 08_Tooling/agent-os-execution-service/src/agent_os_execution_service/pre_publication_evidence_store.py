@@ -3,8 +3,8 @@
 Both v1.1 phases reuse the existing ``pre-publication-producer-evidence``
 namespace. Source evidence may be persisted before a checkpoint exists;
 checkpoint-bound evidence (including legacy v1.0) still requires the exact
-matching durable #895 checkpoint. No second root, pointer, index, or authority
-surface is introduced.
+matching durable #895 checkpoint. The historical public loader remains the
+publication-facing loader and explicitly rejects source-phase evidence.
 """
 from __future__ import annotations
 
@@ -100,8 +100,7 @@ def append_pre_publication_evidence(store_root: Path | str, capsule: PrePublicat
     return AppendPrePublicationEvidenceOutcome(capsule_id=capsule.capsule_id, path=path, already_present=already_present)
 
 
-def load_pre_publication_evidence(store_root: Path | str, capsule_id: str) -> PrePublicationEvidenceCapsule:
-    """Load and content-reverify one exact producer-evidence capsule."""
+def _load_any_pre_publication_evidence(store_root: Path | str, capsule_id: str) -> PrePublicationEvidenceCapsule:
     directory = _directory(store_root)
     _reject_symlink(directory)
     path = directory / _filename(capsule_id)
@@ -118,4 +117,20 @@ def load_pre_publication_evidence(store_root: Path | str, capsule_id: str) -> Pr
         raise CheckpointStoreIntegrityConflict(str(exc)) from exc
     if capsule.capsule_id != capsule_id or path.name != _filename(capsule.capsule_id):
         raise CheckpointStoreIntegrityConflict("persisted producer evidence does not match requested identity")
+    return capsule
+
+
+def load_source_pre_publication_evidence(store_root: Path | str, capsule_id: str) -> PrePublicationEvidenceCapsule:
+    """Load one exact source-phase capsule for the future #1428 host activation."""
+    capsule = _load_any_pre_publication_evidence(store_root, capsule_id)
+    if capsule.phase != SOURCE_PHASE or capsule.checkpoint_id is not None:
+        raise CheckpointStoreIntegrityConflict("source-phase producer evidence is required")
+    return capsule
+
+
+def load_pre_publication_evidence(store_root: Path | str, capsule_id: str) -> PrePublicationEvidenceCapsule:
+    """Load publication-facing evidence; source-phase records fail closed explicitly."""
+    capsule = _load_any_pre_publication_evidence(store_root, capsule_id)
+    if capsule.phase != CHECKPOINT_BOUND_PHASE or capsule.checkpoint_id is None:
+        raise CheckpointStoreIntegrityConflict("source-phase evidence is not publishable")
     return capsule
