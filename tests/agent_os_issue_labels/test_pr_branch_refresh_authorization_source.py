@@ -1,4 +1,4 @@
-from dataclasses import replace
+import pytest
 
 from scripts.agent_os_issue_labels.pr_branch_refresh_authorization import (
     RefreshAuthorization, RefreshAuthorizationState,
@@ -156,8 +156,9 @@ def test_duplicate_comment_identity_and_malformed_trusted_record_fail_closed():
 
 
 def test_receipt_tamper_is_detected_and_receipt_never_grants_authority():
-    record = auth()
-    consumed = receipt(record)
-    bad = replace(consumed, receipt_id="refresh-authorization-receipt:" + "0" * 64)
-    # dataclass reconstruction itself fails before a forged receipt can be serialized.
-    assert bad is None
+    consumed = receipt()
+    values = consumed.to_dict()
+    values["receipt_id"] = "refresh-authorization-receipt:" + "0" * 64
+    with pytest.raises(ValueError, match="receipt_id does not match content"):
+        RefreshAuthorizationReceipt(**values)
+    assert consumed.side_effects_performed is False
