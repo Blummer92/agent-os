@@ -25,7 +25,7 @@ jobs:
         working-directory: 08_Tooling/instructional-materials-coach/picture-perfect-coach
     steps:
       - name: Checkout exact PR source head
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
