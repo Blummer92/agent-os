@@ -24,7 +24,7 @@ google-auth-oauthlib>=1.4.0
 PyGithub==2.9.1
 
 # Coverage
-coverage[toml]>=7.15.4
+coverage[toml]>=7.16.0
 
 # Local editable packages (development convenience only; wheel tests prove packaging)
 -e ./src
