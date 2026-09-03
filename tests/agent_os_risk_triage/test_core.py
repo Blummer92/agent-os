@@ -131,6 +131,15 @@ def test_create_new_issue_candidate_when_no_target_is_supplied():
     assert result.disposition is Disposition.CREATE_NEW_ISSUE_CANDIDATE
 
 
+def test_mismatched_candidate_kind_fails_closed():
+    malformed = candidate(TargetKind.CURRENT_WORK, "pr:10", Relationship.EQUIVALENT)
+    result = triage_risk(
+        RiskTriageInput(finding=finding(), existing_issue_candidates=(malformed,))
+    )
+    assert result.disposition is Disposition.NEEDS_DECISION
+    assert result.reason_codes == ("candidate.kind-mismatch",)
+
+
 def test_near_duplicate_without_structured_proof_needs_decision():
     maybe = candidate(TargetKind.EXISTING_ISSUE, "issue:10", Relationship.UNKNOWN)
     result = triage_risk(RiskTriageInput(finding=finding(), existing_issue_candidates=(maybe,)))
