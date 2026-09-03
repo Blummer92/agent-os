@@ -12,6 +12,19 @@ def test_folder_card_click_is_folder_entry_evidence():
     assert action.source_indexes == (0,)
 
 
+def test_folder_preview_click_is_not_folder_entry():
+    payload = {"steps": [{
+        "type": "click",
+        "selectors": [[
+            "[data-testid='folder-asset-card-digitalmedia']",
+            "[data-testid='preview-button-id']",
+        ]],
+    }]}
+    action = analyze_replay(payload)[0]
+    assert action.kind == "click"
+    assert action.target == "folder-asset-card-digitalmedia"
+
+
 def test_cursor_noise_collapses_into_one_rename_with_evidence():
     steps = [{
         "type": "change",
