@@ -1,82 +1,84 @@
 # First-publication producer activation (#1428 / #1799)
 
-`agent_os_execution_service.first_publication_producer` is the bounded composition
-that prepares the existing canonical artifacts required by the production handoff
-publisher. It is not a publisher and it is not an execution entrypoint.
+`agent_os_execution_service.first_publication_producer` remains the canonical
+producer composition. #1799 adds the two-phase #1412 evidence envelope, and
+`agent_os_execution_service.first_publication_source_activation` now supplies the
+bounded continuation from one exact durable source capsule to the existing
+producer identities. Neither module is a publisher or Scheduler entrypoint.
 
 ## Two-phase #1412 evidence
 
-#1799 extends the existing `PrePublicationEvidenceCapsule` owner rather than
-creating a second producer-input transport. Legacy schema `1.0` remains the
-checkpoint-bound format with unchanged identity semantics. Schema `1.1` has two
-explicit finite phases:
-
-```text
-source
-checkpoint-bound
-```
+Legacy schema `1.0` remains checkpoint-bound with unchanged identity semantics.
+Schema `1.1` has explicit `source` and `checkpoint-bound` phases.
 
 A `source` capsule carries the exact already-canonical CandidatePacket, approved
-ApprovalRecord, RequiredEnvironmentSpec, validation bundle and plan identity,
+ApprovalRecord, RequiredEnvironmentSpec, validation bundle/plan identity,
 advisory identities, candidate branch, workspace request, invalidation events,
 timestamps, and one bounded non-authorizing execution identity. It has no
-checkpoint ID and grants no authority. It may be persisted in the existing
-`pre-publication-producer-evidence` namespace before a checkpoint exists.
+checkpoint ID and grants no authority.
 
-`bind_source_capsule_to_checkpoint(...)` accepts only one exact v1.1 source
-capsule plus one exact matching #895 `ExecutionCheckpoint`. Repository, issue,
-invocation, execution, branch, source SHA, and tested SHA must all match. The
-result preserves the source evidence and adds only the checkpoint binding.
-Equivalent source/checkpoint pairs converge to the same content identity.
+`bind_source_capsule_to_checkpoint(...)` accepts one exact v1.1 source capsule and
+one exact matching #895 checkpoint. Repository, issue, invocation, execution,
+branch, source SHA, and tested SHA must all match. Equivalent pairs converge to
+the same immutable identity.
 
-The historical `load_pre_publication_evidence(...)` remains the publication-facing
-loader and explicitly rejects source-phase evidence. The separate
-`load_source_pre_publication_evidence(...)` exists only for the future trusted
-#1428 host activation. A source capsule therefore cannot reach #1411/#1409/#1243
-publication merely because it is durable.
+The publication-facing `load_pre_publication_evidence(...)` explicitly rejects
+source-phase records. `load_source_pre_publication_evidence(...)` is used only by
+the #1428 source activation.
 
-## Intended ordering
+## #1428 source activation
+
+`activate_first_publication_source(...)` accepts one exact source-capsule identity
+plus evidence already reacquired by trusted host composition. It does not accept
+store roots, repository paths, workspace paths, commands, credentials, or
+authority booleans as part of its request contract. The trusted host supplies the
+existing checkpoint-store root outside that bounded request.
+
+The activation checks the source capsule against the current execution identity
+before any write, independently requires current execution authorization and
+current READY dependency evidence, then composes only existing owners:
 
 ```text
-already-produced canonical pre-PR evidence
--> #1412 source capsule + existing #1412 store
--> trusted host reacquires current repository/issue/authorization/dependency truth
--> #1431 truthful preflight-complete checkpoint
+exact #1412 source capsule
+-> verify repository / issue / invocation / execution / branch / source / tested bindings
+-> require current execution authorization
+-> require current READY dependency evidence
+-> #1431 construct truthful checkpoint from already-observed host evidence
 -> #895 append_checkpoint(...)
--> bind source capsule to exact durable checkpoint
--> persist checkpoint-bound #1412 capsule
+-> #1799 bind source capsule to exact checkpoint
+-> #1412 append checkpoint-bound capsule
 -> #895 plan_resume(...) + append_resume_plan(...)
 -> #918 select_executor_route(...) + existing route-decision store
--> require already-READY/current #1197 DependencyReadinessEvidence
 -> existing dependency-readiness store
 -> return immutable producer identities
 -> STOP
 ```
 
-The producer never calls `publish_authorized_validation_handoff(...)`,
-`publish_governed_handoff(...)`, Workflow Scheduler, a lease API, or dependency
-installation. Dependency preparation remains a separately authorized Workflow
-Scheduler operation.
+The activation deliberately does not serialize or persist a complete
+`SingleIssuePilotInput`. The irreducible pre-PR evidence comes from the source
+capsule; current authorization, dependency, repository/worktree/environment,
+acceptance, governance, and route evidence remain host-reacquired inputs owned by
+their existing contracts.
 
 ## Authority
 
-Neither capsule phase creates execution authorization. The trusted host must
-reacquire current `ExecutionAuthorizationEvidence`, dependency readiness, route,
-ResumePlan, repository and runtime currentness independently. All authority flags
-on both phases remain hard-false.
+Neither capsule phase nor the source activation creates execution authorization.
+All publication/Scheduler/GitHub-write/merge/external-write authority remains
+outside this operation. Dependency preparation/installation is not implicit: any
+non-READY state fails before producer writes.
 
 ## Persistence
 
-Both phases use the existing checkpoint-store root and the same
-`pre-publication-producer-evidence` namespace. No new path, database, queue,
-mutable pointer, descriptor store, checkpoint store, retry database, or alternate
-persistence owner is introduced. Legacy v1.0 records require no migration.
+Both capsule phases use the existing checkpoint-store root and the same
+`pre-publication-producer-evidence` namespace. The activation reuses the existing
+#895 checkpoint/ResumePlan stores, #918 route-decision store, and #1197 dependency
+readiness store. No new root, mutable pointer, database, queue, retry store,
+descriptor store, or alternate persistence owner is introduced.
 
-## Production integration
+## Remaining production boundary
 
-The future fixed #1428 host activation should accept only bounded lineage/source
-capsule identity, reacquire host-current evidence, construct a truthful
-`preflight-complete` checkpoint, and finalize the source capsule. GitHub Actions
-workflow changes, GCE deployment, live producer execution, publication,
-discovery, resume, replay, and Scheduler execution remain separate authorization
-boundaries.
+A fixed host CLI/transport wrapper may call the source activation only after
+trusted host composition has reacquired the required current evidence. GitHub
+Actions changes, GCE deployment/host refresh, live producer execution, #1411
+publication, discovery, resume, replay, and Scheduler execution remain separate
+authorization boundaries.
