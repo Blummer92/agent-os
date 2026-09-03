@@ -1,4 +1,5 @@
 from dataclasses import FrozenInstanceError
+import ast
 
 import pytest
 
@@ -205,6 +206,13 @@ def test_reason_codes_are_bounded_and_stable():
 def test_core_has_no_network_or_github_dependencies():
     import scripts.agent_os_risk_triage.core as core
 
-    source = open(core.__file__, encoding="utf-8").read()
-    forbidden = ("requests", "urllib", "httpx", "subprocess", "PyGithub", "github.Github")
-    assert all(token not in source for token in forbidden)
+    tree = ast.parse(open(core.__file__, encoding="utf-8").read())
+    imported_roots = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_roots.update(alias.name.split(".", 1)[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported_roots.add(node.module.split(".", 1)[0])
+
+    forbidden = {"requests", "urllib", "httpx", "subprocess", "github"}
+    assert imported_roots.isdisjoint(forbidden)
