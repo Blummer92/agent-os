@@ -88,10 +88,9 @@ def verify_pull_request_creation(
 ) -> PullRequestCreationVerification:
     """Reacquire canonical PR state before creation success or follow-up mutation.
 
-    `discoverable` is caller-supplied evidence from the canonical lookup/search
-    surface. A missing secondary list/search result must not override a successful
-    exact PR readback; callers should set this true once exact canonical lookup
-    proves the PR identity.
+    `discoverable` is caller-supplied secondary discovery evidence. A successful
+    exact canonical PR readback proves discoverability itself, so lag on a
+    secondary list/search surface cannot override the exact readback.
     """
     try:
         snapshot = provider.read(expectation.repository, expectation.pr_number)
@@ -105,6 +104,7 @@ def verify_pull_request_creation(
             reportable_state="creation-uncertain",
         )
 
+    canonical_discoverable = True
     reasons: set[str] = set()
     if snapshot.repository != expectation.repository:
         reasons.add("repository-mismatch")
@@ -116,8 +116,6 @@ def verify_pull_request_creation(
         reasons.add("base-ref-mismatch")
     if snapshot.head_ref is not None and snapshot.head_ref != expectation.head_ref:
         reasons.add("head-ref-mismatch")
-    if not discoverable:
-        reasons.add("canonical-discoverability-unproven")
 
     if snapshot.merged:
         reasons.add("pr-merged")
@@ -127,7 +125,7 @@ def verify_pull_request_creation(
             status="unauthorized-terminal-state" if not expectation.merge_authorized else "terminal",
             reason_codes=tuple(sorted(reasons)),
             canonical_snapshot=snapshot,
-            discoverable=discoverable,
+            discoverable=canonical_discoverable,
             mutation_allowed=False,
             reportable_state="merged",
         )
@@ -142,16 +140,19 @@ def verify_pull_request_creation(
             status="state-drift",
             reason_codes=tuple(sorted(reasons)),
             canonical_snapshot=snapshot,
-            discoverable=discoverable,
+            discoverable=canonical_discoverable,
             mutation_allowed=False,
             reportable_state=_reportable_state(snapshot),
         )
 
+    reason_codes = {"canonical-readback-verified"}
+    if not discoverable:
+        reason_codes.add("secondary-discovery-lag-ignored")
     return PullRequestCreationVerification(
         status="verified",
-        reason_codes=("canonical-readback-verified",),
+        reason_codes=tuple(sorted(reason_codes)),
         canonical_snapshot=snapshot,
-        discoverable=True,
+        discoverable=canonical_discoverable,
         mutation_allowed=True,
         reportable_state=_reportable_state(snapshot),
     )
