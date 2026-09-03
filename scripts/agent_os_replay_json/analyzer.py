@@ -144,8 +144,10 @@ def analyze_replay(payload: dict[str, Any]) -> list[SemanticAction]:
             continue
 
         if event_type == "navigate":
+            url = step.get("url")
             actions.append(SemanticAction(
-                kind="navigate", source_indexes=(i,), target=str(step.get("url")),
+                kind="navigate", source_indexes=(i,),
+                target=url if isinstance(url, str) else None,
                 fragile=fragile, evidence=evidence
             ))
             i += 1
