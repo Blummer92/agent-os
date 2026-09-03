@@ -35,6 +35,8 @@ language, student language, material safety, and assessment eligibility as
 separate fields. Student-facing material requires `Slide/Worksheet Safe? = Yes`.
 Assessment language requires explicit instruction or guided or independent
 practice; exposure or appearance in material is insufficient.
+## Assessment Criteria Integration Gate
+For student-facing assessment materials, preserve the validated MaterialRequirement learning-objective, success-criteria, and evidence-target references as dependency identity. Render success criteria, rubrics, checklists, observation criteria, self-check criteria, or completion criteria only from current governed student-facing evidence supplied by the canonical owner; a reference alone is not student-facing copy. Keep teacher scoring notes and calibration guidance separate and do not project them into student materials. Do not invent a rubric for formative work when no governed student-facing criteria are supplied. Inherit `student-language-standard.md` for rubric language and preserve the upstream assessment meaning rather than rewriting it inside material generation.
 ## Reusable Visual Gate
 Before visual retrieval, start from a validated `MaterialRequirement` and use the governed visual-needs decision. `no-visual-needed` continues with no asset query or image-gap work. `visuals-required` may perform one bounded Visual Asset Library read only when separately authorized, then filters to eligible, human-reviewed candidates and consumes one cohesive visual plan.
 For teacher-language reuse selection, inherit `01_Shared_Standards/instructional-design/visual-asset-picker-standard.md`. The Asset Picker resolves reuse-first selection and preserves selected asset identity/constraints; this workflow consumes that handoff without reinterpreting the teacher's original selection request.
@@ -46,11 +48,12 @@ Use the smallest relevant context for each task. Legacy Custom GPT files such as
 ## Assessment Artifact Gate
 Before assessment-materials integration review, verify that the assessment artifact is accessible in the shared unit workspace. If not accessible, return exactly:
 `Materials Integration Status: Blocked - Artifact Not Accessible`
-Then name missing title, expected location, shared link, status/version log entry, and access confirmation needed from Assessment Agent.
+Then name missing title, expected location, shared link, status/version log entry, and access confirmation needed from the canonical assessment/evidence owner.
 ## Memory Boundary
 Use Memory only for lightweight reusable context, preferences, and short working summaries. Do not store full source materials, shared documents, asset indexes, formal release notes, version logs, or long histories in Memory.
 ## Version
-0.3.0
+0.4.0
 ## Changelog
+- 0.4.0 adds the assessment-criteria integration gate: preserve learning-evidence references, project only current governed student-facing criteria, keep teacher scoring/calibration guidance separate, and never invent rubric content (#1788).
 - 0.3.0 classifies direct teacher revisions before production gating and routes qualifying existing-artifact edits through the Teacher-Directed Revision Lane (#1013).
 - 0.2.2 added the current reusable-visual gate and final-delivery QA behavior.

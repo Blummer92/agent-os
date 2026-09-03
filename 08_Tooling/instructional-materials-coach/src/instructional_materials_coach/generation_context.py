@@ -28,6 +28,25 @@ class GenerationContextError(ValueError):
     """Fail-closed error for unusable or unresolved generation evidence."""
 
 
+_TEACHER_ONLY_DECISION_KEYS = frozenset(
+    {
+        "teacher-scoring-guide",
+        "teacher-scoring-notes",
+        "rubric-calibration-guidance",
+        "calibration-guidance",
+    }
+)
+
+_STUDENT_ASSESSMENT_TOKENS = {
+    "success-criteria": "context_student_success_criteria",
+    "student-facing-rubric": "context_student_rubric",
+    "student-facing-checklist": "context_student_checklist",
+    "observation-criteria": "context_student_observation_criteria",
+    "self-check-criteria": "context_student_self_check_criteria",
+    "completion-criteria": "context_student_completion_criteria",
+}
+
+
 def compose_generation_context(
     content: LessonContent,
     *,
@@ -43,6 +62,11 @@ def compose_generation_context(
     requirements are preserved, and selected governed visual identities plus
     their existing #944 assignment/use evidence are carried forward. Any
     blocked/manual-review #973 state fails closed before generation.
+
+    Student-facing success/rubric/checklist evidence is projected only from the
+    current governed state and remains separate from teacher-only scoring or
+    calibration guidance. MaterialRequirement learning references are preserved
+    as identity tokens but never treated as student-facing copy by themselves.
     """
     requirement_result = validate_material_requirement(material_requirement)
     if requirement_result.record is None:
@@ -74,6 +98,7 @@ def compose_generation_context(
     tokens: dict[str, str] = {}
 
     identity = requirement["identity"]
+    learning = requirement["learning_evidence"]
     tokens.update(
         {
             "context_course_ref": identity["course_ref"],
@@ -81,6 +106,9 @@ def compose_generation_context(
             "context_lesson_ref": identity["lesson_ref"],
             "context_material_purpose": requirement["instructional"]["purpose"],
             "context_required_sections": _join(requirement["instructional"]["required_sections"]),
+            "context_learning_objective_ref": learning["learning_objective_ref"]["stable_id"],
+            "context_success_criteria_ref": learning["success_criteria_ref"]["stable_id"],
+            "context_evidence_target_ref": learning["evidence_target_ref"]["stable_id"],
             "context_vocabulary_refs": _join(
                 item["stable_id"] for item in requirement["requirements"]["vocabulary_references"]
             ),
@@ -96,15 +124,27 @@ def compose_generation_context(
     )
 
     for item in state.get("owner_states", []):
+        decision_key = item["decision_key"]
+        if decision_key in _TEACHER_ONLY_DECISION_KEYS:
+            continue
         value = item.get("value")
         if isinstance(value, str):
-            tokens[_decision_token(item["decision_key"])] = value
+            tokens[_decision_token(decision_key)] = value
+            student_token = _STUDENT_ASSESSMENT_TOKENS.get(decision_key)
+            if student_token is not None:
+                tokens[student_token] = value
     for item in state.get("context_evidence", []):
+        decision_key = item["decision_key"]
+        if decision_key in _TEACHER_ONLY_DECISION_KEYS:
+            continue
         if item.get("currentness") != "current":
             continue
         value = item.get("value")
         if isinstance(value, str):
-            tokens.setdefault(_decision_token(item["decision_key"]), value)
+            tokens.setdefault(_decision_token(decision_key), value)
+            student_token = _STUDENT_ASSESSMENT_TOKENS.get(decision_key)
+            if student_token is not None:
+                tokens.setdefault(student_token, value)
 
     # Keep authority evidence visible and fixed false; never infer authorization.
     tokens["context_production_authorized"] = "false"
