@@ -330,6 +330,7 @@ def assess_test_adequacy(
     if not set(exercised).issubset(attack_obligations):
         raise EvidenceValidationError("test evidence obligations must come from the CRH5 attack")
 
+    compatibility_evidence_supplied = bool(changed_paths or material_kinds)
     semantic_invalidated = review_invalidation_scope(
         prior_reviewed_head=tested_head,
         current_head=current_head,
@@ -338,7 +339,9 @@ def assess_test_adequacy(
         previously_reviewed_paths=attack.affected_surface_refs,
     )
     test_surface_changed = bool(set(changed_paths) & set(evidence_surfaces))
-    if tested_head != current_head and (semantic_invalidated or test_surface_changed):
+    if tested_head != current_head and (
+        not compatibility_evidence_supplied or semantic_invalidated or test_surface_changed
+    ):
         return TestAdequacyRecord(
             attack_id=attack.attack_id,
             tested_head_sha=tested_head,
