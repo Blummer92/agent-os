@@ -95,6 +95,9 @@ def triage_risk(request: RiskTriageInput) -> RiskTriageResult:
             reason_codes=("finding.no-action-required",),
         )
 
+    if _has_mismatched_candidate_kind(request):
+        return _decision("candidate.kind-mismatch")
+
     owner_result = _canonical_owner_result(request.canonical_risk_owners)
     if owner_result is not None:
         return owner_result
@@ -153,6 +156,19 @@ def triage_risk(request: RiskTriageInput) -> RiskTriageResult:
     return RiskTriageResult(
         disposition=Disposition.CREATE_NEW_ISSUE_CANDIDATE,
         reason_codes=("finding.no-current-target",),
+    )
+
+
+def _has_mismatched_candidate_kind(request: RiskTriageInput) -> bool:
+    groups = (
+        (request.current_work_candidates, TargetKind.CURRENT_WORK),
+        (request.existing_issue_candidates, TargetKind.EXISTING_ISSUE),
+        (request.canonical_risk_owners, TargetKind.CANONICAL_RISK_OWNER),
+    )
+    return any(
+        candidate.kind is not expected_kind
+        for candidates, expected_kind in groups
+        for candidate in candidates
     )
 
 
