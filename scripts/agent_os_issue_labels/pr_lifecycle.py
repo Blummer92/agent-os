@@ -180,6 +180,8 @@ def reconcile_pull_request_lifecycle(
     if invocation_reason == "draft-pr-created" and creation_expectation is not None:
         if creation_discoverable is None:
             raise ValueError("draft PR creation verification requires canonical discoverability evidence")
+        if creation_expectation.repository != repository or creation_expectation.pr_number != pr_number:
+            raise ValueError("draft PR creation expectation must match lifecycle repository and PR number")
         creation_verification = verify_pull_request_creation(
             provider,
             creation_expectation,
