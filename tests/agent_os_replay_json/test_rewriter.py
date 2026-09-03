@@ -178,48 +178,6 @@ def test_guessing_is_not_a_valid_request():
         )
 
 
-from scripts.agent_os_replay_json.rewriter import RewriteRequest
-
-
-def test_selector_change_requires_explicit_selector():
-    with pytest.raises(ValueError, match="replacement selector"):
-        RewriteRequest(
-            kind="change-selector",
-            semantic_action_id="action-1",
-            source_indexes=(1,),
-        )
-
-
-def test_reorder_requires_explicit_target():
-    with pytest.raises(ValueError, match="target action id"):
-        RewriteRequest(
-            kind="move-before",
-            semantic_action_id="action-1",
-            source_indexes=(1,),
-        )
-
-
-def test_valid_explicit_selector_request():
-    request = RewriteRequest(
-        kind="change-selector",
-        semantic_action_id="action-1",
-        source_indexes=(1,),
-        evidence=("recorded selector alternative",),
-        replacement_selector="[data-testid='folder-card']",
-    )
-
-    assert request.replacement_selector == "[data-testid='folder-card']"
-
-
-def test_guessing_is_not_a_valid_request():
-    with pytest.raises(ValueError, match="unsupported rewrite request"):
-        RewriteRequest(
-            kind="guess",
-            semantic_action_id="action-1",
-            source_indexes=(1,),
-        )
-
-
 from scripts.agent_os_replay_json.rewriter import apply_request
 
 
@@ -272,6 +230,51 @@ def test_selector_change_cannot_invent_selector():
 
     assert result.semantic_equivalence == "rejected"
     assert result.rewritten_recording == payload
+
+
+def test_rejected_result_isolated_from_nested_input_mutation():
+    payload = {
+        "steps": [
+            {"type": "click", "selectors": [["#generated-123"]]},
+        ],
+        "metadata": {"labels": ["original"]},
+    }
+    request = RewriteRequest(
+        kind="change-selector",
+        semantic_action_id="action-0",
+        source_indexes=(0,),
+        replacement_selector="[data-testid='invented']",
+    )
+
+    result = apply_request(payload, request)
+    result.rewritten_recording["steps"][0]["selectors"][0][0] = "changed"
+    result.rewritten_recording["metadata"]["labels"].append("changed")
+
+    assert payload["steps"][0]["selectors"] == [["#generated-123"]]
+    assert payload["metadata"]["labels"] == ["original"]
+
+
+def test_unproven_result_isolated_from_nested_input_mutation():
+    payload = {
+        "steps": [
+            {"type": "click", "selectors": [["aria/A"]]},
+            {"type": "click", "selectors": [["aria/B"]]},
+        ],
+        "metadata": {"labels": ["original"]},
+    }
+    request = RewriteRequest(
+        kind="move-before",
+        semantic_action_id="action-1",
+        source_indexes=(1,),
+        target_action_id="action-0",
+    )
+
+    result = apply_request(payload, request)
+    result.rewritten_recording["steps"][0]["selectors"][0][0] = "changed"
+    result.rewritten_recording["metadata"]["labels"].append("changed")
+
+    assert payload["steps"][0]["selectors"] == [["aria/A"]]
+    assert payload["metadata"]["labels"] == ["original"]
 
 
 def test_request_source_indexes_must_match_analyzer_evidence():
