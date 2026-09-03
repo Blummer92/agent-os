@@ -86,6 +86,9 @@ _MATCH_RELATIONSHIPS = {Relationship.EQUIVALENT, Relationship.OVERLAPS}
 
 def triage_risk(request: RiskTriageInput) -> RiskTriageResult:
     """Return exactly one advisory disposition for immutable supplied evidence."""
+    if not _valid_request_shape(request):
+        return _decision("evidence.malformed")
+
     if request.explicit_uncertainty:
         return _decision("uncertainty.explicit")
 
@@ -156,6 +159,45 @@ def triage_risk(request: RiskTriageInput) -> RiskTriageResult:
     return RiskTriageResult(
         disposition=Disposition.CREATE_NEW_ISSUE_CANDIDATE,
         reason_codes=("finding.no-current-target",),
+    )
+
+
+def _valid_request_shape(request: object) -> bool:
+    if type(request) is not RiskTriageInput or type(request.finding) is not FindingEvidence:
+        return False
+    if type(request.finding.action_required) is not bool:
+        return False
+    if type(request.finding.finding_id) is not str or not request.finding.finding_id.strip():
+        return False
+    if type(request.finding.text) is not str or not request.finding.text.strip():
+        return False
+    if any(
+        value is not None and type(value) is not str
+        for value in (request.finding.likelihood, request.finding.impact)
+    ):
+        return False
+    groups = (
+        request.current_work_candidates,
+        request.existing_issue_candidates,
+        request.canonical_risk_owners,
+    )
+    if any(type(group) is not tuple for group in groups) or type(request.explicit_uncertainty) is not tuple:
+        return False
+    if any(type(item) is not str or not item.strip() for item in request.explicit_uncertainty):
+        return False
+    return all(_valid_candidate(candidate) for group in groups for candidate in group)
+
+
+def _valid_candidate(candidate: object) -> bool:
+    return (
+        type(candidate) is CandidateEvidence
+        and type(candidate.kind) is TargetKind
+        and type(candidate.identity) is str
+        and bool(candidate.identity.strip())
+        and type(candidate.state) is TargetState
+        and type(candidate.relationship) is Relationship
+        and type(candidate.evidence) is tuple
+        and all(type(item) is str and bool(item.strip()) for item in candidate.evidence)
     )
 
 
