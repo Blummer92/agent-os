@@ -49,6 +49,21 @@ def test_no_action_is_not_overridden_by_supplied_target():
     assert result.target_identity is None
 
 
+def test_malformed_action_required_fails_closed_instead_of_becoming_no_action():
+    result = triage_risk(RiskTriageInput(finding=finding(action_required=None)))
+    assert result.disposition is Disposition.NEEDS_DECISION
+    assert result.reason_codes == ("evidence.malformed",)
+
+
+def test_malformed_candidate_enum_fails_closed_instead_of_creating_new_issue():
+    malformed = CandidateEvidence(
+        "existing-issue", "issue:10", TargetState.OPEN, Relationship.EQUIVALENT, ("supplied",)
+    )
+    result = triage_risk(RiskTriageInput(finding=finding(), existing_issue_candidates=(malformed,)))
+    assert result.disposition is Disposition.NEEDS_DECISION
+    assert result.reason_codes == ("evidence.malformed",)
+
+
 def test_unambiguous_canonical_owner_wins_and_preserves_evidence():
     owner = candidate(
         TargetKind.CANONICAL_RISK_OWNER,
