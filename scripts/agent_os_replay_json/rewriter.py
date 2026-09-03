@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import re
 from typing import Any
 
 REWRITE_KINDS = {
@@ -12,6 +13,9 @@ REWRITE_KINDS = {
     "change-selector",
     "insert-assertion",
 }
+
+_ACTION_ID_RE = re.compile(r"action-(0|[1-9][0-9]*)\Z")
+
 
 @dataclass(frozen=True)
 class RewriteOperation:
@@ -37,6 +41,7 @@ class RewriteOperation:
         data["evidence"] = list(self.evidence)
         data["output_indexes"] = list(self.output_indexes)
         return data
+
 
 @dataclass(frozen=True)
 class RewriteResult:
@@ -133,6 +138,7 @@ def rewrite_replay(payload: dict[str, Any]) -> RewriteResult:
         semantic_equivalence="proven",
     )
 
+
 @dataclass(frozen=True)
 class RewriteRequest:
     kind: str
@@ -154,6 +160,7 @@ class RewriteRequest:
         if self.kind in {"move-before", "move-after"} and not self.target_action_id:
             raise ValueError(f"{self.kind} requires target action id")
 
+
 def apply_request(
     payload: dict[str, Any],
     request: RewriteRequest,
@@ -166,10 +173,8 @@ def apply_request(
 
     actions = analyze_replay(payload)
 
-    try:
-        action_index = int(request.semantic_action_id.removeprefix("action-"))
-        action = actions[action_index]
-    except (ValueError, IndexError):
+    match = _ACTION_ID_RE.fullmatch(request.semantic_action_id)
+    if match is None:
         return RewriteResult(
             rewritten_recording=dict(payload),
             operations=(),
@@ -177,6 +182,17 @@ def apply_request(
             warnings=("unknown semantic action id",),
             semantic_equivalence="rejected",
         )
+
+    action_index = int(match.group(1))
+    if action_index >= len(actions):
+        return RewriteResult(
+            rewritten_recording=dict(payload),
+            operations=(),
+            provenance={},
+            warnings=("unknown semantic action id",),
+            semantic_equivalence="rejected",
+        )
+    action = actions[action_index]
 
     if tuple(request.source_indexes) != tuple(action.source_indexes):
         return RewriteResult(

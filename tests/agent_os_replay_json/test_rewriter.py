@@ -293,6 +293,48 @@ def test_request_source_indexes_must_match_analyzer_evidence():
     assert result.semantic_equivalence == "rejected"
 
 
+@pytest.mark.parametrize(
+    "action_id",
+    ["0", "action--1", "action-+0", "action- 0", " action-0", "action-0 ", "action-0junk", "action-01"],
+)
+def test_malformed_semantic_action_ids_are_rejected(action_id):
+    payload = {
+        "steps": [
+            {"type": "click", "selectors": [["aria/Folder"]]},
+        ]
+    }
+    request = RewriteRequest(
+        kind="change-selector",
+        semantic_action_id=action_id,
+        source_indexes=(0,),
+        replacement_selector="aria/Folder",
+    )
+
+    result = apply_request(payload, request)
+
+    assert result.semantic_equivalence == "rejected"
+    assert result.warnings == ("unknown semantic action id",)
+    assert result.rewritten_recording == payload
+
+
+def test_canonical_semantic_action_id_remains_valid():
+    payload = {
+        "steps": [
+            {"type": "click", "selectors": [["aria/Folder"]]},
+        ]
+    }
+    request = RewriteRequest(
+        kind="change-selector",
+        semantic_action_id="action-0",
+        source_indexes=(0,),
+        replacement_selector="aria/Folder",
+    )
+
+    result = apply_request(payload, request)
+
+    assert result.semantic_equivalence == "proven"
+
+
 def test_keyboard_noise_can_be_removed():
     payload = {
         "steps": [
