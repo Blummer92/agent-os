@@ -1,4 +1,4 @@
-"""Fixed GitHub-to-GCE dev-validation transport for #1432/#1436/#1454/#1455/#1495/#1515."""
+"""Fixed GitHub-to-GCE dev-validation transport for #1432/#1436/#1454/#1455/#1495/#1515/#1768."""
 from __future__ import annotations
 
 import argparse
@@ -21,6 +21,8 @@ from .github_issue_comment_ingress import IssueCommentIngressResult
 
 HOST_PYTHON = "/usr/bin/python3"
 DEV_VALIDATION_PYTHON = "/usr/local/libexec/agent-os-dev-validation-python"
+EIA_VALIDATION_ID = "eia-paddleocr-runtime-qualification"
+EIA_VALIDATION_ARGV = ("python", "-m", "workflow_scheduler.governance.eia_paddleocr_runtime_qualification")
 # DEVVAL3 (#1495): the TypeScript/Vitest identity cannot run under the pinned
 # CPython test runtime, so it binds a second fixed root-owned runtime published
 # by the same separately authorized administrator installer pattern. It adds no
@@ -36,6 +38,7 @@ _UNSAFE_DIAGNOSTIC_CHAR_RE = re.compile(r"[^\x09\x0a\x0d\x20-\x7e]")
 _HOST_RUNNER_SOURCE = r'''import json,os,re,shutil,subprocess,sys,tempfile
 REPOSITORY="Blummer92/agent-os"
 REPO_URL="https://github.com/Blummer92/agent-os.git"
+HOST_PYTHON="/usr/bin/python3"
 TEST_PYTHON="/usr/local/libexec/agent-os-dev-validation-python"
 MATERIALS_ID="instructional-materials-current-curriculum-suite"
 MATERIALS_IMPORT_ROOTS=("src","08_Tooling/instructional-materials-coach/src")
@@ -44,6 +47,8 @@ MATERIALS_IMPORT_PROBE=MATERIALS_IMPORT_PRELUDE+";import instructional_materials
 MATERIALS_PYTEST_RUNNER=MATERIALS_IMPORT_PROBE+";import pytest;raise SystemExit(pytest.main(list(sys.argv[1:])))"
 PPUX_ID="ppux-picture-perfect-ts-vitest"
 PPUX_PACKAGE_DIR="08_Tooling/instructional-materials-coach/picture-perfect-coach"
+EIA_ID="eia-paddleocr-runtime-qualification"
+EIA_SCRIPT="08_Tooling/workflow-scheduler/src/workflow_scheduler/governance/eia_paddleocr_runtime_qualification.py"
 NODE="/usr/local/libexec/agent-os-dev-validation-node"
 NODE_MODULES="/opt/agent-os/dev-validation-node-runtime/node_modules"
 VITEST_CLI=NODE_MODULES+"/vitest/vitest.mjs"
@@ -68,6 +73,7 @@ VALIDATION_ARGS={
   "src/executorContract.test.ts",
   "src/provenanceValidator.test.ts",
  ),
+ EIA_ID:(EIA_SCRIPT,),
 }
 SHA40=re.compile(r"^[0-9a-f]{40}$",re.ASCII)
 BRANCH=re.compile(r"^agent/[A-Za-z0-9._/-]{1,180}$",re.ASCII)
@@ -94,6 +100,21 @@ def fixed_env(root):
 def record(result,completed):
  out,out_truncated=bounded(completed.stdout);err,err_truncated=bounded(completed.stderr)
  result.update({"status":"success" if completed.returncode==0 else "failure","reason_codes":["validation-passed" if completed.returncode==0 else "validation-failed"],"exit_code":completed.returncode,"stdout_tail":out,"stderr_tail":err,"stdout_truncated":out_truncated,"stderr_truncated":err_truncated})
+
+def record_eia(result,completed):
+ out,out_truncated=bounded(completed.stdout);err,err_truncated=bounded(completed.stderr)
+ try:payload=json.loads(completed.stdout)
+ except json.JSONDecodeError:
+  result.update({"status":"needs-decision","reason_codes":["eia-qualification-output-invalid"],"exit_code":completed.returncode,"stdout_tail":out,"stderr_tail":err,"stdout_truncated":out_truncated,"stderr_truncated":err_truncated});return
+ reasons=payload.get("reason_codes") if isinstance(payload,dict) else None
+ flags=("network_used","installation_performed","model_download_performed","external_write_performed","execution_authorized","scheduler_invoked","production_authorized","classroom_data_authorized")
+ valid_reasons=isinstance(reasons,list) and 0<len(reasons)<=16 and all(isinstance(value,str) and 0<len(value)<=160 for value in reasons)
+ valid_flags=isinstance(payload,dict) and payload.get("synthetic_only") is True and all(payload.get(key) is False for key in flags)
+ valid_status=isinstance(payload,dict) and payload.get("qualification_id")==EIA_ID and payload.get("status") in {"ready","blocked"}
+ valid_exit=isinstance(payload,dict) and ((payload.get("status")=="ready" and completed.returncode==0) or (payload.get("status")=="blocked" and completed.returncode==2))
+ if not (valid_reasons and valid_flags and valid_status and valid_exit):
+  result.update({"status":"needs-decision","reason_codes":["eia-qualification-output-invalid"],"exit_code":completed.returncode,"stdout_tail":out,"stderr_tail":err,"stdout_truncated":out_truncated,"stderr_truncated":err_truncated});return
+ result.update({"status":"success" if payload["status"]=="ready" else "needs-decision","reason_codes":reasons,"exit_code":completed.returncode,"stdout_tail":out,"stderr_tail":err,"stdout_truncated":out_truncated,"stderr_truncated":err_truncated})
 
 def record_timeout(result,exc):
  out,out_truncated=bounded(exc.stdout if isinstance(exc.stdout,str) else "");err,err_truncated=bounded(exc.stderr if isinstance(exc.stderr,str) else "")
@@ -136,6 +157,14 @@ try:
      os.symlink(NODE_MODULES,link)
      try:record(result,run((NODE,VITEST_CLI,*test_args[1:]),cwd=package,env=env,timeout=TEST_TIMEOUT))
      except subprocess.TimeoutExpired as exc:record_timeout(result,exc)
+   elif validation_id==EIA_ID:
+    eia_script=os.path.join(repo,EIA_SCRIPT)
+    if not os.path.isfile(HOST_PYTHON) or not os.access(HOST_PYTHON,os.X_OK): result["reason_codes"]=["eia-host-python-unavailable"]
+    elif not os.path.isfile(eia_script): result["reason_codes"]=["validation-workspace-unavailable"]
+    else:
+     env=fixed_env(root)
+     try:record_eia(result,run((HOST_PYTHON,eia_script),cwd=repo,env=env,timeout=TEST_TIMEOUT))
+     except subprocess.TimeoutExpired as exc:record_timeout(result,exc)
    elif not os.path.isfile(TEST_PYTHON) or not os.access(TEST_PYTHON,os.X_OK): result["reason_codes"]=["test-runtime-unavailable"]
    else:
     runtime=run((TEST_PYTHON,"-c","import pytest; assert pytest.__version__ == '8.3.5'"),timeout=10)
@@ -164,6 +193,8 @@ def _host_command(request: object) -> str:
     if type(request) is not DevValidationRequest:
         raise TypeError("request must be exact DevValidationRequest")
     expected = VALIDATION_REGISTRY.get(request.validation_id)
+    if request.validation_id == EIA_VALIDATION_ID:
+        expected = EIA_VALIDATION_ARGV
     if expected is None or validation_argv(request) != expected:
         raise ValueError("dev-validation argv drift")
     return shlex.join((HOST_PYTHON, "-c", _HOST_RUNNER_SOURCE, request.repository, str(request.issue_number), request.branch, request.source_sha, request.validation_id, request.request_id))
