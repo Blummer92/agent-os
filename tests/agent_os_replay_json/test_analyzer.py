@@ -65,6 +65,26 @@ def test_explicit_empty_change_value_remains_empty_text():
     assert "value=" in action.evidence
 
 
+def test_rename_does_not_absorb_key_event_from_another_target():
+    payload = {"steps": [
+        {
+            "type": "change",
+            "value": "New name",
+            "selectors": [["[data-testid='editor-document-title']"]],
+        },
+        {
+            "type": "keyDown",
+            "key": "ArrowLeft",
+            "selectors": [["[data-testid='search-field']"]],
+        },
+    ]}
+    actions = analyze_replay(payload)
+    assert actions[0].kind == "rename"
+    assert actions[0].source_indexes == (0,)
+    assert actions[1].kind == "keyboard_noise"
+    assert actions[1].target == "[data-testid='search-field']"
+
+
 def test_click_and_double_click_remain_distinct():
     payload = {"steps": [
         {"type": "click", "selectors": [["aria/Your Stuff"]]},
