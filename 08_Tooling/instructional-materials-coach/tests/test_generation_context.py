@@ -133,6 +133,9 @@ def test_photography_context_augments_instead_of_replacing_authored_content():
     assert "focal point" in tokens["curriculum_vocabulary"]
     assert "framing decision" in tokens["curriculum_exit_ticket"]
     assert "cropping explicitly" in tokens["curriculum_teacher_confirmed_cropping"]
+    assert tokens["context_learning_objective_ref"] == "objective-1"
+    assert tokens["context_success_criteria_ref"] == "criteria-1"
+    assert tokens["context_evidence_target_ref"] == "evidence-1"
     assert tokens["context_selected_asset_ids"] == "asset-1"
     assert tokens["context_production_authorized"] == "false"
 
@@ -143,6 +146,72 @@ def test_photography_context_augments_instead_of_replacing_authored_content():
     assert assignments[0]["selected_candidate"]["manifest_reference"]["external_file_id"] == "file-1"
     assert assignments[0]["compatibility_evidence"]["approved_use"]["material_types"] == ["worksheet"]
     assert assignments[0]["compatibility_evidence"]["approved_use"]["role_types"] == ["worked-example"]
+
+
+def test_student_assessment_criteria_reach_docs_without_teacher_scoring_leakage():
+    evidence = _photography_evidence()
+    evidence["owner_evidence"].extend(
+        [
+            _owner("criteria", "success-criteria", "I use hierarchy to make the most important information stand out."),
+            _owner("rubric", "student-facing-rubric", "Hierarchy — 4 points | Legibility — 4 points | Purpose — 4 points"),
+            _owner("teacher-notes", "teacher-scoring-notes", "Teacher calibration: allow equivalent hierarchy solutions."),
+        ]
+    )
+    content = compose_generation_context(
+        _content(),
+        material_requirement=_requirement(),
+        current_curriculum_evidence=evidence,
+    )
+    tokens = content.placeholder_tokens()
+    assert tokens["context_success_criteria_ref"] == "criteria-1"
+    assert tokens["context_student_success_criteria"] == (
+        "I use hierarchy to make the most important information stand out."
+    )
+    assert tokens["context_student_rubric"] == (
+        "Hierarchy — 4 points | Legibility — 4 points | Purpose — 4 points"
+    )
+    assert "curriculum_teacher_scoring_notes" not in tokens
+    assert "Teacher calibration" not in "\n".join(tokens.values())
+
+    by_token = {
+        request["replaceAllText"]["containsText"]["text"]: request["replaceAllText"]["replaceText"]
+        for request in build_docs_replace_requests(content)
+    }
+    assert by_token["{{context_student_success_criteria}}"] == tokens["context_student_success_criteria"]
+    assert by_token["{{context_student_rubric}}"] == tokens["context_student_rubric"]
+    assert "{{curriculum_teacher_scoring_notes}}" not in by_token
+
+
+@pytest.mark.parametrize(
+    ("decision_key", "token", "value"),
+    [
+        ("student-facing-checklist", "context_student_checklist", "[ ] I completed the taught setup. | [ ] I checked my result."),
+        ("observation-criteria", "context_student_observation_criteria", "I can explain what changed and why."),
+        ("self-check-criteria", "context_student_self_check_criteria", "I checked readability before submitting."),
+        ("completion-criteria", "context_student_completion_criteria", "My file is named correctly and submitted."),
+    ],
+)
+def test_student_criteria_forms_preserve_exact_governed_language(decision_key, token, value):
+    evidence = _photography_evidence()
+    evidence["owner_evidence"].append(_owner(f"evidence-{decision_key}", decision_key, value))
+    content = compose_generation_context(
+        _content(),
+        material_requirement=_requirement(),
+        current_curriculum_evidence=evidence,
+    )
+    assert content.placeholder_tokens()[token] == value
+
+
+def test_formative_without_assessment_criteria_does_not_invent_rubric():
+    content = compose_generation_context(
+        _content(),
+        material_requirement=_requirement(),
+        current_curriculum_evidence=_photography_evidence(),
+    )
+    tokens = content.placeholder_tokens()
+    assert "context_student_rubric" not in tokens
+    assert "context_student_success_criteria" not in tokens
+    assert "context_student_checklist" not in tokens
 
 
 def test_governed_visual_assignment_tokens_reach_docs_and_slides_request_builders():
