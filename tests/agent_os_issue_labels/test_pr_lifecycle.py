@@ -158,9 +158,12 @@ def test_exact_canonical_lookup_can_establish_discoverability_despite_secondary_
     assert verified.status == "verified"
     assert verified.discoverable is True
 
-    unproven = verify_pull_request_creation(provider, creation_expectation(), discoverable=False)
-    assert unproven.status == "state-drift"
-    assert "canonical-discoverability-unproven" in unproven.reason_codes
+    lagging_secondary = verify_pull_request_creation(
+        provider, creation_expectation(), discoverable=False
+    )
+    assert lagging_secondary.status == "verified"
+    assert lagging_secondary.discoverable is True
+    assert lagging_secondary.reason_codes == ("canonical-readback-verified",)
 
 
 @pytest.mark.parametrize(
