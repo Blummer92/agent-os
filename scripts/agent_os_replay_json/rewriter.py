@@ -17,6 +17,15 @@ REWRITE_KINDS = {
 _ACTION_ID_RE = re.compile(r"action-(0|[1-9][0-9]*)\Z")
 
 
+def _validate_source_indexes(source_indexes: tuple[int, ...], owner: str) -> None:
+    if not source_indexes:
+        raise ValueError(f"{owner} requires source indexes")
+    if any(type(index) is not int or index < 0 for index in source_indexes):
+        raise ValueError(f"{owner} source indexes must be exact nonnegative integers")
+    if tuple(sorted(set(source_indexes))) != source_indexes:
+        raise ValueError(f"{owner} source indexes must be unique and increasing")
+
+
 @dataclass(frozen=True)
 class RewriteOperation:
     kind: str
@@ -32,8 +41,7 @@ class RewriteOperation:
     def __post_init__(self) -> None:
         if self.kind not in REWRITE_KINDS:
             raise ValueError(f"unsupported rewrite kind: {self.kind}")
-        if not self.source_indexes:
-            raise ValueError("rewrite operation requires source indexes")
+        _validate_source_indexes(self.source_indexes, "rewrite operation")
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -153,8 +161,7 @@ class RewriteRequest:
             raise ValueError(f"unsupported rewrite request kind: {self.kind}")
         if not self.semantic_action_id:
             raise ValueError("rewrite request requires semantic action id")
-        if not self.source_indexes:
-            raise ValueError("rewrite request requires source indexes")
+        _validate_source_indexes(self.source_indexes, "rewrite request")
         if self.kind == "change-selector" and not self.replacement_selector:
             raise ValueError("change-selector requires replacement selector")
         if self.kind in {"move-before", "move-after"} and not self.target_action_id:
