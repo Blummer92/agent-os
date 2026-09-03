@@ -116,11 +116,15 @@ export function buildTutorialPackage(
   for (const step of route.steps) {
     if (step.disposition === 'new-visual' && step.authoring) authoring.set(step.reviewStepId, step.authoring);
   }
-  const cards = projectReviewedTutorialToPromptCards(tutorial, authoring, captureBundle, visualReferenceLibrary);
+  const projectedCards = projectReviewedTutorialToPromptCards(tutorial, authoring, captureBundle, visualReferenceLibrary);
   const expectedNewVisuals = route.steps.filter((step) => step.disposition === 'new-visual').length;
-  if (cards.length !== expectedNewVisuals) {
+  if (projectedCards.length !== expectedNewVisuals) {
     return { status: 'blocked', package: null, blockers: ['new-visual-authoring-missing'] };
   }
+  const cards = projectedCards.map((card) => ({
+    ...card,
+    provenance: [`Teacher Modeling: ${route.sourceHandoffRef}`, `tutorial_route:${route.routeId}`, `tutorial_route_fingerprint:${route.sourceFingerprint}`, ...card.provenance],
+  }));
 
   return {
     status: 'valid',
