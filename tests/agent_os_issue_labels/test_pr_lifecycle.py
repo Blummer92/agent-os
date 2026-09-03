@@ -181,6 +181,23 @@ def test_post_create_identity_mismatch_fails_closed(override, reason):
     assert verification.mutation_allowed is False
 
 
+def test_creation_expectation_must_match_lifecycle_target_before_provider_reads():
+    provider = MutableProvider(snap())
+    with pytest.raises(ValueError, match="must match lifecycle repository and PR number"):
+        reconcile_pull_request_lifecycle(
+            provider,
+            "Blummer92/agent-os",
+            1038,
+            invocation_reason="draft-pr-created",
+            creation_expectation=creation_expectation(pr_number=999),
+            creation_discoverable=True,
+            dry_run=False,
+            label_write_authorized=True,
+        )
+    assert provider.read_count == 0
+    assert not provider.added and not provider.removed
+
+
 def test_draft_pr_creation_reconciles_managed_labels_and_preserves_unmanaged():
     provider = MutableProvider(snap())
     result = invoke(provider)
