@@ -394,8 +394,10 @@ class PullRequestBranchRefreshReceipt:
     def __post_init__(self) -> None:
         if self.mutation_count not in {0, 1}:
             raise ValueError("mutation_count must be 0 or 1")
-        if self.authorization_consumed != bool(self.side_effects_performed):
-            raise ValueError("authorization consumption must match branch mutation evidence")
+        if self.authorization_consumed != (self.mutation_count == 1):
+            raise ValueError("authorization consumption must match mutation-attempt evidence")
+        if self.side_effects_performed and not self.authorization_consumed:
+            raise ValueError("branch side effects require consumed refresh authorization")
 
 
 def build_branch_refresh_github_client(environment: Mapping[str, str]):
@@ -663,16 +665,17 @@ def _receipt_from_result(
     reasons = tuple(result.reason_codes)
     blockers = () if result.status == "converged" else reasons
     side_effects = bool(result.side_effects_performed)
+    mutation_attempted = bool(result.mutation_attempted or side_effects)
     return PullRequestBranchRefreshReceipt(
         repository=result.repository,
         pr_number=result.pr_number,
         status=result.status,
         authorization_id=authorization_id,
-        authorization_consumed=side_effects,
+        authorization_consumed=mutation_attempted,
         admitted_main_sha=admitted_main_sha,
         old_head_sha=result.old_head_sha,
         new_head_sha=result.new_head_sha,
-        mutation_count=1 if side_effects else 0,
+        mutation_count=1 if mutation_attempted else 0,
         validation_status=None if validation is None else validation.status,
         validation_head_sha=None if validation is None else validation.head_sha,
         lifecycle_reconciliation_status=(
@@ -684,6 +687,8 @@ def _receipt_from_result(
         rollback_posture=(
             "restore-old-head-with-separate-authorization"
             if side_effects
+            else "separate-authorization-required"
+            if mutation_attempted
             else "no-branch-mutation"
         ),
         side_effects_performed=side_effects,
