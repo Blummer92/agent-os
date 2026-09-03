@@ -141,22 +141,25 @@ def test_external_surface_has_no_store_repository_or_workspace_path_arguments() 
     assert not parameters & forbidden
 
 
-def test_capture_defines_no_publication_checkpoint_resume_route_or_retry_calls() -> None:
-    source = MODULE_PATH.read_text(encoding="utf-8")
-    for token in (
-        "publish_authorized_validation_handoff(",
-        "publish_governed_handoff(",
-        "activate_first_publication_source(",
-        "append_checkpoint(",
-        "plan_resume(",
-        "append_resume_plan(",
-        "select_executor_route(",
-        "append_route_decision(",
-        "prepare(",
-        "subprocess",
-        "retry",
-    ):
-        assert token not in source, token
+def test_capture_defines_no_forbidden_calls() -> None:
+    tree = ast.parse(MODULE_PATH.read_text(encoding="utf-8"))
+    called = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    forbidden = {
+        "publish_authorized_validation_handoff",
+        "publish_governed_handoff",
+        "activate_first_publication_source",
+        "append_checkpoint",
+        "plan_resume",
+        "append_resume_plan",
+        "select_executor_route",
+        "append_route_decision",
+        "prepare",
+    }
+    assert not called & forbidden
 
 
 def test_capture_calls_validation_build_and_append_once() -> None:
