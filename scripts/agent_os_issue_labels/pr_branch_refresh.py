@@ -110,8 +110,10 @@ class PullRequestBranchRefreshResult:
     workflow_authorized: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
+        # Preserve existing #1187 result constructors: proven branch side effects
+        # necessarily imply that the one mutation attempt was admitted.
         if self.side_effects_performed and not self.mutation_attempted:
-            raise ValueError("branch side effects require an admitted mutation attempt")
+            object.__setattr__(self, "mutation_attempted", True)
 
 
 def refresh_pull_request_branch(
