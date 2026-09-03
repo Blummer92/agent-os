@@ -39,6 +39,20 @@ def test_known_profile_resolves_to_finite_runner_and_fixed_targets() -> None:
     )
 
 
+def test_eia_profile_resolves_to_one_fixed_qualification_entrypoint() -> None:
+    profile = get_profile("eia-paddleocr-runtime-qualification")
+    assert profile.runner_kind is RunnerKind.EIA_PADDLEOCR_QUALIFICATION
+    assert profile.fixed_targets == (
+        "08_Tooling/workflow-scheduler/src/workflow_scheduler/governance/eia_paddleocr_runtime_qualification.py",
+    )
+    assert profile_argv(profile.profile_id) == (
+        "python", "-m", "workflow_scheduler.governance.eia_paddleocr_runtime_qualification"
+    )
+    built = request(profile.profile_id)
+    assert built.profile_id == profile.profile_id
+    assert validation_argv(built) == profile_argv(profile.profile_id)
+
+
 def test_unknown_or_malformed_profile_fails_closed() -> None:
     for profile_id in ("unknown", "../escape", "x;echo", "", "UPPER"):
         with pytest.raises(ValueError):
@@ -53,6 +67,17 @@ def test_caller_has_no_target_module_script_env_or_cwd_surface() -> None:
         "publication_invoked", "merge_authorized",
     }
     assert validation_argv(built) == profile_argv("pr-remediation")
+
+
+def test_eia_request_has_no_runtime_or_asset_override_surface() -> None:
+    built = request("eia-paddleocr-runtime-qualification")
+    assert set(built.to_dict()) == {
+        "repository", "issue_number", "branch", "source_sha", "validation_id",
+        "profile_id", "request_id", "execution_authorized", "scheduler_invoked",
+        "publication_invoked", "merge_authorized",
+    }
+    payload = built.to_dict()
+    assert not ({"argv", "cwd", "env", "package", "model", "url", "network"} & set(payload))
 
 
 def test_protected_or_malformed_branch_is_rejected() -> None:

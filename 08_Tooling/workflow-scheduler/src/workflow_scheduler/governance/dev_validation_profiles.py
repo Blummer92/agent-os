@@ -22,6 +22,7 @@ class RunnerKind(str, Enum):
     PYTEST_TARGETS = "pytest-targets"
     VITEST_TARGETS = "vitest-targets"
     LEGACY_FIXED_SCRIPT = "legacy-fixed-script"
+    EIA_PADDLEOCR_QUALIFICATION = "eia-paddleocr-qualification"
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +146,12 @@ _PROFILES = (
         ("07_Agent_Tests/run-semantic-ownership-advisory-validation.py",),
         runtime_id="python-system-script-compat",
     ),
+    _profile(
+        "eia-paddleocr-runtime-qualification",
+        RunnerKind.EIA_PADDLEOCR_QUALIFICATION,
+        ("08_Tooling/workflow-scheduler/src/workflow_scheduler/governance/eia_paddleocr_runtime_qualification.py",),
+        runtime_id="host-python-eia-paddleocr",
+    ),
 )
 
 PROFILE_CATALOG: Mapping[str, DevValidationProfile] = MappingProxyType(
@@ -193,6 +200,8 @@ def profile_argv(profile_id: object) -> tuple[str, ...]:
         return ("node", "vitest", "run", *profile.fixed_targets)
     if profile.runner_kind is RunnerKind.LEGACY_FIXED_SCRIPT:
         return ("python", *profile.fixed_targets)
+    if profile.runner_kind is RunnerKind.EIA_PADDLEOCR_QUALIFICATION:
+        return ("python", "-m", "workflow_scheduler.governance.eia_paddleocr_runtime_qualification")
     raise ValueError("unsupported developer-validation runner kind")
 
 
