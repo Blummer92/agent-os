@@ -53,10 +53,25 @@ def test_one_exact_match_recovers_without_duplicate():
 
 def test_multiple_idempotency_matches_require_manual_reconciliation():
     duplicate = _meta("slides-id", "application/vnd.google-apps.presentation", "slides")
+    other = dict(duplicate, id="other", webViewLink="https://example/other")
     p1, p2 = _preflight()
-    with p1, p2, patch("instructional_materials_coach.live_build.find_idempotent_copies", return_value=[duplicate, dict(duplicate, id="other")]), patch("instructional_materials_coach.live_build.duplicate_template") as copy:
+    with p1, p2, patch("instructional_materials_coach.live_build.find_idempotent_copies", return_value=[duplicate, other]), patch("instructional_materials_coach.live_build.duplicate_template") as copy:
         receipt = build_live_materials(_build(), drive_service=MagicMock(), slides_service=MagicMock(), docs_service=MagicMock())
     assert receipt.slides.state == "ambiguous" and receipt.manual_reconciliation_required
+    assert [candidate.file_id for candidate in receipt.slides.reconciliation_candidates] == ["slides-id", "other"]
+    assert receipt.slides.reconciliation_candidates[0].parents == ("folder",)
+    copy.assert_not_called()
+
+
+def test_worksheet_ambiguity_preserves_candidate_identities():
+    slides = _meta("slides-id", "application/vnd.google-apps.presentation", "slides")
+    first = _meta("doc-a", "application/vnd.google-apps.document", "worksheet")
+    second = _meta("doc-b", "application/vnd.google-apps.document", "worksheet")
+    p1, p2 = _preflight()
+    with p1, p2, patch("instructional_materials_coach.live_build.find_idempotent_copies", side_effect=[[slides], [first, second]]), patch("instructional_materials_coach.live_build.duplicate_template") as copy:
+        receipt = build_live_materials(_build(), drive_service=MagicMock(), slides_service=MagicMock(), docs_service=MagicMock())
+    assert receipt.worksheet.state == "ambiguous" and receipt.manual_reconciliation_required
+    assert [candidate.file_id for candidate in receipt.worksheet.reconciliation_candidates] == ["doc-a", "doc-b"]
     copy.assert_not_called()
 
 
@@ -74,6 +89,7 @@ def test_unresolved_ambiguous_copy_stops_without_second_create():
     with p1, p2, patch("instructional_materials_coach.live_build.find_idempotent_copies", side_effect=[[], []]), patch("instructional_materials_coach.live_build.duplicate_template", side_effect=TimeoutError("unknown")) as copy:
         receipt = build_live_materials(_build(), drive_service=MagicMock(), slides_service=MagicMock(), docs_service=MagicMock())
     assert receipt.slides.state == "ambiguous" and receipt.manual_reconciliation_required
+    assert receipt.slides.reconciliation_candidates == ()
     copy.assert_called_once()
 
 

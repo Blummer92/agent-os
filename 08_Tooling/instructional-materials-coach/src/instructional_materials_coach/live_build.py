@@ -36,6 +36,15 @@ class LiveBuildInput:
 
 
 @dataclass(frozen=True)
+class ReconciliationCandidate:
+    file_id: str
+    web_view_link: str = ""
+    drive_id: str = ""
+    mime_type: str = ""
+    parents: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class ArtifactReceipt:
     role: str
     state: ArtifactState = "planned"
@@ -43,6 +52,7 @@ class ArtifactReceipt:
     web_view_link: str = ""
     drive_id: str = ""
     error: str = ""
+    reconciliation_candidates: tuple[ReconciliationCandidate, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -56,7 +66,26 @@ class LiveBuildReceipt:
         return self.slides.state == "updated" and self.worksheet.state == "updated"
 
 
-def _receipt(role: str, state: ArtifactState, meta: dict[str, Any] | None = None, error: str = "") -> ArtifactReceipt:
+def _candidate(meta: dict[str, Any]) -> ReconciliationCandidate:
+    parents = meta.get("parents", [])
+    if not isinstance(parents, list):
+        parents = []
+    return ReconciliationCandidate(
+        file_id=str(meta.get("id", "")),
+        web_view_link=str(meta.get("webViewLink", "")),
+        drive_id=str(meta.get("driveId", "")),
+        mime_type=str(meta.get("mimeType", "")),
+        parents=tuple(str(parent) for parent in parents),
+    )
+
+
+def _receipt(
+    role: str,
+    state: ArtifactState,
+    meta: dict[str, Any] | None = None,
+    error: str = "",
+    reconciliation_candidates: tuple[ReconciliationCandidate, ...] = (),
+) -> ArtifactReceipt:
     meta = meta or {}
     return ArtifactReceipt(
         role=role,
@@ -65,13 +94,23 @@ def _receipt(role: str, state: ArtifactState, meta: dict[str, Any] | None = None
         web_view_link=str(meta.get("webViewLink", "")),
         drive_id=str(meta.get("driveId", "")),
         error=error,
+        reconciliation_candidates=reconciliation_candidates,
+    )
+
+
+def _ambiguous_receipt(role: str, matches: list[dict[str, Any]], error: str) -> ArtifactReceipt:
+    return _receipt(
+        role,
+        "ambiguous",
+        error=error,
+        reconciliation_candidates=tuple(_candidate(match) for match in matches),
     )
 
 
 def _resolve_copy(drive_service: Any, *, template_id: str, target_folder_id: str, name: str, key: str, role: str) -> ArtifactReceipt:
     matches = find_idempotent_copies(drive_service, target_folder_id, key, role)
     if len(matches) > 1:
-        return _receipt(role, "ambiguous", error="multiple idempotency matches require manual reconciliation")
+        return _ambiguous_receipt(role, matches, "multiple idempotency matches require manual reconciliation")
     if len(matches) == 1:
         return _receipt(role, "recovered", matches[0])
     try:
@@ -91,7 +130,7 @@ def _resolve_copy(drive_service: Any, *, template_id: str, target_folder_id: str
         detail = "copy outcome unknown; manual reconciliation required"
         if len(recovered) > 1:
             detail = "copy outcome ambiguous with multiple idempotency matches"
-        return _receipt(role, "ambiguous", error=f"{detail}: {type(exc).__name__}")
+        return _ambiguous_receipt(role, recovered, f"{detail}: {type(exc).__name__}")
 
 
 def build_live_materials(
