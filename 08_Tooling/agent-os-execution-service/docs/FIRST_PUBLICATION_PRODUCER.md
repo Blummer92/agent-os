@@ -1,10 +1,11 @@
-# First-publication producer activation (#1428 / #1799)
+# First-publication producer activation (#1428 / #1799 / #1830)
 
 `agent_os_execution_service.first_publication_producer` remains the canonical
-producer composition. #1799 adds the two-phase #1412 evidence envelope, and
-`agent_os_execution_service.first_publication_source_activation` now supplies the
+producer composition. #1799 adds the two-phase #1412 evidence envelope,
+#1830 captures the source phase at the successful authorized-validation boundary,
+and `agent_os_execution_service.first_publication_source_activation` supplies the
 bounded continuation from one exact durable source capsule to the existing
-producer identities. Neither module is a publisher or Scheduler entrypoint.
+producer identities. None of these modules is a publisher or Scheduler entrypoint.
 
 ## Two-phase #1412 evidence
 
@@ -25,6 +26,33 @@ the same immutable identity.
 The publication-facing `load_pre_publication_evidence(...)` explicitly rejects
 source-phase records. `load_source_pre_publication_evidence(...)` is used only by
 the #1428 source activation.
+
+## #1830 source capture
+
+`run_production_authorized_validation_with_source_capture(...)` wraps the existing
+#762 authorized-validation lifecycle without changing its admission or execution
+semantics. It calls that lifecycle exactly once. Only a terminal `succeeded`
+result may proceed to source capture; every other terminal result returns with no
+#1412 write.
+
+The capture reuses existing owners rather than accepting producer evidence from an
+external caller:
+
+- CandidatePacket comes from the exact `AuthorizedValidationLifecycleRequest`;
+- `SingleIssuePilotInput` is the exact lifecycle input;
+- RequiredEnvironmentSpec comes from the already-bound runtime configuration;
+- execution identity is the Scheduler-owned deterministic `pilot_holder_identity`
+  for the exact `PilotLeaseRequest`, not the #761 evidence-bundle identity;
+- `created_at`/`evaluated_at` use the lifecycle's canonical evaluation time;
+- expiry is bounded by the execution authorization that admitted the specimen;
+- the store root comes only from `load_production_host_configuration()` and its
+  existing `ProductionHostConfiguration.checkpoint_store_root`.
+
+The capture then calls `build_source_pre_publication_evidence(...)` once and
+`append_pre_publication_evidence(...)` once. It creates no checkpoint, ResumePlan,
+route decision, descriptor, handoff, dependency preparation, publication, retry,
+or additional Scheduler dispatch. Equivalent source evidence converges through
+the existing content-addressed #1412 store.
 
 ## #1428 source activation
 
@@ -62,10 +90,10 @@ their existing contracts.
 
 ## Authority
 
-Neither capsule phase nor the source activation creates execution authorization.
-All publication/Scheduler/GitHub-write/merge/external-write authority remains
-outside this operation. Dependency preparation/installation is not implicit: any
-non-READY state fails before producer writes.
+Neither capsule phase, source capture, nor source activation creates execution
+authorization. All publication/Scheduler/GitHub-write/merge/external-write
+authority remains outside these operations. Dependency preparation/installation is
+not implicit: any non-READY state fails before producer writes.
 
 ## Persistence
 
@@ -77,8 +105,9 @@ descriptor store, or alternate persistence owner is introduced.
 
 ## Remaining production boundary
 
-A fixed host CLI/transport wrapper may call the source activation only after
-trusted host composition has reacquired the required current evidence. GitHub
-Actions changes, GCE deployment/host refresh, live producer execution, #1411
-publication, discovery, resume, replay, and Scheduler execution remain separate
-authorization boundaries.
+After #1830, a successful production authorized-validation lifecycle can leave one
+exact durable source-capsule identity for #1428. A fixed host CLI/transport wrapper
+may call the source activation only after trusted host composition has reacquired
+the required current evidence. GitHub Actions changes, GCE deployment/host refresh,
+live producer execution, #1411 publication, discovery, resume, replay, and
+Scheduler execution remain separate authorization boundaries.
