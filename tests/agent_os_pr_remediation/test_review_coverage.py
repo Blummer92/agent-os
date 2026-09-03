@@ -181,6 +181,19 @@ def test_test_only_change_recalculates_adequacy_when_test_surface_changed():
     assert result.adequacy_status is AdequacyStatus.STALE
 
 
+def test_stale_test_head_without_compatibility_evidence_fails_closed():
+    item = attack()
+    result = assess_test_adequacy(
+        attack=item,
+        required_test_obligations=item.bounded_evidence_requirements,
+        evidence=TestEvidence(OLD, ("pytest:old",), item.bounded_evidence_requirements, ("tests/test_parse.py",)),
+        current_head_sha=NEW,
+    )
+    assert result.adequacy_status is AdequacyStatus.STALE
+    assert result.missing_obligations == item.bounded_evidence_requirements
+    assert "refresh-exact-head-test-evidence" in result.recommendations
+
+
 def test_unrelated_change_can_preserve_compatible_test_evidence():
     item = attack()
     result = assess_test_adequacy(
