@@ -10,7 +10,7 @@ from workflow_scheduler.governance.github_issue_comment_ingress import IssueComm
 
 SHA="a"*40;BRANCH="agent/1271-validation-profile-path-coverage"
 
-def request():return build_dev_validation_request(repository="Blummer92/agent-os",issue_number=1271,branch=BRANCH,source_sha=SHA,validation_id="remote-validation-suite")
+def request(validation_id="remote-validation-suite"):return build_dev_validation_request(repository="Blummer92/agent-os",issue_number=1271,branch=BRANCH,source_sha=SHA,validation_id=validation_id)
 def ingress():return IssueCommentIngressResult(schema_version="1.0",status="accepted",reason="accepted-dev-validation-envelope",repository="Blummer92/agent-os",issue_number=1271,comment_id=1,actor="Blummer92",handoff_id_or_none=None,logical_trigger_id_or_none="issue-comment-trigger:"+"b"*64,run_attempt=1,dev_validation_branch_or_none=BRANCH,dev_validation_sha_or_none=SHA,dev_validation_id_or_none="remote-validation-suite")
 def claims(**overrides):
  values={"repository":"Blummer92/agent-os","repository_owner":"Blummer92","workflow_ref":live._policy().workflow_ref,"ref":"refs/heads/main","aud":live._policy().audience};values.update(overrides);return values
@@ -29,6 +29,15 @@ def test_host_command_contains_only_fixed_runner_and_validated_identity():
 
 def test_host_runner_uses_only_governed_test_runtime():
  source=live._HOST_RUNNER_SOURCE;assert 'TEST_PYTHON="/usr/local/libexec/agent-os-dev-validation-python"' in source;assert "test_args=VALIDATION_ARGS[validation_id]" in source;assert "(TEST_PYTHON,*test_args)" in source;assert "pip install" not in source;assert "sudo" not in source;assert "shutil.which" not in source;assert "test-runtime-unavailable" in source;assert "test-runtime-invalid" in source
+
+def test_eia_host_command_accepts_only_canonical_fixed_profile():
+ command=live._host_command(request(live.EIA_VALIDATION_ID));assert live.EIA_VALIDATION_ID in command;assert "eia_paddleocr_runtime_qualification.py" in command;assert "pip install" not in command;assert "sudo" not in command
+
+def test_eia_host_runner_uses_system_python_and_fixed_script_only():
+ source=live._HOST_RUNNER_SOURCE;assert 'EIA_ID="eia-paddleocr-runtime-qualification"' in source;assert 'EIA_SCRIPT="08_Tooling/workflow-scheduler/src/workflow_scheduler/governance/eia_paddleocr_runtime_qualification.py"' in source;assert 'run((HOST_PYTHON,eia_script)' in source;assert "record_eia" in source;assert "runtime-dependency-missing" not in source;assert "pip install" not in source;assert "requests" not in source
+
+def test_eia_profile_does_not_enter_legacy_registry():
+ assert live.EIA_VALIDATION_ID not in live.VALIDATION_REGISTRY;assert live.validation_argv(request(live.EIA_VALIDATION_ID))==live.EIA_VALIDATION_ARGV
 
 def test_successful_transport_remains_non_authorizing():
  result=live.execute_dev_validation_transport(ingress(),claims=claims(),adapter=Adapter());e=result["dev_validation"];assert e["status"]=="success";assert e["tested_sha"]==SHA;assert e["cleanup_complete"] is True;assert e["scheduler_invoked"] is False;assert e["execution_authorized"] is False;assert e["publication_invoked"] is False;assert e["merge_authorized"] is False
