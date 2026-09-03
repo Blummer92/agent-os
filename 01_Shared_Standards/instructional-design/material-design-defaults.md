@@ -54,6 +54,46 @@ Default to mostly short responses plus one or two purposeful full-sentence
 moments. Use longer writing only when the lesson goal depends on explanation,
 analysis, or reflection.
 
+## Worksheet Identification And Challenge Cards
+
+For student-facing worksheets that need student identification, place the primary
+identification row near the top of the first page rather than at the bottom. Use
+`Name`, `Hour`, and `Date`, plus a compact `Unit/Day` lesson identifier when the
+unit sequence provides one. Prefer notation such as `1.1` for Unit 1, Day 1 so
+printed work can be sorted and traced to the lesson sequence without a long label.
+
+When a lesson uses differentiated challenge cards, use neutral student-facing
+labels `Challenge A`, `Challenge B`, and `Challenge C`. Do not expose ability
+labels such as `Beginning`, `Middle`, `On Grade`, or `Advanced`. Students should
+be able to move among challenges without the material assigning an ability
+identity.
+
+Keep one essential learning target across the A/B/C family. Vary scaffolding,
+independence, constraints, or depth rather than creating unrelated assignments:
+
+- Challenge A may use stronger visual scaffolds, choices, sentence starters, or
+  partially structured response space.
+- Challenge B may use lighter prompts and more independent explanation,
+  repair, planning, or practice.
+- Challenge C may use fewer supports plus additional constraints, transfer, or
+  deeper justification.
+
+When the teacher has approved the quick-score pattern for the lesson, challenge
+cards may use this compact 0-2 scoring strip:
+
+- `2 - Got It` - complete and demonstrates or explains the intended choice.
+- `1 - Almost` - mostly complete; needs one meaningful fix or clarification.
+- `0 - Not Yet` - missing, off-task, or does not demonstrate the intended choice.
+
+Treat this strip as fast progress/evidence marking, not as a replacement for an
+approved analytic rubric when the lesson requires one.
+
+For challenge-card worksheets, keep these regions visually distinct and easy to
+scan: challenge title or lesson identity; top identification row; directions;
+challenge task; student work/response space; and quick-score area. Rendered
+judgments such as spacing, writing-room adequacy, and scanability require visual
+or manual review when they cannot be proven structurally.
+
 ## Visual Baseline And Components
 
 See `material-design-defaults/visual-baseline-and-components.md` for the token
@@ -91,4 +131,11 @@ requires extended writing or a different format.
 
 ## Version
 
-0.1.1
+0.2.0
+
+## Changelog
+
+- 0.2.0 adds reusable worksheet identification, neutral Challenge A/B/C
+  differentiation, unit/day notation, quick-score guidance, and rendered-review
+  boundaries from the Typography Business Card worksheet review (#1805).
+- 0.1.1 existing classroom-material design defaults.
