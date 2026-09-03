@@ -58,9 +58,12 @@ def _load_json(path: str, *, default: object) -> object:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def _build_idempotency_key(args: argparse.Namespace, content_title: str) -> str:
-    requirement = json.loads(Path(args.material_requirement).read_text(encoding="utf-8"))
-    identity = requirement.get("identity", {}) if isinstance(requirement, dict) else {}
+def _build_idempotency_key(
+    args: argparse.Namespace,
+    content_title: str,
+    material_requirement: object,
+) -> str:
+    identity = material_requirement.get("identity", {}) if isinstance(material_requirement, dict) else {}
     payload = {
         "requirement_id": identity.get("requirement_id"),
         "contract_version": identity.get("contract_version"),
@@ -126,7 +129,7 @@ def main(argv: list[str] | None = None) -> int:
                 target_folder_id=args.target_folder,
                 slides_name=f"{content.title} - Slides",
                 doc_name=f"{content.title} - Worksheet",
-                idempotency_key=_build_idempotency_key(args, content.title),
+                idempotency_key=_build_idempotency_key(args, content.title, material_requirement),
                 slides_requests=tuple(build_slides_replace_requests(content)),
                 docs_requests=tuple(build_docs_replace_requests(content)),
             ),
