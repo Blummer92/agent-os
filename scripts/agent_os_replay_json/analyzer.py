@@ -83,7 +83,7 @@ def _recovery(evidence: Iterable[str]) -> bool:
 
 def _click_kind(step: dict[str, Any], identity: str | None) -> str:
     text = " ".join(_selector_strings(step)).lower()
-    if identity and identity.startswith("folder-asset-card-") and "preview-buttom-id" not in text:
+    if identity and identity.startswith("folder-asset-card-") and "preview-button-id" not in text:
         return "open_folder"
     if "sidebar-button" in text and "your-stuff" in text:
         return "open_your_stuff"
