@@ -16,6 +16,7 @@ file is registry data only and authorizes nothing.
 | Protected-branch enforcement gap | #231 | #233, #234, #235, #236 | Current `Protect main` ruleset retained; PRs required, force push/deletion blocked, review conversations resolved; local hooks and merge-authorization evidence remain advisory; required status checks, auto-merge, and merge queue remain disabled pending separately authorized evidence | mitigated / monitoring |
 | Documentation-impact gaps | #304 | #306, #310, #323 | Documentation-impact readiness evidence | open |
 | Issue-lifecycle authority and retired-scope revival | #543 | all issue intake and refactor/consolidation work | Immutable closed-body rule, prior-scope review, and behavioral/value evidence | mitigated / monitoring |
+| Advisory working knowledge borrowing task authority for its own provenance | #1520 | CKR6 (#1144), CKR10 (#1369), #1516, #1517 | Per-candidate `canonical_github_refs` sufficiency check in shared CKR2 `select_coding_knowledge`; request-owned `canonical_rule_refs` remain inspect-first evidence only | mitigated / monitoring |
 
 Update rows through normal registry change control when an owner issue
 closes or ownership transfers. A risk with two claimed owners is a

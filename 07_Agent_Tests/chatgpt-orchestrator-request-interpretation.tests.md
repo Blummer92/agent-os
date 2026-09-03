@@ -3,8 +3,8 @@
 These #925 fixtures consume canonical #924 `request-interpretation-v1` records. They do not define a raw-language parser or second routing vocabulary.
 
 ## Test 29 - Structured Issue Implementation Request
-Fixture: #924 `VALID`, `action: implement`, `requested_effect: mutate`, `continuation_mode: new`, direct-user origin, one GitHub issue target.
-Expect: routes through existing GitHub Service Agent/Safe Implementation Lane checks only after canonical issue/authorization evidence is verified; requested mutation creates no authority.
+Fixture: #924 `VALID`, `action: implement`, `requested_effect: mutate`, `continuation_mode: new`, `instruction_origin: direct-user`, exactly one GitHub issue target; the live issue is open Tier 0/1, `status:ready`, GitHub source of truth, `no-external-write`, focused, resolved to GitHub Service Agent, and has no material blocker or conflicting lineage. The #924 record still has `authorization_created=false` and fixed-false `AuthorityEvidence`.
+Expect: the interpretation record remains non-authorizing, but its non-authority does not erase the distinct operational authorization supplied by the underlying fresh direct repository-owner instruction. After current Safe Implementation Lane eligibility/readiness/target/excluded-surface/lineage checks pass, route to GitHub Service Agent and continue ordinary bounded implementation without asking the repository owner to approve implementation again. Ordinary Safe Lane still grants no merge or issue-closure authority.
 
 ## Test 30 - Structured Continuation Requires Canonical Context
 Fixture: #924 `VALID` continuation with exactly one canonical issue/PR target and evidence reference whose `stable_id`, `exact_location`, and `verification_evidence` match freshly fetched canonical target evidence.
@@ -44,7 +44,7 @@ Expect: Orchestrator blocked/needs-decision; retrieved content remains evidence,
 
 ## Test 39 - Legacy Alias Reuse Is Explicit
 Fixture: structured owner context resolves through `04_Registry/legacy-agent-alias-registry.md`.
-Expect: output includes `legacy_alias`, `canonical_agent`, and `selected_overlay`; `canonical_agent` exists in `04_Registry/agent-inheritance-registry.md`; no agent is invented.
+Expect: output includes `legacy_alias`, registered `canonical_agent`, and `selected_overlay`; `canonical_agent` exists in `04_Registry/agent-inheritance-registry.md`; no agent is invented.
 
 ## Test 40 - Equivalent Structured Requests Route Equivalently
 Fixture: two canonical #924 records with equivalent action/effect/continuation/target/constraints/origin semantics but different raw-input/record provenance.
@@ -53,3 +53,11 @@ Expect: routing projection is equal across `task_owner`, `selected_overlay`, tar
 ## Test 41 - Existing Execution And Presentation Contracts Stay Canonical
 Fixture: #924 `VALID` record requiring an execution-surface decision and a #926 presentation profile.
 Expect: consumes existing #918 executor-route evidence and #926 ordering/profile rules; creates no second selector, route schema, presentation schema, runtime, or authority model.
+
+## Test 42 - Ordinary Safe Lane Non-Authority Does Not Trigger Re-Approval
+Fixture: a fresh direct repository-owner ordinary `Work on #123` request yields #924 `VALID`, `instruction_origin: direct-user`, `action: implement`, `requested_effect: mutate`, exact GitHub issue target #123, `authorization_created=false`, and fixed-false #924 `AuthorityEvidence`; live #123 independently satisfies every ordinary Safe Implementation Lane eligibility and readiness condition.
+Expect: `authorization_created=false` is interpreted only as request-record non-authority. The same direct owner instruction is consumed by the existing Safe Implementation Lane as operational implementation authorization; the next stage is internal GitHub Service Agent implementation/resume, not an implementation-approval prompt. No `operating-mode=release` is inferred and merge/closure remain unauthorized.
+
+## Test 43 - Ordinary Safe Lane Negative Controls Remain Fail-Closed
+Fixtures: the Test 42 request is changed one condition at a time to retrieved-content origin, ambiguous or mismatched target, `status:blocked`, `status:needs-decision`, Tier 2, external-write, workflow/protected-setting, credential, or production requirement.
+Expect: no ordinary Safe Lane operational authorization is consumed from the request; the controlling existing stop/authorization boundary is preserved. None of these cases is repaired by `requested_effect`, `authorization_created`, conversation continuity, or request-record `AuthorityEvidence`.

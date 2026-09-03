@@ -192,6 +192,8 @@ class NotionContractAdapter:
             )
 
         display_name = _page_title(payload) or page_id
+        archived = _boolean_evidence(payload, "archived")
+        page_body_read = _boolean_evidence(payload, "page_body_read")
         return RegistryResource(
             system="notion",
             entity_type="Page",
@@ -202,15 +204,17 @@ class NotionContractAdapter:
             source_of_truth=LIVE_NOTION_SOURCE,
             verification_state="VerifiedReadOnly",
             cache_status="LiveRead",
-            human_review_required=_live_payload_requires_review(payload, display_name, page_id),
+            human_review_required=_live_payload_requires_review(
+                payload, display_name, page_id, (archived, page_body_read)
+            ),
             write_allowed=False,
             metadata={
                 "evidence_source": LIVE_NOTION_SOURCE,
                 "url": payload.get("url"),
-                "archived": bool(payload.get("archived", False)),
+                "archived": archived,
                 "created_time": payload.get("created_time"),
                 "last_edited_time": payload.get("last_edited_time"),
-                "page_body_read": bool(payload.get("page_body_read", False)),
+                "page_body_read": page_body_read,
                 "write_boundary": "read-only-live-evidence",
                 "raw_payload": dict(payload),
             },
@@ -230,6 +234,7 @@ class NotionContractAdapter:
             )
 
         display_name = _database_title(payload) or database_id
+        archived = _boolean_evidence(payload, "archived")
         return RegistryResource(
             system="notion",
             entity_type="Database",
@@ -240,12 +245,14 @@ class NotionContractAdapter:
             source_of_truth=LIVE_NOTION_SOURCE,
             verification_state="VerifiedReadOnly",
             cache_status="LiveRead",
-            human_review_required=_live_payload_requires_review(payload, display_name, database_id),
+            human_review_required=_live_payload_requires_review(
+                payload, display_name, database_id, (archived,)
+            ),
             write_allowed=False,
             metadata={
                 "evidence_source": LIVE_NOTION_SOURCE,
                 "url": payload.get("url"),
-                "archived": bool(payload.get("archived", False)),
+                "archived": archived,
                 "created_time": payload.get("created_time"),
                 "last_edited_time": payload.get("last_edited_time"),
                 "properties_schema_visible": bool(payload.get("properties")),
@@ -287,6 +294,7 @@ class NotionContractAdapter:
 
         raw_name = payload.get("name")
         display_name = (_plain_text(raw_name) if raw_name else "") or data_source_id
+        archived = _boolean_evidence(payload, "archived")
         return RegistryResource(
             system="notion",
             entity_type="DataSource",
@@ -298,7 +306,7 @@ class NotionContractAdapter:
             verification_state="VerifiedReadOnly",
             cache_status="LiveRead",
             human_review_required=_live_payload_requires_review(
-                payload, display_name, data_source_id
+                payload, display_name, data_source_id, (archived,)
             ),
             write_allowed=False,
             metadata={
@@ -306,7 +314,7 @@ class NotionContractAdapter:
                 "data_source_id": data_source_id,
                 "database_id": database_id,
                 "url": payload.get("url"),
-                "archived": bool(payload.get("archived", False)),
+                "archived": archived,
                 "created_time": payload.get("created_time"),
                 "last_edited_time": payload.get("last_edited_time"),
                 "properties_schema_visible": bool(payload.get("properties")),
@@ -433,10 +441,37 @@ def _requires_human_review(record: dict[str, Any]) -> bool:
     return False
 
 
-def _live_payload_requires_review(payload: dict[str, Any], display_name: str, fallback_id: str) -> bool:
+def _boolean_evidence(payload: dict[str, Any], key: str, default: bool = False) -> bool | None:
+    """Return canonical boolean evidence, or None when the value is malformed.
+
+    Live evidence booleans must survive normalization unchanged. Python
+    truthiness cannot be used here: a non-empty string such as "false" is not a
+    canonical False, and it is not a canonical True either. Real booleans are
+    preserved, an absent value keeps the documented default, and any other
+    representation normalizes to None so callers see unknown evidence instead of
+    a silently invented truth value.
+    """
+
+    value = payload.get(key, default)
+    if value is None:
+        return default
+    if type(value) is not bool:
+        return None
+    return value
+
+
+def _live_payload_requires_review(
+    payload: dict[str, Any],
+    display_name: str,
+    fallback_id: str,
+    canonical_booleans: Iterable[bool | None] = (),
+) -> bool:
+    if any(value is None for value in canonical_booleans):
+        # Malformed boolean evidence fails closed to manual review.
+        return True
     return bool(
         payload.get("human_review_required", False)
-        or payload.get("archived", False)
+        or _boolean_evidence(payload, "archived") is True
         or not display_name
         or display_name == fallback_id
     )

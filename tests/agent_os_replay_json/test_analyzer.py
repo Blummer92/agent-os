@@ -12,6 +12,19 @@ def test_folder_card_click_is_folder_entry_evidence():
     assert action.source_indexes == (0,)
 
 
+def test_folder_preview_click_is_not_folder_entry():
+    payload = {"steps": [{
+        "type": "click",
+        "selectors": [[
+            "[data-testid='folder-asset-card-digitalmedia']",
+            "[data-testid='preview-button-id']",
+        ]],
+    }]}
+    action = analyze_replay(payload)[0]
+    assert action.kind == "click"
+    assert action.target == "folder-asset-card-digitalmedia"
+
+
 def test_cursor_noise_collapses_into_one_rename_with_evidence():
     steps = [{
         "type": "change",
@@ -31,6 +44,25 @@ def test_cursor_noise_collapses_into_one_rename_with_evidence():
     assert len(action.source_indexes) == 242
     assert action.source_indexes[0] == 0
     assert action.source_indexes[-1] == 241
+
+
+def test_missing_change_value_is_not_invented_as_empty_text():
+    action = analyze_replay({"steps": [{
+        "type": "change",
+        "selectors": [["[data-testid='editor-document-title']"]],
+    }]})[0]
+    assert action.value is None
+    assert not any(item.startswith("value=") for item in action.evidence)
+
+
+def test_explicit_empty_change_value_remains_empty_text():
+    action = analyze_replay({"steps": [{
+        "type": "change",
+        "value": "",
+        "selectors": [["[data-testid='editor-document-title']"]],
+    }]})[0]
+    assert action.value == ""
+    assert "value=" in action.evidence
 
 
 def test_click_and_double_click_remain_distinct():
@@ -61,6 +93,21 @@ def test_account_specific_urn_and_search_history_are_fragile():
     actions = analyze_replay(payload)
     assert actions[0].fragile is True
     assert actions[1].fragile is True
+
+
+def test_malformed_selector_members_are_not_stringified_into_evidence():
+    action = analyze_replay({"steps": [{
+        "type": "click",
+        "selectors": [["aria/Folder", 123, {"fake": "selector"}], 456],
+    }]})[0]
+    assert action.evidence == ("aria/Folder",)
+    assert action.target == "aria/Folder"
+
+
+def test_non_list_selector_container_fails_closed_to_no_selector_evidence():
+    action = analyze_replay({"steps": [{"type": "click", "selectors": {"bad": "shape"}}]})[0]
+    assert action.evidence == ()
+    assert action.target is None
 
 
 def test_missing_steps_fails_closed():

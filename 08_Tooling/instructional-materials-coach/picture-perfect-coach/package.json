@@ -1,0 +1,37 @@
+{
+  "name": "@agent-os/picture-perfect-coach",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12 <23"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit --noUnusedLocals --noUnusedParameters",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "guard": "node scripts/guard-boundaries.mjs",
+    "check": "npm run typecheck && npm run lint && npm run test && npm run build && npm run guard"
+  },
+  "dependencies": {
+    "@xstate/react": "6.1.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "xstate": "5.32.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1",
+    "@testing-library/dom": "10.4.1",
+    "@testing-library/react": "16.3.2",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "fast-check": "4.9.0",
+    "jsdom": "30.0.1",
+    "typescript": "6.0.3",
+    "vite": "8.1.5",
+    "vitest": "4.1.10"
+  }
+}

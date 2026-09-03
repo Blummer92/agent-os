@@ -29,12 +29,15 @@ class SemanticAction:
 
 
 def _selector_strings(step: dict[str, Any]) -> list[str]:
+    selectors = step.get("selectors", []) or []
+    if not isinstance(selectors, list):
+        return []
     out: list[str] = []
-    for chain in step.get("selectors", []) or []:
+    for chain in selectors:
         if isinstance(chain, list):
-            out.extend(str(part) for part in chain)
-        elif chain is not None:
-            out.append(str(chain))
+            out.extend(part for part in chain if isinstance(part, str))
+        elif isinstance(chain, str):
+            out.append(chain)
     return out
 
 
@@ -83,7 +86,7 @@ def _recovery(evidence: Iterable[str]) -> bool:
 
 def _click_kind(step: dict[str, Any], identity: str | None) -> str:
     text = " ".join(_selector_strings(step)).lower()
-    if identity and identity.startswith("folder-asset-card-") and "preview-buttom-id" not in text:
+    if identity and identity.startswith("folder-asset-card-") and "preview-button-id" not in text:
         return "open_folder"
     if "sidebar-button" in text and "your-stuff" in text:
         return "open_your_stuff"
@@ -98,6 +101,13 @@ def _click_kind(step: dict[str, Any], identity: str | None) -> str:
     if "editor-document-title" in text or "renameinputbox" in text:
         return "activate_title"
     return "click"
+
+
+def _change_value(step: dict[str, Any]) -> str | None:
+    if "value" not in step:
+        return None
+    value = step["value"]
+    return value if isinstance(value, str) else str(value)
 
 
 def analyze_replay(payload: dict[str, Any]) -> list[SemanticAction]:
@@ -152,7 +162,7 @@ def analyze_replay(payload: dict[str, Any]) -> list[SemanticAction]:
 
         if event_type == "change":
             indexes = [i]
-            final_value = str(step.get("value", ""))
+            final_value = _change_value(step)
             target = identity
             combined_evidence = list(evidence)
             j = i + 1
@@ -169,7 +179,7 @@ def analyze_replay(payload: dict[str, Any]) -> list[SemanticAction]:
                     continue
                 if nxt_type == "change" and nxt_identity == target:
                     indexes.append(j)
-                    final_value = str(nxt.get("value", ""))
+                    final_value = _change_value(nxt)
                     combined_evidence.extend(_evidence(nxt))
                     j += 1
                     continue

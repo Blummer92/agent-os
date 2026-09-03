@@ -12,6 +12,7 @@ must not be expanded.
 from __future__ import annotations
 
 import json
+import math
 import os
 import urllib.error
 import urllib.parse
@@ -52,6 +53,8 @@ def _retry_after_seconds(headers: Any) -> Optional[float]:
     try:
         parsed = float(value)
     except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
         return None
     return parsed if parsed >= 0 else None
 
@@ -141,6 +144,10 @@ class NotionReadOnlyAdapter(TaskAdapter):
         timeout: float = 10.0,
         notion_version: str = NOTION_VERSION,
     ):
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+            raise TypeError("timeout must be a finite positive number")
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("timeout must be a finite positive number")
         self.token = token if token is not None else os.environ.get("NOTION_TOKEN")
         self._http_get = http_get or _default_http_get
         self._http_post_query_database = http_post_query_database or _default_http_post_read
@@ -233,7 +240,11 @@ class NotionReadOnlyAdapter(TaskAdapter):
             raise NotionReadOnlyAdapterError(
                 "Notion API response is missing required list field 'results'"
             )
-        return [item for item in data["results"] if isinstance(item, dict)]
+        if any(not isinstance(item, dict) for item in data["results"]):
+            raise NotionReadOnlyAdapterError(
+                "Notion API response 'results' contains a malformed non-object entry"
+            )
+        return data["results"]
 
     def _bounded_int(
         self, payload: Dict[str, Any], field: str, default: int, minimum: int, maximum: int
@@ -326,8 +337,13 @@ class NotionReadOnlyAdapter(TaskAdapter):
         block_id = self._require(payload, "block_id")
         page_size = self._bounded_int(payload, "page_size", 100, 1, _MAX_PAGE_SIZE)
         params = {"page_size": page_size}
-        if payload.get("start_cursor") is not None:
-            params["start_cursor"] = str(payload["start_cursor"])
+        if "start_cursor" in payload and payload["start_cursor"] is not None:
+            start_cursor = payload["start_cursor"]
+            if not isinstance(start_cursor, str) or not start_cursor:
+                raise NotionReadOnlyAdapterError(
+                    "'start_cursor' must be a non-empty opaque string"
+                )
+            params["start_cursor"] = start_cursor
         data = self._get(
             f"/blocks/{block_id}/children?{urllib.parse.urlencode(params)}"
         )

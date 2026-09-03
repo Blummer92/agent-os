@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +16,14 @@ from .legacy_preflight import (
     legacy_preflight_to_dict,
     render_legacy_preflight,
 )
-from .models import AcceptanceInput, LinkedIssueParseStatus
+from .models import (
+    AcceptanceInput,
+    AcceptanceReport,
+    CheckResult,
+    LinkedIssueParseStatus,
+    Status,
+    strongest_status,
+)
 from .parse_issue import project_issue_metadata, scan_issue_metadata
 from .policy import evaluate_acceptance
 from .report import exit_code_for, render_report
@@ -42,6 +50,61 @@ def _read_json(path: str) -> object:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
+def _apply_evidence_completeness_flags(
+    report: AcceptanceReport,
+    *,
+    changed_files_incomplete: bool,
+    diff_retrieval_failed: bool,
+) -> AcceptanceReport:
+    if not changed_files_incomplete and not diff_retrieval_failed:
+        return report
+
+    checks = list(report.checks)
+    manual_review_items = list(report.manual_review_items)
+    evidence = list(report.evidence)
+    risks = list(report.remaining_risks)
+
+    if changed_files_incomplete:
+        message = (
+            "Changed-file evidence is incomplete; the retrieved file list does not match "
+            "the authoritative pull request changed-file count."
+        )
+        checks.append(
+            CheckResult(
+                "changed files completeness",
+                Status.MANUAL_REVIEW,
+                message,
+                ["input=changed-files; state=incomplete"],
+            )
+        )
+        manual_review_items.append(message)
+        evidence.append("changed_files_incomplete=true")
+        risks.append(message)
+
+    if diff_retrieval_failed:
+        message = "Pull request diff retrieval failed; diff-dependent evidence is unavailable."
+        checks.append(
+            CheckResult(
+                "diff retrieval",
+                Status.MANUAL_REVIEW,
+                message,
+                ["input=diff; state=retrieval-failed"],
+            )
+        )
+        manual_review_items.append(message)
+        evidence.append("diff_retrieval_failed=true")
+        risks.append(message)
+
+    return replace(
+        report,
+        overall_status=strongest_status(checks),
+        checks=checks,
+        manual_review_items=manual_review_items,
+        evidence=evidence,
+        remaining_risks=risks,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run Agent OS issue acceptance checks from local fixture data.")
     parser.add_argument("--issue", help="Path to the linked issue body markdown.")
@@ -49,6 +112,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--changed-files", help="Path to newline-delimited changed files.")
     parser.add_argument("--diff", help="Optional path to unified diff or patch text.")
     parser.add_argument("--pr-title", default="", help="Optional pull request title.")
+    parser.add_argument(
+        "--changed-files-incomplete",
+        action="store_true",
+        help="Mark the retrieved changed-file evidence as incomplete.",
+    )
+    parser.add_argument(
+        "--diff-retrieval-failed",
+        action="store_true",
+        help="Mark pull request diff retrieval as failed.",
+    )
     parser.add_argument(
         "--legacy-preflight-snapshot",
         help="Optional path to a bounded read-only legacy issue snapshot JSON file.",
@@ -136,8 +209,15 @@ def main(argv: list[str] | None = None) -> int:
             pr_body=_read_text(args.pr_body),
             changed_files=_read_changed_files(args.changed_files),
             diff_text=_read_text(args.diff),
+            changed_files_supplied=bool(args.changed_files),
+            diff_supplied=bool(args.diff),
         ),
         pr_title=args.pr_title,
+    )
+    report = _apply_evidence_completeness_flags(
+        report,
+        changed_files_incomplete=args.changed_files_incomplete,
+        diff_retrieval_failed=args.diff_retrieval_failed,
     )
     if args.documentation_advisory:
         metadata = project_issue_metadata(scan_issue_metadata(issue_body))
@@ -145,7 +225,7 @@ def main(argv: list[str] | None = None) -> int:
 
     transport_payload = None
     if any(
-        getattr(args, name) not in (None, "")
+        getattr(args, name) not in (None, "", False)
         for name in (
             "transport_repository",
             "transport_issue_number",

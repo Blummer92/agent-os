@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import re
 from typing import Any
 
 REWRITE_KINDS = {
@@ -12,6 +13,18 @@ REWRITE_KINDS = {
     "change-selector",
     "insert-assertion",
 }
+
+_ACTION_ID_RE = re.compile(r"action-(0|[1-9][0-9]*)\Z")
+
+
+def _validate_source_indexes(source_indexes: tuple[int, ...], owner: str) -> None:
+    if not source_indexes:
+        raise ValueError(f"{owner} requires source indexes")
+    if any(type(index) is not int or index < 0 for index in source_indexes):
+        raise ValueError(f"{owner} source indexes must be exact nonnegative integers")
+    if tuple(sorted(set(source_indexes))) != source_indexes:
+        raise ValueError(f"{owner} source indexes must be unique and increasing")
+
 
 @dataclass(frozen=True)
 class RewriteOperation:
@@ -28,8 +41,7 @@ class RewriteOperation:
     def __post_init__(self) -> None:
         if self.kind not in REWRITE_KINDS:
             raise ValueError(f"unsupported rewrite kind: {self.kind}")
-        if not self.source_indexes:
-            raise ValueError("rewrite operation requires source indexes")
+        _validate_source_indexes(self.source_indexes, "rewrite operation")
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -37,6 +49,7 @@ class RewriteOperation:
         data["evidence"] = list(self.evidence)
         data["output_indexes"] = list(self.output_indexes)
         return data
+
 
 @dataclass(frozen=True)
 class RewriteResult:
@@ -133,6 +146,7 @@ def rewrite_replay(payload: dict[str, Any]) -> RewriteResult:
         semantic_equivalence="proven",
     )
 
+
 @dataclass(frozen=True)
 class RewriteRequest:
     kind: str
@@ -147,12 +161,12 @@ class RewriteRequest:
             raise ValueError(f"unsupported rewrite request kind: {self.kind}")
         if not self.semantic_action_id:
             raise ValueError("rewrite request requires semantic action id")
-        if not self.source_indexes:
-            raise ValueError("rewrite request requires source indexes")
+        _validate_source_indexes(self.source_indexes, "rewrite request")
         if self.kind == "change-selector" and not self.replacement_selector:
             raise ValueError("change-selector requires replacement selector")
         if self.kind in {"move-before", "move-after"} and not self.target_action_id:
             raise ValueError(f"{self.kind} requires target action id")
+
 
 def apply_request(
     payload: dict[str, Any],
@@ -166,10 +180,8 @@ def apply_request(
 
     actions = analyze_replay(payload)
 
-    try:
-        action_index = int(request.semantic_action_id.removeprefix("action-"))
-        action = actions[action_index]
-    except (ValueError, IndexError):
+    match = _ACTION_ID_RE.fullmatch(request.semantic_action_id)
+    if match is None:
         return RewriteResult(
             rewritten_recording=dict(payload),
             operations=(),
@@ -177,6 +189,17 @@ def apply_request(
             warnings=("unknown semantic action id",),
             semantic_equivalence="rejected",
         )
+
+    action_index = int(match.group(1))
+    if action_index >= len(actions):
+        return RewriteResult(
+            rewritten_recording=dict(payload),
+            operations=(),
+            provenance={},
+            warnings=("unknown semantic action id",),
+            semantic_equivalence="rejected",
+        )
+    action = actions[action_index]
 
     if tuple(request.source_indexes) != tuple(action.source_indexes):
         return RewriteResult(

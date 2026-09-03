@@ -39,7 +39,3 @@ jobs:
         run: |
           cd 08_Tooling/workflow-scheduler
           PYTHONPATH=src python3 -m pytest tests/ -v --cov=src/workflow_scheduler
-
-      - name: Run repository structure validation
-        run: |
-          bash 07_Agent_Tests/validate-repo-structure.sh

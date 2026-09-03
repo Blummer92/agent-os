@@ -7,17 +7,19 @@ from typing import Any
 from .common import (
     FINGERPRINT_ALGORITHM,
     MAX_INPUT_BYTES,
-    MAX_RESULT_BYTES as SHARED_MAX_RESULT_BYTES,
     ContractReference,
     ContractValidationError,
+    MAX_RESULT_BYTES as SHARED_MAX_RESULT_BYTES,
     ValidatedRecord,
     ValidationResult,
     ValidationStatus,
     canonical_size,
     freeze_json,
+    invalid_result,
     sanitize_detail,
     sha256_hex,
     validate_and_normalize_json,
+    validate_mapping,
     validate_revision,
     validate_stable_id,
     validate_text,
@@ -43,7 +45,7 @@ _AUTHORITY_KEYS = {
 def resolve_current_curriculum_state(evidence: object) -> ValidationResult:
     """Project bounded provider-neutral evidence without reads, writes, or inference."""
     try:
-        root = _mapping(validate_and_normalize_json(evidence, max_bytes=MAX_INPUT_BYTES), "evidence")
+        root = validate_mapping(validate_and_normalize_json(evidence, max_bytes=MAX_INPUT_BYTES), "evidence")
         _reject_authority_attack(root)
         if validate_version(root.get("contract_version")) != INPUT_CONTRACT_ID:
             raise ContractValidationError("handoff-version-unsupported", "unsupported current-state evidence version")
@@ -219,19 +221,13 @@ def resolve_current_curriculum_state(evidence: object) -> ValidationResult:
             )
         return ValidationResult(status=ValidationStatus.VALID, record=record)
     except ContractValidationError as exc:
-        return _invalid(exc.reason_code, exc.detail)
+        return invalid_result(exc.reason_code, exc.detail)
     except (TypeError, ValueError) as exc:
-        return _invalid("handoff-invalid", sanitize_detail(str(exc)))
-
-
-def _mapping(value: object, name: str) -> dict[str, Any]:
-    if type(value) is not dict:
-        raise ContractValidationError("handoff-wrong-type", f"{name} must be a built-in mapping")
-    return value
+        return invalid_result("handoff-invalid", sanitize_detail(str(exc)))
 
 
 def _unit(value: object) -> dict[str, str]:
-    raw = _mapping(value, "canonical_unit")
+    raw = validate_mapping(value, "canonical_unit")
     status = validate_text(raw.get("status"), "canonical unit status", max_length=64)
     if status not in UNIT_STATUSES:
         raise ContractValidationError("identity-invalid", "canonical unit status is unsupported")
@@ -239,7 +235,7 @@ def _unit(value: object) -> dict[str, str]:
 
 
 def _request(value: object) -> dict[str, Any]:
-    raw = _mapping(value, "request")
+    raw = validate_mapping(value, "request")
     relative = validate_text(raw.get("relative_time", "none"), "relative_time", max_length=32)
     if relative not in {"none", "tomorrow"}:
         raise ContractValidationError("routing-invalid", "relative_time is unsupported")
@@ -258,7 +254,7 @@ def _request(value: object) -> dict[str, Any]:
 def _context(value: object, relative: str) -> tuple[dict[str, Any] | None, str | None, set[str]]:
     if value is None:
         return (None, None, {"routing-current-day-missing"}) if relative == "tomorrow" else (None, None, set())
-    raw = _mapping(value, "current_context")
+    raw = validate_mapping(value, "current_context")
     current = validate_stable_id(raw.get("current_day_id"), "current day stable_id")
     ordered = _ordered_ids(raw.get("ordered_day_ids", []), "ordered day ids", MAX_DAY_IDS)
     if relative != "tomorrow":
@@ -295,7 +291,7 @@ def _owner_evidence(value: object) -> list[dict[str, Any]]:
 
 
 def _owner_item(value: object) -> dict[str, Any]:
-    raw = _mapping(value, "owner evidence")
+    raw = validate_mapping(value, "owner evidence")
     classification = validate_text(raw.get("classification"), "evidence classification", max_length=32)
     currentness = validate_text(raw.get("currentness"), "evidence currentness", max_length=16)
     if classification not in CLASSIFICATIONS:
@@ -325,7 +321,7 @@ def _owner_item(value: object) -> dict[str, Any]:
 
 
 def _reference(value: object) -> dict[str, str]:
-    raw = _mapping(value, "evidence reference")
+    raw = validate_mapping(value, "evidence reference")
     ref = ContractReference(
         system=raw.get("system"), stable_id=raw.get("stable_id"),
         exact_location=raw.get("exact_location"), verification_evidence=raw.get("verification_evidence")
@@ -340,7 +336,7 @@ def _assets(value: object) -> list[dict[str, Any]]:
         raise ContractValidationError("handoff-oversized", "asset_evidence exceeds its bound")
     items: list[dict[str, Any]] = []
     for value_item in value:
-        raw = _mapping(value_item, "asset evidence")
+        raw = validate_mapping(value_item, "asset evidence")
         exists, approved, reuse = raw.get("exists"), raw.get("approved_for_requested_use"), raw.get("approved_student_reuse")
         if type(exists) is not bool or (approved is not None and type(approved) is not bool) or (reuse is not None and type(reuse) is not bool):
             raise ContractValidationError("handoff-wrong-type", "asset eligibility fields have invalid types")
@@ -413,9 +409,3 @@ def _reject_authority_attack(value: object) -> None:
     elif type(value) is list:
         for item in value:
             _reject_authority_attack(item)
-
-
-def _invalid(reason: str, detail: str) -> ValidationResult:
-    return ValidationResult(
-        status=ValidationStatus.INVALID, record=None, reason_codes=(reason,), details=(sanitize_detail(detail),)
-    )

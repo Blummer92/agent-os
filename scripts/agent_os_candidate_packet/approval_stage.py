@@ -38,7 +38,7 @@ from scripts.agent_os_issue_acceptance.approved_execution_projection import (
 )
 
 from .proposal_stage import RepositoryProposalStageResult, RepositoryProposalStageStatus
-from .stage_models import STAGE_SCHEMA_VERSION
+from .stage_models import STAGE_SCHEMA_VERSION, require_exact_keys
 
 
 class ApprovalProjectionStageStatus(str, Enum):
@@ -210,7 +210,7 @@ def approval_projection_stage_result_from_dict(
         raise ValueError("approval projection stage result must be a mapping")
     if payload.get("schema_version") != STAGE_SCHEMA_VERSION:
         raise ValueError("unsupported stage schema_version")
-    _require_exact_keys(
+    require_exact_keys(
         payload,
         _APPROVAL_PROJECTION_STAGE_RESULT_PAYLOAD_KEYS,
         "approval projection stage result",
@@ -319,22 +319,6 @@ def approval_projection_stage_result_from_dict(
         projection=projection,
         reason_codes=tuple(reason_codes),
     )
-
-
-def _require_exact_keys(
-    payload: object, keys: frozenset[str], label: str
-) -> Mapping[str, Any]:
-    """Closed-schema key check, mirroring the repository-stage transport rule."""
-    if not isinstance(payload, Mapping):
-        raise ValueError(f"{label} must be a mapping")
-    supplied = set(payload)
-    missing = sorted(keys - supplied)
-    if missing:
-        raise ValueError(f"{label} is missing field(s): " + ", ".join(missing))
-    unsupported = sorted(supplied - keys)
-    if unsupported:
-        raise ValueError(f"{label} has unsupported field(s): " + ", ".join(unsupported))
-    return payload
 
 
 def prepare_approval_projection(

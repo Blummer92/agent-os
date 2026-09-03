@@ -15,6 +15,10 @@ permissions:
   issues: read
   pull-requests: read
 
+concurrency:
+  group: issue-acceptance-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   report:
     name: Run issue acceptance report
@@ -40,6 +44,8 @@ jobs:
           : > "$out/changed_files.txt"
           : > "$out/diff.patch"
           printf '%s\n' false > "$out/issue_body_retrieval_failed.txt"
+          printf '%s\n' false > "$out/changed_files_incomplete.txt"
+          printf '%s\n' false > "$out/diff_retrieval_failed.txt"
 
           if [ -z "${PR_NUMBER:-}" ]; then
             cat > "$out/pr_body.md" <<'MD'
@@ -52,8 +58,16 @@ jobs:
 
           gh pr view "$PR_NUMBER" --json title --jq '.title // ""' > "$out/pr_title.txt"
           gh pr view "$PR_NUMBER" --json body --jq '.body // ""' > "$out/pr_body.md"
+          authoritative_changed_files="$(gh pr view "$PR_NUMBER" --json changedFiles --jq '.changedFiles')"
           gh pr view "$PR_NUMBER" --json files --jq '.files[].path' > "$out/changed_files.txt"
-          gh pr diff "$PR_NUMBER" --patch > "$out/diff.patch" || true
+          retrieved_changed_files="$(wc -l < "$out/changed_files.txt" | tr -d '[:space:]')"
+          if [ "$retrieved_changed_files" != "$authoritative_changed_files" ]; then
+            printf '%s\n' true > "$out/changed_files_incomplete.txt"
+          fi
+          if ! gh pr diff "$PR_NUMBER" --patch > "$out/diff.patch"; then
+            : > "$out/diff.patch"
+            printf '%s\n' true > "$out/diff_retrieval_failed.txt"
+          fi
 
           linked_issue="$(
             python - <<'PY'
@@ -73,6 +87,7 @@ jobs:
               print("")
           PY
           )"
+          printf '%s\n' "$linked_issue" > "$out/linked_issue.txt"
 
           if [ -n "$linked_issue" ]; then
             if ! gh issue view "$linked_issue" --json body --jq '.body // ""' > "$out/issue.md"; then
@@ -99,19 +114,13 @@ jobs:
           observed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
           issue_body_retrieval_failed="$(cat tmp/agent_os_issue_acceptance_report/issue_body_retrieval_failed.txt)"
+          changed_files_incomplete="$(cat tmp/agent_os_issue_acceptance_report/changed_files_incomplete.txt)"
+          diff_retrieval_failed="$(cat tmp/agent_os_issue_acceptance_report/diff_retrieval_failed.txt)"
           fresh_issue_body_file=""
           fresh_issue_body_available=false
           fresh_pr_head_sha=""
           fresh_pr_head_sha_available=false
-          linked_issue="$(python - <<'PY'
-          from pathlib import Path
-          from scripts.agent_os_issue_acceptance.parse_pr import parse_linked_issue_result
-          text = Path('tmp/agent_os_issue_acceptance_report/pr_body.md').read_text(encoding='utf-8')
-          title = Path('tmp/agent_os_issue_acceptance_report/pr_title.txt').read_text(encoding='utf-8')
-          result = parse_linked_issue_result(text, title)
-          print(result.issue_number or '')
-          PY
-          )"
+          linked_issue="$(cat tmp/agent_os_issue_acceptance_report/linked_issue.txt 2>/dev/null || true)"
           if [ -n "$linked_issue" ]; then
             if gh issue view "$linked_issue" --json body --jq '.body // ""' > tmp/agent_os_issue_acceptance_report/issue_recheck.md; then
               fresh_issue_body_available=true
@@ -140,6 +149,13 @@ jobs:
             --transport-workflow-run-attempt "$GITHUB_RUN_ATTEMPT"
             --transport-observed-at "$observed_at"
           )
+          evidence_args=()
+          if [ "$changed_files_incomplete" = true ]; then
+            evidence_args+=(--changed-files-incomplete)
+          fi
+          if [ "$diff_retrieval_failed" = true ]; then
+            evidence_args+=(--diff-retrieval-failed)
+          fi
           if [ -n "$linked_issue" ]; then
             transport_args+=(--transport-issue-number "$linked_issue")
           fi
@@ -163,6 +179,7 @@ jobs:
             --diff tmp/agent_os_issue_acceptance_report/diff.patch \
             --pr-title "$(cat tmp/agent_os_issue_acceptance_report/pr_title.txt)" \
             --documentation-advisory \
+            "${evidence_args[@]}" \
             "${transport_args[@]}" \
             | tee tmp/agent_os_issue_acceptance_report/report.txt
           checker_exit_code=${PIPESTATUS[0]}

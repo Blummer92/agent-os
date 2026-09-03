@@ -46,6 +46,16 @@ def test_missing_source_indexes_fails_closed():
         )
 
 
+@pytest.mark.parametrize("source_indexes", [(-1,), (1, 1), (2, 1), (True,), (1.0,), ("1",)])
+def test_rewrite_operation_rejects_noncanonical_source_indexes(source_indexes):
+    with pytest.raises(ValueError, match="source indexes"):
+        RewriteOperation(
+            kind="keep",
+            semantic_action_id="action-1",
+            source_indexes=source_indexes,
+        )
+
+
 from scripts.agent_os_replay_json.rewriter import rewrite_replay
 
 
@@ -178,45 +188,13 @@ def test_guessing_is_not_a_valid_request():
         )
 
 
-from scripts.agent_os_replay_json.rewriter import RewriteRequest
-
-
-def test_selector_change_requires_explicit_selector():
-    with pytest.raises(ValueError, match="replacement selector"):
+@pytest.mark.parametrize("source_indexes", [(-1,), (1, 1), (2, 1), (True,), (1.0,), ("1",)])
+def test_rewrite_request_rejects_noncanonical_source_indexes(source_indexes):
+    with pytest.raises(ValueError, match="source indexes"):
         RewriteRequest(
-            kind="change-selector",
+            kind="remove-noise",
             semantic_action_id="action-1",
-            source_indexes=(1,),
-        )
-
-
-def test_reorder_requires_explicit_target():
-    with pytest.raises(ValueError, match="target action id"):
-        RewriteRequest(
-            kind="move-before",
-            semantic_action_id="action-1",
-            source_indexes=(1,),
-        )
-
-
-def test_valid_explicit_selector_request():
-    request = RewriteRequest(
-        kind="change-selector",
-        semantic_action_id="action-1",
-        source_indexes=(1,),
-        evidence=("recorded selector alternative",),
-        replacement_selector="[data-testid='folder-card']",
-    )
-
-    assert request.replacement_selector == "[data-testid='folder-card']"
-
-
-def test_guessing_is_not_a_valid_request():
-    with pytest.raises(ValueError, match="unsupported rewrite request"):
-        RewriteRequest(
-            kind="guess",
-            semantic_action_id="action-1",
-            source_indexes=(1,),
+            source_indexes=source_indexes,
         )
 
 
@@ -291,6 +269,48 @@ def test_request_source_indexes_must_match_analyzer_evidence():
     result = apply_request(payload, request)
 
     assert result.semantic_equivalence == "rejected"
+
+
+@pytest.mark.parametrize(
+    "action_id",
+    ["0", "action--1", "action-+0", "action- 0", " action-0", "action-0 ", "action-0junk", "action-01"],
+)
+def test_malformed_semantic_action_ids_are_rejected(action_id):
+    payload = {
+        "steps": [
+            {"type": "click", "selectors": [["aria/Folder"]]},
+        ]
+    }
+    request = RewriteRequest(
+        kind="change-selector",
+        semantic_action_id=action_id,
+        source_indexes=(0,),
+        replacement_selector="aria/Folder",
+    )
+
+    result = apply_request(payload, request)
+
+    assert result.semantic_equivalence == "rejected"
+    assert result.warnings == ("unknown semantic action id",)
+    assert result.rewritten_recording == payload
+
+
+def test_canonical_semantic_action_id_remains_valid():
+    payload = {
+        "steps": [
+            {"type": "click", "selectors": [["aria/Folder"]]},
+        ]
+    }
+    request = RewriteRequest(
+        kind="change-selector",
+        semantic_action_id="action-0",
+        source_indexes=(0,),
+        replacement_selector="aria/Folder",
+    )
+
+    result = apply_request(payload, request)
+
+    assert result.semantic_equivalence == "proven"
 
 
 def test_keyboard_noise_can_be_removed():

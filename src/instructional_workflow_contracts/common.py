@@ -253,6 +253,27 @@ def validate_text(value: object, name: str, *, max_length: int = MAX_STRING_LENG
     return value
 
 
+def validate_mapping(value: object, name: str) -> dict[str, Any]:
+    if type(value) is not dict:
+        raise ContractValidationError("handoff-wrong-type", f"{name} must be a built-in mapping")
+    return value
+
+
+def validate_bounded_list(value: object, name: str, maximum: int) -> list[Any]:
+    if type(value) is not list:
+        raise ContractValidationError("handoff-wrong-type", f"{name} must be a built-in list")
+    if len(value) > maximum:
+        raise ContractValidationError("handoff-oversized", f"{name} exceeds its collection bound")
+    return value
+
+
+def validate_exact_fields(value: dict[str, Any], expected: frozenset[str], name: str) -> None:
+    if set(value) != expected:
+        if set(value) - expected:
+            raise ContractValidationError("handoff-unknown-field", f"{name} contains unknown fields")
+        raise ContractValidationError("handoff-invalid", f"{name} is missing required fields")
+
+
 def validate_stable_id(value: object, name: str = "stable_id") -> str:
     text = validate_text(value, name, max_length=128)
     if not _ID_RE.fullmatch(text):
@@ -496,6 +517,15 @@ def sanitize_detail(value: object) -> str:
     cleaned = _CONTROL_RE.sub(" ", value)
     cleaned = _UNSAFE_TEXT_RE.sub("[redacted]", cleaned)
     return cleaned[:MAX_DETAIL_LENGTH]
+
+
+def invalid_result(reason: str, detail: str) -> ValidationResult:
+    return ValidationResult(
+        status=ValidationStatus.INVALID,
+        record=None,
+        reason_codes=(reason,),
+        details=(sanitize_detail(detail),),
+    )
 
 
 def resolve_status(

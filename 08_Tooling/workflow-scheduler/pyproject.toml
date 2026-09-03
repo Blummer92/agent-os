@@ -4,14 +4,51 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "workflow-scheduler"
-version = "0.14.0"
-description = "Agent OS Workflow Scheduler: dependency-ordered task execution, governance stop-condition checks, lease locks, and audit logging."
+version = "0.18.0"
+description = "Agent OS Workflow Scheduler: dependency-ordered task execution, governance stop-condition checks, lease locks, and audit logging. Also distributes the canonical repository-root execution contract packages this runtime imports (#1300)."
 requires-python = ">=3.11"
+dependencies = [
+  "PyYAML>=6.0,<7",
+  "reusable-capability-registry>=0.2.0,<0.3.0",
+]
 
-[tool.setuptools.packages.find]
-where = ["src"]
-
+# #1300 (AOS-GCE2C): the Scheduler runtime already imports canonical
+# repository-root ``scripts.*`` contract packages (for example
+# ``workflow_scheduler.execution.continuation`` imports
+# ``scripts.agent_os_execution_checkpoint.resume_planner``). Those packages stay
+# canonical where they are -- they are declared here, not copied, so a clean host
+# installation resolves them without repository-root ``PYTHONPATH``. #1426 adds
+# the execution-interface contract package required by the installed #1411
+# publication path under the same single-owner distribution boundary.
+# ``packages`` must be explicit because ``packages.find`` only discovers packages
+# under a single ``where`` root and ignores out-of-tree ``package-dir`` entries.
 [tool.setuptools]
+packages = [
+  "workflow_scheduler",
+  "workflow_scheduler.adapters",
+  "workflow_scheduler.audit",
+  "workflow_scheduler.dependencies",
+  "workflow_scheduler.execution",
+  "workflow_scheduler.governance",
+  "workflow_scheduler.models",
+  "workflow_scheduler.planning",
+  "workflow_scheduler.queue",
+  "workflow_scheduler.repository",
+  "scripts.agent_os_execution_capabilities",
+  "scripts.agent_os_execution_checkpoint",
+  "scripts.agent_os_execution_interface",
+  "scripts.agent_os_issue_acceptance",
+  "scripts.agent_os_issue_acceptance.checks",
+  "scripts.agent_os_remote_validation",
+]
 ext-modules = [
   {name = "workflow_scheduler.execution._clone3_cgroup", sources = ["src/workflow_scheduler/execution/_clone3_cgroup.c"]}
 ]
+
+[tool.setuptools.package-dir]
+"" = "src"
+"scripts.agent_os_execution_capabilities" = "../../scripts/agent_os_execution_capabilities"
+"scripts.agent_os_execution_checkpoint" = "../../scripts/agent_os_execution_checkpoint"
+"scripts.agent_os_execution_interface" = "../../scripts/agent_os_execution_interface"
+"scripts.agent_os_issue_acceptance" = "../../scripts/agent_os_issue_acceptance"
+"scripts.agent_os_remote_validation" = "../../scripts/agent_os_remote_validation"

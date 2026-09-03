@@ -216,7 +216,9 @@ def test_null_pr_number_is_distinct_from_legacy_sentinels():
 
     assert null_key != build_handoff_packet_cache_key_v2(v2_packet(pr_number=0))
     assert null_key != build_handoff_packet_cache_key_v2(v2_packet(pr_number=1))
-    assert null_key != build_handoff_packet_cache_key_v2(v2_packet(pr_number=False))
+
+    with pytest.raises(ValueError, match="Invalid handoff packet"):
+        build_handoff_packet_cache_key_v2(v2_packet(pr_number=False))
 
 
 def test_compute_limit_key_order_does_not_change_v2_identity():

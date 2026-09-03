@@ -44,7 +44,7 @@ from workflow_scheduler.execution.runtime_configuration import (
 )
 
 from .approval_stage import ApprovalProjectionStageResult
-from .stage_models import STAGE_SCHEMA_VERSION
+from .stage_models import STAGE_SCHEMA_VERSION, require_exact_keys
 from .validation_stage import (
     CandidateRuntimeInputs,
     ValidationStageDisposition,
@@ -186,7 +186,7 @@ def execution_packet_stage_result_from_dict(
         raise ValueError("execution packet stage result must be a mapping")
     if payload.get("schema_version") != STAGE_SCHEMA_VERSION:
         raise ValueError("unsupported stage schema_version")
-    _require_exact_keys(
+    require_exact_keys(
         payload,
         _EXECUTION_PACKET_STAGE_RESULT_PAYLOAD_KEYS,
         "execution packet stage result",
@@ -272,22 +272,6 @@ def execution_packet_stage_result_from_dict(
         execution_authorization_present=payload["execution_authorization_present"],
         reason_codes=tuple(reason_codes),
     )
-
-
-def _require_exact_keys(
-    payload: object, keys: frozenset[str], label: str
-) -> Mapping[str, Any]:
-    """Closed-schema key check, mirroring the repository-stage transport rule."""
-    if not isinstance(payload, Mapping):
-        raise ValueError(f"{label} must be a mapping")
-    supplied = set(payload)
-    missing = sorted(keys - supplied)
-    if missing:
-        raise ValueError(f"{label} is missing field(s): " + ", ".join(missing))
-    unsupported = sorted(supplied - keys)
-    if unsupported:
-        raise ValueError(f"{label} has unsupported field(s): " + ", ".join(unsupported))
-    return payload
 
 
 def prepare_execution_packet(
@@ -383,6 +367,7 @@ def prepare_execution_packet(
             validation_total_timeout_seconds=candidate_runtime_inputs.total_timeout_seconds,
             executor_max_output_bytes=candidate_runtime_inputs.max_output_bytes,
             validation_max_output_bytes=candidate_runtime_inputs.max_output_bytes,
+            required_environment_spec=candidate_runtime_inputs.required_environment_spec,
         )
     except (ConcreteRuntimeConfigurationError, TypeError, ValueError):
         return _result(

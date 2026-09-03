@@ -21,6 +21,11 @@ import posixpath
 from dataclasses import dataclass
 from typing import Literal
 
+from scripts.agent_os_execution_capabilities.dependencies import (
+    RequiredEnvironmentSpec,
+    reconstruct_required_environment_spec,
+    required_environment_spec_payload,
+)
 from scripts.agent_os_execution_capabilities.models import RepositoryIdentity
 from workflow_scheduler.execution.frozen_test_validation_adapter import FrozenTestCommand
 from workflow_scheduler.execution.single_issue_pilot import (
@@ -245,6 +250,23 @@ def _validated_commands(
     return commands
 
 
+def _required_environment(
+    value: RequiredEnvironmentSpec | None,
+    expected_test_ids: tuple[str, ...],
+) -> RequiredEnvironmentSpec | None:
+    if value is None:
+        return None
+    if type(value) is not RequiredEnvironmentSpec:
+        raise ConcreteRuntimeConfigurationError(
+            "required_environment_spec must be exact RequiredEnvironmentSpec or None"
+        )
+    if value.required_validation_command_ids != tuple(sorted(expected_test_ids)):
+        raise ConcreteRuntimeConfigurationError(
+            "required environment validation-command identities drifted"
+        )
+    return value
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ConcreteRuntimeConfiguration:
     """Immutable configuration for exactly one approved runtime packet.
@@ -290,6 +312,7 @@ class ConcreteRuntimeConfiguration:
     validation_max_output_bytes: int
     allowed_files: tuple[str, ...]
     forbidden_paths: tuple[str, ...]
+    required_environment_spec: RequiredEnvironmentSpec | None = None
 
     @classmethod
     def bind(
@@ -311,6 +334,7 @@ class ConcreteRuntimeConfiguration:
         environment_policy: str = ENVIRONMENT_POLICY,
         lease_directory: str | os.PathLike[str] | None = None,
         delegated_parent_cgroup: str | os.PathLike[str] | None = None,
+        required_environment_spec: RequiredEnvironmentSpec | None = None,
     ) -> "ConcreteRuntimeConfiguration":
         """Bind the canonical configuration.
 
@@ -351,6 +375,7 @@ class ConcreteRuntimeConfiguration:
             raise ConcreteRuntimeConfigurationError("repository identity drifted")
         test_ids = tuple(pilot_input.required_tests)
         commands = _validated_commands(required_test_commands, test_ids)
+        environment = _required_environment(required_environment_spec, test_ids)
         if tuple(getattr(pilot_input.validation_plan, "commands", ())) != test_ids:
             raise ConcreteRuntimeConfigurationError(
                 "validation plan command identities drifted"
@@ -413,6 +438,7 @@ class ConcreteRuntimeConfiguration:
             ),
             "allowed_files": _paths(pilot_input.allowed_files, "allowed_files"),
             "forbidden_paths": _paths(pilot_input.forbidden_paths, "forbidden_paths"),
+            "required_environment_spec": environment,
         }
         if environment_policy != ENVIRONMENT_POLICY:
             raise ConcreteRuntimeConfigurationError("unsupported environment authority")
@@ -452,6 +478,7 @@ class ConcreteRuntimeConfiguration:
         environment_policy: str = ENVIRONMENT_POLICY,
         lease_directory: str | os.PathLike[str] | None = None,
         delegated_parent_cgroup: str | os.PathLike[str] | None = None,
+        required_environment_spec: RequiredEnvironmentSpec | None = None,
     ) -> "ConcreteRuntimeConfiguration":
         """Bind a validation-only configuration from truthful pre-execution evidence.
 
@@ -472,6 +499,7 @@ class ConcreteRuntimeConfiguration:
             raise ConcreteRuntimeConfigurationError(
                 "required test identities are duplicate, missing, reordered, or unbound"
             )
+        environment = _required_environment(required_environment_spec, test_ids)
         canonical_allowed = _paths(allowed_files, "allowed_files")
         canonical_forbidden = _paths(forbidden_paths, "forbidden_paths")
         if _path_conflicts(canonical_allowed, canonical_forbidden):
@@ -544,6 +572,7 @@ class ConcreteRuntimeConfiguration:
             ),
             "allowed_files": canonical_allowed,
             "forbidden_paths": canonical_forbidden,
+            "required_environment_spec": environment,
         }
         return cls(configuration_fingerprint=_fingerprint(_payload(values)), **values)
 
@@ -592,6 +621,7 @@ class ConcreteRuntimeConfiguration:
             raise ConcreteRuntimeConfigurationError(
                 "required test identity or order drifted"
             )
+        _required_environment(self.required_environment_spec, test_ids)
         if tuple(getattr(pilot_input.validation_plan, "commands", ())) != test_ids:
             raise ConcreteRuntimeConfigurationError(
                 "validation plan command identity drifted"
@@ -648,7 +678,8 @@ _PAYLOAD_NESTED_FIELDS = (
     "forbidden_paths",
 )
 
-_PAYLOAD_FIELDS = frozenset(_PAYLOAD_SCALAR_FIELDS) | frozenset(_PAYLOAD_NESTED_FIELDS)
+_BASE_PAYLOAD_FIELDS = frozenset(_PAYLOAD_SCALAR_FIELDS) | frozenset(_PAYLOAD_NESTED_FIELDS)
+_REQUIRED_ENVIRONMENT_PAYLOAD_FIELD = "required_environment_spec"
 
 _REPOSITORY_IDENTITY_FIELDS = frozenset(
     (
@@ -691,6 +722,15 @@ def _payload(configuration: object) -> dict[str, object]:
             "forbidden_paths": list(get("forbidden_paths")),
         }
     )
+    environment = get("required_environment_spec")
+    if environment is not None:
+        if type(environment) is not RequiredEnvironmentSpec:
+            raise ConcreteRuntimeConfigurationError(
+                "required_environment_spec must be exact RequiredEnvironmentSpec or None"
+            )
+        payload[_REQUIRED_ENVIRONMENT_PAYLOAD_FIELD] = required_environment_spec_payload(
+            environment
+        )
     return payload
 
 
@@ -762,6 +802,16 @@ def _reconstruct_required_test_commands(value: object) -> tuple[FrozenTestComman
     return tuple(commands)
 
 
+def _reconstruct_required_environment(value: object) -> RequiredEnvironmentSpec:
+    """Delegate to the one canonical spec reconstructor owned by #1320."""
+    try:
+        return reconstruct_required_environment_spec(value)
+    except (TypeError, ValueError, KeyError) as exc:
+        raise ConcreteRuntimeConfigurationError(
+            f"required_environment_spec is malformed: {exc}"
+        ) from exc
+
+
 def reconstruct_concrete_runtime_configuration(
     payload: object,
     *,
@@ -782,7 +832,12 @@ def reconstruct_concrete_runtime_configuration(
     """
     if type(payload) is not dict:
         raise ConcreteRuntimeConfigurationError("payload must be an exact dictionary")
-    if set(payload) != _PAYLOAD_FIELDS:
+    fields = set(payload)
+    supported_fields = (
+        fields == _BASE_PAYLOAD_FIELDS
+        or fields == _BASE_PAYLOAD_FIELDS | {_REQUIRED_ENVIRONMENT_PAYLOAD_FIELD}
+    )
+    if not supported_fields:
         raise ConcreteRuntimeConfigurationError(
             "runtime configuration payload fields drift"
         )
@@ -803,6 +858,13 @@ def reconstruct_concrete_runtime_configuration(
     if executor_argv is not None:
         executor_argv = _argv(_require_list(executor_argv, "executor_argv"), "executor_argv")
 
+    environment = (
+        None
+        if _REQUIRED_ENVIRONMENT_PAYLOAD_FIELD not in payload
+        else _reconstruct_required_environment(
+            payload[_REQUIRED_ENVIRONMENT_PAYLOAD_FIELD]
+        )
+    )
     values = {
         "schema_name": SCHEMA_NAME,
         "schema_version": SCHEMA_VERSION,
@@ -885,6 +947,7 @@ def reconstruct_concrete_runtime_configuration(
         "forbidden_paths": _paths(
             _require_list(payload["forbidden_paths"], "forbidden_paths"), "forbidden_paths"
         ),
+        "required_environment_spec": environment,
     }
     configuration = ConcreteRuntimeConfiguration(
         configuration_fingerprint=configuration_fingerprint, **values

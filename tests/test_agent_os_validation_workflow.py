@@ -7,6 +7,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/agent-os-validation.yml"
 SCHEDULER_WORKFLOW = ROOT / ".github/workflows/workflow-scheduler-validation.yml"
+NAVIGATION_WORKFLOW = ROOT / ".github/workflows/navigation-registry-offline-tests.yml"
+ISSUE_ACCEPTANCE_WORKFLOW = ROOT / ".github/workflows/agent-os-issue-acceptance-report.yml"
 CLOUD_BUILD = ROOT / "cloudbuild.yaml"
 SHARED_ACTION = ROOT / ".github/actions/setup-python-dev/action.yml"
 
@@ -69,6 +71,48 @@ def test_validation_gate_executes_only_canonical_aggregate_command():
     assert "Cloud Build validation migration notice" not in content
 
 
+def test_validation_gate_suppresses_routine_draft_aggregate_and_preserves_ready_events():
+    content = WORKFLOW.read_text(encoding="utf-8")
+    assert "types: [opened, reopened, synchronize, ready_for_review]" in content
+    assert (
+        "if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}"
+        in content
+    )
+    assert "synchronize" in content
+    assert "ready_for_review" in content
+    assert "paths:" not in content
+    assert "paths-ignore:" not in content
+
+
+def test_validation_gate_dispatch_supports_diagnostic_and_exact_head_candidate_modes():
+    content = WORKFLOW.read_text(encoding="utf-8")
+    assert "workflow_dispatch:" in content
+    assert "pr_number:" in content
+    assert "expected_head_sha:" in content
+    assert content.count("required: false") >= 2
+    assert "PR_NUMBER: ${{ inputs.pr_number }}" in content
+    assert "EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}" in content
+    assert 'if [ -z "$PR_NUMBER" ] && [ -z "$EXPECTED_HEAD_SHA" ]' in content
+    assert 'echo "mode=diagnostic" >> "$GITHUB_OUTPUT"' in content
+    assert 'if [ -z "$PR_NUMBER" ] || [ -z "$EXPECTED_HEAD_SHA" ]' in content
+    assert "must be provided together for final-candidate validation" in content
+    assert 'gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json state,isDraft,headRefOid' in content
+    assert 'if [ "$state" != "OPEN" ]' in content
+    assert 'if [ "$is_draft" != "true" ]' in content
+    assert 'if [ "$current_head" != "$EXPECTED_HEAD_SHA" ]' in content
+    assert "stale final-candidate request" in content
+    assert "^[0-9a-f]{40}$" in content
+    assert 'echo "mode=final-candidate" >> "$GITHUB_OUTPUT"' in content
+
+
+def test_validation_gate_dispatch_checks_out_and_verifies_admitted_candidate_only():
+    content = WORKFLOW.read_text(encoding="utf-8")
+    assert "steps.candidate.outputs.head_sha" in content
+    assert "steps.candidate.outputs.mode == 'final-candidate'" in content
+    assert "checked_out_sha=\"$(git rev-parse HEAD)\"" in content
+    assert 'if [ "$checked_out_sha" != "$EXPECTED_HEAD_SHA" ]' in content
+
+
 def test_cloud_build_executes_only_canonical_aggregate_command():
     content = CLOUD_BUILD.read_text(encoding="utf-8")
     assert content.count("./scripts/validate-all.sh") == 1
@@ -90,9 +134,15 @@ def test_scheduler_validation_preserves_required_workflow_and_job_names():
 def test_validation_gate_uses_read_only_permissions_and_bounded_execution():
     content = WORKFLOW.read_text(encoding="utf-8")
     assert "contents: read" in content
+    assert "pull-requests: read" in content
     assert "contents: write" not in content
+    assert "pull-requests: write" not in content
     assert "timeout-minutes: 30" in content
     assert "cancel-in-progress: true" in content
+    assert (
+        "group: agent-os-validation-${{ github.event.pull_request.number || github.ref }}"
+        in content
+    )
 
 
 def test_validation_gate_installs_same_dependencies_as_cloud_build():
@@ -169,7 +219,7 @@ def test_cache_configuration_does_not_replace_install_or_validation_commands():
         "PYTHONPATH=src python3 -m pytest tests/ -v --cov=src/workflow_scheduler"
     )
     assert scheduler_test_command in scheduler
-    assert "bash 07_Agent_Tests/validate-repo-structure.sh" in scheduler
+    assert "bash 07_Agent_Tests/validate-repo-structure.sh" not in scheduler
 
 
 def test_cloud_build_does_not_use_github_actions_cache_configuration():
@@ -177,3 +227,44 @@ def test_cloud_build_does_not_use_github_actions_cache_configuration():
     assert "actions/setup-python" not in content
     assert "cache-dependency-path" not in content
     assert 'cache: "pip"' not in content
+
+
+def test_navigation_registry_workflow_uses_bounded_same_lineage_concurrency():
+    content = NAVIGATION_WORKFLOW.read_text(encoding="utf-8")
+    assert (
+        "group: navigation-registry-offline-${{ github.event.pull_request.number || github.ref }}"
+        in content
+    )
+    assert "cancel-in-progress: ${{ github.run_attempt == 1 }}" in content
+
+
+def test_navigation_registry_workflow_is_pr_only_path_triggered_and_preserves_job_and_test_command():
+    content = NAVIGATION_WORKFLOW.read_text(encoding="utf-8")
+    assert "name: Navigation Registry Offline Tests" in content
+    assert "pull_request:" in content
+    assert "\n  push:" not in content
+    assert '"08_Tooling/notion-navigation-client/**"' in content
+    assert '"tests/navigation_registry/**"' in content
+    assert '"04_Registry/navigation-alias-registry.md"' in content
+    assert '".github/workflows/navigation-registry-offline-tests.yml"' in content
+    assert "offline-notion-connector-tests:" in content
+    assert "pytest tests/navigation_registry/test_notion_read_only_connector.py" in content
+
+
+def test_navigation_registry_workflow_does_not_cross_event_dedupe():
+    content = NAVIGATION_WORKFLOW.read_text(encoding="utf-8")
+    assert "github.event.pull_request.number || github.ref" in content
+    assert "github.sha" not in content
+    assert "github.head_ref" not in content
+
+
+def test_issue_acceptance_preserves_metadata_sensitive_triggers_and_supersedes_stale_runs():
+    content = ISSUE_ACCEPTANCE_WORKFLOW.read_text(encoding="utf-8")
+    assert "types: [opened, edited, reopened, synchronize, ready_for_review]" in content
+    assert (
+        "group: issue-acceptance-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}"
+        in content
+    )
+    assert "cancel-in-progress: true" in content
+    assert "pull-requests: read" in content
+    assert "Report-only boundary" in content

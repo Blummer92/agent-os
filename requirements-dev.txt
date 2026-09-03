@@ -3,31 +3,34 @@
 # Testing Framework
 pytest>=7.0.0
 pytest-cov>=7.1.0
-pytest-mock>=3.10.0
-pytest-asyncio>=0.21.0
-pytest-xdist>=3.0.0
+pytest-mock>=3.15.1
+pytest-asyncio>=1.4.0
+pytest-xdist>=3.8.0
 
 # Code Quality
 black>=22.0.0
-flake8>=4.0.0
-mypy>=2.3.0
-isort>=5.12.0
+flake8>=7.3.0
+mypy>=2.3.1
+isort>=9.0.1
 
 # Documentation
 markdown>=3.10.3
 
 # Validation Runtime Dependencies
-pyyaml>=6.0.0
-google-auth>=2.0.0
-google-api-python-client>=2.198.0
-google-auth-oauthlib>=1.4.0
-PyGithub==2.9.1
+pyyaml>=6.0.3
+google-auth>=2.57.0
+google-api-python-client>=2.199.0
+google-auth-oauthlib>=1.4.1
+PyGithub==2.10.0
 
 # Coverage
-coverage[toml]>=6.0.0
+coverage[toml]>=7.16.0
 
 # Local editable packages (development convenience only; wheel tests prove packaging)
 -e ./src
 -e ./08_Tooling/agent-memory-context-manager
+# workflow-scheduler declares this local distribution (#1300); it is not on an
+# index, so the developer loop must supply it from the checkout.
+-e ./08_Tooling/reusable-capability-registry
 -e ./08_Tooling/workflow-scheduler
 -e ./08_Tooling/visual-asset-intake

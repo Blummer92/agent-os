@@ -24,41 +24,47 @@ The audit automatically checks:
 4. Matrix primary agents are registered, and every canonical agent has an exact Primary or Support assignment.
 5. Matrix support values are registered agents or exact governed support surfaces.
 6. Unknown values, routing placeholders, legacy aliases, and near matches do not pass as canonical agents.
-7. Navigation Registry responsibilities keep Integration Manager as primary and inheriting the Navigation Registry Standard.
-8. GitHub repository writes remain assigned to GitHub Service Agent, matching AGENTS access rules and the service overlay's sole-writer role.
-9. GitHub Service Agent inherits the Write Authorization Policy and Protected Branch Governance normal PR path.
-10. Navigation Registry records remain non-authoritative and cannot grant write permission.
-11. Integration Manager retains navigation governance without direct GitHub write authority.
-12. Missing or malformed tables, governed files, and required invariant sections fail conservatively.
-13. Validation output is deterministic and does not mutate repository content.
+7. Retired technical agents cannot return as canonical agents, routing primaries/support, or loadout agents; required legacy aliases resolve them to retained canonical owners.
+8. Navigation Registry governance and lookup routing remain assigned to ChatGPT Orchestrator, with the Navigation Registry Standard as a non-authoritative support surface.
+9. GitHub repository writes and ordinary repository implementation remain assigned to GitHub Service Agent, matching AGENTS access rules and the service overlay's sole-writer role.
+10. GitHub Service Agent inherits the Write Authorization Policy and Protected Branch Governance normal PR path.
+11. Navigation Registry records remain non-authoritative and cannot grant write permission.
+12. Workspace writes remain separately authorized from repository implementation.
+13. Missing or malformed tables, governed files, and required invariant sections fail conservatively; validation output is deterministic and non-mutating.
 
-Exact helper-overlay exemptions:
+Exact helper-overlay exemptions include the registered helper overlays plus the retired `integration-manager` and `google-workspace-automation-engineer` compatibility files. Those compatibility files are not executable registrations.
 
-- `apps-script-sync-test-overlay`
-- `dashboard-builder-overlay`
-- `python-development-overlay`
-- `workspace-implementation-overlay`
+Exact Responsibility Matrix support surfaces include Apps Script Sync Test Overlay, Dashboard Builder Overlay, Python Development Overlay, Workspace Implementation Overlay, Python Standards, Google Workspace Standards, Navigation Registry Standard, Reusable Capability Registry Standard, and Source-of-Truth Checks. Support surfaces are valid Matrix values but do not satisfy canonical-agent assignment coverage.
 
-Exact Responsibility Matrix support surfaces:
+## Semantic Ownership Validation
 
-- `Apps Script Sync Test Overlay`
-- `Dashboard Builder Overlay`
-- `Python Development Overlay`
-- `Workspace Implementation Overlay`
+Implementation: `validate_semantic_ownership()` in `07_Agent_Tests/validate_registry_consistency.py`
+Focused tests: `tests/test_registry_consistency.py` (SO-1 through SO-8 fixture matrix)
+Status: **advisory only, non-blocking** (#1511). The focused test always passes; findings print to stdout and never fail a caller.
 
-Support surfaces are valid Matrix values but do not satisfy canonical-agent assignment coverage. Write-boundary checks use scoped headings, stable paths, and ownership tuples instead of full-paragraph matching. Future schema or exemption changes require matching parser and regression-test updates.
+This closes a blind spot the Registry Consistency Audit above does not cover: `validate()` never reads `04_Registry/navigation/**` or any `.yml`/`.yaml` file under `04_Registry/`. `validate_semantic_ownership()` scans three bounded surfaces for two finding types — **stale retired owner** (names a retired technical agent directly, with no resolution through the Legacy Agent Alias Registry) and **unknown canonical owner** (names a value that is neither a current canonical agent, a retired agent, nor a documented support surface):
+
+1. `04_Registry/navigation/**/*.md` — ownership assertions matching `Owner agent: `, `Owned by the `, `governance is owned by the `, or a table row `| Review owner | <value> |`.
+2. `04_Registry/lp-reason-code-catalog.yaml` — `semantic_owners[].role` and each family record's `semantic_owner` field.
+3. `01_Shared_Standards/instructional-design/lp-reason-code-catalog.md` — the named owners in `## ownership-single-semantic-owner`.
+
+Explicit exclusions: `04_Registry/reusable-capabilities.yml` (already validated by `08_Tooling/reusable-capability-registry/src/reusable_capability_registry/validation.py`, which this validator defers to entirely and never re-flags), `06_Archive/**`, the Legacy Agent Alias Registry's own Alias Table and Ambiguous Legacy Values table, and ordinary prose that resolves a legacy name rather than asserting current ownership.
+
+This validator never modifies an ownership value. Blocking enforcement is a separate, dependent follow-up issue.
 
 ## Structural Validation Checks
 
 `07_Agent_Tests/validate-repo-structure.sh` checks:
 
-1. Non-exempt Markdown files, except `CLAUDE.md`, are under 100 lines.
+1. Markdown files over the roughly 200-line maintainability target are reported as a non-blocking advisory unless exempt; line count alone never fails structural validation or authorizes semantic deletion.
 2. Every non-helper overlay references `_common-overlay-rules.md`.
 3. Governance and Registry top-level filenames do not collide, except `README.md`.
 4. Every registered agent has a matching overlay.
 5. Every agent test file has a matching overlay.
 6. Every overlay has a matching test file.
 7. Documentation Dependency Map validation paths exist.
+8. Navigation Alias Registry Markdown paths exist.
+9. The lean excluded-surface governance baseline remains referenced by its required dependents.
 
 ## Coverage Limits
 

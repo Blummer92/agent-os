@@ -7,7 +7,15 @@ Builds a Google Slides deck and Google Docs worksheet for one lesson by duplicat
 - Requires an explicit `--target-folder`; it never guesses a Drive destination.
 - Refuses writes unless `ALLOW_WRITE=true`, in addition to Agent OS write-authorization rules.
 - Connected builds require a supplied governed MaterialRequirement before Google credentials are requested.
+- The application-owned live-build callable accepts already-built Drive/Slides/Docs clients; it never launches interactive OAuth, reads credential environment variables, invokes a shell/Scheduler, or writes to Notion.
+- Before copying, both templates and the exact destination are checked for expected type, untrashed state, and Drive `canCopy` / `canAddChildren` capability evidence.
+- Copies carry bounded private idempotency properties. An ambiguous copy is reconciled in the exact destination before any later create; multiple/conflicting matches stop for manual reconciliation.
+- Slides and Docs are tracked independently. Partial success is reported truthfully; the tool does not claim pair-level transactionality and does not automatically delete/trash partial artifacts.
+- Slides/Docs updates bind `writeControl.requiredRevisionId` to the copied artifact revision observed immediately before mutation.
+- Final Drive readback verifies file ID/type/parent/idempotency evidence and records the web link and shared-drive `driveId` when present. Sharing is observed only; this tool never changes ACLs.
+- Drive metadata/list/copy calls explicitly support My Drive/shared-drive objects while retaining the narrow `drive.file` OAuth scope.
 - Unresolved required visual roles block final production. Visual planning grants no production, publication, approval, readiness, image-generation, or external-write authority.
+- Teacher-reference PDF rendering is offline and caller-supplied: `render_teacher_reference_pdf()` accepts an already-built bounded reference plus optional image bytes keyed by exact governed `asset_id`, `stable_ref`, or `external_file_id`. It performs no network retrieval, no second asset-selection decision, and no Drive/Notion write. Missing bytes preserve the approved identity text or explicit gap rather than fabricating a visual.
 - See `docs/safety.md` and `02_Agent_Overlays/instructional-materials-coach.md`.
 
 ## Installation
@@ -42,9 +50,14 @@ For `visuals-required`, add already-governed evidence as applicable:
     --changed-dependency-keys <changed_dependency_keys.json> \
     --impact-map <impact_map.json>
 
-The runtime reuses the public MaterialRequirement validator, visual-needs planner, canonical reuse planner, visual-candidate filter, and cohesive visual planner. `no-visual-needed` performs no asset-query or image-gap work. `visuals-required` preserves selected approved Asset IDs and deterministic image-gap briefs and does not infer governed evidence from lesson YAML, filenames, notes, prompts, or comments.
+The runtime reuses the public MaterialRequirement validator, visual-needs planner, canonical reuse planner, visual-candidate filter, and cohesive visual planner. The CLI remains the manual credential wrapper and delegates the external operation to `build_live_materials()` after governed content/visual checks pass.
 
-On success it prints selected approved Asset IDs, when any, plus the generated Slides and Doc links.
+On success it prints selected approved Asset IDs, when any, plus the verified generated Slides and Doc links.
+
+## Teacher-reference PDFs
+`teacher_reference.py` projects bounded Unit Alignment / Teacher Modeling evidence and governed visual assignments. `teacher_reference_pdf.py` renders those projections to PDF with ReportLab.
+
+The PDF renderer deliberately has no retrieval client. Callers may supply already-authorized image bytes through `asset_content`; keys must be exact identities already carried by the projection. If no bytes are supplied for an approved identity, the PDF keeps the identity visible instead of widening authority or silently fetching content. Explicit gaps remain explicit. This makes the render seam usable by repository tests and future authorized artifact workflows without coupling it to Drive, the Visual Asset Library, or an image-generation provider.
 
 ## Learning Loop (Notion Lessons Learned)
 This tool does not write to Notion. On a failed build it writes a local YAML lesson-candidate record to `reports/lessons/` (override with `--lessons-dir`) for human review.
@@ -63,7 +76,7 @@ See `docs/notion-field-mapping.md` for the human-applied Notion field mapping.
 ## Tests
     pytest tests/
 
-Tests use no live Google or Notion credentials. The packaging proof builds the root Navigation Registry, `instructional-workflow-contracts`, and coach wheels; verifies exclusive package ownership and one-way dependency metadata; installs from wheels; strips `PYTHONPATH`; and imports the coach/contracts from outside the repository.
+Tests use fakes/mocks only for the C4A live-build boundary and perform no live Google or Notion I/O. The packaging proof builds the root Navigation Registry, `instructional-workflow-contracts`, and coach wheels; verifies exclusive package ownership and one-way dependency metadata; installs from wheels; strips `PYTHONPATH`; and imports the coach/contracts from outside the repository.
 
 ## Release checklist
 - Build all relevant wheels with ordinary setuptools/pip tooling.
@@ -75,7 +88,8 @@ Tests use no live Google or Notion credentials. The packaging proof builds the r
 - Do not merge or publish while any required exact-head check is failing or pending.
 
 ## Limitations
-- No live Drive/Slides/Docs account was exercised in this implementation lane; live connected use remains separately authorized.
-- The visual-reuse bridge consumes supplied governed evidence only; it does not retrieve the Visual Asset Library, generate images, or insert image binaries into Slides.
+- C4A hardens the repository production client but does not authorize credentials or a real Google call. Connected live execution remains separately governed by C4B/#1196 and C4/#119.
+- There is no cross-resource transaction for the Slides/Docs pair; partial or ambiguous results require bounded reconciliation rather than automatic cleanup.
+- The visual-reuse bridge consumes supplied governed evidence only; it does not retrieve the Visual Asset Library or generate images. Teacher-reference PDFs can embed caller-supplied bytes only after the projection has already authorized the exact identity.
 - Worksheet generation supports flat paragraph placeholders only; no table or answer-key templating yet.
 - Placeholder replacement uses literal `{{token_name}}` substring matching, not regex matching.

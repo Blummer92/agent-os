@@ -120,7 +120,15 @@ _STOP_ALL_REASON_CODES: frozenset[str] = frozenset(
 )
 
 _TERMINATION_REASON_CODES: frozenset[str] = frozenset(
-    {"executor.termination-unconfirmed", "cancellation.unconfirmed"}
+    {
+        "executor.termination-unconfirmed",
+        "cancellation.unconfirmed",
+        # A lease held back because termination was never proven is a
+        # termination question first. It must not be downgraded to the
+        # narrower lease-ownership state, which is downgradable and would
+        # lose the reason the ownership is still held.
+        "lease.release-withheld-unproven-termination",
+    }
 )
 
 _PARTIAL_EFFECTS_REASON_CODES: frozenset[str] = frozenset({"executor.possible-partial-effects"})

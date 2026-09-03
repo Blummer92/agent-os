@@ -40,6 +40,18 @@ from .pr_branch_refresh import (
     PullRequestBranchSnapshot,
     refresh_pull_request_branch,
 )
+from .pr_branch_refresh_operator import (
+    PullRequestBranchRefreshReceipt,
+    refresh_pr,
+)
+from .pr_branch_refresh_provider import (
+    BlockingReviewThreadsReader,
+    BranchRefreshValidationExecutor,
+    GitHubPullRequestBranchRefreshBackingProvider,
+    ProductionPullRequestBranchRefreshProvider,
+    PullRequestBranchRefreshBackingProvider,
+    run_production_pull_request_branch_refresh,
+)
 from .pr_lifecycle import (
     PullRequestLifecycleReconciliationResult,
     lifecycle_invocation_reasons,
@@ -65,13 +77,16 @@ from .validation import (
 
 __all__ = [
     "BatchPullRequestLabelReconciliationResult",
+    "BlockingReviewThreadsReader",
     "BranchRefreshMutationResult",
+    "BranchRefreshValidationExecutor",
     "BranchRefreshValidationResult",
     "ConfirmationProvider",
     "DraftExitCode",
     "DraftReasonCode",
     "GhCapabilities",
     "GhRunner",
+    "GitHubPullRequestBranchRefreshBackingProvider",
     "GitHubRepositoryTarget",
     "IssueCreateAdapterResult",
     "IssueCreateCommandPlan",
@@ -86,7 +101,10 @@ __all__ = [
     "LabelApplicationPlan",
     "LivePullRequestSnapshot",
     "MutationState",
+    "ProductionPullRequestBranchRefreshProvider",
+    "PullRequestBranchRefreshBackingProvider",
     "PullRequestBranchRefreshProvider",
+    "PullRequestBranchRefreshReceipt",
     "PullRequestBranchRefreshRequest",
     "PullRequestBranchRefreshResult",
     "PullRequestBranchSnapshot",
@@ -107,7 +125,7 @@ __all__ = [
     "reconcile_pull_request_batch",
     "reconcile_pull_request_labels",
     "reconcile_pull_request_lifecycle",
-    "refresh_pull_request_branch",
+    "refresh_pr",
     "render_draft_preview",
     "render_issue_create_result",
     "render_validation_preview",

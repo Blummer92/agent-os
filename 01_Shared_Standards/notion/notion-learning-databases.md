@@ -8,7 +8,11 @@ Reference schema for the live "Lessons Learned" database (Curriculum
 Operations Hub), so agents don't need to re-fetch it from Notion each
 time. Confirm the live schema before writing if it may have changed.
 
+- `Lesson ID` (text or unique ID) — stable logical identity; CKR11 lesson
+  activation uses this, never the Notion page URL, as `lesson_id`.
 - `Lesson Learned` (title) — short summary.
+- `Status` (select/status) — `New | Applied | Needs follow-up | Archived note`.
+  Present on the live data source; do not assume it is absent.
 - `Owner / Agent` (text) — which agent/tool produced this.
 - `What Happened` (text)
 - `What To Do Next Time` (text)
@@ -28,4 +32,4 @@ time. Confirm the live schema before writing if it may have changed.
   matching record already exists; do not create one just to link it.
 
 ## Version
-0.1.1
+0.1.2

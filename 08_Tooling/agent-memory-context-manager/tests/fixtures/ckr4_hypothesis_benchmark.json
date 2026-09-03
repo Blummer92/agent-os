@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "benchmark_issue": 1146,
+  "tasks": [
+    {"task_id":"T1","description":"explicit Hypothesis property/strategy design"},
+    {"task_id":"T2","description":"ordinary pytest only; specialized knowledge not needed"},
+    {"task_id":"T3","description":"Hypothesis shrinking/falsifying-example debugging"},
+    {"task_id":"T4","description":"multiple library candidates; only Hypothesis relevant"},
+    {"task_id":"T5","description":"historical Hypothesis mention; local evidence sufficient"},
+    {"task_id":"T6","description":"stale Notion Hypothesis candidate"},
+    {"task_id":"T7","description":"Notion guidance conflicts with canonical GitHub evidence"},
+    {"task_id":"T8","description":"required knowledge missing; one bounded escalation"},
+    {"task_id":"T9","description":"Notion unavailable or zero-result; safe fallback when possible"},
+    {"task_id":"T10","description":"oversized candidate set fails closed or narrows"}
+  ],
+  "observations": [
+    {"observation_id":"pre-tuning-C-positive","task_ids":["T1","T3","T4"],"architecture":"C","retrieval_path":"filtered-data-source-query","notion_retrieval_count":1,"candidate_count":2,"selected_count":1,"irrelevant_candidate_count":1,"full_page_read_count":null,"workspace_search_count":0,"agent_step_count":null,"context_token_count":null,"correctness":"pass","safety":"pass","source_authority":"github-canonical-notion-advisory"},
+    {"observation_id":"post-tuning-C-positive","task_ids":["T1","T3","T4"],"architecture":"C","retrieval_path":"known-reference","notion_retrieval_count":1,"candidate_count":1,"selected_count":1,"irrelevant_candidate_count":0,"full_page_read_count":1,"workspace_search_count":0,"agent_step_count":null,"context_token_count":null,"correctness":"pass","safety":"pass","source_authority":"github-canonical-notion-advisory"}
+  ]
+}

@@ -23,6 +23,23 @@ A variant family should define:
 Use variant families for repeatable worksheet, slide, handout, checklist, or
 reflection structures.
 
+### Challenge Card Family
+
+When differentiated challenge cards are requested, use the neutral labels
+`Challenge A`, `Challenge B`, and `Challenge C` rather than student-facing
+ability labels. The letters identify challenge variants, not student levels.
+
+All variants in the family must preserve the same essential learning target and
+expected kind of evidence. Differentiate through support and task demand:
+
+- A: more scaffolding and structure;
+- B: core independent application;
+- C: additional constraint, transfer, or justification.
+
+Do not prevent a student from attempting another challenge because of the
+variant they started with. Do not use `Beginning`, `Middle`, `On Grade`, or
+`Advanced` as visible substitutes for A/B/C.
+
 ## Icons
 
 - Use icons only for wayfinding or task clarity.
@@ -61,7 +78,14 @@ Keep reusable blocks consistent when they appear across materials:
 - vocabulary callouts
 - task cards
 - comparison frames
+- challenge cards
 
 ## Version
 
-0.1.0
+0.2.0
+
+## Changelog
+
+- 0.2.0 defines the neutral Challenge A/B/C variant family and same-target
+  differentiation invariant (#1805).
+- 0.1.0 initial reusable design variant patterns.

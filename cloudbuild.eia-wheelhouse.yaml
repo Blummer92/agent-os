@@ -1,0 +1,56 @@
+steps:
+  - name: python:3.11
+    id: verify-exact-source
+    entrypoint: bash
+    args:
+      - -lc
+      - |
+        set -euo pipefail
+        case "${_EXPECTED_SHA}" in
+          [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+          *) echo "_EXPECTED_SHA must be exactly 40 lowercase hex characters" >&2; exit 2 ;;
+        esac
+        tested_sha="$(git rev-parse HEAD)"
+        test "${tested_sha}" = "${_EXPECTED_SHA}"
+        test "$(git remote get-url origin)" = "https://github.com/Blummer92/agent-os.git"
+
+  - name: python:3.11
+    id: qualify-eia-wheelhouse
+    entrypoint: bash
+    args:
+      - -lc
+      - |
+        set -euo pipefail
+        test "$(git rev-parse HEAD)" = "${_EXPECTED_SHA}"
+        export PYTHONPATH="$PWD/08_Tooling/workflow-scheduler/src"
+        python -m workflow_scheduler.governance.dependency_artifact_qualification | tee /workspace/eia-wheelhouse-qualification.json
+
+  - name: python:3.11
+    id: verify-bounded-evidence
+    entrypoint: python
+    args:
+      - -c
+      - |
+        import json
+        from pathlib import Path
+        path = Path('/workspace/eia-wheelhouse-qualification.json')
+        if not path.is_file() or path.stat().st_size > 32768:
+            raise SystemExit('qualification evidence missing or over bound')
+        payload = json.loads(path.read_text(encoding='utf-8'))
+        if payload.get('profile_id') != 'eia-paddleocr-cp311-wheelhouse-qualification':
+            raise SystemExit('unexpected qualification profile')
+        if payload.get('packages') != ['paddleocr==3.7.0', 'paddlepaddle==3.2.0', 'paddlex==3.7.2']:
+            raise SystemExit('package identity drift')
+        if payload.get('target') != {'python':'3.11','platform':'manylinux2014_x86_64','implementation':'cp','abi':'cp311'}:
+            raise SystemExit('target identity drift')
+        for key in ('execution_authorized','host_mutation_authorized','scheduler_invoked','production_authorized','classroom_data_authorized'):
+            if payload.get(key) is not False:
+                raise SystemExit(f'authority drift: {key}')
+        if payload.get('cleanup_complete') is not True:
+            raise SystemExit('qualification cleanup incomplete')
+
+substitutions:
+  _EXPECTED_SHA: "0000000000000000000000000000000000000000"
+
+options:
+  logging: CLOUD_LOGGING_ONLY

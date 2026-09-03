@@ -21,6 +21,8 @@ import shutil
 import socket
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -38,6 +40,11 @@ REQUIRED_VALIDATION_COMMANDS = (
 DEFAULT_MIN_FREE_MB = 500
 SUBPROCESS_TIMEOUT_SECONDS = 5
 MAX_TOOL_VERSION_CHARS = 120
+#: One bounded read-only direct GitHub API probe, distinct from generic
+#: connector/CLI/token-presence evidence (#1401 / #1363). Overridable only
+#: for isolated, offline test fixtures -- never for a live credential swap.
+GITHUB_API_PROBE_TIMEOUT_SECONDS = 5
+DEFAULT_GITHUB_API_PROBE_URL = "https://api.github.com/user"
 _REPOSITORY_COMPONENT = re.compile(r"[A-Za-z0-9_.-]+")
 _SURFACE_ID = re.compile(r"[A-Za-z0-9_.:-]{1,80}")
 _OBSERVED_AT = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
@@ -266,42 +273,71 @@ def check_validation_commands(repo_root: Path) -> dict:
     return {"name": "validation-commands", "passed": all(presence.values()), "detail": presence}
 
 
-def check_github_auth_capability() -> dict:
-    if os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN"):
+def _github_api_probe_url() -> str:
+    return os.environ.get(
+        "AGENT_OS_GITHUB_API_PROBE_URL", DEFAULT_GITHUB_API_PROBE_URL
+    )
+
+
+def _probe_github_api_authentication(token: str) -> str:
+    """Perform exactly one bounded, read-only, credentialed GitHub API GET.
+
+    Returns ``"authenticated"``, ``"unauthenticated"``, or ``"unknown"``.
+    Never retries and never raises; the token, request headers, and response
+    body never appear in the returned state.
+    """
+    request = urllib.request.Request(
+        _github_api_probe_url(),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "agent-os-environment-health",
+        },
+    )
+    try:
+        with urllib.request.urlopen(
+            request, timeout=GITHUB_API_PROBE_TIMEOUT_SECONDS
+        ) as response:
+            return "authenticated" if response.status == 200 else "unknown"
+    except urllib.error.HTTPError as exc:
+        return "unauthenticated" if exc.code in (401, 403) else "unknown"
+    except (urllib.error.URLError, OSError, TimeoutError):
+        return "unknown"
+
+
+def check_github_auth_capability(network_mode: str) -> dict:
+    """Report direct authenticated GitHub API capability, never generic
+    connector/token-presence evidence (#1401, regression for #1363).
+
+    `local-only` performs no network probe -- the capability is simply not
+    applicable to that mode. `github-connected` performs exactly one bounded
+    read-only authenticated read through the effective token credential path;
+    token presence alone is never treated as proof of authentication, and a
+    401/403/network error/timeout fails closed to a non-passing state.
+    """
+    if network_mode == "local-only":
         return {
             "name": "github-auth-capability",
             "passed": True,
-            "detail": {"capable": True, "state": "authenticated", "source": "env"},
+            "detail": {
+                "capable": False,
+                "state": "not-applicable",
+                "source": "not-applicable",
+            },
         }
-    if shutil.which("gh") is None:
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if not token:
         return {
             "name": "github-auth-capability",
             "passed": False,
-            "detail": {"capable": False, "state": "unknown", "source": "none"},
+            "detail": {"capable": False, "state": "no-credential", "source": "none"},
         }
-    try:
-        result = subprocess.run(
-            ["gh", "auth", "status"],
-            check=False,
-            text=True,
-            capture_output=True,
-            timeout=SUBPROCESS_TIMEOUT_SECONDS,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return {
-            "name": "github-auth-capability",
-            "passed": False,
-            "detail": {"capable": False, "state": "unknown", "source": "gh-cli"},
-        }
-    capable = result.returncode == 0
+    state = _probe_github_api_authentication(token)
+    capable = state == "authenticated"
     return {
         "name": "github-auth-capability",
         "passed": capable,
-        "detail": {
-            "capable": capable,
-            "state": "authenticated" if capable else "unauthenticated",
-            "source": "gh-cli",
-        },
+        "detail": {"capable": capable, "state": state, "source": "direct-api"},
     }
 
 
@@ -346,7 +382,7 @@ def build_evidence(
         check_process_execution(),
         check_disk_space(repo_root, min_free_mb),
         check_validation_commands(repo_root),
-        check_github_auth_capability(),
+        check_github_auth_capability(network_mode),
     ]
     failures = [check["name"] for check in checks if not check["passed"]]
     evidence = {

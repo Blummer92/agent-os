@@ -13,6 +13,7 @@ from .common import (
     ValidationStatus,
     canonical_size,
     freeze_json,
+    invalid_result,
     sanitize_detail,
     sha256_hex,
     validate_and_normalize_json,
@@ -200,9 +201,9 @@ def filter_approved_visual_candidates(
             )
         return ValidationResult(status=ValidationStatus.VALID, record=record)
     except ContractValidationError as exc:
-        return _invalid(exc.reason_code, exc.detail)
+        return invalid_result(exc.reason_code, exc.detail)
     except (KeyError, TypeError, ValueError) as exc:
-        return _invalid("asset-candidates-invalid", sanitize_detail(str(exc)))
+        return invalid_result("asset-candidates-invalid", sanitize_detail(str(exc)))
 
 
 def _plan_record(value: object) -> ValidatedRecord:
@@ -406,13 +407,4 @@ def _candidate_set_id(
     return validate_stable_id(
         "visual-candidates-" + sha256_hex(identity)[:24],
         "candidate_set_id",
-    )
-
-
-def _invalid(reason: str, detail: str) -> ValidationResult:
-    return ValidationResult(
-        status=ValidationStatus.INVALID,
-        record=None,
-        reason_codes=(reason,),
-        details=(sanitize_detail(detail),),
     )

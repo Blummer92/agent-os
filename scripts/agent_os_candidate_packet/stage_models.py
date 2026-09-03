@@ -73,56 +73,6 @@ class EvidenceStatus(str, Enum):
     UNAVAILABLE = "unavailable"
 
 
-@dataclass(frozen=True, slots=True)
-class DependencyEvidence:
-    """Explicit dependency-readiness adapter result. Never a guessed boolean."""
-
-    status: EvidenceStatus
-    reason_codes: tuple[str, ...] = field(default_factory=tuple)
-    details: tuple[str, ...] = field(default_factory=tuple)
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.status, EvidenceStatus):
-            raise TypeError("status must be an EvidenceStatus")
-        object.__setattr__(self, "reason_codes", tuple(self.reason_codes))
-        object.__setattr__(self, "details", tuple(self.details))
-
-
-@dataclass(frozen=True, slots=True)
-class ValidationEvidence:
-    """Explicit validation-readiness adapter result. Never a guessed boolean."""
-
-    status: EvidenceStatus
-    reason_codes: tuple[str, ...] = field(default_factory=tuple)
-    details: tuple[str, ...] = field(default_factory=tuple)
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.status, EvidenceStatus):
-            raise TypeError("status must be an EvidenceStatus")
-        object.__setattr__(self, "reason_codes", tuple(self.reason_codes))
-        object.__setattr__(self, "details", tuple(self.details))
-
-
-class DependencyIdentityStatus(str, Enum):
-    """Whether canonical dependency identities were supplied, and resolved.
-
-    ``resolved`` and ``absent`` are positive findings from a structured source.
-    ``unresolved`` and ``unavailable`` are fail-closed findings: neither ever
-    asserts a dependency-identity set.
-    """
-
-    RESOLVED = "resolved"
-    UNRESOLVED = "unresolved"
-    ABSENT = "absent"
-    UNAVAILABLE = "unavailable"
-
-
-DEPENDENCY_IDENTITY_NOT_SUPPLIED_REASON = "dependency-identity.not-supplied"
-DEPENDENCY_IDENTITY_DUPLICATE_COLLAPSED_REASON = (
-    "dependency-identity.duplicate-collapsed"
-)
-
-
 def _evidence_string(value: object, field_name: str) -> str:
     """Validate one non-empty, control-character-free evidence string."""
     if isinstance(value, bool):
@@ -144,6 +94,56 @@ def _evidence_strings(values: object, field_name: str) -> tuple[str, ...]:
     if isinstance(values, (str, bytes, Mapping)) or not isinstance(values, Iterable):
         raise TypeError(f"{field_name} must be an iterable of strings")
     return tuple(_evidence_string(value, field_name) for value in values)
+
+
+@dataclass(frozen=True, slots=True)
+class DependencyEvidence:
+    """Explicit dependency-readiness adapter result. Never a guessed boolean."""
+
+    status: EvidenceStatus
+    reason_codes: tuple[str, ...] = field(default_factory=tuple)
+    details: tuple[str, ...] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.status, EvidenceStatus):
+            raise TypeError("status must be an EvidenceStatus")
+        object.__setattr__(self, "reason_codes", _evidence_strings(self.reason_codes, "reason_codes"))
+        object.__setattr__(self, "details", _evidence_strings(self.details, "details"))
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationEvidence:
+    """Explicit validation-readiness adapter result. Never a guessed boolean."""
+
+    status: EvidenceStatus
+    reason_codes: tuple[str, ...] = field(default_factory=tuple)
+    details: tuple[str, ...] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.status, EvidenceStatus):
+            raise TypeError("status must be an EvidenceStatus")
+        object.__setattr__(self, "reason_codes", _evidence_strings(self.reason_codes, "reason_codes"))
+        object.__setattr__(self, "details", _evidence_strings(self.details, "details"))
+
+
+class DependencyIdentityStatus(str, Enum):
+    """Whether canonical dependency identities were supplied, and resolved.
+
+    ``resolved`` and ``absent`` are positive findings from a structured source.
+    ``unresolved`` and ``unavailable`` are fail-closed findings: neither ever
+    asserts a dependency-identity set.
+    """
+
+    RESOLVED = "resolved"
+    UNRESOLVED = "unresolved"
+    ABSENT = "absent"
+    UNAVAILABLE = "unavailable"
+
+
+DEPENDENCY_IDENTITY_NOT_SUPPLIED_REASON = "dependency-identity.not-supplied"
+DEPENDENCY_IDENTITY_DUPLICATE_COLLAPSED_REASON = (
+    "dependency-identity.duplicate-collapsed"
+)
 
 
 def _identity_sequence(
@@ -592,10 +592,10 @@ _STAGE_RESULT_PAYLOAD_KEYS = frozenset(
 )
 
 
-def _require_exact_payload_keys(
+def require_exact_keys(
     payload: object, keys: frozenset[str], label: str
 ) -> Mapping[str, Any]:
-    """Closed-schema key check, mirroring the AcceptanceReport transport rule."""
+    """The one closed-schema key check every stage transport payload reuses."""
     if not isinstance(payload, Mapping):
         raise ValueError(f"{label} must be a mapping")
     supplied = set(payload)
@@ -632,7 +632,7 @@ def dependency_identity_evidence_from_dict(
 ) -> DependencyIdentityEvidence:
     """Reconstruct dependency-identity evidence, failing closed on any drift."""
     label = "dependency identity evidence"
-    _require_exact_payload_keys(payload, _DEPENDENCY_IDENTITY_PAYLOAD_KEYS, label)
+    require_exact_keys(payload, _DEPENDENCY_IDENTITY_PAYLOAD_KEYS, label)
     if payload["execution_authorized"] is not False:
         raise ValueError("execution_authorized must be false")
     if payload["side_effects_performed"] is not False:
@@ -846,7 +846,7 @@ def issue_readiness_stage_result_from_dict(
         raise ValueError("readiness stage result must be a mapping")
     if payload.get("schema_version") != STAGE_SCHEMA_VERSION:
         raise ValueError("unsupported stage schema_version")
-    _require_exact_payload_keys(
+    require_exact_keys(
         payload, _STAGE_RESULT_PAYLOAD_KEYS, "readiness stage result"
     )
     if payload["execution_authorized"] is not False:

@@ -40,6 +40,7 @@ result shape changed.
 from __future__ import annotations
 
 import json
+import math
 import os
 import urllib.error
 import urllib.request
@@ -117,6 +118,10 @@ class GitHubPRCommentAdapter(TaskAdapter):
             live GitHub access or real token is ever required in tests.
         timeout: Per-request timeout in seconds.
         """
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+            raise TypeError("timeout must be a finite positive number")
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("timeout must be a finite positive number")
         self.token = token if token is not None else os.environ.get("GITHUB_TOKEN")
         self._http_post_comment = http_post_comment or _default_http_post_comment
         self.timeout = timeout
@@ -144,6 +149,17 @@ class GitHubPRCommentAdapter(TaskAdapter):
             raise GitHubPRCommentAdapterError(f"Missing required payload field: {field!r}")
         return payload[field]
 
+    def _require_repository_full_name(self, payload: Dict[str, Any]) -> str:
+        value = self._require(payload, "repository_full_name")
+        if not isinstance(value, str):
+            raise GitHubPRCommentAdapterError(f"'repository_full_name' must be a string, got {value!r}")
+        parts = value.split("/")
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            raise GitHubPRCommentAdapterError(
+                f"'repository_full_name' must be in 'owner/repo' shape, got {value!r}"
+            )
+        return value
+
     def _require_pr_number(self, payload: Dict[str, Any]) -> int:
         value = self._require(payload, "pr_number")
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
@@ -170,10 +186,15 @@ class GitHubPRCommentAdapter(TaskAdapter):
     # -- action handlers --------------------------------------------------
 
     def _action_post_pr_comment(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        repository_full_name = self._require(payload, "repository_full_name")
+        repository_full_name = self._require_repository_full_name(payload)
         pr_number = self._require_pr_number(payload)
         body = self._require_body(payload)
         data = self._post_comment(repository_full_name, pr_number, body)
+        if not isinstance(data, dict):
+            raise GitHubPRCommentAdapterError(
+                "GitHub comment POST completed but returned malformed response evidence; "
+                "manual reconciliation is required before any retry"
+            )
         return {
             "status": "success",
             "message": f"Posted comment on {repository_full_name}#{pr_number}",

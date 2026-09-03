@@ -95,9 +95,13 @@ def test_no_forbidden_capability_substrings_are_imported() -> None:
 
 
 def test_only_authorized_sibling_packages_are_imported() -> None:
-    """The sole cross-package dependency this design authorizes is
-    scripts.agent_os_issue_acceptance, reused for LifecycleStage,
-    AuthorityProjection/AuthorizationState, and AgentOperatingModeDecision."""
+    """Cross-package imports stay limited to canonical evidence owners.
+
+    Issue-acceptance types remain the lifecycle/authority source, while the
+    exact execution-capabilities dependency module is the #1197 canonical
+    owner for dependency-readiness evidence. No broader execution-capabilities
+    package dependency is authorized here.
+    """
 
     for path in _module_source_files():
         for module_name in _imported_module_names(path):
@@ -108,6 +112,7 @@ def test_only_authorized_sibling_packages_are_imported() -> None:
                 or module_name.startswith("scripts.agent_os_issue_acceptance.")
                 or module_name == "scripts.agent_os_execution_checkpoint"
                 or module_name.startswith("scripts.agent_os_execution_checkpoint.")
+                or module_name == "scripts.agent_os_execution_capabilities.dependencies"
             )
             assert authorized, (
                 f"{path.name} imports unauthorized sibling package {module_name!r}"

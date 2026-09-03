@@ -31,6 +31,7 @@ ever invoked after that gate has already passed.
 from __future__ import annotations
 
 import json
+import math
 import os
 import urllib.error
 import urllib.request
@@ -116,6 +117,10 @@ class GitHubPRLabelAdapter(TaskAdapter):
             live GitHub access or real token is ever required in tests.
         timeout: Per-request timeout in seconds.
         """
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+            raise TypeError("timeout must be a finite positive number")
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("timeout must be a finite positive number")
         self.token = token if token is not None else os.environ.get("GITHUB_TOKEN")
         self._http_post_label = http_post_label or _default_http_post_label
         self.timeout = timeout
@@ -184,7 +189,23 @@ class GitHubPRLabelAdapter(TaskAdapter):
         pr_number = self._require_pr_number(payload)
         label = self._require_label(payload)
         data = self._post_label(repository_full_name, pr_number, label)
-        labels = [item.get("name") for item in data if isinstance(item, dict)] if isinstance(data, list) else []
+
+        if not isinstance(data, list):
+            raise GitHubPRLabelAdapterError("GitHub API returned malformed label response: expected a list")
+
+        labels = []
+        for index, item in enumerate(data):
+            if not isinstance(item, dict):
+                raise GitHubPRLabelAdapterError(
+                    f"GitHub API returned malformed label response: entry {index} is not an object"
+                )
+            name = item.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise GitHubPRLabelAdapterError(
+                    f"GitHub API returned malformed label response: entry {index} has invalid 'name'"
+                )
+            labels.append(name)
+
         return {
             "status": "success",
             "message": f"Added label {label!r} to {repository_full_name}#{pr_number}",

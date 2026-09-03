@@ -18,8 +18,8 @@ from typing import Literal
 EXECUTOR_ROUTING_SCHEMA_VERSION = "1.0"
 MAX_IDENTIFIER_LENGTH = 256
 MAX_OPERATION_LENGTH = 256
-MAX_CAPABILITIES = 12
-MAX_REASONS = 18
+MAX_CAPABILITIES = 14
+MAX_REASONS = 19
 MAX_INVALIDATION_CONDITIONS = 32
 MAX_PATHS = 256
 MAX_PATH_LENGTH = 512
@@ -72,6 +72,8 @@ class ExecutorCapability(str, Enum):
     GIT_RECONCILIATION = "git-reconciliation"
     EXACT_HEAD_VALIDATION = "exact-head-validation"
     CHECKPOINTED_RESUME = "checkpointed-resume"
+    GITHUB_API_READ = "github-api-read"
+    GITHUB_API_WRITE = "github-api-write"
 
 
 class ExecutorRouteReason(str, Enum):
@@ -89,6 +91,9 @@ class ExecutorRouteReason(str, Enum):
     )
     EXTERNAL_FALLBACK_UNAVAILABLE = "external-fallback-unavailable"
     EXTERNAL_FALLBACK_NOT_PERMITTED = "external-fallback-not-permitted"
+    EXTERNAL_FALLBACK_MISSING_REQUIRED_CAPABILITY = (
+        "external-fallback-missing-required-capability"
+    )
     AUTHORITY_AMBIGUOUS = "authority-ambiguous"
     OWNERSHIP_AMBIGUOUS = "ownership-ambiguous"
     SOURCE_OF_TRUTH_AMBIGUOUS = "source-of-truth-ambiguous"
@@ -207,6 +212,17 @@ def _enum_tuple(
     return value
 
 
+def _optional_enum_tuple(
+    name: str,
+    value: object,
+    enum_type: type[Enum],
+    maximum: int,
+) -> tuple | None:
+    if value is None:
+        return None
+    return _enum_tuple(name, value, enum_type, maximum)
+
+
 def _string_tuple(
     name: str,
     value: object,
@@ -277,6 +293,7 @@ def _expected_route(
     governed_runner_available: bool,
     external_fallback_available: bool,
     external_fallback_explicitly_permitted: bool,
+    external_fallback_capabilities: tuple[ExecutorCapability, ...] | None,
     human_flags: dict[str, bool],
 ) -> tuple[
     ExecutorRoute,
@@ -321,7 +338,15 @@ def _expected_route(
         if not governed_runner_available
         else ExecutorRouteReason.GOVERNED_RUNNER_MISSING_REQUIRED_CAPABILITY
     )
-    if external_fallback_available and external_fallback_explicitly_permitted:
+    fallback_missing_capability = (
+        external_fallback_capabilities is not None
+        and not required.issubset(frozenset(external_fallback_capabilities))
+    )
+    if (
+        external_fallback_available
+        and external_fallback_explicitly_permitted
+        and not fallback_missing_capability
+    ):
         return (
             ExecutorRoute.EXTERNAL_CODING_AGENT_FALLBACK,
             tuple(
@@ -346,6 +371,14 @@ def _expected_route(
         reasons.add(ExecutorRouteReason.EXTERNAL_FALLBACK_UNAVAILABLE)
     if not external_fallback_explicitly_permitted:
         reasons.add(ExecutorRouteReason.EXTERNAL_FALLBACK_NOT_PERMITTED)
+    if (
+        external_fallback_available
+        and external_fallback_explicitly_permitted
+        and fallback_missing_capability
+    ):
+        reasons.add(
+            ExecutorRouteReason.EXTERNAL_FALLBACK_MISSING_REQUIRED_CAPABILITY
+        )
     return (
         ExecutorRoute.HUMAN_DECISION_REQUIRED,
         tuple(sorted(reasons, key=lambda item: item.value)),
@@ -370,6 +403,7 @@ class ExecutorRouteDecision:
     governed_runner_available: bool
     external_fallback_available: bool
     external_fallback_explicitly_permitted: bool
+    external_fallback_capabilities: tuple[ExecutorCapability, ...] | None = None
     selected_route: ExecutorRoute
     route_reasons: tuple[ExecutorRouteReason, ...]
     rejected_lower_cost_routes: tuple[ExecutorRoute, ...]
@@ -447,6 +481,12 @@ class ExecutorRouteDecision:
             *_AUTHORITY_FIELDS,
         ):
             _exact_bool(name, getattr(self, name))
+        _optional_enum_tuple(
+            "external_fallback_capabilities",
+            self.external_fallback_capabilities,
+            ExecutorCapability,
+            MAX_CAPABILITIES,
+        )
         if type(self.selected_route) is not ExecutorRoute:
             raise TypeError("selected_route must be an exact ExecutorRoute")
         _enum_tuple(
@@ -473,6 +513,7 @@ class ExecutorRouteDecision:
             external_fallback_explicitly_permitted=(
                 self.external_fallback_explicitly_permitted
             ),
+            external_fallback_capabilities=self.external_fallback_capabilities,
             human_flags=human_flags,
         )
         if self.selected_route is not expected_route:
@@ -574,16 +615,36 @@ class ExecutorRouteDecision:
 
     @classmethod
     def from_dict(cls, payload: object) -> "ExecutorRouteDecision":
-        """Validate and deserialize one strict decision object."""
+        """Validate and deserialize one strict decision object.
+
+        Schema-1.0 payloads produced before ``external_fallback_capabilities``
+        existed remain accepted. Their legacy content ID is verified against
+        the legacy wire shape before the record is normalized to the current
+        canonical shape (field ``None``) and receives its current deterministic
+        content ID. All other missing or unknown fields remain rejected.
+        """
 
         if type(payload) is not dict:
             raise TypeError("route decision must be an exact object")
         expected = {item.name for item in fields(cls)}
-        if set(payload) != expected:
+        optional_legacy_field = "external_fallback_capabilities"
+        payload_fields = set(payload)
+        legacy_shape = payload_fields == expected - {optional_legacy_field}
+        if not legacy_shape and payload_fields != expected:
             raise ValueError("route decision contains unknown or missing fields")
         if payload["side_effects_performed"] is not False:
             raise ValueError("side_effects_performed must be false")
         values = dict(payload)
+        if legacy_shape:
+            legacy_id = values["decision_id"]
+            legacy_identity_payload = dict(values)
+            legacy_identity_payload.pop("decision_id")
+            if legacy_id != _digest(
+                "executor-route-decision", legacy_identity_payload
+            ):
+                raise ValueError("decision_id does not match legacy decision content")
+            values["decision_id"] = ""
+        values.setdefault(optional_legacy_field, None)
         values.pop("side_effects_performed")
         values["required_capabilities"] = tuple(
             ExecutorCapability(item)
@@ -593,6 +654,15 @@ class ExecutorRouteDecision:
             ExecutorCapability(item)
             for item in _list_field(values, "governed_runner_capabilities")
         )
+        raw_fallback_capabilities = values["external_fallback_capabilities"]
+        if raw_fallback_capabilities is not None:
+            if type(raw_fallback_capabilities) is not list:
+                raise TypeError(
+                    "external_fallback_capabilities must be an exact array or null"
+                )
+            values["external_fallback_capabilities"] = tuple(
+                ExecutorCapability(item) for item in raw_fallback_capabilities
+            )
         values["selected_route"] = ExecutorRoute(values["selected_route"])
         values["route_reasons"] = tuple(
             ExecutorRouteReason(item)
@@ -775,6 +845,11 @@ def _decision_payload(
         "external_fallback_explicitly_permitted": (
             value.external_fallback_explicitly_permitted
         ),
+        "external_fallback_capabilities": (
+            None
+            if value.external_fallback_capabilities is None
+            else [item.value for item in value.external_fallback_capabilities]
+        ),
         "selected_route": value.selected_route.value,
         "route_reasons": [item.value for item in value.route_reasons],
         "rejected_lower_cost_routes": [
@@ -915,6 +990,7 @@ def select_executor_route(
     external_fallback_available: bool,
     external_fallback_explicitly_permitted: bool,
     created_at: str,
+    external_fallback_capabilities: tuple[ExecutorCapability, ...] | None = None,
     expires_at: str,
     invalidation_conditions: tuple[str, ...],
     authority_ambiguous: bool = False,
@@ -958,6 +1034,12 @@ def select_executor_route(
         ExecutorCapability,
         MAX_CAPABILITIES,
     )
+    _optional_enum_tuple(
+        "external_fallback_capabilities",
+        external_fallback_capabilities,
+        ExecutorCapability,
+        MAX_CAPABILITIES,
+    )
     boolean_values = {
         "governed_runner_available": governed_runner_available,
         "external_fallback_available": external_fallback_available,
@@ -991,6 +1073,7 @@ def select_executor_route(
         external_fallback_explicitly_permitted=(
             external_fallback_explicitly_permitted
         ),
+        external_fallback_capabilities=external_fallback_capabilities,
         human_flags=human_flags,
     )
     if route is ExecutorRoute.HUMAN_DECISION_REQUIRED:
@@ -1010,6 +1093,7 @@ def select_executor_route(
         external_fallback_explicitly_permitted=(
             external_fallback_explicitly_permitted
         ),
+        external_fallback_capabilities=external_fallback_capabilities,
         selected_route=route,
         route_reasons=reasons,
         rejected_lower_cost_routes=rejected,

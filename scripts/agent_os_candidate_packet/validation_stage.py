@@ -14,7 +14,11 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal
 
-from scripts.agent_os_execution_capabilities import RepositoryIdentity, RepositoryStateEvidence
+from scripts.agent_os_execution_capabilities import (
+    RepositoryIdentity,
+    RepositoryStateEvidence,
+    RequiredEnvironmentSpec,
+)
 from scripts.agent_os_remote_validation import (
     PrePrValidationPlan,
     PrePrValidationSubject,
@@ -30,7 +34,7 @@ from .approval_stage import (
     ApprovalProjectionStageResult,
     ApprovalProjectionStageStatus,
 )
-from .stage_models import STAGE_SCHEMA_VERSION
+from .stage_models import STAGE_SCHEMA_VERSION, require_exact_keys
 
 _SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 
@@ -81,6 +85,7 @@ class CandidateRuntimeInputs:
     max_output_bytes: int = 65_536
     runtime_capability_available: bool = True
     execution_authorization_present: bool = False
+    required_environment_spec: RequiredEnvironmentSpec | None = None
     execution_authorized: Literal[False] = field(default=False, init=False)
     merge_authorized: Literal[False] = field(default=False, init=False)
     automatic_retry: Literal[False] = field(default=False, init=False)
@@ -144,6 +149,21 @@ class CandidateRuntimeInputs:
             raise TypeError("runtime_capability_available must be exact bool")
         if type(self.execution_authorization_present) is not bool:
             raise TypeError("execution_authorization_present must be exact bool")
+        if (
+            self.required_environment_spec is not None
+            and type(self.required_environment_spec) is not RequiredEnvironmentSpec
+        ):
+            raise TypeError(
+                "required_environment_spec must be exact RequiredEnvironmentSpec or None"
+            )
+        if (
+            self.required_environment_spec is not None
+            and self.required_environment_spec.required_validation_command_ids
+            != self.required_tests
+        ):
+            raise ValueError(
+                "required_environment_spec validation commands must match required_tests"
+            )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -245,7 +265,7 @@ def validation_stage_result_from_dict(payload: Mapping[str, Any]) -> ValidationS
         raise ValueError("validation stage result must be a mapping")
     if payload.get("schema_version") != STAGE_SCHEMA_VERSION:
         raise ValueError("unsupported stage schema_version")
-    _require_exact_keys(
+    require_exact_keys(
         payload, _VALIDATION_STAGE_RESULT_PAYLOAD_KEYS, "validation stage result"
     )
     for name in (
@@ -331,22 +351,6 @@ def validation_stage_result_from_dict(payload: Mapping[str, Any]) -> ValidationS
         candidate_sha=None,
         reason_codes=tuple(reason_codes),
     )
-
-
-def _require_exact_keys(
-    payload: object, keys: frozenset[str], label: str
-) -> Mapping[str, Any]:
-    """Closed-schema key check, mirroring the repository-stage transport rule."""
-    if not isinstance(payload, Mapping):
-        raise ValueError(f"{label} must be a mapping")
-    supplied = set(payload)
-    missing = sorted(keys - supplied)
-    if missing:
-        raise ValueError(f"{label} is missing field(s): " + ", ".join(missing))
-    unsupported = sorted(supplied - keys)
-    if unsupported:
-        raise ValueError(f"{label} has unsupported field(s): " + ", ".join(unsupported))
-    return payload
 
 
 def prepare_validation_stage(

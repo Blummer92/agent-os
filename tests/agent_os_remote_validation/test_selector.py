@@ -448,6 +448,94 @@ def test_different_paths_with_different_rules_form_bounded_union() -> None:
     assert plan.reason_codes == ("profile.focused-union",)
 
 
+# --- Documentation + focused selection semantics (#1272) ---------------------
+
+DOC_PATH = "00_Governance/example.md"
+FOCUSED_PATH = "scripts/agent_os_issue_acceptance/policy.py"
+UNKNOWN_EXECUTABLE_PATH = "scripts/unmapped_example.py"
+AGGREGATE_CONFIG_PATH = "requirements-dev.txt"
+
+
+def test_documentation_path_does_not_escalate_focused_selection() -> None:
+    focused_only = _select(_input([FOCUSED_PATH]))
+    mixed = _select(_input([FOCUSED_PATH, DOC_PATH]))
+
+    assert focused_only.profile == "focused"
+    assert mixed.profile == "focused"
+    assert mixed.commands == focused_only.commands
+    assert mixed.reason_codes == focused_only.reason_codes
+    assert mixed.command_set_digest == focused_only.command_set_digest
+    assert validation_plan_id(mixed) == validation_plan_id(focused_only)
+
+    # Before #1272 this mixed shape fell through to aggregate.
+    assert mixed.command_set_digest == (
+        "500ab081d9fd660f55429483dece9c170a7a942248fb7a4d1443c32b457cf3b5"
+    )
+    assert validation_plan_id(mixed) == (
+        "validation-plan:"
+        "ce62f16c71f7d87524796bb3852f7979ffce689421339dc2ac4da9d872280efe"
+    )
+
+
+def test_documentation_only_remains_static() -> None:
+    plan = _select(_input([DOC_PATH]))
+    assert plan.profile == "static"
+    assert plan.commands == ()
+    assert plan.reason_codes == ("profile.documentation-static",)
+
+
+def test_documentation_plus_unmapped_executable_remains_aggregate() -> None:
+    plan = _select(_input([DOC_PATH, UNKNOWN_EXECUTABLE_PATH]))
+    assert plan.profile == "aggregate"
+    assert plan.commands == ("python -m pytest",)
+    assert plan.reason_codes == ("profile.aggregate-unmapped-executable",)
+
+
+def test_documentation_plus_aggregate_configuration_remains_aggregate() -> None:
+    plan = _select(_input([DOC_PATH, AGGREGATE_CONFIG_PATH]))
+    assert plan.profile == "aggregate"
+    assert plan.commands == ("python -m pytest",)
+    assert plan.reason_codes == ("profile.aggregate-configuration",)
+
+
+def test_documentation_and_focused_selection_ignores_changed_file_order() -> None:
+    paths = [DOC_PATH, FOCUSED_PATH]
+    outcomes = {_select(_input(list(order))) for order in permutations(paths)}
+    assert len(outcomes) == 1
+    only = outcomes.pop()
+    assert only.profile == "focused"
+    assert only.commands == ("python -m pytest tests/agent_os_issue_acceptance",)
+
+
+def test_aggregate_and_focused_selection_ignores_changed_file_order() -> None:
+    paths = [AGGREGATE_CONFIG_PATH, FOCUSED_PATH]
+    outcomes = {_select(_input(list(order))) for order in permutations(paths)}
+    assert len(outcomes) == 1
+    only = outcomes.pop()
+    assert only.profile == "aggregate"
+    assert only.commands == ("python -m pytest",)
+    assert only.reason_codes == ("profile.aggregate-configuration",)
+
+
+def test_documentation_and_focused_selection_ignores_rule_order() -> None:
+    paths = [DOC_PATH, FOCUSED_PATH]
+    baseline = _select(_input(paths))
+    count = len(RULES["focused_rules"])
+    orders = [
+        tuple(range(count))[offset:] + tuple(range(count))[:offset]
+        for offset in range(count)
+    ]
+    orders.append(tuple(reversed(range(count))))
+
+    for order in orders:
+        rules = copy.deepcopy(RULES)
+        rules["focused_rules"] = [
+            RULES["focused_rules"][index] for index in order
+        ]
+        assert _select(_input(paths), rules) == baseline
+
+
+
 # --- Positive-PR characterization (#723 regression guard) ---------------------
 POSITIVE_PR_GOLDEN = {
     "static": (

@@ -54,6 +54,7 @@ from .stage_models import (
     IssueReadinessStageStatus,
     issueplan_current_state_evidence_from_dict,
     issueplan_current_state_evidence_to_dict,
+    require_exact_keys,
 )
 
 _OPTIONAL_GOVERNED_FIELD_STATES = frozenset(
@@ -460,7 +461,7 @@ def planning_handoff_stage_result_from_dict(
         raise ValueError("planning handoff stage result must be a mapping")
     if payload.get("schema_version") != STAGE_SCHEMA_VERSION:
         raise ValueError("unsupported stage schema_version")
-    _require_exact_keys(
+    require_exact_keys(
         payload, _PLANNING_STAGE_RESULT_PAYLOAD_KEYS, "planning handoff stage result"
     )
     if payload["execution_authorized"] is not False:
@@ -561,22 +562,6 @@ def planning_handoff_stage_result_from_dict(
         issueplan_current_state_evidence=issueplan,
         planning_binding=planning_binding,
     )
-
-
-def _require_exact_keys(
-    payload: object, keys: frozenset[str], label: str
-) -> Mapping[str, Any]:
-    """Closed-schema key check, mirroring the repository-stage transport rule."""
-    if not isinstance(payload, Mapping):
-        raise ValueError(f"{label} must be a mapping")
-    supplied = set(payload)
-    missing = sorted(keys - supplied)
-    if missing:
-        raise ValueError(f"{label} is missing field(s): " + ", ".join(missing))
-    unsupported = sorted(supplied - keys)
-    if unsupported:
-        raise ValueError(f"{label} has unsupported field(s): " + ", ".join(unsupported))
-    return payload
 
 
 def _decode_governed_text(

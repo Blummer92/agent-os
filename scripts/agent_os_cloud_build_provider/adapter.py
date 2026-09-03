@@ -67,7 +67,7 @@ SubmissionOutcomeKind = Literal["confirmed", "denied", "unavailable", "internal-
 _SUBMISSION_OUTCOME_KINDS = frozenset({"confirmed", "denied", "unavailable", "internal-error", "ambiguous"})
 
 ObservationOutcomeKind = Literal[
-    "working", "success", "failure", "timeout", "cancelled", "internal-error", "unavailable", "unknown"
+    "working", "success", "failure", "timeout", "cancelled", "expired", "internal-error", "unavailable", "unknown"
 ]
 _OBSERVATION_OUTCOME_KINDS = frozenset(status.value for status in ProviderObservationStatus)
 

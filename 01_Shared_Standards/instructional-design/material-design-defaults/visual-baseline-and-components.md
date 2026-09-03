@@ -22,6 +22,8 @@ Companion to `../material-design-defaults.md`.
 - Keep directions, examples, practice, and reflection predictable.
 - Favor visible writing space over squeezing in extra prompts.
 - Keep repeated components in consistent locations when materials are connected.
+- When student identification is needed, keep `Name`, `Hour`, `Date`, and any
+  supplied `Unit/Day` identifier together near the top of the first page.
 
 ## Scaffolding Defaults
 
@@ -30,7 +32,9 @@ teacher cues, short headings, sentence frames when needed, checkboxes, progress
 markers, and close pairing of related text and visuals.
 
 Prefer embedded supports over separate differentiated versions unless requested.
-Fade scaffolds when students have enough practice.
+When separate challenge variants are requested, follow the neutral A/B/C family
+in `../design-variant-patterns.md`. Fade scaffolds when students have enough
+practice.
 
 ## Reusable Components
 
@@ -38,15 +42,21 @@ Reuse proven classroom components when appropriate:
 
 - learning targets
 - success criteria
+- student identification rows
+- compact unit/day identifiers
 - checklist boxes
 - worked example cards
 - vocabulary callouts
 - reflection boxes
 - critique stems
 - task cards
+- challenge cards
+- compact quick-score strips
 - comparison frames
 
 Use a component only when it improves clarity, pacing, or evidence collection.
+Keep quick-score strips compact and separate from full analytic rubrics; use the
+lesson's approved scoring language rather than inventing assessment criteria.
 
 ## Discussion Support
 
