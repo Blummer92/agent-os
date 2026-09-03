@@ -141,6 +141,9 @@ def _require_current_authorization(
         or authorization.command_plan_id != request.execution.command_plan_id
     ):
         raise FirstPublicationProducerError("authorization-binding-mismatch")
+    snapshot = request.execution.authorization_snapshot_id
+    if snapshot is not None and snapshot != authorization.authorization_id:
+        raise FirstPublicationProducerError("authorization-snapshot-mismatch")
 
 
 def _require_ready_dependencies(request: FirstPublicationProducerRequest) -> None:
@@ -172,8 +175,6 @@ def _select_route(
         raise FirstPublicationProducerError("route-evidence-invalid")
     if route.repository.casefold() != request.execution.repository.casefold():
         raise FirstPublicationProducerError("route-repository-mismatch")
-    if route.authorization_id if False else False:  # pragma: no cover - no authority field here
-        raise AssertionError("unreachable")
     return select_executor_route(
         repository=route.repository,
         issue_or_handoff_identity=route.issue_or_handoff_identity,
@@ -238,26 +239,15 @@ def produce_first_publication_evidence(
         stage_observations=request.stage_observations,
         recorded_at=request.evaluated_at,
         actor_id=request.actor_id,
-        authorization_snapshot_id=request.authorization.authorization_id
-        if False
-        else None,
     )
-    # The #1431 constructor binds authorization only through CanonicalExecutionEvidence.
-    # Reject a mismatched caller rather than manufacturing a second snapshot identity.
-    if (
-        request.execution.authorization_snapshot_id is not None
-        and request.execution.authorization_snapshot_id != request.authorization.authorization_id
-    ):
-        raise FirstPublicationProducerError("authorization-snapshot-mismatch")
-
     append_checkpoint(store_root, checkpoint)
-    bindings = binding_snapshot_from_checkpoint(checkpoint)
+
     resume_plan = plan_resume(
         repository=checkpoint.repository,
         issue_number=checkpoint.issue_number,
         execution_id=checkpoint.execution_id,
         evaluated_at=request.evaluated_at,
-        current_bindings=bindings,
+        current_bindings=binding_snapshot_from_checkpoint(checkpoint),
         stored_checkpoints=(checkpoint,),
     )
     append_resume_plan(store_root, resume_plan)
@@ -282,17 +272,11 @@ def produce_first_publication_evidence(
     )
     append_pre_publication_evidence(store_root, capsule)
 
-    dependency_id = getattr(dependency_outcome, "evidence_id", None)
-    if dependency_id is None:
-        # Store outcomes intentionally remain subordinate; the evidence object owns
-        # its canonical identity on versions where the outcome does not expose it.
-        dependency_id = request.dependency_readiness.evidence_id
-
     return FirstPublicationProducerResult(
         checkpoint_id=checkpoint.checkpoint_id,
         resume_plan_id=resume_plan.plan_id,
         route_decision_id=route_decision.decision_id,
-        dependency_readiness_id=dependency_id,
+        dependency_readiness_id=dependency_outcome.evidence_id,
         pre_publication_evidence_id=capsule.capsule_id,
         authorization_id=request.authorization.authorization_id,
         source_sha=checkpoint.source_sha,
