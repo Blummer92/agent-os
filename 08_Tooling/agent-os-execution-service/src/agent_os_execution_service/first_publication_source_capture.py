@@ -1,14 +1,12 @@
 """Persist #1412 source evidence after one successful authorized validation.
 
-This is the narrow upstream capture seam required by #1830.  It reuses the
+This is the narrow upstream capture seam required by #1830. It reuses the
 existing #762 validation lifecycle, #1412 source-capsule builder/store, the
 Scheduler's deterministic pilot-holder identity, and trusted production-host
-configuration.  It creates no checkpoint, ResumePlan, route, handoff,
+configuration. It creates no checkpoint, ResumePlan, route, handoff,
 publication, retry, dependency installation, or Scheduler dispatch of its own.
 """
 from __future__ import annotations
-
-from typing import Callable
 
 from workflow_scheduler.execution.single_issue_pilot import (
     CancellationProbe,
@@ -64,10 +62,10 @@ def run_production_authorized_validation_with_source_capture(
 ) -> tuple[ValidationLifecycleResult, str | None]:
     """Run #762 once and persist one source capsule only for a successful lifecycle.
 
-    The caller supplies no store/repository/workspace path.  The checkpoint-store
+    The caller supplies no store/repository/workspace path. The checkpoint-store
     root is loaded from the existing trusted ``ProductionHostConfiguration``.
     Non-success terminal results are returned unchanged with ``None`` and perform
-    zero #1412 writes.  A successful lifecycle that cannot be captured fails
+    zero #1412 writes. A successful lifecycle that cannot be captured fails
     closed rather than being reported as publication-ready.
     """
     result = run_authorized_validation_lifecycle(
