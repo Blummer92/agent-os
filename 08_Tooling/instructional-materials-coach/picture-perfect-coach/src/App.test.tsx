@@ -1,9 +1,29 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import tutorialRecording from './fixtures/tutorial0-recording.json';
-import { App } from './App';
+import { tutorial0SyntheticCapture } from './fixtures/tutorial0-capture';
+import { tutorial0RoutedTutorialNeed } from './fixtures/tutorial0-prompts';
+import { App, type TutorialRuntimeInput } from './App';
 
-async function reachReview() {
-  render(<App />);
+const readyContext = {
+  fixtureId: 'tutorial0-privacy-safe-v1',
+  requiredTests: ['typecheck', 'lint', 'unit/component tests', 'build', 'guard', 'Playwright', 'repository structural validation'],
+  nonGoals: ['no live GitHub mutation', 'no image-provider execution', 'no live Adobe/browser replay', 'no Notion/Drive/classroom write'],
+  definitionOfDone: ['all deterministic preflight rows pass', 'handoff packet is generated locally', 'execution_authorized remains false'],
+  unresolvedArchitectureDecision: false,
+} as const;
+
+const runtimeInput: TutorialRuntimeInput = {
+  route: tutorial0RoutedTutorialNeed,
+  captureBundle: tutorial0SyntheticCapture,
+  readyContext,
+};
+
+function renderCoach(withRoute = true) {
+  render(<App resolveTutorialInput={withRoute ? () => runtimeInput : undefined} />);
+}
+
+async function reachReview(withRoute = true) {
+  renderCoach(withRoute);
   fireEvent.click(screen.getByRole('button', { name: 'Continue to Upload' }));
   fireEvent.change(screen.getByLabelText('Choose Recorder JSON'), { target: { files: [new File([JSON.stringify(tutorialRecording)], 'recording.json')] } });
   await screen.findByRole('heading', { name: 'Recording loaded' });
@@ -11,14 +31,18 @@ async function reachReview() {
   fireEvent.click(screen.getByRole('button', { name: 'Start Review' }));
 }
 
-async function reachPrompts() {
-  await reachReview();
+async function approveTutorial(withRoute = true) {
+  await reachReview(withRoute);
   const cards = screen.getAllByRole('article');
   fireEvent.click(within(cards[0]!).getByRole('button', { name: 'Keep & Continue' }));
   fireEvent.click(within(cards[1]!).getByRole('button', { name: 'Combine with Previous' }));
   for (let index = 2; index < cards.length - 1; index += 1) fireEvent.click(within(cards[index]!).getByRole('button', { name: 'Keep & Continue' }));
   fireEvent.click(within(cards[cards.length - 1]!).getByRole('button', { name: 'Not Instructional' }));
   fireEvent.click(screen.getByRole('button', { name: 'Approve Tutorial' }));
+}
+
+async function reachPrompts() {
+  await approveTutorial();
   fireEvent.click(await screen.findByRole('button', { name: 'Generate Prompts' }));
   await screen.findByRole('heading', { name: 'Picture Perfect prompts' });
 }
@@ -52,7 +76,14 @@ describe('Picture Perfect Coach review and Ready UX', () => {
     expect(screen.getByText(/Every modeled step needs an explicit review decision/i)).toBeTruthy();
   });
 
-  it('reaches Prompts with role-preserving approved synthetic screen evidence', async () => {
+  it('fails closed when no upstream tutorial/process route is supplied', async () => {
+    await approveTutorial(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Generate Prompts' }));
+    expect(await screen.findByText(/blocked until an upstream tutorial\/process route is supplied/i)).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Picture Perfect prompts' })).toBeNull();
+  });
+
+  it('reaches Prompts through the generic routed Tutorial Package with approved synthetic screen evidence', async () => {
     await reachPrompts();
     expect(screen.getAllByText('Application: Adobe Express').length).toBe(3);
     expect(screen.getByText('Prompts').closest('li')?.getAttribute('aria-current')).toBe('step');
@@ -62,9 +93,10 @@ describe('Picture Perfect Coach review and Ready UX', () => {
     expect(screen.queryByRole('button', { name: /generate image|submit prompt|run provider/i })).toBeNull();
     expect(screen.queryByText('Prompt blocked')).toBeNull();
     expect(screen.getAllByText(/Approved captured screen evidence is the base visual/i).length).toBe(3);
+    expect(screen.getByText(/0 approved tutorial assets reused · 0 resurfaced/)).toBeTruthy();
   });
 
-  it('passes Ready on synthetic capture and produces only a local non-authorizing handoff packet', async () => {
+  it('passes Ready over the exact Stage-4 card set and produces only a local non-authorizing handoff packet', async () => {
     await reachPrompts();
     fireEvent.click(screen.getByRole('button', { name: 'Open Ready' }));
     expect(await screen.findByRole('heading', { name: 'Implementation handoff preflight' })).toBeTruthy();
@@ -77,6 +109,7 @@ describe('Picture Perfect Coach review and Ready UX', () => {
     const packet = screen.getByLabelText('GitHub handoff packet') as HTMLTextAreaElement;
     expect(packet.value).toContain('"captured_screen_evidence"');
     expect(packet.value).toContain('"execution_authorized": false');
+    expect(packet.value).toContain('curriculum-workflow-handoff://tutorial0/modeling');
     expect(screen.getByText(/No GitHub write occurred/i)).toBeTruthy();
   });
 });

@@ -5,19 +5,29 @@ import { deriveReviewedTutorial, needsAttention } from './review';
 import { PromptCards } from './PromptCards';
 import { ReadyPanel } from './ReadyPanel';
 import { runReadyPreflight, type ReadyContext, type ReadyPreflightResult } from './preflight';
-import { tutorial0CapturedPromptCards, tutorial0ReviewedTutorial } from './fixtures/tutorial0-prompts';
+import type { CaptureEvidenceBundle } from './captureEvidence';
+import type { VisualReferenceLibrary } from './visualReference';
+import { buildTutorialPackage, type RoutedTutorialNeed, type TutorialPackage } from './tutorialPackage';
 import type { ReviewChoice, ReviewDecision, ReviewedTutorialProjection, SafeTechnicalDetails, UploadEvidenceProjection, UploadSummary } from './types';
 import { picturePerfectMachine } from './workflowMachine';
 
 const STAGES = ['Model', 'Upload', 'Review', 'Prompts', 'Ready'] as const;
-const TUTORIAL0_READY_CONTEXT: ReadyContext = {
-  fixtureId: 'tutorial0-privacy-safe-v1',
-  requiredTests: ['typecheck', 'lint', 'unit/component tests', 'build', 'guard', 'Playwright', 'repository structural validation'],
-  nonGoals: ['no live GitHub mutation', 'no image-provider execution', 'no live Adobe/browser replay', 'no Notion/Drive/classroom write'],
-  definitionOfDone: ['all deterministic preflight rows pass', 'handoff packet is generated locally', 'execution_authorized remains false'],
-  unresolvedArchitectureDecision: false,
-};
 type UploadEvidence = { summary: UploadSummary; technical: SafeTechnicalDetails; evidence: UploadEvidenceProjection };
+
+export type TutorialRuntimeInput = Readonly<{
+  route: RoutedTutorialNeed;
+  readyContext: ReadyContext;
+  captureBundle?: CaptureEvidenceBundle | null;
+  visualReferenceLibrary?: VisualReferenceLibrary | null;
+}>;
+
+export type AppProps = Readonly<{
+  /**
+   * Upstream routing seam. PPUX does not infer representation need, asset
+   * eligibility, curriculum gates, or pathway assignment from Recorder data.
+   */
+  resolveTutorialInput?: (tutorial: ReviewedTutorialProjection) => TutorialRuntimeInput | null;
+}>;
 
 function StageIndicator({ state }: { state: string }) {
   const activeStage = state === 'model_guidance'
@@ -62,32 +72,50 @@ function ReviewWorkspace({ evidence, decisions, decide, approve }: { evidence: U
   </div>;
 }
 
-export function App() {
+export function App({ resolveTutorialInput }: AppProps = {}) {
   const [state, send] = useMachine(picturePerfectMachine);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadEvidence, setUploadEvidence] = useState<UploadEvidence | null>(null);
   const [decisions, setDecisions] = useState<ReviewDecision[]>([]);
   const [approvedCount, setApprovedCount] = useState(0);
   const [reviewedTutorial, setReviewedTutorial] = useState<ReviewedTutorialProjection | null>(null);
+  const [tutorialPackage, setTutorialPackage] = useState<TutorialPackage | null>(null);
+  const [readyContext, setReadyContext] = useState<ReadyContext | null>(null);
   const [preflight, setPreflight] = useState<ReadyPreflightResult | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const processFile = async (file: File | undefined) => {
-    if (!file) return; send({ type: 'UPLOAD_SELECTED' }); setErrorMessage(null); setUploadEvidence(null); setDecisions([]); setPreflight(null);
+    if (!file) return;
+    send({ type: 'UPLOAD_SELECTED' }); setErrorMessage(null); setUploadEvidence(null); setDecisions([]); setReviewedTutorial(null); setTutorialPackage(null); setReadyContext(null); setPreflight(null);
     const result = validateUploadText(await file.text());
     if (result.ok) { setUploadEvidence({ summary: result.summary, technical: result.technical, evidence: result.evidence }); send({ type: 'UPLOAD_VALID' }); }
     else { setErrorMessage(result.message); send({ type: 'UPLOAD_REJECTED' }); }
   };
   const decide = (stepId: string, choice: ReviewChoice) => setDecisions((current) => [...current.filter((item) => item.step_id !== stepId), { step_id: stepId, choice }]);
-  const approve = () => { if (!uploadEvidence) return; const result = deriveReviewedTutorial(uploadEvidence.evidence, decisions); if (!result.ok) return; setApprovedCount(result.tutorial.retained_steps.length); setReviewedTutorial(result.tutorial); send({ type: 'APPROVE_TUTORIAL' }); };
+  const approve = () => {
+    if (!uploadEvidence) return;
+    const result = deriveReviewedTutorial(uploadEvidence.evidence, decisions);
+    if (!result.ok) return;
+    setApprovedCount(result.tutorial.retained_steps.length); setReviewedTutorial(result.tutorial); setTutorialPackage(null); setReadyContext(null); setPreflight(null); setErrorMessage(null); send({ type: 'APPROVE_TUTORIAL' });
+  };
   const generatePrompts = () => {
     if (!reviewedTutorial) return;
-    send({ type: 'GENERATE_PROMPTS' });
-    if (reviewedTutorial.recording_id === tutorial0ReviewedTutorial.recording_id && reviewedTutorial.recording_sha256 === tutorial0ReviewedTutorial.recording_sha256) send({ type: 'PROMPTS_VALID' });
+    send({ type: 'GENERATE_PROMPTS' }); setErrorMessage(null); setTutorialPackage(null); setReadyContext(null); setPreflight(null);
+    const input = resolveTutorialInput?.(reviewedTutorial) ?? null;
+    if (!input) {
+      setErrorMessage('Prompt authoring is blocked until an upstream tutorial/process route is supplied. Picture Perfect will not infer visual need from the recording.');
+      send({ type: 'PROMPTS_BLOCKED' }); return;
+    }
+    const result = buildTutorialPackage(reviewedTutorial, input.route, input.captureBundle ?? null, input.visualReferenceLibrary ?? null);
+    if (result.status !== 'valid' || !result.package) {
+      setErrorMessage(`Prompt authoring is blocked: ${result.blockers.join(', ')}`);
+      send({ type: 'PROMPTS_BLOCKED' }); return;
+    }
+    setTutorialPackage(result.package); setReadyContext(input.readyContext); send({ type: 'PROMPTS_VALID' });
   };
   const openReady = () => {
-    if (!reviewedTutorial || reviewedTutorial.recording_id !== tutorial0ReviewedTutorial.recording_id || reviewedTutorial.recording_sha256 !== tutorial0ReviewedTutorial.recording_sha256) return;
+    if (!reviewedTutorial || !tutorialPackage || !readyContext) return;
     send({ type: 'OPEN_READY' });
-    const result = runReadyPreflight(reviewedTutorial, tutorial0CapturedPromptCards, TUTORIAL0_READY_CONTEXT);
+    const result = runReadyPreflight(reviewedTutorial, tutorialPackage.cards, readyContext);
     setPreflight(result); send({ type: result.ready ? 'PREFLIGHT_PASS' : 'PREFLIGHT_FAIL' });
   };
   const stateValue = String(state.value);
@@ -100,10 +128,10 @@ export function App() {
       {state.matches('upload_valid') && uploadEvidence && <div className="panel"><p className="step-kicker">Stage 2 · Upload</p><h2>Recording loaded</h2><div className="summary-grid" aria-label="Recording summary"><article><strong>{uploadEvidence.summary.actionsFound}</strong><span>actions found</span></article><article><strong>{uploadEvidence.summary.instructionalCandidates}</strong><span>instructional candidates</span></article><article><strong>{uploadEvidence.summary.likelyNoiseRecovery}</strong><span>likely noise/recovery</span></article><article><strong>{uploadEvidence.summary.needsReview}</strong><span>needs your review</span></article></div><TechnicalDetails technical={uploadEvidence.technical}/><button className="primary" onClick={() => send({ type: 'CONTINUE_TO_REVIEW' })}>Continue to Review</button></div>}
       {state.matches('ready_for_review') && uploadEvidence && <div className="panel"><p className="step-kicker">Stage 3 · Review</p><h2>Ready to review the tutorial.</h2><button className="primary" onClick={() => send({ type: 'START_REVIEW' })}>Start Review</button></div>}
       {(state.matches('reviewing_steps') || state.matches('review_attention_required')) && uploadEvidence && <ReviewWorkspace evidence={uploadEvidence.evidence} decisions={decisions} decide={decide} approve={approve}/>} 
-      {state.matches('tutorial_approved') && reviewedTutorial && <div className="panel"><p className="step-kicker">Stage 4 · Prompts</p><h2>Tutorial review approved.</h2><p>{approvedCount} reviewed instructional steps are ready for prompt authoring.</p><button className="primary" type="button" onClick={generatePrompts}>Generate Prompts</button></div>}
+      {state.matches('tutorial_approved') && reviewedTutorial && <div className="panel"><p className="step-kicker">Stage 4 · Prompts</p><h2>Tutorial review approved.</h2><p>{approvedCount} reviewed instructional steps are ready for routed tutorial planning.</p>{errorMessage && <p role="status">{errorMessage}</p>}<button className="primary" type="button" onClick={generatePrompts}>Generate Prompts</button></div>}
       {state.matches('generating_prompts') && <div className="panel" role="status"><h2>Preparing provider-neutral prompts…</h2></div>}
-      {state.matches('reviewing_prompts') && reviewedTutorial && <section><PromptCards cards={tutorial0CapturedPromptCards}/><div className="panel"><button className="primary" type="button" onClick={openReady}>Open Ready</button></div></section>}
+      {state.matches('reviewing_prompts') && reviewedTutorial && tutorialPackage && <section><PromptCards cards={tutorialPackage.cards}/><div className="panel"><p>{tutorialPackage.reusedAssetRefs.length} approved tutorial assets reused · {tutorialPackage.resurfacedAssetRefs.length} resurfaced</p><button className="primary" type="button" onClick={openReady}>Open Ready</button></div></section>}
       {state.matches('running_preflight') && <div className="panel" role="status"><h2>Running deterministic preflight…</h2></div>}
-      {(state.matches('ready_for_handoff') || state.matches('preflight_failed')) && reviewedTutorial && preflight && <ReadyPanel tutorial={reviewedTutorial} cards={tutorial0CapturedPromptCards} context={TUTORIAL0_READY_CONTEXT} preflight={preflight}/>} 
+      {(state.matches('ready_for_handoff') || state.matches('preflight_failed')) && reviewedTutorial && tutorialPackage && readyContext && preflight && <ReadyPanel tutorial={reviewedTutorial} cards={tutorialPackage.cards} context={readyContext} preflight={preflight}/>} 
     </section></main>;
 }

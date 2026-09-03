@@ -6,6 +6,7 @@ import { deriveReviewedTutorial } from '../review';
 import { deriveRecordingUiEvidence } from '../uiEvidence';
 import { projectReviewedTutorialToPromptCards, type PromptAuthoringInput } from '../promptIntent';
 import type { PromptCardModel } from '../promptIntent';
+import type { RoutedTutorialNeed } from '../tutorialPackage';
 import type { ReviewDecision, UploadEvidenceProjection } from '../types';
 
 const projected = tutorial0Evidence as unknown as Omit<UploadEvidenceProjection, 'recording_evidence'>;
@@ -97,6 +98,28 @@ export const tutorial0CapturedPromptCards: readonly PromptCardModel[] = withComm
 export const tutorial0CurrentReferencePromptCards: readonly PromptCardModel[] = withCommonProvenance(
   projectReviewedTutorialToPromptCards(tutorial0ReviewedTutorial, currentAuthoringByStepId, tutorial0SyntheticCapture, tutorial0CurrentVisualReferences),
 );
+
+/**
+ * #1776 regression route. This is test evidence only: App no longer imports or
+ * recognizes Tutorial 0 identity. Every retained step has an explicit routed
+ * fulfillment disposition; only the three historical demo frames request new
+ * prompt artifacts.
+ */
+export const tutorial0RoutedTutorialNeed: RoutedTutorialNeed = {
+  routeId: 'tutorial0-route-core-v1',
+  representation: 'tutorial-process',
+  sourceHandoffRef: 'curriculum-workflow-handoff://tutorial0/modeling',
+  sourceFingerprint: 'tutorial0-handoff-fingerprint-v1',
+  objectiveRef: 'objective://tutorial0/organize-files',
+  successCriteriaRef: 'success-criteria://tutorial0/organize-files',
+  evidenceTargetRef: 'evidence-target://tutorial0/organized-files',
+  steps: tutorial0ReviewedTutorial.retained_steps.map((step) => {
+    const authoring = historicalAuthoringByStepId.get(step.review_step_id);
+    return authoring
+      ? { reviewStepId: step.review_step_id, visualRoleRef: 'visual-role://process-sequence', disposition: 'new-visual' as const, authoring }
+      : { reviewStepId: step.review_step_id, visualRoleRef: 'visual-role://process-sequence', disposition: 'no-additional-visual-needed' as const, reasonRef: 'route-reason://tutorial0/no-extra-frame' };
+  }),
+};
 
 const reconciledCreateAuthoring = new Map<string, PromptAuthoringInput>([[
   'tutorial0-step-03-square-file',
