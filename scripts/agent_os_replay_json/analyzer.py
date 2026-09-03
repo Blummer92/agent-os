@@ -100,6 +100,13 @@ def _click_kind(step: dict[str, Any], identity: str | None) -> str:
     return "click"
 
 
+def _change_value(step: dict[str, Any]) -> str | None:
+    if "value" not in step:
+        return None
+    value = step["value"]
+    return value if isinstance(value, str) else str(value)
+
+
 def analyze_replay(payload: dict[str, Any]) -> list[SemanticAction]:
     steps = payload.get("steps")
     if not isinstance(steps, list):
@@ -152,7 +159,7 @@ def analyze_replay(payload: dict[str, Any]) -> list[SemanticAction]:
 
         if event_type == "change":
             indexes = [i]
-            final_value = str(step.get("value", ""))
+            final_value = _change_value(step)
             target = identity
             combined_evidence = list(evidence)
             j = i + 1
@@ -169,7 +176,7 @@ def analyze_replay(payload: dict[str, Any]) -> list[SemanticAction]:
                     continue
                 if nxt_type == "change" and nxt_identity == target:
                     indexes.append(j)
-                    final_value = str(nxt.get("value", ""))
+                    final_value = _change_value(nxt)
                     combined_evidence.extend(_evidence(nxt))
                     j += 1
                     continue
