@@ -84,6 +84,7 @@ def test_preflight_block_leaves_authorization_unconsumed() -> None:
     provider = MutationBoundaryProvider()
     result = refresh_pull_request_branch(provider, request(authorization_current=False))
     assert provider.mutation_calls == 0
+    assert result.mutation_attempted is False
     assert result.side_effects_performed is False
     receipt = _receipt_from_result(
         result=result,
@@ -92,14 +93,17 @@ def test_preflight_block_leaves_authorization_unconsumed() -> None:
     )
     assert receipt.authorization_consumed is False
     assert receipt.mutation_count == 0
+    assert receipt.side_effects_performed is False
+    assert receipt.rollback_posture == "no-branch-mutation"
 
 
-def test_admitted_failed_mutation_consumes_authorization_exactly_once() -> None:
+def test_admitted_failed_mutation_consumes_authorization_without_false_side_effects() -> None:
     provider = MutationBoundaryProvider("conflict")
     result = refresh_pull_request_branch(provider, request())
     assert provider.mutation_calls == 1
     assert result.status == "blocked"
-    assert result.side_effects_performed is True
+    assert result.mutation_attempted is True
+    assert result.side_effects_performed is False
     assert result.automatic_retry_authorized is False
 
     receipt = _receipt_from_result(
@@ -109,16 +113,18 @@ def test_admitted_failed_mutation_consumes_authorization_exactly_once() -> None:
     )
     assert receipt.authorization_consumed is True
     assert receipt.mutation_count == 1
+    assert receipt.side_effects_performed is False
     assert receipt.new_head_sha is None
-    assert receipt.rollback_posture == "restore-old-head-with-separate-authorization"
+    assert receipt.rollback_posture == "separate-authorization-required"
 
 
-def test_admitted_ambiguous_mutation_also_consumes_authorization() -> None:
+def test_admitted_ambiguous_mutation_also_consumes_without_claiming_branch_change() -> None:
     provider = MutationBoundaryProvider("ambiguous")
     result = refresh_pull_request_branch(provider, request())
     assert provider.mutation_calls == 1
     assert result.status == "manual-review"
-    assert result.side_effects_performed is True
+    assert result.mutation_attempted is True
+    assert result.side_effects_performed is False
 
     receipt = _receipt_from_result(
         result=result,
@@ -127,3 +133,5 @@ def test_admitted_ambiguous_mutation_also_consumes_authorization() -> None:
     )
     assert receipt.authorization_consumed is True
     assert receipt.mutation_count == 1
+    assert receipt.side_effects_performed is False
+    assert receipt.rollback_posture == "separate-authorization-required"
