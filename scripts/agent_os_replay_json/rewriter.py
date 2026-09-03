@@ -13,6 +13,8 @@ REWRITE_KINDS = {
     "change-selector",
     "insert-assertion",
 }
+CONFIDENCE_STATES = {"proven", "unproven"}
+SEMANTIC_EQUIVALENCE_STATES = {"proven", "unproven", "rejected"}
 
 _ACTION_ID_RE = re.compile(r"action-(0|[1-9][0-9]*)\Z")
 
@@ -34,6 +36,8 @@ class RewriteOperation:
             raise ValueError(f"unsupported rewrite kind: {self.kind}")
         if not self.source_indexes:
             raise ValueError("rewrite operation requires source indexes")
+        if self.confidence not in CONFIDENCE_STATES:
+            raise ValueError(f"unsupported rewrite confidence: {self.confidence}")
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -50,6 +54,12 @@ class RewriteResult:
     provenance: dict[int, tuple[int, ...]]
     warnings: tuple[str, ...]
     semantic_equivalence: str
+
+    def __post_init__(self) -> None:
+        if self.semantic_equivalence not in SEMANTIC_EQUIVALENCE_STATES:
+            raise ValueError(
+                f"unsupported semantic equivalence: {self.semantic_equivalence}"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         return {
