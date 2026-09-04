@@ -64,7 +64,9 @@ class ReviewCoverageRecord:
 
     @property
     def coverage_id(self) -> str:
-        return deterministic_id(asdict(self))
+        payload = asdict(self)
+        payload["coverage_status"] = self.coverage_status.value
+        return deterministic_id(payload)
 
     @property
     def blocks_review(self) -> bool:
@@ -103,7 +105,9 @@ class TestAdequacyRecord:
 
     @property
     def adequacy_id(self) -> str:
-        return deterministic_id(asdict(self))
+        payload = asdict(self)
+        payload["adequacy_status"] = self.adequacy_status.value
+        return deterministic_id(payload)
 
 
 def _text(value: object, field: str) -> str:
