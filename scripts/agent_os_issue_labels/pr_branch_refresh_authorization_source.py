@@ -24,10 +24,6 @@ MAX_COMMENT_BYTES = 32 * 1024
 MAX_TOTAL_COMMENT_BYTES = 256 * 1024
 _SHA40 = re.compile(r"^[0-9a-f]{40}$")
 _REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-# Domain separator between the versioned identity prefix and the canonical
-# payload.  Kept as a module constant so the digest material never places a
-# backslash escape inside an f-string expression, which is a syntax error on
-# the supported Python 3.11 runtime.
 _IDENTITY_SEPARATOR = "\0"
 
 
@@ -241,7 +237,12 @@ def reacquire_refresh_authorization_source(
     *, transport: RefreshAuthorizationSourceTransport, repository: str,
     pr_number: int, expected_authorization_id: str | None = None,
 ) -> RefreshAuthorizationSourceResult:
-    """Read one complete trusted PR conversation and return bounded immutable history."""
+    """Read one complete trusted PR conversation and return bounded immutable history.
+
+    This source owns provenance, parsing, deduplication, and consumption history.
+    It deliberately does not decide which unconsumed authorized record matches the
+    current head/main/scope; #1403's current-evidence resolver owns that decision.
+    """
     if not isinstance(transport, RefreshAuthorizationSourceTransport):
         raise TypeError("transport does not satisfy RefreshAuthorizationSourceTransport")
     try:
@@ -294,9 +295,18 @@ def reacquire_refresh_authorization_source(
         return RefreshAuthorizationSourceResult(RefreshAuthorizationSourceStatus.BLOCKED, ("authorization.absent",), (), tuple(receipts), tuple(source_ids))
 
     consumed = {item.authorization_id for item in receipts if item.consumes_authorization}
-    applicable = tuple(item for item in unique_records if item.state is RefreshAuthorizationState.AUTHORIZED and item.authorization_id not in consumed)
-    if len(applicable) > 1:
-        return RefreshAuthorizationSourceResult(RefreshAuthorizationSourceStatus.NEEDS_DECISION, ("authorization.ambiguous",), applicable, tuple(receipts), tuple(source_ids))
-    if not applicable:
-        return RefreshAuthorizationSourceResult(RefreshAuthorizationSourceStatus.STALE, ("authorization.consumed-or-not-current",), (), tuple(receipts), tuple(source_ids))
-    return RefreshAuthorizationSourceResult(RefreshAuthorizationSourceStatus.CURRENT, ("current",), applicable, tuple(receipts), tuple(source_ids))
+    available = tuple(
+        item for item in unique_records
+        if item.state is RefreshAuthorizationState.AUTHORIZED and item.authorization_id not in consumed
+    )
+    if not available:
+        return RefreshAuthorizationSourceResult(
+            RefreshAuthorizationSourceStatus.STALE,
+            ("authorization.consumed-or-not-current",),
+            (), tuple(receipts), tuple(source_ids),
+        )
+    return RefreshAuthorizationSourceResult(
+        RefreshAuthorizationSourceStatus.CURRENT,
+        ("current",),
+        available, tuple(receipts), tuple(source_ids),
+    )
