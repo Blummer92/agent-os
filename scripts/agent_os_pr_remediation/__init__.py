@@ -18,6 +18,11 @@ from .normalization import classify_review_thread_payload, normalize_pr_snapshot
 from .planning import COMPUTE_ROUTES, FINDING_CLASSIFICATIONS, FindingCandidate, PlannedFinding, RemediationPlan, RemediationTask, plan_remediation
 from .preflight import PreflightResult, preflight
 from .review_attack_plan import RequiredAttack, ReviewAttackPlan, build_review_attack_plan
+from .review_coverage import (
+    ALLOWED_ADEQUACY_RECOMMENDATIONS, AdequacyStatus, CoverageStatus,
+    ReviewCoverageObservation, ReviewCoverageRecord, TestAdequacyRecord, TestEvidence,
+    assess_test_adequacy, normalize_review_coverage,
+)
 from .review_evidence import (
     ADVERSARIAL_RISKS, FULL_REVIEW_INVALIDATORS, NO_AI_CHANGE_KINDS, ReviewDepth,
     ReviewDepthDecision, ReviewEvidencePacket, ReviewRiskEvidence,
@@ -25,21 +30,23 @@ from .review_evidence import (
 )
 
 __all__ = [
-    "ADVERSARIAL_RISKS", "CIEvidenceIdentity", "CIEvidenceRecoveryPlan", "COMPUTE_ROUTES",
+    "ADVERSARIAL_RISKS", "ALLOWED_ADEQUACY_RECOMMENDATIONS", "AdequacyStatus",
+    "CIEvidenceIdentity", "CIEvidenceRecoveryPlan", "COMPUTE_ROUTES", "CoverageStatus",
     "DEFAULT_DIAGNOSTIC_EXCERPT_LINES", "DIAGNOSTIC_EXCERPT_EXPANSION_LINES",
     "EvidenceAssemblyResult", "EvidenceValidationError", "FINDING_CLASSIFICATIONS",
     "FULL_REVIEW_INVALIDATORS", "FindingCandidate", "FindingFixEvidence", "GitHubEvidenceReader",
     "MAX_DIAGNOSTIC_EXCERPT_LINES", "MIN_DIAGNOSTIC_EXCERPT_LINES", "NO_AI_CHANGE_KINDS",
     "NormalizedPRSnapshot", "NormalizedReviewThread", "PlannedFinding", "PreflightResult",
     "RECOVERY_FAILURE_REASONS", "RECOVERY_PATHS", "RecoveryObservation", "RemediationPlan",
-    "RemediationTask", "RequiredAttack", "ResolutionPlan", "ReviewAttackPlan", "ReviewDepth",
-    "ReviewDepthDecision", "ReviewEvidencePacket", "ReviewRiskEvidence", "SUGGESTED_ACTIONS",
-    "ThreadResolutionEvidence", "VALIDATION_STATES", "ValidationCategoryResult",
-    "ValidationEvidenceBinding", "assemble_prr_evidence", "build_review_attack_plan",
-    "build_review_evidence_packet", "canonical_json", "classify_review_thread_payload",
-    "coordinate_resolution", "deterministic_id", "diagnostic_excerpt_lines",
-    "expand_diagnostic_excerpt_lines", "normalize_pr_snapshot", "normalize_review_thread",
-    "normalize_review_threads", "plan_ci_evidence_recovery", "plan_remediation", "preflight",
-    "resolution_plan_id", "review_invalidation_scope", "select_review_depth",
-    "serialize_resolution_plan",
+    "RemediationTask", "RequiredAttack", "ResolutionPlan", "ReviewAttackPlan",
+    "ReviewCoverageObservation", "ReviewCoverageRecord", "ReviewDepth", "ReviewDepthDecision",
+    "ReviewEvidencePacket", "ReviewRiskEvidence", "SUGGESTED_ACTIONS", "TestAdequacyRecord",
+    "TestEvidence", "ThreadResolutionEvidence", "VALIDATION_STATES", "ValidationCategoryResult",
+    "ValidationEvidenceBinding", "assemble_prr_evidence", "assess_test_adequacy",
+    "build_review_attack_plan", "build_review_evidence_packet", "canonical_json",
+    "classify_review_thread_payload", "coordinate_resolution", "deterministic_id",
+    "diagnostic_excerpt_lines", "expand_diagnostic_excerpt_lines", "normalize_pr_snapshot",
+    "normalize_review_coverage", "normalize_review_thread", "normalize_review_threads",
+    "plan_ci_evidence_recovery", "plan_remediation", "preflight", "resolution_plan_id",
+    "review_invalidation_scope", "select_review_depth", "serialize_resolution_plan",
 ]
