@@ -19,8 +19,8 @@ HEAD = "1" * 40
 MAIN = "2" * 40
 
 
-def authorization() -> RefreshAuthorization:
-    return RefreshAuthorization(
+def authorization(**overrides) -> RefreshAuthorization:
+    values = dict(
         schema_version="1.0",
         repository=REPO,
         pr_number=1619,
@@ -35,6 +35,8 @@ def authorization() -> RefreshAuthorization:
         owner_decision_reference="github-owner-decision:1619",
         state=RefreshAuthorizationState.AUTHORIZED,
     )
+    values.update(overrides)
+    return RefreshAuthorization(**values)
 
 
 @dataclass
@@ -104,11 +106,7 @@ def trigger():
     )
 
 
-def test_actions_runner_reacquires_owner_authorization_and_invokes_facade_once():
-    auth = authorization()
-    github = FakeGithub([FakeComment(10, serialize_refresh_authorization_comment(auth))])
-    calls = []
-
+def converged_refresh(auth, calls):
     def refresh(**kwargs):
         calls.append(kwargs)
         return {
@@ -128,11 +126,17 @@ def test_actions_runner_reacquires_owner_authorization_and_invokes_facade_once()
             "rollback_posture": "restore-old-head-with-separate-authorization",
             "side_effects_performed": True,
         }
+    return refresh
 
+
+def test_actions_runner_reacquires_owner_authorization_and_invokes_facade_once():
+    auth = authorization()
+    github = FakeGithub([FakeComment(10, serialize_refresh_authorization_comment(auth))])
+    calls = []
     result = run_branch_refresh_actions(
         trigger=trigger(), github_client=github, repository_root="/repo",
         invocation_id="actions:1:1", environment={"GITHUB_TOKEN": "secret"},
-        refresh_callable=refresh,
+        refresh_callable=converged_refresh(auth, calls),
     )
     assert result.status == "converged"
     assert result.mutation_count == 1
@@ -142,6 +146,45 @@ def test_actions_runner_reacquires_owner_authorization_and_invokes_facade_once()
     assert calls[0]["current_main_sha"] == MAIN
     assert github.repo.issue.created
     assert "secret" not in github.repo.issue.created[0]
+
+
+def test_actions_runner_selects_fresh_authorization_over_stale_main_record():
+    stale = authorization(expected_main_sha="4" * 40, owner_decision_reference="prior-main")
+    current = authorization(owner_decision_reference="fresh-main")
+    github = FakeGithub([
+        FakeComment(10, serialize_refresh_authorization_comment(stale)),
+        FakeComment(11, serialize_refresh_authorization_comment(current)),
+    ])
+    calls = []
+    result = run_branch_refresh_actions(
+        trigger=trigger(), github_client=github, repository_root="/repo",
+        invocation_id="actions:1849:1", environment={"GITHUB_TOKEN": "secret"},
+        refresh_callable=converged_refresh(current, calls),
+    )
+    assert result.status == "converged"
+    assert result.authorization_id == current.authorization_id
+    assert result.mutation_count == 1
+    assert len(calls) == 1
+    assert calls[0]["authorization_id"] == current.authorization_id
+
+
+def test_actions_runner_blocks_genuine_two_current_authorization_ambiguity():
+    first = authorization(owner_decision_reference="current-a")
+    second = authorization(owner_decision_reference="current-b")
+    github = FakeGithub([
+        FakeComment(10, serialize_refresh_authorization_comment(first)),
+        FakeComment(11, serialize_refresh_authorization_comment(second)),
+    ])
+    calls = []
+    result = run_branch_refresh_actions(
+        trigger=trigger(), github_client=github, repository_root="/repo",
+        invocation_id="actions:1:1", environment={"GITHUB_TOKEN": "secret"},
+        refresh_callable=lambda **kwargs: calls.append(kwargs),
+    )
+    assert result.status == "blocked"
+    assert result.reason_codes == ("authorization.ambiguous",)
+    assert result.mutation_count == 0
+    assert not calls
 
 
 def test_actions_runner_blocks_without_canonical_authorization_before_facade():

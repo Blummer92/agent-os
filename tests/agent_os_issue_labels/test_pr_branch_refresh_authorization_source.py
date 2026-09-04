@@ -131,13 +131,14 @@ def test_historical_noncurrent_records_can_coexist_with_one_current_record():
     assert result.records == (current,)
 
 
-def test_multiple_simultaneously_applicable_grants_fail_closed_without_timestamp_selection():
+def test_multiple_unconsumed_authorized_records_are_preserved_for_current_evidence_resolver():
     first = auth(owner_decision_reference="decision:a")
-    second = auth(owner_decision_reference="decision:b")
+    second = auth(expected_main_sha="c" * 40, owner_decision_reference="decision:b")
     result = read([comment(serialize_refresh_authorization_comment(first)),
         comment(serialize_refresh_authorization_comment(second), cid=2)])
-    assert result.status is RefreshAuthorizationSourceStatus.NEEDS_DECISION
-    assert result.reason_codes == ("authorization.ambiguous",)
+    assert result.status is RefreshAuthorizationSourceStatus.CURRENT
+    assert result.reason_codes == ("current",)
+    assert result.records == (first, second)
 
 
 def test_expected_authorization_identity_selects_exact_record_not_newest_timestamp():
@@ -151,10 +152,18 @@ def test_expected_authorization_identity_selects_exact_record_not_newest_timesta
     assert result.records == (first,)
 
 
-def test_duplicate_comment_identity_and_malformed_trusted_record_fail_closed():
+def test_duplicate_authorization_content_deduplicates_by_identity():
+    record = auth()
+    body = serialize_refresh_authorization_comment(record)
+    result = read([comment(body, cid=1), comment(body, cid=2)])
+    assert result.status is RefreshAuthorizationSourceStatus.CURRENT
+    assert result.records == (record,)
+
+
+def test_duplicate_comment_id_and_malformed_trusted_record_fail_closed():
     body = serialize_refresh_authorization_comment(auth())
-    duplicate = read([comment(body), comment(body)])
-    assert duplicate.status is RefreshAuthorizationSourceStatus.NEEDS_DECISION
+    duplicate_id = read([comment(body, cid=1), comment(body, cid=1)])
+    assert duplicate_id.status is RefreshAuthorizationSourceStatus.NEEDS_DECISION
     malformed = read([comment(AUTHORIZATION_MARKER + "\n{}")])
     assert malformed.status is RefreshAuthorizationSourceStatus.NEEDS_DECISION
 
@@ -162,8 +171,6 @@ def test_duplicate_comment_identity_and_malformed_trusted_record_fail_closed():
 def test_receipt_tamper_is_detected_and_receipt_never_grants_authority():
     consumed = receipt()
     values = consumed.to_dict()
-    # `to_dict()` is the JSON-serialization surface, so it emits a list; the
-    # parse path reconstructs the exact tuple field type before validation.
     values["reason_codes"] = tuple(values["reason_codes"])
     values["receipt_id"] = "refresh-authorization-receipt:" + "0" * 64
     with pytest.raises(ValueError, match="receipt_id does not match content"):
