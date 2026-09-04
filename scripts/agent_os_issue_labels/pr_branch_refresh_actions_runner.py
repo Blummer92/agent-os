@@ -1,8 +1,8 @@
 """Finite GitHub Actions execution adapter for governed PR refresh (#1807).
 
-The issue-comment trigger selects only a PR number.  This adapter reacquires all
+The issue-comment trigger selects only a PR number. This adapter reacquires all
 mutation authority and currentness from canonical GitHub evidence before calling
-the existing #1402 ``refresh_pr`` facade.  It introduces no branch-refresh
+the existing #1402 ``refresh_pr`` facade. It introduces no branch-refresh
 algorithm, retry path, credential store, or fallback transport.
 """
 from __future__ import annotations
@@ -104,6 +104,7 @@ class BranchRefreshActionsExecutionResult:
     authorization_id: str | None = None
     refresh_receipt: dict[str, object] | None = None
     authorization_receipt_published: bool = False
+    receipt_publication_http_status: int | None = None
     mutation_count: int = 0
     side_effects_performed: bool = False
     merge_authorized: bool = field(default=False, init=False)
@@ -118,6 +119,10 @@ class BranchRefreshActionsExecutionResult:
             raise ValueError("reason_codes must be sorted and unique")
         if self.side_effects_performed and self.mutation_count != 1:
             raise ValueError("branch side effects require one mutation attempt")
+        if self.receipt_publication_http_status is not None and not (
+            100 <= self.receipt_publication_http_status <= 599
+        ):
+            raise ValueError("receipt_publication_http_status must be an HTTP status")
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -158,6 +163,13 @@ def _receipt_dict(receipt: object) -> dict[str, object]:
     else:
         raise TypeError("refresh receipt must be a dataclass or mapping")
     return payload
+
+
+def _publication_status(error: Exception) -> int | None:
+    status = getattr(error, "status", None)
+    if isinstance(status, int) and 100 <= status <= 599:
+        return status
+    return None
 
 
 def _blocked(
@@ -272,17 +284,22 @@ def run_branch_refresh_actions(
                 serialize_refresh_authorization_receipt(authorization_receipt)
             )
             published = True
-        except Exception:
+        except Exception as error:
+            http_status = _publication_status(error)
+            publication_reasons = {"authorization.receipt-publication-failed"}
+            if http_status is not None:
+                publication_reasons.add(
+                    f"authorization.receipt-publication-http-{http_status}"
+                )
             return BranchRefreshActionsExecutionResult(
                 repository=trigger.repository,
                 pr_number=trigger.pr_number,
                 status="needs-decision",
-                reason_codes=tuple(
-                    sorted(set(reason_codes) | {"authorization.receipt-publication-failed"})
-                ),
+                reason_codes=tuple(sorted(set(reason_codes) | publication_reasons)),
                 authorization_id=resolved.authorization_id,
                 refresh_receipt=payload,
                 authorization_receipt_published=False,
+                receipt_publication_http_status=http_status,
                 mutation_count=mutation_count,
                 side_effects_performed=side_effects,
             )
