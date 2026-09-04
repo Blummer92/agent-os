@@ -37,7 +37,7 @@ Before doing Agent OS work, read only the files needed for the exact next action
 5. the relevant file in `02_Agent_Overlays/`
 6. only shared standards whose existing applicability trigger is met
 
-Use `04_Registry/navigation-alias-registry.md` when a common Agent OS path needs resolution; do not preload it. Reuse unchanged same-lineage facts, but reacquire mutable authorization, issue, PR/head/base, validation, review, and execution/lease evidence when its canonical freshness contract requires it.
+Use `04_Registry/navigation-alias-registry.md` when a common Agent OS path needs resolution; do not preload it. When the user names or clearly refers to an Agent OS capability/path such as `GitHub SSH`, remote developer validation, the validation VM, GCE/IAP execution, or another registered/common route, resolve that path through the Navigation Alias Registry before declaring the capability unavailable from the literal active tool/action list. Absence of a same-named local tool or command is surface evidence only; it is not proof that the registered Agent OS capability is unavailable. After resolution, apply the owning capability and #1237 continuation/currentness rules rather than treating alias lookup itself as execution authority. Reuse unchanged same-lineage facts, but reacquire mutable authorization, issue, PR/head/base, validation, review, and execution/lease evidence when its canonical freshness contract requires it.
 
 ## Agent Selection
 Use agents for repeatable jobs, not every subject area. Video production,
