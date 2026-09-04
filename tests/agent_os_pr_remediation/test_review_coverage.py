@@ -3,6 +3,7 @@ import pytest
 from scripts.agent_os_pr_remediation.models import EvidenceValidationError
 from scripts.agent_os_pr_remediation.review_attack_plan import RequiredAttack, ReviewAttackPlan
 from scripts.agent_os_pr_remediation.review_coverage import (
+    ALLOWED_ADEQUACY_RECOMMENDATIONS,
     AdequacyStatus,
     CoverageStatus,
     ReviewCoverageObservation,
@@ -151,6 +152,7 @@ def test_happy_path_only_parser_evidence_is_inadequate():
     )
     assert result.adequacy_status is AdequacyStatus.INADEQUATE
     assert result.missing_obligations == ("ambiguous-input-case",)
+    assert result.recommendations == ()
 
 
 def test_negative_regression_evidence_can_be_adequate_independent_of_review_coverage():
@@ -191,7 +193,7 @@ def test_stale_test_head_without_compatibility_evidence_fails_closed():
     )
     assert result.adequacy_status is AdequacyStatus.STALE
     assert result.missing_obligations == item.bounded_evidence_requirements
-    assert "refresh-exact-head-test-evidence" in result.recommendations
+    assert result.recommendations == ()
 
 
 def test_unrelated_change_can_preserve_compatible_test_evidence():
@@ -218,7 +220,25 @@ def test_property_mutation_recommendation_is_report_only_and_non_authorizing():
     )
     assert "property-test-candidate" in result.recommendations
     assert "mutation-test-candidate" in result.recommendations
+    assert set(result.recommendations).issubset(ALLOWED_ADEQUACY_RECOMMENDATIONS)
     assert not result.execution_authorized and not result.merge_authorized and not result.external_write_authorized
+
+
+def test_missing_or_stale_evidence_does_not_invent_recommendation_vocabulary():
+    item = attack()
+    missing = assess_test_adequacy(
+        attack=item, evidence=None, required_test_obligations=item.bounded_evidence_requirements,
+    )
+    stale = assess_test_adequacy(
+        attack=item, required_test_obligations=item.bounded_evidence_requirements,
+        evidence=TestEvidence(OLD, ("pytest:old",), item.bounded_evidence_requirements, ("tests/test_parse.py",)),
+        current_head_sha=NEW,
+    )
+    assert missing.adequacy_status is AdequacyStatus.INADEQUATE
+    assert stale.adequacy_status is AdequacyStatus.STALE
+    assert missing.recommendations == stale.recommendations == ()
+    assert missing.missing_obligations == item.bounded_evidence_requirements
+    assert stale.missing_obligations == item.bounded_evidence_requirements
 
 
 def test_authority_fields_remain_false():
