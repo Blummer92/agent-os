@@ -58,11 +58,14 @@ class FakeIssue:
     def __init__(self, comments):
         self.comments = list(comments)
         self.created = []
+        self.create_error = None
 
     def get_comments(self):
         return iter(self.comments)
 
     def create_comment(self, body):
+        if self.create_error is not None:
+            raise self.create_error
         self.created.append(body)
 
 
@@ -239,3 +242,28 @@ def test_actions_runner_never_publishes_receipt_when_no_mutation_attempted():
     assert result.status == "blocked"
     assert result.mutation_count == 0
     assert not github.repo.issue.created
+
+
+def test_receipt_publication_failure_preserves_refresh_result_and_http_status():
+    auth = authorization()
+    github = FakeGithub([FakeComment(10, serialize_refresh_authorization_comment(auth))])
+    github.repo.issue.create_error = SimpleNamespace(status=403)
+
+    class PublicationError(Exception):
+        status = 403
+
+    github.repo.issue.create_error = PublicationError("forbidden")
+    calls = []
+    result = run_branch_refresh_actions(
+        trigger=trigger(), github_client=github, repository_root="/repo",
+        invocation_id="actions:1:1", environment={"GITHUB_TOKEN": "secret"},
+        refresh_callable=converged_refresh(auth, calls),
+    )
+
+    assert result.status == "needs-decision"
+    assert result.refresh_receipt is not None
+    assert result.refresh_receipt["status"] == "converged"
+    assert result.receipt_publication_http_status == 403
+    assert "authorization.receipt-publication-failed" in result.reason_codes
+    assert "authorization.receipt-publication-http-403" in result.reason_codes
+    assert result.authorization_receipt_published is False
