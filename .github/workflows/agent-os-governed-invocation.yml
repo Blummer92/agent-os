@@ -362,3 +362,65 @@ jobs:
           path: ${{ runner.temp }}/agent-os-ingress/*.json
           if-no-files-found: warn
           retention-days: 7
+
+  refresh_pr:
+    name: Run finite governed PR refresh
+    if: ${{ github.event.issue.pull_request == null && github.event.comment.user.id == 32861845 && startsWith(github.event.comment.body, '/agent-os refresh-pr ') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: read
+    steps:
+      - name: Check out canonical workflow source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install bounded refresh runtime dependency
+        run: python -m pip install PyGithub==2.10.0
+
+      - name: Run finite governed PR refresh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/agent-os-refresh"
+          python -m scripts.agent_os_issue_labels.pr_branch_refresh_actions_runner \
+            --event "$GITHUB_EVENT_PATH" \
+            --repository "$GITHUB_REPOSITORY" \
+            --repository-id "$GITHUB_REPOSITORY_ID" \
+            --ref "$GITHUB_REF" \
+            --workflow-ref "$GITHUB_WORKFLOW_REF" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --repository-root "$GITHUB_WORKSPACE" \
+            --invocation-id "actions:$GITHUB_RUN_ID:$GITHUB_RUN_ATTEMPT" \
+            --output "$RUNNER_TEMP/agent-os-refresh/result.json"
+
+      - name: Publish bounded refresh summary
+        if: ${{ always() }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          path = Path(os.environ["RUNNER_TEMP"]) / "agent-os-refresh" / "result.json"
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("## Agent OS governed PR refresh\n\n")
+              if not path.exists():
+                  summary.write("Result evidence unavailable; manual review required.\n")
+              else:
+                  result = json.loads(path.read_text(encoding="utf-8"))
+                  summary.write(f"Status: `{result.get('status')}`\n\n")
+                  summary.write(f"Reasons: `{','.join(result.get('reason_codes', []))}`\n\n")
+                  summary.write(f"Mutation count: `{result.get('mutation_count')}`\n\n")
+                  summary.write(f"Authorization receipt published: `{result.get('authorization_receipt_published')}`\n")
+          PY
+
+      - name: Publish bounded refresh evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-os-refresh-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/agent-os-refresh/result.json
+          if-no-files-found: warn
+          retention-days: 7
