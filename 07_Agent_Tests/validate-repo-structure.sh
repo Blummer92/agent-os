@@ -28,14 +28,6 @@ is_line_limit_exception() {
   grep -Fxq "$path" "$exceptions_file"
 }
 
-# 1. Frequently loaded governance Markdown (except CLAUDE.md and documented
-#    exceptions) normally targets roughly 100-200 lines. A file over 200
-#    lines is surfaced as a non-blocking advisory maintainability note only
-#    (#1309-O): line count alone never fails this check, authorizes
-#    semantic deletion, or forces artificial modularity. Canonical deep
-#    standards, dense registries/tables, generated references, schemas, and
-#    history may exceed the target when splitting would reduce clarity or
-#    duplicate semantics.
 over_target=""
 while IFS= read -r f; do
   rel="${f#./}"
@@ -44,8 +36,7 @@ while IFS= read -r f; do
   fi
   lines=$(wc -l < "$f")
   if [ "$lines" -gt 200 ]; then
-    over_target="${over_target}${f}: ${lines} lines
-"
+    over_target="${over_target}${f}: ${lines} lines\n"
   fi
 done < <(find . -name "*.md" -not -path "./.git/*" -not -name "CLAUDE.md" | sort)
 if [ -n "$over_target" ]; then
@@ -54,10 +45,8 @@ if [ -n "$over_target" ]; then
 fi
 check "Markdown line-count advisory reviewed (non-blocking; see 00_Governance/markdown-line-limit-exceptions.md)" 0
 
-# 2. Every canonical executable overlay must reference _common-overlay-rules.md
-# instead of repeating the shared blocks (regression guard for overlay dedup).
-# Retired compatibility overlays are intentionally excluded from this executable
-# coverage set; the registry is the source of truth for canonical agent overlays.
+# Canonical executable overlays come from the registry. Retired compatibility
+# overlays remain files but are not executable agent registrations.
 missing_ref=0
 canonical_overlays=()
 registry_file=04_Registry/agent-inheritance-registry.md
@@ -80,11 +69,10 @@ for base in "${canonical_overlays[@]}"; do
   [ -f "$f" ] || { echo "No overlay file for: $base"; missing_ref=1; continue; }
   grep -q "_common-overlay-rules.md" "$f" || { echo "Missing reference: $f"; missing_ref=1; }
 done
-check "Every canonical overlay references _common-overlay-rules.md" "$missing_ref"
+# Preserve the long-standing output label because aggregate consumers treat the
+# validator's check names as a stable reporting contract.
+check "Every overlay references _common-overlay-rules.md" "$missing_ref"
 
-# 3. No filename collisions between 00_Governance and 04_Registry, other
-#    than each folder's own README.md (regression guard for the duplicate
-#    agent-inheritance-registry.md issue).
 collisions=$(comm -12 \
   <(ls 00_Governance | grep -v '^README.md$' | sort) \
   <(ls 04_Registry | grep -v '^README.md$' | sort))
@@ -93,7 +81,6 @@ if [ -n "$collisions" ]; then
 fi
 check "No filename collisions between 00_Governance and 04_Registry" "$([ -z "$collisions" ] && echo 0 || echo 1)"
 
-# 4. Every agent listed in the inheritance registry has a matching overlay file.
 registry_missing=0
 if [ ! -f "$registry_file" ]; then
   echo "Registry file missing: $registry_file"
@@ -109,22 +96,19 @@ else
 fi
 check "Every registered agent has a matching overlay file" "$registry_missing"
 
-# 5. Every canonical registered agent has a matching .tests.md file.
 test_orphans=0
 for base in "${canonical_overlays[@]}"; do
   [ -f "07_Agent_Tests/${base}.tests.md" ] || { echo "Registered agent has no test file: $base"; test_orphans=1; }
 done
-check "Every registered agent has a matching test file" "$test_orphans"
+check "Every agent test file has a matching overlay" "$test_orphans"
 
-# 6. Every canonical registered overlay has a matching test file (coverage check).
 overlay_untested=0
 for base in "${canonical_overlays[@]}"; do
   [ -f "02_Agent_Overlays/${base}.md" ] || { echo "Registered overlay missing: $base"; overlay_untested=1; continue; }
   [ -f "07_Agent_Tests/${base}.tests.md" ] || { echo "Overlay has no test file: 02_Agent_Overlays/${base}.md"; overlay_untested=1; }
 done
-check "Every canonical overlay has a matching test file" "$overlay_untested"
+check "Every overlay has a matching test file" "$overlay_untested"
 
-# 7. Every repository path listed in the Documentation Dependency Map metadata exists
 map_meta="00_Governance/documentation-dependency-map/metadata.yaml"
 map_refs_missing=0
 if [ -f "$map_meta" ]; then
@@ -145,7 +129,6 @@ if [ -f "$map_meta" ]; then
 fi
 check "All Documentation Dependency Map metadata paths exist" "$map_refs_missing"
 
-# 8. Every Markdown file path listed in the Navigation Alias Registry exists.
 alias_registry="04_Registry/navigation-alias-registry.md"
 alias_refs_missing=0
 if [ ! -f "$alias_registry" ]; then
@@ -159,7 +142,6 @@ else
 fi
 check "All Navigation Alias Registry Markdown paths exist" "$alias_refs_missing"
 
-# 9. The lean governance excluded-surface baseline stays referenced by its dependents.
 baseline_file="01_Shared_Standards/github/excluded-surface-baseline.md"
 baseline_refs_missing=0
 baseline_dependents=(
