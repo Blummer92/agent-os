@@ -314,7 +314,7 @@ def assess_test_adequacy(
             satisfied_obligations=(),
             missing_obligations=required,
             bounded_evidence_refs=(),
-            recommendations=tuple(sorted(set(recommended) | {"add-material-regression-evidence"})),
+            recommendations=recommended,
         )
     if type(evidence) is not TestEvidence:
         raise EvidenceValidationError("evidence must be TestEvidence")
@@ -349,15 +349,12 @@ def assess_test_adequacy(
             satisfied_obligations=(),
             missing_obligations=required,
             bounded_evidence_refs=refs,
-            recommendations=tuple(sorted(set(recommended) | {"refresh-exact-head-test-evidence"})),
+            recommendations=recommended,
         )
 
     satisfied = tuple(sorted(set(required) & set(exercised)))
     missing = tuple(sorted(set(required) - set(exercised)))
     status = AdequacyStatus.ADEQUATE if not missing else AdequacyStatus.INADEQUATE
-    final_recommendations = set(recommended)
-    if missing:
-        final_recommendations.add("add-material-regression-evidence")
     return TestAdequacyRecord(
         attack_id=attack.attack_id,
         tested_head_sha=tested_head,
@@ -365,5 +362,5 @@ def assess_test_adequacy(
         satisfied_obligations=satisfied,
         missing_obligations=missing,
         bounded_evidence_refs=refs,
-        recommendations=tuple(sorted(final_recommendations)),
+        recommendations=recommended,
     )
