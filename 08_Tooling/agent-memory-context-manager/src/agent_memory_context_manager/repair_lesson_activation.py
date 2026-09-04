@@ -7,7 +7,7 @@ or persistence path.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Any, Mapping, Callable
+from typing import Any, Callable, Mapping
 
 from .coding_knowledge_selection import CodingKnowledgeRequest
 from .lesson_activation_bridge import orchestrate_lesson_activation
@@ -46,7 +46,8 @@ def activate_repair_retry_lessons(
     caller explicitly opted out with ``specialized_knowledge_required=False``.
     When retrieval is required, CKR11 performs the existing bounded read. The
     returned outcome is recorded on this exact failed attempt before the retry
-    gate is recomputed.
+    gate is recomputed. A specialized-required retrieval failure remains a
+    mutation blocker rather than being flattened into an admissible outcome.
     """
     if type(request) is not CodingKnowledgeRequest:
         raise TypeError("request must be a CodingKnowledgeRequest")
@@ -69,7 +70,18 @@ def activate_repair_retry_lessons(
     )
     outcome = _retry_outcome(lesson_result)
     updated_attempt = replace(attempt, retry_reentry_outcome=outcome)
-    boundary = plan_repair_retry_boundary(repair_context, (updated_attempt,))
+
+    if lesson_result.lesson_retrieval_status in {
+        LessonRetrievalStatus.INSUFFICIENT,
+        LessonRetrievalStatus.MANUAL_REVIEW,
+    }:
+        boundary = RepairRetryBoundaryPlan(
+            False,
+            attempt.attempt_id,
+            ("retry-ckr6-reentry-unavailable-or-failed",),
+        )
+    else:
+        boundary = plan_repair_retry_boundary(repair_context, (updated_attempt,))
     return RepairLessonActivationResult(updated_attempt, lesson_result, boundary)
 
 
