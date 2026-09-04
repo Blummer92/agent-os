@@ -5,6 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 REGISTRY = ROOT / "04_Registry/navigation-alias-registry.md"
+AGENTS = ROOT / "AGENTS.md"
 
 
 def _alias_section() -> str:
@@ -66,3 +67,15 @@ def test_remote_dev_validation_alias_preserves_bounded_non_authorizing_route() -
     assert "do not invent arbitrary argv" in section
     assert "generic SSH shell" in section
     assert "#1237" in section
+
+
+def test_agent_entrypoint_resolves_named_capability_before_unavailable() -> None:
+    text = AGENTS.read_text(encoding="utf-8")
+
+    assert "`GitHub SSH`" in text
+    assert "resolve that path through the Navigation Alias Registry" in text
+    assert "before declaring the capability unavailable" in text
+    assert "literal active tool/action list" in text
+    assert "Absence of a same-named local tool or command is surface evidence only" in text
+    assert "not proof that the registered Agent OS capability is unavailable" in text
+    assert "#1237 continuation/currentness rules" in text
