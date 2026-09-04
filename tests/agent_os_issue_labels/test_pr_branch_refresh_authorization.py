@@ -84,6 +84,39 @@ def test_multiple_matching_records_are_ambiguous():
     assert result.reason_codes == ("authorization.ambiguous",)
 
 
+def test_stale_main_record_does_not_compete_with_exact_current_record():
+    stale = auth(expected_main_sha="c" * 40, owner_decision_reference="old-main")
+    current = auth(owner_decision_reference="current-main")
+    result = resolve_branch_refresh_authorization(
+        [stale, current], repository=REPO, pr_number=1363,
+        current_head_sha=HEAD, current_main_sha=MAIN, current_changed_paths=("x.py",),
+    )
+    assert result.applicable is True
+    assert result.authorization_id == current.authorization_id
+
+
+def test_stale_head_record_does_not_compete_with_exact_current_record():
+    stale = auth(expected_head_sha="c" * 40, owner_decision_reference="old-head")
+    current = auth(owner_decision_reference="current-head")
+    result = resolve_branch_refresh_authorization(
+        [stale, current], repository=REPO, pr_number=1363,
+        current_head_sha=HEAD, current_main_sha=MAIN, current_changed_paths=("x.py",),
+    )
+    assert result.applicable is True
+    assert result.authorization_id == current.authorization_id
+
+
+def test_stale_scope_record_does_not_compete_with_exact_current_record():
+    stale = auth(allowed_changed_paths=("docs/x.md",), owner_decision_reference="old-scope")
+    current = auth(owner_decision_reference="current-scope")
+    result = resolve_branch_refresh_authorization(
+        [stale, current], repository=REPO, pr_number=1363,
+        current_head_sha=HEAD, current_main_sha=MAIN, current_changed_paths=("x.py",),
+    )
+    assert result.applicable is True
+    assert result.authorization_id == current.authorization_id
+
+
 @pytest.mark.parametrize("state,reason", [
     (RefreshAuthorizationState.CONSUMED, "authorization.consumed"),
     (RefreshAuthorizationState.EXPIRED, "authorization.not-current"),
