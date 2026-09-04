@@ -71,13 +71,10 @@ def test_validation_gate_executes_only_canonical_aggregate_command():
     assert "Cloud Build validation migration notice" not in content
 
 
-def test_validation_gate_suppresses_routine_draft_aggregate_and_preserves_ready_events():
+def test_validation_gate_runs_for_draft_and_ready_pr_heads():
     content = WORKFLOW.read_text(encoding="utf-8")
     assert "types: [opened, reopened, synchronize, ready_for_review]" in content
-    assert (
-        "if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}"
-        in content
-    )
+    assert "github.event.pull_request.draft == false" not in content
     assert "synchronize" in content
     assert "ready_for_review" in content
     assert "paths:" not in content
