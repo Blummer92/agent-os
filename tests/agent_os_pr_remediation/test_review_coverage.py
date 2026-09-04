@@ -135,6 +135,26 @@ def test_duplicate_equivalent_observations_collapse_deterministically():
     assert one[0].coverage_id == two[0].coverage_id
 
 
+def test_enum_backed_coverage_and_adequacy_ids_are_deterministic():
+    item = attack()
+    coverage = normalize_review_coverage(plan=plan(item), observations=[observation(item)])[0]
+    adequacy = assess_test_adequacy(
+        attack=item,
+        required_test_obligations=item.bounded_evidence_requirements,
+        evidence=TestEvidence(
+            HEAD,
+            ("pytest:parser-negative",),
+            item.bounded_evidence_requirements,
+            ("tests/test_parse.py",),
+        ),
+    )
+
+    assert coverage.coverage_status is CoverageStatus.EXAMINED_CLEAR
+    assert adequacy.adequacy_status is AdequacyStatus.ADEQUATE
+    assert coverage.coverage_id == coverage.coverage_id
+    assert adequacy.adequacy_id == adequacy.adequacy_id
+
+
 def test_contradictory_duplicate_observations_fail_closed():
     item = attack()
     records = normalize_review_coverage(
