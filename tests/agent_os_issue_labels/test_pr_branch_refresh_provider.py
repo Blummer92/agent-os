@@ -33,9 +33,13 @@ MAIN_EPOCH = "1700000000"
 class FakeRunner:
     observations: list[BranchUpdateObservation]
     calls: list[tuple[tuple[str, ...], str, dict[str, str]]] = field(default_factory=list)
+    head_subject: str = ""
 
     def run(self, argv, *, cwd, env):
-        self.calls.append((tuple(argv), cwd, dict(env)))
+        argv = tuple(argv)
+        self.calls.append((argv, cwd, dict(env)))
+        if len(argv) >= 4 and argv[0:3] == ("git", "show", "-s") and "--format=%s" in argv:
+            return observation(stdout=f"{self.head_subject}\n")
         return self.observations.pop(0)
 
 
@@ -241,8 +245,33 @@ def test_rebase_preparation_then_expected_head_transport_updates_once():
     assert result.old_head_sha == OLD and result.new_head_sha == NEW
     assert runner.calls[0][0] == ("git", "merge-base", OLD, MAIN)
     assert runner.calls[1][0] == ("git", "rev-list", "--merges", f"{MERGE_BASE}..{OLD}")
-    assert runner.calls[2][0] == ("git", "rebase", "--no-autostash", "--onto", MAIN, MERGE_BASE, OLD)
+    assert runner.calls[2][0] == ("git", "show", "-s", "--format=%s", OLD)
+    assert runner.calls[3][0] == ("git", "rebase", "--no-autostash", "--onto", MAIN, MERGE_BASE, OLD)
     assert all("merge-tree" not in call[0] for call in runner.calls)
+    assert sum("push" in call[0] for call in runner.calls) == 1
+
+
+def test_previously_refreshed_candidate_uses_merge_tree_without_rebase():
+    backing = FakeBacking(snapshot())
+    runner = FakeRunner([
+        observation(stdout=f"{MERGE_BASE}\n"),
+        observation(),
+        observation(stdout=f"{MERGED_TREE}\n"),
+        observation(stdout=f"{MAIN_EPOCH}\n"),
+        observation(stdout=f"{NEW}\n"),
+        observation(),
+        observation(stdout=f"{NEW}\n"),
+        observation(stdout="scripts/example.py\n"),
+        observation(stdout=f"{OLD}\trefs/heads/agent/1237-publication-required-continuation\n"),
+        observation(),
+        observation(stdout=f"{NEW}\trefs/heads/agent/1237-publication-required-continuation\n"),
+    ], head_subject=provider_module._TOPOLOGY_COMMIT_MESSAGE)
+    result = invoke(provider(backing, runner))
+    assert result.status == "updated"
+    assert result.new_head_sha == NEW
+    assert runner.calls[2][0] == ("git", "show", "-s", "--format=%s", OLD)
+    assert runner.calls[3][0] == ("git", "merge-tree", "--write-tree", MAIN, OLD)
+    assert all("rebase" not in call[0] for call in runner.calls)
     assert sum("push" in call[0] for call in runner.calls) == 1
 
 
@@ -415,7 +444,7 @@ def test_rebase_timeout_is_ambiguous_and_does_not_retry():
         observation(return_code=None, timed_out=True, termination_confirmed=False),
     ])
     result = invoke(provider(FakeBacking(snapshot()), runner))
-    assert result.status == "ambiguous" and len(runner.calls) == 3
+    assert result.status == "ambiguous" and len(runner.calls) == 4
 
 
 def test_unproven_rebased_head_blocks_before_remote_transport():

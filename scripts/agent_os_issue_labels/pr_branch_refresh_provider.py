@@ -262,8 +262,21 @@ class ProductionPullRequestBranchRefreshProvider(PullRequestBranchRefreshProvide
 
         # A GitHub-conflicted stale branch is routed directly to merge-tree so the
         # working tree is never left in a partially rebased state. Existing merge-
-        # shaped history uses the same bounded final-tree projection.
-        if history_lines or snapshot.mergeability == "conflicted":
+        # shaped history uses the same bounded final-tree projection. A previously
+        # generated governed refresh candidate uses that same deterministic path
+        # if it later falls behind main again.
+        use_merge_tree = bool(history_lines) or snapshot.mergeability == "conflicted"
+        if not use_merge_tree:
+            subject = self.runner.run((self.git_binary, "show", "-s", "--format=%s", expected_head_sha), cwd=self.repository_root, env=dict(self.environment))
+            if not subject.started:
+                return _blocked(expected_head_sha, "topology-head-subject-not-started")
+            if subject.timed_out or not subject.termination_confirmed:
+                return _ambiguous(expected_head_sha, "topology-head-subject-outcome-uncertain")
+            if subject.return_code != 0:
+                return _blocked(expected_head_sha, "topology-head-subject-rejected")
+            use_merge_tree = subject.stdout.strip() == _TOPOLOGY_COMMIT_MESSAGE
+
+        if use_merge_tree:
             proposed_head_sha = self._prepare_merge_shaped_candidate(expected_head_sha=expected_head_sha, current_main_sha=current_main_sha, admitted_paths=snapshot.changed_paths)
             if isinstance(proposed_head_sha, BranchRefreshMutationResult):
                 return proposed_head_sha
