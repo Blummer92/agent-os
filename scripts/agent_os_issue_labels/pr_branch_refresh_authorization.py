@@ -163,26 +163,14 @@ class BranchRefreshAuthorizationEvidence:
         }
 
 
-def resolve_branch_refresh_authorization(
-    records: Iterable[RefreshAuthorization],
+def _record_blockers(
+    record: RefreshAuthorization,
     *,
-    repository: str,
-    pr_number: int,
     current_head_sha: str,
     current_main_sha: str,
-    current_changed_paths: tuple[str, ...],
-) -> BranchRefreshAuthorizationEvidence:
-    """Resolve exactly one current authorization from canonical supplied records."""
-    changed = _paths(current_changed_paths, "current_changed_paths")
-    candidates = [record for record in records if record.repository == repository and record.pr_number == pr_number]
+    changed: tuple[str, ...],
+) -> set[str]:
     reasons: set[str] = set()
-    if not candidates:
-        reasons.add("authorization.absent")
-        return _blocked(repository, pr_number, current_head_sha, current_main_sha, reasons)
-    if len(candidates) != 1:
-        reasons.add("authorization.ambiguous")
-        return _blocked(repository, pr_number, current_head_sha, current_main_sha, reasons)
-    record = candidates[0]
     if record.state is RefreshAuthorizationState.CONSUMED:
         reasons.add("authorization.consumed")
     elif record.state is not RefreshAuthorizationState.AUTHORIZED:
@@ -198,8 +186,56 @@ def resolve_branch_refresh_authorization(
         reasons.add("scope.forbidden-path")
     if not changed_set.issubset(set(record.allowed_changed_paths)):
         reasons.add("scope.expanded")
-    if reasons:
-        return _blocked(repository, pr_number, current_head_sha, current_main_sha, reasons)
+    return reasons
+
+
+def resolve_branch_refresh_authorization(
+    records: Iterable[RefreshAuthorization],
+    *,
+    repository: str,
+    pr_number: int,
+    current_head_sha: str,
+    current_main_sha: str,
+    current_changed_paths: tuple[str, ...],
+) -> BranchRefreshAuthorizationEvidence:
+    """Resolve exactly one authorization applicable to freshly reacquired evidence.
+
+    Historical records are intentionally retained.  A stale record bound to an old
+    head/main/scope is non-applicable evidence, not ambiguity.  Ambiguity exists
+    only when more than one distinct record is simultaneously applicable to the
+    exact current repository/PR/head/main/scope tuple.
+    """
+    changed = _paths(current_changed_paths, "current_changed_paths")
+    candidates = [record for record in records if record.repository == repository and record.pr_number == pr_number]
+    if not candidates:
+        return _blocked(repository, pr_number, current_head_sha, current_main_sha, {"authorization.absent"})
+
+    applicable: list[RefreshAuthorization] = []
+    rejected_reasons: set[str] = set()
+    for record in candidates:
+        record_reasons = _record_blockers(
+            record,
+            current_head_sha=current_head_sha,
+            current_main_sha=current_main_sha,
+            changed=changed,
+        )
+        if record_reasons:
+            rejected_reasons.update(record_reasons)
+        else:
+            applicable.append(record)
+
+    if len(applicable) > 1:
+        return _blocked(repository, pr_number, current_head_sha, current_main_sha, {"authorization.ambiguous"})
+    if not applicable:
+        return _blocked(
+            repository,
+            pr_number,
+            current_head_sha,
+            current_main_sha,
+            rejected_reasons or {"authorization.absent"},
+        )
+
+    record = applicable[0]
     return BranchRefreshAuthorizationEvidence(
         repository=repository,
         pr_number=pr_number,
