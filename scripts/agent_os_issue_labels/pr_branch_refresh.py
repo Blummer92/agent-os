@@ -282,7 +282,11 @@ def _admission_blocker(
         return "head.moved-before-refresh"
     if snapshot.branch_state == "current":
         return "branch.refresh-not-required"
-    if snapshot.branch_state != "behind" or snapshot.mergeability in {"conflicted", "unknown"}:
+    # A current GitHub mergeability=conflicted signal is evidence that deterministic
+    # reconciliation is required, not proof that refresh itself is ineligible. The
+    # concrete provider must still compute a conflict-free candidate before #1381
+    # receives any mutation request. Unknown mergeability remains fail-closed.
+    if snapshot.branch_state != "behind" or snapshot.mergeability == "unknown":
         return "branch.refresh-not-eligible"
     return _path_blocker(snapshot.changed_paths, request)
 

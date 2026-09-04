@@ -296,7 +296,7 @@ def test_merge_shaped_tree_conflict_blocks_without_transport_or_retry():
         observation(return_code=1),
     ])
     result = invoke(provider(FakeBacking(snapshot()), runner))
-    assert result.reason_code == "topology-merge-tree-rejected"
+    assert result.reason_code == "reconciliation.semantic-conflict"
     assert all("push" not in call[0] for call in runner.calls)
     assert len(runner.calls) == 3
 
@@ -376,10 +376,11 @@ def test_moved_main_blocks_before_any_git_command():
     assert result.reason_code == "base.moved-before-preparation" and runner.calls == []
 
 
-def test_conflicted_branch_blocks_before_any_git_command():
-    runner = FakeRunner([])
+def test_conflicted_branch_reaches_deterministic_git_preparation():
+    runner = FakeRunner([observation(return_code=1)])
     result = invoke(provider(FakeBacking(snapshot(mergeability="conflicted")), runner))
-    assert result.reason_code == "branch.refresh-not-eligible-before-preparation" and runner.calls == []
+    assert result.reason_code == "merge-base-unavailable"
+    assert runner.calls[0][0] == ("git", "merge-base", OLD, MAIN)
 
 
 def test_transport_authorization_blocks_before_local_preparation():

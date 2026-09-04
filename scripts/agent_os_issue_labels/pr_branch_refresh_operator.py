@@ -462,8 +462,11 @@ def preflight_production_branch_refresh(
         reasons.append("base.branch-mismatch")
     if snapshot.branch_state != "behind":
         reasons.append("branch.refresh-not-required-or-unknown")
-    if snapshot.mergeability in {"conflicted", "unknown"}:
-        reasons.append("branch.mergeability-blocked")
+    # GitHub's conflicted flag is a routing hint for deterministic reconciliation,
+    # not a preflight veto. The provider must still prove a conflict-free candidate
+    # before the one #1381 mutation attempt. Unknown mergeability remains blocked.
+    if snapshot.mergeability == "unknown":
+        reasons.append("branch.mergeability-unknown")
 
     changed = set(snapshot.changed_paths)
     allowed = set(request.allowed_changed_paths)
