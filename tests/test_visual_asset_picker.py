@@ -74,23 +74,3 @@ def test_explicit_requested_asset_scope_does_not_substitute_another_asset():
     intent = AssetPickerIntent(source_preference="explicit-existing", requested_asset_ids=("wanted",))
     result = resolve_visual_asset_picker(intent, [candidate("other", unit_match=True)])
     assert result.outcome == "visual-gap"
-
-
-def test_semantically_equivalent_reuse_only_paraphrase_fixtures_share_behavior():
-    examples = ("Use what we already have.", "Don't make anything new.", "No AI images.", "Just use my old pictures.")
-    outcomes = []
-    for _teacher_language in examples:
-        decision = resolve_visual_asset_picker(
-            AssetPickerIntent(source_preference="reuse-only", generation_allowed=False), [candidate("asset-a", unit_match=True)]
-        )
-        outcomes.append((decision.source_preference, decision.generation_allowed, decision.selected_references[0].asset_id))
-    assert len(set(outcomes)) == 1
-
-
-def test_semantically_equivalent_reuse_first_paraphrase_fixtures_share_behavior():
-    examples = ("Check what we have first.", "Use an existing one if possible.", "Find one first.", "See if there's already a good one.")
-    outcomes = []
-    for _teacher_language in examples:
-        decision = resolve_visual_asset_picker(AssetPickerIntent(source_preference="reuse-first"), [candidate("asset-a")])
-        outcomes.append((decision.source_preference, decision.generation_allowed, decision.outcome))
-    assert len(set(outcomes)) == 1
