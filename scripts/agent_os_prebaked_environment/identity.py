@@ -35,7 +35,8 @@ def _content_id(prefix: str, payload: object) -> str:
     canonical = json.dumps(
         payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
     ).encode("utf-8")
-    return f"{prefix}:{hashlib.sha256(prefix.encode() + b'\0' + canonical).hexdigest()}"
+    digest = hashlib.sha256(prefix.encode() + b"\x00" + canonical).hexdigest()
+    return f"{prefix}:{digest}"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

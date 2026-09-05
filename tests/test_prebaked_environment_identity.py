@@ -51,6 +51,16 @@ def test_equivalent_inputs_produce_stable_identity():
     assert image().environment_id == image().environment_id
 
 
+def test_identity_is_pinned_across_processes_and_runs():
+    # Self-comparison only proves in-process consistency. A pre-baked image is
+    # selected by an identity computed on a different machine and run, so the
+    # derivation itself must stay byte-stable.
+    assert image().environment_id == (
+        "prebaked-environment:"
+        "5c85e191405505f6415c89b4d2684808e0f18a27ef3c40e60d1bcfd74c51f89f"
+    )
+
+
 def test_manifest_drift_changes_required_environment_and_image_identity():
     assert image(spec()).environment_id != image(spec(manifest=C)).environment_id
 
