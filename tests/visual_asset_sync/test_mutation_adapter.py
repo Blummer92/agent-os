@@ -193,7 +193,7 @@ def test_ambiguous_create_reconciles_identity_before_any_retry():
     assert client.creates == 1
 
 
-def test_ambiguous_create_without_identity_never_retries_when_budget_zero():
+def test_ambiguous_create_without_identity_never_retries_even_with_budget():
     entries = _entries()[1:]
     actions = build_mutation_actions(entries, _records()[1:], property_mapping=MAPPING)
 
@@ -204,9 +204,33 @@ def test_ambiguous_create_without_identity_never_retries_when_budget_zero():
             raise NotionTransientMutationError(1, ambiguous=True)
 
     client = Client()
-    with pytest.raises(MutationExecutionError, match="retry limit"):
-        execute_mutation_actions(actions, _authorization(entries, maximum_updates=0, maximum_total_mutations=1, dry_run=False), client=client, now=NOW, sleep=lambda _: None)
+    with pytest.raises(MutationExecutionError, match="manual reconciliation"):
+        execute_mutation_actions(
+            actions,
+            _authorization(entries, maximum_updates=0, maximum_total_mutations=1, dry_run=False, maximum_retries=2, maximum_total_retry_delay=2),
+            client=client, now=NOW, sleep=lambda _: None,
+        )
     assert client.creates == 1
+
+
+def test_ambiguous_update_never_retries_even_with_budget():
+    entries = _entries()[:1]
+    actions = build_mutation_actions(entries, _records()[:1], property_mapping=MAPPING)
+
+    class Client(GoodClient):
+        updates = 0
+        def update_page(self, **kwargs):
+            self.updates += 1
+            raise NotionTransientMutationError(1, ambiguous=True)
+
+    client = Client()
+    with pytest.raises(MutationExecutionError, match="manual reconciliation"):
+        execute_mutation_actions(
+            actions,
+            _authorization(entries, maximum_creates=0, maximum_total_mutations=1, dry_run=False, maximum_retries=2, maximum_total_retry_delay=2),
+            client=client, now=NOW, sleep=lambda _: None,
+        )
+    assert client.updates == 1
 
 
 def test_external_exception_details_are_not_exposed():
