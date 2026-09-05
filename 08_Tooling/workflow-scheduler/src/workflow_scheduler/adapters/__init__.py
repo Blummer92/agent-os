@@ -22,6 +22,10 @@ from workflow_scheduler.adapters.github_readonly_adapter import (
     GitHubReadOnlyAdapter,
     GitHubReadOnlyAdapterError,
 )
+from workflow_scheduler.adapters.github_ruleset_admin_adapter import (
+    GitHubRulesetAdminAdapter,
+    GitHubRulesetAdminAdapterError,
+)
 from workflow_scheduler.adapters.instructional_materials_dry_run_adapter import (
     InstructionalMaterialsDryRunAdapter,
 )
@@ -51,6 +55,8 @@ __all__ = [
     "GitHubPRCommentAdapterError",
     "GitHubPRLabelAdapter",
     "GitHubPRLabelAdapterError",
+    "GitHubRulesetAdminAdapter",
+    "GitHubRulesetAdminAdapterError",
     "resolve_adapter",
     "available_adapters",
 ]
