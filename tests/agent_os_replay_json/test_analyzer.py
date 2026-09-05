@@ -110,6 +110,16 @@ def test_non_list_selector_container_fails_closed_to_no_selector_evidence():
     assert action.target is None
 
 
+def test_missing_navigate_url_preserves_missing_target():
+    action = analyze_replay({"steps": [{"type": "navigate"}]})[0]
+    assert action.target is None
+
+
+def test_present_navigate_url_is_unchanged():
+    action = analyze_replay({"steps": [{"type": "navigate", "url": "https://example.test"}]})[0]
+    assert action.target == "https://example.test"
+
+
 def test_missing_steps_fails_closed():
     try:
         analyze_replay({})
