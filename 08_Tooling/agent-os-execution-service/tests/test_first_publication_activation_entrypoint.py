@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from agent_os_execution_service.executor_routing import (
-    EXECUTOR_ROUTING_SCHEMA_VERSION,
     ExecutorCapability,
     ExecutorHandoff,
-    ExecutorRoute,
+    build_executor_handoff,
     executor_handoff_id,
+    select_executor_route,
 )
 from agent_os_execution_service.first_publication_activation_entrypoint import (
     FirstPublicationActivationIdentity,
@@ -28,7 +28,37 @@ def producer()->FirstPublicationProducerResult:
 
 
 def handoff()->ExecutorHandoff:
-    return ExecutorHandoff(schema_version=EXECUTOR_ROUTING_SCHEMA_VERSION,route=ExecutorRoute.CHATGPT_GOVERNED_RUNNER,repository="Blummer92/agent-os",issue_or_handoff_identity="issue:1239",requested_operation="pre-pr-developer-loop",source_sha=SHA,expected_changed_paths=("README.md",),required_tests=("focused",),required_capabilities=(ExecutorCapability.TEST_EXECUTION,),authorization_id=AUTH,checkpoint_id=CHECKPOINT,resume_plan_id=PLAN,execution_service_request_fingerprint="request:"+"3"*64,validation_command_plan_id="command-plan:"+"4"*64,repository_state_evidence_id="repository-state:"+"5"*64,environment_profile_id="environment-profile:"+"6"*64,environment_health_evidence_id="environment-health:"+"7"*64,workflow_runtime_identity="workflow-runtime:production-gce",required_return_evidence=("exact-head-sha",),stop_conditions=("scope-expanded",),created_at="2026-09-05T22:00:00Z",expires_at="2026-09-05T23:00:00Z")
+    capabilities=(ExecutorCapability.TEST_EXECUTION,)
+    decision=select_executor_route(
+        repository="Blummer92/agent-os",
+        issue_or_handoff_identity="issue:1239",
+        requested_operation="first-publication-activation",
+        required_capabilities=capabilities,
+        governed_runner_capabilities=capabilities,
+        governed_runner_available=True,
+        external_fallback_available=False,
+        external_fallback_explicitly_permitted=False,
+        created_at="2026-09-05T22:00:00Z",
+        expires_at="2026-09-05T23:00:00Z",
+        invalidation_conditions=("authorization-changed","repository-head-changed"),
+        execution_service_request_fingerprint_or_none="execution-request:abc123",
+        operating_mode_decision_id_or_none="operating-mode:abc123",
+        executable_lane_selection_id_or_none="lane-selection:abc123",
+        validation_command_plan_id_or_none="command-plan:abc123",
+        environment_profile_id_or_none="environment-profile:abc123",
+        environment_health_evidence_id_or_none="environment-health:abc123",
+        workflow_runtime_identity_or_none="workflow-runtime:abc123",
+    )
+    return build_executor_handoff(
+        decision,
+        source_ref_or_none="refs/heads/agent/1239-first-publication-activation",
+        source_sha_or_none=SHA,
+        allowed_paths=("08_Tooling/agent-os-execution-service",),
+        forbidden_paths=(".github/workflows",),
+        required_return_evidence=("exact-head-sha","test-results"),
+        stop_conditions=("excluded-surface-entered","scope-expanded"),
+        environment_profile_id_or_none="environment-profile:abc123",
+    )
 
 
 def test_activation_composes_existing_producer_then_publication_exactly_once()->None:
