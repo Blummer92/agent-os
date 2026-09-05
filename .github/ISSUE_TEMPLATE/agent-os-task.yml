@@ -14,7 +14,7 @@ body:
     id: tier
     attributes:
       label: Issue tier
-      description: Tier 0 is small safe maintenance, Tier 1 is standard implementation, and Tier 2 is governed or cross-system work.
+      description: Tier 0 is small safe maintenance, Tier 1 is standard implementation, and Tier 2 is governed or cross-system work. Tier remains body evidence and is not projected as a label.
       options: [tier:0-small-maintenance, tier:1-standard-implementation, tier:2-governed-cross-system]
     validations: {required: true}
 
@@ -29,13 +29,16 @@ body:
     id: owner
     attributes:
       label: Primary owner
+      description: Select only a currently registered canonical Agent OS owner. Historical owner names are compatibility input for legacy issues, not choices for new issues.
       options:
-        - owner:qa-test-agent
+        - owner:chatgpt-orchestrator
         - owner:github-service-agent
-        - owner:integration-manager
-        - owner:instructional-materials-coach
-        - owner:google-workspace-automation-engineer
+        - owner:modeling-dashboard-governance-agent
+        - owner:qa-test-agent
+        - owner:agent-orchestrator
+        - owner:unit-alignment-agent
         - owner:teacher-modeling-coach
+        - owner:instructional-materials-coach
         - needs-decision
     validations: {required: true}
 
@@ -43,9 +46,17 @@ body:
     id: readiness
     attributes:
       label: Readiness candidate
-      description: The readiness preflight makes the final evidence-based decision.
+      description: The readiness preflight makes the final evidence-based decision. Proposed/planning work uses status:needs-decision until canonical readiness evidence supports ready or blocked.
       options: [status:ready, status:blocked, status:needs-decision]
     validations: {required: true}
+
+  - type: dropdown
+    id: work-type
+    attributes:
+      label: Work type
+      description: Optional searchable work classification. This does not create readiness or execution authority.
+      options: [type:bug, type:docs, type:tooling, type:governance, type:validation, type:classroom-artifact, type:planning]
+    validations: {required: false}
 
   - type: dropdown
     id: source-of-truth
@@ -58,6 +69,7 @@ body:
     id: external-write
     attributes:
       label: External write boundary
+      description: This remains canonical body evidence. no-external-write is not itself projected as a label or authorization.
       options: [no-external-write, external-write-requested, needs-decision]
     validations: {required: true}
 

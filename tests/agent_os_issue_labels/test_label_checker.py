@@ -63,6 +63,62 @@ GitHub
 no-external-write
 """
 
+_TIERED_BUG_BODY = """
+### Issue tier
+
+tier:1-standard-implementation
+
+### Primary owner
+
+owner:github-service-agent
+
+### Readiness candidate
+
+status:ready
+
+### Work type
+
+type:bug
+
+### Source of truth
+
+GitHub
+
+### External write boundary
+
+no-external-write
+"""
+
+_LEGACY_INTEGRATION_MANAGER_BODY = """
+### Phase
+
+implementation-phase-1
+
+### Epic
+
+epic:issue-acceptance
+
+### Owner agent
+
+owner:integration-manager
+
+### Status
+
+status:ready
+
+### Type
+
+type:tooling
+
+### Source-of-truth surface
+
+GitHub
+
+### External write surface
+
+no-external-write
+"""
+
 _NEEDS_DECISION_BODY = """
 ### Issue tier
 
@@ -137,6 +193,16 @@ def test_legacy_form_still_maps_expected_labels():
     assert "type:validation" in labels
 
 
+def test_legacy_retired_owner_resolves_to_canonical_owner_label():
+    fields = load_issue_form_fields(FORM)
+    metadata = parse_issue_form_body(_LEGACY_INTEGRATION_MANAGER_BODY, fields)
+    labels, unknown = expected_labels(metadata, load_label_map(MAP))
+
+    assert unknown == []
+    assert "owner:chatgpt-orchestrator" in labels
+    assert "owner:integration-manager" not in labels
+
+
 def test_tiered_form_maps_aliases_without_new_tier_labels():
     fields = load_issue_form_fields(FORM)
     metadata = parse_issue_form_body(_TIERED_READY_BODY, fields)
@@ -146,6 +212,21 @@ def test_tiered_form_maps_aliases_without_new_tier_labels():
     assert metadata["tier"] == ["tier:1-standard-implementation"]
     assert metadata["status"] == ["status:ready"]
     assert labels == set(_TIERED_READY_LABELS)
+
+
+def test_tiered_bug_projects_searchable_type_without_changing_readiness():
+    fields = load_issue_form_fields(FORM)
+    metadata = parse_issue_form_body(_TIERED_BUG_BODY, fields)
+    labels, unknown = expected_labels(metadata, load_label_map(MAP))
+
+    assert unknown == []
+    assert metadata["type"] == ["type:bug"]
+    assert labels == {
+        "agent-os",
+        "owner:github-service-agent",
+        "status:ready",
+        "type:bug",
+    }
 
 
 def test_documentation_fields_map_without_changing_label_contract():

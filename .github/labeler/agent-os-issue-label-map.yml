@@ -14,7 +14,7 @@ base_labels:
 
 fields:
   tier:
-    description: Tier classification evidence. No new labels are applied in this migration.
+    description: Tier classification evidence. Tier is canonical body evidence and is not projected as a label.
     values:
       tier:0-small-maintenance:
         labels: []
@@ -24,7 +24,7 @@ fields:
         labels: []
 
   phase:
-    description: Legacy phase label from the former issue form.
+    description: Legacy phase label from the former issue form. Compatibility input only.
     values:
       implementation-phase-1:
         labels: [implementation-phase-1]
@@ -36,7 +36,7 @@ fields:
         labels: []
 
   epic:
-    description: Legacy roadmap or topic label.
+    description: Legacy roadmap or topic label. Compatibility input only.
     values:
       epic:foundation:
         labels: [epic:foundation]
@@ -62,25 +62,33 @@ fields:
         labels: [status:needs-decision]
 
   owner:
-    description: Primary owner label from either supported issue form.
+    description: Primary owner projection. New tiered issues use canonical registered agents; retired names remain legacy compatibility input and resolve to canonical labels.
     values:
-      owner:qa-test-agent:
-        labels: [owner:qa-test-agent]
+      owner:chatgpt-orchestrator:
+        labels: [owner:chatgpt-orchestrator]
       owner:github-service-agent:
         labels: [owner:github-service-agent]
-      owner:integration-manager:
-        labels: [owner:integration-manager]
-      owner:instructional-materials-coach:
-        labels: [owner:instructional-materials-coach]
-      owner:google-workspace-automation-engineer:
-        labels: [owner:google-workspace-automation-engineer]
+      owner:modeling-dashboard-governance-agent:
+        labels: [owner:modeling-dashboard-governance-agent]
+      owner:qa-test-agent:
+        labels: [owner:qa-test-agent]
+      owner:agent-orchestrator:
+        labels: [owner:agent-orchestrator]
+      owner:unit-alignment-agent:
+        labels: [owner:unit-alignment-agent]
       owner:teacher-modeling-coach:
         labels: [owner:teacher-modeling-coach]
+      owner:instructional-materials-coach:
+        labels: [owner:instructional-materials-coach]
+      owner:integration-manager:
+        labels: [owner:chatgpt-orchestrator]
+      owner:google-workspace-automation-engineer:
+        labels: [owner:github-service-agent]
       needs-decision:
         labels: [status:needs-decision]
 
   status:
-    description: Readiness candidate or legacy status value.
+    description: Canonical readiness projection. Only ready, blocked, and needs-decision are managed readiness labels; proposed is not a canonical readiness state.
     values:
       status:ready:
         labels: [status:ready]
@@ -90,9 +98,11 @@ fields:
         labels: [status:needs-decision]
 
   type:
-    description: Legacy work-type labels.
+    description: Searchable work-type projection. Legacy issue bodies and the current work-type field share this canonical map.
     multiple: true
     values:
+      type:bug:
+        labels: [type:bug]
       type:docs:
         labels: [type:docs]
       type:tooling:
@@ -103,9 +113,11 @@ fields:
         labels: [type:validation]
       type:classroom-artifact:
         labels: [type:classroom-artifact]
+      type:planning:
+        labels: [type:planning]
 
   source-of-truth:
-    description: Source-of-truth routing evidence. No labels are applied except needs-decision.
+    description: Source-of-truth routing evidence. It remains body evidence except that ambiguity projects needs-decision.
     values:
       GitHub:
         labels: []
@@ -119,7 +131,7 @@ fields:
         labels: [status:needs-decision]
 
   external-write:
-    description: External write risk evidence. No labels are applied except needs-decision.
+    description: External-write boundary evidence. no-external-write is not a label or authorization; requested/ambiguous external writes project needs-decision.
     values:
       no-external-write:
         labels: []
@@ -129,7 +141,10 @@ fields:
         labels: [status:needs-decision]
 
 validation_notes:
-  - This file supports both legacy and tiered issue-form output during migration.
-  - Tier values are evidence only and do not create a new label taxonomy in this change.
+  - New tiered issue intake exposes only canonical registered owner identities.
+  - Retired owner values remain compatibility input for historical issues and resolve through the legacy alias registry to canonical owner labels.
+  - Canonical readiness labels are status:ready, status:blocked, and status:needs-decision; status:proposed is not a readiness projection.
+  - Work type is optional searchable classification and never creates readiness or execution authority.
+  - Tier, source-of-truth, and no-external-write remain body evidence rather than additional label families.
   - This file is configuration only and must not apply labels by itself.
   - Tests must use fixtures and must not require live GitHub credentials or network access.

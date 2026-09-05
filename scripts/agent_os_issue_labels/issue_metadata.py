@@ -14,6 +14,7 @@ _SUPPORTED_CONTROL_TYPES = {"checkboxes", "dropdown", "input", "textarea"}
 # both the legacy and tiered issue forms to be parsed by one implementation.
 _FIELD_ID_ALIASES = {
     "readiness": "status",
+    "work-type": "type",
     "documentation-impact": "documentation_impact",
     "required-docs": "required_docs",
     "documentation-expected-change": "documentation_expected_change",
@@ -28,6 +29,7 @@ _HEADING_ALIASES = {
     "status": "status",
     "readiness candidate": "status",
     "type": "type",
+    "work type": "type",
     "source-of-truth surface": "source-of-truth",
     "source of truth": "source-of-truth",
     "external write surface": "external-write",

@@ -44,18 +44,41 @@ def test_schema_loader_preserves_canonical_form_order_and_metadata():
     assert schema.name == "Agent OS task"
     assert schema.title_prefix == "[Agent OS] "
     assert schema.default_labels == ("agent-os", "status:needs-decision")
-    assert len(schema.fields) == 19
-    assert [field.field_id for field in schema.fields[:5]] == [
+    assert len(schema.fields) == 20
+    assert [field.field_id for field in schema.fields[:6]] == [
         "tier",
         "objective",
         "owner",
         "readiness",
+        "work-type",
         "source-of-truth",
     ]
     assert schema.fields[3].canonical_id == "status"
+    assert schema.fields[4].canonical_id == "type"
     assert schema.fields[-1].field_id == "safety"
     assert len(schema.fields[-1].required_options) == 3
     assert schema.unsupported_controls == ()
+
+
+def test_new_issue_owner_options_are_only_canonical_registered_agents():
+    schema = load_issue_form_schema(FORM)
+    owner = next(field for field in schema.fields if field.canonical_id == "owner")
+
+    assert "owner:integration-manager" not in owner.options
+    assert "owner:google-workspace-automation-engineer" not in owner.options
+    assert "owner:chatgpt-orchestrator" in owner.options
+    assert "owner:agent-orchestrator" in owner.options
+    assert "owner:unit-alignment-agent" in owner.options
+    assert "owner:modeling-dashboard-governance-agent" in owner.options
+
+
+def test_work_type_exposes_bug_and_planning_without_becoming_required():
+    schema = load_issue_form_schema(FORM)
+    work_type = next(field for field in schema.fields if field.canonical_id == "type")
+
+    assert work_type.required is False
+    assert "type:bug" in work_type.options
+    assert "type:planning" in work_type.options
 
 
 def test_existing_field_loader_remains_backward_compatible():
@@ -63,6 +86,7 @@ def test_existing_field_loader_remains_backward_compatible():
 
     assert fields["tier"] == "Issue tier"
     assert fields["status"] == "Readiness candidate"
+    assert fields["type"] == "Work type"
     assert fields["documentation_impact"] == "Documentation impact"
     assert fields["required_docs"] == "Required documentation paths or bounded areas"
 
@@ -124,9 +148,27 @@ def test_renderer_uses_form_order_and_round_trips_through_existing_parser():
     assert metadata["tier"] == ["tier:1-standard-implementation"]
     assert metadata["owner"] == ["owner:github-service-agent"]
     assert metadata["status"] == ["status:ready"]
+    assert "type" not in metadata
     assert metadata["source-of-truth"] == ["GitHub"]
     assert metadata["external-write"] == ["no-external-write"]
     assert "_No response_" in result.body
+
+
+def test_bug_work_type_projects_type_bug_without_changing_readiness():
+    payload = _payload(MINIMUM)
+    fields = dict(payload["fields"])
+    fields["work-type"] = "type:bug"
+    payload["fields"] = fields
+
+    result = build_issue_draft(payload, FORM, MAP)
+
+    assert result.report.overall_status == Status.PASS
+    assert result.proposed_labels == (
+        "agent-os",
+        "owner:github-service-agent",
+        "status:ready",
+        "type:bug",
+    )
 
 
 def test_complete_draft_preserves_unicode_multiline_and_existing_prefix():
