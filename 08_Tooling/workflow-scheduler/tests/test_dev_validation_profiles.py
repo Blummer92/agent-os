@@ -53,6 +53,20 @@ def test_eia_profile_resolves_to_one_fixed_qualification_entrypoint() -> None:
     assert validation_argv(built) == profile_argv(profile.profile_id)
 
 
+def test_visual_asset_sheets_profile_is_finite_and_has_no_shell_surface() -> None:
+    profile = get_profile("visual-asset-sheets-smoke")
+    assert profile.runner_kind is RunnerKind.VISUAL_ASSET_SHEETS_SMOKE
+    assert profile.fixed_targets == (
+        "08_Tooling/workflow-scheduler/src/workflow_scheduler/governance/visual_asset_sheets_smoke.py",
+    )
+    assert profile_argv(profile.profile_id) == (
+        "python", "-m", "workflow_scheduler.governance.visual_asset_sheets_smoke"
+    )
+    assert project_selector_requirements(["visual-asset-sheets-smoke"]) == (
+        "visual-asset-sheets-smoke",
+    )
+
+
 def test_unknown_or_malformed_profile_fails_closed() -> None:
     for profile_id in ("unknown", "../escape", "x;echo", "", "UPPER"):
         with pytest.raises(ValueError):
@@ -81,8 +95,6 @@ def test_eia_request_has_no_runtime_or_asset_override_surface() -> None:
 
 
 def test_protected_or_malformed_branch_is_rejected() -> None:
-    # A non-protected agent/* branch is valid by contract. Reject only protected
-    # or syntactically malformed branch shapes here.
     for branch in ("main", "agent/../main", "agent/x//y"):
         with pytest.raises(ValueError):
             build_dev_validation_request(
@@ -122,7 +134,7 @@ def test_existing_four_identities_have_stable_compatibility_aliases() -> None:
 
 
 def test_initial_reusable_package_profiles_exist() -> None:
-    assert {"pr-remediation", "workflow-scheduler", "issue-acceptance"}.issubset(PROFILE_CATALOG)
+    assert {"pr-remediation", "workflow-scheduler", "issue-acceptance", "visual-asset-sheets-smoke"}.issubset(PROFILE_CATALOG)
 
 
 def test_selector_projection_is_deterministic_and_deduplicated() -> None:
