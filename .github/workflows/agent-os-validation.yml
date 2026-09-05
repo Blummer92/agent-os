@@ -74,6 +74,10 @@ jobs:
             echo "stale final-candidate request: expected $EXPECTED_HEAD_SHA but current PR head is $current_head" >&2
             exit 1
           fi
+          if [ "$GITHUB_SHA" != "$EXPECTED_HEAD_SHA" ]; then
+            echo "final-candidate dispatch SHA $GITHUB_SHA does not match admitted candidate $EXPECTED_HEAD_SHA; dispatch the workflow on a ref resolving to the exact PR head" >&2
+            exit 1
+          fi
 
           echo "mode=final-candidate" >> "$GITHUB_OUTPUT"
           echo "head_sha=$current_head" >> "$GITHUB_OUTPUT"
