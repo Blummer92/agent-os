@@ -1,96 +1,64 @@
 # Visual Asset Sync — Reconciliation Planner
 
-Deterministic, offline, dry-run reconciliation planner for moving reviewed icon
-assets from the `Approved Use Review` Google Sheet into the Notion Visual Asset
-Library. See Issue #693.
+Deterministic reconciliation tooling for reviewed visual assets. The planner core
+performs zero network calls and zero external writes. Optional Sheets and Notion
+adapters perform only separately authorized bounded reads.
 
-The planner core performs **zero network calls and zero external writes**.
-Optional Google Sheets and Notion adapters may perform only separately
-authorized bounded reads. No component performs an external write. Live
-credentials, targets, smoke testing, and production synchronization remain
-separately authorized.
+Issue #739 adds an **offline, authorization-gated mutation boundary** without
+activating any live write. `mutation_adapter.py` converts only planner-approved
+`UPDATE_EXISTING` and `CREATE_MISSING` entries into deterministic actions. Dry-run
+is the default and makes zero client calls. Non-dry execution requires an exact,
+immutable `MutationAuthorization` and an injected client supplied by a separately
+authorized runtime.
 
 Adapter contracts:
 
 - [`SHEETS_ADAPTER.md`](SHEETS_ADAPTER.md) — fixture-first Google Sheets values
   extraction for Issue #731.
-- [`NOTION_ADAPTER.md`](NOTION_ADAPTER.md) — fixture-first Notion data-source
+- [`NOTION_ADAPTER.md`](NOTION_ADAPTER.md) — fixture-first read-only Notion
   extraction for Issue #735.
+- `mutation_adapter.py` — #739 mutation planning/execution boundary; no concrete
+  credential or network client is included.
+- `orchestration.py` — #739 disabled-by-default one-run wrapper.
 
-## Input contract
+## Mutation authorization
 
-`normalize_source_record` accepts an exact built-in dictionary. `source_row` is
-a required, non-empty exact string of at most 128 characters. Optional text
-fields accept only exact built-in strings or `None`, and `excluded` accepts only
-an exact built-in Boolean. Values are never coerced with `str()`, `repr()`, or
-truthiness. Unsupported objects fail closed with fixed diagnostics.
+Live-capable calls fail closed unless authorization binds the exact Notion data
+source, pinned `Notion-Version`, planner digest, approved action classes,
+property allowlist, credential-injection route, update/create/total ceilings,
+validity window, and explicit dry-run/live mode. Authorization never grants
+schema, sharing, relation, comment, file, archive, delete, Sheets, or Drive
+mutation authority.
 
-`normalize_existing_record` applies the same exact-string boundary, requires a
-non-empty `page_id`, and preserves unrelated fields verbatim in `extra_fields`
-without coercing their values.
+Action evidence keys and plan digests are stable SHA-256 values over normalized
+planner/action identity. Mutable entries must preserve the planner's exact
+identity and, for updates, exactly one planner-selected page ID. Non-mutable
+planner results are never converted into mutation actions.
 
-Supported source fields include: `drive_file_id`, `drive_url`, `file_name`,
-`approved_use`, `audience`, `review_status`, `review_date`, `visual_rationale`,
-`worksheet_fit`, `slideshow_fit`, `poster_fit`, `format_decision_notes`, and
-`source_row`.
+## Orchestration defaults
 
-## Identity precedence
+`OrchestrationConfig()` is inert: schedule and mutation flags both default to
+false. An enabled run checks the kill switch before lease acquisition and again
+immediately before mutation, validates the exact plan digest, requires a single
+lease, and releases that lease on every terminal path after acquisition. The
+wrapper composes the mutation adapter; it does not reimplement reconciliation,
+identity, pagination, or property mapping.
 
-1. A valid `drive_file_id` is the authoritative identity key.
-2. `drive_url` is used only when the explicit ID is absent and the URL yields
-   exactly one unambiguous Drive File ID.
-3. `file_name` never establishes identity; it is diagnostic only.
-4. A valid explicit ID conflicting with any URL-derived candidate produces
-   `CONTRADICTORY_RECORD`.
-5. Missing, malformed, unsupported, or ambiguous identity produces
-   `MALFORMED_IDENTITY`.
-6. Existing records use the same rules. Contradictory existing evidence blocks
-   both false updates and false creates for every involved identity.
+No scheduler, daemon, background worker, credential source, alert transport, or
+production activation is created by this package. Connected execution remains a
+separate authorization decision under #736.
 
-### URL identity rules
+## Planner identity and result rules
 
-Only `drive.google.com` and `docs.google.com` over `http` or `https` may
-establish Drive identity. URLs are structurally parsed; strings, unsupported
-hosts, lookalike hosts, and embedded `/d/<id>` fragments contribute no evidence.
+Drive File ID is authoritative when valid. Drive URL is used only when the
+explicit ID is absent and yields one unambiguous supported Drive identity.
+Filename never establishes identity. Contradictory or ambiguous evidence fails
+closed.
 
-`extract_drive_id_candidates` returns every distinct valid candidate from all
-`/d/<id>` path segments and `id=` query parameters. A URL carrying multiple
-distinct IDs is ambiguous and never silently resolves to the first candidate.
+Planner results are `UPDATE_EXISTING`, `CREATE_MISSING`, `DUPLICATE_ID`,
+`MALFORMED_IDENTITY`, `CONTRADICTORY_RECORD`, and `EXCLUDED`. Only the first two
+are eligible for mutation planning.
 
-### Drive File ID format
-
-`is_valid_drive_file_id` applies a bounded shape check: 20–128 characters drawn
-from `[A-Za-z0-9_-]`. This rejects malformed tokens but does not prove that a
-file exists or points to the intended asset.
-
-## Result types
-
-| Result | Meaning |
-|---|---|
-| `UPDATE_EXISTING` | Identity matches one valid existing record. |
-| `CREATE_MISSING` | Identity is valid and matches no existing evidence. |
-| `DUPLICATE_ID` | Source or existing identity is duplicated. |
-| `MALFORMED_IDENTITY` | No single usable identity exists. |
-| `CONTRADICTORY_RECORD` | Source or existing identity evidence conflicts. |
-| `EXCLUDED` | Record is explicitly outside synchronization scope. |
-
-## Idempotency and simulation
-
-`build_reconciliation_plan` is a pure function whose output order mirrors the
-source-record order. `simulate_apply` verifies row and identity agreement and
-materializes only `CREATE_MISSING` entries in memory. Count, order, or identity
-mismatches fail closed with fixed diagnostics.
-
-Passing simulated records into a second plan reclassifies prior creates as
-updates, so repeated dry runs do not propose duplicate creates.
-
-## Reporting and boundaries
-
-`plan_to_dict` and `plan_to_json` provide machine-readable output;
-`plan_to_summary` provides readable counts. `dry_run` and
-`zero_write_confirmed` remain true for planner-produced output.
-
-The planner does not prove live Drive existence, read Google Sheets or Notion,
-measure real duplicate rates, or perform end-to-end synchronization. Optional
-read adapters remain separately authorized, and all external writes remain
-excluded.
+`build_reconciliation_plan` remains pure and deterministic. `simulate_apply`
+remains in-memory only. Optional read adapters remain separately bounded, and
+this repository implementation performs no external write by itself.
