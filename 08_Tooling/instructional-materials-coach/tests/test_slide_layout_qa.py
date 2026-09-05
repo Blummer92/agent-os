@@ -20,7 +20,7 @@ def test_typography_challenge_fixture_detects_four_consolidated_defect_classes()
             element("directions", "directions", (0.5, 1.2, 4.5, 2), text="Compare hierarchy and spacing.", foreground="#111111", background="#FFFFFF"),
             element("task", "task", (4.0, 1.4, 4.5, 2), text="Choose and explain.", foreground="#111111", background="#FFFFFF"),
             element("blank-card", "accent", (0.4, 1.1, 4.8, 2.2), z_index=10, opaque=True, placeholder=True),
-            element("preview", "supporting-preview", (5.0, 3.8, 5.0, 3.7)),
+            element("preview", "supporting-preview", (4.5, 2.0, 5.5, 5.0)),
         ),
     )
 
