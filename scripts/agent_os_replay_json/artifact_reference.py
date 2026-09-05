@@ -162,6 +162,8 @@ def build_notion_projection(
     warnings: Iterable[str] = (),
 ) -> dict[str, Any]:
     _bounded_text(modeling_sequence_ref, field="modeling_sequence_ref", limit=256)
+    if isinstance(warnings, (str, bytes)):
+        raise ValueError("warnings must be an iterable of warning strings, not text")
     bounded_warnings: list[str] = []
     for warning in warnings:
         if len(bounded_warnings) >= _MAX_WARNINGS:

@@ -71,15 +71,12 @@ def test_validation_gate_executes_only_canonical_aggregate_command():
     assert "Cloud Build validation migration notice" not in content
 
 
-def test_validation_gate_suppresses_routine_draft_aggregate_and_preserves_ready_events():
+def test_validation_gate_runs_once_per_pr_head_without_ready_transition_duplicate():
     content = WORKFLOW.read_text(encoding="utf-8")
-    assert "types: [opened, reopened, synchronize, ready_for_review]" in content
-    assert (
-        "if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}"
-        in content
-    )
+    assert "types: [opened, reopened, synchronize]" in content
+    assert "ready_for_review" not in content
+    assert "github.event.pull_request.draft == false" not in content
     assert "synchronize" in content
-    assert "ready_for_review" in content
     assert "paths:" not in content
     assert "paths-ignore:" not in content
 
@@ -103,6 +100,18 @@ def test_validation_gate_dispatch_supports_diagnostic_and_exact_head_candidate_m
     assert "stale final-candidate request" in content
     assert "^[0-9a-f]{40}$" in content
     assert 'echo "mode=final-candidate" >> "$GITHUB_OUTPUT"' in content
+
+
+def test_validation_gate_final_candidate_requires_dispatch_ref_to_resolve_to_exact_head():
+    content = WORKFLOW.read_text(encoding="utf-8")
+    diagnostic_exit = content.index('echo "mode=diagnostic" >> "$GITHUB_OUTPUT"')
+    dispatch_guard = content.index('if [ "$GITHUB_SHA" != "$EXPECTED_HEAD_SHA" ]')
+    final_candidate = content.index('echo "mode=final-candidate" >> "$GITHUB_OUTPUT"')
+    aggregate = content.index("- name: Run aggregate validation")
+
+    assert diagnostic_exit < dispatch_guard < final_candidate < aggregate
+    assert "final-candidate dispatch SHA $GITHUB_SHA does not match admitted candidate $EXPECTED_HEAD_SHA" in content
+    assert "dispatch the workflow on a ref resolving to the exact PR head" in content
 
 
 def test_validation_gate_dispatch_checks_out_and_verifies_admitted_candidate_only():

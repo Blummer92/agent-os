@@ -4,7 +4,7 @@ on:
   pull_request:
     branches:
       - main
-    types: [opened, reopened, synchronize, ready_for_review]
+    types: [opened, reopened, synchronize]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -27,7 +27,6 @@ concurrency:
 jobs:
   validate:
     name: Run aggregate validation
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -73,6 +72,10 @@ jobs:
           fi
           if [ "$current_head" != "$EXPECTED_HEAD_SHA" ]; then
             echo "stale final-candidate request: expected $EXPECTED_HEAD_SHA but current PR head is $current_head" >&2
+            exit 1
+          fi
+          if [ "$GITHUB_SHA" != "$EXPECTED_HEAD_SHA" ]; then
+            echo "final-candidate dispatch SHA $GITHUB_SHA does not match admitted candidate $EXPECTED_HEAD_SHA; dispatch the workflow on a ref resolving to the exact PR head" >&2
             exit 1
           fi
 

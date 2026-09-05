@@ -50,7 +50,7 @@ def test_needs_review_candidate_never_enters_selected_references():
     assert result.selected_references == ()
 
 
-def test_library_failure_does_not_silently_enable_generation():
+def test_library_failure_keeps_generation_disabled():
     result = resolve_visual_asset_picker(
         AssetPickerIntent(source_preference="reuse-first", generation_allowed=True), [], library_available=False
     )
@@ -70,7 +70,7 @@ def test_selected_asset_becoming_unavailable_returns_to_picker_resolution():
     assert result.outcome == "selection-invalidated"
 
 
-def test_explicit_requested_asset_scope_does_not_substitute_another_asset():
+def test_requested_asset_scope_rejects_substitution():
     intent = AssetPickerIntent(source_preference="explicit-existing", requested_asset_ids=("wanted",))
     result = resolve_visual_asset_picker(intent, [candidate("other", unit_match=True)])
     assert result.outcome == "visual-gap"

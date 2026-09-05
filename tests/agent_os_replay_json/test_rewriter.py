@@ -56,7 +56,28 @@ def test_rewrite_operation_rejects_noncanonical_source_indexes(source_indexes):
         )
 
 
-from scripts.agent_os_replay_json.rewriter import rewrite_replay
+def test_rewrite_operation_rejects_unknown_confidence_state():
+    with pytest.raises(ValueError, match="unsupported rewrite confidence"):
+        RewriteOperation(
+            kind="keep",
+            semantic_action_id="action-1",
+            source_indexes=(1,),
+            confidence="probably",
+        )
+
+
+from scripts.agent_os_replay_json.rewriter import RewriteResult, rewrite_replay
+
+
+def test_rewrite_result_rejects_unknown_equivalence_state():
+    with pytest.raises(ValueError, match="unsupported semantic equivalence"):
+        RewriteResult(
+            rewritten_recording={},
+            operations=(),
+            provenance={},
+            warnings=(),
+            semantic_equivalence="probably",
+        )
 
 
 def test_clean_recording_round_trips():
@@ -227,6 +248,74 @@ def test_selector_change_uses_only_recorded_selector_evidence():
         ["[data-testid='folder-card']"]
     ]
     assert result.operations[0].changes_selector is True
+
+
+def test_selector_change_rejects_non_selector_action_evidence():
+    payload = {
+        "steps": [
+            {
+                "type": "click",
+                "url": "https://example.test/not-a-selector",
+                "selectors": [["#generated-123"]],
+            }
+        ]
+    }
+    request = RewriteRequest(
+        kind="change-selector",
+        semantic_action_id="action-0",
+        source_indexes=(0,),
+        replacement_selector="https://example.test/not-a-selector",
+    )
+
+    result = apply_request(payload, request)
+
+    assert result.semantic_equivalence == "rejected"
+    assert "recorded selector evidence" in result.warnings[0]
+
+
+def test_selector_request_evidence_must_be_recorded_selector_evidence():
+    payload = {
+        "steps": [
+            {
+                "type": "click",
+                "url": "https://example.test/not-selector-provenance",
+                "selectors": [["aria/Folder"]],
+            }
+        ]
+    }
+    request = RewriteRequest(
+        kind="change-selector",
+        semantic_action_id="action-0",
+        source_indexes=(0,),
+        evidence=("https://example.test/not-selector-provenance",),
+        replacement_selector="aria/Folder",
+    )
+
+    result = apply_request(payload, request)
+
+    assert result.semantic_equivalence == "rejected"
+    assert result.warnings == (
+        "request evidence is not present in recorded selector evidence",
+    )
+
+
+def test_empty_selector_request_evidence_uses_recorded_selector_evidence():
+    payload = {
+        "steps": [
+            {"type": "click", "selectors": [["aria/Folder"]]},
+        ]
+    }
+    request = RewriteRequest(
+        kind="change-selector",
+        semantic_action_id="action-0",
+        source_indexes=(0,),
+        replacement_selector="aria/Folder",
+    )
+
+    result = apply_request(payload, request)
+
+    assert result.semantic_equivalence == "proven"
+    assert result.operations[0].evidence == ("aria/Folder",)
 
 
 def test_selector_change_cannot_invent_selector():
@@ -429,3 +518,36 @@ def test_move_after_is_unproven_without_dependency_evidence():
 
     assert result.semantic_equivalence == "unproven"
     assert result.rewritten_recording == payload
+
+
+@pytest.mark.parametrize(
+    "rewrite_request",
+    [
+        RewriteRequest(
+            kind="change-selector",
+            semantic_action_id="missing",
+            source_indexes=(0,),
+            replacement_selector="aria/Folder",
+        ),
+        RewriteRequest(
+            kind="move-before",
+            semantic_action_id="action-0",
+            source_indexes=(0,),
+            target_action_id="action-1",
+        ),
+    ],
+)
+def test_rejected_and_unproven_results_do_not_alias_nested_input(rewrite_request):
+    payload = {
+        "metadata": {"tags": ["original"]},
+        "steps": [
+            {"type": "click", "selectors": [["aria/Folder"]]},
+        ],
+    }
+
+    result = apply_request(payload, rewrite_request)
+    result.rewritten_recording["metadata"]["tags"].append("mutated")
+    result.rewritten_recording["steps"][0]["selectors"][0].append("mutated-selector")
+
+    assert payload["metadata"]["tags"] == ["original"]
+    assert payload["steps"][0]["selectors"] == [["aria/Folder"]]

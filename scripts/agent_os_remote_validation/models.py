@@ -293,7 +293,7 @@ def _validate_path(value: object) -> None:
     _require_exact_str("path", value)
     if not value or len(value) > MAX_PRE_PR_PATH_LENGTH or value.startswith("/") or "\\" in value:
         raise ValueError("path must be a bounded repository-relative POSIX path")
-    if _CONTROL_RE.search(value) is not None:
+    if any(ord(char) < 32 or ord(char) == 127 for char in value):
         raise ValueError("path contains a control character")
     if any(part in ("", ".", "..") for part in value.split("/")):
         raise ValueError("path contains a non-canonical segment")

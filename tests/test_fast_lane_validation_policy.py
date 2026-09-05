@@ -93,15 +93,17 @@ def test_ci_routing_does_not_grant_lifecycle_or_external_authority() -> None:
     assert "A CI-routed pending state grants no Ready-for-Review or later authority" in lane
 
 
-def test_current_draft_ready_aggregate_trigger_policy_is_preserved() -> None:
+def test_validation_gate_runs_on_each_new_pr_head_without_ready_transition_duplicate() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     lane = normalized_section(SAFE_LANE, "Validation Loop")
 
-    assert "types: [opened, reopened, synchronize, ready_for_review]" in workflow
-    assert "github.event.pull_request.draft == false" in workflow
+    assert "types: [opened, reopened, synchronize]" in workflow
+    assert "ready_for_review" not in workflow
+    assert "github.event.pull_request.draft == false" not in workflow
     assert "workflow_dispatch:" in workflow
     assert "this lane does not require aggregate validation on ordinary Draft PR updates" in lane
     assert "does not create or modify a workflow to obtain validation" in lane
+    assert "Only required evidence bound to the current exact head may satisfy Ready-for-Review" in lane
 
 
 def test_broader_local_validation_remains_available_for_diagnosis() -> None:

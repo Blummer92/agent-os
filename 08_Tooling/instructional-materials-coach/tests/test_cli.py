@@ -166,8 +166,9 @@ def test_main_requires_current_curriculum_evidence_before_credentials(monkeypatc
     monkeypatch.setenv("ALLOW_WRITE", "true")
     lesson_file = _lesson_file(tmp_path)
     requirement_file = _no_visual_requirement_file(tmp_path)
+    lessons_dir = tmp_path / "lessons"
     with patch("instructional_materials_coach.cli.get_credentials") as credentials:
-        exit_code = cli.main(_base_build_args(lesson_file, requirement_file))
+        exit_code = cli.main(_base_build_args(lesson_file, requirement_file) + ["--lessons-dir", str(lessons_dir)])
     assert exit_code == 1
     credentials.assert_not_called()
     assert "current-curriculum evidence is required" in capsys.readouterr().err

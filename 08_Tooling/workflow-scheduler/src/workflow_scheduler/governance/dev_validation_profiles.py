@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Iterable, Mapping
 _PROFILE_ID=re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$",re.ASCII);_SAFE_PATH=re.compile(r"^[A-Za-z0-9._/-]+$",re.ASCII);MAX_TARGETS=32
 class RunnerKind(str,Enum):
- PYTEST_TARGETS="pytest-targets";VITEST_TARGETS="vitest-targets";LEGACY_FIXED_SCRIPT="legacy-fixed-script";EIA_PADDLEOCR_QUALIFICATION="eia-paddleocr-qualification";DEPENDENCY_ARTIFACT_QUALIFICATION="dependency-artifact-qualification"
+ PYTEST_TARGETS="pytest-targets";VITEST_TARGETS="vitest-targets";LEGACY_FIXED_SCRIPT="legacy-fixed-script";EIA_PADDLEOCR_QUALIFICATION="eia-paddleocr-qualification";DEPENDENCY_ARTIFACT_QUALIFICATION="dependency-artifact-qualification";VISUAL_ASSET_SHEETS_SMOKE="visual-asset-sheets-smoke"
 @dataclass(frozen=True,slots=True)
 class DevValidationProfile:
  profile_id:str;runner_kind:RunnerKind;fixed_targets:tuple[str,...];fixed_working_directory:str|None;runtime_id:str;timeout_class:str;selector_requirements:tuple[str,...]
@@ -39,10 +39,11 @@ _PROFILES=(
  _profile("semantic-ownership-advisory",RunnerKind.LEGACY_FIXED_SCRIPT,("07_Agent_Tests/run-semantic-ownership-advisory-validation.py",),runtime_id="python-system-script-compat"),
  _profile("eia-paddleocr-runtime-qualification",RunnerKind.EIA_PADDLEOCR_QUALIFICATION,("08_Tooling/workflow-scheduler/src/workflow_scheduler/governance/eia_paddleocr_runtime_qualification.py",),runtime_id="host-python-eia-paddleocr"),
  _profile("eia-paddleocr-cp311-wheelhouse-qualification",RunnerKind.DEPENDENCY_ARTIFACT_QUALIFICATION,("08_Tooling/workflow-scheduler/src/workflow_scheduler/governance/dependency_artifact_qualification.py",),runtime_id="network-capable-ephemeral-python-resolver",timeout_class="artifact-300s"),
+ _profile("visual-asset-sheets-smoke",RunnerKind.VISUAL_ASSET_SHEETS_SMOKE,("08_Tooling/workflow-scheduler/src/workflow_scheduler/governance/visual_asset_sheets_smoke.py",),runtime_id="governed-sheets-readonly",selector_requirements=("visual-asset-sheets-smoke",)),
 )
 PROFILE_CATALOG:Mapping[str,DevValidationProfile]=MappingProxyType({p.profile_id:p for p in _PROFILES})
 PROFILE_ALIASES:Mapping[str,str]=MappingProxyType({"remote-validation-suite":"remote-validation","instructional-materials-current-curriculum-suite":"instructional-materials-current-curriculum","ppux-picture-perfect-ts-vitest":"picture-perfect","semantic-ownership-advisory":"semantic-ownership-advisory"})
-_SELECTOR_TO_PROFILE:Mapping[str,str]=MappingProxyType({"pr-remediation":"pr-remediation","workflow-scheduler":"workflow-scheduler","workflow-scheduler-concrete-runtime-adapters":"workflow-scheduler","issue-acceptance":"issue-acceptance"})
+_SELECTOR_TO_PROFILE:Mapping[str,str]=MappingProxyType({"pr-remediation":"pr-remediation","workflow-scheduler":"workflow-scheduler","workflow-scheduler-concrete-runtime-adapters":"workflow-scheduler","issue-acceptance":"issue-acceptance","visual-asset-sheets-smoke":"visual-asset-sheets-smoke"})
 def canonical_profile_id(profile_id:object)->str:
  if type(profile_id)is not str or _PROFILE_ID.fullmatch(profile_id)is None:raise ValueError("unknown developer-validation profile")
  canonical=PROFILE_ALIASES.get(profile_id,profile_id)
@@ -56,6 +57,7 @@ def profile_argv(profile_id:object)->tuple[str,...]:
  if p.runner_kind is RunnerKind.LEGACY_FIXED_SCRIPT:return("python",*p.fixed_targets)
  if p.runner_kind is RunnerKind.EIA_PADDLEOCR_QUALIFICATION:return("python","-m","workflow_scheduler.governance.eia_paddleocr_runtime_qualification")
  if p.runner_kind is RunnerKind.DEPENDENCY_ARTIFACT_QUALIFICATION:return("python","-m","workflow_scheduler.governance.dependency_artifact_qualification")
+ if p.runner_kind is RunnerKind.VISUAL_ASSET_SHEETS_SMOKE:return("python","-m","workflow_scheduler.governance.visual_asset_sheets_smoke")
  raise ValueError("unsupported developer-validation runner kind")
 def project_selector_requirements(requirements:Iterable[str])->tuple[str,...]:
  if type(requirements)not in {tuple,list}:raise ValueError("selector requirements must be a tuple or list")

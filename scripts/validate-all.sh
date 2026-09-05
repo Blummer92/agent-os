@@ -353,6 +353,7 @@ mapfile -t test_dirs < <(
     -not -path './.venv/*' \
     -not -path './venv/*' \
     -not -path './node_modules/*' \
+    -not -path './.tmp/*' \
     -not -path './03_Templates/*' \
     | sort | while IFS= read -r test_dir; do
         if is_python_pytest_suite "$test_dir"; then

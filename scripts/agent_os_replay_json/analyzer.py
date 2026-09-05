@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass
 from typing import Any, Iterable
 
@@ -7,6 +8,7 @@ SUPPORTED_TYPES = {
     "setViewport", "navigate", "click", "doubleClick", "change", "keyDown", "keyUp"
 }
 _KEY_TYPES = {"keyDown", "keyUp"}
+_DATA_TESTID_RE = re.compile(r"\[data-testid=(?P<quote>['\"])(?P<value>[^'\"]+)\1\]")
 
 
 @dataclass(frozen=True)
@@ -65,6 +67,10 @@ def _identity(step: dict[str, Any]) -> str | None:
             return "editor-document-title"
         if "organizer-rename-textfield" in selector:
             return "organizer-rename-textfield"
+    for selector in selectors:
+        match = _DATA_TESTID_RE.search(selector)
+        if match:
+            return match.group("value")
     return selectors[-1] if selectors else None
 
 
@@ -104,7 +110,7 @@ def _click_kind(step: dict[str, Any], identity: str | None) -> str:
 
 
 def _change_value(step: dict[str, Any]) -> str | None:
-    if "value" not in step:
+    if "value" not in step or step["value"] is None:
         return None
     value = step["value"]
     return value if isinstance(value, str) else str(value)
@@ -144,8 +150,10 @@ def analyze_replay(payload: dict[str, Any]) -> list[SemanticAction]:
             continue
 
         if event_type == "navigate":
+            url = step.get("url")
             actions.append(SemanticAction(
-                kind="navigate", source_indexes=(i,), target=str(step.get("url")),
+                kind="navigate", source_indexes=(i,),
+                target=url if isinstance(url, str) else None,
                 fragile=fragile, evidence=evidence
             ))
             i += 1
@@ -172,12 +180,12 @@ def analyze_replay(payload: dict[str, Any]) -> list[SemanticAction]:
                     break
                 nxt_type = nxt.get("type")
                 nxt_identity = _identity(nxt)
-                if nxt_type in _KEY_TYPES:
+                if nxt_type in _KEY_TYPES and (nxt_identity is None or nxt_identity == target):
                     indexes.append(j)
                     combined_evidence.extend(_evidence(nxt))
                     j += 1
                     continue
-                if nxt_type == "change" and nxt_identity == target:
+                if nxt_type == "change" and target is not None and nxt_identity == target:
                     indexes.append(j)
                     final_value = _change_value(nxt)
                     combined_evidence.extend(_evidence(nxt))
