@@ -1,10 +1,10 @@
 """Bounded GitHub issue-comment transport parsing for Agent OS Scheduler ingress.
 
-This module validates only the low-trust GitHub event envelope for #1203,
-#1432, #1454, #1495, #1515, and #1768. A successful parse is transport evidence,
-not implementation authorization and not Scheduler admission.
+This module validates only the low-trust GitHub event envelope. A successful
+parse is transport evidence, not implementation authorization and not Scheduler
+admission. First-publication activation accepts only one immutable #1412 source
+capsule identity and grants no execution authority.
 """
-
 from __future__ import annotations
 
 import argparse
@@ -19,7 +19,9 @@ INGRESS_SCHEMA_VERSION = "1.0"
 MAX_EVENT_BYTES = 1_048_576
 MAX_COMMENT_BYTES = 256
 _HANDOFF_RE = re.compile(r"executor-handoff:[0-9a-f]{64}", re.ASCII)
+_SOURCE_CAPSULE_RE = re.compile(r"pre-publication-evidence:[0-9a-f]{64}", re.ASCII)
 _TRIGGER_RE = re.compile(r"/agent-os resume (?P<handoff>executor-handoff:[0-9a-f]{64})", re.ASCII)
+_ACTIVATION_RE = re.compile(r"/agent-os activate-first-publication (?P<capsule>pre-publication-evidence:[0-9a-f]{64})", re.ASCII)
 _VALIDATION_IDS = (
     "remote-validation-suite",
     "instructional-materials-current-curriculum-suite",
@@ -40,9 +42,9 @@ _ACTOR_RE = re.compile(r"[A-Za-z0-9-]{1,39}", re.ASCII)
 IngressStatus = Literal["accepted", "blocked", "ignored"]
 IngressReason = Literal[
     "accepted-envelope", "accepted-discovery-envelope", "accepted-runtime-inspection-envelope",
-    "accepted-dev-validation-envelope", "event-not-created", "pull-request-comment",
-    "repository-mismatch", "workflow-rerun", "actor-not-allowed", "actor-evidence-mismatch",
-    "malformed-trigger", "invalid-event-envelope",
+    "accepted-dev-validation-envelope", "accepted-first-publication-activation-envelope",
+    "event-not-created", "pull-request-comment", "repository-mismatch", "workflow-rerun",
+    "actor-not-allowed", "actor-evidence-mismatch", "malformed-trigger", "invalid-event-envelope",
 ]
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -53,11 +55,12 @@ class IssueCommentIngressResult:
     dev_validation_branch_or_none: str | None = None
     dev_validation_sha_or_none: str | None = None
     dev_validation_id_or_none: str | None = None
+    source_capsule_id_or_none: str | None = None
     execution_authorized: Literal[False] = field(default=False, init=False)
     scheduler_invoked: Literal[False] = field(default=False, init=False)
     side_effects_performed: Literal[False] = field(default=False, init=False)
     def to_dict(self) -> dict[str, object]:
-        return {"schema_version":self.schema_version,"status":self.status,"reason":self.reason,"repository":self.repository,"issue_number":self.issue_number,"comment_id":self.comment_id,"actor":self.actor,"handoff_id_or_none":self.handoff_id_or_none,"logical_trigger_id_or_none":self.logical_trigger_id_or_none,"run_attempt":self.run_attempt,"dev_validation_branch_or_none":self.dev_validation_branch_or_none,"dev_validation_sha_or_none":self.dev_validation_sha_or_none,"dev_validation_id_or_none":self.dev_validation_id_or_none,"execution_authorized":False,"scheduler_invoked":False,"side_effects_performed":False}
+        return {"schema_version":self.schema_version,"status":self.status,"reason":self.reason,"repository":self.repository,"issue_number":self.issue_number,"comment_id":self.comment_id,"actor":self.actor,"handoff_id_or_none":self.handoff_id_or_none,"logical_trigger_id_or_none":self.logical_trigger_id_or_none,"run_attempt":self.run_attempt,"dev_validation_branch_or_none":self.dev_validation_branch_or_none,"dev_validation_sha_or_none":self.dev_validation_sha_or_none,"dev_validation_id_or_none":self.dev_validation_id_or_none,"source_capsule_id_or_none":self.source_capsule_id_or_none,"execution_authorized":False,"scheduler_invoked":False,"side_effects_performed":False}
 
 def _logical_trigger_id(repository: str, issue_number: int, handoff_id: str) -> str:
     material = f"{repository}\0{issue_number}\0{handoff_id}".encode("ascii")
@@ -67,16 +70,21 @@ def _operation_trigger_id(repository: str, issue_number: int, operation: str) ->
     material = f"{repository}\0{issue_number}\0{operation}".encode("ascii")
     return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
 
+def _activation_trigger_id(repository:str,issue_number:int,capsule:str)->str:
+    material=f"{repository}\0{issue_number}\0activate-first-publication\0{capsule}".encode("ascii")
+    return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
+
 def _dev_validation_trigger_id(repository: str, issue_number: int, branch: str, sha: str, validation_id: str) -> str:
     material=f"{repository}\0{issue_number}\0dev-validate\0{branch}\0{sha}\0{validation_id}".encode("ascii")
     return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
 
-def _result(*,status:IngressStatus,reason:IngressReason,repository:str,run_attempt:int,issue_number:int|None=None,comment_id:int|None=None,actor:str|None=None,handoff_id:str|None=None,operation:str|None=None,dev_validation_branch:str|None=None,dev_validation_sha:str|None=None,dev_validation_id:str|None=None)->IssueCommentIngressResult:
+def _result(*,status:IngressStatus,reason:IngressReason,repository:str,run_attempt:int,issue_number:int|None=None,comment_id:int|None=None,actor:str|None=None,handoff_id:str|None=None,operation:str|None=None,dev_validation_branch:str|None=None,dev_validation_sha:str|None=None,dev_validation_id:str|None=None,source_capsule_id:str|None=None)->IssueCommentIngressResult:
     logical_id=None
     if handoff_id is not None and issue_number is not None: logical_id=_logical_trigger_id(repository,issue_number,handoff_id)
+    elif source_capsule_id is not None and issue_number is not None: logical_id=_activation_trigger_id(repository,issue_number,source_capsule_id)
     elif dev_validation_branch is not None and dev_validation_sha is not None and dev_validation_id is not None and issue_number is not None: logical_id=_dev_validation_trigger_id(repository,issue_number,dev_validation_branch,dev_validation_sha,dev_validation_id)
     elif operation is not None and issue_number is not None: logical_id=_operation_trigger_id(repository,issue_number,operation)
-    return IssueCommentIngressResult(schema_version=INGRESS_SCHEMA_VERSION,status=status,reason=reason,repository=repository,issue_number=issue_number,comment_id=comment_id,actor=actor,handoff_id_or_none=handoff_id,logical_trigger_id_or_none=logical_id,run_attempt=run_attempt,dev_validation_branch_or_none=dev_validation_branch,dev_validation_sha_or_none=dev_validation_sha,dev_validation_id_or_none=dev_validation_id)
+    return IssueCommentIngressResult(schema_version=INGRESS_SCHEMA_VERSION,status=status,reason=reason,repository=repository,issue_number=issue_number,comment_id=comment_id,actor=actor,handoff_id_or_none=handoff_id,logical_trigger_id_or_none=logical_id,run_attempt=run_attempt,dev_validation_branch_or_none=dev_validation_branch,dev_validation_sha_or_none=dev_validation_sha,dev_validation_id_or_none=dev_validation_id,source_capsule_id_or_none=source_capsule_id)
 
 def _valid_dev_branch(branch:str)->bool:
     return branch.startswith("agent/") and branch not in {"agent/","agent/main"} and ".." not in branch and "//" not in branch and not branch.endswith(("/","."))
@@ -102,6 +110,11 @@ def admit_issue_comment_event(event:object,*,expected_repository:str,allowed_act
     if type(body) is not str or len(body.encode("utf-8"))>MAX_COMMENT_BYTES:return _result(status="ignored",reason="malformed-trigger",**common)
     if body=="/agent-os discover":return _result(status="accepted",reason="accepted-discovery-envelope",operation="discover",**common)
     if body=="/agent-os inspect-runtime":return _result(status="accepted",reason="accepted-runtime-inspection-envelope",operation="inspect-runtime",**common)
+    activation=_ACTIVATION_RE.fullmatch(body)
+    if activation is not None:
+        capsule=activation.group("capsule")
+        if _SOURCE_CAPSULE_RE.fullmatch(capsule) is None:return _result(status="ignored",reason="malformed-trigger",**common)
+        return _result(status="accepted",reason="accepted-first-publication-activation-envelope",source_capsule_id=capsule,**common)
     dev_match=_DEV_VALIDATE_RE.fullmatch(body)
     if dev_match is not None:
         branch=dev_match.group("branch")
