@@ -1,6 +1,17 @@
 # Instructional Materials Coach
 
-Builds a Google Slides deck and Google Docs worksheet for one lesson by duplicating an approved template pair and replacing placeholder tokens with lesson content.
+Builds a Google Slides deck and Google Docs worksheet for one lesson by duplicating an approved template pair and replacing placeholder tokens with lesson content. It also provides a pure/offline Source -> Lesson Bundle planning seam that coordinates existing governed material requirements before any connected production occurs.
+
+## Offline lesson bundles
+`lesson_bundle.py` plans a bounded set of requested classroom-material members from caller-supplied current-curriculum evidence and validated `MaterialRequirement` records. It is coordination only: it performs no source retrieval, generation, credential access, Drive/Notion call, provider execution, persistence, publication, or sharing change.
+
+A bundle does not create a second canonical lesson schema. Shared identity comes from the existing resolved current-curriculum state plus the common course/unit/lesson and curriculum-handoff references already carried by each `MaterialRequirement`. Each requirement keeps its own content-bound fingerprint; different artifact types are not required to have identical MaterialRequirement fingerprints.
+
+The planner selects required members plus optional members that are actually available, so a minimal request does not expand into a fixed oversized package. It fails closed on cross-artifact course/unit/lesson, handoff provenance, learning-evidence, Teacher Modeling, or conflicting vocabulary-reference drift. An artifact may omit vocabulary that is irrelevant to it; if the same vocabulary stable ID appears in multiple members, its governed reference identity must agree.
+
+`plan_bundle_member_revision()` delegates one explicitly targeted member to the existing `plan_instructional_artifact_reuse()` contract with caller-supplied changed dependency keys and impact map. Other bundle members are reported unchanged; bundle membership does not authorize broad regeneration.
+
+All bundle authority evidence remains false. A successful plan grants no execution, external-write, production, publication, approval, readiness, or side-effect authority. Connected Slides/Docs production remains a separate governed path.
 
 ## Safety
 - Never edits template/master files directly; it duplicates first, then writes only to the copy.
@@ -76,6 +87,10 @@ See `docs/notion-field-mapping.md` for the human-applied Notion field mapping.
 ## Tests
     pytest tests/
 
+Focused lesson-bundle coverage:
+
+    PYTHONPATH=src:08_Tooling/instructional-materials-coach/src python -m pytest 08_Tooling/instructional-materials-coach/tests/test_lesson_bundle.py -q
+
 Tests use fakes/mocks only for the C4A live-build boundary and perform no live Google or Notion I/O. The packaging proof builds the root Navigation Registry, `instructional-workflow-contracts`, and coach wheels; verifies exclusive package ownership and one-way dependency metadata; installs from wheels; strips `PYTHONPATH`; and imports the coach/contracts from outside the repository.
 
 ## Release checklist
@@ -88,6 +103,7 @@ Tests use fakes/mocks only for the C4A live-build boundary and perform no live G
 - Do not merge or publish while any required exact-head check is failing or pending.
 
 ## Limitations
+- Lesson-bundle planning is offline coordination only; it does not yet execute a bundle against Drive or change the connected CLI's current Slides + worksheet production behavior.
 - C4A hardens the repository production client but does not authorize credentials or a real Google call. Connected live execution remains separately governed by C4B/#1196 and C4/#119.
 - There is no cross-resource transaction for the Slides/Docs pair; partial or ambiguous results require bounded reconciliation rather than automatic cleanup.
 - The visual-reuse bridge consumes supplied governed evidence only; it does not retrieve the Visual Asset Library or generate images. Teacher-reference PDFs can embed caller-supplied bytes only after the projection has already authorized the exact identity.
