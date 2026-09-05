@@ -8,14 +8,34 @@ from .grading_decision import (
     SourceProvenance,
     TeacherApprovalState,
 )
+from .synthetic_gradebook import (
+    SYNTHETIC_GRADEBOOK_FIXTURE_VERSION,
+    FixtureError,
+    FixtureFreshness,
+    FixtureMode,
+    MatchResult,
+    ReadOnlyFixtureError,
+    RecoverableFixtureError,
+    StaleFixtureError,
+    SyntheticGradebookFixture,
+)
 
 __all__ = (
     "GRADING_DECISION_SCHEMA_VERSION",
+    "SYNTHETIC_GRADEBOOK_FIXTURE_VERSION",
     "EvidenceFreshness",
+    "FixtureError",
+    "FixtureFreshness",
+    "FixtureMode",
     "GradingDecision",
     "IdentityEvidence",
     "IdentityResolution",
+    "MatchResult",
+    "ReadOnlyFixtureError",
+    "RecoverableFixtureError",
     "RubricCriterionEvidence",
     "SourceProvenance",
+    "StaleFixtureError",
+    "SyntheticGradebookFixture",
     "TeacherApprovalState",
 )
