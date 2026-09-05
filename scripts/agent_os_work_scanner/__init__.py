@@ -1,3 +1,12 @@
+from .gradebook_reader import (
+    GRADEBOOK_READER_SCHEMA_VERSION,
+    Editability,
+    EvidenceProvenance,
+    GradebookReaderResult,
+    ReaderFreshness,
+    ReaderStatus,
+    normalize_reader_record,
+)
 from .grading_decision import (
     GRADING_DECISION_SCHEMA_VERSION,
     EvidenceFreshness,
@@ -21,21 +30,28 @@ from .synthetic_gradebook import (
 )
 
 __all__ = (
+    "GRADEBOOK_READER_SCHEMA_VERSION",
     "GRADING_DECISION_SCHEMA_VERSION",
     "SYNTHETIC_GRADEBOOK_FIXTURE_VERSION",
+    "Editability",
     "EvidenceFreshness",
+    "EvidenceProvenance",
     "FixtureError",
     "FixtureFreshness",
     "FixtureMode",
+    "GradebookReaderResult",
     "GradingDecision",
     "IdentityEvidence",
     "IdentityResolution",
     "MatchResult",
     "ReadOnlyFixtureError",
+    "ReaderFreshness",
+    "ReaderStatus",
     "RecoverableFixtureError",
     "RubricCriterionEvidence",
     "SourceProvenance",
     "StaleFixtureError",
     "SyntheticGradebookFixture",
     "TeacherApprovalState",
+    "normalize_reader_record",
 )
