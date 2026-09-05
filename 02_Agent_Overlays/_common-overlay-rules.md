@@ -10,6 +10,7 @@ Required Handoff Targets.
 - Read-Only Default 0.1.0
 - Source-of-Truth Checks 0.1.0
 - Agent Interaction Output Standard 0.1.0
+- `01_Shared_Standards/global-engineering/failed-repair-lesson-reentry.md`
 
 ## Required Human Approval Points
 - Production writes
