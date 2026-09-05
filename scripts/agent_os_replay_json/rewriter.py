@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 import re
 from typing import Any
@@ -13,6 +14,8 @@ REWRITE_KINDS = {
     "change-selector",
     "insert-assertion",
 }
+REWRITE_CONFIDENCE_STATES = {"proven", "unproven"}
+SEMANTIC_EQUIVALENCE_STATES = {"proven", "unproven", "rejected"}
 
 _ACTION_ID_RE = re.compile(r"action-(0|[1-9][0-9]*)\Z")
 
@@ -24,6 +27,37 @@ def _validate_source_indexes(source_indexes: tuple[int, ...], owner: str) -> Non
         raise ValueError(f"{owner} source indexes must be exact nonnegative integers")
     if tuple(sorted(set(source_indexes))) != source_indexes:
         raise ValueError(f"{owner} source indexes must be unique and increasing")
+
+
+def _isolated_recording(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return a result payload that cannot alias mutable caller structures."""
+
+    return deepcopy(payload)
+
+
+def _selector_evidence(
+    steps: list[Any], source_indexes: tuple[int, ...]
+) -> tuple[str, ...]:
+    selectors: list[str] = []
+    for source_index in source_indexes:
+        step = steps[source_index]
+        if not isinstance(step, dict):
+            continue
+        raw_selectors = step.get("selectors", []) or []
+        if not isinstance(raw_selectors, list):
+            continue
+        for chain in raw_selectors:
+            if isinstance(chain, list):
+                selectors.extend(part for part in chain if isinstance(part, str))
+            elif isinstance(chain, str):
+                selectors.append(chain)
+    return tuple(selectors)
+
+
+def _request_evidence_is_recorded(
+    request_evidence: tuple[str, ...], recorded_evidence: tuple[str, ...]
+) -> bool:
+    return not request_evidence or set(request_evidence).issubset(recorded_evidence)
 
 
 @dataclass(frozen=True)
@@ -42,6 +76,8 @@ class RewriteOperation:
         if self.kind not in REWRITE_KINDS:
             raise ValueError(f"unsupported rewrite kind: {self.kind}")
         _validate_source_indexes(self.source_indexes, "rewrite operation")
+        if self.confidence not in REWRITE_CONFIDENCE_STATES:
+            raise ValueError(f"unsupported rewrite confidence: {self.confidence}")
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -58,6 +94,12 @@ class RewriteResult:
     provenance: dict[int, tuple[int, ...]]
     warnings: tuple[str, ...]
     semantic_equivalence: str
+
+    def __post_init__(self) -> None:
+        if self.semantic_equivalence not in SEMANTIC_EQUIVALENCE_STATES:
+            raise ValueError(
+                f"unsupported semantic equivalence: {self.semantic_equivalence}"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -95,7 +137,7 @@ def rewrite_replay(payload: dict[str, Any]) -> RewriteResult:
             if not change_steps:
                 warnings.append(f"action-{action_index}: no change step found")
                 return RewriteResult(
-                    rewritten_recording=dict(payload),
+                    rewritten_recording=_isolated_recording(payload),
                     operations=tuple(operations),
                     provenance=provenance,
                     warnings=tuple(warnings),
@@ -168,6 +210,26 @@ class RewriteRequest:
             raise ValueError(f"{self.kind} requires target action id")
 
 
+def _rejected(payload: dict[str, Any], warning: str) -> RewriteResult:
+    return RewriteResult(
+        rewritten_recording=_isolated_recording(payload),
+        operations=(),
+        provenance={},
+        warnings=(warning,),
+        semantic_equivalence="rejected",
+    )
+
+
+def _unproven(payload: dict[str, Any], warning: str) -> RewriteResult:
+    return RewriteResult(
+        rewritten_recording=_isolated_recording(payload),
+        operations=(),
+        provenance={},
+        warnings=(warning,),
+        semantic_equivalence="unproven",
+    )
+
+
 def apply_request(
     payload: dict[str, Any],
     request: RewriteRequest,
@@ -182,59 +244,39 @@ def apply_request(
 
     match = _ACTION_ID_RE.fullmatch(request.semantic_action_id)
     if match is None:
-        return RewriteResult(
-            rewritten_recording=dict(payload),
-            operations=(),
-            provenance={},
-            warnings=("unknown semantic action id",),
-            semantic_equivalence="rejected",
-        )
+        return _rejected(payload, "unknown semantic action id")
 
     action_index = int(match.group(1))
     if action_index >= len(actions):
-        return RewriteResult(
-            rewritten_recording=dict(payload),
-            operations=(),
-            provenance={},
-            warnings=("unknown semantic action id",),
-            semantic_equivalence="rejected",
-        )
+        return _rejected(payload, "unknown semantic action id")
     action = actions[action_index]
 
     if tuple(request.source_indexes) != tuple(action.source_indexes):
-        return RewriteResult(
-            rewritten_recording=dict(payload),
-            operations=(),
-            provenance={},
-            warnings=("source indexes do not match semantic action",),
-            semantic_equivalence="rejected",
+        return _rejected(payload, "source indexes do not match semantic action")
+
+    selector_evidence = (
+        _selector_evidence(steps, action.source_indexes)
+        if request.kind == "change-selector"
+        else ()
+    )
+    applicable_evidence = (
+        selector_evidence if request.kind == "change-selector" else action.evidence
+    )
+    if not _request_evidence_is_recorded(request.evidence, applicable_evidence):
+        warning = (
+            "request evidence is not present in recorded selector evidence"
+            if request.kind == "change-selector"
+            else "request evidence is not present in recorded evidence"
         )
+        return _rejected(payload, warning)
 
     if request.kind == "remove-noise":
         if action.recovery:
-            return RewriteResult(
-                rewritten_recording=dict(payload),
-                operations=(),
-                provenance={},
-                warnings=("recovery behavior cannot be removed as noise",),
-                semantic_equivalence="rejected",
-            )
+            return _rejected(payload, "recovery behavior cannot be removed as noise")
         if action.instructional:
-            return RewriteResult(
-                rewritten_recording=dict(payload),
-                operations=(),
-                provenance={},
-                warnings=("instructional action cannot be removed as noise",),
-                semantic_equivalence="rejected",
-            )
+            return _rejected(payload, "instructional action cannot be removed as noise")
         if action.kind != "keyboard_noise":
-            return RewriteResult(
-                rewritten_recording=dict(payload),
-                operations=(),
-                provenance={},
-                warnings=("only proven keyboard noise may be removed automatically",),
-                semantic_equivalence="rejected",
-            )
+            return _rejected(payload, "only proven keyboard noise may be removed automatically")
 
         removed = set(action.source_indexes)
         rewritten_steps = [
@@ -269,32 +311,17 @@ def apply_request(
         )
 
     if request.kind != "change-selector":
-        return RewriteResult(
-            rewritten_recording=dict(payload),
-            operations=(),
-            provenance={},
-            warnings=(f"request kind not implemented safely: {request.kind}",),
-            semantic_equivalence="unproven",
-        )
+        return _unproven(payload, f"request kind not implemented safely: {request.kind}")
 
     replacement = request.replacement_selector
-    if replacement is None or replacement not in action.evidence:
-        return RewriteResult(
-            rewritten_recording=dict(payload),
-            operations=(),
-            provenance={},
-            warnings=("replacement selector is not present in recorded evidence",),
-            semantic_equivalence="rejected",
+    if replacement is None or replacement not in selector_evidence:
+        return _rejected(
+            payload,
+            "replacement selector is not present in recorded selector evidence",
         )
 
     if len(action.source_indexes) != 1:
-        return RewriteResult(
-            rewritten_recording=dict(payload),
-            operations=(),
-            provenance={},
-            warnings=("selector change requires one source step",),
-            semantic_equivalence="rejected",
-        )
+        return _rejected(payload, "selector change requires one source step")
 
     source_index = action.source_indexes[0]
     source_step = steps[source_index]
@@ -314,7 +341,7 @@ def apply_request(
         kind="change-selector",
         semantic_action_id=request.semantic_action_id,
         source_indexes=action.source_indexes,
-        evidence=request.evidence or action.evidence,
+        evidence=request.evidence or selector_evidence,
         confidence="proven",
         output_indexes=(source_index,),
         changes_selector=True,
