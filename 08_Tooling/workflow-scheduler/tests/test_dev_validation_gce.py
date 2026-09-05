@@ -39,6 +39,21 @@ def test_eia_host_runner_uses_system_python_and_fixed_script_only():
 def test_eia_profile_does_not_enter_legacy_registry():
  assert live.EIA_VALIDATION_ID not in live.VALIDATION_REGISTRY;assert live.validation_argv(request(live.EIA_VALIDATION_ID))==live.EIA_VALIDATION_ARGV
 
+def test_sheets_smoke_host_command_accepts_only_canonical_fixed_profile():
+ req=request(live.SHEETS_SMOKE_VALIDATION_ID);command=live._host_command(req);assert live.SHEETS_SMOKE_VALIDATION_ID in command;assert "visual_asset_sheets_smoke.py" in command;assert req.request_id in command;assert "pip install" not in command;assert "sudo" not in command
+
+def test_sheets_smoke_profile_does_not_enter_legacy_registry():
+ req=request(live.SHEETS_SMOKE_VALIDATION_ID);assert live.SHEETS_SMOKE_VALIDATION_ID not in live.VALIDATION_REGISTRY;assert live.validation_argv(req)==live.SHEETS_SMOKE_VALIDATION_ARGV
+
+def test_sheets_smoke_host_runner_is_fail_closed_without_credential_injector():
+ source=live._HOST_RUNNER_SOURCE;assert 'SHEETS_SMOKE_ID="visual-asset-sheets-smoke"' in source;assert 'SHEETS_SMOKE_SCRIPT="08_Tooling/workflow-scheduler/src/workflow_scheduler/governance/visual_asset_sheets_smoke.py"' in source;assert "credential injector unavailable" in source;assert "values_get must remain unreachable" in source;assert "sheets-smoke-credential-injector-unavailable" in source;assert "GOOGLE_APPLICATION_CREDENTIALS" not in source;assert "access_token" not in source;assert "refresh_token" not in source;assert "client_secret" not in source
+
+def test_sheets_smoke_identity_uses_only_fixed_repository_import_roots():
+ source=live._HOST_RUNNER_SOURCE;assert 'SHEETS_SMOKE_IMPORT_ROOT="08_Tooling/workflow-scheduler/src"' in source;assert 'SHEETS_SMOKE_IMPORT_PRELUDE=' in source;assert "sys.path[:0]=[os.path.join(repo,path)" in source;assert 'SHEETS_SMOKE_PROBE=SHEETS_SMOKE_IMPORT_PRELUDE+' in source;assert 'env["PYTHONPATH"]' not in source;assert 'os.environ.get("PYTHONPATH"' not in source
+
+def test_sheets_smoke_host_runner_uses_fixed_target_and_no_drive_or_notion_surface():
+ source=live._HOST_RUNNER_SOURCE;assert "1S3GNwqu0ehPXUA1j4FEksH1uEMKlxyEwAZWfIADPfpo" in source;assert "'Approved Use Review'!A1:N455" in source;assert 'payload.get("drive_access_performed")' not in source;assert "drive.google" not in source;assert "api.notion" not in source
+
 def test_successful_transport_remains_non_authorizing():
  result=live.execute_dev_validation_transport(ingress(),claims=claims(),adapter=Adapter());e=result["dev_validation"];assert e["status"]=="success";assert e["tested_sha"]==SHA;assert e["cleanup_complete"] is True;assert e["scheduler_invoked"] is False;assert e["execution_authorized"] is False;assert e["publication_invoked"] is False;assert e["merge_authorized"] is False
 
