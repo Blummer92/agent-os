@@ -291,12 +291,21 @@ def _execute_one(
             )
             return _validate_response(response, action, expected_page_id=None)
         except NotionTransientMutationError as error:
-            if action.action is ReconciliationResult.CREATE_MISSING and error.ambiguous:
-                matches = _identity_matches(client, action, authorization)
-                if len(matches) == 1:
-                    return _outcome_from_reconciled_create(matches[0], action)
-                if len(matches) > 1:
-                    raise MutationExecutionError("ambiguous create reconciled to multiple identities") from None
+            if error.ambiguous:
+                if action.action is ReconciliationResult.CREATE_MISSING:
+                    matches = _identity_matches(client, action, authorization)
+                    if len(matches) == 1:
+                        return _outcome_from_reconciled_create(matches[0], action)
+                    if len(matches) > 1:
+                        raise MutationExecutionError(
+                            "ambiguous create reconciled to multiple identities"
+                        ) from None
+                    raise MutationExecutionError(
+                        "ambiguous create requires manual reconciliation"
+                    ) from None
+                raise MutationExecutionError(
+                    "ambiguous update requires manual reconciliation"
+                ) from None
             if retries >= authorization.maximum_retries:
                 raise MutationExecutionError("mutation retry limit reached") from None
             new_total = total_delay + error.retry_after
