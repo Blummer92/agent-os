@@ -179,7 +179,7 @@ def analyze_replay(payload: dict[str, Any]) -> list[SemanticAction]:
                     combined_evidence.extend(_evidence(nxt))
                     j += 1
                     continue
-                if nxt_type == "change" and nxt_identity == target:
+                if nxt_type == "change" and target is not None and nxt_identity == target:
                     indexes.append(j)
                     final_value = _change_value(nxt)
                     combined_evidence.extend(_evidence(nxt))
