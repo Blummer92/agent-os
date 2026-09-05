@@ -365,7 +365,12 @@ jobs:
 
   refresh_pr:
     name: Run finite governed PR refresh
-    if: ${{ github.event.issue.pull_request == null && github.event.comment.user.id == 32861845 && startsWith(github.event.comment.body, '/agent-os refresh-pr ') }}
+    # Coarse cost prefilter only; it is deliberately a superset of the canonical
+    # grammar and carries no operand semantics. Operation grammar is owned solely
+    # by scripts/agent_os_issue_labels/pr_branch_refresh_actions.py, which emits
+    # the precise rejected-trigger reason as bounded terminal evidence. Do not
+    # reintroduce operand parsing here (#1875).
+    if: ${{ github.event.issue.pull_request == null && github.event.comment.user.id == 32861845 && startsWith(github.event.comment.body, '/agent-os refresh-pr') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -402,7 +407,16 @@ jobs:
           python - <<'PY'
           import json
           import os
+          import re
           from pathlib import Path
+
+          SHA40 = re.compile(r"^[0-9a-f]{40}$")
+
+          def codes(value):
+              if not isinstance(value, (list, tuple)):
+                  return ""
+              return ",".join(item for item in value if isinstance(item, str) and item)
+
           path = Path(os.environ["RUNNER_TEMP"]) / "agent-os-refresh" / "result.json"
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
               summary.write("## Agent OS governed PR refresh\n\n")
@@ -411,9 +425,21 @@ jobs:
               else:
                   result = json.loads(path.read_text(encoding="utf-8"))
                   summary.write(f"Status: `{result.get('status')}`\n\n")
-                  summary.write(f"Reasons: `{','.join(result.get('reason_codes', []))}`\n\n")
+                  summary.write(f"Reasons: `{codes(result.get('reason_codes'))}`\n\n")
                   summary.write(f"Mutation count: `{result.get('mutation_count')}`\n\n")
-                  summary.write(f"Authorization receipt published: `{result.get('authorization_receipt_published')}`\n")
+                  summary.write(f"Authorization receipt published: `{result.get('authorization_receipt_published')}`\n\n")
+                  http_status = result.get("receipt_publication_http_status")
+                  if isinstance(http_status, int):
+                      summary.write(f"Receipt publication HTTP status: `{http_status}`\n\n")
+                  receipt = result.get("refresh_receipt")
+                  if isinstance(receipt, dict):
+                      summary.write(f"Underlying refresh status: `{receipt.get('status')}`\n\n")
+                      summary.write(f"Underlying refresh reasons: `{codes(receipt.get('reason_codes'))}`\n\n")
+                      new_head = receipt.get("new_head_sha")
+                      if isinstance(new_head, str) and SHA40.fullmatch(new_head):
+                          summary.write(f"Refreshed head SHA: `{new_head}`\n")
+                  else:
+                      summary.write("Underlying refresh receipt: `unavailable`\n")
           PY
 
       - name: Publish bounded refresh evidence
