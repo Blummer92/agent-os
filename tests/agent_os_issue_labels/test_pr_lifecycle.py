@@ -163,7 +163,10 @@ def test_exact_canonical_lookup_can_establish_discoverability_despite_secondary_
     )
     assert lagging_secondary.status == "verified"
     assert lagging_secondary.discoverable is True
-    assert lagging_secondary.reason_codes == ("canonical-readback-verified",)
+    assert lagging_secondary.reason_codes == (
+        "canonical-readback-verified",
+        "secondary-discovery-lag-ignored",
+    )
 
 
 @pytest.mark.parametrize(
