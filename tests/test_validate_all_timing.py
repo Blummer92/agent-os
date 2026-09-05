@@ -82,3 +82,38 @@ def test_validate_all_focused_check_uses_same_timing_boundary(tmp_path: Path) ->
     assert "- PASS | focused: tests/test_sample.py | exit 0 |" in result.stdout
     assert "- focused: tests/test_sample.py |" in result.stdout
     assert len(TIMING_LINE.findall(result.stdout)) == 4
+
+
+def test_validate_all_excludes_transient_tmp_test_trees(tmp_path: Path) -> None:
+    """Issue #1915: repository-local .tmp suites are not canonical aggregate suites."""
+    repo = _make_repo(tmp_path)
+    package_tests = repo / "package" / "tests"
+    package_tests.mkdir(parents=True)
+    (package_tests / "test_package.py").write_text(
+        "def test_package():\n    assert True\n",
+        encoding="utf-8",
+    )
+    transient_tests = repo / ".tmp" / "isolation-copy" / "package" / "tests"
+    transient_tests.mkdir(parents=True)
+    (transient_tests / "test_transient_failure.py").write_text(
+        "def test_transient_failure():\n    assert False, 'transient suite must not run'\n",
+        encoding="utf-8",
+    )
+
+    result = _run(repo)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "- PASS | package | exit 0 |" in result.stdout
+    assert ".tmp/isolation-copy/package" not in result.stdout
+    assert "transient suite must not run" not in result.stdout
+    assert "OVERALL STATUS\nPASS\n\nEXIT CODE\n0\n" in result.stdout
+
+
+def test_validate_all_focused_behavior_ignores_tmp_aggregate_exclusion(tmp_path: Path) -> None:
+    """Issue #1915: aggregate .tmp exclusion does not alter focused validation."""
+    repo = _make_repo(tmp_path)
+
+    result = _run(repo, "--focused", "tests/test_sample.py", "--focused-maxfail", "1")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "- PASS | focused: tests/test_sample.py | exit 0 |" in result.stdout
