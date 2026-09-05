@@ -1,7 +1,8 @@
 """Concrete bounded gcloud/IAP adapter for the #1217 GCE control path.
 
-Only fixed repository-owned operations are admitted. There is no arbitrary
-command API, retry loop, provider fallback, or VM stop capability.
+The adapter is intentionally narrow: one exact GCE tuple, IAP/OS Login SSH,
+and fixed repository-owned operations. It has no arbitrary command API, no
+retry loop for invocation, and no stop capability in the first activation.
 """
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ from .gce_control_path import FIXED_ENTRYPOINT, GceResourceTuple, HostInvocation
 from .github_issue_comment_ingress import IssueCommentIngressResult
 from .governed_invocation_binding import bind_ingress_to_gce
 
-PROJECT="agent-os-502614"; ZONE="us-central1-a"; INSTANCE="agent-os-test"; RESOURCE=GceResourceTuple(project=PROJECT,zone=ZONE,instance=INSTANCE)
+PROJECT="agent-os-502614";ZONE="us-central1-a";INSTANCE="agent-os-test";RESOURCE=GceResourceTuple(project=PROJECT,zone=ZONE,instance=INSTANCE)
 HOST_PYTHON="/usr/bin/python3"
 DISCOVERY_MODULE="agent_os_execution_service.handoff_discovery_entrypoint"
 ACTIVATION_MODULE="agent_os_execution_service.first_publication_activation_entrypoint"
@@ -28,7 +29,15 @@ ACTIVATION_PROBE_COMMAND=f"{HOST_PYTHON} -c 'import {ACTIVATION_MODULE}'"
 MAX_DIAGNOSTIC_STDERR=2048
 WORKFLOW_REF="Blummer92/agent-os/.github/workflows/agent-os-governed-invocation.yml@refs/heads/main"
 WIF_PROVIDER="//iam.googleapis.com/projects/966859826758/locations/global/workloadIdentityPools/agent-os-github/providers/agent-os-main"
-_FRAME_START="===AGENT-OS-RUNTIME-INSPECTION-JSON-BEGIN==="; _FRAME_END="===AGENT-OS-RUNTIME-INSPECTION-JSON-END==="
+
+# Fixed repository-owned sentinels framing the trusted runtime-inspection JSON.
+# gcloud compute ssh can interleave its own local SSH-keygen chatter into the
+# captured stdout stream (proven live in run 32896154122); these markers let
+# the adapter isolate exactly the bytes the remote diagnostic itself printed
+# instead of scanning for "{"/"}" in arbitrary transport noise.
+_FRAME_START="===AGENT-OS-RUNTIME-INSPECTION-JSON-BEGIN==="
+_FRAME_END="===AGENT-OS-RUNTIME-INSPECTION-JSON-END==="
+
 _RUNTIME_INSPECTION_SOURCE=r'''import grp,importlib.util,json,os,pwd,site,stat,subprocess,sys,sysconfig
 M="agent_os_execution_service.handoff_discovery_entrypoint"
 def spec(n):
@@ -59,30 +68,31 @@ out={"schema_version":"1.0","status":"observed","reason_codes":["runtime-context
 '''+("print(%r);print(json.dumps(out,sort_keys=True,separators=(\",\",\":\")));print(%r)"%(_FRAME_START,_FRAME_END))
 RUNTIME_INSPECTION_COMMAND=f"{HOST_PYTHON} -c {shlex.quote(_RUNTIME_INSPECTION_SOURCE)}"
 
-class GcloudCommandError(RuntimeError): pass
+class GcloudCommandError(RuntimeError):pass
 
-def _run(argv:Sequence[str],*,timeout:int=60)->subprocess.CompletedProcess[str]: return subprocess.run(tuple(argv),check=False,capture_output=True,text=True,timeout=timeout)
+def _run(argv:Sequence[str],*,timeout:int=60)->subprocess.CompletedProcess[str]:return subprocess.run(tuple(argv),check=False,capture_output=True,text=True,timeout=timeout)
 def _require_ok(result:subprocess.CompletedProcess[str],operation:str)->str:
- if result.returncode!=0: raise GcloudCommandError(f"{operation} failed")
+ if result.returncode!=0:raise GcloudCommandError(f"{operation} failed")
  return result.stdout.strip()
-def _state(value:str)->VmState: return {"RUNNING":VmState.RUNNING,"TERMINATED":VmState.STOPPED,"STOPPED":VmState.STOPPED,"STAGING":VmState.STAGING,"STOPPING":VmState.STOPPING,"SUSPENDING":VmState.SUSPENDING}.get(value.strip().upper(),VmState.UNKNOWN)
+def _state(value:str)->VmState:return {"RUNNING":VmState.RUNNING,"TERMINATED":VmState.STOPPED,"STOPPED":VmState.STOPPED,"STAGING":VmState.STAGING,"STOPPING":VmState.STOPPING,"SUSPENDING":VmState.SUSPENDING}.get(value.strip().upper(),VmState.UNKNOWN)
 def _discovery_command(*,repository:str,issue_number:int)->str:
- if repository!="Blummer92/agent-os" or type(issue_number) is not int or issue_number<1: raise GcloudCommandError("non-canonical discovery identity rejected")
+ if repository!="Blummer92/agent-os":raise GcloudCommandError("non-canonical discovery repository rejected")
+ if type(issue_number) is not int or issue_number<1:raise GcloudCommandError("non-canonical discovery issue rejected")
  return f"{HOST_PYTHON} -m {DISCOVERY_MODULE} --repository {repository} --issue-number {issue_number}"
 def _activation_command(capsule:str)->str:
- if not re.fullmatch(r"pre-publication-evidence:[0-9a-f]{64}",capsule): raise GcloudCommandError("non-canonical source capsule rejected")
+ if not re.fullmatch(r"pre-publication-evidence:[0-9a-f]{64}",capsule):raise GcloudCommandError("non-canonical source capsule rejected")
  return f"{HOST_PYTHON} -m {ACTIVATION_MODULE} --source-capsule-id {capsule}"
 
 class GcloudIapAdapter:
  def __init__(self,*,poll_seconds:float=2.0,max_polls:int=30)->None:
-  if poll_seconds<=0 or max_polls<1: raise ValueError("poll bounds must be positive")
-  self.poll_seconds=poll_seconds; self.max_polls=max_polls
+  if poll_seconds<=0 or max_polls<1:raise ValueError("poll bounds must be positive")
+  self.poll_seconds=poll_seconds;self.max_polls=max_polls
  @staticmethod
  def _resource_args(resource:GceResourceTuple)->tuple[str,...]:
-  if resource!=RESOURCE: raise GcloudCommandError("resource tuple is not the approved #1217 target")
+  if resource!=RESOURCE:raise GcloudCommandError("resource tuple is not the approved #1217 target")
   return ("--project",resource.project,"--zone",resource.zone)
- def observe_state(self,resource:GceResourceTuple)->VmState: return _state(_require_ok(_run(("gcloud","compute","instances","describe",resource.instance,*self._resource_args(resource),"--format=value(status)")),"observe instance state"))
- def start(self,resource:GceResourceTuple)->bool: return _run(("gcloud","compute","instances","start",resource.instance,*self._resource_args(resource),"--quiet"),timeout=120).returncode==0
+ def observe_state(self,resource:GceResourceTuple)->VmState:return _state(_require_ok(_run(("gcloud","compute","instances","describe",resource.instance,*self._resource_args(resource),"--format=value(status)")),"observe instance state"))
+ def start(self,resource:GceResourceTuple)->bool:return _run(("gcloud","compute","instances","start",resource.instance,*self._resource_args(resource),"--quiet"),timeout=120).returncode==0
  def wait_until_running(self,resource:GceResourceTuple)->VmState:
   for _ in range(self.max_polls):
    state=self.observe_state(resource)
@@ -90,39 +100,53 @@ class GcloudIapAdapter:
    if state not in {VmState.STAGING,VmState.STOPPED}:return state
    time.sleep(self.poll_seconds)
   return VmState.UNKNOWN
- def _ssh(self,resource:GceResourceTuple,command:str)->subprocess.CompletedProcess[str]: return _run(("gcloud","compute","ssh",resource.instance,*self._resource_args(resource),"--tunnel-through-iap","--quiet","--command",command),timeout=180)
+ def _ssh(self,resource:GceResourceTuple,command:str)->subprocess.CompletedProcess[str]:return _run(("gcloud","compute","ssh",resource.instance,*self._resource_args(resource),"--tunnel-through-iap","--quiet","--command",command),timeout=180)
  def probe_ready(self,resource:GceResourceTuple)->bool:return self._ssh(resource,f"test -x {FIXED_ENTRYPOINT}").returncode==0
  def probe_discovery_ready(self,resource:GceResourceTuple)->bool:return self._ssh(resource,DISCOVERY_PROBE_COMMAND).returncode==0
  def probe_activation_ready(self,resource:GceResourceTuple)->bool:return self._ssh(resource,ACTIVATION_PROBE_COMMAND).returncode==0
  def activate_first_publication(self,resource:GceResourceTuple,*,source_capsule_id:str)->dict[str,object]:
   result=self._ssh(resource,_activation_command(source_capsule_id))
-  if result.returncode!=0: raise GcloudCommandError("fixed first-publication activation failed")
-  try: payload=json.loads(result.stdout)
-  except json.JSONDecodeError as exc: raise GcloudCommandError("activation evidence was not JSON") from exc
-  if type(payload) is not dict or payload.get("source_capsule_id")!=source_capsule_id: raise GcloudCommandError("activation evidence identity mismatch")
-  if payload.get("scheduler_invoked") is not False or payload.get("execution_lease_acquired") is not False or payload.get("resume_invoked") is not False: raise GcloudCommandError("activation crossed execution boundary")
+  if result.returncode!=0:raise GcloudCommandError("fixed first-publication activation failed")
+  try:payload=json.loads(result.stdout)
+  except json.JSONDecodeError as exc:raise GcloudCommandError("activation evidence was not JSON") from exc
+  if type(payload) is not dict or payload.get("source_capsule_id")!=source_capsule_id:raise GcloudCommandError("activation evidence identity mismatch")
+  if payload.get("scheduler_invoked") is not False or payload.get("execution_lease_acquired") is not False or payload.get("resume_invoked") is not False:raise GcloudCommandError("activation crossed execution boundary")
   return payload
  def inspect_runtime(self,resource:GceResourceTuple)->dict[str,object]:
   result=self._ssh(resource,RUNTIME_INSPECTION_COMMAND)
   if result.returncode!=0:return _inspection_failure("needs-decision","inspection-command-failed",exit_code=result.returncode,stderr=result.stderr)
-  framed,reason=_extract_framed_payload(result.stdout)
-  if framed is None:return _inspection_failure("needs-decision",reason,exit_code=result.returncode,stderr=result.stderr)
+  framed,frame_reason=_extract_framed_payload(result.stdout)
+  if framed is None:
+   envelope=_inspection_failure("needs-decision",frame_reason,exit_code=result.returncode,stderr=result.stderr)
+   envelope["stdout_evidence"]=_stdout_contamination_evidence(result.stdout)
+   return envelope
   try:payload=json.loads(framed)
-  except json.JSONDecodeError:return _inspection_failure("needs-decision","inspection-evidence-not-json",exit_code=result.returncode,stderr=result.stderr)
+  except json.JSONDecodeError:
+   envelope=_inspection_failure("needs-decision","inspection-evidence-not-json",exit_code=result.returncode,stderr=result.stderr)
+   envelope["stdout_evidence"]=_stdout_contamination_evidence(result.stdout)
+   return envelope
   if type(payload) is not dict:return _inspection_failure("needs-decision","inspection-evidence-malformed",exit_code=result.returncode,stderr=result.stderr)
   fixed={"project":PROJECT,"zone":ZONE,"instance":INSTANCE,"interpreter":HOST_PYTHON,"execution_authorized":False,"scheduler_invoked":False,"discovery_invoked":False,"resume_invoked":False,"side_effects_performed":False}
   if any(payload.get(k)!=v for k,v in fixed.items()):return _inspection_failure("needs-decision","inspection-contract-violation",exit_code=result.returncode,stderr=result.stderr)
+  probe=payload.get("import_probe")
+  if type(probe) is not dict or type(probe.get("stderr")) is not str:return _inspection_failure("needs-decision","inspection-contract-violation",exit_code=result.returncode,stderr=result.stderr)
+  if len(probe["stderr"])>MAX_DIAGNOSTIC_STDERR:
+   payload=dict(payload);payload["import_probe"]=dict(probe)
+   payload["import_probe"]["stderr"]=probe["stderr"][-MAX_DIAGNOSTIC_STDERR:]
+   payload["import_probe"]["stderr_truncated"]=True
   return payload
  def discover(self,resource:GceResourceTuple,*,repository:str,issue_number:int)->dict[str,object]:
   result=self._ssh(resource,_discovery_command(repository=repository,issue_number=issue_number))
   if result.returncode!=0:raise GcloudCommandError("fixed host discovery failed")
   try:payload=json.loads(result.stdout)
   except json.JSONDecodeError as exc:raise GcloudCommandError("host discovery evidence was not JSON") from exc
-  if type(payload) is not dict or payload.get("repository")!=repository or payload.get("issue_number")!=issue_number:raise GcloudCommandError("host discovery identity mismatch")
-  if payload.get("execution_authorized") is not False or payload.get("side_effects_performed") is not False:raise GcloudCommandError("discovery must remain read-only")
+  if type(payload) is not dict:raise GcloudCommandError("host discovery evidence must be an object")
+  if payload.get("repository")!=repository or payload.get("issue_number")!=issue_number:raise GcloudCommandError("host discovery identity mismatch")
+  if payload.get("execution_authorized") is not False or payload.get("side_effects_performed") is not False:raise GcloudCommandError("discovery must remain read-only and non-authorizing")
   return payload
  def invoke(self,resource:GceResourceTuple,argv:tuple[str,...])->HostInvocationEvidence:
-  if len(argv)!=3 or argv[0]!=FIXED_ENTRYPOINT or argv[1]!="--handoff-id" or not validate_handoff_id(argv[2]):raise GcloudCommandError("non-canonical host argv rejected")
+  if len(argv)!=3 or argv[0]!=FIXED_ENTRYPOINT or argv[1]!="--handoff-id":raise GcloudCommandError("non-canonical host argv rejected")
+  if not validate_handoff_id(argv[2]):raise GcloudCommandError("non-canonical handoff id rejected")
   result=self._ssh(resource,f"{FIXED_ENTRYPOINT} --handoff-id {argv[2]}")
   if result.returncode!=0:raise GcloudCommandError("fixed host invocation failed")
   try:payload=json.loads(result.stdout)
@@ -137,23 +161,63 @@ def _ingress_from_file(path:Path)->IssueCommentIngressResult:
  payload=json.loads(path.read_text(encoding="utf-8"))
  if type(payload) is not dict:raise ValueError("transport evidence must be an object")
  values={key:payload[key] for key in ("schema_version","status","reason","repository","issue_number","comment_id","actor","handoff_id_or_none","logical_trigger_id_or_none","run_attempt")}
- for key in ("dev_validation_branch_or_none","dev_validation_sha_or_none","dev_validation_id_or_none","source_capsule_id_or_none"):values[key]=payload.get(key)
+ for key in ("dev_validation_branch_or_none","dev_validation_sha_or_none","dev_validation_id_or_none","source_capsule_id_or_none"):
+  values[key]=payload.get(key)
  return IssueCommentIngressResult(**values)
 def _policy()->OidcTrustPolicy:return OidcTrustPolicy(repository="Blummer92/agent-os",repository_owner="Blummer92",workflow_ref=WORKFLOW_REF,ref="refs/heads/main",audience=WIF_PROVIDER)
 def _non_authorizing(status:str,reason:str)->dict[str,object]:return {"schema_version":"1.0","status":status,"reason_codes":[reason],"project":PROJECT,"zone":ZONE,"instance":INSTANCE,"interpreter":HOST_PYTHON,"execution_authorized":False,"scheduler_invoked":False,"discovery_invoked":False,"resume_invoked":False,"side_effects_performed":False}
 def _bounded_diagnostic_text(text:str)->tuple[str,bool]:
  if type(text) is not str:text=""
- return (text[-MAX_DIAGNOSTIC_STDERR:],True) if len(text)>MAX_DIAGNOSTIC_STDERR else (text,False)
+ if len(text)>MAX_DIAGNOSTIC_STDERR:return text[-MAX_DIAGNOSTIC_STDERR:],True
+ return text,False
 def _inspection_failure(status:str,reason:str,*,exit_code:int,stderr:str)->dict[str,object]:
- bounded,truncated=_bounded_diagnostic_text(stderr);out=_non_authorizing(status,reason);out.update({"ssh_exit_code":exit_code,"ssh_stderr":bounded,"ssh_stderr_truncated":truncated});return out
+ bounded_stderr,truncated=_bounded_diagnostic_text(stderr)
+ envelope=_non_authorizing(status,reason)
+ envelope["ssh_exit_code"]=exit_code
+ envelope["ssh_stderr"]=bounded_stderr
+ envelope["ssh_stderr_truncated"]=truncated
+ return envelope
+
+_STDOUT_EVIDENCE_PREFIX_CAP=200
+_STDOUT_EVIDENCE_SUFFIX_CAP=200
+_UNSAFE_SNIPPET_CHAR_RE=re.compile(r'[^\x09\x0a\x0d\x20-\x7e]')
+def _sanitize_stdout_snippet(text:str)->str:return _UNSAFE_SNIPPET_CHAR_RE.sub("?",text)
+def _stdout_contamination_evidence(stdout:str)->dict[str,object]:
+ if type(stdout) is not str:stdout=""
+ length=len(stdout)
+ first_brace=stdout.find("{");last_brace=stdout.rfind("}")
+ json_span_present=first_brace!=-1 and last_brace!=-1 and first_brace<last_brace
+ return {
+  "length":length,
+  "empty":length==0,
+  "json_object_span_present":json_span_present,
+  "leading_text_before_json":json_span_present and first_brace>0,
+  "trailing_text_after_json":json_span_present and last_brace<length-1,
+  "prefix":_sanitize_stdout_snippet(stdout[:_STDOUT_EVIDENCE_PREFIX_CAP]),
+  "prefix_truncated":length>_STDOUT_EVIDENCE_PREFIX_CAP,
+  "suffix":_sanitize_stdout_snippet(stdout[-_STDOUT_EVIDENCE_SUFFIX_CAP:]) if length>_STDOUT_EVIDENCE_PREFIX_CAP else "",
+  "suffix_truncated":length>_STDOUT_EVIDENCE_PREFIX_CAP+_STDOUT_EVIDENCE_SUFFIX_CAP,
+  "sha256":hashlib.sha256(stdout.encode("utf-8",errors="replace")).hexdigest(),
+ }
 
 def _extract_framed_payload(stdout:str)->tuple[str|None,str|None]:
+ """Return only the bytes between exactly one valid sentinel pair, or a fail-closed reason.
+
+ Requires exactly one start marker and exactly one end marker, with the start
+ strictly before the end. This is a structural boundary match on fixed
+ repository-owned literals only -- it never scans for "{"/"}" and cannot be
+ influenced by braces or any other content in surrounding transport chatter.
+ """
  if type(stdout) is not str:stdout=""
- if stdout.count(_FRAME_START)!=1:return None,"inspection-frame-start-missing" if _FRAME_START not in stdout else "inspection-frame-start-duplicate"
- if stdout.count(_FRAME_END)!=1:return None,"inspection-frame-end-missing" if _FRAME_END not in stdout else "inspection-frame-end-duplicate"
- start=stdout.find(_FRAME_START);end=stdout.find(_FRAME_END)
- if end<=start:return None,"inspection-frame-order-invalid"
- return stdout[start+len(_FRAME_START):end].strip(),None
+ start_count=stdout.count(_FRAME_START)
+ if start_count==0:return None,"inspection-frame-start-missing"
+ if start_count>1:return None,"inspection-frame-start-duplicate"
+ end_count=stdout.count(_FRAME_END)
+ if end_count==0:return None,"inspection-frame-end-missing"
+ if end_count>1:return None,"inspection-frame-end-duplicate"
+ start_idx=stdout.find(_FRAME_START);end_idx=stdout.find(_FRAME_END)
+ if end_idx<=start_idx:return None,"inspection-frame-order-invalid"
+ return stdout[start_idx+len(_FRAME_START):end_idx].strip(),None
 
 def execute_transport(ingress:IssueCommentIngressResult,*,claims:Mapping[str,object],adapter:GcloudIapAdapter)->dict[str,object]:
  if ingress.reason=="accepted-dev-validation-envelope":
@@ -161,11 +225,13 @@ def execute_transport(ingress:IssueCommentIngressResult,*,claims:Mapping[str,obj
   return execute_dev_validation_transport(ingress,claims=claims,adapter=adapter)
  if ingress.reason=="accepted-runtime-inspection-envelope":
   if ingress.status!="accepted" or ingress.issue_number is None:raise ValueError("runtime inspection requires accepted canonical issue evidence")
-  if ingress.handoff_id_or_none is not None or ingress.run_attempt!=1:raise ValueError("runtime inspection transport malformed")
+  if ingress.handoff_id_or_none is not None:raise ValueError("runtime inspection must not carry a handoff identity")
+  if ingress.run_attempt!=1:raise ValueError("workflow reruns cannot perform runtime inspection")
   if not _policy().accepts(claims):return {"runtime_inspection":_non_authorizing("blocked","claims-rejected")}
   if adapter.observe_state(RESOURCE) is not VmState.RUNNING:return {"runtime_inspection":_non_authorizing("needs-decision","host-not-running")}
+  runtime_inspection=adapter.inspect_runtime(RESOURCE)
   from .cloud_identity_inspection import collect_cloud_identity
-  return {"runtime_inspection":adapter.inspect_runtime(RESOURCE),"cloud_identity":collect_cloud_identity(_run)}
+  return {"runtime_inspection":runtime_inspection,"cloud_identity":collect_cloud_identity(_run)}
  if ingress.reason=="accepted-first-publication-activation-envelope":
   if ingress.status!="accepted" or ingress.issue_number is None or ingress.source_capsule_id_or_none is None:raise ValueError("activation requires accepted canonical source capsule evidence")
   if ingress.handoff_id_or_none is not None or ingress.run_attempt!=1:raise ValueError("activation transport malformed")
@@ -176,7 +242,8 @@ def execute_transport(ingress:IssueCommentIngressResult,*,claims:Mapping[str,obj
   return {"first_publication_activation":adapter.activate_first_publication(RESOURCE,source_capsule_id=ingress.source_capsule_id_or_none)}
  if ingress.reason=="accepted-discovery-envelope":
   if ingress.status!="accepted" or ingress.issue_number is None:raise ValueError("discovery requires accepted canonical issue evidence")
-  if ingress.handoff_id_or_none is not None or ingress.run_attempt!=1:raise ValueError("discovery transport malformed")
+  if ingress.handoff_id_or_none is not None:raise ValueError("discovery must not carry a handoff identity")
+  if ingress.run_attempt!=1:raise ValueError("workflow reruns cannot perform discovery")
   if not _policy().accepts(claims):return {"discovery":{"status":"blocked","reason_codes":["claims-rejected"],"repository":ingress.repository,"issue_number":ingress.issue_number,"handoff_id":None,"execution_authorized":False,"scheduler_invoked":False,"side_effects_performed":False}}
   initial=adapter.observe_state(RESOURCE)
   if initial is VmState.STOPPED:
