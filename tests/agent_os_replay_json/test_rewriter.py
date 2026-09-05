@@ -1,13 +1,6 @@
 import pytest
 
-from scripts.agent_os_replay_json.rewriter import (
-    REWRITE_KINDS,
-    RewriteOperation,
-    RewriteRequest,
-    RewriteResult,
-    apply_request,
-    rewrite_replay,
-)
+from scripts.agent_os_replay_json.rewriter import REWRITE_KINDS, RewriteOperation
 
 
 def test_rewrite_vocabulary_is_finite():
@@ -37,18 +30,30 @@ def test_rewrite_operation_preserves_provenance():
 
 def test_unknown_rewrite_kind_fails_closed():
     with pytest.raises(ValueError, match="unsupported rewrite kind"):
-        RewriteOperation(kind="guess", semantic_action_id="action-1", source_indexes=(1,))
+        RewriteOperation(
+            kind="guess",
+            semantic_action_id="action-1",
+            source_indexes=(1,),
+        )
 
 
 def test_missing_source_indexes_fails_closed():
     with pytest.raises(ValueError, match="requires source indexes"):
-        RewriteOperation(kind="keep", semantic_action_id="action-1", source_indexes=())
+        RewriteOperation(
+            kind="keep",
+            semantic_action_id="action-1",
+            source_indexes=(),
+        )
 
 
 @pytest.mark.parametrize("source_indexes", [(-1,), (1, 1), (2, 1), (True,), (1.0,), ("1",)])
 def test_rewrite_operation_rejects_noncanonical_source_indexes(source_indexes):
     with pytest.raises(ValueError, match="source indexes"):
-        RewriteOperation(kind="keep", semantic_action_id="action-1", source_indexes=source_indexes)
+        RewriteOperation(
+            kind="keep",
+            semantic_action_id="action-1",
+            source_indexes=source_indexes,
+        )
 
 
 def test_rewrite_operation_rejects_unknown_confidence_state():
@@ -61,190 +66,488 @@ def test_rewrite_operation_rejects_unknown_confidence_state():
         )
 
 
+from scripts.agent_os_replay_json.rewriter import RewriteResult, rewrite_replay
+
+
 def test_rewrite_result_rejects_unknown_equivalence_state():
     with pytest.raises(ValueError, match="unsupported semantic equivalence"):
-        RewriteResult({}, (), {}, (), "probably")
+        RewriteResult(
+            rewritten_recording={},
+            operations=(),
+            provenance={},
+            warnings=(),
+            semantic_equivalence="probably",
+        )
 
 
 def test_clean_recording_round_trips():
-    payload = {"steps": [{"type": "navigate", "url": "https://example.test"}, {"type": "click", "selectors": [["aria/Folder"]]}]}
+    payload = {
+        "steps": [
+            {"type": "navigate", "url": "https://example.test"},
+            {"type": "click", "selectors": [["aria/Folder"]]},
+        ]
+    }
+
     result = rewrite_replay(payload)
+
     assert result.rewritten_recording == payload
     assert result.semantic_equivalence == "proven"
     assert result.provenance == {0: (0,), 1: (1,)}
 
 
 def test_keyboard_correction_sequence_collapses_to_final_change():
-    payload = {"steps": [
-        {"type": "change", "value": "My F", "selectors": [["[data-testid='editor-document-title']"]]},
-        {"type": "keyDown", "key": "ArrowLeft"},
-        {"type": "keyUp", "key": "ArrowLeft"},
-        {"type": "change", "value": "My First Project", "selectors": [["[data-testid='editor-document-title']"]]},
-    ]}
+    payload = {
+        "steps": [
+            {
+                "type": "change",
+                "value": "My F",
+                "selectors": [["[data-testid='editor-document-title']"]],
+            },
+            {"type": "keyDown", "key": "ArrowLeft"},
+            {"type": "keyUp", "key": "ArrowLeft"},
+            {
+                "type": "change",
+                "value": "My First Project",
+                "selectors": [["[data-testid='editor-document-title']"]],
+            },
+        ]
+    }
+
     result = rewrite_replay(payload)
+
     assert result.rewritten_recording["steps"] == [payload["steps"][3]]
     assert result.provenance == {0: (0, 1, 2, 3)}
     assert result.operations[0].kind == "replace-sequence"
-
+    assert result.semantic_equivalence == "proven"
 
 def test_click_and_double_click_are_preserved():
-    payload = {"steps": [{"type": "click", "selectors": [["aria/Folder"]]}, {"type": "doubleClick", "selectors": [["aria/Folder"]]}]}
+    payload = {
+        "steps": [
+            {"type": "click", "selectors": [["aria/Folder"]]},
+            {"type": "doubleClick", "selectors": [["aria/Folder"]]},
+        ]
+    }
+
     result = rewrite_replay(payload)
+
     assert result.rewritten_recording["steps"][0]["type"] == "click"
     assert result.rewritten_recording["steps"][1]["type"] == "doubleClick"
 
 
 def test_recovery_steps_are_preserved():
-    payload = {"steps": [{"type": "click", "selectors": [["[data-testid='x-loading-view']"]]}]}
+    payload = {
+        "steps": [
+            {"type": "click", "selectors": [["[data-testid='x-loading-view']"]]},
+        ]
+    }
+
     result = rewrite_replay(payload)
+
     assert result.rewritten_recording == payload
     assert result.operations[0].kind == "keep"
 
 
 def test_unsupported_steps_are_preserved():
-    payload = {"steps": [{"type": "mysteryStep", "value": "keep-me"}]}
-    assert rewrite_replay(payload).rewritten_recording == payload
+    payload = {
+        "steps": [
+            {"type": "mysteryStep", "value": "keep-me"},
+        ]
+    }
+
+    result = rewrite_replay(payload)
+
+    assert result.rewritten_recording == payload
+    assert result.operations[0].kind == "keep"
 
 
 def test_missing_steps_fails_closed():
+    import pytest
+
     with pytest.raises(ValueError, match="steps"):
         rewrite_replay({})
 
 
+from scripts.agent_os_replay_json.rewriter import RewriteRequest
+
+
 def test_selector_change_requires_explicit_selector():
     with pytest.raises(ValueError, match="replacement selector"):
-        RewriteRequest(kind="change-selector", semantic_action_id="action-1", source_indexes=(1,))
+        RewriteRequest(
+            kind="change-selector",
+            semantic_action_id="action-1",
+            source_indexes=(1,),
+        )
 
 
 def test_reorder_requires_explicit_target():
     with pytest.raises(ValueError, match="target action id"):
-        RewriteRequest(kind="move-before", semantic_action_id="action-1", source_indexes=(1,))
+        RewriteRequest(
+            kind="move-before",
+            semantic_action_id="action-1",
+            source_indexes=(1,),
+        )
 
 
 def test_valid_explicit_selector_request():
-    request = RewriteRequest(kind="change-selector", semantic_action_id="action-1", source_indexes=(1,), evidence=("recorded selector alternative",), replacement_selector="[data-testid='folder-card']")
+    request = RewriteRequest(
+        kind="change-selector",
+        semantic_action_id="action-1",
+        source_indexes=(1,),
+        evidence=("recorded selector alternative",),
+        replacement_selector="[data-testid='folder-card']",
+    )
+
     assert request.replacement_selector == "[data-testid='folder-card']"
 
 
 def test_guessing_is_not_a_valid_request():
     with pytest.raises(ValueError, match="unsupported rewrite request"):
-        RewriteRequest(kind="guess", semantic_action_id="action-1", source_indexes=(1,))
+        RewriteRequest(
+            kind="guess",
+            semantic_action_id="action-1",
+            source_indexes=(1,),
+        )
 
 
 @pytest.mark.parametrize("source_indexes", [(-1,), (1, 1), (2, 1), (True,), (1.0,), ("1",)])
 def test_rewrite_request_rejects_noncanonical_source_indexes(source_indexes):
     with pytest.raises(ValueError, match="source indexes"):
-        RewriteRequest(kind="remove-noise", semantic_action_id="action-1", source_indexes=source_indexes)
+        RewriteRequest(
+            kind="remove-noise",
+            semantic_action_id="action-1",
+            source_indexes=source_indexes,
+        )
+
+
+from scripts.agent_os_replay_json.rewriter import apply_request
 
 
 def test_selector_change_uses_only_recorded_selector_evidence():
-    payload = {"steps": [{"type": "click", "selectors": [["[data-testid='folder-card']", "#generated-123"]]}]}
-    request = RewriteRequest(kind="change-selector", semantic_action_id="action-0", source_indexes=(0,), replacement_selector="[data-testid='folder-card']")
+    payload = {
+        "steps": [
+            {
+                "type": "click",
+                "selectors": [
+                    ["[data-testid='folder-card']", "#generated-123"]
+                ],
+            }
+        ]
+    }
+
+    request = RewriteRequest(
+        kind="change-selector",
+        semantic_action_id="action-0",
+        source_indexes=(0,),
+        replacement_selector="[data-testid='folder-card']",
+    )
+
     result = apply_request(payload, request)
+
     assert result.semantic_equivalence == "proven"
-    assert result.rewritten_recording["steps"][0]["selectors"] == [["[data-testid='folder-card']"]]
+    assert result.rewritten_recording["steps"][0]["selectors"] == [
+        ["[data-testid='folder-card']"]
+    ]
+    assert result.operations[0].changes_selector is True
 
 
-def test_selector_change_rejects_non_selector_evidence_even_when_action_evidence_contains_it():
-    payload = {"steps": [{"type": "click", "url": "https://example.test/not-a-selector", "selectors": [["#generated-123"]]}]}
-    request = RewriteRequest(kind="change-selector", semantic_action_id="action-0", source_indexes=(0,), replacement_selector="https://example.test/not-a-selector")
+def test_selector_change_rejects_non_selector_action_evidence():
+    payload = {
+        "steps": [
+            {
+                "type": "click",
+                "url": "https://example.test/not-a-selector",
+                "selectors": [["#generated-123"]],
+            }
+        ]
+    }
+    request = RewriteRequest(
+        kind="change-selector",
+        semantic_action_id="action-0",
+        source_indexes=(0,),
+        replacement_selector="https://example.test/not-a-selector",
+    )
+
     result = apply_request(payload, request)
+
     assert result.semantic_equivalence == "rejected"
     assert "recorded selector evidence" in result.warnings[0]
 
 
-def test_selector_change_cannot_invent_selector():
-    payload = {"steps": [{"type": "click", "selectors": [["#generated-123"]]}]}
-    request = RewriteRequest(kind="change-selector", semantic_action_id="action-0", source_indexes=(0,), replacement_selector="[data-testid='invented']")
-    assert apply_request(payload, request).semantic_equivalence == "rejected"
+def test_selector_request_evidence_must_be_recorded_selector_evidence():
+    payload = {
+        "steps": [
+            {
+                "type": "click",
+                "url": "https://example.test/not-selector-provenance",
+                "selectors": [["aria/Folder"]],
+            }
+        ]
+    }
+    request = RewriteRequest(
+        kind="change-selector",
+        semantic_action_id="action-0",
+        source_indexes=(0,),
+        evidence=("https://example.test/not-selector-provenance",),
+        replacement_selector="aria/Folder",
+    )
 
-
-def test_request_evidence_must_be_subset_of_recorded_action_evidence():
-    payload = {"steps": [{"type": "click", "selectors": [["aria/Folder"]]}]}
-    request = RewriteRequest(kind="change-selector", semantic_action_id="action-0", source_indexes=(0,), evidence=("invented provenance",), replacement_selector="aria/Folder")
     result = apply_request(payload, request)
+
     assert result.semantic_equivalence == "rejected"
-    assert result.warnings == ("request evidence is not present in recorded evidence",)
+    assert result.warnings == (
+        "request evidence is not present in recorded selector evidence",
+    )
 
 
-def test_empty_request_evidence_uses_recorded_action_evidence():
-    payload = {"steps": [{"type": "click", "selectors": [["aria/Folder"]]}]}
-    request = RewriteRequest(kind="change-selector", semantic_action_id="action-0", source_indexes=(0,), replacement_selector="aria/Folder")
+def test_empty_selector_request_evidence_uses_recorded_selector_evidence():
+    payload = {
+        "steps": [
+            {"type": "click", "selectors": [["aria/Folder"]]},
+        ]
+    }
+    request = RewriteRequest(
+        kind="change-selector",
+        semantic_action_id="action-0",
+        source_indexes=(0,),
+        replacement_selector="aria/Folder",
+    )
+
     result = apply_request(payload, request)
+
     assert result.semantic_equivalence == "proven"
     assert result.operations[0].evidence == ("aria/Folder",)
 
 
-def test_request_source_indexes_must_match_analyzer_evidence():
-    payload = {"steps": [{"type": "click", "selectors": [["aria/Folder"]]}]}
-    request = RewriteRequest(kind="change-selector", semantic_action_id="action-0", source_indexes=(99,), replacement_selector="aria/Folder")
-    assert apply_request(payload, request).semantic_equivalence == "rejected"
+def test_selector_change_cannot_invent_selector():
+    payload = {
+        "steps": [
+            {
+                "type": "click",
+                "selectors": [["#generated-123"]],
+            }
+        ]
+    }
 
+    request = RewriteRequest(
+        kind="change-selector",
+        semantic_action_id="action-0",
+        source_indexes=(0,),
+        replacement_selector="[data-testid='invented']",
+    )
 
-@pytest.mark.parametrize("action_id", ["0", "action--1", "action-+0", "action- 0", " action-0", "action-0 ", "action-0junk", "action-01"])
-def test_malformed_semantic_action_ids_are_rejected(action_id):
-    payload = {"steps": [{"type": "click", "selectors": [["aria/Folder"]]}]}
-    request = RewriteRequest(kind="change-selector", semantic_action_id=action_id, source_indexes=(0,), replacement_selector="aria/Folder")
     result = apply_request(payload, request)
+
+    assert result.semantic_equivalence == "rejected"
+    assert result.rewritten_recording == payload
+
+
+def test_request_source_indexes_must_match_analyzer_evidence():
+    payload = {
+        "steps": [
+            {"type": "click", "selectors": [["aria/Folder"]]},
+        ]
+    }
+
+    request = RewriteRequest(
+        kind="change-selector",
+        semantic_action_id="action-0",
+        source_indexes=(99,),
+        replacement_selector="aria/Folder",
+    )
+
+    result = apply_request(payload, request)
+
+    assert result.semantic_equivalence == "rejected"
+
+
+@pytest.mark.parametrize(
+    "action_id",
+    ["0", "action--1", "action-+0", "action- 0", " action-0", "action-0 ", "action-0junk", "action-01"],
+)
+def test_malformed_semantic_action_ids_are_rejected(action_id):
+    payload = {
+        "steps": [
+            {"type": "click", "selectors": [["aria/Folder"]]},
+        ]
+    }
+    request = RewriteRequest(
+        kind="change-selector",
+        semantic_action_id=action_id,
+        source_indexes=(0,),
+        replacement_selector="aria/Folder",
+    )
+
+    result = apply_request(payload, request)
+
     assert result.semantic_equivalence == "rejected"
     assert result.warnings == ("unknown semantic action id",)
+    assert result.rewritten_recording == payload
 
 
 def test_canonical_semantic_action_id_remains_valid():
-    payload = {"steps": [{"type": "click", "selectors": [["aria/Folder"]]}]}
-    request = RewriteRequest(kind="change-selector", semantic_action_id="action-0", source_indexes=(0,), replacement_selector="aria/Folder")
-    assert apply_request(payload, request).semantic_equivalence == "proven"
+    payload = {
+        "steps": [
+            {"type": "click", "selectors": [["aria/Folder"]]},
+        ]
+    }
+    request = RewriteRequest(
+        kind="change-selector",
+        semantic_action_id="action-0",
+        source_indexes=(0,),
+        replacement_selector="aria/Folder",
+    )
+
+    result = apply_request(payload, request)
+
+    assert result.semantic_equivalence == "proven"
 
 
 def test_keyboard_noise_can_be_removed():
-    payload = {"steps": [{"type": "keyUp", "key": "ArrowLeft"}, {"type": "click", "selectors": [["aria/Folder"]]}]}
-    request = RewriteRequest(kind="remove-noise", semantic_action_id="action-0", source_indexes=(0,))
+    payload = {
+        "steps": [
+            {"type": "keyUp", "key": "ArrowLeft"},
+            {"type": "click", "selectors": [["aria/Folder"]]},
+        ]
+    }
+
+    request = RewriteRequest(
+        kind="remove-noise",
+        semantic_action_id="action-0",
+        source_indexes=(0,),
+    )
+
     result = apply_request(payload, request)
+
     assert result.semantic_equivalence == "proven"
     assert result.rewritten_recording["steps"] == [payload["steps"][1]]
+    assert result.operations[0].kind == "remove-noise"
 
 
 def test_viewport_infrastructure_cannot_be_removed_as_noise():
     payload = {"steps": [{"type": "setViewport", "width": 1200, "height": 800}]}
-    request = RewriteRequest(kind="remove-noise", semantic_action_id="action-0", source_indexes=(0,))
-    assert apply_request(payload, request).semantic_equivalence == "rejected"
+
+    request = RewriteRequest(
+        kind="remove-noise",
+        semantic_action_id="action-0",
+        source_indexes=(0,),
+    )
+
+    result = apply_request(payload, request)
+
+    assert result.semantic_equivalence == "rejected"
+    assert result.rewritten_recording == payload
 
 
 def test_recovery_behavior_cannot_be_removed_as_noise():
-    payload = {"steps": [{"type": "click", "selectors": [["[data-testid='x-loading-view']"]]}]}
-    request = RewriteRequest(kind="remove-noise", semantic_action_id="action-0", source_indexes=(0,))
-    assert apply_request(payload, request).semantic_equivalence == "rejected"
+    payload = {
+        "steps": [
+            {
+                "type": "click",
+                "selectors": [["[data-testid='x-loading-view']"]],
+            }
+        ]
+    }
+
+    request = RewriteRequest(
+        kind="remove-noise",
+        semantic_action_id="action-0",
+        source_indexes=(0,),
+    )
+
+    result = apply_request(payload, request)
+
+    assert result.semantic_equivalence == "rejected"
+    assert result.rewritten_recording == payload
 
 
 def test_instructional_action_cannot_be_removed_as_noise():
-    payload = {"steps": [{"type": "click", "selectors": [["aria/Folder"]]}]}
-    request = RewriteRequest(kind="remove-noise", semantic_action_id="action-0", source_indexes=(0,))
-    assert apply_request(payload, request).semantic_equivalence == "rejected"
+    payload = {
+        "steps": [
+            {"type": "click", "selectors": [["aria/Folder"]]},
+        ]
+    }
 
+    request = RewriteRequest(
+        kind="remove-noise",
+        semantic_action_id="action-0",
+        source_indexes=(0,),
+    )
+
+    result = apply_request(payload, request)
+
+    assert result.semantic_equivalence == "rejected"
+    assert result.rewritten_recording == payload
 
 def test_move_before_is_unproven_without_dependency_evidence():
-    payload = {"steps": [{"type": "click", "selectors": [["aria/A"]]}, {"type": "click", "selectors": [["aria/B"]]}]}
-    request = RewriteRequest(kind="move-before", semantic_action_id="action-1", source_indexes=(1,), target_action_id="action-0")
-    assert apply_request(payload, request).semantic_equivalence == "unproven"
+    payload = {
+        "steps": [
+            {"type": "click", "selectors": [["aria/A"]]},
+            {"type": "click", "selectors": [["aria/B"]]},
+        ]
+    }
+
+    request = RewriteRequest(
+        kind="move-before",
+        semantic_action_id="action-1",
+        source_indexes=(1,),
+        target_action_id="action-0",
+    )
+
+    result = apply_request(payload, request)
+
+    assert result.semantic_equivalence == "unproven"
+    assert result.rewritten_recording == payload
 
 
 def test_move_after_is_unproven_without_dependency_evidence():
-    payload = {"steps": [{"type": "click", "selectors": [["aria/A"]]}, {"type": "click", "selectors": [["aria/B"]]}]}
-    request = RewriteRequest(kind="move-after", semantic_action_id="action-0", source_indexes=(0,), target_action_id="action-1")
-    assert apply_request(payload, request).semantic_equivalence == "unproven"
+    payload = {
+        "steps": [
+            {"type": "click", "selectors": [["aria/A"]]},
+            {"type": "click", "selectors": [["aria/B"]]},
+        ]
+    }
+
+    request = RewriteRequest(
+        kind="move-after",
+        semantic_action_id="action-0",
+        source_indexes=(0,),
+        target_action_id="action-1",
+    )
+
+    result = apply_request(payload, request)
+
+    assert result.semantic_equivalence == "unproven"
+    assert result.rewritten_recording == payload
 
 
 @pytest.mark.parametrize(
     "request",
     [
-        RewriteRequest(kind="change-selector", semantic_action_id="missing", source_indexes=(0,), replacement_selector="aria/Folder"),
-        RewriteRequest(kind="move-before", semantic_action_id="action-0", source_indexes=(0,), target_action_id="action-1"),
+        RewriteRequest(
+            kind="change-selector",
+            semantic_action_id="missing",
+            source_indexes=(0,),
+            replacement_selector="aria/Folder",
+        ),
+        RewriteRequest(
+            kind="move-before",
+            semantic_action_id="action-0",
+            source_indexes=(0,),
+            target_action_id="action-1",
+        ),
     ],
 )
 def test_rejected_and_unproven_results_do_not_alias_nested_input(request):
-    payload = {"metadata": {"tags": ["original"]}, "steps": [{"type": "click", "selectors": [["aria/Folder"]]}]}
+    payload = {
+        "metadata": {"tags": ["original"]},
+        "steps": [
+            {"type": "click", "selectors": [["aria/Folder"]]},
+        ],
+    }
+
     result = apply_request(payload, request)
     result.rewritten_recording["metadata"]["tags"].append("mutated")
     result.rewritten_recording["steps"][0]["selectors"][0].append("mutated-selector")
+
     assert payload["metadata"]["tags"] == ["original"]
     assert payload["steps"][0]["selectors"] == [["aria/Folder"]]
