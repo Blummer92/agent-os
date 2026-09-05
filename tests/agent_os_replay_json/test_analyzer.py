@@ -25,6 +25,23 @@ def test_folder_preview_click_is_not_folder_entry():
     assert action.target == "folder-asset-card-digitalmedia"
 
 
+def test_generic_data_testid_is_preferred_over_trailing_generic_selector():
+    action = analyze_replay({"steps": [{
+        "type": "change",
+        "value": "Zachary",
+        "selectors": [["[data-testid='first-name']", "input"]],
+    }]})[0]
+    assert action.target == "first-name"
+
+
+def test_distinct_data_testids_remain_distinct_with_same_trailing_selector():
+    actions = analyze_replay({"steps": [
+        {"type": "click", "selectors": [["[data-testid='first-name']", "input"]]},
+        {"type": "click", "selectors": [["[data-testid=\"last-name\"]", "input"]]},
+    ]})
+    assert [action.target for action in actions] == ["first-name", "last-name"]
+
+
 def test_cursor_noise_collapses_into_one_rename_with_evidence():
     steps = [{
         "type": "change",
@@ -127,7 +144,7 @@ def test_rename_does_not_absorb_key_event_from_another_target():
     assert actions[0].kind == "rename"
     assert actions[0].source_indexes == (0,)
     assert actions[1].kind == "keyboard_noise"
-    assert actions[1].target == "[data-testid='search-field']"
+    assert actions[1].target == "search-field"
 
 
 def test_click_and_double_click_remain_distinct():
