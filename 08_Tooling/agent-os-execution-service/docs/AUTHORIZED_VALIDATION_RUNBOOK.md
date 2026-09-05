@@ -11,6 +11,29 @@ should (and should not) do about it. It does not re-document the lower-level
 contracts -- see `08_Tooling/workflow-scheduler/docs/ARCHITECTURE.md` and the
 module docstrings for #757-#761 themselves.
 
+## Request schema compatibility
+
+`AuthorizedValidationLifecycleRequest` keeps schema `1.0` as the default and
+legacy read contract. A `1.0` request has the original exact field set and
+retains the original request-identity calculation; it does not contain enough
+immutable pre-runtime evidence for the later #1929 source-capture caller.
+
+Schema `1.1` is opt-in. It adds only the canonical pre-PR
+`ValidationEvidenceBundle` and a bounded, sorted, unique tuple of
+`invalidation_events`. Both are non-authorizing evidence, both are covered by
+the request identity, and the bundle must round-trip through its existing
+canonical serializer/reconstructor. The carried bundle must also match the
+already-bound runtime validation-bundle and validation-plan identities before
+it can be exposed for later pilot reconstruction.
+
+Deserializing either version never creates authority. Unknown versions,
+version-specific field drift, malformed/tampered bundle evidence, or
+noncanonical invalidation events fail closed. A malformed `1.1` payload cannot
+fall back to `1.0` because each version has a separate exact field set.
+`SingleIssuePilotInput` is never serialized or persisted by this request; the
+later #1929 caller must reacquire current issue/repository/authorization truth
+and rebuild that object in memory before invoking #1830.
+
 ## What runs, in order
 
 1. **#757 admission** (`verify_authorized_validation_admission`) -- pure,

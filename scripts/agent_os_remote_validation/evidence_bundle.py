@@ -722,3 +722,291 @@ def _nonnegative(value: object) -> bool:
 
 def _string_or_none(value: object) -> str | None:
     return value if isinstance(value, str) else None
+
+
+_BUNDLE_SERIALIZED_KEYS = frozenset(
+    {
+        "schema_name",
+        "schema_version",
+        "status",
+        "repository_identity",
+        "pull_request",
+        "base_branch",
+        "base_sha",
+        "source_head_sha",
+        "tested_sha",
+        "repository_evidence_type",
+        "projection_id",
+        "proposal_id",
+        "approval_id",
+        "repository_state_evidence_id",
+        "implementation_contract_fingerprint",
+        "selector_version",
+        "profile",
+        "command_set_digest",
+        "plan_id",
+        "runner_id",
+        "invocation_id",
+        "started_at",
+        "completed_at",
+        "validation_plan",
+        "command_results",
+        "reason_codes",
+        "details",
+        "authoritative",
+        "execution_authorized",
+        "merge_authorized",
+        "attestation_verified",
+        "side_effects_performed",
+        "bundle_id",
+    }
+)
+_REPOSITORY_IDENTITY_KEYS = frozenset(
+    {
+        "host",
+        "owner",
+        "repository",
+        "repository_id",
+        "is_fork",
+        "upstream_owner",
+        "upstream_repository",
+        "upstream_repository_id",
+        "default_branch",
+    }
+)
+_VALIDATION_PLAN_KEYS = frozenset(
+    {
+        "schema_name",
+        "schema_version",
+        "selector_version",
+        "repository",
+        "pull_request",
+        "base_sha",
+        "head_sha",
+        "profile",
+        "commands",
+        "command_set_digest",
+        "reason_codes",
+        "remote_build_required",
+        "execution_authorized",
+        "side_effects_performed",
+    }
+)
+_COMMAND_RESULT_KEYS = frozenset(
+    {
+        "result_id",
+        "plan_id",
+        "invocation_id",
+        "runner_id",
+        "command_ordinal",
+        "command",
+        "source_head_sha",
+        "tested_sha",
+        "started_at",
+        "completed_at",
+        "status",
+        "exit_code",
+        "diagnostic_summary",
+        "diagnostic_truncated",
+    }
+)
+_BUNDLE_STATUSES = frozenset(
+    {"passed", "failed", "timed-out", "cancelled", "incomplete", "invalid", "needs-decision"}
+)
+
+
+def _closed_dict(value: object, keys: frozenset[str], name: str) -> dict[str, object]:
+    if type(value) is not dict:
+        raise ValueError(f"{name} must be an exact object")
+    if set(value) != keys:
+        raise ValueError(f"{name} fields drifted")
+    return value
+
+
+def _reconstruct_repository_identity(payload: object) -> RepositoryIdentity | None:
+    if payload is None:
+        return None
+    value = _closed_dict(payload, _REPOSITORY_IDENTITY_KEYS, "repository_identity")
+    identity = RepositoryIdentity(
+        host=value["host"],
+        owner=value["owner"],
+        repository=value["repository"],
+        repository_id=value["repository_id"],
+        is_fork=value["is_fork"],
+        upstream_owner=value["upstream_owner"],
+        upstream_repository=value["upstream_repository"],
+        upstream_repository_id=value["upstream_repository_id"],
+        default_branch=value["default_branch"],
+    )
+    if _repository_payload(identity) != value:
+        raise ValueError("repository_identity is noncanonical")
+    return identity
+
+
+def _reconstruct_validation_plan(payload: object) -> ValidationPlan | None:
+    if payload is None:
+        return None
+    value = _closed_dict(payload, _VALIDATION_PLAN_KEYS, "validation_plan")
+    if value["execution_authorized"] is not False or value["side_effects_performed"] is not False:
+        raise ValueError("validation plan authority fields must remain false")
+    commands = value["commands"]
+    reason_codes = value["reason_codes"]
+    if type(commands) is not list or type(reason_codes) is not list:
+        raise ValueError("validation plan tuple fields must be lists")
+    plan = ValidationPlan(
+        selector_version=value["selector_version"],
+        repository=value["repository"],
+        pull_request=value["pull_request"],
+        base_sha=value["base_sha"],
+        head_sha=value["head_sha"],
+        profile=value["profile"],
+        commands=tuple(commands),
+        command_set_digest=value["command_set_digest"],
+        reason_codes=tuple(reason_codes),
+        remote_build_required=value["remote_build_required"],
+    )
+    if serialize_validation_plan(plan) != value:
+        raise ValueError("validation plan is noncanonical")
+    return plan
+
+
+def _reconstruct_command_results(
+    payload: object,
+    *,
+    plan: ValidationPlan | None,
+    expected: dict[str, object],
+    bundle_start: datetime | None,
+    bundle_end: datetime | None,
+) -> tuple[CommandResultEvidence, ...]:
+    if type(payload) is not list:
+        raise ValueError("command_results must be a list")
+    if payload and plan is None:
+        raise ValueError("command_results require a validation plan")
+    results: list[CommandResultEvidence] = []
+    seen: set[int] = set()
+    for position, raw in enumerate(payload):
+        value = _closed_dict(raw, _COMMAND_RESULT_KEYS, "command_result")
+        supplied = SuppliedCommandResult(
+            plan_id=value["plan_id"],
+            invocation_id=value["invocation_id"],
+            runner_id=value["runner_id"],
+            command_ordinal=value["command_ordinal"],
+            command=value["command"],
+            source_head_sha=value["source_head_sha"],
+            tested_sha=value["tested_sha"],
+            started_at=value["started_at"],
+            completed_at=value["completed_at"],
+            status=value["status"],
+            exit_code=value["exit_code"],
+            diagnostic_summary=value["diagnostic_summary"],
+            diagnostic_truncated=value["diagnostic_truncated"],
+        )
+        assert plan is not None
+        errors = _result_errors(
+            supplied,
+            position=position,
+            plan=plan,
+            expected=expected,
+            bundle_start=bundle_start,
+            bundle_end=bundle_end,
+            seen=seen,
+        )
+        if errors:
+            raise ValueError("command_result is noncanonical: " + ",".join(errors))
+        seen.add(supplied.command_ordinal)
+        result_payload = _supplied_result_payload(supplied)
+        result_id = "command-result:" + _semantic_digest(
+            "agent-os-command-result:v1", result_payload
+        )
+        if value["result_id"] != result_id:
+            raise ValueError("command_result identity mismatch")
+        results.append(CommandResultEvidence(result_id=result_id, **result_payload))
+    return tuple(results)
+
+
+def reconstruct_validation_evidence_bundle(payload: object) -> ValidationEvidenceBundle:
+    """Reconstruct one exact canonical bundle without I/O or new authority."""
+    value = _closed_dict(payload, _BUNDLE_SERIALIZED_KEYS, "validation evidence bundle")
+    if len(_canonical_bytes(value)) > MAX_BUNDLE_SERIALIZED_BYTES:
+        raise ValueError("validation evidence bundle exceeds canonical size limit")
+    if value["schema_name"] != VALIDATION_EVIDENCE_BUNDLE_SCHEMA_NAME:
+        raise ValueError("unsupported validation evidence bundle schema name")
+    if value["schema_version"] != VALIDATION_EVIDENCE_BUNDLE_SCHEMA_VERSION:
+        raise ValueError("unsupported validation evidence bundle schema version")
+    if value["status"] not in _BUNDLE_STATUSES:
+        raise ValueError("validation evidence bundle status is invalid")
+    for name in (
+        "authoritative",
+        "execution_authorized",
+        "merge_authorized",
+        "attestation_verified",
+        "side_effects_performed",
+    ):
+        if value[name] is not False:
+            raise ValueError(f"{name} must remain false")
+    repository_identity = _reconstruct_repository_identity(value["repository_identity"])
+    evidence_type_raw = value["repository_evidence_type"]
+    try:
+        evidence_type = (
+            None
+            if evidence_type_raw is None
+            else RepositoryEvidenceType(evidence_type_raw)
+        )
+    except ValueError as exc:
+        raise ValueError("repository_evidence_type is invalid") from exc
+    plan = _reconstruct_validation_plan(value["validation_plan"])
+    if plan is not None and validation_plan_id(plan) != value["plan_id"]:
+        raise ValueError("validation plan identity does not match bundle")
+    expected = {
+        "plan_id": value["plan_id"],
+        "runner_id": value["runner_id"],
+        "invocation_id": value["invocation_id"],
+        "source_head_sha": value["source_head_sha"],
+        "tested_sha": value["tested_sha"],
+    }
+    command_results = _reconstruct_command_results(
+        value["command_results"],
+        plan=plan,
+        expected=expected,
+        bundle_start=_timestamp(value["started_at"]),
+        bundle_end=_timestamp(value["completed_at"]),
+    )
+    reason_codes = value["reason_codes"]
+    details = value["details"]
+    if type(reason_codes) is not list or any(type(item) is not str for item in reason_codes):
+        raise ValueError("reason_codes must be a list of strings")
+    if type(details) is not list or any(type(item) is not str for item in details):
+        raise ValueError("details must be a list of strings")
+    bundle = ValidationEvidenceBundle(
+        schema_name=value["schema_name"],
+        schema_version=value["schema_version"],
+        status=value["status"],
+        bundle_id=value["bundle_id"],
+        repository_identity=repository_identity,
+        pull_request=value["pull_request"],
+        base_branch=value["base_branch"],
+        base_sha=value["base_sha"],
+        source_head_sha=value["source_head_sha"],
+        tested_sha=value["tested_sha"],
+        repository_evidence_type=evidence_type,
+        projection_id=value["projection_id"],
+        proposal_id=value["proposal_id"],
+        approval_id=value["approval_id"],
+        repository_state_evidence_id=value["repository_state_evidence_id"],
+        implementation_contract_fingerprint=value["implementation_contract_fingerprint"],
+        selector_version=value["selector_version"],
+        profile=value["profile"],
+        command_set_digest=value["command_set_digest"],
+        plan_id=value["plan_id"],
+        runner_id=value["runner_id"],
+        invocation_id=value["invocation_id"],
+        started_at=value["started_at"],
+        completed_at=value["completed_at"],
+        validation_plan=plan,
+        command_results=command_results,
+        reason_codes=tuple(reason_codes),
+        details=tuple(details),
+    )
+    if serialize_validation_evidence_bundle(bundle) != value:
+        raise ValueError("validation evidence bundle is noncanonical")
+    return bundle

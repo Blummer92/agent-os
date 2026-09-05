@@ -35,11 +35,22 @@ from scripts.agent_os_candidate_packet.models import (
     serialize_candidate_packet,
 )
 from scripts.agent_os_issue_acceptance.approval_records import ApprovalState
+from scripts.agent_os_remote_validation.evidence_bundle import (
+    MAX_BUNDLE_SERIALIZED_BYTES,
+    ValidationEvidenceBundle,
+    reconstruct_validation_evidence_bundle,
+    serialize_validation_evidence_bundle,
+    validation_evidence_bundle_id,
+)
 
 from .authorization import ExecutionAuthorizationEvidence
 from .models import parse_canonical_utc
 
 AUTHORIZED_VALIDATION_SCHEMA_VERSION = "1.0"
+AUTHORIZED_VALIDATION_VNEXT_SCHEMA_VERSION = "1.1"
+AUTHORIZED_VALIDATION_SUPPORTED_SCHEMA_VERSIONS = frozenset(
+    {AUTHORIZED_VALIDATION_SCHEMA_VERSION, AUTHORIZED_VALIDATION_VNEXT_SCHEMA_VERSION}
+)
 AUTHORIZED_VALIDATION_POLICY_SCHEMA_VERSION = "1.0"
 AUTHORIZED_VALIDATION_PERMITTED_OPERATION = "validation-only"
 
@@ -54,7 +65,10 @@ _POLICY_VALUES = {
 }
 _MAX_PATHS = 256
 _MAX_PATH_LENGTH = 512
+_MAX_INVALIDATION_EVENTS = 256
+_MAX_INVALIDATION_EVENT_LENGTH = 512
 _MAX_SERIALIZED_BYTES = 262_144
+_MAX_VNEXT_SERIALIZED_BYTES = MAX_BUNDLE_SERIALIZED_BYTES + _MAX_SERIALIZED_BYTES
 
 
 class AuthorizedValidationAdmissionStatus(str, Enum):
@@ -106,6 +120,25 @@ def _paths(value: object, name: str) -> tuple[str, ...]:
     if len(set(result)) != len(result):
         raise ValueError(f"{name} contains duplicate paths")
     return tuple(result)
+
+
+def _invalidation_events(value: object) -> tuple[str, ...]:
+    if type(value) is not tuple:
+        raise TypeError("invalidation_events must be an exact tuple")
+    if len(value) > _MAX_INVALIDATION_EVENTS:
+        raise ValueError("invalidation_events exceeds the bounded count")
+    result: list[str] = []
+    for item in value:
+        text = _exact_text(item, "invalidation_event")
+        if len(text) > _MAX_INVALIDATION_EVENT_LENGTH:
+            raise ValueError("invalidation_events contains an oversized value")
+        result.append(text)
+    if len(set(result)) != len(result):
+        raise ValueError("invalidation_events must be unique")
+    normalized = tuple(sorted(result))
+    if tuple(result) != normalized:
+        raise ValueError("invalidation_events must be canonically sorted")
+    return normalized
 
 
 def _stage_digest(stage_name: str, payload: object) -> str:
@@ -191,6 +224,8 @@ class AuthorizedValidationLifecycleRequest:
 
     Nested semantics stay owned by their canonical modules; #757 binds their
     canonical identities and independently re-verifies them at admission time.
+    Schema 1.1 carries only the immutable pre-runtime evidence that cannot be
+    reacquired later; it still grants no execution authority.
     """
 
     schema_version: str
@@ -204,13 +239,15 @@ class AuthorizedValidationLifecycleRequest:
     authorized_invocation_id: str
     authorized_operation: str
     lifecycle_policy: AuthorizedValidationLifecyclePolicy
+    validation_evidence_bundle: ValidationEvidenceBundle | None = None
+    invalidation_events: tuple[str, ...] = ()
     execution_authorized: Literal[False] = field(default=False, init=False)
     merge_authorized: Literal[False] = field(default=False, init=False)
     automatic_retry: Literal[False] = field(default=False, init=False)
     side_effects_performed: Literal[False] = field(default=False, init=False)
 
     def __post_init__(self) -> None:
-        if self.schema_version != AUTHORIZED_VALIDATION_SCHEMA_VERSION:
+        if self.schema_version not in AUTHORIZED_VALIDATION_SUPPORTED_SCHEMA_VERSIONS:
             raise ValueError("unsupported authorized-validation request schema")
         if type(self.candidate_packet) is not CandidatePacket:
             raise TypeError("candidate_packet must be an exact CandidatePacket")
@@ -226,6 +263,20 @@ class AuthorizedValidationLifecycleRequest:
         object.__setattr__(self, "authorized_candidate_packet_id", _exact_text(self.authorized_candidate_packet_id, "authorized_candidate_packet_id"))
         object.__setattr__(self, "authorized_invocation_id", _exact_text(self.authorized_invocation_id, "authorized_invocation_id"))
         object.__setattr__(self, "authorized_operation", _exact_text(self.authorized_operation, "authorized_operation"))
+        if self.schema_version == AUTHORIZED_VALIDATION_SCHEMA_VERSION:
+            if self.validation_evidence_bundle is not None or self.invalidation_events:
+                raise ValueError("schema 1.0 cannot carry pilot-reconstruction evidence")
+        else:
+            if type(self.validation_evidence_bundle) is not ValidationEvidenceBundle:
+                raise TypeError(
+                    "schema 1.1 requires an exact ValidationEvidenceBundle"
+                )
+            serialize_validation_evidence_bundle(self.validation_evidence_bundle)
+            object.__setattr__(
+                self,
+                "invalidation_events",
+                _invalidation_events(self.invalidation_events),
+            )
         expected_id = _request_id(self)
         if self.request_id and self.request_id != expected_id:
             raise ValueError("request_id does not match request content")
@@ -234,7 +285,7 @@ class AuthorizedValidationLifecycleRequest:
 
 def _request_identity_payload(request: AuthorizedValidationLifecycleRequest) -> dict[str, object]:
     approval_digests = _pairs(request.candidate_packet.stage_payload_digests, "stage_payload_digests")
-    return {
+    payload: dict[str, object] = {
         "schema_version": request.schema_version,
         "candidate_packet_id": request.candidate_packet.packet_id,
         "invocation_id": request.candidate_packet.invocation_id,
@@ -251,6 +302,13 @@ def _request_identity_payload(request: AuthorizedValidationLifecycleRequest) -> 
         "automatic_retry": False,
         "side_effects_performed": False,
     }
+    if request.schema_version == AUTHORIZED_VALIDATION_VNEXT_SCHEMA_VERSION:
+        bundle = request.validation_evidence_bundle
+        if type(bundle) is not ValidationEvidenceBundle:
+            raise ValueError("schema 1.1 validation bundle is missing")
+        payload["validation_evidence_bundle_id"] = validation_evidence_bundle_id(bundle)
+        payload["invalidation_events"] = list(_invalidation_events(request.invalidation_events))
+    return payload
 
 
 def _request_id(request: AuthorizedValidationLifecycleRequest) -> str:
@@ -282,10 +340,13 @@ def build_authorized_validation_lifecycle_request(
     authorized_invocation_id: str,
     authorized_operation: str = AUTHORIZED_VALIDATION_PERMITTED_OPERATION,
     lifecycle_policy: AuthorizedValidationLifecyclePolicy,
+    schema_version: str = AUTHORIZED_VALIDATION_SCHEMA_VERSION,
+    validation_evidence_bundle: ValidationEvidenceBundle | None = None,
+    invalidation_events: tuple[str, ...] = (),
 ) -> AuthorizedValidationLifecycleRequest:
     """Build one immutable request without performing admission or any I/O."""
     return AuthorizedValidationLifecycleRequest(
-        schema_version=AUTHORIZED_VALIDATION_SCHEMA_VERSION,
+        schema_version=schema_version,
         request_id="",
         candidate_packet=candidate_packet,
         approval_stage=approval_stage,
@@ -296,10 +357,12 @@ def build_authorized_validation_lifecycle_request(
         authorized_invocation_id=authorized_invocation_id,
         authorized_operation=authorized_operation,
         lifecycle_policy=lifecycle_policy,
+        validation_evidence_bundle=validation_evidence_bundle,
+        invalidation_events=invalidation_events,
     )
 
 
-_REQUEST_KEYS = frozenset(
+_REQUEST_KEYS_V1_0 = frozenset(
     {
         "schema_version",
         "request_id",
@@ -316,6 +379,13 @@ _REQUEST_KEYS = frozenset(
         "merge_authorized",
         "automatic_retry",
         "side_effects_performed",
+    }
+)
+_REQUEST_KEYS_V1_1 = frozenset(
+    {
+        *_REQUEST_KEYS_V1_0,
+        "validation_evidence_bundle",
+        "invalidation_events",
     }
 )
 _POLICY_KEYS = frozenset({"policy_id", *_POLICY_VALUES.keys(), "schema_version", "expected_changed_paths", "requested_concurrency", "automatic_retry"})
@@ -390,7 +460,7 @@ def serialize_authorized_validation_lifecycle_request(
 ) -> dict[str, object]:
     if type(request) is not AuthorizedValidationLifecycleRequest:
         raise TypeError("request must be exact AuthorizedValidationLifecycleRequest")
-    payload = {
+    payload: dict[str, object] = {
         "schema_version": request.schema_version,
         "request_id": request.request_id,
         "candidate_packet": serialize_candidate_packet(request.candidate_packet),
@@ -407,7 +477,15 @@ def serialize_authorized_validation_lifecycle_request(
         "automatic_retry": False,
         "side_effects_performed": False,
     }
-    if len(_canonical_bytes(payload)) > _MAX_SERIALIZED_BYTES:
+    size_bound = _MAX_SERIALIZED_BYTES
+    if request.schema_version == AUTHORIZED_VALIDATION_VNEXT_SCHEMA_VERSION:
+        bundle = request.validation_evidence_bundle
+        if type(bundle) is not ValidationEvidenceBundle:
+            raise ValueError("schema 1.1 validation bundle is missing")
+        payload["validation_evidence_bundle"] = serialize_validation_evidence_bundle(bundle)
+        payload["invalidation_events"] = list(_invalidation_events(request.invalidation_events))
+        size_bound = _MAX_VNEXT_SERIALIZED_BYTES
+    if len(_canonical_bytes(payload)) > size_bound:
         raise ValueError("authorized validation request exceeds serialized size bound")
     if reconstruct_authorized_validation_lifecycle_request(payload) != request:
         raise ValueError("authorized validation request is noncanonical")
@@ -417,14 +495,28 @@ def serialize_authorized_validation_lifecycle_request(
 def reconstruct_authorized_validation_lifecycle_request(
     payload: object,
 ) -> AuthorizedValidationLifecycleRequest:
-    value = _closed_mapping(payload, _REQUEST_KEYS, "authorized validation request")
+    if not isinstance(payload, Mapping):
+        raise ValueError("authorized validation request must be a mapping")
+    schema_version = payload.get("schema_version")
+    if schema_version == AUTHORIZED_VALIDATION_SCHEMA_VERSION:
+        value = _closed_mapping(payload, _REQUEST_KEYS_V1_0, "authorized validation request")
+    elif schema_version == AUTHORIZED_VALIDATION_VNEXT_SCHEMA_VERSION:
+        value = _closed_mapping(payload, _REQUEST_KEYS_V1_1, "authorized validation request")
+    else:
+        raise ValueError("unsupported authorized-validation request schema")
     for name in ("execution_authorized", "merge_authorized", "automatic_retry", "side_effects_performed"):
         if value[name] is not False:
             raise ValueError(f"{name} must be false")
-    if value["schema_version"] != AUTHORIZED_VALIDATION_SCHEMA_VERSION:
-        raise ValueError("unsupported authorized-validation request schema")
+    bundle = None
+    invalidation_events: tuple[str, ...] = ()
+    if schema_version == AUTHORIZED_VALIDATION_VNEXT_SCHEMA_VERSION:
+        bundle = reconstruct_validation_evidence_bundle(value["validation_evidence_bundle"])
+        raw_events = value["invalidation_events"]
+        if type(raw_events) is not list:
+            raise ValueError("invalidation_events must be a list")
+        invalidation_events = _invalidation_events(tuple(raw_events))
     return AuthorizedValidationLifecycleRequest(
-        schema_version=value["schema_version"],
+        schema_version=schema_version,
         request_id=value["request_id"],
         candidate_packet=deserialize_candidate_packet(value["candidate_packet"]),
         approval_stage=approval_projection_stage_result_from_dict(value["approval_stage"]),
@@ -435,7 +527,38 @@ def reconstruct_authorized_validation_lifecycle_request(
         authorized_invocation_id=value["authorized_invocation_id"],
         authorized_operation=value["authorized_operation"],
         lifecycle_policy=_reconstruct_policy(value["lifecycle_policy"]),
+        validation_evidence_bundle=bundle,
+        invalidation_events=invalidation_events,
     )
+
+
+def pilot_reconstruction_evidence(
+    request: AuthorizedValidationLifecycleRequest,
+) -> tuple[ValidationEvidenceBundle, tuple[str, ...]]:
+    """Return the inert v1.1 evidence needed by a later current-state caller.
+
+    This performs no I/O and grants no authority.  It only verifies that the
+    carried validation evidence is canonically bound to the already-existing
+    runtime configuration before exposing it to #1929's future reconstruction.
+    """
+    if type(request) is not AuthorizedValidationLifecycleRequest:
+        raise TypeError("request must be exact AuthorizedValidationLifecycleRequest")
+    if request.schema_version != AUTHORIZED_VALIDATION_VNEXT_SCHEMA_VERSION:
+        raise ValueError("pilot reconstruction requires authorized-validation schema 1.1")
+    bundle = request.validation_evidence_bundle
+    if type(bundle) is not ValidationEvidenceBundle:
+        raise ValueError("schema 1.1 validation bundle is missing")
+    bundle_id = validation_evidence_bundle_id(bundle)
+    runtime = request.execution_packet_stage.runtime_configuration
+    if runtime is None:
+        raise ValueError("runtime configuration is missing")
+    if runtime.validation_bundle_id != bundle_id:
+        raise ValueError("validation bundle does not match runtime configuration")
+    if runtime.validation_plan_id != bundle.plan_id:
+        raise ValueError("validation plan does not match runtime configuration")
+    if request.candidate_packet.invocation_id != bundle.invocation_id:
+        raise ValueError("validation bundle invocation does not match candidate packet")
+    return bundle, _invalidation_events(request.invalidation_events)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -515,6 +638,10 @@ def verify_authorized_validation_admission(
             execution_packet_stage_result_to_dict(request.execution_packet_stage)
         ) != request.execution_packet_stage:
             return _result(request, evaluated_at, AuthorizedValidationAdmissionStatus.INVALID, "execution-packet.noncanonical")
+        if request.schema_version == AUTHORIZED_VALIDATION_VNEXT_SCHEMA_VERSION:
+            serialize_validation_evidence_bundle(request.validation_evidence_bundle)
+            _invalidation_events(request.invalidation_events)
+            pilot_reconstruction_evidence(request)
     except (TypeError, ValueError):
         return _result(request, evaluated_at, AuthorizedValidationAdmissionStatus.INVALID, "canonical-root.invalid")
 
