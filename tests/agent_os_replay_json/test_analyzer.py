@@ -81,6 +81,16 @@ def test_missing_change_value_is_not_invented_as_empty_text():
     assert not any(item.startswith("value=") for item in action.evidence)
 
 
+def test_explicit_null_change_value_remains_none():
+    action = analyze_replay({"steps": [{
+        "type": "change",
+        "value": None,
+        "selectors": [["[data-testid='editor-document-title']"]],
+    }]})[0]
+    assert action.value is None
+    assert action.value != "None"
+
+
 def test_explicit_empty_change_value_remains_empty_text():
     action = analyze_replay({"steps": [{
         "type": "change",
@@ -89,6 +99,15 @@ def test_explicit_empty_change_value_remains_empty_text():
     }]})[0]
     assert action.value == ""
     assert "value=" in action.evidence
+
+
+def test_string_change_value_remains_unchanged():
+    action = analyze_replay({"steps": [{
+        "type": "change",
+        "value": "Project title",
+        "selectors": [["[data-testid='editor-document-title']"]],
+    }]})[0]
+    assert action.value == "Project title"
 
 
 def test_rename_does_not_absorb_key_event_from_another_target():
