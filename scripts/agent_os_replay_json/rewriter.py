@@ -254,8 +254,21 @@ def apply_request(
     if tuple(request.source_indexes) != tuple(action.source_indexes):
         return _rejected(payload, "source indexes do not match semantic action")
 
-    if not _request_evidence_is_recorded(request.evidence, action.evidence):
-        return _rejected(payload, "request evidence is not present in recorded evidence")
+    selector_evidence = (
+        _selector_evidence(steps, action.source_indexes)
+        if request.kind == "change-selector"
+        else ()
+    )
+    applicable_evidence = (
+        selector_evidence if request.kind == "change-selector" else action.evidence
+    )
+    if not _request_evidence_is_recorded(request.evidence, applicable_evidence):
+        warning = (
+            "request evidence is not present in recorded selector evidence"
+            if request.kind == "change-selector"
+            else "request evidence is not present in recorded evidence"
+        )
+        return _rejected(payload, warning)
 
     if request.kind == "remove-noise":
         if action.recovery:
@@ -301,9 +314,11 @@ def apply_request(
         return _unproven(payload, f"request kind not implemented safely: {request.kind}")
 
     replacement = request.replacement_selector
-    selector_evidence = _selector_evidence(steps, action.source_indexes)
     if replacement is None or replacement not in selector_evidence:
-        return _rejected(payload, "replacement selector is not present in recorded selector evidence")
+        return _rejected(
+            payload,
+            "replacement selector is not present in recorded selector evidence",
+        )
 
     if len(action.source_indexes) != 1:
         return _rejected(payload, "selector change requires one source step")
@@ -326,7 +341,7 @@ def apply_request(
         kind="change-selector",
         semantic_action_id=request.semantic_action_id,
         source_indexes=action.source_indexes,
-        evidence=request.evidence or action.evidence,
+        evidence=request.evidence or selector_evidence,
         confidence="proven",
         output_indexes=(source_index,),
         changes_selector=True,
