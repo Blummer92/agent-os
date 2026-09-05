@@ -189,7 +189,7 @@ def test_main_visual_gap_blocks_before_credentials(monkeypatch, tmp_path, capsys
     assert "visual-gap-blocked" in stderr and "image_gap_briefs=1" in stderr
 
 
-def test_main_complete_visual_plan_preserves_selected_asset_id(monkeypatch, tmp_path, capsys):
+def test_main_selected_visual_blocks_before_credentials_and_live_build(monkeypatch, tmp_path, capsys):
     from instructional_materials_coach import cli
     monkeypatch.setenv("ALLOW_WRITE", "true")
     lesson_file = _lesson_file(tmp_path)
@@ -197,10 +197,18 @@ def test_main_complete_visual_plan_preserves_selected_asset_id(monkeypatch, tmp_
     evidence_file = _current_curriculum_evidence_file(tmp_path)
     manifests_file = _write_json(tmp_path, "artifact-manifests.json", [_fixture("valid_artifact_manifest.json")])
     candidates_file = _write_json(tmp_path, "visual-candidates.json", [_fixture("valid_visual_asset_compatibility_v2.json")])
-    with patch("instructional_materials_coach.cli.get_credentials", return_value="creds"), patch("instructional_materials_coach.cli.build_drive_service"), patch("instructional_materials_coach.cli.build_slides_service"), patch("instructional_materials_coach.cli.build_docs_service"), patch("instructional_materials_coach.cli.build_live_materials", return_value=_success_receipt()):
-        exit_code = cli.main(_base_build_args(lesson_file, requirement_file) + ["--current-curriculum-evidence", str(evidence_file), "--artifact-manifests", str(manifests_file), "--visual-candidates", str(candidates_file), "--visual-source-revision", "visual-library-snapshot-v2"])
-    assert exit_code == 0
-    assert "Approved visual assets: asset-1" in capsys.readouterr().out
+    lessons_dir = tmp_path / "lessons"
+    with patch("instructional_materials_coach.cli.get_credentials") as credentials, patch("instructional_materials_coach.cli.build_live_materials") as live:
+        exit_code = cli.main(_base_build_args(lesson_file, requirement_file) + ["--current-curriculum-evidence", str(evidence_file), "--artifact-manifests", str(manifests_file), "--visual-candidates", str(candidates_file), "--visual-source-revision", "visual-library-snapshot-v2", "--lessons-dir", str(lessons_dir)])
+    assert exit_code == 1
+    credentials.assert_not_called()
+    live.assert_not_called()
+    captured = capsys.readouterr()
+    assert "no verified image-placement operation" in captured.err
+    assert "selected_asset_ids=asset-1" in captured.err
+    assert "Approved visual assets" not in captured.out
+    record = yaml.safe_load(next(lessons_dir.glob("*.yaml")).read_text())
+    assert record["context"]["selected_asset_ids"] == ["asset-1"]
 
 
 def test_main_build_failure_writes_lesson_record_and_never_touches_notion(monkeypatch, tmp_path, capsys):

@@ -78,6 +78,18 @@ def _build_idempotency_key(
     return hashlib.sha256(canonical).hexdigest()
 
 
+def _require_visual_placement_support(selected_asset_ids: tuple[str, ...]) -> None:
+    """Fail before connected writes when selected visuals cannot be physically placed."""
+    if not selected_asset_ids:
+        return
+    identities = ",".join(selected_asset_ids)
+    raise RuntimeError(
+        "Governed reusable visuals were selected but the current Docs/Slides build "
+        "path has no verified image-placement operation; refusing a false-success "
+        f"build before external write. selected_asset_ids={identities}"
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     if args.command == "log-lesson":
@@ -109,6 +121,7 @@ def main(argv: list[str] | None = None) -> int:
         context["selected_asset_ids"] = list(visual_plan.selected_asset_ids)
         if visual_plan.final_production_blocked:
             raise RuntimeError(f"Governed visual reuse gate blocked final production: {visual_plan.outcome}; image_gap_briefs={len(visual_plan.image_gap_briefs)}")
+        _require_visual_placement_support(visual_plan.selected_asset_ids)
 
         content = compose_generation_context(
             content,
@@ -137,8 +150,6 @@ def main(argv: list[str] | None = None) -> int:
         )
         if not receipt.succeeded:
             raise RuntimeError(f"Live build incomplete: slides={receipt.slides.state}; worksheet={receipt.worksheet.state}; manual_reconciliation_required={receipt.manual_reconciliation_required}")
-        if visual_plan.selected_asset_ids:
-            print(f"Approved visual assets: {', '.join(visual_plan.selected_asset_ids)}")
         print(f"Slides: {receipt.slides.web_view_link}")
         print(f"Worksheet: {receipt.worksheet.web_view_link}")
         return 0
