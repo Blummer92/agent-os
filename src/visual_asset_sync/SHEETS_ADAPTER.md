@@ -86,7 +86,18 @@ rendering drift: locale `en_US`, timezone `America/New_York`, 455x14 grid, exact
 Date, and text-dropdown review/audience/fit fields. `FORMATTED_VALUE` remains
 compatible with the mapped contract.
 
-#734 remains the separately governed live smoke-test lane. Before executing it,
-verify the exact adapter commit, credential injection route, and the OAuth scopes
-actually granted to the token; the required scope is
-`https://www.googleapis.com/auth/spreadsheets.readonly`.
+Issue #1926 adds a repository-owned `visual-asset-sheets-smoke` capability contract.
+It content-binds repository, #734, exact source SHA, spreadsheet identity,
+worksheet, and bounded A1 range; verifies the effective application credential
+scope before the read; rejects broader or unverifiable scope evidence; and emits
+only sanitized counts and zero-write flags. It intentionally keeps the generic
+GitHub/GCE transport credential separate from the Sheets application credential.
+
+The repository capability is not credential deployment and is not live-read
+authorization. A governed runtime still must bind an approved application-level
+credential and prove that its effective grant is exactly
+`https://www.googleapis.com/auth/spreadsheets.readonly`. Credential/secret
+creation or rotation, OAuth/IAM changes, and GitHub Actions workflow changes remain
+separately authorized surfaces. Once that deployment boundary is satisfied, #734
+reacquires the live #733 contract and performs the separately authorized bounded
+smoke read.
