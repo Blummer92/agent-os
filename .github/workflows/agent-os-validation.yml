@@ -4,7 +4,7 @@ on:
   pull_request:
     branches:
       - main
-    types: [opened, reopened, synchronize, ready_for_review]
+    types: [opened, reopened, synchronize]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -59,7 +59,7 @@ jobs:
 
           pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json state,isDraft,headRefOid)"
           state="$(jq -r '.state' <<<"$pr_json")"
-          is_draft="$(jq -r '.isDraft' <<<"$pr_json")"
+          is_draft="$(jq -r '.isDraft')"
           current_head="$(jq -r '.headRefOid' <<<"$pr_json")"
 
           if [ "$state" != "OPEN" ]; then
