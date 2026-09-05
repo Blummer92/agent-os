@@ -208,7 +208,8 @@ def test_main_selected_visual_blocks_before_credentials_and_live_build(monkeypat
     assert "selected_asset_ids=asset-1" in captured.err
     assert "Approved visual assets" not in captured.out
     record = yaml.safe_load(next(lessons_dir.glob("*.yaml")).read_text())
-    assert record["context"]["selected_asset_ids"] == ["asset-1"]
+    assert "no verified image-placement operation" in record["what_happened"]
+    assert "asset-1" in record["what_happened"]
 
 
 def test_main_build_failure_writes_lesson_record_and_never_touches_notion(monkeypatch, tmp_path, capsys):
