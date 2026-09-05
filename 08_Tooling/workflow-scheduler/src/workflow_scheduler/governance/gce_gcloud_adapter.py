@@ -212,7 +212,9 @@ def execute_transport(ingress:IssueCommentIngressResult,*,claims:Mapping[str,obj
   if ingress.run_attempt!=1:raise ValueError("workflow reruns cannot perform runtime inspection")
   if not _policy().accepts(claims):return {"runtime_inspection":_non_authorizing("blocked","claims-rejected")}
   if adapter.observe_state(RESOURCE) is not VmState.RUNNING:return {"runtime_inspection":_non_authorizing("needs-decision","host-not-running")}
-  return {"runtime_inspection":adapter.inspect_runtime(RESOURCE)}
+  runtime_inspection=adapter.inspect_runtime(RESOURCE)
+  from .cloud_identity_inspection import collect_cloud_identity
+  return {"runtime_inspection":runtime_inspection,"cloud_identity":collect_cloud_identity(_run)}
  if ingress.reason=="accepted-discovery-envelope":
   if ingress.status!="accepted" or ingress.issue_number is None:raise ValueError("discovery requires accepted canonical issue evidence")
   if ingress.handoff_id_or_none is not None:raise ValueError("discovery must not carry a handoff identity")
