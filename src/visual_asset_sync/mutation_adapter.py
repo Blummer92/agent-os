@@ -1,17 +1,14 @@
-"""Authorization-gated Notion mutation planning and execution for Visual Asset Sync.
-
-This module is fixture-first and client-neutral. Dry-run is the default and makes
-zero external calls. Live execution requires an exact immutable authorization
-object plus an injected client supplied by a separately authorized runtime.
-"""
+"""Authorization-gated Notion mutation planning and execution for Visual Asset Sync."""
 
 from __future__ import annotations
 
 import hashlib
 import json
+import math
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Protocol, Sequence
+from typing import Any, Callable, Protocol, Sequence
 
 from .models import ReconciliationEntry, ReconciliationResult, SourceAssetRecord
 from .notion_adapter import SUPPORTED_NOTION_VERSION
@@ -19,6 +16,8 @@ from .notion_adapter import SUPPORTED_NOTION_VERSION
 _ALLOWED_ACTIONS = frozenset(
     {ReconciliationResult.UPDATE_EXISTING, ReconciliationResult.CREATE_MISSING}
 )
+_MAX_RETRIES = 10
+_MAX_TOTAL_RETRY_DELAY = 300.0
 
 
 class MutationAdapterError(Exception):
@@ -37,6 +36,22 @@ class MutationExecutionError(MutationAdapterError):
     """Raised when an injected client returns an invalid or ambiguous result."""
 
 
+class NotionTransientMutationError(Exception):
+    """Client-neutral transient signal with bounded retry evidence."""
+
+    def __init__(self, retry_after: float, *, ambiguous: bool = False) -> None:
+        if type(retry_after) not in {int, float}:
+            raise TypeError("retry_after must be an exact number")
+        delay = float(retry_after)
+        if not math.isfinite(delay) or delay < 0 or delay > _MAX_TOTAL_RETRY_DELAY:
+            raise ValueError("retry_after is outside the supported range")
+        if type(ambiguous) is not bool:
+            raise TypeError("ambiguous must be an exact boolean")
+        super().__init__("Notion mutation transient failure")
+        self.retry_after = delay
+        self.ambiguous = ambiguous
+
+
 @dataclass(frozen=True)
 class MutationAuthorization:
     data_source_id: str
@@ -50,6 +65,8 @@ class MutationAuthorization:
     maximum_total_mutations: int
     valid_until: datetime
     dry_run: bool = True
+    maximum_retries: int = 0
+    maximum_total_retry_delay: float = 0.0
 
     def __post_init__(self) -> None:
         if type(self.data_source_id) is not str or not self.data_source_id.strip():
@@ -76,13 +93,22 @@ class MutationAuthorization:
             ("maximum_updates", self.maximum_updates),
             ("maximum_creates", self.maximum_creates),
             ("maximum_total_mutations", self.maximum_total_mutations),
+            ("maximum_retries", self.maximum_retries),
         ):
             if type(value) is not int or value < 0:
                 raise MutationAuthorizationError(f"{name} must be a non-negative integer")
+        if self.maximum_retries > _MAX_RETRIES:
+            raise MutationAuthorizationError("maximum_retries exceeds the supported range")
         if self.maximum_total_mutations < self.maximum_updates:
             raise MutationAuthorizationError("maximum_total_mutations is below maximum_updates")
         if self.maximum_total_mutations < self.maximum_creates:
             raise MutationAuthorizationError("maximum_total_mutations is below maximum_creates")
+        if type(self.maximum_total_retry_delay) not in {int, float}:
+            raise MutationAuthorizationError("maximum_total_retry_delay must be an exact number")
+        retry_delay = float(self.maximum_total_retry_delay)
+        if not math.isfinite(retry_delay) or retry_delay < 0 or retry_delay > _MAX_TOTAL_RETRY_DELAY:
+            raise MutationAuthorizationError("maximum_total_retry_delay is outside the supported range")
+        object.__setattr__(self, "maximum_total_retry_delay", retry_delay)
         if not isinstance(self.valid_until, datetime) or self.valid_until.tzinfo is None:
             raise MutationAuthorizationError("valid_until must be timezone-aware")
         if type(self.dry_run) is not bool:
@@ -109,6 +135,12 @@ class MutationOutcome:
 
 
 class NotionMutationClient(Protocol):
+    def read_page_identity(self, *, page_id: str, notion_version: str) -> dict[str, Any]: ...
+
+    def find_pages_by_identity(
+        self, *, data_source_id: str, identity_key: str, notion_version: str
+    ) -> Sequence[dict[str, Any]]: ...
+
     def update_page(self, *, page_id: str, properties: dict[str, str], notion_version: str) -> dict[str, Any]: ...
 
     def create_page(self, *, data_source_id: str, properties: dict[str, str], notion_version: str) -> dict[str, Any]: ...
@@ -138,7 +170,6 @@ def build_mutation_actions(
         raise MutationPlanError("plan and source record counts differ")
     if type(property_mapping) is not dict or not property_mapping:
         raise MutationPlanError("property_mapping must be a non-empty dictionary")
-
     actions: list[MutationAction] = []
     for entry, source in zip(entries, source_records, strict=True):
         if entry.source_row != source.source_row:
@@ -155,9 +186,7 @@ def build_mutation_actions(
             if entry.matched_page_ids:
                 raise MutationPlanError("create action must not carry matched page ids")
             page_id = None
-
         values = _mapped_properties(source, property_mapping)
-        evidence_key = _action_evidence_key(entry, values)
         actions.append(
             MutationAction(
                 action=entry.result,
@@ -165,7 +194,7 @@ def build_mutation_actions(
                 identity_key=entry.identity_key,
                 page_id=page_id,
                 properties=tuple(sorted(values.items())),
-                evidence_key=evidence_key,
+                evidence_key=_action_evidence_key(entry, values),
             )
         )
     return tuple(actions)
@@ -177,13 +206,13 @@ def execute_mutation_actions(
     *,
     client: NotionMutationClient | None = None,
     now: datetime | None = None,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> tuple[MutationOutcome, ...]:
     current = now or datetime.now(timezone.utc)
     if current.tzinfo is None:
         raise MutationAuthorizationError("now must be timezone-aware")
     if current > authorization.valid_until:
         raise MutationAuthorizationError("authorization is expired")
-
     _validate_actions_against_authorization(actions, authorization)
     if authorization.dry_run:
         return tuple(
@@ -199,28 +228,8 @@ def execute_mutation_actions(
         if action.evidence_key in seen:
             raise MutationPlanError("duplicate action evidence key")
         seen.add(action.evidence_key)
-        properties = dict(action.properties)
-        try:
-            if action.action is ReconciliationResult.UPDATE_EXISTING:
-                assert action.page_id is not None
-                response = client.update_page(
-                    page_id=action.page_id,
-                    properties=properties,
-                    notion_version=authorization.notion_version,
-                )
-                outcome = _validate_response(response, action, expected_page_id=action.page_id)
-            else:
-                response = client.create_page(
-                    data_source_id=authorization.data_source_id,
-                    properties=properties,
-                    notion_version=authorization.notion_version,
-                )
-                outcome = _validate_response(response, action, expected_page_id=None)
-        except MutationAdapterError:
-            raise
-        except Exception:
-            raise MutationExecutionError("Notion mutation failed") from None
-        outcomes.append(outcome)
+        _validate_precondition(client, action, authorization)
+        outcomes.append(_execute_one(client, action, authorization, sleep))
     return tuple(outcomes)
 
 
@@ -229,6 +238,126 @@ def validate_plan_authorization(
 ) -> None:
     if plan_digest(entries) != authorization.plan_digest:
         raise MutationAuthorizationError("authorization plan digest does not match")
+
+
+def _validate_precondition(
+    client: NotionMutationClient,
+    action: MutationAction,
+    authorization: MutationAuthorization,
+) -> None:
+    try:
+        if action.action is ReconciliationResult.UPDATE_EXISTING:
+            assert action.page_id is not None
+            evidence = client.read_page_identity(
+                page_id=action.page_id,
+                notion_version=authorization.notion_version,
+            )
+            if type(evidence) is not dict or evidence.get("identity_key") != action.identity_key:
+                raise MutationExecutionError("update precondition identity is stale or conflicting")
+            if evidence.get("page_id") not in {None, action.page_id}:
+                raise MutationExecutionError("update precondition page id is conflicting")
+        else:
+            matches = _identity_matches(client, action, authorization)
+            if matches:
+                raise MutationExecutionError("create precondition found an existing identity")
+    except MutationAdapterError:
+        raise
+    except Exception:
+        raise MutationExecutionError("Notion precondition read failed") from None
+
+
+def _execute_one(
+    client: NotionMutationClient,
+    action: MutationAction,
+    authorization: MutationAuthorization,
+    sleep: Callable[[float], None],
+) -> MutationOutcome:
+    retries = 0
+    total_delay = 0.0
+    while True:
+        try:
+            if action.action is ReconciliationResult.UPDATE_EXISTING:
+                assert action.page_id is not None
+                response = client.update_page(
+                    page_id=action.page_id,
+                    properties=dict(action.properties),
+                    notion_version=authorization.notion_version,
+                )
+                return _validate_response(response, action, expected_page_id=action.page_id)
+            response = client.create_page(
+                data_source_id=authorization.data_source_id,
+                properties=dict(action.properties),
+                notion_version=authorization.notion_version,
+            )
+            return _validate_response(response, action, expected_page_id=None)
+        except NotionTransientMutationError as error:
+            if error.ambiguous:
+                if action.action is ReconciliationResult.CREATE_MISSING:
+                    matches = _identity_matches(client, action, authorization)
+                    if len(matches) == 1:
+                        return _outcome_from_reconciled_create(matches[0], action)
+                    if len(matches) > 1:
+                        raise MutationExecutionError(
+                            "ambiguous create reconciled to multiple identities"
+                        ) from None
+                    raise MutationExecutionError(
+                        "ambiguous create requires manual reconciliation"
+                    ) from None
+                raise MutationExecutionError(
+                    "ambiguous update requires manual reconciliation"
+                ) from None
+            if retries >= authorization.maximum_retries:
+                raise MutationExecutionError("mutation retry limit reached") from None
+            new_total = total_delay + error.retry_after
+            if new_total > authorization.maximum_total_retry_delay:
+                raise MutationExecutionError("mutation retry delay limit reached") from None
+            sleep(error.retry_after)
+            total_delay = new_total
+            retries += 1
+        except MutationAdapterError:
+            raise
+        except Exception:
+            raise MutationExecutionError("Notion mutation failed") from None
+
+
+def _identity_matches(
+    client: NotionMutationClient,
+    action: MutationAction,
+    authorization: MutationAuthorization,
+) -> tuple[dict[str, Any], ...]:
+    try:
+        raw = client.find_pages_by_identity(
+            data_source_id=authorization.data_source_id,
+            identity_key=action.identity_key,
+            notion_version=authorization.notion_version,
+        )
+    except Exception:
+        raise MutationExecutionError("Notion identity reconciliation failed") from None
+    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes)):
+        raise MutationExecutionError("Notion identity reconciliation response is malformed")
+    matches = tuple(raw)
+    if any(type(item) is not dict for item in matches):
+        raise MutationExecutionError("Notion identity reconciliation response is malformed")
+    return matches
+
+
+def _outcome_from_reconciled_create(
+    evidence: dict[str, Any], action: MutationAction
+) -> MutationOutcome:
+    page_id = evidence.get("id")
+    page_url = evidence.get("url")
+    identity_key = evidence.get("identity_key")
+    if type(page_id) is not str or not page_id.strip() or identity_key != action.identity_key:
+        raise MutationExecutionError("ambiguous create reconciliation evidence is malformed")
+    if page_url is not None and type(page_url) is not str:
+        raise MutationExecutionError("ambiguous create reconciliation evidence is malformed")
+    return MutationOutcome(
+        evidence_key=action.evidence_key,
+        action=action.action,
+        status="applied-reconciled",
+        page_id=page_id,
+        page_url=page_url,
+    )
 
 
 def _validate_actions_against_authorization(
