@@ -1,4 +1,4 @@
-"""Fixed GitHub-to-GCE dev-validation transport for #1432/#1436/#1454/#1455/#1495/#1515/#1768."""
+"""Fixed GitHub-to-GCE dev-validation transport for #1432/#1436/#1454/#1455/#1495/#1515/#1768/#1942."""
 from __future__ import annotations
 
 import argparse
@@ -23,6 +23,8 @@ HOST_PYTHON = "/usr/bin/python3"
 DEV_VALIDATION_PYTHON = "/usr/local/libexec/agent-os-dev-validation-python"
 EIA_VALIDATION_ID = "eia-paddleocr-runtime-qualification"
 EIA_VALIDATION_ARGV = ("python", "-m", "workflow_scheduler.governance.eia_paddleocr_runtime_qualification")
+SHEETS_SMOKE_VALIDATION_ID = "visual-asset-sheets-smoke"
+SHEETS_SMOKE_VALIDATION_ARGV = ("python", "-m", "workflow_scheduler.governance.visual_asset_sheets_smoke")
 # DEVVAL3 (#1495): the TypeScript/Vitest identity cannot run under the pinned
 # CPython test runtime, so it binds a second fixed root-owned runtime published
 # by the same separately authorized administrator installer pattern. It adds no
@@ -49,6 +51,10 @@ PPUX_ID="ppux-picture-perfect-ts-vitest"
 PPUX_PACKAGE_DIR="08_Tooling/instructional-materials-coach/picture-perfect-coach"
 EIA_ID="eia-paddleocr-runtime-qualification"
 EIA_SCRIPT="08_Tooling/workflow-scheduler/src/workflow_scheduler/governance/eia_paddleocr_runtime_qualification.py"
+SHEETS_SMOKE_ID="visual-asset-sheets-smoke"
+SHEETS_SMOKE_SCRIPT="08_Tooling/workflow-scheduler/src/workflow_scheduler/governance/visual_asset_sheets_smoke.py"
+SHEETS_SMOKE_IMPORT_ROOT="08_Tooling/workflow-scheduler/src"
+SHEETS_SMOKE_PROBE="import json,sys;from workflow_scheduler.governance.visual_asset_sheets_smoke import build_request,execute_smoke;req=build_request(repository='Blummer92/agent-os',issue_number=734,source_sha=sys.argv[1],spreadsheet_id='1S3GNwqu0ehPXUA1j4FEksH1uEMKlxyEwAZWfIADPfpo',worksheet_name='Approved Use Review',a1_range=\"'Approved Use Review'!A1:N455\");inspect=lambda:(_ for _ in ()).throw(RuntimeError('credential injector unavailable'));read=lambda *_:(_ for _ in ()).throw(AssertionError('values_get must remain unreachable'));print(json.dumps(execute_smoke(req,inspect_effective_scopes=inspect,values_get=read),sort_keys=True,separators=(',',':')))"
 NODE="/usr/local/libexec/agent-os-dev-validation-node"
 NODE_MODULES="/opt/agent-os/dev-validation-node-runtime/node_modules"
 VITEST_CLI=NODE_MODULES+"/vitest/vitest.mjs"
@@ -74,6 +80,7 @@ VALIDATION_ARGS={
   "src/provenanceValidator.test.ts",
  ),
  EIA_ID:(EIA_SCRIPT,),
+ SHEETS_SMOKE_ID:(SHEETS_SMOKE_SCRIPT,),
 }
 SHA40=re.compile(r"^[0-9a-f]{40}$",re.ASCII)
 BRANCH=re.compile(r"^agent/[A-Za-z0-9._/-]{1,180}$",re.ASCII)
@@ -115,6 +122,17 @@ def record_eia(result,completed):
  if not (valid_reasons and valid_flags and valid_status and valid_exit):
   result.update({"status":"needs-decision","reason_codes":["eia-qualification-output-invalid"],"exit_code":completed.returncode,"stdout_tail":out,"stderr_tail":err,"stdout_truncated":out_truncated,"stderr_truncated":err_truncated});return
  result.update({"status":"success" if payload["status"]=="ready" else "needs-decision","reason_codes":reasons,"exit_code":completed.returncode,"stdout_tail":out,"stderr_tail":err,"stdout_truncated":out_truncated,"stderr_truncated":err_truncated})
+
+def record_sheets_smoke(result,completed):
+ out,out_truncated=bounded(completed.stdout);err,err_truncated=bounded(completed.stderr)
+ try:payload=json.loads(completed.stdout)
+ except json.JSONDecodeError:
+  result.update({"status":"needs-decision","reason_codes":["sheets-smoke-output-invalid"],"exit_code":completed.returncode,"stdout_tail":out,"stderr_tail":err,"stdout_truncated":out_truncated,"stderr_truncated":err_truncated});return
+ flags=("external_write_performed","sheet_write_performed","drive_access_performed","notion_access_performed","execution_authorized","production_authorized","credential_material_emitted")
+ valid=isinstance(payload,dict) and completed.returncode==0 and payload.get("status")=="blocked" and payload.get("reason_codes")==["scope-unverifiable"] and payload.get("scope_verified") is False and payload.get("response_row_count")==0 and all(payload.get(key) is False for key in flags)
+ if not valid:
+  result.update({"status":"needs-decision","reason_codes":["sheets-smoke-output-invalid"],"exit_code":completed.returncode,"stdout_tail":out,"stderr_tail":err,"stdout_truncated":out_truncated,"stderr_truncated":err_truncated});return
+ result.update({"status":"needs-decision","reason_codes":["sheets-smoke-credential-injector-unavailable"],"exit_code":0,"stdout_tail":"","stderr_tail":"","stdout_truncated":False,"stderr_truncated":False})
 
 def record_timeout(result,exc):
  out,out_truncated=bounded(exc.stdout if isinstance(exc.stdout,str) else "");err,err_truncated=bounded(exc.stderr if isinstance(exc.stderr,str) else "")
@@ -165,6 +183,14 @@ try:
      env=fixed_env(root)
      try:record_eia(result,run((HOST_PYTHON,eia_script),cwd=repo,env=env,timeout=TEST_TIMEOUT))
      except subprocess.TimeoutExpired as exc:record_timeout(result,exc)
+   elif validation_id==SHEETS_SMOKE_ID:
+    sheets_script=os.path.join(repo,SHEETS_SMOKE_SCRIPT)
+    if not os.path.isfile(HOST_PYTHON) or not os.access(HOST_PYTHON,os.X_OK): result["reason_codes"]=["sheets-smoke-host-python-unavailable"]
+    elif not os.path.isfile(sheets_script): result["reason_codes"]=["validation-workspace-unavailable"]
+    else:
+     env=fixed_env(root);env["PYTHONPATH"]=os.path.join(repo,SHEETS_SMOKE_IMPORT_ROOT)
+     try:record_sheets_smoke(result,run((HOST_PYTHON,"-c",SHEETS_SMOKE_PROBE,sha),cwd=repo,env=env,timeout=20))
+     except subprocess.TimeoutExpired as exc:record_timeout(result,exc)
    elif not os.path.isfile(TEST_PYTHON) or not os.access(TEST_PYTHON,os.X_OK): result["reason_codes"]=["test-runtime-unavailable"]
    else:
     runtime=run((TEST_PYTHON,"-c","import pytest; assert pytest.__version__ == '8.3.5'"),timeout=10)
@@ -195,6 +221,8 @@ def _host_command(request: object) -> str:
     expected = VALIDATION_REGISTRY.get(request.validation_id)
     if request.validation_id == EIA_VALIDATION_ID:
         expected = EIA_VALIDATION_ARGV
+    elif request.validation_id == SHEETS_SMOKE_VALIDATION_ID:
+        expected = SHEETS_SMOKE_VALIDATION_ARGV
     if expected is None or validation_argv(request) != expected:
         raise ValueError("dev-validation argv drift")
     return shlex.join((HOST_PYTHON, "-c", _HOST_RUNNER_SOURCE, request.repository, str(request.issue_number), request.branch, request.source_sha, request.validation_id, request.request_id))
