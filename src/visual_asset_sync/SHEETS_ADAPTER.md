@@ -23,26 +23,33 @@ coercion.
 
 ## Header mapping
 
-The live `Approved Use Review` contract was unavailable during implementation,
-so callers supply an exact, non-empty mapping from selected planner fields to
-verified Sheet headers. Supported targets are:
+The live `Approved Use Review` contract is verified under Issue #733. Current
+verified target: spreadsheet `1S3GNwqu0ehPXUA1j4FEksH1uEMKlxyEwAZWfIADPfpo`,
+worksheet `Approved Use Review`, header row 1, bounded range `A1:N455`.
 
-- `drive_file_id`, `drive_url`, `file_name`, `approved_use`
-- `audience`, `review_status`, `review_date`, `visual_rationale`
-- `worksheet_fit`, `slideshow_fit`, `poster_fit`
-- `format_decision_notes`, `excluded`
+The verified mapping is:
 
-Only configured headers are required. Unmapped text fields become `None`, and
-unmapped `excluded` becomes `False`. Unconfigured column values never enter
-planner records.
+- `drive_file_id` -> `File ID`
+- `drive_url` -> `Drive URL`
+- `file_name` -> `File Name`
+- `approved_use` -> `Approved Use`
+- `audience` -> `Audience`
+- `review_status` -> `Review Status`
+- `review_date` -> `Reviewed Date`
+- `visual_rationale` -> `Visual Rationale`
+- `worksheet_fit` -> `Worksheet Fit`
+- `slideshow_fit` -> `Slideshow Fit`
+- `poster_fit` -> `Poster Fit`
+- `format_decision_notes` -> `Format Decision Notes`
+
+`Source Row` and `Confidence` are intentionally unmapped. `source_row` is derived
+from the physical Sheet row, while `Confidence` has no planner target. The live
+sheet has no `excluded` column, so unmapped `excluded` remains `False`.
 
 Live worksheets may contain unrelated columns. They are ignored after the full
 header row passes structural validation. Duplicate, blank, or non-string headers
 still fail closed, as do unsupported targets, repeated source-header assignments,
 and missing configured headers.
-
-Fixture display labels support offline tests only. They do not claim to match the
-live Sheet and must be replaced with a verified mapping before an authorized read.
 
 ## Row behavior
 
@@ -73,6 +80,24 @@ Offline fixture tests cover partial and complete mappings, unrelated columns,
 ordering, row identity, strict request and cell types, bounded reads, traceback
 sanitization, absent write methods, and the planner smoke path.
 
-Before live use, the Integration Manager must verify header names, spreadsheet
-and worksheet IDs, bounded range, rendering and locale policy, credential route,
-and read-only OAuth scope. #734 remains separately authorized after #733.
+The current live contract has been revalidated as of 2026-09-05 without schema or
+rendering drift: locale `en_US`, timezone `America/New_York`, 455x14 grid, exact
+14-header order, formula-backed File ID/File Name/Drive URL, ISO-text Reviewed
+Date, and text-dropdown review/audience/fit fields. `FORMATTED_VALUE` remains
+compatible with the mapped contract.
+
+Issue #1926 adds a repository-owned `visual-asset-sheets-smoke` capability contract.
+It content-binds repository, #734, exact source SHA, spreadsheet identity,
+worksheet, and bounded A1 range; verifies the effective application credential
+scope before the read; rejects broader or unverifiable scope evidence; and emits
+only sanitized counts and zero-write flags. It intentionally keeps the generic
+GitHub/GCE transport credential separate from the Sheets application credential.
+
+The repository capability is not credential deployment and is not live-read
+authorization. A governed runtime still must bind an approved application-level
+credential and prove that its effective grant is exactly
+`https://www.googleapis.com/auth/spreadsheets.readonly`. Credential/secret
+creation or rotation, OAuth/IAM changes, and GitHub Actions workflow changes remain
+separately authorized surfaces. Once that deployment boundary is satisfied, #734
+reacquires the live #733 contract and performs the separately authorized bounded
+smoke read.

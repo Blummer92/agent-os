@@ -25,6 +25,23 @@ def test_folder_preview_click_is_not_folder_entry():
     assert action.target == "folder-asset-card-digitalmedia"
 
 
+def test_generic_data_testid_is_preferred_over_trailing_generic_selector():
+    action = analyze_replay({"steps": [{
+        "type": "change",
+        "value": "Zachary",
+        "selectors": [["[data-testid='first-name']", "input"]],
+    }]})[0]
+    assert action.target == "first-name"
+
+
+def test_distinct_data_testids_remain_distinct_with_same_trailing_selector():
+    actions = analyze_replay({"steps": [
+        {"type": "click", "selectors": [["[data-testid='first-name']", "input"]]},
+        {"type": "click", "selectors": [["[data-testid=\"last-name\"]", "input"]]},
+    ]})
+    assert [action.target for action in actions] == ["first-name", "last-name"]
+
+
 def test_cursor_noise_collapses_into_one_rename_with_evidence():
     steps = [{
         "type": "change",
@@ -46,6 +63,32 @@ def test_cursor_noise_collapses_into_one_rename_with_evidence():
     assert action.source_indexes[-1] == 241
 
 
+def test_targetless_changes_do_not_collapse_into_one_action():
+    actions = analyze_replay({"steps": [
+        {"type": "change", "value": "first"},
+        {"type": "change", "value": "second"},
+    ]})
+    assert len(actions) == 2
+    assert actions[0].source_indexes == (0,)
+    assert actions[0].value == "first"
+    assert actions[1].source_indexes == (1,)
+    assert actions[1].value == "second"
+
+
+def test_targetless_change_still_absorbs_targetless_key_noise():
+    actions = analyze_replay({"steps": [
+        {"type": "change", "value": "first"},
+        {"type": "keyDown", "key": "ArrowLeft"},
+        {"type": "keyUp", "key": "ArrowLeft"},
+        {"type": "change", "value": "second"},
+    ]})
+    assert len(actions) == 2
+    assert actions[0].source_indexes == (0, 1, 2)
+    assert actions[0].value == "first"
+    assert actions[1].source_indexes == (3,)
+    assert actions[1].value == "second"
+
+
 def test_missing_change_value_is_not_invented_as_empty_text():
     action = analyze_replay({"steps": [{
         "type": "change",
@@ -53,6 +96,16 @@ def test_missing_change_value_is_not_invented_as_empty_text():
     }]})[0]
     assert action.value is None
     assert not any(item.startswith("value=") for item in action.evidence)
+
+
+def test_explicit_null_change_value_remains_none():
+    action = analyze_replay({"steps": [{
+        "type": "change",
+        "value": None,
+        "selectors": [["[data-testid='editor-document-title']"]],
+    }]})[0]
+    assert action.value is None
+    assert action.value != "None"
 
 
 def test_explicit_empty_change_value_remains_empty_text():
@@ -63,6 +116,15 @@ def test_explicit_empty_change_value_remains_empty_text():
     }]})[0]
     assert action.value == ""
     assert "value=" in action.evidence
+
+
+def test_string_change_value_remains_unchanged():
+    action = analyze_replay({"steps": [{
+        "type": "change",
+        "value": "Project title",
+        "selectors": [["[data-testid='editor-document-title']"]],
+    }]})[0]
+    assert action.value == "Project title"
 
 
 def test_rename_does_not_absorb_key_event_from_another_target():
@@ -82,7 +144,7 @@ def test_rename_does_not_absorb_key_event_from_another_target():
     assert actions[0].kind == "rename"
     assert actions[0].source_indexes == (0,)
     assert actions[1].kind == "keyboard_noise"
-    assert actions[1].target == "[data-testid='search-field']"
+    assert actions[1].target == "search-field"
 
 
 def test_click_and_double_click_remain_distinct():

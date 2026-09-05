@@ -29,6 +29,8 @@ Examples:
 test_<what_is_being_tested>_<scenario>
 ```
 
+Prefer a short subject plus a positive behavioral verb when that preserves the important condition, for example `test_library_failure_keeps_generation_disabled` or `test_requested_scope_rejects_substitution`. This is soft guidance, not a character limit: keep a longer explicit name when shortening would hide behavior or a material condition.
+
 ### Structure
 
 ```
