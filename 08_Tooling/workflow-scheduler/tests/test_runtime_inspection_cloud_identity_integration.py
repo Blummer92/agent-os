@@ -76,7 +76,7 @@ def test_runtime_inspection_dispatch_includes_cloud_identity(monkeypatch):
             return _result('[{"email":"visual-asset-reader@agent-os-502614.iam.gserviceaccount.com","displayName":"Visual Asset Reader","disabled":false}]')
         if argv[:3] == ("gcloud", "projects", "get-iam-policy"):
             return _result('{"bindings":[]}')
-        if argv[:5] == ("gcloud", "iam", "service-accounts", "get-iam-policy"):
+        if argv[:4] == ("gcloud", "iam", "service-accounts", "get-iam-policy"):
             return _result('{"bindings":[{"role":"roles/iam.serviceAccountTokenCreator","members":["serviceAccount:runtime@agent-os-502614.iam.gserviceaccount.com"]}]}')
         raise AssertionError(f"unexpected command: {argv}")
 
