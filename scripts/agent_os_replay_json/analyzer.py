@@ -104,7 +104,7 @@ def _click_kind(step: dict[str, Any], identity: str | None) -> str:
 
 
 def _change_value(step: dict[str, Any]) -> str | None:
-    if "value" not in step:
+    if "value" not in step or step["value"] is None:
         return None
     value = step["value"]
     return value if isinstance(value, str) else str(value)
