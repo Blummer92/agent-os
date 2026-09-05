@@ -7,6 +7,7 @@ existing #975 evidence packet, #973 resolver, MaterialRequirement validator, and
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any
 
@@ -46,6 +47,9 @@ _STUDENT_ASSESSMENT_TOKENS = {
     "completion-criteria": "context_student_completion_criteria",
 }
 
+_ASSESSMENT_DEPENDENCY_TOKEN = "context_assessment_dependency_fingerprint"
+_ASSESSMENT_CURRENTNESS_TOKEN = "context_assessment_dependency_currentness"
+
 
 def compose_generation_context(
     content: LessonContent,
@@ -67,6 +71,12 @@ def compose_generation_context(
     current governed state and remains separate from teacher-only scoring or
     calibration guidance. MaterialRequirement learning references are preserved
     as identity tokens but never treated as student-facing copy by themselves.
+
+    The effective student-facing assessment dependency is content-bound. If a
+    previously composed worksheet/material context is presented again after that
+    dependency changes, generation fails closed instead of silently treating the
+    old context as current. Teacher-only and metadata-only evidence changes are
+    intentionally excluded from this dependency identity.
     """
     requirement_result = validate_material_requirement(material_requirement)
     if requirement_result.record is None:
@@ -95,6 +105,13 @@ def compose_generation_context(
         raise GenerationContextError("Selected visual identity does not match governed visual plan")
 
     requirement = requirement_result.record.to_dict()
+    assessment_dependency = _assessment_dependency_fingerprint(requirement, state)
+    prior_dependency = content.context_tokens.get(_ASSESSMENT_DEPENDENCY_TOKEN)
+    if prior_dependency is not None and prior_dependency != assessment_dependency:
+        raise GenerationContextError(
+            "Student-facing assessment dependency changed; worksheet generation context is stale"
+        )
+
     tokens: dict[str, str] = {}
 
     identity = requirement["identity"]
@@ -120,6 +137,8 @@ def compose_generation_context(
             "context_requirement_asset_ids": _join(item["asset_id"] for item in requirement["assets"]),
             "context_selected_asset_ids": _join(visual_asset_ids),
             "context_selected_visual_assignments": visual_assignments,
+            _ASSESSMENT_DEPENDENCY_TOKEN: assessment_dependency,
+            _ASSESSMENT_CURRENTNESS_TOKEN: "current",
         }
     )
 
@@ -152,6 +171,72 @@ def compose_generation_context(
     tokens["context_external_write_authorized"] = "false"
 
     return content.with_context_tokens(tokens)
+
+
+def _assessment_dependency_fingerprint(
+    requirement: dict[str, Any], state: dict[str, Any]
+) -> str:
+    """Bind only material student-facing assessment evidence, not volatile metadata.
+
+    Owner-governed evidence wins exactly as it does during token projection;
+    current context evidence may fill a missing student-facing key but cannot
+    override an owner-governed value. Source revisions/timestamps are excluded so
+    metadata-only refreshes do not force regeneration when the governed student
+    payload and stable references are unchanged.
+    """
+    effective: dict[str, dict[str, str]] = {}
+    for item in state.get("owner_states", []):
+        key = item.get("decision_key")
+        value = item.get("value")
+        if key not in _STUDENT_ASSESSMENT_TOKENS or not isinstance(value, str):
+            continue
+        effective[key] = {
+            "value": value,
+            "reference_stable_id": _reference_stable_id(item.get("reference")),
+        }
+    for item in state.get("context_evidence", []):
+        key = item.get("decision_key")
+        value = item.get("value")
+        if (
+            key not in _STUDENT_ASSESSMENT_TOKENS
+            or item.get("currentness") != "current"
+            or not isinstance(value, str)
+        ):
+            continue
+        effective.setdefault(
+            key,
+            {
+                "value": value,
+                "reference_stable_id": _reference_stable_id(item.get("reference")),
+            },
+        )
+
+    learning = requirement["learning_evidence"]
+    payload = {
+        "success_criteria_ref": learning["success_criteria_ref"]["stable_id"],
+        "student_assessment": [
+            {
+                "decision_key": key,
+                "value": effective[key]["value"],
+                "reference_stable_id": effective[key]["reference_stable_id"],
+            }
+            for key in sorted(effective)
+        ],
+    }
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _reference_stable_id(value: object) -> str:
+    if type(value) is not dict:
+        return ""
+    stable_id = value.get("stable_id")
+    return stable_id if isinstance(stable_id, str) else ""
 
 
 def _visual_context(value: object | None) -> tuple[tuple[str, ...], str]:
