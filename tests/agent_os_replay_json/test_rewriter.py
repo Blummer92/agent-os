@@ -521,7 +521,7 @@ def test_move_after_is_unproven_without_dependency_evidence():
 
 
 @pytest.mark.parametrize(
-    "request",
+    "rewrite_request",
     [
         RewriteRequest(
             kind="change-selector",
@@ -537,7 +537,7 @@ def test_move_after_is_unproven_without_dependency_evidence():
         ),
     ],
 )
-def test_rejected_and_unproven_results_do_not_alias_nested_input(request):
+def test_rejected_and_unproven_results_do_not_alias_nested_input(rewrite_request):
     payload = {
         "metadata": {"tags": ["original"]},
         "steps": [
@@ -545,7 +545,7 @@ def test_rejected_and_unproven_results_do_not_alias_nested_input(request):
         ],
     }
 
-    result = apply_request(payload, request)
+    result = apply_request(payload, rewrite_request)
     result.rewritten_recording["metadata"]["tags"].append("mutated")
     result.rewritten_recording["steps"][0]["selectors"][0].append("mutated-selector")
 
