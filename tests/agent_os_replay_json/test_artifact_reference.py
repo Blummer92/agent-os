@@ -126,6 +126,27 @@ def test_projection_warning_count_is_bounded() -> None:
     assert len(projection["warnings"]) == 8
 
 
+def test_projection_rejects_plain_string_warning_container() -> None:
+    with pytest.raises(ValueError, match="warnings must be an iterable"):
+        build_notion_projection(
+            _source(),
+            RecorderPipelineStatuses(),
+            modeling_sequence_ref="model://sequence",
+            warnings="one warning",
+        )
+
+
+def test_projection_preserves_list_and_tuple_warning_records() -> None:
+    for warnings in (["first", "second"], ("first", "second")):
+        projection = build_notion_projection(
+            _source(),
+            RecorderPipelineStatuses(),
+            modeling_sequence_ref="model://sequence",
+            warnings=warnings,
+        )
+        assert projection["warnings"] == ["first", "second"]
+
+
 def test_tutorial_zero_golden_lineage() -> None:
     original = _source()
     cleaned = _clean(original)
