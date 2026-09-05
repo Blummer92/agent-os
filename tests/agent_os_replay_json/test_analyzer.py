@@ -46,6 +46,32 @@ def test_cursor_noise_collapses_into_one_rename_with_evidence():
     assert action.source_indexes[-1] == 241
 
 
+def test_targetless_changes_do_not_collapse_into_one_action():
+    actions = analyze_replay({"steps": [
+        {"type": "change", "value": "first"},
+        {"type": "change", "value": "second"},
+    ]})
+    assert len(actions) == 2
+    assert actions[0].source_indexes == (0,)
+    assert actions[0].value == "first"
+    assert actions[1].source_indexes == (1,)
+    assert actions[1].value == "second"
+
+
+def test_targetless_change_still_absorbs_targetless_key_noise():
+    actions = analyze_replay({"steps": [
+        {"type": "change", "value": "first"},
+        {"type": "keyDown", "key": "ArrowLeft"},
+        {"type": "keyUp", "key": "ArrowLeft"},
+        {"type": "change", "value": "second"},
+    ]})
+    assert len(actions) == 2
+    assert actions[0].source_indexes == (0, 1, 2)
+    assert actions[0].value == "first"
+    assert actions[1].source_indexes == (3,)
+    assert actions[1].value == "second"
+
+
 def test_missing_change_value_is_not_invented_as_empty_text():
     action = analyze_replay({"steps": [{
         "type": "change",
