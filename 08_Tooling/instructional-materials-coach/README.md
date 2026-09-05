@@ -2,6 +2,9 @@
 
 Builds a Google Slides deck and Google Docs worksheet for one lesson by duplicating an approved template pair and replacing placeholder tokens with lesson content. It also provides a pure/offline Source -> Lesson Bundle planning seam that coordinates existing governed material requirements before any connected production occurs.
 
+## Offline slide layout QA
+`slide_layout_qa.py` provides a pure structural QA seam for student-facing slide render plans. It detects only mechanically provable defects: empty opaque placeholders layered above required instructional regions, unsafe required-text contrast when both colors are known, unintended overlap between required title/directions/model/task/teacher-cue regions, oversized supporting previews, and under-dominant focal models. Unknown colors or other judgments that cannot be established from the supplied structural plan route to `manual-review` rather than receiving a false pass. The seam performs no rendering, OCR/CV, provider call, classroom publication, or Drive mutation; broader phone/projector rendered review remains owned by #1835.
+
 ## Offline lesson bundles
 `lesson_bundle.py` plans a bounded set of requested classroom-material members from caller-supplied current-curriculum evidence and validated `MaterialRequirement` records. It is coordination only: it performs no source retrieval, generation, credential access, Drive/Notion call, provider execution, persistence, publication, or sharing change.
 
@@ -78,34 +81,6 @@ To log a lesson manually:
     python -m instructional_materials_coach.cli log-lesson \
       --title "Template had a stale placeholder" \
       --what-happened "QA caught {{objective_2}} left unreplaced in a delivered deck." \
-      --what-to-do-next-time "Validate all tokens are replaced before sharing the link." \
-      --severity Medium \
-      --learning-type "QA feedback"
-
-See `docs/notion-field-mapping.md` for the human-applied Notion field mapping.
-
-## Tests
-    pytest tests/
-
-Focused lesson-bundle coverage:
-
-    PYTHONPATH=src:08_Tooling/instructional-materials-coach/src python -m pytest 08_Tooling/instructional-materials-coach/tests/test_lesson_bundle.py -q
-
-Tests use fakes/mocks only for the C4A live-build boundary and perform no live Google or Notion I/O. The packaging proof builds the root Navigation Registry, `instructional-workflow-contracts`, and coach wheels; verifies exclusive package ownership and one-way dependency metadata; installs from wheels; strips `PYTHONPATH`; and imports the coach/contracts from outside the repository.
-
-## Release checklist
-- Build all relevant wheels with ordinary setuptools/pip tooling.
-- Verify the root Navigation Registry wheel excludes `instructional_workflow_contracts`.
-- Verify the contracts wheel excludes `navigation_registry` and the coach package.
-- Verify coach metadata declares the bounded contracts dependency and not the reverse.
-- Run non-editable outside-repository import proof plus focused coach/runtime tests.
-- Run repository structure and aggregate validation against the exact PR head.
-- Do not merge or publish while any required exact-head check is failing or pending.
-
-## Limitations
-- Lesson-bundle planning is offline coordination only; it does not yet execute a bundle against Drive or change the connected CLI's current Slides + worksheet production behavior.
-- C4A hardens the repository production client but does not authorize credentials or a real Google call. Connected live execution remains separately governed by C4B/#1196 and C4/#119.
-- There is no cross-resource transaction for the Slides/Docs pair; partial or ambiguous results require bounded reconciliation rather than automatic cleanup.
-- The visual-reuse bridge consumes supplied governed evidence only; it does not retrieve the Visual Asset Library or generate images. Teacher-reference PDFs can embed caller-supplied bytes only after the projection has already authorized the exact identity.
-- Worksheet generation supports flat paragraph placeholders only; no table or answer-key templating yet.
-- Placeholder replacement uses literal `{{token_name}}` substring matching, not regex matching.
+      --root-cause "Template version drift" \
+      --fix "Update approved template and re-run QA" \
+      --prevention "Validate placeholder inventory before build"
