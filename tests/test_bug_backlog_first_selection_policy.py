@@ -1,4 +1,4 @@
-"""Regression guards for #1827 backlog-first bug-work selection."""
+"""Regression guards for #1827 backlog-first selection and #1957 batch progression."""
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,6 +41,37 @@ def test_backlog_first_rule_reuses_existing_orchestrator_mission_routing() -> No
     assert "explicitly bounded finite multi-item mission" in routing
     assert "maintain a mission cursor" in routing
     assert "Do not silently substitute, omit, or duplicate requested identities." in routing
+
+
+def test_bug_batch_item_local_dispositions_advance_existing_cursor() -> None:
+    workflow = normalized(AGENTS)
+    assert "Bind each candidate disposition to the existing finite-mission cursor" in workflow
+    for disposition in (
+        "already-fixed/completed",
+        "duplicate",
+        "blocked-item-local",
+        "separately-gated",
+        "external-owner/non-repository",
+    ):
+        assert disposition in workflow
+    assert "non-terminal for the parent batch" in workflow
+    assert "immediately advance to the next independent candidate without another user prompt" in workflow
+    assert "rebuilding the batch investigation" in workflow
+
+
+def test_bug_batch_stops_later_candidates_only_for_shared_blocker() -> None:
+    workflow = normalized(AGENTS)
+    for blocker in (
+        "shared authorization",
+        "source-of-truth",
+        "bounded-scope",
+        "excluded-surface",
+        "capability",
+        "material-decision",
+    ):
+        assert blocker in workflow
+    assert "continue until the requested count is worked or the reconciled pool is exhausted" in workflow
+    assert "report the honest shortfall" in workflow
 
 
 def test_backlog_first_selection_does_not_expand_authority() -> None:
