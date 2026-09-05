@@ -137,6 +137,8 @@ def test_photography_context_augments_instead_of_replacing_authored_content():
     assert tokens["context_success_criteria_ref"] == "criteria-1"
     assert tokens["context_evidence_target_ref"] == "evidence-1"
     assert tokens["context_selected_asset_ids"] == "asset-1"
+    assert tokens["context_assessment_dependency_currentness"] == "current"
+    assert len(tokens["context_assessment_dependency_fingerprint"]) == 64
     assert tokens["context_production_authorized"] == "false"
 
     assignments = json.loads(tokens["context_selected_visual_assignments"])
@@ -180,6 +182,97 @@ def test_student_assessment_criteria_reach_docs_without_teacher_scoring_leakage(
     assert by_token["{{context_student_success_criteria}}"] == tokens["context_student_success_criteria"]
     assert by_token["{{context_student_rubric}}"] == tokens["context_student_rubric"]
     assert "{{curriculum_teacher_scoring_notes}}" not in by_token
+
+
+def test_student_facing_criteria_change_invalidates_previously_bound_context():
+    before = _photography_evidence()
+    before["owner_evidence"].append(
+        _owner("criteria", "success-criteria", "I can explain one intentional hierarchy choice.")
+    )
+    bound = compose_generation_context(
+        _content(),
+        material_requirement=_requirement(),
+        current_curriculum_evidence=before,
+    )
+
+    after = _photography_evidence()
+    after["owner_evidence"].append(
+        _owner("criteria-v2", "success-criteria", "I can explain two intentional hierarchy choices.")
+    )
+    with pytest.raises(GenerationContextError, match="assessment dependency changed"):
+        compose_generation_context(
+            bound,
+            material_requirement=_requirement(),
+            current_curriculum_evidence=after,
+        )
+
+
+def test_regeneration_with_new_criteria_rebinds_dependency():
+    first = _photography_evidence()
+    first["owner_evidence"].append(_owner("criteria", "success-criteria", "First criteria"))
+    old = compose_generation_context(
+        _content(), material_requirement=_requirement(), current_curriculum_evidence=first
+    )
+
+    second = _photography_evidence()
+    second["owner_evidence"].append(_owner("criteria-v2", "success-criteria", "Revised criteria"))
+    regenerated = compose_generation_context(
+        _content(), material_requirement=_requirement(), current_curriculum_evidence=second
+    )
+    assert (
+        old.context_tokens["context_assessment_dependency_fingerprint"]
+        != regenerated.context_tokens["context_assessment_dependency_fingerprint"]
+    )
+    assert regenerated.context_tokens["context_student_success_criteria"] == "Revised criteria"
+
+
+def test_teacher_only_scoring_change_does_not_invalidate_student_context():
+    before = _photography_evidence()
+    before["owner_evidence"].extend(
+        [
+            _owner("criteria", "success-criteria", "Student-visible criteria"),
+            _owner("teacher", "teacher-scoring-notes", "Calibration note A"),
+        ]
+    )
+    bound = compose_generation_context(
+        _content(), material_requirement=_requirement(), current_curriculum_evidence=before
+    )
+
+    after = _photography_evidence()
+    after["owner_evidence"].extend(
+        [
+            _owner("criteria", "success-criteria", "Student-visible criteria"),
+            _owner("teacher-v2", "teacher-scoring-notes", "Calibration note B"),
+        ]
+    )
+    rebound = compose_generation_context(
+        bound, material_requirement=_requirement(), current_curriculum_evidence=after
+    )
+    assert (
+        rebound.context_tokens["context_assessment_dependency_fingerprint"]
+        == bound.context_tokens["context_assessment_dependency_fingerprint"]
+    )
+
+
+def test_student_assessment_metadata_refresh_does_not_invalidate_when_semantics_match():
+    before = _photography_evidence()
+    before["owner_evidence"].append(_owner("criteria", "success-criteria", "Same criteria"))
+    bound = compose_generation_context(
+        _content(), material_requirement=_requirement(), current_curriculum_evidence=before
+    )
+
+    after = _photography_evidence()
+    refreshed = _owner("criteria", "success-criteria", "Same criteria")
+    refreshed["source_revision"] = 2
+    refreshed["observed_at"] = "2026-08-29T12:00:00Z"
+    after["owner_evidence"].append(refreshed)
+    rebound = compose_generation_context(
+        bound, material_requirement=_requirement(), current_curriculum_evidence=after
+    )
+    assert (
+        rebound.context_tokens["context_assessment_dependency_fingerprint"]
+        == bound.context_tokens["context_assessment_dependency_fingerprint"]
+    )
 
 
 @pytest.mark.parametrize(
