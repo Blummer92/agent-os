@@ -21,7 +21,12 @@ from .github_issue_comment_ingress import IssueCommentIngressResult
 from .governed_invocation_binding import bind_ingress_to_gce
 
 PROJECT="agent-os-502614";ZONE="us-central1-a";INSTANCE="agent-os-test";RESOURCE=GceResourceTuple(project=PROJECT,zone=ZONE,instance=INSTANCE)
-HOST_PYTHON="/usr/bin/python3";DISCOVERY_MODULE="agent_os_execution_service.handoff_discovery_entrypoint";DISCOVERY_PROBE_COMMAND=f"{HOST_PYTHON} -c 'import {DISCOVERY_MODULE}'";MAX_DIAGNOSTIC_STDERR=2048
+HOST_PYTHON="/usr/bin/python3"
+DISCOVERY_MODULE="agent_os_execution_service.handoff_discovery_entrypoint"
+ACTIVATION_MODULE="agent_os_execution_service.first_publication_activation_entrypoint"
+DISCOVERY_PROBE_COMMAND=f"{HOST_PYTHON} -c 'import {DISCOVERY_MODULE}'"
+ACTIVATION_PROBE_COMMAND=f"{HOST_PYTHON} -c 'import {ACTIVATION_MODULE}'"
+MAX_DIAGNOSTIC_STDERR=2048
 WORKFLOW_REF="Blummer92/agent-os/.github/workflows/agent-os-governed-invocation.yml@refs/heads/main"
 WIF_PROVIDER="//iam.googleapis.com/projects/966859826758/locations/global/workloadIdentityPools/agent-os-github/providers/agent-os-main"
 
@@ -74,6 +79,9 @@ def _discovery_command(*,repository:str,issue_number:int)->str:
  if repository!="Blummer92/agent-os":raise GcloudCommandError("non-canonical discovery repository rejected")
  if type(issue_number) is not int or issue_number<1:raise GcloudCommandError("non-canonical discovery issue rejected")
  return f"{HOST_PYTHON} -m {DISCOVERY_MODULE} --repository {repository} --issue-number {issue_number}"
+def _activation_command(capsule:str)->str:
+ if not re.fullmatch(r"pre-publication-evidence:[0-9a-f]{64}",capsule):raise GcloudCommandError("non-canonical source capsule rejected")
+ return f"{HOST_PYTHON} -m {ACTIVATION_MODULE} --source-capsule-id {capsule}"
 
 class GcloudIapAdapter:
  def __init__(self,*,poll_seconds:float=2.0,max_polls:int=30)->None:
@@ -95,6 +103,15 @@ class GcloudIapAdapter:
  def _ssh(self,resource:GceResourceTuple,command:str)->subprocess.CompletedProcess[str]:return _run(("gcloud","compute","ssh",resource.instance,*self._resource_args(resource),"--tunnel-through-iap","--quiet","--command",command),timeout=180)
  def probe_ready(self,resource:GceResourceTuple)->bool:return self._ssh(resource,f"test -x {FIXED_ENTRYPOINT}").returncode==0
  def probe_discovery_ready(self,resource:GceResourceTuple)->bool:return self._ssh(resource,DISCOVERY_PROBE_COMMAND).returncode==0
+ def probe_activation_ready(self,resource:GceResourceTuple)->bool:return self._ssh(resource,ACTIVATION_PROBE_COMMAND).returncode==0
+ def activate_first_publication(self,resource:GceResourceTuple,*,source_capsule_id:str)->dict[str,object]:
+  result=self._ssh(resource,_activation_command(source_capsule_id))
+  if result.returncode!=0:raise GcloudCommandError("fixed first-publication activation failed")
+  try:payload=json.loads(result.stdout)
+  except json.JSONDecodeError as exc:raise GcloudCommandError("activation evidence was not JSON") from exc
+  if type(payload) is not dict or payload.get("source_capsule_id")!=source_capsule_id:raise GcloudCommandError("activation evidence identity mismatch")
+  if payload.get("scheduler_invoked") is not False or payload.get("execution_lease_acquired") is not False or payload.get("resume_invoked") is not False:raise GcloudCommandError("activation crossed execution boundary")
+  return payload
  def inspect_runtime(self,resource:GceResourceTuple)->dict[str,object]:
   result=self._ssh(resource,RUNTIME_INSPECTION_COMMAND)
   if result.returncode!=0:return _inspection_failure("needs-decision","inspection-command-failed",exit_code=result.returncode,stderr=result.stderr)
@@ -144,7 +161,7 @@ def _ingress_from_file(path:Path)->IssueCommentIngressResult:
  payload=json.loads(path.read_text(encoding="utf-8"))
  if type(payload) is not dict:raise ValueError("transport evidence must be an object")
  values={key:payload[key] for key in ("schema_version","status","reason","repository","issue_number","comment_id","actor","handoff_id_or_none","logical_trigger_id_or_none","run_attempt")}
- for key in ("dev_validation_branch_or_none","dev_validation_sha_or_none","dev_validation_id_or_none"):
+ for key in ("dev_validation_branch_or_none","dev_validation_sha_or_none","dev_validation_id_or_none","source_capsule_id_or_none"):
   values[key]=payload.get(key)
  return IssueCommentIngressResult(**values)
 def _policy()->OidcTrustPolicy:return OidcTrustPolicy(repository="Blummer92/agent-os",repository_owner="Blummer92",workflow_ref=WORKFLOW_REF,ref="refs/heads/main",audience=WIF_PROVIDER)
@@ -215,6 +232,14 @@ def execute_transport(ingress:IssueCommentIngressResult,*,claims:Mapping[str,obj
   runtime_inspection=adapter.inspect_runtime(RESOURCE)
   from .cloud_identity_inspection import collect_cloud_identity
   return {"runtime_inspection":runtime_inspection,"cloud_identity":collect_cloud_identity(_run)}
+ if ingress.reason=="accepted-first-publication-activation-envelope":
+  if ingress.status!="accepted" or ingress.issue_number is None or ingress.source_capsule_id_or_none is None:raise ValueError("activation requires accepted canonical source capsule evidence")
+  if ingress.handoff_id_or_none is not None or ingress.run_attempt!=1:raise ValueError("activation transport malformed")
+  if not _policy().accepts(claims):return {"first_publication_activation":_non_authorizing("blocked","claims-rejected")}
+  state=adapter.observe_state(RESOURCE)
+  if state is not VmState.RUNNING:return {"first_publication_activation":_non_authorizing("needs-decision","host-not-running")}
+  if not adapter.probe_activation_ready(RESOURCE):return {"first_publication_activation":_non_authorizing("needs-decision","activation-entrypoint-unavailable")}
+  return {"first_publication_activation":adapter.activate_first_publication(RESOURCE,source_capsule_id=ingress.source_capsule_id_or_none)}
  if ingress.reason=="accepted-discovery-envelope":
   if ingress.status!="accepted" or ingress.issue_number is None:raise ValueError("discovery requires accepted canonical issue evidence")
   if ingress.handoff_id_or_none is not None:raise ValueError("discovery must not carry a handoff identity")

@@ -11,6 +11,7 @@ from workflow_scheduler.governance.github_issue_comment_ingress import (
 REPOSITORY = "Blummer92/agent-os"
 ACTOR = "Blummer92"
 HANDOFF = "executor-handoff:" + "a" * 64
+SOURCE_CAPSULE = "pre-publication-evidence:" + "c" * 64
 DEV_SHA = "b" * 40
 DEV_TRIGGER = f"/agent-os dev-validate agent/1271-validation-profile-path-coverage {DEV_SHA} remote-validation-suite"
 
@@ -153,6 +154,35 @@ def test_duplicate_discovery_comments_share_logical_identity() -> None:
     second = event("/agent-os discover")
     second["comment"]["id"] = 9982
     assert admit(first).logical_trigger_id_or_none == admit(second).logical_trigger_id_or_none
+
+
+def test_exact_first_publication_activation_is_bounded_and_non_authorizing() -> None:
+    result = admit(event(f"/agent-os activate-first-publication {SOURCE_CAPSULE}"))
+    assert result.status == "accepted"
+    assert result.reason == "accepted-first-publication-activation-envelope"
+    assert result.source_capsule_id_or_none == SOURCE_CAPSULE
+    assert result.handoff_id_or_none is None
+    assert result.logical_trigger_id_or_none is not None
+    assert result.execution_authorized is False
+    assert result.scheduler_invoked is False
+    assert result.side_effects_performed is False
+
+
+def test_activation_rejects_extra_tokens_and_noncanonical_capsule() -> None:
+    extra = admit(event(f"/agent-os activate-first-publication {SOURCE_CAPSULE} --publish"))
+    bad = admit(event("/agent-os activate-first-publication pre-publication-evidence:abc"))
+    assert (extra.status, extra.reason) == ("ignored", "malformed-trigger")
+    assert (bad.status, bad.reason) == ("ignored", "malformed-trigger")
+
+
+def test_duplicate_activation_comments_converge_but_capsule_change_does_not() -> None:
+    first = admit(event(f"/agent-os activate-first-publication {SOURCE_CAPSULE}"))
+    duplicate_event = event(f"/agent-os activate-first-publication {SOURCE_CAPSULE}")
+    duplicate_event["comment"]["id"] = 9982
+    duplicate = admit(duplicate_event)
+    changed = admit(event(f"/agent-os activate-first-publication pre-publication-evidence:{'d' * 64}"))
+    assert first.logical_trigger_id_or_none == duplicate.logical_trigger_id_or_none
+    assert first.logical_trigger_id_or_none != changed.logical_trigger_id_or_none
 
 
 def test_exact_dev_validation_trigger_is_accepted_but_non_authorizing() -> None:
