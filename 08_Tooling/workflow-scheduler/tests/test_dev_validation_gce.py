@@ -48,6 +48,9 @@ def test_sheets_smoke_profile_does_not_enter_legacy_registry():
 def test_sheets_smoke_host_runner_is_fail_closed_without_credential_injector():
  source=live._HOST_RUNNER_SOURCE;assert 'SHEETS_SMOKE_ID="visual-asset-sheets-smoke"' in source;assert 'SHEETS_SMOKE_SCRIPT="08_Tooling/workflow-scheduler/src/workflow_scheduler/governance/visual_asset_sheets_smoke.py"' in source;assert "credential injector unavailable" in source;assert "values_get must remain unreachable" in source;assert "sheets-smoke-credential-injector-unavailable" in source;assert "GOOGLE_APPLICATION_CREDENTIALS" not in source;assert "access_token" not in source;assert "refresh_token" not in source;assert "client_secret" not in source
 
+def test_sheets_smoke_identity_uses_only_fixed_repository_import_roots():
+ source=live._HOST_RUNNER_SOURCE;assert 'SHEETS_SMOKE_IMPORT_ROOT="08_Tooling/workflow-scheduler/src"' in source;assert 'SHEETS_SMOKE_IMPORT_PRELUDE=' in source;assert "sys.path[:0]=[os.path.join(repo,path)" in source;assert 'SHEETS_SMOKE_PROBE=SHEETS_SMOKE_IMPORT_PRELUDE+' in source;assert 'env["PYTHONPATH"]' not in source;assert 'os.environ.get("PYTHONPATH"' not in source
+
 def test_sheets_smoke_host_runner_uses_fixed_target_and_no_drive_or_notion_surface():
  source=live._HOST_RUNNER_SOURCE;assert "1S3GNwqu0ehPXUA1j4FEksH1uEMKlxyEwAZWfIADPfpo" in source;assert "'Approved Use Review'!A1:N455" in source;assert 'payload.get("drive_access_performed")' not in source;assert "drive.google" not in source;assert "api.notion" not in source
 

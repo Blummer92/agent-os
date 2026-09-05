@@ -54,7 +54,8 @@ EIA_SCRIPT="08_Tooling/workflow-scheduler/src/workflow_scheduler/governance/eia_
 SHEETS_SMOKE_ID="visual-asset-sheets-smoke"
 SHEETS_SMOKE_SCRIPT="08_Tooling/workflow-scheduler/src/workflow_scheduler/governance/visual_asset_sheets_smoke.py"
 SHEETS_SMOKE_IMPORT_ROOT="08_Tooling/workflow-scheduler/src"
-SHEETS_SMOKE_PROBE="import json,sys;from workflow_scheduler.governance.visual_asset_sheets_smoke import build_request,execute_smoke;req=build_request(repository='Blummer92/agent-os',issue_number=734,source_sha=sys.argv[1],spreadsheet_id='1S3GNwqu0ehPXUA1j4FEksH1uEMKlxyEwAZWfIADPfpo',worksheet_name='Approved Use Review',a1_range=\"'Approved Use Review'!A1:N455\");inspect=lambda:(_ for _ in ()).throw(RuntimeError('credential injector unavailable'));read=lambda *_:(_ for _ in ()).throw(AssertionError('values_get must remain unreachable'));print(json.dumps(execute_smoke(req,inspect_effective_scopes=inspect,values_get=read),sort_keys=True,separators=(',',':')))"
+SHEETS_SMOKE_IMPORT_PRELUDE="import os,sys;repo=os.getcwd();sys.path[:0]=[os.path.join(repo,path) for path in ('08_Tooling/workflow-scheduler/src',)]"
+SHEETS_SMOKE_PROBE=SHEETS_SMOKE_IMPORT_PRELUDE+";import json;from workflow_scheduler.governance.visual_asset_sheets_smoke import build_request,execute_smoke;req=build_request(repository='Blummer92/agent-os',issue_number=734,source_sha=sys.argv[1],spreadsheet_id='1S3GNwqu0ehPXUA1j4FEksH1uEMKlxyEwAZWfIADPfpo',worksheet_name='Approved Use Review',a1_range=\"'Approved Use Review'!A1:N455\");inspect=lambda:(_ for _ in ()).throw(RuntimeError('credential injector unavailable'));read=lambda *_:(_ for _ in ()).throw(AssertionError('values_get must remain unreachable'));print(json.dumps(execute_smoke(req,inspect_effective_scopes=inspect,values_get=read),sort_keys=True,separators=(',',':')))"
 NODE="/usr/local/libexec/agent-os-dev-validation-node"
 NODE_MODULES="/opt/agent-os/dev-validation-node-runtime/node_modules"
 VITEST_CLI=NODE_MODULES+"/vitest/vitest.mjs"
@@ -188,7 +189,7 @@ try:
     if not os.path.isfile(HOST_PYTHON) or not os.access(HOST_PYTHON,os.X_OK): result["reason_codes"]=["sheets-smoke-host-python-unavailable"]
     elif not os.path.isfile(sheets_script): result["reason_codes"]=["validation-workspace-unavailable"]
     else:
-     env=fixed_env(root);env["PYTHONPATH"]=os.path.join(repo,SHEETS_SMOKE_IMPORT_ROOT)
+     env=fixed_env(root)
      try:record_sheets_smoke(result,run((HOST_PYTHON,"-c",SHEETS_SMOKE_PROBE,sha),cwd=repo,env=env,timeout=20))
      except subprocess.TimeoutExpired as exc:record_timeout(result,exc)
    elif not os.path.isfile(TEST_PYTHON) or not os.access(TEST_PYTHON,os.X_OK): result["reason_codes"]=["test-runtime-unavailable"]
