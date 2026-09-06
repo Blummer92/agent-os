@@ -81,15 +81,111 @@ def _reason_values(result: object) -> tuple[str, ...]:
     return tuple(sorted(set(values)))
 
 
-def _evidence(*, handoff_id: str, status: str, reasons: tuple[str, ...]) -> str:
+def _bounded_text(value: object) -> str | None:
+    return value if type(value) is str and 0 < len(value) <= 512 else None
+
+
+def _pilot_terminal_status(result: object) -> str:
+    status = _status_value(result)
+    if status == "completed":
+        return "succeeded"
+    if (
+        status == "failed"
+        and getattr(result, "validation_attempted", False) is True
+        and getattr(result, "validation_passed", False) is False
+    ):
+        return "validation-failed"
+    if status in {
+        "blocked",
+        "stale",
+        "cancelled",
+        "timed-out",
+        "failed",
+        "quarantined",
+        "needs-decision",
+    }:
+        return status
+    return "evidence-incomplete"
+
+
+def _host_evidence(
+    *,
+    handoff_id: str,
+    status: str,
+    reasons: tuple[str, ...],
+    scheduler_dispatch_count: int,
+    accepted: bool,
+    scheduler_invocation_id: str | None = None,
+    execution_id: str | None = None,
+    terminal_status: str | None = None,
+    termination_confirmed: bool = False,
+    lease_released: bool = False,
+    cleanup_complete: bool = False,
+    retained_lease: bool = False,
+    quarantined: bool = False,
+    evidence_refs: tuple[str, ...] = (),
+) -> str:
     payload = {
         "schema": SCHEMA,
         "handoff_id": handoff_id,
         "status": status,
         "reason_codes": list(reasons),
-        "scheduler_dispatch_count": 1 if status == "completed" else 0,
+        "scheduler_dispatch_count": scheduler_dispatch_count,
+        "accepted": accepted,
+        "scheduler_invocation_id": scheduler_invocation_id,
+        "execution_id": execution_id,
+        "terminal_status": terminal_status,
+        "termination_confirmed": termination_confirmed,
+        "lease_released": lease_released,
+        "cleanup_complete": cleanup_complete,
+        "retained_lease": retained_lease,
+        "quarantined": quarantined,
+        "evidence_refs": list(evidence_refs),
     }
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _blocked_evidence(*, handoff_id: str, status: str, reasons: tuple[str, ...]) -> str:
+    return _host_evidence(
+        handoff_id=handoff_id,
+        status=status,
+        reasons=reasons,
+        scheduler_dispatch_count=0,
+        accepted=False,
+        terminal_status="blocked-before-execution",
+        termination_confirmed=True,
+        lease_released=True,
+        cleanup_complete=True,
+    )
+
+
+def _pilot_evidence(*, handoff_id: str, result: object) -> str:
+    status = _status_value(result) or "needs-decision"
+    reasons = _reason_values(result)
+    lease_acquired = getattr(result, "lease_acquired", False) is True
+    lease_released = getattr(result, "lease_released", False) is True
+    workspace_created = getattr(result, "workspace_created", False) is True
+    filesystem_cleaned = getattr(result, "workspace_filesystem_cleaned", False) is True
+    metadata_cleaned = getattr(result, "workspace_metadata_cleaned", False) is True
+    result_id = _bounded_text(getattr(result, "result_id", None))
+    invocation_id = _bounded_text(getattr(result, "invocation_id", None))
+    evidence_refs = () if result_id is None else (result_id,)
+    return _host_evidence(
+        handoff_id=handoff_id,
+        status=status,
+        reasons=reasons,
+        scheduler_dispatch_count=1,
+        accepted=True,
+        scheduler_invocation_id=invocation_id,
+        execution_id=result_id,
+        terminal_status=_pilot_terminal_status(result),
+        termination_confirmed=getattr(result, "termination_confirmed", False) is True,
+        lease_released=(not lease_acquired) or lease_released,
+        cleanup_complete=(not workspace_created) or (filesystem_cleaned and metadata_cleaned),
+        retained_lease=lease_acquired and not lease_released,
+        quarantined=status == "quarantined",
+        evidence_refs=evidence_refs,
+    )
 
 
 def run_governed_resume(argv: Sequence[str], *, bindings: GovernedResumeBindings) -> str:
@@ -106,10 +202,14 @@ def run_governed_resume(argv: Sequence[str], *, bindings: GovernedResumeBindings
             if status in {"blocked", "stale", "needs-decision"}
             else "needs-decision"
         )
-        return _evidence(handoff_id=handoff_id, status=blocked_status, reasons=reasons)
+        return _blocked_evidence(
+            handoff_id=handoff_id,
+            status=blocked_status,
+            reasons=reasons,
+        )
 
-    bindings.dispatch(pilot_input)
-    return _evidence(handoff_id=handoff_id, status="completed", reasons=("admitted",))
+    pilot_result = bindings.dispatch(pilot_input)
+    return _pilot_evidence(handoff_id=handoff_id, result=pilot_result)
 
 
 def build_governed_resume_bindings(
