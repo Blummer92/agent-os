@@ -36,6 +36,8 @@ Coverage and adequacy records use deterministic IDs and keep execution, readines
 
 `scripts/agent_os_pr_remediation/merge_evidence_summary.py` projects already-owned validation, acceptance, and review evidence into one bounded provider-neutral summary for the current PR lineage. Source head, base, synthetic merge SHA, merge commit, tested SHAs, reviewed SHA, and metadata fingerprint remain distinct identities; stale evidence cannot silently satisfy exact-head claims.
 
+`scripts/agent_os_pr_remediation/repair_evidence_composition.py` adds the remaining #1540 repair-oriented presentation seam without introducing another evidence or provenance model. It consumes only typed canonical `CIEvidenceRecoveryPlan` evidence from #1611 and `AggregateFailureEvidence` from #1602, verifies repository/PR/exact-head/tested-SHA compatibility, and renders bounded sanitized actionable failure text, canonical provenance/applicability, diagnostic routing facts, and caller-supplied post-repair validation labels beside the existing #1540 summary. A diagnostic `next_path` remains a routing fact, not a repair recommendation. Stale/mismatched or authorizing inputs fail closed, and the projection performs no publication or external write.
+
 ## PR Review Remediation CLI
 
 ```bash
@@ -50,7 +52,7 @@ The CLI remains non-authorizing and composes existing remediation evidence only.
 
 ## GitHub Write Handoff
 
-Any separately authorized source change, thread mutation, PR update, merge, issue lifecycle action, credential change, workflow change, or external operation remains owned by the appropriate Agent OS owner. Review planning, findings, coverage, and adequacy evidence grant none of those authorities.
+Any separately authorized source change, thread mutation, PR update, merge, issue lifecycle action, credential change, workflow change, or external operation remains owned by the appropriate Agent OS owner. Review planning, findings, coverage, adequacy, and repair-evidence presentation grant none of those authorities.
 
 ## Validation
 
@@ -58,7 +60,7 @@ Focused tests:
 
 ```bash
 python -m pytest tests/agent_os_pr_remediation/test_review_evidence.py tests/agent_os_pr_remediation/test_review_attack_plan.py tests/agent_os_pr_remediation/test_review_findings.py tests/agent_os_pr_remediation/test_review_coverage.py
-python -m pytest tests/agent_os_pr_remediation/test_merge_evidence_summary.py
+python -m pytest tests/agent_os_pr_remediation/test_merge_evidence_summary.py tests/agent_os_pr_remediation/test_merge_evidence_summary_renderer.py tests/agent_os_pr_remediation/test_merge_evidence_summary_composition.py
 python -m pytest tests/agent_os_pr_remediation/test_ci_evidence_recovery.py
 python -m pytest tests/agent_os_pr_remediation
 ```
