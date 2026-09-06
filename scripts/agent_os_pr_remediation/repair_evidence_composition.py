@@ -141,7 +141,7 @@ def render_repair_evidence_summary(
     if repair_lines:
         lines.extend(("", "### Repair evidence", *repair_lines))
         lines.append(
-            "Routing and evidence facts only. They do not authorize or prescribe a repair, execution, readiness, merge, closure, production, or external write."
+            "Routing and evidence facts only. This repair evidence does not authorize or prescribe a repair, execution, readiness, merge, closure, production, or external write."
         )
 
     rendered = "\n".join(lines)
