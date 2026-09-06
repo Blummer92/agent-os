@@ -25,6 +25,27 @@ procedural and suggesting the request was not understood.
 4. Never describe a routing record, Notion handoff, readiness report, or
    authorization request as though it were the requested classroom artifact.
 
+## Required Visual Components
+
+When the requested classroom artifact explicitly requires, or its approved
+content specification declares, images, icons, diagrams, or other visual
+support, those visual slots are part of completion rather than optional polish.
+Before final delivery, the producing path must verify that every required
+visual slot is either populated by an approved visual path or explicitly
+reported as blocked.
+
+If a connected visual-asset source such as Visual Asset Sync is unavailable or
+not authorized, do not interpret that absence as permission to silently remove
+required visuals. Use an approved non-connected/generated/local fallback when
+current policy permits it. If no approved fallback is available, label the
+artifact as incomplete/preview, identify the visual-assets blocker, and do not
+claim classroom-ready completion.
+
+Render QA for a visually required artifact must verify both layout integrity
+and presence of the required visual components. A file whose required visual
+slots resolve to zero images/icons cannot receive a complete/classroom-ready
+claim.
+
 ## Blocked-Production Behavior
 
 When production is blocked, show a clearly labeled preview or content
@@ -57,4 +78,4 @@ the artifact per the Required Order above.
 
 ## Version
 
-0.1.0
+0.1.1
