@@ -66,6 +66,7 @@ DOMAIN_RULES: tuple[tuple[str, frozenset[str], tuple[str, ...]], ...] = (
                 "lifecycle_reconciliation",
                 "merge_authorization",
                 "planning_binding",
+                "typed_subject_approval",
             }
         ),
         (),
