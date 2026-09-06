@@ -56,6 +56,12 @@ _AUTHORITY_FIELDS = frozenset(
 def validate_live_operation_subject(value: object) -> ValidationResult:
     """Validate one exact approval-semantic live-operation subject without I/O."""
     try:
+        # Classify closed-schema top-level fields before generic JSON normalization so
+        # forbidden invocation/audit keys remain contract-unknown rather than being
+        # reclassified by the shared secret-like-key firewall. Nested secret-like
+        # keys still fail through the shared normalization path.
+        if type(value) is dict and all(type(key) is str for key in value):
+            validate_exact_fields(value, _TOP_LEVEL_FIELDS, "live-operation subject")
         data = validate_and_normalize_json(value, max_bytes=MAX_INPUT_BYTES)
         if type(data) is not dict:
             raise ContractValidationError("handoff-wrong-type", "live-operation subject must be a mapping")
