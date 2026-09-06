@@ -1,7 +1,8 @@
-"""Regression contract for #1901 failed-repair CKR6 consumer wiring."""
+"""Regression contract for #1901/#1988 failed-repair CKR6 consumer wiring."""
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+AGENTS = ROOT / "AGENTS.md"
 COMMON = ROOT / "02_Agent_Overlays/_common-overlay-rules.md"
 ORCHESTRATOR = ROOT / "02_Agent_Overlays/chatgpt-orchestrator.md"
 STANDARD = ROOT / "01_Shared_Standards/global-engineering/failed-repair-lesson-reentry.md"
@@ -17,6 +18,21 @@ def test_orchestrator_inherits_failed_repair_reentry_standard() -> None:
     common = normalized(COMMON)
     assert "See `_common-overlay-rules.md`" in orchestrator
     assert "01_Shared_Standards/global-engineering/failed-repair-lesson-reentry.md" in common
+
+
+def test_agents_entrypoint_triggers_retry_specific_reentry_after_each_failure() -> None:
+    agents = normalized(AGENTS)
+    for phrase in (
+        "implementation or PR repair attempt remains red or otherwise fails",
+        "next repair hypothesis or repository mutation is gated by `01_Shared_Standards/global-engineering/failed-repair-lesson-reentry.md`",
+        "Preserve the failed attempt",
+        "increase diagnostic resolution",
+        "reacquire mutable GitHub state before continuing",
+        "Every newly failed attempt re-triggers this step",
+        "an earlier lesson outcome cannot satisfy a later failed attempt",
+        "Do not substitute the ordinary one-time coding preflight for this retry transition",
+    ):
+        assert phrase in agents
 
 
 def test_failed_repair_requires_existing_ckr6_activation_before_mutation() -> None:
