@@ -51,11 +51,6 @@ from .image_intent import (
     validate_image_intent,
     validate_imported_asset_context,
 )
-from .live_operation_subject import (
-    CONTRACT_ID as LIVE_OPERATION_SUBJECT_CONTRACT_ID,
-    SUBJECT_ID_PREFIX as LIVE_OPERATION_SUBJECT_ID_PREFIX,
-    validate_live_operation_subject,
-)
 from .request_interpretation import (
     ACTIONS as REQUEST_ACTIONS,
     CONTRACT_VERSION as REQUEST_INTERPRETATION_VERSION,
@@ -80,8 +75,6 @@ __all__ = [
     "FORBIDDEN_IMPORT_PREFIXES",
     "IMAGE_INTENT_CONTRACT_ID",
     "IMPORTED_ASSET_CONTEXT_CONTRACT_ID",
-    "LIVE_OPERATION_SUBJECT_CONTRACT_ID",
-    "LIVE_OPERATION_SUBJECT_ID_PREFIX",
     "MAX_BLOCKERS",
     "MAX_DEPENDENCY_KEYS",
     "MAX_DETAIL_LENGTH",
@@ -116,7 +109,6 @@ __all__ = [
     "validate_experiment_evidence",
     "validate_image_intent",
     "validate_imported_asset_context",
-    "validate_live_operation_subject",
     "validate_reason_code",
     "validate_request_interpretation",
     "validate_revision",
