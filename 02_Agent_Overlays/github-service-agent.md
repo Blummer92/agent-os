@@ -70,6 +70,12 @@ Only after canonical post-create verification succeeds, invoke the existing #102
 Keep canonical readback evidence separate from creation-response evidence, and keep Draft-PR creation evidence separate from label-reconciliation evidence. Stale, blocked, failed, drifted, terminal, or nonconvergent reconciliation is explicit and fail-closed and grants no Ready-for-Review, merge, issue-closure, review-resolution, protected-setting, production, or external-system authority. User-facing reports state and link the verified canonical current PR state rather than repeating a stale creation response.
 This follow-up is connector/operator driven; do not replace it with a GitHub Actions workflow, webhook, poller, daemon, background worker, permission expansion, or repository-local PR-creation subsystem.
 
+## Implementation-Issue Post-Create Classification And Continuation
+After every successful authorized creation of an Agent OS implementation handoff, treat the creation response as provisional until canonical issue readback proves the issue identity, body, state, and managed classification labels. Prefer the existing structured issue-create path, which supplies the validated `proposed_labels` set at creation and verifies exact label readback. Do not report an implementation-ready handoff as complete while a canonical managed owner/readiness/type projection that was part of the validated creation plan is missing.
+If canonical readback shows a system-created mechanical classification omission, reuse the existing #1962 issue-label reconciler rather than inventing a second readiness or label writer. Reconcile only labels supported by canonical issue metadata, require the applicable label-write authority, preserve unmanaged labels, reread to prove convergence, and fail closed on ambiguous owner/readiness, stale issue state, unavailable labels, provider failure, or readback mismatch. Never infer `status:ready` from title, bug type, age, lack of blockers, or the mere fact that ChatGPT created the issue.
+When a still-current direct repository-owner `work on #<issue>` instruction reaches an otherwise eligible Tier 0/1 issue whose only defect is that system-created mechanical readiness/classification state, the reconciliation is subordinate continuation work. After convergence to canonical `status:ready`, carry that same instruction forward into the existing Safe Implementation Lane without asking for a second implementation approval. Do not carry it across `status:blocked`, `status:needs-decision`, changed scope/ownership/source of truth, excluded surfaces, or active/ambiguous execution.
+Keep issue-creation evidence, canonical readback evidence, label-reconciliation evidence, and implementation authorization evidence distinct. Label convergence is a projection and never creates implementation, merge, closure, protected-setting, production, credential, or external-write authority.
+
 ## Repository-State Verification
 When a local checkout is available, use `scripts/verify-repo-state.sh`; usage is
 in `scripts/verify-repo-state.md`, and stdout follows
@@ -112,9 +118,10 @@ existing shared standard, or environment-assigned non-protected branch that
 satisfies the Safe Implementation Lane.
 
 ## Version
-0.8.0
+0.9.0
 
 ## Changelog
+- 0.9.0 requires canonical post-create issue classification/readiness verification for implementation handoffs, reuses #1962 for system-created mechanical label omissions, and carries the same current `work on` instruction forward after purely mechanical readiness convergence without synthesizing new authority (#1885).
 - 0.8.0 requires canonical post-create PR identity/state/discoverability verification before success reporting or managed-label mutation, fails closed on Draft/Ready drift or unauthorized merged state, and forbids duplicate-create visibility diagnostics (#1793).
 - #1324 consolidates all ordinary repository engineering under this canonical role while retiring Integration Manager and Google Workspace Automation Engineer as executable technical agents; shared standards preserve their routing/domain constraints without transferring external-write authority.
 - 0.7.0 consumes the canonical Terminal Fast Lane request interpretation as a bounded owner-decision input for eligible Tier 0/1 `no-external-write` work and records any merge/closure authority through the existing content-bound authorization contracts; `IssueOperationalState`, `operating_mode.py`, exact-head, merge/review, closure, and excluded-surface gates remain authoritative, with no Fast-Lane-specific parser or second authority system (#1309).

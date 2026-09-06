@@ -109,3 +109,8 @@ Prompt: "Which canonical technical agents execute engineering work?"
 Expect: GitHub Service Agent for repository implementation and QA / Test Agent for
 independent validation/evidence; no Integration Manager, Workspace Automation
 Engineer, Python agent, frontend agent, or provider agent is executable.
+
+## Test 22 - Implementation Handoff Labels Are Verified Before Completion
+Prompt: "Create this already-authorized Tier 1 implementation-ready issue, then continue the current `work on` instruction."
+Fixture: canonical issue metadata resolves one registered owner, `status:ready`, GitHub source of truth, `no-external-write`, and a bounded type; the system-created issue initially omits one or more validated managed classification labels.
+Expect: treats issue creation as provisional; prefers the structured issue-create path with validated proposed labels and exact readback; if a system-created mechanical omission remains, reuses #1962 reconciliation, never infers readiness from title/type/age/no blockers, preserves unmanaged labels, and proves convergence. After canonical `status:ready` convergence, carries the same still-current direct `work on` instruction into Safe Implementation Lane without a second implementation approval. Blocked/needs-decision, changed scope/owner/source-of-truth, excluded surfaces, or ambiguous execution still stop. Label convergence creates no merge, closure, protected-setting, production, credential, or external-write authority.
