@@ -7,8 +7,9 @@ from agent_os_execution_service import mcp_server
 
 def test_mcp_server_exposes_only_bounded_agent_os_tools() -> None:
     source = inspect.getsource(mcp_server)
-    assert source.count("@mcp.tool()") == 2
+    assert source.count("@mcp.tool()") == 3
     assert "plan_agent_os_continuation_tool" in source
+    assert "activate_agent_os_failed_repair_tool" in source
     assert "classify_agent_os_continuation_tool" in source
 
 
