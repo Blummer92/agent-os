@@ -1,8 +1,8 @@
 """Read-only GitHub-backed reacquisition of current execution authorization.
 
 GitHub transport is injected. Only exact repository-owner-authored machine
-records can produce the existing ExecutionAuthorizationEvidence model. This
-module performs no GitHub/network/runtime/write operation itself.
+records can produce execution-authorization evidence. This module performs no
+GitHub/network/runtime/write operation itself.
 """
 from __future__ import annotations
 
@@ -526,6 +526,450 @@ def reacquire_execution_authorization(
             expected_authorization_id=expected_authorization_id,
         )
     return _result(
+        ExecutionAuthorizationSourceStatus.CURRENT,
+        (ExecutionAuthorizationSourceReason.CURRENT,),
+        record=current,
+        expected_authorization_id=expected_authorization_id,
+    )
+
+
+# Additive live-operation successor for #1986. Historical v1 remains untouched.
+LIVE_OPERATION_EXECUTION_AUTHORIZATION_SCHEMA_VERSION = "2.0"
+LIVE_OPERATION_EXECUTION_AUTHORIZATION_COMMENT_MARKER = (
+    "agent-os-execution-authorization/v2"
+)
+INSTRUCTIONAL_MATERIALS_LIVE_OPERATION = "instructional-materials-live-operation"
+_LIVE_RECORD_KEYS = frozenset(
+    {
+        "schema_version",
+        "issue_number",
+        "authorizer_id",
+        "repository",
+        "authorized_subject_id",
+        "authorized_approval_id",
+        "authorized_approval_revision",
+        "authorized_projection_id",
+        "authorized_run_id",
+        "authorized_task_id",
+        "authorized_attempt_number",
+        "authorized_operation",
+        "authorized_at",
+        "expires_at",
+        "execution_authorized",
+        "authorization_id",
+    }
+)
+
+
+def _nonnegative_int(value: object, name: str) -> int:
+    if type(value) is not int or value < 0:
+        raise TypeError(f"{name} must be a non-negative exact integer")
+    return value
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LiveOperationExecutionAuthorizationEvidence:
+    authorization_id: str
+    issue_number: int
+    authorizer_id: str
+    repository: str
+    authorized_subject_id: str
+    authorized_approval_id: str
+    authorized_approval_revision: str
+    authorized_projection_id: str
+    authorized_run_id: str
+    authorized_task_id: str
+    authorized_attempt_number: int
+    authorized_operation: str
+    authorized_at: str
+    expires_at: str
+    execution_authorized: bool
+    side_effects_performed: Literal[False] = field(default=False, init=False)
+
+    def __post_init__(self) -> None:
+        semantic = {
+            "issue_number": self.issue_number,
+            "authorizer_id": self.authorizer_id,
+            "repository": self.repository,
+            "authorized_subject_id": self.authorized_subject_id,
+            "authorized_approval_id": self.authorized_approval_id,
+            "authorized_approval_revision": self.authorized_approval_revision,
+            "authorized_projection_id": self.authorized_projection_id,
+            "authorized_run_id": self.authorized_run_id,
+            "authorized_task_id": self.authorized_task_id,
+            "authorized_attempt_number": self.authorized_attempt_number,
+            "authorized_operation": self.authorized_operation,
+            "authorized_at": self.authorized_at,
+            "expires_at": self.expires_at,
+            "execution_authorized": self.execution_authorized,
+        }
+        expected_id = live_operation_execution_authorization_id(**semantic)
+        if (
+            type(self.authorization_id) is not str
+            or not _AUTHORIZATION_ID_RE.fullmatch(self.authorization_id)
+            or self.authorization_id != expected_id
+        ):
+            raise ValueError("authorization_id does not match live authorization content")
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _ParsedLiveAuthorizationRecord:
+    evidence: LiveOperationExecutionAuthorizationEvidence
+    source_comment_id: int
+    source_created_at: str
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LiveOperationExecutionAuthorizationReadResult:
+    status: ExecutionAuthorizationSourceStatus
+    reason_codes: tuple[ExecutionAuthorizationSourceReason, ...]
+    evidence: LiveOperationExecutionAuthorizationEvidence | None
+    source_comment_id: int | None
+    current_authorization_id: str | None
+    expected_authorization_id: str | None
+    side_effects_performed: Literal[False] = field(default=False, init=False)
+
+    def __post_init__(self) -> None:
+        if type(self.status) is not ExecutionAuthorizationSourceStatus:
+            raise TypeError("status must be exact ExecutionAuthorizationSourceStatus")
+        if type(self.reason_codes) is not tuple or not self.reason_codes:
+            raise ValueError("reason_codes must be a non-empty exact tuple")
+        if any(
+            type(item) is not ExecutionAuthorizationSourceReason
+            for item in self.reason_codes
+        ):
+            raise TypeError("reason_codes contain unsupported values")
+        expected = tuple(sorted(set(self.reason_codes), key=lambda item: item.value))
+        if self.reason_codes != expected:
+            raise ValueError("reason_codes must be sorted and unique")
+        if self.evidence is not None and type(self.evidence) is not LiveOperationExecutionAuthorizationEvidence:
+            raise TypeError("evidence must be exact live-operation authorization evidence or None")
+        if self.status is ExecutionAuthorizationSourceStatus.CURRENT and (
+            self.reason_codes != (ExecutionAuthorizationSourceReason.CURRENT,)
+            or self.evidence is None
+            or not self.evidence.execution_authorized
+        ):
+            raise ValueError("current result requires current authorized evidence")
+
+
+def _validated_live_semantic_values(**values: object) -> dict[str, object]:
+    expected = set(_LIVE_RECORD_KEYS) - {"authorization_id", "schema_version"}
+    if set(values) != expected:
+        raise ValueError(
+            "live authorization semantic fields are incomplete or contain unknown fields"
+        )
+    issue_number = _positive_int(values["issue_number"], "issue_number")
+    authorizer_id = _identifier(values["authorizer_id"], "authorizer_id")
+    repository = _repository(values["repository"])
+    subject_id = _identifier(values["authorized_subject_id"], "authorized_subject_id")
+    approval_id = _identifier(values["authorized_approval_id"], "authorized_approval_id")
+    approval_revision = _identifier(
+        values["authorized_approval_revision"], "authorized_approval_revision"
+    )
+    projection_id = _identifier(
+        values["authorized_projection_id"], "authorized_projection_id"
+    )
+    run_id = _identifier(values["authorized_run_id"], "authorized_run_id")
+    task_id = _identifier(values["authorized_task_id"], "authorized_task_id")
+    attempt_number = _nonnegative_int(
+        values["authorized_attempt_number"], "authorized_attempt_number"
+    )
+    operation = _identifier(values["authorized_operation"], "authorized_operation")
+    if operation != INSTRUCTIONAL_MATERIALS_LIVE_OPERATION:
+        raise ValueError("unsupported live authorization operation")
+    authorized_at = _text(values["authorized_at"], "authorized_at")
+    expires_at = _text(values["expires_at"], "expires_at")
+    if _timestamp(authorized_at, "authorized_at") >= _timestamp(expires_at, "expires_at"):
+        raise ValueError("authorization window is empty")
+    execution_authorized = values["execution_authorized"]
+    if type(execution_authorized) is not bool:
+        raise TypeError("execution_authorized must be an exact boolean")
+    return {
+        "schema_version": LIVE_OPERATION_EXECUTION_AUTHORIZATION_SCHEMA_VERSION,
+        "issue_number": issue_number,
+        "authorizer_id": authorizer_id,
+        "repository": repository,
+        "authorized_subject_id": subject_id,
+        "authorized_approval_id": approval_id,
+        "authorized_approval_revision": approval_revision,
+        "authorized_projection_id": projection_id,
+        "authorized_run_id": run_id,
+        "authorized_task_id": task_id,
+        "authorized_attempt_number": attempt_number,
+        "authorized_operation": operation,
+        "authorized_at": authorized_at,
+        "expires_at": expires_at,
+        "execution_authorized": execution_authorized,
+    }
+
+
+def live_operation_execution_authorization_id(**values: object) -> str:
+    payload = _validated_live_semantic_values(**values)
+    digest = hashlib.sha256(
+        b"agent-os-execution-authorization:v2\0"
+        + _canonical_json(payload).encode("utf-8")
+    ).hexdigest()
+    return f"execution-authorization:{digest}"
+
+
+def serialize_live_operation_execution_authorization_comment(**values: object) -> str:
+    payload = _validated_live_semantic_values(**values)
+    semantic = {key: value for key, value in payload.items() if key != "schema_version"}
+    full = {
+        **payload,
+        "authorization_id": live_operation_execution_authorization_id(**semantic),
+    }
+    return LIVE_OPERATION_EXECUTION_AUTHORIZATION_COMMENT_MARKER + "\n" + _canonical_json(full)
+
+
+def _parse_trusted_live_comment(
+    comment: ExecutionAuthorizationCommentSnapshot,
+) -> _ParsedLiveAuthorizationRecord | None:
+    prefix = LIVE_OPERATION_EXECUTION_AUTHORIZATION_COMMENT_MARKER + "\n"
+    if not comment.body.startswith(prefix):
+        return None
+    if comment.body.count("\n") != 1:
+        raise ValueError("trusted live authorization marker must contain exactly two lines")
+    serialized = comment.body[len(prefix) :]
+    payload = json.loads(serialized)
+    if type(payload) is not dict or set(payload) != _LIVE_RECORD_KEYS:
+        raise ValueError("trusted live authorization payload fields are invalid")
+    if _canonical_json(payload) != serialized:
+        raise ValueError("trusted live authorization payload is not canonical compact JSON")
+    if payload["schema_version"] != LIVE_OPERATION_EXECUTION_AUTHORIZATION_SCHEMA_VERSION:
+        raise ValueError("unsupported live authorization source schema")
+    semantic = {
+        key: payload[key]
+        for key in payload
+        if key not in {"authorization_id", "schema_version"}
+    }
+    validated = _validated_live_semantic_values(**semantic)
+    identity_values = {
+        key: value for key, value in validated.items() if key != "schema_version"
+    }
+    expected_id = live_operation_execution_authorization_id(**identity_values)
+    supplied_id = payload["authorization_id"]
+    if (
+        type(supplied_id) is not str
+        or not _AUTHORIZATION_ID_RE.fullmatch(supplied_id)
+        or supplied_id != expected_id
+    ):
+        raise ValueError("authorization_id does not match live authorization content")
+    evidence = LiveOperationExecutionAuthorizationEvidence(
+        authorization_id=expected_id,
+        issue_number=validated["issue_number"],
+        authorizer_id=validated["authorizer_id"],
+        repository=validated["repository"],
+        authorized_subject_id=validated["authorized_subject_id"],
+        authorized_approval_id=validated["authorized_approval_id"],
+        authorized_approval_revision=validated["authorized_approval_revision"],
+        authorized_projection_id=validated["authorized_projection_id"],
+        authorized_run_id=validated["authorized_run_id"],
+        authorized_task_id=validated["authorized_task_id"],
+        authorized_attempt_number=validated["authorized_attempt_number"],
+        authorized_operation=validated["authorized_operation"],
+        authorized_at=validated["authorized_at"],
+        expires_at=validated["expires_at"],
+        execution_authorized=validated["execution_authorized"],
+    )
+    return _ParsedLiveAuthorizationRecord(
+        evidence=evidence,
+        source_comment_id=comment.comment_id,
+        source_created_at=comment.created_at,
+    )
+
+
+def _live_result(
+    status: ExecutionAuthorizationSourceStatus,
+    reasons: tuple[ExecutionAuthorizationSourceReason, ...],
+    *,
+    record: _ParsedLiveAuthorizationRecord | None = None,
+    expected_authorization_id: str | None = None,
+) -> LiveOperationExecutionAuthorizationReadResult:
+    return LiveOperationExecutionAuthorizationReadResult(
+        status=status,
+        reason_codes=tuple(sorted(set(reasons), key=lambda item: item.value)),
+        evidence=None if record is None else record.evidence,
+        source_comment_id=None if record is None else record.source_comment_id,
+        current_authorization_id=(
+            None if record is None else record.evidence.authorization_id
+        ),
+        expected_authorization_id=expected_authorization_id,
+    )
+
+
+def reacquire_live_operation_execution_authorization(
+    *,
+    transport: ExecutionAuthorizationSourceTransport,
+    repository: str,
+    issue_number: int,
+    expected_subject_id: str,
+    expected_approval_id: str,
+    expected_approval_revision: str,
+    expected_projection_id: str,
+    expected_run_id: str,
+    expected_task_id: str,
+    expected_attempt_number: int,
+    expected_operation: str,
+    evaluated_at: str,
+    expected_authorization_id: str | None = None,
+) -> LiveOperationExecutionAuthorizationReadResult:
+    repository = _repository(repository)
+    issue_number = _positive_int(issue_number, "issue_number")
+    for value, name in (
+        (expected_subject_id, "expected_subject_id"),
+        (expected_approval_id, "expected_approval_id"),
+        (expected_approval_revision, "expected_approval_revision"),
+        (expected_projection_id, "expected_projection_id"),
+        (expected_run_id, "expected_run_id"),
+        (expected_task_id, "expected_task_id"),
+        (expected_operation, "expected_operation"),
+    ):
+        _identifier(value, name)
+    expected_attempt_number = _nonnegative_int(
+        expected_attempt_number, "expected_attempt_number"
+    )
+    if expected_operation != INSTRUCTIONAL_MATERIALS_LIVE_OPERATION:
+        raise ValueError("unsupported live authorization operation")
+    evaluated = _timestamp(evaluated_at, "evaluated_at")
+    if expected_authorization_id is not None and (
+        type(expected_authorization_id) is not str
+        or not _AUTHORIZATION_ID_RE.fullmatch(expected_authorization_id)
+    ):
+        raise ValueError("expected_authorization_id is malformed")
+    if not isinstance(transport, ExecutionAuthorizationSourceTransport):
+        raise TypeError("transport must satisfy ExecutionAuthorizationSourceTransport")
+    try:
+        snapshot = transport.read_authorization_source(repository, issue_number)
+    except (TypeError, ValueError, RuntimeError, OSError):
+        return _live_result(
+            ExecutionAuthorizationSourceStatus.NEEDS_DECISION,
+            (ExecutionAuthorizationSourceReason.SOURCE_UNAVAILABLE,),
+            expected_authorization_id=expected_authorization_id,
+        )
+    if type(snapshot) is not ExecutionAuthorizationSourceSnapshot:
+        return _live_result(
+            ExecutionAuthorizationSourceStatus.NEEDS_DECISION,
+            (ExecutionAuthorizationSourceReason.SOURCE_UNAVAILABLE,),
+            expected_authorization_id=expected_authorization_id,
+        )
+    if (
+        snapshot.repository.casefold() != repository.casefold()
+        or snapshot.issue_number != issue_number
+    ):
+        return _live_result(
+            ExecutionAuthorizationSourceStatus.NEEDS_DECISION,
+            (ExecutionAuthorizationSourceReason.SOURCE_AMBIGUOUS,),
+            expected_authorization_id=expected_authorization_id,
+        )
+    if snapshot.owner_type != "User":
+        return _live_result(
+            ExecutionAuthorizationSourceStatus.NEEDS_DECISION,
+            (ExecutionAuthorizationSourceReason.OWNER_UNSUPPORTED,),
+            expected_authorization_id=expected_authorization_id,
+        )
+    if not snapshot.comments_complete:
+        return _live_result(
+            ExecutionAuthorizationSourceStatus.NEEDS_DECISION,
+            (ExecutionAuthorizationSourceReason.SOURCE_INCOMPLETE,),
+            expected_authorization_id=expected_authorization_id,
+        )
+    comment_ids = [item.comment_id for item in snapshot.comments]
+    if len(comment_ids) != len(set(comment_ids)):
+        return _live_result(
+            ExecutionAuthorizationSourceStatus.NEEDS_DECISION,
+            (ExecutionAuthorizationSourceReason.SOURCE_AMBIGUOUS,),
+            expected_authorization_id=expected_authorization_id,
+        )
+
+    records: list[_ParsedLiveAuthorizationRecord] = []
+    for comment in sorted(snapshot.comments, key=lambda item: (item.created_at, item.comment_id)):
+        if comment.author_login.casefold() != snapshot.owner_login.casefold():
+            continue
+        try:
+            record = _parse_trusted_live_comment(comment)
+        except (TypeError, ValueError, json.JSONDecodeError, RecursionError):
+            return _live_result(
+                ExecutionAuthorizationSourceStatus.NEEDS_DECISION,
+                (ExecutionAuthorizationSourceReason.TRUSTED_RECORD_MALFORMED,),
+                expected_authorization_id=expected_authorization_id,
+            )
+        if record is None:
+            continue
+        evidence = record.evidence
+        if evidence.authorizer_id.casefold() != snapshot.owner_login.casefold():
+            return _live_result(
+                ExecutionAuthorizationSourceStatus.NEEDS_DECISION,
+                (ExecutionAuthorizationSourceReason.TRUSTED_RECORD_MALFORMED,),
+                expected_authorization_id=expected_authorization_id,
+            )
+        if (
+            evidence.repository.casefold() == repository.casefold()
+            and evidence.issue_number == issue_number
+            and evidence.authorized_run_id == expected_run_id
+            and evidence.authorized_task_id == expected_task_id
+            and evidence.authorized_attempt_number == expected_attempt_number
+            and evidence.authorized_operation == expected_operation
+        ):
+            records.append(record)
+
+    if not records:
+        return _live_result(
+            ExecutionAuthorizationSourceStatus.BLOCKED,
+            (ExecutionAuthorizationSourceReason.AUTHORIZATION_MISSING,),
+            expected_authorization_id=expected_authorization_id,
+        )
+    current = records[-1]
+    evidence = current.evidence
+    if not evidence.execution_authorized:
+        return _live_result(
+            ExecutionAuthorizationSourceStatus.BLOCKED,
+            (ExecutionAuthorizationSourceReason.AUTHORIZATION_REVOKED,),
+            record=current,
+            expected_authorization_id=expected_authorization_id,
+        )
+    start = _timestamp(evidence.authorized_at, "authorized_at")
+    expires = _timestamp(evidence.expires_at, "expires_at")
+    if evaluated < start:
+        return _live_result(
+            ExecutionAuthorizationSourceStatus.STALE,
+            (ExecutionAuthorizationSourceReason.AUTHORIZATION_NOT_YET_ACTIVE,),
+            record=current,
+            expected_authorization_id=expected_authorization_id,
+        )
+    if evaluated >= expires:
+        return _live_result(
+            ExecutionAuthorizationSourceStatus.STALE,
+            (ExecutionAuthorizationSourceReason.AUTHORIZATION_EXPIRED,),
+            record=current,
+            expected_authorization_id=expected_authorization_id,
+        )
+    if not all(
+        (
+            evidence.authorized_subject_id == expected_subject_id,
+            evidence.authorized_approval_id == expected_approval_id,
+            evidence.authorized_approval_revision == expected_approval_revision,
+            evidence.authorized_projection_id == expected_projection_id,
+            evidence.authorizer_id.casefold() == snapshot.owner_login.casefold(),
+        )
+    ):
+        return _live_result(
+            ExecutionAuthorizationSourceStatus.STALE,
+            (ExecutionAuthorizationSourceReason.BINDING_MISMATCH,),
+            record=current,
+            expected_authorization_id=expected_authorization_id,
+        )
+    if (
+        expected_authorization_id is not None
+        and evidence.authorization_id != expected_authorization_id
+    ):
+        return _live_result(
+            ExecutionAuthorizationSourceStatus.STALE,
+            (ExecutionAuthorizationSourceReason.AUTHORIZATION_SUPERSEDED,),
+            record=current,
+            expected_authorization_id=expected_authorization_id,
+        )
+    return _live_result(
         ExecutionAuthorizationSourceStatus.CURRENT,
         (ExecutionAuthorizationSourceReason.CURRENT,),
         record=current,
