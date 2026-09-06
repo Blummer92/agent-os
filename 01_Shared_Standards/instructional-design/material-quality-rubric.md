@@ -28,6 +28,28 @@ weighting, vocabulary integration, or digital media throughline.
 | Teacher revision burden | Requires only minor teacher edits. |
 | Compute efficiency | Passed gates first and reused approved assets. |
 
+## Rendered Classroom Review Gate
+
+Student-facing slide decks require a rendered-review checkpoint before a
+classroom-ready claim. Successful PPTX/source generation or structural
+validation alone is not sufficient evidence of rendered quality.
+
+The rendered review must inspect, at minimum:
+
+- occlusion and opaque placeholder/container artifacts;
+- contrast and readability of required instructional text;
+- clipping, overflow, and unintended region collisions;
+- instructional visual hierarchy and role-appropriate scale;
+- a phone-preview/readability perspective; and
+- a projected-classroom perspective when the deck is intended for projection.
+
+Reuse mechanical artifact-structure/layout QA for facts it can prove. Keep
+those results separate from visual judgments that require rendered inspection.
+If the available evidence cannot prove a rendered judgment, return
+`manual-review-required` for that dimension rather than a classroom-ready pass.
+A structurally valid deck with visible occlusion, clipping, unreadable contrast,
+or broken hierarchy cannot satisfy this gate.
+
 ## Quick QA Heuristics
 
 Legacy `agent_tools/material_qa.py` checks are advisory heuristics, not a full rubric.
@@ -56,10 +78,13 @@ or a gate violation is discovered.
 
 ## Version
 
-0.3.0
+0.3.1
 
 ## Changelog
 
+- 0.3.1 added the rendered classroom review gate for phone/projector quality
+  and explicit separation of mechanical evidence from manual visual judgment
+  (#1835).
 - 0.3.0 added the Rubric completeness & weighting row (#822) as a required
   ship gate.
 - 0.2.0 initial rubric, QA heuristics, feedback, and revision rules.
