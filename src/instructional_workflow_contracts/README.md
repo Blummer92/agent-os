@@ -2,6 +2,16 @@
 
 MaterialRequirement remains the sole material-input contract.
 
+## Governed live-operation subject
+
+`validate_live_operation_subject` validates the additive `instructional-materials-live-operation-subject-v1` contract selected by #1974. The contract is a pure, provider-neutral approval-semantic description of one exact intended Materials Coach live operation. It performs no retrieval, execution, persistence, Scheduler dispatch, credential access, or Google API call and grants no approval, production, publication, execution, or external-write authority.
+
+The deterministic `instructional-live-operation-subject:<sha256>` identity binds the exact source identity/revision/content fingerprint; validated MaterialRequirement version/ID/revision/fingerprint; Slides and Docs template IDs; target Drive folder ID; idempotency key; output names; operation-shape fingerprint; required gate-evidence identities; and applicable visual/reuse evidence identities. Set-like evidence IDs are bounded, unique, and canonically sorted.
+
+Invocation/run IDs, attempt/correlation/session IDs, executor or credential identities, provider response IDs, produced artifact IDs/URLs/revisions, receipts, and reconciliation diagnostics are not fields in this closed contract. Unknown fields fail closed. These runtime/audit identities belong to the separate exact-invocation execution/live-write authorization boundary and cannot change or manufacture human approval semantics.
+
+The validator reconstructs the supplied MaterialRequirement through the existing canonical validator and requires its declared version, ID, revision, and fingerprint to match exactly. A v2 MaterialRequirement whose governed visual direction is `visuals-required` must carry at least one visual/reuse evidence identity; the contract never infers visual requirements from prose.
+
 ## Version compatibility
 
 - curriculum-material-requirement-v1 keeps its existing exact shape and contains no governed visual-direction evidence.
@@ -88,5 +98,7 @@ All retrieval, generation, production, publication, approval, readiness, and ext
 Issue #849 may consume only a validated `visuals-required` plan. A `no-visual-needed` or `manual-review-required` plan must not trigger Visual Asset Library retrieval. The plan and filtered candidate set remain advisory and do not authorize selection, use, generation, or publication of an image.
 
 ## Rollback
+
+Rollback for the live-operation subject is removal of the additive validator, tests, exports, and this documentation section. It performs no external writes and requires no provider cleanup or migration.
 
 Rollback for the visual eligibility lane is removal or reversion of the additive planner-consumer modules, focused fixtures and tests, and documentation sections. `MaterialRequirement`, `VisualNeedsPlan`, `ArtifactManifest`, and Visual Asset Sync remain independently valid and require no external cleanup or migration.
