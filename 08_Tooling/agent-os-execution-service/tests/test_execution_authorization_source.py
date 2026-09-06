@@ -8,12 +8,17 @@ import pytest
 
 from agent_os_execution_service.execution_authorization_source import (
     EXECUTION_AUTHORIZATION_COMMENT_MARKER,
+    INSTRUCTIONAL_MATERIALS_LIVE_OPERATION,
+    LIVE_OPERATION_EXECUTION_AUTHORIZATION_COMMENT_MARKER,
     ExecutionAuthorizationCommentSnapshot,
     ExecutionAuthorizationSourceReason,
     ExecutionAuthorizationSourceSnapshot,
     ExecutionAuthorizationSourceStatus,
+    live_operation_execution_authorization_id,
     reacquire_execution_authorization,
+    reacquire_live_operation_execution_authorization,
     serialize_execution_authorization_comment,
+    serialize_live_operation_execution_authorization_comment,
 )
 
 SHA = "d" * 40
@@ -41,36 +46,12 @@ def _body(**changes: object) -> str:
     return serialize_execution_authorization_comment(**{**BASE, **changes})
 
 
-def _comment(
-    comment_id: int = 1,
-    *,
-    author: str = "Blummer92",
-    text: str | None = None,
-    created_at: str = "2026-08-17T17:01:00Z",
-) -> ExecutionAuthorizationCommentSnapshot:
-    return ExecutionAuthorizationCommentSnapshot(
-        comment_id=comment_id,
-        author_login=author,
-        created_at=created_at,
-        body=_body() if text is None else text,
-    )
+def _comment(comment_id: int = 1, *, author: str = "Blummer92", text: str | None = None, created_at: str = "2026-08-17T17:01:00Z") -> ExecutionAuthorizationCommentSnapshot:
+    return ExecutionAuthorizationCommentSnapshot(comment_id=comment_id, author_login=author, created_at=created_at, body=_body() if text is None else text)
 
 
-def _snapshot(
-    comments: tuple[ExecutionAuthorizationCommentSnapshot, ...] = (),
-    *,
-    complete: bool = True,
-    owner: str = "Blummer92",
-    owner_type: str = "User",
-) -> ExecutionAuthorizationSourceSnapshot:
-    return ExecutionAuthorizationSourceSnapshot(
-        repository="Blummer92/agent-os",
-        issue_number=1226,
-        owner_login=owner,
-        owner_type=owner_type,
-        comments_complete=complete,
-        comments=comments,
-    )
+def _snapshot(comments: tuple[ExecutionAuthorizationCommentSnapshot, ...] = (), *, complete: bool = True, owner: str = "Blummer92", owner_type: str = "User") -> ExecutionAuthorizationSourceSnapshot:
+    return ExecutionAuthorizationSourceSnapshot(repository="Blummer92/agent-os", issue_number=1226, owner_login=owner, owner_type=owner_type, comments_complete=complete, comments=comments)
 
 
 class _Transport:
@@ -78,29 +59,13 @@ class _Transport:
         self.snapshot = snapshot
         self.calls = 0
 
-    def read_authorization_source(
-        self, repository: str, issue_number: int
-    ) -> ExecutionAuthorizationSourceSnapshot:
+    def read_authorization_source(self, repository: str, issue_number: int) -> ExecutionAuthorizationSourceSnapshot:
         self.calls += 1
         return self.snapshot
 
 
-def _read(
-    snapshot: ExecutionAuthorizationSourceSnapshot,
-    **changes: object,
-):
-    values: dict[str, object] = {
-        "transport": _Transport(snapshot),
-        "repository": "Blummer92/agent-os",
-        "issue_number": 1226,
-        "expected_candidate_packet_id": CANDIDATE,
-        "expected_invocation_id": INVOCATION,
-        "expected_operation": "validation-only",
-        "expected_request_fingerprint": REQUEST,
-        "expected_command_plan_id": PLAN,
-        "expected_sha": SHA,
-        "evaluated_at": "2026-08-17T18:00:00Z",
-    }
+def _read(snapshot: ExecutionAuthorizationSourceSnapshot, **changes: object):
+    values: dict[str, object] = {"transport": _Transport(snapshot), "repository": "Blummer92/agent-os", "issue_number": 1226, "expected_candidate_packet_id": CANDIDATE, "expected_invocation_id": INVOCATION, "expected_operation": "validation-only", "expected_request_fingerprint": REQUEST, "expected_command_plan_id": PLAN, "expected_sha": SHA, "evaluated_at": "2026-08-17T18:00:00Z"}
     values.update(changes)
     return reacquire_execution_authorization(**values)
 
@@ -123,42 +88,26 @@ def test_missing_authorization_is_blocked() -> None:
 
 
 def test_incomplete_source_needs_decision() -> None:
-    assert _read(_snapshot(complete=False)).reason_codes == (
-        ExecutionAuthorizationSourceReason.SOURCE_INCOMPLETE,
-    )
+    assert _read(_snapshot(complete=False)).reason_codes == (ExecutionAuthorizationSourceReason.SOURCE_INCOMPLETE,)
 
 
 def test_organization_owner_is_unsupported() -> None:
-    assert _read(_snapshot(owner_type="Organization")).reason_codes == (
-        ExecutionAuthorizationSourceReason.OWNER_UNSUPPORTED,
-    )
+    assert _read(_snapshot(owner_type="Organization")).reason_codes == (ExecutionAuthorizationSourceReason.OWNER_UNSUPPORTED,)
 
 
 def test_non_owner_marker_cannot_authorize() -> None:
     result = _read(_snapshot((_comment(author="other"),)))
     assert result.status is ExecutionAuthorizationSourceStatus.BLOCKED
-    assert result.reason_codes == (
-        ExecutionAuthorizationSourceReason.AUTHORIZATION_MISSING,
-    )
+    assert result.reason_codes == (ExecutionAuthorizationSourceReason.AUTHORIZATION_MISSING,)
 
 
 def test_ordinary_owner_prose_cannot_authorize() -> None:
-    result = _read(_snapshot((_comment(text="Work on 1226"),)))
-    assert result.status is ExecutionAuthorizationSourceStatus.BLOCKED
+    assert _read(_snapshot((_comment(text="Work on 1226"),))).status is ExecutionAuthorizationSourceStatus.BLOCKED
 
 
-@pytest.mark.parametrize(
-    "text",
-    (
-        EXECUTION_AUTHORIZATION_COMMENT_MARKER + "\n{}",
-        EXECUTION_AUTHORIZATION_COMMENT_MARKER + '\n{"x":1}',
-        EXECUTION_AUTHORIZATION_COMMENT_MARKER + "\n{}\nextra",
-    ),
-)
+@pytest.mark.parametrize("text", (EXECUTION_AUTHORIZATION_COMMENT_MARKER + "\n{}", EXECUTION_AUTHORIZATION_COMMENT_MARKER + '\n{"x":1}', EXECUTION_AUTHORIZATION_COMMENT_MARKER + "\n{}\nextra"))
 def test_malformed_trusted_record_needs_decision(text: str) -> None:
-    assert _read(_snapshot((_comment(text=text),))).reason_codes == (
-        ExecutionAuthorizationSourceReason.TRUSTED_RECORD_MALFORMED,
-    )
+    assert _read(_snapshot((_comment(text=text),))).reason_codes == (ExecutionAuthorizationSourceReason.TRUSTED_RECORD_MALFORMED,)
 
 
 def test_tampered_authorization_id_needs_decision() -> None:
@@ -166,30 +115,11 @@ def test_tampered_authorization_id_needs_decision() -> None:
     payload = json.loads(serialized)
     payload["authorization_id"] = "execution-authorization:" + "0" * 64
     text = marker + "\n" + json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    assert _read(_snapshot((_comment(text=text),))).reason_codes == (
-        ExecutionAuthorizationSourceReason.TRUSTED_RECORD_MALFORMED,
-    )
+    assert _read(_snapshot((_comment(text=text),))).reason_codes == (ExecutionAuthorizationSourceReason.TRUSTED_RECORD_MALFORMED,)
 
 
-@pytest.mark.parametrize(
-    ("changes", "reason"),
-    (
-        (
-            {"expires_at": "2026-08-17T17:30:00Z"},
-            ExecutionAuthorizationSourceReason.AUTHORIZATION_EXPIRED,
-        ),
-        (
-            {
-                "authorized_at": "2026-08-17T18:30:00Z",
-                "expires_at": "2026-08-17T19:30:00Z",
-            },
-            ExecutionAuthorizationSourceReason.AUTHORIZATION_NOT_YET_ACTIVE,
-        ),
-    ),
-)
-def test_authorization_window_drift_is_stale(
-    changes: dict[str, object], reason: ExecutionAuthorizationSourceReason
-) -> None:
+@pytest.mark.parametrize(("changes", "reason"), (({"expires_at": "2026-08-17T17:30:00Z"}, ExecutionAuthorizationSourceReason.AUTHORIZATION_EXPIRED), ({"authorized_at": "2026-08-17T18:30:00Z", "expires_at": "2026-08-17T19:30:00Z"}, ExecutionAuthorizationSourceReason.AUTHORIZATION_NOT_YET_ACTIVE)))
+def test_authorization_window_drift_is_stale(changes: dict[str, object], reason: ExecutionAuthorizationSourceReason) -> None:
     result = _read(_snapshot((_comment(text=_body(**changes)),)))
     assert result.status is ExecutionAuthorizationSourceStatus.STALE
     assert result.reason_codes == (reason,)
@@ -197,103 +127,52 @@ def test_authorization_window_drift_is_stale(
 
 def test_newer_false_record_revokes_older_true_record() -> None:
     old = _comment(1, created_at="2026-08-17T17:01:00Z")
-    new = _comment(
-        2,
-        text=_body(execution_authorized=False),
-        created_at="2026-08-17T17:02:00Z",
-    )
+    new = _comment(2, text=_body(execution_authorized=False), created_at="2026-08-17T17:02:00Z")
     result = _read(_snapshot((new, old)))
     assert result.status is ExecutionAuthorizationSourceStatus.BLOCKED
-    assert result.reason_codes == (
-        ExecutionAuthorizationSourceReason.AUTHORIZATION_REVOKED,
-    )
+    assert result.reason_codes == (ExecutionAuthorizationSourceReason.AUTHORIZATION_REVOKED,)
 
 
 def test_newer_true_record_supersedes_expected_old_identity() -> None:
     old_text = _body()
     old_id = json.loads(old_text.splitlines()[1])["authorization_id"]
-    new = _comment(
-        2,
-        text=_body(expires_at="2026-08-17T20:00:00Z"),
-        created_at="2026-08-17T17:02:00Z",
-    )
-    result = _read(
-        _snapshot((_comment(1, text=old_text), new)),
-        expected_authorization_id=old_id,
-    )
+    new = _comment(2, text=_body(expires_at="2026-08-17T20:00:00Z"), created_at="2026-08-17T17:02:00Z")
+    result = _read(_snapshot((_comment(1, text=old_text), new)), expected_authorization_id=old_id)
     assert result.status is ExecutionAuthorizationSourceStatus.STALE
-    assert result.reason_codes == (
-        ExecutionAuthorizationSourceReason.AUTHORIZATION_SUPERSEDED,
-    )
+    assert result.reason_codes == (ExecutionAuthorizationSourceReason.AUTHORIZATION_SUPERSEDED,)
 
 
-@pytest.mark.parametrize(
-    ("argument", "value"),
-    (
-        ("expected_candidate_packet_id", "candidate-packet:" + "f" * 64),
-        ("expected_operation", "other"),
-        ("expected_request_fingerprint", "execution-request:" + "f" * 64),
-        ("expected_command_plan_id", "command-plan:" + "f" * 64),
-        ("expected_sha", "e" * 40),
-    ),
-)
+@pytest.mark.parametrize(("argument", "value"), (("expected_candidate_packet_id", "candidate-packet:" + "f" * 64), ("expected_operation", "other"), ("expected_request_fingerprint", "execution-request:" + "f" * 64), ("expected_command_plan_id", "command-plan:" + "f" * 64), ("expected_sha", "e" * 40)))
 def test_expected_binding_drift_is_stale(argument: str, value: str) -> None:
     result = _read(_snapshot((_comment(),)), **{argument: value})
     assert result.status is ExecutionAuthorizationSourceStatus.STALE
-    assert result.reason_codes == (
-        ExecutionAuthorizationSourceReason.BINDING_MISMATCH,
-    )
+    assert result.reason_codes == (ExecutionAuthorizationSourceReason.BINDING_MISMATCH,)
 
 
 def test_repository_and_issue_drift_are_fail_closed() -> None:
     repository = _read(_snapshot((_comment(text=_body(repository="Other/repo")),)))
     issue = _read(_snapshot((_comment(text=_body(issue_number=999)),)))
-    assert repository.reason_codes == (
-        ExecutionAuthorizationSourceReason.BINDING_MISMATCH,
-    )
-    assert issue.reason_codes == (
-        ExecutionAuthorizationSourceReason.BINDING_MISMATCH,
-    )
+    assert repository.reason_codes == (ExecutionAuthorizationSourceReason.BINDING_MISMATCH,)
+    assert issue.reason_codes == (ExecutionAuthorizationSourceReason.BINDING_MISMATCH,)
 
 
 def test_other_invocation_does_not_authorize_expected_invocation() -> None:
-    result = _read(
-        _snapshot((_comment(text=_body(authorized_invocation_id="other")),))
-    )
-    assert result.reason_codes == (
-        ExecutionAuthorizationSourceReason.AUTHORIZATION_MISSING,
-    )
+    result = _read(_snapshot((_comment(text=_body(authorized_invocation_id="other")),)))
+    assert result.reason_codes == (ExecutionAuthorizationSourceReason.AUTHORIZATION_MISSING,)
 
 
 def test_duplicate_comment_ids_are_ambiguous() -> None:
-    result = _read(_snapshot((_comment(1), _comment(1))))
-    assert result.reason_codes == (
-        ExecutionAuthorizationSourceReason.SOURCE_AMBIGUOUS,
-    )
+    assert _read(_snapshot((_comment(1), _comment(1)))).reason_codes == (ExecutionAuthorizationSourceReason.SOURCE_AMBIGUOUS,)
 
 
 def test_transport_is_called_at_most_once() -> None:
     transport = _Transport(_snapshot((_comment(),)))
-    reacquire_execution_authorization(
-        transport=transport,
-        repository="Blummer92/agent-os",
-        issue_number=1226,
-        expected_candidate_packet_id=CANDIDATE,
-        expected_invocation_id=INVOCATION,
-        expected_operation="validation-only",
-        expected_request_fingerprint=REQUEST,
-        expected_command_plan_id=PLAN,
-        expected_sha=SHA,
-        evaluated_at="2026-08-17T18:00:00Z",
-    )
+    reacquire_execution_authorization(transport=transport, repository="Blummer92/agent-os", issue_number=1226, expected_candidate_packet_id=CANDIDATE, expected_invocation_id=INVOCATION, expected_operation="validation-only", expected_request_fingerprint=REQUEST, expected_command_plan_id=PLAN, expected_sha=SHA, evaluated_at="2026-08-17T18:00:00Z")
     assert transport.calls == 1
 
 
 def test_source_module_has_no_runtime_or_network_capability() -> None:
-    module = __import__(
-        "agent_os_execution_service.execution_authorization_source",
-        fromlist=["placeholder"],
-    )
+    module = __import__("agent_os_execution_service.execution_authorization_source", fromlist=["placeholder"])
     tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
     roots: set[str] = set()
     for node in ast.walk(tree):
@@ -301,11 +180,128 @@ def test_source_module_has_no_runtime_or_network_capability() -> None:
             roots.update(alias.name.split(".")[0] for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             roots.add(node.module.split(".")[0])
-    assert not roots & {
-        "github",
-        "requests",
-        "httpx",
-        "socket",
-        "subprocess",
-        "workflow_scheduler",
+    assert not roots & {"github", "requests", "httpx", "socket", "subprocess", "workflow_scheduler"}
+
+
+# #1986 additive v2 coverage.
+SUBJECT = "instructional-live-operation-subject:" + "1" * 64
+APPROVAL = "approval:" + "2" * 64
+REVISION = "approval-revision:" + "3" * 64
+PROJECTION = "approved-execution-projection:" + "4" * 64
+LIVE_BASE = {
+    "issue_number": 1226,
+    "authorizer_id": "Blummer92",
+    "repository": "Blummer92/agent-os",
+    "authorized_subject_id": SUBJECT,
+    "authorized_approval_id": APPROVAL,
+    "authorized_approval_revision": REVISION,
+    "authorized_projection_id": PROJECTION,
+    "authorized_run_id": "run-c4b-1",
+    "authorized_task_id": "task-c4b-1",
+    "authorized_attempt_number": 0,
+    "authorized_operation": INSTRUCTIONAL_MATERIALS_LIVE_OPERATION,
+    "authorized_at": "2026-08-17T17:00:00Z",
+    "expires_at": "2026-08-17T19:00:00Z",
+    "execution_authorized": True,
+}
+
+
+def _live_body(**changes: object) -> str:
+    return serialize_live_operation_execution_authorization_comment(**{**LIVE_BASE, **changes})
+
+
+def _live_read(comments: tuple[ExecutionAuthorizationCommentSnapshot, ...], **changes: object):
+    values: dict[str, object] = {
+        "transport": _Transport(_snapshot(comments)),
+        "repository": "Blummer92/agent-os",
+        "issue_number": 1226,
+        "expected_subject_id": SUBJECT,
+        "expected_approval_id": APPROVAL,
+        "expected_approval_revision": REVISION,
+        "expected_projection_id": PROJECTION,
+        "expected_run_id": "run-c4b-1",
+        "expected_task_id": "task-c4b-1",
+        "expected_attempt_number": 0,
+        "expected_operation": INSTRUCTIONAL_MATERIALS_LIVE_OPERATION,
+        "evaluated_at": "2026-08-17T18:00:00Z",
     }
+    values.update(changes)
+    return reacquire_live_operation_execution_authorization(**values)
+
+
+def test_v1_serialization_fixture_remains_exact_and_v1_ignores_v2() -> None:
+    expected = EXECUTION_AUTHORIZATION_COMMENT_MARKER + "\n" + json.dumps({**BASE, "schema_version": "1.0", "authorization_id": json.loads(_body().splitlines()[1])["authorization_id"]}, sort_keys=True, separators=(",", ":"))
+    assert _body() == expected
+    result = _read(_snapshot((_comment(text=_live_body()),)))
+    assert result.status is ExecutionAuthorizationSourceStatus.BLOCKED
+    assert result.reason_codes == (ExecutionAuthorizationSourceReason.AUTHORIZATION_MISSING,)
+
+
+def test_v2_is_deterministic_and_ignores_v1() -> None:
+    body = _live_body()
+    assert body == _live_body()
+    payload = json.loads(body.splitlines()[1])
+    semantic = {key: value for key, value in LIVE_BASE.items()}
+    assert payload["authorization_id"] == live_operation_execution_authorization_id(**semantic)
+    result = _live_read((_comment(text=_body()), _comment(2, text=body)))
+    assert result.status is ExecutionAuthorizationSourceStatus.CURRENT
+    assert result.evidence is not None
+    assert result.evidence.authorized_attempt_number == 0
+
+
+@pytest.mark.parametrize(("argument", "value"), (("expected_subject_id", "instructional-live-operation-subject:" + "f" * 64), ("expected_approval_id", "approval:" + "f" * 64), ("expected_approval_revision", "approval-revision:" + "f" * 64), ("expected_projection_id", "approved-execution-projection:" + "f" * 64)))
+def test_v2_semantic_binding_drift_is_stale(argument: str, value: str) -> None:
+    result = _live_read((_comment(text=_live_body()),), **{argument: value})
+    assert result.status is ExecutionAuthorizationSourceStatus.STALE
+    assert result.reason_codes == (ExecutionAuthorizationSourceReason.BINDING_MISMATCH,)
+
+
+@pytest.mark.parametrize(("argument", "value"), (("expected_run_id", "other-run"), ("expected_task_id", "other-task"), ("expected_attempt_number", 1)))
+def test_v2_other_logical_attempt_cannot_replay(argument: str, value: object) -> None:
+    result = _live_read((_comment(text=_live_body()),), **{argument: value})
+    assert result.status is ExecutionAuthorizationSourceStatus.BLOCKED
+    assert result.reason_codes == (ExecutionAuthorizationSourceReason.AUTHORIZATION_MISSING,)
+
+
+def test_v2_revocation_expiry_and_supersession() -> None:
+    old = _comment(1, text=_live_body(), created_at="2026-08-17T17:01:00Z")
+    revoked = _comment(2, text=_live_body(execution_authorized=False), created_at="2026-08-17T17:02:00Z")
+    assert _live_read((old, revoked)).reason_codes == (ExecutionAuthorizationSourceReason.AUTHORIZATION_REVOKED,)
+    expired = _comment(3, text=_live_body(expires_at="2026-08-17T17:30:00Z"), created_at="2026-08-17T17:03:00Z")
+    assert _live_read((expired,)).reason_codes == (ExecutionAuthorizationSourceReason.AUTHORIZATION_EXPIRED,)
+    old_id = json.loads(_live_body().splitlines()[1])["authorization_id"]
+    newer = _comment(4, text=_live_body(expires_at="2026-08-17T20:00:00Z"), created_at="2026-08-17T17:04:00Z")
+    assert _live_read((old, newer), expected_authorization_id=old_id).reason_codes == (ExecutionAuthorizationSourceReason.AUTHORIZATION_SUPERSEDED,)
+
+
+def test_v2_non_owner_prose_and_human_approval_alone_cannot_authorize() -> None:
+    comments = (_comment(text="approved"), _comment(2, author="other", text=_live_body()))
+    result = _live_read(comments)
+    assert result.status is ExecutionAuthorizationSourceStatus.BLOCKED
+    assert result.reason_codes == (ExecutionAuthorizationSourceReason.AUTHORIZATION_MISSING,)
+
+
+@pytest.mark.parametrize("change", ({"authorized_operation": "drive.files.copy"}, {"authorized_attempt_number": True}, {"authorized_attempt_number": -1}, {"authorized_subject_id": "x" * 513}))
+def test_v2_malformed_or_unsupported_values_fail_closed(change: dict[str, object]) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        _live_body(**change)
+
+
+def test_v2_tampered_unknown_and_malformed_trusted_records_need_decision() -> None:
+    marker, serialized = _live_body().splitlines()
+    payload = json.loads(serialized)
+    payload["authorization_id"] = "execution-authorization:" + "0" * 64
+    tampered = marker + "\n" + json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    assert _live_read((_comment(text=tampered),)).reason_codes == (ExecutionAuthorizationSourceReason.TRUSTED_RECORD_MALFORMED,)
+    payload = json.loads(serialized)
+    payload["extra"] = "nope"
+    unknown = marker + "\n" + json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    assert _live_read((_comment(text=unknown),)).reason_codes == (ExecutionAuthorizationSourceReason.TRUSTED_RECORD_MALFORMED,)
+
+
+def test_v2_source_fail_closed_semantics_and_single_transport_read() -> None:
+    body = _live_body()
+    assert _live_read((_comment(1, text=body), _comment(1, text=body))).reason_codes == (ExecutionAuthorizationSourceReason.SOURCE_AMBIGUOUS,)
+    transport = _Transport(_snapshot((_comment(text=body),)))
+    reacquire_live_operation_execution_authorization(transport=transport, repository="Blummer92/agent-os", issue_number=1226, expected_subject_id=SUBJECT, expected_approval_id=APPROVAL, expected_approval_revision=REVISION, expected_projection_id=PROJECTION, expected_run_id="run-c4b-1", expected_task_id="task-c4b-1", expected_attempt_number=0, expected_operation=INSTRUCTIONAL_MATERIALS_LIVE_OPERATION, evaluated_at="2026-08-17T18:00:00Z")
+    assert transport.calls == 1
