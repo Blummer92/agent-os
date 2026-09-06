@@ -41,6 +41,22 @@ class Result:
     pilot_input: object | None
 
 
+@dataclass
+class PilotResult:
+    status: str = "completed"
+    reason_codes: tuple[str, ...] = ("lifecycle.proven-complete",)
+    result_id: str = "single-issue-pilot:" + "b" * 64
+    invocation_id: str = "invocation:1"
+    lease_acquired: bool = True
+    lease_released: bool = True
+    workspace_created: bool = True
+    workspace_filesystem_cleaned: bool = True
+    workspace_metadata_cleaned: bool = True
+    termination_confirmed: bool = True
+    validation_attempted: bool = True
+    validation_passed: bool = True
+
+
 def test_accepts_only_exact_canonical_handoff_argv():
     assert parse_handoff_argv(["--handoff-id", H]) == H
     bad = [
@@ -64,13 +80,21 @@ def test_reconstruction_precedes_single_dispatch():
 
     def dispatch(value):
         calls.append(("dispatch", value))
+        return PilotResult()
 
     output = run_governed_resume(
         ["--handoff-id", H],
         bindings=GovernedResumeBindings(reconstruct, dispatch),
     )
     assert calls == [("reconstruct", H), ("dispatch", pilot)]
-    assert json.loads(output)["scheduler_dispatch_count"] == 1
+    payload = json.loads(output)
+    assert payload["scheduler_dispatch_count"] == 1
+    assert payload["status"] == "completed"
+    assert payload["terminal_status"] == "succeeded"
+    assert payload["accepted"] is True
+    assert payload["termination_confirmed"] is True
+    assert payload["lease_released"] is True
+    assert payload["cleanup_complete"] is True
 
 
 @pytest.mark.parametrize("status", [Status.BLOCKED, Status.STALE, Status.NEEDS_DECISION])
@@ -85,6 +109,11 @@ def test_nonadmitted_result_never_dispatches(status):
     assert dispatched == []
     assert payload["status"] == status.value
     assert payload["scheduler_dispatch_count"] == 0
+    assert payload["accepted"] is False
+    assert payload["terminal_status"] == "blocked-before-execution"
+    assert payload["termination_confirmed"] is True
+    assert payload["lease_released"] is True
+    assert payload["cleanup_complete"] is True
 
 
 def test_admitted_without_pilot_input_fails_closed():
@@ -98,6 +127,53 @@ def test_admitted_without_pilot_input_fails_closed():
     )
     assert dispatched == []
     assert payload["status"] == "needs-decision"
+    assert payload["terminal_status"] == "blocked-before-execution"
+
+
+def test_dispatch_result_is_not_flattened_to_success():
+    reconstruction = Result(Status.ADMITTED, ("admitted",), object())
+    pilot = PilotResult(
+        status="quarantined",
+        reason_codes=("executor.termination-unconfirmed",),
+        lease_released=False,
+        workspace_filesystem_cleaned=False,
+        workspace_metadata_cleaned=False,
+        termination_confirmed=False,
+        validation_attempted=False,
+        validation_passed=False,
+    )
+    payload = json.loads(
+        run_governed_resume(
+            ["--handoff-id", H],
+            bindings=GovernedResumeBindings(lambda _: reconstruction, lambda _: pilot),
+        )
+    )
+    assert payload["status"] == "quarantined"
+    assert payload["terminal_status"] == "quarantined"
+    assert payload["quarantined"] is True
+    assert payload["retained_lease"] is True
+    assert payload["lease_released"] is False
+    assert payload["cleanup_complete"] is False
+    assert payload["termination_confirmed"] is False
+
+
+def test_validation_failure_maps_to_existing_host_terminal_vocabulary():
+    reconstruction = Result(Status.ADMITTED, ("admitted",), object())
+    pilot = PilotResult(
+        status="failed",
+        reason_codes=("validation.failed",),
+        validation_attempted=True,
+        validation_passed=False,
+    )
+    payload = json.loads(
+        run_governed_resume(
+            ["--handoff-id", H],
+            bindings=GovernedResumeBindings(lambda _: reconstruction, lambda _: pilot),
+        )
+    )
+    assert payload["status"] == "failed"
+    assert payload["terminal_status"] == "validation-failed"
+    assert payload["reason_codes"] == ["validation.failed"]
 
 
 def test_bounded_evidence_does_not_echo_command_text():
@@ -108,7 +184,21 @@ def test_bounded_evidence_does_not_echo_command_text():
     )
     assert "echo" not in payload
     assert set(json.loads(payload)) == {
-        "handoff_id", "reason_codes", "scheduler_dispatch_count", "schema", "status"
+        "accepted",
+        "cleanup_complete",
+        "evidence_refs",
+        "execution_id",
+        "handoff_id",
+        "lease_released",
+        "quarantined",
+        "reason_codes",
+        "retained_lease",
+        "scheduler_dispatch_count",
+        "scheduler_invocation_id",
+        "schema",
+        "status",
+        "terminal_status",
+        "termination_confirmed",
     }
 
 
@@ -122,6 +212,7 @@ def test_main_module_entrypoint_preserves_reconstruction_before_dispatch(capsys)
 
     def dispatch(value):
         calls.append(("dispatch", value))
+        return PilotResult()
 
     exit_code = main(
         ["--handoff-id", H],
@@ -131,6 +222,7 @@ def test_main_module_entrypoint_preserves_reconstruction_before_dispatch(capsys)
     assert calls == [("reconstruct", H), ("dispatch", pilot)]
     output = json.loads(capsys.readouterr().out)
     assert output["scheduler_dispatch_count"] == 1
+    assert output["terminal_status"] == "succeeded"
 
 
 @pytest.mark.parametrize("status", [Status.BLOCKED, Status.STALE, Status.NEEDS_DECISION])
@@ -181,6 +273,7 @@ def test_default_main_selects_production_factory_after_argv_validation(monkeypat
 
     def dispatch(value):
         calls.append(("dispatch", value))
+        return PilotResult()
 
     def build(handoff_id):
         calls.append(("factory", handoff_id))
@@ -194,7 +287,9 @@ def test_default_main_selects_production_factory_after_argv_validation(monkeypat
 
     assert main(["--handoff-id", H]) == 0
     assert calls == [("factory", H), ("reconstruct", H), ("dispatch", pilot)]
-    assert json.loads(capsys.readouterr().out)["scheduler_dispatch_count"] == 1
+    output = json.loads(capsys.readouterr().out)
+    assert output["scheduler_dispatch_count"] == 1
+    assert output["terminal_status"] == "succeeded"
 
 
 def test_default_main_rejects_malformed_argv_before_production_factory(monkeypatch):
