@@ -39,6 +39,7 @@ packages = [
   "scripts.agent_os_execution_interface",
   "scripts.agent_os_issue_acceptance",
   "scripts.agent_os_issue_acceptance.checks",
+  "scripts.agent_os_issue_acceptance.typed_subject_approval",
   "scripts.agent_os_remote_validation",
 ]
 ext-modules = [
@@ -51,4 +52,5 @@ ext-modules = [
 "scripts.agent_os_execution_checkpoint" = "../../scripts/agent_os_execution_checkpoint"
 "scripts.agent_os_execution_interface" = "../../scripts/agent_os_execution_interface"
 "scripts.agent_os_issue_acceptance" = "../../scripts/agent_os_issue_acceptance"
+"scripts.agent_os_issue_acceptance.typed_subject_approval" = "../../scripts/agent_os_issue_acceptance/typed_subject_approval"
 "scripts.agent_os_remote_validation" = "../../scripts/agent_os_remote_validation"
