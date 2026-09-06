@@ -124,6 +124,31 @@ class FakePilotInput:
     """
 
 
+@dataclass
+class FakePilotResult:
+    """Test double standing in for ``SingleIssuePilotResult`` (#1884).
+
+    The governed-resume producer reads the dispatch result rather than assuming
+    success, so a composition stub must carry the same lifecycle facts the real
+    ``run_single_issue_pilot`` returns. Only the fields the host evidence
+    contract consumes are modelled here; ``SingleIssuePilotResult``'s full
+    schema stays covered by #758's own suite.
+    """
+
+    status: str = "completed"
+    reason_codes: tuple[str, ...] = ("lifecycle.proven-complete",)
+    result_id: str = "single-issue-pilot:" + "c" * 64
+    invocation_id: str = "invocation:1287"
+    lease_acquired: bool = True
+    lease_released: bool = True
+    workspace_created: bool = True
+    workspace_filesystem_cleaned: bool = True
+    workspace_metadata_cleaned: bool = True
+    termination_confirmed: bool = True
+    validation_attempted: bool = True
+    validation_passed: bool = True
+
+
 class FakeConfiguration:
     def __init__(self, *, lease_directory: str | None) -> None:
         self.lease_directory = lease_directory
@@ -160,7 +185,13 @@ def lease_directory(tmp_path):
 
 
 def _build_bindings_with_stub_reconstruction(
-    monkeypatch, *, store_root, lease_directory, result, dispatch_stub_calls
+    monkeypatch,
+    *,
+    store_root,
+    lease_directory,
+    result,
+    dispatch_stub_calls,
+    pilot_result=None,
 ):
     monkeypatch.setattr(phc, "ConcreteRuntimeConfiguration", FakeConfiguration)
 
@@ -173,9 +204,11 @@ def _build_bindings_with_stub_reconstruction(
         dispatch_stub_calls.append(("build_concrete_runtime_adapters", pilot_input, configuration))
         return SimpleNamespace(lease=object(), workspace=object(), executor=None, validator=object())
 
+    returned_pilot_result = FakePilotResult() if pilot_result is None else pilot_result
+
     def run_pilot_stub(pilot_input, *, lease, workspace, executor, validator, cancelled):
         dispatch_stub_calls.append(("run_single_issue_pilot", pilot_input))
-        return SimpleNamespace(outcome="stub")
+        return returned_pilot_result
 
     monkeypatch.setattr(phc, "build_concrete_runtime_adapters", build_adapters_stub)
     monkeypatch.setattr(phc, "run_single_issue_pilot", run_pilot_stub)
@@ -211,8 +244,65 @@ def test_admitted_reconstruction_dispatches_exactly_once(
     ]
     import json
 
-    assert json.loads(output)["scheduler_dispatch_count"] == 1
-    assert json.loads(output)["status"] == "completed"
+    payload = json.loads(output)
+    assert payload["scheduler_dispatch_count"] == 1
+    assert payload["status"] == "completed"
+    assert payload["terminal_status"] == "succeeded"
+    assert payload["accepted"] is True
+    assert payload["execution_id"] == "single-issue-pilot:" + "c" * 64
+    assert payload["scheduler_invocation_id"] == "invocation:1287"
+    assert payload["termination_confirmed"] is True
+    assert payload["lease_released"] is True
+    assert payload["cleanup_complete"] is True
+    assert payload["retained_lease"] is False
+    assert payload["quarantined"] is False
+
+
+def test_composed_dispatch_result_is_not_flattened_to_success(
+    loosen_type_checks, monkeypatch, store_root, lease_directory
+):
+    """#1884: the composed host path reports the pilot's real lifecycle facts.
+
+    Before #1884 this path discarded the dispatch result and always emitted
+    ``completed``/``admitted``, so a quarantined execution reached the GCE host
+    as apparent success. The composition seam must carry the real result.
+    """
+    calls: list[object] = []
+    bindings = _build_bindings_with_stub_reconstruction(
+        monkeypatch,
+        store_root=store_root,
+        lease_directory=lease_directory,
+        result=Result(Status.ADMITTED, ("admitted",), FakePilotInput()),
+        dispatch_stub_calls=calls,
+        pilot_result=FakePilotResult(
+            status="quarantined",
+            reason_codes=("executor.termination-unconfirmed",),
+            lease_released=False,
+            workspace_filesystem_cleaned=False,
+            workspace_metadata_cleaned=False,
+            termination_confirmed=False,
+            validation_attempted=False,
+            validation_passed=False,
+        ),
+    )
+    output = run_governed_resume(["--handoff-id", H], bindings=bindings)
+
+    assert [call[0] for call in calls] == [
+        "build_concrete_runtime_adapters",
+        "run_single_issue_pilot",
+    ]
+    import json
+
+    payload = json.loads(output)
+    assert payload["scheduler_dispatch_count"] == 1
+    assert payload["status"] == "quarantined"
+    assert payload["terminal_status"] == "quarantined"
+    assert payload["quarantined"] is True
+    assert payload["retained_lease"] is True
+    assert payload["lease_released"] is False
+    assert payload["cleanup_complete"] is False
+    assert payload["termination_confirmed"] is False
+    assert payload["reason_codes"] == ["executor.termination-unconfirmed"]
 
 
 # ---------------------------------------------------------------------------
