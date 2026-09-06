@@ -28,16 +28,22 @@ dependencies = [
 ]
 
 # The ``scripts.*`` packages below stay canonical where they are and are
-# imported only by this distribution's runtime. #1966 packages the existing
-# execution-interface continuation owner so the MCP facade can delegate to
-# #1237 instead of defining a second continuation vocabulary.
+# imported only by this distribution's runtime (``agent_os_candidate_packet``,
+# the ``agent_os_github_issue_provider`` it depends on, and -- since #1319 --
+# ``agent_os_candidate_packet_live_input``, whose ``LiveIssueReader`` and
+# canonical ``verify-repo-state.sh`` observation assembler the production host
+# bootstrap reuses). Everything else under ``scripts.`` that this runtime
+# imports is distributed by ``workflow-scheduler``; no module is carried by two
+# distributions. #1966's MCP facade imports
+# ``scripts.agent_os_execution_interface.post_selection_continuation``, which
+# #1426 already made a ``workflow-scheduler`` module, so it is resolved through
+# the declared Scheduler dependency rather than shipped a second time here.
 [tool.setuptools]
 packages = [
   "agent_os_execution_service",
   "scripts.agent_os_candidate_packet",
   "scripts.agent_os_candidate_packet_live_input",
   "scripts.agent_os_github_issue_provider",
-  "scripts.agent_os_execution_interface",
 ]
 
 [tool.setuptools.package-dir]
@@ -45,4 +51,3 @@ packages = [
 "scripts.agent_os_candidate_packet" = "../../scripts/agent_os_candidate_packet"
 "scripts.agent_os_candidate_packet_live_input" = "../../scripts/agent_os_candidate_packet_live_input"
 "scripts.agent_os_github_issue_provider" = "../../scripts/agent_os_github_issue_provider"
-"scripts.agent_os_execution_interface" = "../../scripts/agent_os_execution_interface"

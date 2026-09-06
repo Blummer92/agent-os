@@ -32,6 +32,8 @@ The MCP server has no GitHub repository-write credential in this phase. GitHub m
 
 `agent_os_execution_service.mcp_server` uses the official Python MCP SDK (`mcp>=2.1.1,<2.2`) and registers exactly the two tools above with `MCPServer`. The repository phase does not start a network listener or choose a deployment transport.
 
+`mcp_facade` imports the #1237 owner from `scripts.agent_os_execution_interface.post_selection_continuation`. That package is already distributed by `workflow-scheduler` (#1426), and this distribution declares `workflow-scheduler>=0.18.0,<0.19.0`, so a clean host installation resolves the continuation owner through the existing single-owner distribution boundary. It is deliberately not re-packaged here: #1300 requires that no runtime module be carried by two distributions.
+
 The SDK supports stdio and Streamable HTTP, but hosting, authentication/principal validation, origin/host policy, TLS/network exposure, ChatGPT Developer Mode/app installation, Secure MCP Tunnel, credentials, and production activation are separate external/configuration decisions and are not authorized by #1966.
 
 ## #1233 regression intent
@@ -54,4 +56,4 @@ This facade does not solve or fake the canonical `AuthorizedValidationLifecycleR
 
 ## Rollback
 
-Remove `mcp_facade.py`, `mcp_server.py`, their focused tests/docs, the packaged `scripts.agent_os_execution_interface` mapping, and the `mcp` dependency. Existing #1237 policy, #1284 server-side discovery, #1203/#1217 transport, #1218 currentness, GitHub connector, Scheduler state, and all external systems remain unchanged.
+Remove `mcp_facade.py`, `mcp_server.py`, their focused tests/docs, and the `mcp` dependency. Existing #1237 policy, #1284 server-side discovery, #1203/#1217 transport, #1218 currentness, GitHub connector, Scheduler state, and all external systems remain unchanged.
