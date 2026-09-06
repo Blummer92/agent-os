@@ -3,8 +3,8 @@ from __future__ import annotations
 import pytest
 
 from scripts.agent_os_pr_remediation.aggregate_failure_provenance import (
-    AggregateFailureProvenance,
     AggregateFailureEvidence,
+    AggregateFailureProvenance,
 )
 from scripts.agent_os_pr_remediation.ci_evidence_recovery import (
     CIEvidenceIdentity,
@@ -16,10 +16,12 @@ from scripts.agent_os_pr_remediation.merge_evidence_summary import (
     acceptance_evidence,
     ai_review_evidence,
     build_review_merge_evidence_summary,
-    compose_repair_evidence,
     validation_evidence,
 )
 from scripts.agent_os_pr_remediation.models import EvidenceValidationError
+from scripts.agent_os_pr_remediation.repair_evidence_composition import (
+    render_repair_evidence_summary,
+)
 
 HEAD = "a" * 40
 BASE = "b" * 40
@@ -97,41 +99,37 @@ def _aggregate(*, head=HEAD):
 
 
 def test_composes_canonical_ci_and_provenance_without_reclassifying():
-    result = compose_repair_evidence(
+    rendered = render_repair_evidence_summary(
         _summary(), ci_recovery=_ci(), aggregate_failure=_aggregate(),
         post_repair_validation=("focused", "aggregate"),
     )
-    assert result.actionable_failure.startswith("FAILED tests/test_widget.py")
-    assert result.aggregate_failure_provenance == "pr-attributable"
-    assert result.aggregate_failure_blocking_pr is True
-    assert result.aggregate_failure_requires_manual_review is False
-    assert result.next_diagnostic_path == "direct-actions-log"
-    assert result.post_repair_validation == ("aggregate", "focused")
-    assert result.execution_authorized is False
-    assert result.external_write_authorized is False
+    assert "actionable failure (sanitized canonical evidence)" in rendered
+    assert "aggregate provenance: pr-attributable" in rendered
+    assert "blocking PR failure: yes" in rendered
+    assert "aggregate manual review required: no" in rendered
+    assert "next diagnostic route: direct-actions-log" in rendered
+    assert "post-repair validation: aggregate, focused" in rendered
+    assert "does not authorize or prescribe a repair" in rendered
 
 
 def test_render_preserves_skipped_and_rate_limited_review_truth():
-    rendered = compose_repair_evidence(
+    rendered = render_repair_evidence_summary(
         _summary(), ci_recovery=_ci(), aggregate_failure=_aggregate()
-    ).rendered_summary
+    )
     assert "normal: skipped" in rendered
     assert "adversarial: unavailable" in rendered
     assert "performed-clear" not in rendered
-    assert "aggregate provenance: pr-attributable" in rendered
-    assert "actionable failure (sanitized canonical evidence)" in rendered
-    assert "next diagnostic route: direct-actions-log" in rendered
     assert "fix this" not in rendered.lower()
 
 
 def test_stale_ci_evidence_fails_closed():
     with pytest.raises(EvidenceValidationError, match="CI recovery evidence is not current"):
-        compose_repair_evidence(_summary(), ci_recovery=_ci(head="c" * 40))
+        render_repair_evidence_summary(_summary(), ci_recovery=_ci(head="c" * 40))
 
 
 def test_mismatched_aggregate_tested_sha_fails_closed():
     with pytest.raises(EvidenceValidationError, match="aggregate tested SHA"):
-        compose_repair_evidence(_summary(), aggregate_failure=_aggregate(head="c" * 40))
+        render_repair_evidence_summary(_summary(), aggregate_failure=_aggregate(head="c" * 40))
 
 
 def test_composition_rejects_authorizing_upstream_evidence():
@@ -147,4 +145,4 @@ def test_composition_rejects_authorizing_upstream_evidence():
         merge_authorized=True,
     )
     with pytest.raises(EvidenceValidationError, match="non-authorizing"):
-        compose_repair_evidence(_summary(), aggregate_failure=evidence)
+        render_repair_evidence_summary(_summary(), aggregate_failure=evidence)
