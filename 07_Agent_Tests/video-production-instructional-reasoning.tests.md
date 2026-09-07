@@ -290,3 +290,125 @@ Inspect admitted existing coverage, preserve source identity, test the candidate
 against the required shot role and known continuity/story evidence, and choose
 the smallest intervention the evidence actually supports.
 ```
+
+## VP-3 — Usable Action Inside a Partially Unusable Take
+
+### Scenario
+
+Use the same intended `A -> B -> C` hallway/classroom-door sequence. A and C are
+usable. Selected source take B contains an unusable section before the required
+action, the complete required hand-reaches-and-turns-handle action in technically
+usable form, and an unusable section after the required action. The unusable head
+and tail are not required for B's storytelling role. Admitted evidence says they
+can be removed while leaving the complete required action intact, with no known
+continuity, direction, timing, pacing, or storytelling problem between A and C.
+
+A separate recorded alternate B2 also exists and is technically usable, but no
+admitted evidence establishes that B2 is better than the usable required action
+already present in B.
+
+### Expected reasoning binding
+
+The system should classify B as **partially unusable**, not wholly unusable. The
+primary intervention category is temporal trimming because the required action
+itself is already usable and the defective material lies outside that required
+content.
+
+The smallest justified intervention is:
+
+```text
+trim selected source take B to retain its complete usable required action
+```
+
+The structure remains `A -> B -> C`. Trimming does not change source-footage
+identity: trimmed B remains source take B, while B2 remains a different recorded
+alternate take. B2 may be legitimate alternate coverage without being necessary
+or preferred.
+
+Trimming removes unnecessary material; it does not repair, restore, synthesize,
+or generate the defective material.
+
+### Pass condition
+
+A response passes VP-3 when it follows this hierarchy:
+
+```text
+required shot role
+-> inspect selected take
+-> portions outside required action fail
+-> required action itself is usable
+-> remove unnecessary unusable material
+-> preserve selected source take + shot role + sequence
+```
+
+It fails if it follows any shortcut:
+
+```text
+part of take is bad -> entire take is bad
+alternate exists -> automatically replace
+technical flaw exists -> automatically reshoot
+```
+
+### Gemini observed result — 2026-09-07
+
+**Overall:** `PASS_WITH_EVIDENCE_BOUNDARY_WARNINGS`
+
+Gemini correctly:
+
+- identified B as partially rather than entirely unusable;
+- recognized that the complete required action inside B is usable;
+- selected temporal trimming as the primary intervention;
+- preserved the `A -> B -> C` structural sequence;
+- preserved B's source-take identity after trimming and kept B2 distinct;
+- recognized B2 as a legitimate alternate without treating its existence as a
+  reason to replace B;
+- chose trimming as the smallest justified intervention instead of replacement,
+  reorder, or reshoot;
+- correctly distinguished temporal removal from repair or generation;
+- produced a visual specification showing unusable head/tail removal, retained
+  usable action, and `A -> trimmed B -> C` while leaving B2 unused.
+
+#### Evidence-boundary warnings
+
+The core decision passes, but the response strengthened several claims beyond the
+supplied evidence:
+
+1. It called the usable action `pristine`. The prompt established that the action
+   was technically usable, not pristine.
+2. It said trimming `preserves seamless continuity`. The prompt established that
+   no evidence shows a continuity/direction/timing/pacing/storytelling problem;
+   absence of a known problem is not evidence of seamlessness.
+3. It introduced editing-software procedure language (`in-point/out-point`,
+   `sub-clips`, and `sets temporal boundaries`) even though the test explicitly
+   prohibited inventing software/timeline controls. The conceptual trim decision
+   is supported; those procedural mechanisms were not.
+4. It stated that the required action was `technically sound` and referred to
+   `defective frames`. The admitted terms were technically usable action and
+   unusable surrounding sections; the stronger characterization was unnecessary.
+5. Its future-unsuitability examples introduced unsupported specifics such as the
+   usable segment being `too short` and B2 providing `match-on-action` superiority.
+   The safe general rule is that new evidence showing trimming creates an actual
+   continuity, direction, timing, pacing, storytelling, or required-action problem
+   could move the decision toward an admitted alternate or, if no suitable
+   existing coverage remains, a reshoot.
+
+These warnings do not reverse the correct smallest-intervention decision, but they
+show a repeated tendency to convert bounded evidence into stronger production or
+software-specific claims.
+
+### VP-1 / VP-2 / VP-3 intervention invariant
+
+The first three fixtures now bind a three-level decision discipline:
+
+```text
+1. Preserve usable required material inside the selected take when trimming alone
+   removes irrelevant unusable material.
+2. If the selected take cannot safely fulfill the role, evaluate existing admitted
+   alternate coverage and replace only when that alternate satisfies the role and
+   known continuity/story evidence.
+3. Reshoot only after admitted existing coverage cannot safely fulfill the role.
+```
+
+This is an evidence hierarchy, not a mechanical rule that trim always outranks
+replace or that replace always outranks reshoot. The smallest intervention is the
+smallest one that the supplied evidence actually supports.
