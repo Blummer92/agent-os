@@ -128,7 +128,33 @@ def test_validation_gate_dispatch_checks_out_and_verifies_admitted_candidate_onl
     assert "steps.candidate.outputs.head_sha" in content
     assert "steps.candidate.outputs.mode == 'final-candidate'" in content
     assert "checked_out_sha=\"$(git rev-parse HEAD)\"" in content
-    assert 'if [ "$checked_out_sha" != "$EXPECTED_HEAD_SHA" ]' in content
+    # The aggregate job now verifies both event shapes in one step, so the
+    # final-candidate comparison is guarded by its dispatch mode. Assert the
+    # fail-closed comparison and its message instead of one literal `if` spelling.
+    assert (
+        '[ "$DISPATCH_MODE" = "final-candidate" ]'
+        ' && [ "$checked_out_sha" != "$EXPECTED_HEAD_SHA" ]'
+    ) in content
+    assert (
+        "checked-out SHA $checked_out_sha does not match admitted candidate "
+        "$EXPECTED_HEAD_SHA"
+    ) in content
+
+
+def test_validation_gate_pull_request_aggregate_verifies_the_exact_pull_request_head():
+    content = WORKFLOW.read_text(encoding="utf-8")
+    assert (
+        "ref: ${{ github.event_name == 'pull_request'"
+        " && github.event.pull_request.head.sha || github.sha }}"
+    ) in content
+    assert (
+        '[ "$GITHUB_EVENT_NAME" = "pull_request" ]'
+        ' && [ "$checked_out_sha" != "$PR_HEAD_SHA" ]'
+    ) in content
+    assert (
+        "checked-out SHA $checked_out_sha does not match pull request head "
+        "$PR_HEAD_SHA"
+    ) in content
 
 
 def test_cloud_build_executes_only_canonical_aggregate_command():
