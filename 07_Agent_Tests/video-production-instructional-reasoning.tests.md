@@ -279,18 +279,6 @@ correct decision:
 These overclaims do not reverse the decision and therefore do not fail VP-2, but
 they are retained as evidence-discipline warnings for later regression testing.
 
-### VP-1 / VP-2 paired invariant
-
-Together the first two fixtures bind this decision rule:
-
-```text
-Do not reshoot merely because the selected take fails.
-Do not use an alternate merely because it exists.
-Inspect admitted existing coverage, preserve source identity, test the candidate
-against the required shot role and known continuity/story evidence, and choose
-the smallest intervention the evidence actually supports.
-```
-
 ## VP-3 — Usable Action Inside a Partially Unusable Take
 
 ### Scenario
@@ -396,19 +384,111 @@ These warnings do not reverse the correct smallest-intervention decision, but th
 show a repeated tendency to convert bounded evidence into stronger production or
 software-specific claims.
 
-### VP-1 / VP-2 / VP-3 intervention invariant
+## VP-4 — Correct Coverage, Wrong Sequence Order
 
-The first three fixtures now bind a three-level decision discipline:
+### Scenario
+
+All three recorded shots A, B, and C are technically usable and belong to the same
+classroom-door scene. A shows approach, B shows the required handle-turning action,
+and C shows entry. No known continuity, direction, timing, or storytelling
+contradiction exists within the individual shots. The intended chronological
+structure is `A -> B -> C`, but the current edit is `A -> C -> B`. No evidence
+establishes intentional non-linear storytelling.
+
+### Expected reasoning binding
+
+The system should classify the primary problem as **sequence/order**, not shot
+quality, coverage, trimming, replacement, or a demonstrated defect inside B.
+
+The smallest justified intervention is:
 
 ```text
-1. Preserve usable required material inside the selected take when trimming alone
-   removes irrelevant unusable material.
-2. If the selected take cannot safely fulfill the role, evaluate existing admitted
-   alternate coverage and replace only when that alternate satisfies the role and
-   known continuity/story evidence.
-3. Reshoot only after admitted existing coverage cannot safely fulfill the role.
+reorder the existing A, B, and C occurrences to A -> B -> C
 ```
 
-This is an evidence hierarchy, not a mechanical rule that trim always outranks
-replace or that replace always outranks reshoot. The smallest intervention is the
-smallest one that the supplied evidence actually supports.
+A, B, and C retain their source-footage identities. Reordering changes sequence
+position, not which recorded source take fulfills each role. No new footage is
+needed on the admitted evidence.
+
+### Pass condition
+
+A response passes VP-4 when it follows this hierarchy:
+
+```text
+required story action
+-> inspect existing usable coverage
+-> identify sequence-position error
+-> preserve source identities
+-> reorder existing shots
+-> restore intended chronology
+```
+
+It fails if it follows a shortcut such as:
+
+```text
+shot feels wrong -> assume shot is bad
+sequence problem -> reshoot
+wrong placement -> replace source footage
+```
+
+### Gemini observed result — 2026-09-07
+
+**Overall:** `PASS_WITH_EVIDENCE_BOUNDARY_WARNINGS`
+
+Gemini correctly:
+
+- identified the current `A -> C -> B` arrangement and the intended `A -> B -> C`
+  structure;
+- concluded that B itself fulfills its required handle-turning role;
+- classified the problem as sequence/order;
+- chose reordering existing footage as the smallest justified intervention;
+- preserved A, B, and C as the same source identities;
+- distinguished reordering from replacement and reshoot;
+- concluded that no new footage is needed from the supplied evidence;
+- produced a visual specification that clearly changes only sequence position.
+
+#### Evidence-boundary warnings
+
+The decision is correct, but Gemini again introduced stronger or procedural claims
+not supplied by the fixture:
+
+1. It stated there were no `motion blur`, `bad lighting`, `focus issues`, or
+   `framing errors` in B. The prompt established that B was technically usable; it
+   did not separately enumerate those technical properties.
+2. It described the three shots as `technically sound`. The admitted term was
+   technically usable.
+3. It said B's wrongness stems `entirely` from timeline placement. The evidence
+   supports sequence/order as the demonstrated problem, but the safer formulation
+   is that no other problem is established by the supplied evidence.
+4. It introduced software/timeline mechanism language such as `timeline timestamp`
+   and `moving clips on a timeline`. The conceptual reorder operation is supported,
+   but implementation mechanics were explicitly outside the evidence boundary.
+5. It characterized the current order as violating `real-world cause and effect`
+   and proposed specific hypothetical nonlinear stories such as a character
+   `remembering turning the handle` or `parallel actions occurring simultaneously`.
+   The fixture only requires additional evidence of intentional non-linear
+   storytelling; those invented examples are unnecessary.
+6. It defined source-footage identity as an `immutable recorded asset`. The test
+   requires preserving source identity, but does not establish a broader immutable-
+   asset technical model.
+
+These warnings do not reverse the correct reorder decision. They strengthen the
+cross-test finding that Gemini is reliable on the intervention category while
+repeatedly embellishing bounded evidence with plausible production/software
+specifics.
+
+## VP-1 through VP-4 intervention invariant
+
+The first four fixtures bind a category-first decision discipline:
+
+```text
+First identify what the evidence says is wrong:
+- unnecessary unusable material around usable required action -> trim
+- selected take cannot fulfill role, compatible admitted alternate exists -> replace
+- admitted existing coverage cannot safely fulfill required role -> reshoot
+- usable required coverage is in the wrong structural position -> reorder
+```
+
+Do not select an intervention from the student's complaint alone. Preserve source
+identity and choose the smallest intervention supported by the demonstrated
+problem category and admitted evidence.
