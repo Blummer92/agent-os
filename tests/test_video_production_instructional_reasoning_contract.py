@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-FIXTURES = ROOT / "07_Agent_Tests" / "video-production-instructional-reasoning.tests.md"
+FIXTURES = ROOT / "07_Agent_Tests" / "video-production-instructional-reasoning-tests-details.md"
 
 
 def _fixture_text() -> str:
