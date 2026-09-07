@@ -49,5 +49,6 @@ def test_unproduced_format_falls_back_to_blocked_production_behavior() -> None:
 def test_required_order_and_blocked_production_behavior_remain_canonical() -> None:
     text = ARTIFACT_FIRST.read_text(encoding="utf-8")
     assert "## Required Order" in text
+    assert "## Required Visual Components" in text
     assert "## Blocked-Production Behavior" in text
-    assert "0.1.1" in text.split("## Version", 1)[1]
+    assert "0.1.2" in text.split("## Version", 1)[1]
