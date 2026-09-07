@@ -375,7 +375,7 @@ jobs:
     permissions:
       contents: write
       issues: write
-      pull-requests: read
+      pull-requests: write
     steps:
       - name: Check out canonical workflow source
         uses: actions/checkout@v7

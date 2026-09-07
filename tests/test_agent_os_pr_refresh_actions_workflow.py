@@ -83,7 +83,8 @@ def test_refresh_job_is_job_level_least_privilege_and_keeps_ingress_baseline() -
     permissions = job.split("permissions:", 1)[1].split("steps:", 1)[0]
     assert "contents: write" in permissions
     assert "issues: write" in permissions
-    assert "pull-requests: read" in permissions
+    assert "pull-requests: write" in permissions
+    assert "pull-requests: read" not in permissions
     assert "id-token: write" not in permissions
     assert "actions: write" not in permissions
     assert "workflows: write" not in permissions
