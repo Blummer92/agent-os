@@ -6,6 +6,11 @@ from .base import ConnectorError, ConnectorErrorCode, RegistryResource
 
 
 _ALLOWED_TYPES = {"page": "Page", "database": "Database"}
+_BOOLEAN_FIELDS = {
+    "human_review_required": False,
+    "archived": False,
+    "properties_schema_visible": False,
+}
 
 
 def normalize_notion_resource(raw: dict[str, Any]) -> RegistryResource | ConnectorError:
@@ -14,14 +19,19 @@ def normalize_notion_resource(raw: dict[str, Any]) -> RegistryResource | Connect
     title = raw.get("title") or raw.get("display_name")
 
     if notion_type not in _ALLOWED_TYPES or not canonical_id or not title:
-        return ConnectorError(
-            code=ConnectorErrorCode.METADATA_INCOMPLETE,
-            severity="medium",
-            retryable=False,
-            message="Notion fixture is missing required metadata.",
-            resource_id=canonical_id,
-            evidence={"object": notion_type, "has_title": bool(title)},
-        )
+        return _metadata_error(canonical_id, notion_type=notion_type, title=title)
+
+    booleans: dict[str, bool] = {}
+    for field, default in _BOOLEAN_FIELDS.items():
+        value = raw.get(field, default)
+        if type(value) is not bool:
+            return _metadata_error(
+                canonical_id,
+                notion_type=notion_type,
+                title=title,
+                malformed_boolean=field,
+            )
+        booleans[field] = value
 
     return RegistryResource(
         system="notion",
@@ -33,16 +43,36 @@ def normalize_notion_resource(raw: dict[str, Any]) -> RegistryResource | Connect
         source_of_truth="notion",
         verification_state="Verified",
         cache_status="FixtureOnly",
-        human_review_required=bool(raw.get("human_review_required", False)),
+        human_review_required=booleans["human_review_required"],
         write_allowed=False,
         metadata={
             "url": raw.get("url"),
             "created_time": raw.get("created_time"),
             "last_edited_time": raw.get("last_edited_time"),
-            "archived": bool(raw.get("archived", False)),
-            "properties_schema_visible": bool(raw.get("properties_schema_visible", False)),
+            "archived": booleans["archived"],
+            "properties_schema_visible": booleans["properties_schema_visible"],
             "page_body_read": False,
         },
+    )
+
+
+def _metadata_error(
+    canonical_id: object,
+    *,
+    notion_type: object,
+    title: object,
+    malformed_boolean: str | None = None,
+) -> ConnectorError:
+    evidence: dict[str, object] = {"object": notion_type, "has_title": bool(title)}
+    if malformed_boolean is not None:
+        evidence["malformed_boolean"] = malformed_boolean
+    return ConnectorError(
+        code=ConnectorErrorCode.METADATA_INCOMPLETE,
+        severity="medium",
+        retryable=False,
+        message="Notion fixture is missing or contains malformed required metadata.",
+        resource_id=canonical_id if isinstance(canonical_id, str) else None,
+        evidence=evidence,
     )
 
 
