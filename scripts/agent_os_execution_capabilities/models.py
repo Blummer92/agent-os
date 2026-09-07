@@ -299,7 +299,7 @@ class RepositoryStateValidationResult:
         if self.outcome not in _REPOSITORY_OUTCOMES:
             raise ValueError("unsupported repository-state outcome")
         object.__setattr__(self, "reason_codes", normalize_reason_codes(self.reason_codes))
-        object.__setattr__(self, "details", tuple(str(item) for item in self.details))
+        object.__setattr__(self, "details", _normalize_strings(self.details))
 
 
 
