@@ -45,6 +45,12 @@ from .pr_reconciler import LivePullRequestSnapshot, PullRequestLabelProvider
 
 _SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
 _TOPOLOGY_COMMIT_MESSAGE = "Agent OS governed PR refresh candidate"
+_PROVIDER_GIT_IDENTITY = {
+    "GIT_AUTHOR_NAME": "Agent OS Branch Refresh",
+    "GIT_AUTHOR_EMAIL": "agent-os-branch-refresh@localhost",
+    "GIT_COMMITTER_NAME": "Agent OS Branch Refresh",
+    "GIT_COMMITTER_EMAIL": "agent-os-branch-refresh@localhost",
+}
 
 
 @runtime_checkable
@@ -281,7 +287,9 @@ class ProductionPullRequestBranchRefreshProvider(PullRequestBranchRefreshProvide
             if isinstance(proposed_head_sha, BranchRefreshMutationResult):
                 return proposed_head_sha
         else:
-            rebase = self.runner.run((self.git_binary, "rebase", "--no-autostash", "--onto", current_main_sha, merge_base_sha, expected_head_sha), cwd=self.repository_root, env=dict(self.environment))
+            rebase_env = dict(self.environment)
+            rebase_env.update(_PROVIDER_GIT_IDENTITY)
+            rebase = self.runner.run((self.git_binary, "rebase", "--no-autostash", "--onto", current_main_sha, merge_base_sha, expected_head_sha), cwd=self.repository_root, env=rebase_env)
             if not rebase.started:
                 return _blocked(expected_head_sha, "rebase-not-started")
             if rebase.timed_out or not rebase.termination_confirmed:
@@ -334,11 +342,8 @@ class ProductionPullRequestBranchRefreshProvider(PullRequestBranchRefreshProvide
         if main_epoch is None:
             return _blocked(expected_head_sha, "topology-main-timestamp-unavailable")
         commit_env = dict(self.environment)
+        commit_env.update(_PROVIDER_GIT_IDENTITY)
         commit_env.update({
-            "GIT_AUTHOR_NAME": "Agent OS Branch Refresh",
-            "GIT_AUTHOR_EMAIL": "agent-os-branch-refresh@localhost",
-            "GIT_COMMITTER_NAME": "Agent OS Branch Refresh",
-            "GIT_COMMITTER_EMAIL": "agent-os-branch-refresh@localhost",
             "GIT_AUTHOR_DATE": f"@{main_epoch} +0000",
             "GIT_COMMITTER_DATE": f"@{main_epoch} +0000",
         })

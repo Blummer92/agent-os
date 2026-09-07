@@ -18,6 +18,9 @@ export type RoutedTutorialStep = Readonly<{
   authoring?: PromptAuthoringInput;
   approvedAssetRef?: string;
   reasonRef?: string;
+  visualArtifactIdentity?: string;
+  crossContextExemplarEvidenceRef?: string;
+  instructionalSpecificityEvidenceRefs?: readonly string[];
 }>;
 
 export type RoutedTutorialNeed = Readonly<{
@@ -28,6 +31,7 @@ export type RoutedTutorialNeed = Readonly<{
   objectiveRef: string;
   successCriteriaRef: string;
   evidenceTargetRef: string;
+  canonicalArtifactIdentity?: string;
   pathwayPlanRef?: string;
   steps: readonly RoutedTutorialStep[];
 }>;
@@ -42,7 +46,11 @@ export type TutorialPackageBlocker =
   | 'new-visual-authoring-missing'
   | 'reuse-asset-missing'
   | 'resurface-asset-missing'
-  | 'reason-evidence-missing';
+  | 'reason-evidence-missing'
+  | 'artifact-identity-missing'
+  | 'artifact-identity-mismatch'
+  | 'cross-context-exemplar-evidence-missing'
+  | 'unsupported-instructional-specificity';
 
 export type TutorialPackage = Readonly<{
   packageVersion: 'picture-perfect-tutorial-package-v1';
@@ -54,6 +62,7 @@ export type TutorialPackage = Readonly<{
   objectiveRef: string;
   successCriteriaRef: string;
   evidenceTargetRef: string;
+  canonicalArtifactIdentity: string | null;
   pathwayPlanRef: string | null;
   steps: readonly RoutedTutorialStep[];
   cards: readonly PromptCardModel[];
@@ -74,6 +83,25 @@ function unique<T>(items: readonly T[]): T[] {
   return [...new Set(items)];
 }
 
+const EXACT_INSTRUCTIONAL_DETAIL = /\b\d+(?:\.\d+)?\s*(?:pt|px|pixels?|points?|rem|em|%|mm|cm|inches?)\b/i;
+
+function authoredInstructionText(authoring: PromptAuthoringInput): string {
+  return [
+    authoring.imagePurpose,
+    authoring.targetState,
+    ...authoring.mustShow,
+    ...authoring.mustNotShow,
+    authoring.annotationSpace,
+  ].join(' ');
+}
+
+function artifactDirective(canonicalArtifactIdentity: string, exemplarIdentity: string | null): string {
+  const base = `Canonical task/artifact identity: ${canonicalArtifactIdentity}. Preserve this identity; do not substitute another assessed artifact.`;
+  return exemplarIdentity && exemplarIdentity !== canonicalArtifactIdentity
+    ? `${base} Cross-context exemplar: ${exemplarIdentity}; treat it as illustrative only and do not replace the canonical task/artifact identity.`
+    : base;
+}
+
 export function buildTutorialPackage(
   tutorial: ReviewedTutorialProjection,
   route: RoutedTutorialNeed | null,
@@ -92,6 +120,7 @@ export function buildTutorialPackage(
   const retained = new Set(tutorial.retained_steps.map((step) => step.review_step_id));
   const routeIds = route.steps.map((step) => step.reviewStepId);
   const blockers: TutorialPackageBlocker[] = [];
+  const canonicalArtifactIdentity = route.canonicalArtifactIdentity?.trim() || null;
 
   for (const reviewStepId of retained) {
     const matches = route.steps.filter((step) => step.reviewStepId === reviewStepId);
@@ -108,6 +137,21 @@ export function buildTutorialPackage(
     if ((step.disposition === 'no-additional-visual-needed' || step.disposition === 'pathway-compacted') && !step.reasonRef?.trim()) {
       blockers.push('reason-evidence-missing');
     }
+
+    if (step.disposition === 'new-visual' && canonicalArtifactIdentity) {
+      const visualArtifactIdentity = step.visualArtifactIdentity?.trim();
+      if (!visualArtifactIdentity) blockers.push('artifact-identity-missing');
+      else if (visualArtifactIdentity !== canonicalArtifactIdentity && !step.crossContextExemplarEvidenceRef?.trim()) {
+        blockers.push('artifact-identity-mismatch');
+        blockers.push('cross-context-exemplar-evidence-missing');
+      }
+    }
+
+    if (step.disposition === 'new-visual' && step.authoring && !step.authoring.screenFidelityRequired) {
+      const hasExactInstructionalDetail = EXACT_INSTRUCTIONAL_DETAIL.test(authoredInstructionText(step.authoring));
+      const hasOwnerEvidence = (step.instructionalSpecificityEvidenceRefs ?? []).some((ref) => ref.trim().length > 0);
+      if (hasExactInstructionalDetail && !hasOwnerEvidence) blockers.push('unsupported-instructional-specificity');
+    }
   }
 
   if (blockers.length > 0) return { status: 'blocked', package: null, blockers: unique(blockers) };
@@ -121,10 +165,31 @@ export function buildTutorialPackage(
   if (projectedCards.length !== expectedNewVisuals) {
     return { status: 'blocked', package: null, blockers: ['new-visual-authoring-missing'] };
   }
-  const cards = projectedCards.map((card) => ({
-    ...card,
-    provenance: [`Teacher Modeling: ${route.sourceHandoffRef}`, `tutorial_route:${route.routeId}`, `tutorial_route_fingerprint:${route.sourceFingerprint}`, ...card.provenance],
-  }));
+  let cardIndex = 0;
+  const cards = projectedCards.map((card) => {
+    const step = route.steps.filter((item) => item.disposition === 'new-visual')[cardIndex++];
+    const visualArtifactIdentity = step.visualArtifactIdentity?.trim() || canonicalArtifactIdentity;
+    const identityPrompt = canonicalArtifactIdentity && visualArtifactIdentity
+      ? artifactDirective(canonicalArtifactIdentity, visualArtifactIdentity)
+      : '';
+    return {
+      ...card,
+      portablePrompt: card.status === 'ready' && identityPrompt
+        ? `${identityPrompt} ${card.portablePrompt}`
+        : card.portablePrompt,
+      provenance: [
+        `Teacher Modeling: ${route.sourceHandoffRef}`,
+        `tutorial_route:${route.routeId}`,
+        `tutorial_route_fingerprint:${route.sourceFingerprint}`,
+        ...(canonicalArtifactIdentity ? [`canonical_artifact:${canonicalArtifactIdentity}`] : []),
+        ...(visualArtifactIdentity && visualArtifactIdentity !== canonicalArtifactIdentity
+          ? [`cross_context_exemplar:${visualArtifactIdentity}`, `cross_context_exemplar_evidence:${step.crossContextExemplarEvidenceRef}`]
+          : []),
+        ...(step.instructionalSpecificityEvidenceRefs ?? []).map((ref) => `instructional_specificity_evidence:${ref}`),
+        ...card.provenance,
+      ],
+    };
+  });
 
   return {
     status: 'valid',
@@ -139,6 +204,7 @@ export function buildTutorialPackage(
       objectiveRef: route.objectiveRef,
       successCriteriaRef: route.successCriteriaRef,
       evidenceTargetRef: route.evidenceTargetRef,
+      canonicalArtifactIdentity,
       pathwayPlanRef: route.pathwayPlanRef ?? null,
       steps: route.steps,
       cards,

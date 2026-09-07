@@ -33,6 +33,19 @@ function route(overrides: Partial<RoutedTutorialNeed> = {}): RoutedTutorialNeed 
   };
 }
 
+function businessCardRoute(
+  authoringOverride: PromptAuthoringInput = authoring,
+  stepOverride: Record<string, unknown> = {},
+): RoutedTutorialNeed {
+  const base = route({ canonicalArtifactIdentity: 'business-card' });
+  return {
+    ...base,
+    steps: base.steps.map((step, index) => index === 0
+      ? { ...step, authoring: authoringOverride, visualArtifactIdentity: 'business-card', ...stepOverride }
+      : step),
+  };
+}
+
 describe('PPUX #1776 routed Tutorial Package', () => {
   it('builds a reusable package only for an explicit tutorial-process route', () => {
     const result = buildTutorialPackage(tutorial0ReviewedTutorial, route());
@@ -81,5 +94,95 @@ describe('PPUX #1776 routed Tutorial Package', () => {
       reasonRef: 'route-reason://not-needed',
     }];
     expect(buildTutorialPackage(tutorial0ReviewedTutorial, route({ steps })).blockers).toContain('step-not-retained');
+  });
+});
+
+describe('PPUX #2010 artifact identity and instructional specificity', () => {
+  it('preserves business-card identity in the package, provenance, and ready prompt', () => {
+    const result = buildTutorialPackage(tutorial0ReviewedTutorial, businessCardRoute());
+    expect(result.status).toBe('valid');
+    expect(result.package?.canonicalArtifactIdentity).toBe('business-card');
+    expect(result.package?.cards[0].provenance).toContain('canonical_artifact:business-card');
+    expect(result.package?.cards[0].portablePrompt).toContain('Canonical task/artifact identity: business-card');
+  });
+
+  it('rejects an event-flyer substitution without owner-backed exemplar evidence', () => {
+    const result = buildTutorialPackage(tutorial0ReviewedTutorial, businessCardRoute(authoring, {
+      visualArtifactIdentity: 'event-flyer',
+    }));
+    expect(result.status).toBe('blocked');
+    expect(result.blockers).toContain('artifact-identity-mismatch');
+    expect(result.blockers).toContain('cross-context-exemplar-evidence-missing');
+  });
+
+  it('permits an owner-backed cross-context exemplar without replacing canonical identity', () => {
+    const result = buildTutorialPackage(tutorial0ReviewedTutorial, businessCardRoute(authoring, {
+      visualArtifactIdentity: 'event-flyer',
+      crossContextExemplarEvidenceRef: 'teacher-modeling://approved-transfer-example',
+    }));
+    expect(result.status).toBe('valid');
+    expect(result.package?.canonicalArtifactIdentity).toBe('business-card');
+    expect(result.package?.cards[0].portablePrompt).toContain('Cross-context exemplar: event-flyer');
+    expect(result.package?.cards[0].portablePrompt).toContain('do not replace the canonical task/artifact identity');
+  });
+
+  it('blocks unsupported exact point and spacing prescriptions', () => {
+    const exactAuthoring: PromptAuthoringInput = {
+      ...authoring,
+      targetState: 'title is 24 pt and subtitle is 12 pt',
+      mustShow: ['8 pt spacing'],
+    };
+    const result = buildTutorialPackage(tutorial0ReviewedTutorial, businessCardRoute(exactAuthoring));
+    expect(result.status).toBe('blocked');
+    expect(result.blockers).toContain('unsupported-instructional-specificity');
+  });
+
+  it('allows exact non-UI prescriptions only with explicit owner-backed evidence', () => {
+    const exactAuthoring: PromptAuthoringInput = {
+      ...authoring,
+      targetState: 'title is 24 pt and subtitle is 12 pt',
+      mustShow: ['8 pt spacing'],
+    };
+    const result = buildTutorialPackage(tutorial0ReviewedTutorial, businessCardRoute(exactAuthoring, {
+      instructionalSpecificityEvidenceRefs: ['teacher-modeling://approved-exact-values'],
+    }));
+    expect(result.status).toBe('valid');
+    expect(result.package?.cards[0].provenance).toContain(
+      'instructional_specificity_evidence:teacher-modeling://approved-exact-values',
+    );
+  });
+
+  it('keeps semantic hierarchy guidance eligible without exact numeric prescriptions', () => {
+    const semanticAuthoring: PromptAuthoringInput = {
+      ...authoring,
+      targetState: 'the primary element is more prominent',
+      mustShow: ['clear visual hierarchy'],
+    };
+    expect(buildTutorialPackage(tutorial0ReviewedTutorial, businessCardRoute(semanticAuthoring)).status).toBe('valid');
+  });
+
+  it('leaves software UI detail to the existing fidelity gate instead of specificity authority', () => {
+    const uiAuthoring: PromptAuthoringInput = {
+      ...authoring,
+      applicationContext: 'Adobe Express editor',
+      targetState: 'set the size control to 24 pt',
+      mustShow: ['24 pt'],
+      requestedUiDetails: ['24 pt'],
+      screenFidelityRequired: true,
+    };
+    const result = buildTutorialPackage(tutorial0ReviewedTutorial, businessCardRoute(uiAuthoring));
+    expect(result.blockers).not.toContain('unsupported-instructional-specificity');
+  });
+
+  it('does not add assessment, composition, provider, execution, production, or external-write authority', () => {
+    const result = buildTutorialPackage(tutorial0ReviewedTutorial, businessCardRoute());
+    expect(result.status).toBe('valid');
+    expect(result.package?.objectiveRef).toBe('objective://unit0/files');
+    expect(result.package?.successCriteriaRef).toBe('criteria://unit0/files');
+    expect(result.package?.evidenceTargetRef).toBe('evidence://unit0/files');
+    expect(result.package?.executionAuthorized).toBe(false);
+    expect(result.package?.productionAuthorized).toBe(false);
+    expect(result.package?.externalWriteAuthorized).toBe(false);
+    expect(JSON.stringify(result.package)).not.toMatch(/Gemini|Microsoft 365|Meta Instant/);
   });
 });
