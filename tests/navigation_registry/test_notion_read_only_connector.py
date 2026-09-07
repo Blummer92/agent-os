@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from navigation_registry.connectors.base import ConnectorError, ConnectorErrorCode, RegistryResource
 from navigation_registry.connectors.notion import NotionReadOnlyConnector
 
@@ -85,6 +87,35 @@ def test_incomplete_metadata_maps_to_metadata_incomplete() -> None:
 
     assert isinstance(result, ConnectorError)
     assert result.code == ConnectorErrorCode.METADATA_INCOMPLETE
+
+
+@pytest.mark.parametrize("field", ["human_review_required", "archived", "properties_schema_visible"])
+@pytest.mark.parametrize("value", ["false", 0, [], {}, None])
+def test_malformed_boolean_metadata_fails_closed(field, value) -> None:
+    fixture = load_fixture("page.json")
+    fixture[field] = value
+    connector = NotionReadOnlyConnector(fixtures={"malformed": fixture})
+
+    result = connector.lookup_resource("malformed")
+
+    assert isinstance(result, ConnectorError)
+    assert result.code == ConnectorErrorCode.METADATA_INCOMPLETE
+    assert result.evidence["malformed_boolean"] == field
+
+
+def test_exact_boolean_metadata_is_preserved() -> None:
+    fixture = load_fixture("page.json")
+    fixture.update(
+        human_review_required=True,
+        archived=True,
+        properties_schema_visible=False,
+    )
+    result = NotionReadOnlyConnector(fixtures={"strict": fixture}).lookup_resource("strict")
+
+    assert isinstance(result, RegistryResource)
+    assert result.human_review_required is True
+    assert result.metadata["archived"] is True
+    assert result.metadata["properties_schema_visible"] is False
 
 
 def test_connector_health_identifies_fixture_compatibility_role() -> None:
