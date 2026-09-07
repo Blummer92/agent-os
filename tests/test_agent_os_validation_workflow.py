@@ -71,10 +71,22 @@ def test_validation_gate_executes_only_canonical_aggregate_command():
 def test_validation_gate_preserves_pr_head_validation_without_path_exemptions():
     content = WORKFLOW.read_text(encoding="utf-8")
     pull_request = content.index("pull_request:")
-    workflow_dispatch = content.index("workflow_dispatch:")
-    trigger_block = content[pull_request:workflow_dispatch]
+    push = content.index("push:")
+    trigger_block = content[pull_request:push]
     assert "main" in trigger_block
     assert "synchronize" in trigger_block
+    assert "paths:" not in trigger_block
+    assert "paths-ignore:" not in trigger_block
+
+
+def test_validation_gate_validates_every_canonical_main_push_without_path_exemptions():
+    content = WORKFLOW.read_text(encoding="utf-8")
+    push = content.index("push:")
+    workflow_dispatch = content.index("workflow_dispatch:")
+    trigger_block = content[push:workflow_dispatch]
+
+    assert "branches:" in trigger_block
+    assert re.search(r"(?m)^\s*- main\s*$", trigger_block)
     assert "paths:" not in trigger_block
     assert "paths-ignore:" not in trigger_block
 
@@ -148,6 +160,8 @@ def test_validation_gate_uses_read_only_permissions_and_bounded_execution():
     assert "group:" in content
     assert "cancel-in-progress:" in content
     assert "github.event.pull_request.number" in content
+    assert "github.run_id" in content
+    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in content
 
 
 def test_validation_gate_installs_same_dependencies_as_cloud_build():
