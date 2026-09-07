@@ -137,13 +137,20 @@ jobs:
           DISPATCH_HEAD_SHA: ${{ steps.candidate.outputs.head_sha }}
           DISPATCH_MODE: ${{ steps.candidate.outputs.mode }}
         run: |
+          tested_sha="$(git rev-parse HEAD)"
           {
             echo "## Agent OS Validation Gate"
             echo
-            echo "- Head SHA (pull request head): \`${PR_HEAD_SHA:-${DISPATCH_HEAD_SHA:-not applicable for this event}}\`"
-            echo "- Checked-out (merge) SHA: \`$GITHUB_SHA\`"
+            echo "- Workflow run SHA: \`$GITHUB_SHA\`"
+            echo "- Tested checkout SHA: \`$tested_sha\`"
             echo "- Event: \`$GITHUB_EVENT_NAME\`"
+            if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+              echo "- Pull request head SHA: \`$PR_HEAD_SHA\`"
+            fi
             if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+              if [ "$DISPATCH_MODE" = "final-candidate" ]; then
+                echo "- Admitted candidate SHA: \`$DISPATCH_HEAD_SHA\`"
+              fi
               echo "- Dispatch mode: \`${DISPATCH_MODE:-diagnostic}\`"
             fi
             echo "- Aggregate validation, including repository structure validation, executed in GitHub Actions."
