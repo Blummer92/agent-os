@@ -104,6 +104,21 @@ def _strict_receipt_bool(payload: Mapping[str, object], field_name: str) -> bool
     return value
 
 
+def _strict_receipt_fields(payload: Mapping[str, object]) -> tuple[int, str, tuple[str, ...]]:
+    mutation_count = payload.get("mutation_count", 0)
+    if type(mutation_count) is not int or mutation_count not in {0, 1}:
+        raise ValueError("refresh receipt mutation_count must be 0 or 1")
+    status = payload.get("status", "blocked")
+    if type(status) is not str or not status.strip():
+        raise ValueError("refresh receipt status must be a non-empty string")
+    raw_reasons = payload.get("reason_codes", ())
+    if type(raw_reasons) not in {tuple, list}:
+        raise ValueError("refresh receipt reason_codes must be a list or tuple")
+    if any(type(item) is not str or not item for item in raw_reasons):
+        raise ValueError("refresh receipt reason_codes must contain non-empty strings")
+    return mutation_count, status, tuple(sorted(set(raw_reasons)))
+
+
 def _current_pr_evidence(github_client: object, repository: str, pr_number: int) -> tuple[str, str, tuple[str, ...]]:
     repo = github_client.get_repo(repository)
     pr = repo.get_pull(pr_number)
@@ -154,10 +169,8 @@ def run_branch_refresh_actions(*, trigger: BranchRefreshActionsTrigger, github_c
 
     receipt = refresh_callable(**resolved.refresh_pr_kwargs(repository_root=repository_root, invocation_id=invocation_id, environment=environment))
     payload = _receipt_dict(receipt)
-    mutation_count = int(payload.get("mutation_count", 0))
-    status = str(payload.get("status", "blocked"))
-    reason_codes = tuple(sorted({str(item) for item in payload.get("reason_codes", ()) if isinstance(item, str) and item}))
     try:
+        mutation_count, status, reason_codes = _strict_receipt_fields(payload)
         side_effects = _strict_receipt_bool(payload, "side_effects_performed")
         authorization_consumed = _strict_receipt_bool(payload, "authorization_consumed")
     except ValueError:
