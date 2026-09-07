@@ -9,6 +9,15 @@ permissions:
   contents: read
   issues: read
 
+# One issue lineage keeps at most one useful current report execution. Each run derives its
+# report solely from its own event payload and publishes only to its own step summary, so a
+# superseded run holds no evidence any other workflow, check, or contract consumes. Manual runs
+# fall back to the unique run id and are additionally excluded from cancellation, so they can
+# never collapse one another.
+concurrency:
+  group: agent-os-issue-label-report-${{ github.event_name }}-${{ github.event.issue.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'issues' }}
+
 jobs:
   report:
     name: Run issue label report
