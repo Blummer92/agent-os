@@ -1,4 +1,4 @@
-"""Regression guards for #1827 backlog-first selection and #1957 batch progression."""
+"""Regression guards for #1827 backlog-first selection and #1957/#2026 batch progression."""
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -72,6 +72,26 @@ def test_bug_batch_stops_later_candidates_only_for_shared_blocker() -> None:
         assert blocker in workflow
     assert "continue until the requested count is worked or the reconciled pool is exhausted" in workflow
     assert "report the honest shortfall" in workflow
+
+
+def test_requested_count_larger_than_eligible_backlog_continues_to_fresh_discovery() -> None:
+    workflow = normalized(AGENTS)
+    assert "discover new bugs only when the reconciled backlog cannot satisfy the requested count" in workflow
+    assert "continue until the requested count is worked or the reconciled pool is exhausted" in workflow
+    assert "Do not create issues merely to pad a requested count." in workflow
+
+
+def test_one_successful_pr_is_not_parent_batch_completion() -> None:
+    routing = normalized(ORCHESTRATOR)
+    assert "maintain a mission cursor until every requested item has a terminal mission state" in routing
+    assert "An item-local blocker does not stop independently actionable later items." in routing
+    assert "untouched` is intermediate only and must be zero before reporting the bounded mission complete" in routing
+
+
+def test_process_bug_logging_does_not_replace_parent_cursor() -> None:
+    workflow = normalized(AGENTS)
+    assert "treat bug capture as subordinate bookkeeping rather than a terminal outcome" in workflow
+    assert "continue the still-authorized parent mission without requiring another user prompt" in workflow
 
 
 def test_backlog_first_selection_does_not_expand_authority() -> None:
