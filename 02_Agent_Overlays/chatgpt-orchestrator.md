@@ -125,19 +125,31 @@ Before selecting a GitHub execution path for already-authorized work, classify t
 - Create GitHub Change Requests for lesson artifacts only after explicit approval.
 - If destination is unclear, stop and ask whether the target is Notion, Drive, or GitHub.
 
-## Handoff Rules
-- Keep context packets small and owner-specific.
-- Do not copy entire databases or full issue backlogs into handoffs.
-- Preserve source links, exact issue/PR identities, authorization boundaries, and stop conditions.
-- Internal owner routing is preferred over user-visible copy/paste when authorization remains applicable.
-- Handoffs never create authority that the source request or governing policy did not provide.
+## Response Ordering Rule
+Select the presentation profile, visible ordering, progress labeling, compact operator semantics, and report fields from `01_Shared_Standards/global-engineering/agent-interaction-output-standard.md`; routing and handoff fields stay internal evidence unless the profile requires them and never displace the requested answer or artifact.
+For ordinary Agent OS implementation, review, repair, and terminal handoff turns, enforce that canonical compact operator rendering at runtime. `Complete handoff` and `Complete the handoff` select compact implementation/review rendering; `Next step` leads with the single supported next action; `Work on #<issue>` selects the issue-implementation profile; PR review leads with exact-head, check, and blocking-review state before any bounded compact status block.
+Classroom-material responses follow `artifact-first-response-standard.md`: lead with the requested artifact, preview, or content specification before backend routing and governance reporting. Rubric or assessment-design consultation follows `teacher-decision-studio-standard.md` and `teacher-decision-studio-previews-standard.md`: a table-first comparison with per-option worksheet and PDF previews, never an auto-approved choice. These domain standards refine the classroom profile and do not create a competing output schema.
 
 ## Stop Conditions
-Stop when authorization, source of truth, target identity, bounded scope, or a material decision is unclear; when an excluded surface is required without separate authorization; or when no capable authorized execution route exists after bounded rerouting.
+Stop when the target, source of truth, permission, owner, or requested write surface is unclear, or when current Safe Implementation Lane authorization no longer covers the next action.
+Stop when canonical request interpretation is invalid, stale, target-mismatched, or materially ambiguous, or when a material schema/architecture/ownership decision is required.
+Do not stop merely because an internal owner changes while the next action remains authorized and bounded.
+Do not stop merely because tool/schema/capability discovery succeeded while the authorized mission remains unfinished; apply `01_Shared_Standards/github/tool-discovery-continuation.md`.
 
 ## Version
-0.10.0
+0.3.6
+Compatibility lineage: 0.3.5, 0.3.4, 0.3.3, 0.3.2, 0.3.1
 
 ## Changelog
-- 0.10.0 requires canonical readback and parent-mission reconciliation after successful subordinate GitHub mutations during unfinished finite missions (#2006).
-- 0.9.0 requires Coding Lessons Learned preflight before substantial investigation/implementation/repair reasoning and preserves retry-specific failed-repair re-entry.
+- 0.3.6 treats a successful subordinate GitHub mutation during an unfinished finite mission as provisional intermediate evidence: read back the canonical mutated target, reacquire the parent issue/PR/branch/head/CI checkpoint, and continue the still-authorized parent mission instead of emitting its final report (#2006). Existing continuation, finite-mission reconciliation, and authority-ceiling contracts are reused unchanged.
+- 0.3.5 prevents false owner handoff during failed-CI diagnosis: an insufficient diagnostic read is action/surface evidence, bounded alternate canonical GitHub evidence routes must be inspected before `BLOCKED_DIAGNOSTIC_SURFACE`, current head identity is reacquired across route transitions, repository owners are not used as manual CI-evidence transports, and a connector that can prove annotations/equivalent evidence exist but cannot read them reports an integration-capability blocker instead (#1614). This consumes #1237 reroute semantics and completed #1251 red-CI boundedness without adding another router, CI state machine, retry system, or authority model.
+- 0.3.4 wires the bounded #1608 tool/schema discovery continuation contract into runtime routing and stop conditions: successful discovery during an unfinished authorized mission is intermediate evidence, not a stop condition, per `01_Shared_Standards/github/tool-discovery-continuation.md`, reusing existing #1237 reroute, #1524 terminal reconciliation, and #1200 no-progress ownership with no new agent, overlay, framework, or scheduler.
+- 0.3.3 points the CKR6 Lessons Learned preflight route at the now-instantiated live activation bridge, `agent_memory_context_manager.orchestrate_lesson_activation(...)` (#1516 / CKR11): bounded known-reference-first or filtered live Notion retrieval, deterministic finite-vocabulary row normalization with explicit fail-closed non-ready outcomes, and unchanged reuse of the #1144 CKR2 selector and the #1520 shared candidate-owned provenance invariant with no Lessons-specific duplicate guard.
+- 0.3.2 wires the bounded CKR10 Decision/ADR preflight into coding-task routing as a completion repair for #1369: Decision-sensitive classification before substantial reasoning, zero-read `not-needed`, exact-reference-first bounded lookup, #1144 selector reuse, existing Memory Manager projection, GitHub-over-Notion authority, nonrecursive coexistence with Lessons/Patterns, and safe outage behavior.
+- 0.3.1 wires the bounded CKR6 Lessons Learned preflight into coding-task routing: zero-read `not-needed`, bounded read-only lesson normalization, #1144 selector reuse, existing Memory Manager handoff projection, GitHub-over-Notion authority, safe outage behavior, and no new agent/retrieval/persistence system (#1357).
+- 0.3.0 includes the bounded Picture Perfect / PPUX tutorial prompt-artifact route through the existing Instructional Materials Coach capability, preserving current PPUX state including blockers/capture evidence and forbidding generic software-UI reconstruction fallback (#1280), while retaining the Terminal Fast Lane composition through canonical #924 request interpretation and existing release-authority gates (#1309).
+- 0.2.1 consolidates Safe Implementation Lane activation, distinguishes durable artifact non-authority from later direct-owner authorization, and resumes automatically after one mechanical readiness intervention (#1274).
+- 0.2.0 wires the canonical compact Agent Interaction Output Standard into runtime-facing Orchestrator behavior for implementation, review, handoff, continuation, and PR-review turns; bounded progress is evidence-based, conditional fields remain conditional, and no new state, routing, or authority system is introduced (#1086).
+- 0.1.9 consumes canonical #924 structured request interpretation as upstream routing evidence and delegates detailed conformance/freshness rules to `chatgpt-orchestrator-request-interpretation.md` (#925).
+- 0.1.8 inherits the canonical Agent Interaction Output Standard (#926) for presentation-profile selection, visible ordering, and progress labeling, while preserving existing execution-surface preflight, Safe-Lane, finite-mission, artifact-first, and Teacher Decision Studio behavior.
+- 0.1.7 requires a live execution-surface capability preflight before GitHub execution routing, reuses #918 route semantics and environment-health evidence, treats missing surface tooling as a capability mismatch rather than repository-issue failure, and preserves Safe-Lane authorization across internal reroutes without widening authority (#1039).
