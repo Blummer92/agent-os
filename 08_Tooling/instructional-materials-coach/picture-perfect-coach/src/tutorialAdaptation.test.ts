@@ -18,6 +18,7 @@ function pkg(stepCount = 1): TutorialPackage {
     objectiveRef: 'objective-hierarchy',
     successCriteriaRef: 'success-purposeful-hierarchy',
     evidenceTargetRef: 'evidence-designed-layout',
+    canonicalArtifactIdentity: null,
     pathwayPlanRef: null,
     steps: Array.from({ length: stepCount }, (_, index) => ({
       reviewStepId: `step-${index + 1}`,

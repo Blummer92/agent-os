@@ -18,6 +18,7 @@ function packageWith(disposition: TutorialPackage['steps'][number]['disposition'
     objectiveRef: 'objective-layout-hierarchy',
     successCriteriaRef: 'success-hierarchy-purpose',
     evidenceTargetRef: 'evidence-layout-product',
+    canonicalArtifactIdentity: null,
     pathwayPlanRef: null,
     steps: [{
       reviewStepId: 'step-1',
