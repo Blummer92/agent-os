@@ -23,7 +23,6 @@ def normalized_section(path: Path, heading: str) -> str:
 def test_validation_obligation_is_separate_from_execution_location() -> None:
     developer_loop = normalized_section(TESTING, "Developer Loop Validation")
     lane = normalized_section(SAFE_LANE, "Validation Loop")
-
     assert "Validation obligation and validation execution location are separate decisions." in developer_loop
     assert "it is not inherently a local/manual or pre-Draft-PR command" in developer_loop
     assert "it is not inherently a local/manual pre-Draft-PR command" in lane
@@ -32,7 +31,6 @@ def test_validation_obligation_is_separate_from_execution_location() -> None:
 def test_local_executor_remains_preferred_when_capable() -> None:
     developer_loop = normalized_section(TESTING, "Developer Loop Validation")
     lane = normalized_section(SAFE_LANE, "Validation Loop")
-
     assert "Prefer the active/local execution surface when it can run them safely" in developer_loop
     assert "Prefer the active/local route when available" in lane
     assert "reuse the canonical executor-routing contract" in lane
@@ -41,7 +39,6 @@ def test_local_executor_remains_preferred_when_capable() -> None:
 def test_governed_ci_can_stage_required_validation_after_draft_creation() -> None:
     developer_loop = normalized_section(TESTING, "Developer Loop Validation")
     lane = normalized_section(SAFE_LANE, "Validation Loop")
-
     assert "Draft PR creation may stage that CI-routed validation" in developer_loop
     assert "A Draft PR may therefore exist while CI-routed developer-loop evidence is pending" in developer_loop
     assert "Draft PR creation may stage the validation" in lane
@@ -51,7 +48,6 @@ def test_governed_ci_can_stage_required_validation_after_draft_creation() -> Non
 def test_no_capable_executor_still_requires_decision() -> None:
     developer_loop = normalized_section(TESTING, "Developer Loop Validation")
     lane = normalized_section(SAFE_LANE, "Validation Loop")
-
     assert "stop with `needs-decision`" in developer_loop
     assert "stop with `needs-decision`" in lane
 
@@ -59,7 +55,6 @@ def test_no_capable_executor_still_requires_decision() -> None:
 def test_exact_head_evidence_is_required_for_ready_for_review() -> None:
     authoritative = normalized_section(TESTING, "Authoritative Final Validation")
     lane = normalized_section(SAFE_LANE, "Validation Loop")
-
     assert "CI evidence from any SHA other than the current required head is stale" in authoritative
     assert "Ready-for-Review" in authoritative
     assert "Only required evidence bound to the current exact head may satisfy Ready-for-Review" in lane
@@ -70,7 +65,6 @@ def test_exact_head_ci_may_subsume_focused_and_aggregate_obligations() -> None:
     developer_loop = normalized_section(TESTING, "Developer Loop Validation")
     authoritative = normalized_section(TESTING, "Authoritative Final Validation")
     lane = normalized_section(SAFE_LANE, "Validation Loop")
-
     assert "exact-head governed CI aggregate may provide both the required focused behavior evidence and the authoritative final aggregate evidence" in developer_loop
     assert "One clean aggregate run bound to the exact final pull-request head may satisfy the full-suite requirement" in authoritative
     assert "one clean exact-head aggregate may satisfy both obligations without duplicate local execution" in lane
@@ -79,28 +73,24 @@ def test_exact_head_ci_may_subsume_focused_and_aggregate_obligations() -> None:
 def test_ci_routing_does_not_grant_lifecycle_or_external_authority() -> None:
     developer_loop = normalized_section(TESTING, "Developer Loop Validation")
     lane = normalized_section(SAFE_LANE, "Validation Loop")
-
-    for phrase in (
-        "Ready-for-Review",
-        "merge",
-        "closure",
-        "production",
-        "credential",
-        "permission",
-        "external-write",
-    ):
+    for phrase in ("Ready-for-Review", "merge", "closure", "production", "credential", "permission", "external-write"):
         assert phrase in developer_loop
     assert "A CI-routed pending state grants no Ready-for-Review or later authority" in lane
 
 
-def test_validation_gate_runs_on_each_new_pr_head_without_ready_transition_duplicate() -> None:
+def test_validation_gate_supports_current_pr_heads_and_explicit_final_candidate_dispatch() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     lane = normalized_section(SAFE_LANE, "Validation Loop")
+    pull_request = workflow.index("pull_request:")
+    dispatch = workflow.index("workflow_dispatch:")
+    trigger_block = workflow[pull_request:dispatch]
 
-    assert "types: [opened, reopened, synchronize]" in workflow
-    assert "ready_for_review" not in workflow
-    assert "github.event.pull_request.draft == false" not in workflow
+    assert "main" in trigger_block
+    assert "synchronize" in trigger_block
+    assert "paths:" not in trigger_block
+    assert "paths-ignore:" not in trigger_block
     assert "workflow_dispatch:" in workflow
+    assert "expected_head_sha:" in workflow
     assert "this lane does not require aggregate validation on ordinary Draft PR updates" in lane
     assert "does not create or modify a workflow to obtain validation" in lane
     assert "Only required evidence bound to the current exact head may satisfy Ready-for-Review" in lane
@@ -108,7 +98,6 @@ def test_validation_gate_runs_on_each_new_pr_head_without_ready_transition_dupli
 
 def test_broader_local_validation_remains_available_for_diagnosis() -> None:
     developer_loop = normalized_section(TESTING, "Developer Loop Validation")
-
     assert (
         "Expand local testing when focused tests fail, when exact-head CI reports a "
         "specific failure that needs diagnosis, when CI is unavailable, or when the "

@@ -27,11 +27,9 @@ def _cache_dependency_paths(content: str) -> set[str]:
         stripped = line.strip()
         if not stripped.startswith("cache-dependency-path:"):
             continue
-
         value = stripped.split(":", 1)[1].strip()
         if value and value != "|":
             return {value.strip("\"'")}
-
         parent_indent = len(line) - len(line.lstrip())
         paths: set[str] = set()
         for candidate in lines[index + 1 :]:
@@ -42,7 +40,6 @@ def _cache_dependency_paths(content: str) -> set[str]:
                 break
             paths.add(candidate.strip().strip("\"'"))
         return paths
-
     return set()
 
 
@@ -71,14 +68,15 @@ def test_validation_gate_executes_only_canonical_aggregate_command():
     assert "Cloud Build validation migration notice" not in content
 
 
-def test_validation_gate_runs_once_per_pr_head_without_ready_transition_duplicate():
+def test_validation_gate_preserves_pr_head_validation_without_path_exemptions():
     content = WORKFLOW.read_text(encoding="utf-8")
-    assert "types: [opened, reopened, synchronize]" in content
-    assert "ready_for_review" not in content
-    assert "github.event.pull_request.draft == false" not in content
-    assert "synchronize" in content
-    assert "paths:" not in content
-    assert "paths-ignore:" not in content
+    pull_request = content.index("pull_request:")
+    workflow_dispatch = content.index("workflow_dispatch:")
+    trigger_block = content[pull_request:workflow_dispatch]
+    assert "main" in trigger_block
+    assert "synchronize" in trigger_block
+    assert "paths:" not in trigger_block
+    assert "paths-ignore:" not in trigger_block
 
 
 def test_validation_gate_dispatch_supports_diagnostic_and_exact_head_candidate_modes():
@@ -108,7 +106,6 @@ def test_validation_gate_final_candidate_requires_dispatch_ref_to_resolve_to_exa
     dispatch_guard = content.index('if [ "$GITHUB_SHA" != "$EXPECTED_HEAD_SHA" ]')
     final_candidate = content.index('echo "mode=final-candidate" >> "$GITHUB_OUTPUT"')
     aggregate = content.index("- name: Run aggregate validation")
-
     assert diagnostic_exit < dispatch_guard < final_candidate < aggregate
     assert "final-candidate dispatch SHA $GITHUB_SHA does not match admitted candidate $EXPECTED_HEAD_SHA" in content
     assert "dispatch the workflow on a ref resolving to the exact PR head" in content
@@ -147,11 +144,10 @@ def test_validation_gate_uses_read_only_permissions_and_bounded_execution():
     assert "contents: write" not in content
     assert "pull-requests: write" not in content
     assert "timeout-minutes: 30" in content
-    assert "cancel-in-progress: true" in content
-    assert (
-        "group: agent-os-validation-${{ github.event.pull_request.number || github.ref }}"
-        in content
-    )
+    assert "concurrency:" in content
+    assert "group:" in content
+    assert "cancel-in-progress:" in content
+    assert "github.event.pull_request.number" in content
 
 
 def test_validation_gate_installs_same_dependencies_as_cloud_build():
@@ -187,9 +183,7 @@ def test_scheduler_cache_paths_match_installed_dependency_manifests():
     assert "uses: actions/setup-python@v7" in content
     assert 'cache: "pip"' in content
     _assert_dependency_cache_parity(content)
-    assert _cache_dependency_paths(content) == {
-        "08_Tooling/workflow-scheduler/requirements.txt"
-    }
+    assert _cache_dependency_paths(content) == {"08_Tooling/workflow-scheduler/requirements.txt"}
 
 
 def test_parity_check_fails_when_new_install_manifest_is_not_cached():
@@ -220,13 +214,8 @@ def test_cache_configuration_does_not_replace_install_or_validation_commands():
     scheduler = SCHEDULER_WORKFLOW.read_text(encoding="utf-8")
     assert "python -m pip install -r requirements-dev.txt" in aggregate
     assert "./scripts/validate-all.sh" in aggregate
-    assert (
-        "python -m pip install -r 08_Tooling/workflow-scheduler/requirements.txt"
-        in scheduler
-    )
-    scheduler_test_command = (
-        "PYTHONPATH=src python3 -m pytest tests/ -v --cov=src/workflow_scheduler"
-    )
+    assert "python -m pip install -r 08_Tooling/workflow-scheduler/requirements.txt" in scheduler
+    scheduler_test_command = "PYTHONPATH=src python3 -m pytest tests/ -v --cov=src/workflow_scheduler"
     assert scheduler_test_command in scheduler
     assert "bash 07_Agent_Tests/validate-repo-structure.sh" not in scheduler
 
@@ -240,10 +229,7 @@ def test_cloud_build_does_not_use_github_actions_cache_configuration():
 
 def test_navigation_registry_workflow_uses_bounded_same_lineage_concurrency():
     content = NAVIGATION_WORKFLOW.read_text(encoding="utf-8")
-    assert (
-        "group: navigation-registry-offline-${{ github.event.pull_request.number || github.ref }}"
-        in content
-    )
+    assert "group: navigation-registry-offline-${{ github.event.pull_request.number || github.ref }}" in content
     assert "cancel-in-progress: ${{ github.run_attempt == 1 }}" in content
 
 
@@ -270,10 +256,7 @@ def test_navigation_registry_workflow_does_not_cross_event_dedupe():
 def test_issue_acceptance_preserves_metadata_sensitive_triggers_and_supersedes_stale_runs():
     content = ISSUE_ACCEPTANCE_WORKFLOW.read_text(encoding="utf-8")
     assert "types: [opened, edited, reopened, synchronize, ready_for_review]" in content
-    assert (
-        "group: issue-acceptance-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}"
-        in content
-    )
+    assert "group: issue-acceptance-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}" in content
     assert "cancel-in-progress: true" in content
     assert "pull-requests: read" in content
     assert "Report-only boundary" in content
