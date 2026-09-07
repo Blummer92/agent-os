@@ -336,8 +336,9 @@ def test_classroom_fixture_preserves_artifact_first_and_decision_studio() -> Non
     assert "destinations are unchanged" in classroom
     assert "never fabricated" in classroom
 
-    # The consumed standards themselves stay unchanged in substance.
-    assert "0.1.0" in section(ARTIFACT_FIRST, "Version")
+    # The consumed standards keep their canonical shape; the artifact-first
+    # standard is at 0.1.1 after the #1945 required-visual-components clause.
+    assert "0.1.1" in section(ARTIFACT_FIRST, "Version")
     assert "0.1.0" in section(TEACHER_STUDIO, "Version")
     assert "Required Order" in read(ARTIFACT_FIRST)
     assert "Locked Interaction Model" in read(TEACHER_STUDIO)
