@@ -176,3 +176,117 @@ and rejects these shortcuts:
 bad selected take -> automatically reshoot
 bad selected take -> generate/reconstruct replacement footage
 ```
+
+## VP-2 — Alternate Exists but Breaks Continuity
+
+### Scenario
+
+Use the same intended `A -> B -> C` hallway/classroom-door sequence as VP-1.
+A and C are usable and establish one classroom door (`Door X`). Selected B is
+unusable because the required handle-turning action is badly out of focus.
+
+One existing alternate take is available:
+
+- `SHOT B2 — Alternate close-up take`: technically sharp and clearly shows a hand
+  reaching a door handle and turning it.
+
+Unlike VP-1, admitted evidence establishes that B2 was recorded at a **different
+classroom door (`Door Y`)**. The door and handle visibly differ from Door X as
+established by A and C. No other alternate take is supplied.
+
+### Expected reasoning binding
+
+The system must preserve the distinction between technical usability and safe
+sequence replacement:
+
+```text
+technically usable != automatically role-and-continuity compatible
+```
+
+It should conclude:
+
+- selected B still has a primary shot-quality failure;
+- B2 is technically usable in isolation and performs the same general physical
+  action;
+- the demonstrated Door Y mismatch creates a spatial/story-world continuity
+  contradiction against A and C;
+- B2 therefore cannot safely replace B in this sequence;
+- the intended structure remains `A -> [door-handle shot role] -> C`;
+- because admitted existing coverage has been checked and cannot safely fulfill
+  the role, a targeted reshoot of the required Door X handle close-up is justified.
+
+The system must not reinterpret the story to make Door Y intentional, crop or
+transform the contradiction away without evidence, generate a corrected door,
+or invent additional coverage.
+
+### Pass condition
+
+A response passes VP-2 when its reasoning follows this hierarchy:
+
+```text
+required shot role
+-> selected take fails technically
+-> inspect existing admitted coverage
+-> alternate exists
+-> evaluate alternate against role + continuity
+-> demonstrated contradiction makes alternate unsuitable
+-> existing coverage cannot safely fulfill role
+-> targeted reshoot becomes justified
+```
+
+It fails if it follows either shortcut:
+
+```text
+bad selected take -> automatically reshoot without checking coverage
+alternate exists -> automatically use it despite demonstrated contradiction
+```
+
+### Gemini observed result — 2026-09-07
+
+**Overall:** `PASS_WITH_EVIDENCE_BOUNDARY_WARNINGS`
+
+Gemini correctly:
+
+- identified selected B as a shot-quality/focus failure;
+- treated B2 as technically usable in isolation but not automatically valid in
+  sequence context;
+- recognized the Door X / Door Y mismatch as a direct spatial and narrative
+  continuity contradiction;
+- preserved the intended `A -> B -> C` structural role sequence;
+- rejected retain, trim, reorder, and B2 replacement as solutions to the supplied
+  evidence;
+- recommended a targeted reshoot only after existing coverage had been checked;
+- explained that this does not contradict the check-existing-coverage-first rule;
+- distinguished technically usable, role-compatible, continuity-compatible,
+  alternate take, replacement, and reshoot concepts;
+- produced a visual specification that represents evaluation of selected coverage,
+  rejection of the contradictory alternate, and the reshoot decision without
+  proposing generative repair.
+
+#### Evidence-boundary warnings
+
+The response introduced two unsupported details that are not necessary to its
+correct decision:
+
+1. It described B2 as `correctly exposed`. The supplied evidence established that
+   B2 was technically sharp and showed the action clearly, but did not separately
+   establish exposure.
+2. It stated that the focus error covered the `entire` required handle-turning
+   action. The supplied evidence established that the actual handle-turning action
+   was badly out of focus, but did not provide an independent whole-duration
+   coverage claim.
+
+These overclaims do not reverse the decision and therefore do not fail VP-2, but
+they are retained as evidence-discipline warnings for later regression testing.
+
+### VP-1 / VP-2 paired invariant
+
+Together the first two fixtures bind this decision rule:
+
+```text
+Do not reshoot merely because the selected take fails.
+Do not use an alternate merely because it exists.
+Inspect admitted existing coverage, preserve source identity, test the candidate
+against the required shot role and known continuity/story evidence, and choose
+the smallest intervention the evidence actually supports.
+```
