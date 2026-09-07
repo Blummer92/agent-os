@@ -85,7 +85,7 @@ def test_one_successful_pr_is_not_parent_batch_completion() -> None:
     routing = normalized(ORCHESTRATOR)
     assert "maintain a mission cursor until every requested item has a terminal mission state" in routing
     assert "An item-local blocker does not stop independently actionable later items." in routing
-    assert "untouched` is intermediate only and must be zero before reporting the bounded mission complete" in routing
+    assert "`untouched` is intermediate only and must be zero before reporting the bounded mission complete" in routing
 
 
 def test_process_bug_logging_does_not_replace_parent_cursor() -> None:
