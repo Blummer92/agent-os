@@ -114,3 +114,12 @@ Engineer, Python agent, frontend agent, or provider agent is executable.
 Prompt: "Create this already-authorized Tier 1 implementation-ready issue, then continue the current `work on` instruction."
 Fixture: canonical issue metadata resolves one registered owner, `status:ready`, GitHub source of truth, `no-external-write`, and a bounded type; the system-created issue initially omits one or more validated managed classification labels.
 Expect: treats issue creation as provisional; prefers the structured issue-create path with validated proposed labels and exact readback; if a system-created mechanical omission remains, reuses #1962 reconciliation, never infers readiness from title/type/age/no blockers, preserves unmanaged labels, and proves convergence. After canonical `status:ready` convergence, carries the same still-current direct `work on` instruction into Safe Implementation Lane without a second implementation approval. Blocked/needs-decision, changed scope/owner/source-of-truth, excluded surfaces, or ambiguous execution still stop. Label convergence creates no merge, closure, protected-setting, production, credential, or external-write authority.
+
+## Test 23 - Connected Issue Creation Supplies Known Managed Labels
+Prompt: "Create a system-generated Agent OS bug issue whose canonical metadata already resolves `agent-os`, `type:bug`, one registered owner, Tier 1, `status:ready`, and `no-external-write`."
+Fixture: the active connected GitHub issue-create capability accepts a `labels` list. The #2020 recurrence demonstrates that a successful connected create can otherwise persist zero labels.
+Expect: sends every supported known managed classification label in the connected create request, then immediately reacquires the created issue and proves those labels persisted. A successful create response alone is not completion.
+
+## Test 24 - Connected Create Label Mismatch Reuses Existing Reconciler
+Prompt: "The connected create succeeded, but canonical readback is missing one supported managed label. Continue the same issue-creation operation."
+Expect: does not return a completed handoff and does not create a second issue or label writer. Reuses the existing #1962 bounded reconciler once when the same authorization permits that mechanical repair, preserves unmanaged labels, rereads to prove convergence, and continues the still-authorized parent finite mission after convergence. Ambiguous owner/readiness or failed/nonconvergent repair fails closed and never invents `status:ready`.
