@@ -60,13 +60,10 @@ class DashboardEntry:
 
 
 class SnapshotProvider(Protocol):
-    def fetch_dashboard(self, entry: DashboardEntry) -> Dict[str, Any]:
-        ...
+    def fetch_dashboard(self, entry: DashboardEntry) -> Dict[str, Any]: ...
 
 
 def placeholder_evidence_path() -> Dict[str, Any]:
-    """Return explicit safety metadata for local placeholder snapshots."""
-
     return {
         "mode": "placeholder_only",
         "evidence_speed_tier": "local_placeholder",
@@ -80,18 +77,12 @@ def placeholder_evidence_path() -> Dict[str, Any]:
         "safe_for_retirement_decision": False,
         "human_review_required": True,
         "live_verification_required": True,
-        "next_required_evidence": (
-            "cached_navigation_lookup_then_optional_live_verification"
-        ),
+        "next_required_evidence": "cached_navigation_lookup_then_optional_live_verification",
     }
 
 
 def missing_evidence_section(empty_key: str) -> Dict[str, Any]:
-    return {
-        "evidence_status": "missing",
-        "captured": False,
-        empty_key: {},
-    }
+    return {"evidence_status": "missing", "captured": False, empty_key: {}}
 
 
 def dashboard_registry_fields(entry: DashboardEntry) -> Dict[str, Any]:
@@ -111,11 +102,9 @@ def dashboard_registry_fields(entry: DashboardEntry) -> Dict[str, Any]:
 def _valid_evidence_path(raw_path: Any) -> Mapping[str, Any] | None:
     if not isinstance(raw_path, Mapping):
         return None
-
     for field_name, expected_type in REQUIRED_EVIDENCE_PATH_FIELDS.items():
-        if not isinstance(raw_path.get(field_name), expected_type):
+        if type(raw_path.get(field_name)) is not expected_type:
             return None
-
     if raw_path["mode"] not in KNOWN_EVIDENCE_MODES:
         return None
     if raw_path["evidence_speed_tier"] not in KNOWN_EVIDENCE_TIERS:
@@ -123,14 +112,9 @@ def _valid_evidence_path(raw_path: Any) -> Mapping[str, Any] | None:
     return raw_path
 
 
-def build_evidence_path_summary(
-    dashboards: Mapping[str, Any],
-) -> Dict[str, Any]:
-    """Build a fail-closed summary from per-dashboard evidence metadata."""
-
+def build_evidence_path_summary(dashboards: Mapping[str, Any]) -> Dict[str, Any]:
     evidence_paths = []
     invalid_paths = 0
-
     for raw_dashboard in dashboards.values():
         if not isinstance(raw_dashboard, Mapping):
             invalid_paths += 1
@@ -144,10 +128,8 @@ def build_evidence_path_summary(
     dashboard_total = len(dashboards)
     modes = {str(path["mode"]) for path in evidence_paths}
     tiers = {str(path["evidence_speed_tier"]) for path in evidence_paths}
-
     if dashboard_total == 0:
-        summary_mode = "empty"
-        summary_tier = "none"
+        summary_mode, summary_tier = "empty", "none"
     elif invalid_paths:
         summary_mode = "unknown" if not evidence_paths else "mixed"
         summary_tier = "unknown" if not evidence_paths else "mixed"
@@ -161,50 +143,19 @@ def build_evidence_path_summary(
         "dashboards_total": dashboard_total,
         "dashboards_with_valid_evidence_path": len(evidence_paths),
         "dashboards_with_invalid_evidence_path": invalid_paths,
-        "dashboards_with_cached_navigation_lookup": sum(
-            1
-            for path in evidence_paths
-            if path["cached_navigation_lookup_used"]
-        ),
-        "dashboards_with_live_verification": sum(
-            1 for path in evidence_paths if path["live_notion_used"]
-        ),
-        "dashboards_safe_for_fast_agent_context": sum(
-            1 for path in evidence_paths if path["safe_for_fast_agent_context"]
-        ),
-        "dashboards_safe_for_migration_decision": sum(
-            1 for path in evidence_paths if path["safe_for_migration_decision"]
-        ),
-        "dashboards_safe_for_retirement_decision": sum(
-            1 for path in evidence_paths if path["safe_for_retirement_decision"]
-        ),
-        "requires_network": any(
-            path["requires_network"] for path in evidence_paths
-        ),
-        "requires_credentials": any(
-            path["requires_credentials"] for path in evidence_paths
-        ),
-        "human_review_required": (
-            dashboard_total == 0
-            or invalid_paths > 0
-            or any(path["human_review_required"] for path in evidence_paths)
-        ),
-        "live_verification_required": (
-            dashboard_total > 0
-            and (
-                invalid_paths > 0
-                or any(
-                    path["live_verification_required"]
-                    for path in evidence_paths
-                )
-            )
-        ),
+        "dashboards_with_cached_navigation_lookup": sum(1 for path in evidence_paths if path["cached_navigation_lookup_used"]),
+        "dashboards_with_live_verification": sum(1 for path in evidence_paths if path["live_notion_used"]),
+        "dashboards_safe_for_fast_agent_context": sum(1 for path in evidence_paths if path["safe_for_fast_agent_context"]),
+        "dashboards_safe_for_migration_decision": sum(1 for path in evidence_paths if path["safe_for_migration_decision"]),
+        "dashboards_safe_for_retirement_decision": sum(1 for path in evidence_paths if path["safe_for_retirement_decision"]),
+        "requires_network": any(path["requires_network"] for path in evidence_paths),
+        "requires_credentials": any(path["requires_credentials"] for path in evidence_paths),
+        "human_review_required": dashboard_total == 0 or invalid_paths > 0 or any(path["human_review_required"] for path in evidence_paths),
+        "live_verification_required": dashboard_total > 0 and (invalid_paths > 0 or any(path["live_verification_required"] for path in evidence_paths)),
     }
 
 
 class PlaceholderSnapshotProvider:
-    """Produce conservative local evidence without network or credentials."""
-
     def fetch_dashboard(self, entry: DashboardEntry) -> Dict[str, Any]:
         return {
             **dashboard_registry_fields(entry),
@@ -221,10 +172,7 @@ class PlaceholderSnapshotProvider:
                 "duplicate_risk": "unknown",
                 "evidence_status": "missing",
                 "notes": [
-                    (
-                        "Placeholder snapshot only. Replace with verified Notion "
-                        "inventory before retirement decisions."
-                    ),
+                    "Placeholder snapshot only. Replace with verified Notion inventory before retirement decisions.",
                     "Local placeholder context is not migration or retirement proof.",
                 ],
             },
@@ -233,46 +181,21 @@ class PlaceholderSnapshotProvider:
 
 
 class NotionApiSnapshotProvider:
-    """Deferred extension point; approved live reads belong behind B4."""
-
     def __init__(self, api_token: str) -> None:
         self.api_token = api_token
 
     def fetch_dashboard(self, entry: DashboardEntry) -> Dict[str, Any]:
         raise NotImplementedError(
-            "Direct live Notion connectivity is not configured. Use the "
-            "placeholder provider until an approved B4 read-only integration "
-            "exists."
+            "Direct live Notion connectivity is not configured. Use the placeholder provider until an approved B4 read-only integration exists."
         )
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Capture a structured dashboard evidence snapshot."
-    )
-    parser.add_argument(
-        "--config",
-        type=Path,
-        default=DEFAULT_CONFIG,
-        help="Path to dashboards.yaml",
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=DEFAULT_OUTPUT_DIR,
-        help="Directory for JSON snapshots",
-    )
-    parser.add_argument(
-        "--provider",
-        choices=["placeholder", "notion"],
-        default="placeholder",
-        help="Snapshot provider implementation",
-    )
-    parser.add_argument(
-        "--api-token",
-        default="",
-        help="Reserved for future approved Notion read support",
-    )
+    parser = argparse.ArgumentParser(description="Capture a structured dashboard evidence snapshot.")
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Path to dashboards.yaml")
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR, help="Directory for JSON snapshots")
+    parser.add_argument("--provider", choices=["placeholder", "notion"], default="placeholder", help="Snapshot provider implementation")
+    parser.add_argument("--api-token", default="", help="Reserved for future approved Notion read support")
     return parser.parse_args()
 
 
@@ -282,6 +205,13 @@ def load_yaml(path: Path) -> Dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError(f"Expected mapping at {path}")
     return data
+
+
+def _strict_optional_bool(raw: Mapping[str, Any], field: str, default: bool, key: object) -> bool:
+    value = raw.get(field, default)
+    if type(value) is not bool:
+        raise ValueError(f"Dashboard entry `{key}` field `{field}` must be a boolean")
+    return value
 
 
 def load_dashboard_registry(path: Path) -> Dict[str, DashboardEntry]:
@@ -301,8 +231,8 @@ def load_dashboard_registry(path: Path) -> Dict[str, DashboardEntry]:
             data_source_id=str(raw.get("data_source_id", "unknown")),
             owner=str(raw.get("owner", "unknown")),
             source_of_truth_role=str(raw.get("source_of_truth_role", "unknown")),
-            retirement_allowed=bool(raw.get("retirement_allowed", False)),
-            human_approval_required=bool(raw.get("human_approval_required", True)),
+            retirement_allowed=_strict_optional_bool(raw, "retirement_allowed", False, key),
+            human_approval_required=_strict_optional_bool(raw, "human_approval_required", True, key),
             notes=str(raw.get("notes", "")),
         )
     return registry
@@ -316,12 +246,9 @@ def get_provider(args: argparse.Namespace) -> SnapshotProvider:
     return NotionApiSnapshotProvider(api_token=args.api_token)
 
 
-def build_snapshot(
-    registry: Mapping[str, DashboardEntry], provider: SnapshotProvider
-) -> Dict[str, Any]:
+def build_snapshot(registry: Mapping[str, DashboardEntry], provider: SnapshotProvider) -> Dict[str, Any]:
     generated_at = datetime.now(timezone.utc).isoformat()
     dashboards: Dict[str, Any] = {}
-
     for dashboard_key, entry in registry.items():
         dashboard_snapshot = provider.fetch_dashboard(entry)
         if not isinstance(dashboard_snapshot, dict):
@@ -329,12 +256,7 @@ def build_snapshot(
         for field_name, value in dashboard_registry_fields(entry).items():
             dashboard_snapshot.setdefault(field_name, value)
         dashboards[dashboard_key] = dashboard_snapshot
-
-    return {
-        "generated_at": generated_at,
-        "evidence_path_summary": build_evidence_path_summary(dashboards),
-        "dashboards": dashboards,
-    }
+    return {"generated_at": generated_at, "evidence_path_summary": build_evidence_path_summary(dashboards), "dashboards": dashboards}
 
 
 def write_snapshot(snapshot: Mapping[str, Any], output_dir: Path) -> Path:
@@ -342,15 +264,12 @@ def write_snapshot(snapshot: Mapping[str, Any], output_dir: Path) -> Path:
     timestamp = snapshot["generated_at"].replace(":", "-")
     snapshot_path = output_dir / f"snapshot_{timestamp}.json"
     latest_path = output_dir / "latest.json"
-
     with snapshot_path.open("w", encoding="utf-8") as handle:
         json.dump(snapshot, handle, indent=2, sort_keys=True)
         handle.write("\n")
-
     with latest_path.open("w", encoding="utf-8") as handle:
         json.dump(snapshot, handle, indent=2, sort_keys=True)
         handle.write("\n")
-
     return snapshot_path
 
 
