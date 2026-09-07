@@ -25,6 +25,26 @@ procedural and suggesting the request was not understood.
 4. Never describe a routing record, Notion handoff, readiness report, or
    authorization request as though it were the requested classroom artifact.
 
+## Requested Format Is Part Of The Artifact
+
+When the teacher explicitly requests an artifact format such as PDF, DOCX, or
+PPTX, successful delivery requires an artifact in that requested format. A
+prose description, outline, page-by-page specification, or chat-only rendering
+does not satisfy the request merely because it contains the intended content.
+
+Before claiming completion:
+
+- produce the requested file when production is authorized;
+- run the format's required render/verification path before delivery;
+- return a usable artifact reference or file link through the active delivery
+  surface; and
+- if any of those steps cannot be completed, use Blocked-Production Behavior
+  and label the result as a preview or content specification rather than a
+  completed artifact.
+
+A response must never report an explicitly requested PDF as complete when no
+PDF artifact was actually produced and made available to the teacher.
+
 ## Blocked-Production Behavior
 
 When production is blocked, show a clearly labeled preview or content
@@ -57,4 +77,4 @@ the artifact per the Required Order above.
 
 ## Version
 
-0.1.0
+0.1.1
