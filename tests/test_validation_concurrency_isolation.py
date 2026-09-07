@@ -32,7 +32,12 @@ def test_dispatch_inputs_do_not_control_pre_admission_concurrency_identity():
     assert "github.event.inputs" not in block
 
 
-def test_concurrency_model_does_not_preempt_future_main_push_policy():
+def test_main_push_consumes_non_pr_isolation_without_changing_cancellation_policy():
     content = WORKFLOW.read_text(encoding="utf-8")
     trigger_block = content[: content.index("permissions:")]
-    assert "\n  push:" not in trigger_block
+    block = _concurrency_block()
+
+    assert "\n  push:" in trigger_block
+    assert "github.run_id" in block
+    assert "github.ref" not in block
+    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in block
