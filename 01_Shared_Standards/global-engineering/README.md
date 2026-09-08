@@ -3,6 +3,8 @@
 - Global engineering rules apply to every coding and automation agent.
 - `reusable-capability-registry-standard.md` governs reusable capability discovery, evidence, ownership, lifecycle, and report-only validation.
 - `agent-interaction-output-standard.md` is the canonical interaction-output contract: base report fields, conditional field groups, presentation profiles, visible ordering, and progress labeling. `final-report-standard.md` points to it.
+- `typescript-react-development.md` governs the shared TypeScript + React foundation for UI work.
+- `react-web-development.md` extends that shared foundation with browser-specific semantic HTML, CSS, accessibility, routing, rendering/framework selection, compatibility, performance, security, and browser acceptance guidance.
 
 ## Mobile Terminal And Cloud Shell UX
 
