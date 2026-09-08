@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
+import pytest
+
 from scripts.agent_os_execution_capabilities.models import RepositoryEvidenceType
 from scripts.agent_os_remote_validation import (
     PrePrValidationPlan,
@@ -11,6 +15,7 @@ from scripts.agent_os_remote_validation import (
 from scripts.agent_os_remote_validation.pre_pr_evidence_bundle import (
     build_pre_pr_validation_evidence_bundle,
     pre_pr_validation_evidence_bundle_id,
+    reconstruct_pre_pr_validation_evidence_bundle,
     serialize_pre_pr_validation_evidence_bundle,
 )
 from tests.agent_os_remote_validation.test_evidence_bundle import (
@@ -73,9 +78,8 @@ def _result(plan: PrePrValidationPlan) -> SuppliedCommandResult:
     )
 
 
-def test_pr_less_bundle_uses_existing_model_without_dummy_pr() -> None:
-    plan = _plan()
-    bundle = build_pre_pr_validation_evidence_bundle(
+def _bundle(plan: PrePrValidationPlan):
+    return build_pre_pr_validation_evidence_bundle(
         _projection(),
         plan,
         (_result(plan),),
@@ -88,47 +92,69 @@ def test_pr_less_bundle_uses_existing_model_without_dummy_pr() -> None:
         completed_at="2026-09-08T17:00:01Z",
     )
 
+
+def test_pr_less_bundle_carries_canonical_plan_without_dummy_pr() -> None:
+    plan = _plan()
+    bundle = _bundle(plan)
+
     assert bundle.status == "passed"
     assert bundle.pull_request is None
-    assert bundle.validation_plan is None
+    assert bundle.validation_plan is plan
     assert bundle.plan_id == pre_pr_validation_plan_id(plan)
     assert bundle.execution_authorized is False
-    payload = serialize_pre_pr_validation_evidence_bundle(bundle, plan)
+    payload = serialize_pre_pr_validation_evidence_bundle(bundle)
     assert payload["pull_request"] is None
     assert payload["validation_plan"]["subject"]["issue_number"] == 1985
-    assert pre_pr_validation_evidence_bundle_id(bundle, plan) == bundle.bundle_id
+    assert pre_pr_validation_evidence_bundle_id(bundle) == bundle.bundle_id
+
+
+def test_pr_less_bundle_round_trips_without_positive_pr_assumption() -> None:
+    plan = _plan()
+    bundle = _bundle(plan)
+    payload = serialize_pre_pr_validation_evidence_bundle(bundle)
+
+    reconstructed = reconstruct_pre_pr_validation_evidence_bundle(payload)
+
+    assert reconstructed.pull_request is None
+    assert type(reconstructed.validation_plan) is PrePrValidationPlan
+    assert reconstructed.validation_plan == plan
+    assert pre_pr_validation_evidence_bundle_id(reconstructed) == bundle.bundle_id
+    assert serialize_pre_pr_validation_evidence_bundle(reconstructed) == payload
+
+
+def test_pr_less_bundle_rejects_fabricated_positive_pr() -> None:
+    bundle = _bundle(_plan())
+    with pytest.raises(ValueError, match="must not carry a pull request"):
+        serialize_pre_pr_validation_evidence_bundle(replace(bundle, pull_request=1))
 
 
 def test_pr_less_bundle_identity_changes_with_observed_result() -> None:
     plan = _plan()
-    first = build_pre_pr_validation_evidence_bundle(
-        _projection(), plan, (_result(plan),),
-        expected_repository=_identity(),
-        expected_repository_evidence_type=RepositoryEvidenceType.BRANCH_HEAD,
-        expected_proposal_id=PROPOSAL_ID,
-        expected_repository_state_evidence_id=EVIDENCE_ID,
-        runner_id="dev-validation:remote-validation",
-        started_at="2026-09-08T17:00:00Z", completed_at="2026-09-08T17:00:01Z",
-    )
-    changed = SuppliedCommandResult(**{
-        **_result(plan).__dict__,
-        "diagnostic_summary": "bounded observation",
-    }) if hasattr(_result(plan), "__dict__") else None
-    # Slotted evidence is immutable; construct the changed observation explicitly.
+    first = _bundle(plan)
     changed = SuppliedCommandResult(
-        plan_id=pre_pr_validation_plan_id(plan), invocation_id=plan.subject.invocation_id,
-        runner_id="dev-validation:remote-validation", command_ordinal=0, command=COMMAND,
-        source_head_sha=HEAD_SHA, tested_sha=HEAD_SHA,
-        started_at="2026-09-08T17:00:00Z", completed_at="2026-09-08T17:00:01Z",
-        status="passed", exit_code=0, diagnostic_summary="bounded observation",
+        plan_id=pre_pr_validation_plan_id(plan),
+        invocation_id=plan.subject.invocation_id,
+        runner_id="dev-validation:remote-validation",
+        command_ordinal=0,
+        command=COMMAND,
+        source_head_sha=HEAD_SHA,
+        tested_sha=HEAD_SHA,
+        started_at="2026-09-08T17:00:00Z",
+        completed_at="2026-09-08T17:00:01Z",
+        status="passed",
+        exit_code=0,
+        diagnostic_summary="bounded observation",
     )
     second = build_pre_pr_validation_evidence_bundle(
-        _projection(), plan, (changed,),
+        _projection(),
+        plan,
+        (changed,),
         expected_repository=_identity(),
         expected_repository_evidence_type=RepositoryEvidenceType.BRANCH_HEAD,
         expected_proposal_id=PROPOSAL_ID,
         expected_repository_state_evidence_id=EVIDENCE_ID,
         runner_id="dev-validation:remote-validation",
-        started_at="2026-09-08T17:00:00Z", completed_at="2026-09-08T17:00:01Z",
+        started_at="2026-09-08T17:00:00Z",
+        completed_at="2026-09-08T17:00:01Z",
     )
     assert first.bundle_id != second.bundle_id
