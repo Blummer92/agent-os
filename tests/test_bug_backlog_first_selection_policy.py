@@ -1,4 +1,4 @@
-"""Regression guards for #1827 backlog-first selection and #1957/#2026 batch progression."""
+"""Regression guards for #1827 backlog-first selection and #1957/#2026/#2184 batch progression."""
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,9 +12,23 @@ def normalized(path: Path) -> str:
 
 def test_bug_work_reconciles_existing_backlog_before_fresh_discovery() -> None:
     workflow = normalized(AGENTS)
-    assert "reconcile the existing discovered/open bug backlog before fresh defect discovery" in workflow
+    assert "reconcile that existing open bug backlog before fresh defect discovery" in workflow
     assert "use eligible existing bugs first" in workflow
-    assert "discover new bugs only when the reconciled backlog cannot satisfy the requested count" in workflow
+    assert "discover new bugs only when the reconciled open backlog cannot satisfy the requested count" in workflow
+
+
+def test_bug_candidate_enumeration_is_open_only() -> None:
+    workflow = normalized(AGENTS)
+    assert "build the implementation candidate population from currently open GitHub issues only" in workflow
+    assert "`is:issue is:open` or an equivalent structured `state=open` filter at enumeration time" in workflow
+    assert "Closed issues, including closed issues with stale bug/readiness labels or entries in old handoffs/queues, must not enter candidate enumeration." in workflow
+
+
+def test_closed_history_is_supporting_evidence_only_after_open_selection() -> None:
+    workflow = normalized(AGENTS)
+    assert "After an open issue has been selected" in workflow
+    assert "closed issue/PR/commit history may be read only as supporting dependency, supersession, prior-implementation, or lineage evidence" in workflow
+    assert "historical evidence never promotes a closed issue into actionable work" in workflow
 
 
 def test_bug_work_filters_ineligible_existing_candidates() -> None:
@@ -55,7 +69,7 @@ def test_bug_batch_item_local_dispositions_advance_existing_cursor() -> None:
     ):
         assert disposition in workflow
     assert "non-terminal for the parent batch" in workflow
-    assert "immediately advance to the next independent candidate without another user prompt" in workflow
+    assert "immediately advance to the next independent open candidate without another user prompt" in workflow
     assert "rebuilding the batch investigation" in workflow
 
 
@@ -70,15 +84,21 @@ def test_bug_batch_stops_later_candidates_only_for_shared_blocker() -> None:
         "material-decision",
     ):
         assert blocker in workflow
-    assert "continue until the requested count is worked or the reconciled pool is exhausted" in workflow
+    assert "continue until the requested count is worked or the reconciled open pool is exhausted" in workflow
     assert "report the honest shortfall" in workflow
 
 
 def test_requested_count_larger_than_eligible_backlog_continues_to_fresh_discovery() -> None:
     workflow = normalized(AGENTS)
-    assert "discover new bugs only when the reconciled backlog cannot satisfy the requested count" in workflow
-    assert "continue until the requested count is worked or the reconciled pool is exhausted" in workflow
+    assert "discover new bugs only when the reconciled open backlog cannot satisfy the requested count" in workflow
+    assert "continue until the requested count is worked or the reconciled open pool is exhausted" in workflow
     assert "Do not create issues merely to pad a requested count." in workflow
+
+
+def test_batch_never_falls_back_to_closed_issues_as_replacement_work() -> None:
+    workflow = normalized(AGENTS)
+    assert "Never fall back to closed issues as replacement candidates" in workflow
+    assert "when open candidates are blocked, already implemented, or exhausted" in workflow
 
 
 def test_one_successful_pr_is_not_parent_batch_completion() -> None:
