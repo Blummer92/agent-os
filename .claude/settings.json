@@ -13,11 +13,21 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash|Edit|Write|NotebookEdit|mcp__github__.*|mcp__notion__.*|mcp__google_drive__.*|mcp__google_calendar__.*|mcp__gmail__.*",
         "hooks": [
           {
             "type": "command",
             "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/agent-os-execution-interface-preflight.py\" --hook pre-tool-use"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/scripts/agent-os-execution-interface-preflight.py\" --hook stop"
           }
         ]
       }
