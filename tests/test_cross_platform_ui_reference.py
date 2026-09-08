@@ -13,6 +13,7 @@ def test_reference_fixture_contains_shared_web_mobile_and_acceptance_surfaces():
     required = (
         "README.md",
         "package.json",
+        "index.html",
         "shared/task.ts",
         "web/TaskPanel.tsx",
         "web/task-panel.css",
@@ -39,10 +40,12 @@ def test_shared_logic_is_platform_free_and_models_deterministic_states():
 
 
 def test_web_fixture_preserves_semantic_and_keyboard_specific_behavior():
+    html = read("index.html")
     web = read("web/TaskPanel.tsx")
     css = read("web/task-panel.css")
     e2e = read("tests/web.e2e.ts")
-    assert "<main" in web and "<form" in web and 'role="dialog"' in web
+    assert '<main id="root">' in html and "<h1>Agent OS UI Reference</h1>" in html
+    assert "<form" in web and 'role="dialog"' in web
     assert 'aria-modal="true"' in web and 'e.key === "Escape"' in web
     assert ":focus-visible" in css and "@media" in css
     assert 'press("Enter")' in e2e and 'keyboard.press("Escape")' in e2e
