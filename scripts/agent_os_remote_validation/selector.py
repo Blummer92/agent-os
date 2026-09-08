@@ -201,7 +201,11 @@ def _safe_text(value: object) -> str:
 
 
 def _safe_pr(value: object) -> int:
-    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+    return (
+        value
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0
+        else 0
+    )
 
 
 def _plan(
