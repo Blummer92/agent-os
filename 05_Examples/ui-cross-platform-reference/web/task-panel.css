@@ -1,0 +1,6 @@
+.task-shell { margin: 0 auto; max-width: 48rem; padding: 1rem; }
+.task-shell form { display: grid; gap: .5rem; }
+.task-shell input, .task-shell button { font: inherit; min-height: 2.75rem; }
+.task-shell [role="dialog"] { border: 1px solid currentColor; padding: 1rem; margin-top: 1rem; }
+.task-shell :focus-visible { outline: 3px solid currentColor; outline-offset: 2px; }
+@media (min-width: 48rem) { .task-shell form { grid-template-columns: 1fr auto; } .task-shell form label, .task-shell form p { grid-column: 1 / -1; } }
