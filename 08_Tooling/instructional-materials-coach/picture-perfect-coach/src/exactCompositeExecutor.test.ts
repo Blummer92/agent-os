@@ -103,7 +103,7 @@ describe('deterministicExactCompositeExecutor', () => {
         fill_id: 'fill-1',
         asset_id: 'callout',
         asset_fingerprint: 'sha256:callout',
-        destination: { space: RECT_SPACES.outputPixel, rect: [2, 2, 2, 2] },
+        destination: { space: RECT_SPACES.outputPixel, rect: [10, 6, 2, 2] },
       }],
     });
     const output = await deterministicExactCompositeExecutor.execute({
@@ -113,12 +113,12 @@ describe('deterministicExactCompositeExecutor', () => {
     });
     const outputImage = artifactToImage(output.image);
 
-    expect(getPixel(outputImage, 2, 2)).toEqual([7, 8, 9, 1]);
+    expect(getPixel(outputImage, 10, 6)).toEqual([7, 8, 9, 1]);
     expect(output.report.asset_placements).toEqual([{
       fill_id: 'fill-1',
       asset_id: 'callout',
       asset_fingerprint: 'sha256:callout',
-      destination: { space: 'output-pixel', rect: [2, 2, 2, 2] },
+      destination: { space: 'output-pixel', rect: [10, 6, 2, 2] },
     }]);
   });
 
