@@ -44,7 +44,8 @@ def test_web_fixture_preserves_semantic_and_keyboard_specific_behavior():
     web = read("web/TaskPanel.tsx")
     css = read("web/task-panel.css")
     e2e = read("tests/web.e2e.ts")
-    assert '<main id="root">' in html and "<h1>Agent OS UI Reference</h1>" in html
+    assert '<main id="root"><p>Loading Agent OS UI reference' in html
+    assert "<h1>Agent OS UI Reference</h1>" in html
     assert "<form" in web and 'role="dialog"' in web
     assert 'aria-modal="true"' in web and 'e.key === "Escape"' in web
     assert ":focus-visible" in css and "@media" in css
