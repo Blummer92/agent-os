@@ -4,7 +4,7 @@ from agent_memory_context_manager.coding_knowledge_selection import (
     SufficiencyStatus,
 )
 from agent_memory_context_manager.lesson_activation_bridge import (
-    LessonActivationError,
+    MAX_RETRIEVAL_ROWS,
     LessonActivationSkip,
     build_filtered_query,
     build_known_reference_query,
@@ -171,32 +171,54 @@ def test_known_reference_is_attempted_before_filtered_query():
     assert {"property": "Lesson ID", "rich_text": {"equals": "LL-42"}} in calls[0]["filter"]["or"]
 
 
-def test_filtered_query_is_bounded_before_ckr6():
-    query = build_filtered_query(request())
-    assert query["page_size"] <= 5
-    assert set(query["filter_properties"]).issubset(
-        {
-            "Lesson ID",
-            "Lesson Learned",
-            "Status",
-            "Surface Before Work?",
-            "Area",
-            "Applies To",
-            "Learning Type",
-            "Source Link",
-            "Guardrail",
-            "What To Do Next Time",
-        }
+def test_filtered_query_uses_request_relevance_signals():
+    testing_query = build_filtered_query(request(ecosystem_hints=("python",), capability_keywords=("testing",)))
+    deployment_query = build_filtered_query(request(ecosystem_hints=("agent-os",), capability_keywords=("deployment",)))
+    assert testing_query != deployment_query
+    assert testing_query["page_size"] == MAX_RETRIEVAL_ROWS
+    assert {"property": "Learning Type", "select": {"equals": "Testing lesson"}} in testing_query["filter"]["and"][-1]["or"]
+    assert {"property": "Learning Type", "select": {"equals": "Deployment lesson"}} in deployment_query["filter"]["and"][-1]["or"]
+
+
+def test_unmapped_vocabulary_keeps_existing_bounded_query_without_guessing():
+    query = build_filtered_query(
+        request(ecosystem_hints=("unmapped-runtime",), capability_keywords=(), target_path_hints=())
     )
+    assert query["page_size"] == 5
+    assert len(query["filter"]["and"]) == 2
 
 
-def test_more_than_five_returned_rows_fails_closed():
-    rows = {"results": [live_row(id=f"row-{i}") for i in range(6)]}
-    try:
-        orchestrate_lesson_activation(request(), execute_read=lambda query: rows)
-        assert False, "expected LessonActivationError"
-    except LessonActivationError:
-        pass
+def test_over_budget_retrieval_is_deterministically_narrowed_before_ckr2():
+    rows = []
+    for index in range(24):
+        rows.append(
+            live_row(
+                id=f"row-{index}",
+                properties={
+                    "Lesson ID": _rich_text(f"LL-{index:02d}"),
+                    "Area": _select("Automation"),
+                    "Learning Type": _select("Trigger lesson"),
+                    "Applies To": _multi_select("scheduling"),
+                },
+            )
+        )
+    rows.append(
+        live_row(
+            id="row-relevant",
+            properties={
+                "Lesson ID": _rich_text("LL-RELEVANT"),
+                "Area": _select("Testing"),
+                "Learning Type": _select("Testing lesson"),
+                "Applies To": _multi_select("testing"),
+            },
+        )
+    )
+    result = orchestrate_lesson_activation(
+        request(ecosystem_hints=("python",), capability_keywords=("testing",)),
+        execute_read=lambda query: {"results": rows},
+    )
+    assert result.candidate_count <= 5
+    assert "LL-RELEVANT" in result.selected_lesson_ids
 
 
 def test_lesson_without_provenance_cannot_reach_sufficient_despite_request_refs():

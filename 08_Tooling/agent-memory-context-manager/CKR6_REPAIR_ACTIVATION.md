@@ -20,6 +20,12 @@ failed implementation/repair attempt
 
 Every new failed attempt creates a new retry-specific CKR6 obligation. An outcome from an earlier attempt cannot satisfy a later attempt.
 
+## Retrieval contract
+
+Ordinary CKR11 retrieval derives provider filters from the current `CodingKnowledgeRequest` using only the bridge's existing finite Area/ecosystem and Learning Type/capability maps plus the request's explicit capability, library, and target-path terms. Unmapped ecosystem or capability vocabulary does not create guessed clauses.
+
+The provider read may return a bounded relevance page larger than CKR2's five-candidate selection budget. The bridge reuses CKR2's canonical candidate matcher to rank normalized rows and hands at most `MAX_LESSON_RECORDS` candidates to CKR2. Corpus growth therefore does not make the first arbitrary five provider rows authoritative, and an over-budget provider response is narrowed deterministically instead of failing solely because more than five rows were returned.
+
 ## Outcomes
 
 - `consumed`: relevant lesson evidence was selected through CKR6/CKR2; the retry gate may admit the next mutation.
@@ -34,4 +40,4 @@ Lessons Learned remain advisory-only. GitHub governance, current issue/PR state,
 
 `src/agent_memory_context_manager/repair_lesson_activation.py` composes existing public CKR6/CKR11 functions. It does not duplicate retrieval or selection logic.
 
-Regression coverage lives in `tests/test_repair_lesson_activation.py` and proves automatic retrieval, retry-specific re-entry, specialized-required fail-closed behavior, explicit not-material zero-read behavior, and rejection of reuse of an already-satisfied attempt.
+Regression coverage lives in `tests/test_repair_lesson_activation.py` and `tests/test_lesson_activation_bridge.py` and proves automatic retrieval, task-specific bounded retrieval, deterministic over-budget narrowing, retry-specific re-entry, specialized-required fail-closed behavior, explicit not-material zero-read behavior, and rejection of reuse of an already-satisfied attempt.
