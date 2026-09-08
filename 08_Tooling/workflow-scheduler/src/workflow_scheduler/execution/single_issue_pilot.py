@@ -309,7 +309,9 @@ def _bounded_optional_text(value: object, name: str) -> str | None:
 def _bounded_strings(values: object, name: str, *, maximum: int) -> tuple[str, ...]:
     if isinstance(values, (str, bytes)) or not hasattr(values, "__iter__"):
         raise TypeError(f"{name} must be an iterable of strings")
-    items = tuple(str(item) for item in values)
+    items = tuple(values)
+    if not all(isinstance(item, str) for item in items):
+        raise TypeError(f"{name} must be an iterable of strings")
     if len(items) > maximum:
         raise ValueError(f"{name} exceeds the bounded item count")
     for item in items:

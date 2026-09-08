@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -88,17 +89,27 @@ def evaluate_release_run(evidence: dict[str, Any]) -> ReleaseRunState:
         raise TypeError("lifecycle_reconciliation must be object or null")
 
     state = ReleaseRunState(
-        repository=str(evidence.get("repository", "")),
+        repository=_text_or_default(evidence.get("repository"), "repository", ""),
         pull_request_number=_int_or_zero(evidence.get("pull_request_number")),
         issue_number=_int_or_zero(evidence.get("issue_number")),
-        expected_head_sha=str(evidence.get("expected_head_sha", "")),
-        observed_head_sha=str(evidence.get("observed_head_sha", "")),
-        current_main_sha=str(evidence.get("current_main_sha", "")),
-        validation_head_sha=str(evidence.get("validation_head_sha", "")),
-        branch_state=str(evidence.get("branch_state", "unknown")),
-        pr_state=str(evidence.get("pr_state", "open")),
-        pr_lifecycle_state=str(evidence.get("pr_lifecycle_state", "draft")),
-        issue_state=str(evidence.get("issue_state", "open")),
+        expected_head_sha=_text_or_default(
+            evidence.get("expected_head_sha"), "expected_head_sha", ""
+        ),
+        observed_head_sha=_text_or_default(
+            evidence.get("observed_head_sha"), "observed_head_sha", ""
+        ),
+        current_main_sha=_text_or_default(
+            evidence.get("current_main_sha"), "current_main_sha", ""
+        ),
+        validation_head_sha=_text_or_default(
+            evidence.get("validation_head_sha"), "validation_head_sha", ""
+        ),
+        branch_state=_text_or_default(evidence.get("branch_state"), "branch_state", "unknown"),
+        pr_state=_text_or_default(evidence.get("pr_state"), "pr_state", "open"),
+        pr_lifecycle_state=_text_or_default(
+            evidence.get("pr_lifecycle_state"), "pr_lifecycle_state", "draft"
+        ),
+        issue_state=_text_or_default(evidence.get("issue_state"), "issue_state", "open"),
         checkpoint_phase=_optional_string(evidence.get("checkpoint_phase")),
         checkpoint_head_sha=_optional_string(evidence.get("checkpoint_head_sha")),
         checkpoint_pr_lifecycle_state=_optional_string(
@@ -529,7 +540,7 @@ def _classify_failed_validation(state: ReleaseRunState, raw: Any) -> None:
             failed_requirement=raw.get("failed_requirement"),
             error_excerpt=raw.get("error_excerpt"),
             exit_code=raw.get("exit_code"),
-            source_identifiers=tuple(raw.get("source_identifiers", ())),
+            source_identifiers=_source_identifier_strings(raw.get("source_identifiers", ())),
             evidence_state=EvidenceState(str(raw.get("evidence_state", "current"))),
             comparable_pr_and_main=_exact_bool(
                 raw.get("comparable_pr_and_main", False)
@@ -587,6 +598,35 @@ def _int_or_zero(value: Any) -> int:
         return 0
     if type(value) is not int:
         raise TypeError("numeric identity must be int")
+    return value
+
+
+def _source_identifier_strings(value: Any) -> tuple[str, ...]:
+    """Validate a source-identifier collection instead of splitting a scalar.
+
+    tuple("abc") would silently become ("a", "b", "c"); a scalar or malformed
+    member is rejected rather than reshaped into plausible-looking evidence.
+    """
+    if value is None:
+        return ()
+    if isinstance(value, (str, bytes, Mapping)) or not isinstance(value, Iterable):
+        raise TypeError("source_identifiers must be an iterable of strings")
+    items = tuple(value)
+    if not all(isinstance(item, str) for item in items):
+        raise TypeError("source_identifiers must be an iterable of strings")
+    return items
+
+
+def _text_or_default(value: Any, name: str, default: str) -> str:
+    """Validate canonical scalar text, never fabricating it from another type.
+
+    str(value) would turn an explicit null or a malformed object into invented
+    evidence text such as "None"; a missing key still takes the canonical default.
+    """
+    if value is None:
+        return default
+    if not isinstance(value, str):
+        raise TypeError(f"{name} must be a string")
     return value
 
 

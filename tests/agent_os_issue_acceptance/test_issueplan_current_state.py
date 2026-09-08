@@ -596,7 +596,6 @@ def test_unsupported_transport_container_is_rejected(payload):
         {"current_evidence_id": "   "},
         {"expected_fingerprint": 1},
         {"current_fingerprint": None},
-        {"details": ("",)},
     ],
 )
 def test_serializer_fails_closed_on_non_round_trippable_comparison(overrides):
@@ -605,8 +604,17 @@ def test_serializer_fails_closed_on_non_round_trippable_comparison(overrides):
         serialize_issueplan_current_state_comparison(comparison)
 
 
-def test_constructor_owned_detail_coercion_is_transported_not_re_coerced():
-    comparison = _raw_comparison(details=(1, 2))
+# #2054: details are validated as exact bounded strings, never stringified. An
+# empty or non-string member now fails closed in the constructor rather than
+# reaching the serializer as invented text.
+@pytest.mark.parametrize("details", [("",), (1, 2), (None,), ({"a": 1},), "detail"])
+def test_constructor_fails_closed_on_non_string_details(details):
+    with pytest.raises((TypeError, ValueError)):
+        _raw_comparison(details=details)
+
+
+def test_constructor_owned_detail_validation_is_transported_not_re_coerced():
+    comparison = _raw_comparison(details=("1", "2"))
     assert comparison.details == ("1", "2")
     assert _payload(comparison)["details"] == ["1", "2"]
     assert reconstruct_issueplan_current_state_comparison(
