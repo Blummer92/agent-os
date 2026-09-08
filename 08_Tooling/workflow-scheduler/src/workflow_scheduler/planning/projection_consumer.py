@@ -47,7 +47,9 @@ class ProjectionConsumptionResult:
         reasons = tuple(sorted(set(self.reason_codes)))
         if not set(reasons) <= _REASON_CODES:
             raise ValueError("projection consumption reason code is unsupported")
-        details = tuple(str(item) for item in self.details)
+        if not all(isinstance(item, str) for item in self.details):
+            raise ValueError("projection consumption details must contain only strings")
+        details = tuple(self.details)
         accepted = self.status == "accepted"
         if accepted:
             if not isinstance(self.projection, ApprovedExecutionProjection):
