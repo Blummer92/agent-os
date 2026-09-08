@@ -110,6 +110,27 @@ def test_moved_head_before_mutation_fails_closed():
     assert not provider.added
 
 
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"validation_state": "green"},
+        {"blocking_review_threads": 1},
+        {"draft": False},
+        {"mergeable": False, "conflicted": True},
+        {"behind": True},
+    ],
+)
+def test_same_head_planner_evidence_change_before_mutation_fails_closed(change):
+    provider = FakeProvider([snap(), snap(**change)])
+    result = reconcile_pull_request_labels(provider, "Blummer92/agent-os", 1023, dry_run=False,
+                                             label_write_authorized=True)
+    assert result.convergence_status == "stale-plan"
+    assert result.reason_codes == ("planner-evidence-changed-before-mutation",)
+    assert result.mutation_attempted is False
+    assert result.side_effects_performed is False
+    assert not provider.added and not provider.removed
+
+
 def test_moved_head_on_readback_never_claims_convergence():
     provider = FakeProvider([snap(), snap(), snap(head_sha=NEW_SHA)])
     result = reconcile_pull_request_labels(provider, "Blummer92/agent-os", 1023, dry_run=False,
@@ -120,7 +141,7 @@ def test_moved_head_on_readback_never_claims_convergence():
 
 @pytest.mark.parametrize("failure", ["add", "remove"])
 def test_provider_write_failure_is_visible(failure):
-    labels = ("pr:ready-for-review", "validation:pending", "branch:current", "review:clear", "human:keep")
+    labels = ("pr:ready-for-review", "validation:pending", "branch:behind", "review:needs-attention", "human:keep")
     provider = FakeProvider([snap(labels=labels)] * 3, fail_add=failure == "add", fail_remove=failure == "remove")
     result = reconcile_pull_request_labels(provider, "Blummer92/agent-os", 1023, dry_run=False,
                                              label_write_authorized=True)
