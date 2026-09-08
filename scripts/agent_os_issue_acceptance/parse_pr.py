@@ -11,7 +11,10 @@ _SHORT_TARGET = rf"(?:(?P<repository>{_REPOSITORY}))?#(?P<number>\d+)"
 _URL_TARGET = rf"https://github\.com/(?P<url_repository>{_REPOSITORY})/issues/(?P<url_number>\d+)"
 _TARGET = rf"(?P<target>(?:{_URL_TARGET}|{_SHORT_TARGET}))"
 
-EXPLICIT_LINK_RE = re.compile(rf"\b(?P<keyword>{_SUPPORTED_KEYWORDS})(?:\s*:\s*|\s+){_TARGET}\b", re.IGNORECASE)
+# Authoritative closing syntax is a standalone body directive, not a keyword
+# substring embedded in prose. This keeps negation/examples/history from being
+# promoted into issue authority while preserving GitHub closing-keyword forms.
+EXPLICIT_LINK_RE = re.compile(rf"^[ \t]*(?P<keyword>{_SUPPORTED_KEYWORDS})(?:\s*:\s*|\s+){_TARGET}\b", re.IGNORECASE | re.MULTILINE)
 UNSUPPORTED_LINK_RE = re.compile(rf"\b(?P<keyword>address(?:es|ed)?)(?:\s*:\s*|\s+){_TARGET}\b", re.IGNORECASE)
 ISSUE_REFERENCE_RE = re.compile(rf"(?<![A-Za-z0-9_.-]){_TARGET}\b")
 _AUTHORITATIVE_PREFIX_RE = re.compile(rf"\b(?P<keyword>{_SUPPORTED_KEYWORDS}|address(?:es|ed)?)\b[^#\n]{{0,80}}$", re.IGNORECASE)
