@@ -21,6 +21,7 @@ from .workspace_clients import (
 )
 
 ArtifactState = Literal["planned", "recovered", "created", "updated", "failed", "ambiguous"]
+ArtifactDeliveryKind = Literal["pending", "final"]
 
 
 @dataclass(frozen=True)
@@ -51,8 +52,25 @@ class ArtifactReceipt:
     file_id: str = ""
     web_view_link: str = ""
     drive_id: str = ""
+    mime_type: str = ""
+    parents: tuple[str, ...] = ()
+    delivery_kind: ArtifactDeliveryKind = "pending"
+    canonical_editable: bool = False
+    persistence_verified: bool = False
     error: str = ""
     reconciliation_candidates: tuple[ReconciliationCandidate, ...] = ()
+
+    @property
+    def is_final(self) -> bool:
+        return (
+            self.state == "updated"
+            and self.delivery_kind == "final"
+            and self.canonical_editable
+            and self.persistence_verified
+            and bool(self.file_id)
+            and bool(self.mime_type)
+            and bool(self.parents)
+        )
 
 
 @dataclass(frozen=True)
@@ -63,19 +81,23 @@ class LiveBuildReceipt:
 
     @property
     def succeeded(self) -> bool:
-        return self.slides.state == "updated" and self.worksheet.state == "updated"
+        return self.slides.is_final and self.worksheet.is_final
+
+
+def _parents(meta: dict[str, Any]) -> tuple[str, ...]:
+    parents = meta.get("parents", [])
+    if not isinstance(parents, list):
+        return ()
+    return tuple(str(parent) for parent in parents)
 
 
 def _candidate(meta: dict[str, Any]) -> ReconciliationCandidate:
-    parents = meta.get("parents", [])
-    if not isinstance(parents, list):
-        parents = []
     return ReconciliationCandidate(
         file_id=str(meta.get("id", "")),
         web_view_link=str(meta.get("webViewLink", "")),
         drive_id=str(meta.get("driveId", "")),
         mime_type=str(meta.get("mimeType", "")),
-        parents=tuple(str(parent) for parent in parents),
+        parents=_parents(meta),
     )
 
 
@@ -85,6 +107,8 @@ def _receipt(
     meta: dict[str, Any] | None = None,
     error: str = "",
     reconciliation_candidates: tuple[ReconciliationCandidate, ...] = (),
+    *,
+    final: bool = False,
 ) -> ArtifactReceipt:
     meta = meta or {}
     return ArtifactReceipt(
@@ -93,6 +117,11 @@ def _receipt(
         file_id=str(meta.get("id", "")),
         web_view_link=str(meta.get("webViewLink", "")),
         drive_id=str(meta.get("driveId", "")),
+        mime_type=str(meta.get("mimeType", "")),
+        parents=_parents(meta),
+        delivery_kind="final" if final else "pending",
+        canonical_editable=final,
+        persistence_verified=final,
         error=error,
         reconciliation_candidates=reconciliation_candidates,
     )
@@ -178,7 +207,7 @@ def build_live_materials(
             idempotency_key=build.idempotency_key,
             role="slides",
         )
-        slides = _receipt("slides", "updated", final)
+        slides = _receipt("slides", "updated", final, final=True)
     except Exception as exc:
         return LiveBuildReceipt(replace(slides, state="failed", error=str(exc)), worksheet)
 
@@ -193,7 +222,7 @@ def build_live_materials(
             idempotency_key=build.idempotency_key,
             role="worksheet",
         )
-        worksheet = _receipt("worksheet", "updated", final)
+        worksheet = _receipt("worksheet", "updated", final, final=True)
     except Exception as exc:
         worksheet = replace(worksheet, state="failed", error=str(exc))
     return LiveBuildReceipt(slides, worksheet, worksheet.state == "ambiguous")
