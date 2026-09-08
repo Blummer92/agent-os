@@ -7,6 +7,13 @@ A successful connected build treats the verified native Google Drive artifacts a
 
 A created/recovered file, an `updated` state without verified native metadata, a missing/empty destination, a failed or ambiguous readback, a partial Slides/Docs result, or any PDF/preview is not sufficient for canonical-final completion. PDFs are derived review/export artifacts only and never supersede the native Drive source merely because they are easier to download. PDF draft/preview generation is governed separately from this connected native-final contract.
 
+## Student-material PDF drafts/previews
+`student_material_pdf.py` renders a bounded student-material PDF preview from caller-supplied content already bound to one exact governed native artifact identity and revision. The caller must supply the expected current revision; stale or mismatched revision evidence fails closed before rendering.
+
+A successful receipt is explicitly `preview`, `canonical=False`, and `render_verified=True`. It carries the exact native file ID, native revision ID, and approved source destination identity. The renderer verifies that a non-trivial PDF with a PDF header and EOF marker was actually written before reporting the preview available. Render or verification failure returns `blocked`; prose or a wireframe is never substituted as a completed PDF.
+
+The PDF is a derived review/print/download artifact only. The native Google Docs/Slides file remains the canonical editable final. This offline renderer has no Google client, credential, Drive persistence, ACL, readiness, approval, publication, or source-authority mutation. Persisting a derived PDF to Drive remains a separately authorized external-write operation with its own exact destination/readback requirement.
+
 ## Reusable visual placement contract
 `visual_placement.py` defines the repository-side fail-closed contract for binding one exact governed reusable asset to one exact Docs/Slides placement marker. Controlled markers use `{{visual:<role_id>}}`; coarse visual intent such as `slide`, `page`, `section`, or `student-facing` is never interpreted as a concrete position. Exactly one marker match is required. Missing, duplicate, malformed, or drifted markers stop placement.
 
@@ -40,6 +47,7 @@ All bundle authority evidence remains false. A successful plan grants no executi
 - Slides/Docs updates bind `writeControl.requiredRevisionId` to the copied artifact revision observed immediately before mutation.
 - Final Drive readback verifies file ID/type/parent/idempotency evidence and records the web link and shared-drive `driveId` when present. Only that verified native Drive file is reported as the canonical editable final. Sharing is observed only; this tool never changes ACLs.
 - Drive metadata/list/copy calls explicitly support My Drive/shared-drive objects while retaining the narrow `drive.file` OAuth scope.
+- Student-material PDF previews are local derived artifacts, never canonical finals, and perform zero Drive persistence.
 - Unresolved required visual roles block final production. Visual planning grants no production, publication, approval, readiness, image-generation, or external-write authority.
 - Teacher-reference PDF rendering is offline and caller-supplied: `render_teacher_reference_pdf()` accepts an already-built bounded reference plus optional image bytes keyed by exact governed `asset_id`, `stable_ref`, or `external_file_id`. It performs no network retrieval, no second asset-selection decision, and no Drive/Notion write. Missing bytes preserve the approved identity text or explicit gap rather than fabricating a visual.
 - See `docs/safety.md` and `02_Agent_Overlays/instructional-materials-coach.md`.
@@ -80,10 +88,14 @@ The runtime reuses the public MaterialRequirement validator, visual-needs planne
 
 On success it explicitly identifies the verified native Google Slides and Google Docs links as the canonical editable finals.
 
+For a local derived PDF preview, a caller supplies the exact governed native source identity/revision plus the already-authorized student-material payload to `student_material_pdf.py`. The resulting receipt is usable only when it is render-verified and remains explicitly non-canonical; this path performs no Drive persistence or sharing mutation.
+
 ## Teacher-reference PDFs
 `teacher_reference.py` projects bounded Unit Alignment / Teacher Modeling evidence and governed visual assignments. `teacher_reference_pdf.py` renders those projections to PDF with ReportLab.
 
 The PDF renderer deliberately has no retrieval client. Callers may supply already-authorized image bytes through `asset_content`; keys must be exact identities already carried by the projection. If no bytes are supplied for an approved identity, the PDF keeps the identity visible instead of widening authority or silently fetching content. Explicit gaps remain explicit. This makes the render seam usable by repository tests and future authorized artifact workflows without coupling it to Drive, the Visual Asset Library, or an image-generation provider.
+
+The teacher-reference renderer remains a separate teacher-facing seam and is not reused for student worksheet preview semantics.
 
 ## Learning Loop (Notion Lessons Learned)
 This tool does not write to Notion. On a failed build it writes a local YAML lesson-candidate record to `reports/lessons/` (override with `--lessons-dir`) for human review.
@@ -105,6 +117,10 @@ See `docs/notion-field-mapping.md` for the human-applied Notion field mapping.
 Focused native-final delivery coverage:
 
     PYTHONPATH=src:08_Tooling/instructional-materials-coach/src python -m pytest 08_Tooling/instructional-materials-coach/tests/test_live_build.py 08_Tooling/instructional-materials-coach/tests/test_cli.py -q
+
+Focused student-material PDF-preview coverage:
+
+    PYTHONPATH=src:08_Tooling/instructional-materials-coach/src python -m pytest 08_Tooling/instructional-materials-coach/tests/test_student_material_pdf.py -q
 
 Focused reusable-visual placement coverage:
 
@@ -131,5 +147,6 @@ Tests use fakes/mocks only for the C4A live-build boundary and perform no live G
 - There is no cross-resource transaction for the Slides/Docs pair; partial or ambiguous results require bounded reconciliation rather than automatic cleanup.
 - The visual-reuse bridge consumes supplied governed evidence only; it does not retrieve the Visual Asset Library or generate images. Teacher-reference PDFs can embed caller-supplied bytes only after the projection has already authorized the exact identity.
 - The new reusable-visual placement seam is repository-only; it is not wired into the connected CLI until a separately governed runtime/deployment path is activated and verified.
+- The student-material PDF seam renders from an exact caller-supplied authorized payload; it does not yet export Google Docs/Slides bytes through a live Google API. Live Docs/Slides-to-PDF export or Drive persistence remains separately governed.
 - Worksheet generation supports flat paragraph placeholders only; no table or answer-key templating yet.
 - Placeholder replacement uses literal `{{token_name}}` substring matching, not regex matching.
