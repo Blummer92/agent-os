@@ -279,7 +279,7 @@ def _valid_focused_rule_map(rules: object) -> bool:
     for rule in focused_rules:
         if not isinstance(rule, dict):
             return False
-        if not isinstance(rule.get("name"), str):
+        if not _bounded_text(rule.get("name")):
             return False
         prefixes = rule.get("prefixes", [])
         exact_paths = rule.get("exact_paths", [])
@@ -289,7 +289,7 @@ def _valid_focused_rule_map(rules: object) -> bool:
             return False
         if not prefixes and not exact_paths:
             return False
-        if not _string_list(rule.get("commands")):
+        if not _usable_string_list(rule.get("commands")):
             return False
     return True
 
