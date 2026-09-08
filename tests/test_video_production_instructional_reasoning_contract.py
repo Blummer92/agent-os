@@ -6,7 +6,7 @@ FIXTURES = ROOT / "07_Agent_Tests" / "video-production-instructional-reasoning-t
 
 
 def _fixture_text() -> str:
-    return FIXTURES.read_text(encoding="utf-8")
+    return " ".join(FIXTURES.read_text(encoding="utf-8").split())
 
 
 def test_alternate_take_is_checked_before_reshoot() -> None:
