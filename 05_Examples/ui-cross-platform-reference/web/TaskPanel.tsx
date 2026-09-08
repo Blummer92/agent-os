@@ -27,8 +27,7 @@ export function TaskPanel({ state }: { state: TaskState }) {
   }
 
   return (
-    <main className="task-shell">
-      <header><h1>Task reference</h1></header>
+    <div className="task-shell">
       <section aria-labelledby="tasks-heading">
         <h2 id="tasks-heading">Tasks</h2>
         {state.kind === "loading" && <p role="status">Loading tasks…</p>}
@@ -46,6 +45,6 @@ export function TaskPanel({ state }: { state: TaskState }) {
       {dialogOpen && <div role="dialog" aria-modal="true" aria-labelledby="help-title" onKeyDown={e => { if (e.key === "Escape") closeHelp(); }}>
         <h2 id="help-title">Task help</h2><p>Use a short, descriptive task title.</p><button ref={closeButton} type="button" onClick={closeHelp}>Close help</button>
       </div>}
-    </main>
+    </div>
   );
 }
