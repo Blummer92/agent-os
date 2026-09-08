@@ -10,6 +10,8 @@ A created/recovered file, an `updated` state without verified native metadata, a
 ## Student-material PDF drafts/previews
 `student_material_pdf.py` renders a bounded student-material PDF preview from caller-supplied content already bound to one exact governed native artifact identity and revision. The caller must supply the expected current revision; stale or mismatched revision evidence fails closed before rendering.
 
+When the supplied governed material context requires visuals, the caller must also pass the exact required visual role IDs plus already-verified `PlacementReceipt` evidence from the existing `visual_placement.py` contract. The preview renderer does not select, retrieve, place, or generate visuals. Every required role must have exactly one verified placement bound to the same native source artifact before the PDF can be reported as available. Missing required placement blocks before PDF creation and the receipt preserves the unresolved role IDs. A material with no required visual roles keeps the existing text-only preview behavior.
+
 A successful receipt is explicitly `preview`, `canonical=False`, and `render_verified=True`. It carries the exact native file ID, native revision ID, and approved source destination identity. The renderer verifies that a non-trivial PDF with a PDF header and EOF marker was actually written before reporting the preview available. Render or verification failure returns `blocked`; prose or a wireframe is never substituted as a completed PDF.
 
 The PDF is a derived review/print/download artifact only. The native Google Docs/Slides file remains the canonical editable final. This offline renderer has no Google client, credential, Drive persistence, ACL, readiness, approval, publication, or source-authority mutation. Persisting a derived PDF to Drive remains a separately authorized external-write operation with its own exact destination/readback requirement.
@@ -47,7 +49,7 @@ All bundle authority evidence remains false. A successful plan grants no executi
 - Slides/Docs updates bind `writeControl.requiredRevisionId` to the copied artifact revision observed immediately before mutation.
 - Final Drive readback verifies file ID/type/parent/idempotency evidence and records the web link and shared-drive `driveId` when present. Only that verified native Drive file is reported as the canonical editable final. Sharing is observed only; this tool never changes ACLs.
 - Drive metadata/list/copy calls explicitly support My Drive/shared-drive objects while retaining the narrow `drive.file` OAuth scope.
-- Student-material PDF previews are local derived artifacts, never canonical finals, and perform zero Drive persistence.
+- Student-material PDF previews are local derived artifacts, never canonical finals, and perform zero Drive persistence. Required visual roles block until exact verified source-bound placement evidence is supplied; the renderer never treats a text box, blank region, or unresolved visual gap as fulfillment.
 - Unresolved required visual roles block final production. Visual planning grants no production, publication, approval, readiness, image-generation, or external-write authority.
 - Teacher-reference PDF rendering is offline and caller-supplied: `render_teacher_reference_pdf()` accepts an already-built bounded reference plus optional image bytes keyed by exact governed `asset_id`, `stable_ref`, or `external_file_id`. It performs no network retrieval, no second asset-selection decision, and no Drive/Notion write. Missing bytes preserve the approved identity text or explicit gap rather than fabricating a visual.
 - See `docs/safety.md` and `02_Agent_Overlays/instructional-materials-coach.md`.
@@ -88,7 +90,7 @@ The runtime reuses the public MaterialRequirement validator, visual-needs planne
 
 On success it explicitly identifies the verified native Google Slides and Google Docs links as the canonical editable finals.
 
-For a local derived PDF preview, a caller supplies the exact governed native source identity/revision plus the already-authorized student-material payload to `student_material_pdf.py`. The resulting receipt is usable only when it is render-verified and remains explicitly non-canonical; this path performs no Drive persistence or sharing mutation.
+For a local derived PDF preview, a caller supplies the exact governed native source identity/revision plus the already-authorized student-material payload to `student_material_pdf.py`. When governed material evidence requires visuals, the caller also supplies the exact required role IDs and verified source-bound placement receipts. The resulting receipt is usable only when it is render-verified and remains explicitly non-canonical; this path performs no Drive persistence or sharing mutation.
 
 ## Teacher-reference PDFs
 `teacher_reference.py` projects bounded Unit Alignment / Teacher Modeling evidence and governed visual assignments. `teacher_reference_pdf.py` renders those projections to PDF with ReportLab.
