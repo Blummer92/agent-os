@@ -1,6 +1,6 @@
 # Modeled Software Tutorial Capture Spike
 
-Repository-only Phase 1 implementation for #932 (parent #931). This package validates Chrome DevTools Recorder JSON before execution, provides a thin Puppeteer Replay capture shell, owns the RJ3 Recorder-conformance adapter from #1125, and owns the RJ4 synthetic replay-equivalence harness from #1126.
+Repository-only Phase 1 implementation for #932 (parent #931). This package validates Chrome DevTools Recorder JSON before execution, provides a thin Puppeteer Replay capture shell, owns the RJ3 Recorder-conformance adapter from #1125, owns the RJ4 synthetic replay-equivalence harness from #1126, and now owns the bounded live-capture request/receipt seam from #2100.
 
 ## Boundary
 
@@ -61,6 +61,31 @@ No real unsanitized screenshot or Recorder capture belongs in Git. Repository fi
 `captureFlow({ ..., captureTargetStyle: true })` opts into `software-tutorial-capture-v2`, which adds one optional bounded `target_style` snapshot per resolved action from a frozen `getComputedStyle` property allowlist on the already-resolved target handle only (no DOM traversal). Colors persist as canonical RGBA; `background_image` retains bounded CSS gradients and blocks `url(...)`/`blob:`/`data:` resource identity. Style resolution failure leaves `target_style: null` rather than blocking or fabricating a value, since Replay stays authoritative for execution regardless.
 
 `captureTargetStyle` defaults to `false`, which keeps `format_version: software-tutorial-capture-v1` and its existing shape byte-identical. Adding `target_style` never changes `fingerprintAction()` output or recording identity.
+
+## Governed live capture request seam (#2100)
+
+`runLiveCaptureRequest(...)` is a thin request/receipt adapter around the existing #932 capture worker. It does not reimplement Replay, Recorder validation, browser launch, screenshot capture, or target inspection.
+
+The request format is exactly `software-tutorial-capture-request-v1`. It binds one bounded `capture_request_id`, HTTPS target URL, exact approved origins, Chrome Recorder content reference + SHA-256, the opaque `browser_session_ref = adobe-express-default`, and `privacy_mode = sensitive-by-default`. Unknown fields fail closed, so callers cannot smuggle arbitrary commands, scripts, profile paths, ports, displays, credentials, or alternate browser instructions into the capture route.
+
+The selected execution surface is fixed to:
+
+```text
+kind = gce-iap
+project = agent-os-502614
+zone = us-central1-a
+instance = agent-os-test
+```
+
+A different execution surface is rejected; there is no silent local/Cloud Build/provider fallback. Browser-session capability is bounded to the same opaque session identity plus one of #932's canonical auth states. Only `AUTH_READY` admits invocation. The adapter verifies the Recorder bytes against the request SHA before transport.
+
+The injected transport receives only the bounded capture operation and request evidence needed by the selected route. It may resolve the host-local profile internally, but the request/result contract never contains a profile path, profile bytes, password, MFA material, cookie, token, or SSO artifact.
+
+Transport status and capture status remain separate. Successful transport does not imply a successful capture, privacy clearance, Picture Perfect readiness, classroom readiness, or publication authority. A successful receipt returns only a bounded `software-tutorial-capture-v1` identity reference (`capture_id` + recording SHA), not raw screenshots or unrestricted page data.
+
+Duplicate request handling is injected rather than creating a new persistence system. If the selected route supplies an existing receipt for the same logical request identity, the adapter reuses it without a second capture invocation; a conflicting request fingerprint fails closed.
+
+Repository tests remain synthetic and credential-free. Live GCE/IAP/browser activation, package installation, Adobe login, Recorder replay against Adobe, and screenshot capture remain separately authorized operations under #2099/#2106/#932.
 
 ## Local checks
 
