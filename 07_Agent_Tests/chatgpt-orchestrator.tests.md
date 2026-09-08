@@ -136,7 +136,7 @@ Fixture:
 owner: Complete the handoff
 mission: diagnose existing red #1573 Draft PR/check and complete authorized handoff
 step A: commit-related GitHub schema successfully loaded
-step B: log-related GitHub capability successfully loaded
+step B: log-related GitHub schema successfully loaded
 capability: available
 next operation: authorized GitHub evidence read
 ```
