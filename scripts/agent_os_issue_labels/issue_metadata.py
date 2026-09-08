@@ -122,8 +122,6 @@ def load_issue_form_schema(path: str | Path) -> IssueFormSchema:
         if not field_id or not label:
             unsupported.append(f"body[{index}] input control must define id and label")
             continue
-        # Route malformed shapes to unsupported rather than stringifying them; str()
-        # would invent a usable id or label out of a non-string value.
         if not isinstance(field_id, str) or not isinstance(label, str):
             unsupported.append(f"body[{index}] input control id and label must be strings")
             continue
@@ -181,15 +179,18 @@ def parse_issue_form_body(issue_body: str, fields: dict[str, str]) -> dict[str, 
     }
     label_to_id.update(_HEADING_ALIASES)
 
-    sections = _markdown_sections(issue_body)
     parsed: dict[str, list[str]] = {}
-    for heading, content in sections.items():
+    for heading, content in _markdown_sections(issue_body):
         field_id = label_to_id.get(_normalize(heading))
         if not field_id:
             continue
         values = _parse_values(content)
-        if values:
-            parsed[field_id] = values
+        if not values:
+            continue
+        canonical_values = parsed.setdefault(field_id, [])
+        for value in values:
+            if value not in canonical_values:
+                canonical_values.append(value)
     return parsed
 
 
@@ -236,8 +237,6 @@ def _string_tuple(value: object) -> tuple[str, ...]:
     if value is None:
         return ()
     if isinstance(value, list):
-        # Validate members rather than stringify them: str(item) would turn a
-        # malformed entry such as None or {} into invented text.
         if not all(isinstance(item, str) for item in value):
             raise TypeError("expected a list of strings")
         return tuple(value)
@@ -253,18 +252,18 @@ def _optional_string(value: object) -> str | None:
     return text or None
 
 
-def _markdown_sections(text: str) -> dict[str, str]:
-    sections: dict[str, list[str]] = {}
-    current: str | None = None
+def _markdown_sections(text: str) -> tuple[tuple[str, str], ...]:
+    sections: list[tuple[str, list[str]]] = []
+    current: list[str] | None = None
     for line in text.splitlines():
         match = _HEADING_RE.match(line)
         if match:
-            current = match.group(1).strip()
-            sections[current] = []
+            current = []
+            sections.append((match.group(1).strip(), current))
             continue
         if current is not None:
-            sections[current].append(line)
-    return {heading: "\n".join(lines).strip() for heading, lines in sections.items()}
+            current.append(line)
+    return tuple((heading, "\n".join(lines).strip()) for heading, lines in sections)
 
 
 def _parse_values(content: str) -> list[str]:
