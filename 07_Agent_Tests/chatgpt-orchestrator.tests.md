@@ -136,7 +136,7 @@ Fixture:
 owner: Complete the handoff
 mission: diagnose existing red #1573 Draft PR/check and complete authorized handoff
 step A: commit-related GitHub schema successfully loaded
-step B: log-related GitHub schema successfully loaded
+step B: log-related GitHub capability successfully loaded
 capability: available
 next operation: authorized GitHub evidence read
 ```
@@ -173,5 +173,15 @@ Expect: preserves the computational result as unavailable/failed evidence; makes
 ## Test 45 - Canonical Evidence Write Preserves Tool-Result Provenance
 Fixture: after Test 44's failed computation, the mission includes an authorized GitHub experiment-evidence write.
 Expect: the persisted record distinguishes user-supplied evidence, qualitative/model inference, successful computed evidence, and failed/unavailable analysis. Exact computed metrics require traceable successful tool output. Failed-tool-derived values are excluded rather than written as computed facts, and the failed analysis state remains visible.
+
+## Test 46 - Continuation Into Prior Domain Retrieves Existing Work First
+Prompt: `let's continue working on the photography lessons next test`.
+Fixture: earlier project/personal context contains Photography Foundations work covering taking-vs-making, intentional composition, same-subject/different-choice comparisons, camera position, Rule of Thirds, framing/cropping, perspective, focal point, and the sequence `compose with the camera first -> cropping as intentional revision`; the active chat most recently focused on a business-card PPUX benchmark and does not contain enough Photography history to know the next untested hypothesis.
+Expect: recognizes continuation intent and performs bounded prior-work retrieval before proposing a new Photography baseline. It reconciles already-tested hypotheses and established sequencing, then advances to a genuinely unresolved test. It does not reset numbering or silently reissue generic composition-vs-camera-operation work.
+
+## Test 47 - Fresh Domain Does Not Trigger Broad Historical Retrieval
+Prompt: `Design the first test for a brand-new stop-motion unit`.
+Fixture: no current or prior context identifies an existing stop-motion test lineage.
+Expect: treats the request as fresh work and does not perform broad history retrieval merely because another curriculum domain has prior records. If a continuation request cannot recover sufficient prior context, reports that uncertainty rather than asserting a duplicate hypothesis is new.
 
 #1086 compact runtime fixtures continue in `chatgpt-orchestrator-tests-details.md`; structured #924/#925 fixtures continue in `chatgpt-orchestrator-request-interpretation.tests.md`. Safe Lane activation and Terminal Fast Lane behavior are owned here and by the canonical shared standard; no second Fast-Lane fixture file is authoritative.
