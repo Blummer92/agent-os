@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from scripts.agent_os_execution_capabilities.approved_projection import (
-    GOVENED_PROJECTION_EVIDENCE_SCHEMA_VERSION,
+    GOVERNED_PROJECTION_EVIDENCE_SCHEMA_VERSION,
     GovernedProjectionEvidenceResult,
 )
 from scripts.agent_os_execution_capabilities.models import (
@@ -289,7 +289,7 @@ def _projection_from_plan_payload(
     subject = plan.subject
     return GovernedProjectionEvidenceResult(
         status="accepted",
-        schema_version=GOVENED_PROJECTION_EVIDENCE_SCHEMA_VERSION,
+        schema_version=GOVERNED_PROJECTION_EVIDENCE_SCHEMA_VERSION,
         projection_id=subject.projection_id,
         proposal_id=str(payload.get("proposal_id")),
         approval_id=subject.approval_id,
