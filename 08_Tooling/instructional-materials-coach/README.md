@@ -2,6 +2,13 @@
 
 Builds a Google Slides deck and Google Docs worksheet for one lesson by duplicating an approved template pair and replacing placeholder tokens with lesson content. It also provides a pure/offline Source -> Lesson Bundle planning seam that coordinates existing governed material requirements before any connected production occurs.
 
+## Reusable visual placement contract
+`visual_placement.py` defines the repository-side fail-closed contract for binding one exact governed reusable asset to one exact Docs/Slides placement marker. Controlled markers use `{{visual:<role_id>}}`; coarse visual intent such as `slide`, `page`, `section`, or `student-facing` is never interpreted as a concrete position. Exactly one marker match is required. Missing, duplicate, malformed, or drifted markers stop placement.
+
+`apps-script/VisualPlacementTransport.gs` is an **offline reference transport** for the separately governed dedicated Apps Script runtime. It demonstrates the approved `BlobSource` route: read the exact selected private Drive file, insert its blob into the exact admitted Docs/Slides target, remove only the matched marker, and return bounded placement evidence. It does not search/reselect assets or alter Drive sharing.
+
+Repository implementation does not activate this runtime. Creating/deploying an Apps Script API executable, enabling the Apps Script API, selecting/configuring the shared standard Google Cloud project, OAuth/credential work, and live Drive/Docs/Slides writes require separate authorization. Candidate minimum functional scopes must be reverified before activation and are currently `drive.readonly`, `documents` when Docs are enabled, and `presentations` when Slides are enabled. Existing #1753 fail-closed connected-build behavior remains in force until a positive placement path is separately integrated, activated, and verified.
+
 ## Offline slide layout QA
 `slide_layout_qa.py` provides a pure structural QA seam for student-facing slide render plans. It detects only mechanically provable defects: empty opaque placeholders layered above required instructional regions, unsafe required-text contrast when both colors are known, unintended overlap between required title/directions/model/task/teacher-cue regions, oversized supporting previews, and under-dominant focal models. Unknown colors or other judgments that cannot be established from the supplied structural plan route to `manual-review` rather than receiving a false pass. The seam performs no rendering, OCR/CV, provider call, classroom publication, or Drive mutation; broader phone/projector rendered review remains owned by #1835.
 
@@ -90,6 +97,10 @@ See `docs/notion-field-mapping.md` for the human-applied Notion field mapping.
 ## Tests
     pytest tests/
 
+Focused reusable-visual placement coverage:
+
+    PYTHONPATH=src:08_Tooling/instructional-materials-coach/src python -m pytest 08_Tooling/instructional-materials-coach/tests/test_visual_placement.py -q
+
 Focused lesson-bundle coverage:
 
     PYTHONPATH=src:08_Tooling/instructional-materials-coach/src python -m pytest 08_Tooling/instructional-materials-coach/tests/test_lesson_bundle.py -q
@@ -110,5 +121,6 @@ Tests use fakes/mocks only for the C4A live-build boundary and perform no live G
 - C4A hardens the repository production client but does not authorize credentials or a real Google call. Connected live execution remains separately governed by C4B/#1196 and C4/#119.
 - There is no cross-resource transaction for the Slides/Docs pair; partial or ambiguous results require bounded reconciliation rather than automatic cleanup.
 - The visual-reuse bridge consumes supplied governed evidence only; it does not retrieve the Visual Asset Library or generate images. Teacher-reference PDFs can embed caller-supplied bytes only after the projection has already authorized the exact identity.
+- The new reusable-visual placement seam is repository-only; it is not wired into the connected CLI until a separately governed runtime/deployment path is activated and verified.
 - Worksheet generation supports flat paragraph placeholders only; no table or answer-key templating yet.
 - Placeholder replacement uses literal `{{token_name}}` substring matching, not regex matching.
