@@ -539,15 +539,22 @@ class _FixtureRepositoryReader(RepositoryEvidenceReader):
         return self._validation
 
 
-def _evidence_status_from_dict(
-    data: dict[str, object] | None, cls: type[DependencyEvidence] | type[ValidationEvidence]
+def _evidence_from_json(
+    cls: type[DependencyEvidence] | type[ValidationEvidence],
+    data: dict[str, object] | None,
 ):
     if data is None:
         return None
+    reason_codes = data.get("reason_codes", ())
+    details = data.get("details", ())
+    if not isinstance(reason_codes, (list, tuple)):
+        raise TypeError("reason_codes must be a list or tuple, not a scalar string")
+    if not isinstance(details, (list, tuple)):
+        raise TypeError("details must be a list or tuple, not a scalar string")
     return cls(
         status=EvidenceStatus(data["status"]),
-        reason_codes=tuple(data.get("reason_codes", ())),
-        details=tuple(data.get("details", ())),
+        reason_codes=tuple(reason_codes),
+        details=tuple(details),
     )
 
 
@@ -654,8 +661,8 @@ def _candidate_runtime_inputs_from_dict(data: dict[str, object]) -> CandidateRun
 
 
 def _prepare_from_fixture(fixture: dict[str, object]) -> PreparedCandidatePacket:
-    dependency = _evidence_status_from_dict(fixture.get("dependency_evidence"), DependencyEvidence)
-    validation = _evidence_status_from_dict(fixture.get("validation_evidence"), ValidationEvidence)
+    dependency = _evidence_from_json(DependencyEvidence, fixture.get("dependency_evidence"))
+    validation = _evidence_from_json(ValidationEvidence, fixture.get("validation_evidence"))
     repository_observation = fixture.get("repository_observation")
     candidate_context = fixture.get("candidate_context")
     approval_decision = fixture.get("approval_decision")
