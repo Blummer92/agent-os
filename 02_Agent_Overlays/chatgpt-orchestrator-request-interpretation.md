@@ -31,4 +31,12 @@ This detail file is part of `chatgpt-orchestrator.md` and owns only the #925 con
 - Repository mutation still routes only through GitHub Service Agent and existing Safe Implementation Lane checks.
 - Legacy aliases still resolve through `04_Registry/legacy-agent-alias-registry.md`; successful alias output includes `legacy_alias`, registered `canonical_agent`, and `selected_overlay`.
 - Classroom generation still uses registered instructional owners and approved Drive/Slides destinations.
-- Equivalent structured requests compare routing outcomes separately from request record identity/provenance; `record_id`, `raw_input_digest`, fingerprint, and evidence provenance remain distinct evidence.
+- Equivalent structured requests compare routing outcomes separately from request record identity/provenance; `record_id`, `raw_input_digest`, record fingerprint, and evidence provenance remain distinct evidence.
+
+## Provider-Specific Tutorial Intent Preservation
+- Provider identity is a capability/destination constraint, not permission to replace the requested task type. A request to create/build an existing tutorial artifact in Adobe Express or another provider must preserve canonical creation intent through capability discovery.
+- Distinguish `create/build artifact`, `inspect/review existing artifact`, `guide through existing UI/tutorial`, and `design a new generic tutorial` from the canonical request record and current context. Do not silently substitute one mode for another.
+- When the user requests an existing tutorial/artifact, resolve that artifact from canonical context before generic reconstruction. Missing artifact evidence must remain explicit; do not invent a replacement lesson/tutorial.
+- When canonical intent is create/build, discover the provider capability before asking the user to supply screenshots or narrate the interface. A screen-coaching fallback is not equivalent to artifact creation.
+- A provider capability transition never grants execution authority. If the provider cannot create/inspect the resolved artifact under the current authorization envelope, return the exact capability blocker and preserve the requested task type for handoff.
+- Typo normalization may repair a surface token such as `topography` -> `typography` only when surrounding evidence makes the intended term unambiguous; it must not change tutorial identity or task type.
