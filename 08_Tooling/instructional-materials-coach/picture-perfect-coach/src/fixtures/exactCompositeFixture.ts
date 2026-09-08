@@ -1,9 +1,10 @@
 import type { CaptureStatus } from '../captureEvidence';
-import type { ExactCompositeArtifact, ExecutorBlockerReason, ExecutorProvenanceReport } from '../executorContract';
+import type { ExactCompositeArtifact, ExecutorProvenanceReport } from '../executorContract';
 import type { RectXywh, TutorialFramePlan } from '../framePlan';
 import {
   renderDeterministicExactComposite,
   toExactCompositeArtifact,
+  type DeterministicExecutorBlockerReason,
 } from '../exactCompositeExecutor';
 import {
   fillRect,
@@ -24,7 +25,7 @@ export type FixtureRenderResult = Readonly<{
   status: CaptureStatus;
   image: RgbaImage | null;
   report: ExecutorProvenanceReport | null;
-  blocker_reasons: readonly ExecutorBlockerReason[];
+  blocker_reasons: readonly DeterministicExecutorBlockerReason[];
 }>;
 
 export function toArtifact(image: RgbaImage): ExactCompositeArtifact {
@@ -64,7 +65,7 @@ export function renderExactCompositeFixture(
   return renderDeterministicExactComposite(plan, source, assets, {
     executor_id: 'ppux-fixture-reference-renderer',
     executor_version: '2',
-  }) as FixtureRenderResult;
+  });
 }
 
 /* --------------------------- corruption fixtures --------------------------- */
