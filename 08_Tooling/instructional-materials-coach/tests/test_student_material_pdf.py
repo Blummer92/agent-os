@@ -3,11 +3,12 @@ from unittest.mock import patch
 
 from instructional_materials_coach.student_material_pdf import (
     StudentMaterialPdfSource,
+    StudentMaterialVisualEvidence,
     render_student_material_pdf_preview,
 )
 
 
-def _source(revision="rev-7"):
+def _source(revision="rev-7", *, visual_evidence=None):
     return StudentMaterialPdfSource(
         artifact_role="worksheet",
         native_file_id="doc-123",
@@ -15,6 +16,7 @@ def _source(revision="rev-7"):
         target_folder_id="approved-folder",
         title="Photography Foundations - Worksheet",
         paragraphs=("Name: ____________________", "Explain aperture in your own words."),
+        visual_evidence=visual_evidence,
     )
 
 
@@ -61,3 +63,47 @@ def test_generated_preview_never_claims_canonical_final(tmp_path):
     receipt = render_student_material_pdf_preview(_source(), tmp_path / "preview.pdf", expected_revision_id="rev-7")
     assert receipt.available and receipt.canonical is False
     assert "preview" in receipt.state
+
+
+def test_required_visual_without_verified_placement_blocks_before_pdf_creation(tmp_path):
+    target = tmp_path / "photography.pdf"
+    evidence = StudentMaterialVisualEvidence(
+        required_roles=("composition-example", "camera-icon"),
+        verified_placed_roles=("camera-icon",),
+    )
+    receipt = render_student_material_pdf_preview(
+        _source(visual_evidence=evidence), target, expected_revision_id="rev-7"
+    )
+    assert receipt.state == "blocked" and not receipt.available and not target.exists()
+    assert receipt.unresolved_visual_roles == ("composition-example",)
+    assert "composition-example" in receipt.error
+
+
+def test_all_required_visuals_verified_allows_preview(tmp_path):
+    evidence = StudentMaterialVisualEvidence(
+        required_roles=("composition-example", "camera-icon"),
+        verified_placed_roles=("camera-icon", "composition-example"),
+    )
+    receipt = render_student_material_pdf_preview(
+        _source(visual_evidence=evidence), tmp_path / "verified.pdf", expected_revision_id="rev-7"
+    )
+    assert receipt.available and receipt.unresolved_visual_roles == ()
+
+
+def test_no_visual_needed_text_only_preview_remains_supported(tmp_path):
+    evidence = StudentMaterialVisualEvidence(required_roles=(), verified_placed_roles=())
+    receipt = render_student_material_pdf_preview(
+        _source(visual_evidence=evidence), tmp_path / "text-only.pdf", expected_revision_id="rev-7"
+    )
+    assert receipt.available
+
+
+def test_visual_role_duplicates_do_not_create_false_missing_roles(tmp_path):
+    evidence = StudentMaterialVisualEvidence(
+        required_roles=("critique-image", "critique-image"),
+        verified_placed_roles=("critique-image",),
+    )
+    receipt = render_student_material_pdf_preview(
+        _source(visual_evidence=evidence), tmp_path / "deduped.pdf", expected_revision_id="rev-7"
+    )
+    assert receipt.available and receipt.unresolved_visual_roles == ()
