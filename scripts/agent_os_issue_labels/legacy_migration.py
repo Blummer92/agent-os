@@ -4,7 +4,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from .issue_metadata import load_issue_form_fields, metadata_contract, parse_issue_form_body
+from .issue_metadata import (
+    load_issue_form_fields,
+    load_issue_form_schema,
+    metadata_contract,
+    parse_issue_form_body,
+)
 from .label_map import expected_labels, load_label_map
 
 _REQUIRED_TIERED_FIELDS = (
@@ -43,7 +48,12 @@ def build_legacy_issue_migration(
     issue_form_path: str | Path,
     label_map_path: str | Path,
 ) -> LegacyIssueMigrationResult:
-    """Build a fail-closed canonical metadata migration without mutating GitHub."""
+    """Build a fail-closed canonical metadata migration without mutating GitHub.
+
+    Every migrated value must be supplied explicitly by the caller. The helper
+    never infers readiness, owner, tier, source of truth, or external-write state
+    from prose, titles, labels, age, or repository state.
+    """
     fields = load_issue_form_fields(issue_form_path)
     existing = parse_issue_form_body(issue_body, fields)
     existing_contract = metadata_contract(existing)
@@ -75,6 +85,27 @@ def build_legacy_issue_migration(
             "manual-review",
             "incomplete",
             tuple(reasons),
+            _freeze_metadata(normalized),
+        )
+
+    schema = load_issue_form_schema(issue_form_path)
+    option_sets = {
+        field.canonical_id: frozenset(field.options)
+        for field in schema.fields
+        if field.canonical_id in _ALLOWED_EVIDENCE_FIELDS and field.options
+    }
+    invalid_form_values = sorted(
+        f"{field}={value}"
+        for field, values in normalized.items()
+        for value in values
+        if field in option_sets and value not in option_sets[field]
+    )
+    if invalid_form_values:
+        return LegacyIssueMigrationResult(
+            issue_body,
+            "manual-review",
+            "incomplete",
+            tuple(f"noncanonical-form-evidence:{item}" for item in invalid_form_values),
             _freeze_metadata(normalized),
         )
 
