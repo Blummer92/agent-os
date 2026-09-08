@@ -58,21 +58,13 @@ def _load_json(path: str, *, default: object) -> object:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def _build_idempotency_key(
-    args: argparse.Namespace,
-    content_title: str,
-    material_requirement: object,
-) -> str:
+def _build_idempotency_key(args: argparse.Namespace, content_title: str, material_requirement: object) -> str:
     identity = material_requirement.get("identity", {}) if isinstance(material_requirement, dict) else {}
     payload = {
-        "requirement_id": identity.get("requirement_id"),
-        "contract_version": identity.get("contract_version"),
-        "record_revision": identity.get("record_revision"),
-        "source_fingerprint": identity.get("source_fingerprint"),
-        "slides_template": args.slides_template,
-        "doc_template": args.doc_template,
-        "target_folder": args.target_folder,
-        "content_title": content_title,
+        "requirement_id": identity.get("requirement_id"), "contract_version": identity.get("contract_version"),
+        "record_revision": identity.get("record_revision"), "source_fingerprint": identity.get("source_fingerprint"),
+        "slides_template": args.slides_template, "doc_template": args.doc_template,
+        "target_folder": args.target_folder, "content_title": content_title,
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(canonical).hexdigest()
@@ -135,10 +127,8 @@ def main(argv: list[str] | None = None) -> int:
         credentials = get_credentials(args.client_secret, args.token_path)
         receipt = build_live_materials(
             LiveBuildInput(
-                slides_template_id=args.slides_template,
-                doc_template_id=args.doc_template,
-                target_folder_id=args.target_folder,
-                slides_name=f"{content.title} - Slides",
+                slides_template_id=args.slides_template, doc_template_id=args.doc_template,
+                target_folder_id=args.target_folder, slides_name=f"{content.title} - Slides",
                 doc_name=f"{content.title} - Worksheet",
                 idempotency_key=_build_idempotency_key(args, content.title, material_requirement),
                 slides_requests=tuple(build_slides_replace_requests(content)),
@@ -150,8 +140,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         if not receipt.succeeded:
             raise RuntimeError(f"Live build incomplete: slides={receipt.slides.state}; worksheet={receipt.worksheet.state}; manual_reconciliation_required={receipt.manual_reconciliation_required}")
-        print(f"Slides: {receipt.slides.web_view_link}")
-        print(f"Worksheet: {receipt.worksheet.web_view_link}")
+        print(f"Slides final (native Google Slides, canonical editable): {receipt.slides.web_view_link}")
+        print(f"Worksheet final (native Google Docs, canonical editable): {receipt.worksheet.web_view_link}")
         return 0
     except Exception as exc:
         lesson_path = record_lesson(lesson_from_exception(exc, context), args.lessons_dir)
