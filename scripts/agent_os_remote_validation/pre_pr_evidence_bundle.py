@@ -1,7 +1,7 @@
 """Additive PR-less evidence-bundle construction for #1985.
 
 This module deliberately reuses ``ValidationEvidenceBundle`` and its canonical
-content-addressed identity.  It does not introduce a second evidence model and
+content-addressed identity. It does not introduce a second evidence model and
 it leaves the existing positive-PR v1.0 builder unchanged.
 """
 from __future__ import annotations
@@ -17,11 +17,13 @@ from scripts.agent_os_execution_capabilities.models import (
 )
 
 from .evidence_bundle import (
+    MAX_BUNDLE_SERIALIZED_BYTES,
     VALIDATION_EVIDENCE_BUNDLE_SCHEMA_NAME,
     VALIDATION_EVIDENCE_BUNDLE_SCHEMA_VERSION,
     SuppliedCommandResult,
     ValidationEvidenceBundle,
     _bundle_payload,
+    _canonical_bytes,
     _semantic_digest,
     _status_for,
     _timestamp,
@@ -31,6 +33,7 @@ from .evidence_bundle import (
 from .models import PrePrValidationPlan
 from .selector import (
     compute_command_set_digest,
+    deserialize_pre_pr_validation_plan,
     pre_pr_validation_plan_id,
     serialize_pre_pr_validation_plan,
 )
@@ -113,9 +116,6 @@ def build_pre_pr_validation_evidence_bundle(
     if bundle_start is None or bundle_end is None or bundle_end < bundle_start:
         invalid.add("bundle.timestamp")
 
-    # Reuse the existing result validator by presenting only the plan surface it
-    # consumes.  This adapter is local and non-authorizing; no positive PR is
-    # fabricated and no v1.0 positive-PR behavior changes.
     class _ResultPlan:
         profile = validation_plan.profile
         commands = validation_plan.commands
@@ -158,7 +158,7 @@ def build_pre_pr_validation_evidence_bundle(
         invocation_id=subject.invocation_id,
         started_at=started_at,
         completed_at=completed_at,
-        validation_plan=None,
+        validation_plan=validation_plan,  # type: ignore[arg-type]
         command_results=normalized,
         reason_codes=tuple(sorted(reasons)),
         details=tuple(sorted(details)),
@@ -171,10 +171,19 @@ def build_pre_pr_validation_evidence_bundle(
 
 def serialize_pre_pr_validation_evidence_bundle(
     bundle: ValidationEvidenceBundle,
-    validation_plan: PrePrValidationPlan,
+    validation_plan: PrePrValidationPlan | None = None,
 ) -> dict[str, object]:
-    """Serialize a PR-less bundle while verifying its content-addressed identity."""
-    payload = _pre_pr_payload(bundle, validation_plan)
+    """Serialize a PR-less bundle while verifying plan and content identity."""
+    if type(bundle) is not ValidationEvidenceBundle:
+        raise TypeError("bundle must be exact ValidationEvidenceBundle")
+    if bundle.pull_request is not None:
+        raise ValueError("pre-PR validation evidence must not carry a pull request")
+    plan = validation_plan if validation_plan is not None else bundle.validation_plan
+    if type(plan) is not PrePrValidationPlan:
+        raise TypeError("pre-PR bundle must carry an exact PrePrValidationPlan")
+    if bundle.plan_id != pre_pr_validation_plan_id(plan):
+        raise ValueError("pre-PR validation plan identity does not match bundle")
+    payload = _pre_pr_payload(bundle, plan)
     expected = "validation-evidence-bundle:" + _semantic_digest(
         "agent-os-validation-evidence-bundle:v1", payload
     )
@@ -182,21 +191,133 @@ def serialize_pre_pr_validation_evidence_bundle(
         raise ValueError("validation evidence bundle ID mismatch")
     result = dict(payload)
     result["bundle_id"] = bundle.bundle_id
+    if len(_canonical_bytes(result)) > MAX_BUNDLE_SERIALIZED_BYTES:
+        raise ValueError("validation evidence bundle exceeds canonical size limit")
     return result
 
 
 def pre_pr_validation_evidence_bundle_id(
     bundle: ValidationEvidenceBundle,
-    validation_plan: PrePrValidationPlan,
+    validation_plan: PrePrValidationPlan | None = None,
 ) -> str:
-    return str(serialize_pre_pr_validation_evidence_bundle(bundle, validation_plan)["bundle_id"])
+    return str(
+        serialize_pre_pr_validation_evidence_bundle(bundle, validation_plan)["bundle_id"]
+    )
+
+
+def reconstruct_pre_pr_validation_evidence_bundle(
+    payload: object,
+) -> ValidationEvidenceBundle:
+    """Reconstruct one canonical PR-less bundle without inventing PR identity."""
+    if type(payload) is not dict:
+        raise TypeError("payload must be an exact dictionary")
+    if payload.get("pull_request", object()) is not None:
+        raise ValueError("pre-PR bundle pull_request must be null")
+    plan_payload = payload.get("validation_plan")
+    plan = deserialize_pre_pr_validation_plan(plan_payload)
+    if payload.get("plan_id") != pre_pr_validation_plan_id(plan):
+        raise ValueError("pre-PR validation plan identity does not match bundle")
+
+    repository_payload = payload.get("repository_identity")
+    if type(repository_payload) is not dict:
+        raise ValueError("repository_identity must be an exact object")
+    repository = RepositoryIdentity(
+        host=repository_payload.get("host"),
+        owner=repository_payload.get("owner"),
+        repository=repository_payload.get("repository"),
+        repository_id=repository_payload.get("repository_id"),
+        is_fork=repository_payload.get("is_fork"),
+        upstream_owner=repository_payload.get("upstream_owner"),
+        upstream_repository=repository_payload.get("upstream_repository"),
+        upstream_repository_id=repository_payload.get("upstream_repository_id"),
+        default_branch=repository_payload.get("default_branch"),
+    )
+    try:
+        evidence_type = RepositoryEvidenceType(payload.get("repository_evidence_type"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("repository_evidence_type is invalid") from exc
+
+    raw_results = payload.get("command_results")
+    if type(raw_results) is not list:
+        raise ValueError("command_results must be a list")
+    supplied: list[SuppliedCommandResult] = []
+    for item in raw_results:
+        if type(item) is not dict:
+            raise ValueError("command_result must be an exact object")
+        supplied.append(
+            SuppliedCommandResult(
+                plan_id=item.get("plan_id"),
+                invocation_id=item.get("invocation_id"),
+                runner_id=item.get("runner_id"),
+                command_ordinal=item.get("command_ordinal"),
+                command=item.get("command"),
+                source_head_sha=item.get("source_head_sha"),
+                tested_sha=item.get("tested_sha"),
+                started_at=item.get("started_at"),
+                completed_at=item.get("completed_at"),
+                status=item.get("status"),
+                exit_code=item.get("exit_code"),
+                diagnostic_summary=item.get("diagnostic_summary"),
+                diagnostic_truncated=item.get("diagnostic_truncated"),
+            )
+        )
+
+    rebuilt = build_pre_pr_validation_evidence_bundle(
+        _projection_from_plan_payload(payload, repository, evidence_type),
+        plan,
+        tuple(supplied),
+        expected_repository=repository,
+        expected_repository_evidence_type=evidence_type,
+        expected_proposal_id=str(payload.get("proposal_id")),
+        expected_repository_state_evidence_id=str(payload.get("repository_state_evidence_id")),
+        runner_id=str(payload.get("runner_id")),
+        started_at=str(payload.get("started_at")),
+        completed_at=str(payload.get("completed_at")),
+    )
+    serialized = serialize_pre_pr_validation_evidence_bundle(rebuilt)
+    if serialized != payload:
+        raise ValueError("pre-PR validation evidence bundle is noncanonical")
+    return rebuilt
+
+
+def _projection_from_plan_payload(
+    payload: dict[str, object],
+    repository: RepositoryIdentity,
+    evidence_type: RepositoryEvidenceType,
+) -> GovernedProjectionEvidenceResult:
+    """Rebuild only the immutable projection facts already carried by the bundle."""
+    plan = deserialize_pre_pr_validation_plan(payload["validation_plan"])
+    subject = plan.subject
+    return GovernedProjectionEvidenceResult(
+        status="accepted",
+        repository_identity=repository,
+        base_branch=subject.base_branch,
+        base_sha=subject.base_sha,
+        evaluated_sha=subject.base_sha,
+        head_sha=subject.expected_source_sha,
+        tested_sha=subject.tested_sha,
+        repository_evidence_type=evidence_type,
+        projection_id=subject.projection_id,
+        proposal_id=str(payload.get("proposal_id")),
+        approval_id=subject.approval_id,
+        repository_state_evidence_id=str(payload.get("repository_state_evidence_id")),
+        implementation_contract_fingerprint=subject.implementation_contract_fingerprint,
+    )
 
 
 def _pre_pr_payload(
     bundle: ValidationEvidenceBundle,
     validation_plan: PrePrValidationPlan,
 ) -> dict[str, object]:
-    payload = _bundle_payload(bundle)
+    payload = _bundle_payload(replace(bundle, validation_plan=None))
     payload["pull_request"] = None
     payload["validation_plan"] = serialize_pre_pr_validation_plan(validation_plan)
     return payload
+
+
+__all__ = [
+    "build_pre_pr_validation_evidence_bundle",
+    "pre_pr_validation_evidence_bundle_id",
+    "reconstruct_pre_pr_validation_evidence_bundle",
+    "serialize_pre_pr_validation_evidence_bundle",
+]
