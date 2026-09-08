@@ -21,11 +21,12 @@ def test_fixed_target_and_session_identity_are_not_selectable() -> None:
     installer = _text(INSTALLER)
     runbook = _text(RUNBOOK)
     gce_adapter = _text(GCE_ADAPTER)
+    normalized_session = session.replace('\\"', '"')
 
     assert '[ "$#" -eq 0 ] || fail "arguments are not supported"' in session
     assert '[ "$#" -eq 0 ] || fail "arguments are not supported"' in installer
     assert "browser_session_ref = adobe-express-default" in runbook
-    assert '"browser_session_ref\\":\\"adobe-express-default"' in session
+    assert '"browser_session_ref":"adobe-express-default"' in normalized_session
     assert 'PROJECT="agent-os-502614"' in gce_adapter
     assert 'ZONE="us-central1-a"' in gce_adapter
     assert 'INSTANCE="agent-os-test"' in gce_adapter
@@ -168,13 +169,17 @@ def test_bootstrap_does_not_invoke_capture_replay_scheduler_or_provider() -> Non
 
 def test_runbook_keeps_auth_manual_and_profile_host_local() -> None:
     runbook = _text(RUNBOOK)
+    normalized = runbook.lower()
 
-    assert "manual Adobe / SSO / MFA" in runbook
-    assert "do not automate password entry" in runbook
-    assert "do not automate MFA" in runbook
-    assert "do not bypass SSO" in runbook
-    assert "do not inspect, extract, print, or copy cookies/tokens" in runbook
-    assert "do not copy the profile directory off-host" in runbook
+    for required in (
+        "manual adobe / sso / mfa",
+        "do not automate password entry",
+        "do not automate mfa",
+        "do not bypass sso",
+        "do not inspect, extract, print, or copy cookies/tokens",
+        "do not copy the profile directory off-host",
+    ):
+        assert required in normalized
     assert "Only #932 may determine `AUTH_READY`" in runbook
 
 
