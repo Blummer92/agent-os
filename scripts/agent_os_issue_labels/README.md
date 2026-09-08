@@ -3,6 +3,25 @@
 Local, fixture-first tooling for issue taxonomy evidence, safe application planning,
 and bounded pull-request label reconciliation.
 
+## Governed legacy issue migration
+
+`legacy_migration.py` provides the bounded migration path for pre-tiered free-form
+Agent OS issue bodies. It does not parse arbitrary prose into readiness metadata and it
+does not write to GitHub. A caller supplies explicit canonical evidence for tier, owner,
+readiness, source of truth, and external-write boundary (plus optional work type). Missing,
+conflicting, or ambiguous evidence returns `manual-review` with named reason codes.
+
+Successful migration preserves the legacy prose and appends the canonical tiered metadata
+block **last**. The migrated body is then consumed by the existing
+`parse_issue_form_body()` and `reconcile_issue_labels()` path; the migration helper never
+becomes a second readiness authority, selector, or label writer. Already-tiered bodies are
+returned unchanged. Rendering metadata last prevents historical/trailing prose from being
+absorbed into the final canonical field.
+
+This utility produces migration evidence only (`mutation_performed=false`,
+`write_authorized=false`). Any issue-body mutation and managed-label reconciliation remain
+separately authorized GitHub operations under the existing lifecycle contracts.
+
 ## Pull-request reconciliation
 
 `scripts/agent_os_issue_labels/pr_reconciler.py` consumes the canonical PR-label
@@ -169,6 +188,7 @@ PR-label reconciliation, lifecycle integration, or branch refresh.
 ## Validation
 
 ```bash
+python -m pytest tests/agent_os_issue_labels/test_legacy_migration.py -q
 python -m pytest tests/agent_os_issue_labels/test_pr_branch_refresh_operator.py -q
 python -m pytest tests/agent_os_issue_labels/test_pr_branch_refresh.py -q
 python -m pytest tests/agent_os_issue_labels/test_pr_branch_refresh_provider.py -q
