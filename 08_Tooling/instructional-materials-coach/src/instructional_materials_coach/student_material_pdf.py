@@ -17,6 +17,14 @@ class StudentMaterialPdfError(ValueError):
 
 
 @dataclass(frozen=True)
+class StudentMaterialVisualEvidence:
+    """Caller-supplied governed visual requirements and verified placements."""
+
+    required_roles: tuple[str, ...] = ()
+    verified_placed_roles: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class StudentMaterialPdfSource:
     artifact_role: str
     native_file_id: str
@@ -24,6 +32,7 @@ class StudentMaterialPdfSource:
     target_folder_id: str
     title: str
     paragraphs: tuple[str, ...]
+    visual_evidence: StudentMaterialVisualEvidence | None = None
 
 
 @dataclass(frozen=True)
@@ -33,6 +42,7 @@ class StudentMaterialPdfReceipt:
     source_file_id: str = ""
     source_revision_id: str = ""
     source_target_folder_id: str = ""
+    unresolved_visual_roles: tuple[str, ...] = ()
     canonical: bool = False
     render_verified: bool = False
     error: str = ""
@@ -49,8 +59,14 @@ def render_student_material_pdf_preview(
     expected_revision_id: str,
 ) -> StudentMaterialPdfReceipt:
     """Render and verify a non-canonical PDF preview from one exact native source revision."""
+    unresolved_visual_roles: tuple[str, ...] = ()
     try:
         _validate_source(source, expected_revision_id)
+        unresolved_visual_roles = _unresolved_visual_roles(source.visual_evidence)
+        if unresolved_visual_roles:
+            raise StudentMaterialPdfError(
+                "required visual placement is unresolved: " + ", ".join(unresolved_visual_roles)
+            )
         target = Path(output_path)
         target.parent.mkdir(parents=True, exist_ok=True)
         styles = getSampleStyleSheet()
@@ -83,6 +99,7 @@ def render_student_material_pdf_preview(
             source_file_id=source.native_file_id,
             source_revision_id=source.native_revision_id,
             source_target_folder_id=source.target_folder_id,
+            unresolved_visual_roles=unresolved_visual_roles,
             canonical=False,
             render_verified=False,
             error=str(exc),
@@ -104,6 +121,31 @@ def _validate_source(source: StudentMaterialPdfSource, expected_revision_id: str
         raise StudentMaterialPdfError("native source revision is stale or mismatched")
     if not source.paragraphs or any(not isinstance(item, str) or not item.strip() for item in source.paragraphs):
         raise StudentMaterialPdfError("paragraphs must contain non-empty text")
+    if source.visual_evidence is not None and not isinstance(source.visual_evidence, StudentMaterialVisualEvidence):
+        raise StudentMaterialPdfError("visual_evidence must use StudentMaterialVisualEvidence")
+
+
+def _unresolved_visual_roles(evidence: StudentMaterialVisualEvidence | None) -> tuple[str, ...]:
+    if evidence is None:
+        return ()
+    required = _normalized_roles(evidence.required_roles, "required_roles")
+    placed = set(_normalized_roles(evidence.verified_placed_roles, "verified_placed_roles"))
+    return tuple(role for role in required if role not in placed)
+
+
+def _normalized_roles(values: tuple[str, ...], field: str) -> tuple[str, ...]:
+    if not isinstance(values, tuple):
+        raise StudentMaterialPdfError(f"{field} must be a tuple")
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not isinstance(value, str) or not value.strip():
+            raise StudentMaterialPdfError(f"{field} must contain non-empty role identities")
+        role = value.strip()
+        if role not in seen:
+            normalized.append(role)
+            seen.add(role)
+    return tuple(normalized)
 
 
 def _verify_pdf(path: Path) -> None:
