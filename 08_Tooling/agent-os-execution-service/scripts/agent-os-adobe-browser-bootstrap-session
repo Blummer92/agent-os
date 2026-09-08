@@ -1,0 +1,146 @@
+#!/bin/sh
+# Fixed unprivileged Adobe browser operator session for #2106.
+# This file is repository contract only until separately authorized host activation.
+set -eu
+
+CAPTURE_USER=agent-os-capture
+CAPTURE_HOME=/var/lib/agent-os/capture-home
+PROFILE_DIR=$CAPTURE_HOME/.agent-os/browser-profiles/adobe-express
+RUNTIME_DIR=/run/agent-os/adobe-browser-bootstrap
+DISPLAY_ID=:97
+SCREEN_SPEC=1600x1000x24
+VNC_PORT=5901
+NOVNC_PORT=6080
+SESSION_TTL_SECONDS=1800
+START_URL=https://new.express.adobe.com/
+VIEW_URL='http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale'
+XAUTHORITY_FILE=$RUNTIME_DIR/Xauthority
+
+XVFB=/usr/bin/Xvfb
+XAUTH=/usr/bin/xauth
+MCOOKIE=/usr/bin/mcookie
+CHROMIUM=/usr/bin/chromium
+X11VNC=/usr/bin/x11vnc
+WEBSOCKIFY=/usr/bin/websockify
+DATE=/usr/bin/date
+SLEEP=/usr/bin/sleep
+
+fail() {
+  printf '%s\n' "adobe browser session refused: $1" >&2
+  exit 64
+}
+
+[ "$#" -eq 0 ] || fail "arguments are not supported"
+[ "$(id -un)" = "$CAPTURE_USER" ] || fail "must run as dedicated capture user"
+[ "${HOME:-}" = "$CAPTURE_HOME" ] || fail "capture HOME mismatch"
+[ -d "$PROFILE_DIR" ] || fail "fixed browser profile unavailable"
+[ -d "$RUNTIME_DIR" ] || fail "fixed runtime directory unavailable"
+for binary in "$XVFB" "$XAUTH" "$MCOOKIE" "$CHROMIUM" "$X11VNC" "$WEBSOCKIFY" "$DATE" "$SLEEP"; do
+  [ -x "$binary" ] || fail "required fixed runtime unavailable"
+done
+[ -d /usr/share/novnc ] || fail "noVNC web root unavailable"
+
+umask 077
+export DISPLAY=$DISPLAY_ID
+export XAUTHORITY=$XAUTHORITY_FILE
+export HOME=$CAPTURE_HOME
+export XDG_CONFIG_HOME=$CAPTURE_HOME/.config
+export XDG_CACHE_HOME=$CAPTURE_HOME/.cache
+unset PYTHONPATH PYTHONHOME
+
+mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME"
+rm -f "$XAUTHORITY_FILE"
+cookie=$($MCOOKIE)
+$XAUTH -f "$XAUTHORITY_FILE" add "$DISPLAY_ID" . "$cookie" >/dev/null 2>&1
+unset cookie
+
+xvfb_pid=
+chromium_pid=
+x11vnc_pid=
+websockify_pid=
+cleanup() {
+  trap - EXIT HUP INT TERM
+  for pid in "$websockify_pid" "$x11vnc_pid" "$chromium_pid" "$xvfb_pid"; do
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" 2>/dev/null || true
+    fi
+  done
+  for pid in "$websockify_pid" "$x11vnc_pid" "$chromium_pid" "$xvfb_pid"; do
+    if [ -n "$pid" ]; then
+      wait "$pid" 2>/dev/null || true
+    fi
+  done
+  rm -f "$XAUTHORITY_FILE"
+}
+trap cleanup EXIT HUP INT TERM
+
+$XVFB "$DISPLAY_ID" -screen 0 "$SCREEN_SPEC" -nolisten tcp -auth "$XAUTHORITY_FILE" >/dev/null 2>&1 &
+xvfb_pid=$!
+$SLEEP 1
+kill -0 "$xvfb_pid" 2>/dev/null || fail "virtual display failed to start"
+
+$CHROMIUM \
+  --user-data-dir="$PROFILE_DIR" \
+  --no-first-run \
+  --no-default-browser-check \
+  --disable-session-crashed-bubble \
+  --start-maximized \
+  "$START_URL" >/dev/null 2>&1 &
+chromium_pid=$!
+
+$X11VNC \
+  -display "$DISPLAY_ID" \
+  -auth "$XAUTHORITY_FILE" \
+  -rfbport "$VNC_PORT" \
+  -localhost \
+  -forever \
+  -shared \
+  -nopw \
+  -nosel \
+  -noclipboard \
+  -nosetclipboard \
+  -notightfilexfer \
+  -noutrafilexfer \
+  -noxrecord \
+  -quiet >/dev/null 2>&1 &
+x11vnc_pid=$!
+
+$WEBSOCKIFY \
+  --web=/usr/share/novnc \
+  "127.0.0.1:$NOVNC_PORT" \
+  "127.0.0.1:$VNC_PORT" >/dev/null 2>&1 &
+websockify_pid=$!
+
+$SLEEP 1
+for pid in "$chromium_pid" "$x11vnc_pid" "$websockify_pid"; do
+  kill -0 "$pid" 2>/dev/null || fail "browser bootstrap component failed to start"
+done
+
+started_at=$($DATE -u +%Y-%m-%dT%H:%M:%SZ)
+printf '%s\n' "{\"schema_name\":\"agent-os-adobe-browser-bootstrap-session\",\"schema_version\":\"1.0\",\"status\":\"operator-session-started\",\"reason_codes\":[\"operator-login-required\"],\"browser_session_ref\":\"adobe-express-default\",\"operator_view_url\":\"$VIEW_URL\",\"started_at\":\"$started_at\",\"auth_ready_asserted\":false,\"profile_material_emitted\":false,\"capture_invoked\":false,\"scheduler_invoked\":false,\"external_write_authorized\":false,\"live_activation_authorized\":false}"
+
+deadline=$(( $($DATE +%s) + SESSION_TTL_SECONDS ))
+status=operator-session-complete
+reason=operator-browser-closed
+while :; do
+  now=$($DATE +%s)
+  if [ "$now" -ge "$deadline" ]; then
+    status=operator-session-timeout
+    reason=bounded-ttl-reached
+    break
+  fi
+  if ! kill -0 "$xvfb_pid" 2>/dev/null || ! kill -0 "$x11vnc_pid" 2>/dev/null || ! kill -0 "$websockify_pid" 2>/dev/null; then
+    status=operator-session-failed
+    reason=bootstrap-component-exited
+    break
+  fi
+  if ! kill -0 "$chromium_pid" 2>/dev/null; then
+    break
+  fi
+  $SLEEP 2
+done
+
+finished_at=$($DATE -u +%Y-%m-%dT%H:%M:%SZ)
+printf '%s\n' "{\"schema_name\":\"agent-os-adobe-browser-bootstrap-session\",\"schema_version\":\"1.0\",\"status\":\"$status\",\"reason_codes\":[\"$reason\"],\"browser_session_ref\":\"adobe-express-default\",\"finished_at\":\"$finished_at\",\"auth_ready_asserted\":false,\"profile_material_emitted\":false,\"capture_invoked\":false,\"scheduler_invoked\":false,\"external_write_authorized\":false,\"live_activation_authorized\":false}"
+
+[ "$status" != operator-session-failed ]
