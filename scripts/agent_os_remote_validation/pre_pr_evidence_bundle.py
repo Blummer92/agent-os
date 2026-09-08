@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from scripts.agent_os_execution_capabilities.approved_projection import (
+    GOVENED_PROJECTION_EVIDENCE_SCHEMA_VERSION,
     GovernedProjectionEvidenceResult,
 )
 from scripts.agent_os_execution_capabilities.models import (
@@ -213,8 +214,7 @@ def reconstruct_pre_pr_validation_evidence_bundle(
         raise TypeError("payload must be an exact dictionary")
     if payload.get("pull_request", object()) is not None:
         raise ValueError("pre-PR bundle pull_request must be null")
-    plan_payload = payload.get("validation_plan")
-    plan = deserialize_pre_pr_validation_plan(plan_payload)
+    plan = deserialize_pre_pr_validation_plan(payload.get("validation_plan"))
     if payload.get("plan_id") != pre_pr_validation_plan_id(plan):
         raise ValueError("pre-PR validation plan identity does not match bundle")
 
@@ -285,23 +285,25 @@ def _projection_from_plan_payload(
     repository: RepositoryIdentity,
     evidence_type: RepositoryEvidenceType,
 ) -> GovernedProjectionEvidenceResult:
-    """Rebuild only the immutable projection facts already carried by the bundle."""
     plan = deserialize_pre_pr_validation_plan(payload["validation_plan"])
     subject = plan.subject
     return GovernedProjectionEvidenceResult(
         status="accepted",
-        repository_identity=repository,
-        base_branch=subject.base_branch,
-        base_sha=subject.base_sha,
-        evaluated_sha=subject.base_sha,
-        head_sha=subject.expected_source_sha,
-        tested_sha=subject.tested_sha,
-        repository_evidence_type=evidence_type,
+        schema_version=GOVENED_PROJECTION_EVIDENCE_SCHEMA_VERSION,
         projection_id=subject.projection_id,
         proposal_id=str(payload.get("proposal_id")),
         approval_id=subject.approval_id,
+        repository_identity=repository,
+        base_branch=subject.base_branch,
+        base_sha=subject.base_sha,
+        head_sha=subject.expected_source_sha,
+        evaluated_sha=subject.base_sha,
+        tested_sha=subject.tested_sha,
+        repository_evidence_type=evidence_type,
         repository_state_evidence_id=str(payload.get("repository_state_evidence_id")),
         implementation_contract_fingerprint=subject.implementation_contract_fingerprint,
+        reason_codes=(),
+        details=(),
     )
 
 
