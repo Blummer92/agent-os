@@ -34,58 +34,17 @@ def _no_visual_requirement_file(tmp_path):
 
 
 def _current_curriculum_evidence_file(tmp_path):
-    gate_keys = (
-        "unit-generation-approval",
-        "packet-generation-gate",
-        "instructional-materials-readiness",
-        "source-control-gate",
-        "production-authorized",
-    )
+    gate_keys = ("unit-generation-approval", "packet-generation-gate", "instructional-materials-readiness", "source-control-gate", "production-authorized")
 
     def reference(stable_id):
-        return {
-            "system": "notion",
-            "stable_id": stable_id,
-            "exact_location": f"collection://fixture/{stable_id}",
-            "verification_evidence": "fixture-read-back",
-        }
+        return {"system": "notion", "stable_id": stable_id, "exact_location": f"collection://fixture/{stable_id}", "verification_evidence": "fixture-read-back"}
 
     owner_evidence = []
     for index, decision_key in enumerate(gate_keys):
         evidence_id = f"gate-{index}"
-        owner_evidence.append(
-            {
-                "evidence_id": evidence_id,
-                "owner": "instructional-materials-coach",
-                "decision_key": decision_key,
-                "value": "ready",
-                "classification": "owner-governed",
-                "source_revision": 1,
-                "observed_at": "2026-08-28T12:00:00Z",
-                "currentness": "current",
-                "material": True,
-                "relation_resolved": True,
-                "reference": reference(evidence_id),
-            }
-        )
+        owner_evidence.append({"evidence_id": evidence_id, "owner": "instructional-materials-coach", "decision_key": decision_key, "value": "ready", "classification": "owner-governed", "source_revision": 1, "observed_at": "2026-08-28T12:00:00Z", "currentness": "current", "material": True, "relation_resolved": True, "reference": reference(evidence_id)})
 
-    return _write_json(
-        tmp_path,
-        "current-curriculum-evidence.json",
-        {
-            "contract_version": "curriculum-current-state-evidence-v1",
-            "canonical_unit": {"stable_id": "photography-foundations", "status": "active"},
-            "request": {
-                "action": "make",
-                "artifact_type": "worksheet",
-                "relative_time": "none",
-                "requires_reusable_assets": False,
-            },
-            "required_decision_keys": list(gate_keys),
-            "owner_evidence": owner_evidence,
-            "asset_evidence": [],
-        },
-    )
+    return _write_json(tmp_path, "current-curriculum-evidence.json", {"contract_version": "curriculum-current-state-evidence-v1", "canonical_unit": {"stable_id": "photography-foundations", "status": "active"}, "request": {"action": "make", "artifact_type": "worksheet", "relative_time": "none", "requires_reusable_assets": False}, "required_decision_keys": list(gate_keys), "owner_evidence": owner_evidence, "asset_evidence": []})
 
 
 def _base_build_args(lesson_file, requirement_file):
@@ -103,7 +62,7 @@ def test_main_refuses_without_allow_write(monkeypatch, capsys):
     assert "ALLOW_WRITE" in capsys.readouterr().err
 
 
-def test_main_full_flow_delegates_to_live_build(monkeypatch, tmp_path, capsys):
+def test_main_full_flow_delegates_to_live_build_and_labels_native_finals(monkeypatch, tmp_path, capsys):
     from instructional_materials_coach import cli
     monkeypatch.setenv("ALLOW_WRITE", "true")
     lesson_file = _lesson_file(tmp_path)
@@ -116,19 +75,15 @@ def test_main_full_flow_delegates_to_live_build(monkeypatch, tmp_path, capsys):
     assert live.call_args.args[0].target_folder_id == "folder-id"
     assert len(live.call_args.args[0].idempotency_key) == 64
     output = capsys.readouterr().out
-    assert "https://example/slides" in output and "https://example/doc" in output
+    assert "Slides final (native Google Slides, canonical editable): https://example/slides" in output
+    assert "Worksheet final (native Google Docs, canonical editable): https://example/doc" in output
 
 
 def test_idempotency_key_uses_loaded_requirement_snapshot_without_reread(tmp_path):
     from instructional_materials_coach import cli
     requirement_file = _no_visual_requirement_file(tmp_path)
     loaded = json.loads(requirement_file.read_text(encoding="utf-8"))
-    args = SimpleNamespace(
-        material_requirement=str(requirement_file),
-        slides_template="slides-template-id",
-        doc_template="doc-template-id",
-        target_folder="folder-id",
-    )
+    args = SimpleNamespace(material_requirement=str(requirement_file), slides_template="slides-template-id", doc_template="doc-template-id", target_folder="folder-id")
     requirement_file.unlink()
     key = cli._build_idempotency_key(args, "Fractions Intro", loaded)
     assert len(key) == 64
@@ -140,12 +95,7 @@ def test_idempotency_key_changes_with_requirement_identity(tmp_path):
     first = json.loads(requirement_file.read_text(encoding="utf-8"))
     second = json.loads(requirement_file.read_text(encoding="utf-8"))
     second["identity"]["record_revision"] = first["identity"]["record_revision"] + 1
-    args = SimpleNamespace(
-        material_requirement=str(requirement_file),
-        slides_template="slides-template-id",
-        doc_template="doc-template-id",
-        target_folder="folder-id",
-    )
+    args = SimpleNamespace(material_requirement=str(requirement_file), slides_template="slides-template-id", doc_template="doc-template-id", target_folder="folder-id")
     assert cli._build_idempotency_key(args, "Fractions Intro", first) != cli._build_idempotency_key(args, "Fractions Intro", second)
 
 

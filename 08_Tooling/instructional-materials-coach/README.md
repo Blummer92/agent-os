@@ -2,6 +2,11 @@
 
 Builds a Google Slides deck and Google Docs worksheet for one lesson by duplicating an approved template pair and replacing placeholder tokens with lesson content. It also provides a pure/offline Source -> Lesson Bundle planning seam that coordinates existing governed material requirements before any connected production occurs.
 
+## Connected artifact delivery
+A successful connected build treats the verified native Google Drive artifacts as the canonical editable finals: the slide deliverable is the exact native Google Slides file and the worksheet deliverable is the exact native Google Docs file in the approved Drive destination. `ArtifactReceipt` reports `delivery_kind=final`, `canonical_editable=true`, and `persistence_verified=true` only after the existing final Drive readback proves the exact file identity, expected native MIME type, approved parent folder, and matching idempotency/role evidence. Pair-level `succeeded` requires both native artifacts to meet that final contract.
+
+A created/recovered file, an `updated` state without verified native metadata, a missing/empty destination, a failed or ambiguous readback, a partial Slides/Docs result, or any PDF/preview is not sufficient for canonical-final completion. PDFs are derived review/export artifacts only and never supersede the native Drive source merely because they are easier to download. PDF draft/preview generation is governed separately from this connected native-final contract.
+
 ## Reusable visual placement contract
 `visual_placement.py` defines the repository-side fail-closed contract for binding one exact governed reusable asset to one exact Docs/Slides placement marker. Controlled markers use `{{visual:<role_id>}}`; coarse visual intent such as `slide`, `page`, `section`, or `student-facing` is never interpreted as a concrete position. Exactly one marker match is required. Missing, duplicate, malformed, or drifted markers stop placement.
 
@@ -33,7 +38,7 @@ All bundle authority evidence remains false. A successful plan grants no executi
 - Copies carry bounded private idempotency properties. An ambiguous copy is reconciled in the exact destination before any later create; multiple/conflicting matches stop for manual reconciliation.
 - Slides and Docs are tracked independently. Partial success is reported truthfully; the tool does not claim pair-level transactionality and does not automatically delete/trash partial artifacts.
 - Slides/Docs updates bind `writeControl.requiredRevisionId` to the copied artifact revision observed immediately before mutation.
-- Final Drive readback verifies file ID/type/parent/idempotency evidence and records the web link and shared-drive `driveId` when present. Sharing is observed only; this tool never changes ACLs.
+- Final Drive readback verifies file ID/type/parent/idempotency evidence and records the web link and shared-drive `driveId` when present. Only that verified native Drive file is reported as the canonical editable final. Sharing is observed only; this tool never changes ACLs.
 - Drive metadata/list/copy calls explicitly support My Drive/shared-drive objects while retaining the narrow `drive.file` OAuth scope.
 - Unresolved required visual roles block final production. Visual planning grants no production, publication, approval, readiness, image-generation, or external-write authority.
 - Teacher-reference PDF rendering is offline and caller-supplied: `render_teacher_reference_pdf()` accepts an already-built bounded reference plus optional image bytes keyed by exact governed `asset_id`, `stable_ref`, or `external_file_id`. It performs no network retrieval, no second asset-selection decision, and no Drive/Notion write. Missing bytes preserve the approved identity text or explicit gap rather than fabricating a visual.
@@ -73,7 +78,7 @@ For `visuals-required`, add already-governed evidence as applicable:
 
 The runtime reuses the public MaterialRequirement validator, visual-needs planner, canonical reuse planner, visual-candidate filter, and cohesive visual planner. The CLI remains the manual credential wrapper and delegates the external operation to `build_live_materials()` after governed content/visual checks pass.
 
-On success it prints selected approved Asset IDs, when any, plus the verified generated Slides and Doc links.
+On success it explicitly identifies the verified native Google Slides and Google Docs links as the canonical editable finals.
 
 ## Teacher-reference PDFs
 `teacher_reference.py` projects bounded Unit Alignment / Teacher Modeling evidence and governed visual assignments. `teacher_reference_pdf.py` renders those projections to PDF with ReportLab.
@@ -96,6 +101,10 @@ See `docs/notion-field-mapping.md` for the human-applied Notion field mapping.
 
 ## Tests
     pytest tests/
+
+Focused native-final delivery coverage:
+
+    PYTHONPATH=src:08_Tooling/instructional-materials-coach/src python -m pytest 08_Tooling/instructional-materials-coach/tests/test_live_build.py 08_Tooling/instructional-materials-coach/tests/test_cli.py -q
 
 Focused reusable-visual placement coverage:
 

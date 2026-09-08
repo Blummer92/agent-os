@@ -2,7 +2,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from instructional_materials_coach.live_build import LiveBuildInput, build_live_materials
+from instructional_materials_coach.live_build import ArtifactReceipt, LiveBuildInput, LiveBuildReceipt, build_live_materials
 
 
 def _build():
@@ -31,15 +31,37 @@ def test_preflight_failure_blocks_before_copy():
     copy.assert_not_called()
 
 
-def test_zero_matches_creates_both_and_updates_with_revision_controls():
+def test_zero_matches_creates_both_and_reports_verified_native_finals():
     slides = _meta("slides-id", "application/vnd.google-apps.presentation", "slides")
     doc = _meta("doc-id", "application/vnd.google-apps.document", "worksheet")
     p1, p2 = _preflight()
     with p1, p2, patch("instructional_materials_coach.live_build.find_idempotent_copies", side_effect=[[], []]), patch("instructional_materials_coach.live_build.duplicate_template", side_effect=[slides, doc]), patch("instructional_materials_coach.live_build.get_slides_revision_id", return_value="s-rev"), patch("instructional_materials_coach.live_build.get_docs_revision_id", return_value="d-rev"), patch("instructional_materials_coach.live_build.apply_slides_requests") as s_apply, patch("instructional_materials_coach.live_build.apply_docs_requests") as d_apply, patch("instructional_materials_coach.live_build.verify_final_copy", side_effect=[slides, doc]):
         receipt = build_live_materials(_build(), drive_service=MagicMock(), slides_service=MagicMock(), docs_service=MagicMock())
     assert receipt.succeeded
+    assert receipt.slides.is_final and receipt.worksheet.is_final
+    assert receipt.slides.delivery_kind == receipt.worksheet.delivery_kind == "final"
+    assert receipt.slides.canonical_editable and receipt.worksheet.canonical_editable
+    assert receipt.slides.persistence_verified and receipt.worksheet.persistence_verified
+    assert receipt.slides.mime_type == "application/vnd.google-apps.presentation"
+    assert receipt.worksheet.mime_type == "application/vnd.google-apps.document"
+    assert receipt.slides.parents == receipt.worksheet.parents == ("folder",)
     assert s_apply.call_args.kwargs["required_revision_id"] == "s-rev"
     assert d_apply.call_args.kwargs["required_revision_id"] == "d-rev"
+
+
+def test_updated_state_without_verified_native_metadata_is_not_final_or_success():
+    slides = ArtifactReceipt(role="slides", state="updated", file_id="slides-id")
+    worksheet = ArtifactReceipt(role="worksheet", state="updated", file_id="doc-id")
+    receipt = LiveBuildReceipt(slides, worksheet)
+    assert not slides.is_final and not worksheet.is_final and not receipt.succeeded
+
+
+def test_pdf_like_receipt_cannot_satisfy_native_final_completion():
+    pdf = ArtifactReceipt(
+        role="worksheet", state="updated", file_id="pdf-id", mime_type="application/pdf",
+        parents=("folder",), delivery_kind="pending", canonical_editable=False, persistence_verified=True,
+    )
+    assert not pdf.is_final
 
 
 def test_one_exact_match_recovers_without_duplicate():
@@ -57,7 +79,7 @@ def test_multiple_idempotency_matches_require_manual_reconciliation():
     p1, p2 = _preflight()
     with p1, p2, patch("instructional_materials_coach.live_build.find_idempotent_copies", return_value=[duplicate, other]), patch("instructional_materials_coach.live_build.duplicate_template") as copy:
         receipt = build_live_materials(_build(), drive_service=MagicMock(), slides_service=MagicMock(), docs_service=MagicMock())
-    assert receipt.slides.state == "ambiguous" and receipt.manual_reconciliation_required
+    assert receipt.slides.state == "ambiguous" and receipt.manual_reconciliation_required and not receipt.succeeded
     assert [candidate.file_id for candidate in receipt.slides.reconciliation_candidates] == ["slides-id", "other"]
     assert receipt.slides.reconciliation_candidates[0].parents == ("folder",)
     copy.assert_not_called()
@@ -70,7 +92,7 @@ def test_worksheet_ambiguity_preserves_candidate_identities():
     p1, p2 = _preflight()
     with p1, p2, patch("instructional_materials_coach.live_build.find_idempotent_copies", side_effect=[[slides], [first, second]]), patch("instructional_materials_coach.live_build.duplicate_template") as copy:
         receipt = build_live_materials(_build(), drive_service=MagicMock(), slides_service=MagicMock(), docs_service=MagicMock())
-    assert receipt.worksheet.state == "ambiguous" and receipt.manual_reconciliation_required
+    assert receipt.worksheet.state == "ambiguous" and receipt.manual_reconciliation_required and not receipt.succeeded
     assert [candidate.file_id for candidate in receipt.worksheet.reconciliation_candidates] == ["doc-a", "doc-b"]
     copy.assert_not_called()
 
@@ -88,7 +110,7 @@ def test_unresolved_ambiguous_copy_stops_without_second_create():
     p1, p2 = _preflight()
     with p1, p2, patch("instructional_materials_coach.live_build.find_idempotent_copies", side_effect=[[], []]), patch("instructional_materials_coach.live_build.duplicate_template", side_effect=TimeoutError("unknown")) as copy:
         receipt = build_live_materials(_build(), drive_service=MagicMock(), slides_service=MagicMock(), docs_service=MagicMock())
-    assert receipt.slides.state == "ambiguous" and receipt.manual_reconciliation_required
+    assert receipt.slides.state == "ambiguous" and receipt.manual_reconciliation_required and not receipt.succeeded
     assert receipt.slides.reconciliation_candidates == ()
     copy.assert_called_once()
 
@@ -99,6 +121,7 @@ def test_slides_created_docs_copy_fails_preserves_partial_state():
     with p1, p2, patch("instructional_materials_coach.live_build.find_idempotent_copies", side_effect=[[], [], []]), patch("instructional_materials_coach.live_build.duplicate_template", side_effect=[slides, TimeoutError("doc unknown")]), patch("instructional_materials_coach.live_build.get_slides_revision_id") as get_revision, patch("instructional_materials_coach.live_build.apply_slides_requests") as apply, patch("instructional_materials_coach.live_build.verify_final_copy") as verify:
         receipt = build_live_materials(_build(), drive_service=MagicMock(), slides_service=MagicMock(), docs_service=MagicMock())
     assert receipt.slides.state == "created" and receipt.worksheet.state == "ambiguous" and receipt.slides.file_id == "slides-id"
+    assert not receipt.succeeded
     get_revision.assert_not_called()
     apply.assert_not_called()
     verify.assert_not_called()
@@ -112,16 +135,25 @@ def test_both_copied_slides_update_failure_preserves_both_ids():
         receipt = build_live_materials(_build(), drive_service=MagicMock(), slides_service=MagicMock(), docs_service=MagicMock())
     assert receipt.slides.state == "failed" and receipt.slides.file_id == "slides-id"
     assert receipt.worksheet.state == "created" and receipt.worksheet.file_id == "doc-id"
-    assert copy.call_count == 2
+    assert not receipt.succeeded and copy.call_count == 2
 
 
-def test_docs_update_failure_preserves_slides_success():
+def test_docs_update_failure_preserves_slides_final_but_pair_is_partial():
     slides = _meta("slides-id", "application/vnd.google-apps.presentation", "slides")
     doc = _meta("doc-id", "application/vnd.google-apps.document", "worksheet")
     p1, p2 = _preflight()
     with p1, p2, patch("instructional_materials_coach.live_build.find_idempotent_copies", side_effect=[[], []]), patch("instructional_materials_coach.live_build.duplicate_template", side_effect=[slides, doc]), patch("instructional_materials_coach.live_build.get_slides_revision_id", return_value="s"), patch("instructional_materials_coach.live_build.get_docs_revision_id", return_value="d"), patch("instructional_materials_coach.live_build.apply_slides_requests"), patch("instructional_materials_coach.live_build.apply_docs_requests", side_effect=RuntimeError("revision mismatch")), patch("instructional_materials_coach.live_build.verify_final_copy", return_value=slides):
         receipt = build_live_materials(_build(), drive_service=MagicMock(), slides_service=MagicMock(), docs_service=MagicMock())
-    assert receipt.slides.state == "updated" and receipt.worksheet.state == "failed"
+    assert receipt.slides.is_final and receipt.worksheet.state == "failed" and not receipt.succeeded
+
+
+def test_wrong_parent_or_mime_or_failed_readback_never_reports_final():
+    slides = _meta("slides-id", "application/vnd.google-apps.presentation", "slides")
+    doc = _meta("doc-id", "application/vnd.google-apps.document", "worksheet")
+    p1, p2 = _preflight()
+    with p1, p2, patch("instructional_materials_coach.live_build.find_idempotent_copies", side_effect=[[], []]), patch("instructional_materials_coach.live_build.duplicate_template", side_effect=[slides, doc]), patch("instructional_materials_coach.live_build.get_slides_revision_id", return_value="s"), patch("instructional_materials_coach.live_build.apply_slides_requests"), patch("instructional_materials_coach.live_build.verify_final_copy", side_effect=RuntimeError("Final slides metadata is incompatible")):
+        receipt = build_live_materials(_build(), drive_service=MagicMock(), slides_service=MagicMock(), docs_service=MagicMock())
+    assert receipt.slides.state == "failed" and not receipt.slides.is_final and not receipt.succeeded
 
 
 def test_core_callable_has_no_credential_environment_shell_scheduler_or_notion_imports():
