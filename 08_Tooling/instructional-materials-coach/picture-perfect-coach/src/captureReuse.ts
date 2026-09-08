@@ -127,21 +127,21 @@ function mapBindingReasons(
   blockerReasons: readonly string[],
   status: string,
 ): { disposition: CaptureReuseDisposition; reasons: CaptureReuseReason[] } {
+  const manualReasons: CaptureReuseReason[] = [];
+  if (blockerReasons.includes(CAPTURE_BLOCKER_REASONS.capturePrivacyUnresolved)) {
+    manualReasons.push(CAPTURE_REUSE_REASONS.privacyUnresolved);
+  }
+  if (blockerReasons.includes(CAPTURE_BLOCKER_REASONS.captureAssetIneligible)) {
+    manualReasons.push(CAPTURE_REUSE_REASONS.assetEligibilityUnresolved);
+  }
+  if (manualReasons.length > 0) {
+    return { disposition: 'MANUAL_REVIEW_REQUIRED', reasons: manualReasons };
+  }
   if (status === 'manual-review-required') {
     return { disposition: 'MANUAL_REVIEW_REQUIRED', reasons: [CAPTURE_REUSE_REASONS.manualReviewStatus] };
   }
 
   const reasons: CaptureReuseReason[] = [];
-  if (blockerReasons.includes(CAPTURE_BLOCKER_REASONS.capturePrivacyUnresolved)) {
-    reasons.push(CAPTURE_REUSE_REASONS.privacyUnresolved);
-  }
-  if (blockerReasons.includes(CAPTURE_BLOCKER_REASONS.captureAssetIneligible)) {
-    reasons.push(CAPTURE_REUSE_REASONS.assetEligibilityUnresolved);
-  }
-  if (reasons.length > 0) {
-    return { disposition: 'MANUAL_REVIEW_REQUIRED', reasons };
-  }
-
   if (blockerReasons.includes(CAPTURE_BLOCKER_REASONS.captureRecordingMismatch)) {
     reasons.push(CAPTURE_REUSE_REASONS.recordingMismatch);
   }
