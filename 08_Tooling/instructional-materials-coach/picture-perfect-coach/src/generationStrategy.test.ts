@@ -59,7 +59,7 @@ function card(overrides: Partial<PromptCardModel> = {}): PromptCardModel {
     capturedScreenEvidence: null,
     capturedScreenRef: null,
     currentVisualReference: null,
-    evidence: { recordingClaimTexts: [], stateLocalClaims: [], actionIdentity: [] },
+    evidence: { sourceIndexes: [], recordingClaimTexts: [], stateLocalClaims: [], actionIdentity: [] },
     portablePrompt: 'semantic prompt',
     status: 'ready',
     blockerReasons: [],
