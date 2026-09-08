@@ -79,6 +79,11 @@ class BatchPullRequestLabelReconciliationResult:
         return tuple(result.pr_number for result in self.results if result.convergence_status == "not-attempted")
 
 
+def _plan_source_matches(planned: PullRequestLabelEvidence, current: PullRequestLabelEvidence) -> bool:
+    """Return whether every planner-relevant live input is still current."""
+    return planned == current
+
+
 def reconcile_pull_request_labels(
     provider: PullRequestLabelProvider,
     repository: str,
@@ -88,7 +93,8 @@ def reconcile_pull_request_labels(
     label_write_authorized: bool = False,
 ) -> PullRequestLabelReconciliationResult:
     initial = provider.read(repository, pr_number)
-    plan = plan_pull_request_labels(initial.evidence())
+    planned_evidence = initial.evidence()
+    plan = plan_pull_request_labels(planned_evidence)
     available = frozenset(provider.available_labels(repository))
     missing = tuple(sorted(set(plan.desired_managed_labels) - available))
     if missing:
@@ -105,6 +111,9 @@ def reconcile_pull_request_labels(
     before_write = provider.read(repository, pr_number)
     if before_write.head_sha != plan.head_sha:
         return _result(plan, status="stale-head", reasons=("head-moved-before-mutation",), dry_run=False,
+                       authorized=True, verified_head=before_write.head_sha)
+    if not _plan_source_matches(planned_evidence, before_write.evidence()):
+        return _result(plan, status="stale-plan", reasons=("planner-evidence-changed-before-mutation",), dry_run=False,
                        authorized=True, verified_head=before_write.head_sha)
 
     added: list[str] = []
