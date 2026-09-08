@@ -85,3 +85,15 @@ Expect: the fresh direct-user edit action may route to image editing when otherw
 ## Test 49 - Ambiguous Evidence Versus Edit Prefers Non-Destructive Interpretation
 Fixture: the user supplies a provider result image and asks `What do you think of this result?` after an external generation test.
 Expect: interpret as read-only assessment from the current evidence context, or ask only if a material ambiguity genuinely remains; do not infer local mutation merely because the conversation previously contained generation prompts.
+
+## Test 50 - Adobe Tutorial Creation Does Not Become Generic Curriculum
+Fixture: canonical context resolves an existing typography tutorial and the direct user asks to create/build that tutorial in Adobe Express.
+Expect: preserve the existing tutorial identity and canonical create/build task. Do not invent a generic typography lesson sequence merely because provider-specific execution has not yet been resolved.
+
+## Test 51 - Adobe Tutorial Creation Does Not Become Screen Coaching
+Fixture: after clarifying that the target is the actual existing typography tutorial, the direct user asks to make it in Adobe Express. Provider capability has not yet been inspected.
+Expect: discover the Adobe Express capability while preserving create/build intent. Do not ask for screenshots or convert the task into a screen-by-screen walkthrough before capability discovery proves that user-supplied visual evidence is necessary.
+
+## Test 52 - Explicit Screen Walkthrough Remains Distinct
+Fixture: the direct user explicitly asks `Walk me through the Adobe Express tutorial screen by screen; I am not asking you to create it.`
+Expect: screen/UI guidance may route as guidance when otherwise supported. The #1637 guard preserves task type; it does not force creation when the user explicitly requests a walkthrough.
