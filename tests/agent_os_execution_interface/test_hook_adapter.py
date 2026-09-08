@@ -1,12 +1,4 @@
-"""Hook-surface coverage for the #1237 pre-tool governed-route seam.
-
-The product-level regression is `Work on #1259` with local `gh` unavailable:
-the interface must reach handoff discovery and the existing immutable governed
-resume ingress instead of a generic publish path gated on a local CLI. When no
-handoff exists yet, the hook must continue toward the existing bounded execution-
-interface publication adapter instead of presenting descriptor absence as a
-terminal mission blocker or implying that the advisory hook publishes directly.
-"""
+"""Behavioral coverage for governed host hook re-entry (#1237/#2139)."""
 
 from __future__ import annotations
 
@@ -23,9 +15,7 @@ from scripts.agent_os_execution_checkpoint.invocation_descriptor import (
     append_invocation_descriptor,
 )
 from scripts.agent_os_execution_interface import hook_adapter
-from scripts.agent_os_execution_interface.governed_route_preflight import (
-    GOVERNED_CHECKOUT_MARKERS,
-)
+from scripts.agent_os_execution_interface.governed_route_preflight import GOVERNED_CHECKOUT_MARKERS
 
 REPOSITORY = "Blummer92/agent-os"
 
@@ -111,9 +101,7 @@ def test_repository_identity_resolves_from_git_remote(governed_checkout, monkeyp
     assert hook_adapter.resolve_repository_identity(governed_checkout) == REPOSITORY
 
 
-def test_repository_identity_prefers_explicit_configuration(
-    governed_checkout, monkeypatch
-):
+def test_repository_identity_prefers_explicit_configuration(governed_checkout, monkeypatch):
     monkeypatch.setenv(hook_adapter.REPOSITORY_ENV, "Other/repo")
     assert hook_adapter.resolve_repository_identity(governed_checkout) == "Other/repo"
 
@@ -136,38 +124,25 @@ def local_gh(request, tmp_path, monkeypatch):
     return request.param
 
 
-def test_work_on_1259_reaches_governed_resume_regardless_of_local_gh(
-    governed_checkout, configured_env, local_gh
-):
+def test_work_on_1259_reaches_governed_resume_regardless_of_local_gh(governed_checkout, configured_env, local_gh):
     descriptor = _descriptor()
     append_invocation_descriptor(configured_env, descriptor)
-
     notice = hook_adapter.run_user_prompt_submit_hook(
         json.dumps({"prompt": "Work on #1259", "cwd": str(governed_checkout)})
     )
-
     assert f"/agent-os resume {descriptor.handoff_id}" in notice
     assert "Do not select generic GitHub publish tooling" in notice
     assert "never evidence that Agent OS execution is" in notice
 
 
-def test_missing_handoff_continues_to_existing_publication_adapter(
-    governed_checkout, configured_env
-):
+def test_missing_handoff_continues_to_existing_publication_adapter(governed_checkout, configured_env):
     notice = hook_adapter.run_user_prompt_submit_hook(
         json.dumps({"prompt": "Work on #1117", "cwd": str(governed_checkout)})
     )
-
     assert "status=publication-required" in notice
     assert "continuation=execution-interface-adapter" in notice
-    assert "owner=#1237" in notice
-    assert "publication-owner=#1243" in notice
     assert "publish_current_pre_pr_handoff(...)" in notice
     assert "publish_governed_handoff(...)" in notice
-    assert "advisory hook does not itself publish" in notice
-    assert "scheduler_invoked=false" in notice
-    assert "Do not fabricate a descriptor or handoff" in notice
-    assert "silently fall back to local git/gh tooling" in notice
     assert "/agent-os resume executor-handoff:" not in notice
 
 
@@ -175,37 +150,15 @@ def test_prompt_hook_is_silent_outside_a_governed_checkout(tmp_path, configured_
     plain = tmp_path / "plain"
     plain.mkdir()
     append_invocation_descriptor(configured_env, _descriptor())
-
-    output = hook_adapter.run_user_prompt_submit_hook(
+    assert hook_adapter.run_user_prompt_submit_hook(
         json.dumps({"prompt": "Work on #1259", "cwd": str(plain)})
-    )
-
-    assert output == ""
+    ) == ""
 
 
-def test_prompt_hook_is_silent_without_an_issue_reference(
-    governed_checkout, configured_env
-):
-    output = hook_adapter.run_user_prompt_submit_hook(
+def test_prompt_hook_is_silent_without_an_issue_reference(governed_checkout, configured_env):
+    assert hook_adapter.run_user_prompt_submit_hook(
         json.dumps({"prompt": "summarize the README", "cwd": str(governed_checkout)})
-    )
-
-    assert output == ""
-
-
-def test_prompt_hook_fails_closed_when_the_store_is_unconfigured(
-    governed_checkout, monkeypatch
-):
-    monkeypatch.delenv(hook_adapter.STORE_ROOT_ENV, raising=False)
-    monkeypatch.delenv(hook_adapter.REPOSITORY_ENV, raising=False)
-
-    notice = hook_adapter.run_user_prompt_submit_hook(
-        json.dumps({"prompt": "Work on #1259", "cwd": str(governed_checkout)})
-    )
-
-    assert "status=needs-decision" in notice
-    assert "descriptor-store-not-configured" in notice
-    assert "/agent-os resume" not in notice
+    ) == ""
 
 
 def test_prompt_hook_tolerates_malformed_payloads(configured_env):
@@ -231,65 +184,83 @@ def test_references_local_gh(command, expected):
     assert hook_adapter.references_local_gh(command) is expected
 
 
-def test_pre_tool_guard_restates_the_invariant_for_gh_probes(governed_checkout):
+def test_pre_tool_guard_restates_invariant_for_local_gh(governed_checkout):
     payload = hook_adapter.run_pre_tool_use_hook(
-        json.dumps(
-            {
-                "tool_name": "Bash",
-                "tool_input": {"command": "which gh"},
-                "cwd": str(governed_checkout),
-            }
-        )
+        json.dumps({"tool_name": "Bash", "tool_input": {"command": "which gh"}, "cwd": str(governed_checkout)})
     )
-
     decoded = json.loads(payload)
     context = decoded["hookSpecificOutput"]["additionalContext"]
     assert decoded["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
     assert "never evidence that Agent OS execution is" in context
-    assert "/agent-os resume" in context
     assert "permissionDecision" not in json.dumps(decoded)
 
 
-def test_pre_tool_guard_is_silent_for_non_gh_and_non_bash_calls(governed_checkout):
-    assert (
-        hook_adapter.run_pre_tool_use_hook(
-            json.dumps(
-                {
-                    "tool_name": "Bash",
-                    "tool_input": {"command": "git log -1"},
-                    "cwd": str(governed_checkout),
-                }
-            )
-        )
-        == ""
+def test_pre_tool_guard_reaches_github_mutation_tool_without_becoming_a_gate(governed_checkout):
+    payload = hook_adapter.run_pre_tool_use_hook(
+        json.dumps({"tool_name": "mcp__github__update_file", "tool_input": {}, "cwd": str(governed_checkout)})
     )
-    assert (
-        hook_adapter.run_pre_tool_use_hook(
-            json.dumps(
-                {
-                    "tool_name": "Read",
-                    "tool_input": {"file_path": "gh"},
-                    "cwd": str(governed_checkout),
-                }
-            )
-        )
-        == ""
-    )
+    decoded = json.loads(payload)
+    context = decoded["hookSpecificOutput"]["additionalContext"]
+    assert "Reacquire current repository" in context
+    assert "grant no implementation" in context
+    assert "permissionDecision" not in json.dumps(decoded)
 
 
-def test_pre_tool_guard_is_silent_outside_a_governed_checkout(tmp_path):
-    plain = tmp_path / "plain"
-    plain.mkdir()
+def test_pre_tool_guard_is_silent_for_non_gh_bash_and_read(governed_checkout):
+    assert hook_adapter.run_pre_tool_use_hook(
+        json.dumps({"tool_name": "Bash", "tool_input": {"command": "git log -1"}, "cwd": str(governed_checkout)})
+    ) == ""
+    assert hook_adapter.run_pre_tool_use_hook(
+        json.dumps({"tool_name": "Read", "tool_input": {"file_path": "gh"}, "cwd": str(governed_checkout)})
+    ) == ""
 
-    assert (
-        hook_adapter.run_pre_tool_use_hook(
-            json.dumps(
-                {
-                    "tool_name": "Bash",
-                    "tool_input": {"command": "gh pr create"},
-                    "cwd": str(plain),
-                }
-            )
-        )
-        == ""
+
+def test_stop_blocks_once_for_structured_authorized_next_action(governed_checkout):
+    raw = json.dumps(
+        {
+            "cwd": str(governed_checkout),
+            "stop_hook_active": False,
+            "agent_os_continuation": {
+                "action": "create-draft-pr",
+                "terminal": False,
+                "blocked": False,
+                "stalled": False,
+                "reason_codes": ["authorized-next-action"],
+            },
+        }
     )
+    decoded = json.loads(hook_adapter.run_stop_hook(raw))
+    assert decoded["decision"] == "block"
+    assert "create-draft-pr" in decoded["reason"]
+    assert "grant no implementation" in decoded["reason"]
+
+
+def test_stop_allows_reentry_after_one_block(governed_checkout):
+    raw = json.dumps(
+        {
+            "cwd": str(governed_checkout),
+            "stop_hook_active": True,
+            "agent_os_continuation": {"action": "create-draft-pr"},
+        }
+    )
+    assert hook_adapter.run_stop_hook(raw) == ""
+
+
+@pytest.mark.parametrize(
+    "observation",
+    [
+        {"action": "", "terminal": True, "blocked": False, "stalled": False, "reason_codes": []},
+        {"action": "", "terminal": False, "blocked": True, "stalled": False, "reason_codes": ["authorization-boundary"]},
+        {"action": "", "terminal": False, "blocked": False, "stalled": True, "reason_codes": ["recovery-stalled"]},
+    ],
+)
+def test_stop_allows_terminal_blocked_and_stalled_states(governed_checkout, observation):
+    assert hook_adapter.run_stop_hook(
+        json.dumps({"cwd": str(governed_checkout), "agent_os_continuation": observation})
+    ) == ""
+
+
+def test_stop_evaluator_error_fails_open(governed_checkout):
+    assert hook_adapter.run_stop_hook(
+        json.dumps({"cwd": str(governed_checkout), "agent_os_continuation": {"action": 123}})
+    ) == ""

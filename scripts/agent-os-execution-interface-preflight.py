@@ -1,21 +1,13 @@
 #!/usr/bin/env python3
-"""Claude Code hook entrypoint for the #1237 governed-route preflight.
+"""Claude Code hook entrypoint for governed Agent OS route re-entry.
 
-Wired from ``.claude/settings.json`` so it runs before the model selects
-generic GitHub publish tooling or checks local ``git``/``gh`` prerequisites:
+Wired from ``.claude/settings.json`` for prompt submission, mutation-capable
+PreToolUse events, and turn Stop evaluation. Hook modes read JSON from stdin.
+Direct mode remains the inspectable governed-route preflight.
 
-```bash
-scripts/agent-os-execution-interface-preflight.py --hook user-prompt-submit
-scripts/agent-os-execution-interface-preflight.py --hook pre-tool-use
-scripts/agent-os-execution-interface-preflight.py --repository <owner/name> --issue <n>
-```
-
-The hook modes read their JSON payload from stdin. The direct mode prints
-canonical preflight JSON and is the inspectable form of the same decision.
-
-The entrypoint always exits ``0``: it is an advisory routing seam, not a gate.
-Fail-closed behavior belongs to the emitted decision (``not-found`` /
-``needs-decision``), never to killing the host turn.
+Every mode exits ``0``. PreToolUse remains advisory. Stop may return the host's
+bounded ``decision=block`` response only when an already-structured continuation
+decision names an authorized executable next action; evaluator errors fail open.
 """
 
 from __future__ import annotations
@@ -34,15 +26,16 @@ from scripts.agent_os_execution_interface.hook_adapter import (  # noqa: E402
     render_preflight_notice,
     resolve_store_root,
     run_pre_tool_use_hook,
+    run_stop_hook,
     run_user_prompt_submit_hook,
 )
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Resolve the governed Agent OS route before generic publish tooling.",
+        description="Resolve governed Agent OS routing and bounded continuation hooks.",
     )
-    parser.add_argument("--hook", choices=("user-prompt-submit", "pre-tool-use"))
+    parser.add_argument("--hook", choices=("user-prompt-submit", "pre-tool-use", "stop"))
     parser.add_argument("--repository")
     parser.add_argument("--issue", type=int)
     parser.add_argument("--checkout-root", default=".")
@@ -58,14 +51,14 @@ def main(argv: list[str] | None = None) -> int:
             raw = sys.stdin.read()
         except (OSError, ValueError):
             return 0
-        handler = (
-            run_user_prompt_submit_hook
-            if args.hook == "user-prompt-submit"
-            else run_pre_tool_use_hook
-        )
+        handlers = {
+            "user-prompt-submit": run_user_prompt_submit_hook,
+            "pre-tool-use": run_pre_tool_use_hook,
+            "stop": run_stop_hook,
+        }
         try:
-            output = handler(raw)
-        except Exception:  # never let an advisory seam break the host turn
+            output = handlers[args.hook](raw)
+        except Exception:  # never let a governance seam trap the host turn
             return 0
         if output:
             print(output)
