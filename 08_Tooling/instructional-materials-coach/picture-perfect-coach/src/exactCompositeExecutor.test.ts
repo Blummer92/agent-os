@@ -6,7 +6,7 @@ import {
   deterministicExactCompositeExecutor,
   toExactCompositeArtifact,
 } from './exactCompositeExecutor';
-import { createImage, getPixel, imageSha256, planSha256, setPixel } from './exactCompositePrimitives';
+import { createImage, getPixel, imageSha256, planSha256, setPixel, utf8Bytes } from './exactCompositePrimitives';
 import {
   DEFAULT_EXACT_COMPOSITE_RENDER_SPEC,
   RECT_CONVENTION,
@@ -15,7 +15,7 @@ import {
   TUTORIAL_FRAME_PLAN_VERSION,
   type TutorialFramePlan,
 } from './framePlan';
-import { validateForwardPixelFidelity, validateReportIntegrity } from './provenanceValidator';
+import { validatePixelFidelity, validateReportIntegrity } from './provenanceValidator';
 import { createFixtureSource } from './fixtures/exactCompositeFixture';
 
 function planWith(overrides: Partial<TutorialFramePlan> = {}): TutorialFramePlan {
@@ -59,7 +59,7 @@ const sourceImage = createFixtureSource(32, 18);
 const sourceArtifact = toExactCompositeArtifact(sourceImage);
 
 function artifactToImage(artifact: ReturnType<typeof toExactCompositeArtifact>) {
-  const headerLength = new TextEncoder().encode(`ppux-rgba8:${artifact.width_px}x${artifact.height_px}:`).length;
+  const headerLength = utf8Bytes(`ppux-rgba8:${artifact.width_px}x${artifact.height_px}:`).length;
   return {
     width: artifact.width_px,
     height: artifact.height_px,
@@ -79,7 +79,7 @@ describe('deterministicExactCompositeExecutor', () => {
     expect(output.report.plan_sha256).toBe(planSha256(plan));
     expect(output.report.output_sha256).toBe(imageSha256(outputImage));
 
-    const gateA = validateForwardPixelFidelity({ plan, source: sourceImage, output: outputImage, assets: new Map() });
+    const gateA = validatePixelFidelity({ plan, source: sourceImage, output: outputImage });
     const gateB = validateReportIntegrity({ plan, report: output.report, source: sourceImage, output: outputImage });
     expect(gateA.passed).toBe(true);
     expect(gateB.passed).toBe(true);
@@ -150,7 +150,9 @@ describe('deterministicExactCompositeExecutor', () => {
       plan: planWith(),
       source: { ...sourceArtifact, bytes: new Uint8Array([1, 2, 3]) },
       assets: [],
-    })).rejects.toBeInstanceOf(DeterministicExactCompositeExecutionError);
+    })).rejects.toMatchObject({
+      blocker_reasons: [DETERMINISTIC_EXECUTOR_BLOCKER_REASONS.sourceArtifactBytesInvalid],
+    });
   });
 
   it('keeps unsupported inset fail-closed rather than inventing source geometry', async () => {
@@ -159,7 +161,7 @@ describe('deterministicExactCompositeExecutor', () => {
         overlay_id: 'inset-1',
         kind: 'inset',
         bounds: { space: RECT_SPACES.outputPixel, rect: [20, 2, 8, 8] },
-        region_id: 'add-content-button',
+        source_rect: { space: RECT_SPACES.sourcePixel, rect: [8, 4, 4, 4] },
         magnification: 2,
       }],
     });
@@ -174,6 +176,14 @@ describe('deterministicExactCompositeExecutor', () => {
     const corrupted = artifactToImage(output.image);
     setPixel(corrupted, 0, 0, [255, 0, 255, 1]);
 
-    expect(validateForwardPixelFidelity({ plan, source: sourceImage, output: corrupted, assets: new Map() }).passed).toBe(false);
+    expect(validatePixelFidelity({ plan, source: sourceImage, output: corrupted }).passed).toBe(false);
+  });
+
+  it('uses the typed execution error for blocked requests', async () => {
+    await expect(deterministicExactCompositeExecutor.execute({
+      plan: planWith({ scale_x: 2, scale_y: 2 }),
+      source: sourceArtifact,
+      assets: [],
+    })).rejects.toBeInstanceOf(DeterministicExactCompositeExecutionError);
   });
 });
