@@ -122,13 +122,18 @@ def load_issue_form_schema(path: str | Path) -> IssueFormSchema:
         if not field_id or not label:
             unsupported.append(f"body[{index}] input control must define id and label")
             continue
+        # Route malformed shapes to unsupported rather than stringifying them; str()
+        # would invent a usable id or label out of a non-string value.
+        if not isinstance(field_id, str) or not isinstance(label, str):
+            unsupported.append(f"body[{index}] input control id and label must be strings")
+            continue
         if control_type not in _SUPPORTED_CONTROL_TYPES:
             unsupported.append(
                 f"body[{index}] field {field_id!s} uses unsupported control {control_type!r}"
             )
             continue
 
-        raw_id = str(field_id)
+        raw_id = field_id
         canonical_id = canonical_field_id(raw_id)
         if canonical_id in seen_canonical_ids:
             unsupported.append(f"duplicate canonical field id: {canonical_id}")
@@ -141,7 +146,7 @@ def load_issue_form_schema(path: str | Path) -> IssueFormSchema:
                 field_id=raw_id,
                 canonical_id=canonical_id,
                 control_type=control_type,
-                label=str(label),
+                label=label,
                 required=validations.get("required") is True,
                 options=options,
                 required_options=required_options,
@@ -231,8 +236,14 @@ def _string_tuple(value: object) -> tuple[str, ...]:
     if value is None:
         return ()
     if isinstance(value, list):
-        return tuple(str(item) for item in value)
-    return (str(value),)
+        # Validate members rather than stringify them: str(item) would turn a
+        # malformed entry such as None or {} into invented text.
+        if not all(isinstance(item, str) for item in value):
+            raise TypeError("expected a list of strings")
+        return tuple(value)
+    if not isinstance(value, str):
+        raise TypeError("expected a string or list of strings")
+    return (value,)
 
 
 def _optional_string(value: object) -> str | None:

@@ -219,7 +219,7 @@ class IssuePlanCurrentStateComparison:
             self, "changed_bindings", _strings(self.changed_bindings)
         )
         object.__setattr__(self, "reason_codes", _reasons(self.reason_codes))
-        object.__setattr__(self, "details", tuple(str(item) for item in self.details))
+        object.__setattr__(self, "details", _detail_strings(self.details))
 
 
 def build_issueplan_current_state_evidence(
@@ -905,6 +905,20 @@ def _strings(values: Iterable[str]) -> tuple[str, ...]:
     result = tuple(sorted(set(values)))
     if not all(isinstance(value, str) and value for value in result):
         raise ValueError("values must be non-empty strings")
+    return result
+
+
+def _detail_strings(values: Iterable[str]) -> tuple[str, ...]:
+    """Validate detail items, preserving supplied order and multiplicity.
+
+    Detail items are validated rather than stringified: str(item) would turn a
+    malformed member such as None into the invented text "None".
+    """
+    if isinstance(values, (str, bytes, Mapping)) or not isinstance(values, Iterable):
+        raise TypeError("details must be an iterable of strings")
+    result = tuple(values)
+    if not all(isinstance(value, str) and value for value in result):
+        raise ValueError("details must be non-empty strings")
     return result
 
 

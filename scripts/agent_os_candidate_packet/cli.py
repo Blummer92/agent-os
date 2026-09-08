@@ -544,10 +544,13 @@ def _evidence_status_from_dict(
 ):
     if data is None:
         return None
+    # Pass collections through unconverted. tuple() would silently character-split a
+    # JSON scalar such as "blocked" into ("b", "l", ...); the evidence dataclasses
+    # reject a bare str/bytes/Mapping, so let them fail closed instead.
     return cls(
         status=EvidenceStatus(data["status"]),
-        reason_codes=tuple(data.get("reason_codes", ())),
-        details=tuple(data.get("details", ())),
+        reason_codes=data.get("reason_codes", ()),
+        details=data.get("details", ()),
     )
 
 
