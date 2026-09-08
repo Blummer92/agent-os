@@ -52,6 +52,35 @@ describe('PPUX-RUN2 reuse-before-recapture', () => {
     });
   });
 
+  it('reports an explicitly identified repeated satisfied request as one avoided duplicate run', () => {
+    const first = decideCaptureReuse(square, requirement(), tutorial0SyntheticCapture);
+    const repeated = decideCaptureReuse(
+      square,
+      requirement({ already_satisfied_duplicate: true }),
+      tutorial0SyntheticCapture,
+    );
+
+    expect(repeated.disposition).toBe('REUSE_EXISTING_CAPTURE');
+    expect(repeated.reused_evidence).toEqual(first.reused_evidence);
+    expect(repeated.observability).toEqual({
+      browser_runs_requested: 0,
+      browser_runs_launched: 0,
+      existing_capture_reuses: 1,
+      duplicate_runs_avoided: 1,
+    });
+  });
+
+  it('does not claim a duplicate run was avoided when evidence is not reusable', () => {
+    const result = decideCaptureReuse(
+      square,
+      requirement({ already_satisfied_duplicate: true }),
+      null,
+    );
+
+    expect(result.disposition).toBe('CAPTURE_REQUIRED');
+    expect(result.observability.duplicate_runs_avoided).toBe(0);
+  });
+
   it('is deterministic for an identical repeated request and returns the same evidence identity', () => {
     const first = decideCaptureReuse(square, requirement(), tutorial0SyntheticCapture);
     const second = decideCaptureReuse(square, requirement(), tutorial0SyntheticCapture);
