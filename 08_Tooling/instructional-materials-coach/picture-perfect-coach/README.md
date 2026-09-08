@@ -1,4 +1,4 @@
-# Picture Perfect Coach — PPUX-A / B / C / D / E / F1 / F2
+# Picture Perfect Coach — PPUX-A / B / C / D / E / F1 / F2 / RUN2
 
 Bounded implementation package for the five-stage Picture Perfect authoring flow and its local browser acceptance suite.
 
@@ -21,6 +21,22 @@ Stage 5 performs deterministic local preflight and can generate a local implemen
 - `curriculum-visual-asset-compatibility-v2` owns suitability; `interface-capture` is accepted only with `screen-capture` medium and an eligible non-stale record.
 - TypeScript types here are bounded consumer projections, not new canonical schemas.
 - Prompt/image output is presentation guidance, never source instructional evidence.
+
+## Reuse before recapture (#2109)
+
+`captureReuse.ts` is a pure routing seam that runs before the #2100 live-capture adapter. It consumes the existing F2 `bindCaptureEvidence` result rather than searching for assets or defining another currentness model.
+
+```text
+exact current governed evidence -> REUSE_EXISTING_CAPTURE
+missing/stale/mismatched evidence -> CAPTURE_REQUIRED
+conflicting/privacy/eligibility ambiguity -> MANUAL_REVIEW_REQUIRED
+```
+
+Reuse requires the exact modeled application, recording SHA, source index + fingerprint, requested action/result role, co-visible UI claims, existing ArtifactManifest privacy/rights/readiness evidence, compatibility freshness, and target geometry when the requested frame depends on geometry. A filename, lesson title, generic application screenshot, generated image, or visually similar state is never a reuse key.
+
+The result exposes bounded non-authorizing counters for browser runs requested, browser runs launched by this pure seam (always zero), existing evidence reuse, and duplicate runs avoided. The same logical request plus the same current evidence deterministically returns the same evidence identity. This module never launches the browser; only `CAPTURE_REQUIRED` may be handed to #2100 for live capture. Manual-review outcomes deliberately do not spend browser compute to hide ambiguity.
+
+No cache, asset registry, persistence root, crawler, Scheduler, workflow, or execution authority is added. Reuse grants no Picture Perfect Ready, classroom readiness, publication, provider execution, or external-write authority.
 
 ## Fidelity evaluation boundary (#1542)
 
