@@ -9,14 +9,15 @@ describe("web reference", () => {
     expect(screen.getByRole("heading", { name: "Tasks" })).toBeTruthy();
     expect(screen.getByText("No tasks yet.")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Add task" }));
-    expect(screen.getByRole("alert")).toHaveTextContent("Enter a task title.");
+    expect(screen.getByRole("alert").textContent).toContain("Enter a task title.");
   });
 
-  it("opens an accessible dialog and restores its explicit close path", () => {
+  it("opens an accessible dialog and exposes a keyboard dismissal path", () => {
     render(<TaskPanel state={{ kind: "empty" }} />);
     fireEvent.click(screen.getByRole("button", { name: "Open help" }));
-    expect(screen.getByRole("dialog", { name: "Task help" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Close help" }));
+    const dialog = screen.getByRole("dialog", { name: "Task help" });
+    expect(dialog).toBeTruthy();
+    fireEvent.keyDown(dialog, { key: "Escape" });
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 });
