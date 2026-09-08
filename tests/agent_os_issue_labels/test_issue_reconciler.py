@@ -65,11 +65,7 @@ class Provider:
             raise RuntimeError("boom")
         snap = self.snapshots[issue_number]
         self.snapshots[issue_number] = LiveIssueSnapshot(
-            snap.repository,
-            snap.issue_number,
-            snap.body,
-            tuple((*snap.labels, label)),
-            snap.state,
+            snap.repository, snap.issue_number, snap.body, tuple((*snap.labels, label)), snap.state
         )
         self.writes.append(("add", issue_number, label))
 
@@ -96,13 +92,7 @@ class ReorderedReadProvider(Provider):
         snap = super().read(repository, issue_number)
         self.read_count += 1
         if self.read_count == 2:
-            return LiveIssueSnapshot(
-                snap.repository,
-                snap.issue_number,
-                snap.body,
-                tuple(reversed(snap.labels)),
-                snap.state,
-            )
+            return LiveIssueSnapshot(snap.repository, snap.issue_number, snap.body, tuple(reversed(snap.labels)), snap.state)
         return snap
 
 
@@ -135,32 +125,22 @@ def reconcile(provider, number=1, **kwargs):
     )
 
 
+def duplicate_section(body, heading, value, *, alias=None):
+    marker = f"### {heading}\n\n"
+    insertion = f"### {alias or heading}\n\n{value}\n\n"
+    return body.replace(marker, insertion + marker, 1)
+
+
 def test_zero_label_issue_dry_run_bootstraps_without_writes():
     provider = Provider({1: snap()})
     result = reconcile(provider)
     assert result.convergence_status == "would-change"
-    assert set(result.labels_to_add) == {
-        "agent-os",
-        "owner:github-service-agent",
-        "status:ready",
-        "type:bug",
-    }
+    assert set(result.labels_to_add) == {"agent-os", "owner:github-service-agent", "status:ready", "type:bug"}
     assert provider.writes == []
 
 
 def test_stale_managed_label_removed_but_human_label_preserved():
-    provider = Provider(
-        {
-            1: snap(
-                labels=(
-                    "agent-os",
-                    "owner:github-service-agent",
-                    "status:blocked",
-                    "human-note",
-                )
-            )
-        }
-    )
+    provider = Provider({1: snap(labels=("agent-os", "owner:github-service-agent", "status:blocked", "human-note"))})
     result = reconcile(provider, dry_run=False, label_write_authorized=True)
     assert result.convergence_status == "converged"
     assert ("remove", 1, "status:blocked") in provider.writes
@@ -179,6 +159,50 @@ def test_conflicting_readiness_routes_to_manual_review_without_writes():
     assert result.convergence_status == "manual-review"
     assert result.reason_codes == ("ambiguous-owner-or-readiness",)
     assert provider.writes == []
+
+
+def test_repeated_owner_heading_conflict_routes_to_manual_review_without_writes():
+    body = duplicate_section(BODY, "Primary owner", "owner:chatgpt-orchestrator")
+    provider = Provider({1: snap(body=body)})
+    result = reconcile(provider, dry_run=False, label_write_authorized=True)
+    assert result.convergence_status == "manual-review"
+    assert result.reason_codes == ("ambiguous-owner-or-readiness",)
+    assert provider.writes == []
+
+
+def test_alias_equivalent_owner_heading_conflict_routes_to_manual_review():
+    body = duplicate_section(BODY, "Primary owner", "owner:chatgpt-orchestrator", alias="Owner agent")
+    provider = Provider({1: snap(body=body)})
+    result = reconcile(provider, dry_run=False, label_write_authorized=True)
+    assert result.convergence_status == "manual-review"
+    assert provider.writes == []
+
+
+def test_repeated_readiness_heading_conflict_routes_to_manual_review():
+    body = duplicate_section(BODY, "Readiness candidate", "status:blocked")
+    provider = Provider({1: snap(body=body)})
+    result = reconcile(provider, dry_run=False, label_write_authorized=True)
+    assert result.convergence_status == "manual-review"
+    assert provider.writes == []
+
+
+def test_identical_duplicate_owner_is_deduplicated_deterministically():
+    body = duplicate_section(BODY, "Primary owner", "owner:github-service-agent")
+    provider = Provider({1: snap(body=body)})
+    assert reconcile(provider).convergence_status == "would-change"
+
+
+def test_duplicate_conflict_is_order_independent_and_newline_tolerant():
+    first = duplicate_section(BODY, "Primary owner", "owner:chatgpt-orchestrator")
+    second = first.replace(
+        "### Primary owner\n\nowner:chatgpt-orchestrator\n\n### Primary owner\n\nowner:github-service-agent",
+        "### Primary owner\r\n\r\n owner:github-service-agent \r\n\r\n### Primary owner\r\n\r\nowner:chatgpt-orchestrator",
+    )
+    for body in (first, second):
+        provider = Provider({1: snap(body=body)})
+        result = reconcile(provider, dry_run=False, label_write_authorized=True)
+        assert result.convergence_status == "manual-review"
+        assert provider.writes == []
 
 
 def test_legacy_owner_alias_projects_canonical_owner_label():
