@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from scripts.agent_os_issue_acceptance.lifecycle_mutation_guard import LifecycleMutationAdmissionResult
+
 from .issue_metadata import load_issue_form_fields, metadata_contract, parse_issue_form_body
 from .issue_reconciler import IssueLabelProvider, IssueLabelReconciliationResult, reconcile_issue_labels
 from .label_map import expected_labels, load_label_map
@@ -37,10 +39,10 @@ def managed_labels_for_create(issue_body: str, *, issue_form_path: str | Path, l
     return managed
 
 
-def converge_connected_issue_creation(provider: IssueLabelProvider, repository: str, issue_number: int, *, issue_form_path: str | Path, label_map_path: str | Path, label_write_authorized: bool) -> ConnectedIssueCreationConvergence:
+def converge_connected_issue_creation(provider: IssueLabelProvider, repository: str, issue_number: int, *, issue_form_path: str | Path, label_map_path: str | Path, lifecycle_admission: LifecycleMutationAdmissionResult | None) -> ConnectedIssueCreationConvergence:
     initial = provider.read(repository, issue_number)
     labels_for_create = managed_labels_for_create(initial.body, issue_form_path=issue_form_path, label_map_path=label_map_path)
-    reconciliation = reconcile_issue_labels(provider, repository, issue_number, issue_form_path=issue_form_path, label_map_path=label_map_path, dry_run=False, label_write_authorized=label_write_authorized)
+    reconciliation = reconcile_issue_labels(provider, repository, issue_number, issue_form_path=issue_form_path, label_map_path=label_map_path, dry_run=False, lifecycle_admission=lifecycle_admission)
     terminal = reconciliation.convergence_status in {"converged", "already-current"}
     reasons = set(reconciliation.reason_codes)
     reasons.add("connected-create-label-convergence-proven" if terminal else "connected-create-label-convergence-not-proven")
