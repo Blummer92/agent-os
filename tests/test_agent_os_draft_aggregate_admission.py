@@ -17,11 +17,20 @@ def test_draft_aggregate_profile_requires_explicit_final_candidate_admission():
     because a *skipped* required job is indistinguishable from a passing one to
     branch protection. Draft deferral is unchanged, and remains the only way
     the automatic aggregate is withheld.
+
+    The condition no longer carries an `always() &&` prefix. That prefix existed
+    only to survive the `needs: plan` edge -- it forced `validate` to run when
+    the plan job failed or was skipped. With the edge removed, `validate` has no
+    upstream job and its own `if` is the whole admission rule, so the draft
+    deferral pinned here is the same predicate on the same inputs. Dropping
+    `always()` additionally lets the job honour run cancellation instead of
+    starting during it, which withholds no evidence: a cancelled run never
+    produces the passing exact-head aggregate the Ready gate requires.
     """
     content = _workflow()
     assert (
-        "if: ${{ always() && (github.event_name != 'pull_request' || "
-        "github.event.pull_request.draft == false) }}"
+        "if: ${{ github.event_name != 'pull_request' || "
+        "github.event.pull_request.draft == false }}"
     ) in content
     assert "Admit exact-head Draft final candidate" in content
     assert "if: ${{ github.event_name == 'workflow_dispatch' }}" in content
