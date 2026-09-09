@@ -81,3 +81,52 @@ def test_genuine_blocker_survives_reconciliation_normalization():
     normalized = normalize_recoverable_reconciliation(state)
     assert "dependency.blocked" in normalized.blocker_codes
     assert normalized.outcome is not OperationalOutcome.READY
+
+
+def test_authority_projections_survive_blocker_normalization():
+    """Clearing blockers must not clear authority.
+
+    Normalization drops the recoverable drift code and the `authorization.*`
+    codes that `evaluate_operating_mode_decision` re-derives for itself. The
+    AuthorityProjection fields it derives them *from* stay untouched, so no
+    authority is granted by the reclassification (#2152 non-goal: "no new
+    authority").
+    """
+    state = _merged_open_state()
+    normalized = normalize_recoverable_reconciliation(state)
+
+    assert normalized.blocker_codes == ()
+    for field in (
+        "implementation_authorization",
+        "ready_for_review_authorization",
+        "execution_authorization",
+        "merge_authorization",
+        "closure_authorization",
+        "external_write_authorization",
+    ):
+        assert getattr(normalized, field) == getattr(state, field), field
+
+    # The dropped authorization codes come back from the evaluator, not from a
+    # stored blocker list, so fail-closed behaviour is preserved end to end.
+    decision = evaluate_operating_mode_decision(
+        normalized, RequestedMode.RELEASE.value, _environment()
+    )
+    assert "authorization.closure-not-authorized" in decision.blocker_codes
+    assert decision.next_permitted_action == "none"
+
+
+def test_non_authority_blocker_still_dominates_alongside_authorization_codes():
+    """Only re-derived authorization codes are ignored by the dominance check."""
+    state = _merged_open_state(
+        dependency_state=__import__(
+            "scripts.agent_os_issue_acceptance.issue_operational_state",
+            fromlist=["DependencyState"],
+        ).DependencyState.BLOCKED
+    )
+    assert any(code.startswith("authorization.") for code in state.blocker_codes)
+
+    normalized = normalize_recoverable_reconciliation(state)
+
+    assert "dependency.blocked" in normalized.blocker_codes
+    assert "reconciliation.merged-pr-open-issue" not in normalized.blocker_codes
+    assert normalized.outcome is not OperationalOutcome.READY

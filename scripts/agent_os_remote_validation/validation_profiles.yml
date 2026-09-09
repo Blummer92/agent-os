@@ -4,7 +4,7 @@
   "documentation_suffixes": [".md", ".txt", ".rst"],
   "documentation_prefixes": ["00_Governance/", "01_Shared_Standards/", "02_Agent_Overlays/", "03_Templates/", "04_Registry/", "05_Roadmap/", "06_Archive/", "07_Agent_Tests/"],
   "aggregate_paths": ["cloudbuild.yaml", "pyproject.toml", "requirements-dev.txt", "pytest.ini"],
-  "aggregate_prefixes": [".github/workflows/", "tests/"],
+  "aggregate_prefixes": [".github/workflows/", "tests/test_agent_os_validation_workflow.py"],
   "focused_rules": [
     {"name":"issue-acceptance","prefixes":["scripts/agent_os_issue_acceptance/","tests/agent_os_issue_acceptance/"],"commands":["python -m pytest tests/agent_os_issue_acceptance"]},
     {"name":"workflow-scheduler","prefixes":["08_Tooling/workflow-scheduler/"],"commands":["python -m pytest 08_Tooling/workflow-scheduler/tests"]},

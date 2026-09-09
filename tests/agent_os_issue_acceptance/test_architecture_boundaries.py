@@ -63,10 +63,12 @@ DOMAIN_RULES: tuple[tuple[str, frozenset[str], tuple[str, ...]], ...] = (
                 "ready_for_review_compatibility",
                 "issue_operational_state",
                 "lifecycle_drift_scan",
+                "lifecycle_mutation_authorization",
                 "lifecycle_mutation_guard",
                 "lifecycle_reconciliation",
                 "merge_authorization",
                 "planning_binding",
+                "recoverable_reconciliation",
             }
         ),
         (),
