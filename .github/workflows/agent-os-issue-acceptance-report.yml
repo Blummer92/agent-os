@@ -20,8 +20,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  relevance:
+    name: Classify acceptance inputs
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.relevance.outputs.should_run }}
+      reason: ${{ steps.relevance.outputs.reason }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Classify pull request event
+        id: relevance
+        run: python -m scripts.agent_os_issue_acceptance.edit_relevance "$GITHUB_EVENT_PATH" >> "$GITHUB_OUTPUT"
+
   report:
     name: Run issue acceptance report
+    needs: relevance
+    if: needs.relevance.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
