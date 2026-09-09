@@ -16,6 +16,7 @@ from agent_memory_context_manager.lesson_preflight import FailedRepairAttempt, R
 from agent_memory_context_manager.repair_lesson_activation import activate_repair_retry_lessons
 from agent_os_execution_service.execution_surface_availability import ExecutionSurfaceAvailabilityOutcome
 from agent_os_execution_service.failed_repair_admission import evaluate_failed_repair_admission
+from scripts.agent_os_execution_checkpoint.resume_planner import ResumePlan
 from scripts.agent_os_execution_interface.continuation_driver import ContinuationDecision as DriverDecision
 from scripts.agent_os_execution_interface.mission_completion_admission import evaluate_mission_completion_admission
 from scripts.agent_os_execution_interface.post_selection_continuation import (
@@ -121,7 +122,6 @@ def activate_agent_os_failed_repair(
     execute_read: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
     repair_context: str = "failed-pr-repair",
 ) -> dict[str, object]:
-    """Execute the existing #1873 CKR6 retry seam for one exact failed attempt."""
     repo = _repository(repository)
     issue = _issue_number(issue_number)
     if type(attempt_id) is not str or not attempt_id:
@@ -168,7 +168,6 @@ def admit_agent_os_failed_repair(
     required_check_configuration_state: str, review_state: str,
     branch_freshness: str, mergeability: str,
 ) -> dict[str, object]:
-    """Consume the existing failed-repair admission classifier at the runtime facade."""
     decision = evaluate_failed_repair_admission(
         activation_result=activation_result,
         check_state=check_state,
@@ -193,7 +192,6 @@ def classify_agent_os_mission_completion(
     canonical_pr_readback_verified: bool, capable_route_available: bool,
     subordinate_writes_only: bool,
 ) -> dict[str, object]:
-    """Consume the existing mission-completion admission classifier at runtime."""
     decision = evaluate_mission_completion_admission(
         repository=_repository(repository), issue_number=_issue_number(issue_number),
         branch_exists=branch_exists, implementation_commit_count=implementation_commit_count,
@@ -214,10 +212,9 @@ def classify_agent_os_mission_completion(
 
 
 def classify_agent_os_existing_work(
-    *, evidence: ExistingWorkEvidence, resume_plan: object | None,
+    *, evidence: ExistingWorkEvidence, resume_plan: ResumePlan | None,
     lease_request: PilotLeaseRequest | None, lease_observation: HostLocalLeaseObservation | None,
 ) -> dict[str, object]:
-    """Expose the canonical #1188 existing-work classifier without reimplementing it."""
     decision = plan_execution_continuation(
         evidence, resume_plan=resume_plan, lease_request=lease_request,
         lease_observation=lease_observation,
@@ -229,15 +226,14 @@ def classify_agent_os_existing_work(
         ContinuationDisposition.SCOPE_DRIFT,
         ContinuationDisposition.NEEDS_DECISION,
     }
-    action = "" if blocked else decision.recommended_action
     payload["agent_os_continuation"] = _driver_payload(DriverDecision(
-        action=action, blocked=blocked, reason_codes=decision.reason_codes,
+        action="" if blocked else decision.recommended_action,
+        blocked=blocked, reason_codes=decision.reason_codes,
     ))
     return payload
 
 
 def classify_agent_os_red_ci(evidence: RedCiEvidence) -> dict[str, object]:
-    """Expose the canonical #1251 red-CI classifier and its next action."""
     decision = plan_red_ci_continuation(evidence)
     payload = asdict(decision)
     payload["failure_class"] = decision.failure_class.value
@@ -258,7 +254,6 @@ def classify_agent_os_recovery_progress(
     current: RecoverySemanticEvidence, *, prior: RecoverySemanticEvidence | None = None,
     prior_transition_fingerprint: str | None = None,
 ) -> dict[str, object]:
-    """Expose canonical semantic no-progress detection to the continuation path."""
     decision = classify_recovery_progress(
         current, prior=prior, prior_transition_fingerprint=prior_transition_fingerprint,
     )
