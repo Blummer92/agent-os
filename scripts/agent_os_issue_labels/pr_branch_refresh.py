@@ -37,6 +37,7 @@ class PullRequestBranchRefreshRequest:
     authorization_id: str; authorization_current: bool; allowed_changed_paths: tuple[str, ...]; forbidden_paths: tuple[str, ...]
     required_validation_command_ids: tuple[str, ...]; branch_refresh_authorized: bool
     lifecycle_admission: LifecycleMutationAdmissionResult | None = None
+    label_write_authorized: bool = False  # deprecated compatibility input; never grants lifecycle authority
 
 @dataclass(frozen=True, slots=True)
 class PullRequestBranchRefreshResult:
