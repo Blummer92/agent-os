@@ -136,18 +136,15 @@ class BenchmarkMetrics:
 def _text(value: object, field: str) -> str:
     if type(value) is not str or not value.strip() or len(value) > MAX_TEXT: raise EvidenceValidationError(f"{field} must be a bounded non-empty string")
     return value.strip()
-
 def _items(values: tuple[str, ...], field: str, required: bool=False) -> tuple[str, ...]:
     if type(values) is not tuple or len(values) > MAX_ITEMS: raise EvidenceValidationError(f"{field} must be a bounded tuple")
     result=tuple(sorted({_text(v, field) for v in values}))
     if required and not result: raise EvidenceValidationError(f"{field} must not be empty")
     return result
-
 def _sha(value: str) -> str:
     value=_text(value,"source_head_sha").lower()
     if len(value)!=40 or any(c not in "0123456789abcdef" for c in value): raise EvidenceValidationError("source_head_sha must be a 40-character hexadecimal SHA")
     return value
-
 def _mean(values: list[float]) -> float | None: return sum(values)/len(values) if values else None
 
 def validate_case(packet: ReviewerPacket, answer: AnswerKey) -> None:
@@ -168,7 +165,24 @@ def score_case(packet: ReviewerPacket, answer: AnswerKey, run: BenchmarkRun) -> 
     validate_case(packet,answer)
     if run.benchmark_version != BENCHMARK_VERSION or run.scorer_version != SCORER_VERSION or run.case_id != packet.case_id or run.case_version != packet.case_version or run.packet_fingerprint != packet.fingerprint: raise EvidenceValidationError("run identity/version does not match frozen benchmark case")
     if run.run_number < 1: raise EvidenceValidationError("run_number must be positive")
-    if run.contaminated or run.contamination_reasons: return CaseScore(False,0,0,0,0,0,0,0,0,0,0,0,0,0)
+    if run.contaminated or run.contamination_reasons:
+        return CaseScore(
+            eligible=False,
+            detected_defects=0,
+            scorable_defects=0,
+            substantive_findings=0,
+            true_positive_findings=0,
+            blocking_findings=0,
+            true_positive_blockers=0,
+            false_blocks=0,
+            severity_credit=0,
+            severity_possible=0,
+            evidence_quality=0,
+            fix_boundary_accuracy=0,
+            test_recommendation_quality=0,
+            manual_review_calibration=0,
+            unsupported_claims=0,
+        )
     scorable = answer.detectability not in {Detectability.LATER_EVIDENCE_ONLY,Detectability.REVIEW_TIME_UNKNOWABLE,Detectability.RUNTIME_EVIDENCE_REQUIRED}
     expected={d.defect_id:d for d in answer.defects} if scorable else {}
     findings={f.finding_id:f for f in run.findings}
