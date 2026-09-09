@@ -15,8 +15,17 @@ sys.path.insert(0, str(EXECUTION_SERVICE_SRC))
 from agent_os_execution_service.command_planning import _COMMAND_REGISTRY
 from scripts.agent_os_remote_validation import ValidationPlan, validate_validation_plan
 
-_PICTURE_PERFECT_CHECK = (
-    "cd 08_Tooling/instructional-materials-coach/picture-perfect-coach && npm run check"
+_PICTURE_PERFECT_TESTS = (
+    "src/overlayIntegrity.test.ts",
+    "src/exactComposite.test.ts",
+    "src/exactCompositeSuite.test.ts",
+    "src/framePlan.test.ts",
+    "src/executorContract.test.ts",
+    "src/provenanceValidator.test.ts",
+)
+_PICTURE_PERFECT_FOCUSED = (
+    "cd 08_Tooling/instructional-materials-coach/picture-perfect-coach && npm test -- "
+    + " ".join(_PICTURE_PERFECT_TESTS)
 )
 _PICTURE_PERFECT_DIR = (
     ROOT / "08_Tooling/instructional-materials-coach/picture-perfect-coach"
@@ -86,8 +95,8 @@ def _resolve_command(command: str) -> tuple[tuple[str, ...], Path]:
     argv = _COMMAND_REGISTRY.get(command)
     if argv is not None:
         return argv, ROOT
-    if command == _PICTURE_PERFECT_CHECK:
-        return ("npm", "run", "check"), _PICTURE_PERFECT_DIR
+    if command == _PICTURE_PERFECT_FOCUSED:
+        return ("npm", "test", "--", *_PICTURE_PERFECT_TESTS), _PICTURE_PERFECT_DIR
     raise ValueError(f"validation command is not in the bounded CI executor: {command}")
 
 

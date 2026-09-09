@@ -6,7 +6,16 @@ BASE_SHA = "a" * 40
 HEAD_SHA = "b" * 40
 PPUX = "08_Tooling/instructional-materials-coach/picture-perfect-coach/"
 PY_COACH = "08_Tooling/instructional-materials-coach/"
-PPUX_COMMAND = f"cd {PPUX.rstrip('/')} && npm run check"
+PPUX_TESTS = (
+    "src/overlayIntegrity.test.ts",
+    "src/exactComposite.test.ts",
+    "src/exactCompositeSuite.test.ts",
+    "src/framePlan.test.ts",
+    "src/executorContract.test.ts",
+    "src/provenanceValidator.test.ts",
+)
+PPUX_COMMAND = f"cd {PPUX.rstrip('/')} && npm test -- " + " ".join(PPUX_TESTS)
+PPUX_FINAL_COMMAND = f"cd {PPUX.rstrip('/')} && npm run check"
 PY_COMMAND = "python -m pytest 08_Tooling/instructional-materials-coach/tests"
 
 
@@ -23,23 +32,27 @@ def _select(paths: list[str]):
     )
 
 
-def test_ppux_ts_source_selects_typescript_validation() -> None:
+def test_ppux_ts_source_selects_bounded_developer_validation() -> None:
     plan = _select([PPUX + "src/App.tsx"])
     assert plan.profile == "focused"
     assert plan.commands == (PPUX_COMMAND,)
+    assert PPUX_FINAL_COMMAND not in plan.commands
     assert plan.head_sha == HEAD_SHA
     assert plan.execution_authorized is False
     assert plan.side_effects_performed is False
 
 
-def test_ppux_test_selects_typescript_validation() -> None:
+def test_ppux_test_selects_bounded_developer_validation() -> None:
     plan = _select([PPUX + "src/App.test.tsx"])
     assert plan.commands == (PPUX_COMMAND,)
+    assert PPUX_FINAL_COMMAND not in plan.commands
 
 
-def test_ppux_package_and_guard_changes_select_typescript_validation() -> None:
+def test_ppux_package_and_guard_changes_select_bounded_developer_validation() -> None:
     for path in (PPUX + "package.json", PPUX + "scripts/guard-boundaries.mjs"):
-        assert _select([path]).commands == (PPUX_COMMAND,)
+        plan = _select([path])
+        assert plan.commands == (PPUX_COMMAND,)
+        assert PPUX_FINAL_COMMAND not in plan.commands
 
 
 def test_unrelated_instructional_materials_python_change_stays_python_only() -> None:
@@ -47,6 +60,7 @@ def test_unrelated_instructional_materials_python_change_stays_python_only() -> 
     assert plan.profile == "focused"
     assert plan.commands == (PY_COMMAND,)
     assert PPUX_COMMAND not in plan.commands
+    assert PPUX_FINAL_COMMAND not in plan.commands
 
 
 def test_mixed_ppux_and_python_change_preserves_both_validation_families() -> None:
@@ -58,6 +72,7 @@ def test_mixed_ppux_and_python_change_preserves_both_validation_families() -> No
     )
     assert plan.profile == "focused"
     assert plan.commands == tuple(sorted((PPUX_COMMAND, PY_COMMAND)))
+    assert PPUX_FINAL_COMMAND not in plan.commands
     assert plan.reason_codes == ("profile.focused-union",)
 
 
@@ -77,6 +92,7 @@ def test_new_source_sha_changes_exact_head_identity() -> None:
     assert first.command_set_digest == second.command_set_digest
 
 
-def test_ppux_readme_change_remains_in_ppux_lane() -> None:
+def test_ppux_readme_change_remains_in_ppux_lane_without_full_package_check() -> None:
     plan = _select([PPUX + "README.md"])
     assert plan.commands == (PPUX_COMMAND,)
+    assert PPUX_FINAL_COMMAND not in plan.commands
