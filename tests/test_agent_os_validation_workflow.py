@@ -6,7 +6,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/agent-os-validation.yml"
-SCHEDULER_WORKFLOW = ROOT / ".github/workflows/workflow-scheduler-validation.yml"
+AGGREGATE_RUNNER = ROOT / "scripts/validate-all.sh"
 NAVIGATION_WORKFLOW = ROOT / ".github/workflows/navigation-registry-offline-tests.yml"
 ISSUE_ACCEPTANCE_WORKFLOW = ROOT / ".github/workflows/agent-os-issue-acceptance-report.yml"
 CLOUD_BUILD = ROOT / "cloudbuild.yaml"
@@ -166,25 +166,33 @@ def test_validation_gate_preserves_required_workflow_and_job_names():
     assert "name: Run aggregate validation" in content
 
 
-def test_scheduler_validation_preserves_required_workflow_and_job_names():
-    content = SCHEDULER_WORKFLOW.read_text(encoding="utf-8")
-    assert "name: Workflow Scheduler Validation" in content
-    assert "name: Validate Workflow Scheduler" in content
+def test_scheduler_validation_is_owned_by_the_canonical_aggregate_runner():
+    assert not (ROOT / ".github/workflows/workflow-scheduler-validation.yml").exists()
+    content = AGGREGATE_RUNNER.read_text(encoding="utf-8")
+    assert 'suite_name" = "08_Tooling/workflow-scheduler"' in content
+    assert content.count("--cov=src/workflow_scheduler") == 1
+    assert content.count("--cov-report=term") == 1
+    assert "--cov-fail-under" not in content
 
 
 def test_validation_gate_uses_read_only_permissions_and_bounded_execution():
     content = WORKFLOW.read_text(encoding="utf-8")
     assert "contents: read" in content
     assert "pull-requests: read" in content
+    assert "checks: read" in content
     assert "contents: write" not in content
     assert "pull-requests: write" not in content
+    assert "checks: write" not in content
     assert "timeout-minutes: 30" in content
     assert "concurrency:" in content
     assert "group:" in content
     assert "cancel-in-progress:" in content
     assert "github.event.pull_request.number" in content
     assert "github.run_id" in content
-    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in content
+    assert (
+        "cancel-in-progress: ${{ github.event_name == 'pull_request' "
+        "&& github.event.action != 'ready_for_review' }}"
+    ) in content
 
 
 def test_validation_gate_installs_same_dependencies_as_cloud_build():
@@ -203,7 +211,7 @@ def test_validation_gate_installs_same_dependencies_as_cloud_build():
 
 
 def test_governed_validation_paths_do_not_upgrade_pip_unconditionally():
-    for path in (WORKFLOW, SCHEDULER_WORKFLOW, CLOUD_BUILD, SHARED_ACTION):
+    for path in (WORKFLOW, CLOUD_BUILD, SHARED_ACTION):
         content = path.read_text(encoding="utf-8")
         assert "pip install --upgrade pip" not in content, path
 
@@ -213,14 +221,6 @@ def test_validation_gate_cache_paths_match_installed_dependency_manifests():
     assert "uses: actions/setup-python@v7" in content
     assert 'cache: "pip"' in content
     _assert_dependency_cache_parity(content)
-
-
-def test_scheduler_cache_paths_match_installed_dependency_manifests():
-    content = SCHEDULER_WORKFLOW.read_text(encoding="utf-8")
-    assert "uses: actions/setup-python@v7" in content
-    assert 'cache: "pip"' in content
-    _assert_dependency_cache_parity(content)
-    assert _cache_dependency_paths(content) == {"08_Tooling/workflow-scheduler/requirements.txt"}
 
 
 def test_parity_check_fails_when_new_install_manifest_is_not_cached():
@@ -247,14 +247,13 @@ def test_parity_check_fails_when_required_cache_path_is_removed():
 
 
 def test_cache_configuration_does_not_replace_install_or_validation_commands():
-    aggregate = WORKFLOW.read_text(encoding="utf-8")
-    scheduler = SCHEDULER_WORKFLOW.read_text(encoding="utf-8")
-    assert "python -m pip install -r requirements-dev.txt" in aggregate
-    assert "./scripts/validate-all.sh" in aggregate
-    assert "python -m pip install -r 08_Tooling/workflow-scheduler/requirements.txt" in scheduler
-    scheduler_test_command = "PYTHONPATH=src python3 -m pytest tests/ -v --cov=src/workflow_scheduler"
-    assert scheduler_test_command in scheduler
-    assert "bash 07_Agent_Tests/validate-repo-structure.sh" not in scheduler
+    aggregate_workflow = WORKFLOW.read_text(encoding="utf-8")
+    aggregate_runner = AGGREGATE_RUNNER.read_text(encoding="utf-8")
+    assert "python -m pip install -r requirements-dev.txt" in aggregate_workflow
+    assert "python -m pip install -r 08_Tooling/workflow-scheduler/requirements.txt" in aggregate_workflow
+    assert "./scripts/validate-all.sh" in aggregate_workflow
+    assert "--cov=src/workflow_scheduler" in aggregate_runner
+    assert "--cov-report=term" in aggregate_runner
 
 
 def test_cloud_build_does_not_use_github_actions_cache_configuration():
