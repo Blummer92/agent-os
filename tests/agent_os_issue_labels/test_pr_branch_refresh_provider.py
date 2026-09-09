@@ -198,7 +198,6 @@ def request(**overrides):
         forbidden_paths=(".github/workflows/x.yml",),
         required_validation_command_ids=("focused",),
         branch_refresh_authorized=True,
-        label_write_authorized=True,
     )
     values.update(overrides)
     return PullRequestBranchRefreshRequest(**values)

@@ -9,6 +9,7 @@ from scripts.agent_os_issue_labels.pr_branch_refresh import (
 )
 from scripts.agent_os_issue_labels.pr_planner import managed_labels
 from scripts.agent_os_issue_labels.pr_reconciler import LivePullRequestSnapshot
+from tests.agent_os_issue_labels.lifecycle_admission import admitted_lifecycle_labels
 
 OLD = "a" * 40
 BASE = "b" * 40
@@ -104,7 +105,7 @@ def request(**overrides):
         forbidden_paths=(".github/workflows/x.yml",),
         required_validation_command_ids=("pytest:pr-branch-refresh",),
         branch_refresh_authorized=True,
-        label_write_authorized=True,
+        lifecycle_admission=admitted_lifecycle_labels(),
     )
     values.update(overrides)
     return PullRequestBranchRefreshRequest(**values)

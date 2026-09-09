@@ -156,7 +156,6 @@ class BranchRefreshAuthorizationEvidence:
             "branch_refresh_authorized": self.branch_refresh_authorized,
             "allowed_changed_paths": self.allowed_changed_paths,
             "forbidden_paths": self.forbidden_paths,
-            "label_write_authorized": self.label_write_authorized,
             "repository_root": repository_root,
             "invocation_id": invocation_id,
             "environment": environment,

@@ -8,6 +8,7 @@ from scripts.agent_os_issue_labels.pr_reconciler import (
     reconcile_pull_request_batch,
     reconcile_pull_request_labels,
 )
+from tests.agent_os_issue_labels.lifecycle_admission import admitted_lifecycle_labels
 
 SHA = "a" * 40
 NEW_SHA = "b" * 40
@@ -69,7 +70,7 @@ def test_converged_state_performs_zero_writes():
     labels = ("pr:draft", "validation:pending", "branch:current", "review:clear", "human:keep")
     provider = FakeProvider([snap(labels=labels)] * 3)
     result = reconcile_pull_request_labels(provider, "Blummer92/agent-os", 1023, dry_run=False,
-                                             label_write_authorized=True)
+                                             lifecycle_admission=admitted_lifecycle_labels())
     assert result.convergence_status == "converged"
     assert not provider.added and not provider.removed
 
@@ -78,7 +79,7 @@ def test_add_remove_converges_without_touching_unmanaged_labels():
     labels = ("pr:ready-for-review", "validation:failing", "branch:behind", "review:needs-attention", "human:keep")
     provider = FakeProvider([snap(labels=labels)] * 3)
     result = reconcile_pull_request_labels(provider, "Blummer92/agent-os", 1023, dry_run=False,
-                                             label_write_authorized=True)
+                                             lifecycle_admission=admitted_lifecycle_labels())
     assert result.convergence_status == "converged"
     assert set(result.labels_added) == {"pr:draft", "validation:pending", "branch:current", "review:clear"}
     assert set(result.labels_removed) == {"pr:ready-for-review", "validation:failing", "branch:behind", "review:needs-attention"}
@@ -88,7 +89,7 @@ def test_add_remove_converges_without_touching_unmanaged_labels():
 def test_missing_managed_label_definition_fails_closed():
     provider = FakeProvider([snap()], available=tuple(managed_labels() - {"pr:draft"}))
     result = reconcile_pull_request_labels(provider, "Blummer92/agent-os", 1023, dry_run=False,
-                                             label_write_authorized=True)
+                                             lifecycle_admission=admitted_lifecycle_labels())
     assert result.convergence_status == "blocked"
     assert result.reason_codes == ("managed-label-unavailable",)
     assert not provider.added
@@ -97,14 +98,14 @@ def test_missing_managed_label_definition_fails_closed():
 def test_write_requires_separate_label_authorization():
     provider = FakeProvider([snap()])
     result = reconcile_pull_request_labels(provider, "Blummer92/agent-os", 1023, dry_run=False)
-    assert result.reason_codes == ("label-write-authorization-required",)
+    assert result.reason_codes == ("lifecycle-admission-required",)
     assert not provider.added
 
 
 def test_moved_head_before_mutation_fails_closed():
     provider = FakeProvider([snap(), snap(head_sha=NEW_SHA)])
     result = reconcile_pull_request_labels(provider, "Blummer92/agent-os", 1023, dry_run=False,
-                                             label_write_authorized=True)
+                                             lifecycle_admission=admitted_lifecycle_labels())
     assert result.convergence_status == "stale-head"
     assert result.reason_codes == ("head-moved-before-mutation",)
     assert not provider.added
@@ -123,7 +124,7 @@ def test_moved_head_before_mutation_fails_closed():
 def test_same_head_planner_evidence_change_before_mutation_fails_closed(change):
     provider = FakeProvider([snap(), snap(**change)])
     result = reconcile_pull_request_labels(provider, "Blummer92/agent-os", 1023, dry_run=False,
-                                             label_write_authorized=True)
+                                             lifecycle_admission=admitted_lifecycle_labels())
     assert result.convergence_status == "stale-plan"
     assert result.reason_codes == ("planner-evidence-changed-before-mutation",)
     assert result.mutation_attempted is False
@@ -134,7 +135,7 @@ def test_same_head_planner_evidence_change_before_mutation_fails_closed(change):
 def test_moved_head_on_readback_never_claims_convergence():
     provider = FakeProvider([snap(), snap(), snap(head_sha=NEW_SHA)])
     result = reconcile_pull_request_labels(provider, "Blummer92/agent-os", 1023, dry_run=False,
-                                             label_write_authorized=True)
+                                             lifecycle_admission=admitted_lifecycle_labels())
     assert result.convergence_status == "stale-head"
     assert result.side_effects_performed is True
 
@@ -144,7 +145,7 @@ def test_provider_write_failure_is_visible(failure):
     labels = ("pr:ready-for-review", "validation:pending", "branch:behind", "review:needs-attention", "human:keep")
     provider = FakeProvider([snap(labels=labels)] * 3, fail_add=failure == "add", fail_remove=failure == "remove")
     result = reconcile_pull_request_labels(provider, "Blummer92/agent-os", 1023, dry_run=False,
-                                             label_write_authorized=True)
+                                             lifecycle_admission=admitted_lifecycle_labels())
     assert result.convergence_status in {"write-failure", "partial-failure"}
     assert not result.convergence_status == "converged"
 
@@ -155,7 +156,7 @@ def test_readback_mismatch_is_not_success():
             self.added.append(label)
     provider = IgnoringProvider([snap()] * 3)
     result = reconcile_pull_request_labels(provider, "Blummer92/agent-os", 1023, dry_run=False,
-                                             label_write_authorized=True)
+                                             lifecycle_admission=admitted_lifecycle_labels())
     assert result.convergence_status == "readback-mismatch"
 
 
@@ -212,13 +213,13 @@ def test_second_invocation_after_partial_failure_converges_without_duplicate_add
     provider = FlakyOnceProvider([snap(labels=labels)] * 6, fail_label="pr:draft")
 
     first = reconcile_pull_request_labels(provider, "Blummer92/agent-os", 1023, dry_run=False,
-                                           label_write_authorized=True)
+                                           lifecycle_admission=admitted_lifecycle_labels())
     assert first.convergence_status == "partial-failure"
     assert first.labels_added == ("branch:current",)
     assert "branch:current" in provider.labels
 
     second = reconcile_pull_request_labels(provider, "Blummer92/agent-os", 1023, dry_run=False,
-                                            label_write_authorized=True)
+                                            lifecycle_admission=admitted_lifecycle_labels())
     assert second.convergence_status == "converged"
     # The label already applied by the first (partial) attempt must not be
     # re-added: the retry boundary re-plans from live state instead of
