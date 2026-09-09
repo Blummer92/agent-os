@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from mcp.server import MCPServer
 
+from .lesson_reader_composition import build_lesson_read_executor
 from .mcp_facade import (
     activate_agent_os_failed_repair,
     admit_agent_os_failed_repair,
@@ -22,7 +23,14 @@ def plan_agent_os_continuation_tool(repository: str, issue_number: int, canonica
 
 @mcp.tool()
 def activate_agent_os_failed_repair_tool(repository: str, issue_number: int, attempt_id: str, failed_hypothesis: str, result_summary: str, task_reference: str, ecosystem_hints: tuple[str, ...] = (), language_hints: tuple[str, ...] = (), library_hints: tuple[str, ...] = (), capability_keywords: tuple[str, ...] = (), target_path_hints: tuple[str, ...] = (), canonical_rule_refs: tuple[str, ...] = (), known_knowledge_refs: tuple[str, ...] = (), specialized_knowledge_required: bool | None = None, lesson_rows: list[dict[str, object]] | None = None, repair_context: str = "failed-pr-repair") -> dict[str, object]:
-    execute_read = None if lesson_rows is None else lambda _query: {"results": lesson_rows}
+    # ``lesson_rows`` is an explicit test/diagnostic override. Production calls
+    # bind CKR11 to the existing read-only Scheduler Notion adapter so the
+    # bounded query produced by the lesson bridge is actually executed.
+    execute_read = (
+        (lambda _query: {"results": lesson_rows})
+        if lesson_rows is not None
+        else build_lesson_read_executor()
+    )
     return activate_agent_os_failed_repair(repository=repository, issue_number=issue_number, attempt_id=attempt_id, failed_hypothesis=failed_hypothesis, result_summary=result_summary, task_reference=task_reference, ecosystem_hints=ecosystem_hints, language_hints=language_hints, library_hints=library_hints, capability_keywords=capability_keywords, target_path_hints=target_path_hints, canonical_rule_refs=canonical_rule_refs, known_knowledge_refs=known_knowledge_refs, specialized_knowledge_required=specialized_knowledge_required, execute_read=execute_read, repair_context=repair_context)
 
 

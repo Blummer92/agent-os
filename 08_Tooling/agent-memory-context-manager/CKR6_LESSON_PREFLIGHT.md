@@ -38,9 +38,13 @@ When retrieval is required, callers use the cheapest bounded existing path first
 
 1. `known-reference` when the request already carries a stable lesson/knowledge reference;
 2. otherwise `filtered-data-source-query`;
-3. after an insufficient supplied result, the existing CKR2 escalation continues through `exact-narrow-lookup`, then bounded `workspace-search`, then `manual-review` only as needed.
+3. after an insufficient result, `exact-narrow-lookup`;
+4. after another insufficient result, the final bounded `workspace-search` slot;
+5. `manual-review` after every executable step has been attempted.
 
-CKR6 does not perform retrieval, invent a second escalation order, or create a second selector. Workspace search is an escalation path, not the ordinary retrieval path.
+#2141 makes that existing CKR2 ledger executable for the Lessons Learned provider in `lesson_retrieval_orchestrator.py`. Each provider call is recorded on an immutable `CodingKnowledgeRequest.attempted_retrieval` copy before CKR2 chooses the next step, so a recommendation can never name the query that was just executed. The loop is capped by `MAX_ESCALATION_STEPS` and therefore cannot retry indefinitely.
+
+For this provider, the CKR2 `workspace-search` slot is implemented conservatively as the broadest bounded query **inside the canonical Lessons Learned data source**. It is not a raw Notion workspace search. This preserves #2141's prohibition on a second retrieval mechanism while retaining CKR2's finite escalation semantics.
 
 ## Eligible lesson evidence
 
@@ -58,16 +62,7 @@ The adapter does not silently turn stale or conflicting rows into current knowle
 
 ## CKR2 reuse
 
-Each eligible row becomes the existing `CodingKnowledgeCandidate` type with:
-
-- stable lesson identity;
-- source revision;
-- ecosystem/capability hints;
-- next-time guidance and guardrail;
-- canonical GitHub references;
-- evidence references;
-- currentness;
-- authority-conflict evidence.
+Each eligible row becomes the existing `CodingKnowledgeCandidate` type with stable lesson identity, source revision, ecosystem/capability hints, next-time guidance and guardrail, canonical GitHub references, evidence references, currentness, and authority-conflict evidence.
 
 All ranking, deduplication, candidate-budget behavior, relevant-candidate selection, currentness handling, canonical-reference requirements, and sufficiency disposition remain owned by `select_coding_knowledge()` from #1144.
 
@@ -77,123 +72,34 @@ CKR6 does not implement fuzzy ranking, embeddings, model scoring, a vector store
 
 ## Existing handoff packet
 
-CKR6 reuses `CodingKnowledgeSelectionResult.to_handoff_projection()`.
-
-Selected lessons therefore enter the existing Memory Manager concepts only through:
-
-- `known_facts`;
-- `prior_decisions` where CKR2 supplies them;
-- `allowed_inspect_first` canonical GitHub refs;
-- `stop_conditions` for insufficient/manual-review results.
-
-No handoff-packet schema change is introduced.
+CKR6 reuses `CodingKnowledgeSelectionResult.to_handoff_projection()`. Selected lessons therefore enter the existing Memory Manager concepts only through `known_facts`, `prior_decisions` where CKR2 supplies them, `allowed_inspect_first` canonical GitHub refs, and `stop_conditions` for insufficient/manual-review results. No handoff-packet schema change is introduced.
 
 ## Retrieval unavailable behavior
 
-If the read surface is unavailable:
-
-- when specialized knowledge is explicitly required, result is `insufficient` with manual-review escalation;
-- otherwise result is `unavailable-safe-fallback`, allowing a caller to continue using current GitHub authority alone when safe.
-
-Missing retrieval never authorizes fabricated replacement guidance.
+If the read surface is unavailable, when specialized knowledge is explicitly required the result is `insufficient` with manual-review escalation; otherwise the result is `unavailable-safe-fallback`, allowing a caller to continue using current GitHub authority alone when safe. Missing retrieval never authorizes fabricated replacement guidance. #2142 separately owns any change to the blocking classification for this condition.
 
 ## Deterministic evidence
 
-`LessonPreflightResult` exposes:
-
-- `lesson_retrieval_status`;
-- `candidate_count`;
-- `selected_count`;
-- `selected_lesson_ids`;
-- `selection_reason_codes`;
-- `canonical_github_refs`;
-- `knowledge_refs`;
-- `stale_or_conflicting_count`;
-- `retrieval_escalation`;
-- `source_authority=advisory-only`;
-- the existing CKR2 handoff projection.
-
-All authority/write flags remain false.
+`LessonPreflightResult` exposes `lesson_retrieval_status`, candidate and selected counts, selected lesson identities, selection reason codes, canonical GitHub refs, knowledge refs, stale/conflicting count, retrieval escalation, `source_authority=advisory-only`, and the existing CKR2 handoff projection. All authority/write flags remain false.
 
 ## External-effect boundary
 
-This module performs zero:
-
-- Notion reads;
-- Notion writes;
-- Notion schema/view/property changes;
-- GitHub writes;
-- Scheduler/background work;
-- provider calls;
-- credential access;
-- production operations.
-
-The caller owns bounded retrieval through an already-approved read surface. Any later external mutation remains separately authorization-gated.
+The memory/context package itself performs zero Notion writes, Notion schema/view/property changes, GitHub writes, credential mutations, or production operations. The caller owns bounded retrieval through an already-approved read surface. Any later external mutation remains separately authorization-gated.
 
 ## Live activation bridge (#1516 / CKR11)
 
-`lesson_activation_bridge.py` is the runtime seam that turns real bounded
-Lessons Learned Notion rows into `LessonRecordEvidence`, reusing the existing
-read-only Notion query path (e.g. the Workflow Scheduler
-`NotionReadOnlyAdapter.query_data_source` action) through an injected
-`execute_read` callable. It creates no Notion client, credential, schema
-mutation, or second retrieval system.
+`lesson_activation_bridge.py` turns real bounded Lessons Learned Notion rows into `LessonRecordEvidence`, reusing the existing read-only `NotionReadOnlyAdapter.query_data_source` path through an injected `execute_read` callable. It creates no Notion client, credential, schema mutation, or second retrieval system.
 
-```text
-CodingKnowledgeRequest
--> plan_lesson_preflight(...)
--> not-needed -> zero reads
--> known lesson reference -> build_known_reference_query(...) first
--> otherwise -> build_filtered_query(...) (page_size <= MAX_LESSON_RECORDS)
--> injected execute_read(...) (existing read-only Notion adapter)
--> normalize_lesson_row(...) per returned row (<= MAX_LESSON_RECORDS)
--> consume_lesson_preflight(...)
-```
-
-`orchestrate_lesson_activation(request, execute_read=...)` is the single
-entry point. `execute_read=None` degrades to the existing
-`retrieval_available=False` CKR6 fallback path unchanged.
+`lesson_retrieval_orchestrator.py` composes those existing query and normalization helpers with CKR2's existing escalation ledger. `repair_lesson_activation.py` uses that bounded orchestrator for failed-repair/CI re-entry. `execute_read=None` still degrades to the existing CKR6 unavailable path.
 
 ### Deterministic normalization
 
-`normalize_lesson_row()` maps the live controlled Notion properties
-(`Lesson ID`, `Lesson Learned`, `Status`, `Surface Before Work?`, `Area`,
-`Applies To`, `Learning Type`, `Source Link`, `Guardrail`,
-`What To Do Next Time`, plus the page's `last_edited_time`) into
-`LessonRecordEvidence`, or returns an explicit `LessonActivationSkip(lesson_id,
-reason)` when evidence is missing or ambiguous. It never invents
-`ecosystem`, `capability_kind`, or keyword values:
-
-- `Lesson ID` supplies the stable logical identity, never the Notion page URL;
-- `last_edited_time` supplies `source_revision`;
-- `Area` and `Learning Type` map through finite deterministic vocabularies to
-  `ecosystem`/`capability_kind`; an unrecognized value fails closed as
-  `ambiguous-area-vocabulary` / `ambiguous-learning-type-vocabulary`;
-- `Status` must be one of the live finite values; anything else fails closed
-  as `ambiguous-status-vocabulary`;
-- `Source Link` supplies the lesson's own `canonical_github_refs` only when it
-  is a recognized GitHub/repository-path reference; a missing or
-  unrecognized link normalizes to `currentness=unverifiable` with an empty
-  `canonical_github_refs` tuple rather than fabricating provenance -- CKR2's
-  shared candidate-provenance invariant (#1520) then fails it closed with no
-  Lessons-specific duplicate guard;
-- oversized or malformed collections/text are rejected (`oversized-or-malformed-field`)
-  rather than truncated silently.
-
-Rows that cannot be mapped safely are excluded from the candidate set as
-explicitly non-ready; they are accounted for by #1517 / CKR12, not retried or
-guessed here.
+`normalize_lesson_row()` maps only the controlled live Notion properties into `LessonRecordEvidence`, or returns an explicit `LessonActivationSkip` when evidence is missing or ambiguous. It never invents ecosystem, capability, keyword, provenance, or currentness evidence. Rows that cannot be mapped safely are excluded from the candidate set as explicitly non-ready; they are accounted for by #1517 / CKR12, not guessed here.
 
 ### Bounded retrieval
 
-`build_known_reference_query()` and `build_filtered_query()` both request
-only the required properties and cap `page_size` at `MAX_LESSON_RECORDS`.
-`orchestrate_lesson_activation()` additionally rejects (via
-`LessonActivationError`) any executor response carrying more than
-`MAX_LESSON_RECORDS` rows before normalization, so the full Lessons Learned
-catalog can never reach `consume_lesson_preflight()`.
+Provider responses are capped by `MAX_RETRIEVAL_ROWS`, and the selector receives at most `MAX_LESSON_RECORDS` after deterministic relevance narrowing. The executable escalation sequence has a fixed maximum of four calls when a known reference exists and three otherwise. Exhaustion terminates at CKR2 `manual-review`; no query can repeat indefinitely because every executed step is recorded before the next recommendation is calculated.
 
 ## Validation
 
-Focused tests in `tests/test_lesson_preflight.py` and
-`tests/test_lesson_activation_bridge.py` cover matching and unrelated tasks, zero-retrieval planning, known-reference-first planning, filtered-query fallback, `Surface Before Work` filtering, archived rows, advisory `Needs follow-up`, GitHub authority conflicts, stale evidence, Notion-unavailable fallback, required-specialized-knowledge outage behavior, duplicate identity handling, bounded candidate sets, authority-claim rejection, determinism, existing handoff projection, and fixed no-write/no-authority behavior.
+Focused tests in `tests/test_lesson_preflight.py`, `tests/test_lesson_activation_bridge.py`, and `tests/test_lesson_retrieval_orchestrator.py` cover zero-retrieval planning, known-reference-first planning, task-filtered retrieval, exact-narrow distinction, immutable attempt-ledger advancement, bounded escalation exhaustion, unavailable-source behavior, normalization, candidate narrowing, authority/currentness handling, and fixed no-write/no-authority behavior.

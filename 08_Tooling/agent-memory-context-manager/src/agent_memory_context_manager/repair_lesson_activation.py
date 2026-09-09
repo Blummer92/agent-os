@@ -10,7 +10,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Callable, Mapping
 
 from .coding_knowledge_selection import CodingKnowledgeRequest
-from .lesson_activation_bridge import orchestrate_lesson_activation
+from .lesson_retrieval_orchestrator import orchestrate_lesson_retrieval
 from .lesson_preflight import (
     FailedRepairAttempt,
     LessonPreflightResult,
@@ -44,10 +44,11 @@ def activate_repair_retry_lessons(
 
     Repair/CI retry contexts force CKR6 material-use evaluation unless the
     caller explicitly opted out with ``specialized_knowledge_required=False``.
-    When retrieval is required, CKR11 performs the existing bounded read. The
-    returned outcome is recorded on this exact failed attempt before the retry
-    gate is recomputed. A specialized-required retrieval failure remains a
-    mutation blocker rather than being flattened into an admissible outcome.
+    When retrieval is required, CKR11 walks CKR2's existing bounded retrieval
+    ledger. The returned outcome is recorded on this exact failed attempt before
+    the retry gate is recomputed. A specialized-required retrieval failure
+    remains a mutation blocker rather than being flattened into an admissible
+    outcome; #2142 owns any change to that classification.
     """
     if type(request) is not CodingKnowledgeRequest:
         raise TypeError("request must be a CodingKnowledgeRequest")
@@ -64,7 +65,7 @@ def activate_repair_retry_lessons(
     if request.specialized_knowledge_required is not False:
         effective_request = replace(request, specialized_knowledge_required=True)
 
-    lesson_result = orchestrate_lesson_activation(
+    lesson_result = orchestrate_lesson_retrieval(
         effective_request,
         execute_read=execute_read,
     )
