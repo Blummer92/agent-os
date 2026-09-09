@@ -8,10 +8,7 @@ from .mcp_facade import (
     activate_agent_os_failed_repair,
     admit_agent_os_failed_repair,
     classify_agent_os_continuation,
-    classify_agent_os_existing_work,
     classify_agent_os_mission_completion,
-    classify_agent_os_recovery_progress,
-    classify_agent_os_red_ci,
     plan_agent_os_continuation,
 )
 
@@ -84,33 +81,6 @@ def classify_agent_os_mission_completion_tool(
         canonical_pr_readback_verified=canonical_pr_readback_verified,
         capable_route_available=capable_route_available,
         subordinate_writes_only=subordinate_writes_only,
-    )
-
-
-@mcp.tool()
-def classify_agent_os_existing_work_tool(
-    evidence: object, resume_plan: object | None = None,
-    lease_request: object | None = None, lease_observation: object | None = None,
-) -> dict[str, object]:
-    return classify_agent_os_existing_work(
-        evidence=evidence, resume_plan=resume_plan,
-        lease_request=lease_request, lease_observation=lease_observation,
-    )
-
-
-@mcp.tool()
-def classify_agent_os_red_ci_tool(evidence: object) -> dict[str, object]:
-    return classify_agent_os_red_ci(evidence)
-
-
-@mcp.tool()
-def classify_agent_os_recovery_progress_tool(
-    current: object, prior: object | None = None,
-    prior_transition_fingerprint: str | None = None,
-) -> dict[str, object]:
-    return classify_agent_os_recovery_progress(
-        current, prior=prior,
-        prior_transition_fingerprint=prior_transition_fingerprint,
     )
 
 
