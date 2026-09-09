@@ -79,6 +79,56 @@ class GitHubLineageReconciliationResult:
     external_system_write_authorized: bool = field(default=False, init=False)
 
 
+@dataclass(frozen=True, slots=True)
+class PullRequestCreationAdmissionResult:
+    status: str
+    canonical_pr_number: int | None
+    reason_codes: tuple[str, ...]
+    creation_allowed: bool
+    mutation_allowed: bool
+    merge_authorized: bool = field(default=False, init=False)
+    issue_closure_authorized: bool = field(default=False, init=False)
+    protected_setting_authorized: bool = field(default=False, init=False)
+    production_authorized: bool = field(default=False, init=False)
+    external_system_write_authorized: bool = field(default=False, init=False)
+
+
+def reconcile_pull_request_creation_admission(
+    *,
+    branch_exists: bool,
+    direct_pr_numbers: tuple[int, ...] = (),
+    search_pr_numbers: tuple[int, ...] = (),
+    recent_pr_numbers: tuple[int, ...] = (),
+    duplicate_create_pr_number: int | None = None,
+) -> PullRequestCreationAdmissionResult:
+    """Fail closed before creating a primary implementation pull request."""
+    identities = {number for surface in (direct_pr_numbers, search_pr_numbers, recent_pr_numbers) for number in surface}
+    if duplicate_create_pr_number is not None:
+        identities.add(duplicate_create_pr_number)
+
+    if len(identities) > 1:
+        return PullRequestCreationAdmissionResult(
+            "conflicting", None, ("multiple-primary-pr-identities",), False, False
+        )
+    if identities:
+        canonical = next(iter(identities))
+        reasons = {"existing-primary-pr-proven"}
+        if not search_pr_numbers and (direct_pr_numbers or recent_pr_numbers or duplicate_create_pr_number is not None):
+            reasons.add("secondary-search-disagreement")
+        if duplicate_create_pr_number is not None:
+            reasons.add("duplicate-create-response-reconciled")
+        return PullRequestCreationAdmissionResult(
+            "existing-primary", canonical, tuple(sorted(reasons)), False, False
+        )
+    if branch_exists:
+        return PullRequestCreationAdmissionResult(
+            "uncertain", None, ("implementation-branch-without-reconciled-primary-pr",), False, False
+        )
+    return PullRequestCreationAdmissionResult(
+        "no-primary-proven", None, ("no-branch-or-primary-pr-evidence",), True, True
+    )
+
+
 def reconcile_github_lineage(
     provider: GitHubLineageProvider,
     expectation: GitHubLineageExpectation,
@@ -145,12 +195,7 @@ def reconcile_github_lineage(
     if issue.state == "closed" and issue.state_reason == "completed" and not pr.merged:
         reasons.add("issue-completed-with-open-or-unmerged-pr")
 
-    if (
-        expectation.require_open_pr_for_active_issue
-        and issue.state == "open"
-        and pr.state != "open"
-        and not pr.merged
-    ):
+    if expectation.require_open_pr_for_active_issue and issue.state == "open" and pr.state != "open" and not pr.merged:
         reasons.add("active-issue-with-nonopen-pr")
 
     ci: CiSnapshot | None = None
