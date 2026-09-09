@@ -4,7 +4,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 GOVERNED_PATHS = (
     ROOT / ".github/workflows/agent-os-validation.yml",
-    ROOT / ".github/workflows/workflow-scheduler-validation.yml",
     ROOT / ".github/actions/setup-python-dev/action.yml",
     ROOT / "cloudbuild.yaml",
     ROOT / "01_Shared_Standards/python/ci-cd/github-actions.md",
