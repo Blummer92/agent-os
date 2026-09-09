@@ -29,7 +29,29 @@ def test_unsupported_test_recommendation_no_credit():
 def test_overlarge_repair_no_boundary_credit():
     p,a=case(); assert score_case(p,a,run(p,(finding(repair_refs=("src/parser.py","src/unrelated.py")),))).fix_boundary_accuracy==0
 def test_contaminated_run_ineligible():
-    p,a=case(); assert not score_case(p,a,run(p,contaminated=True,contamination_reasons=("repository-wide-search",))).eligible
+    p,a=case(); s=score_case(p,a,run(p,contaminated=True,contamination_reasons=("repository-wide-search",)))
+    assert s.to_dict() == {
+        "eligible": False,
+        "detected_defects": 0,
+        "scorable_defects": 0,
+        "substantive_findings": 0,
+        "true_positive_findings": 0,
+        "blocking_findings": 0,
+        "true_positive_blockers": 0,
+        "false_blocks": 0,
+        "severity_credit": 0,
+        "severity_possible": 0,
+        "evidence_quality": 0,
+        "fix_boundary_accuracy": 0,
+        "test_recommendation_quality": 0,
+        "manual_review_calibration": 0,
+        "unsupported_claims": 0,
+        "execution_authorized": False,
+        "merge_authorized": False,
+        "closure_authorized": False,
+        "external_write_authorized": False,
+        "side_effects_performed": False,
+    }
 def test_deterministic_scorer():
     p,a=case(); r=run(p,(finding(),)); assert score_case(p,a,r)==score_case(p,a,r)
 def test_changed_packet_identity_fails_closed():
