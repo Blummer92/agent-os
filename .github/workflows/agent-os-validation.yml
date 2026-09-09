@@ -183,8 +183,15 @@ jobs:
 
   validate:
     name: Run aggregate validation
-    needs: plan
-    if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.draft == false) }}
+    # Deliberately not `needs: plan`. The plan job owns only the cheap
+    # developer-loop lane; #2132 already established that the profile has no say
+    # in whether the authoritative aggregate runs, so the two jobs share no data.
+    # A `needs:` edge would only serialize the aggregate behind the plan job
+    # (measured: ~11-16s for an aggregate-profile PR, ~56s for a focused-profile
+    # PR, whose plan job re-installs the same dependency set the aggregate
+    # installs again). Running them concurrently preserves the focused
+    # developer-loop signal while removing it from the Ready-path critical path.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
