@@ -4,7 +4,16 @@ from __future__ import annotations
 
 from mcp.server import MCPServer
 
-from .mcp_facade import activate_agent_os_failed_repair, classify_agent_os_continuation, plan_agent_os_continuation
+from .mcp_facade import (
+    activate_agent_os_failed_repair,
+    admit_agent_os_failed_repair,
+    classify_agent_os_continuation,
+    classify_agent_os_existing_work,
+    classify_agent_os_mission_completion,
+    classify_agent_os_recovery_progress,
+    classify_agent_os_red_ci,
+    plan_agent_os_continuation,
+)
 
 mcp = MCPServer("Agent OS")
 
@@ -33,14 +42,7 @@ def activate_agent_os_failed_repair_tool(
     lesson_rows: list[dict[str, object]] | None = None,
     repair_context: str = "failed-pr-repair",
 ) -> dict[str, object]:
-    """Execute canonical CKR6 for one failed attempt using bounded read evidence.
-
-    ``lesson_rows`` is the result of the existing read-only Lessons Learned
-    connector operation selected by CKR6/CKR11. It is not trusted as authority:
-    the canonical activation bridge still normalizes, bounds, verifies
-    provenance/currentness, and selects it. Omitting rows when material retrieval
-    is required fails closed rather than treating policy text as activation.
-    """
+    """Execute canonical CKR6 for one failed attempt using bounded read evidence."""
     execute_read = None if lesson_rows is None else lambda _query: {"results": lesson_rows}
     return activate_agent_os_failed_repair(
         repository=repository, issue_number=issue_number, attempt_id=attempt_id,
@@ -51,6 +53,64 @@ def activate_agent_os_failed_repair_tool(
         canonical_rule_refs=canonical_rule_refs, known_knowledge_refs=known_knowledge_refs,
         specialized_knowledge_required=specialized_knowledge_required,
         execute_read=execute_read, repair_context=repair_context,
+    )
+
+
+@mcp.tool()
+def admit_agent_os_failed_repair_tool(
+    activation_result: dict[str, object], check_state: str,
+    required_check_configuration_state: str, review_state: str,
+    branch_freshness: str, mergeability: str,
+) -> dict[str, object]:
+    return admit_agent_os_failed_repair(
+        activation_result=activation_result, check_state=check_state,
+        required_check_configuration_state=required_check_configuration_state,
+        review_state=review_state, branch_freshness=branch_freshness,
+        mergeability=mergeability,
+    )
+
+
+@mcp.tool()
+def classify_agent_os_mission_completion_tool(
+    repository: str, issue_number: int, branch_exists: bool,
+    implementation_commit_count: int, draft_pr_exists: bool,
+    canonical_pr_readback_verified: bool, capable_route_available: bool,
+    subordinate_writes_only: bool,
+) -> dict[str, object]:
+    return classify_agent_os_mission_completion(
+        repository=repository, issue_number=issue_number, branch_exists=branch_exists,
+        implementation_commit_count=implementation_commit_count,
+        draft_pr_exists=draft_pr_exists,
+        canonical_pr_readback_verified=canonical_pr_readback_verified,
+        capable_route_available=capable_route_available,
+        subordinate_writes_only=subordinate_writes_only,
+    )
+
+
+@mcp.tool()
+def classify_agent_os_existing_work_tool(
+    evidence: object, resume_plan: object | None = None,
+    lease_request: object | None = None, lease_observation: object | None = None,
+) -> dict[str, object]:
+    return classify_agent_os_existing_work(
+        evidence=evidence, resume_plan=resume_plan,
+        lease_request=lease_request, lease_observation=lease_observation,
+    )
+
+
+@mcp.tool()
+def classify_agent_os_red_ci_tool(evidence: object) -> dict[str, object]:
+    return classify_agent_os_red_ci(evidence)
+
+
+@mcp.tool()
+def classify_agent_os_recovery_progress_tool(
+    current: object, prior: object | None = None,
+    prior_transition_fingerprint: str | None = None,
+) -> dict[str, object]:
+    return classify_agent_os_recovery_progress(
+        current, prior=prior,
+        prior_transition_fingerprint=prior_transition_fingerprint,
     )
 
 
