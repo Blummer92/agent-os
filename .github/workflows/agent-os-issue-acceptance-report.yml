@@ -2,7 +2,7 @@ name: Agent OS Issue Acceptance Report
 
 on:
   pull_request:
-    types: [opened, edited, reopened, synchronize, ready_for_review]
+    types: [opened, edited, reopened, synchronize]
   workflow_dispatch:
     inputs:
       pr_number:

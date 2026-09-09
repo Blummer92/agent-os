@@ -128,18 +128,33 @@ def _bounded(payload: object, maximum: int, name: str) -> None:
         raise ValueError(f"{name} exceeds its serialized bound")
 
 
+def _validate_target_identity(issue_number: object, pull_request_number: object) -> None:
+    _optional_positive_int(issue_number, "issue_number")
+    _optional_positive_int(pull_request_number, "pull_request_number")
+    if issue_number is None and pull_request_number is None:
+        raise ValueError("lifecycle target requires issue_number or pull_request_number")
+
+
+def _validate_issue_state(issue_number: int | None, issue_state: object, name: str) -> None:
+    if issue_number is None:
+        if issue_state is not None:
+            raise ValueError(f"{name} must be None when issue_number is absent")
+    elif issue_state not in ISSUE_STATES:
+        raise ValueError(f"{name} is unsupported")
+
+
 @dataclass(frozen=True, slots=True)
 class LifecycleMutationAuthorization:
     schema_version: str
     repository: str
-    issue_number: int
+    issue_number: int | None
     pull_request_number: int | None
     authorized_mutations: tuple[str, ...]
     expected_source_head: str | None
     expected_base_head: str | None
     expected_pr_state: Literal["draft", "ready", "none"]
     expected_merged: bool
-    expected_issue_state: Literal["open", "closed"]
+    expected_issue_state: Literal["open", "closed"] | None
     expected_review_state: Literal["clear", "blocked", "unknown"]
     expected_unresolved_threads: int
     expected_lifecycle_labels: tuple[str, ...]
@@ -154,16 +169,16 @@ class LifecycleMutationAuthorization:
         if self.schema_version != SCHEMA_VERSION:
             raise ValueError("unsupported lifecycle authorization schema version")
         _repository(self.repository)
-        _positive_int(self.issue_number, "issue_number")
-        _optional_positive_int(self.pull_request_number, "pull_request_number")
+        _validate_target_identity(self.issue_number, self.pull_request_number)
         object.__setattr__(self, "authorized_mutations", _canonical_strings(self.authorized_mutations, name="authorized mutations", maximum=MAX_MUTATIONS, allowed=MUTATIONS))
         _optional_sha40(self.expected_source_head, "expected_source_head")
         _optional_sha40(self.expected_base_head, "expected_base_head")
         if self.expected_pr_state not in PR_STATES:
             raise ValueError("expected_pr_state is unsupported")
         _bool(self.expected_merged, "expected_merged")
-        if self.expected_issue_state not in ISSUE_STATES or self.expected_review_state not in REVIEW_STATES:
-            raise ValueError("expected lifecycle state is unsupported")
+        _validate_issue_state(self.issue_number, self.expected_issue_state, "expected_issue_state")
+        if self.expected_review_state not in REVIEW_STATES:
+            raise ValueError("expected review state is unsupported")
         if type(self.expected_unresolved_threads) is not int or not 0 <= self.expected_unresolved_threads <= 256:
             raise ValueError("expected_unresolved_threads is outside bounds")
         object.__setattr__(self, "expected_lifecycle_labels", _labels(self.expected_lifecycle_labels))
@@ -192,13 +207,13 @@ class LifecycleMutationAuthorization:
 @dataclass(frozen=True, slots=True)
 class LifecycleStateSnapshot:
     repository: str
-    issue_number: int
+    issue_number: int | None
     pull_request_number: int | None
     source_head: str | None
     base_head: str | None
     pr_state: Literal["draft", "ready", "none"]
     merged: bool
-    issue_state: Literal["open", "closed"]
+    issue_state: Literal["open", "closed"] | None
     review_state: Literal["clear", "blocked", "unknown"]
     unresolved_threads: int
     lifecycle_labels: tuple[str, ...]
@@ -207,12 +222,12 @@ class LifecycleStateSnapshot:
 
     def __post_init__(self) -> None:
         _repository(self.repository)
-        _positive_int(self.issue_number, "issue_number")
-        _optional_positive_int(self.pull_request_number, "pull_request_number")
+        _validate_target_identity(self.issue_number, self.pull_request_number)
         _optional_sha40(self.source_head, "source_head")
         _optional_sha40(self.base_head, "base_head")
-        if self.pr_state not in PR_STATES or self.issue_state not in ISSUE_STATES or self.review_state not in REVIEW_STATES:
+        if self.pr_state not in PR_STATES or self.review_state not in REVIEW_STATES:
             raise ValueError("snapshot lifecycle state is unsupported")
+        _validate_issue_state(self.issue_number, self.issue_state, "issue_state")
         _bool(self.merged, "merged")
         if type(self.unresolved_threads) is not int or not 0 <= self.unresolved_threads <= 256:
             raise ValueError("unresolved_threads is outside bounds")
@@ -291,10 +306,35 @@ def evaluate_lifecycle_mutation(authorization: object, snapshot: object, request
         mismatch("authorization-stale", "authorization freshness revision does not match snapshot")
     if mutation not in authorization.authorized_mutations:
         mismatch("authorization-mutation-not-permitted", "requested mutation is not explicitly authorized")
-    precondition_met = {"mark-ready": snapshot.pr_state == "draft" and not snapshot.merged, "mark-draft": snapshot.pr_state == "ready" and not snapshot.merged, "merge": snapshot.pr_state == "ready" and not snapshot.merged, "close-issue": snapshot.issue_state == "open", "reopen-issue": snapshot.issue_state == "closed", "add-lifecycle-label": True, "remove-lifecycle-label": True, "replace-lifecycle-labels": True}[mutation]
+
+    has_issue = snapshot.issue_number is not None
+    has_pr = snapshot.pull_request_number is not None
+    precondition_met = {
+        "mark-ready": has_pr and snapshot.pr_state == "draft" and not snapshot.merged,
+        "mark-draft": has_pr and snapshot.pr_state == "ready" and not snapshot.merged,
+        "merge": has_pr and snapshot.pr_state == "ready" and not snapshot.merged,
+        "close-issue": has_issue and snapshot.issue_state == "open",
+        "reopen-issue": has_issue and snapshot.issue_state == "closed",
+        "add-lifecycle-label": has_issue or has_pr,
+        "remove-lifecycle-label": has_issue or has_pr,
+        "replace-lifecycle-labels": has_issue or has_pr,
+    }[mutation]
     if not precondition_met:
         mismatch("mutation-precondition-not-met", "current state cannot admit the requested mutation")
-    comparisons = ((authorization.repository, snapshot.repository, "identity-repository-mismatch", "repository identity changed"), (authorization.issue_number, snapshot.issue_number, "identity-issue-mismatch", "issue identity changed"), (authorization.pull_request_number, snapshot.pull_request_number, "identity-pull-request-mismatch", "pull request identity changed"), (authorization.expected_source_head, snapshot.source_head, "pull-request-head-changed", "source head changed"), (authorization.expected_base_head, snapshot.base_head, "pull-request-base-changed", "base head changed"), (authorization.expected_pr_state, snapshot.pr_state, "pull-request-ready-state-changed", "Draft or Ready state changed"), (authorization.expected_merged, snapshot.merged, "pull-request-merged-state-changed", "merged state changed"), (authorization.expected_issue_state, snapshot.issue_state, "issue-state-changed", "issue state changed"), (authorization.expected_review_state, snapshot.review_state, "review-state-changed", "review state changed"), (authorization.expected_unresolved_threads, snapshot.unresolved_threads, "review-thread-state-changed", "unresolved review thread count changed"), (authorization.expected_lifecycle_labels, snapshot.lifecycle_labels, "lifecycle-label-state-changed", "lifecycle label state changed"))
+
+    comparisons = (
+        (authorization.repository, snapshot.repository, "identity-repository-mismatch", "repository identity changed"),
+        (authorization.issue_number, snapshot.issue_number, "identity-issue-mismatch", "issue identity changed"),
+        (authorization.pull_request_number, snapshot.pull_request_number, "identity-pull-request-mismatch", "pull request identity changed"),
+        (authorization.expected_source_head, snapshot.source_head, "pull-request-head-changed", "source head changed"),
+        (authorization.expected_base_head, snapshot.base_head, "pull-request-base-changed", "base head changed"),
+        (authorization.expected_pr_state, snapshot.pr_state, "pull-request-ready-state-changed", "Draft or Ready state changed"),
+        (authorization.expected_merged, snapshot.merged, "pull-request-merged-state-changed", "merged state changed"),
+        (authorization.expected_issue_state, snapshot.issue_state, "issue-state-changed", "issue state changed"),
+        (authorization.expected_review_state, snapshot.review_state, "review-state-changed", "review state changed"),
+        (authorization.expected_unresolved_threads, snapshot.unresolved_threads, "review-thread-state-changed", "unresolved review thread count changed"),
+        (authorization.expected_lifecycle_labels, snapshot.lifecycle_labels, "lifecycle-label-state-changed", "lifecycle label state changed"),
+    )
     for expected, observed, reason, detail in comparisons:
         if expected != observed:
             mismatch(reason, detail)

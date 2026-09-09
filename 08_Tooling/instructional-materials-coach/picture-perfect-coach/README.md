@@ -22,19 +22,19 @@ Stage 5 performs deterministic local preflight and can generate a local implemen
 - TypeScript types here are bounded consumer projections, not new canonical schemas.
 - Prompt/image output is presentation guidance, never source instructional evidence.
 
-## Reuse before recapture (#2109)
+## Reuse before recapture (#2109 / #2117)
 
-`captureReuse.ts` is a pure routing seam that runs before the #2100 live-capture adapter. It consumes the existing F2 `bindCaptureEvidence` result rather than searching for assets or defining another currentness model.
+`captureReuse.ts` is the pure reuse decision. `captureReuseRouting.ts` is the production composition seam that consumes that decision before the #2100 live-capture adapter boundary. Until #2100 lands on `main`, the adapter remains injected and tests perform no browser/cloud execution.
 
 ```text
-exact current governed evidence -> REUSE_EXISTING_CAPTURE
-missing/stale/mismatched evidence -> CAPTURE_REQUIRED
-conflicting/privacy/eligibility ambiguity -> MANUAL_REVIEW_REQUIRED
+exact current governed evidence -> REUSE_EXISTING_CAPTURE -> zero adapter calls
+missing/stale/mismatched evidence -> CAPTURE_REQUIRED -> exactly one adapter call
+conflicting/privacy/eligibility ambiguity -> MANUAL_REVIEW_REQUIRED -> zero adapter calls
 ```
 
 Reuse requires the exact modeled application, recording SHA, source index + fingerprint, requested action/result role, co-visible UI claims, existing ArtifactManifest privacy/rights/readiness evidence, compatibility freshness, and target geometry when the requested frame depends on geometry. A filename, lesson title, generic application screenshot, generated image, or visually similar state is never a reuse key.
 
-The result exposes bounded non-authorizing counters for browser runs requested, browser runs launched by this pure seam (always zero), existing evidence reuse, and duplicate runs avoided. The same logical request plus the same current evidence deterministically returns the same evidence identity. This module never launches the browser; only `CAPTURE_REQUIRED` may be handed to #2100 for live capture. Manual-review outcomes deliberately do not spend browser compute to hide ambiguity.
+The result exposes bounded non-authorizing counters for browser runs requested, browser runs launched by the pure decision seam (always zero), existing evidence reuse, and duplicate runs avoided. The caller may mark an already-satisfied equivalent logical request with `already_satisfied_duplicate=true`; that marker is observability evidence only and counts one avoided duplicate run only when the same decision independently proves `REUSE_EXISTING_CAPTURE`. It cannot turn missing, stale, mismatched, or ambiguous evidence into reuse and introduces no cache or persistence. The same logical request plus the same current evidence deterministically returns the same evidence identity. This package never launches the browser itself; only `CAPTURE_REQUIRED` may cross the injected #2100 adapter boundary. Manual-review outcomes deliberately do not spend browser compute to hide ambiguity.
 
 No cache, asset registry, persistence root, crawler, Scheduler, workflow, or execution authority is added. Reuse grants no Picture Perfect Ready, classroom readiness, publication, provider execution, or external-write authority.
 

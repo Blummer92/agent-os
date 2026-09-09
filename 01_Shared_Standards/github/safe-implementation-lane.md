@@ -42,6 +42,13 @@ authorizes a previously excluded surface.
 For a currently authorized Safe Implementation Lane issue, discovery of one existing valid issue-linked branch, Draft PR, or checkpoint lineage is normally a resume target, not a stop condition. Reacquire current repository, authorization, scope, ownership, checkpoint, exact-head, and canonical Scheduler lease evidence; consume the existing `ResumePlan`; and continue from the newest valid checkpoint when no active conflict exists.
 An existing active Scheduler lease is the concurrency authority. Do not create a competing branch, PR, execution, or lease; do not steal, force-release, expire by age, or automatically retry an active or ambiguous lease. When the same authorized branch advances from SHA A to SHA B, reacquire B, inspect the head change, rebind current exact-head evidence, invalidate only the head-bound evidence required by existing contracts, and continue when authorization, ownership, and bounded scope remain valid. If `main` advanced and the PR branch is behind, route to the separately governed branch-refresh path rather than treating base drift as ordinary `HEAD_ADVANCED`.
 Cancelled validation on stale SHA A may be projected as `SUPERSEDED_BY_NEW_HEAD` only when bounded evidence proves the old run was cancelled, the current PR head is different SHA B, a newer run/check for B exists in the same validation lane/concurrency group, and replacement/supersession evidence is current. A genuine test or configuration failure on A remains genuine failure evidence. Only validation bound to the current exact head may satisfy Ready-for-Review.
+
+### Single-Issue Runtime Boundary
+The WSC5 single-issue pilot's successful `completed` result means **validated workspace**, not Safe Implementation Lane completion. WSC5 owns bounded workspace execution, changed-path containment, validation, cleanup, and lease release. It does not own GitHub Draft PR creation, PR readback, or handoff publication.
+
+After WSC5 proves a validated workspace, `scripts/agent_os_execution_interface/validated_workspace_continuation.py` projects that evidence into the existing #2137 governed continuation driver. The next bounded action is `materialize-draft-pr`, owned by the GitHub Service Agent's existing Draft-PR creation/readback path, followed by the existing handoff publication owner. No new GitHub writer or lifecycle authority is created. A repairable validation failure may re-enter only through the existing failed-repair admission/lesson contracts; the continuation bridge never grants repair authority itself.
+
+The Safe Implementation Lane implementation terminal state is a canonically read-back Draft PR plus required handoff evidence (`draft-pr-handoff`). `validated-workspace` is an internal runtime boundary and must not be reported as mission completion while authorized delivery work remains.
 ## Validation Loop
 Follow the canonical validation-obligation and execution-location policy in
 `01_Shared_Standards/global-engineering/testing-and-release.md`.
@@ -140,8 +147,9 @@ risks, rollback, and the applicable authorization boundary. Prefer one
 consolidated user-facing result for routine internal routing while preserving
 required handoff artifacts for owners and auditability.
 ## Version
-0.9.0
+0.10.0
 ## Changelog
+- 0.10.0 declares the WSC5 `validated-workspace` boundary and makes its continuation to the Safe Implementation Lane `draft-pr-handoff` terminal state executable through the existing #2137 continuation driver and GitHub Service Agent delivery owner (#2138).
 - 0.9.0 defines evidence-backed bounded diagnosis correction (#1594): same-objective corrections may update the canonical issue/handoff and continue under the still-current implementation instruction, while objective, authority, source-of-truth, ownership, architecture/schema/compatibility, persistence/external-effect, and excluded-surface changes still fail closed with `needs-decision`.
 - 0.8.0 separates required validation from its execution location, allows Draft PR staging when existing governed CI is the capable executor, forbids false manual-command stops, preserves current Draft/Ready CI trigger semantics, and keeps exact-head evidence mandatory before Ready-for-Review (#1595).
 - 0.7.0 adds opt-in Terminal Fast Lane (#1309) by composing the canonical `request-interpretation-v1` record, existing content-bound merge/lifecycle authorization records, `operating_mode.py` release ceiling, #1187 branch refresh, and `agent-os-release-run.py` terminal progression. No second raw-language parser, lifecycle stage, router, authority model, or terminal controller is introduced.

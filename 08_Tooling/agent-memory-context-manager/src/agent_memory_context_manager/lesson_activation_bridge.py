@@ -8,13 +8,15 @@ existing read-only Notion query path (``NotionReadOnlyAdapter.query_data_source`
 via the Workflow Scheduler, or an equivalent already-approved read surface).
 
 Ordering matches CKR6/CKR2 exactly: ``not-needed`` performs zero reads; a
-known lesson reference is attempted before a bounded filtered query; the
-filtered query never asks for more than ``MAX_LESSON_RECORDS`` rows before
-normalization. Live Notion row shapes are mapped through a finite,
-deterministic vocabulary; anything missing or ambiguous is excluded as
-explicitly non-ready rather than guessed. The shared CKR2 candidate-owned
-provenance invariant (#1520) is reused unchanged -- this module adds no
-duplicate provenance guard.
+known lesson reference is attempted before a bounded filtered query. Ordinary
+filtered retrieval derives exact provider filters from the request's existing
+finite signals, may inspect a bounded relevance page larger than CKR2's five
+candidate budget, and deterministically narrows to at most
+``MAX_LESSON_RECORDS`` before selection. Live Notion row shapes are mapped
+through a finite, deterministic vocabulary; anything missing or ambiguous is
+excluded as explicitly non-ready rather than guessed. The shared CKR2
+candidate-owned provenance invariant (#1520) is reused unchanged -- this
+module adds no duplicate provenance guard or relevance vocabulary.
 """
 
 from __future__ import annotations
@@ -22,7 +24,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
 
-from .coding_knowledge_selection import CodingKnowledgeRequest, KnowledgeCurrentness, RetrievalEscalation
+from .coding_knowledge_selection import (
+    CodingKnowledgeCandidate,
+    CodingKnowledgeRequest,
+    KnowledgeCurrentness,
+    RetrievalEscalation,
+    _match_candidate,
+)
 from .lesson_preflight import (
     MAX_LESSON_RECORDS,
     LessonPreflightResult,
@@ -33,6 +41,7 @@ from .lesson_preflight import (
 
 MAX_ROW_TEXT_CHARS = 512
 MAX_ROW_LIST_ITEMS = 20
+MAX_RETRIEVAL_ROWS = MAX_LESSON_RECORDS * 5
 
 _LESSON_ID_PROPERTY = "Lesson ID"
 _TITLE_PROPERTY = "Lesson Learned"
@@ -115,22 +124,56 @@ def build_known_reference_query(known_ids: Sequence[str]) -> dict[str, Any]:
     }
 
 
+def _normalized(values: Sequence[str]) -> frozenset[str]:
+    return frozenset(value.strip().casefold() for value in values if value.strip())
+
+
+def _relevance_filter_clauses(request: CodingKnowledgeRequest) -> list[dict[str, Any]]:
+    """Translate explicit request signals through the existing finite vocabularies."""
+    ecosystem_hints = _normalized(request.ecosystem_hints + request.language_hints)
+    capability_hints = _normalized(request.capability_keywords)
+
+    clauses: list[dict[str, Any]] = []
+    for area, ecosystem in sorted(_AREA_ECOSYSTEM.items()):
+        if ecosystem.casefold() in ecosystem_hints:
+            clauses.append({"property": _AREA_PROPERTY, "select": {"equals": area}})
+    for learning_type, capability in sorted(_LEARNING_TYPE_CAPABILITY.items()):
+        if capability.casefold() in capability_hints:
+            clauses.append(
+                {"property": _LEARNING_TYPE_PROPERTY, "select": {"equals": learning_type}}
+            )
+
+    applies_to_terms = dict.fromkeys(
+        request.capability_keywords + request.library_hints + request.target_path_hints
+    )
+    for term in applies_to_terms:
+        if term.strip():
+            clauses.append(
+                {"property": _APPLIES_TO_PROPERTY, "multi_select": {"contains": term.strip()}}
+            )
+    return clauses
+
+
 def build_filtered_query(request: CodingKnowledgeRequest) -> dict[str, Any]:
-    """Smallest bounded ordinary filtered query, capped at the CKR6 budget."""
+    """Build a bounded task-specific read query without inventing vocabulary."""
     if type(request) is not CodingKnowledgeRequest:
         raise TypeError("request must be a CodingKnowledgeRequest")
-    return {
-        "page_size": MAX_LESSON_RECORDS,
-        "filter_properties": list(REQUIRED_LESSON_PROPERTIES),
-        "filter": {
-            "and": [
-                {"property": _SURFACE_PROPERTY, "checkbox": {"equals": True}},
-                {
-                    "property": _STATUS_PROPERTY,
-                    "status": {"does_not_equal": "Archived note"},
-                },
-            ]
+
+    base_filter: list[dict[str, Any]] = [
+        {"property": _SURFACE_PROPERTY, "checkbox": {"equals": True}},
+        {
+            "property": _STATUS_PROPERTY,
+            "status": {"does_not_equal": "Archived note"},
         },
+    ]
+    relevance_clauses = _relevance_filter_clauses(request)
+    if relevance_clauses:
+        base_filter.append({"or": relevance_clauses})
+
+    return {
+        "page_size": MAX_RETRIEVAL_ROWS if relevance_clauses else MAX_LESSON_RECORDS,
+        "filter_properties": list(REQUIRED_LESSON_PROPERTIES),
+        "filter": {"and": base_filter},
     }
 
 
@@ -222,6 +265,45 @@ def normalize_lesson_row(row: Mapping[str, Any]) -> LessonRecordEvidence | Lesso
         return LessonActivationSkip(lesson_id, "oversized-or-malformed-field")
 
 
+def _as_selection_candidate(lesson: LessonRecordEvidence) -> CodingKnowledgeCandidate:
+    return CodingKnowledgeCandidate(
+        knowledge_id=lesson.lesson_id,
+        source_system="notion-lessons-learned",
+        source_revision=lesson.source_revision,
+        currentness=lesson.currentness,
+        name=lesson.title,
+        ecosystem=lesson.ecosystem,
+        library_name=lesson.library_name,
+        capability_kind=lesson.capability_kind,
+        keywords=lesson.keywords,
+        use_when=(lesson.what_to_do_next_time, lesson.guardrail),
+        avoid_when=(),
+        canonical_github_refs=lesson.canonical_github_refs,
+        evidence_refs=lesson.evidence_refs,
+        authority_conflict=lesson.authority_conflict,
+    )
+
+
+def _bound_relevant_lessons(
+    request: CodingKnowledgeRequest, lessons: Sequence[LessonRecordEvidence]
+) -> tuple[LessonRecordEvidence, ...]:
+    """Keep CKR2's candidate budget while reusing CKR2's canonical matcher."""
+    ranked: list[tuple[int, str, LessonRecordEvidence]] = []
+    unranked: list[LessonRecordEvidence] = []
+    for lesson in lessons:
+        bucket, _ = _match_candidate(request, _as_selection_candidate(lesson))
+        if bucket:
+            ranked.append((bucket, lesson.lesson_id.casefold(), lesson))
+        else:
+            unranked.append(lesson)
+
+    if ranked:
+        ranked.sort(key=lambda item: (-item[0], item[1]))
+        return tuple(item[2] for item in ranked[:MAX_LESSON_RECORDS])
+    unranked.sort(key=lambda item: item.lesson_id.casefold())
+    return tuple(unranked[:MAX_LESSON_RECORDS])
+
+
 def orchestrate_lesson_activation(
     request: CodingKnowledgeRequest,
     *,
@@ -257,7 +339,8 @@ def orchestrate_lesson_activation(
         if isinstance(normalized, LessonRecordEvidence):
             lessons.append(normalized)
 
-    return consume_lesson_preflight(request, tuple(lessons))
+    bounded = _bound_relevant_lessons(request, lessons)
+    return consume_lesson_preflight(request, bounded)
 
 
 def _extract_bounded_rows(raw: Any) -> list[Mapping[str, Any]]:
@@ -266,9 +349,7 @@ def _extract_bounded_rows(raw: Any) -> list[Mapping[str, Any]]:
     results = raw.get("results")
     if not isinstance(results, list):
         raise LessonActivationError("read executor result is missing 'results'")
-    if len(results) > MAX_LESSON_RECORDS:
-        raise LessonActivationError("read executor returned more than the CKR6 candidate budget")
-    return [item for item in results if isinstance(item, Mapping)][:MAX_LESSON_RECORDS]
+    return [item for item in results if isinstance(item, Mapping)][:MAX_RETRIEVAL_ROWS]
 
 
 def _plain_text(rich_text: Any) -> str | None:

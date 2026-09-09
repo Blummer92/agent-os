@@ -62,10 +62,13 @@ DOMAIN_RULES: tuple[tuple[str, frozenset[str], tuple[str, ...]], ...] = (
                 "evidence_compatibility",
                 "ready_for_review_compatibility",
                 "issue_operational_state",
+                "lifecycle_drift_scan",
+                "lifecycle_mutation_authorization",
                 "lifecycle_mutation_guard",
                 "lifecycle_reconciliation",
                 "merge_authorization",
                 "planning_binding",
+                "recoverable_reconciliation",
             }
         ),
         (),
@@ -292,6 +295,18 @@ def _domain_for(module_name: str) -> str:
     return matches[0]
 
 
+def _classification_violations(module_names) -> list[str]:
+    violations: list[str] = []
+    for module_name in module_names:
+        matches = _domain_matches(module_name)
+        if len(matches) != 1:
+            violations.append(
+                f"{module_name}.py must have exactly one architecture-domain classification; "
+                f"found {matches or 'none'}"
+            )
+    return violations
+
+
 def _parse(path: Path) -> ast.Module:
     return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
@@ -366,23 +381,27 @@ def test_every_production_module_has_one_domain_classification() -> None:
     modules = _production_modules()
     assert modules, "issue-automation production modules were not found"
 
-    for module_name in modules:
-        _domain_for(module_name)
+    violations = _classification_violations(modules)
+    assert not violations, "Architecture classification violations:\n- " + "\n- ".join(violations)
 
 
 def test_dependency_direction_and_scheduler_runtime_boundary() -> None:
     modules = _production_modules()
-    violations: list[str] = []
+    violations = _classification_violations(modules)
 
     for module_name, path in modules.items():
-        source_domain = _domain_for(module_name)
+        source_matches = _domain_matches(module_name)
         tree = _parse(path)
 
-        if source_domain != "facade":
+        if len(source_matches) == 1 and source_matches[0] != "facade":
+            source_domain = source_matches[0]
             for imported_module in sorted(_local_imports(tree)):
                 if imported_module not in modules:
                     continue
-                target_domain = _domain_for(imported_module)
+                target_matches = _domain_matches(imported_module)
+                if len(target_matches) != 1:
+                    continue
+                target_domain = target_matches[0]
                 if target_domain in FORBIDDEN_DOMAIN_IMPORTS.get(
                     source_domain, frozenset()
                 ):
@@ -402,6 +421,14 @@ def test_dependency_direction_and_scheduler_runtime_boundary() -> None:
     assert not violations, "Architecture dependency violations:\n- " + "\n- ".join(
         violations
     )
+
+
+def test_dependency_sweep_reports_all_unclassified_modules() -> None:
+    violations = _classification_violations(("unclassified_alpha", "unclassified_beta"))
+    assert violations == [
+        "unclassified_alpha.py must have exactly one architecture-domain classification; found none",
+        "unclassified_beta.py must have exactly one architecture-domain classification; found none",
+    ]
 
 
 def test_issueplan_scanner_is_the_only_yaml_parser() -> None:

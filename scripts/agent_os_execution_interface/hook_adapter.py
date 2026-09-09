@@ -1,18 +1,16 @@
-"""Host-execution-interface hook adapter for the #1237 governed-route preflight.
+"""Host-execution-interface hook adapter for governed Agent OS route re-entry.
 
-Claude Code exposes repository-owned hooks that run *before* the model selects
-any tool: ``UserPromptSubmit`` fires on every submitted request, and
-``PreToolUse`` fires before a ``Bash`` command executes. Those hooks are the
-concrete pre-tool routing surface #1237 needs, and they are configured from
-this repository in ``.claude/settings.json``.
+Claude Code exposes repository-owned hooks at prompt submission, before tool use,
+and at turn stop. This module owns only those host-shaped edges. It never grants
+authority, persists state, or implements a second continuation classifier.
 
-This module owns only the host-shaped edges of that seam: reading the hook
-payload, recognizing which repository and issue the request already names,
-resolving the descriptor-store location the host composition configured, and
-rendering the bounded routing notice. The decision itself is delegated to
-:func:`resolve_governed_route_preflight`, which in turn delegates the lookup to
-the existing #1237 read-only locator. Nothing here routes, authorizes,
-persists, dispatches, or executes.
+The Stop seam consumes an already-structured continuation observation and reuses
+the bounded #2137 continuation driver. If no structured observation is supplied,
+the evaluator fails, the mission is terminal/blocked/stalled, or the host is
+already processing a blocked Stop, the hook allows the turn to end. This keeps
+the seam finite and fail-open while still preventing an unfinished authorized
+mission from silently ending when the host has already produced an executable
+next action.
 """
 
 from __future__ import annotations
@@ -22,6 +20,10 @@ import os
 import re
 from pathlib import Path
 
+from .continuation_driver import (
+    ContinuationDecision,
+    drive_governed_continuation,
+)
 from .governed_route_preflight import (
     GovernedRoutePreflightResult,
     GovernedRoutePreflightStatus,
@@ -29,11 +31,7 @@ from .governed_route_preflight import (
     resolve_governed_route_preflight,
 )
 
-#: Host composition supplies the existing #1218 descriptor store location.
-#: There is deliberately no default: an unset value is "unavailable", not a
-#: path for this adapter to invent.
 STORE_ROOT_ENV = "AGENT_OS_CHECKPOINT_STORE_ROOT"
-#: Optional explicit override for the governed repository identity.
 REPOSITORY_ENV = "AGENT_OS_EXECUTION_INTERFACE_REPOSITORY"
 
 _ISSUE_RE = re.compile(r"#(\d{1,7})(?![\w#])", re.ASCII)
@@ -42,14 +40,16 @@ _REMOTE_URL_RE = re.compile(
     r"github\.com[:/]+(?P<owner>[A-Za-z0-9_.-]+)/(?P<name>[A-Za-z0-9_.-]+?)(?:\.git)?\s*$",
     re.ASCII,
 )
-#: ``gh`` used as a standalone word: ``gh pr create``, ``which gh``,
-#: ``command -v gh``, ``gh --version``. The guard is advisory-only, so a rare
-#: false positive costs one extra context line and nothing else.
 _LOCAL_GH_RE = re.compile(r"(?<![\w./-])gh(?![\w./-])", re.ASCII)
+_GOVERNED_MUTATION_TOOL_RE = re.compile(
+    r"^(?:Bash|Edit|Write|NotebookEdit|mcp__github__.*|mcp__notion__.*|mcp__google_drive__.*|mcp__google_calendar__.*|mcp__gmail__.*)$",
+    re.ASCII,
+)
 
 _MAX_PROMPT_BYTES = 65_536
 _MAX_COMMAND_BYTES = 16_384
 _MAX_GIT_CONFIG_BYTES = 262_144
+MAX_CONSECUTIVE_STOP_BLOCKS = 1
 
 _INVARIANT = (
     "Local `gh` availability is capability evidence about one execution surface "
@@ -57,11 +57,9 @@ _INVARIANT = (
     "unavailable and must not become a task blocker."
 )
 _NON_AUTHORITY = (
-    "Discovery is a locator, not authorization or currentness. It grants no "
-    "implementation, cloud, merge, issue-closure, or publication authority, and "
-    "the identity must still pass the existing #1218/#1253 reconstruction, "
-    "authorization, source/scope, checkpoint, ResumePlan, environment, and "
-    "Scheduler lease checks before any execution."
+    "Discovery and continuation routing are not authorization or currentness. "
+    "They grant no implementation, execution, GitHub-write, merge, issue-closure, "
+    "publication, production, credential, or external-write authority."
 )
 _PUBLICATION_CONTINUATION = (
     "No existing handoff is a predecessor-publication condition, not evidence "
@@ -71,21 +69,14 @@ _PUBLICATION_CONTINUATION = (
     "evidence. If those current bindings select the governed runner, call the "
     "repository execution-interface adapter publish_current_pre_pr_handoff(...), "
     "which delegates to the existing #1243 publish_governed_handoff(...) owner. "
-    "This advisory hook does not itself publish a handoff or complete external "
-    "ChatGPT product integration. After durable publication, repeat discovery "
-    "and resume only the exact immutable handoff returned. Do not synthesize a "
-    "handoff identity. Do not fabricate a descriptor or handoff and do not "
-    "silently fall back to local git/gh tooling."
+    "This advisory hook does not itself publish a handoff. After durable "
+    "publication, repeat discovery and resume only the exact immutable handoff "
+    "returned. Do not synthesize a handoff identity and do not silently fall "
+    "back to local git/gh tooling."
 )
 
 
 def extract_issue_numbers(text: object) -> tuple[int, ...]:
-    """Extract ``#<n>`` lookup keys from request text, in first-seen order.
-
-    The extracted number is a lookup key for the existing locator and nothing
-    else. Prompt text never becomes authorization, currentness, route
-    selection, or command input on this path.
-    """
     if type(text) is not str:
         return ()
     bounded = text[:_MAX_PROMPT_BYTES]
@@ -98,11 +89,6 @@ def extract_issue_numbers(text: object) -> tuple[int, ...]:
 
 
 def resolve_repository_identity(checkout_root: Path | str | None) -> str | None:
-    """Resolve ``owner/name`` from explicit configuration, else the git remote.
-
-    The git remote is read as a file; this adapter runs no subprocess and makes
-    no network call.
-    """
     configured = os.environ.get(REPOSITORY_ENV, "").strip()
     if configured:
         return configured if _REPOSITORY_RE.fullmatch(configured) else None
@@ -112,9 +98,7 @@ def resolve_repository_identity(checkout_root: Path | str | None) -> str | None:
         config_path = Path(checkout_root) / ".git" / "config"
         if not config_path.is_file():
             return None
-        raw = config_path.read_text(encoding="utf-8", errors="replace")[
-            :_MAX_GIT_CONFIG_BYTES
-        ]
+        raw = config_path.read_text(encoding="utf-8", errors="replace")[:_MAX_GIT_CONFIG_BYTES]
     except OSError:
         return None
 
@@ -136,30 +120,24 @@ def resolve_repository_identity(checkout_root: Path | str | None) -> str | None:
 
 
 def resolve_store_root() -> str | None:
-    """Return the host-configured descriptor-store root, or ``None``."""
     value = os.environ.get(STORE_ROOT_ENV, "").strip()
     return value or None
 
 
 def references_local_gh(command: object) -> bool:
-    """Return whether a shell command uses the local ``gh`` CLI as a program."""
     if type(command) is not str:
         return False
     return _LOCAL_GH_RE.search(command[:_MAX_COMMAND_BYTES]) is not None
 
 
 def render_preflight_notice(result: GovernedRoutePreflightResult) -> str:
-    """Render the bounded routing notice, or the empty string when silent."""
     if type(result) is not GovernedRoutePreflightResult:
         raise TypeError("result must be an exact GovernedRoutePreflightResult")
     if result.status is GovernedRoutePreflightStatus.NOT_APPLICABLE:
         return ""
 
     reasons = ", ".join(item.value for item in result.reason_codes)
-    header = (
-        "Agent OS governed-route preflight (#1237) — resolved before generic "
-        "GitHub publish tooling."
-    )
+    header = "Agent OS governed-route preflight (#1237) — resolved before generic GitHub publish tooling."
     target = (
         f"repository={result.repository} issue=#{result.issue_number}"
         if result.repository and result.issue_number
@@ -171,10 +149,8 @@ def render_preflight_notice(result: GovernedRoutePreflightResult) -> str:
             f"status=governed-resume-available {target}\n"
             f"Exactly one existing immutable handoff matched: {result.handoff_id}\n"
             f"Use the existing bounded governed resume ingress: {result.resume_command}\n"
-            "Do not select generic GitHub publish tooling and do not check local "
-            "git/gh prerequisites for this route.\n"
-            "Preserve the existing branch/PR/checkpoint/invocation lineage; do not "
-            "open a shadow lineage."
+            "Do not select generic GitHub publish tooling and do not check local git/gh prerequisites for this route.\n"
+            "Preserve the existing branch/PR/checkpoint/invocation lineage; do not open a shadow lineage."
         )
     elif result.status is GovernedRoutePreflightStatus.NOT_FOUND:
         body = (
@@ -185,9 +161,7 @@ def render_preflight_notice(result: GovernedRoutePreflightResult) -> str:
     else:
         body = (
             f"status=needs-decision {target} ({reasons})\n"
-            "Fail closed. Do not choose a 'latest' or newest-looking descriptor, do "
-            "not infer currentness from timestamps, issue status, or branch names, "
-            "and do not silently fall back to local git/gh tooling."
+            "Fail closed. Do not choose a 'latest' descriptor, infer currentness from timestamps, issue status, or branch names, or silently fall back to local git/gh tooling."
         )
     return f"{header}\n{body}\n{_NON_AUTHORITY}\n{_INVARIANT}"
 
@@ -208,7 +182,6 @@ def _checkout_root(payload: dict) -> str:
 
 
 def run_user_prompt_submit_hook(raw_payload: str) -> str:
-    """Resolve the governed route for a submitted request; stay silent if N/A."""
     payload = _load_payload(raw_payload)
     checkout_root = _checkout_root(payload)
     result = resolve_governed_route_preflight(
@@ -220,36 +193,122 @@ def run_user_prompt_submit_hook(raw_payload: str) -> str:
     return render_preflight_notice(result)
 
 
-def run_pre_tool_use_hook(raw_payload: str) -> str:
-    """Restate the #1237 invariant before a local ``gh`` command is treated as a gate.
+def _is_governed_mutation_tool(tool_name: object) -> bool:
+    return type(tool_name) is str and _GOVERNED_MUTATION_TOOL_RE.fullmatch(tool_name) is not None
 
-    The guard never denies, never rewrites, and never grants permission; it only
-    prevents a missing local CLI from being read as an Agent OS execution
-    blocker. Non-Agent-OS checkouts and commands that do not use ``gh`` produce
-    no output at all, so generic behavior is unchanged.
-    """
+
+def run_pre_tool_use_hook(raw_payload: str) -> str:
+    """Restate governed-route invariants before a mutation-capable tool executes."""
     payload = _load_payload(raw_payload)
-    if payload.get("tool_name") != "Bash":
-        return ""
-    tool_input = payload.get("tool_input")
-    command = tool_input.get("command") if type(tool_input) is dict else None
-    if not references_local_gh(command):
+    tool_name = payload.get("tool_name")
+    if not _is_governed_mutation_tool(tool_name):
         return ""
     if not is_governed_checkout(_checkout_root(payload)):
         return ""
+
+    if tool_name == "Bash":
+        tool_input = payload.get("tool_input")
+        command = tool_input.get("command") if type(tool_input) is dict else None
+        if not references_local_gh(command):
+            return ""
+
     return json.dumps(
         {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "additionalContext": (
-                    "Agent OS governed-route guard (#1237): "
-                    f"{_INVARIANT} If this repository's governed route is selected, "
-                    "use the existing bounded `/agent-os resume "
-                    "executor-handoff:<sha256>` ingress instead of a local `gh` "
-                    "prerequisite. Local CLI prerequisites apply only after a local "
-                    "CLI surface has actually been selected."
+                    "Agent OS governed-route guard (#1237/#2139): "
+                    f"{_INVARIANT} {_NON_AUTHORITY} Reacquire current repository, "
+                    "authorization, scope, checkpoint, and execution evidence before "
+                    "any governed mutation."
                 ),
             }
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+class _StopObservationAdapter:
+    def __init__(self, observation: dict) -> None:
+        self.observation = observation
+        self.actions: list[str] = []
+
+    def observe(self) -> object:
+        return self.observation
+
+    def dispatch(self, action: str) -> None:
+        # Stop hooks never execute the action. Blocking the stop returns the
+        # exact action to the host/model so the still-authorized turn can continue.
+        self.actions.append(action)
+
+
+def _structured_continuation_decision(observation: object) -> ContinuationDecision:
+    """Decode a host-produced structured continuation decision without NLP."""
+    if type(observation) is not dict:
+        raise ValueError("structured continuation observation is required")
+    action = observation.get("action", "")
+    terminal = observation.get("terminal", False)
+    blocked = observation.get("blocked", False)
+    stalled = observation.get("stalled", False)
+    reason_codes = observation.get("reason_codes", [])
+    if type(action) is not str:
+        raise TypeError("continuation action must be a string")
+    if type(terminal) is not bool or type(blocked) is not bool or type(stalled) is not bool:
+        raise TypeError("continuation flags must be booleans")
+    if type(reason_codes) is not list or any(type(item) is not str for item in reason_codes):
+        raise TypeError("continuation reason_codes must be a string list")
+    return ContinuationDecision(
+        action=action,
+        terminal=terminal,
+        blocked=blocked,
+        stalled=stalled,
+        reason_codes=tuple(reason_codes),
+    )
+
+
+def run_stop_hook(raw_payload: str) -> str:
+    """Block one premature Stop when a structured authorized next action exists.
+
+    The host supplies ``agent_os_continuation`` as structured output from the
+    canonical continuation/completion classification path. This adapter does not
+    infer mission state from transcript prose. ``stop_hook_active`` is the host's
+    re-entry marker; once true, the explicit one-block ceiling allows the stop so
+    the hook can never trap a turn. Any evaluator/shape error also fails open.
+    """
+    payload = _load_payload(raw_payload)
+    if not is_governed_checkout(_checkout_root(payload)):
+        return ""
+    if payload.get("stop_hook_active") is True:
+        return ""
+
+    observation = payload.get("agent_os_continuation")
+    if type(observation) is not dict:
+        return ""
+
+    try:
+        adapter = _StopObservationAdapter(observation)
+        result = drive_governed_continuation(
+            adapter,
+            _structured_continuation_decision,
+            max_transitions=MAX_CONSECUTIVE_STOP_BLOCKS,
+        )
+    except Exception:
+        return ""
+
+    if result.status != "recovery-stalled" or not result.transitions:
+        return ""
+    # A one-transition drive reaches its finite bound after recording the exact
+    # executable action. That is the one case where Stop should be blocked once.
+    action = result.transitions[-1]
+    reason_codes = ",".join(result.reason_codes) if result.reason_codes else "authorized-next-action"
+    return json.dumps(
+        {
+            "decision": "block",
+            "reason": (
+                f"Agent OS continuation (#2139): continue the still-authorized mission with `{action}` "
+                f"before ending the turn ({reason_codes}). {_NON_AUTHORITY}"
+            ),
         },
         sort_keys=True,
         separators=(",", ":"),
