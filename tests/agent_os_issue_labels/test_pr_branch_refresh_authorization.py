@@ -28,6 +28,8 @@ def auth(**overrides):
         forbidden_paths=(".github/workflows/x.yml",),
         required_validation_command_ids=("pytest:pr-branch-refresh",),
         branch_refresh_authorized=True,
+        # Justified historical fixture: this is the persisted RefreshAuthorization
+        # authorization-source record, not a caller-supplied lifecycle grant (#2218).
         label_write_authorized=True,
         owner_decision_reference="github-comment:123",
         state=RefreshAuthorizationState.AUTHORIZED,
@@ -180,7 +182,7 @@ def test_resolved_evidence_projects_merged_refresh_pr_inputs_without_manual_auth
     assert kwargs["authorization_id"] == result.authorization_id
     assert kwargs["authorization_current"] is True
     assert kwargs["branch_refresh_authorized"] is True
-    assert kwargs["label_write_authorized"] is True
+    assert "label_write_authorized" not in kwargs
     assert kwargs["expected_head_sha"] == HEAD
     assert kwargs["current_main_sha"] == MAIN
 
