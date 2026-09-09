@@ -176,15 +176,20 @@ def test_validation_gate_uses_read_only_permissions_and_bounded_execution():
     content = WORKFLOW.read_text(encoding="utf-8")
     assert "contents: read" in content
     assert "pull-requests: read" in content
+    assert "checks: read" in content
     assert "contents: write" not in content
     assert "pull-requests: write" not in content
+    assert "checks: write" not in content
     assert "timeout-minutes: 30" in content
     assert "concurrency:" in content
     assert "group:" in content
     assert "cancel-in-progress:" in content
     assert "github.event.pull_request.number" in content
     assert "github.run_id" in content
-    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in content
+    assert (
+        "cancel-in-progress: ${{ github.event_name == 'pull_request' "
+        "&& github.event.action != 'ready_for_review' }}"
+    ) in content
 
 
 def test_validation_gate_installs_same_dependencies_as_cloud_build():
