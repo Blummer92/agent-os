@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from scripts.agent_os_issue_acceptance.lifecycle_mutation_guard import LifecycleMutationAdmissionResult
+
 from .pr_lifecycle import PullRequestCreationExpectation, PullRequestLifecycleReconciliationResult, reconcile_pull_request_lifecycle
 from .pr_reconciler import PullRequestLabelProvider
 
@@ -19,7 +21,7 @@ def converge_connected_pull_request_lifecycle(
     pr_number: int,
     *,
     invocation_reason: str,
-    label_write_authorized: bool,
+    lifecycle_admission: LifecycleMutationAdmissionResult | None,
     caller_operation_evidence: str | None = None,
     caller_result_evidence: str | None = None,
     creation_expectation: PullRequestCreationExpectation | None = None,
@@ -33,7 +35,7 @@ def converge_connected_pull_request_lifecycle(
         caller_operation_evidence=caller_operation_evidence,
         caller_result_evidence=caller_result_evidence,
         dry_run=False,
-        label_write_authorized=label_write_authorized,
+        lifecycle_admission=lifecycle_admission,
         creation_expectation=creation_expectation,
         creation_discoverable=creation_discoverable,
     )
