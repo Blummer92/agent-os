@@ -324,12 +324,17 @@ run_pytest_suite() {
   local suite_name="$2"
 
   if [ -d "$suite_dir/src" ]; then
+    local command=("$PYTHON_BIN" -m pytest tests)
     local display="cd $suite_dir && PYTHONPATH=src $PYTHON_BIN -m pytest tests"
+    if [ "$suite_name" = "08_Tooling/workflow-scheduler" ]; then
+      command+=("--cov=src/workflow_scheduler" "--cov-report=term")
+      display+=" --cov=src/workflow_scheduler --cov-report=term"
+    fi
     local src_dir
     local pythonpath_value
     src_dir="$(cd "$suite_dir" && pwd)/src"
     pythonpath_value="$(python_path_with_src "$src_dir")"
-    run_check "$suite_name" "$suite_dir" "$display" env PYTHONPATH="$pythonpath_value" "$PYTHON_BIN" -m pytest tests
+    run_check "$suite_name" "$suite_dir" "$display" env PYTHONPATH="$pythonpath_value" "${command[@]}"
   else
     run_check "$suite_name" "$suite_dir" "cd $suite_dir && $PYTHON_BIN -m pytest tests" "$PYTHON_BIN" -m pytest tests
   fi
