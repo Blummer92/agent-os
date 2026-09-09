@@ -1,10 +1,4 @@
-"""Immutable, content-bound authorization evidence for governed PR refresh (#1403).
-
-The record specializes existing Agent OS content-bound authorization conventions for
-#1187. It performs no retrieval, mutation, credential handling, or persistence.
-Callers supply canonical records plus freshly reacquired PR/head/main/scope evidence;
-the resolver selects exactly one applicable record or fails closed.
-"""
+"""Immutable, content-bound authorization evidence for governed PR refresh (#1403)."""
 from __future__ import annotations
 
 import hashlib
@@ -13,6 +7,10 @@ import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Iterable, Mapping
+
+from scripts.agent_os_issue_acceptance.lifecycle_mutation_guard import (
+    LifecycleMutationAdmissionResult,
+)
 
 SCHEMA_VERSION = "1.0"
 _SHA40 = re.compile(r"^[0-9a-f]{40}$")
@@ -60,9 +58,9 @@ class RefreshAuthorization:
     forbidden_paths: tuple[str, ...]
     required_validation_command_ids: tuple[str, ...]
     branch_refresh_authorized: bool
-    label_write_authorized: bool
     owner_decision_reference: str
     state: RefreshAuthorizationState
+    lifecycle_admission: LifecycleMutationAdmissionResult | None = None
     authorization_id: str = ""
     side_effects_performed: bool = field(default=False, init=False)
 
@@ -81,8 +79,10 @@ class RefreshAuthorization:
         object.__setattr__(self, "allowed_changed_paths", _paths(self.allowed_changed_paths, "allowed_changed_paths"))
         object.__setattr__(self, "forbidden_paths", _paths(self.forbidden_paths, "forbidden_paths"))
         object.__setattr__(self, "required_validation_command_ids", _paths(self.required_validation_command_ids, "required_validation_command_ids"))
-        if type(self.branch_refresh_authorized) is not bool or type(self.label_write_authorized) is not bool:
-            raise TypeError("authority fields must be exact booleans")
+        if type(self.branch_refresh_authorized) is not bool:
+            raise TypeError("branch_refresh_authorized must be an exact boolean")
+        if self.lifecycle_admission is not None and type(self.lifecycle_admission) is not LifecycleMutationAdmissionResult:
+            raise TypeError("lifecycle_admission must be a LifecycleMutationAdmissionResult or None")
         if type(self.owner_decision_reference) is not str or not self.owner_decision_reference.strip() or "\x00" in self.owner_decision_reference:
             raise ValueError("owner_decision_reference is required")
         if not isinstance(self.state, RefreshAuthorizationState):
@@ -104,7 +104,7 @@ class RefreshAuthorization:
             "forbidden_paths": list(self.forbidden_paths),
             "required_validation_command_ids": list(self.required_validation_command_ids),
             "branch_refresh_authorized": self.branch_refresh_authorized,
-            "label_write_authorized": self.label_write_authorized,
+            "lifecycle_admission": None if self.lifecycle_admission is None else self.lifecycle_admission.to_dict(),
             "owner_decision_reference": self.owner_decision_reference,
             "state": self.state.value,
         }
@@ -121,7 +121,7 @@ class BranchRefreshAuthorizationEvidence:
     applicable: bool
     authorization_current: bool
     branch_refresh_authorized: bool
-    label_write_authorized: bool
+    lifecycle_admission: LifecycleMutationAdmissionResult | None
     expected_head_sha: str
     current_main_sha: str
     allowed_changed_paths: tuple[str, ...]
@@ -139,11 +139,10 @@ class BranchRefreshAuthorizationEvidence:
             raise ValueError("applicable must match reason evidence")
         if self.authorization_current != self.applicable:
             raise ValueError("authorization_current must match applicability")
-        if not self.applicable and (self.branch_refresh_authorized or self.label_write_authorized):
+        if not self.applicable and (self.branch_refresh_authorized or self.lifecycle_admission is not None):
             raise ValueError("blocked evidence cannot carry write authority")
 
     def refresh_pr_kwargs(self, *, repository_root: str, invocation_id: str, environment: Mapping[str, str]) -> dict[str, object]:
-        """Project only the existing #1402 facade inputs; never create authority."""
         if not self.applicable or self.authorization_id is None:
             raise RuntimeError("applicable refresh authorization is required")
         return {
@@ -156,20 +155,14 @@ class BranchRefreshAuthorizationEvidence:
             "branch_refresh_authorized": self.branch_refresh_authorized,
             "allowed_changed_paths": self.allowed_changed_paths,
             "forbidden_paths": self.forbidden_paths,
-            "label_write_authorized": self.label_write_authorized,
+            "lifecycle_admission": self.lifecycle_admission,
             "repository_root": repository_root,
             "invocation_id": invocation_id,
             "environment": environment,
         }
 
 
-def _record_blockers(
-    record: RefreshAuthorization,
-    *,
-    current_head_sha: str,
-    current_main_sha: str,
-    changed: tuple[str, ...],
-) -> set[str]:
+def _record_blockers(record: RefreshAuthorization, *, current_head_sha: str, current_main_sha: str, changed: tuple[str, ...]) -> set[str]:
     reasons: set[str] = set()
     if record.state is RefreshAuthorizationState.CONSUMED:
         reasons.add("authorization.consumed")
@@ -189,83 +182,26 @@ def _record_blockers(
     return reasons
 
 
-def resolve_branch_refresh_authorization(
-    records: Iterable[RefreshAuthorization],
-    *,
-    repository: str,
-    pr_number: int,
-    current_head_sha: str,
-    current_main_sha: str,
-    current_changed_paths: tuple[str, ...],
-) -> BranchRefreshAuthorizationEvidence:
-    """Resolve exactly one authorization applicable to freshly reacquired evidence.
-
-    Historical records are intentionally retained.  A stale record bound to an old
-    head/main/scope is non-applicable evidence, not ambiguity.  Ambiguity exists
-    only when more than one distinct record is simultaneously applicable to the
-    exact current repository/PR/head/main/scope tuple.
-    """
+def resolve_branch_refresh_authorization(records: Iterable[RefreshAuthorization], *, repository: str, pr_number: int, current_head_sha: str, current_main_sha: str, current_changed_paths: tuple[str, ...]) -> BranchRefreshAuthorizationEvidence:
     changed = _paths(current_changed_paths, "current_changed_paths")
     candidates = [record for record in records if record.repository == repository and record.pr_number == pr_number]
     if not candidates:
         return _blocked(repository, pr_number, current_head_sha, current_main_sha, {"authorization.absent"})
-
     applicable: list[RefreshAuthorization] = []
     rejected_reasons: set[str] = set()
     for record in candidates:
-        record_reasons = _record_blockers(
-            record,
-            current_head_sha=current_head_sha,
-            current_main_sha=current_main_sha,
-            changed=changed,
-        )
+        record_reasons = _record_blockers(record, current_head_sha=current_head_sha, current_main_sha=current_main_sha, changed=changed)
         if record_reasons:
             rejected_reasons.update(record_reasons)
         else:
             applicable.append(record)
-
     if len(applicable) > 1:
         return _blocked(repository, pr_number, current_head_sha, current_main_sha, {"authorization.ambiguous"})
     if not applicable:
-        return _blocked(
-            repository,
-            pr_number,
-            current_head_sha,
-            current_main_sha,
-            rejected_reasons or {"authorization.absent"},
-        )
-
+        return _blocked(repository, pr_number, current_head_sha, current_main_sha, rejected_reasons or {"authorization.absent"})
     record = applicable[0]
-    return BranchRefreshAuthorizationEvidence(
-        repository=repository,
-        pr_number=pr_number,
-        authorization_id=record.authorization_id,
-        applicable=True,
-        authorization_current=True,
-        branch_refresh_authorized=True,
-        label_write_authorized=record.label_write_authorized,
-        expected_head_sha=record.expected_head_sha,
-        current_main_sha=record.expected_main_sha,
-        allowed_changed_paths=record.allowed_changed_paths,
-        forbidden_paths=record.forbidden_paths,
-        required_validation_command_ids=record.required_validation_command_ids,
-        reason_codes=(),
-    )
+    return BranchRefreshAuthorizationEvidence(repository, pr_number, record.authorization_id, True, True, True, record.lifecycle_admission, record.expected_head_sha, record.expected_main_sha, record.allowed_changed_paths, record.forbidden_paths, record.required_validation_command_ids, ())
 
 
 def _blocked(repository: str, pr_number: int, head: str, main: str, reasons: set[str]) -> BranchRefreshAuthorizationEvidence:
-    return BranchRefreshAuthorizationEvidence(
-        repository=repository,
-        pr_number=pr_number,
-        authorization_id=None,
-        applicable=False,
-        authorization_current=False,
-        branch_refresh_authorized=False,
-        label_write_authorized=False,
-        expected_head_sha=head,
-        current_main_sha=main,
-        allowed_changed_paths=(),
-        forbidden_paths=(),
-        required_validation_command_ids=(),
-        reason_codes=tuple(sorted(reasons)),
-    )
+    return BranchRefreshAuthorizationEvidence(repository, pr_number, None, False, False, False, None, head, main, (), (), (), tuple(sorted(reasons)))
