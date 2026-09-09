@@ -7,6 +7,7 @@ from scripts.agent_os_issue_labels.lineage import (
     IssueSnapshot,
     PullRequestSnapshot,
     reconcile_github_lineage,
+    reconcile_pull_request_creation_admission,
 )
 
 
@@ -144,3 +145,57 @@ def test_secondary_visibility_is_not_part_of_identity_contract():
 
     assert result.status == "converged"
     assert not any("visibility" in reason for reason in result.reason_codes)
+
+
+def test_pr_create_reuses_direct_primary_when_secondary_search_is_empty():
+    result = reconcile_pull_request_creation_admission(
+        branch_exists=True,
+        direct_pr_numbers=(2192,),
+        search_pr_numbers=(),
+    )
+
+    assert result.status == "existing-primary"
+    assert result.canonical_pr_number == 2192
+    assert result.creation_allowed is False
+    assert "secondary-search-disagreement" in result.reason_codes
+
+
+def test_pr_create_fails_closed_when_branch_exists_but_pr_identity_is_unresolved():
+    result = reconcile_pull_request_creation_admission(branch_exists=True)
+
+    assert result.status == "uncertain"
+    assert result.creation_allowed is False
+    assert result.reason_codes == ("implementation-branch-without-reconciled-primary-pr",)
+
+
+def test_pr_create_rejects_multiple_plausible_primary_identities():
+    result = reconcile_pull_request_creation_admission(
+        branch_exists=True,
+        direct_pr_numbers=(2192,),
+        recent_pr_numbers=(2193,),
+    )
+
+    assert result.status == "conflicting"
+    assert result.creation_allowed is False
+    assert result.canonical_pr_number is None
+
+
+def test_pr_create_is_allowed_only_when_no_branch_or_pr_evidence_exists():
+    result = reconcile_pull_request_creation_admission(branch_exists=False)
+
+    assert result.status == "no-primary-proven"
+    assert result.creation_allowed is True
+    assert result.mutation_allowed is True
+
+
+def test_duplicate_create_response_reconciles_existing_identity_without_retry():
+    result = reconcile_pull_request_creation_admission(
+        branch_exists=True,
+        search_pr_numbers=(),
+        duplicate_create_pr_number=2192,
+    )
+
+    assert result.status == "existing-primary"
+    assert result.canonical_pr_number == 2192
+    assert result.creation_allowed is False
+    assert "duplicate-create-response-reconciled" in result.reason_codes
