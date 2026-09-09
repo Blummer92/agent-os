@@ -15,6 +15,7 @@ MAX_ADMISSION_REASON_CODES = 32
 MAX_ADMISSION_SERIALIZED_BYTES = 131_072
 
 AdmissionStatus = Literal["admit", "require-aggregate", "block", "manual-review"]
+ValidationObligation = Literal["static", "focused", "aggregate", "manual-review"]
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -28,6 +29,7 @@ class MergeAdmissionResult:
     base_sha: str
     head_sha: str
     profile: str
+    validation_obligation: ValidationObligation
     plan_id: str
     evidence_result_id: str | None
     reason_codes: tuple[str, ...]
@@ -44,54 +46,158 @@ def evaluate_merge_admission(
     current_head_sha: object,
     schema_version: object = MERGE_ADMISSION_SCHEMA_VERSION,
 ) -> MergeAdmissionResult:
-    """Evaluate validation sufficiency for one exact candidate without granting merge authority.
+    """Evaluate the cheapest sufficient validation evidence for one exact candidate.
 
     The existing validation selector remains the sole changed-surface classifier.
-    This evaluator only consumes its canonical plan and current evidence.
+    This evaluator consumes that canonical plan and current evidence, then records
+    the minimum validation obligation that can still satisfy admission. It never
+    grants merge authority or executes validation.
     """
     if not isinstance(plan, ValidationPlan) or validate_validation_plan(plan):
-        return _result(plan, None, "block", ("admission.plan-invalid",))
+        return _result(
+            plan,
+            None,
+            "block",
+            "manual-review",
+            ("admission.plan-invalid",),
+        )
     if schema_version != MERGE_ADMISSION_SCHEMA_VERSION:
-        return _result(plan, None, "block", ("admission.schema-version",))
+        return _result(
+            plan,
+            None,
+            "block",
+            _plan_obligation(plan),
+            ("admission.schema-version",),
+        )
     if current_head_sha != plan.head_sha:
-        return _result(plan, _evidence(evidence), "block", ("revision.head-sha-stale",))
+        return _result(
+            plan,
+            _evidence(evidence),
+            "block",
+            _plan_obligation(plan),
+            ("revision.head-sha-stale",),
+        )
     if current_base_sha != plan.base_sha:
-        return _result(plan, _evidence(evidence), "block", ("revision.base-sha-stale",))
+        return _result(
+            plan,
+            _evidence(evidence),
+            "block",
+            _plan_obligation(plan),
+            ("revision.base-sha-stale",),
+        )
 
     if plan.profile == "manual-review":
-        return _result(plan, _evidence(evidence), "manual-review", ("admission.selector-manual-review",))
+        return _result(
+            plan,
+            _evidence(evidence),
+            "manual-review",
+            "manual-review",
+            ("admission.selector-manual-review",),
+        )
 
     if plan.profile == "static":
         # Static/documentation selection is itself the required deterministic proof.
         # It remains non-authorizing and can be composed with other release gates.
-        return _result(plan, None, "admit", ("admission.static-plan-sufficient",))
+        return _result(
+            plan,
+            None,
+            "admit",
+            "static",
+            ("admission.static-plan-sufficient",),
+        )
 
     advisory = _evidence(evidence)
     if advisory is None:
-        status = "require-aggregate" if plan.profile == "aggregate" else "block"
-        reason = "admission.aggregate-required" if plan.profile == "aggregate" else "admission.focused-evidence-missing"
-        return _result(plan, None, status, (reason,))
+        if plan.profile == "aggregate":
+            return _result(
+                plan,
+                None,
+                "require-aggregate",
+                "aggregate",
+                ("admission.aggregate-required",),
+            )
+        return _result(
+            plan,
+            None,
+            "block",
+            "focused",
+            ("admission.focused-evidence-missing",),
+        )
 
     mismatch = _evidence_mismatch(plan, advisory)
     if mismatch:
-        return _result(plan, advisory, "block", mismatch)
+        return _result(
+            plan,
+            advisory,
+            "block",
+            _plan_obligation(plan),
+            mismatch,
+        )
 
     if advisory.status == "passed":
         if plan.profile == "aggregate":
-            return _result(plan, advisory, "admit", ("admission.aggregate-passed",))
-        return _result(plan, advisory, "admit", ("admission.focused-passed",))
+            return _result(
+                plan,
+                advisory,
+                "admit",
+                "aggregate",
+                ("admission.aggregate-passed",),
+            )
+        return _result(
+            plan,
+            advisory,
+            "admit",
+            "focused",
+            ("admission.focused-passed",),
+        )
 
     if advisory.status == "needs-decision":
-        return _result(plan, advisory, "manual-review", ("admission.evidence-needs-decision",))
+        return _result(
+            plan,
+            advisory,
+            "manual-review",
+            "manual-review",
+            ("admission.evidence-needs-decision",),
+        )
     if advisory.status == "stale":
-        return _result(plan, advisory, "block", ("admission.evidence-stale",))
+        return _result(
+            plan,
+            advisory,
+            "block",
+            _plan_obligation(plan),
+            ("admission.evidence-stale",),
+        )
     if advisory.status == "incomplete":
         if plan.profile == "focused":
-            return _result(plan, advisory, "require-aggregate", ("admission.focused-incomplete",))
-        return _result(plan, advisory, "block", ("admission.aggregate-incomplete",))
+            return _result(
+                plan,
+                advisory,
+                "require-aggregate",
+                "aggregate",
+                ("admission.focused-incomplete",),
+            )
+        return _result(
+            plan,
+            advisory,
+            "block",
+            "aggregate",
+            ("admission.aggregate-incomplete",),
+        )
     if advisory.status == "failed":
-        return _result(plan, advisory, "block", (f"admission.{plan.profile}-failed",))
-    return _result(plan, advisory, "block", ("admission.evidence-invalid",))
+        return _result(
+            plan,
+            advisory,
+            "block",
+            _plan_obligation(plan),
+            (f"admission.{plan.profile}-failed",),
+        )
+    return _result(
+        plan,
+        advisory,
+        "block",
+        _plan_obligation(plan),
+        ("admission.evidence-invalid",),
+    )
 
 
 def serialize_merge_admission(result: MergeAdmissionResult) -> dict[str, object]:
@@ -116,6 +222,16 @@ def _evidence(value: object | None) -> AdvisoryEvidenceResult | None:
     return value if isinstance(value, AdvisoryEvidenceResult) else None
 
 
+def _plan_obligation(plan: ValidationPlan) -> ValidationObligation:
+    if plan.profile == "static":
+        return "static"
+    if plan.profile == "focused":
+        return "focused"
+    if plan.profile == "aggregate":
+        return "aggregate"
+    return "manual-review"
+
+
 def _evidence_mismatch(plan: ValidationPlan, evidence: AdvisoryEvidenceResult) -> tuple[str, ...]:
     reasons: set[str] = set()
     checks = (
@@ -138,6 +254,7 @@ def _result(
     plan: object,
     evidence: AdvisoryEvidenceResult | None,
     status: AdmissionStatus,
+    validation_obligation: ValidationObligation,
     reasons: tuple[str, ...],
 ) -> MergeAdmissionResult:
     valid = plan if isinstance(plan, ValidationPlan) else None
@@ -149,6 +266,7 @@ def _result(
         base_sha=valid.base_sha if valid is not None else "unavailable",
         head_sha=valid.head_sha if valid is not None else "unavailable",
         profile=valid.profile if valid is not None else "unavailable",
+        validation_obligation=validation_obligation,
         plan_id=validation_plan_id(valid) if valid is not None and not validate_validation_plan(valid) else "unavailable",
         evidence_result_id=evidence.result_id if evidence is not None else None,
         reason_codes=tuple(sorted(set(reasons)))[:MAX_ADMISSION_REASON_CODES],
@@ -166,6 +284,7 @@ def _payload(result: MergeAdmissionResult) -> dict[str, object]:
         "base_sha": result.base_sha,
         "head_sha": result.head_sha,
         "profile": result.profile,
+        "validation_obligation": result.validation_obligation,
         "plan_id": result.plan_id,
         "evidence_result_id": result.evidence_result_id,
         "reason_codes": list(result.reason_codes),
