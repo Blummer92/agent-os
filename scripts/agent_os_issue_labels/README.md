@@ -143,12 +143,25 @@ receipt = refresh_pr(
     branch_refresh_authorized=True,
     allowed_changed_paths=("path/to/authorized/file.py",),
     forbidden_paths=(".github/workflows/example.yml",),
-    label_write_authorized=True,
     repository_root="/repo",
     invocation_id="<invocation-id>",
     environment={"GITHUB_TOKEN": "<runtime-provided-token>"},
 )
 ```
+
+Lifecycle-label authority is never a boolean. The retired `label_write_authorized`
+input has been removed from the reconciler, PR-lifecycle, connected-lifecycle, and
+branch-refresh facade boundaries. Callers that need managed-label mutation must supply a
+canonical `LifecycleMutationAdmissionResult` through `lifecycle_admission`, produced by
+`scripts.agent_os_issue_acceptance.lifecycle_mutation_guard.evaluate_lifecycle_mutation(...)`
+against a current authorization and lifecycle-state snapshot. An absent, refused, or
+non-canonical admission fails closed with zero writes and the
+`lifecycle-admission-required` reason code; it is never upgraded into write authority.
+
+The persisted `RefreshAuthorization` record retains its own `label_write_authorized`
+field as authorization-source data. That stored field is evidence about a governed
+decision, not a caller-supplied grant, and it is no longer projected into
+`refresh_pr(...)` kwargs.
 
 `request != authorization`: naming a PR or calling `refresh_pr(...)` never grants,
 renews, manufactures, or rebinds refresh authority. Missing or stale authorization,

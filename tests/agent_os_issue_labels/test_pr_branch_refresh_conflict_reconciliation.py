@@ -40,7 +40,6 @@ def request() -> PullRequestBranchRefreshRequest:
         forbidden_paths=(),
         required_validation_command_ids=("focused",),
         branch_refresh_authorized=True,
-        label_write_authorized=True,
     )
 
 

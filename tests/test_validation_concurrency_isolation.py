@@ -16,7 +16,7 @@ def test_pr_validation_uses_stable_pr_lineage_and_can_supersede_same_pr_runs():
     block = _concurrency_block()
     assert "github.event_name == 'pull_request'" in block
     assert "github.event.pull_request.number" in block
-    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in block
+    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action != 'ready_for_review' }}" in block
 
 
 def test_non_pr_validation_uses_unique_run_lineage_instead_of_shared_ref():
@@ -40,4 +40,4 @@ def test_main_push_consumes_non_pr_isolation_without_changing_cancellation_polic
     assert "\n  push:" in trigger_block
     assert "github.run_id" in block
     assert "github.ref" not in block
-    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in block
+    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action != 'ready_for_review' }}" in block

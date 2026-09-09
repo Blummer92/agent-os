@@ -549,7 +549,6 @@ def refresh_pr(
     branch_refresh_authorized: bool,
     allowed_changed_paths: tuple[str, ...],
     forbidden_paths: tuple[str, ...],
-    label_write_authorized: bool,
     repository_root: str,
     invocation_id: str,
     environment: Mapping[str, str],
@@ -564,7 +563,6 @@ def refresh_pr(
     for name, value in (
         ("authorization_current", authorization_current),
         ("branch_refresh_authorized", branch_refresh_authorized),
-        ("label_write_authorized", label_write_authorized),
     ):
         if type(value) is not bool:
             raise TypeError(f"{name} must be an exact boolean")
@@ -594,7 +592,6 @@ def refresh_pr(
         forbidden_paths=forbidden_paths,
         required_validation_command_ids=_CANONICAL_REFRESH_VALIDATION_COMMAND_IDS,
         branch_refresh_authorized=branch_refresh_authorized,
-        label_write_authorized=label_write_authorized,
     )
     _validate_request(request)
 

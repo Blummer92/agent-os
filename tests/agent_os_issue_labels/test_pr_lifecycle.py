@@ -10,6 +10,7 @@ from scripts.agent_os_issue_labels.pr_lifecycle import (
 )
 from scripts.agent_os_issue_labels.pr_planner import managed_labels
 from scripts.agent_os_issue_labels.pr_reconciler import LivePullRequestSnapshot
+from tests.agent_os_issue_labels.lifecycle_admission import admitted_lifecycle_labels
 
 SHA = "a" * 40
 NEW_SHA = "b" * 40
@@ -99,7 +100,7 @@ def invoke(provider, reason="draft-pr-created", *, verify_creation=False, discov
         caller_operation_evidence="operation:1038",
         caller_result_evidence="result:1038",
         dry_run=False,
-        label_write_authorized=True,
+        lifecycle_admission=admitted_lifecycle_labels(),
         **kwargs,
     )
 
@@ -198,7 +199,7 @@ def test_creation_expectation_must_match_lifecycle_target_before_provider_reads(
             creation_expectation=creation_expectation(pr_number=999),
             creation_discoverable=True,
             dry_run=False,
-            label_write_authorized=True,
+            lifecycle_admission=admitted_lifecycle_labels(),
         )
     assert provider.read_count == 0
     assert not provider.added and not provider.removed
@@ -355,7 +356,7 @@ def test_invalid_caller_evidence_fails_before_provider_reads_or_writes(evidence_
             1038,
             invocation_reason="draft-pr-created",
             dry_run=False,
-            label_write_authorized=True,
+            lifecycle_admission=admitted_lifecycle_labels(),
             **kwargs,
         )
     assert provider.read_count == 0

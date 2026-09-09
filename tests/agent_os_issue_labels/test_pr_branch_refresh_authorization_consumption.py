@@ -74,7 +74,6 @@ def request(**overrides) -> PullRequestBranchRefreshRequest:
         forbidden_paths=(".github/workflows/x.yml",),
         required_validation_command_ids=("pytest:pr-branch-refresh",),
         branch_refresh_authorized=True,
-        label_write_authorized=False,
     )
     values.update(overrides)
     return PullRequestBranchRefreshRequest(**values)
