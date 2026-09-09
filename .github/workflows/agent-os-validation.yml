@@ -22,10 +22,11 @@ on:
 permissions:
   contents: read
   pull-requests: read
+  checks: read
 
 concurrency:
   group: agent-os-validation-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action != 'ready_for_review' }}
 
 jobs:
   plan:
@@ -239,13 +240,46 @@ jobs:
           echo "mode=final-candidate" >> "$GITHUB_OUTPUT"
           echo "head_sha=$current_head" >> "$GITHUB_OUTPUT"
 
+      - name: Reuse valid exact-head aggregate evidence
+        if: ${{ github.event_name == 'pull_request' && github.event.action == 'ready_for_review' }}
+        id: aggregate_evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CURRENT_RUN_URL_FRAGMENT: /actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          evidence_state="$(
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA/check-runs?per_page=100" \
+              --jq '[.check_runs[]
+                | select(.name == "Run aggregate validation")
+                | select(((.details_url // "") | contains(env.CURRENT_RUN_URL_FRAGMENT)) | not)
+                | {status, conclusion}]
+                | if any(.status == "queued" or .status == "in_progress") then "active"
+                  elif any(.status == "completed" and .conclusion == "success") then "passed"
+                  else "missing-or-nonpassing"
+                  end'
+          )"
+          echo "state=$evidence_state" >> "$GITHUB_OUTPUT"
+          case "$evidence_state" in
+            active|passed)
+              echo "run_required=false" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "run_required=true" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
       - name: Check out repository
+        if: ${{ steps.aggregate_evidence.outputs.run_required != 'false' }}
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
       - name: Check out admitted candidate commit
-        if: ${{ github.event_name == 'workflow_dispatch' && steps.candidate.outputs.mode == 'final-candidate' }}
+        if: ${{ steps.aggregate_evidence.outputs.run_required != 'false' && github.event_name == 'workflow_dispatch' && steps.candidate.outputs.mode == 'final-candidate' }}
         env:
           CANDIDATE_HEAD_SHA: ${{ steps.candidate.outputs.head_sha }}
         run: |
@@ -254,6 +288,7 @@ jobs:
           git checkout --detach "$CANDIDATE_HEAD_SHA"
 
       - name: Verify aggregate checkout identity
+        if: ${{ steps.aggregate_evidence.outputs.run_required != 'false' }}
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
@@ -271,6 +306,7 @@ jobs:
           fi
 
       - name: Set up Python
+        if: ${{ steps.aggregate_evidence.outputs.run_required != 'false' }}
         uses: actions/setup-python@v7
         with:
           python-version: "3.11"
@@ -283,6 +319,7 @@ jobs:
             08_Tooling/reusable-capability-registry/pyproject.toml
 
       - name: Install validation dependencies
+        if: ${{ steps.aggregate_evidence.outputs.run_required != 'false' }}
         run: |
           set -euo pipefail
           python -m pip install -r requirements-dev.txt
@@ -292,6 +329,7 @@ jobs:
           python -m pip install -e "./08_Tooling/reusable-capability-registry[test]"
 
       - name: Run aggregate validation
+        if: ${{ steps.aggregate_evidence.outputs.run_required != 'false' }}
         run: ./scripts/validate-all.sh
 
       - name: Publish validation summary
@@ -300,8 +338,13 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           DISPATCH_HEAD_SHA: ${{ steps.candidate.outputs.head_sha }}
           DISPATCH_MODE: ${{ steps.candidate.outputs.mode }}
+          RUN_REQUIRED: ${{ steps.aggregate_evidence.outputs.run_required }}
+          REUSE_STATE: ${{ steps.aggregate_evidence.outputs.state }}
         run: |
-          tested_sha="$(git rev-parse HEAD)"
+          tested_sha="not-executed-in-this-run"
+          if [ "${RUN_REQUIRED:-true}" != "false" ]; then
+            tested_sha="$(git rev-parse HEAD)"
+          fi
           {
             echo "## Agent OS Validation Gate"
             echo
@@ -317,6 +360,10 @@ jobs:
               fi
               echo "- Dispatch mode: \`${DISPATCH_MODE:-diagnostic}\`"
             fi
-            echo "- Aggregate validation, including repository structure validation, executed in GitHub Actions."
+            if [ "${RUN_REQUIRED:-true}" = "false" ]; then
+              echo "- Existing exact-head aggregate evidence was reused (state: \`${REUSE_STATE:-unknown}\`); duplicate aggregate execution was skipped."
+            else
+              echo "- Aggregate validation, including repository structure validation, executed in GitHub Actions."
+            fi
             echo "- Static/focused PR evidence never substitutes for this authoritative exact-head aggregate."
           } >> "$GITHUB_STEP_SUMMARY"
