@@ -20,12 +20,33 @@ def test_bounded_executor_resolves_registered_python_command_without_shell():
     assert cwd == ROOT
 
 
-def test_bounded_executor_resolves_picture_perfect_command_to_fixed_argv_and_cwd():
-    argv, cwd = module._resolve_command(
-        "cd 08_Tooling/instructional-materials-coach/picture-perfect-coach && npm run check"
+def test_bounded_executor_resolves_picture_perfect_focused_command_to_fixed_argv_and_cwd():
+    command = (
+        "cd 08_Tooling/instructional-materials-coach/picture-perfect-coach && npm test -- "
+        "src/overlayIntegrity.test.ts src/exactComposite.test.ts "
+        "src/exactCompositeSuite.test.ts src/framePlan.test.ts "
+        "src/executorContract.test.ts src/provenanceValidator.test.ts"
     )
-    assert argv == ("npm", "run", "check")
+    argv, cwd = module._resolve_command(command)
+    assert argv == (
+        "npm",
+        "test",
+        "--",
+        "src/overlayIntegrity.test.ts",
+        "src/exactComposite.test.ts",
+        "src/exactCompositeSuite.test.ts",
+        "src/framePlan.test.ts",
+        "src/executorContract.test.ts",
+        "src/provenanceValidator.test.ts",
+    )
     assert cwd == ROOT / "08_Tooling/instructional-materials-coach/picture-perfect-coach"
+
+
+def test_bounded_executor_does_not_admit_full_picture_perfect_package_check():
+    with pytest.raises(ValueError, match="not in the bounded CI executor"):
+        module._resolve_command(
+            "cd 08_Tooling/instructional-materials-coach/picture-perfect-coach && npm run check"
+        )
 
 
 def test_bounded_executor_fails_closed_on_unregistered_command():
