@@ -19,10 +19,23 @@ def test_pr_events_use_distinct_profile_job_and_exact_head_checkout():
 
 
 def test_static_and_focused_profiles_do_not_impersonate_aggregate_success():
+    """A non-aggregate profile can never stand in for the authoritative run.
+
+    Previously the `validate` job was admitted only when the plan selected the
+    `aggregate` profile, so a Ready PR with a static or focused plan produced a
+    *skipped* required check -- which branch protection cannot distinguish from
+    a pass (#2132). The profile now steers only the cheap developer-loop lane in
+    the `plan` job; it has no say in whether the authoritative aggregate runs.
+    """
     content = _content()
     assert "steps.plan.outputs.profile == 'focused'" in content
     assert "steps.plan.outputs.profile == 'manual-review'" in content
-    assert "needs.plan.outputs.profile == 'aggregate'" in content
+
+    start = content.index("  validate:\n")
+    admission = content[start : content.index("    runs-on:", start)]
+    assert "needs.plan.outputs.profile" not in admission
+    assert "github.event.pull_request.draft == false" in admission
+
     assert content.count("- name: Run aggregate validation") == 1
     assert "Static/focused evidence is non-final" in content
     assert "Static/focused PR evidence never substitutes" in content

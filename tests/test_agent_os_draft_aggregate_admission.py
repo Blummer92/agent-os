@@ -10,11 +10,18 @@ def _workflow() -> str:
 
 
 def test_draft_aggregate_profile_requires_explicit_final_candidate_admission():
+    """A Draft PR still defers the automatic aggregate to explicit admission.
+
+    The admission condition no longer consults the validation-plan profile
+    (#2132): a Ready PR runs the authoritative aggregate whatever its profile,
+    because a *skipped* required job is indistinguishable from a passing one to
+    branch protection. Draft deferral is unchanged, and remains the only way
+    the automatic aggregate is withheld.
+    """
     content = _workflow()
     assert (
         "if: ${{ always() && (github.event_name != 'pull_request' || "
-        "(github.event.pull_request.draft == false && "
-        "needs.plan.outputs.profile == 'aggregate')) }}"
+        "github.event.pull_request.draft == false) }}"
     ) in content
     assert "Admit exact-head Draft final candidate" in content
     assert "if: ${{ github.event_name == 'workflow_dispatch' }}" in content
