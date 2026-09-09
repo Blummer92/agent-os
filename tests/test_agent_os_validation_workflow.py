@@ -128,9 +128,6 @@ def test_validation_gate_dispatch_checks_out_and_verifies_admitted_candidate_onl
     assert "steps.candidate.outputs.head_sha" in content
     assert "steps.candidate.outputs.mode == 'final-candidate'" in content
     assert "checked_out_sha=\"$(git rev-parse HEAD)\"" in content
-    # The aggregate job now verifies both event shapes in one step, so the
-    # final-candidate comparison is guarded by its dispatch mode. Assert the
-    # fail-closed comparison and its message instead of one literal `if` spelling.
     assert (
         '[ "$DISPATCH_MODE" = "final-candidate" ]'
         ' && [ "$checked_out_sha" != "$EXPECTED_HEAD_SHA" ]'
@@ -293,9 +290,10 @@ def test_navigation_registry_workflow_does_not_cross_event_dedupe():
     assert "github.head_ref" not in content
 
 
-def test_issue_acceptance_preserves_metadata_sensitive_triggers_and_supersedes_stale_runs():
+def test_issue_acceptance_preserves_input_sensitive_triggers_and_supersedes_stale_runs():
     content = ISSUE_ACCEPTANCE_WORKFLOW.read_text(encoding="utf-8")
-    assert "types: [opened, edited, reopened, synchronize, ready_for_review]" in content
+    assert "types: [opened, edited, reopened, synchronize]" in content
+    assert "ready_for_review" not in content
     assert "group: issue-acceptance-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}" in content
     assert "cancel-in-progress: true" in content
     assert "pull-requests: read" in content
