@@ -1,7 +1,7 @@
 """Construct the existing content-bound lifecycle authorization from owner decision evidence.
 
-This module is a pure producer for ``LifecycleMutationAuthorization``.  It does not
-infer authority, perform I/O, or create a second authorization model.  Callers
+This module is a pure producer for ``LifecycleMutationAuthorization``. It does not
+infer authority, perform I/O, or create a second authorization model. Callers
 must supply a distinct, already-recorded owner decision identity and the exact
 current lifecycle snapshot to which that decision applies.
 """
@@ -22,17 +22,22 @@ class LifecycleOwnerDecision:
     """Non-authorizing decision evidence supplied by the canonical request path."""
 
     repository: str
-    issue_number: int
+    issue_number: int | None
     requested_mutations: tuple[str, ...]
     authorizer_id: str
     decision_id: str
     decision_recorded: bool
+    pull_request_number: int | None = None
 
     def __post_init__(self) -> None:
         if type(self.repository) is not str or not self.repository:
             raise TypeError("repository must be a non-empty built-in string")
-        if type(self.issue_number) is not int or self.issue_number < 1:
-            raise TypeError("issue_number must be a positive built-in integer")
+        if self.issue_number is not None and (type(self.issue_number) is not int or self.issue_number < 1):
+            raise TypeError("issue_number must be None or a positive built-in integer")
+        if self.pull_request_number is not None and (type(self.pull_request_number) is not int or self.pull_request_number < 1):
+            raise TypeError("pull_request_number must be None or a positive built-in integer")
+        if self.issue_number is None and self.pull_request_number is None:
+            raise ValueError("owner decision requires issue_number or pull_request_number")
         if type(self.requested_mutations) is not tuple or not self.requested_mutations:
             raise TypeError("requested_mutations must be a non-empty exact tuple")
         if len(set(self.requested_mutations)) != len(self.requested_mutations):
@@ -51,12 +56,7 @@ def produce_lifecycle_mutation_authorization(
     decision: LifecycleOwnerDecision,
     snapshot: LifecycleStateSnapshot,
 ) -> LifecycleMutationAuthorization:
-    """Bind one explicit owner decision to the exact current lifecycle snapshot.
-
-    Absence of a recorded decision fails closed.  Ordinary Safe Implementation
-    Lane work therefore cannot synthesize closure authority by calling this
-    producer without distinct owner-decision evidence.
-    """
+    """Bind one explicit owner decision to the exact current lifecycle snapshot."""
     if type(decision) is not LifecycleOwnerDecision:
         raise TypeError("decision must be LifecycleOwnerDecision")
     if type(snapshot) is not LifecycleStateSnapshot:
@@ -67,6 +67,8 @@ def produce_lifecycle_mutation_authorization(
         raise ValueError("owner decision repository does not match lifecycle snapshot")
     if decision.issue_number != snapshot.issue_number:
         raise ValueError("owner decision issue does not match lifecycle snapshot")
+    if decision.pull_request_number != snapshot.pull_request_number:
+        raise ValueError("owner decision pull request does not match lifecycle snapshot")
 
     return LifecycleMutationAuthorization(
         schema_version=SCHEMA_VERSION,
