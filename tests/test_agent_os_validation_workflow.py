@@ -294,6 +294,10 @@ def test_issue_acceptance_preserves_input_sensitive_triggers_and_supersedes_stal
     content = ISSUE_ACCEPTANCE_WORKFLOW.read_text(encoding="utf-8")
     assert "types: [opened, edited, reopened, synchronize]" in content
     assert "ready_for_review" not in content
+    assert "name: Classify acceptance inputs" in content
+    assert "python -m scripts.agent_os_issue_acceptance.edit_relevance" in content
+    assert "needs: relevance" in content
+    assert "if: needs.relevance.outputs.should_run == 'true'" in content
     assert "group: issue-acceptance-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}" in content
     assert "cancel-in-progress: true" in content
     assert "pull-requests: read" in content
