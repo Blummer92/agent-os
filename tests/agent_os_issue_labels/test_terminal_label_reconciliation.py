@@ -2,6 +2,7 @@
 from pathlib import Path
 
 from scripts.agent_os_issue_labels.issue_reconciler import LiveIssueSnapshot, reconcile_issue_labels
+from tests.agent_os_issue_labels.lifecycle_admission import admitted_lifecycle_labels
 
 ROOT = Path(__file__).resolve().parents[2]
 FORM = ROOT / ".github/ISSUE_TEMPLATE/agent-os-task.yml"
@@ -63,7 +64,7 @@ def reconcile(provider):
     return reconcile_issue_labels(
         provider, "Blummer92/agent-os", 1,
         issue_form_path=FORM, label_map_path=MAP,
-        dry_run=False, label_write_authorized=True,
+        dry_run=False, lifecycle_admission=admitted_lifecycle_labels(),
     )
 
 

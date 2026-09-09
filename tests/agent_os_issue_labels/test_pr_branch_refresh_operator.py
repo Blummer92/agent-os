@@ -207,7 +207,7 @@ def _request(*, authorization_current=True):
         authorization_current=authorization_current,
         allowed_changed_paths=("x.py",), forbidden_paths=(".github/workflows/x.yml",),
         required_validation_command_ids=("pytest:pr-branch-refresh",),
-        branch_refresh_authorized=True, label_write_authorized=True,
+        branch_refresh_authorized=True,
     )
 
 
@@ -287,7 +287,7 @@ def _facade_kwargs(**overrides):
         "authorization_id": "auth:1363", "authorization_current": True,
         "branch_refresh_authorized": True, "allowed_changed_paths": ("x.py",),
         "forbidden_paths": (".github/workflows/x.yml",),
-        "label_write_authorized": True, "repository_root": "/repo",
+        "repository_root": "/repo",
         "invocation_id": "invocation:1363",
         "environment": {"GITHUB_TOKEN": "redacted-test-token"},
     }

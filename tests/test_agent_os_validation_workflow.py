@@ -170,8 +170,11 @@ def test_scheduler_validation_is_owned_by_the_canonical_aggregate_runner():
     assert not (ROOT / ".github/workflows/workflow-scheduler-validation.yml").exists()
     content = AGGREGATE_RUNNER.read_text(encoding="utf-8")
     assert 'suite_name" = "08_Tooling/workflow-scheduler"' in content
-    assert content.count("--cov=src/workflow_scheduler") == 1
-    assert content.count("--cov-report=term") == 1
+    # The runner appends coverage flags to the executed command exactly once and
+    # mirrors them into the operator-visible display string; only the executed
+    # command proves single ownership (#2126).
+    assert content.count('command+=("--cov=src/workflow_scheduler" "--cov-report=term")') == 1
+    assert content.count("--cov=src/workflow_scheduler") == 2
     assert "--cov-fail-under" not in content
 
 
@@ -293,6 +296,10 @@ def test_issue_acceptance_preserves_input_sensitive_triggers_and_supersedes_stal
     content = ISSUE_ACCEPTANCE_WORKFLOW.read_text(encoding="utf-8")
     assert "types: [opened, edited, reopened, synchronize]" in content
     assert "ready_for_review" not in content
+    assert "name: Classify acceptance inputs" in content
+    assert "python -m scripts.agent_os_issue_acceptance.edit_relevance" in content
+    assert "needs: relevance" in content
+    assert "if: needs.relevance.outputs.should_run == 'true'" in content
     assert "group: issue-acceptance-${{ github.event.pull_request.number || inputs.pr_number || github.run_id }}" in content
     assert "cancel-in-progress: true" in content
     assert "pull-requests: read" in content

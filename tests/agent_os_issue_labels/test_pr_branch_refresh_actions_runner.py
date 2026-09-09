@@ -31,6 +31,8 @@ def authorization(**overrides) -> RefreshAuthorization:
         forbidden_paths=(".github/workflows/",),
         required_validation_command_ids=("pytest:pr-branch-refresh",),
         branch_refresh_authorized=True,
+        # Justified historical fixture: this is the persisted RefreshAuthorization
+        # authorization-source record, not a caller-supplied lifecycle grant (#2218).
         label_write_authorized=True,
         owner_decision_reference="github-owner-decision:1619",
         state=RefreshAuthorizationState.AUTHORIZED,

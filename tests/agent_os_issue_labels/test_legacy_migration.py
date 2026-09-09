@@ -63,7 +63,6 @@ def test_real_legacy_shape_can_reach_existing_canonical_reconciler():
         issue_form_path=FORM,
         label_map_path=MAP,
         dry_run=True,
-        label_write_authorized=False,
     )
     assert reconciliation.convergence_status == "would-change"
     assert "status:ready" in reconciliation.labels_to_add

@@ -5,6 +5,7 @@ from scripts.agent_os_issue_labels.issue_reconciler import (
     reconcile_issue_batch,
     reconcile_issue_labels,
 )
+from tests.agent_os_issue_labels.lifecycle_admission import admitted_lifecycle_labels
 
 ROOT = Path(__file__).resolve().parents[2]
 FORM = ROOT / ".github/ISSUE_TEMPLATE/agent-os-task.yml"
@@ -141,7 +142,7 @@ def test_zero_label_issue_dry_run_bootstraps_without_writes():
 
 def test_stale_managed_label_removed_but_human_label_preserved():
     provider = Provider({1: snap(labels=("agent-os", "owner:github-service-agent", "status:blocked", "human-note"))})
-    result = reconcile(provider, dry_run=False, label_write_authorized=True)
+    result = reconcile(provider, dry_run=False, lifecycle_admission=admitted_lifecycle_labels())
     assert result.convergence_status == "converged"
     assert ("remove", 1, "status:blocked") in provider.writes
     assert "human-note" in provider.snapshots[1].labels
@@ -155,7 +156,7 @@ def test_ambiguous_or_incomplete_metadata_routes_to_manual_review():
 def test_conflicting_readiness_routes_to_manual_review_without_writes():
     body = BODY.replace("status:ready", "status:ready\nstatus:blocked")
     provider = Provider({1: snap(body=body)})
-    result = reconcile(provider, dry_run=False, label_write_authorized=True)
+    result = reconcile(provider, dry_run=False, lifecycle_admission=admitted_lifecycle_labels())
     assert result.convergence_status == "manual-review"
     assert result.reason_codes == ("ambiguous-owner-or-readiness",)
     assert provider.writes == []
@@ -164,7 +165,7 @@ def test_conflicting_readiness_routes_to_manual_review_without_writes():
 def test_repeated_owner_heading_conflict_routes_to_manual_review_without_writes():
     body = duplicate_section(BODY, "Primary owner", "owner:chatgpt-orchestrator")
     provider = Provider({1: snap(body=body)})
-    result = reconcile(provider, dry_run=False, label_write_authorized=True)
+    result = reconcile(provider, dry_run=False, lifecycle_admission=admitted_lifecycle_labels())
     assert result.convergence_status == "manual-review"
     assert result.reason_codes == ("ambiguous-owner-or-readiness",)
     assert provider.writes == []
@@ -173,7 +174,7 @@ def test_repeated_owner_heading_conflict_routes_to_manual_review_without_writes(
 def test_alias_equivalent_owner_heading_conflict_routes_to_manual_review():
     body = duplicate_section(BODY, "Primary owner", "owner:chatgpt-orchestrator", alias="Owner agent")
     provider = Provider({1: snap(body=body)})
-    result = reconcile(provider, dry_run=False, label_write_authorized=True)
+    result = reconcile(provider, dry_run=False, lifecycle_admission=admitted_lifecycle_labels())
     assert result.convergence_status == "manual-review"
     assert provider.writes == []
 
@@ -181,7 +182,7 @@ def test_alias_equivalent_owner_heading_conflict_routes_to_manual_review():
 def test_repeated_readiness_heading_conflict_routes_to_manual_review():
     body = duplicate_section(BODY, "Readiness candidate", "status:blocked")
     provider = Provider({1: snap(body=body)})
-    result = reconcile(provider, dry_run=False, label_write_authorized=True)
+    result = reconcile(provider, dry_run=False, lifecycle_admission=admitted_lifecycle_labels())
     assert result.convergence_status == "manual-review"
     assert provider.writes == []
 
@@ -200,7 +201,7 @@ def test_duplicate_conflict_is_order_independent_and_newline_tolerant():
     )
     for body in (first, second):
         provider = Provider({1: snap(body=body)})
-        result = reconcile(provider, dry_run=False, label_write_authorized=True)
+        result = reconcile(provider, dry_run=False, lifecycle_admission=admitted_lifecycle_labels())
         assert result.convergence_status == "manual-review"
         assert provider.writes == []
 
@@ -228,21 +229,21 @@ def test_write_requires_explicit_authorization():
 
 def test_prewrite_currentness_ignores_label_order_only():
     provider = ReorderedReadProvider({1: snap(labels=("human-note", "status:blocked"))})
-    result = reconcile(provider, dry_run=False, label_write_authorized=True)
+    result = reconcile(provider, dry_run=False, lifecycle_admission=admitted_lifecycle_labels())
     assert result.convergence_status == "converged"
     assert result.side_effects_performed is True
 
 
 def test_provider_failure_is_explicit():
     provider = Provider({1: snap()}, fail_write=True)
-    result = reconcile(provider, dry_run=False, label_write_authorized=True)
+    result = reconcile(provider, dry_run=False, lifecycle_admission=admitted_lifecycle_labels())
     assert result.convergence_status == "blocked"
     assert result.reason_codes == ("provider-write-failure:RuntimeError",)
 
 
 def test_readback_mismatch_is_explicit():
     provider = ReadbackMismatchProvider({1: snap()})
-    result = reconcile(provider, dry_run=False, label_write_authorized=True)
+    result = reconcile(provider, dry_run=False, lifecycle_admission=admitted_lifecycle_labels())
     assert result.convergence_status == "blocked"
     assert result.reason_codes == ("readback-mismatch",)
     assert result.side_effects_performed is True
@@ -251,7 +252,7 @@ def test_readback_mismatch_is_explicit():
 def test_unchanged_issue_is_idempotent():
     labels = ("agent-os", "owner:github-service-agent", "status:ready", "type:bug")
     provider = Provider({1: snap(labels=labels)})
-    result = reconcile(provider, dry_run=False, label_write_authorized=True)
+    result = reconcile(provider, dry_run=False, lifecycle_admission=admitted_lifecycle_labels())
     assert result.convergence_status == "already-current"
     assert provider.writes == []
 

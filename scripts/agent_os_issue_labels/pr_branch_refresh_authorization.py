@@ -156,116 +156,39 @@ class BranchRefreshAuthorizationEvidence:
             "branch_refresh_authorized": self.branch_refresh_authorized,
             "allowed_changed_paths": self.allowed_changed_paths,
             "forbidden_paths": self.forbidden_paths,
-            "label_write_authorized": self.label_write_authorized,
             "repository_root": repository_root,
             "invocation_id": invocation_id,
             "environment": environment,
         }
 
 
-def _record_blockers(
-    record: RefreshAuthorization,
-    *,
-    current_head_sha: str,
-    current_main_sha: str,
-    changed: tuple[str, ...],
-) -> set[str]:
+def _record_blockers(record: RefreshAuthorization, *, current_head_sha: str, current_main_sha: str, changed: tuple[str, ...]) -> set[str]:
     reasons: set[str] = set()
-    if record.state is RefreshAuthorizationState.CONSUMED:
-        reasons.add("authorization.consumed")
-    elif record.state is not RefreshAuthorizationState.AUTHORIZED:
-        reasons.add("authorization.not-current")
-    if not record.branch_refresh_authorized:
-        reasons.add("authorization.refresh-not-granted")
-    if record.expected_head_sha != current_head_sha:
-        reasons.add("head.moved")
-    if record.expected_main_sha != current_main_sha:
-        reasons.add("main.moved")
+    if record.state is RefreshAuthorizationState.CONSUMED: reasons.add("authorization.consumed")
+    elif record.state is not RefreshAuthorizationState.AUTHORIZED: reasons.add("authorization.not-current")
+    if not record.branch_refresh_authorized: reasons.add("authorization.refresh-not-granted")
+    if record.expected_head_sha != current_head_sha: reasons.add("head.moved")
+    if record.expected_main_sha != current_main_sha: reasons.add("main.moved")
     changed_set = set(changed)
-    if changed_set & set(record.forbidden_paths):
-        reasons.add("scope.forbidden-path")
-    if not changed_set.issubset(set(record.allowed_changed_paths)):
-        reasons.add("scope.expanded")
+    if changed_set & set(record.forbidden_paths): reasons.add("scope.forbidden-path")
+    if not changed_set.issubset(set(record.allowed_changed_paths)): reasons.add("scope.expanded")
     return reasons
 
 
-def resolve_branch_refresh_authorization(
-    records: Iterable[RefreshAuthorization],
-    *,
-    repository: str,
-    pr_number: int,
-    current_head_sha: str,
-    current_main_sha: str,
-    current_changed_paths: tuple[str, ...],
-) -> BranchRefreshAuthorizationEvidence:
-    """Resolve exactly one authorization applicable to freshly reacquired evidence.
-
-    Historical records are intentionally retained.  A stale record bound to an old
-    head/main/scope is non-applicable evidence, not ambiguity.  Ambiguity exists
-    only when more than one distinct record is simultaneously applicable to the
-    exact current repository/PR/head/main/scope tuple.
-    """
+def resolve_branch_refresh_authorization(records: Iterable[RefreshAuthorization], *, repository: str, pr_number: int, current_head_sha: str, current_main_sha: str, current_changed_paths: tuple[str, ...]) -> BranchRefreshAuthorizationEvidence:
     changed = _paths(current_changed_paths, "current_changed_paths")
     candidates = [record for record in records if record.repository == repository and record.pr_number == pr_number]
-    if not candidates:
-        return _blocked(repository, pr_number, current_head_sha, current_main_sha, {"authorization.absent"})
-
-    applicable: list[RefreshAuthorization] = []
-    rejected_reasons: set[str] = set()
+    if not candidates: return _blocked(repository, pr_number, current_head_sha, current_main_sha, {"authorization.absent"})
+    applicable=[]; rejected_reasons=set()
     for record in candidates:
-        record_reasons = _record_blockers(
-            record,
-            current_head_sha=current_head_sha,
-            current_main_sha=current_main_sha,
-            changed=changed,
-        )
-        if record_reasons:
-            rejected_reasons.update(record_reasons)
-        else:
-            applicable.append(record)
-
-    if len(applicable) > 1:
-        return _blocked(repository, pr_number, current_head_sha, current_main_sha, {"authorization.ambiguous"})
-    if not applicable:
-        return _blocked(
-            repository,
-            pr_number,
-            current_head_sha,
-            current_main_sha,
-            rejected_reasons or {"authorization.absent"},
-        )
-
-    record = applicable[0]
-    return BranchRefreshAuthorizationEvidence(
-        repository=repository,
-        pr_number=pr_number,
-        authorization_id=record.authorization_id,
-        applicable=True,
-        authorization_current=True,
-        branch_refresh_authorized=True,
-        label_write_authorized=record.label_write_authorized,
-        expected_head_sha=record.expected_head_sha,
-        current_main_sha=record.expected_main_sha,
-        allowed_changed_paths=record.allowed_changed_paths,
-        forbidden_paths=record.forbidden_paths,
-        required_validation_command_ids=record.required_validation_command_ids,
-        reason_codes=(),
-    )
+        reasons=_record_blockers(record,current_head_sha=current_head_sha,current_main_sha=current_main_sha,changed=changed)
+        if reasons: rejected_reasons.update(reasons)
+        else: applicable.append(record)
+    if len(applicable)>1: return _blocked(repository,pr_number,current_head_sha,current_main_sha,{"authorization.ambiguous"})
+    if not applicable: return _blocked(repository,pr_number,current_head_sha,current_main_sha,rejected_reasons or {"authorization.absent"})
+    record=applicable[0]
+    return BranchRefreshAuthorizationEvidence(repository,pr_number,record.authorization_id,True,True,True,record.label_write_authorized,record.expected_head_sha,record.expected_main_sha,record.allowed_changed_paths,record.forbidden_paths,record.required_validation_command_ids,())
 
 
 def _blocked(repository: str, pr_number: int, head: str, main: str, reasons: set[str]) -> BranchRefreshAuthorizationEvidence:
-    return BranchRefreshAuthorizationEvidence(
-        repository=repository,
-        pr_number=pr_number,
-        authorization_id=None,
-        applicable=False,
-        authorization_current=False,
-        branch_refresh_authorized=False,
-        label_write_authorized=False,
-        expected_head_sha=head,
-        current_main_sha=main,
-        allowed_changed_paths=(),
-        forbidden_paths=(),
-        required_validation_command_ids=(),
-        reason_codes=tuple(sorted(reasons)),
-    )
+    return BranchRefreshAuthorizationEvidence(repository,pr_number,None,False,False,False,False,head,main,(),(),(),tuple(sorted(reasons)))

@@ -107,6 +107,6 @@ def test_sha_attribution_contract_does_not_freeze_unrelated_workflow_semantics()
     assert "pull-requests: write" not in content
 
     assert "github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id" in content
-    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in content
+    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action != 'ready_for_review' }}" in content
     assert "final-candidate dispatch SHA $GITHUB_SHA does not match admitted candidate $EXPECTED_HEAD_SHA" in content
     assert content.count("./scripts/validate-all.sh") == 1
