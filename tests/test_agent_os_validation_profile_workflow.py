@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/agent-os-validation.yml"
 
@@ -48,6 +50,34 @@ def test_manual_review_fails_closed_and_focused_execution_uses_bounded_helper():
     assert "eval " not in content
     assert "bash -c" not in content
     assert "sh -c" not in content
+
+
+def test_aggregate_is_not_serialized_behind_the_developer_loop_plan_job():
+    """The plan job must never sit on the authoritative aggregate's critical path.
+
+    `validate` consumes no `plan` output -- the sibling assertions above pin that
+    the profile has no say in whether the aggregate runs. A `needs: plan` edge
+    therefore bought no correctness, only wall-clock: the aggregate job was not
+    created until the plan job finished (measured on current `main`: ~11-16s for
+    an aggregate-profile PR, and ~56s for a focused-profile Ready PR, whose plan
+    job spends ~30s installing the same dependency set the aggregate job then
+    installs again). The focused developer-loop lane still runs -- concurrently,
+    so it keeps its early-failure value without delaying the exact-head gate.
+    """
+    content = _content()
+
+    # Parsed, not string-matched: the point is the absence of a `needs:` key on
+    # the job, which prose in a nearby comment must not be able to fake.
+    validate = yaml.safe_load(content)["jobs"]["validate"]
+    assert "needs" not in validate
+
+    # The focused developer-loop lane is preserved, not removed.
+    assert "- name: Run focused validation plan" in content
+    assert "steps.plan.outputs.profile == 'focused'" in content
+
+    # The authoritative exact-head aggregate is untouched and still singular.
+    assert content.count("./scripts/validate-all.sh") == 1
+    assert "checked-out SHA $checked_out_sha does not match pull request head" in content
 
 
 def test_push_and_final_candidate_keep_authoritative_aggregate_lane():
