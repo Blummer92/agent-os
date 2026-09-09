@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from scripts.agent_os_issue_acceptance.lifecycle_mutation_guard import LifecycleMutationAdmissionResult
+
 from .issue_metadata import load_issue_form_fields, metadata_contract, parse_issue_form_body
 from .label_map import expected_labels, load_label_map
 
@@ -49,7 +51,7 @@ def reconcile_issue_labels(
     issue_form_path: str | Path,
     label_map_path: str | Path,
     dry_run: bool = True,
-    label_write_authorized: bool = False,
+    lifecycle_admission: LifecycleMutationAdmissionResult | None = None,
 ) -> IssueLabelReconciliationResult:
     initial = provider.read(repository, issue_number)
     fields = load_issue_form_fields(issue_form_path)
@@ -68,10 +70,6 @@ def reconcile_issue_labels(
     if len(owners) != 1 or len(statuses) != 1:
         return _result(initial, (), (), (), "manual-review", ("ambiguous-owner-or-readiness",), dry_run)
 
-    # Terminal GitHub state is canonical. Readiness/status labels are projections of
-    # active work and must not survive a verified closed issue. Preserve the other
-    # managed classification labels and all unmanaged labels; do not infer closure
-    # or rewrite the issue body from labels.
     if initial.state == "closed":
         desired_managed = frozenset(
             label for label in desired_managed if not label.startswith("status:")
@@ -90,8 +88,10 @@ def reconcile_issue_labels(
         return _result(initial, desired_managed, (), (), "already-current", (), dry_run, unmanaged)
     if dry_run:
         return _result(initial, desired_managed, to_add, to_remove, "would-change", (), True, unmanaged)
-    if not label_write_authorized:
-        return _result(initial, desired_managed, to_add, to_remove, "blocked", ("label-write-authorization-required",), False, unmanaged)
+
+    admission_reason = _admission_blocker(lifecycle_admission, repository, issue_number)
+    if admission_reason is not None:
+        return _result(initial, desired_managed, to_add, to_remove, "blocked", (admission_reason,), False, unmanaged)
 
     current = provider.read(repository, issue_number)
     if current.body != initial.body or frozenset(current.labels) != frozenset(initial.labels) or current.state != initial.state:
@@ -124,6 +124,20 @@ def reconcile_issue_batch(provider: IssueLabelProvider, repository: str, issue_n
         except Exception as exc:
             results.append(IssueLabelReconciliationResult(repository, issue_number, (), (), (), (), "blocked", (f"provider-read-failure:{type(exc).__name__}",), bool(kwargs.get("dry_run", True)), False))
     return tuple(results)
+
+
+def _admission_blocker(
+    admission: LifecycleMutationAdmissionResult | None,
+    repository: str,
+    issue_number: int,
+) -> str | None:
+    if admission is None:
+        return "lifecycle-admission-required"
+    if type(admission) is not LifecycleMutationAdmissionResult:
+        return "lifecycle-admission-invalid"
+    if admission.requested_mutation != "replace-lifecycle-labels" or not admission.admitted:
+        return "lifecycle-admission-refused"
+    return None
 
 
 def _is_managed(label: str) -> bool:
