@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This package exposes pure-local, read-only contracts for PR review remediation, risk-triggered review selection, bounded review evidence, deterministic Review Attack Plans, evidence-backed substantive findings, per-attack review coverage/test adequacy, truthful review/merge-evidence summaries, and CI evidence recovery. It evaluates supplied evidence only and performs no provider invocation, source edit, validation execution, merge, or external write.
+This package exposes pure-local, read-only contracts for PR review remediation, risk-triggered review selection, bounded review evidence, deterministic Review Attack Plans, evidence-backed substantive findings, per-attack review coverage/test adequacy, controlled code-review benchmarking, truthful review/merge-evidence summaries, and CI evidence recovery. It evaluates supplied evidence only and performs no provider invocation, source edit, validation execution, merge, or external write.
 
 ## Risk-triggered code review
 
@@ -10,33 +10,29 @@ This package exposes pure-local, read-only contracts for PR review remediation, 
 
 ## Deterministic Review Attack Plans
 
-`scripts/agent_os_pr_remediation/review_attack_plan.py` consumes an existing CRH1 `ReviewEvidencePacket` and projects adversarial risk classes into a finite provider-neutral set of defect-class attacks. Normal/no-AI review is not inflated into a generic adversarial checklist.
-
-Attack families are bounded to parser/resolver/selector, authorization/permissions/security, state/retry/reconciliation, persistence/migration, concurrency/lease/fencing, workflow/CI validation authority, cross-system/external API semantics, and architecture/ownership/interfaces. Every `RequiredAttack` carries a stable `attack_id`, exact reviewed head, affected surfaces, bounded evidence requirements, and reason codes. Unknown or conflicting risk evidence fails closed rather than silently reducing the plan.
+`scripts/agent_os_pr_remediation/review_attack_plan.py` consumes an existing CRH1 `ReviewEvidencePacket` and projects adversarial risk classes into a finite provider-neutral set of defect-class attacks. Every `RequiredAttack` carries a stable `attack_id`, exact reviewed head, affected surfaces, bounded evidence requirements, and reason codes.
 
 ## Evidence-backed substantive findings
 
-`scripts/agent_os_pr_remediation/review_findings.py` owns CRH6 finding meaning. A `SubstantiveReviewFinding` is a falsifiable defect claim tied to one CRH5 `attack_id`; suggestions remain structurally non-blocking. Clearing evidence is bounded and exact-head aware, while finding currentness delegates to CRH1 proportional invalidation. Findings and clearing evidence grant no authority.
+`scripts/agent_os_pr_remediation/review_findings.py` owns CRH6 finding meaning. A `SubstantiveReviewFinding` is a falsifiable defect claim tied to one CRH5 `attack_id`; suggestions remain structurally non-blocking. Clearing evidence is bounded and exact-head aware, while finding currentness delegates to CRH1 proportional invalidation.
 
 ## Review coverage and test adequacy
 
-`scripts/agent_os_pr_remediation/review_coverage.py` owns CRH7 evidence. Review coverage and test adequacy are independent dimensions: coverage asks whether a required CRH5 defect class was actually examined; adequacy asks whether supplied test evidence materially protects the behavior against the caller-supplied test-relevant subset of that attack's CRH5 evidence obligations. CRH7 never selects tests, invokes a reviewer, or converts provider/check success into attack coverage.
+`scripts/agent_os_pr_remediation/review_coverage.py` owns CRH7 evidence. Review coverage and test adequacy are independent dimensions. Every required `attack_id` receives one bounded coverage disposition; missing per-attack evidence becomes `unexamined-blocking`. Test adequacy consumes caller-supplied evidence and never becomes a second test selector.
 
-Every required `attack_id` receives one bounded coverage disposition: `examined-clear`, `examined-finding`, `not-applicable`, `unexamined-blocking`, `manual-review`, or `stale`. Missing per-attack evidence becomes `unexamined-blocking`; `examined-clear` and `examined-finding` require bounded per-attack evidence; conflicting observations fail closed; `examined-finding` requires a current CRH6 substantive finding; and `not-applicable` requires bounded evidence plus a reason. Duplicate equivalent observations collapse deterministically.
+## Blinded historical code-review benchmark
 
-Coverage currentness reuses CRH1 `review_invalidation_scope(...)`. An old observation becomes stale when CRH1 says its affected surface is invalidated; an unrelated later change may preserve compatible semantic review coverage. CRH7 does not introduce another head/surface invalidation engine.
+`scripts/agent_os_pr_remediation/code_review_benchmark.py` owns CRH8A Code Review Benchmark v1 (`benchmark=1.0.0`, `scorer=1.0.0`). It keeps the reviewer-visible packet and hidden answer key as separate typed surfaces, assigns a deterministic packet fingerprint, uses neutral case IDs, and rejects obvious answer-leakage material. Runs record model identity, reasoning setting, run number, tool profile, packet fingerprint, and explicit contamination state. Contaminated or tool-mismatched runs are ineligible rather than silently scored.
 
-Test adequacy consumes caller-supplied `TestEvidence` plus an explicit `required_test_obligations` subset drawn from the existing CRH5 `RequiredAttack.bounded_evidence_requirements`. This distinction matters because CRH5 obligations are review-evidence obligations, not automatically unit-test requirements: architecture/API/provider-semantic attacks may appropriately have no required test obligation. For test-relevant attacks, a parser happy-path test cannot satisfy an ambiguity/fail-closed obligation merely because pytest is green. Supplied test-surface identity lets a later test-only change invalidate/recalculate adequacy without automatically invalidating unrelated semantic review coverage; unrelated changes may preserve compatible evidence under CRH1 proportional invalidation.
+The finite review-time detectability vocabulary is `static-code-detectable`, `requirements-detectable`, `repository-context-detectable`, `review-time-test-detectable`, `runtime-evidence-required`, `later-evidence-only`, `review-time-unknowable`, and `manual-review`. Later-only, runtime-required, and review-time-unknowable cases never become reviewer false negatives. Clean controls require positive bounded answer evidence; insufficient evidence must be represented as manual review rather than invented cleanliness.
 
-CRH7 does not require line/branch coverage percentages and does not execute #1554 property/mutation pilots. It may retain only the bounded report-only recommendations `property-test-candidate` or `mutation-test-candidate`; recommendation does not itself create a blocker or authority.
+The scorer reuses CRH6 `FindingSeverity` and caller-supplied CRH5/CRH7 attack identities. It reports component metrics rather than a vanity composite: defect recall, severity-weighted recall, review precision, blocking-finding precision, false-block rate, severity calibration, evidence quality, fix-boundary accuracy, test-recommendation quality, manual-review calibration, unsupported-claim rate, and cross-run blocking stability. Defect identity—not comment count—owns recall, so synonymous findings cannot multiply discovered defects. False blockers on controls are explicit. Repeated fresh runs retain individual identities and expose unstable blocking outcomes.
 
-Coverage and adequacy records use deterministic IDs and keep execution, readiness, merge, closure, production/protected-setting, and external-write authority false. They retain bounded structured conclusions only—never chain-of-thought, unrestricted transcripts, or provider logs. #1675/CRH8A may score these deterministic records; #1587/CRH8B may measure operational effectiveness; #1588 remains provider execution/normalization owner.
+The v1 protocol is intentionally small-sample and fixture-first. Locked sentinel cases may detect regressions while rotating/holdout cases remain separately versioned. Any change to reviewer packet semantics, answer-key semantics, scorer semantics, or admission rules requires a new version/fingerprint. Benchmark results are bounded evidence for #1587/CRH8B; they do not redefine operational effectiveness, provider execution (#1588), finding semantics, coverage semantics, or any implementation/release authority. No chain-of-thought, provider call, telemetry, database, workflow, or external write is required.
 
 ## Truthful review and merge evidence
 
-`scripts/agent_os_pr_remediation/merge_evidence_summary.py` projects already-owned validation, acceptance, and review evidence into one bounded provider-neutral summary for the current PR lineage. Source head, base, synthetic merge SHA, merge commit, tested SHAs, reviewed SHA, and metadata fingerprint remain distinct identities; stale evidence cannot silently satisfy exact-head claims.
-
-`scripts/agent_os_pr_remediation/repair_evidence_composition.py` adds the remaining #1540 repair-oriented presentation seam without introducing another evidence or provenance model. It consumes only typed canonical `CIEvidenceRecoveryPlan` evidence from #1611 and `AggregateFailureEvidence` from #1602, verifies repository/PR/exact-head/tested-SHA compatibility, and renders bounded sanitized actionable failure text, canonical provenance/applicability, diagnostic routing facts, and caller-supplied post-repair validation labels beside the existing #1540 summary. A diagnostic `next_path` remains a routing fact, not a repair recommendation. Aggregate exact-head currency and aggregate tested-SHA compatibility are separate fail-closed guards with distinct rejection reasons, so neither can mask the other. Stale/mismatched or authorizing inputs fail closed, and the projection performs no publication or external write.
+`scripts/agent_os_pr_remediation/merge_evidence_summary.py` projects already-owned validation, acceptance, and review evidence into one bounded provider-neutral summary for the current PR lineage. Source head, base, synthetic merge SHA, merge commit, tested SHAs, reviewed SHA, and metadata fingerprint remain distinct identities.
 
 ## PR Review Remediation CLI
 
@@ -44,15 +40,13 @@ Coverage and adequacy records use deterministic IDs and keep execution, readines
 python -m scripts.agent_os_pr_remediation.cli --input tests/fixtures/agent_os_pr_remediation/e2e.json --format json
 ```
 
-The CLI remains non-authorizing and composes existing remediation evidence only.
-
 ## CI Evidence Recovery Contract
 
 `scripts/agent_os_pr_remediation/ci_evidence_recovery.py` plans bounded recovery of actionable GitHub Actions failure evidence without assuming `gh` or Cloud Shell. It performs no network, CLI, retry, repository, or external-system operation itself.
 
 ## GitHub Write Handoff
 
-Any separately authorized source change, thread mutation, PR update, merge, issue lifecycle action, credential change, workflow change, or external operation remains owned by the appropriate Agent OS owner. Review planning, findings, coverage, adequacy, and repair-evidence presentation grant none of those authorities.
+Any separately authorized source change, thread mutation, PR update, merge, issue lifecycle action, credential change, workflow change, or external operation remains owned by the appropriate Agent OS owner. Review planning, findings, coverage, adequacy, benchmark scoring, and repair-evidence presentation grant none of those authorities.
 
 ## Validation
 
@@ -60,8 +54,7 @@ Focused tests:
 
 ```bash
 python -m pytest tests/agent_os_pr_remediation/test_review_evidence.py tests/agent_os_pr_remediation/test_review_attack_plan.py tests/agent_os_pr_remediation/test_review_findings.py tests/agent_os_pr_remediation/test_review_coverage.py
-python -m pytest tests/agent_os_pr_remediation/test_merge_evidence_summary.py tests/agent_os_pr_remediation/test_merge_evidence_summary_renderer.py tests/agent_os_pr_remediation/test_merge_evidence_summary_composition.py
-python -m pytest tests/agent_os_pr_remediation/test_ci_evidence_recovery.py
+python -m pytest tests/agent_os_pr_remediation/test_code_review_benchmark.py
 python -m pytest tests/agent_os_pr_remediation
 ```
 
