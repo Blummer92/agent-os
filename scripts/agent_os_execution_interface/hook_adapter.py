@@ -71,8 +71,8 @@ _PUBLICATION_CONTINUATION = (
     "which delegates to the existing #1243 publish_governed_handoff(...) owner. "
     "This advisory hook does not itself publish a handoff. After durable "
     "publication, repeat discovery and resume only the exact immutable handoff "
-    "returned. Do not synthesize a handoff identity or silently fall back to "
-    "local git/gh tooling."
+    "returned. Do not synthesize a handoff identity and do not silently fall "
+    "back to local git/gh tooling."
 )
 
 

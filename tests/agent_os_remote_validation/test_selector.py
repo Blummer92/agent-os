@@ -1374,3 +1374,40 @@ def test_pre_pr_frozen_binding_is_not_auto_suppressed() -> None:
     # The originally bound narrow command remains exact and valid.
     plan = select_pre_pr_validation_plan(subject, RULES)
     assert plan.commands == (PILOT_COMMAND,)
+
+
+# --- #2135: aggregate prefixes must not make focused owners unreachable ------
+#
+# PR #2158 tried to satisfy #2135 by adding a blanket `tests/` entry to
+# `aggregate_prefixes`. Because `aggregate_prefixes` short-circuits before the
+# focused rules, that entry also swallowed `tests/agent_os_issue_acceptance/`
+# and every other focused owner rooted under `tests/`, silently deleting focused
+# selection and breaking nineteen selector contracts. #2135's actual acceptance
+# criterion -- a changed test path is always executed by some lane -- is pinned
+# in `tests/test_2135_root_test_aggregate_selection.py`. The ordering hazard
+# that made the wrong fix look correct is pinned here, next to the ordering.
+
+
+def test_aggregate_prefixes_never_subsume_a_focused_rule_prefix() -> None:
+    """A blanket aggregate prefix silently deletes focused selection.
+
+    `aggregate_prefixes` is evaluated before `focused_rules`, so an aggregate
+    prefix that is itself a prefix of a focused owner makes that owner
+    unreachable. Guard the ordering hazard directly rather than only its
+    nineteen downstream symptoms.
+    """
+    aggregate_prefixes = tuple(RULES["aggregate_prefixes"])
+    owned: list[str] = []
+    for rule in RULES["focused_rules"]:
+        owned.extend(rule.get("prefixes", []))
+        owned.extend(rule.get("exact_paths", []))
+
+    subsumed = [
+        (aggregate_prefix, owner)
+        for aggregate_prefix in aggregate_prefixes
+        for owner in owned
+        if owner.startswith(aggregate_prefix) and owner != aggregate_prefix
+    ]
+    assert not subsumed, (
+        "aggregate_prefixes make focused owners unreachable: " + repr(subsumed)
+    )
