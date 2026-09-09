@@ -28,7 +28,7 @@ tasks:
     type: "verification"
     owner: "system"
     action: "verify_sync"
-    idempotency_key: "verify-20260712"
+    idempotency_key: "sync-20260712"
     depends_on: ["task-1"]
     priority: 0
 ```
@@ -230,7 +230,7 @@ tasks:
 ## Troubleshooting
 
 ### Workflow won't run
-- Check for cycles: `rng --multiline "depends_on.*\[" workflow.yaml`
+- Check for cycles: `rng --multiline "depends_on.*\\[" workflow.yaml`
 - Verify task actions are not empty
 - Check ownership: Does owner have permission for action?
 
@@ -265,9 +265,11 @@ Still NOT supported:
 
 See `ARCHITECTURE.md` for implementation details, `API_REFERENCE.md` for Python API.
 
-To run tests:
+To run tests with coverage locally:
 ```bash
 pytest tests/ -v --cov=src/workflow_scheduler --cov-report=term
 ```
 
-Current: 291 tests passed, 97% coverage overall (target: 80%+)
+Canonical repository aggregate validation also executes this Scheduler test suite once and emits the same terminal coverage measurement. The aggregate runner owns CI correctness and coverage evidence; there is no separate Scheduler validation workflow.
+
+The documented coverage target remains 80%+. CI reports coverage but does not convert that target into a new `--cov-fail-under` gate.
