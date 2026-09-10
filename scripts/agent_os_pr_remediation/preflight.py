@@ -29,9 +29,9 @@ class PreflightResult:
 def _validate_sha(value: str, field: str) -> str:
     if type(value) is not str:
         raise EvidenceValidationError(f"{field} must be exactly str")
-    if len(value) != 40 or any(char not in "0123456789abcdef" for char in value.lower()):
+    if len(value) != 40 or any(char not in "0123456789abcdef" for char in value):
         raise EvidenceValidationError(f"{field} must be a 40-character hexadecimal SHA")
-    return value.lower()
+    return value
 
 
 def _allowed_files(value: object) -> tuple[str, ...]:
