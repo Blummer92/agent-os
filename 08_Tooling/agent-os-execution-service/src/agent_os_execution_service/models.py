@@ -243,7 +243,7 @@ class ExecutionServiceResult:
         if self.schema_version != EXECUTION_SERVICE_RESULT_SCHEMA_VERSION:
             raise ValueError("schema_version is unsupported")
         _validate_identifier("request_id", self.request_id)
-        _require_nonnegative_int("request_revision", self.request_revision)
+        _require_positive_int("request_revision", self.request_revision)
         _validate_sha256("request_fingerprint", self.request_fingerprint)
         parse_canonical_utc(self.evaluated_at)
         _require_exact_str("service_version", self.service_version)

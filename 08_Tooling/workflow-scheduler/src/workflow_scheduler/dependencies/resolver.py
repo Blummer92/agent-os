@@ -1,5 +1,6 @@
 """Dependency resolver for workflow task execution."""
 
+from graphlib import CycleError, TopologicalSorter
 from typing import Dict, List, Set, Tuple
 
 from workflow_scheduler.models import Task
@@ -18,40 +19,36 @@ class DependencyResolver:
         self.tasks = {t.id: t for t in tasks}
         self.dependencies = dependencies
 
+    def _known_dependency_graph(self) -> Dict[str, Tuple[str, ...]]:
+        """Return the dependency graph restricted to known workflow tasks."""
+        return {
+            task_id: tuple(
+                dependency_id
+                for dependency_id in self.dependencies.get(task_id, [])
+                if dependency_id in self.tasks
+            )
+            for task_id in self.tasks
+        }
+
+    def _has_unknown_dependencies(self) -> bool:
+        """Return true when any task references a dependency outside the workflow."""
+        return any(
+            dependency_id not in self.tasks
+            for task_id in self.tasks
+            for dependency_id in self.dependencies.get(task_id, [])
+        )
+
     def has_cycle(self) -> Tuple[bool, List[str]]:
         """Detect if dependency graph has cycles.
 
         Returns:
             Tuple of (has_cycle, cycle_path). If no cycle, cycle_path is empty.
         """
-        visited: Set[str] = set()
-        rec_stack: Set[str] = set()
-        cycle_path: List[str] = []
-
-        def visit(node: str) -> bool:
-            visited.add(node)
-            rec_stack.add(node)
-            cycle_path.append(node)
-
-            for neighbor in self.dependencies.get(node, []):
-                if neighbor not in self.tasks:
-                    continue
-                if neighbor not in visited:
-                    if visit(neighbor):
-                        return True
-                elif neighbor in rec_stack:
-                    cycle_path.append(neighbor)
-                    return True
-
-            cycle_path.pop()
-            rec_stack.remove(node)
-            return False
-
-        for task_id in self.tasks:
-            if task_id not in visited:
-                if visit(task_id):
-                    return True, cycle_path
-
+        sorter = TopologicalSorter(self._known_dependency_graph())
+        try:
+            tuple(sorter.static_order())
+        except CycleError as exc:
+            return True, list(exc.args[1])
         return False, []
 
     def get_ready_tasks(self, completed_tasks: Set[str]) -> List[str]:
@@ -85,47 +82,29 @@ class DependencyResolver:
             Set of all task IDs this task depends on (directly or indirectly)
         """
         all_deps: Set[str] = set()
-        visited: Set[str] = set()
+        pending = list(reversed(self.dependencies.get(task_id, [])))
 
-        def traverse(tid: str) -> None:
-            if tid in visited:
-                return
-            visited.add(tid)
+        while pending:
+            dependency_id = pending.pop()
+            if dependency_id not in self.tasks or dependency_id in all_deps:
+                continue
+            all_deps.add(dependency_id)
+            pending.extend(reversed(self.dependencies.get(dependency_id, [])))
 
-            for dep in self.dependencies.get(tid, []):
-                if dep in self.tasks:
-                    all_deps.add(dep)
-                    traverse(dep)
-
-        traverse(task_id)
         return all_deps
 
     def topological_sort(self) -> Tuple[bool, List[str]]:
         """Return tasks in topological order (dependencies before dependents).
 
         Returns:
-            Tuple of (success, sorted_task_ids). If cycle detected, success=False.
+            Tuple of (success, sorted_task_ids). If cycle or an unknown dependency
+            is detected, success=False.
         """
-        has_cycle, _ = self.has_cycle()
-        if has_cycle:
+        if self._has_unknown_dependencies():
             return False, []
 
-        visited: Set[str] = set()
-        sorted_list: List[str] = []
-
-        def visit(node: str) -> None:
-            if node in visited:
-                return
-            visited.add(node)
-
-            for neighbor in self.dependencies.get(node, []):
-                if neighbor in self.tasks:
-                    visit(neighbor)
-
-            sorted_list.append(node)
-
-        for task_id in self.tasks:
-            if task_id not in visited:
-                visit(task_id)
-
-        return True, sorted_list
+        sorter = TopologicalSorter(self._known_dependency_graph())
+        try:
+            return True, list(sorter.static_order())
+        except CycleError:
+            return False, []

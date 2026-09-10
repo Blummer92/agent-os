@@ -32,18 +32,16 @@ def drive_governed_continuation(adapter: ContinuationAdapter, decide: Callable[[
     if type(max_transitions) is not int or max_transitions < 1 or max_transitions > MAX_DRIVER_TRANSITIONS:
         raise ValueError("max_transitions is outside the governed finite bound")
     transitions = []
-    prior_action = None
     for _ in range(max_transitions):
         decision = decide(adapter.observe())
         if decision.terminal:
             return ContinuationDriveResult("completed", tuple(transitions), decision.reason_codes)
         if decision.blocked:
             return ContinuationDriveResult("blocked", tuple(transitions), decision.reason_codes)
-        if decision.stalled or (prior_action is not None and decision.action == prior_action):
+        if decision.stalled:
             return ContinuationDriveResult("recovery-stalled", tuple(transitions), tuple(sorted(set(decision.reason_codes) | {"repeated-equivalent-transition"})))
         if not decision.action:
             return ContinuationDriveResult("blocked", tuple(transitions), ("no-authorized-executable-next-action",))
         adapter.dispatch(decision.action)
         transitions.append(decision.action)
-        prior_action = decision.action
     return ContinuationDriveResult("recovery-stalled", tuple(transitions), ("finite-transition-bound-exhausted",))

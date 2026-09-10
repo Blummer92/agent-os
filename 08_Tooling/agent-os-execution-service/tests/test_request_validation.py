@@ -174,6 +174,15 @@ def test_result_reason_invariants() -> None:
         )
 
 
+def test_result_request_revision_must_be_positive() -> None:
+    with pytest.raises(TypeError, match="request_revision must be a positive exact integer"):
+        result(request_revision=0)
+    with pytest.raises(TypeError, match="request_revision must be a positive exact integer"):
+        result(request_revision=-1)
+    with pytest.raises(TypeError, match="request_revision must be a positive exact integer"):
+        result(request_revision=True)
+
+
 def test_private_evidence_never_projects() -> None:
     secret = "github_pat_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
     value = result(

@@ -33,6 +33,16 @@ def test_parenthesized_prompt_is_context_not_a_command():
     assert parsed.branch == "agent/1571-mobile-terminal-transcript"
 
 
+def test_newest_prompt_without_branch_clears_older_branch_context():
+    parsed = parse_terminal_transcript(
+        "user@cloudshell:~/agent-os (agent/2257-fix)$ python -m pytest -q\n"
+        "user@cloudshell:~/agent-os$ git status\n"
+    )
+    assert parsed.commands == ("python -m pytest -q", "git status")
+    assert parsed.branch is None
+    assert parsed.current_directory == "~/agent-os"
+
+
 def test_repeated_history_does_not_displace_newest_actionable_failure():
     parsed = parse_terminal_transcript(
         "user@cloudshell:~$ git fetch origin\n"
