@@ -82,6 +82,25 @@ class TestDependencyResolver:
         assert has_cycle is True
         assert cycle == ["x", "y", "x"]
 
+    def test_cycle_detection_is_deterministic_with_multiple_cycles(self):
+        """Multiple cycles expose the first cycle in task insertion order."""
+        tasks = [make_task(task_id) for task_id in ("x", "y", "a", "b")]
+        resolver = DependencyResolver(
+            tasks,
+            {
+                "x": ["y"],
+                "y": ["x"],
+                "a": ["b"],
+                "b": ["a"],
+            },
+        )
+
+        first = resolver.has_cycle()
+        second = resolver.has_cycle()
+
+        assert first == (True, ["x", "y", "x"])
+        assert second == first
+
     def test_no_cycle(self):
         """Test resolver confirms no cycle exists."""
         tasks = [make_task(f"task-{i}") for i in range(3)]
@@ -102,6 +121,23 @@ class TestDependencyResolver:
 
         assert success is True
         assert sorted_tasks == ["task-0", "task-1", "task-2"]
+
+    def test_topological_sort_preserves_ready_sibling_order(self):
+        """Branching DAGs preserve task insertion order among ready siblings."""
+        tasks = [make_task(task_id) for task_id in ("root", "right", "left", "join")]
+        resolver = DependencyResolver(
+            tasks,
+            {
+                "right": ["root"],
+                "left": ["root"],
+                "join": ["left", "right"],
+            },
+        )
+
+        success, sorted_tasks = resolver.topological_sort()
+
+        assert success is True
+        assert sorted_tasks == ["root", "right", "left", "join"]
 
     def test_topological_sort_with_cycle(self):
         """Test that topological sort fails with cycle."""
