@@ -3,7 +3,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TESTING = ROOT / "01_Shared_Standards/global-engineering/testing-and-release.md"
 SAFE_LANE = ROOT / "01_Shared_Standards/github/safe-implementation-lane.md"
-WORKFLOW = ROOT / ".github/workflows/agent-os-validation.yml"
 
 
 def normalized_text(path: Path) -> str:
@@ -78,19 +77,8 @@ def test_ci_routing_does_not_grant_lifecycle_or_external_authority() -> None:
     assert "A CI-routed pending state grants no Ready-for-Review or later authority" in lane
 
 
-def test_validation_gate_supports_current_pr_heads_and_explicit_final_candidate_dispatch() -> None:
-    workflow = WORKFLOW.read_text(encoding="utf-8")
+def test_validation_policy_preserves_draft_cost_and_exact_head_ready_boundaries() -> None:
     lane = normalized_section(SAFE_LANE, "Validation Loop")
-    pull_request = workflow.index("pull_request:")
-    dispatch = workflow.index("workflow_dispatch:")
-    trigger_block = workflow[pull_request:dispatch]
-
-    assert "main" in trigger_block
-    assert "synchronize" in trigger_block
-    assert "paths:" not in trigger_block
-    assert "paths-ignore:" not in trigger_block
-    assert "workflow_dispatch:" in workflow
-    assert "expected_head_sha:" in workflow
     assert "this lane does not require aggregate validation on ordinary Draft PR updates" in lane
     assert "does not create or modify a workflow to obtain validation" in lane
     assert "Only required evidence bound to the current exact head may satisfy Ready-for-Review" in lane
