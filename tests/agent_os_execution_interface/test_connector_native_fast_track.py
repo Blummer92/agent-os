@@ -81,6 +81,22 @@ def test_runtime_capability_preserves_the_existing_governed_runner_route():
     assert decision.governed_runner_invoked is False
 
 
+@pytest.mark.parametrize("authority", ("merge_authorized", "external_writes_authorized"))
+def test_runtime_route_fails_closed_on_excluded_authority(authority):
+    route = _route(
+        required_capabilities=(ExecutorCapability.TEST_EXECUTION,),
+        **{authority: True},
+    )
+    assert route.selected_route is ExecutorRoute.CHATGPT_GOVERNED_RUNNER
+
+    decision = consume_executor_route_decision(route)
+
+    assert decision.action is ConnectorNativeFastTrackAction.NEEDS_DECISION
+    assert decision.reason_codes == (
+        ConnectorNativeFastTrackReason.EXCLUDED_AUTHORITY_PRESENT,
+    )
+
+
 def test_connector_native_fails_closed_without_upstream_write_authority():
     route = _route(
         authorization_id_or_none=None,
