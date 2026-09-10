@@ -105,10 +105,13 @@ def parse_terminal_transcript(text: str) -> TerminalTranscript:
                 command_project = _PROJECT_RE.search(command)
                 if command_project:
                     cloud_project = command_project.group("project")
-            # A parenthesized prompt segment is the Cloud project when it matches a
-            # project the transcript already established, and a git branch otherwise.
-            if parsed_context and parsed_context != cloud_project:
-                branch = parsed_context
+            # Branch evidence describes the newest prompt only. A prompt with no
+            # branch context must clear an older branch instead of leaking it forward.
+            branch = (
+                parsed_context
+                if parsed_context is not None and parsed_context != cloud_project
+                else None
+            )
             continue
 
         if line.startswith("Updated property [core/project]."):
