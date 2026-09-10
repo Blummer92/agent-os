@@ -19,6 +19,7 @@ from typing import Mapping, Sequence
 from .gce_control_path import FIXED_ENTRYPOINT, GceResourceTuple, HostInvocationEvidence, OidcTrustPolicy, VmState, run_gce_control_path, validate_handoff_id
 from .github_issue_comment_ingress import IssueCommentIngressResult
 from .governed_invocation_binding import bind_ingress_to_gce
+from .sudo_admission_inspection import collect_sudo_admission, expected_runtime_source_sha, unavailable_sudo_admission
 
 PROJECT="agent-os-502614";ZONE="us-central1-a";INSTANCE="agent-os-test";RESOURCE=GceResourceTuple(project=PROJECT,zone=ZONE,instance=INSTANCE)
 HOST_PYTHON="/usr/bin/python3"
@@ -30,11 +31,6 @@ MAX_DIAGNOSTIC_STDERR=2048
 WORKFLOW_REF="Blummer92/agent-os/.github/workflows/agent-os-governed-invocation.yml@refs/heads/main"
 WIF_PROVIDER="//iam.googleapis.com/projects/966859826758/locations/global/workloadIdentityPools/agent-os-github/providers/agent-os-main"
 
-# Fixed repository-owned sentinels framing the trusted runtime-inspection JSON.
-# gcloud compute ssh can interleave its own local SSH-keygen chatter into the
-# captured stdout stream (proven live in run 32896154122); these markers let
-# the adapter isolate exactly the bytes the remote diagnostic itself printed
-# instead of scanning for "{"/"}" in arbitrary transport noise.
 _FRAME_START="===AGENT-OS-RUNTIME-INSPECTION-JSON-BEGIN==="
 _FRAME_END="===AGENT-OS-RUNTIME-INSPECTION-JSON-END==="
 
@@ -104,6 +100,10 @@ class GcloudIapAdapter:
  def probe_ready(self,resource:GceResourceTuple)->bool:return self._ssh(resource,f"test -x {FIXED_ENTRYPOINT}").returncode==0
  def probe_discovery_ready(self,resource:GceResourceTuple)->bool:return self._ssh(resource,DISCOVERY_PROBE_COMMAND).returncode==0
  def probe_activation_ready(self,resource:GceResourceTuple)->bool:return self._ssh(resource,ACTIVATION_PROBE_COMMAND).returncode==0
+ def inspect_sudo_admission(self,resource:GceResourceTuple)->dict[str,object]:
+  try:expected_sha=expected_runtime_source_sha()
+  except (OSError,ValueError):return unavailable_sudo_admission("runtime-source-sha-unavailable")
+  return collect_sudo_admission(lambda command:self._ssh(resource,command),expected_sha)
  def activate_first_publication(self,resource:GceResourceTuple,*,source_capsule_id:str)->dict[str,object]:
   result=self._ssh(resource,_activation_command(source_capsule_id))
   if result.returncode!=0:raise GcloudCommandError("fixed first-publication activation failed")
@@ -187,27 +187,9 @@ def _stdout_contamination_evidence(stdout:str)->dict[str,object]:
  length=len(stdout)
  first_brace=stdout.find("{");last_brace=stdout.rfind("}")
  json_span_present=first_brace!=-1 and last_brace!=-1 and first_brace<last_brace
- return {
-  "length":length,
-  "empty":length==0,
-  "json_object_span_present":json_span_present,
-  "leading_text_before_json":json_span_present and first_brace>0,
-  "trailing_text_after_json":json_span_present and last_brace<length-1,
-  "prefix":_sanitize_stdout_snippet(stdout[:_STDOUT_EVIDENCE_PREFIX_CAP]),
-  "prefix_truncated":length>_STDOUT_EVIDENCE_PREFIX_CAP,
-  "suffix":_sanitize_stdout_snippet(stdout[-_STDOUT_EVIDENCE_SUFFIX_CAP:]) if length>_STDOUT_EVIDENCE_PREFIX_CAP else "",
-  "suffix_truncated":length>_STDOUT_EVIDENCE_PREFIX_CAP+_STDOUT_EVIDENCE_SUFFIX_CAP,
-  "sha256":hashlib.sha256(stdout.encode("utf-8",errors="replace")).hexdigest(),
- }
+ return {"length":length,"empty":length==0,"json_object_span_present":json_span_present,"leading_text_before_json":json_span_present and first_brace>0,"trailing_text_after_json":json_span_present and last_brace<length-1,"prefix":_sanitize_stdout_snippet(stdout[:_STDOUT_EVIDENCE_PREFIX_CAP]),"prefix_truncated":length>_STDOUT_EVIDENCE_PREFIX_CAP,"suffix":_sanitize_stdout_snippet(stdout[-_STDOUT_EVIDENCE_SUFFIX_CAP:]) if length>_STDOUT_EVIDENCE_PREFIX_CAP else "","suffix_truncated":length>_STDOUT_EVIDENCE_PREFIX_CAP+_STDOUT_EVIDENCE_SUFFIX_CAP,"sha256":hashlib.sha256(stdout.encode("utf-8",errors="replace")).hexdigest()}
 
 def _extract_framed_payload(stdout:str)->tuple[str|None,str|None]:
- """Return only the bytes between exactly one valid sentinel pair, or a fail-closed reason.
-
- Requires exactly one start marker and exactly one end marker, with the start
- strictly before the end. This is a structural boundary match on fixed
- repository-owned literals only -- it never scans for "{"/"}" and cannot be
- influenced by braces or any other content in surrounding transport chatter.
- """
  if type(stdout) is not str:stdout=""
  start_count=stdout.count(_FRAME_START)
  if start_count==0:return None,"inspection-frame-start-missing"
@@ -230,8 +212,12 @@ def execute_transport(ingress:IssueCommentIngressResult,*,claims:Mapping[str,obj
   if not _policy().accepts(claims):return {"runtime_inspection":_non_authorizing("blocked","claims-rejected")}
   if adapter.observe_state(RESOURCE) is not VmState.RUNNING:return {"runtime_inspection":_non_authorizing("needs-decision","host-not-running")}
   runtime_inspection=adapter.inspect_runtime(RESOURCE)
+  response={"runtime_inspection":runtime_inspection}
+  inspect_sudo=getattr(adapter,"inspect_sudo_admission",None)
+  if callable(inspect_sudo):response["sudo_admission"]=inspect_sudo(RESOURCE)
   from .cloud_identity_inspection import collect_cloud_identity
-  return {"runtime_inspection":runtime_inspection,"cloud_identity":collect_cloud_identity(_run)}
+  response["cloud_identity"]=collect_cloud_identity(_run)
+  return response
  if ingress.reason=="accepted-first-publication-activation-envelope":
   if ingress.status!="accepted" or ingress.issue_number is None or ingress.source_capsule_id_or_none is None:raise ValueError("activation requires accepted canonical source capsule evidence")
   if ingress.handoff_id_or_none is not None or ingress.run_attempt!=1:raise ValueError("activation transport malformed")
