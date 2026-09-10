@@ -25,8 +25,17 @@ def test_genuine_boundary_stops_without_dispatch():
     assert adapter.actions == []
 
 
-def test_repeated_equivalent_transition_stalls_finitely():
+def test_repeated_action_name_can_advance_across_new_observations():
     adapter = Adapter()
-    result = drive_governed_continuation(adapter, lambda _: ContinuationDecision("retry-validation"))
+    def decide(stage):
+        return ContinuationDecision("", terminal=True) if stage == 2 else ContinuationDecision("retry-validation")
+    result = drive_governed_continuation(adapter, decide)
+    assert result.status == "completed"
+    assert result.transitions == ("retry-validation", "retry-validation")
+
+
+def test_explicit_semantic_stall_stops_finitely():
+    adapter = Adapter()
+    result = drive_governed_continuation(adapter, lambda _: ContinuationDecision("retry-validation", stalled=True))
     assert result.status == "recovery-stalled"
-    assert adapter.actions == ["retry-validation"]
+    assert adapter.actions == []
