@@ -91,10 +91,9 @@ class BranchRefreshActionsExecutionResult:
 
 
 def _sha40(value: object, field_name: str) -> str:
-    text = str(value).lower()
-    if _SHA40.fullmatch(text) is None:
+    if type(value) is not str or _SHA40.fullmatch(value) is None:
         raise ValueError(f"{field_name} must be a lowercase 40-character SHA")
-    return text
+    return value
 
 
 def _strict_receipt_bool(payload: Mapping[str, object], field_name: str) -> bool:
