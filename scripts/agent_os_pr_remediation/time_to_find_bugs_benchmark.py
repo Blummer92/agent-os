@@ -96,6 +96,7 @@ class DiagnosticAction:
     sequence: int
     kind: ActionKind
     evidence_ref: str
+    monotonic_seconds: float
 
     def __post_init__(self) -> None:
         if type(self.sequence) is not int or self.sequence < 1:
@@ -103,6 +104,8 @@ class DiagnosticAction:
         if type(self.kind) is not ActionKind:
             raise EvidenceValidationError("diagnostic action kind must use ActionKind")
         _text(self.evidence_ref, "diagnostic_action.evidence_ref")
+        if type(self.monotonic_seconds) not in {int, float} or self.monotonic_seconds < 0:
+            raise EvidenceValidationError("diagnostic action time must be non-negative monotonic seconds")
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,6 +275,10 @@ def validate_run(case: TTFDCase, run: TTFDRun) -> None:
         raise EvidenceValidationError("actions must be a bounded tuple")
     if tuple(action.sequence for action in run.actions) != tuple(range(1, len(run.actions) + 1)):
         raise EvidenceValidationError("diagnostic action sequence must be contiguous")
+    if any(run.actions[index].monotonic_seconds < run.actions[index - 1].monotonic_seconds for index in range(1, len(run.actions))):
+        raise EvidenceValidationError("diagnostic action times must not move backwards")
+    if run.actions and (run.actions[0].monotonic_seconds < times[0] or run.actions[-1].monotonic_seconds > times[-1]):
+        raise EvidenceValidationError("diagnostic actions must stay inside T0-T5")
     _text(run.discovered_outcome, "discovered_outcome")
     _items(run.contamination_reasons, "contamination_reasons")
     if run.contaminated != bool(run.contamination_reasons):
@@ -297,9 +304,7 @@ def score_run(case: TTFDCase, run: TTFDRun) -> TTFDScore:
         counts[action.kind] += 1
     points = {point.event: float(point.monotonic_seconds) for point in run.timeline}
     t3_time = points[TraceEvent.T3_DEFECT_CONFIRMED]
-    actions_to_t3 = sum(1 for action in run.actions if action.sequence <= len(run.actions) and action.evidence_ref and action.sequence and action.sequence <= len(run.actions))
-    # Action records are intentionally sequence-only; callers stop recording confirmation-bound
-    # diagnostic actions at T3 and may append post-confirmation actions only with explicit refs.
+    actions_to_t3 = sum(1 for action in run.actions if action.monotonic_seconds <= t3_time)
     premature_stop = (
         run.case_id in NATIVE_CANARY_CASES
         and run.native_canary is not None
