@@ -66,6 +66,15 @@ def _text(value: object, name: str) -> str:
     return value
 
 
+def _canonical_text_tuple(value: object, name: str) -> tuple[str, ...]:
+    if type(value) is not tuple or any(type(item) is not str or not item for item in value):
+        raise TypeError(f"{name} must be a tuple of non-empty strings")
+    checked = tuple(_text(item, name) for item in value)
+    if checked != tuple(sorted(set(checked))):
+        raise ValueError(f"{name} must be sorted and unique")
+    return checked
+
+
 def _bindings(value: object, name: str) -> tuple[tuple[str, str], ...]:
     if type(value) is not tuple:
         raise TypeError(f"{name} must be an exact tuple")
@@ -144,10 +153,8 @@ class EvidenceCompatibilityDecision:
         object.__setattr__(self, "expected_bindings", _bindings(self.expected_bindings, "decision expected bindings"))
         if not self.expected_bindings:
             raise ValueError("decision expected bindings must not be empty")
-        if type(self.reason_codes) is not tuple or any(type(value) is not str or not value for value in self.reason_codes):
-            raise TypeError("reason_codes must be a tuple of non-empty strings")
-        if type(self.reacquire_owners) is not tuple or any(type(value) is not str or not value for value in self.reacquire_owners):
-            raise TypeError("reacquire_owners must be a tuple of non-empty strings")
+        _canonical_text_tuple(self.reason_codes, "reason_codes")
+        _canonical_text_tuple(self.reacquire_owners, "reacquire_owners")
         _text(self.decision_id, "decision_id")
         if self.authority_created is not False or self.side_effects_performed is not False:
             raise ValueError("compatibility decision cannot create authority or side effects")
