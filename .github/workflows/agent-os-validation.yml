@@ -133,7 +133,7 @@ jobs:
 
       - name: Set up Node for focused validation
         if: ${{ steps.plan.outputs.profile == 'focused' && steps.plan.outputs.needs_node == 'true' }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
