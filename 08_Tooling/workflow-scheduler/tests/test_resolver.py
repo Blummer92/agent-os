@@ -1,7 +1,5 @@
 """Tests for dependency resolver."""
 
-import pytest
-
 from workflow_scheduler.dependencies import DependencyResolver
 from workflow_scheduler.models import Task
 
