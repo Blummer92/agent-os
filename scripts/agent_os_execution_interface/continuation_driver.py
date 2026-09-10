@@ -1,62 +1,47 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Callable, Protocol
+
+MAX_DRIVER_TRANSITIONS = 12
 
 
 @dataclass(frozen=True, slots=True)
 class ContinuationDecision:
     action: str
+    terminal: bool = False
     blocked: bool = False
     stalled: bool = False
     reason_codes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
-class ContinuationResult:
-    terminal_state: str
-    transitions: int
+class ContinuationDriveResult:
+    status: str
+    transitions: tuple[str, ...]
     reason_codes: tuple[str, ...]
+    user_turns_required: int = 0
 
 
-def drive_bounded_continuation(
-    *,
-    observe: Callable[[], Any],
-    decide: Callable[[Any], ContinuationDecision],
-    dispatch: Callable[[str], None],
-    max_transitions: int = 8,
-) -> ContinuationResult:
-    """Drive an already-authorized finite continuation until terminal evidence.
+class ContinuationAdapter(Protocol):
+    def observe(self) -> object: ...
+    def dispatch(self, action: str) -> None: ...
 
-    Repeating an action name is not itself semantic no-progress: a later
-    observation may legitimately require the same bounded transition again.
-    The decision layer owns semantic stall detection and signals it explicitly
-    with ``stalled=True``.
-    """
-    if type(max_transitions) is not int or max_transitions < 1:
-        raise ValueError("max_transitions must be a positive built-in integer")
 
-    for transition in range(max_transitions + 1):
-        decision = decide(observe())
-        if type(decision) is not ContinuationDecision:
-            raise TypeError("decide must return an exact ContinuationDecision")
+def drive_governed_continuation(adapter: ContinuationAdapter, decide: Callable[[object], ContinuationDecision], *, max_transitions: int = MAX_DRIVER_TRANSITIONS) -> ContinuationDriveResult:
+    if type(max_transitions) is not int or max_transitions < 1 or max_transitions > MAX_DRIVER_TRANSITIONS:
+        raise ValueError("max_transitions is outside the governed finite bound")
+    transitions = []
+    for _ in range(max_transitions):
+        decision = decide(adapter.observe())
+        if decision.terminal:
+            return ContinuationDriveResult("completed", tuple(transitions), decision.reason_codes)
         if decision.blocked:
-            return ContinuationResult("blocked", transition, decision.reason_codes)
+            return ContinuationDriveResult("blocked", tuple(transitions), decision.reason_codes)
         if decision.stalled:
-            return ContinuationResult(
-                "recovery-stalled",
-                transition,
-                decision.reason_codes or ("semantic-no-progress",),
-            )
+            return ContinuationDriveResult("recovery-stalled", tuple(transitions), tuple(sorted(set(decision.reason_codes) | {"repeated-equivalent-transition"})))
         if not decision.action:
-            return ContinuationResult("complete", transition, decision.reason_codes)
-        if transition == max_transitions:
-            return ContinuationResult(
-                "transition-limit-reached",
-                transition,
-                ("finite-transition-bound-reached",),
-            )
-        dispatch(decision.action)
-
-    raise AssertionError("unreachable")
+            return ContinuationDriveResult("blocked", tuple(transitions), ("no-authorized-executable-next-action",))
+        adapter.dispatch(decision.action)
+        transitions.append(decision.action)
+    return ContinuationDriveResult("recovery-stalled", tuple(transitions), ("finite-transition-bound-exhausted",))
