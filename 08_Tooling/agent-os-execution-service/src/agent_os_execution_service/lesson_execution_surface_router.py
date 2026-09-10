@@ -62,8 +62,13 @@ def activate_routed_issue_start_lesson_preflight(
             if cached_executor is None:
                 fallback_state = "unavailable"
                 raise LessonReadUnavailableError("Agent OS Lessons Learned fallback reader unavailable")
+            try:
+                output = cached_executor(query)
+            except (ConnectionError, TimeoutError, RuntimeError):
+                fallback_state = "unavailable"
+                raise
             fallback_state = "available"
-            return cached_executor(query)
+            return output
 
     result = activate_issue_start_lesson_preflight(
         repository=repository,
