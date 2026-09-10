@@ -260,6 +260,19 @@ class ExecutionServiceResult:
         if self.status is ExecutionServiceStatus.ACCEPTED:
             if self.reasons != (ExecutionServiceReason.ACCEPTED,):
                 raise ValueError("accepted results require exactly the accepted reason")
+            if any(
+                value is None
+                for value in (
+                    self.repository_identity,
+                    self.requested_ref,
+                    self.expected_sha,
+                    self.observed_ref,
+                    self.observed_sha,
+                )
+            ):
+                raise ValueError(
+                    "accepted results require complete canonical identity evidence"
+                )
         elif ExecutionServiceReason.ACCEPTED in self.reasons:
             raise ValueError("non-accepted results cannot include accepted")
         if self.repository_identity is not None:
