@@ -113,6 +113,20 @@ def test_fallback_unavailable_preserves_ckr6_capability_disposition():
     assert result["handoff_projection"]["stop_conditions"]
 
 
+def test_fallback_runtime_failure_reports_reader_unavailable():
+    def failing_reader(_query):
+        raise TimeoutError("Notion read timed out")
+
+    result = _required(
+        native_notion_connector_available=False,
+        fallback_factory=lambda: failing_reader,
+    )
+    assert result["fallback_reader_invoked"] is True
+    assert result["fallback_reader_state"] == "unavailable"
+    assert result["lesson_retrieval_status"] == "insufficient"
+    assert result["substantial_hypothesis_admissible"] is False
+
+
 def test_native_and_fallback_routes_return_equivalent_ckr6_evidence():
     reader = lambda _query: {"results": [_lesson()]}
     native = _required(
