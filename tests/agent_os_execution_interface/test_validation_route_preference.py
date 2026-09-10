@@ -141,6 +141,19 @@ def test_ci_diagnosis_reuses_connected_evidence_before_manual_reproduction() -> 
     assert decision.manual_fallback_justified is False
 
 
+def test_ci_diagnosis_does_not_treat_non_exact_connected_evidence_as_exact_head() -> None:
+    decision = choose_validation_route(
+        timing=ValidationTiming.CI_FAILURE_DIAGNOSIS,
+        executor_route=route(runner=True),
+        exact_head_ci_available=False,
+        connected_ci_evidence_available=True,
+        manual_terminal_available=False,
+        manual_terminal_appropriate=False,
+    )
+    assert decision.selected_route is ValidationRoute.GOVERNED_EXECUTOR
+    assert decision.connected_evidence_reused is False
+
+
 def test_ci_diagnosis_uses_governed_route_when_connected_evidence_unavailable() -> None:
     decision = choose_validation_route(
         timing=ValidationTiming.CI_FAILURE_DIAGNOSIS,
