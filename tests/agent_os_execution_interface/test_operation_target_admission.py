@@ -64,6 +64,21 @@ def test_correct_issue_operation_binding_can_continue():
     assert result.next_action == "continue-selected-operation"
 
 
+def test_correct_binding_without_capable_route_fails_closed():
+    result = evaluate_operation_target_admission(
+        repository="Blummer92/agent-os",
+        target_number=1284,
+        operation=LifecycleOperation.UPDATE_ISSUE,
+        selected_target_kind=TargetKind.ISSUE,
+        prior_effect_none_proven=True,
+        current_target_reacquired=True,
+        capable_alternative_available=False,
+    )
+    assert result.mutation_admissible is False
+    assert result.reason_codes == ("no-capable-authorized-route",)
+    assert result.next_action == "report-no-capable-authorized-alternative"
+
+
 def test_guard_grants_no_lifecycle_or_workflow_authority():
     result = evaluate_operation_target_admission(
         repository="Blummer92/agent-os",

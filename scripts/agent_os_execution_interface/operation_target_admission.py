@@ -54,14 +54,7 @@ def evaluate_operation_target_admission(
     current_target_reacquired: bool,
     capable_alternative_available: bool,
 ) -> OperationTargetAdmission:
-    """Fail closed when a lifecycle operation is bound to the wrong target kind.
-
-    This pre-mutation guard does not choose a tool or grant write authority. When
-    a wrong target/action selection is proven to have had zero effect and a
-    capable authorized alternative exists, it requires currentness reacquisition
-    and continuation through the existing #1237 post-selection seam instead of
-    terminating the parent finite mission.
-    """
+    """Fail closed unless the selected operation is current, typed, and capable."""
     if type(repository) is not str or "/" not in repository or not repository.strip():
         raise ValueError("repository must be non-empty owner/name text")
     if type(target_number) is not int or target_number < 1:
@@ -86,6 +79,8 @@ def evaluate_operation_target_admission(
         reasons.append("prior-effect-not-proven-zero")
     if not current_target_reacquired:
         reasons.append("current-target-not-reacquired")
+    if not capable_alternative_available:
+        reasons.append("no-capable-authorized-route")
 
     if not reasons:
         mutation_admissible = True
@@ -93,15 +88,17 @@ def evaluate_operation_target_admission(
         reasons.append("operation-target-binding-current")
     else:
         mutation_admissible = False
-        if "operation-target-kind-mismatch" in reasons and prior_effect_none_proven:
+        if "prior-effect-not-proven-zero" in reasons:
+            next_action = "read-back-canonical-state-before-any-mutation"
+        elif "operation-target-kind-mismatch" in reasons:
             if not current_target_reacquired:
                 next_action = "reacquire-issue-currentness-before-alternative"
             elif capable_alternative_available:
                 next_action = "continue-via-approved-alternative-on-same-lineage"
             else:
                 next_action = "report-no-capable-authorized-alternative"
-        elif "prior-effect-not-proven-zero" in reasons:
-            next_action = "read-back-canonical-state-before-any-mutation"
+        elif "no-capable-authorized-route" in reasons:
+            next_action = "report-no-capable-authorized-alternative"
         else:
             next_action = "reacquire-operation-bindings"
 
