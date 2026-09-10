@@ -41,5 +41,7 @@ class ExecutionAuthorizationEvidence:
                 raise TypeError(f"{name} must be a non-empty exact string")
         if type(self.execution_authorized) is not bool:
             raise TypeError("execution_authorized must be an exact boolean")
-        parse_canonical_utc(self.authorized_at)
-        parse_canonical_utc(self.expires_at)
+        authorized = parse_canonical_utc(self.authorized_at)
+        expires = parse_canonical_utc(self.expires_at)
+        if expires <= authorized:
+            raise ValueError("expires_at must be after authorized_at")

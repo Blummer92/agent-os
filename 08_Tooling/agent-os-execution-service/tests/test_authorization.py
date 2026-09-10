@@ -75,6 +75,15 @@ def test_malformed_timestamps_fail_closed(field: str) -> None:
         _evidence(**{field: "not-a-timestamp"})
 
 
+@pytest.mark.parametrize(
+    "expires_at",
+    ("2026-07-30T20:00:00Z", "2026-07-30T19:59:59Z"),
+)
+def test_expiry_must_be_after_authorization(expires_at: str) -> None:
+    with pytest.raises(ValueError, match="expires_at must be after authorized_at"):
+        _evidence(expires_at=expires_at)
+
+
 def test_execution_authorized_requires_exact_boolean() -> None:
     with pytest.raises(TypeError):
         _evidence(execution_authorized=1)
