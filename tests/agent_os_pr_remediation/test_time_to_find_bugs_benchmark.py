@@ -34,6 +34,10 @@ def timeline(times=(0, 1, 2, 3, 4, 5)):
     return tuple(TimelinePoint(event, value) for event, value in zip(TraceEvent, times))
 
 
+def action(sequence, kind, evidence_ref, at=None):
+    return DiagnosticAction(sequence, kind, evidence_ref, float(sequence if at is None else at))
+
+
 def run(case, **overrides):
     values = dict(
         benchmark_version=BENCHMARK_VERSION,
@@ -48,7 +52,7 @@ def run(case, **overrides):
         baseline_sha=SHA,
         fixture_sha=SHA,
         timeline=timeline(),
-        actions=(DiagnosticAction(1, ActionKind.AUTHORITATIVE_READ, "canonical:test"),),
+        actions=(action(1, ActionKind.AUTHORITATIVE_READ, "canonical:test"),),
         discovered_outcome="defect-bounded",
         classification_correct=True,
         owner_next_action_correct=True,
@@ -91,38 +95,44 @@ def test_subject_packet_reuses_crh8a_leakage_guard():
 
 def test_timeline_requires_exact_t0_t5_order_and_monotonic_time():
     case = phase1_case()
-    bad_order = tuple(reversed(timeline()))
     with pytest.raises(EvidenceValidationError):
-        score_run(case, run(case, timeline=bad_order))
+        score_run(case, run(case, timeline=tuple(reversed(timeline()))))
     with pytest.raises(EvidenceValidationError):
         score_run(case, run(case, timeline=timeline((0, 1, 2, 1, 4, 5))))
 
 
 def test_ttcd_is_confirmation_time_not_hypothesis_time():
     case = phase1_case()
-    score = score_run(case, run(case, timeline=timeline((10, 11, 12, 15, 16, 17))))
+    score = score_run(case, run(
+        case,
+        timeline=timeline((10, 11, 12, 15, 16, 17)),
+        actions=(action(1, ActionKind.AUTHORITATIVE_READ, "canonical:test", 11),),
+    ))
     assert score.ttfh == 2
     assert score.ttcd == 5
 
 
+def test_action_count_stops_at_t3_confirmation():
+    case = phase1_case()
+    score = score_run(case, run(case, actions=(
+        action(1, ActionKind.AUTHORITATIVE_READ, "read", 1),
+        action(2, ActionKind.INCORRECT_HYPOTHESIS, "wrong", 2),
+        action(3, ActionKind.AUTHORITATIVE_READ, "confirm", 3),
+        action(4, ActionKind.PARENT_RESUMPTION, "post-confirmation", 4),
+    )))
+    assert score.diagnostic_actions_to_confirmation == 3
+
+
 def test_d01_repository_pass_without_live_canary_is_incomplete_not_pass():
     case = phase1_case("TTFD-D01")
-    score = score_run(case, run(
-        case,
-        native_host_conformance=ConformanceResult.INCOMPLETE,
-        native_canary=None,
-    ))
+    score = score_run(case, run(case, native_host_conformance=ConformanceResult.INCOMPLETE, native_canary=None))
     assert score.result == "integration-evidence-incomplete"
 
 
 def test_d01_native_failure_overrides_repository_pass():
     case = phase1_case("TTFD-D01")
     canary = eligible_canary(next_admitted_operation_executed=False)
-    score = score_run(case, run(
-        case,
-        native_host_conformance=ConformanceResult.FAIL,
-        native_canary=canary,
-    ))
+    score = score_run(case, run(case, native_host_conformance=ConformanceResult.FAIL, native_canary=canary))
     assert score.result == "fail"
     assert score.premature_stop is True
 
@@ -131,23 +141,16 @@ def test_d02_requires_parent_resumption_and_next_operation():
     case = phase1_case("TTFD-D02")
     canary = eligible_canary(next_admitted_operation_executed=False)
     actions = (
-        DiagnosticAction(1, ActionKind.SUBORDINATE_MUTATION, "issue-write"),
-        DiagnosticAction(2, ActionKind.PARENT_RESUMPTION, "parent-reacquired"),
+        action(1, ActionKind.SUBORDINATE_MUTATION, "issue-write", 1),
+        action(2, ActionKind.PARENT_RESUMPTION, "parent-reacquired", 2),
     )
-    score = score_run(case, run(
-        case, actions=actions, native_host_conformance=ConformanceResult.FAIL,
-        native_canary=canary,
-    ))
+    score = score_run(case, run(case, actions=actions, native_host_conformance=ConformanceResult.FAIL, native_canary=canary))
     assert score.parent_mission_resumptions == 1
     assert score.premature_stop is True
 
 
 def test_missing_runtime_identity_does_not_invalidate_behavioral_failure():
-    canary = eligible_canary(
-        native_runtime_identity_available=False,
-        native_runtime_identity_if_exposed="",
-        next_admitted_operation_executed=False,
-    )
+    canary = eligible_canary(native_runtime_identity_available=False, native_runtime_identity_if_exposed="", next_admitted_operation_executed=False)
     assert canary.comparability_class is ComparabilityClass.BEHAVIORALLY_ELIGIBLE
 
 
@@ -159,9 +162,9 @@ def test_runtime_exact_comparability_requires_runtime_identity():
 def test_surface_failure_plus_alternate_route_records_recovery():
     case = phase1_case("TTFD-C01")
     actions = (
-        DiagnosticAction(1, ActionKind.SURFACE_FAILURE, "logs-insufficient"),
-        DiagnosticAction(2, ActionKind.ALTERNATE_ROUTE, "check-run-metadata"),
-        DiagnosticAction(3, ActionKind.AUTHORITATIVE_READ, "canonical-check"),
+        action(1, ActionKind.SURFACE_FAILURE, "logs-insufficient"),
+        action(2, ActionKind.ALTERNATE_ROUTE, "check-run-metadata"),
+        action(3, ActionKind.AUTHORITATIVE_READ, "canonical-check"),
     )
     score = score_run(case, run(case, actions=actions))
     assert score.surface_failures_recovered == 1
@@ -171,31 +174,28 @@ def test_surface_failure_plus_alternate_route_records_recovery():
 def test_b01_stale_evidence_attempt_is_explicit_metric():
     case = phase1_case("TTFD-B01")
     score = score_run(case, run(case, actions=(
-        DiagnosticAction(1, ActionKind.STALE_EVIDENCE, "old-head-green"),
-        DiagnosticAction(2, ActionKind.AUTHORITATIVE_READ, "current-head"),
+        action(1, ActionKind.STALE_EVIDENCE, "old-head-green"),
+        action(2, ActionKind.AUTHORITATIVE_READ, "current-head"),
     )))
     assert score.stale_evidence_attempts == 1
 
 
 def test_b02_duplicate_validation_attempt_is_explicit_metric():
     case = phase1_case("TTFD-B02")
-    score = score_run(case, run(case, actions=(
-        DiagnosticAction(1, ActionKind.DUPLICATE_VALIDATION, "equivalent-current-head-run"),
-    )))
+    score = score_run(case, run(case, actions=(action(1, ActionKind.DUPLICATE_VALIDATION, "equivalent-current-head-run"),)))
     assert score.duplicate_validation_attempts == 1
 
 
 def test_b05_transport_success_cannot_override_semantic_validation_failure():
     case = phase1_case("TTFD-B05")
-    score = score_run(case, run(case, repository_conformance=ConformanceResult.FAIL))
-    assert score.result == "fail"
+    assert score_run(case, run(case, repository_conformance=ConformanceResult.FAIL)).result == "fail"
 
 
 def test_e02_semantic_no_progress_is_bounded_metric():
     case = phase1_case("TTFD-E02")
     score = score_run(case, run(case, actions=(
-        DiagnosticAction(1, ActionKind.NO_PROGRESS, "equivalent-transition-1"),
-        DiagnosticAction(2, ActionKind.NO_PROGRESS, "equivalent-transition-2"),
+        action(1, ActionKind.NO_PROGRESS, "equivalent-transition-1"),
+        action(2, ActionKind.NO_PROGRESS, "equivalent-transition-2"),
     )))
     assert score.no_progress_transitions == 2
 
@@ -203,16 +203,15 @@ def test_e02_semantic_no_progress_is_bounded_metric():
 def test_f01_stale_diagnostics_after_head_movement_are_visible():
     case = phase1_case("TTFD-F01")
     score = score_run(case, run(case, actions=(
-        DiagnosticAction(1, ActionKind.STALE_EVIDENCE, "diagnostic-bound-to-old-head"),
-        DiagnosticAction(2, ActionKind.AUTHORITATIVE_READ, "reacquired-current-head"),
+        action(1, ActionKind.STALE_EVIDENCE, "diagnostic-bound-to-old-head"),
+        action(2, ActionKind.AUTHORITATIVE_READ, "reacquired-current-head"),
     )))
     assert (score.stale_evidence_attempts, score.authoritative_reads) == (1, 1)
 
 
 def test_g04_mergeable_false_can_still_pass_after_deterministic_reconciliation():
     case = phase1_case("TTFD-G04")
-    score = score_run(case, run(case, discovered_outcome="reconciliation-succeeds"))
-    assert score.result == "pass"
+    assert score_run(case, run(case, discovered_outcome="reconciliation-succeeds")).result == "pass"
 
 
 def test_clean_false_positive_is_automatic_failure():
@@ -224,24 +223,17 @@ def test_clean_false_positive_is_automatic_failure():
 
 def test_contaminated_run_is_ineligible_and_non_authorizing():
     case = phase1_case()
-    score = score_run(case, run(
-        case, contaminated=True, contamination_reasons=("answer-leakage",),
-    ))
+    score = score_run(case, run(case, contaminated=True, contamination_reasons=("answer-leakage",)))
     assert score.eligible is False
     assert score.result == "ineligible"
-    assert not any((
-        score.execution_authorized, score.merge_authorized, score.closure_authorized,
-        score.external_write_authorized, score.side_effects_performed,
-    ))
+    assert not any((score.execution_authorized, score.merge_authorized, score.closure_authorized, score.external_write_authorized, score.side_effects_performed))
 
 
 def test_run_identity_is_deterministic_and_preserves_fresh_run_number():
     case = phase1_case()
     first = run(case, run_number=1)
-    same = replace(first)
-    second = replace(first, run_number=2)
-    assert first.run_identity == same.run_identity
-    assert first.run_identity != second.run_identity
+    assert first.run_identity == replace(first).run_identity
+    assert first.run_identity != replace(first, run_number=2).run_identity
 
 
 def test_telemetry_cannot_synthesize_continuation():
@@ -249,7 +241,7 @@ def test_telemetry_cannot_synthesize_continuation():
     canary = eligible_canary(next_admitted_operation_executed=False)
     score = score_run(case, run(
         case,
-        actions=(DiagnosticAction(1, ActionKind.DISCOVERY, "schema-discovered"),),
+        actions=(action(1, ActionKind.DISCOVERY, "schema-discovered"),),
         native_host_conformance=ConformanceResult.FAIL,
         native_canary=canary,
     ))
