@@ -193,3 +193,33 @@ def test_private_evidence_never_projects() -> None:
     assert "private_evidence" not in public
     assert secret not in str(public)
     assert public["side_effects_performed"] is False
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "repository_identity",
+        "requested_ref",
+        "expected_sha",
+        "observed_ref",
+        "observed_sha",
+    ),
+)
+def test_accepted_result_requires_complete_identity(field: str) -> None:
+    with pytest.raises(
+        ValueError,
+        match="accepted results require complete canonical identity evidence",
+    ):
+        result(**{field: None})
+
+
+def test_rejected_result_may_omit_identity() -> None:
+    value = result(
+        status=ExecutionServiceStatus.REJECTED,
+        reasons=(ExecutionServiceReason.EVIDENCE_UNAVAILABLE,),
+        repository_identity=None,
+        requested_ref=None,
+        expected_sha=None,
+        observed_ref=None,
+        observed_sha=None,
+    )
+    assert value.status is ExecutionServiceStatus.REJECTED
