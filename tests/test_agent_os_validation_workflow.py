@@ -11,6 +11,7 @@ NAVIGATION_WORKFLOW = ROOT / ".github/workflows/navigation-registry-offline-test
 ISSUE_ACCEPTANCE_WORKFLOW = ROOT / ".github/workflows/agent-os-issue-acceptance-report.yml"
 CLOUD_BUILD = ROOT / "cloudbuild.yaml"
 SHARED_ACTION = ROOT / ".github/actions/setup-python-dev/action.yml"
+REQUIREMENTS_DEV = ROOT / "requirements-dev.txt"
 
 _REQUIREMENTS_INSTALL = re.compile(
     r"python -m pip install -r [\"']?([^\s\"']+)[\"']?"
@@ -201,16 +202,19 @@ def test_validation_gate_uses_read_only_permissions_and_bounded_execution():
 def test_validation_gate_installs_same_dependencies_as_cloud_build():
     workflow = WORKFLOW.read_text(encoding="utf-8")
     cloudbuild = CLOUD_BUILD.read_text(encoding="utf-8")
-    required = [
+    requirements = REQUIREMENTS_DEV.read_text(encoding="utf-8")
+    direct_bootstrap = [
         "requirements-dev.txt",
         "08_Tooling/workflow-scheduler/requirements.txt",
         "08_Tooling/instructional-materials-coach[test]",
         "08_Tooling/notion-navigation-client[test]",
-        "08_Tooling/reusable-capability-registry[test]",
     ]
-    for dependency in required:
+    for dependency in direct_bootstrap:
         assert dependency in workflow
         assert dependency in cloudbuild
+    assert "-e ./08_Tooling/reusable-capability-registry[test]" in requirements
+    assert 'pip install -e "./08_Tooling/reusable-capability-registry[test]"' not in workflow
+    assert 'pip install -e "./08_Tooling/reusable-capability-registry[test]"' not in cloudbuild
 
 
 def test_governed_validation_paths_do_not_upgrade_pip_unconditionally():

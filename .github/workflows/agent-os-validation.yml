@@ -121,7 +121,6 @@ jobs:
             08_Tooling/workflow-scheduler/requirements.txt
             08_Tooling/instructional-materials-coach/pyproject.toml
             08_Tooling/notion-navigation-client/pyproject.toml
-            08_Tooling/reusable-capability-registry/pyproject.toml
 
       - name: Install focused validation dependencies
         if: ${{ steps.plan.outputs.profile == 'focused' }}
@@ -131,7 +130,6 @@ jobs:
           python -m pip install -r 08_Tooling/workflow-scheduler/requirements.txt
           python -m pip install -e "./08_Tooling/instructional-materials-coach[test]"
           python -m pip install -e "./08_Tooling/notion-navigation-client[test]"
-          python -m pip install -e "./08_Tooling/reusable-capability-registry[test]"
 
       - name: Set up Node for focused validation
         if: ${{ steps.plan.outputs.profile == 'focused' && steps.plan.outputs.needs_node == 'true' }}
@@ -323,7 +321,6 @@ jobs:
             08_Tooling/workflow-scheduler/requirements.txt
             08_Tooling/instructional-materials-coach/pyproject.toml
             08_Tooling/notion-navigation-client/pyproject.toml
-            08_Tooling/reusable-capability-registry/pyproject.toml
 
       - name: Install validation dependencies
         if: ${{ steps.aggregate_evidence.outputs.run_required != 'false' }}
@@ -333,7 +330,6 @@ jobs:
           python -m pip install -r 08_Tooling/workflow-scheduler/requirements.txt
           python -m pip install -e "./08_Tooling/instructional-materials-coach[test]"
           python -m pip install -e "./08_Tooling/notion-navigation-client[test]"
-          python -m pip install -e "./08_Tooling/reusable-capability-registry[test]"
 
       - name: Run aggregate validation
         if: ${{ steps.aggregate_evidence.outputs.run_required != 'false' }}
