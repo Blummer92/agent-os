@@ -243,7 +243,7 @@ class ExecutionServiceResult:
         if self.schema_version != EXECUTION_SERVICE_RESULT_SCHEMA_VERSION:
             raise ValueError("schema_version is unsupported")
         _validate_identifier("request_id", self.request_id)
-        _require_nonnegative_int("request_revision", self.request_revision)
+        _require_positive_int("request_revision", self.request_revision)
         _validate_sha256("request_fingerprint", self.request_fingerprint)
         parse_canonical_utc(self.evaluated_at)
         _require_exact_str("service_version", self.service_version)
@@ -335,134 +335,77 @@ _EXECUTION_SERVICE_REQUEST_FIELD_NAMES = frozenset(f.name for f in fields(Execut
 
 
 def _serialize_repository_identity(value: RepositoryIdentity) -> dict[str, object]:
-    if type(value) is not RepositoryIdentity:
-        raise TypeError("repository_identity must be the canonical exact RepositoryIdentity")
-    return {
-        "host": value.host,
-        "owner": value.owner,
-        "repository": value.repository,
-        "repository_id": value.repository_id,
-        "is_fork": value.is_fork,
-        "upstream_owner": value.upstream_owner,
-        "upstream_repository": value.upstream_repository,
-        "upstream_repository_id": value.upstream_repository_id,
-        "default_branch": value.default_branch,
-    }
+    return {name: getattr(value, name) for name in sorted(_REPOSITORY_IDENTITY_FIELD_NAMES)}
 
 
-def _reconstruct_repository_identity(payload: object) -> RepositoryIdentity:
-    if type(payload) is not dict:
-        raise TypeError("repository_identity payload must be an exact object")
-    if set(payload) != _REPOSITORY_IDENTITY_FIELD_NAMES:
-        raise ValueError("repository_identity payload contains unknown or missing fields")
-    return RepositoryIdentity(**payload)
-
-
-def _list_field(payload: dict[str, object], name: str) -> list:
-    value = payload[name]
-    if type(value) is not list:
-        raise TypeError(f"{name} must be an exact array")
-    return value
-
-
-def _string_list_field(payload: dict[str, object], name: str) -> list[str]:
-    values = _list_field(payload, name)
-    if not all(type(item) is str for item in values):
-        raise TypeError(f"{name} must contain exact strings")
-    return values
-
-
-def serialize_execution_service_request(value: ExecutionServiceRequest) -> dict[str, object]:
-    """Serialize one exact ``ExecutionServiceRequest`` to its canonical payload.
-
-    The payload contains every public semantic request field in deterministic
-    form: enums as their supported string values, ordered tuple fields as
-    arrays, and the nested ``RepositoryIdentity`` using its own canonical
-    field set. ``execution_service_request_fingerprint(...)`` remains the sole
-    fingerprint authority; this only carries the value already computed onto
-    the request.
-    """
-
+def serialize_execution_service_request(value: ExecutionServiceRequest) -> bytes:
     if type(value) is not ExecutionServiceRequest:
         raise TypeError("value must be an exact ExecutionServiceRequest")
-    return {
-        "schema_version": value.schema_version,
-        "request_id": value.request_id,
-        "request_revision": value.request_revision,
-        "created_at": value.created_at,
-        "expires_at": value.expires_at,
-        "repository_identity": _serialize_repository_identity(value.repository_identity),
-        "issue_or_handoff_identity": value.issue_or_handoff_identity,
-        "canonical_owner": value.canonical_owner,
-        "requesting_actor": value.requesting_actor,
-        "capability": value.capability.value,
-        "base_branch": value.base_branch,
-        "base_sha": value.base_sha,
-        "requested_ref": value.requested_ref,
-        "expected_sha": value.expected_sha,
-        "allowed_paths": list(value.allowed_paths),
-        "forbidden_paths": list(value.forbidden_paths),
-        "inspected_file_count_limit": value.inspected_file_count_limit,
-        "inspected_byte_limit": value.inspected_byte_limit,
-        "evidence_visibility_policy": value.evidence_visibility_policy.value,
-        "invalidation_conditions": [item.value for item in value.invalidation_conditions],
-        "request_fingerprint": value.request_fingerprint,
+    payload = {
+        name: (
+            value.capability.value
+            if name == "capability"
+            else _serialize_repository_identity(value.repository_identity)
+            if name == "repository_identity"
+            else value.evidence_visibility_policy.value
+            if name == "evidence_visibility_policy"
+            else [item.value for item in value.invalidation_conditions]
+            if name == "invalidation_conditions"
+            else list(getattr(value, name))
+            if name in {"allowed_paths", "forbidden_paths"}
+            else getattr(value, name)
+        )
+        for name in sorted(_EXECUTION_SERVICE_REQUEST_FIELD_NAMES)
     }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
-def reconstruct_execution_service_request(payload: object) -> ExecutionServiceRequest:
-    """Reconstruct one exact ``ExecutionServiceRequest`` from its canonical payload.
-
-    Accepts only the exact canonical payload shape produced by
-    ``serialize_execution_service_request``. Every semantic check -- malformed
-    timestamps, refs, SHAs, paths, repository identity, bounds, duplicates,
-    overlaps, ordering, and fingerprint drift -- is delegated to the existing
-    ``ExecutionServiceRequest`` and ``RepositoryIdentity`` constructors so this
-    seam never duplicates or redefines request semantics.
-    """
-
-    if type(payload) is not dict:
-        raise TypeError("execution service request payload must be an exact object")
-    if set(payload) != _EXECUTION_SERVICE_REQUEST_FIELD_NAMES:
-        raise ValueError("execution service request payload contains unknown or missing fields")
-    if payload["schema_version"] != EXECUTION_SERVICE_REQUEST_SCHEMA_VERSION:
-        raise ValueError("schema_version is unsupported")
-    if type(payload["capability"]) is not str:
-        raise TypeError("capability must be an exact string")
-    capability = ExecutionServiceCapability(payload["capability"])
-    if type(payload["evidence_visibility_policy"]) is not str:
-        raise TypeError("evidence_visibility_policy must be an exact string")
-    evidence_visibility_policy = EvidenceVisibilityPolicy(payload["evidence_visibility_policy"])
-    invalidation_conditions = tuple(
-        ExecutionServiceInvalidationCondition(item)
-        for item in _string_list_field(payload, "invalidation_conditions")
-    )
-    allowed_paths = tuple(_string_list_field(payload, "allowed_paths"))
-    forbidden_paths = tuple(_string_list_field(payload, "forbidden_paths"))
-    repository_identity = _reconstruct_repository_identity(payload["repository_identity"])
-    return ExecutionServiceRequest(
-        schema_version=payload["schema_version"],
-        request_id=payload["request_id"],
-        request_revision=payload["request_revision"],
-        created_at=payload["created_at"],
-        expires_at=payload["expires_at"],
-        repository_identity=repository_identity,
-        issue_or_handoff_identity=payload["issue_or_handoff_identity"],
-        canonical_owner=payload["canonical_owner"],
-        requesting_actor=payload["requesting_actor"],
-        capability=capability,
-        base_branch=payload["base_branch"],
-        base_sha=payload["base_sha"],
-        requested_ref=payload["requested_ref"],
-        expected_sha=payload["expected_sha"],
-        allowed_paths=allowed_paths,
-        forbidden_paths=forbidden_paths,
-        inspected_file_count_limit=payload["inspected_file_count_limit"],
-        inspected_byte_limit=payload["inspected_byte_limit"],
-        evidence_visibility_policy=evidence_visibility_policy,
-        invalidation_conditions=invalidation_conditions,
-        request_fingerprint=payload["request_fingerprint"],
-    )
+def deserialize_execution_service_request(payload: bytes | str) -> ExecutionServiceRequest:
+    if isinstance(payload, bytes):
+        try:
+            text = payload.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError("request payload must be UTF-8") from exc
+    elif type(payload) is str:
+        text = payload
+    else:
+        raise TypeError("request payload must be bytes or exact string")
+    try:
+        decoded = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError("request payload must be canonical JSON") from exc
+    if type(decoded) is not dict or set(decoded) != _EXECUTION_SERVICE_REQUEST_FIELD_NAMES:
+        raise ValueError("request payload has unknown or missing fields")
+    try:
+        identity_payload = decoded["repository_identity"]
+        if type(identity_payload) is not dict or set(identity_payload) != _REPOSITORY_IDENTITY_FIELD_NAMES:
+            raise ValueError("repository_identity has unknown or missing fields")
+        identity = RepositoryIdentity(**identity_payload)
+        capability = ExecutionServiceCapability(decoded["capability"])
+        visibility = EvidenceVisibilityPolicy(decoded["evidence_visibility_policy"])
+        conditions_payload = decoded["invalidation_conditions"]
+        if type(conditions_payload) is not list:
+            raise ValueError("invalidation_conditions must be an array")
+        conditions = tuple(ExecutionServiceInvalidationCondition(item) for item in conditions_payload)
+        for name in ("allowed_paths", "forbidden_paths"):
+            if type(decoded[name]) is not list:
+                raise ValueError(f"{name} must be an array")
+        request = ExecutionServiceRequest(
+            **{
+                **decoded,
+                "repository_identity": identity,
+                "capability": capability,
+                "evidence_visibility_policy": visibility,
+                "invalidation_conditions": conditions,
+                "allowed_paths": tuple(decoded["allowed_paths"]),
+                "forbidden_paths": tuple(decoded["forbidden_paths"]),
+            }
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("request payload failed validation") from exc
+    if serialize_execution_service_request(request).decode("utf-8") != text:
+        raise ValueError("request payload is not canonical JSON")
+    return request
 
 
 def execution_service_result_fingerprint(value: ExecutionServiceResult) -> str:
@@ -484,44 +427,45 @@ def execution_service_result_fingerprint(value: ExecutionServiceResult) -> str:
         "observed_sha": value.observed_sha,
         "inspected_file_count": value.inspected_file_count,
         "inspected_byte_count": value.inspected_byte_count,
-        "private_evidence": [{"label": item.label, "value": item.value} for item in value.private_evidence],
+        "private_evidence": [(item.label, item.value) for item in value.private_evidence],
         "public_summary": value.public_summary,
-        "side_effects_performed": False,
+        "side_effects_performed": value.side_effects_performed,
     }
     return _fingerprint(payload)
+
+
+def project_public_result(value: ExecutionServiceResult) -> dict[str, object]:
+    if type(value) is not ExecutionServiceResult:
+        raise TypeError("value must be ExecutionServiceResult")
+    return {
+        "schema_version": value.schema_version,
+        "request_id": value.request_id,
+        "request_revision": value.request_revision,
+        "request_fingerprint": value.request_fingerprint,
+        "evaluated_at": value.evaluated_at,
+        "service_version": value.service_version,
+        "status": value.status.value,
+        "reasons": [item.value for item in value.reasons],
+        "repository_identity": list(value.repository_identity.canonical_key) if value.repository_identity else None,
+        "requested_ref": value.requested_ref,
+        "expected_sha": value.expected_sha,
+        "observed_ref": value.observed_ref,
+        "observed_sha": value.observed_sha,
+        "inspected_file_count": value.inspected_file_count,
+        "inspected_byte_count": value.inspected_byte_count,
+        "public_summary": value.public_summary,
+        "result_fingerprint": value.result_fingerprint,
+        "side_effects_performed": value.side_effects_performed,
+    }
 
 
 def paths_overlap(left: str, right: str) -> bool:
     return left == right or left.startswith(right + "/") or right.startswith(left + "/")
 
 
-def path_is_within(path: str, roots: tuple[str, ...]) -> bool:
-    return any(path == root or path.startswith(root + "/") for root in roots)
-
-
-def _fingerprint(payload: dict[str, object]) -> str:
-    data = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    return hashlib.sha256(data.encode("utf-8")).hexdigest()
-
-
-def _require_exact_str(name: str, value: object) -> None:
-    if type(value) is not str:
-        raise TypeError(f"{name} must be an exact string")
-
-
-def _require_exact_tuple(name: str, value: object) -> None:
-    if type(value) is not tuple:
-        raise TypeError(f"{name} must be an exact tuple")
-
-
-def _require_nonnegative_int(name: str, value: object) -> None:
-    if type(value) is not int or value < 0:
-        raise TypeError(f"{name} must be a non-negative exact integer")
-
-
-def _require_positive_int(name: str, value: object) -> None:
-    if type(value) is not int or value <= 0:
-        raise TypeError(f"{name} must be a positive exact integer")
+def _validate_repository_identity(value: object) -> None:
+    if type(value) is not RepositoryIdentity:
+        raise TypeError("repository_identity must be RepositoryIdentity")
 
 
 def _validate_identifier(name: str, value: object) -> None:
@@ -536,10 +480,39 @@ def _validate_owner(name: str, value: object) -> None:
         raise ValueError(f"{name} must use bounded ASCII owner syntax")
 
 
+def _validate_ref(name: str, value: object) -> None:
+    _require_exact_str(name, value)
+    if not _REF_RE.fullmatch(value) or any(char in value for char in _FORBIDDEN_REF_CHARS):
+        raise ValueError(f"{name} must use bounded Git ref syntax")
+
+
+def _validate_path_tuple(name: str, value: object, *, require_nonempty: bool) -> None:
+    _require_exact_tuple(name, value)
+    if require_nonempty and not value:
+        raise ValueError(f"{name} must not be empty")
+    if len(value) > MAX_PATH_COUNT:
+        raise ValueError(f"{name} exceeds the path ceiling")
+    for item in value:
+        _validate_path(item)
+    if tuple(sorted(value)) != value or len(set(value)) != len(value):
+        raise ValueError(f"{name} must be sorted and unique")
+
+
+def _validate_path(value: object) -> None:
+    _require_exact_str("path", value)
+    if not value or len(value.encode("utf-8")) > MAX_PATH_LENGTH:
+        raise ValueError("path is empty or exceeds the byte ceiling")
+    if value.startswith("/") or "\\" in value or "\x00" in value:
+        raise ValueError("path must be repository-relative POSIX text")
+    parts = value.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise ValueError("path contains a non-canonical segment")
+
+
 def _validate_sha40(name: str, value: object) -> None:
     _require_exact_str(name, value)
     if not _SHA40_RE.fullmatch(value):
-        raise ValueError(f"{name} must be a full lowercase commit SHA")
+        raise ValueError(f"{name} must be a lowercase 40-character SHA")
 
 
 def _validate_sha256(name: str, value: object) -> None:
@@ -548,56 +521,26 @@ def _validate_sha256(name: str, value: object) -> None:
         raise ValueError(f"{name} must be a lowercase SHA-256 digest")
 
 
-def _validate_ref(name: str, value: object) -> None:
-    _require_exact_str(name, value)
-    if not _REF_RE.fullmatch(value):
-        raise ValueError(f"{name} must use canonical ASCII ref syntax")
-    if value.startswith("/") or value.endswith("/") or "//" in value or ".." in value or "@{" in value:
-        raise ValueError(f"{name} is not canonical")
-    if any(char in value for char in _FORBIDDEN_REF_CHARS):
-        raise ValueError(f"{name} contains a forbidden ref character")
+def _require_exact_str(name: str, value: object) -> None:
+    if type(value) is not str:
+        raise TypeError(f"{name} must be an exact string")
 
 
-def _validate_path(value: object) -> None:
-    _require_exact_str("path", value)
-    if not value or len(value) > MAX_PATH_LENGTH or value.startswith("/") or "\\" in value:
-        raise ValueError("path must be a bounded repository-relative POSIX path")
-    if any(ord(char) < 32 or ord(char) == 127 for char in value):
-        raise ValueError("path contains a control character")
-    parts = value.split("/")
-    if any(part in ("", ".", "..") for part in parts):
-        raise ValueError("path contains a non-canonical segment")
+def _require_exact_tuple(name: str, value: object) -> None:
+    if type(value) is not tuple:
+        raise TypeError(f"{name} must be an exact tuple")
 
 
-def _validate_path_tuple(name: str, values: object, *, require_nonempty: bool) -> None:
-    _require_exact_tuple(name, values)
-    if require_nonempty and not values:
-        raise ValueError(f"{name} must not be empty")
-    if len(values) > MAX_PATH_COUNT:
-        raise ValueError(f"{name} exceeds the path count ceiling")
-    if not all(type(item) is str for item in values):
-        raise TypeError(f"{name} must contain exact strings")
-    for item in values:
-        _validate_path(item)
-    if values != tuple(sorted(values)) or len(set(values)) != len(values):
-        raise ValueError(f"{name} must be sorted and unique")
-    for index, left in enumerate(values):
-        for right in values[index + 1 :]:
-            if paths_overlap(left, right):
-                raise ValueError(f"{name} must not contain overlapping paths")
+def _require_positive_int(name: str, value: object) -> None:
+    if type(value) is not int or value <= 0:
+        raise TypeError(f"{name} must be a positive exact integer")
 
 
-def _validate_repository_identity(value: object) -> None:
-    if type(value) is not RepositoryIdentity:
-        raise TypeError("repository_identity must be the canonical exact RepositoryIdentity")
-    for name in ("host", "owner", "repository", "default_branch"):
-        _require_exact_str(name, getattr(value, name))
-    if value.host != value.host.lower() or value.owner != value.owner.lower() or value.repository != value.repository.lower():
-        raise ValueError("repository identity host, owner, and repository must be canonical lowercase")
-    if not value.host or not value.owner or not value.repository:
-        raise ValueError("repository identity values must not be empty")
-    if value.repository_id is not None and type(value.repository_id) is not int:
-        raise TypeError("repository_id must be an exact integer or None")
-    if type(value.is_fork) is not bool:
-        raise TypeError("is_fork must be an exact boolean")
-    _validate_ref("default_branch", value.default_branch)
+def _require_nonnegative_int(name: str, value: object) -> None:
+    if type(value) is not int or value < 0:
+        raise TypeError(f"{name} must be a non-negative exact integer")
+
+
+def _fingerprint(payload: object) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
