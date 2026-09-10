@@ -6,24 +6,26 @@ from workflow_scheduler.dependencies import DependencyResolver
 from workflow_scheduler.models import Task
 
 
+def make_task(task_id: str) -> Task:
+    """Build a minimal workflow task for dependency tests."""
+    return Task(
+        id=task_id,
+        workflow_id="workflow-1",
+        type="test",
+        owner="system",
+        action="test",
+        idempotency_key=f"key-{task_id}",
+    )
+
+
 class TestDependencyResolver:
     """Tests for DependencyResolver."""
 
     def test_no_dependencies(self):
         """Test resolver with independent tasks."""
-        tasks = [
-            Task(
-                id=f"task-{i}",
-                workflow_id="workflow-1",
-                type="test",
-                owner="system",
-                action="test",
-                idempotency_key=f"key-{i}",
-            )
-            for i in range(3)
-        ]
-
+        tasks = [make_task(f"task-{i}") for i in range(3)]
         resolver = DependencyResolver(tasks, {})
+
         ready = resolver.get_ready_tasks(set())
 
         assert len(ready) == 3
@@ -31,198 +33,101 @@ class TestDependencyResolver:
 
     def test_simple_dependency_chain(self):
         """Test simple dependency chain: 1 depends on 0."""
-        tasks = [
-            Task(
-                id="task-0",
-                workflow_id="workflow-1",
-                type="test",
-                owner="system",
-                action="test",
-                idempotency_key="key-0",
-            ),
-            Task(
-                id="task-1",
-                workflow_id="workflow-1",
-                type="test",
-                owner="system",
-                action="test",
-                idempotency_key="key-1",
-            ),
-        ]
-
+        tasks = [make_task("task-0"), make_task("task-1")]
         dependencies = {"task-1": ["task-0"]}
         resolver = DependencyResolver(tasks, dependencies)
 
-        # Initially, only task-0 is ready
-        ready = resolver.get_ready_tasks(set())
-        assert ready == ["task-0"]
-
-        # After task-0 completes, task-1 is ready
-        ready = resolver.get_ready_tasks({"task-0"})
-        assert ready == ["task-1"]
+        assert resolver.get_ready_tasks(set()) == ["task-0"]
+        assert resolver.get_ready_tasks({"task-0"}) == ["task-1"]
 
     def test_multiple_dependencies(self):
         """Test task with multiple dependencies."""
-        tasks = [
-            Task(
-                id=f"task-{i}",
-                workflow_id="workflow-1",
-                type="test",
-                owner="system",
-                action="test",
-                idempotency_key=f"key-{i}",
-            )
-            for i in range(3)
-        ]
-
+        tasks = [make_task(f"task-{i}") for i in range(3)]
         dependencies = {"task-2": ["task-0", "task-1"]}
         resolver = DependencyResolver(tasks, dependencies)
 
-        # task-2 not ready when only task-0 complete
-        ready = resolver.get_ready_tasks({"task-0"})
-        assert "task-2" not in ready
-
-        # task-2 ready when both dependencies complete
-        ready = resolver.get_ready_tasks({"task-0", "task-1"})
-        assert "task-2" in ready
+        assert "task-2" not in resolver.get_ready_tasks({"task-0"})
+        assert "task-2" in resolver.get_ready_tasks({"task-0", "task-1"})
 
     def test_cycle_detection_simple(self):
         """Test detection of simple cycle: A -> B -> A."""
-        tasks = [
-            Task(
-                id="task-A",
-                workflow_id="workflow-1",
-                type="test",
-                owner="system",
-                action="test",
-                idempotency_key="key-A",
-            ),
-            Task(
-                id="task-B",
-                workflow_id="workflow-1",
-                type="test",
-                owner="system",
-                action="test",
-                idempotency_key="key-B",
-            ),
-        ]
-
+        tasks = [make_task("task-A"), make_task("task-B")]
         dependencies = {"task-A": ["task-B"], "task-B": ["task-A"]}
         resolver = DependencyResolver(tasks, dependencies)
 
         has_cycle, cycle = resolver.has_cycle()
+
         assert has_cycle is True
-        assert len(cycle) > 0
+        assert cycle == ["task-A", "task-B", "task-A"]
 
     def test_cycle_detection_self_loop(self):
         """Test detection of self-loop cycle."""
-        tasks = [
-            Task(
-                id="task-1",
-                workflow_id="workflow-1",
-                type="test",
-                owner="system",
-                action="test",
-                idempotency_key="key-1",
-            ),
-        ]
-
-        dependencies = {"task-1": ["task-1"]}
-        resolver = DependencyResolver(tasks, dependencies)
+        resolver = DependencyResolver([make_task("task-1")], {"task-1": ["task-1"]})
 
         has_cycle, cycle = resolver.has_cycle()
+
         assert has_cycle is True
+        assert cycle == ["task-1", "task-1"]
+
+    def test_cycle_detection_excludes_non_cycle_prefix(self):
+        """Cycle paths contain only the actual cycle, not the DFS prefix."""
+        tasks = [make_task(task_id) for task_id in ("root", "x", "y")]
+        resolver = DependencyResolver(
+            tasks,
+            {"root": ["x"], "x": ["y"], "y": ["x"]},
+        )
+
+        has_cycle, cycle = resolver.has_cycle()
+
+        assert has_cycle is True
+        assert cycle == ["x", "y", "x"]
 
     def test_no_cycle(self):
         """Test resolver confirms no cycle exists."""
-        tasks = [
-            Task(
-                id=f"task-{i}",
-                workflow_id="workflow-1",
-                type="test",
-                owner="system",
-                action="test",
-                idempotency_key=f"key-{i}",
-            )
-            for i in range(3)
-        ]
-
+        tasks = [make_task(f"task-{i}") for i in range(3)]
         dependencies = {"task-1": ["task-0"], "task-2": ["task-1"]}
         resolver = DependencyResolver(tasks, dependencies)
 
         has_cycle, _ = resolver.has_cycle()
+
         assert has_cycle is False
 
     def test_topological_sort(self):
         """Test topological sort of task dependencies."""
-        tasks = [
-            Task(
-                id=f"task-{i}",
-                workflow_id="workflow-1",
-                type="test",
-                owner="system",
-                action="test",
-                idempotency_key=f"key-{i}",
-            )
-            for i in range(3)
-        ]
-
+        tasks = [make_task(f"task-{i}") for i in range(3)]
         dependencies = {"task-1": ["task-0"], "task-2": ["task-1"]}
         resolver = DependencyResolver(tasks, dependencies)
 
         success, sorted_tasks = resolver.topological_sort()
+
         assert success is True
-        assert len(sorted_tasks) == 3
-
-        # Check ordering: task-0 before task-1, task-1 before task-2
-        task_0_idx = sorted_tasks.index("task-0")
-        task_1_idx = sorted_tasks.index("task-1")
-        task_2_idx = sorted_tasks.index("task-2")
-
-        assert task_0_idx < task_1_idx < task_2_idx
+        assert sorted_tasks == ["task-0", "task-1", "task-2"]
 
     def test_topological_sort_with_cycle(self):
         """Test that topological sort fails with cycle."""
-        tasks = [
-            Task(
-                id="task-A",
-                workflow_id="workflow-1",
-                type="test",
-                owner="system",
-                action="test",
-                idempotency_key="key-A",
-            ),
-            Task(
-                id="task-B",
-                workflow_id="workflow-1",
-                type="test",
-                owner="system",
-                action="test",
-                idempotency_key="key-B",
-            ),
-        ]
-
+        tasks = [make_task("task-A"), make_task("task-B")]
         dependencies = {"task-A": ["task-B"], "task-B": ["task-A"]}
         resolver = DependencyResolver(tasks, dependencies)
 
         success, sorted_tasks = resolver.topological_sort()
+
         assert success is False
-        assert len(sorted_tasks) == 0
+        assert sorted_tasks == []
+
+    def test_unknown_dependency_fails_closed_for_topological_sort(self):
+        """Unknown dependencies cannot be silently treated as schedulable."""
+        tasks = [make_task("a"), make_task("b")]
+        resolver = DependencyResolver(tasks, {"a": ["ghost"], "b": ["a"]})
+
+        success, sorted_tasks = resolver.topological_sort()
+
+        assert success is False
+        assert sorted_tasks == []
+        assert resolver.get_ready_tasks(set()) == []
 
     def test_get_all_dependencies(self):
         """Test getting all transitive dependencies."""
-        tasks = [
-            Task(
-                id=f"task-{i}",
-                workflow_id="workflow-1",
-                type="test",
-                owner="system",
-                action="test",
-                idempotency_key=f"key-{i}",
-            )
-            for i in range(4)
-        ]
-
+        tasks = [make_task(f"task-{i}") for i in range(4)]
         dependencies = {
             "task-1": ["task-0"],
             "task-2": ["task-1"],
@@ -230,6 +135,29 @@ class TestDependencyResolver:
         }
         resolver = DependencyResolver(tasks, dependencies)
 
-        # task-3 transitively depends on task-0, task-1, task-2
-        all_deps = resolver.get_all_dependencies("task-3")
-        assert all_deps == {"task-0", "task-1", "task-2"}
+        assert resolver.get_all_dependencies("task-3") == {
+            "task-0",
+            "task-1",
+            "task-2",
+        }
+
+    def test_deep_dependency_chain_does_not_recurse(self):
+        """Cycle, ordering, and closure mechanics handle graphs beyond recursion depth."""
+        count = 3000
+        tasks = [make_task(f"task-{i}") for i in range(count)]
+        dependencies = {
+            f"task-{i}": [f"task-{i - 1}"]
+            for i in range(1, count)
+        }
+        resolver = DependencyResolver(tasks, dependencies)
+
+        has_cycle, cycle = resolver.has_cycle()
+        success, sorted_tasks = resolver.topological_sort()
+        all_dependencies = resolver.get_all_dependencies(f"task-{count - 1}")
+
+        assert has_cycle is False
+        assert cycle == []
+        assert success is True
+        assert sorted_tasks[0] == "task-0"
+        assert sorted_tasks[-1] == f"task-{count - 1}"
+        assert len(all_dependencies) == count - 1
