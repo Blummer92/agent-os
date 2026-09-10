@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from mcp.server import MCPServer
 
-from .issue_start_lesson_preflight import activate_issue_start_lesson_preflight
+from .lesson_execution_surface_router import activate_routed_issue_start_lesson_preflight
 from .lesson_reader_composition import build_lesson_read_executor
 from .mcp_facade import (
     activate_agent_os_failed_repair,
@@ -23,17 +23,25 @@ def plan_agent_os_continuation_tool(repository: str, issue_number: int, canonica
 
 
 @mcp.tool()
-def activate_agent_os_issue_start_lessons_tool(repository: str, issue_number: int, task_reference: str, ecosystem_hints: tuple[str, ...] = (), language_hints: tuple[str, ...] = (), library_hints: tuple[str, ...] = (), capability_keywords: tuple[str, ...] = (), target_path_hints: tuple[str, ...] = (), canonical_rule_refs: tuple[str, ...] = (), known_knowledge_refs: tuple[str, ...] = (), specialized_knowledge_required: bool | None = None, lesson_rows: list[dict[str, object]] | None = None) -> dict[str, object]:
-    """Resolve the mandatory initial CKR6 gate before substantial reasoning."""
-    execute_read = (
+def activate_agent_os_issue_start_lessons_tool(repository: str, issue_number: int, task_reference: str, native_notion_connector_available: bool = False, ecosystem_hints: tuple[str, ...] = (), language_hints: tuple[str, ...] = (), library_hints: tuple[str, ...] = (), capability_keywords: tuple[str, ...] = (), target_path_hints: tuple[str, ...] = (), canonical_rule_refs: tuple[str, ...] = (), known_knowledge_refs: tuple[str, ...] = (), specialized_knowledge_required: bool | None = None, lesson_rows: list[dict[str, object]] | None = None) -> dict[str, object]:
+    """Resolve initial CKR6 using native Notion or the existing Agent OS reader."""
+    native_execute_read = (
         (lambda _query: {"results": lesson_rows})
-        if lesson_rows is not None
-        else build_lesson_read_executor()
+        if native_notion_connector_available and lesson_rows is not None
+        else None
     )
-    return activate_issue_start_lesson_preflight(
+    fallback_factory = (
+        (lambda: (lambda _query: {"results": lesson_rows}))
+        if not native_notion_connector_available and lesson_rows is not None
+        else build_lesson_read_executor
+    )
+    return activate_routed_issue_start_lesson_preflight(
         repository=repository,
         issue_number=issue_number,
         task_reference=task_reference,
+        native_notion_connector_available=native_notion_connector_available,
+        native_execute_read=native_execute_read,
+        fallback_factory=fallback_factory,
         ecosystem_hints=ecosystem_hints,
         language_hints=language_hints,
         library_hints=library_hints,
@@ -42,7 +50,6 @@ def activate_agent_os_issue_start_lessons_tool(repository: str, issue_number: in
         canonical_rule_refs=canonical_rule_refs,
         known_knowledge_refs=known_knowledge_refs,
         specialized_knowledge_required=specialized_knowledge_required,
-        execute_read=execute_read,
     )
 
 
