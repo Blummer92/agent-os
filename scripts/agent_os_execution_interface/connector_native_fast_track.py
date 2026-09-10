@@ -115,15 +115,16 @@ def _expected_consumption(
     tuple[ConnectorNativeFastTrackReason, ...],
 ]:
     route = route_decision.selected_route
+    if route_decision.merge_authorized or route_decision.external_writes_authorized:
+        return (
+            ConnectorNativeFastTrackAction.NEEDS_DECISION,
+            (ConnectorNativeFastTrackReason.EXCLUDED_AUTHORITY_PRESENT,),
+        )
+
     if route is ExecutorRoute.CHATGPT_CONNECTOR_NATIVE:
         if route_decision.required_capabilities:
             raise ValueError(
                 "connector-native route cannot carry runtime capabilities"
-            )
-        if route_decision.merge_authorized or route_decision.external_writes_authorized:
-            return (
-                ConnectorNativeFastTrackAction.NEEDS_DECISION,
-                (ConnectorNativeFastTrackReason.EXCLUDED_AUTHORITY_PRESENT,),
             )
         if not (
             route_decision.execution_authorized
