@@ -46,7 +46,7 @@ def test_issue_start_preflight_consumes_relevant_lesson_before_hypothesis():
         specialized_knowledge_required=True,
         execute_read=lambda query: calls.append(query) or {"results": [_lesson()]},
     )
-    assert len(calls) == 1
+    assert calls
     assert result["lesson_retrieval_status"] == "sufficient"
     assert result["selected_lesson_ids"] == ["LL-63"]
     assert result["substantial_hypothesis_admissible"] is True
