@@ -32,3 +32,19 @@ def test_reconciled_sha_validators_preserve_lowercase_and_reject_noncanonical_in
     for value in INVALID_VALUES:
         with pytest.raises(error_type):
             validator(value, "sha")
+
+
+@pytest.mark.parametrize(
+    ("validator", "error_type", "message"),
+    [
+        (recovery_sha40, EvidenceValidationError, "sha must be a 40-character hexadecimal SHA"),
+        (coordination_sha40, EvidenceValidationError, "sha must be a 40-character hexadecimal SHA"),
+        (refresh_sha40, ValueError, "sha must be a lowercase 40-character SHA"),
+        (aggregate_sha, EvidenceValidationError, "sha must be a 40-character hexadecimal SHA"),
+        (normalization_sha, EvidenceValidationError, "sha must be a 40-character hexadecimal SHA"),
+        (preflight_sha, EvidenceValidationError, "sha must be a 40-character hexadecimal SHA"),
+    ],
+)
+def test_reconciled_sha_validators_preserve_pinned_failure_messages(validator, error_type, message):
+    with pytest.raises(error_type, match=f"^{message}$"):
+        validator(UPPER, "sha")
