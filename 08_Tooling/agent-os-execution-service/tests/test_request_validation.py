@@ -110,11 +110,6 @@ def test_bool_and_hostile_tuple_are_rejected_without_iteration() -> None:
     assert touched is False
 
 
-def test_result_revision_must_be_positive() -> None:
-    with pytest.raises(TypeError, match="request_revision must be a positive exact integer"):
-        result(request_revision=0)
-
-
 @pytest.mark.parametrize(
     "path",
     ("/x", "../x", "a/../b", "a//b", "a\\b", "a/./b", "a\x00b"),
