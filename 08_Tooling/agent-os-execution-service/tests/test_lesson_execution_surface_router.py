@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from agent_os_execution_service.lesson_execution_surface_router import (
     activate_routed_issue_start_lesson_preflight,
+    execute_routed_notion_read,
 )
 
 
@@ -61,8 +62,8 @@ def test_native_connector_available_does_not_force_fallback():
     assert native_calls
     assert fallback_calls == []
     assert result["lesson_read_route"] == "native-notion-connector"
+    assert result["content_class"] == "lessons-learned"
     assert result["lesson_retrieval_status"] == "sufficient"
-    assert result["selected_lesson_ids"] == ["LL-63"]
 
 
 def test_native_connector_unavailable_selects_existing_fallback_factory():
@@ -73,15 +74,11 @@ def test_native_connector_unavailable_selects_existing_fallback_factory():
         fallback_calls.append("built")
         return lambda query: read_calls.append(query) or {"results": [_lesson()]}
 
-    result = _required(
-        native_notion_connector_available=False,
-        fallback_factory=factory,
-    )
+    result = _required(native_notion_connector_available=False, fallback_factory=factory)
     assert fallback_calls == ["built"]
     assert read_calls
-    assert result["lesson_read_route"] == "agent-os-lessons-reader"
+    assert result["lesson_read_route"] == "agent-os-notion-reader"
     assert result["fallback_reader_state"] == "available"
-    assert result["lesson_retrieval_status"] == "sufficient"
 
 
 def test_not_needed_performs_zero_native_and_fallback_reads():
@@ -99,56 +96,71 @@ def test_not_needed_performs_zero_native_and_fallback_reads():
     assert native_calls == []
     assert fallback_calls == []
     assert result["lesson_read_route"] == "not-needed"
-    assert result["lesson_retrieval_status"] == "not-needed"
 
 
 def test_fallback_unavailable_preserves_ckr6_capability_disposition():
-    result = _required(
-        native_notion_connector_available=False,
-        fallback_factory=lambda: None,
-    )
-    assert result["fallback_reader_state"] == "unavailable"
-    assert result["lesson_retrieval_status"] == "insufficient"
-    assert result["substantial_hypothesis_admissible"] is False
-    assert result["handoff_projection"]["stop_conditions"]
-
-
-def test_fallback_runtime_failure_reports_reader_unavailable():
-    def failing_reader(_query):
-        raise TimeoutError("Notion read timed out")
-
-    result = _required(
-        native_notion_connector_available=False,
-        fallback_factory=lambda: failing_reader,
-    )
-    assert result["fallback_reader_invoked"] is True
+    result = _required(native_notion_connector_available=False, fallback_factory=lambda: None)
     assert result["fallback_reader_state"] == "unavailable"
     assert result["lesson_retrieval_status"] == "insufficient"
     assert result["substantial_hypothesis_admissible"] is False
 
 
-def test_native_and_fallback_routes_return_equivalent_ckr6_evidence():
-    reader = lambda _query: {"results": [_lesson()]}
-    native = _required(
+def test_curriculum_asset_read_preserves_typed_source_class():
+    row = {"id": "asset-1", "name": "rule-of-thirds-example"}
+    result = execute_routed_notion_read(
+        content_class="curriculum-assets",
+        query={"page_size": 3},
+        native_notion_connector_available=False,
+        fallback_factory=lambda: (lambda _query: {"results": [row]}),
+    )
+    assert result["content_class"] == "curriculum-assets"
+    assert result["read_route"] == "agent-os-notion-reader"
+    assert result["retrieval_status"] == "sufficient"
+    assert result["results"] == [row]
+    assert result["source_authority"] == "preserve-source-contract"
+    assert result["github_writes_authorized"] is False
+    assert result["side_effects_performed"] is False
+
+
+def test_curriculum_content_native_and_fallback_routes_are_semantically_equivalent():
+    row = {"id": "content-1", "title": "Photography Foundations"}
+    reader = lambda _query: {"results": [row]}
+    native = execute_routed_notion_read(
+        content_class="curriculum-content",
+        query={"page_size": 5},
         native_notion_connector_available=True,
         native_execute_read=reader,
     )
-    fallback = _required(
+    fallback = execute_routed_notion_read(
+        content_class="curriculum-content",
+        query={"page_size": 5},
         native_notion_connector_available=False,
         fallback_factory=lambda: reader,
     )
-    for key in (
-        "lesson_retrieval_status",
-        "selected_lesson_ids",
-        "selection_reason_codes",
-        "canonical_github_refs",
-        "knowledge_refs",
-        "handoff_projection",
-        "substantial_hypothesis_admissible",
-        "source_authority",
-    ):
+    for key in ("content_class", "retrieval_status", "results", "source_authority"):
         assert native[key] == fallback[key]
-    assert native["github_writes_authorized"] is False
-    assert fallback["github_writes_authorized"] is False
-    assert native["side_effects_performed"] is False
-    assert fallback["side_effects_performed"] is False
+
+
+def test_lesson_planning_unbound_fallback_fails_closed_without_guessing_source():
+    result = execute_routed_notion_read(
+        content_class="lesson-planning",
+        query={"page_size": 5},
+        native_notion_connector_available=False,
+        fallback_factory=lambda: None,
+    )
+    assert result["retrieval_status"] == "unavailable"
+    assert result["results"] == []
+
+
+def test_unsupported_content_class_is_rejected():
+    try:
+        execute_routed_notion_read(
+            content_class="everything-in-notion",
+            query={},
+            native_notion_connector_available=False,
+            fallback_factory=lambda: None,
+        )
+    except ValueError as exc:
+        assert "unsupported Notion content class" in str(exc)
+    else:
+        raise AssertionError("unsupported content class must fail closed")

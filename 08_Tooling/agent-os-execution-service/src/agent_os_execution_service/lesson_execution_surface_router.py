@@ -1,9 +1,9 @@
-"""Execution-surface routing for issue-start Lessons Learned retrieval (#2282).
+"""Execution-surface routing for bounded Agent OS Notion reads (#2282).
 
-This module selects between a host-supplied native ChatGPT Notion read executor
-and the existing Agent OS production Lessons Learned reader from #2141. It does
-not create a Notion client, selector, context packet, authority model, or write
-capability.
+The router preserves the existing CKR Lessons Learned path while also exposing a
+typed read seam for curriculum assets, curriculum content/working knowledge, and
+lesson-planning context. It reuses the canonical #2141 Scheduler-backed reader
+and creates no second Notion client, selector, cache, mirror, or authority model.
 """
 
 from __future__ import annotations
@@ -11,10 +11,94 @@ from __future__ import annotations
 from typing import Any, Callable, Mapping
 
 from .issue_start_lesson_preflight import activate_issue_start_lesson_preflight
-from .lesson_reader_composition import LessonReadUnavailableError, build_lesson_read_executor
+from .lesson_reader_composition import (
+    LessonReadUnavailableError,
+    build_lesson_read_executor,
+    build_notion_read_executor,
+)
 
 ReadExecutor = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 FallbackFactory = Callable[[], ReadExecutor | None]
+SUPPORTED_NOTION_CONTENT_CLASSES = frozenset(
+    {"curriculum-assets", "curriculum-content", "lesson-planning", "lessons-learned"}
+)
+
+
+def execute_routed_notion_read(
+    *,
+    content_class: str,
+    query: Mapping[str, Any],
+    native_notion_connector_available: bool,
+    native_execute_read: ReadExecutor | None = None,
+    fallback_factory: FallbackFactory | None = None,
+) -> dict[str, object]:
+    """Execute one bounded typed Notion read through native or existing fallback.
+
+    This function does not decide source authority. It preserves the requested
+    content class in the result so downstream callers can apply the existing
+    source-specific provenance/safe-use contract instead of treating every
+    Notion record as interchangeable.
+    """
+    if content_class not in SUPPORTED_NOTION_CONTENT_CLASSES:
+        raise ValueError(f"unsupported Notion content class: {content_class}")
+    if type(native_notion_connector_available) is not bool:
+        raise TypeError("native_notion_connector_available must be a built-in bool")
+    if not isinstance(query, Mapping):
+        raise TypeError("query must be a mapping")
+
+    if native_notion_connector_available:
+        if native_execute_read is None:
+            return {
+                "content_class": content_class,
+                "read_route": "native-notion-connector",
+                "retrieval_status": "unavailable",
+                "results": [],
+                "source_authority": "preserve-source-contract",
+                "github_writes_authorized": False,
+                "side_effects_performed": False,
+            }
+        executor = native_execute_read
+        route = "native-notion-connector"
+    else:
+        factory = fallback_factory or (
+            lambda: build_notion_read_executor(content_class=content_class)
+        )
+        executor = factory()
+        route = "agent-os-notion-reader"
+        if executor is None:
+            return {
+                "content_class": content_class,
+                "read_route": route,
+                "retrieval_status": "unavailable",
+                "results": [],
+                "source_authority": "preserve-source-contract",
+                "github_writes_authorized": False,
+                "side_effects_performed": False,
+            }
+
+    try:
+        output = executor(query)
+    except (ConnectionError, TimeoutError, RuntimeError):
+        return {
+            "content_class": content_class,
+            "read_route": route,
+            "retrieval_status": "unavailable",
+            "results": [],
+            "source_authority": "preserve-source-contract",
+            "github_writes_authorized": False,
+            "side_effects_performed": False,
+        }
+
+    results = output.get("results", []) if isinstance(output, Mapping) else []
+    return {
+        "content_class": content_class,
+        "read_route": route,
+        "retrieval_status": "sufficient" if results else "no-results",
+        "results": results,
+        "source_authority": "preserve-source-contract",
+        "github_writes_authorized": False,
+        "side_effects_performed": False,
+    }
 
 
 def activate_routed_issue_start_lesson_preflight(
@@ -34,13 +118,7 @@ def activate_routed_issue_start_lesson_preflight(
     known_knowledge_refs: tuple[str, ...] = (),
     specialized_knowledge_required: bool | None = None,
 ) -> dict[str, object]:
-    """Resolve CKR6 using native Notion when available, otherwise #2141.
-
-    Fallback composition is lazy: when CKR6 resolves ``not-needed`` the
-    fallback factory is never called. Native availability is explicit execution-
-    surface capability evidence only and never grants repository or Notion write
-    authority.
-    """
+    """Resolve CKR6 Lessons Learned using native Notion or the #2141 fallback."""
     if type(native_notion_connector_available) is not bool:
         raise TypeError("native_notion_connector_available must be a built-in bool")
 
@@ -51,7 +129,7 @@ def activate_routed_issue_start_lesson_preflight(
         selected_route = "native-notion-connector"
         execute_read = native_execute_read
     else:
-        selected_route = "agent-os-lessons-reader"
+        selected_route = "agent-os-notion-reader"
         cached_executor: ReadExecutor | None | object = _UNSET
 
         def execute_read(query: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -93,6 +171,7 @@ def activate_routed_issue_start_lesson_preflight(
 
     return {
         **result,
+        "content_class": "lessons-learned",
         "native_notion_connector_available": native_notion_connector_available,
         "lesson_read_route": selected_route,
         "fallback_reader_state": fallback_state,
@@ -102,4 +181,8 @@ def activate_routed_issue_start_lesson_preflight(
 
 _UNSET = object()
 
-__all__ = ["activate_routed_issue_start_lesson_preflight"]
+__all__ = [
+    "SUPPORTED_NOTION_CONTENT_CLASSES",
+    "activate_routed_issue_start_lesson_preflight",
+    "execute_routed_notion_read",
+]

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from mcp.server import MCPServer
 
-from .lesson_execution_surface_router import activate_routed_issue_start_lesson_preflight
+from .lesson_execution_surface_router import (
+    activate_routed_issue_start_lesson_preflight,
+    execute_routed_notion_read,
+)
 from .lesson_reader_composition import build_lesson_read_executor
 from .mcp_facade import (
     activate_agent_os_failed_repair,
@@ -23,8 +26,30 @@ def plan_agent_os_continuation_tool(repository: str, issue_number: int, canonica
 
 
 @mcp.tool()
+def read_agent_os_notion_knowledge_tool(content_class: str, query: dict[str, object], native_notion_connector_available: bool = False, notion_rows: list[dict[str, object]] | None = None) -> dict[str, object]:
+    """Read one typed Agent OS Notion knowledge surface without creating write authority."""
+    native_execute_read = (
+        (lambda _query: {"results": notion_rows})
+        if native_notion_connector_available and notion_rows is not None
+        else None
+    )
+    fallback_factory = (
+        (lambda: (lambda _query: {"results": notion_rows}))
+        if not native_notion_connector_available and notion_rows is not None
+        else None
+    )
+    return execute_routed_notion_read(
+        content_class=content_class,
+        query=query,
+        native_notion_connector_available=native_notion_connector_available,
+        native_execute_read=native_execute_read,
+        fallback_factory=fallback_factory,
+    )
+
+
+@mcp.tool()
 def activate_agent_os_issue_start_lessons_tool(repository: str, issue_number: int, task_reference: str, native_notion_connector_available: bool = False, ecosystem_hints: tuple[str, ...] = (), language_hints: tuple[str, ...] = (), library_hints: tuple[str, ...] = (), capability_keywords: tuple[str, ...] = (), target_path_hints: tuple[str, ...] = (), canonical_rule_refs: tuple[str, ...] = (), known_knowledge_refs: tuple[str, ...] = (), specialized_knowledge_required: bool | None = None, lesson_rows: list[dict[str, object]] | None = None) -> dict[str, object]:
-    """Resolve initial CKR6 using native Notion or the existing Agent OS reader."""
+    """Resolve mandatory initial CKR6 through native Notion or existing fallback."""
     native_execute_read = (
         (lambda _query: {"results": lesson_rows})
         if native_notion_connector_available and lesson_rows is not None

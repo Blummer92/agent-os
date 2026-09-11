@@ -80,23 +80,7 @@ def choose_validation_route(
     manual_terminal_appropriate: bool,
     connected_ci_evidence_available: bool = False,
 ) -> ValidationRoutePreference:
-    """Choose the evidence-appropriate validation surface after canonical routing.
-
-    Pre-PR validation never uses PR CI as its first execution. A capable governed
-    runner wins automatically. External fallback may be used only when #918 has
-    already selected it. Manual terminal is considered only after #918 proves no
-    capable approved automated route and the caller separately proves that manual
-    execution is available and appropriate.
-
-    Final aggregate validation prefers authoritative exact-head CI and therefore
-    avoids redundant manual/local full-suite execution when CI is available.
-
-    CI failure diagnosis is evidence-first: when connected run/check/job evidence
-    already exists, inspect and reuse that evidence rather than asking the user to
-    reproduce the aggregate manually. A request to fix code manually does not make
-    manual validation execution appropriate; manual terminal remains a separately
-    justified last resort after connected evidence and governed routes are absent.
-    """
+    """Choose the evidence-appropriate validation surface after canonical routing."""
     if type(timing) is not ValidationTiming:
         raise TypeError("timing must be an exact ValidationTiming")
     if type(executor_route) is not ExecutorRouteDecision:
@@ -111,12 +95,12 @@ def choose_validation_route(
             raise TypeError(f"{name} must be an exact boolean")
 
     if timing is ValidationTiming.CI_FAILURE_DIAGNOSIS:
-        if connected_ci_evidence_available:
+        if connected_ci_evidence_available and exact_head_ci_available:
             return ValidationRoutePreference(
                 timing=timing,
                 route_decision_id=executor_route.decision_id,
                 selected_route=ValidationRoute.EXACT_HEAD_CI,
-                reason="connected CI run/check/job evidence already exists; inspect it before requesting manual reproduction",
+                reason="connected authoritative exact-head CI evidence already exists; inspect it before requesting manual reproduction",
                 manual_fallback_justified=False,
                 duplicate_aggregate_avoided=True,
                 connected_evidence_reused=True,
@@ -129,7 +113,7 @@ def choose_validation_route(
                 timing=timing,
                 route_decision_id=executor_route.decision_id,
                 selected_route=ValidationRoute.GOVERNED_EXECUTOR,
-                reason="connected CI evidence is unavailable; canonical routing selected a capable governed diagnostic route",
+                reason="authoritative exact-head connected CI evidence is unavailable; canonical routing selected a capable governed diagnostic route",
                 manual_fallback_justified=False,
                 duplicate_aggregate_avoided=False,
             )
@@ -142,7 +126,7 @@ def choose_validation_route(
                 timing=timing,
                 route_decision_id=executor_route.decision_id,
                 selected_route=ValidationRoute.MANUAL_TERMINAL,
-                reason="connected CI evidence and capable governed diagnostic routes are unavailable; manual terminal is explicitly appropriate",
+                reason="authoritative exact-head connected CI evidence and capable governed diagnostic routes are unavailable; manual terminal is explicitly appropriate",
                 manual_fallback_justified=True,
                 duplicate_aggregate_avoided=False,
             )
@@ -150,7 +134,7 @@ def choose_validation_route(
             timing=timing,
             route_decision_id=executor_route.decision_id,
             selected_route=ValidationRoute.NEEDS_DECISION,
-            reason="no connected CI evidence or capable authorized diagnostic route is proven",
+            reason="no authoritative exact-head connected CI evidence or capable authorized diagnostic route is proven",
             manual_fallback_justified=False,
             duplicate_aggregate_avoided=False,
         )

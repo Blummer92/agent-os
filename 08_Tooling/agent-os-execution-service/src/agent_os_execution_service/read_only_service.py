@@ -190,7 +190,7 @@ def _result_for_request(
         safe_evaluated_at = _FALLBACK_EVALUATED_AT
     if request is None:
         request_id = "unknown"
-        request_revision = 0
+        request_revision = 1
         request_fingerprint = _ZERO_FINGERPRINT
         repository_identity = None
         requested_ref = None

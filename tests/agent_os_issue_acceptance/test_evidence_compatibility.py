@@ -1,6 +1,10 @@
+import pytest
+
 from scripts.agent_os_issue_acceptance.evidence_compatibility import (
+    CompatibilityContext,
     CompatibilityEvidenceRecord,
     CompatibilityOutcome,
+    EvidenceCompatibilityDecision,
     ExpectedGeneration,
     evaluate_execution_dispatch_compatibility,
     evaluate_ready_for_review_compatibility,
@@ -50,6 +54,30 @@ def test_coherent_generation_is_compatible_and_order_independent() -> None:
     assert first.reason_codes == ("compatible",)
     assert first.authority_created is False
     assert first.side_effects_performed is False
+
+
+def test_decision_rejects_noncanonical_reason_tuple() -> None:
+    with pytest.raises(ValueError, match="reason_codes must be sorted and unique"):
+        EvidenceCompatibilityDecision(
+            context=CompatibilityContext.EXECUTION_DISPATCH,
+            outcome=CompatibilityOutcome.REACQUIRE_REQUIRED,
+            expected_bindings=expected().bindings,
+            reason_codes=("b", "a"),
+            reacquire_owners=(),
+            decision_id="decision:1",
+        )
+
+
+def test_decision_rejects_duplicate_reacquire_owner() -> None:
+    with pytest.raises(ValueError, match="reacquire_owners must be sorted and unique"):
+        EvidenceCompatibilityDecision(
+            context=CompatibilityContext.EXECUTION_DISPATCH,
+            outcome=CompatibilityOutcome.REACQUIRE_REQUIRED,
+            expected_bindings=expected().bindings,
+            reason_codes=("reason",),
+            reacquire_owners=("runtime", "runtime"),
+            decision_id="decision:1",
+        )
 
 
 def test_current_head_with_old_workspace_requires_reacquisition() -> None:
@@ -195,9 +223,5 @@ def test_scope_mismatch_never_widens_authority() -> None:
 
 def test_duplicate_evidence_identity_is_rejected() -> None:
     item = record("runtime:2", "runtime", execution_id="execution:2")
-    try:
+    with pytest.raises(ValueError, match="duplicate evidence_id"):
         evaluate_execution_dispatch_compatibility(expected=expected(), records=(item, item))
-    except ValueError as exc:
-        assert "duplicate evidence_id" in str(exc)
-    else:
-        raise AssertionError("duplicate evidence identity must fail closed")
