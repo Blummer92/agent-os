@@ -83,12 +83,12 @@ def evaluate(plan, impact_result, evidence=None, *, base=BASE, head=HEAD):
 def test_complete_lockstep_change_preserves_canonical_focused_admission():
     rule = ImpactCouplingRule(
         name="lockstep",
-        trigger_paths=("scripts/agent_os_issue_labels/pr_reconciler.py",),
-        required_companion_paths=("tests/agent_os_issue_labels/test_pr_reconciler.py",),
+        trigger_paths=("scripts/agent_os_issue_acceptance/approval_records.py",),
+        required_companion_paths=("tests/agent_os_issue_acceptance/test_approval_records.py",),
     )
     paths = (
-        "scripts/agent_os_issue_labels/pr_reconciler.py",
-        "tests/agent_os_issue_labels/test_pr_reconciler.py",
+        "scripts/agent_os_issue_acceptance/approval_records.py",
+        "tests/agent_os_issue_acceptance/test_approval_records.py",
     )
     plan = plan_for(paths)
     result = evaluate(plan, impact(paths, rule), evidence_for(plan))
