@@ -28,7 +28,7 @@ def _lesson():
             "Status": _select("Applied"),
             "Surface Before Work?": {"type": "checkbox", "checkbox": True},
             "Area": _select("Automation"),
-            "Applies To": {"type": "multi_select", "multi_select": [{"name": "Notion"}]},
+            "Applies To": {"type": "multi_select", "multi_select": [{"name": "Notion"}, {"name": "Automation"}]},
             "Learning Type": _select("Mistake"),
             "Source Link": {"type": "url", "url": "https://github.com/Blummer92/agent-os/issues/2065"},
             "Guardrail": _rich("Check relevant Lessons Learned before a new repair hypothesis."),
