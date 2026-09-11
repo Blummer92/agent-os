@@ -83,6 +83,32 @@ booleans fail closed; relative-time requests do not invent current-day context.
 For source-of-truth, cache, ownership, and write-authority rules, inherit the
 canonical `navigation-registry-standard.md`; this README does not redefine them.
 
+## Curriculum Execution-Surface Routing
+
+`src/navigation_registry/connectors/curriculum_execution_surface_router.py`
+selects which execution surface performs the bounded reads the orchestration
+above already plans. When the native ChatGPT Notion connector is available, the
+host-supplied native read executor runs them; when it is explicitly unavailable,
+the router builds bounded read-only Scheduler payloads for the canonical
+`NotionReadOnlyAdapter` path, which the caller injects. Both surfaces feed the
+same orchestration, #975 assembler, and #973 resolver, so assembled curriculum
+and visual-asset evidence is identical across routes and the route label itself
+carries no authority.
+
+The router re-plans nothing. Request sensitivity, relation-first Visual Asset
+Library lookup by `Canonical Unit`, provider-id hiding, owner/asset
+classification, currentness, provenance, approved-use/reuse/human-review
+evidence, and every non-authority boundary stay owned by the existing
+orchestration, assembler, and resolver. Only `get_page` and `query_data_source`
+may reach the Scheduler; any other action, a missing class source binding, an
+out-of-bound result request, a malformed Scheduler envelope, or any non-success
+Scheduler state fails closed rather than assembling partial evidence.
+
+Consistent with the connector boundary above, the router never imports the
+Workflow Scheduler: the Scheduler remains the canonical live-read executor and is
+injected. Providing a live executor, its credentials, and its Notion source
+sharing is a separate excluded-surface decision and is not granted here.
+
 ## V1 Cleanup Notes
 
 Before declaring Version 1.0, QA should decide whether long files must be split.
@@ -91,9 +117,10 @@ into companion files without changing the canonical authority map.
 
 ## Version
 
-0.2.0
+0.3.0
 
 ## Changelog
 
+- 0.3.0 documents curriculum/visual-asset execution-surface routing between the native ChatGPT Notion connector and the existing injected canonical read path, without adding a second reader or authority model (#2282).
 - 0.2.0 preserves the detailed Navigation Registry contracts while replacing Integration Manager execution ownership with ChatGPT Orchestrator + shared Navigation capability routing (#1324).
 - 0.1.0 initial navigation index.
