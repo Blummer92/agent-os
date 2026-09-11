@@ -28,6 +28,8 @@ Class-specific runtime source bindings are:
 
 These names establish the repository-side binding seam only. #2283 owns any live source sharing, credential, secret-storage, runtime injection, or production activation required to populate them.
 
+Each class resolves only its own binding, and a request may shape the bounded query but may never override the fields the binding owns. `action` and `data_source_id` are governed: a query carrying either is rejected before it reaches the adapter, so one content class cannot re-point a read at another class's source identity or swap the bounded `query_data_source` action for the deprecated compatibility action. Page, page-count, and result bounds stay owned by the canonical adapter rather than being re-declared here.
+
 ## Authority boundary
 
 All paths are read-only and use `query_data_source`. This implementation performs no Notion mutation and creates no new Notion client, selector, cache, mirror, RAG system, credential store, scheduler, worker, or persistence path. GitHub remains authoritative for Agent OS governance/code/tests. Notion content retains its existing source-specific working/advisory role, and classroom artifact destination rules remain unchanged.

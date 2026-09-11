@@ -23,6 +23,11 @@ NOTION_CONTENT_SOURCE_ENVS = {
 
 ReadExecutor = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 
+# Fields the class-specific binding owns. A request may shape the bounded query
+# but may never re-point it at another source identity or swap the read action,
+# which would let one content class borrow another class's source authority.
+GOVERNED_QUERY_FIELDS = frozenset({"action", "data_source_id"})
+
 
 class LessonReadUnavailableError(RuntimeError):
     """The existing read-only Notion surface could not return bounded rows."""
@@ -59,6 +64,12 @@ def build_notion_read_executor(
     def execute_read(query: Mapping[str, Any]) -> Mapping[str, Any]:
         if not isinstance(query, Mapping):
             raise TypeError("Notion query must be a mapping")
+        governed = sorted(GOVERNED_QUERY_FIELDS.intersection(query))
+        if governed:
+            raise ValueError(
+                "Notion query must not override governed read fields: "
+                f"{', '.join(governed)}"
+            )
 
         payload = {"action": "query_data_source", "data_source_id": source_id}
         payload.update(dict(query))
@@ -102,6 +113,7 @@ def build_lesson_read_executor(
 
 
 __all__ = [
+    "GOVERNED_QUERY_FIELDS",
     "LESSONS_LEARNED_DATA_SOURCE_ENV",
     "NOTION_CONTENT_SOURCE_ENVS",
     "LessonReadUnavailableError",

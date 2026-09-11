@@ -12,6 +12,7 @@ EXPECTED_TOOLS = frozenset(
     {
         "plan_agent_os_continuation_tool",
         "activate_agent_os_issue_start_lessons_tool",
+        "read_agent_os_notion_knowledge_tool",
         "activate_agent_os_failed_repair_tool",
         "admit_agent_os_failed_repair_tool",
         "classify_agent_os_mission_completion_tool",
