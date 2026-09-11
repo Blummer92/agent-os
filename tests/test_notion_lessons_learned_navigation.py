@@ -13,6 +13,13 @@ def _alias_section() -> str:
     return text[start:end]
 
 
+def _remote_dev_section() -> str:
+    text = REGISTRY.read_text(encoding="utf-8")
+    start = text.index("### @remote-dev-validation")
+    end = text.index("\n### ", start + 4)
+    return text[start:end]
+
+
 def test_notion_lessons_learned_alias_resolves_existing_contracts() -> None:
     section = _alias_section()
     for path in (
@@ -48,6 +55,17 @@ def test_write_intent_does_not_infer_reachability_from_read_route() -> None:
     assert "separately resolve the applicable notion write authorization" in section
     assert "write-capable execution surface" in section
     assert "write requests continue only after separate write authorization" in section
+
+
+def test_remote_dev_validation_prefers_codespaces_and_preserves_gce_boundary() -> None:
+    section = _remote_dev_section().lower()
+    assert "prefer current/capable codespaces" in section
+    assert "ordinary interactive developer-loop work" in section
+    assert "#759 containment" in section
+    assert "unattended scheduler" in section
+    assert "fixed-service-identity" in section
+    assert "fall back through the existing governed gce route under #1237" in section
+    assert "docs/2299-codespaces-developer-runner.md" in section
 
 
 def test_global_orchestrator_contract_supports_alias_and_continuation_semantics() -> None:

@@ -8,6 +8,7 @@
   "focused_rules": [
     {"name":"issue-acceptance","prefixes":["scripts/agent_os_issue_acceptance/","tests/agent_os_issue_acceptance/"],"commands":["python -m pytest tests/agent_os_issue_acceptance"]},
     {"name":"issue-labels","prefixes":["scripts/agent_os_issue_labels/","tests/agent_os_issue_labels/"],"commands":["python -m pytest tests/agent_os_issue_labels"]},
+    {"name":"execution-interface","prefixes":["scripts/agent_os_execution_interface/","tests/agent_os_execution_interface/"],"commands":["python -m pytest tests/agent_os_execution_interface"]},
     {"name":"workflow-scheduler","prefixes":["08_Tooling/workflow-scheduler/"],"commands":["python -m pytest 08_Tooling/workflow-scheduler/tests"]},
     {"name":"workflow-scheduler-concrete-runtime-adapters","exact_paths":["08_Tooling/workflow-scheduler/tests/test_concrete_runtime_adapters.py"],"commands":["python -m pytest 08_Tooling/workflow-scheduler/tests/test_concrete_runtime_adapters.py"]},
     {"name":"navigation-registry","prefixes":["08_Tooling/notion-navigation-client/"],"commands":["python -m pytest 08_Tooling/notion-navigation-client/tests"]},
