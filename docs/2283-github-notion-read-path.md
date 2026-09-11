@@ -2,121 +2,169 @@
 
 ## Status
 
-Implementation contract for issue #2283. This document records the repository owner's 2026-09-11 decision that sanitized curriculum and Visual Asset Library read results may be returned through the public `Blummer92/agent-os` GitHub surface.
+Implementation contract and current state for issue #2283. The repository owner
+decided on 2026-09-11 that sanitized curriculum and Visual Asset Library results
+may be returned through the public `Blummer92/agent-os` GitHub surface, and that
+no private transport repository is introduced.
 
-This decision does **not** permit credentials, API headers, sensitive student/private information, unrestricted raw Notion payloads, or other secrets to become public.
+That decision does **not** permit credentials, API headers, sensitive
+student/private information, unrestricted raw Notion payloads, or secret-derived
+diagnostics to become public.
+
+The repository-side implementation is complete and validated. Live activation
+remains blocked on separately authorized excluded surfaces (see below).
 
 ## Target architecture
 
 ```text
 ChatGPT
 -> GitHub MCP
--> bounded GitHub issue-comment request
--> admitted GitHub Actions read job
--> Notion read-only API
--> sanitized bounded GitHub result
+-> bounded `/agent-os notion-read <request-id>` issue comment
+-> existing governed issue_comment admission
+-> GitHub Actions standard hosted runner
+-> existing #936 read-only Notion adapter
+-> sanitized bounded result on the public GitHub evidence surface
 -> ChatGPT reads the result through GitHub MCP
 ```
 
-GitHub remains the Agent OS governance/control surface. Notion remains the teacher-planning/current-curriculum and Visual Asset Library working source. Public GitHub result evidence is a request-scoped projection, not a second curriculum or asset source of truth.
+GitHub remains the Agent OS governance/control surface. Notion remains the
+teacher-planning/current-curriculum and Visual Asset Library working source.
+Public GitHub result evidence is a request-scoped projection, not a second
+curriculum or asset source of truth.
 
-## Existing capabilities to reuse
+## Implemented surfaces
 
-The implementation must reuse existing Agent OS behavior rather than introducing another curriculum or asset system:
+| Surface | Location |
+| --- | --- |
+| finite `notion-read` command shape and transport admission | `08_Tooling/workflow-scheduler/src/workflow_scheduler/governance/github_issue_comment_ingress.py` |
+| explicit refusal to route a notion-read into the GCE control path | `08_Tooling/workflow-scheduler/src/workflow_scheduler/governance/gce_gcloud_adapter.py` |
+| request catalog, admission, execution seam, public projection, runner | `scripts/agent_os_notion_read_request/` |
+| focused security and regression tests | `tests/agent_os_notion_read_request/`, `08_Tooling/workflow-scheduler/tests/test_2283_notion_read_ingress.py` |
 
-- the existing governed `issue_comment` admission pattern for GitHub-triggered work;
-- #936 read-only Notion adapter semantics;
+## Reused capabilities
+
+No second curriculum system is created. The path composes existing behavior:
+
+- the existing governed `issue_comment` admission pattern;
+- #936 read-only Notion adapter semantics and the `NOTION_TOKEN` contract;
 - #980 request-sensitive curriculum read planning;
-- #975 provider-neutral evidence semantics;
-- #973 currentness/conflict disposition;
-- #971 relation-first Visual Asset Library semantics;
-- #2282 execution-surface routing and fail-closed read boundaries.
-
-## Public result decision
-
-The repository owner accepts public visibility of sanitized curriculum/asset results needed for ordinary Agent OS teacher requests.
-
-Allowed public result content may include bounded fields such as:
-
-- request id and finite request class;
-- canonical unit identity;
-- curriculum/asset source identity;
-- source revision/currentness and provenance;
-- semantic/value owner classification;
-- bounded teacher-planning or curriculum evidence required by the request;
-- bounded Visual Asset Library metadata;
-- approved-use, reuse and human-review evidence;
-- explicit missing/stale/conflicting/inaccessible state;
-- `write_allowed=false` and `production_authorized=false` authority evidence;
-- generated timestamp.
-
-The result channel must not contain:
-
-- Notion credentials or tokens;
-- authorization/API headers;
-- secret values or secret-derived diagnostics;
-- sensitive student/private information;
-- unrestricted raw page/workspace dumps;
-- arbitrary page body content unrelated to the bounded request;
-- credentials for GitHub or another provider.
+- #975 provider-neutral evidence assembly;
+- #973 currentness/conflict/authority resolution;
+- #971 relation-first Visual Asset Library retrieval;
+- #2282 execution-surface routing and the read-only action bound.
 
 ## Request admission
 
-Use a finite repository-owned request vocabulary. Do not execute free-form issue/comment text.
+The executable comment carries only a finite repository-owned slug:
 
-The trigger must validate the trusted actor, canonical repository, expected event, request shape and request class before any secret-bearing step. Unknown request classes, arbitrary URLs, arbitrary Notion ids, shell syntax, extra executable tokens, write actions and workspace-wide search fail closed.
+```text
+/agent-os notion-read photography-foundations-visual-assets
+```
 
-Initial request classes should map to existing curriculum planning semantics, for example:
+Before any secret-bearing or network step, admission validates the canonical
+repository, the trusted actor, the expected event, the expected issue target,
+run-attempt/replay constraints, the finite command shape, the request identity,
+the allowed request class, and every approved source binding. Only then is
+`secret_dispatch_authorized` true.
 
-- `canonical-unit`
-- `current-curriculum`
-- `visual-assets`
-- `teacher-modeling`
-- `packet-materials`
+Arbitrary URLs, arbitrary Notion ids (including a bare UUID, which otherwise
+satisfies the slug grammar), arbitrary shell syntax, arbitrary HTTP methods,
+arbitrary API paths, arbitrary property names, arbitrary filters, workspace-wide
+search, extra executable tokens, and free-form teacher text all fail closed.
 
-Exact request-schema implementation remains subordinate to existing Agent OS request/admission contracts and must not create a second general command protocol.
+Request classes map onto existing #980 intent: `canonical-unit`,
+`current-curriculum`, `visual-assets`, `teacher-modeling`, `packet-materials`.
 
 ## Read-only boundary
 
-Only bounded Notion reads required by the existing curriculum/asset path are reachable. No create, update, archive, delete, share, comment, schema mutation, bulk synchronization or workspace-wide crawl is permitted.
-
-The Notion integration/principal must be read-only and shared only to the approved curriculum/asset sources required by the request-sensitive path.
+Only `get_page` and `query_data_source` are reachable, reusing the #2282
+allowlist. No create, update, archive, delete, comment, share, schema mutation,
+bulk synchronization, or workspace-wide crawl path exists. Every data-source
+read is pinned to one approved binding and bounded to a single page of results.
 
 ## Visual Asset Library boundary
 
-Preserve relation-first retrieval through canonical curriculum identity. Titles, filenames, prompts, notes or keyword similarity cannot substitute for the governed `Canonical Unit` relation.
-
-Asset existence is not approval. Public result projection must preserve approved-use, reuse, human-review and production-authority boundaries.
+Retrieval stays relation-first through the governed `Canonical Unit` relation.
+Titles, filenames, prompts, notes, and keyword similarity cannot substitute for
+that relation: an asset without the relation is dropped by #975 regardless of
+how well it matches. Asset existence never becomes approved use or production
+authority.
 
 ## Result projection
 
-The GitHub result must be a sanitized provider-neutral projection, not an unrestricted Notion response. It may be returned on an approved public GitHub evidence surface because the repository owner explicitly accepts public visibility of the sanitized curriculum/asset information.
+The public result is derived only from the repository-owned catalog and the #973
+validated state record. A raw Notion response is never a projection input, so
+raw page bodies, private property values, and workspace dumps cannot reach the
+public surface.
 
-Sensitive/private/student data is always excluded regardless of this public-result decision.
+The projection carries request id, request class, canonical unit identity,
+provider-neutral source identity, source revision/currentness, provenance,
+semantic/value owner class, bounded curriculum evidence, bounded asset metadata,
+approved-use/reuse/human-review evidence, explicit missing/stale/conflicting/
+inaccessible state, `write_allowed=false`, `production_authorized=false`, and a
+generated timestamp.
+
+Sanitization is structural rather than a natural-language phrase list: fixed key
+allowlists, declared source content classes, dropped private page locations, and
+a guard refusing any credential-class key that carries anything but a boolean.
 
 ## Cost boundary
 
-Routine reads must not require persistent GCE. The selected ordinary path uses a standard GitHub-hosted runner only while the repository remains public and the current GitHub billing model continues to make standard hosted runners free for public repositories. Repository visibility or billing-policy drift requires re-evaluation before continued activation.
+Routine reads require no persistent GCE and no larger paid runner. The path
+targets a standard GitHub-hosted runner, which current GitHub billing
+documentation states is free for public repositories. `Blummer92/agent-os` is
+currently public. Repository-visibility or billing-policy drift is a
+re-evaluation trigger before continued activation.
 
-## Tests required before live activation
+## Current activation state
 
-1. Only the trusted admitted actor/request reaches the secret-bearing job.
-2. Malformed/free-form/arbitrary commands fail closed.
-3. Unknown request classes and unapproved targets fail before Notion dispatch.
-4. Only approved Notion read operations are reachable.
-5. Secret/token/header values cannot enter public output, logs, summaries, artifacts, fixtures or repository files.
-6. Sensitive student/private information is rejected from public projection.
-7. Relation-first Visual Asset Library behavior survives the round trip.
-8. Asset existence never becomes approved use or production authority.
-9. Missing/stale/conflicting/inaccessible evidence remains explicit.
-10. No GCE dependency, Drive/classroom write, second curriculum source of truth, second scheduler, arbitrary proxy or workspace-wide crawl is introduced.
+`notion_read_catalog.json` ships with **no verified binding**: every
+`verification_state` is `unverified` and every source and canonical unit identity
+is `null`. Admission therefore fails closed with `canonical-unit-unverified`
+before any secret-bearing step, and the runner reports `dispatch_status:
+"blocked"`.
 
-## Excluded-surface checkpoint
+Historical #962 identities are planning leads only and are deliberately absent
+from the executable allowlist, so a stale lead can never be dispatched.
 
-Creating or modifying `.github/workflows/**`, creating/changing GitHub secrets, creating/rotating a Notion integration credential, changing Notion sharing/permissions, and live/production activation remain separately authorization-gated Tier-2 surfaces.
+## Remaining excluded-surface authorization packet
 
-This contract intentionally allows the implementation lineage and review to exist before those excluded surfaces are activated.
+Live activation requires the repository owner to separately authorize:
+
+1. **Workflow file.** A bounded `notion_read` job in
+   `.github/workflows/agent-os-governed-invocation.yml` (or a sibling workflow),
+   gated on `github.event.issue.pull_request == null`, running the existing
+   ingress parser and then
+   `python -m scripts.agent_os_notion_read_request.runner`, publishing the result
+   JSON with `actions/upload-artifact` and a bounded job summary.
+2. **Workflow permissions.** `permissions: contents: read` only. No
+   `issues: write`, `pull-requests: write`, `contents: write`, `actions: write`,
+   or `id-token: write` is required for this job.
+3. **Repository secret.** One secret named `NOTION_TOKEN`, exposed only to the
+   admitted dispatch step. The value never appears in code, comments, logs,
+   summaries, artifacts, fixtures, or ChatGPT.
+4. **Notion principal.** One existing read-only Notion integration, reused
+   rather than duplicated. No write capability, no workspace-wide access.
+5. **Notion source sharing.** Share only the Canonical Digital Media Unit
+   Registry and the Visual Asset Library with that integration.
+6. **Verified source identities.** Re-verify those two data-source ids and the
+   Photography Foundations canonical unit page id live, then set them in
+   `notion_read_catalog.json` with `verification_state: "verified-current"`.
+7. **Bounded live smoke test.** One `visual-assets` request for Photography
+   Foundations, proving canonical-unit resolution plus relation-first asset
+   retrieval.
+
+No other request class is activated by this packet: the wider classes stay
+fail-closed on `source-not-allowlisted` until their sources are separately
+verified.
 
 ## Rollback
 
-Disable/remove the bounded workflow, revoke/remove the Notion credential and its source access, and stop producing request-scoped GitHub result projections. No canonical curriculum or asset data requires rollback because Notion remains the working source.
+Remove the workflow job, revoke the Notion integration token, remove its source
+sharing, reset the catalog bindings to `unverified`/`null`, and stop producing
+request-scoped result artifacts. Optionally remove
+`scripts/agent_os_notion_read_request/`, its tests, its validation-profile rule,
+and the `notion-read` branches in the ingress and GCE adapter.
+
+No canonical curriculum or asset data requires rollback: Notion remains the
+working source and GitHub stores only bounded request-scoped evidence.
