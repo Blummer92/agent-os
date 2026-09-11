@@ -22,7 +22,7 @@ google-auth>=2.57.0
 google-api-python-client>=2.200.0
 google-auth-oauthlib>=1.4.1
 PyGithub==2.10.0
-mcp>=2.1.1,<2.2
+mcp>=2.2.0,<2.3
 
 # Coverage
 coverage[toml]>=7.16.0
