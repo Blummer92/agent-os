@@ -1,0 +1,44 @@
+{
+  "schema_version": "1.0",
+  "repository": "Blummer92/agent-os",
+  "credential_env_var": "NOTION_TOKEN",
+  "canonical_units": [
+    {
+      "canonical_unit_key": "photography-foundations",
+      "stable_id": "canonical-unit-photography-foundations",
+      "provider_page_id": null,
+      "verification_state": "unverified",
+      "content_class": "curriculum-metadata"
+    }
+  ],
+  "sources": [
+    {
+      "logical_source": "canonical-unit",
+      "display_name": "Canonical Digital Media Unit Registry",
+      "data_source_id": null,
+      "verification_state": "unverified",
+      "content_class": "curriculum-metadata"
+    },
+    {
+      "logical_source": "visual-asset-library",
+      "display_name": "Visual Asset Library",
+      "data_source_id": null,
+      "verification_state": "unverified",
+      "content_class": "visual-asset-metadata"
+    }
+  ],
+  "requests": [
+    {
+      "request_id": "photography-foundations-canonical-unit",
+      "request_class": "canonical-unit",
+      "canonical_unit_key": "photography-foundations",
+      "issue_number": 2283
+    },
+    {
+      "request_id": "photography-foundations-visual-assets",
+      "request_class": "visual-assets",
+      "canonical_unit_key": "photography-foundations",
+      "issue_number": 2283
+    }
+  ]
+}
