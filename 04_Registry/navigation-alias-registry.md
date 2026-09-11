@@ -86,6 +86,21 @@ use and require Navigation Alias Registry review.
 | Operator fallback | If the capable route is known but automatic dispatch is unavailable, name the governed GCE/IAP console/dev-validation route explicitly. A compact mobile/external-coding-agent handoff may preserve repository, issue/PR, branch/head, bounded scope, fixed validation identity/command, stop conditions, and required return evidence; it is operator UX only and grants no new authority. |
 | Stop condition | Stop navigation after the bounded route and applicable fixed validation identity are known. Execution/continuation after discovery remains governed by the existing routing/continuation contracts (including #1237); do not invent arbitrary argv, a generic SSH shell, a second executor, or new write/merge authority. |
 
+### @notion-lessons-learned
+
+| Field | Value |
+|---|---|
+| Alias | `@notion-lessons-learned` |
+| Purpose | Resolve Agent OS Lessons Learned and other bounded Notion working-knowledge reads from ChatGPT without assuming the native/direct ChatGPT Notion connector is the only capability path. |
+| Owner | ChatGPT Orchestrator for route discovery; GitHub Service Agent owns repository transport implementation; QA / Test Agent owns validation evidence. |
+| Source of truth | GitHub governs the route and contracts; Notion remains the working source for Lessons Learned and authorized working knowledge. |
+| Files to read in order | 1. `AGENTS.md`<br>2. `02_Agent_Overlays/chatgpt-orchestrator.md`<br>3. `08_Tooling/agent-memory-context-manager/CKR6_LESSON_PREFLIGHT.md`<br>4. `01_Shared_Standards/notion/notion-learning-databases.md`<br>5. `docs/2283-github-notion-read-path.md` |
+| Recognized intent phrases | `Notion Lessons Learned`, `Lessons Learned`, `coding lessons learned`, `update the Notion learned lessons`, `Notion working knowledge`, and requests that explicitly refer to the GitHub MCP / Agent OS path to Notion. |
+| Distinguish from | The native/direct ChatGPT Notion plugin, generic workspace search, GitHub-hosted curriculum/lesson storage, or unrestricted Notion API access. The direct plugin is one possible transport surface, not capability truth. |
+| Negative rule | A disabled, missing, disconnected, or unsupported native ChatGPT Notion plugin does not prove the governed Agent OS Notion capability is unavailable. Resolve this alias and inspect the current GitHub-controlled route before reporting a Notion capability blocker. |
+| Continuation rule | Successful route discovery is intermediate evidence. Continue the parent mission through the currently authorized read/write path, or return the exact remaining activation/authorization blocker; do not stop merely because the direct plugin is unavailable. |
+| Stop condition | Stop only after the current governed Notion route, authorization boundary, and execution-surface availability are known. Alias resolution itself grants no Notion write, schema, credential, sharing, workflow, production, merge, or issue-closure authority. |
+
 ### @interaction-output
 
 | Field | Value |
@@ -110,9 +125,10 @@ use and require Navigation Alias Registry review.
 
 ## Version
 
-0.3.0
+0.4.0
 
 ## Changelog
 
+- 0.4.0 adds `@notion-lessons-learned` so ChatGPT resolves the governed GitHub MCP / Agent OS Notion route before treating native/direct Notion plugin unavailability as a terminal capability result (#2301).
 - 0.3.0 adds `@remote-dev-validation`, disambiguates `GitHub SSH` from direct Git transport, and makes the existing bounded GCE/IAP developer-validation/console route discoverable without creating execution authority (#1514).
 - 0.2.0 moves Navigation Registry and interaction-output alias ownership from retired Integration Manager references to ChatGPT Orchestrator (#1324).
