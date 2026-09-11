@@ -129,11 +129,17 @@ class NotionReadSource:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class CanonicalUnitBinding:
-    """One canonical unit identity resolved internally from a request slug."""
+    """One canonical unit *identity* binding resolved from a request slug.
+
+    This binding carries identity and configuration only. It deliberately holds
+    no curriculum state: unit status is live Notion truth that #973 consumes to
+    decide disposition, so it is resolved from the live canonical-unit read
+    through the canonical normalizer rather than asserted by repository config.
+    Asserting it here would make #973's non-active protection unreachable.
+    """
 
     canonical_unit_key: str
     stable_id: str
-    unit_status: str
     provider_page_id: str | None
     verification_state: str
     content_class: str

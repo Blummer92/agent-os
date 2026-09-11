@@ -53,7 +53,25 @@ fragment, or free-form teacher text.
 `notion_read_catalog.json` is the only place a slug becomes a source identity.
 It declares the finite request classes (`canonical-unit`, `current-curriculum`,
 `visual-assets`, `teacher-modeling`, `packet-materials`), the canonical unit
-bindings, and the source allowlist.
+identity bindings, and the source allowlist.
+
+## What the catalog may and may not own
+
+The catalog is **binding and policy configuration only**. It carries request
+ids, provider identity bindings, the finite request-class vocabulary, the
+publication content class, and the operator-controlled verification state.
+
+It must never carry curriculum semantic truth. In particular it may not declare
+a canonical unit's status: #973 decides disposition from that status, and
+`_disposition` returns `needs-decision` for any non-active unit. A
+repository-declared status would make that protection unreachable and would
+drift from Notion the moment a unit is archived, split, or merged. Loading
+therefore rejects a catalog that declares `unit_status` or `status`.
+
+Unit status is instead resolved from the live canonical-unit page through the
+canonical `SchedulerNotionEvidenceAdapter` / `NotionContractAdapter` pair, so
+archived and human-review detection stay owned upstream. This path only maps
+those canonical booleans onto the existing #973 status vocabulary.
 
 ## Activation state
 

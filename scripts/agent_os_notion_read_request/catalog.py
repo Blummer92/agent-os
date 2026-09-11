@@ -13,8 +13,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from instructional_workflow_contracts.current_curriculum_state import UNIT_STATUSES
-
 from .models import (
     PUBLIC_PROJECTABLE_CONTENT_CLASSES,
     REQUEST_CLASSES,
@@ -89,14 +87,17 @@ def parse_catalog(payload: object) -> NotionReadCatalog:
 
 def _canonical_unit(value: object) -> CanonicalUnitBinding:
     item = _object(value, "canonical unit")
-    unit_status = _text(item.get("unit_status"), "canonical unit unit_status")
-    # Reuse the canonical #973 status vocabulary rather than defining a second one.
-    if unit_status not in UNIT_STATUSES:
-        raise NotionReadRequestError(f"unsupported canonical unit status: {unit_status!r}")
+    # Curriculum state must never be declared here. A repository-asserted unit
+    # status would decide #973's disposition from config instead of live Notion
+    # truth, making its non-active protection unreachable.
+    if "unit_status" in item or "status" in item:
+        raise NotionReadRequestError(
+            "canonical unit binding must not declare curriculum status; "
+            "status is resolved from the live canonical-unit read"
+        )
     return CanonicalUnitBinding(
         canonical_unit_key=_slug(item.get("canonical_unit_key"), "canonical_unit_key"),
         stable_id=_text(item.get("stable_id"), "canonical unit stable_id"),
-        unit_status=unit_status,
         provider_page_id=_optional_identity(item.get("provider_page_id"), "provider_page_id"),
         verification_state=_verification_state(item.get("verification_state")),
         content_class=_content_class(item.get("content_class")),

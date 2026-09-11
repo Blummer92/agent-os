@@ -69,14 +69,43 @@ def transport(
     return payload
 
 
+def unit_page(
+    *,
+    page_id: str = UNIT_PAGE_ID,
+    title: str = "Photography Foundations",
+    archived: bool = False,
+    human_review_required: bool = False,
+) -> dict:
+    """One live-shaped canonical-unit page payload.
+
+    A title is required for an ``active`` unit: the canonical normalizer treats
+    an untitled page (display name falling back to the id) as human-review
+    evidence, which #973 then routes to ``needs-decision``.
+    """
+    return {
+        "id": page_id,
+        "title": title,
+        "archived": archived,
+        "human_review_required": human_review_required,
+        "last_edited_time": "2026-09-10T12:00:00.000Z",
+    }
+
+
 class RecordingExecutor:
     """Records every bounded read payload the seam dispatches."""
 
-    def __init__(self, *, assets: list[dict] | None = None, page_id: str = UNIT_PAGE_ID):
+    def __init__(
+        self,
+        *,
+        assets: list[dict] | None = None,
+        page_id: str = UNIT_PAGE_ID,
+        page: dict | None = None,
+    ):
         self.calls: list[dict] = []
         self.factory_invocations = 0
         self._assets = assets if assets is not None else default_assets()
         self._page_id = page_id
+        self._page = page if page is not None else unit_page(page_id=page_id)
 
     def factory(self):
         self.factory_invocations += 1
@@ -85,7 +114,7 @@ class RecordingExecutor:
     def execute(self, payload):
         self.calls.append(copy.deepcopy(dict(payload)))
         if payload["action"] == "get_page":
-            return {"status": "success", "output": {"id": self._page_id}}
+            return {"status": "success", "output": copy.deepcopy(self._page)}
         return {"status": "success", "output": {"results": copy.deepcopy(self._assets)}}
 
     @property

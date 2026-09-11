@@ -136,7 +136,9 @@ def test_only_allowed_read_actions_are_dispatched(verified_catalog) -> None:
     evidence = run(verified_catalog, executor)
 
     assert evidence["dispatch_status"] == DISPATCH_COMPLETED
-    assert executor.actions == ["get_page", "query_data_source"]
+    # Resolve-then-verify: the first get_page resolves the unit's live #973
+    # status, then #980's own plan re-reads and re-verifies the same identity.
+    assert executor.actions == ["get_page", "get_page", "query_data_source"]
     assert set(executor.actions) <= set(READ_ONLY_ACTIONS)
 
 
@@ -300,7 +302,7 @@ def test_canonical_unit_request_loads_no_unrelated_evidence(verified_catalog) ->
         payload=transport(request_id="photography-foundations-canonical-unit"),
     )
 
-    assert executor.actions == ["get_page"]
+    assert executor.actions == ["get_page", "get_page"]
     assert evidence["result"]["request_class"] == "canonical-unit"
     assert [source["logical_source"] for source in evidence["result"]["sources"]] == [
         "canonical-unit"

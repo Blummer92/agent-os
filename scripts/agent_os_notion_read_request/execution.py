@@ -23,14 +23,20 @@ from instructional_workflow_contracts.common import thaw_json
 from instructional_workflow_contracts.current_curriculum_state import (
     resolve_current_curriculum_state,
 )
+from navigation_registry.connectors.base import ConnectorError
 from navigation_registry.connectors.curriculum_execution_surface_router import (
     FALLBACK_ROUTE,
+    READ_ONLY_ACTIONS,
     build_scheduler_fallback_read_executor,
     retrieve_curriculum_evidence,
+)
+from navigation_registry.connectors.scheduler_notion_evidence import (
+    SchedulerNotionEvidenceAdapter,
 )
 
 from .admission import build_curriculum_read_request
 from .models import (
+    CanonicalUnitBinding,
     NotionReadAdmission,
     NotionReadCatalog,
     NotionReadRequestError,
@@ -80,11 +86,16 @@ def execute_admitted_notion_read(
             "human_review_required": False,
         }
 
+    execute_task = _bounded_read_task_executor(scheduler_task_executor_factory())
+    # Curriculum status is live Notion truth, resolved here through the canonical
+    # normalizer so #973 decides disposition from the unit's actual state.
+    unit_status = _resolve_live_unit_status(unit, execute_task)
+
     routed = retrieve_curriculum_evidence(
         request=request,
         canonical_unit={
             "stable_id": unit.stable_id,
-            "status": unit.unit_status,
+            "status": unit_status,
             "provider_page_id": unit.provider_page_id,
         },
         resolve_identity=resolve_identity,
@@ -92,7 +103,7 @@ def execute_admitted_notion_read(
         # reader; it never depends on a native ChatGPT Notion connector.
         native_notion_connector_available=False,
         fallback_factory=lambda: build_scheduler_fallback_read_executor(
-            execute_scheduler_task=scheduler_task_executor_factory()
+            execute_scheduler_task=execute_task
         ),
         current_context=current_context,
     )
@@ -110,6 +121,59 @@ def execute_admitted_notion_read(
         # second traversal of the same frozen structure.
         "state_payload": thaw_json(state.record.payload),
     }
+
+
+def _bounded_read_task_executor(
+    execute_task: object,
+) -> Callable[[Mapping[str, object]], object]:
+    """Refuse any action outside the inherited #2282 read-only bound.
+
+    #2282 already bounds what it dispatches, but the canonical-unit resolution
+    below calls the injected executor directly, and the #936 adapter's own action
+    surface is wider than #2282's (it also exposes page-body and property reads).
+    Re-asserting the bound from the canonical constant keeps every dispatch on
+    this path inside it without restating the action set.
+    """
+    if not callable(execute_task):
+        raise NotionReadRequestError("scheduler task executor must be callable")
+
+    def execute(payload: Mapping[str, object]) -> object:
+        action = payload.get("action") if isinstance(payload, Mapping) else None
+        if action not in READ_ONLY_ACTIONS:
+            raise NotionReadRequestError(
+                f"action is outside the bounded read surface: {action!r}"
+            )
+        return execute_task(payload)
+
+    return execute
+
+
+def _resolve_live_unit_status(
+    unit: CanonicalUnitBinding,
+    execute_task: Callable[[Mapping[str, object]], object],
+) -> str:
+    """Resolve the canonical unit's #973 status from live evidence.
+
+    The scheduler result is normalized by the canonical
+    ``SchedulerNotionEvidenceAdapter``/``NotionContractAdapter`` pair, so archived
+    and human-review detection stay owned upstream. This function only maps those
+    canonical booleans onto the existing #973 status vocabulary; it classifies
+    nothing itself.
+    """
+    result = execute_task({"action": "get_page", "page_id": unit.provider_page_id})
+    resource = SchedulerNotionEvidenceAdapter().from_scheduler_result("get_page", result)
+    if isinstance(resource, ConnectorError):
+        raise NotionReadRequestError(
+            f"canonical unit evidence is unavailable: {resource.message}"
+        )
+    if resource.canonical_id != unit.provider_page_id:
+        raise NotionReadRequestError("canonical unit identity mismatch")
+
+    if resource.metadata.get("archived") is True:
+        return "archived"
+    if resource.human_review_required:
+        return "human-review-required"
+    return "active"
 
 
 __all__ = ["SchedulerTaskExecutorFactory", "execute_admitted_notion_read"]

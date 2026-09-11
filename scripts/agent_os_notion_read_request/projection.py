@@ -162,9 +162,15 @@ def _assets(value: object) -> dict[str, Any]:
     summary = {key: value.get(key) for key in _ASSET_SUMMARY_KEYS}
     for key in ("asset_ids", "eligible_asset_ids"):
         summary[key] = _string_list(summary.get(key))
+    # Inherit #973's asset authority rather than overwriting it. Overwriting
+    # would publish a fail-closed value even if the canonical summary ever
+    # reported something else, masking upstream truth instead of surfacing it.
+    if summary["production_authorized"] is not False:
+        raise NotionReadRequestError(
+            "#973 asset summary production_authorized is not fail-closed"
+        )
     # Restate the #971/#973 boundary explicitly so a public reader cannot infer
     # approval or production authority from mere existence.
-    summary["production_authorized"] = False
     summary["existence_implies_approved_use"] = False
     summary["existence_implies_production_authority"] = False
     summary["relation_source"] = "canonical-unit-relation"

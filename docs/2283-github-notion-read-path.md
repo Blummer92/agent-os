@@ -78,9 +78,27 @@ Request classes map onto existing #980 intent: `canonical-unit`,
 ## Read-only boundary
 
 Only `get_page` and `query_data_source` are reachable, reusing the #2282
-allowlist. No create, update, archive, delete, comment, share, schema mutation,
-bulk synchronization, or workspace-wide crawl path exists. Every data-source
-read is pinned to one approved binding and bounded to a single page of results.
+allowlist. That bound is imported from #2282 rather than restated, and it is
+re-asserted on this path's own executor because the #936 adapter's action
+surface is wider than #2282's (it also exposes page-body and page-property
+reads, which this path must never reach). No create, update, archive, delete,
+comment, share, schema mutation, bulk synchronization, or workspace-wide crawl
+path exists. Every data-source read is pinned to one approved binding and
+bounded to a single page of results.
+
+## Ownership boundary for the repository catalog
+
+`notion_read_catalog.json` owns binding and policy configuration only: request
+ids, provider identity bindings, the finite request-class vocabulary, the
+publication content class, and operator-controlled verification state.
+
+It must never own curriculum semantic truth. A repository-declared canonical
+unit status would decide #973's disposition from configuration and would make
+its non-active-unit protection unreachable, so catalog loading rejects any
+declared `unit_status`/`status`. Unit status is resolved from the live
+canonical-unit read through the canonical normalizer instead, which means the
+path reads the canonical unit page twice: once to resolve live status, then
+again as #980's own plan step, which re-verifies identity independently.
 
 ## Visual Asset Library boundary
 
@@ -137,6 +155,10 @@ Live activation requires the repository owner to separately authorize:
    ingress parser and then
    `python -m scripts.agent_os_notion_read_request.runner`, publishing the result
    JSON with `actions/upload-artifact` and a bounded job summary.
+   The job must supply the read executor **through this package's seam**, which
+   applies the inherited #2282 action bound. It must not call
+   `NotionReadOnlyAdapter` directly: that adapter's action surface is wider than
+   #2282's, so a direct binding would be a second, unbounded provider path.
 2. **Workflow permissions.** `permissions: contents: read` only. No
    `issues: write`, `pull-requests: write`, `contents: write`, `actions: write`,
    or `id-token: write` is required for this job.

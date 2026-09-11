@@ -292,6 +292,28 @@ def test_full_evidence_envelope_never_carries_a_token(
     assert "Authorization" not in serialized
 
 
+def test_asset_production_authority_is_inherited_not_overwritten(
+    verified_catalog,
+) -> None:
+    """#973 owns asset production authority; projection must not assert it.
+
+    Overwriting would publish a fail-closed value regardless of what the
+    canonical summary said, masking upstream truth instead of surfacing it.
+    """
+    with pytest.raises(NotionReadRequestError, match="not fail-closed"):
+        project(
+            verified_catalog,
+            assets={
+                "matching_asset_exists": True,
+                "approved_for_requested_use_exists": True,
+                "approved_reusable_student_facing_exists": True,
+                "production_authorized": True,
+                "asset_ids": ["asset-a"],
+                "eligible_asset_ids": ["asset-a"],
+            },
+        )
+
+
 def test_authority_widening_from_upstream_is_refused(verified_catalog) -> None:
     with pytest.raises(NotionReadRequestError, match="not fail-closed"):
         project(
