@@ -40,6 +40,16 @@ def test_route_discovery_must_continue_parent_mission() -> None:
     assert "do not stop merely because the direct plugin is unavailable" in section
 
 
+def test_write_intent_does_not_infer_reachability_from_read_route() -> None:
+    section = _alias_section().lower()
+    assert "update the notion learned lessons" in section
+    assert "proves only the bounded read route" in section
+    assert "never infer notion write reachability from that read route" in section
+    assert "separately resolve the applicable notion write authorization" in section
+    assert "write-capable execution surface" in section
+    assert "write requests continue only after separate write authorization" in section
+
+
 def test_global_orchestrator_contract_supports_alias_and_continuation_semantics() -> None:
     agents = AGENTS.read_text(encoding="utf-8")
     orchestrator = ORCHESTRATOR.read_text(encoding="utf-8")
