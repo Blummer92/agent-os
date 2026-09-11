@@ -1,3 +1,72 @@
+# Navigation Alias Registry
+
+## Purpose
+
+This file maps stable human-readable aliases to common Agent OS reading paths so
+canonical agents and capability routes can find governed documentation without
+repeated manual searches.
+
+Aliases are lookup aids only. They do not change source-of-truth ownership, grant
+write authority, replace live verification, or create executable agents.
+
+## Validation
+
+Every file path listed in an alias must exist. Missing paths block automatic alias
+use and require Navigation Alias Registry review.
+
+## Starter Aliases
+
+### @governance-start
+
+| Field | Value |
+|---|---|
+| Alias | `@governance-start` |
+| Purpose | Basic source-of-truth and write authorization rules. |
+| Owner | ChatGPT Orchestrator |
+| Source of truth | GitHub Agent OS governance files |
+| Files to read in order | 1. `AGENTS.md`<br>2. `00_Governance/ownership-and-source-of-truth.md`<br>3. `00_Governance/write-authorization-policy.md` |
+| Stop condition | Stop after the system of record and write boundary are clear; if authorization or source of truth is unclear, stop and ask. |
+
+### @agent-routing
+
+| Field | Value |
+|---|---|
+| Alias | `@agent-routing` |
+| Purpose | Identify the correct canonical job owner, legacy alias, and applicable shared standards/capabilities. |
+| Owner | ChatGPT Orchestrator |
+| Source of truth | Agent OS registry files in GitHub |
+| Files to read in order | 1. `AGENTS.md`<br>2. `04_Registry/legacy-agent-alias-registry.md`<br>3. `04_Registry/agent-inheritance-registry.md`<br>4. `04_Registry/responsibility-matrix.md` |
+| Stop condition | Stop after the canonical owner or capability route is identified. If no owner/standard is clear, recommend a registry update instead of inventing an agent. |
+
+### @navigation-registry
+
+| Field | Value |
+|---|---|
+| Alias | `@navigation-registry` |
+| Purpose | Navigation Registry governance, lookup routing, or related repository implementation. |
+| Owner | ChatGPT Orchestrator |
+| Source of truth | GitHub shared navigation standard and registry files |
+| Files to read in order | 1. `AGENTS.md`<br>2. `04_Registry/agent-inheritance-registry.md`<br>3. `04_Registry/responsibility-matrix.md`<br>4. `01_Shared_Standards/navigation/navigation-registry-standard.md`<br>5. `00_Governance/documentation-dependency-map/navigation-guide.md`<br>6. `02_Agent_Overlays/github-service-agent.md` only when repository implementation is required |
+| Stop condition | Stop after routing, lookup scope, source-of-truth boundary, and write boundary are clear. Repository implementation routes to GitHub Service Agent; no cache/live-system mutation follows from lookup. |
+
+### @github-change-request
+
+| Field | Value |
+|---|---|
+| Alias | `@github-change-request` |
+| Purpose | Prepare an authorized repository change handoff. |
+| Owner | GitHub Service Agent |
+| Source of truth | GitHub Change Request template and GitHub Service Agent overlay |
+| Files to read in order | 1. `AGENTS.md`<br>2. `00_Governance/ownership-and-source-of-truth.md`<br>3. `00_Governance/write-authorization-policy.md`<br>4. `02_Agent_Overlays/github-service-agent.md`<br>5. `03_Templates/prompts/github-change-request.md` |
+| Stop condition | Stop after target repository, branch, files, owner, permissions needed, acceptance criteria, validation evidence, risks, and blockers are clear. |
+
+### @github-lean-start
+
+| Field | Value |
+|---|---|
+| Alias | `@github-lean-start` |
+| Purpose | Ordinary Tier 0/Tier 1 GitHub work. |
+| Owner | GitHub Service Agent |
 | Source of truth | GitHub Agent OS governance files |
 | Files to read in order | 1. `AGENTS.md`<br>2. `00_Governance/write-authorization-policy.md`<br>3. `01_Shared_Standards/github/safe-implementation-lane.md`<br>4. `02_Agent_Overlays/github-service-agent.md`<br>5. `01_Shared_Standards/github/excluded-surface-baseline.md` |
 | Stop condition | Stop after issue owner, source of truth, write boundary, bounded scope, and excluded surfaces are clear. |
