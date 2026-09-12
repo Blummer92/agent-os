@@ -1,9 +1,12 @@
-"""Durable candidate-preparer provenance for #1982 Option C.
+"""Durable candidate-preparer provenance for #1982 Option C / #1985 vNext.
 
 This is an additive evidence variant under the existing #1412
 ``pre-publication-producer-evidence`` namespace and trusted checkpoint-store
-root. It carries one exact APPROVAL_READY packet plus its distinct
-ApprovalCandidateContext. It creates no approval or execution authority.
+root. Version 1 carries one exact APPROVAL_READY packet plus its distinct
+ApprovalCandidateContext. Version 2 additionally retains the exact canonical
+RepositoryProposalStageResult needed for a later fresh process to delegate
+approval/currentness/projection reconstruction back to #753. Neither version
+creates approval or execution authority.
 """
 from __future__ import annotations
 
@@ -19,6 +22,11 @@ from scripts.agent_os_candidate_packet.models import (
     CandidatePacketPhase,
     deserialize_candidate_packet,
     serialize_candidate_packet,
+)
+from scripts.agent_os_candidate_packet.proposal_stage import (
+    RepositoryProposalStageResult,
+    repository_proposal_stage_result_from_dict,
+    repository_proposal_stage_result_to_dict,
 )
 from scripts.agent_os_execution_checkpoint.identity import canonical_json_bytes
 from scripts.agent_os_execution_checkpoint.store import (
@@ -39,14 +47,16 @@ from .pre_publication_evidence_store import (
 )
 
 SCHEMA_NAME = "agent-os-candidate-approval-provenance"
-SCHEMA_VERSION = "1.0"
-MAX_BYTES = 512 * 1024
+SCHEMA_VERSION = "2.0"
+LEGACY_SCHEMA_VERSION = "1.0"
+SUPPORTED_SCHEMA_VERSIONS = frozenset({LEGACY_SCHEMA_VERSION, SCHEMA_VERSION})
+MAX_BYTES = 1024 * 1024
 _PREFIX = "pre-publication-evidence:"
 
 
 def _context_payload(value: ApprovalCandidateContext) -> dict[str, object]:
     if value.supersedes is not None:
-        raise ValueError("candidate provenance v1 does not carry supersedes records")
+        raise ValueError("candidate provenance does not carry supersedes records")
     return {
         "approval_kind": value.approval_kind.value,
         "authorizer_id": value.authorizer_id,
@@ -57,7 +67,7 @@ def _context_payload(value: ApprovalCandidateContext) -> dict[str, object]:
 
 
 def _payload(value: "CandidateApprovalProvenanceEvidence", *, include_id: bool) -> dict[str, object]:
-    result = {
+    result: dict[str, object] = {
         "schema_name": value.schema_name,
         "schema_version": value.schema_version,
         "approval_ready_packet": serialize_candidate_packet(value.approval_ready_packet),
@@ -69,15 +79,24 @@ def _payload(value: "CandidateApprovalProvenanceEvidence", *, include_id: bool) 
         "merge_authorized": False,
         "external_writes_authorized": False,
     }
+    if value.schema_version == SCHEMA_VERSION:
+        assert value.repository_proposal_stage_result is not None
+        result["repository_proposal_stage_result"] = repository_proposal_stage_result_to_dict(
+            value.repository_proposal_stage_result
+        )
     if include_id:
         result["evidence_id"] = value.evidence_id
     return result
 
 
 def candidate_approval_provenance_id(value: "CandidateApprovalProvenanceEvidence") -> str:
-    digest = hashlib.sha256(
+    domain = (
         b"agent-os-candidate-approval-provenance:v1\0"
-        + canonical_json_bytes(_payload(value, include_id=False))
+        if value.schema_version == LEGACY_SCHEMA_VERSION
+        else b"agent-os-candidate-approval-provenance:v2\0"
+    )
+    digest = hashlib.sha256(
+        domain + canonical_json_bytes(_payload(value, include_id=False))
     ).hexdigest()
     return _PREFIX + digest
 
@@ -88,6 +107,7 @@ class CandidateApprovalProvenanceEvidence:
     schema_version: str
     approval_ready_packet: CandidatePacket
     candidate_context: ApprovalCandidateContext
+    repository_proposal_stage_result: RepositoryProposalStageResult | None = None
     evidence_id: str = ""
     repository_implementation_authorized: Literal[False] = field(default=False, init=False)
     execution_authorized: Literal[False] = field(default=False, init=False)
@@ -97,17 +117,25 @@ class CandidateApprovalProvenanceEvidence:
     external_writes_authorized: Literal[False] = field(default=False, init=False)
 
     def __post_init__(self) -> None:
-        if self.schema_name != SCHEMA_NAME or self.schema_version != SCHEMA_VERSION:
+        if self.schema_name != SCHEMA_NAME or self.schema_version not in SUPPORTED_SCHEMA_VERSIONS:
             raise ValueError("unsupported candidate-approval provenance schema")
         if type(self.approval_ready_packet) is not CandidatePacket:
             raise TypeError("approval_ready_packet must be exact CandidatePacket")
         if self.approval_ready_packet.phase is not CandidatePacketPhase.APPROVAL_READY:
             raise ValueError("candidate provenance requires APPROVAL_READY packet")
-        if self.approval_ready_packet.evidence_completeness != "complete" or self.approval_ready_packet.disposition != "verified":
+        if (
+            self.approval_ready_packet.evidence_completeness != "complete"
+            or self.approval_ready_packet.disposition != "verified"
+        ):
             raise ValueError("candidate provenance requires complete verified packet")
         if type(self.candidate_context) is not ApprovalCandidateContext:
             raise TypeError("candidate_context must be exact ApprovalCandidateContext")
         _context_payload(self.candidate_context)
+        if self.schema_version == LEGACY_SCHEMA_VERSION:
+            if self.repository_proposal_stage_result is not None:
+                raise ValueError("candidate provenance v1 cannot carry proposal stage material")
+        elif type(self.repository_proposal_stage_result) is not RepositoryProposalStageResult:
+            raise TypeError("candidate provenance v2 requires exact RepositoryProposalStageResult")
         computed = candidate_approval_provenance_id(self)
         if self.evidence_id and self.evidence_id != computed:
             raise ValueError("candidate provenance evidence_id mismatch")
@@ -115,13 +143,22 @@ class CandidateApprovalProvenanceEvidence:
 
 
 def build_candidate_approval_provenance(
-    *, approval_ready_packet: CandidatePacket, candidate_context: ApprovalCandidateContext
+    *,
+    approval_ready_packet: CandidatePacket,
+    candidate_context: ApprovalCandidateContext,
+    repository_proposal_stage_result: RepositoryProposalStageResult | None = None,
 ) -> CandidateApprovalProvenanceEvidence:
+    """Build v1 for legacy callers or v2 when exact proposal-stage material is supplied."""
     return CandidateApprovalProvenanceEvidence(
         schema_name=SCHEMA_NAME,
-        schema_version=SCHEMA_VERSION,
+        schema_version=(
+            LEGACY_SCHEMA_VERSION
+            if repository_proposal_stage_result is None
+            else SCHEMA_VERSION
+        ),
         approval_ready_packet=approval_ready_packet,
         candidate_context=candidate_context,
+        repository_proposal_stage_result=repository_proposal_stage_result,
     )
 
 
@@ -137,13 +174,17 @@ def deserialize_candidate_approval_provenance(payload: bytes | str) -> Candidate
     if len(raw) > MAX_BYTES:
         raise ValueError("candidate provenance evidence exceeds size bound")
     decoded = json.loads(raw.decode("utf-8"))
-    expected = {
+    if type(decoded) is not dict:
+        raise ValueError("candidate provenance fields drifted")
+    version = decoded.get("schema_version")
+    base = {
         "schema_name", "schema_version", "approval_ready_packet", "candidate_context",
         "evidence_id", "repository_implementation_authorized", "execution_authorized",
         "publication_authorized", "github_writes_authorized", "merge_authorized",
         "external_writes_authorized",
     }
-    if type(decoded) is not dict or set(decoded) != expected:
+    expected = base if version == LEGACY_SCHEMA_VERSION else base | {"repository_proposal_stage_result"}
+    if version not in SUPPORTED_SCHEMA_VERSIONS or set(decoded) != expected:
         raise ValueError("candidate provenance fields drifted")
     for name in {
         "repository_implementation_authorized", "execution_authorized",
@@ -157,9 +198,14 @@ def deserialize_candidate_approval_provenance(payload: bytes | str) -> Candidate
         "approval_kind", "authorizer_id", "decision_id", "decision_at", "expires_at"
     }:
         raise ValueError("candidate context fields drifted")
+    proposal_stage = (
+        None
+        if version == LEGACY_SCHEMA_VERSION
+        else repository_proposal_stage_result_from_dict(decoded["repository_proposal_stage_result"])
+    )
     return CandidateApprovalProvenanceEvidence(
         schema_name=decoded["schema_name"],
-        schema_version=decoded["schema_version"],
+        schema_version=version,
         approval_ready_packet=deserialize_candidate_packet(decoded["approval_ready_packet"]),
         candidate_context=ApprovalCandidateContext(
             approval_kind=ApprovalKind(context["approval_kind"]),
@@ -168,6 +214,7 @@ def deserialize_candidate_approval_provenance(payload: bytes | str) -> Candidate
             decision_at=context["decision_at"],
             expires_at=context["expires_at"],
         ),
+        repository_proposal_stage_result=proposal_stage,
         evidence_id=decoded["evidence_id"],
     )
 
@@ -225,6 +272,8 @@ def load_candidate_approval_provenance(
 
 __all__ = [
     "CandidateApprovalProvenanceEvidence",
+    "LEGACY_SCHEMA_VERSION",
+    "SCHEMA_VERSION",
     "append_candidate_approval_provenance",
     "build_candidate_approval_provenance",
     "candidate_approval_provenance_id",
