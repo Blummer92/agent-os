@@ -67,7 +67,11 @@ def _artifact(root: Path, relative_path: str) -> DependencyArtifactIdentity:
 def _python_spec(root: Path, required_tests: tuple[str, ...]) -> RequiredEnvironmentSpec:
     manifest = _artifact(root, PYTHON_MANIFEST)
     projects: list[LocalProjectRequirement] = []
-    for relative_path in PYTHON_LOCAL_PROJECTS:
+    # RequiredEnvironmentSpec requires local project requirements sorted by
+    # relative path. Sorting here (rather than relying on the declaration order
+    # of PYTHON_LOCAL_PROJECTS) keeps the constant readable and stops a later
+    # entry from silently making every Python spec construction fail closed.
+    for relative_path in sorted(PYTHON_LOCAL_PROJECTS):
         digest = _local_project_sha256(str(root / relative_path))
         if digest is None:
             raise ValueError("local project identity is unavailable")

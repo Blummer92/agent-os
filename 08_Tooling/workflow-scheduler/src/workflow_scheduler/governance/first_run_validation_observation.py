@@ -9,14 +9,46 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from .dev_validation_profiles import canonical_profile_id
+from scripts.agent_os_remote_validation import PrePrValidationPlan
+
+from .dev_validation import VALIDATION_REGISTRY
+from .dev_validation_profiles import canonical_profile_id, profile_argv
 from .pre_pr_dev_validation_evidence import ObservedDevValidationCommand
 
 FIXED_GCE_RUNNER_ID = "agent-os-gce-dev-validation-v1"
 
+# The first-run lane may only execute a validation plan the *existing* fixed GCE
+# dev-validation runner already knows how to run. ``VALIDATION_REGISTRY`` is that
+# runner's own legacy execution registry, so this widens nothing: a plan that is
+# not exactly one of those fixed profiles fails closed instead of becoming a new
+# command surface.
+FIRST_RUN_SUPPORTED_VALIDATION_IDS = tuple(sorted(VALIDATION_REGISTRY))
+
 
 class FirstRunValidationObservationError(ValueError):
     """Fixed-runner evidence is incomplete, malformed, or identity-drifted."""
+
+
+def resolve_fixed_first_run_validation_id(validation_plan: object) -> str:
+    """Return the one existing fixed validation id whose argv is exactly the plan.
+
+    The canonical #1985 pre-validation plan may execute only when it maps to an
+    exact existing fixed validation profile. No plan is translated, rewritten, or
+    approximated, and no new validation identity is created.
+    """
+    if type(validation_plan) is not PrePrValidationPlan:
+        raise FirstRunValidationObservationError("validation-plan-malformed")
+    commands = tuple(validation_plan.commands)
+    if len(commands) != 1:
+        raise FirstRunValidationObservationError("validation-plan-not-single-command")
+    matches = tuple(
+        validation_id
+        for validation_id in FIRST_RUN_SUPPORTED_VALIDATION_IDS
+        if " ".join(profile_argv(validation_id)) == commands[0]
+    )
+    if len(matches) != 1:
+        raise FirstRunValidationObservationError("validation-profile-unsupported")
+    return matches[0]
 
 
 def _instant(value: object, name: str) -> datetime:
@@ -90,7 +122,9 @@ def observed_command_from_fixed_gce_evidence(
 
 
 __all__ = [
+    "FIRST_RUN_SUPPORTED_VALIDATION_IDS",
     "FIXED_GCE_RUNNER_ID",
     "FirstRunValidationObservationError",
     "observed_command_from_fixed_gce_evidence",
+    "resolve_fixed_first_run_validation_id",
 ]
