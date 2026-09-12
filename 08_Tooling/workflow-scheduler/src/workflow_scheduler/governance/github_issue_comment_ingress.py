@@ -2,8 +2,8 @@
 
 This module validates only the low-trust GitHub event envelope. A successful
 parse is transport evidence, not implementation authorization and not Scheduler
-admission. First-publication activation accepts only one immutable #1412 source
-capsule identity and grants no execution authority.
+admission. Fixed operations carry only bounded immutable selectors and grant no
+execution authority.
 """
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ _HANDOFF_RE = re.compile(r"executor-handoff:[0-9a-f]{64}", re.ASCII)
 _SOURCE_CAPSULE_RE = re.compile(r"pre-publication-evidence:[0-9a-f]{64}", re.ASCII)
 _TRIGGER_RE = re.compile(r"/agent-os resume (?P<handoff>executor-handoff:[0-9a-f]{64})", re.ASCII)
 _ACTIVATION_RE = re.compile(r"/agent-os activate-first-publication (?P<capsule>pre-publication-evidence:[0-9a-f]{64})", re.ASCII)
+_FIRST_RUN_VALIDATION_RE = re.compile(r"/agent-os validate-first-run (?P<candidate_sha>[0-9a-f]{40})", re.ASCII)
 _VALIDATION_IDS = (
     "remote-validation-suite",
     "instructional-materials-current-curriculum-suite",
@@ -38,11 +39,6 @@ _DEV_VALIDATE_RE = re.compile(
 )
 _REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", re.ASCII)
 _ACTOR_RE = re.compile(r"[A-Za-z0-9-]{1,39}", re.ASCII)
-# #2283 bounded GitHub-controlled Notion read. The operand is only a finite
-# repository-owned request slug; it never carries a Notion id, URL, property
-# name, filter, or free-form teacher text. Resolving the slug to an approved
-# source binding belongs to scripts/agent_os_notion_read_request, after
-# admission and before any secret-bearing step.
 _NOTION_READ_RE = re.compile(
     r"/agent-os notion-read (?P<request_id>[a-z0-9][a-z0-9-]{0,62})", re.ASCII
 )
@@ -51,7 +47,7 @@ IngressStatus = Literal["accepted", "blocked", "ignored"]
 IngressReason = Literal[
     "accepted-envelope", "accepted-discovery-envelope", "accepted-runtime-inspection-envelope",
     "accepted-dev-validation-envelope", "accepted-first-publication-activation-envelope",
-    "accepted-notion-read-envelope",
+    "accepted-first-run-validation-envelope", "accepted-notion-read-envelope",
     "event-not-created", "pull-request-comment", "repository-mismatch", "workflow-rerun",
     "actor-not-allowed", "actor-evidence-mismatch", "malformed-trigger", "invalid-event-envelope",
 ]
@@ -65,12 +61,13 @@ class IssueCommentIngressResult:
     dev_validation_sha_or_none: str | None = None
     dev_validation_id_or_none: str | None = None
     source_capsule_id_or_none: str | None = None
+    first_run_candidate_sha_or_none: str | None = None
     notion_read_request_id_or_none: str | None = None
     execution_authorized: Literal[False] = field(default=False, init=False)
     scheduler_invoked: Literal[False] = field(default=False, init=False)
     side_effects_performed: Literal[False] = field(default=False, init=False)
     def to_dict(self) -> dict[str, object]:
-        return {"schema_version":self.schema_version,"status":self.status,"reason":self.reason,"repository":self.repository,"issue_number":self.issue_number,"comment_id":self.comment_id,"actor":self.actor,"handoff_id_or_none":self.handoff_id_or_none,"logical_trigger_id_or_none":self.logical_trigger_id_or_none,"run_attempt":self.run_attempt,"dev_validation_branch_or_none":self.dev_validation_branch_or_none,"dev_validation_sha_or_none":self.dev_validation_sha_or_none,"dev_validation_id_or_none":self.dev_validation_id_or_none,"source_capsule_id_or_none":self.source_capsule_id_or_none,"notion_read_request_id_or_none":self.notion_read_request_id_or_none,"execution_authorized":False,"scheduler_invoked":False,"side_effects_performed":False}
+        return {"schema_version":self.schema_version,"status":self.status,"reason":self.reason,"repository":self.repository,"issue_number":self.issue_number,"comment_id":self.comment_id,"actor":self.actor,"handoff_id_or_none":self.handoff_id_or_none,"logical_trigger_id_or_none":self.logical_trigger_id_or_none,"run_attempt":self.run_attempt,"dev_validation_branch_or_none":self.dev_validation_branch_or_none,"dev_validation_sha_or_none":self.dev_validation_sha_or_none,"dev_validation_id_or_none":self.dev_validation_id_or_none,"source_capsule_id_or_none":self.source_capsule_id_or_none,"first_run_candidate_sha_or_none":self.first_run_candidate_sha_or_none,"notion_read_request_id_or_none":self.notion_read_request_id_or_none,"execution_authorized":False,"scheduler_invoked":False,"side_effects_performed":False}
 
 def _logical_trigger_id(repository: str, issue_number: int, handoff_id: str) -> str:
     material = f"{repository}\0{issue_number}\0{handoff_id}".encode("ascii")
@@ -84,6 +81,10 @@ def _activation_trigger_id(repository:str,issue_number:int,capsule:str)->str:
     material=f"{repository}\0{issue_number}\0activate-first-publication\0{capsule}".encode("ascii")
     return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
 
+def _first_run_validation_trigger_id(repository:str,issue_number:int,candidate_sha:str)->str:
+    material=f"{repository}\0{issue_number}\0validate-first-run\0{candidate_sha}".encode("ascii")
+    return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
+
 def _notion_read_trigger_id(repository:str,issue_number:int,request_id:str)->str:
     material=f"{repository}\0{issue_number}\0notion-read\0{request_id}".encode("ascii")
     return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
@@ -92,30 +93,24 @@ def _dev_validation_trigger_id(repository: str, issue_number: int, branch: str, 
     material=f"{repository}\0{issue_number}\0dev-validate\0{branch}\0{sha}\0{validation_id}".encode("ascii")
     return f"issue-comment-trigger:{hashlib.sha256(material).hexdigest()}"
 
-def _result(*,status:IngressStatus,reason:IngressReason,repository:str,run_attempt:int,issue_number:int|None=None,comment_id:int|None=None,actor:str|None=None,handoff_id:str|None=None,operation:str|None=None,dev_validation_branch:str|None=None,dev_validation_sha:str|None=None,dev_validation_id:str|None=None,source_capsule_id:str|None=None,notion_read_request_id:str|None=None)->IssueCommentIngressResult:
+def _result(*,status:IngressStatus,reason:IngressReason,repository:str,run_attempt:int,issue_number:int|None=None,comment_id:int|None=None,actor:str|None=None,handoff_id:str|None=None,operation:str|None=None,dev_validation_branch:str|None=None,dev_validation_sha:str|None=None,dev_validation_id:str|None=None,source_capsule_id:str|None=None,first_run_candidate_sha:str|None=None,notion_read_request_id:str|None=None)->IssueCommentIngressResult:
     logical_id=None
     if handoff_id is not None and issue_number is not None: logical_id=_logical_trigger_id(repository,issue_number,handoff_id)
     elif source_capsule_id is not None and issue_number is not None: logical_id=_activation_trigger_id(repository,issue_number,source_capsule_id)
+    elif first_run_candidate_sha is not None and issue_number is not None: logical_id=_first_run_validation_trigger_id(repository,issue_number,first_run_candidate_sha)
     elif notion_read_request_id is not None and issue_number is not None: logical_id=_notion_read_trigger_id(repository,issue_number,notion_read_request_id)
     elif dev_validation_branch is not None and dev_validation_sha is not None and dev_validation_id is not None and issue_number is not None: logical_id=_dev_validation_trigger_id(repository,issue_number,dev_validation_branch,dev_validation_sha,dev_validation_id)
     elif operation is not None and issue_number is not None: logical_id=_operation_trigger_id(repository,issue_number,operation)
-    return IssueCommentIngressResult(schema_version=INGRESS_SCHEMA_VERSION,status=status,reason=reason,repository=repository,issue_number=issue_number,comment_id=comment_id,actor=actor,handoff_id_or_none=handoff_id,logical_trigger_id_or_none=logical_id,run_attempt=run_attempt,dev_validation_branch_or_none=dev_validation_branch,dev_validation_sha_or_none=dev_validation_sha,dev_validation_id_or_none=dev_validation_id,source_capsule_id_or_none=source_capsule_id,notion_read_request_id_or_none=notion_read_request_id)
+    return IssueCommentIngressResult(schema_version=INGRESS_SCHEMA_VERSION,status=status,reason=reason,repository=repository,issue_number=issue_number,comment_id=comment_id,actor=actor,handoff_id_or_none=handoff_id,logical_trigger_id_or_none=logical_id,run_attempt=run_attempt,dev_validation_branch_or_none=dev_validation_branch,dev_validation_sha_or_none=dev_validation_sha,dev_validation_id_or_none=dev_validation_id,source_capsule_id_or_none=source_capsule_id,first_run_candidate_sha_or_none=first_run_candidate_sha,notion_read_request_id_or_none=notion_read_request_id)
 
 def _valid_dev_branch(branch:str)->bool:
     return branch.startswith("agent/") and branch not in {"agent/","agent/main"} and ".." not in branch and "//" not in branch and not branch.endswith(("/","."))
 
 def _looks_like_notion_id(value:str)->bool:
-    """True for a bare Notion UUID, dashed or compact.
-
-    A Notion id is lowercase hex and so otherwise satisfies the slug grammar.
-    Rejecting the shape here keeps an arbitrary Notion target out of the
-    transport entirely, before the repository-owned catalog is ever consulted.
-    """
     compact=value.replace("-","")
     return len(compact)==32 and all(character in "0123456789abcdef" for character in compact)
 
 def _valid_notion_read_request_id(request_id:str)->bool:
-    """Accept only a finite lowercase slug; transport never carries a target id."""
     return 3<=len(request_id)<=63 and not request_id.startswith("-") and not request_id.endswith("-") and "--" not in request_id and not _looks_like_notion_id(request_id)
 
 def admit_issue_comment_event(event:object,*,expected_repository:str,allowed_actor:str,run_attempt:int)->IssueCommentIngressResult:
@@ -139,6 +134,9 @@ def admit_issue_comment_event(event:object,*,expected_repository:str,allowed_act
     if type(body) is not str or len(body.encode("utf-8"))>MAX_COMMENT_BYTES:return _result(status="ignored",reason="malformed-trigger",**common)
     if body=="/agent-os discover":return _result(status="accepted",reason="accepted-discovery-envelope",operation="discover",**common)
     if body=="/agent-os inspect-runtime":return _result(status="accepted",reason="accepted-runtime-inspection-envelope",operation="inspect-runtime",**common)
+    first_run=_FIRST_RUN_VALIDATION_RE.fullmatch(body)
+    if first_run is not None:
+        return _result(status="accepted",reason="accepted-first-run-validation-envelope",first_run_candidate_sha=first_run.group("candidate_sha"),**common)
     activation=_ACTIVATION_RE.fullmatch(body)
     if activation is not None:
         capsule=activation.group("capsule")

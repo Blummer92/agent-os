@@ -13,6 +13,7 @@ ACTOR = "Blummer92"
 HANDOFF = "executor-handoff:" + "a" * 64
 SOURCE_CAPSULE = "pre-publication-evidence:" + "c" * 64
 DEV_SHA = "b" * 40
+FIRST_RUN_SHA = "d" * 40
 DEV_TRIGGER = f"/agent-os dev-validate agent/1271-validation-profile-path-coverage {DEV_SHA} remote-validation-suite"
 
 
@@ -214,5 +215,37 @@ def test_duplicate_dev_validation_comments_share_identity_but_sha_change_does_no
     duplicate_event["comment"]["id"] = 9982
     duplicate = admit(duplicate_event)
     changed = admit(event(DEV_TRIGGER.replace(DEV_SHA, "c" * 40)))
+    assert first.logical_trigger_id_or_none == duplicate.logical_trigger_id_or_none
+    assert first.logical_trigger_id_or_none != changed.logical_trigger_id_or_none
+
+
+def test_exact_first_run_validation_selector_is_bounded_and_non_authorizing() -> None:
+    result = admit(event(f"/agent-os validate-first-run {FIRST_RUN_SHA}"))
+    assert result.status == "accepted"
+    assert result.reason == "accepted-first-run-validation-envelope"
+    assert result.first_run_candidate_sha_or_none == FIRST_RUN_SHA
+    assert result.handoff_id_or_none is None
+    assert result.source_capsule_id_or_none is None
+    assert result.logical_trigger_id_or_none is not None
+    assert result.execution_authorized is False
+    assert result.scheduler_invoked is False
+    assert result.side_effects_performed is False
+
+
+def test_first_run_validation_rejects_noncanonical_sha_and_extra_tokens() -> None:
+    short = admit(event("/agent-os validate-first-run abc"))
+    upper = admit(event(f"/agent-os validate-first-run {FIRST_RUN_SHA.upper()}"))
+    extra = admit(event(f"/agent-os validate-first-run {FIRST_RUN_SHA} --force"))
+    assert (short.status, short.reason) == ("ignored", "malformed-trigger")
+    assert (upper.status, upper.reason) == ("ignored", "malformed-trigger")
+    assert (extra.status, extra.reason) == ("ignored", "malformed-trigger")
+
+
+def test_duplicate_first_run_validation_comments_converge_but_sha_change_does_not() -> None:
+    first = admit(event(f"/agent-os validate-first-run {FIRST_RUN_SHA}"))
+    duplicate_event = event(f"/agent-os validate-first-run {FIRST_RUN_SHA}")
+    duplicate_event["comment"]["id"] = 9982
+    duplicate = admit(duplicate_event)
+    changed = admit(event(f"/agent-os validate-first-run {'e' * 40}"))
     assert first.logical_trigger_id_or_none == duplicate.logical_trigger_id_or_none
     assert first.logical_trigger_id_or_none != changed.logical_trigger_id_or_none
