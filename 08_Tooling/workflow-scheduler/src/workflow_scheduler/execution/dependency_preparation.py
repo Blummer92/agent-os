@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import posixpath
+import re
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 from urllib.parse import urlsplit
@@ -46,6 +47,7 @@ _INDIRECTION_OPTION_PREFIXES = ("-r", "--requirement", "-c", "--constraint")
 _VCS_SCHEMES = ("git+", "hg+", "bzr+", "svn+", "git:", "svn:")
 _URL_SCHEMES = ("http://", "https://", "ftp://", "file:")
 _ARCHIVE_SUFFIXES = (".whl", ".tar.gz", ".tgz", ".zip", ".tar.bz2", ".tar.xz")
+_EXTRA_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$", re.ASCII)
 
 
 def source_location(approved_source_identity: str) -> str:
@@ -71,6 +73,30 @@ def _canonical_project_path(raw: str) -> str:
         return ""
     normalized = posixpath.normpath(text)
     return "" if normalized in (".", "..") or normalized.startswith("..") else normalized
+
+
+def _editable_project_path(target: str) -> str:
+    """Return the filesystem path for one pip editable target, excluding extras.
+
+    Extras select dependency groups from the already-declared local project; they
+    are not part of the repository-relative filesystem identity. Malformed or
+    ambiguous bracket syntax fails closed rather than being normalized away.
+    """
+    text = target.strip()
+    if "[" not in text and "]" not in text:
+        return _canonical_project_path(text)
+    if text.count("[") != 1 or text.count("]") != 1 or not text.endswith("]"):
+        return ""
+    path, extras = text[:-1].split("[", 1)
+    names = tuple(item.strip() for item in extras.split(","))
+    if (
+        not path
+        or not names
+        or any(not name or _EXTRA_NAME_RE.fullmatch(name) is None for name in names)
+        or len(set(names)) != len(names)
+    ):
+        return ""
+    return _canonical_project_path(path)
 
 
 def _logical_requirement_lines(text: str) -> tuple[str, ...]:
@@ -161,8 +187,10 @@ def _editable_reasons(target: str, declared: dict[str, bool]) -> tuple[str, ...]
         return (UNSUPPORTED_SOURCE_INDIRECTION,)
     if target.startswith(_VCS_SCHEMES) or target.startswith(_URL_SCHEMES):
         return (UNDECLARED_PACKAGE_SOURCE,)
-    canonical = _canonical_project_path(target)
-    if not canonical or declared.get(canonical) is not True:
+    canonical = _editable_project_path(target)
+    if not canonical:
+        return (UNSUPPORTED_SOURCE_INDIRECTION,)
+    if declared.get(canonical) is not True:
         return (UNDECLARED_LOCAL_PROJECT,)
     return ()
 
