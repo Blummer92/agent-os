@@ -19,39 +19,13 @@ MAX_CHANGED_FILES = 5_000
 MAX_THREADS = 5_000
 
 _PR_FIELDS = {
-    "repository",
-    "pr_number",
-    "base_branch",
-    "base_sha",
-    "head_branch",
-    "head_sha",
-    "state",
-    "merged",
-    "draft",
-    "changed_files",
-    "captured_at",
-    "source_revision",
-    *AUTHORITY_FIELDS,
+    "repository", "pr_number", "base_branch", "base_sha", "head_branch", "head_sha",
+    "state", "merged", "draft", "changed_files", "captured_at", "source_revision", *AUTHORITY_FIELDS,
 }
 _THREAD_FIELDS = {
-    "thread_id",
-    "top_level_comment_id",
-    "reviewer",
-    "body",
-    "path",
-    "line",
-    "original_line",
-    "side",
-    "start_line",
-    "start_side",
-    "resolved",
-    "outdated",
-    "superseded",
-    "created_at",
-    "updated_at",
-    "reply_ids",
-    "supersession_evidence",
-    *AUTHORITY_FIELDS,
+    "thread_id", "top_level_comment_id", "reviewer", "body", "path", "line", "original_line",
+    "side", "start_line", "start_side", "resolved", "outdated", "superseded", "created_at",
+    "updated_at", "reply_ids", "supersession_evidence", *AUTHORITY_FIELDS,
 }
 
 
@@ -60,13 +34,7 @@ def _exact(value: Any, expected: type, field: str) -> None:
         raise EvidenceValidationError(f"{field} must be exactly {expected.__name__}")
 
 
-def _string(
-    value: Any,
-    field: str,
-    *,
-    optional: bool = False,
-    max_length: int = MAX_STRING_LENGTH,
-) -> str | None:
+def _string(value: Any, field: str, *, optional: bool = False, max_length: int = MAX_STRING_LENGTH) -> str | None:
     if value is None and optional:
         return None
     _exact(value, str, field)
@@ -79,9 +47,9 @@ def _sha(value: Any, field: str, *, optional: bool = False) -> str | None:
     text = _string(value, field, optional=optional)
     if text is None:
         return None
-    if len(text) != 40 or any(char not in "0123456789abcdef" for char in text.lower()):
+    if len(text) != 40 or any(char not in "0123456789abcdef" for char in text):
         raise EvidenceValidationError(f"{field} must be a 40-character hexadecimal SHA")
-    return text.lower()
+    return text
 
 
 def _timestamp(value: Any, field: str, *, optional: bool = True) -> str | None:
@@ -167,23 +135,13 @@ def normalize_pr_snapshot(payload: Any) -> NormalizedPRSnapshot:
     draft = _bool(data, "draft")
     if merged and state != "closed":
         raise EvidenceValidationError("merged PR must be closed")
-    changed_files = tuple(
-        sorted(_string_sequence(data.get("changed_files"), "changed_files", max_items=MAX_CHANGED_FILES))
-    )
+    changed_files = tuple(sorted(_string_sequence(data.get("changed_files"), "changed_files", max_items=MAX_CHANGED_FILES)))
     return NormalizedPRSnapshot(
-        repository=repository,
-        pr_number=pr_number,
-        base_branch=base_branch,
-        base_sha=_sha(data.get("base_sha"), "base_sha", optional=True),
-        head_branch=head_branch,
-        head_sha=_sha(data.get("head_sha"), "head_sha"),
-        state=state,
-        merged=merged,
-        draft=draft,
-        changed_files=changed_files,
-        captured_at=_timestamp(data.get("captured_at"), "captured_at"),
-        source_revision=_string(data.get("source_revision"), "source_revision", optional=True),
-        **_authority_false(data),
+        repository=repository, pr_number=pr_number, base_branch=base_branch,
+        base_sha=_sha(data.get("base_sha"), "base_sha", optional=True), head_branch=head_branch,
+        head_sha=_sha(data.get("head_sha"), "head_sha"), state=state, merged=merged, draft=draft,
+        changed_files=changed_files, captured_at=_timestamp(data.get("captured_at"), "captured_at"),
+        source_revision=_string(data.get("source_revision"), "source_revision", optional=True), **_authority_false(data),
     )
 
 
@@ -198,11 +156,7 @@ def normalize_review_thread(payload: Any) -> NormalizedReviewThread:
     if comment_id <= 0:
         raise EvidenceValidationError("top_level_comment_id must be positive")
     superseded = _bool(data, "superseded", default=False)
-    supersession_evidence = _string_sequence(
-        data.get("supersession_evidence", []),
-        "supersession_evidence",
-        max_items=100,
-    )
+    supersession_evidence = _string_sequence(data.get("supersession_evidence", []), "supersession_evidence", max_items=100)
     if superseded and not supersession_evidence:
         raise EvidenceValidationError("superseded threads require supersession_evidence")
     side = _string(data.get("side"), "side", optional=True)
@@ -211,23 +165,13 @@ def normalize_review_thread(payload: Any) -> NormalizedReviewThread:
         if value is not None and value not in {"LEFT", "RIGHT"}:
             raise EvidenceValidationError(f"{field} must be LEFT or RIGHT")
     return NormalizedReviewThread(
-        thread_id=thread_id,
-        top_level_comment_id=comment_id,
-        reviewer=reviewer,
-        body_fingerprint=sha256(body.encode("utf-8")).hexdigest(),
-        resolved=_bool(data, "resolved"),
-        outdated=_bool(data, "outdated"),
-        superseded=superseded,
-        path=_string(data.get("path"), "path", optional=True),
-        line=_optional_positive_int(data.get("line"), "line"),
-        original_line=_optional_positive_int(data.get("original_line"), "original_line"),
-        side=side,
-        start_line=_optional_positive_int(data.get("start_line"), "start_line"),
-        start_side=start_side,
-        created_at=_timestamp(data.get("created_at"), "created_at"),
-        updated_at=_timestamp(data.get("updated_at"), "updated_at"),
-        reply_ids=_string_sequence(data.get("reply_ids", []), "reply_ids", max_items=500),
-        supersession_evidence=supersession_evidence,
+        thread_id=thread_id, top_level_comment_id=comment_id, reviewer=reviewer,
+        body_fingerprint=sha256(body.encode("utf-8")).hexdigest(), resolved=_bool(data, "resolved"),
+        outdated=_bool(data, "outdated"), superseded=superseded, path=_string(data.get("path"), "path", optional=True),
+        line=_optional_positive_int(data.get("line"), "line"), original_line=_optional_positive_int(data.get("original_line"), "original_line"),
+        side=side, start_line=_optional_positive_int(data.get("start_line"), "start_line"), start_side=start_side,
+        created_at=_timestamp(data.get("created_at"), "created_at"), updated_at=_timestamp(data.get("updated_at"), "updated_at"),
+        reply_ids=_string_sequence(data.get("reply_ids", []), "reply_ids", max_items=500), supersession_evidence=supersession_evidence,
         **_authority_false(data),
     )
 
@@ -248,7 +192,6 @@ def normalize_review_threads(payload: Any) -> tuple[NormalizedReviewThread, ...]
 
 def classify_review_thread_payload(payload: Any) -> str:
     """Classify supplied thread evidence without weakening strict normalization."""
-
     try:
         return normalize_review_thread(payload).classification
     except EvidenceValidationError:

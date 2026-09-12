@@ -29,8 +29,8 @@ class PullRequestLabelEvidence:
         repository = self.repository.strip()
         if repository.count("/") != 1 or any(not part for part in repository.split("/")):
             raise ValueError("repository must be exact owner/name")
-        head_sha = self.head_sha.lower()
-        if len(head_sha) != 40 or any(c not in "0123456789abcdef" for c in head_sha):
+        head_sha = self.head_sha
+        if type(head_sha) is not str or len(head_sha) != 40 or any(c not in "0123456789abcdef" for c in head_sha):
             raise ValueError("head_sha must be a full 40-character hexadecimal commit identity")
         if self.pr_number < 1:
             raise ValueError("pr_number must be positive")
@@ -99,7 +99,7 @@ def plan_pull_request_labels(evidence: PullRequestLabelEvidence) -> PullRequestL
 
 
 def plan_matches_head(plan: PullRequestLabelPlan, current_head_sha: str) -> bool:
-    return plan.head_sha == current_head_sha.lower()
+    return type(current_head_sha) is str and plan.head_sha == current_head_sha
 
 
 def _lifecycle_label(evidence: PullRequestLabelEvidence) -> str:
