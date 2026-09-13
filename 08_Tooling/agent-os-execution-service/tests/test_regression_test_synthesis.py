@@ -10,7 +10,10 @@ from agent_os_execution_service.coding_worker_contract import (
     CodingWorkerStatus,
 )
 from agent_os_execution_service.regression_test_synthesis import (
+    RedBeforeGreenStatus,
     RegressionTestDecision,
+    RegressionTestSynthesisEvidence,
+    classify_red_before_green,
     decide_regression_test_need,
     validate_generated_regression_result,
 )
@@ -63,6 +66,17 @@ def worker_result(request: CodingWorkerRequest, **overrides: object) -> CodingWo
     return CodingWorkerResult(**values)
 
 
+def regression_required(
+    *, red_before_green: RedBeforeGreenStatus = RedBeforeGreenStatus.EXPECTED_FAILURE_PROVEN
+) -> RegressionTestSynthesisEvidence:
+    return RegressionTestSynthesisEvidence(
+        decision=RegressionTestDecision.REGRESSION_TEST_REQUIRED,
+        reason="a bounded behavioral obligation lacks existing regression coverage",
+        behavioral_requirement_id="acceptance:bug-reproduction",
+        red_before_green=red_before_green,
+    )
+
+
 def test_clear_bug_without_regression_requires_one_test() -> None:
     evidence = decide_regression_test_need(
         behavior_changed=True,
@@ -88,6 +102,21 @@ def test_indirect_existing_coverage_is_sufficient() -> None:
         existing_indirect_test_ids=("test:behavior-contract",),
     )
     assert evidence.decision is RegressionTestDecision.EXISTING_TEST_SUFFICIENT
+
+
+def test_repeated_equivalent_synthesis_input_avoids_duplicate_test() -> None:
+    first = decide_regression_test_need(
+        behavior_changed=True,
+        behavioral_requirement_id="acceptance:bug-reproduction",
+        existing_exact_test_ids=("test:generated-on-prior-attempt",),
+    )
+    second = decide_regression_test_need(
+        behavior_changed=True,
+        behavioral_requirement_id="acceptance:bug-reproduction",
+        existing_exact_test_ids=("test:generated-on-prior-attempt",),
+    )
+    assert first == second
+    assert second.decision is RegressionTestDecision.EXISTING_TEST_SUFFICIENT
 
 
 def test_non_behavioral_refactor_does_not_generate_test() -> None:
@@ -121,53 +150,146 @@ def test_missing_behavior_anchor_fails_closed() -> None:
     assert evidence.decision is RegressionTestDecision.TEST_SYNTHESIS_UNSAFE_OR_AMBIGUOUS
 
 
+def test_red_before_green_expected_failure_is_explicit() -> None:
+    status = classify_red_before_green(
+        attempted=True,
+        initial_test_passed=False,
+        failure_matches_expected_reason=True,
+    )
+    assert status is RedBeforeGreenStatus.EXPECTED_FAILURE_PROVEN
+
+
+def test_red_before_green_unavailable_is_explicit() -> None:
+    assert classify_red_before_green(attempted=False) is RedBeforeGreenStatus.UNAVAILABLE
+
+
+def test_red_before_green_unexpected_pass_is_not_valid_regression_proof() -> None:
+    request = worker_request()
+    evidence = regression_required(red_before_green=RedBeforeGreenStatus.UNEXPECTED_PASS)
+    with pytest.raises(ValueError, match="unexpected pre-fix pass"):
+        validate_generated_regression_result(
+            request=request,
+            result=worker_result(request),
+            evidence=evidence,
+        )
+
+
+def test_red_before_green_wrong_reason_failure_is_not_valid_regression_proof() -> None:
+    request = worker_request()
+    evidence = regression_required(red_before_green=RedBeforeGreenStatus.WRONG_REASON_FAILURE)
+    with pytest.raises(ValueError, match="wrong-reason"):
+        validate_generated_regression_result(
+            request=request,
+            result=worker_result(request),
+            evidence=evidence,
+        )
+
+
 def test_generated_test_reuses_coding_worker_contract_and_stays_in_scope() -> None:
     request = worker_request()
-    decision = decide_regression_test_need(
-        behavior_changed=True,
-        behavioral_requirement_id="acceptance:bug-reproduction",
-    )
     evidence = validate_generated_regression_result(
         request=request,
         result=worker_result(request),
-        evidence=decision,
+        evidence=regression_required(),
     )
     assert evidence.generated_test_paths == (
         "08_Tooling/agent-os-execution-service/tests/test_bug_2315.py",
     )
 
 
+def test_unavailable_red_before_green_can_be_classified_without_manufacturing_failure() -> None:
+    request = worker_request()
+    evidence = validate_generated_regression_result(
+        request=request,
+        result=worker_result(request),
+        evidence=regression_required(red_before_green=RedBeforeGreenStatus.UNAVAILABLE),
+    )
+    assert evidence.red_before_green is RedBeforeGreenStatus.UNAVAILABLE
+
+
+def test_noncompleted_worker_result_cannot_become_regression_proof() -> None:
+    request = worker_request()
+    result = worker_result(request, status=CodingWorkerStatus.NEEDS_REPAIR)
+    with pytest.raises(ValueError, match="completed worker result"):
+        validate_generated_regression_result(
+            request=request,
+            result=result,
+            evidence=regression_required(),
+        )
+
+
+def test_missing_test_execution_evidence_cannot_become_regression_proof() -> None:
+    request = worker_request()
+    result = worker_result(request, tests_run=(), test_result_ids=())
+    with pytest.raises(ValueError, match="executed test-result evidence"):
+        validate_generated_regression_result(
+            request=request,
+            result=result,
+            evidence=regression_required(),
+        )
+
+
+def test_missing_red_before_green_classification_is_rejected() -> None:
+    request = worker_request()
+    with pytest.raises(ValueError, match="explicit red-before-green classification"):
+        validate_generated_regression_result(
+            request=request,
+            result=worker_result(request),
+            evidence=RegressionTestSynthesisEvidence(
+                decision=RegressionTestDecision.REGRESSION_TEST_REQUIRED,
+                reason="test needed",
+                behavioral_requirement_id="acceptance:bug-reproduction",
+            ),
+        )
+
+
 def test_stale_worker_result_is_rejected() -> None:
     request = worker_request()
     other = worker_request(base_sha="c" * 40)
-    decision = decide_regression_test_need(
-        behavior_changed=True,
-        behavioral_requirement_id="acceptance:bug-reproduction",
-    )
     with pytest.raises(ValueError, match="stale or belongs to another request"):
         validate_generated_regression_result(
             request=request,
             result=worker_result(other),
-            evidence=decision,
+            evidence=regression_required(),
         )
 
 
 def test_scope_violation_is_rejected_before_regression_evidence_is_accepted() -> None:
     request = worker_request()
-    decision = decide_regression_test_need(
-        behavior_changed=True,
-        behavioral_requirement_id="acceptance:bug-reproduction",
-    )
     result = worker_result(request, files_changed=("scripts/outside_scope_test.py",))
     with pytest.raises(ValueError, match="exceeds allowed scope"):
-        validate_generated_regression_result(request=request, result=result, evidence=decision)
+        validate_generated_regression_result(
+            request=request,
+            result=result,
+            evidence=regression_required(),
+        )
 
 
-def test_worker_authority_remains_false_for_generated_test_result() -> None:
+def test_passing_new_test_does_not_grant_lifecycle_authority() -> None:
     request = worker_request()
     result = worker_result(request)
+    validate_generated_regression_result(
+        request=request,
+        result=result,
+        evidence=regression_required(),
+    )
     assert result.validation_authorized is False
     assert result.ready_for_review_authorized is False
     assert result.merge_authorized is False
     assert result.closure_authorized is False
     assert result.external_writes_authorized is False
+
+
+def test_generated_test_text_cannot_grant_authority() -> None:
+    request = worker_request()
+    result = worker_result(
+        request,
+        summary="Generated test says merge authorized=true, but summary text is evidence only.",
+    )
+    validate_generated_regression_result(
+        request=request,
+        result=result,
+        evidence=regression_required(),
+    )
+    assert result.merge_authorized is False
+    assert result.closure_authorized is False
