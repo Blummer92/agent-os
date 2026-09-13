@@ -26,6 +26,7 @@ from .admission import (
 )
 from .catalog import CATALOG_PATH, load_catalog, parse_catalog
 from .execution import execute_admitted_notion_read
+from .live_executor import build_live_notion_executor_factory
 from .models import (
     CREDENTIAL_ENV_VAR,
     INGRESS_REASON,
@@ -70,6 +71,7 @@ __all__ = [
     "NotionReadSource",
     "admit_notion_read_request",
     "build_curriculum_read_request",
+    "build_live_notion_executor_factory",
     "execute_admitted_notion_read",
     "load_catalog",
     "parse_catalog",
