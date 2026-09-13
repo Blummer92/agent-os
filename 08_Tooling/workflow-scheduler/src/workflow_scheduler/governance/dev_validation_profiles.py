@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Iterable, Mapping
 _PROFILE_ID=re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$",re.ASCII);_SAFE_PATH=re.compile(r"^[A-Za-z0-9._/-]+$",re.ASCII);MAX_TARGETS=32
 class RunnerKind(str,Enum):
- PYTEST_TARGETS="pytest-targets";VITEST_TARGETS="vitest-targets";LEGACY_FIXED_SCRIPT="legacy-fixed-script";EIA_PADDLEOCR_QUALIFICATION="eia-paddleocr-qualification";DEPENDENCY_ARTIFACT_QUALIFICATION="dependency-artifact-qualification";VISUAL_ASSET_SHEETS_SMOKE="visual-asset-sheets-smoke"
+ PYTEST_TARGETS="pytest-targets";VITEST_TARGETS="vitest-targets";LEGACY_FIXED_SCRIPT="legacy-fixed-script";EIA_PADDLEOCR_QUALIFICATION="eia-paddleocr-qualification";DEPENDENCY_ARTIFACT_QUALIFICATION="dependency-artifact-qualification";VISUAL_ASSET_SHEETS_SMOKE="visual-asset-sheets-smoke";ISSUE_SCANNER_PROOF="issue-scanner-proof"
 @dataclass(frozen=True,slots=True)
 class DevValidationProfile:
  profile_id:str;runner_kind:RunnerKind;fixed_targets:tuple[str,...];fixed_working_directory:str|None;runtime_id:str;timeout_class:str;selector_requirements:tuple[str,...]
@@ -40,6 +40,7 @@ _PROFILES=(
  _profile("eia-paddleocr-runtime-qualification",RunnerKind.EIA_PADDLEOCR_QUALIFICATION,("08_Tooling/workflow-scheduler/src/workflow_scheduler/governance/eia_paddleocr_runtime_qualification.py",),runtime_id="host-python-eia-paddleocr"),
  _profile("eia-paddleocr-cp311-wheelhouse-qualification",RunnerKind.DEPENDENCY_ARTIFACT_QUALIFICATION,("08_Tooling/workflow-scheduler/src/workflow_scheduler/governance/dependency_artifact_qualification.py",),runtime_id="network-capable-ephemeral-python-resolver",timeout_class="artifact-300s"),
  _profile("visual-asset-sheets-smoke",RunnerKind.VISUAL_ASSET_SHEETS_SMOKE,("08_Tooling/workflow-scheduler/src/workflow_scheduler/governance/visual_asset_sheets_smoke.py",),runtime_id="governed-sheets-readonly",selector_requirements=("visual-asset-sheets-smoke",)),
+ _profile("issue-scanner-proof",RunnerKind.ISSUE_SCANNER_PROOF,("scripts/agent_os_github_issue_provider/scanner_proof.py",),runtime_id="governed-github-app-readonly"),
 )
 PROFILE_CATALOG:Mapping[str,DevValidationProfile]=MappingProxyType({p.profile_id:p for p in _PROFILES})
 PROFILE_ALIASES:Mapping[str,str]=MappingProxyType({"remote-validation-suite":"remote-validation","instructional-materials-current-curriculum-suite":"instructional-materials-current-curriculum","ppux-picture-perfect-ts-vitest":"picture-perfect","semantic-ownership-advisory":"semantic-ownership-advisory"})
@@ -58,6 +59,7 @@ def profile_argv(profile_id:object)->tuple[str,...]:
  if p.runner_kind is RunnerKind.EIA_PADDLEOCR_QUALIFICATION:return("python","-m","workflow_scheduler.governance.eia_paddleocr_runtime_qualification")
  if p.runner_kind is RunnerKind.DEPENDENCY_ARTIFACT_QUALIFICATION:return("python","-m","workflow_scheduler.governance.dependency_artifact_qualification")
  if p.runner_kind is RunnerKind.VISUAL_ASSET_SHEETS_SMOKE:return("python","-m","workflow_scheduler.governance.visual_asset_sheets_smoke")
+ if p.runner_kind is RunnerKind.ISSUE_SCANNER_PROOF:return("python","-m","scripts.agent_os_github_issue_provider.scanner_proof")
  raise ValueError("unsupported developer-validation runner kind")
 def project_selector_requirements(requirements:Iterable[str])->tuple[str,...]:
  if type(requirements)not in {tuple,list}:raise ValueError("selector requirements must be a tuple or list")

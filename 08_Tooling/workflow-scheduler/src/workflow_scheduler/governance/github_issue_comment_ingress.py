@@ -29,6 +29,7 @@ _VALIDATION_IDS = (
     "semantic-ownership-advisory",
     "ppux-picture-perfect-ts-vitest",
     "eia-paddleocr-runtime-qualification",
+    "issue-scanner-proof",
 )
 _DEV_VALIDATE_RE = re.compile(
     r"/agent-os dev-validate (?P<branch>agent/[A-Za-z0-9._/-]{1,180}) "
