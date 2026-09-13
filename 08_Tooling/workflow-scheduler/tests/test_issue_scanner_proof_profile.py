@@ -34,12 +34,15 @@ def test_scanner_ingress_accepts_only_exact_finite_identity():
   result=admit_issue_comment_event(event(body),expected_repository=REPOSITORY,allowed_actor=ACTOR,run_attempt=1)
   assert (result.status,result.reason)==("ignored","malformed-trigger")
 
-def test_scanner_host_route_is_fixed_and_fail_closed_without_credentials():
+def test_scanner_host_route_is_fixed_to_credential_bridge():
  req=request();command=live._host_command(req);source=live._HOST_RUNNER_SOURCE
  assert live.SCANNER_PROOF_VALIDATION_ID in command
  assert "scripts.agent_os_github_issue_provider.scanner_proof" in command
  assert 'SCANNER_PROOF_ID="issue-scanner-proof"' in source
- assert "scanner-proof-credential-injector-unavailable" in source
+ assert 'SCANNER_PROOF_HOST_MODULE="scripts.agent_os_github_issue_provider.scanner_proof_host_bridge"' in source
+ assert "scanner-proof-credential-injector-unavailable" not in source
+ assert 'run((HOST_PYTHON,"-m",SCANNER_PROOF_HOST_MODULE)' in source
+ assert "record_scanner_proof" in source
  assert "private_key" not in source and "Authorization" not in source and "GITHUB_TOKEN" not in source
  assert "sudo" not in command and "pip install" not in command
 

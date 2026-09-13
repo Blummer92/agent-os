@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import stat
 from types import SimpleNamespace
 
@@ -209,3 +210,17 @@ def test_bridge_creates_no_authority_or_retry_surface():
     assert not hasattr(bridge, "merge")
     assert not hasattr(bridge, "publish")
     assert not hasattr(bridge, "schedule")
+
+
+def test_external_credential_boundary_remains_separately_governed():
+    assert bridge.VALIDATOR_PRINCIPAL == (
+        "agent-os-github-app-validator@agent-os-502614.iam.gserviceaccount.com"
+    )
+    assert bridge.SECRET_RESOURCE == (
+        "projects/agent-os-502614/secrets/agent-os-github-app-private-key"
+    )
+    source = Path(bridge.__file__).read_text()
+    normalized = " ".join(source.split())
+    assert "does not claim that executing the helper proves those external bindings" in normalized
+    assert "gcloud" not in source
+    assert "secretmanager.versions.access" not in source

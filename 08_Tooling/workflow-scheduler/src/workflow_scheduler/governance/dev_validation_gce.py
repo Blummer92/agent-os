@@ -56,6 +56,7 @@ EIA_SCRIPT="08_Tooling/workflow-scheduler/src/workflow_scheduler/governance/eia_
 SHEETS_SMOKE_ID="visual-asset-sheets-smoke"
 SCANNER_PROOF_ID="issue-scanner-proof"
 SCANNER_PROOF_MODULE="scripts.agent_os_github_issue_provider.scanner_proof"
+SCANNER_PROOF_HOST_MODULE="scripts.agent_os_github_issue_provider.scanner_proof_host_bridge"
 SHEETS_SMOKE_SCRIPT="08_Tooling/workflow-scheduler/src/workflow_scheduler/governance/visual_asset_sheets_smoke.py"
 SHEETS_SMOKE_IMPORT_ROOT="08_Tooling/workflow-scheduler/src"
 SHEETS_SMOKE_IMPORT_PRELUDE="import os,sys;repo=os.getcwd();sys.path[:0]=[os.path.join(repo,path) for path in ('08_Tooling/workflow-scheduler/src',)]"
@@ -140,6 +141,32 @@ def record_sheets_smoke(result,completed):
   result.update({"status":"needs-decision","reason_codes":["sheets-smoke-output-invalid"],"exit_code":completed.returncode,"stdout_tail":out,"stderr_tail":err,"stdout_truncated":out_truncated,"stderr_truncated":err_truncated});return
  result.update({"status":"needs-decision","reason_codes":["sheets-smoke-credential-injector-unavailable"],"exit_code":0,"stdout_tail":"","stderr_tail":"","stdout_truncated":False,"stderr_truncated":False})
 
+def record_scanner_proof(result,completed):
+ try:payload=json.loads(completed.stdout)
+ except json.JSONDecodeError:
+  result.update({"status":"needs-decision","reason_codes":["scanner-proof-output-invalid"],"exit_code":completed.returncode,"stdout_tail":"","stderr_tail":"","stdout_truncated":False,"stderr_truncated":False});return
+ allowed_reasons={
+  "bounded-page-proven","issue-page-unproven","scanner-proof-failed",
+  "scanner-proof-host-argv-invalid","scanner-proof-secret-provider-unavailable",
+  "scanner-proof-secret-provider-invalid","scanner-proof-github-read-failed",
+  "scanner-proof-installation-metadata-invalid","scanner-proof-app-mismatch",
+  "scanner-proof-installation-mismatch","scanner-proof-permission-drift",
+  "scanner-proof-repository-scope-mismatch",
+  "scanner-proof-installation-pagination-unproven","installation:mismatch",
+  "pagination:ambiguous","pagination:incomplete","repository:absent",
+  "repository:duplicate","repository:id-invalid","repository:name-invalid",
+  "selection-mode:unsupported","snapshot:malformed"
+ }
+ fixed=isinstance(payload,dict) and payload.get("repository")==REPOSITORY and payload.get("page")==1 and payload.get("per_page")==30 and payload.get("state")=="open" and payload.get("installation_id")==148403885
+ safe=isinstance(payload,dict) and payload.get("external_side_effects_performed") is False and payload.get("production_state_mutated") is False and payload.get("execution_authorized") is False and payload.get("publication_authorized") is False and payload.get("complete_scan_authorized") is False and payload.get("automatic_retry") is False
+ reason=payload.get("reason") if isinstance(payload,dict) else None
+ valid_reason=isinstance(reason,str) and reason in allowed_reasons
+ valid_status=isinstance(payload,dict) and payload.get("status") in {"success","blocked"}
+ success_shape=payload.get("status")!="success" or (reason=="bounded-page-proven" and payload.get("same_invocation_identity") is True)
+ if completed.returncode!=0 or not (fixed and safe and valid_reason and valid_status and success_shape):
+  result.update({"status":"needs-decision","reason_codes":["scanner-proof-output-invalid"],"exit_code":completed.returncode,"stdout_tail":"","stderr_tail":"","stdout_truncated":False,"stderr_truncated":False});return
+ result.update({"status":"success" if payload["status"]=="success" else "needs-decision","reason_codes":[reason],"exit_code":0,"stdout_tail":"","stderr_tail":"","stdout_truncated":False,"stderr_truncated":False})
+
 def record_timeout(result,exc):
  out,out_truncated=bounded(exc.stdout if isinstance(exc.stdout,str) else "");err,err_truncated=bounded(exc.stderr if isinstance(exc.stderr,str) else "")
  result.update({"status":"timeout","reason_codes":["validation-timeout"],"stdout_tail":out,"stderr_tail":err,"stdout_truncated":out_truncated,"stderr_truncated":err_truncated})
@@ -190,7 +217,9 @@ try:
      try:record_eia(result,run((HOST_PYTHON,eia_script),cwd=repo,env=env,timeout=TEST_TIMEOUT))
      except subprocess.TimeoutExpired as exc:record_timeout(result,exc)
    elif validation_id==SCANNER_PROOF_ID:
-    result["reason_codes"]=["scanner-proof-credential-injector-unavailable"]
+    env=fixed_env(root)
+    try:record_scanner_proof(result,run((HOST_PYTHON,"-m",SCANNER_PROOF_HOST_MODULE),cwd=repo,env=env,timeout=TEST_TIMEOUT))
+    except subprocess.TimeoutExpired as exc:record_timeout(result,exc)
    elif validation_id==SHEETS_SMOKE_ID:
     sheets_script=os.path.join(repo,SHEETS_SMOKE_SCRIPT)
     if not os.path.isfile(HOST_PYTHON) or not os.access(HOST_PYTHON,os.X_OK): result["reason_codes"]=["sheets-smoke-host-python-unavailable"]

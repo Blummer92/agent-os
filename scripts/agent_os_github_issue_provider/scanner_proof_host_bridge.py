@@ -1,9 +1,14 @@
 """Fixed host-side credential bridge for the bounded #531 scanner proof.
 
-This repository module does not mutate IAM, Secret Manager, GitHub App settings,
-or host state. It consumes one fixed root-owned host credential-provider
-entrypoint, validates the exact read-only GitHub App installation boundary, and
-delegates the one-page read to the existing :mod:`scanner_proof` composition.
+This repository module does not mutate or prove IAM, Secret Manager, GitHub
+App installation, or host configuration. It consumes one fixed root-owned host
+credential-provider entrypoint, validates the exact read-only GitHub App
+installation boundary observed in the same invocation, and delegates the
+one-page read to the existing :mod:`scanner_proof` composition.
+
+The validator principal and Secret Manager resource below are expected-currentness
+identities for the separately governed host/runtime prerequisite. This module does
+not claim that executing the helper proves those external bindings.
 """
 from __future__ import annotations
 
@@ -59,7 +64,12 @@ def _safe_provider_env() -> dict[str, str]:
 
 
 class FixedHostGitHubAppSecretProvider:
-    """Implement GitHubAppSecretProvider through one fixed host entrypoint."""
+    """Consume one fixed root-owned helper.
+
+    Repository code verifies only the helper path/ownership/mode and returned key
+    shape. IAM principal and Secret Manager source currentness must be proven
+    separately before any live scanner invocation.
+    """
 
     def __init__(
         self,
