@@ -17,6 +17,7 @@ PAGINATION_DIAGNOSTIC_KINDS = frozenset(
         "pagination:next-page-invalid",
         "pagination:next-page-ambiguous",
         "pagination:next-page-non-advancing",
+        "pagination:next-page-non-contiguous",
         "pagination:next-per-page-invalid",
         "pagination:next-per-page-ambiguous",
         "pagination:next-per-page-changed",
@@ -315,6 +316,11 @@ def validated_next_page(
     )
     if page <= current_page:
         _fail("pagination:next-page-non-advancing", "next link does not advance")
+    if page != current_page + 1:
+        _fail(
+            "pagination:next-page-non-contiguous",
+            "next link does not identify the contiguous successor page",
+        )
 
     linked_per_page_values = query.get("per_page")
     if linked_per_page_values is not None:
