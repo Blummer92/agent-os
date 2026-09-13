@@ -25,6 +25,8 @@ EIA_VALIDATION_ID = "eia-paddleocr-runtime-qualification"
 EIA_VALIDATION_ARGV = ("python", "-m", "workflow_scheduler.governance.eia_paddleocr_runtime_qualification")
 SHEETS_SMOKE_VALIDATION_ID = "visual-asset-sheets-smoke"
 SHEETS_SMOKE_VALIDATION_ARGV = ("python", "-m", "workflow_scheduler.governance.visual_asset_sheets_smoke")
+SCANNER_PROOF_VALIDATION_ID = "issue-scanner-proof"
+SCANNER_PROOF_VALIDATION_ARGV = ("python", "-m", "scripts.agent_os_github_issue_provider.scanner_proof")
 # DEVVAL3 (#1495): the TypeScript/Vitest identity cannot run under the pinned
 # CPython test runtime, so it binds a second fixed root-owned runtime published
 # by the same separately authorized administrator installer pattern. It adds no
@@ -52,6 +54,8 @@ PPUX_PACKAGE_DIR="08_Tooling/instructional-materials-coach/picture-perfect-coach
 EIA_ID="eia-paddleocr-runtime-qualification"
 EIA_SCRIPT="08_Tooling/workflow-scheduler/src/workflow_scheduler/governance/eia_paddleocr_runtime_qualification.py"
 SHEETS_SMOKE_ID="visual-asset-sheets-smoke"
+SCANNER_PROOF_ID="issue-scanner-proof"
+SCANNER_PROOF_MODULE="scripts.agent_os_github_issue_provider.scanner_proof"
 SHEETS_SMOKE_SCRIPT="08_Tooling/workflow-scheduler/src/workflow_scheduler/governance/visual_asset_sheets_smoke.py"
 SHEETS_SMOKE_IMPORT_ROOT="08_Tooling/workflow-scheduler/src"
 SHEETS_SMOKE_IMPORT_PRELUDE="import os,sys;repo=os.getcwd();sys.path[:0]=[os.path.join(repo,path) for path in ('08_Tooling/workflow-scheduler/src',)]"
@@ -82,6 +86,7 @@ VALIDATION_ARGS={
  ),
  EIA_ID:(EIA_SCRIPT,),
  SHEETS_SMOKE_ID:(SHEETS_SMOKE_SCRIPT,),
+ SCANNER_PROOF_ID:(SCANNER_PROOF_MODULE,),
 }
 SHA40=re.compile(r"^[0-9a-f]{40}$",re.ASCII)
 BRANCH=re.compile(r"^agent/[A-Za-z0-9._/-]{1,180}$",re.ASCII)
@@ -184,7 +189,9 @@ try:
      env=fixed_env(root)
      try:record_eia(result,run((HOST_PYTHON,eia_script),cwd=repo,env=env,timeout=TEST_TIMEOUT))
      except subprocess.TimeoutExpired as exc:record_timeout(result,exc)
-   elif validation_id==SHEETS_SMOKE_ID:
+   elif validation_id==SCANNER_PROOF_ID:
+                    result["reason_codes"]=["scanner-proof-credential-injector-unavailable"]
+                elif validation_id==SHEETS_SMOKE_ID:
     sheets_script=os.path.join(repo,SHEETS_SMOKE_SCRIPT)
     if not os.path.isfile(HOST_PYTHON) or not os.access(HOST_PYTHON,os.X_OK): result["reason_codes"]=["sheets-smoke-host-python-unavailable"]
     elif not os.path.isfile(sheets_script): result["reason_codes"]=["validation-workspace-unavailable"]
@@ -224,6 +231,8 @@ def _host_command(request: object) -> str:
         expected = EIA_VALIDATION_ARGV
     elif request.validation_id == SHEETS_SMOKE_VALIDATION_ID:
         expected = SHEETS_SMOKE_VALIDATION_ARGV
+    elif request.validation_id == SCANNER_PROOF_VALIDATION_ID:
+        expected = SCANNER_PROOF_VALIDATION_ARGV
     if expected is None or validation_argv(request) != expected:
         raise ValueError("dev-validation argv drift")
     return shlex.join((HOST_PYTHON, "-c", _HOST_RUNNER_SOURCE, request.repository, str(request.issue_number), request.branch, request.source_sha, request.validation_id, request.request_id))
