@@ -295,9 +295,18 @@ def build_validation_evidence_bundle(
 def serialize_validation_evidence_bundle(
     bundle: ValidationEvidenceBundle,
 ) -> dict[str, object]:
-    """Return canonical bundle data after verifying its semantic identity."""
+    """Return canonical bundle data after verifying its semantic identity.
+
+    The canonical API accepts both the original positive-PR bundle and the
+    additive #1985 PR-less bundle. The latter keeps its own plan serializer and
+    never fabricates a pull-request identity.
+    """
     if not isinstance(bundle, ValidationEvidenceBundle):
         raise TypeError("bundle must be ValidationEvidenceBundle")
+    if bundle.pull_request is None:
+        from .pre_pr_evidence_bundle import serialize_pre_pr_validation_evidence_bundle
+
+        return serialize_pre_pr_validation_evidence_bundle(bundle)
     payload = _bundle_payload(bundle)
     expected = "validation-evidence-bundle:" + _semantic_digest(
         "agent-os-validation-evidence-bundle:v1", payload
@@ -925,7 +934,15 @@ def _reconstruct_command_results(
 
 
 def reconstruct_validation_evidence_bundle(payload: object) -> ValidationEvidenceBundle:
-    """Reconstruct one exact canonical bundle without I/O or new authority."""
+    """Reconstruct one exact canonical bundle without I/O or new authority.
+
+    PR-less payloads stay in the same bundle family and delegate to the #1985
+    reconstructor so no positive pull-request identity is invented.
+    """
+    if type(payload) is dict and payload.get("pull_request", object()) is None:
+        from .pre_pr_evidence_bundle import reconstruct_pre_pr_validation_evidence_bundle
+
+        return reconstruct_pre_pr_validation_evidence_bundle(payload)
     value = _closed_dict(payload, _BUNDLE_SERIALIZED_KEYS, "validation evidence bundle")
     if len(_canonical_bytes(value)) > MAX_BUNDLE_SERIALIZED_BYTES:
         raise ValueError("validation evidence bundle exceeds canonical size limit")

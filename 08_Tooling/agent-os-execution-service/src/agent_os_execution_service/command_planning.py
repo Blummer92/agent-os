@@ -72,6 +72,36 @@ _COMMAND_REGISTRY = MappingProxyType(
             "pytest",
             "08_Tooling/workflow-scheduler/tests/test_concrete_runtime_adapters.py",
         ),
+        "python -m pytest tests/agent_os_issue_labels": (
+            "python",
+            "-m",
+            "pytest",
+            "tests/agent_os_issue_labels",
+        ),
+        "python -m pytest tests/agent_os_execution_interface": (
+            "python",
+            "-m",
+            "pytest",
+            "tests/agent_os_execution_interface",
+        ),
+        "python -m pytest tests/agent_os_notion_read_request": (
+            "python",
+            "-m",
+            "pytest",
+            "tests/agent_os_notion_read_request",
+        ),
+        "python -m pytest 08_Tooling/agent-os-execution-service/tests": (
+            "python",
+            "-m",
+            "pytest",
+            "08_Tooling/agent-os-execution-service/tests",
+        ),
+        "python -m pytest tests/agent_os_remote_validation": (
+            "python",
+            "-m",
+            "pytest",
+            "tests/agent_os_remote_validation",
+        ),
         "python -m pytest 08_Tooling/notion-navigation-client/tests": (
             "python",
             "-m",

@@ -12,6 +12,11 @@ from scripts.agent_os_remote_validation import (
     compute_command_set_digest,
     pre_pr_validation_plan_id,
 )
+from scripts.agent_os_remote_validation.evidence_bundle import (
+    reconstruct_validation_evidence_bundle,
+    serialize_validation_evidence_bundle,
+    validation_evidence_bundle_id,
+)
 from scripts.agent_os_remote_validation.pre_pr_evidence_bundle import (
     build_pre_pr_validation_evidence_bundle,
     pre_pr_validation_evidence_bundle_id,
@@ -120,6 +125,22 @@ def test_pr_less_bundle_round_trips_without_positive_pr_assumption() -> None:
     assert reconstructed.validation_plan == plan
     assert pre_pr_validation_evidence_bundle_id(reconstructed) == bundle.bundle_id
     assert serialize_pre_pr_validation_evidence_bundle(reconstructed) == payload
+
+
+def test_canonical_bundle_api_dispatches_pr_less_without_fabricating_pr() -> None:
+    plan = _plan()
+    bundle = _bundle(plan)
+
+    payload = serialize_validation_evidence_bundle(bundle)
+    reconstructed = reconstruct_validation_evidence_bundle(payload)
+
+    assert payload["pull_request"] is None
+    assert payload["validation_plan"]["subject"]["issue_number"] == 1985
+    assert type(reconstructed.validation_plan) is PrePrValidationPlan
+    assert reconstructed.validation_plan == plan
+    assert reconstructed.pull_request is None
+    assert validation_evidence_bundle_id(reconstructed) == bundle.bundle_id
+    assert serialize_validation_evidence_bundle(reconstructed) == payload
 
 
 def test_pr_less_bundle_rejects_fabricated_positive_pr() -> None:
