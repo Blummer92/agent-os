@@ -66,6 +66,23 @@ function result(
   });
 }
 
+function exactCompositeRequestMatchesSelectedReference(
+  request: ExactCompositeExecutionRequest,
+  card: PromptCardModel,
+  strategy: GenerationStrategyResult,
+): boolean {
+  const selectedReference = card.currentVisualReference ?? null;
+  if (!selectedReference || strategy.currentVisualReferenceRef === null) return false;
+
+  const plannedReference = request.plan.base_reference;
+  const selectedAsset = selectedReference.asset_reference;
+  return plannedReference.reference_id === selectedReference.reference_id
+    && plannedReference.stable_ref === strategy.currentVisualReferenceRef
+    && plannedReference.stable_ref === selectedAsset.stable_ref
+    && plannedReference.content_fingerprint === selectedAsset.content_fingerprint
+    && request.source.sha256 === plannedReference.content_fingerprint;
+}
+
 /**
  * #2101 composition owner.
  *
@@ -74,7 +91,9 @@ function result(
  * consumed first. A new current-application visual evaluates #2109 reuse before
  * crossing #2100. Exact-composite execution is possible only from an already
  * resolved #2075 request supplied by the caller; this function never invents
- * geometry, source pixels, assets, or provider authority.
+ * geometry, source pixels, assets, or provider authority. Before execution, the
+ * resolved request is rebound to the exact selected current-reference identity
+ * and pixel fingerprint so a stale or substituted source fails closed.
  */
 export async function orchestrateTutorialVisual(input: Readonly<{
   routed_step: RoutedTutorialStep;
@@ -122,7 +141,11 @@ export async function orchestrateTutorialVisual(input: Readonly<{
   if (!input.exact_composite_request) {
     return result('exact-composite-ready', strategy, reuse);
   }
-  if (!input.exact_composite_executor) {
+  if (
+    !input.prompt_card
+    || !exactCompositeRequestMatchesSelectedReference(input.exact_composite_request, input.prompt_card, strategy)
+    || !input.exact_composite_executor
+  ) {
     return result('blocked', strategy, reuse);
   }
 
