@@ -61,3 +61,7 @@ def test_scanner_unavailable_evidence_is_bounded_and_non_authorizing():
  assert result["reason_codes"]==["scanner-proof-credential-injector-unavailable"]
  assert result["stdout_tail"]==result["stderr_tail"]==""
  assert result["external_side_effects_performed"] is False and result["merge_authorized"] is False
+
+
+def test_host_runner_source_is_syntactically_valid():
+    compile(live._HOST_RUNNER_SOURCE, "<agent-os-dev-validation-host>", "exec")

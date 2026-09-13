@@ -190,8 +190,8 @@ try:
      try:record_eia(result,run((HOST_PYTHON,eia_script),cwd=repo,env=env,timeout=TEST_TIMEOUT))
      except subprocess.TimeoutExpired as exc:record_timeout(result,exc)
    elif validation_id==SCANNER_PROOF_ID:
-                    result["reason_codes"]=["scanner-proof-credential-injector-unavailable"]
-                elif validation_id==SHEETS_SMOKE_ID:
+    result["reason_codes"]=["scanner-proof-credential-injector-unavailable"]
+   elif validation_id==SHEETS_SMOKE_ID:
     sheets_script=os.path.join(repo,SHEETS_SMOKE_SCRIPT)
     if not os.path.isfile(HOST_PYTHON) or not os.access(HOST_PYTHON,os.X_OK): result["reason_codes"]=["sheets-smoke-host-python-unavailable"]
     elif not os.path.isfile(sheets_script): result["reason_codes"]=["validation-workspace-unavailable"]
