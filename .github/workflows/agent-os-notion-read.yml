@@ -37,29 +37,63 @@ jobs:
           import json
           import os
           from pathlib import Path
-          from scripts.agent_os_notion_read_request import admit_notion_read_request
+          from scripts.agent_os_notion_read_request import (
+              admit_notion_read_request,
+              load_catalog,
+          )
+          from scripts.agent_os_notion_read_request.binding_verification import (
+              VERIFICATION_REQUEST_ID,
+              admit_binding_verification_request,
+          )
 
           root = Path(os.environ["RUNNER_TEMP"]) / "agent-os-notion-read"
           transport = json.loads((root / "transport.json").read_text(encoding="utf-8"))
-          decision = admit_notion_read_request(
-              transport,
-              expected_repository=os.environ["GITHUB_REPOSITORY"],
-              expected_actor="Blummer92",
-          )
+          if transport.get("notion_read_request_id_or_none") == VERIFICATION_REQUEST_ID:
+              decision = admit_binding_verification_request(
+                  transport,
+                  expected_repository=os.environ["GITHUB_REPOSITORY"],
+                  expected_actor="Blummer92",
+              )
+          else:
+              decision = admit_notion_read_request(
+                  transport,
+                  catalog=load_catalog(),
+                  expected_repository=os.environ["GITHUB_REPOSITORY"],
+                  expected_actor="Blummer92",
+              ).to_dict()
           (root / "admission.json").write_text(
-              json.dumps(decision.to_dict(), sort_keys=True, separators=(",", ":")) + "\n",
+              json.dumps(decision, sort_keys=True, separators=(",", ":")) + "\n",
               encoding="utf-8",
           )
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write(
                   "secret_dispatch_authorized="
-                  + ("true" if decision.secret_dispatch_authorized else "false")
+                  + ("true" if decision.get("secret_dispatch_authorized") is True else "false")
+                  + "\n"
+              )
+              output.write(
+                  "binding_verification="
+                  + ("true" if decision.get("request_id") == VERIFICATION_REQUEST_ID else "false")
                   + "\n"
               )
           PY
 
+      - name: Execute admitted binding verification through canonical Notion adapter
+        if: ${{ steps.admission.outputs.secret_dispatch_authorized == 'true' && steps.admission.outputs.binding_verification == 'true' }}
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          PYTHONPATH: src:08_Tooling/workflow-scheduler/src:.
+        run: |
+          set -euo pipefail
+          python -m scripts.agent_os_notion_read_request.binding_verification \
+            --transport "$RUNNER_TEMP/agent-os-notion-read/transport.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            --allowed-actor Blummer92 \
+            --generated-at "${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
+            --output "$RUNNER_TEMP/agent-os-notion-read/result.json"
+
       - name: Execute admitted read through canonical Notion adapter
-        if: ${{ steps.admission.outputs.secret_dispatch_authorized == 'true' }}
+        if: ${{ steps.admission.outputs.secret_dispatch_authorized == 'true' && steps.admission.outputs.binding_verification != 'true' }}
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           PYTHONPATH: src:08_Tooling/workflow-scheduler/src:.
