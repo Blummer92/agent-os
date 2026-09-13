@@ -104,9 +104,20 @@ Provider adapters live outside this canonical wire shape. Codex, Claude Code, a 
 
 Capability negotiation remains #918/#1401-owned. A provider's capabilities do not grant permission to use them.
 
-## #2315 compatibility
+## #2315 regression-test synthesis
 
-Regression-test synthesis consumes the ordinary operation `generate-regression-test`. #2315 may return generated-test paths and test-result evidence through the same result shape. A generated or passing regression test remains worker evidence and cannot authorize validation, Ready-for-Review, merge, closure, or lifecycle completion.
+Regression-test synthesis reuses the ordinary operation `generate-regression-test` and the same worker request/result evidence boundary. The adjacent `regression_test_synthesis.py` seam first emits exactly one bounded decision:
+
+- `TEST_NOT_NEEDED`
+- `EXISTING_TEST_SUFFICIENT`
+- `REGRESSION_TEST_REQUIRED`
+- `TEST_SYNTHESIS_UNSAFE_OR_AMBIGUOUS`
+
+The decision checks existing exact/indirect coverage before requesting generation, so a behavioral change alone does not justify test spam. Ambiguous expectations, ambiguous canonical test surfaces, forbidden external I/O, out-of-scope test locations, and missing behavioral anchors fail closed.
+
+When generation is required, the worker result is accepted only when it belongs to the same content-addressed request/base SHA and every generated path remains inside the request's allowed scope and outside forbidden scope. Generated-test paths and test-result identities remain evidence in `CodingWorkerResult`; they never authorize validation, Ready-for-Review, merge, closure, external writes, or lifecycle completion.
+
+Red-before-green is a separately classified evidence property. It may be `expected-failure-proven`, `unavailable`, `unexpected-pass`, or `wrong-reason-failure`; callers must not manufacture a failing state or treat an unexpected pass/wrong-reason failure as repair authority. Existing focused validation, exact-head validation, repair continuation, and semantic-progress owners remain canonical.
 
 ## Persistence and concurrency
 
@@ -114,6 +125,6 @@ The contract is intentionally one request -> one bounded worker execution -> one
 
 ## Validation
 
-Focused contract coverage lives in `tests/test_coding_worker_contract.py`. It covers provider-neutral shape, content-addressed round trips, scope overlap/violation behavior, finite status vocabulary, stale-state binding evidence, authority-injection rejection, and provider substitution without schema changes.
+Focused contract coverage lives in `tests/test_coding_worker_contract.py`. #2315 decision/scope/duplicate-avoidance coverage lives in `tests/test_regression_test_synthesis.py`.
 
 Independent exact-head validation remains separately required by Agent OS before review readiness.
