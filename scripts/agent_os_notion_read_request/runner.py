@@ -2,9 +2,9 @@
 
 The runner produces one deterministic evidence object for the smallest existing
 approved public GitHub evidence surface (a bounded Actions artifact plus a job
-summary), exactly like the existing governed ingress. It creates no new
-persistence subsystem, writes nothing to Notion or Drive, and never turns issue
-comments or repository files into a curriculum store.
+summary). It creates no new persistence subsystem, writes nothing to Notion or
+Drive, and never turns issue comments or repository files into a curriculum
+store.
 
 Following the existing preflight convention, the runner never reads the system
 clock: ``generated_at`` is caller-supplied so results stay reproducible.
@@ -20,14 +20,12 @@ from typing import Mapping
 from .admission import admit_notion_read_request
 from .catalog import load_catalog
 from .execution import SchedulerTaskExecutorFactory, execute_admitted_notion_read
+from .live_executor import build_live_notion_executor_factory
 from .models import SCHEMA_VERSION, NotionReadCatalog, NotionReadRequestError
 from .projection import reject_credential_keys, project_public_result
 
 MAX_TRANSPORT_BYTES = 262_144
 
-#: Terminal dispatch states. ``not-activated`` is the honest state while the
-#: source allowlist carries no verified binding: admission succeeded in shape but
-#: live secret-backed access remains a separately authorized excluded surface.
 DISPATCH_BLOCKED = "blocked"
 DISPATCH_NOT_ACTIVATED = "not-activated"
 DISPATCH_COMPLETED = "completed"
@@ -106,13 +104,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--allowed-actor", required=True)
     parser.add_argument("--generated-at", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--live-notion",
+        action="store_true",
+        help="bind the existing #936 Notion reader after admission succeeds",
+    )
     args = parser.parse_args(argv)
 
+    executor_factory = build_live_notion_executor_factory() if args.live_notion else None
     evidence = run_notion_read_request(
         _read_transport(args.transport),
         expected_repository=args.repository,
         expected_actor=args.allowed_actor,
         generated_at=args.generated_at,
+        scheduler_task_executor_factory=executor_factory,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
