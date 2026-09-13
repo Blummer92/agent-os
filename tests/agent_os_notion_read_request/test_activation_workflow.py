@@ -35,14 +35,28 @@ def test_workflow_has_read_only_github_permissions_and_no_gcp_identity() -> None
     assert "gcloud" not in text
 
 
-def test_secret_is_exposed_only_to_post_admission_execution_step() -> None:
+def test_workflow_loads_catalog_for_normal_admission() -> None:
     text = workflow_text()
-    assert text.count("NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}") == 1
-    secret_index = text.index("NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}")
+    assert "load_catalog" in text
+    assert "catalog=load_catalog()" in text
+
+
+def test_secret_is_exposed_only_to_post_admission_execution_steps() -> None:
+    text = workflow_text()
+    assert text.count("NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}") == 2
     admission_index = text.index("Admit bounded Notion read without credentials")
-    gate_index = text.index("steps.admission.outputs.secret_dispatch_authorized == 'true'")
-    assert admission_index < gate_index < secret_index
-    assert "--live-notion" in text[secret_index:]
+    first_secret_index = text.index("NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}")
+    assert admission_index < first_secret_index
+    assert "steps.admission.outputs.secret_dispatch_authorized == 'true'" in text[:first_secret_index]
+    assert "--live-notion" in text[first_secret_index:]
+
+
+def test_binding_verification_is_finite_and_separate_from_normal_dispatch() -> None:
+    text = workflow_text()
+    assert "VERIFICATION_REQUEST_ID" in text
+    assert "admit_binding_verification_request" in text
+    assert "steps.admission.outputs.binding_verification == 'true'" in text
+    assert "scripts.agent_os_notion_read_request.binding_verification" in text
 
 
 def test_workflow_publishes_only_bounded_result_artifacts() -> None:
