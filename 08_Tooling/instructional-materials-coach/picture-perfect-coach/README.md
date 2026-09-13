@@ -1,4 +1,4 @@
-# Picture Perfect Coach — PPUX-A / B / C / D / E / F1 / F2 / RUN2
+# Picture Perfect Coach — PPUX-A / B / C / D / E / F1 / F2 / LIVE3
 
 Bounded implementation package for the five-stage Picture Perfect authoring flow and its local browser acceptance suite.
 
@@ -22,21 +22,32 @@ Stage 5 performs deterministic local preflight and can generate a local implemen
 - TypeScript types here are bounded consumer projections, not new canonical schemas.
 - Prompt/image output is presentation guidance, never source instructional evidence.
 
-## Reuse before recapture (#2109 / #2117)
+## Live tutorial visual composition (#2101)
 
-`captureReuse.ts` is the pure reuse decision. `captureReuseRouting.ts` is the production composition seam that consumes that decision before the #2100 live-capture adapter boundary. Until #2100 lands on `main`, the adapter remains injected and tests perform no browser/cloud execution.
+`tutorialVisualOrchestration.ts` is the single bounded composition seam over existing owners. It does not add another asset registry, cache, idempotency owner, capture engine, strategy model, or compositor.
 
 ```text
-exact current governed evidence -> REUSE_EXISTING_CAPTURE -> zero adapter calls
-missing/stale/mismatched evidence -> CAPTURE_REQUIRED -> exactly one adapter call
-conflicting/privacy/eligibility ambiguity -> MANUAL_REVIEW_REQUIRED -> zero adapter calls
+routed tutorial need
+-> existing generation strategy
+   reuse/resurface -> return approved asset identity; zero capture
+   no visual -> stop; zero capture
+   semantic synthetic -> provider-neutral planning only
+   current-reference-composite
+      -> decideCaptureReuse
+         REUSE -> zero #2100 calls
+         MANUAL_REVIEW -> zero #2100 calls
+         CAPTURE_REQUIRED -> exactly one #2100 adapter call
+      -> already-resolved #2075 exact-composite request
+      -> existing ExactCompositeExecutor
 ```
+
+The old `captureReuseRouting.ts` injected-adapter shim was retired because #2100 is now the canonical live-capture request/receipt owner. `captureReuse.ts` remains the pure exact-evidence decision and no longer accepts caller-trusted duplicate telemetry. Duplicate-run observability is derived only from a #2100 receipt whose transport status is `deduplicated`; a caller cannot manufacture an avoided-run count by setting a flag.
 
 Reuse requires the exact modeled application, recording SHA, source index + fingerprint, requested action/result role, co-visible UI claims, existing ArtifactManifest privacy/rights/readiness evidence, compatibility freshness, and target geometry when the requested frame depends on geometry. A filename, lesson title, generic application screenshot, generated image, or visually similar state is never a reuse key.
 
-The result exposes bounded non-authorizing counters for browser runs requested, browser runs launched by the pure decision seam (always zero), existing evidence reuse, and duplicate runs avoided. The caller may mark an already-satisfied equivalent logical request with `already_satisfied_duplicate=true`; that marker is observability evidence only and counts one avoided duplicate run only when the same decision independently proves `REUSE_EXISTING_CAPTURE`. It cannot turn missing, stale, mismatched, or ambiguous evidence into reuse and introduces no cache or persistence. The same logical request plus the same current evidence deterministically returns the same evidence identity. This package never launches the browser itself; only `CAPTURE_REQUIRED` may cross the injected #2100 adapter boundary. Manual-review outcomes deliberately do not spend browser compute to hide ambiguity.
+The composition seam receives only an already-resolved exact-composite request. It never discovers source pixels, invents geometry, searches for assets, or reconstructs current-application UI. Missing or ambiguous evidence remains blocked/manual-review rather than falling through to provider reconstruction or unnecessary browser compute.
 
-No cache, asset registry, persistence root, crawler, Scheduler, workflow, or execution authority is added. Reuse grants no Picture Perfect Ready, classroom readiness, publication, provider execution, or external-write authority.
+Every orchestration result keeps execution, classroom readiness, publication, and external-write authority false. No cache, asset registry, persistence root, crawler, Scheduler, workflow, live browser, provider execution, or external write is added.
 
 ## Fidelity evaluation boundary (#1542)
 
@@ -120,16 +131,10 @@ There is no OCR, computer vision, model scoring, or editor-UI detection anywhere
 ## Commands
 
 ```bash
-npm ci
-npx playwright install chromium
 npm run typecheck
 npm run lint
-npm test
+npm run test
 npm run build
 npm run guard
-npm run test:e2e
+npm run check
 ```
-
-The package targets Node `>=22.12 <23`. Repository structural and aggregate validation are also required before Ready-for-Review.
-
-The governed developer-validation identity `ppux-picture-perfect-ts-vitest` (#1495) runs a fixed subset of this package's suite — `overlayIntegrity`, `exactComposite`, `exactCompositeSuite`, `framePlan`, `executorContract`, `provenanceValidator` — from repository-owned configuration only. It is documented in `08_Tooling/agent-os-execution-service/docs/HOST_RUNTIME_INSTALLATION.md`; it selects no argv, path, filter, or reporter, and it authorizes nothing.
