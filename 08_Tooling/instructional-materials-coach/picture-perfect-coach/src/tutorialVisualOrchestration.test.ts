@@ -16,7 +16,7 @@ function reviewedStep(id: string) {
 }
 
 const square = reviewedStep('tutorial0-step-03-square-file');
-const squareCard = tutorial0CapturedPromptCards.find((card) => card.stepNumber === square.step_number)!;
+const squareCard = tutorial0CapturedPromptCards.find((card) => card.stepNumber === square.sequence)!;
 
 function captureRequirement(): CaptureReuseRequirement {
   return {
