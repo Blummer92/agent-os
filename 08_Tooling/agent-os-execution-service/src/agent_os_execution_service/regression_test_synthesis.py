@@ -10,7 +10,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-from .coding_worker_contract import CodingWorkerOperation, CodingWorkerRequest, CodingWorkerResult
+from .coding_worker_contract import (
+    CodingWorkerOperation,
+    CodingWorkerRequest,
+    CodingWorkerResult,
+    CodingWorkerStatus,
+)
 
 
 class RegressionTestDecision(str, Enum):
@@ -78,12 +83,12 @@ def decide_regression_test_need(
             behavioral_requirement_id=behavioral_requirement_id,
         )
     if existing_exact_test_ids or existing_indirect_test_ids:
-        evidence = existing_exact_test_ids + existing_indirect_test_ids
+        existing = existing_exact_test_ids + existing_indirect_test_ids
         return RegressionTestSynthesisEvidence(
             decision=RegressionTestDecision.EXISTING_TEST_SUFFICIENT,
             reason="existing coverage already proves the bounded behavioral obligation",
             behavioral_requirement_id=behavioral_requirement_id,
-            existing_test_ids=evidence,
+            existing_test_ids=existing,
         )
     if not behavior_changed:
         return RegressionTestSynthesisEvidence(
@@ -103,21 +108,51 @@ def decide_regression_test_need(
     )
 
 
+def classify_red_before_green(
+    *,
+    attempted: bool,
+    initial_test_passed: bool | None = None,
+    failure_matches_expected_reason: bool | None = None,
+) -> RedBeforeGreenStatus:
+    """Classify pre-fix execution without manufacturing a failing state."""
+    if not attempted:
+        return RedBeforeGreenStatus.UNAVAILABLE
+    if initial_test_passed is True:
+        return RedBeforeGreenStatus.UNEXPECTED_PASS
+    if initial_test_passed is None:
+        raise ValueError("attempted red-before-green requires an observed pass/fail result")
+    if failure_matches_expected_reason is True:
+        return RedBeforeGreenStatus.EXPECTED_FAILURE_PROVEN
+    if failure_matches_expected_reason is False:
+        return RedBeforeGreenStatus.WRONG_REASON_FAILURE
+    raise ValueError("a failing red-before-green run requires expected-reason classification")
+
+
 def validate_generated_regression_result(
     *,
     request: CodingWorkerRequest,
     result: CodingWorkerResult,
     evidence: RegressionTestSynthesisEvidence,
 ) -> RegressionTestSynthesisEvidence:
-    """Validate worker evidence without turning generated tests into authority."""
+    """Validate meaningful worker evidence without turning it into authority."""
     if evidence.decision is not RegressionTestDecision.REGRESSION_TEST_REQUIRED:
         raise ValueError("generated regression evidence requires REGRESSION_TEST_REQUIRED")
     if request.operation is not CodingWorkerOperation.GENERATE_REGRESSION_TEST:
         raise ValueError("request must use generate-regression-test operation")
     if result.request_id != request.request_id or result.base_sha != request.base_sha:
         raise ValueError("worker result is stale or belongs to another request")
+    if result.status is not CodingWorkerStatus.COMPLETED:
+        raise ValueError("generated regression evidence requires a completed worker result")
     if not result.files_changed:
         raise ValueError("worker result contains no generated test path")
+    if not result.tests_run or not result.test_result_ids:
+        raise ValueError("generated regression evidence requires executed test-result evidence")
+    if evidence.red_before_green is RedBeforeGreenStatus.NOT_APPLICABLE:
+        raise ValueError("REGRESSION_TEST_REQUIRED requires explicit red-before-green classification")
+    if evidence.red_before_green is RedBeforeGreenStatus.UNEXPECTED_PASS:
+        raise ValueError("unexpected pre-fix pass is not valid regression proof")
+    if evidence.red_before_green is RedBeforeGreenStatus.WRONG_REASON_FAILURE:
+        raise ValueError("wrong-reason pre-fix failure is not valid regression proof")
     for path in result.files_changed:
         if not any(path == root or path.startswith(root + "/") for root in request.allowed_paths):
             raise ValueError("generated test path exceeds allowed scope")
@@ -137,6 +172,7 @@ __all__ = [
     "RedBeforeGreenStatus",
     "RegressionTestDecision",
     "RegressionTestSynthesisEvidence",
+    "classify_red_before_green",
     "decide_regression_test_need",
     "validate_generated_regression_result",
 ]
