@@ -63,7 +63,6 @@ def test_parse_link_header_handles_rfc_delimiters_and_multiple_relations():
     assert parsed["last"] == parsed["next"]
 
 
-
 @pytest.mark.parametrize("relation", ["Next", "NEXT", "nExT"])
 def test_registered_next_relation_is_case_insensitive(relation: str):
     header = (
@@ -121,7 +120,6 @@ def test_query_canonicalization_fail_closed(kind: str, query: str):
     )
 
 
-
 def test_percent_encoded_allowed_query_name_decodes_once():
     assert validated_next_page(
         '<https://api.github.com/repos/owner/repo/issues?'
@@ -149,6 +147,7 @@ def test_next_link_fragment_fails_closed():
         "pagination:link-parse",
         '<https://api.github.com/repos/owner/repo/issues?page=2#fragment>; rel="next"',
     )
+
 
 def test_parse_link_header_absent_is_not_present_empty():
     assert parse_link_header(None) == {}
@@ -191,6 +190,20 @@ def test_validated_next_page_success_and_omitted_trusted_parameters():
             per_page=100,
             state="open",
         ) == (2, False)
+
+
+def test_next_link_must_be_contiguous_successor():
+    _assert_kind(
+        "pagination:next-page-non-contiguous",
+        '<https://api.github.com/repos/owner/repo/issues?page=3>; rel="next"',
+    )
+    assert validated_next_page(
+        '<https://api.github.com/repos/owner/repo/issues?page=3>; rel="next"',
+        repository="owner/repo",
+        current_page=2,
+        per_page=100,
+        state="open",
+    ) == (3, False)
 
 
 def test_matching_numeric_repository_path_is_accepted_with_trusted_identity():
@@ -324,6 +337,10 @@ def test_validated_next_page_terminal_contract():
         (
             "pagination:next-page-non-advancing",
             '<https://api.github.com/repos/owner/repo/issues?page=1>; rel="next"',
+        ),
+        (
+            "pagination:next-page-non-contiguous",
+            '<https://api.github.com/repos/owner/repo/issues?page=3>; rel="next"',
         ),
         (
             "pagination:next-per-page-invalid",
