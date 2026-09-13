@@ -5,6 +5,7 @@ import {
   tutorial0ReviewedTutorial,
 } from './fixtures/tutorial0-prompts';
 import type { CaptureReuseRequirement } from './captureReuse';
+import type { ExactCompositeExecutionRequest } from './executorContract';
 import type { PromptCardModel } from './promptIntent';
 import type { RoutedTutorialStep } from './tutorialPackage';
 import { orchestrateTutorialVisual } from './tutorialVisualOrchestration';
@@ -56,6 +57,51 @@ function currentReferenceCard(): PromptCardModel {
       manifest_reference: state.manifest_reference,
       asset_reference: state.asset_reference,
     },
+  };
+}
+
+function exactRequest(card: PromptCardModel): ExactCompositeExecutionRequest {
+  const reference = card.currentVisualReference!;
+  const fingerprint = reference.asset_reference.content_fingerprint;
+  return {
+    plan: {
+      plan_version: 'picture-perfect-exact-composite-plan-v1',
+      rect_convention: 'xywh',
+      base_reference: {
+        reference_id: reference.reference_id,
+        stable_ref: reference.asset_reference.stable_ref,
+        content_fingerprint: fingerprint,
+      },
+      resolved_target_region_id: 'region:create-new',
+      source_rect: { space: 'source-pixel', rect: [0, 0, 1, 1] },
+      output_aspect: { width: 1, height: 1 },
+      output_width_px: 1,
+      output_height_px: 1,
+      render_mode: 'crop-only',
+      scale_x: 1,
+      scale_y: 1,
+      render_spec: {
+        compositing_colour_space: 'srgb',
+        dim_rgba: [0, 0, 0, 0],
+        resampler: 'none',
+        overlay_bleed_px: 0,
+        annotation_clearance_px: 0,
+        context_margin_fraction: 0,
+        spotlight: { padding_px: 0, falloff_px: 0, falloff_function: 'none' },
+        badge: { diameter_px: 1, border_width_px: 0, fill_rgba: [0, 0, 0, 0], border_rgba: [0, 0, 0, 0], text_rgba: [0, 0, 0, 0], font_family: 'test', font_size_px: 1, font_weight: 400 },
+        arrow: { shaft_width_px: 1, head_length_px: 1, head_width_px: 1, rgba: [0, 0, 0, 0] },
+        label: { font_family: 'test', font_size_px: 1, font_weight: 400, line_height_px: 1, padding_x_px: 0, padding_y_px: 0, corner_radius_px: 0, max_width_px: 1, background_rgba: [0, 0, 0, 0], text_rgba: [0, 0, 0, 0] },
+        inset: { magnification: 1, border_width_px: 0, border_rgba: [0, 0, 0, 0] },
+      },
+      asset_fills: [],
+      overlays: [],
+      anchored_rects: [],
+      must_show_region_ids: [],
+      annotation_intent: { target_region_id: 'region:create-new', label: null, preferred_side: null },
+      execution_authorized: false,
+    },
+    source: { sha256: fingerprint, width_px: 1, height_px: 1, bytes: new Uint8Array() },
+    assets: [],
   };
 }
 
@@ -156,6 +202,43 @@ describe('#2101 tutorial visual orchestration', () => {
     });
     expect(result.disposition).toBe('manual-review-required');
     expect(capture).not.toHaveBeenCalled();
+    expect(executor.execute).not.toHaveBeenCalled();
+  });
+
+  it('executes only when the resolved composite request is bound to the selected current reference', async () => {
+    const card = currentReferenceCard();
+    const request = exactRequest(card);
+    const executor = { execute: vi.fn(async () => ({ image: request.source, report: {} as never })) };
+    const result = await orchestrateTutorialVisual({
+      routed_step: routedStep(),
+      reviewed_step: square,
+      prompt_card: card,
+      capture_requirement: captureRequirement(),
+      capture_bundle: tutorial0SyntheticCapture,
+      capture_request_adapter: unusedCaptureAdapter,
+      exact_composite_request: request,
+      exact_composite_executor: executor,
+    });
+    expect(result.disposition).toBe('exact-composite-rendered');
+    expect(executor.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks a substituted exact-composite source instead of executing it', async () => {
+    const card = currentReferenceCard();
+    const request = exactRequest(card);
+    const substituted = { ...request, source: { ...request.source, sha256: 'wrong-source-fingerprint' } };
+    const executor = { execute: vi.fn() };
+    const result = await orchestrateTutorialVisual({
+      routed_step: routedStep(),
+      reviewed_step: square,
+      prompt_card: card,
+      capture_requirement: captureRequirement(),
+      capture_bundle: tutorial0SyntheticCapture,
+      capture_request_adapter: unusedCaptureAdapter,
+      exact_composite_request: substituted,
+      exact_composite_executor: executor,
+    });
+    expect(result.disposition).toBe('blocked');
     expect(executor.execute).not.toHaveBeenCalled();
   });
 
