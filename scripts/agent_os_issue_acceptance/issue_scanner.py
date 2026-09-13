@@ -127,26 +127,16 @@ def scan_issues(
             findings.append(RetrievalFinding.API_ERROR)
             reasons.append(f"page {page_number}: {page.error}")
             return _incomplete(
-                records,
-                findings,
-                reasons,
-                page_count,
-                resolved_source_query,
-                requested_state,
-                retrieved_at,
+                records, findings, reasons, page_count, resolved_source_query,
+                requested_state, retrieved_at,
             )
 
         if not page.complete:
             findings.append(RetrievalFinding.PAGE_MISSING_NEXT)
             reasons.append(f"page {page_number}: pagination completeness is unknown")
             return _incomplete(
-                records,
-                findings,
-                reasons,
-                page_count,
-                resolved_source_query,
-                requested_state,
-                retrieved_at,
+                records, findings, reasons, page_count, resolved_source_query,
+                requested_state, retrieved_at,
             )
 
         for raw_item in page.items:
@@ -154,13 +144,8 @@ def scan_issues(
                 findings.append(RetrievalFinding.MISSING_FIELD)
                 reasons.append("issue record must be a mapping")
                 return _incomplete(
-                    records,
-                    findings,
-                    reasons,
-                    page_count,
-                    resolved_source_query,
-                    requested_state,
-                    retrieved_at,
+                    records, findings, reasons, page_count, resolved_source_query,
+                    requested_state, retrieved_at,
                 )
 
             try:
@@ -169,26 +154,16 @@ def scan_issues(
                 findings.append(error.finding)
                 reasons.append(error.reason)
                 return _incomplete(
-                    records,
-                    findings,
-                    reasons,
-                    page_count,
-                    resolved_source_query,
-                    requested_state,
-                    retrieved_at,
+                    records, findings, reasons, page_count, resolved_source_query,
+                    requested_state, retrieved_at,
                 )
 
             if record.issue_number in seen_issue_numbers:
                 findings.append(RetrievalFinding.DUPLICATE_ISSUE)
                 reasons.append(f"duplicate issue number encountered: #{record.issue_number}")
                 return _incomplete(
-                    records,
-                    findings,
-                    reasons,
-                    page_count,
-                    resolved_source_query,
-                    requested_state,
-                    retrieved_at,
+                    records, findings, reasons, page_count, resolved_source_query,
+                    requested_state, retrieved_at,
                 )
 
             seen_issue_numbers.add(record.issue_number)
@@ -212,20 +187,15 @@ def scan_issues(
         if (
             not isinstance(page.next_page, int)
             or isinstance(page.next_page, bool)
-            or page.next_page <= page_number
+            or page.next_page != page_number + 1
         ):
             findings.append(RetrievalFinding.PAGE_MISSING_NEXT)
             reasons.append(
-                f"page {page_number}: next_page={page.next_page!r} does not advance pagination"
+                f"page {page_number}: next_page={page.next_page!r} is not the contiguous successor"
             )
             return _incomplete(
-                records,
-                findings,
-                reasons,
-                page_count,
-                resolved_source_query,
-                requested_state,
-                retrieved_at,
+                records, findings, reasons, page_count, resolved_source_query,
+                requested_state, retrieved_at,
             )
 
         page_number = page.next_page
