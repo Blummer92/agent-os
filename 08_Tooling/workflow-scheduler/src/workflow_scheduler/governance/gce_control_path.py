@@ -186,6 +186,13 @@ class GceControlAdapter(Protocol):
     def stop(self, resource: GceResourceTuple) -> bool: ...
 
 
+@runtime_checkable
+class GceShutdownVerificationAdapter(Protocol):
+    """Additional contract required only after a stop request is accepted."""
+
+    def wait_until_stopped(self, resource: GceResourceTuple) -> VmState: ...
+
+
 def _canonical_bytes(value: object) -> bytes:
     return json.dumps(
         value,
@@ -323,7 +330,8 @@ def run_gce_control_path(
 
     The function validates immutable transport data first, then performs at most
     one VM start, one readiness probe, one fixed host invocation, and, only when
-    explicitly enabled, one evidence-gated stop through the injected adapter.
+    explicitly enabled, one evidence-gated stop request followed by independent
+    provider-state observation.
     """
     if type(request_id) is not str or not request_id or len(request_id) > 512:
         raise ValueError("request_id must be bounded non-empty text")
@@ -489,7 +497,19 @@ def run_gce_control_path(
         if stopped is True:
             effects.append("vm-stop")
             base["shutdown_issued"] = True
-            base["vm_final_state"] = VmState.STOPPED
+            try:
+                if isinstance(adapter, GceShutdownVerificationAdapter):
+                    observed = adapter.wait_until_stopped(resource)
+                else:
+                    observed = VmState.UNKNOWN
+            except (TypeError, ValueError, RuntimeError, OSError):
+                observed = VmState.UNKNOWN
+            if type(observed) is not VmState:
+                observed = VmState.UNKNOWN
+            base["vm_final_state"] = observed
+            if observed is not VmState.STOPPED:
+                reasons.append(ControlPathReason.SHUTDOWN_FAILED)
+                status = ControlPathStatus.NEEDS_DECISION
         else:
             reasons.append(ControlPathReason.SHUTDOWN_FAILED)
             status = ControlPathStatus.NEEDS_DECISION
