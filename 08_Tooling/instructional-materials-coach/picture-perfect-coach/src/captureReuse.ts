@@ -37,7 +37,6 @@ export type CaptureReuseRequirement = Readonly<{
   image_state: CaptureImageState;
   requested_ui_claims: readonly string[];
   require_target_geometry: boolean;
-  already_satisfied_duplicate?: boolean;
 }>;
 
 export type ReusedStateIdentity = Readonly<{
@@ -60,7 +59,6 @@ export type CaptureReuseObservability = Readonly<{
   browser_runs_requested: 0 | 1;
   browser_runs_launched: 0;
   existing_capture_reuses: 0 | 1;
-  duplicate_runs_avoided: 0 | 1;
 }>;
 
 export type CaptureReuseDecision = Readonly<{
@@ -91,8 +89,6 @@ function baseDecision(
       browser_runs_requested: disposition === 'CAPTURE_REQUIRED' ? 1 : 0,
       browser_runs_launched: 0,
       existing_capture_reuses: disposition === 'REUSE_EXISTING_CAPTURE' ? 1 : 0,
-      duplicate_runs_avoided:
-        disposition === 'REUSE_EXISTING_CAPTURE' && requirement.already_satisfied_duplicate === true ? 1 : 0,
     },
     picture_perfect_ready: false,
     classroom_ready: false,
@@ -167,12 +163,12 @@ function mapBindingReasons(
 }
 
 /**
- * Pure pre-capture routing decision for #2109.
+ * Pure pre-capture routing decision for #2109/#2101.
  *
  * This function intentionally does not launch a browser, search for assets, mutate
- * evidence, or create a new identity/currentness model. It consumes the existing
- * PPUX capture-binding contract and returns only a routing disposition plus bounded
- * non-authorizing observability. #2100 remains the owner of live capture invocation.
+ * evidence, or own idempotency. It consumes the existing PPUX capture-binding
+ * contract and returns only a routing disposition plus bounded non-authorizing
+ * observability. #2100 remains the owner of live capture and duplicate receipts.
  */
 export function decideCaptureReuse(
   step: ReviewedStepProjection,
