@@ -2,6 +2,11 @@
 
 Batch membership records finite owner intent only. It never grants merge authority
 and performs no retrieval, merge, refresh, issue mutation, scheduling, or I/O.
+
+Both guarantees are enforced structurally rather than merely documented: the
+non-authorizing constants are validated in the model constructors, and evidence
+carrying a non-canonical state, admission status, or blocker scope fails closed
+instead of normalizing into a merge candidate.
 """
 
 from __future__ import annotations
@@ -12,6 +17,34 @@ from typing import Iterable, Literal
 
 PR_BATCH_MERGE_PLAN_SCHEMA_VERSION = "1.0"
 _MAX_BATCH_ITEMS = 100
+
+# Canonical vocabularies. `Literal` annotations document intent but are erased at
+# runtime, so the constructors below validate against these sets. A value outside
+# them is non-canonical evidence and fails closed rather than being classified.
+CANONICAL_PR_STATES: frozenset[str] = frozenset({"open", "closed", "merged"})
+CANONICAL_MERGE_ADMISSION_STATUSES: frozenset[str] = frozenset(
+    {"applicable", "blocked", "stale", "needs-decision", "invalid"}
+)
+CANONICAL_BLOCKER_SCOPES: frozenset[str] = frozenset({"none", "item", "shared"})
+
+
+def _require_canonical(value: object, allowed: frozenset[str], field: str) -> None:
+    if type(value) is not str or value not in allowed:
+        raise ValueError(
+            f"{field} must be one of {sorted(allowed)}; non-canonical evidence "
+            f"never normalizes into a merge disposition"
+        )
+
+
+def _require_exact_constant(value: object, expected: bool, field: str) -> None:
+    """Enforce a structurally fixed authority or side-effect constant.
+
+    These fields carry the non-authorizing guarantee of this contract. They are
+    not caller-supplied policy, so a caller may never widen them.
+    """
+
+    if value is not expected:
+        raise ValueError(f"{field} is structurally {expected} and cannot be overridden")
 
 
 class PrBatchDisposition(str, Enum):
@@ -35,6 +68,13 @@ class PrBatchItemEvidence:
             raise ValueError("pull_request_number must be a positive integer")
         if not self.head_sha or not self.base_branch:
             raise ValueError("head_sha and base_branch are required canonical evidence")
+        _require_canonical(self.state, CANONICAL_PR_STATES, "state")
+        _require_canonical(
+            self.merge_admission_status,
+            CANONICAL_MERGE_ADMISSION_STATUSES,
+            "merge_admission_status",
+        )
+        _require_canonical(self.blocker_scope, CANONICAL_BLOCKER_SCOPES, "blocker_scope")
         if self.blocker_scope == "none" and self.merge_admission_status != "applicable" and self.state == "open":
             raise ValueError("non-applicable open PR evidence must declare blocker_scope")
 
@@ -49,6 +89,12 @@ class PrBatchPlanItem:
     requires_pre_merge_reacquisition: Literal[True] = True
     merge_authorized: Literal[False] = False
 
+    def __post_init__(self) -> None:
+        _require_exact_constant(
+            self.requires_pre_merge_reacquisition, True, "requires_pre_merge_reacquisition"
+        )
+        _require_exact_constant(self.merge_authorized, False, "merge_authorized")
+
 
 @dataclass(frozen=True, slots=True)
 class PrBatchMergePlan:
@@ -60,6 +106,12 @@ class PrBatchMergePlan:
     halt_remaining: bool
     merge_authorized: Literal[False] = False
     side_effects_performed: Literal[False] = False
+
+    def __post_init__(self) -> None:
+        _require_exact_constant(self.merge_authorized, False, "merge_authorized")
+        _require_exact_constant(
+            self.side_effects_performed, False, "side_effects_performed"
+        )
 
 
 def normalize_finite_pr_targets(targets: Iterable[int]) -> tuple[int, ...]:

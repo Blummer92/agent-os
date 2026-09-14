@@ -40,7 +40,7 @@ DOMAIN_RULES: tuple[tuple[str, frozenset[str], tuple[str, ...]], ...] = (
     ),
     (
         "planning",
-        frozenset(),
+        frozenset({"pr_batch_merge_plan"}),
         ("batch_",),
     ),
     (
@@ -287,12 +287,24 @@ def _domain_matches(module_name: str) -> list[str]:
     ]
 
 
+def _classification_violation(module_name: str, matches: list[str]) -> str:
+    """Render the single canonical unclassified/ambiguous-module message.
+
+    The message names DOMAIN_RULES because that tuple is the only place a module
+    is classified. A new production module in the package is unclassified until
+    it is registered there, so the failure has to point the author at the
+    registry rather than only reporting that a rule is missing.
+    """
+    return (
+        f"{module_name}.py must have exactly one architecture-domain classification; "
+        f"found {matches or 'none'}. Register it in DOMAIN_RULES in "
+        f"tests/agent_os_issue_acceptance/test_architecture_boundaries.py."
+    )
+
+
 def _domain_for(module_name: str) -> str:
     matches = _domain_matches(module_name)
-    assert len(matches) == 1, (
-        f"{module_name}.py must have exactly one architecture-domain classification; "
-        f"found {matches or 'none'}"
-    )
+    assert len(matches) == 1, _classification_violation(module_name, matches)
     return matches[0]
 
 
@@ -301,10 +313,7 @@ def _classification_violations(module_names) -> list[str]:
     for module_name in module_names:
         matches = _domain_matches(module_name)
         if len(matches) != 1:
-            violations.append(
-                f"{module_name}.py must have exactly one architecture-domain classification; "
-                f"found {matches or 'none'}"
-            )
+            violations.append(_classification_violation(module_name, matches))
     return violations
 
 
@@ -426,9 +435,15 @@ def test_dependency_direction_and_scheduler_runtime_boundary() -> None:
 
 def test_dependency_sweep_reports_all_unclassified_modules() -> None:
     violations = _classification_violations(("unclassified_alpha", "unclassified_beta"))
+    registry = (
+        "Register it in DOMAIN_RULES in "
+        "tests/agent_os_issue_acceptance/test_architecture_boundaries.py."
+    )
     assert violations == [
-        "unclassified_alpha.py must have exactly one architecture-domain classification; found none",
-        "unclassified_beta.py must have exactly one architecture-domain classification; found none",
+        "unclassified_alpha.py must have exactly one architecture-domain classification; "
+        f"found none. {registry}",
+        "unclassified_beta.py must have exactly one architecture-domain classification; "
+        f"found none. {registry}",
     ]
 
 
