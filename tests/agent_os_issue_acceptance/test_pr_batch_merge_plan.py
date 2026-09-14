@@ -1,4 +1,5 @@
 import ast
+from dataclasses import fields
 from pathlib import Path
 
 import pytest
@@ -167,10 +168,13 @@ def test_planner_imports_nothing_that_could_retrieve_or_mutate_state():
     [
         ("merge_authorized", True),
         ("requires_pre_merge_reacquisition", False),
+        # Truthiness must not sneak past either: there is no parameter to pass.
+        ("merge_authorized", 1),
+        ("requires_pre_merge_reacquisition", 0),
     ],
 )
-def test_plan_item_authority_constants_cannot_be_widened_by_a_caller(field, value):
-    """`Literal[False]` is erased at runtime, so the constructor has to enforce it."""
+def test_plan_item_authority_constants_are_not_caller_supplied(field, value):
+    """`Literal[False]` is erased at runtime; `init=False` is what actually binds."""
     kwargs = {
         "sequence": 1,
         "pull_request_number": 101,
@@ -179,12 +183,12 @@ def test_plan_item_authority_constants_cannot_be_widened_by_a_caller(field, valu
         "observed_base_branch": "main",
         field: value,
     }
-    with pytest.raises(ValueError, match=field):
+    with pytest.raises(TypeError, match=field):
         PrBatchPlanItem(**kwargs)
 
 
 @pytest.mark.parametrize("field", ["merge_authorized", "side_effects_performed"])
-def test_plan_authority_constants_cannot_be_widened_by_a_caller(field):
+def test_plan_authority_constants_are_not_caller_supplied(field):
     kwargs = {
         "schema_version": "1.0",
         "repository": "Blummer92/agent-os",
@@ -194,21 +198,25 @@ def test_plan_authority_constants_cannot_be_widened_by_a_caller(field):
         "halt_remaining": False,
         field: True,
     }
-    with pytest.raises(ValueError, match=field):
+    with pytest.raises(TypeError, match=field):
         PrBatchMergePlan(**kwargs)
 
 
-def test_truthy_non_bool_never_satisfies_an_authority_constant():
-    """Identity, not truthiness: `1 == False` style coercion must not slip through."""
-    with pytest.raises(ValueError, match="requires_pre_merge_reacquisition"):
-        PrBatchPlanItem(
-            sequence=1,
-            pull_request_number=101,
-            disposition=PrBatchDisposition.CANDIDATE,
-            observed_head_sha="head-101",
-            observed_base_branch="main",
-            requires_pre_merge_reacquisition=1,
-        )
+@pytest.mark.parametrize(
+    "field", ["merge_authorized", "side_effects_performed", "requires_pre_merge_reacquisition"]
+)
+def test_authority_constants_are_declared_non_constructible(field):
+    """Pin the mechanism, not just one rejected call.
+
+    A later edit that re-added these as ordinary constructor parameters would
+    keep the defaults correct and silently reopen the hole, so assert the
+    dataclass field metadata directly.
+    """
+    declared = {
+        **{f.name: f for f in fields(PrBatchPlanItem)},
+        **{f.name: f for f in fields(PrBatchMergePlan)},
+    }
+    assert declared[field].init is False
 
 
 def test_every_disposition_still_reports_no_merge_authority():

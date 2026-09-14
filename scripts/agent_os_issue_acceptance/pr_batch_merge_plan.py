@@ -4,14 +4,14 @@ Batch membership records finite owner intent only. It never grants merge authori
 and performs no retrieval, merge, refresh, issue mutation, scheduling, or I/O.
 
 Both guarantees are enforced structurally rather than merely documented: the
-non-authorizing constants are validated in the model constructors, and evidence
-carrying a non-canonical state, admission status, or blocker scope fails closed
-instead of normalizing into a merge candidate.
+non-authorizing constants are declared ``init=False`` so no caller can supply
+them, and evidence carrying a non-canonical state, admission status, or blocker
+scope fails closed instead of normalizing into a merge candidate.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Iterable, Literal
 
@@ -34,17 +34,6 @@ def _require_canonical(value: object, allowed: frozenset[str], field: str) -> No
             f"{field} must be one of {sorted(allowed)}; non-canonical evidence "
             f"never normalizes into a merge disposition"
         )
-
-
-def _require_exact_constant(value: object, expected: bool, field: str) -> None:
-    """Enforce a structurally fixed authority or side-effect constant.
-
-    These fields carry the non-authorizing guarantee of this contract. They are
-    not caller-supplied policy, so a caller may never widen them.
-    """
-
-    if value is not expected:
-        raise ValueError(f"{field} is structurally {expected} and cannot be overridden")
 
 
 class PrBatchDisposition(str, Enum):
@@ -86,14 +75,11 @@ class PrBatchPlanItem:
     disposition: PrBatchDisposition
     observed_head_sha: str
     observed_base_branch: str
-    requires_pre_merge_reacquisition: Literal[True] = True
-    merge_authorized: Literal[False] = False
-
-    def __post_init__(self) -> None:
-        _require_exact_constant(
-            self.requires_pre_merge_reacquisition, True, "requires_pre_merge_reacquisition"
-        )
-        _require_exact_constant(self.merge_authorized, False, "merge_authorized")
+    # ``init=False`` is the repository's canonical way to state that a field is a
+    # structural guarantee rather than caller-supplied policy: it is not a
+    # constructor parameter at all, so no caller can widen it.
+    requires_pre_merge_reacquisition: Literal[True] = field(default=True, init=False)
+    merge_authorized: Literal[False] = field(default=False, init=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,14 +90,8 @@ class PrBatchMergePlan:
     requested_pull_requests: tuple[int, ...]
     items: tuple[PrBatchPlanItem, ...]
     halt_remaining: bool
-    merge_authorized: Literal[False] = False
-    side_effects_performed: Literal[False] = False
-
-    def __post_init__(self) -> None:
-        _require_exact_constant(self.merge_authorized, False, "merge_authorized")
-        _require_exact_constant(
-            self.side_effects_performed, False, "side_effects_performed"
-        )
+    merge_authorized: Literal[False] = field(default=False, init=False)
+    side_effects_performed: Literal[False] = field(default=False, init=False)
 
 
 def normalize_finite_pr_targets(targets: Iterable[int]) -> tuple[int, ...]:
