@@ -19,6 +19,7 @@ REQUIRED_ISSUE_FIELDS = (
 )
 
 _TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+MAX_SCAN_PAGES = 100
 
 
 class IssueStateFilter(str, Enum):
@@ -35,6 +36,7 @@ class RetrievalStatus(str, Enum):
 class RetrievalFinding(str, Enum):
     COMPLETE = "scan-complete"
     PAGE_MISSING_NEXT = "pagination-unknown"
+    PAGE_LIMIT_EXCEEDED = "pagination-bound-exhausted"
     API_ERROR = "source-inaccessible"
     MISSING_FIELD = "source-partial"
     SOURCE_STATE_MISMATCH = "source-state-mismatch"
@@ -105,6 +107,8 @@ def scan_issues(
 
     The scanner is evidence-only. It does not call GitHub directly, mutate issues,
     infer state, read the system clock, or normalize malformed source metadata.
+    Complete scans are capped at ``MAX_SCAN_PAGES`` so a source that never emits
+    terminal pagination evidence cannot cause unbounded connected reads.
     """
     _validate_requested_state(requested_state)
     _validate_retrieved_at(retrieved_at, allow_none=_allow_missing_retrieved_at)
@@ -192,6 +196,16 @@ def scan_issues(
             findings.append(RetrievalFinding.PAGE_MISSING_NEXT)
             reasons.append(
                 f"page {page_number}: next_page={page.next_page!r} is not the contiguous successor"
+            )
+            return _incomplete(
+                records, findings, reasons, page_count, resolved_source_query,
+                requested_state, retrieved_at,
+            )
+
+        if page_count >= MAX_SCAN_PAGES:
+            findings.append(RetrievalFinding.PAGE_LIMIT_EXCEEDED)
+            reasons.append(
+                f"scan reached finite page ceiling of {MAX_SCAN_PAGES} before terminal pagination evidence"
             )
             return _incomplete(
                 records, findings, reasons, page_count, resolved_source_query,
