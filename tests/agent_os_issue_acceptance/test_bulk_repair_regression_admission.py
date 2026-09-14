@@ -1,4 +1,4 @@
-from scripts.agent_os_issue_acceptance.bulk_repair_regression_admission import (
+from scripts.agent_os_issue_acceptance.batch_repair_regression_admission import (
     RegressionAdmission,
     RegressionEvidence,
     RegressionEvidenceKind,
