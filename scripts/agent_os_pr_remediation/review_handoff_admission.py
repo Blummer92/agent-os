@@ -57,7 +57,7 @@ def admit_review_handoff(
         if type(value) is not bool:
             raise EvidenceValidationError(f"{name} must be a boolean")
     if type(current_head_sha) is not str or len(current_head_sha) != 40 or any(
-        char not in "0123456789abcdef" for char in current_head_sha.lower()
+        char not in "0123456789abcdef" for char in current_head_sha
     ):
         raise EvidenceValidationError("current_head_sha must be a 40-character hexadecimal SHA")
     if review_evidence is not None and type(review_evidence) is not AIReviewEvidence:
@@ -101,7 +101,7 @@ def admit_review_handoff(
             )
         if review_evidence.status is ReviewStatus.STALE or (
             review_evidence.reviewed_sha is not None
-            and review_evidence.reviewed_sha.lower() != current_head_sha.lower()
+            and review_evidence.reviewed_sha != current_head_sha
         ):
             return ReviewHandoffAdmission(
                 state=ReviewHandoffState.REVIEW_UNAVAILABLE_MANUAL_REVIEW,
