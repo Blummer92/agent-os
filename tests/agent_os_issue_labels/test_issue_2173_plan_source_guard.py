@@ -20,7 +20,7 @@ BASE = LivePullRequestSnapshot(
         ("mergeable", False),
         ("conflicted", True),
         ("behind", True),
-        ("validation_state", "success"),
+        ("validation_state", "green"),
         ("blocking_review_threads", 1),
         ("labels", ("human:keep", "pr:draft")),
     ],
