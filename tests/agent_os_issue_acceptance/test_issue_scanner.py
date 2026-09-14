@@ -5,6 +5,7 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from scripts.agent_os_issue_acceptance.issue_scanner import (
+    MAX_SCAN_PAGES,
     IssueScanPage,
     IssueStateFilter,
     RetrievalFinding,
@@ -29,6 +30,17 @@ class FakePageSource:
     def fetch_page(self, page: int) -> IssueScanPage:
         self.requested_pages.append(page)
         return self.pages[page]
+
+
+class AdvancingPageSource:
+    """Adversarial source that never emits terminal pagination evidence."""
+
+    def __init__(self):
+        self.requested_pages = []
+
+    def fetch_page(self, page: int) -> IssueScanPage:
+        self.requested_pages.append(page)
+        return IssueScanPage(items=(), next_page=page + 1)
 
 
 def _issue(number: int, *, state="open", labels=None, **overrides):
@@ -235,6 +247,32 @@ def test_scanner_fails_closed_when_next_page_skips_a_page():
     assert source.requested_pages == [1]
     assert "next_page=3" in result.reasons[0]
     assert "contiguous successor" in result.reasons[0]
+
+
+def test_scanner_fails_closed_at_finite_page_ceiling():
+    source = AdvancingPageSource()
+    result = _scan(source)
+    assert result.status == RetrievalStatus.INCOMPLETE
+    assert result.complete is False
+    assert result.findings == (RetrievalFinding.PAGE_LIMIT_EXCEEDED,)
+    assert result.page_count == MAX_SCAN_PAGES
+    assert result.item_count == 0
+    assert source.requested_pages == list(range(1, MAX_SCAN_PAGES + 1))
+    assert str(MAX_SCAN_PAGES) in result.reasons[0]
+    assert "terminal pagination evidence" in result.reasons[0]
+
+
+def test_scanner_can_complete_on_the_finite_page_ceiling():
+    pages = {
+        page: IssueScanPage(items=(), next_page=page + 1)
+        for page in range(1, MAX_SCAN_PAGES)
+    }
+    pages[MAX_SCAN_PAGES] = IssueScanPage(items=(), next_page=None)
+    source = FakePageSource(pages)
+    result = _scan(source)
+    assert result.status == RetrievalStatus.COMPLETE
+    assert result.page_count == MAX_SCAN_PAGES
+    assert result.findings == (RetrievalFinding.COMPLETE,)
 
 
 def test_repeated_scan_results_are_deterministic_and_immutable():
