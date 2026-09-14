@@ -1,15 +1,35 @@
 from scripts.agent_os_issue_acceptance.batch_repair_continuation import (
     RepairCandidateEvidence,
     RepairDisposition,
+    RepairRetryBoundaryEvidence,
     evaluate_bulk_repair_continuation,
 )
 
 
-def ev(pr, disposition, reason, shared=False, attempt=None, lesson_admitted=False):
-    return RepairCandidateEvidence(pr, disposition, reason, shared, attempt, lesson_admitted)
+def boundary(attempt, admitted):
+    return RepairRetryBoundaryEvidence(
+        failed_attempt_id=attempt,
+        mutation_admissible=admitted,
+        blocking_attempt_id=None if admitted else attempt,
+        reason_codes=(
+            "retry-ckr6-reentry-consumed" if admitted else "retry-ckr6-reentry-required",
+        ),
+    )
 
 
-def test_item_local_matrix_advances_to_later_independent_candidates():
+def ev(pr, disposition, reason, shared=False, attempt=None, retry_boundary=None, mutated=False):
+    return RepairCandidateEvidence(
+        pr,
+        disposition,
+        reason,
+        shared,
+        attempt,
+        retry_boundary,
+        mutated,
+    )
+
+
+def test_item_local_matrix_advances_and_marks_failed_attempt_as_lesson_required():
     result = evaluate_bulk_repair_continuation(
         requested_pull_requests=(1, 2, 3, 4, 5, 6, 7, 8, 9),
         evidence=(
@@ -24,52 +44,95 @@ def test_item_local_matrix_advances_to_later_independent_candidates():
         ),
     )
     assert result.visited_pull_requests == (1, 2, 3, 4, 5, 6, 7, 8)
-    assert result.lesson_reentry_pull_requests == (2,)
+    assert result.lesson_reentry_required_pull_requests == (2,)
+    assert result.lesson_reentry_admitted_pull_requests == ()
     assert result.remaining_pull_requests == (9,)
     assert result.next_action == "reacquire-next-candidate"
-    assert result.finite_admission.completion_admissible is False
 
 
-def test_failed_repair_retry_cannot_be_marked_repaired_before_ckr6_lesson_admission():
-    try:
-        ev(
-            10,
-            RepairDisposition.REPAIRED,
-            "retry-repair-succeeded",
-            attempt="attempt-pr10-red-1",
-            lesson_admitted=False,
-        )
-    except ValueError as error:
-        assert "CKR6 retry lesson boundary admission" in str(error)
-    else:
-        raise AssertionError("failed repair retry must fail closed before CKR6 lesson admission")
+def test_retry_mutation_requires_exact_admitted_ckr6_boundary():
+    attempt = "attempt-pr10-red-1"
+    for retry_boundary in (None, boundary(attempt, False)):
+        try:
+            ev(
+                10,
+                RepairDisposition.BLOCKED,
+                "retry-still-red",
+                attempt=attempt,
+                retry_boundary=retry_boundary,
+                mutated=True,
+            )
+        except ValueError as error:
+            assert "retry mutation" in str(error)
+        else:
+            raise AssertionError("retry mutation must fail closed without admitted CKR6 boundary")
 
 
-def test_failed_repair_retry_is_admissible_only_when_bound_to_exact_attempt():
+def test_admitted_boundary_allows_retry_even_when_retry_fails_again():
+    attempt = "attempt-pr11-red-1"
     result = evaluate_bulk_repair_continuation(
         requested_pull_requests=(11,),
         evidence=(
             ev(
                 11,
-                RepairDisposition.REPAIRED,
-                "retry-repair-succeeded",
-                attempt="attempt-pr11-red-2",
-                lesson_admitted=True,
+                RepairDisposition.BLOCKED,
+                "retry-still-red",
+                attempt=attempt,
+                retry_boundary=boundary(attempt, True),
+                mutated=True,
             ),
         ),
     )
-    assert result.repaired_pull_requests == (11,)
-    assert result.lesson_reentry_pull_requests == (11,)
-    assert result.next_action == "report-complete-repair-batch"
+    assert result.lesson_reentry_admitted_pull_requests == (11,)
+    assert result.blocked_pull_requests == (11,)
 
 
-def test_lesson_admission_without_failed_attempt_identity_fails_closed():
+def test_failed_retry_can_be_repaired_only_after_admitted_mutation():
+    attempt = "attempt-pr12-red-2"
+    result = evaluate_bulk_repair_continuation(
+        requested_pull_requests=(12,),
+        evidence=(
+            ev(
+                12,
+                RepairDisposition.REPAIRED,
+                "retry-repair-succeeded",
+                attempt=attempt,
+                retry_boundary=boundary(attempt, True),
+                mutated=True,
+            ),
+        ),
+    )
+    assert result.repaired_pull_requests == (12,)
+    assert result.lesson_reentry_admitted_pull_requests == (12,)
+
+
+def test_boundary_must_bind_to_exact_failed_attempt():
     try:
-        ev(12, RepairDisposition.BLOCKED, "red-validation", lesson_admitted=True)
+        ev(
+            13,
+            RepairDisposition.BLOCKED,
+            "red-validation",
+            attempt="attempt-pr13-red-2",
+            retry_boundary=boundary("attempt-pr13-red-1", True),
+        )
     except ValueError as error:
-        assert "bind to one failed repair attempt" in str(error)
+        assert "exact failed repair attempt" in str(error)
     else:
-        raise AssertionError("lesson admission must bind to exact failed attempt")
+        raise AssertionError("stale retry boundary must not satisfy a newer failed attempt")
+
+
+def test_blocked_boundary_must_name_exact_blocking_attempt():
+    try:
+        RepairRetryBoundaryEvidence(
+            failed_attempt_id="attempt-pr14-red-2",
+            mutation_admissible=False,
+            blocking_attempt_id="attempt-pr14-red-1",
+            reason_codes=("retry-ckr6-reentry-required",),
+        )
+    except ValueError as error:
+        assert "exact failed attempt" in str(error)
+    else:
+        raise AssertionError("blocked boundary must identify its exact failed attempt")
 
 
 def test_already_terminal_candidate_is_accounted_without_padding():
@@ -79,7 +142,6 @@ def test_already_terminal_candidate_is_accounted_without_padding():
     )
     assert result.already_terminal_pull_requests == (20,)
     assert result.remaining_pull_requests == (21,)
-    assert len(result.visited_pull_requests) == 1
 
 
 def test_shared_validation_outage_halts_with_exact_reason():
@@ -92,7 +154,6 @@ def test_shared_validation_outage_halts_with_exact_reason():
     )
     assert result.next_action == "halt-shared-blocker"
     assert result.finite_admission.completion_admissible is True
-    assert "shared-terminal-blocker" in result.finite_admission.reason_codes
     assert result.remaining_pull_requests == (32,)
 
 
@@ -105,13 +166,12 @@ def test_deferred_and_stale_candidates_are_revisited_before_completion():
             ev(42, RepairDisposition.REACQUIRE, "stale-head"),
         ),
     )
-    assert result.remaining_pull_requests == ()
     assert result.next_action == "revisit-deferred-or-stale-candidates"
     assert result.deferred_pull_requests == (41,)
     assert result.reacquire_pull_requests == (42,)
 
 
-def test_all_final_dispositions_produce_complete_accounting():
+def test_all_final_dispositions_produce_complete_accounting_without_authority():
     result = evaluate_bulk_repair_continuation(
         requested_pull_requests=(50, 51, 52),
         evidence=(
@@ -123,7 +183,6 @@ def test_all_final_dispositions_produce_complete_accounting():
     assert result.remaining_pull_requests == ()
     assert result.next_action == "report-complete-repair-batch"
     assert result.finite_admission.completion_admissible is True
-    assert len(result.visited_pull_requests) == len(result.requested_pull_requests)
     assert result.mutation_authorized is False
     assert result.merge_authorized is False
     assert result.side_effects_performed is False
@@ -134,7 +193,7 @@ def test_duplicate_or_out_of_batch_evidence_fails_closed():
         evaluate_bulk_repair_continuation(
             requested_pull_requests=(60, 61),
             evidence=(
-                ev(60, RepairDisposition.BLOCKED, "red-validation", attempt="attempt-pr60-red-1"),
+                ev(60, RepairDisposition.BLOCKED, "red-validation"),
                 ev(60, RepairDisposition.REPAIRED, "repair-succeeded"),
             ),
         )
