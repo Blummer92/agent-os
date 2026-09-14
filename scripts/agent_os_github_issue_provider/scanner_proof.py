@@ -11,6 +11,9 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Mapping, Protocol
 
+from scripts.agent_os_issue_acceptance.github_issue_source import GitHubIssuePageSource
+from scripts.agent_os_issue_acceptance.issue_scanner import IssueStateFilter
+
 from .auth import GitHubAppConfig, GitHubAppSecretProvider, build_installation_client
 from .installation_repository_identity import (
     build_installation_repository_identity,
@@ -62,7 +65,7 @@ def run_scanner_proof(
     secrets: GitHubAppSecretProvider,
     installation_snapshot_reader: InstallationSnapshotReader,
 ) -> ScannerProofEvidence:
-    """Run the fixed one-page proof; return only bounded non-sensitive evidence."""
+    """Run the fixed one-page proof; return only bounded non-sensitive issue evidence."""
     try:
         client = build_installation_client(
             GitHubAppConfig(app_id=APP_ID, installation_id=INSTALLATION_ID), secrets
@@ -82,18 +85,24 @@ def run_scanner_proof(
             PyGithubRestTransport(client=client, max_attempts=1),
             trusted_repository_identities=(trusted,),
         )
-        response = provider.read_issue_page(
-            REPOSITORY, page=PAGE, per_page=PER_PAGE, state=STATE
+        # Reuse the canonical connected scanner page source so pull-request-shaped
+        # records are excluded by the same issue-only semantics as complete scans.
+        source = GitHubIssuePageSource(
+            REPOSITORY,
+            provider,
+            state=IssueStateFilter.OPEN,
+            per_page=PER_PAGE,
         )
-        if not response.complete:
+        page = source.fetch_page(PAGE)
+        if page.error is not None or not page.complete:
             return ScannerProofEvidence(status="blocked", reason="issue-page-unproven")
         return ScannerProofEvidence(
             status="success",
             reason="bounded-page-proven",
             repository_id=trusted.repository_id,
-            item_count=len(response.items),
-            next_page=response.next_page,
-            terminal_page_proven=response.terminal_page_proven,
+            item_count=len(page.items),
+            next_page=page.next_page,
+            terminal_page_proven=page.next_page is None,
             same_invocation_identity=True,
         )
     except Exception as error:

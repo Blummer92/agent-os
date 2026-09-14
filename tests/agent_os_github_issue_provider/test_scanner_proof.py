@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import fields
 
 import scripts.agent_os_github_issue_provider.scanner_proof as proof
-from scripts.agent_os_github_issue_provider.models import TransportAttempt, TransportResponse
 
 
 class Secrets:
@@ -28,13 +27,29 @@ class SnapshotReader:
 
 
 class FakeClient:
-    def __init__(self):
+    def __init__(self, payload=None):
         self.requester = self
         self.calls = []
+        self.payload = [] if payload is None else payload
 
     def requestJsonAndCheck(self, method, url, parameters, headers):
         self.calls.append((method, url, dict(parameters)))
-        return {}, []
+        return {}, self.payload
+
+
+def _item(number, **extra):
+    item = {
+        "number": number,
+        "title": f"record {number}",
+        "state": "open",
+        "body": "bounded fixture",
+        "html_url": f"https://github.com/Blummer92/agent-os/issues/{number}",
+        "created_at": "2026-09-13T20:00:00Z",
+        "updated_at": "2026-09-13T20:01:00Z",
+        "labels": [],
+    }
+    item.update(extra)
+    return item
 
 
 def test_fixed_contract_has_no_caller_selected_scope(monkeypatch):
@@ -48,6 +63,19 @@ def test_fixed_contract_has_no_caller_selected_scope(monkeypatch):
     assert result.same_invocation_identity is True
     assert reader.clients == [client]
     assert client.calls == [("GET", "/repos/Blummer92/agent-os/issues", {"page": 1, "per_page": 30, "state": "open"})]
+
+
+def test_mixed_issue_and_pull_request_page_counts_only_issues(monkeypatch):
+    client = FakeClient([_item(10), _item(11, pull_request={"url": "redacted"})])
+    monkeypatch.setattr(proof, "build_installation_client", lambda config, secrets: client)
+    result = proof.run_scanner_proof(
+        secrets=Secrets(), installation_snapshot_reader=SnapshotReader()
+    )
+    assert result.status == "success"
+    assert result.item_count == 1
+    assert result.next_page is None
+    assert result.terminal_page_proven is True
+    assert len(client.calls) == 1
 
 
 def test_duplicate_case_colliding_identity_fails_closed(monkeypatch):
