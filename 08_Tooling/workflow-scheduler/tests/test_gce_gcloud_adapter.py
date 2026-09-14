@@ -30,9 +30,10 @@ def ingress(**overrides: object) -> IssueCommentIngressResult:
 
 
 class FakeAdapter:
-    def __init__(self, *, state=VmState.RUNNING, clean_terminal=False):
+    def __init__(self, *, state=VmState.RUNNING, clean_terminal=False, shutdown_enabled=False):
         self.state = state
         self.clean_terminal = clean_terminal
+        self.shutdown_enabled = shutdown_enabled
         self.calls: list[str] = []
 
     def observe_state(self, resource):
@@ -46,6 +47,10 @@ class FakeAdapter:
     def wait_until_running(self, resource):
         self.calls.append("wait")
         return VmState.RUNNING
+
+    def wait_until_stopped(self, resource):
+        self.calls.append("wait-stop")
+        return VmState.STOPPED
 
     def probe_ready(self, resource):
         self.calls.append("probe")
@@ -79,7 +84,7 @@ class FakeAdapter:
 
     def stop(self, resource):
         self.calls.append("stop")
-        raise AssertionError("first activation must never stop the VM")
+        return self.shutdown_enabled
 
 
 def claims(**overrides: str) -> dict[str, str]:
@@ -103,7 +108,7 @@ def test_live_binding_invokes_once_and_withholds_shutdown() -> None:
     assert result["control"]["retry_attempted"] is False
 
 
-def test_clean_terminal_evidence_still_never_calls_stop_in_first_activation() -> None:
+def test_clean_terminal_evidence_withholds_shutdown_when_capability_disabled() -> None:
     adapter = FakeAdapter(clean_terminal=True)
     result = live.execute_transport(ingress(), claims=claims(), adapter=adapter)
     assert adapter.calls == ["observe", "probe", "invoke"]
@@ -111,6 +116,24 @@ def test_clean_terminal_evidence_still_never_calls_stop_in_first_activation() ->
     assert result["control"]["shutdown_eligible"] is True
     assert result["control"]["shutdown_issued"] is False
     assert "shutdown-withheld" in result["control"]["reason_codes"]
+
+
+def test_clean_terminal_evidence_stops_when_capability_enabled() -> None:
+    adapter = FakeAdapter(clean_terminal=True, shutdown_enabled=True)
+    result = live.execute_transport(ingress(), claims=claims(), adapter=adapter)
+    assert adapter.calls == ["observe", "probe", "invoke", "stop", "wait-stop"]
+    assert result["control"]["status"] == "accepted"
+    assert result["control"]["shutdown_eligible"] is True
+    assert result["control"]["shutdown_issued"] is True
+    assert "shutdown-failed" not in result["control"]["reason_codes"]
+
+
+def test_uncertain_terminal_never_stops_even_when_capability_enabled() -> None:
+    adapter = FakeAdapter(shutdown_enabled=True)
+    result = live.execute_transport(ingress(), claims=claims(), adapter=adapter)
+    assert adapter.calls == ["observe", "probe", "invoke"]
+    assert result["control"]["shutdown_eligible"] is False
+    assert result["control"]["shutdown_issued"] is False
 
 
 def test_stopped_vm_starts_once_before_invocation() -> None:
@@ -141,7 +164,7 @@ def test_workflow_rerun_cannot_create_control_binding() -> None:
         live.execute_transport(ingress(run_attempt=2), claims=claims(), adapter=FakeAdapter())
 
 
-def test_adapter_has_no_stop_command_surface(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_adapter_stop_is_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[tuple[str, ...]] = []
 
     def fake_run(argv, *, timeout=60):
@@ -156,6 +179,45 @@ def test_adapter_has_no_stop_command_surface(monkeypatch: pytest.MonkeyPatch) ->
     adapter = live.GcloudIapAdapter()
     assert adapter.stop(live.RESOURCE) is False
     assert calls == []
+
+
+def test_adapter_stop_uses_only_exact_resource_when_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(argv, *, timeout=60):
+        calls.append(tuple(argv))
+        class Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return Result()
+
+    monkeypatch.setattr(live, "_run", fake_run)
+    adapter = live.GcloudIapAdapter(shutdown_enabled=True)
+    assert adapter.stop(live.RESOURCE) is True
+    assert calls == [(
+        "gcloud", "compute", "instances", "stop", "agent-os-test",
+        "--project", "agent-os-502614", "--zone", "us-central1-a", "--quiet",
+    )]
+
+
+def test_wait_until_stopped_requires_provider_observation(monkeypatch: pytest.MonkeyPatch) -> None:
+    states = iter(["STOPPING", "TERMINATED"])
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(argv, *, timeout=60):
+        calls.append(tuple(argv))
+        class Result:
+            returncode = 0
+            stdout = next(states)
+            stderr = ""
+        return Result()
+
+    monkeypatch.setattr(live, "_run", fake_run)
+    adapter = live.GcloudIapAdapter(poll_seconds=0.001, max_polls=2, shutdown_enabled=True)
+    assert adapter.wait_until_stopped(live.RESOURCE) is VmState.STOPPED
+    assert len(calls) == 2
+    assert all(command[:4] == ("gcloud", "compute", "instances", "describe") for command in calls)
 
 
 def test_probe_command_is_fixed_and_iap_only(monkeypatch: pytest.MonkeyPatch) -> None:

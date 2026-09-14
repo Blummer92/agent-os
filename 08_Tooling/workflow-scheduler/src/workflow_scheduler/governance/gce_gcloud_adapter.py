@@ -1,8 +1,9 @@
 """Concrete bounded gcloud/IAP adapter for the #1217 GCE control path.
 
 The adapter is intentionally narrow: one exact GCE tuple, IAP/OS Login SSH,
-and fixed repository-owned operations. It has no arbitrary command API, no
-retry loop for invocation, and no stop capability in the first activation.
+and fixed repository-owned operations. It has no arbitrary command API and no
+retry loop for invocation. VM stop actuation is explicit opt-in and remains
+evidence-gated by the canonical GCE control path.
 """
 from __future__ import annotations
 
@@ -90,9 +91,10 @@ def _first_run_validation_command(*,repository:str,issue_number:int,candidate_sh
  return f"{HOST_PYTHON} -m {FIRST_RUN_VALIDATION_MODULE} --repository {repository} --issue-number {issue_number} --candidate-sha {candidate_sha}"
 
 class GcloudIapAdapter:
- def __init__(self,*,poll_seconds:float=2.0,max_polls:int=30)->None:
+ def __init__(self,*,poll_seconds:float=2.0,max_polls:int=30,shutdown_enabled:bool=False)->None:
   if poll_seconds<=0 or max_polls<1:raise ValueError("poll bounds must be positive")
-  self.poll_seconds=poll_seconds;self.max_polls=max_polls
+  if type(shutdown_enabled) is not bool:raise TypeError("shutdown_enabled must be bool")
+  self.poll_seconds=poll_seconds;self.max_polls=max_polls;self.shutdown_enabled=shutdown_enabled
  @staticmethod
  def _resource_args(resource:GceResourceTuple)->tuple[str,...]:
   if resource!=RESOURCE:raise GcloudCommandError("resource tuple is not the approved #1217 target")
@@ -104,6 +106,13 @@ class GcloudIapAdapter:
    state=self.observe_state(resource)
    if state is VmState.RUNNING:return state
    if state not in {VmState.STAGING,VmState.STOPPED}:return state
+   time.sleep(self.poll_seconds)
+  return VmState.UNKNOWN
+ def wait_until_stopped(self,resource:GceResourceTuple)->VmState:
+  for _ in range(self.max_polls):
+   state=self.observe_state(resource)
+   if state is VmState.STOPPED:return state
+   if state not in {VmState.RUNNING,VmState.STOPPING}:return state
    time.sleep(self.poll_seconds)
   return VmState.UNKNOWN
  def _ssh(self,resource:GceResourceTuple,command:str)->subprocess.CompletedProcess[str]:return _run(("gcloud","compute","ssh",resource.instance,*self._resource_args(resource),"--tunnel-through-iap","--quiet","--command",command),timeout=180)
@@ -175,7 +184,9 @@ class GcloudIapAdapter:
   refs=payload.get("evidence_refs",())
   if type(refs) not in (list,tuple):raise GcloudCommandError("host evidence refs must be an array")
   return HostInvocationEvidence(invoked=True,accepted=payload.get("accepted") is True,scheduler_invocation_id=payload.get("scheduler_invocation_id"),execution_id=payload.get("execution_id"),terminal_status=payload.get("terminal_status"),termination_confirmed=payload.get("termination_confirmed") is True,lease_released=payload.get("lease_released") is True,cleanup_complete=payload.get("cleanup_complete") is True,retained_lease=payload.get("retained_lease") is True,quarantined=payload.get("quarantined") is True,evidence_refs=tuple(refs))
- def stop(self,resource:GceResourceTuple)->bool:return False
+ def stop(self,resource:GceResourceTuple)->bool:
+  if not self.shutdown_enabled:return False
+  return _run(("gcloud","compute","instances","stop",resource.instance,*self._resource_args(resource),"--quiet"),timeout=120).returncode==0
 
 def _ingress_from_file(path:Path)->IssueCommentIngressResult:
  payload=json.loads(path.read_text(encoding="utf-8"))
@@ -274,10 +285,10 @@ def execute_transport(ingress:IssueCommentIngressResult,*,claims:Mapping[str,obj
   if state is not VmState.RUNNING:return {"discovery":{"status":"needs-decision","reason_codes":["host-unavailable"],"repository":ingress.repository,"issue_number":ingress.issue_number,"handoff_id":None,"execution_authorized":False,"scheduler_invoked":False,"side_effects_performed":False}}
   if not adapter.probe_discovery_ready(RESOURCE):return {"discovery":{"status":"needs-decision","reason_codes":["discovery-entrypoint-unavailable"],"repository":ingress.repository,"issue_number":ingress.issue_number,"handoff_id":None,"execution_authorized":False,"scheduler_invoked":False,"side_effects_performed":False}}
   return {"discovery":adapter.discover(RESOURCE,repository=ingress.repository,issue_number=ingress.issue_number)}
- binding=bind_ingress_to_gce(ingress,resource=RESOURCE);result=run_gce_control_path(request_id=binding.control_request_id,claims=claims,trust_policy=_policy(),resource=binding.resource,expected_resource=RESOURCE,handoff_id=binding.handoff_id,adapter=adapter,allow_shutdown=False)
+ binding=bind_ingress_to_gce(ingress,resource=RESOURCE);result=run_gce_control_path(request_id=binding.control_request_id,claims=claims,trust_policy=_policy(),resource=binding.resource,expected_resource=RESOURCE,handoff_id=binding.handoff_id,adapter=adapter,allow_shutdown=bool(getattr(adapter,"shutdown_enabled",False)))
  return {"binding":binding.to_dict(),"control":{"result_id":result.result_id,"status":result.status.value,"reason_codes":[item.value for item in result.reason_codes],"request_id":result.request_id,"handoff_id":result.handoff_id,"start_issued":result.start_issued,"host_ready":result.host_ready,"host_invoked":result.host_invoked,"host_accepted":result.host_accepted,"scheduler_invocation_id":result.scheduler_invocation_id,"execution_id":result.execution_id,"terminal_status":result.terminal_status,"shutdown_eligible":result.shutdown_eligible,"shutdown_issued":result.shutdown_issued,"retry_attempted":False,"github_writes_authorized":False,"merge_authorized":False}}
 
 def main(argv:list[str]|None=None)->int:
  parser=argparse.ArgumentParser(description=__doc__);parser.add_argument("--transport",type=Path,required=True);parser.add_argument("--output",type=Path,required=True);parser.add_argument("--repository",required=True);parser.add_argument("--repository-owner",required=True);parser.add_argument("--workflow-ref",required=True);parser.add_argument("--ref",required=True);parser.add_argument("--audience",required=True);args=parser.parse_args(argv)
- claims={"repository":args.repository,"repository_owner":args.repository_owner,"workflow_ref":args.workflow_ref,"ref":args.ref,"aud":args.audience};evidence=execute_transport(_ingress_from_file(args.transport),claims=claims,adapter=GcloudIapAdapter());args.output.parent.mkdir(parents=True,exist_ok=True);args.output.write_text(json.dumps(evidence,sort_keys=True,separators=(",",":"))+"\n",encoding="utf-8");print(json.dumps(evidence,sort_keys=True));return 0
+ claims={"repository":args.repository,"repository_owner":args.repository_owner,"workflow_ref":args.workflow_ref,"ref":args.ref,"aud":args.audience};evidence=execute_transport(_ingress_from_file(args.transport),claims=claims,adapter=GcloudIapAdapter(shutdown_enabled=True));args.output.parent.mkdir(parents=True,exist_ok=True);args.output.write_text(json.dumps(evidence,sort_keys=True,separators=(",",":"))+"\n",encoding="utf-8");print(json.dumps(evidence,sort_keys=True));return 0
 if __name__=="__main__":raise SystemExit(main())
