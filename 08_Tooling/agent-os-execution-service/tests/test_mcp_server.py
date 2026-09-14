@@ -10,6 +10,7 @@ from agent_os_execution_service import mcp_server
 # added; pinning the allowlist by name names the offender instead (#2154 mission).
 EXPECTED_TOOLS = frozenset(
     {
+        "plan_connected_issue_creation_tool",
         "plan_agent_os_continuation_tool",
         "activate_agent_os_issue_start_lessons_tool",
         "activate_agent_os_failed_repair_tool",
