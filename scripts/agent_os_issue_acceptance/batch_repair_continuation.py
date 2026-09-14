@@ -5,8 +5,8 @@ the existing finite-batch contract. It performs no retrieval, repair, scheduling
 validation, merge, lesson selection, or external mutation.
 
 Failed repair retries remain owned by the existing CKR6 failed-repair lesson
-re-entry seam. This projection only accepts caller-supplied evidence that the
-current failed attempt's retry boundary admitted another mutation; it never
+re-entry seam. This projection consumes normalized evidence matching the canonical
+``RepairRetryBoundaryPlan`` shape for the exact failed attempt; it never
 reimplements lesson retrieval or mutation authority.
 """
 
@@ -31,13 +31,42 @@ class RepairDisposition(str, Enum):
 
 
 @dataclass(frozen=True, slots=True)
+class RepairRetryBoundaryEvidence:
+    """Normalized evidence from the canonical CKR6 RepairRetryBoundaryPlan."""
+
+    failed_attempt_id: str
+    mutation_admissible: bool
+    blocking_attempt_id: str | None
+    reason_codes: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if type(self.failed_attempt_id) is not str or not self.failed_attempt_id.strip():
+            raise ValueError("failed_attempt_id must be a non-empty string")
+        if type(self.mutation_admissible) is not bool:
+            raise TypeError("mutation_admissible must use built-in bool")
+        if self.blocking_attempt_id is not None and (
+            type(self.blocking_attempt_id) is not str or not self.blocking_attempt_id.strip()
+        ):
+            raise ValueError("blocking_attempt_id must be a non-empty string when supplied")
+        if type(self.reason_codes) is not tuple or not self.reason_codes:
+            raise ValueError("reason_codes must be a non-empty tuple")
+        if any(type(code) is not str or not code.strip() for code in self.reason_codes):
+            raise ValueError("reason_codes must contain non-empty strings")
+        if self.mutation_admissible and self.blocking_attempt_id is not None:
+            raise ValueError("admitted retry boundary cannot retain a blocking attempt")
+        if not self.mutation_admissible and self.blocking_attempt_id != self.failed_attempt_id:
+            raise ValueError("blocked retry boundary must identify the exact failed attempt")
+
+
+@dataclass(frozen=True, slots=True)
 class RepairCandidateEvidence:
     pull_request_number: int
     disposition: RepairDisposition
     reason_code: str
     shared_blocker: bool = False
     failed_repair_attempt_id: str | None = None
-    retry_lesson_boundary_admitted: bool = False
+    retry_boundary: RepairRetryBoundaryEvidence | None = None
+    retry_mutation_performed: bool = False
 
     def __post_init__(self) -> None:
         if type(self.pull_request_number) is not int or self.pull_request_number < 1:
@@ -48,21 +77,27 @@ class RepairCandidateEvidence:
             raise ValueError("reason_code must be non-empty")
         if type(self.shared_blocker) is not bool:
             raise TypeError("shared_blocker must use built-in bool")
-        if self.failed_repair_attempt_id is not None:
-            if type(self.failed_repair_attempt_id) is not str or not self.failed_repair_attempt_id.strip():
-                raise ValueError("failed_repair_attempt_id must be a non-empty string when supplied")
-        if type(self.retry_lesson_boundary_admitted) is not bool:
-            raise TypeError("retry_lesson_boundary_admitted must use built-in bool")
-        if self.retry_lesson_boundary_admitted and self.failed_repair_attempt_id is None:
-            raise ValueError("retry lesson admission must bind to one failed repair attempt")
-        if (
-            self.disposition is RepairDisposition.REPAIRED
-            and self.failed_repair_attempt_id is not None
-            and not self.retry_lesson_boundary_admitted
+        if type(self.retry_mutation_performed) is not bool:
+            raise TypeError("retry_mutation_performed must use built-in bool")
+        if self.failed_repair_attempt_id is not None and (
+            type(self.failed_repair_attempt_id) is not str or not self.failed_repair_attempt_id.strip()
         ):
-            raise ValueError(
-                "failed repair retry cannot be recorded as repaired before CKR6 retry lesson boundary admission"
-            )
+            raise ValueError("failed_repair_attempt_id must be a non-empty string when supplied")
+        if self.retry_boundary is not None and type(self.retry_boundary) is not RepairRetryBoundaryEvidence:
+            raise TypeError("retry_boundary must be RepairRetryBoundaryEvidence or None")
+        if self.retry_boundary is not None:
+            if self.failed_repair_attempt_id is None:
+                raise ValueError("retry boundary must bind to one failed repair attempt")
+            if self.retry_boundary.failed_attempt_id != self.failed_repair_attempt_id:
+                raise ValueError("retry boundary must bind to the exact failed repair attempt")
+        if self.retry_mutation_performed:
+            if self.failed_repair_attempt_id is None or self.retry_boundary is None:
+                raise ValueError("retry mutation requires exact failed-attempt CKR6 boundary evidence")
+            if not self.retry_boundary.mutation_admissible:
+                raise ValueError("retry mutation cannot occur while CKR6 retry boundary blocks mutation")
+        if self.disposition is RepairDisposition.REPAIRED and self.failed_repair_attempt_id is not None:
+            if not self.retry_mutation_performed:
+                raise ValueError("failed repair cannot become repaired without an admitted retry mutation")
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,7 +109,9 @@ class BulkRepairContinuation:
     deferred_pull_requests: tuple[int, ...]
     reacquire_pull_requests: tuple[int, ...]
     already_terminal_pull_requests: tuple[int, ...]
-    lesson_reentry_pull_requests: tuple[int, ...]
+    lesson_reentry_required_pull_requests: tuple[int, ...]
+    lesson_reentry_admitted_pull_requests: tuple[int, ...]
+    lesson_reentry_blocked_pull_requests: tuple[int, ...]
     remaining_pull_requests: tuple[int, ...]
     evidence: tuple[RepairCandidateEvidence, ...]
     finite_admission: FiniteBatchAdmission
@@ -108,10 +145,20 @@ def evaluate_bulk_repair_continuation(
     deferred = _by_disposition(evidence, RepairDisposition.DEFERRED)
     reacquire = _by_disposition(evidence, RepairDisposition.REACQUIRE)
     terminal = _by_disposition(evidence, RepairDisposition.ALREADY_TERMINAL)
-    lesson_reentry = tuple(
+    lesson_required = tuple(
         item.pull_request_number
         for item in evidence
-        if item.failed_repair_attempt_id is not None
+        if item.failed_repair_attempt_id is not None and item.retry_boundary is None
+    )
+    lesson_admitted = tuple(
+        item.pull_request_number
+        for item in evidence
+        if item.retry_boundary is not None and item.retry_boundary.mutation_admissible
+    )
+    lesson_blocked = tuple(
+        item.pull_request_number
+        for item in evidence
+        if item.retry_boundary is not None and not item.retry_boundary.mutation_admissible
     )
     remaining = tuple(number for number in requested if number not in set(visited))
 
@@ -140,7 +187,9 @@ def evaluate_bulk_repair_continuation(
         deferred,
         reacquire,
         terminal,
-        lesson_reentry,
+        lesson_required,
+        lesson_admitted,
+        lesson_blocked,
         remaining,
         evidence,
         admission,
