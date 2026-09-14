@@ -1,9 +1,10 @@
-"""MCP protocol binding for the bounded Agent OS ChatGPT facade (#1966 / #1988)."""
+"""MCP protocol binding for the bounded Agent OS ChatGPT facade (#1966 / #1988 / #2363)."""
 
 from __future__ import annotations
 
 from mcp.server import MCPServer
 
+from .connected_issue_creation_facade import plan_connected_issue_creation_for_host
 from .issue_start_lesson_preflight import activate_issue_start_lesson_preflight
 from .lesson_reader_composition import build_lesson_read_executor
 from .mcp_facade import (
@@ -15,6 +16,12 @@ from .mcp_facade import (
 )
 
 mcp = MCPServer("Agent OS")
+
+
+@mcp.tool()
+def plan_connected_issue_creation_tool(repository: str, issue_body: str) -> dict[str, object]:
+    """Plan canonical managed labels before connected issue creation."""
+    return plan_connected_issue_creation_for_host(repository=repository, issue_body=issue_body)
 
 
 @mcp.tool()
