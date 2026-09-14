@@ -1,10 +1,15 @@
 """Lazy activation binding for the bounded #2283 Notion read path.
 
 The workflow may select this factory before admission, but the canonical
-``NotionReadOnlyAdapter`` is not constructed until
-``execute_admitted_notion_read`` has proved ``secret_dispatch_authorized``.
-The existing #2282 action bound is applied by ``execution.py`` around the task
-callable returned here, so this module creates no second read/write policy.
+read-only adapter is not constructed until ``execute_admitted_notion_read`` has
+proved ``secret_dispatch_authorized``. The existing #2282 action bound is
+applied by ``execution.py`` around the task callable returned here, so this
+module creates no second read/write policy.
+
+The Scheduler itself stays an injected caller concern: ``agent_os_notion_binding``
+owns the ``workflow_scheduler`` composition, so this package keeps the
+provider-neutral boundary that ``test_architecture_boundaries.py`` and the
+#752/#912 packaging allowlist both require.
 """
 
 from __future__ import annotations
@@ -12,19 +17,22 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from workflow_scheduler.adapters.notion_readonly_adapter import NotionReadOnlyAdapter
-from workflow_scheduler.models import Task
+from agent_os_notion_binding import (
+    AdapterFactory,
+    NotionBindingError,
+    build_read_task,
+    new_read_adapter,
+)
 
 from .models import NotionReadRequestError
 
-AdapterFactory = Callable[[], NotionReadOnlyAdapter]
 SchedulerTaskExecutor = Callable[[Mapping[str, object]], object]
 SchedulerTaskExecutorFactory = Callable[[], SchedulerTaskExecutor]
 
 
 def build_live_notion_executor_factory(
     *,
-    adapter_factory: AdapterFactory = NotionReadOnlyAdapter,
+    adapter_factory: AdapterFactory | None = None,
 ) -> SchedulerTaskExecutorFactory:
     """Return a lazy factory for the existing #936 read-only adapter.
 
@@ -33,15 +41,15 @@ def build_live_notion_executor_factory(
     which happens behind the canonical #2283 admission gate.
     """
 
-    if not callable(adapter_factory):
+    if adapter_factory is not None and not callable(adapter_factory):
         raise TypeError("adapter_factory must be callable")
 
     def factory() -> SchedulerTaskExecutor:
-        adapter = adapter_factory()
-        if not isinstance(adapter, NotionReadOnlyAdapter):
-            raise TypeError("adapter_factory must return NotionReadOnlyAdapter")
-        if not adapter.token:
-            raise NotionReadRequestError("NOTION_TOKEN is unavailable")
+        try:
+            adapter = new_read_adapter(adapter_factory)
+        except NotionBindingError as exc:
+            # Keep this package's single bounded error vocabulary.
+            raise NotionReadRequestError(str(exc)) from exc
 
         def execute_task(payload: Mapping[str, object]) -> object:
             if not isinstance(payload, Mapping):
@@ -50,14 +58,13 @@ def build_live_notion_executor_factory(
             if not isinstance(action, str) or not action:
                 raise NotionReadRequestError("Notion task action is required")
 
-            task = Task(
-                id=f"agent-os-notion-read-{action}",
+            task = build_read_task(
+                task_id=f"agent-os-notion-read-{action}",
                 workflow_id="agent-os-notion-read",
-                type="read",
                 owner="agent-os-notion-read-request",
                 action=action,
                 idempotency_key=f"agent-os-notion-read-{action}",
-                payload=dict(payload),
+                payload=payload,
             )
             result: Any = adapter.execute(task)
             if not isinstance(result, Mapping):

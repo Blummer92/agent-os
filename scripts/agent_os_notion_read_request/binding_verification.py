@@ -17,8 +17,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from workflow_scheduler.adapters.notion_readonly_adapter import NotionReadOnlyAdapter
-from workflow_scheduler.models import Task
+from agent_os_notion_binding import NotionBindingError, build_read_task, new_read_adapter
 
 from .models import INGRESS_REASON, SCHEMA_VERSION, NotionReadRequestError
 from .runner import MAX_TRANSPORT_BYTES
@@ -102,10 +101,9 @@ def _execute_read(adapter: object, action: str, **payload: object) -> dict[str, 
     if not callable(execute):
         raise TypeError("adapter must expose execute(task)")
 
-    task = Task(
-        id=f"agent-os-notion-binding-verification-{action}",
+    task = build_read_task(
+        task_id=f"agent-os-notion-binding-verification-{action}",
         workflow_id="agent-os-notion-binding-verification",
-        type="read",
         owner="agent-os-notion-read-request",
         action=action,
         idempotency_key=f"agent-os-notion-binding-verification-{action}-{len(payload)}",
@@ -240,9 +238,10 @@ def main(argv: list[str] | None = None) -> int:
             "generated_at": args.generated_at,
         }
     else:
-        adapter = NotionReadOnlyAdapter()
-        if not adapter.token:
-            raise NotionReadRequestError("NOTION_TOKEN is unavailable")
+        try:
+            adapter = new_read_adapter()
+        except NotionBindingError as exc:
+            raise NotionReadRequestError(str(exc)) from exc
         evidence = {
             "admission": admission,
             **verify_live_bindings(adapter, generated_at=args.generated_at),

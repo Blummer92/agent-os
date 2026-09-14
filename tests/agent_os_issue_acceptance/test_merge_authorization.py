@@ -714,3 +714,94 @@ def test_exception_details_never_propagate_message_text():
     assert all(len(item.encode("utf-8")) <= merge_authorization._MAX_DETAIL_BYTES
                for item in result.details)
     assert len(result.details) <= merge_authorization._MAX_DETAILS
+
+
+# --------------------------------------------------------------------------
+# #2337 red-merge incident regressions.
+#
+# PR #2335 was merged while its exact-head aggregate validation was failing.
+# These tests pin the three confusions that made that merge look admissible,
+# against the canonical merge-admission owner rather than a second framework.
+# --------------------------------------------------------------------------
+
+#: An earlier Draft-run head. Distinct from HEAD so "green, but for another
+#: commit" stays representable.
+DRAFT_HEAD = "e" * 40
+
+_PLAN_CHECK = "Agent OS Validation Gate / Run validation plan"
+_AGGREGATE_CHECK = "Agent OS Validation Gate / Run aggregate validation"
+
+
+def test_2337_ready_state_exact_head_aggregate_failure_blocks_merge():
+    """Ready + failing exact-head aggregate must never be merge-authorized."""
+    authorized, bundle = _authorized()
+    ready_but_red = _pr(
+        bundle,
+        draft=False,
+        ready_for_review=True,
+        required_checks=(_check(context=_AGGREGATE_CHECK, state="failure"),),
+    )
+
+    result = _evaluate(authorized, bundle, ready_but_red)
+
+    assert result.status == "blocked"
+    assert not result.merge_authorized
+    assert "checks.failed" in result.reason_codes
+
+
+def test_2337_sibling_validation_plan_success_does_not_offset_aggregate_failure():
+    """A green sibling check cannot rescue a failing required aggregate."""
+    bundle = _bundle()
+    green_plan = _check(context=_PLAN_CHECK)
+    green_aggregate = _check(context=_AGGREGATE_CHECK)
+    authorized = record_merge_authorization_decision(
+        _candidate(bundle, pr=_pr(bundle, required_checks=(green_plan, green_aggregate))),
+        state="authorized",
+        decision_id="merge-authorized",
+        authorizer_id="repository-owner",
+        decision_at=AUTHORIZED,
+    )
+
+    # The plan job still succeeds; only the authoritative aggregate turns red.
+    result = _evaluate(
+        authorized,
+        bundle,
+        _pr(
+            bundle,
+            required_checks=(
+                green_plan,
+                _check(context=_AGGREGATE_CHECK, state="failure"),
+            ),
+        ),
+    )
+
+    assert result.status == "blocked"
+    assert not result.merge_authorized
+    assert "checks.failed" in result.reason_codes
+
+
+def test_2337_earlier_draft_run_green_does_not_satisfy_the_current_head():
+    """Green evidence bound to an earlier SHA is not exact-head evidence."""
+    authorized, bundle = _authorized()
+    stale_green = _check(context=_AGGREGATE_CHECK, state="success", tested_sha=DRAFT_HEAD)
+
+    result = _evaluate(authorized, bundle, _pr(bundle, required_checks=(stale_green,)))
+
+    assert not result.merge_authorized
+    assert "checks.changed" in result.reason_codes
+
+
+@pytest.mark.parametrize("state", ["failure", "pending", "cancelled", "skipped",
+                                   "not-triggered", "unknown"])
+def test_2337_only_terminal_success_on_the_exact_head_is_merge_evidence(state):
+    """Every non-success terminal conclusion blocks, on the exact head."""
+    authorized, bundle = _authorized()
+
+    result = _evaluate(
+        authorized,
+        bundle,
+        _pr(bundle, required_checks=(_check(context=_AGGREGATE_CHECK, state=state),)),
+    )
+
+    assert not result.merge_authorized
+    assert result.status in {"blocked", "needs-decision"}
