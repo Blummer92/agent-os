@@ -41,3 +41,11 @@ The finite statuses are `read-success`, `ambiguous-student`, `ambiguous-assignme
 The reader is strictly observational. `write_authorized` is permanently false, and the result exposes no grade mutation or form-submission method. Editability describes visible capability only; it never authorizes a write. Vendor-specific DOM selectors may appear only as bounded diagnostic provenance and must not enter the WS-GRADE1 grading decision contract.
 
 WS-GRADE3 generic tests use the WS-GRADE2 synthetic fixture only. This contract performs no live browser automation, LMS/SIS login, API call, credential/session extraction, real-student-data handling, grade mutation, or external write. Vendor-specific browser mechanics belong to #1130/#1131; exact write authorization and post-write verification remain #1132/#1133.
+
+## WS-GRADE4 Schoology read-only adapter boundary
+
+`schoology_gradebook_adapter.py` translates already-observed, bounded Schoology-like gradebook evidence into the WS-GRADE3 `GradebookReaderResult`. It owns only Schoology-specific evidence normalization: course identity, candidate student/assignment identities, visible score/feedback, editability, freshness, page state, and bounded selector provenance.
+
+Identity matching fails closed: zero candidates becomes `not-found`, multiple candidates become the corresponding ambiguity status, and exactly one candidate is required for resolved identity. Authentication-required, unsupported-page, selector-drift, stale, read-only, unknown-freshness, and reader-error states remain explicit finite outcomes rather than being promoted into success.
+
+The adapter accepts normalized snapshot evidence; it does not fetch or scrape Schoology itself. Repository tests use synthetic Schoology-like values and selectors only. No real student records, production DOM captures, URLs, cookies, tokens, credentials, network interception, undocumented/private API, grade mutation, form submission, or external write is present. `write_authorized` remains permanently false through the WS-GRADE3 result.
