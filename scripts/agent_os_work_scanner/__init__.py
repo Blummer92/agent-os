@@ -17,6 +17,12 @@ from .grading_decision import (
     SourceProvenance,
     TeacherApprovalState,
 )
+from .schoology_gradebook_adapter import (
+    SchoologyGradebookSnapshot,
+    SchoologyIdentityCandidate,
+    SchoologyPageState,
+    normalize_schoology_snapshot,
+)
 from .synthetic_gradebook import (
     SYNTHETIC_GRADEBOOK_FIXTURE_VERSION,
     FixtureError,
@@ -49,9 +55,13 @@ __all__ = (
     "ReaderStatus",
     "RecoverableFixtureError",
     "RubricCriterionEvidence",
+    "SchoologyGradebookSnapshot",
+    "SchoologyIdentityCandidate",
+    "SchoologyPageState",
     "SourceProvenance",
     "StaleFixtureError",
     "SyntheticGradebookFixture",
     "TeacherApprovalState",
     "normalize_reader_record",
+    "normalize_schoology_snapshot",
 )
