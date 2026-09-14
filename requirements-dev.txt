@@ -6,6 +6,10 @@ pytest-cov>=7.1.0
 pytest-mock>=3.15.1
 pytest-asyncio>=1.4.0
 pytest-xdist>=3.8.0
+# Imported directly by tests/test_dependency_constraint_alignment.py to compare
+# declared version constraints. pytest already pulls it in; declared explicitly
+# so the guard does not rest on a transitive dependency.
+packaging>=24.0
 
 # Code Quality
 black>=26.5.1
