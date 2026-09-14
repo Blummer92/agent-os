@@ -56,7 +56,7 @@ def sanitize_actionable_failure(value: Any) -> str:
 
 
 def _sha40(value: Any, field: str) -> str:
-    text = _text(value, field).lower()
+    text = _text(value, field)
     if len(text) != 40 or any(char not in "0123456789abcdef" for char in text):
         raise EvidenceValidationError(f"{field} must be a 40-character hexadecimal SHA")
     return text

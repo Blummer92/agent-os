@@ -82,10 +82,9 @@ def _pr_number(value: Any) -> int:
 
 def _sha(value: Any, field: str) -> str:
     _exact(value, str, field)
-    lowered = value.lower()
-    if len(lowered) != 40 or any(char not in "0123456789abcdef" for char in lowered):
+    if len(value) != 40 or any(char not in "0123456789abcdef" for char in value):
         raise EvidenceValidationError(f"{field} must be a 40-character hexadecimal SHA")
-    return lowered
+    return value
 
 
 def _bounded_list(value: Any, field: str, maximum: int) -> list[Any]:
