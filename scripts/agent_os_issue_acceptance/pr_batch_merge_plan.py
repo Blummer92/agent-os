@@ -28,10 +28,10 @@ CANONICAL_MERGE_ADMISSION_STATUSES: frozenset[str] = frozenset(
 CANONICAL_BLOCKER_SCOPES: frozenset[str] = frozenset({"none", "item", "shared"})
 
 
-def _require_canonical(value: object, allowed: frozenset[str], field: str) -> None:
+def _require_canonical(value: object, allowed: frozenset[str], name: str) -> None:
     if type(value) is not str or value not in allowed:
         raise ValueError(
-            f"{field} must be one of {sorted(allowed)}; non-canonical evidence "
+            f"{name} must be one of {sorted(allowed)}; non-canonical evidence "
             f"never normalizes into a merge disposition"
         )
 
