@@ -1,19 +1,19 @@
 #!/bin/sh
-# Separately authorized administrator installer for the fixed #2106 browser bootstrap.
+# Separately authorized administrator installer for the fixed #2455 Canva browser bootstrap.
 # Repository implementation does not authorize running this script on agent-os-test.
 set -eu
 
-CAPTURE_USER=agent-os-capture
-CAPTURE_HOME=/var/lib/agent-os/capture-home
-PROFILE_DIR=$CAPTURE_HOME/.agent-os/browser-profiles/adobe-express
-RUNTIME_DIR=/run/agent-os/adobe-browser-bootstrap
-INNER_TARGET=/usr/local/libexec/agent-os-adobe-browser-session
-OUTER_TARGET=/usr/local/libexec/agent-os-adobe-browser-bootstrap
+CAPTURE_USER=agent-os-canva-capture
+CAPTURE_HOME=/var/lib/agent-os/canva-capture-home
+PROFILE_DIR=$CAPTURE_HOME/.agent-os/browser-profiles/canva
+RUNTIME_DIR=/run/agent-os/canva-browser-bootstrap
+INNER_TARGET=/usr/local/libexec/agent-os-canva-browser-session
+OUTER_TARGET=/usr/local/libexec/agent-os-canva-browser-bootstrap
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-INNER_SOURCE=$SCRIPT_DIR/agent-os-adobe-browser-session
+INNER_SOURCE=$SCRIPT_DIR/agent-os-canva-browser-session
 
 fail() {
-  printf '%s\n' "adobe browser bootstrap install refused: $1" >&2
+  printf '%s\n' "canva browser bootstrap install refused: $1" >&2
   exit 64
 }
 
@@ -54,12 +54,12 @@ trap 'rm -f "$outer_tmp"' EXIT HUP INT TERM
 cat > "$outer_tmp" <<'EOF_OUTER'
 #!/bin/sh
 set -eu
-CAPTURE_USER=agent-os-capture
-CAPTURE_HOME=/var/lib/agent-os/capture-home
-RUNTIME_DIR=/run/agent-os/adobe-browser-bootstrap
-INNER=/usr/local/libexec/agent-os-adobe-browser-session
+CAPTURE_USER=agent-os-canva-capture
+CAPTURE_HOME=/var/lib/agent-os/canva-capture-home
+RUNTIME_DIR=/run/agent-os/canva-browser-bootstrap
+INNER=/usr/local/libexec/agent-os-canva-browser-session
 fail() {
-  printf '%s\n' "adobe browser bootstrap refused: $1" >&2
+  printf '%s\n' "canva browser bootstrap refused: $1" >&2
   exit 64
 }
 [ "$#" -eq 0 ] || fail "arguments are not supported"
@@ -75,4 +75,4 @@ install -o root -g root -m 0755 "$outer_tmp" "$OUTER_TARGET"
 
 inner_sha=$(sha256sum "$INNER_TARGET" | awk '{print $1}')
 outer_sha=$(sha256sum "$OUTER_TARGET" | awk '{print $1}')
-printf '%s\n' "{\"status\":\"installed\",\"browser_session_ref\":\"adobe-express-default\",\"inner_sha256\":\"$inner_sha\",\"outer_sha256\":\"$outer_sha\",\"owner\":\"root\",\"group\":\"root\",\"mode\":\"755\",\"auth_ready_asserted\":false,\"capture_invoked\":false,\"scheduler_invoked\":false,\"external_write_authorized\":false,\"live_activation_authorized\":false}"
+printf '%s\n' "{\"status\":\"installed\",\"browser_session_ref\":\"canva-default\",\"inner_sha256\":\"$inner_sha\",\"outer_sha256\":\"$outer_sha\",\"owner\":\"root\",\"group\":\"root\",\"mode\":\"755\",\"auth_ready_asserted\":false,\"capture_invoked\":false,\"scheduler_invoked\":false,\"external_write_authorized\":false,\"live_activation_authorized\":false}"

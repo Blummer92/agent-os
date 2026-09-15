@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto';
 import test from 'node:test';
 import {
   BROWSER_SESSION_REF,
+  BROWSER_SESSION_REFS,
+  CANVA_BROWSER_SESSION_REF,
   EXECUTION_SURFACE,
   LIVE_CAPTURE_REQUEST_VERSION,
   PRIVACY_MODE,
@@ -35,8 +37,8 @@ function request(overrides = {}) {
   };
 }
 
-function capability(authentication_status = 'AUTH_READY') {
-  return { browser_session_ref: BROWSER_SESSION_REF, authentication_status };
+function capability(authentication_status = 'AUTH_READY', browser_session_ref = BROWSER_SESSION_REF) {
+  return { browser_session_ref, authentication_status };
 }
 
 function successTransport(overrides = {}) {
@@ -58,7 +60,7 @@ function successTransport(overrides = {}) {
 
 async function run(options = {}) {
   let calls = 0;
-  const invokeCapture = options.invokeCapture ?? (async () => { calls += 1; return successTransport(); });
+  const invokeCapture = options.invokeCapture ?? (async () => successTransport());
   const result = await runLiveCaptureRequest({
     request: options.request ?? request(),
     rawRecording: options.rawRecording ?? rawRecording,
@@ -71,10 +73,11 @@ async function run(options = {}) {
   return { result, calls };
 }
 
-test('valid request invokes exactly one injected capture transport and returns bounded capture identity', async () => {
+test('valid Adobe request remains backward compatible and returns bounded capture identity', async () => {
   let received;
   const { result, calls } = await run({ invokeCapture: async (input) => { received = input; return successTransport(); } });
   assert.equal(calls, 1);
+  assert.equal(BROWSER_SESSION_REF, 'adobe-express-default');
   assert.equal(received.operation, 'captureFlow');
   assert.deepEqual(received.execution_surface, EXECUTION_SURFACE);
   assert.equal(received.browser_session_ref, BROWSER_SESSION_REF);
@@ -88,12 +91,51 @@ test('valid request invokes exactly one injected capture transport and returns b
   assert.equal('token' in received, false);
 });
 
+test('Canva request admits only canva-default and delegates unchanged to existing captureFlow transport', async () => {
+  let received;
+  const canvaRequest = request({
+    target_url: 'https://www.canva.com/',
+    allowed_origins: ['https://www.canva.com'],
+    browser_session_ref: CANVA_BROWSER_SESSION_REF,
+  });
+  const { result, calls } = await run({
+    request: canvaRequest,
+    browserSessionCapability: capability('AUTH_READY', CANVA_BROWSER_SESSION_REF),
+    invokeCapture: async (input) => { received = input; return successTransport(); },
+  });
+  assert.deepEqual(BROWSER_SESSION_REFS, ['adobe-express-default', 'canva-default']);
+  assert.equal(calls, 1);
+  assert.equal(received.operation, 'captureFlow');
+  assert.equal(received.browser_session_ref, 'canva-default');
+  assert.equal(received.target_url, 'https://www.canva.com/');
+  assert.deepEqual(received.approved_origins, ['https://www.canva.com']);
+  assert.equal(result.capture_status, 'valid');
+});
+
+test('unknown session identity and mismatched session capability fail before invocation', async () => {
+  const unknown = await run({ request: request({ browser_session_ref: 'arbitrary-browser' }) });
+  assert.equal(unknown.calls, 0);
+  assert.equal(unknown.result.reason_codes[0], 'request-invalid');
+
+  const canvaRequest = request({ browser_session_ref: CANVA_BROWSER_SESSION_REF });
+  const mismatch = await run({ request: canvaRequest, browserSessionCapability: capability('AUTH_READY', BROWSER_SESSION_REF) });
+  assert.equal(mismatch.calls, 0);
+  assert.equal(mismatch.result.reason_codes[0], 'browser-session-capability-missing');
+});
+
 test('unknown request version and arbitrary execution fields fail before invocation', async () => {
   for (const badRequest of [
     request({ format_version: 'software-tutorial-capture-request-v2' }),
     { ...request(), command: 'curl https://example.com' },
     { ...request(), script: 'alert(1)' },
     { ...request(), profile_path: '/tmp/profile' },
+    { ...request(), display: ':99' },
+    { ...request(), port: 6082 },
+    { ...request(), executable_path: '/usr/bin/chromium' },
+    { ...request(), launch_args: ['--remote-debugging-port=9222'] },
+    { ...request(), password: 'secret' },
+    { ...request(), cookie: 'session=value' },
+    { ...request(), token: 'secret' },
   ]) {
     const { result, calls } = await run({ request: badRequest });
     assert.equal(calls, 0);
@@ -113,11 +155,14 @@ test('recording digest mismatch fails before invocation', async () => {
   assert.equal(result.reason_codes[0], 'recording-digest-mismatch');
 });
 
-test('missing and non-ready browser session capability fail before replay', async () => {
-  for (const value of [undefined, capability('AUTH_REQUIRED'), capability('AUTH_EXPIRED'), capability('AUTH_BLOCKED')]) {
-    const { result, calls } = await run({ browserSessionCapability: value });
-    assert.equal(calls, 0);
-    assert.equal(result.capture_status, 'blocked');
+test('missing and non-ready browser session capability fail before replay for both governed sessions', async () => {
+  for (const browserSessionRef of BROWSER_SESSION_REFS) {
+    const governedRequest = request({ browser_session_ref: browserSessionRef });
+    for (const value of [undefined, capability('AUTH_REQUIRED', browserSessionRef), capability('AUTH_EXPIRED', browserSessionRef), capability('AUTH_BLOCKED', browserSessionRef)]) {
+      const { result, calls } = await run({ request: governedRequest, browserSessionCapability: value });
+      assert.equal(calls, 0);
+      assert.equal(result.capture_status, 'blocked');
+    }
   }
 });
 

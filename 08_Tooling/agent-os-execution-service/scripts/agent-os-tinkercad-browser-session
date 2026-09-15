@@ -1,19 +1,19 @@
 #!/bin/sh
-# Fixed unprivileged Adobe browser operator session for #2106.
+# Fixed unprivileged Tinkercad browser operator session for #2450.
 # Installed and invoked only by the separately authorized root-owned bootstrap installer.
 set -eu
 
-CAPTURE_USER=agent-os-capture
-CAPTURE_HOME=/var/lib/agent-os/capture-home
-PROFILE_DIR=$CAPTURE_HOME/.agent-os/browser-profiles/adobe-express
-RUNTIME_DIR=/run/agent-os/adobe-browser-bootstrap
-DISPLAY_ID=:97
+CAPTURE_USER=agent-os-tinkercad-capture
+CAPTURE_HOME=/var/lib/agent-os/tinkercad-capture-home
+PROFILE_DIR=$CAPTURE_HOME/.agent-os/browser-profiles/tinkercad
+RUNTIME_DIR=/run/agent-os/tinkercad-browser-bootstrap
+DISPLAY_ID=:98
 SCREEN_SPEC=1600x1000x24
-VNC_PORT=5901
-NOVNC_PORT=6080
+VNC_PORT=5902
+NOVNC_PORT=6081
 SESSION_TTL_SECONDS=1800
-START_URL=https://new.express.adobe.com/
-VIEW_URL='http://127.0.0.1:6080/vnc.html?autoconnect=1&resize=scale'
+START_URL=https://www.tinkercad.com/3d-design/
+VIEW_URL='http://127.0.0.1:6081/vnc.html?autoconnect=1&resize=scale'
 XAUTHORITY_FILE=$RUNTIME_DIR/Xauthority
 
 XVFB=/usr/bin/Xvfb
@@ -26,12 +26,12 @@ DATE=/usr/bin/date
 SLEEP=/usr/bin/sleep
 
 fail() {
-  printf '%s\n' "adobe browser session refused: $1" >&2
+  printf '%s\n' "tinkercad browser session refused: $1" >&2
   exit 64
 }
 
 [ "$#" -eq 0 ] || fail "arguments are not supported"
-[ "$(id -un)" = "$CAPTURE_USER" ] || fail "must run as dedicated capture user"
+[ "$(id -un)" = "$CAPTURE_USER" ] || fail "must run as dedicated Tinkercad capture user"
 [ "${HOME:-}" = "$CAPTURE_HOME" ] || fail "capture HOME mismatch"
 [ -d "$PROFILE_DIR" ] || fail "fixed browser profile unavailable"
 [ -d "$RUNTIME_DIR" ] || fail "fixed runtime directory unavailable"
@@ -116,7 +116,7 @@ for pid in "$chromium_pid" "$x11vnc_pid" "$websockify_pid"; do
 done
 
 started_at=$($DATE -u +%Y-%m-%dT%H:%M:%SZ)
-printf '%s\n' "{\"schema_name\":\"agent-os-adobe-browser-bootstrap-session\",\"schema_version\":\"1.0\",\"status\":\"operator-session-started\",\"reason_codes\":[\"operator-login-required\"],\"browser_session_ref\":\"adobe-express-default\",\"operator_view_url\":\"$VIEW_URL\",\"started_at\":\"$started_at\",\"auth_ready_asserted\":false,\"profile_material_emitted\":false,\"capture_invoked\":false,\"scheduler_invoked\":false,\"external_write_authorized\":false,\"live_activation_authorized\":false}"
+printf '%s\n' "{\"schema_name\":\"agent-os-tinkercad-browser-bootstrap-session\",\"schema_version\":\"1.0\",\"status\":\"operator-session-started\",\"reason_codes\":[\"operator-login-required\"],\"browser_session_ref\":\"tinkercad-default\",\"operator_view_url\":\"$VIEW_URL\",\"started_at\":\"$started_at\",\"auth_ready_asserted\":false,\"profile_material_emitted\":false,\"capture_invoked\":false,\"scheduler_invoked\":false,\"external_write_authorized\":false,\"live_activation_authorized\":false}"
 
 deadline=$(( $($DATE +%s) + SESSION_TTL_SECONDS ))
 status=operator-session-complete
@@ -140,6 +140,6 @@ while :; do
 done
 
 finished_at=$($DATE -u +%Y-%m-%dT%H:%M:%SZ)
-printf '%s\n' "{\"schema_name\":\"agent-os-adobe-browser-bootstrap-session\",\"schema_version\":\"1.0\",\"status\":\"$status\",\"reason_codes\":[\"$reason\"],\"browser_session_ref\":\"adobe-express-default\",\"finished_at\":\"$finished_at\",\"auth_ready_asserted\":false,\"profile_material_emitted\":false,\"capture_invoked\":false,\"scheduler_invoked\":false,\"external_write_authorized\":false,\"live_activation_authorized\":false}"
+printf '%s\n' "{\"schema_name\":\"agent-os-tinkercad-browser-bootstrap-session\",\"schema_version\":\"1.0\",\"status\":\"$status\",\"reason_codes\":[\"$reason\"],\"browser_session_ref\":\"tinkercad-default\",\"finished_at\":\"$finished_at\",\"auth_ready_asserted\":false,\"profile_material_emitted\":false,\"capture_invoked\":false,\"scheduler_invoked\":false,\"external_write_authorized\":false,\"live_activation_authorized\":false}"
 
 [ "$status" != operator-session-failed ]
