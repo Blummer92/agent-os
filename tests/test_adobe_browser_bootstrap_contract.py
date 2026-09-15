@@ -16,6 +16,11 @@ def _text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def test_bootstrap_sources_are_executable_in_clean_checkout() -> None:
+    assert SESSION.stat().st_mode & 0o111
+    assert INSTALLER.stat().st_mode & 0o111
+
+
 def test_fixed_target_and_session_identity_are_not_selectable() -> None:
     session = _text(SESSION)
     installer = _text(INSTALLER)
