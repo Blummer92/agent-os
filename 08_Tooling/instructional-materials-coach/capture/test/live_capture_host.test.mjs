@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { access, writeFile } from 'node:fs/promises';
 
 import {
   CAPTURE_HOST_MAX_INPUT_BYTES,
@@ -54,26 +55,58 @@ test('host fails closed when the process is not the fixed Canva capture identity
   assert.equal(result.transport_status, 'succeeded');
   assert.equal(result.capture_result.status, 'blocked');
   assert.equal(result.capture_result.failure.reason_code, 'browser-session-user-mismatch');
+  assert.deepEqual(result.screenshots, []);
+  assert.equal(result.evidence_persisted, false);
   assert.equal(result.side_effects_performed, false);
 });
 
-test('Canva host binding invokes existing captureFlow contract with fixed profile and Chromium', async () => {
+test('Canva host uses tmpfs, returns screenshot bytes, and deletes the workspace', async () => {
   let observed;
-  const captureResult = Object.freeze({ status: 'blocked', capture: null, failure: Object.freeze({ reason_code: 'synthetic-stop' }) });
+  const fakePng = Buffer.from('\x89PNG\r\n\x1a\nsynthetic');
+  const captureResult = Object.freeze({
+    status: 'valid',
+    capture: Object.freeze({
+      format_version: 'software-tutorial-capture-v1',
+      capture_id: 'tutorial0-canva',
+      source: Object.freeze({ recording_sha256: fingerprintRecording(rawRecording) }),
+    }),
+  });
   const result = await runHostCapture(input(), {
     username: 'agent-os-canva-capture',
     capturedAt: '2026-09-15T22:00:00Z',
-    captureImpl: async (value) => { observed = value; return captureResult; },
+    captureImpl: async (value) => {
+      observed = value;
+      await writeFile(`${value.screenshotDir}/000-before.png`, fakePng);
+      await writeFile(`${value.screenshotDir}/000-after.png`, fakePng);
+      return captureResult;
+    },
   });
   assert.equal(observed.rawRecording, rawRecording);
   assert.deepEqual(observed.approvedOrigins, ['https://www.canva.com']);
   assert.equal(observed.captureId, 'tutorial0-canva');
   assert.equal(observed.userDataDir, '/var/lib/agent-os/canva-capture-home/.agent-os/browser-profiles/canva');
-  assert.match(observed.screenshotDir, /^\/var\/lib\/agent-os\/canva-capture-home\/\.agent-os\/tutorial-captures\/tutorial0-canva$/);
+  assert.match(observed.screenshotDir, /^\/dev\/shm\/agent-os-software-tutorial-capture-[^/]+\/screenshots$/);
   assert.equal(observed.authenticationStatus, 'AUTH_READY');
   assert.equal(observed.headless, true);
   assert.deepEqual(observed.launchOptions, { executablePath: '/usr/bin/chromium' });
   assert.equal(observed.captureTargetStyle, false);
   assert.equal(result.capture_result, captureResult);
+  assert.equal(result.evidence_persisted, false);
   assert.equal(result.side_effects_performed, true);
+  assert.deepEqual(result.screenshots.map((item) => item.filename), ['000-after.png', '000-before.png']);
+  assert.deepEqual(Buffer.from(result.screenshots[0].content_base64, 'base64'), fakePng);
+  await assert.rejects(() => access(observed.screenshotDir));
+});
+
+test('tmpfs workspace is removed when capture throws', async () => {
+  let screenshotDir;
+  await assert.rejects(() => runHostCapture(input(), {
+    username: 'agent-os-canva-capture',
+    captureImpl: async (value) => {
+      screenshotDir = value.screenshotDir;
+      await writeFile(`${value.screenshotDir}/000-before.png`, Buffer.from('partial'));
+      throw new Error('synthetic failure');
+    },
+  }), /synthetic failure/);
+  await assert.rejects(() => access(screenshotDir));
 });
