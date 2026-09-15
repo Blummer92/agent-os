@@ -96,6 +96,34 @@ def test_red_repairable_under_ceiling_returns_exact_retry_attempt():
     assert result.diagnostic_routing_required is True
 
 
+def test_red_repairable_retries_even_when_review_is_not_yet_cleared():
+    result = evaluate_exact_head_validation(
+        evidence(
+            validation_state=ValidationState.FAILURE,
+            review_state=ReviewState.MISSING,
+            reviewed_head_sha=None,
+            failed_attempt_id="attempt-8",
+            retry_count=0,
+            retry_ceiling=2,
+        )
+    )
+    assert result.disposition is ValidationDisposition.RETRY_REQUIRED
+    assert result.failed_attempt_id == "attempt-8"
+    assert result.review_clearance_required is True
+
+
+def test_pending_validation_defers_even_when_review_is_not_yet_cleared():
+    result = evaluate_exact_head_validation(
+        evidence(
+            validation_state=ValidationState.PENDING,
+            review_state=ReviewState.MISSING,
+            reviewed_head_sha=None,
+        )
+    )
+    assert result.disposition is ValidationDisposition.DEFERRED
+    assert result.review_clearance_required is True
+
+
 def test_red_repairable_requires_failed_attempt_identity():
     with pytest.raises(ValueError, match="failed_attempt_id"):
         evaluate_exact_head_validation(
