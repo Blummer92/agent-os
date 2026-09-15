@@ -15,6 +15,7 @@ import {
 import { fingerprintRecording } from '../safe_recording.mjs';
 
 const rawRecording = JSON.stringify({ title: 'Synthetic Canva', steps: [] });
+const authReady = async () => 'AUTH_READY';
 
 function input(overrides = {}) {
   return {
@@ -47,14 +48,33 @@ test('host rejects arbitrary execution fields and oversized Recorder input', () 
 
 test('host fails closed when the process is not the fixed Canva capture identity', async () => {
   let invoked = false;
+  let probed = false;
   const result = await runHostCapture(input(), {
     username: 'unexpected-user',
+    authenticationProbeImpl: async () => { probed = true; return 'AUTH_READY'; },
     captureImpl: async () => { invoked = true; throw new Error('must not invoke'); },
   });
+  assert.equal(probed, false);
   assert.equal(invoked, false);
   assert.equal(result.transport_status, 'succeeded');
   assert.equal(result.capture_result.status, 'blocked');
   assert.equal(result.capture_result.failure.reason_code, 'browser-session-user-mismatch');
+  assert.deepEqual(result.screenshots, []);
+  assert.equal(result.evidence_persisted, false);
+  assert.equal(result.side_effects_performed, false);
+});
+
+test('host stops before Replay when current Canva auth probe requires login', async () => {
+  let invoked = false;
+  const result = await runHostCapture(input(), {
+    username: 'agent-os-canva-capture',
+    authenticationProbeImpl: async () => 'AUTH_REQUIRED',
+    captureImpl: async () => { invoked = true; throw new Error('must not invoke'); },
+  });
+  assert.equal(invoked, false);
+  assert.equal(result.capture_result.status, 'blocked');
+  assert.equal(result.capture_result.authentication_status, 'AUTH_REQUIRED');
+  assert.equal(result.capture_result.failure.reason_code, 'auth-required');
   assert.deepEqual(result.screenshots, []);
   assert.equal(result.evidence_persisted, false);
   assert.equal(result.side_effects_performed, false);
@@ -73,6 +93,7 @@ test('Canva host uses tmpfs, returns screenshot bytes, and deletes the workspace
   });
   const result = await runHostCapture(input(), {
     username: 'agent-os-canva-capture',
+    authenticationProbeImpl: authReady,
     capturedAt: '2026-09-15T22:00:00Z',
     captureImpl: async (value) => {
       observed = value;
@@ -102,6 +123,7 @@ test('tmpfs workspace is removed when capture throws', async () => {
   let screenshotDir;
   await assert.rejects(() => runHostCapture(input(), {
     username: 'agent-os-canva-capture',
+    authenticationProbeImpl: authReady,
     captureImpl: async (value) => {
       screenshotDir = value.screenshotDir;
       await writeFile(`${value.screenshotDir}/000-before.png`, Buffer.from('partial'));
