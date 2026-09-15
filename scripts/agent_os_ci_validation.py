@@ -40,6 +40,7 @@ _CAPTURE_COMMANDS = {
         "check",
     ),
 }
+_CI_VALIDATION_SELF_TEST = "python -m pytest tests/test_agent_os_ci_validation.py"
 
 
 def _decode_plan(encoded: str) -> ValidationPlan:
@@ -110,6 +111,8 @@ def _resolve_command(command: str) -> tuple[tuple[str, ...], Path]:
     capture_argv = _CAPTURE_COMMANDS.get(command)
     if capture_argv is not None:
         return capture_argv, _CAPTURE_DIR
+    if command == _CI_VALIDATION_SELF_TEST:
+        return ("python", "-m", "pytest", "tests/test_agent_os_ci_validation.py"), ROOT
     raise ValueError(f"validation command is not in the bounded CI executor: {command}")
 
 
