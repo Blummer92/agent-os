@@ -30,6 +30,7 @@ class CurrentPrEvidence:
         if not self.main_sha or not self.head_sha: raise ValueError("main_sha and head_sha are required fresh identities")
         if self.state not in {"open","closed","merged"}: raise ValueError("state is non-canonical")
         if self.branch_freshness not in {"current","behind","diverged","unknown"}: raise ValueError("branch_freshness is non-canonical")
+        if type(self.semantic_conflict) is not bool or type(self.provider_available) is not bool: raise TypeError("current PR boolean evidence must be bool")
 @dataclass(frozen=True, slots=True)
 class ItemAdmissionEvidence:
     pull_request_number:int; main_sha:str; head_sha:str; validation_status:Literal["passed","failed","pending","missing","manual-review"]
@@ -37,6 +38,8 @@ class ItemAdmissionEvidence:
 @dataclass(frozen=True, slots=True)
 class MergeReadbackEvidence:
     pull_request_number:int; expected_head_sha:str; merged:bool; new_main_sha:str; provider_available:bool=True
+    def __post_init__(self):
+        if type(self.merged) is not bool or type(self.provider_available) is not bool: raise TypeError("merge readback boolean evidence must be bool")
 @dataclass(frozen=True, slots=True)
 class BatchItemResult:
     pull_request_number:int; disposition:BatchItemDisposition; starting_head_sha:str|None; final_head_sha:str|None
@@ -97,6 +100,7 @@ def expected_merge(c):
     return c.current_pull_request,c.current_head_sha
 def record_merge_attempt(c,*,pull_request_number,expected_head_sha,accepted):
     _expect(c,BatchMergeAction.MERGE,pull_request_number)
+    if type(accepted) is not bool: raise TypeError("accepted must be bool")
     if expected_head_sha!=c.current_head_sha:return _restart(c)
     if not accepted:return _advance(c,_result(pull_request_number,BatchItemDisposition.SKIPPED_ITEM_LOCAL,"expected-head-merge-rejected",cursor=c))
     return _replace(c,action=BatchMergeAction.READBACK)
@@ -120,6 +124,7 @@ def expected_lifecycle_mutations(c,p):
     return p.issue_number,p.remove_status_ready,p.close_issue
 def record_lifecycle_mutations(c,*,issue_number,accepted):
     if c.action is not BatchMergeAction.LIFECYCLE_MUTATE or issue_number!=c.current_issue_number:raise ValueError("lifecycle mutation does not match current issue")
+    if type(accepted) is not bool: raise TypeError("accepted must be bool")
     if not accepted:return _finish_linked(c,BatchItemDisposition.MANUAL_REVIEW,("admitted-lifecycle-mutation-rejected",))
     return _replace(c,action=BatchMergeAction.LIFECYCLE_READBACK)
 def apply_lifecycle_readback(c,p):
