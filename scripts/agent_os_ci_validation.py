@@ -30,6 +30,17 @@ _PICTURE_PERFECT_FOCUSED = (
 _PICTURE_PERFECT_DIR = (
     ROOT / "08_Tooling/instructional-materials-coach/picture-perfect-coach"
 )
+_CAPTURE_DIR = ROOT / "08_Tooling/instructional-materials-coach/capture"
+_CAPTURE_COMMANDS = {
+    "cd 08_Tooling/instructional-materials-coach/capture && npm ci": ("npm", "ci"),
+    "cd 08_Tooling/instructional-materials-coach/capture && npm test": ("npm", "test"),
+    "cd 08_Tooling/instructional-materials-coach/capture && npm run check": (
+        "npm",
+        "run",
+        "check",
+    ),
+}
+_CI_VALIDATION_SELF_TEST = "python -m pytest tests/test_agent_os_ci_validation.py"
 
 
 def _decode_plan(encoded: str) -> ValidationPlan:
@@ -97,6 +108,11 @@ def _resolve_command(command: str) -> tuple[tuple[str, ...], Path]:
         return argv, ROOT
     if command == _PICTURE_PERFECT_FOCUSED:
         return ("npm", "test", "--", *_PICTURE_PERFECT_TESTS), _PICTURE_PERFECT_DIR
+    capture_argv = _CAPTURE_COMMANDS.get(command)
+    if capture_argv is not None:
+        return capture_argv, _CAPTURE_DIR
+    if command == _CI_VALIDATION_SELF_TEST:
+        return ("python", "-m", "pytest", "tests/test_agent_os_ci_validation.py"), ROOT
     raise ValueError(f"validation command is not in the bounded CI executor: {command}")
 
 
