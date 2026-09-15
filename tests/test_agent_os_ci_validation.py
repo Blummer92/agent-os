@@ -58,6 +58,12 @@ def test_bounded_executor_resolves_capture_commands_to_exact_npm_argv_and_cwd():
         assert cwd == ROOT / "08_Tooling/instructional-materials-coach/capture"
 
 
+def test_bounded_executor_resolves_its_exact_self_test_without_generic_pytest_expansion():
+    argv, cwd = module._resolve_command("python -m pytest tests/test_agent_os_ci_validation.py")
+    assert argv == ("python", "-m", "pytest", "tests/test_agent_os_ci_validation.py")
+    assert cwd == ROOT
+
+
 def test_bounded_executor_does_not_admit_unregistered_capture_npm_commands():
     for command in (
         "cd 08_Tooling/instructional-materials-coach/capture && npm install",
