@@ -17,13 +17,27 @@ def test_existing_open_bug_backlog_is_reconciled_before_discovery():
     assert "use eligible existing bugs first" in text
 
 
-def test_discovery_is_allowed_when_reconciled_open_backlog_cannot_satisfy_count():
+def test_fresh_discovery_requires_explicit_new_bug_intent_or_incidental_defect():
     text = rule()
-    assert "discover new bugs only when the reconciled open backlog cannot satisfy the requested count" in text
+    assert "Fresh defect discovery is allowed only when the user explicitly requests new bug discovery/logging" in text
+    assert "distinct defect is discovered incidentally during authorized work" in text
 
 
-def test_count_cannot_be_padded_with_synthetic_issues():
-    assert "Do not create issues merely to pad a requested count" in rule()
+def test_new_bugs_do_not_substitute_for_existing_backlog_count_without_approval():
+    text = rule()
+    assert "do not count toward a user-requested existing-backlog implementation count" in text
+    assert "unless the user explicitly approves that substitution" in text
+
+
+def test_exhausted_backlog_reports_honest_shortfall_instead_of_padding_count():
+    text = rule()
+    assert "report the honest shortfall rather than creating issues merely to pad the count" in text
+
+
+def test_ambiguous_find_bugs_uses_backlog_but_explicit_new_bugs_allows_discovery():
+    text = rule()
+    assert "ambiguous wording such as `find 10 bugs` resolves to the existing canonical backlog" in text
+    assert "explicit wording such as `find 10 new bugs` authorizes fresh defect discovery" in text
 
 
 def test_blocked_or_already_fixed_candidates_do_not_end_parent_batch():
