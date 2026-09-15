@@ -42,6 +42,32 @@ def test_bounded_executor_resolves_picture_perfect_focused_command_to_fixed_argv
     assert cwd == ROOT / "08_Tooling/instructional-materials-coach/picture-perfect-coach"
 
 
+def test_bounded_executor_resolves_capture_commands_to_exact_npm_argv_and_cwd():
+    expected = {
+        "cd 08_Tooling/instructional-materials-coach/capture && npm ci": ("npm", "ci"),
+        "cd 08_Tooling/instructional-materials-coach/capture && npm test": ("npm", "test"),
+        "cd 08_Tooling/instructional-materials-coach/capture && npm run check": (
+            "npm",
+            "run",
+            "check",
+        ),
+    }
+    for command, argv in expected.items():
+        resolved, cwd = module._resolve_command(command)
+        assert resolved == argv
+        assert cwd == ROOT / "08_Tooling/instructional-materials-coach/capture"
+
+
+def test_bounded_executor_does_not_admit_unregistered_capture_npm_commands():
+    for command in (
+        "cd 08_Tooling/instructional-materials-coach/capture && npm install",
+        "cd 08_Tooling/instructional-materials-coach/capture && npm exec sh",
+        "cd 08_Tooling/instructional-materials-coach/capture && npm run arbitrary",
+    ):
+        with pytest.raises(ValueError, match="not in the bounded CI executor"):
+            module._resolve_command(command)
+
+
 def test_bounded_executor_does_not_admit_full_picture_perfect_package_check():
     with pytest.raises(ValueError, match="not in the bounded CI executor"):
         module._resolve_command(
