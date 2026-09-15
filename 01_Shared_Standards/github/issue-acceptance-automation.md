@@ -50,6 +50,17 @@ repeated or trailing separators, `**`, `?`, or bracket classes.
 The user-facing result is exactly `ready`, `blocked`, or `needs-decision`.
 `ready` satisfies tier requirements, `blocked` has a missing or failed required
 item, and `needs-decision` requires human judgment. Readiness is evidence only.
+
+### Readiness/body drift evidence
+An open issue may carry an explicit current readiness statement in its body. A
+report-only drift check may compare that statement with the already-computed
+canonical readiness result. The check never recomputes readiness from labels and
+labels never override body/readiness evidence. Agreement or absence of an
+explicit claim is non-authorizing evidence; conflicting or multiple current
+claims are surfaced as drift/manual review. The check performs no issue-body or
+label mutation and creates no readiness, implementation, merge, or closure
+authority. Repairing a stale body remains a separately authorized GitHub Service
+Agent action with canonical readback.
 ## Prior-Scope Review Intake
 The canonical form adds required `prior-scope-review` and optional
 `refactor-evidence` textareas. Readiness requires visible content under `Prior
