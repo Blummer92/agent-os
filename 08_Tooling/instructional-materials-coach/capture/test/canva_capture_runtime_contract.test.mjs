@@ -15,7 +15,9 @@ test('fixed outer entrypoint accepts no argv and delegates only to the Canva cap
   assert.match(value, /\[ "\$#" -eq 0 \]/);
   assert.match(value, /CAPTURE_USER=agent-os-canva-capture/);
   assert.match(value, /SESSION_ENTRYPOINT=\/usr\/local\/libexec\/agent-os-canva-software-tutorial-capture-session/);
-  assert.match(value, /exec "\$RUNUSER" -u "\$CAPTURE_USER" -- "\$SESSION_ENTRYPOINT"/);
+  assert.match(value, /exec "\$RUNUSER" -u "\$CAPTURE_USER" -- env -i/);
+  assert.match(value, /HOME="\$CAPTURE_HOME"/);
+  assert.match(value, /"\$SESSION_ENTRYPOINT"/);
   assert.doesNotMatch(value, /\beval\b|sh -c|bash -c|\$\{@/);
 });
 
@@ -34,8 +36,11 @@ test('installer pins Node and exact service-account sudo command without generic
   assert.match(value, /NODE_SHA256=f4cb75bb036f0d0eddf6b79d9596df1aaab9ddccd6a20bf489be5abe9467e84e/);
   assert.match(value, /TRANSPORT_PRINCIPAL=sa_117278680011452280250/);
   assert.match(value, /SUDOERS_TARGET=\/etc\/sudoers\.d\/agent-os-canva-software-tutorial-capture/);
-  assert.match(value, /printf '%s ALL=\(root\) NOPASSWD: %s/);
+  const sudoersLine = value.split('\n').find((line) => line.includes("ALL=(root) NOPASSWD:"));
+  assert.equal(typeof sudoersLine, 'string');
+  assert.match(sudoersLine, /printf '%s ALL=\(root\) NOPASSWD: %s/);
+  assert.match(sudoersLine, /"\$TRANSPORT_PRINCIPAL" "\$OUTER_TARGET"/);
+  assert.doesNotMatch(sudoersLine, /NOPASSWD:\s*ALL|ALL=\(ALL|\/bin\/sh|\/bin\/bash|python3?/);
   assert.match(value, /visudo -c -f/);
   assert.match(value, /visudo -c/);
-  assert.doesNotMatch(value, /NOPASSWD:\s*ALL|ALL=\(ALL|\/bin\/sh|\/bin\/bash|python3?\s*\*/);
 });
