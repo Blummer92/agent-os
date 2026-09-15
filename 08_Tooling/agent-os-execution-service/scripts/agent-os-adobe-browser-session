@@ -100,7 +100,6 @@ $X11VNC \
   -noclipboard \
   -nosetclipboard \
   -notightfilexfer \
-  -noutrafilexfer \
   -noxrecord \
   -quiet >/dev/null 2>&1 &
 x11vnc_pid=$!
