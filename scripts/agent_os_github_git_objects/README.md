@@ -51,6 +51,10 @@ Read retries are bounded to transient failures. Git tree, commit, and ref writes
 
 GitHub's ordinary contents/file API is suitable for creating or replacing UTF-8 file content, but it does not provide this package's explicit Git tree-mode contract. When executable state is part of the required repository artifact, publish the blob through the guarded Git-object tree/commit path with a `GitTreeEntry` mode of `100755` and verify that exact mode on tree readback. Ordinary non-executable files use `100644`.
 
+Tree read-back preserves the exact supported mode it parsed, so the created-tree validation that guards the ref update compares the real published mode rather than a normalized one. Entries in any other mode, and non-blob entries, are ignored on read-back exactly as they are rejected on write.
+
+`atomic_request_from_verified_handoff` publishes ordinary `100644` entries only, because `VerifiedImplementationHandoff` entries carry no mode. Executable publication uses the `GitTreeEntry` path directly.
+
 Mode selection does not create extra authority: the same branch, path allowlist, confirmation, currentness, compare, and non-force ref-update gates still apply.
 
 ## CLI

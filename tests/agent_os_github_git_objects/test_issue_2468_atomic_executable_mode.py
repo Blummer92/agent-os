@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from unittest.mock import MagicMock
 
 from scripts.agent_os_github_git_objects.atomic_commit import (
     execute_atomic_commit_from_blobs,
@@ -17,8 +18,8 @@ from scripts.agent_os_github_git_objects.models import (
     GitCompareSnapshot,
     GitRefSnapshot,
     GitTreeEntry,
-    GitTreeSnapshot,
 )
+from scripts.agent_os_github_git_objects.transport import PyGithubGitObjectTransport
 
 REPOSITORY = "Blummer92/agent-os"
 BRANCH = "agent/2468-executable-git-tree-mode"
@@ -26,7 +27,9 @@ HEAD = "1" * 40
 PARENT = "2" * 40
 PARENT_TREE = "3" * 40
 BLOB = "4" * 40
+PLAIN_BLOB = "5" * 40
 PATH = "scripts/example.sh"
+PLAIN_PATH = "scripts/example.txt"
 
 
 def _derive(kind: str, *parts: object) -> str:
@@ -36,12 +39,19 @@ def _derive(kind: str, *parts: object) -> str:
 
 
 class ExecutableModeTransport:
-    """Offline transport that preserves the exact entries supplied to create_tree."""
+    """Offline transport whose read-back uses the real tree-response parser.
+
+    ``get_tree`` deliberately re-serializes each created tree into a GitHub-shaped
+    payload and parses it with `PyGithubGitObjectTransport`. A fixture that
+    short-circuits read-back cannot observe a parser that drops or rewrites
+    executable entries, which is precisely how the #2468 defect survived.
+    """
 
     def __init__(self) -> None:
         self.head = HEAD
         self.trees: dict[str, tuple[GitTreeEntry, ...]] = {}
         self.commit_trees: dict[str, str] = {}
+        self.read_back_modes: dict[str, str] = {}
 
     def get_ref(self, repository: str, branch: str) -> GitRefSnapshot:
         """Return the current branch head."""
@@ -52,8 +62,22 @@ class ExecutableModeTransport:
         return GitCommitSnapshot(commit_sha, PARENT_TREE, (PARENT,))
 
     def get_tree(self, repository: str, tree_sha: str, *, recursive: bool = False):
-        """Return created tree entries so readback can verify their modes."""
-        return GitTreeSnapshot(tree_sha, self.trees.get(tree_sha, ()), False)
+        """Parse a GitHub-shaped tree response through the production parser."""
+        payload = {
+            "sha": tree_sha,
+            "truncated": False,
+            "tree": [
+                {"path": entry.path, "mode": entry.mode, "type": entry.type, "sha": entry.sha}
+                for entry in self.trees.get(tree_sha, ())
+            ],
+        }
+        client = MagicMock()
+        client.requester.requestJsonAndCheck.return_value = ({"Status": "200 OK"}, payload)
+        snapshot = PyGithubGitObjectTransport(client).get_tree(
+            repository, tree_sha, recursive=recursive
+        )
+        self.read_back_modes = {entry.path: entry.mode for entry in snapshot.entries}
+        return snapshot
 
     def get_blob(self, repository: str, blob_sha: str) -> GitBlobSnapshot:
         """Return the one allowed blob snapshot."""
@@ -94,21 +118,20 @@ class ExecutableModeTransport:
         return GitRefSnapshot(repository, branch, commit_sha)
 
 
-def test_atomic_publication_preserves_executable_mode() -> None:
-    """A 100755 entry must remain executable through tree creation and readback."""
-    transport = ExecutableModeTransport()
+def _publish(transport: ExecutableModeTransport, entries: tuple[GitTreeEntry, ...]):
+    """Drive the full guarded plan/confirm/execute publication path."""
     request = AtomicCommitRequest(
         repository=REPOSITORY,
         branch=BRANCH,
         expected_head_sha=HEAD,
-        allowed_paths=(PATH,),
-        entries=(GitTreeEntry(PATH, "100755", "blob", BLOB),),
+        allowed_paths=tuple(entry.path for entry in entries),
+        entries=entries,
         message="test executable mode",
         invocation_id="issue-2468",
     )
-
     plan, planned = prepare_atomic_commit_from_blobs(request, transport)
     assert plan is not None
+    assert planned.status is AtomicCommitStatus.PLANNED
     confirmation = AtomicCommitConfirmation(
         invocation_id=request.invocation_id,
         operation_fingerprint=plan.operation_fingerprint,
@@ -117,11 +140,40 @@ def test_atomic_publication_preserves_executable_mode() -> None:
         expected_head_sha=request.expected_head_sha,
         confirmed=True,
     )
-    result = execute_atomic_commit_from_blobs(plan, confirmation, transport)
+    return execute_atomic_commit_from_blobs(plan, confirmation, transport)
 
-    assert planned.status is AtomicCommitStatus.PLANNED
+
+def test_atomic_publication_preserves_executable_mode() -> None:
+    """A 100755 entry must stay executable from creation through the ref update."""
+    transport = ExecutableModeTransport()
+    entry = GitTreeEntry(PATH, "100755", "blob", BLOB)
+
+    result = _publish(transport, (entry,))
+
     assert result.status is AtomicCommitStatus.REF_UPDATED
     assert result.created_tree_sha is not None
-    assert transport.trees[result.created_tree_sha] == (
+    assert result.created_commit_sha is not None
+    # The created tree kept the executable mode on write ...
+    assert transport.trees[result.created_tree_sha] == (entry,)
+    # ... the production parser kept it on read-back ...
+    assert transport.read_back_modes == {PATH: "100755"}
+    # ... and the guarded ref update actually completed against that commit.
+    assert result.ending_branch_sha == result.created_commit_sha
+    assert transport.head == result.created_commit_sha
+
+
+def test_atomic_publication_preserves_mixed_regular_file_modes() -> None:
+    """Executable support must not disturb ordinary 100644 publication."""
+    transport = ExecutableModeTransport()
+    entries = (
         GitTreeEntry(PATH, "100755", "blob", BLOB),
+        GitTreeEntry(PLAIN_PATH, "100644", "blob", PLAIN_BLOB),
     )
+
+    result = _publish(transport, entries)
+
+    assert result.status is AtomicCommitStatus.REF_UPDATED
+    assert result.created_tree_sha is not None
+    assert transport.trees[result.created_tree_sha] == entries
+    assert transport.read_back_modes == {PATH: "100755", PLAIN_PATH: "100644"}
+    assert transport.head == result.created_commit_sha

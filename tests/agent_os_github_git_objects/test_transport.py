@@ -80,7 +80,12 @@ def test_get_commit_rejects_incomplete_response(payload) -> None:
         transport.get_commit(REPO, SHA)
 
 
-def test_get_tree_returns_only_supported_ordinary_blob_entries() -> None:
+def test_get_tree_returns_supported_regular_blob_entries_with_exact_modes() -> None:
+    """Read-back must retain both supported regular-file modes unchanged (#2468).
+
+    Dropping or rewriting an executable entry here would make a valid ``100755``
+    publication fail the atomic created-tree validation and strand the commit.
+    """
     transport, _ = transport_with(
         {
             "sha": TREE,
@@ -89,11 +94,16 @@ def test_get_tree_returns_only_supported_ordinary_blob_entries() -> None:
                 {"path": "a.py", "mode": "100644", "type": "blob", "sha": BLOB},
                 {"path": "script.sh", "mode": "100755", "type": "blob", "sha": "e" * 40},
                 {"path": "folder", "mode": "040000", "type": "tree", "sha": "f" * 40},
+                {"path": "link", "mode": "120000", "type": "blob", "sha": "b" * 40},
+                {"path": "vendor", "mode": "160000", "type": "commit", "sha": "c" * 40},
             ],
         }
     )
     result = transport.get_tree(REPO, TREE, recursive=True)
-    assert result.entries == (GitTreeEntry("a.py", "100644", "blob", BLOB),)
+    assert result.entries == (
+        GitTreeEntry("a.py", "100644", "blob", BLOB),
+        GitTreeEntry("script.sh", "100755", "blob", "e" * 40),
+    )
     assert result.truncated is False
 
 

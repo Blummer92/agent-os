@@ -14,6 +14,13 @@ _BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 _ALLOWED_COMPARE_STATUSES = frozenset({"added", "modified"})
 
+#: Regular-file blob modes this package may represent. Ordinary files use
+#: ``100644`` and executable files use ``100755`` (#2468). Symlink (``120000``),
+#: submodule (``160000``), and every other Git mode remain unsupported. Both the
+#: model guard and the tree read-back parser consume this one set so a supported
+#: mode can never be accepted on write and then dropped on read.
+SUPPORTED_BLOB_MODES = frozenset({"100644", "100755"})
+
 
 def require_sha40(value: object, name: str) -> str:
     if not isinstance(value, str) or not _SHA40_RE.fullmatch(value):
@@ -101,7 +108,7 @@ class GitTreeEntry:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "path", require_path(self.path))
-        if self.mode not in {"100644", "100755"}:
+        if self.mode not in SUPPORTED_BLOB_MODES:
             raise ValueError("only regular 100644 and executable 100755 files are supported")
         if self.type != "blob":
             raise ValueError("only blob entries are supported")

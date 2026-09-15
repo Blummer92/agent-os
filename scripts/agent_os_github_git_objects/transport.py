@@ -22,6 +22,7 @@ except ModuleNotFoundError:  # dependency is optional at import time for offline
         pass
 
 from .models import (
+    SUPPORTED_BLOB_MODES,
     GitBlobSnapshot,
     GitChangedFile,
     GitCommitSnapshot,
@@ -139,12 +140,13 @@ class PyGithubGitObjectTransport:
         entries: list[GitTreeEntry] = []
         for raw in raw_entries:
             item = _mapping(raw, "tree entry")
-            if item.get("type") != "blob" or item.get("mode") != "100644":
+            mode = item.get("mode")
+            if item.get("type") != "blob" or mode not in SUPPORTED_BLOB_MODES:
                 continue
             entries.append(
                 GitTreeEntry(
                     path=_text(item.get("path"), "entry path"),
-                    mode="100644",
+                    mode=_text(mode, "entry mode"),
                     type="blob",
                     sha=_text(item.get("sha"), "entry sha"),
                 )
