@@ -50,6 +50,12 @@ repeated or trailing separators, `**`, `?`, or bracket classes.
 The user-facing result is exactly `ready`, `blocked`, or `needs-decision`.
 `ready` satisfies tier requirements, `blocked` has a missing or failed required
 item, and `needs-decision` requires human judgment. Readiness is evidence only.
+
+An explicit current readiness statement in an open issue body may be compared
+with the already-computed canonical `ReadinessResult` by a report-only drift
+projection. That projection does not recompute readiness, consume labels as
+readiness authority, edit the body, or mutate readiness. A contradiction is
+body-maintenance evidence only and any repair remains separately authorized.
 ## Prior-Scope Review Intake
 The canonical form adds required `prior-scope-review` and optional
 `refactor-evidence` textareas. Readiness requires visible content under `Prior
@@ -57,6 +63,16 @@ scope, duplicate, and supersession review` for every tier; refactor evidence is
 conditionally required by lifecycle policy, not readiness. `_No response_`,
 blank, quoted, fenced, commented, unrelated, or absent evidence fails closed to
 `needs-decision`; live links are never parsed.
+## Existing Open-Body Normalization Planning
+Existing open issues that predate or bypass structured intake may be assessed by
+a finite report-only normalization planner. The planner may identify canonical
+or functionally equivalent bodies, mechanically normalizable presentation when
+the replacement value is already explicit, stale durable-decision evidence,
+readiness/body conflicts, decision-required gaps, and closed immutable records.
+It must never infer missing owner, readiness, tier, source-of-truth, or external-
+write decisions. Its output is a proposed handoff only; GitHub body mutation
+requires separate authorization and canonical readback. Item-local manual review
+does not terminate later independent items in the supplied finite batch.
 ## Optional Machine-Checkable Metadata
 ```yaml
 agent_os_issue_acceptance:
