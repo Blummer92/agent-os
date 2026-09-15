@@ -18,3 +18,40 @@ export async function runGceLiveCaptureRequest({
     ...(idempotencyRecord ? { idempotencyRecord } : {}),
   });
 }
+
+export async function runGceLiveCaptureWithEvidence({
+  request,
+  rawRecording,
+  browserSessionCapability,
+  idempotencyLookup,
+  idempotencyRecord,
+  invokeCapture = invokeGceCapture,
+}) {
+  let transportEvidence = null;
+  const receipt = await runLiveCaptureRequest({
+    request,
+    rawRecording,
+    browserSessionCapability,
+    invokeCapture: async (payload) => {
+      transportEvidence = await invokeCapture(payload);
+      return transportEvidence;
+    },
+    ...(idempotencyLookup ? { idempotencyLookup } : {}),
+    ...(idempotencyRecord ? { idempotencyRecord } : {}),
+  });
+
+  const validCapture = receipt.capture_status === 'valid'
+    && transportEvidence?.capture_result?.status === 'valid';
+  const screenshots = validCapture && Array.isArray(transportEvidence?.screenshots)
+    ? Object.freeze(transportEvidence.screenshots.map((item) => Object.freeze(structuredClone(item))))
+    : Object.freeze([]);
+
+  return Object.freeze({
+    receipt,
+    capture_result: transportEvidence?.capture_result ?? null,
+    screenshots,
+    authentication_status: transportEvidence?.capture_result?.authentication_status ?? receipt.authentication_status ?? null,
+    sensitive_evidence: screenshots.length > 0,
+    persisted_evidence: false,
+  });
+}
