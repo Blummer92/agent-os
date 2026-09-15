@@ -1,4 +1,4 @@
-import { mkdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import { resolve } from 'node:path';
 
@@ -13,6 +13,8 @@ import { fingerprintRecording } from './safe_recording.mjs';
 
 export const CAPTURE_HOST_INPUT_VERSION = 'software-tutorial-capture-host-input-v1';
 export const CAPTURE_HOST_MAX_INPUT_BYTES = 512 * 1024;
+export const CAPTURE_HOST_MAX_SCREENSHOTS = 256;
+export const CAPTURE_HOST_MAX_SCREENSHOT_BYTES = 16 * 1024 * 1024;
 
 const HOST_INPUT_FIELDS = new Set([
   'operation',
@@ -31,15 +33,11 @@ const HOST_INPUT_FIELDS = new Set([
 const HOST_SESSION_CONFIG = Object.freeze({
   [BROWSER_SESSION_REF]: Object.freeze({
     username: 'agent-os-capture',
-    home: '/var/lib/agent-os/capture-home',
     profile: '/var/lib/agent-os/capture-home/.agent-os/browser-profiles/adobe-express',
-    captureRoot: '/var/lib/agent-os/capture-home/.agent-os/tutorial-captures',
   }),
   [CANVA_BROWSER_SESSION_REF]: Object.freeze({
     username: 'agent-os-canva-capture',
-    home: '/var/lib/agent-os/canva-capture-home',
     profile: '/var/lib/agent-os/canva-capture-home/.agent-os/browser-profiles/canva',
-    captureRoot: '/var/lib/agent-os/canva-capture-home/.agent-os/tutorial-captures',
   }),
 });
 
@@ -78,6 +76,18 @@ function canonicalCapturedAt(date = new Date()) {
   return date.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
+async function collectScreenshots(screenshotDir) {
+  const names = (await readdir(screenshotDir)).filter((name) => /^[0-9]{3}-(?:before|after)\.png$/.test(name)).sort();
+  if (names.length > CAPTURE_HOST_MAX_SCREENSHOTS) throw new Error('capture screenshot count exceeds bound');
+  const screenshots = [];
+  for (const filename of names) {
+    const bytes = await readFile(resolve(screenshotDir, filename));
+    if (bytes.length > CAPTURE_HOST_MAX_SCREENSHOT_BYTES) throw new Error('capture screenshot exceeds byte bound');
+    screenshots.push(Object.freeze({ filename, content_base64: bytes.toString('base64') }));
+  }
+  return Object.freeze(screenshots);
+}
+
 export async function runHostCapture(value, {
   captureImpl = captureFlow,
   username = os.userInfo().username,
@@ -90,27 +100,41 @@ export async function runHostCapture(value, {
       transport_status: 'succeeded',
       execution_surface: EXECUTION_SURFACE,
       capture_result: Object.freeze({ status: 'blocked', capture: null, failure: Object.freeze({ reason_code: 'browser-session-user-mismatch' }) }),
+      screenshots: Object.freeze([]),
+      evidence_persisted: false,
       side_effects_performed: false,
     });
   }
-  const screenshotDir = resolve(config.captureRoot, input.capture_request_id);
-  await mkdir(screenshotDir, { recursive: true, mode: 0o700 });
-  const captureResult = await captureImpl({
-    rawRecording: input.raw_recording,
-    approvedOrigins: input.approved_origins,
-    captureId: input.capture_request_id,
-    capturedAt,
-    userDataDir: config.profile,
-    screenshotDir,
-    authenticationStatus: input.authentication_status,
-    headless: true,
-    launchOptions: Object.freeze({ executablePath: '/usr/bin/chromium' }),
-    captureTargetStyle: false,
-  });
+
+  const runtimeRoot = await mkdtemp('/dev/shm/agent-os-software-tutorial-capture-');
+  const screenshotDir = resolve(runtimeRoot, 'screenshots');
+  let captureResult;
+  let screenshots = Object.freeze([]);
+  try {
+    await mkdir(screenshotDir, { recursive: true, mode: 0o700 });
+    captureResult = await captureImpl({
+      rawRecording: input.raw_recording,
+      approvedOrigins: input.approved_origins,
+      captureId: input.capture_request_id,
+      capturedAt,
+      userDataDir: config.profile,
+      screenshotDir,
+      authenticationStatus: input.authentication_status,
+      headless: true,
+      launchOptions: Object.freeze({ executablePath: '/usr/bin/chromium' }),
+      captureTargetStyle: false,
+    });
+    screenshots = await collectScreenshots(screenshotDir);
+  } finally {
+    await rm(runtimeRoot, { recursive: true, force: true });
+  }
+
   return Object.freeze({
     transport_status: 'succeeded',
     execution_surface: EXECUTION_SURFACE,
     capture_result: captureResult,
+    screenshots,
+    evidence_persisted: false,
     side_effects_performed: true,
   });
 }
