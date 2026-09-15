@@ -124,11 +124,17 @@ def test_repository_requires_exact_owner_name(repository):
         evidence(repository=repository)
 
 
-def test_head_sha_requires_full_commit_identity_and_normalizes_case():
+@pytest.mark.parametrize(
+    "head_sha",
+    ["abcdef1", HEAD_SHA.upper(), HEAD_SHA[:20] + HEAD_SHA[20:].upper(), HEAD_SHA[:39], HEAD_SHA + "a", "g" * 40, "", None, 123],
+)
+def test_head_sha_requires_full_canonical_lowercase_commit_identity(head_sha):
     with pytest.raises(ValueError):
-        evidence(head_sha="abcdef1")
-    item = evidence(head_sha=HEAD_SHA.upper())
-    assert item.head_sha == HEAD_SHA
+        evidence(head_sha=head_sha)
+
+
+def test_canonical_lowercase_head_sha_is_preserved_exactly():
+    assert evidence(head_sha=HEAD_SHA).head_sha == HEAD_SHA
 
 
 def test_authority_fields_cannot_be_overridden():
