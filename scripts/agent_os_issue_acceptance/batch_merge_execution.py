@@ -71,6 +71,8 @@ def start_batch_execution(plan:PrBatchMergePlan, *, linked_issues:dict[int,int]|
 def apply_current_state(c,e):
     _expect(c,BatchMergeAction.REACQUIRE,e.pull_request_number)
     if not e.provider_available or e.branch_freshness=="unknown": return _halt(c,e,"canonical-state-unavailable")
+    if e.state=="merged" and c.current_issue_number is not None:
+        return _replace(c,current_main_sha=e.main_sha,current_head_sha=e.head_sha,pending_merged_main_sha=e.main_sha,action=BatchMergeAction.POST_MERGE)
     if e.state in {"closed","merged"}: return _advance(c,_result(e.pull_request_number,BatchItemDisposition.ALREADY_TERMINAL,"pr-already-terminal",e))
     if e.semantic_conflict:return _advance(c,_result(e.pull_request_number,BatchItemDisposition.SKIPPED_ITEM_LOCAL,"semantic-conflict",e))
     return _replace(c,current_main_sha=e.main_sha,current_head_sha=e.head_sha,action=BatchMergeAction.REFRESH if e.branch_freshness in {"behind","diverged"} else BatchMergeAction.VALIDATE)
