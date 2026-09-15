@@ -1,12 +1,17 @@
 import { spawn } from 'node:child_process';
 
 import {
+  BROWSER_SESSION_REF,
   BROWSER_SESSION_REFS,
+  CANVA_BROWSER_SESSION_REF,
   EXECUTION_SURFACE,
   PRIVACY_MODE,
 } from './live_capture_request.mjs';
 
-export const CAPTURE_HOST_ENTRYPOINT = '/usr/local/libexec/agent-os-software-tutorial-capture';
+export const CAPTURE_HOST_ENTRYPOINTS = Object.freeze({
+  [BROWSER_SESSION_REF]: '/usr/local/libexec/agent-os-adobe-software-tutorial-capture',
+  [CANVA_BROWSER_SESSION_REF]: '/usr/local/libexec/agent-os-canva-software-tutorial-capture',
+});
 export const CAPTURE_TRANSPORT_MAX_INPUT_BYTES = 512 * 1024;
 export const CAPTURE_TRANSPORT_MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 export const CAPTURE_TRANSPORT_TIMEOUT_MS = 120_000;
@@ -56,14 +61,20 @@ function validateTransportPayload(payload) {
   return encoded;
 }
 
-export function captureGcloudArgv() {
+export function captureHostEntrypoint(browserSessionRef) {
+  if (!BROWSER_SESSION_REFS.includes(browserSessionRef)) throw new TypeError('unsupported browser session');
+  return CAPTURE_HOST_ENTRYPOINTS[browserSessionRef];
+}
+
+export function captureGcloudArgv(browserSessionRef) {
+  const entrypoint = captureHostEntrypoint(browserSessionRef);
   return Object.freeze([
     'compute', 'ssh', EXECUTION_SURFACE.instance,
     '--project', EXECUTION_SURFACE.project,
     '--zone', EXECUTION_SURFACE.zone,
     '--tunnel-through-iap',
     '--quiet',
-    '--command', CAPTURE_HOST_ENTRYPOINT,
+    '--command', `sudo -n ${entrypoint}`,
   ]);
 }
 
@@ -93,7 +104,7 @@ export async function invokeGceCapture(payload, {
     throw new TypeError('timeoutMs is outside the bounded transport limit');
   }
 
-  const child = spawnImpl('gcloud', captureGcloudArgv(), {
+  const child = spawnImpl('gcloud', captureGcloudArgv(payload.browser_session_ref), {
     shell: false,
     stdio: ['pipe', 'pipe', 'pipe'],
     env: process.env,
