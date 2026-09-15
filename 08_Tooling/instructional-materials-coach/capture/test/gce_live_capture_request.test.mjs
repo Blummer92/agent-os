@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { runGceLiveCaptureRequest } from '../gce_live_capture_request.mjs';
+import {
+  runGceLiveCaptureRequest,
+  runGceLiveCaptureWithEvidence,
+} from '../gce_live_capture_request.mjs';
 import {
   CANVA_BROWSER_SESSION_REF,
   EXECUTION_SURFACE,
@@ -35,13 +38,17 @@ const capability = Object.freeze({
   authentication_status: 'AUTH_READY',
 });
 
-test('bounded GCE bridge delegates exactly once after request/auth/digest validation', async () => {
-  const calls = [];
-  const capture = Object.freeze({
+function validCapture() {
+  return Object.freeze({
     format_version: 'software-tutorial-capture-v1',
     capture_id: 'tutorial0-canva',
     source: Object.freeze({ recording_sha256: recordingSha }),
   });
+}
+
+test('bounded GCE bridge delegates exactly once after request/auth/digest validation', async () => {
+  const calls = [];
+  const capture = validCapture();
   const result = await runGceLiveCaptureRequest({
     request: request(),
     rawRecording,
@@ -52,6 +59,8 @@ test('bounded GCE bridge delegates exactly once after request/auth/digest valida
         transport_status: 'succeeded',
         execution_surface: EXECUTION_SURFACE,
         capture_result: { status: 'valid', capture },
+        screenshots: [],
+        evidence_persisted: false,
         side_effects_performed: true,
       };
     },
@@ -63,6 +72,48 @@ test('bounded GCE bridge delegates exactly once after request/auth/digest valida
   assert.equal(result.transport_status, 'succeeded');
   assert.equal(result.capture_status, 'valid');
   assert.equal(result.capture_ref.capture_id, 'tutorial0-canva');
+});
+
+test('ephemeral evidence helper returns valid screenshot bytes without changing receipt semantics', async () => {
+  const screenshot = { filename: '000-before.png', content_base64: Buffer.from('synthetic-png').toString('base64') };
+  const result = await runGceLiveCaptureWithEvidence({
+    request: request(),
+    rawRecording,
+    browserSessionCapability: capability,
+    invokeCapture: async () => ({
+      transport_status: 'succeeded',
+      execution_surface: EXECUTION_SURFACE,
+      capture_result: { status: 'valid', capture: validCapture() },
+      screenshots: [screenshot],
+      evidence_persisted: false,
+      side_effects_performed: true,
+    }),
+  });
+  assert.equal(result.receipt.capture_status, 'valid');
+  assert.equal(result.receipt.capture_ref.capture_id, 'tutorial0-canva');
+  assert.deepEqual(result.screenshots, [screenshot]);
+  assert.equal(result.sensitive_evidence, true);
+  assert.equal(result.persisted_evidence, false);
+});
+
+test('blocked capture never promotes partial screenshots into approved evidence', async () => {
+  const result = await runGceLiveCaptureWithEvidence({
+    request: request(),
+    rawRecording,
+    browserSessionCapability: capability,
+    invokeCapture: async () => ({
+      transport_status: 'succeeded',
+      execution_surface: EXECUTION_SURFACE,
+      capture_result: { status: 'blocked', capture: null, failure: { reason_code: 'quality-replay-failed' } },
+      screenshots: [{ filename: '000-before.png', content_base64: Buffer.from('partial').toString('base64') }],
+      evidence_persisted: false,
+      side_effects_performed: true,
+    }),
+  });
+  assert.equal(result.receipt.capture_status, 'blocked');
+  assert.deepEqual(result.screenshots, []);
+  assert.equal(result.sensitive_evidence, false);
+  assert.equal(result.persisted_evidence, false);
 });
 
 test('invalid request or digest never reaches GCE transport', async () => {
