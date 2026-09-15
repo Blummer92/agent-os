@@ -1,6 +1,7 @@
 import { mkdtemp, mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import os from 'node:os';
 import { resolve } from 'node:path';
+import puppeteer from 'puppeteer';
 
 import { captureFlow } from './replay_capture.mjs';
 import {
@@ -34,10 +35,14 @@ const HOST_SESSION_CONFIG = Object.freeze({
   [BROWSER_SESSION_REF]: Object.freeze({
     username: 'agent-os-capture',
     profile: '/var/lib/agent-os/capture-home/.agent-os/browser-profiles/adobe-express',
+    authProbeUrl: 'https://new.express.adobe.com/your-stuff/files',
+    expectedOrigin: 'https://new.express.adobe.com',
   }),
   [CANVA_BROWSER_SESSION_REF]: Object.freeze({
     username: 'agent-os-canva-capture',
     profile: '/var/lib/agent-os/canva-capture-home/.agent-os/browser-profiles/canva',
+    authProbeUrl: 'https://www.canva.com/projects/',
+    expectedOrigin: 'https://www.canva.com',
   }),
 });
 
@@ -88,8 +93,55 @@ async function collectScreenshots(screenshotDir) {
   return Object.freeze(screenshots);
 }
 
+export async function probeHostAuthentication(config, {
+  puppeteerImpl = puppeteer,
+} = {}) {
+  let browser = null;
+  try {
+    browser = await puppeteerImpl.launch({
+      executablePath: '/usr/bin/chromium',
+      userDataDir: config.profile,
+      headless: true,
+      args: ['--no-first-run', '--no-default-browser-check', '--disable-session-crashed-bubble'],
+    });
+    const pages = await browser.pages();
+    const page = pages[0] ?? await browser.newPage();
+    await page.goto(config.authProbeUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+    const observed = new URL(page.url());
+    const route = `${observed.pathname}${observed.search}`.toLowerCase();
+    if (observed.origin !== config.expectedOrigin || /(?:login|log-in|signin|sign-in|signup|sign-up|auth)/.test(route)) return 'AUTH_REQUIRED';
+    const body = await page.evaluate(() => document.body?.innerText?.slice(0, 5000) ?? '');
+    if (/\blog in\b/i.test(body) && /\bsign up\b/i.test(body) && !/\bprojects\b|\byour stuff\b/i.test(body)) return 'AUTH_REQUIRED';
+    return 'AUTH_READY';
+  } catch {
+    return 'AUTH_BLOCKED';
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+  }
+}
+
+function authBlockedResult(status) {
+  const reason = status === 'AUTH_REQUIRED' ? 'auth-required'
+    : status === 'AUTH_EXPIRED' ? 'auth-expired'
+      : 'auth-blocked';
+  return Object.freeze({
+    transport_status: 'succeeded',
+    execution_surface: EXECUTION_SURFACE,
+    capture_result: Object.freeze({
+      status: 'blocked',
+      capture: null,
+      authentication_status: status,
+      failure: Object.freeze({ reason_code: reason }),
+    }),
+    screenshots: Object.freeze([]),
+    evidence_persisted: false,
+    side_effects_performed: false,
+  });
+}
+
 export async function runHostCapture(value, {
   captureImpl = captureFlow,
+  authenticationProbeImpl = probeHostAuthentication,
   username = os.userInfo().username,
   capturedAt = canonicalCapturedAt(),
 } = {}) {
@@ -106,6 +158,9 @@ export async function runHostCapture(value, {
     });
   }
 
+  const currentAuth = await authenticationProbeImpl(config);
+  if (currentAuth !== 'AUTH_READY') return authBlockedResult(currentAuth);
+
   const runtimeRoot = await mkdtemp('/dev/shm/agent-os-software-tutorial-capture-');
   const screenshotDir = resolve(runtimeRoot, 'screenshots');
   let captureResult;
@@ -119,7 +174,7 @@ export async function runHostCapture(value, {
       capturedAt,
       userDataDir: config.profile,
       screenshotDir,
-      authenticationStatus: input.authentication_status,
+      authenticationStatus: currentAuth,
       headless: true,
       launchOptions: Object.freeze({ executablePath: '/usr/bin/chromium' }),
       captureTargetStyle: false,
