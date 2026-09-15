@@ -85,7 +85,11 @@ class GitCommitSnapshot:
         object.__setattr__(self, "tree_sha", require_sha40(self.tree_sha, "tree_sha"))
         if not isinstance(self.parent_shas, tuple):
             raise TypeError("parent_shas must be a tuple")
-        object.__setattr__(self, "parent_shas", tuple(require_sha40(value, "parent_sha") for value in self.parent_shas))
+        object.__setattr__(
+            self,
+            "parent_shas",
+            tuple(require_sha40(value, "parent_sha") for value in self.parent_shas),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,10 +116,13 @@ class GitTreeSnapshot:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "sha", require_sha40(self.sha, "tree_sha"))
-        if not isinstance(self.entries, tuple): raise TypeError("entries must be a tuple")
+        if not isinstance(self.entries, tuple):
+            raise TypeError("entries must be a tuple")
         paths = [entry.path for entry in self.entries]
-        if len(paths) != len(set(paths)): raise ValueError("tree contains duplicate paths")
-        if type(self.truncated) is not bool: raise TypeError("truncated must be bool")
+        if len(paths) != len(set(paths)):
+            raise ValueError("tree contains duplicate paths")
+        if type(self.truncated) is not bool:
+            raise TypeError("truncated must be bool")
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,9 +134,12 @@ class GitBlobSnapshot:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "sha", require_sha40(self.sha, "blob_sha"))
-        if type(self.size) is not int or self.size < 0: raise ValueError("blob size must be a non-negative integer")
-        if self.encoding not in {"utf-8", "base64", "none"}: raise ValueError("blob encoding is unsupported")
-        if self.content is not None and not isinstance(self.content, str): raise TypeError("blob content must be text or None")
+        if type(self.size) is not int or self.size < 0:
+            raise ValueError("blob size must be a non-negative integer")
+        if self.encoding not in {"utf-8", "base64", "none"}:
+            raise ValueError("blob encoding is unsupported")
+        if self.content is not None and not isinstance(self.content, str):
+            raise TypeError("blob content must be text or None")
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,9 +151,11 @@ class GitChangedFile:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "path", require_path(self.path))
-        if self.status not in _ALLOWED_COMPARE_STATUSES | {"removed", "renamed"}: raise ValueError("changed-file status is unsupported")
+        if self.status not in _ALLOWED_COMPARE_STATUSES | {"removed", "renamed"}:
+            raise ValueError("changed-file status is unsupported")
         object.__setattr__(self, "blob_sha", require_sha40(self.blob_sha, "blob_sha"))
-        if self.previous_path is not None: object.__setattr__(self, "previous_path", require_path(self.previous_path))
+        if self.previous_path is not None:
+            object.__setattr__(self, "previous_path", require_path(self.previous_path))
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,13 +169,17 @@ class GitCompareSnapshot:
     deletions: int
 
     def __post_init__(self) -> None:
-        if self.status not in {"ahead", "behind", "diverged", "identical"}: raise ValueError("compare status is unsupported")
+        if self.status not in {"ahead", "behind", "diverged", "identical"}:
+            raise ValueError("compare status is unsupported")
         for name in ("ahead_by", "behind_by", "total_commits", "additions", "deletions"):
             value = getattr(self, name)
-            if type(value) is not int or value < 0: raise ValueError(f"{name} must be a non-negative integer")
-        if not isinstance(self.changed_files, tuple): raise TypeError("changed_files must be a tuple")
+            if type(value) is not int or value < 0:
+                raise ValueError(f"{name} must be a non-negative integer")
+        if not isinstance(self.changed_files, tuple):
+            raise TypeError("changed_files must be a tuple")
         paths = [item.path for item in self.changed_files]
-        if len(paths) != len(set(paths)): raise ValueError("compare result contains duplicate paths")
+        if len(paths) != len(set(paths)):
+            raise ValueError("compare result contains duplicate paths")
 
 
 class MutationState(str, Enum):
@@ -218,21 +234,34 @@ class AtomicCommitRequest:
     def __post_init__(self) -> None:
         object.__setattr__(self, "repository", require_repository(self.repository))
         object.__setattr__(self, "branch", require_branch(self.branch))
-        object.__setattr__(self, "expected_head_sha", require_sha40(self.expected_head_sha, "expected_head_sha"))
-        if not isinstance(self.allowed_paths, tuple) or not self.allowed_paths: raise ValueError("allowed_paths must be a non-empty tuple")
+        object.__setattr__(
+            self, "expected_head_sha", require_sha40(self.expected_head_sha, "expected_head_sha")
+        )
+        if not isinstance(self.allowed_paths, tuple) or not self.allowed_paths:
+            raise ValueError("allowed_paths must be a non-empty tuple")
         allowed = tuple(sorted(require_path(path) for path in self.allowed_paths))
-        if len(allowed) != len(set(allowed)): raise ValueError("allowed_paths contains duplicates")
-        if not isinstance(self.entries, tuple) or not self.entries: raise ValueError("entries must be a non-empty tuple")
+        if len(allowed) != len(set(allowed)):
+            raise ValueError("allowed_paths contains duplicates")
+        if not isinstance(self.entries, tuple) or not self.entries:
+            raise ValueError("entries must be a non-empty tuple")
         entry_paths = tuple(sorted(entry.path for entry in self.entries))
-        if len(entry_paths) != len(set(entry_paths)): raise ValueError("entries contain duplicate paths")
-        if entry_paths != allowed: raise ValueError("entries must exactly match allowed_paths")
-        if not isinstance(self.message, str) or self.message != self.message.strip() or not self.message: raise ValueError("message must be non-empty trimmed text")
-        if len(self.message.encode("utf-8")) > 4096 or _CONTROL_RE.search(self.message): raise ValueError("message is oversized or contains control characters")
-        if not isinstance(self.invocation_id, str) or self.invocation_id != self.invocation_id.strip() or not self.invocation_id: raise ValueError("invocation_id must be non-empty trimmed text")
-        if len(self.invocation_id) > 256 or _CONTROL_RE.search(self.invocation_id): raise ValueError("invocation_id is malformed")
-        if not isinstance(self.prior_fingerprints, tuple): raise TypeError("prior_fingerprints must be a tuple")
+        if len(entry_paths) != len(set(entry_paths)):
+            raise ValueError("entries contain duplicate paths")
+        if entry_paths != allowed:
+            raise ValueError("entries must exactly match allowed_paths")
+        if not isinstance(self.message, str) or self.message != self.message.strip() or not self.message:
+            raise ValueError("message must be non-empty trimmed text")
+        if len(self.message.encode("utf-8")) > 4096 or _CONTROL_RE.search(self.message):
+            raise ValueError("message is oversized or contains control characters")
+        if not isinstance(self.invocation_id, str) or self.invocation_id != self.invocation_id.strip() or not self.invocation_id:
+            raise ValueError("invocation_id must be non-empty trimmed text")
+        if len(self.invocation_id) > 256 or _CONTROL_RE.search(self.invocation_id):
+            raise ValueError("invocation_id is malformed")
+        if not isinstance(self.prior_fingerprints, tuple):
+            raise TypeError("prior_fingerprints must be a tuple")
         for fingerprint in self.prior_fingerprints:
-            if not isinstance(fingerprint, str) or not re.fullmatch(r"[0-9a-f]{64}", fingerprint): raise ValueError("prior_fingerprints must contain SHA-256 hex strings")
+            if not isinstance(fingerprint, str) or not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
+                raise ValueError("prior_fingerprints must contain SHA-256 hex strings")
         object.__setattr__(self, "allowed_paths", allowed)
         object.__setattr__(self, "entries", tuple(sorted(self.entries, key=lambda item: item.path)))
 
@@ -242,9 +271,11 @@ class AtomicCommitPlan:
     request: AtomicCommitRequest
     parent_tree_sha: str
     operation_fingerprint: str
+
     def __post_init__(self) -> None:
         object.__setattr__(self, "parent_tree_sha", require_sha40(self.parent_tree_sha, "parent_tree_sha"))
-        if not re.fullmatch(r"[0-9a-f]{64}", self.operation_fingerprint): raise ValueError("operation_fingerprint must be SHA-256 hex")
+        if not re.fullmatch(r"[0-9a-f]{64}", self.operation_fingerprint):
+            raise ValueError("operation_fingerprint must be SHA-256 hex")
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,13 +286,19 @@ class AtomicCommitConfirmation:
     branch: str
     expected_head_sha: str
     confirmed: bool
+
     def __post_init__(self) -> None:
-        if not isinstance(self.invocation_id, str) or not self.invocation_id: raise ValueError("invocation_id is required")
-        if not re.fullmatch(r"[0-9a-f]{64}", self.operation_fingerprint): raise ValueError("operation_fingerprint must be SHA-256 hex")
+        if not isinstance(self.invocation_id, str) or not self.invocation_id:
+            raise ValueError("invocation_id is required")
+        if not re.fullmatch(r"[0-9a-f]{64}", self.operation_fingerprint):
+            raise ValueError("operation_fingerprint must be SHA-256 hex")
         object.__setattr__(self, "repository", require_repository(self.repository))
         object.__setattr__(self, "branch", require_branch(self.branch))
-        object.__setattr__(self, "expected_head_sha", require_sha40(self.expected_head_sha, "expected_head_sha"))
-        if type(self.confirmed) is not bool: raise TypeError("confirmed must be bool")
+        object.__setattr__(
+            self, "expected_head_sha", require_sha40(self.expected_head_sha, "expected_head_sha")
+        )
+        if type(self.confirmed) is not bool:
+            raise TypeError("confirmed must be bool")
 
 
 @dataclass(frozen=True, slots=True)
@@ -308,18 +345,41 @@ class ExpectedHeadBranchUpdateRequest:
     authorization_id: str
     authorization_current: bool
     branch_update_authorized: bool
+
     def __post_init__(self) -> None:
         object.__setattr__(self, "repository", require_repository(self.repository))
         object.__setattr__(self, "branch", require_branch(self.branch))
-        object.__setattr__(self, "expected_head_sha", require_sha40(self.expected_head_sha, "expected_head_sha"))
-        object.__setattr__(self, "proposed_head_sha", require_sha40(self.proposed_head_sha, "proposed_head_sha"))
-        object.__setattr__(self, "admitted_main_sha", require_sha40(self.admitted_main_sha, "admitted_main_sha"))
-        if self.expected_head_sha == self.proposed_head_sha: raise ValueError("proposed_head_sha must differ from expected_head_sha")
+        object.__setattr__(
+            self, "expected_head_sha",
+            require_sha40(self.expected_head_sha, "expected_head_sha"),
+        )
+        object.__setattr__(
+            self, "proposed_head_sha",
+            require_sha40(self.proposed_head_sha, "proposed_head_sha"),
+        )
+        object.__setattr__(
+            self, "admitted_main_sha",
+            require_sha40(self.admitted_main_sha, "admitted_main_sha"),
+        )
+
+        if self.expected_head_sha == self.proposed_head_sha:
+            raise ValueError("proposed_head_sha must differ from expected_head_sha")
+
         for name in ("invocation_id", "authorization_id"):
             value = getattr(self, name)
-            if not isinstance(value, str) or value != value.strip() or not value or len(value) > 256 or _CONTROL_RE.search(value): raise ValueError(f"{name} is malformed")
-        if type(self.authorization_current) is not bool: raise TypeError("authorization_current must be bool")
-        if type(self.branch_update_authorized) is not bool: raise TypeError("branch_update_authorized must be bool")
+            if (
+                not isinstance(value, str)
+                or value != value.strip()
+                or not value
+                or len(value) > 256
+                or _CONTROL_RE.search(value)
+            ):
+                raise ValueError(f"{name} is malformed")
+
+        if type(self.authorization_current) is not bool:
+            raise TypeError("authorization_current must be bool")
+        if type(self.branch_update_authorized) is not bool:
+            raise TypeError("branch_update_authorized must be bool")
 
 
 @dataclass(frozen=True, slots=True)
@@ -343,18 +403,41 @@ class ExpectedHeadBranchUpdateResult:
     protected_branch_authorized: Literal[False] = field(default=False, init=False)
     workflow_mutation_authorized: Literal[False] = field(default=False, init=False)
     repository_setting_authorized: Literal[False] = field(default=False, init=False)
+
     def __post_init__(self) -> None:
         object.__setattr__(self, "repository", require_repository(self.repository))
         object.__setattr__(self, "branch", require_branch(self.branch))
-        object.__setattr__(self, "expected_head_sha", require_sha40(self.expected_head_sha, "expected_head_sha"))
-        object.__setattr__(self, "proposed_head_sha", require_sha40(self.proposed_head_sha, "proposed_head_sha"))
-        object.__setattr__(self, "admitted_main_sha", require_sha40(self.admitted_main_sha, "admitted_main_sha"))
-        if not isinstance(self.status, ExpectedHeadBranchUpdateStatus): raise TypeError("status must be ExpectedHeadBranchUpdateStatus")
-        if not isinstance(self.mutation_state, MutationState): raise TypeError("mutation_state must be MutationState")
-        if type(self.mutation_attempted) is not bool: raise TypeError("mutation_attempted must be bool")
+        object.__setattr__(
+            self, "expected_head_sha",
+            require_sha40(self.expected_head_sha, "expected_head_sha"),
+        )
+        object.__setattr__(
+            self, "proposed_head_sha",
+            require_sha40(self.proposed_head_sha, "proposed_head_sha"),
+        )
+        object.__setattr__(
+            self, "admitted_main_sha",
+            require_sha40(self.admitted_main_sha, "admitted_main_sha"),
+        )
+
+        if not isinstance(self.status, ExpectedHeadBranchUpdateStatus):
+            raise TypeError("status must be ExpectedHeadBranchUpdateStatus")
+        if not isinstance(self.mutation_state, MutationState):
+            raise TypeError("mutation_state must be MutationState")
+        if type(self.mutation_attempted) is not bool:
+            raise TypeError("mutation_attempted must be bool")
+
         for name in ("invocation_id", "authorization_id", "reason"):
             value = getattr(self, name)
-            if not isinstance(value, str) or not value or len(value) > 256 or _CONTROL_RE.search(value): raise ValueError(f"{name} is malformed")
+            if (
+                not isinstance(value, str)
+                or not value
+                or len(value) > 256
+                or _CONTROL_RE.search(value)
+            ):
+                raise ValueError(f"{name} is malformed")
+
         for name in ("observed_head_before", "observed_head_after"):
             value = getattr(self, name)
-            if value is not None: object.__setattr__(self, name, require_sha40(value, name))
+            if value is not None:
+                object.__setattr__(self, name, require_sha40(value, name))
