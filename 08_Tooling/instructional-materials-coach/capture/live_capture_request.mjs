@@ -14,7 +14,6 @@ export const BROWSER_SESSION_REFS = Object.freeze([
   CANVA_BROWSER_SESSION_REF,
 ]);
 export const BROWSER_SESSION_ORIGINS = Object.freeze({
-  [BROWSER_SESSION_REF]: Object.freeze(['https://new.express.adobe.com']),
   [CANVA_BROWSER_SESSION_REF]: Object.freeze(['https://www.canva.com']),
 });
 export const PRIVACY_MODE = 'sensitive-by-default';
@@ -104,8 +103,8 @@ export function validateLiveCaptureRequest(request) {
   if (typeof request.recording_source.content_ref !== 'string' || !CONTENT_REF_RE.test(request.recording_source.content_ref)) throw new TypeError('recording_source.content_ref must be a bounded opaque reference');
   if (request.recording_source.content_ref.includes('..')) throw new TypeError('recording_source.content_ref may not traverse paths');
   if (!isGovernedBrowserSessionRef(request.browser_session_ref)) throw new TypeError('unsupported browser_session_ref');
-  const governedOrigins = BROWSER_SESSION_ORIGINS[request.browser_session_ref];
-  if (!governedOrigins.includes(target.origin) || origins.some((origin) => !governedOrigins.includes(origin))) {
+  const governedOrigins = BROWSER_SESSION_ORIGINS[request.browser_session_ref] ?? null;
+  if (governedOrigins && (!governedOrigins.includes(target.origin) || origins.some((origin) => !governedOrigins.includes(origin)))) {
     throw new TypeError('request origin does not match governed browser session');
   }
   if (request.privacy_mode !== PRIVACY_MODE) throw new TypeError('unsupported privacy_mode');
