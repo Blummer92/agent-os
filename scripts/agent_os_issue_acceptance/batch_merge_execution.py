@@ -49,6 +49,7 @@ class BatchMergeCursor:
     requested_pull_requests:tuple[int,...]; linked_issues:tuple[tuple[int,int],...]=(); index:int=0; current_main_sha:str|None=None
     current_head_sha:str|None=None; pending_merged_main_sha:str|None=None; results:tuple[BatchItemResult,...]=()
     action:BatchMergeAction=BatchMergeAction.REACQUIRE; halted:bool=False
+    pending_lifecycle_snapshot_id:str|None=None; pending_operational_state_id:str|None=None
     merge_authorized:Literal[False]=field(default=False,init=False); side_effects_performed:Literal[False]=field(default=False,init=False)
     @property
     def current_pull_request(self): return None if self.index>=len(self.requested_pull_requests) else self.requested_pull_requests[self.index]
@@ -115,14 +116,14 @@ def apply_merge_readback(c,e):
 def apply_post_merge_reconciliation(c,p):
     _expect(c,BatchMergeAction.POST_MERGE,p.pull_request_number)
     if type(p) is not PostMergeCandidateProjection or p.issue_number!=c.current_issue_number:raise ValueError("projection does not match current linked issue")
-    if p.requires_final_readback:return _replace(c,action=BatchMergeAction.LIFECYCLE_MUTATE)
+    if p.requires_final_readback:return _replace(c,action=BatchMergeAction.LIFECYCLE_MUTATE,pending_lifecycle_snapshot_id=p.lifecycle_snapshot_id,pending_operational_state_id=p.operational_state_id)
     if p.disposition is TerminalLifecycleDisposition.CLOSED_COMPLETED and p.converged:return _finish_linked(c,BatchItemDisposition.MERGED_ISSUE_CLOSED,p.reason_codes)
     if p.disposition is TerminalLifecycleDisposition.MERGED_AWAITING_CLOSURE_AUTHORIZATION:return _finish_linked(c,BatchItemDisposition.MERGED_AWAITING_CLOSURE,p.reason_codes)
     if p.disposition is TerminalLifecycleDisposition.MERGED_ISSUE_NOT_COMPLETE:return _finish_linked(c,BatchItemDisposition.MERGED_ISSUE_INCOMPLETE,p.reason_codes)
     return _finish_linked(c,BatchItemDisposition.MANUAL_REVIEW,p.reason_codes)
 def expected_lifecycle_mutations(c,p):
     _expect(c,BatchMergeAction.LIFECYCLE_MUTATE,p.pull_request_number)
-    if p.issue_number!=c.current_issue_number or not p.requires_final_readback:raise ValueError("projection is not the current admitted lifecycle plan")
+    if p.issue_number!=c.current_issue_number or not p.requires_final_readback or p.lifecycle_snapshot_id!=c.pending_lifecycle_snapshot_id or p.operational_state_id!=c.pending_operational_state_id:raise ValueError("projection is not the current admitted lifecycle plan")
     return p.issue_number,p.remove_status_ready,p.close_issue
 def record_lifecycle_mutations(c,*,issue_number,accepted):
     if c.action is not BatchMergeAction.LIFECYCLE_MUTATE or issue_number!=c.current_issue_number:raise ValueError("lifecycle mutation does not match current issue")
@@ -131,7 +132,7 @@ def record_lifecycle_mutations(c,*,issue_number,accepted):
     return _replace(c,action=BatchMergeAction.LIFECYCLE_READBACK)
 def apply_lifecycle_readback(c,p):
     _expect(c,BatchMergeAction.LIFECYCLE_READBACK,p.pull_request_number)
-    if p.issue_number!=c.current_issue_number or not p.converged or p.disposition is not TerminalLifecycleDisposition.CLOSED_COMPLETED:return _halt(c,None,"linked-issue-terminal-readback-failed")
+    if p.issue_number!=c.current_issue_number or p.lifecycle_snapshot_id!=c.pending_lifecycle_snapshot_id or p.operational_state_id!=c.pending_operational_state_id or not p.converged or p.disposition is not TerminalLifecycleDisposition.CLOSED_COMPLETED:return _halt(c,None,"linked-issue-terminal-readback-failed")
     return _finish_linked(c,BatchItemDisposition.MERGED_ISSUE_CLOSED,p.reason_codes)
 def final_batch_report(c):
     if c.action not in {BatchMergeAction.COMPLETE,BatchMergeAction.HALT}:raise ValueError("batch is not terminal")
@@ -140,16 +141,16 @@ def _finish_linked(c,d,reasons):return _advance(c,BatchItemResult(c.current_pull
 def _expect(c,a,pr):
     if type(c) is not BatchMergeCursor or c.action is not a or c.current_pull_request!=pr:raise ValueError("evidence does not match the current batch transition")
 def _same(c,main,head):return main==c.current_main_sha and head==c.current_head_sha
-def _restart(c):return _replace(c,current_main_sha=None,current_head_sha=None,pending_merged_main_sha=None,action=BatchMergeAction.REACQUIRE)
+def _restart(c):return _replace(c,current_main_sha=None,current_head_sha=None,pending_merged_main_sha=None,pending_lifecycle_snapshot_id=None,pending_operational_state_id=None,action=BatchMergeAction.REACQUIRE)
 def _advance(c,r,*,new_main=None):
     idx=c.index+1; action=BatchMergeAction.COMPLETE if idx>=len(c.requested_pull_requests) else BatchMergeAction.REACQUIRE
     return BatchMergeCursor(c.requested_pull_requests,c.linked_issues,idx,new_main,None,None,c.results+(r,),action,False)
 def _halt(c,e,reason):
     results=c.results; pr=c.current_pull_request
     if pr is not None:results+=(_result(pr,BatchItemDisposition.BLOCKED_SHARED,reason,e,c),)
-    return BatchMergeCursor(c.requested_pull_requests,c.linked_issues,c.index,c.current_main_sha,c.current_head_sha,c.pending_merged_main_sha,results,BatchMergeAction.HALT,True)
+    return BatchMergeCursor(c.requested_pull_requests,c.linked_issues,c.index,c.current_main_sha,c.current_head_sha,c.pending_merged_main_sha,results,BatchMergeAction.HALT,True,c.pending_lifecycle_snapshot_id,c.pending_operational_state_id)
 def _replace(c,**changes):
-    v={"requested_pull_requests":c.requested_pull_requests,"linked_issues":c.linked_issues,"index":c.index,"current_main_sha":c.current_main_sha,"current_head_sha":c.current_head_sha,"pending_merged_main_sha":c.pending_merged_main_sha,"results":c.results,"action":c.action,"halted":c.halted};v.update(changes);return BatchMergeCursor(**v)
+    v={"requested_pull_requests":c.requested_pull_requests,"linked_issues":c.linked_issues,"index":c.index,"current_main_sha":c.current_main_sha,"current_head_sha":c.current_head_sha,"pending_merged_main_sha":c.pending_merged_main_sha,"results":c.results,"action":c.action,"halted":c.halted,"pending_lifecycle_snapshot_id":c.pending_lifecycle_snapshot_id,"pending_operational_state_id":c.pending_operational_state_id};v.update(changes);return BatchMergeCursor(**v)
 def _result(pr,d,reason,e=None,cursor=None):
     head=e.head_sha if e else (cursor.current_head_sha if cursor else None);main=e.main_sha if e else (cursor.current_main_sha if cursor else None)
     return BatchItemResult(pr,d,head,head,main,main,(reason,))
