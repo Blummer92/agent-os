@@ -8,8 +8,14 @@ A legacy caller-supplied boolean is deliberately ignored as authority.
 """
 from __future__ import annotations
 
+import sys
 from dataclasses import fields
+from pathlib import Path
 from typing import Any
+
+_SCRIPT_DIR = str(Path(__file__).resolve().parent)
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
 
 from agent_os_release_run_core import *  # noqa: F401,F403
 from agent_os_release_run_core import evaluate_release_run as _evaluate_release_run_core
