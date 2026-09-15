@@ -8,6 +8,14 @@ import {
 export const LIVE_CAPTURE_REQUEST_VERSION = 'software-tutorial-capture-request-v1';
 export const LIVE_CAPTURE_RESULT_VERSION = 'software-tutorial-capture-request-result-v1';
 export const BROWSER_SESSION_REF = 'adobe-express-default';
+export const CANVA_BROWSER_SESSION_REF = 'canva-default';
+export const BROWSER_SESSION_REFS = Object.freeze([
+  BROWSER_SESSION_REF,
+  CANVA_BROWSER_SESSION_REF,
+]);
+export const BROWSER_SESSION_ORIGINS = Object.freeze({
+  [CANVA_BROWSER_SESSION_REF]: Object.freeze(['https://www.canva.com']),
+});
 export const PRIVACY_MODE = 'sensitive-by-default';
 export const EXECUTION_SURFACE = Object.freeze({
   kind: 'gce-iap',
@@ -30,6 +38,7 @@ const CAPABILITY_FIELDS = new Set(['browser_session_ref', 'authentication_status
 const SHA256_RE = /^[a-f0-9]{64}$/;
 const SAFE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
 const CONTENT_REF_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
+const BROWSER_SESSION_REF_SET = new Set(BROWSER_SESSION_REFS);
 
 function canonicalize(value) {
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -72,6 +81,10 @@ function surfaceMatches(value) {
     && Object.keys(value).length === 4;
 }
 
+function isGovernedBrowserSessionRef(value) {
+  return typeof value === 'string' && BROWSER_SESSION_REF_SET.has(value);
+}
+
 export function validateLiveCaptureRequest(request) {
   exactKeys(request, REQUEST_FIELDS, 'request');
   if (request.format_version !== LIVE_CAPTURE_REQUEST_VERSION) throw new TypeError('unsupported live capture request version');
@@ -89,14 +102,19 @@ export function validateLiveCaptureRequest(request) {
   if (typeof request.recording_source.sha256 !== 'string' || !SHA256_RE.test(request.recording_source.sha256)) throw new TypeError('recording_source.sha256 must be lowercase sha256');
   if (typeof request.recording_source.content_ref !== 'string' || !CONTENT_REF_RE.test(request.recording_source.content_ref)) throw new TypeError('recording_source.content_ref must be a bounded opaque reference');
   if (request.recording_source.content_ref.includes('..')) throw new TypeError('recording_source.content_ref may not traverse paths');
-  if (request.browser_session_ref !== BROWSER_SESSION_REF) throw new TypeError('unsupported browser_session_ref');
+  if (!isGovernedBrowserSessionRef(request.browser_session_ref)) throw new TypeError('unsupported browser_session_ref');
+  const governedOrigins = BROWSER_SESSION_ORIGINS[request.browser_session_ref] ?? null;
+  if (governedOrigins && (!governedOrigins.includes(target.origin) || origins.some((origin) => !governedOrigins.includes(origin)))) {
+    throw new TypeError('request origin does not match governed browser session');
+  }
   if (request.privacy_mode !== PRIVACY_MODE) throw new TypeError('unsupported privacy_mode');
   return Object.freeze({ ...structuredClone(request), allowed_origins: Object.freeze([...origins]) });
 }
 
-export function validateBrowserSessionCapability(capability) {
+export function validateBrowserSessionCapability(capability, expectedBrowserSessionRef = BROWSER_SESSION_REF) {
   exactKeys(capability, CAPABILITY_FIELDS, 'browser session capability');
-  if (capability.browser_session_ref !== BROWSER_SESSION_REF) throw new TypeError('browser session capability does not match canonical session');
+  if (!isGovernedBrowserSessionRef(expectedBrowserSessionRef)) throw new TypeError('unsupported expected browser session');
+  if (capability.browser_session_ref !== expectedBrowserSessionRef) throw new TypeError('browser session capability does not match requested session');
   validateAuthenticationStatus(capability.authentication_status);
   return Object.freeze(structuredClone(capability));
 }
@@ -150,7 +168,7 @@ export async function runLiveCaptureRequest({
   if (!surfaceMatches(executionSurface)) return blocked(normalized, requestFingerprint, null, 'execution-surface-mismatch');
 
   let capability;
-  try { capability = validateBrowserSessionCapability(browserSessionCapability); }
+  try { capability = validateBrowserSessionCapability(browserSessionCapability, normalized.browser_session_ref); }
   catch { return blocked(normalized, requestFingerprint, null, 'browser-session-capability-missing'); }
   if (capability.authentication_status !== 'AUTH_READY') {
     return blocked(normalized, requestFingerprint, capability.authentication_status, `auth-${capability.authentication_status.slice(5).toLowerCase()}`);
