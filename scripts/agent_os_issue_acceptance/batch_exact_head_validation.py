@@ -133,12 +133,6 @@ def evaluate_exact_head_validation(
     elif not evidence.semantic_progress:
         disposition = ValidationDisposition.BLOCKED
         reasons.append("semantic-progress-failed")
-    elif review_state is not ReviewState.CLEARED:
-        disposition = ValidationDisposition.BLOCKED
-        reasons.append(f"review-{review_state.value}")
-    elif state is ValidationState.SUCCESS:
-        disposition = ValidationDisposition.HANDOFF
-        reasons.append("review-cleared-exact-head-valid")
     elif state is ValidationState.FAILURE:
         if evidence.repairable and evidence.retry_count < evidence.retry_ceiling:
             if evidence.failed_attempt_id is None:
@@ -159,6 +153,12 @@ def evaluate_exact_head_validation(
     }:
         disposition = ValidationDisposition.DEFERRED
         reasons.append(f"validation-{state.value}")
+    elif state is ValidationState.SUCCESS and review_state is not ReviewState.CLEARED:
+        disposition = ValidationDisposition.BLOCKED
+        reasons.append(f"review-{review_state.value}")
+    elif state is ValidationState.SUCCESS:
+        disposition = ValidationDisposition.HANDOFF
+        reasons.append("review-cleared-exact-head-valid")
     else:  # pragma: no cover - enum exhaustiveness guard
         raise AssertionError("unhandled validation state")
 
