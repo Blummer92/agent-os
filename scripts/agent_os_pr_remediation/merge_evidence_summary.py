@@ -112,7 +112,10 @@ class ReviewMergeEvidenceSummary:
         payload = asdict(self)
         payload["merge_evidence_status"] = self.merge_evidence_status.value
         for key in ("focused_validation", "language_validation", "specialized_validation"):
-            payload[key] = [{**item, "status": item["status"].value} for item in payload[key]]
+            payload[key] = [
+                {**item, "status": item["status"].value}
+                for item in payload[key]
+            ]
         payload["aggregate_validation"]["status"] = payload["aggregate_validation"]["status"].value
         payload["acceptance"]["status"] = payload["acceptance"]["status"].value
         payload["normal_review"]["status"] = payload["normal_review"]["status"].value
@@ -161,23 +164,59 @@ def _items(values: Iterable[str], field: str) -> tuple[str, ...]:
     return tuple(sorted(result))
 
 
-def validation_evidence(*, name: str, status: EvidenceStatus, tested_sha: str | None = None, profile: str | None = None, reason_codes: tuple[str, ...] | list[str] = ()) -> ValidationEvidence:
+def validation_evidence(
+    *,
+    name: str,
+    status: EvidenceStatus,
+    tested_sha: str | None = None,
+    profile: str | None = None,
+    reason_codes: tuple[str, ...] | list[str] = (),
+) -> ValidationEvidence:
     if type(status) is not EvidenceStatus:
         raise EvidenceValidationError("validation status must be EvidenceStatus")
-    return ValidationEvidence(name=_text(name, "validation name"), status=status, tested_sha=_sha(tested_sha, "tested_sha", optional=True), profile=None if profile is None else _text(profile, "validation profile"), reason_codes=_items(reason_codes, "validation reason_codes"))
+    return ValidationEvidence(
+        name=_text(name, "validation name"),
+        status=status,
+        tested_sha=_sha(tested_sha, "tested_sha", optional=True),
+        profile=None if profile is None else _text(profile, "validation profile"),
+        reason_codes=_items(reason_codes, "validation reason_codes"),
+    )
 
 
-def acceptance_evidence(*, transport_completed: bool, status: EvidenceStatus, metadata_fingerprint: str | None, current_metadata_fingerprint: str | None, reason_codes: tuple[str, ...] | list[str] = ()) -> AcceptanceEvidence:
+def acceptance_evidence(
+    *,
+    transport_completed: bool,
+    status: EvidenceStatus,
+    metadata_fingerprint: str | None,
+    current_metadata_fingerprint: str | None,
+    reason_codes: tuple[str, ...] | list[str] = (),
+) -> AcceptanceEvidence:
     if type(transport_completed) is not bool or type(status) is not EvidenceStatus:
         raise EvidenceValidationError("acceptance transport/status evidence is malformed")
     observed = _fingerprint(metadata_fingerprint, "metadata_fingerprint", optional=True)
     current = _fingerprint(current_metadata_fingerprint, "current_metadata_fingerprint", optional=True)
     if observed is not None and current is not None and observed != current:
         status = EvidenceStatus.STALE
-    return AcceptanceEvidence(transport_completed=transport_completed, status=status, metadata_fingerprint=observed, current_metadata_fingerprint=current, reason_codes=_items(reason_codes, "acceptance reason_codes"))
+    return AcceptanceEvidence(
+        transport_completed=transport_completed,
+        status=status,
+        metadata_fingerprint=observed,
+        current_metadata_fingerprint=current,
+        reason_codes=_items(reason_codes, "acceptance reason_codes"),
+    )
 
 
-def ai_review_evidence(*, provider: str, status: ReviewStatus, reviewed_sha: str | None, current_head_sha: str, unresolved_finding_ids: tuple[str, ...] | list[str] = (), resolved_finding_ids: tuple[str, ...] | list[str] = (), invalidated_finding_ids: tuple[str, ...] | list[str] = (), reason_codes: tuple[str, ...] | list[str] = ()) -> AIReviewEvidence:
+def ai_review_evidence(
+    *,
+    provider: str,
+    status: ReviewStatus,
+    reviewed_sha: str | None,
+    current_head_sha: str,
+    unresolved_finding_ids: tuple[str, ...] | list[str] = (),
+    resolved_finding_ids: tuple[str, ...] | list[str] = (),
+    invalidated_finding_ids: tuple[str, ...] | list[str] = (),
+    reason_codes: tuple[str, ...] | list[str] = (),
+) -> AIReviewEvidence:
     if type(status) is not ReviewStatus:
         raise EvidenceValidationError("review status must be ReviewStatus")
     current = _sha(current_head_sha, "current_head_sha")
@@ -187,16 +226,43 @@ def ai_review_evidence(*, provider: str, status: ReviewStatus, reviewed_sha: str
     invalidated = _items(invalidated_finding_ids, "invalidated_finding_ids")
     if set(unresolved) & set(resolved):
         raise EvidenceValidationError("finding cannot be both resolved and unresolved")
-    if reviewed is not None and reviewed != current and status in {ReviewStatus.PERFORMED_CLEAR, ReviewStatus.PERFORMED_BLOCKED}:
+    if reviewed is not None and reviewed != current and status in {
+        ReviewStatus.PERFORMED_CLEAR,
+        ReviewStatus.PERFORMED_BLOCKED,
+    }:
         status = ReviewStatus.STALE
     if invalidated and status is ReviewStatus.PERFORMED_CLEAR:
         status = ReviewStatus.STALE
     if unresolved and status is ReviewStatus.PERFORMED_CLEAR:
         status = ReviewStatus.PERFORMED_BLOCKED
-    return AIReviewEvidence(provider=_text(provider, "provider"), status=status, reviewed_sha=reviewed, unresolved_finding_ids=unresolved, resolved_finding_ids=resolved, invalidated_finding_ids=invalidated, reason_codes=_items(reason_codes, "review reason_codes"))
+    return AIReviewEvidence(
+        provider=_text(provider, "provider"),
+        status=status,
+        reviewed_sha=reviewed,
+        unresolved_finding_ids=unresolved,
+        resolved_finding_ids=resolved,
+        invalidated_finding_ids=invalidated,
+        reason_codes=_items(reason_codes, "review reason_codes"),
+    )
 
 
-def build_review_merge_evidence_summary(*, repository: str, pr_number: int, source_head_sha: str, base_sha: str | None, synthetic_merge_sha: str | None, merge_commit_sha: str | None, locally_tested_sha: str | None, acceptance: AcceptanceEvidence, focused_validation: tuple[ValidationEvidence, ...] | list[ValidationEvidence], aggregate_validation: ValidationEvidence, language_validation: tuple[ValidationEvidence, ...] | list[ValidationEvidence], specialized_validation: tuple[ValidationEvidence, ...] | list[ValidationEvidence], normal_review: AIReviewEvidence, adversarial_review: AIReviewEvidence) -> ReviewMergeEvidenceSummary:
+def build_review_merge_evidence_summary(
+    *,
+    repository: str,
+    pr_number: int,
+    source_head_sha: str,
+    base_sha: str | None,
+    synthetic_merge_sha: str | None,
+    merge_commit_sha: str | None,
+    locally_tested_sha: str | None,
+    acceptance: AcceptanceEvidence,
+    focused_validation: tuple[ValidationEvidence, ...] | list[ValidationEvidence],
+    aggregate_validation: ValidationEvidence,
+    language_validation: tuple[ValidationEvidence, ...] | list[ValidationEvidence],
+    specialized_validation: tuple[ValidationEvidence, ...] | list[ValidationEvidence],
+    normal_review: AIReviewEvidence,
+    adversarial_review: AIReviewEvidence,
+) -> ReviewMergeEvidenceSummary:
     head = _sha(source_head_sha, "source_head_sha") or ""
     base = _sha(base_sha, "base_sha", optional=True)
     synthetic = _sha(synthetic_merge_sha, "synthetic_merge_sha", optional=True)
@@ -204,47 +270,89 @@ def build_review_merge_evidence_summary(*, repository: str, pr_number: int, sour
     local = _sha(locally_tested_sha, "locally_tested_sha", optional=True)
     if type(pr_number) is not int or pr_number <= 0:
         raise EvidenceValidationError("pr_number must be a positive integer")
-    if type(acceptance) is not AcceptanceEvidence or type(aggregate_validation) is not ValidationEvidence:
-        raise EvidenceValidationError("acceptance/aggregate validation evidence is malformed")
+    if type(acceptance) is not AcceptanceEvidence:
+        raise EvidenceValidationError("acceptance must be AcceptanceEvidence")
+    if type(aggregate_validation) is not ValidationEvidence:
+        raise EvidenceValidationError("aggregate_validation must be ValidationEvidence")
     if type(normal_review) is not AIReviewEvidence or type(adversarial_review) is not AIReviewEvidence:
         raise EvidenceValidationError("review evidence is malformed")
+
     validation_groups = (focused_validation, language_validation, specialized_validation)
     if any(type(group) not in {tuple, list} or len(group) > MAX_ITEMS for group in validation_groups):
         raise EvidenceValidationError("validation evidence groups must be bounded")
     if any(type(item) is not ValidationEvidence for group in validation_groups for item in group):
         raise EvidenceValidationError("validation evidence group contains unsupported value")
-    focused, language, specialized = tuple(focused_validation), tuple(language_validation), tuple(specialized_validation)
+
+    focused = tuple(focused_validation)
+    language = tuple(language_validation)
+    specialized = tuple(specialized_validation)
     all_validation = (*focused, aggregate_validation, *language, *specialized)
+
     reasons: set[str] = set()
     status = MergeEvidenceStatus.COMPLETE
+
     if acceptance.status in {EvidenceStatus.FAILED, EvidenceStatus.MANUAL_REVIEW}:
-        status = MergeEvidenceStatus.BLOCKED; reasons.add("acceptance-blocked")
+        status = MergeEvidenceStatus.BLOCKED
+        reasons.add("acceptance-blocked")
     elif acceptance.status is EvidenceStatus.STALE:
-        status = MergeEvidenceStatus.STALE; reasons.add("acceptance-stale")
+        status = MergeEvidenceStatus.STALE
+        reasons.add("acceptance-stale")
     elif acceptance.status is not EvidenceStatus.PASSED:
-        status = MergeEvidenceStatus.INCOMPLETE; reasons.add("acceptance-incomplete")
+        status = MergeEvidenceStatus.INCOMPLETE
+        reasons.add("acceptance-incomplete")
+
     for item in all_validation:
         if item.status is EvidenceStatus.FAILED:
-            status = MergeEvidenceStatus.BLOCKED; reasons.add(f"validation-failed:{item.name}")
-        elif item.status is EvidenceStatus.STALE or (item.status is EvidenceStatus.PASSED and item.tested_sha != head):
-            if status is not MergeEvidenceStatus.BLOCKED: status = MergeEvidenceStatus.STALE
+            status = MergeEvidenceStatus.BLOCKED
+            reasons.add(f"validation-failed:{item.name}")
+        elif item.status is EvidenceStatus.STALE or (
+            item.status is EvidenceStatus.PASSED and item.tested_sha != head
+        ):
+            if status is not MergeEvidenceStatus.BLOCKED:
+                status = MergeEvidenceStatus.STALE
             reasons.add(f"validation-stale:{item.name}")
         elif item.status not in {EvidenceStatus.PASSED, EvidenceStatus.NOT_APPLICABLE}:
-            if status is MergeEvidenceStatus.COMPLETE: status = MergeEvidenceStatus.INCOMPLETE
+            if status is MergeEvidenceStatus.COMPLETE:
+                status = MergeEvidenceStatus.INCOMPLETE
             reasons.add(f"validation-incomplete:{item.name}")
+
     for label, review in (("normal", normal_review), ("adversarial", adversarial_review)):
         if review.status is ReviewStatus.PERFORMED_BLOCKED:
-            status = MergeEvidenceStatus.BLOCKED; reasons.add(f"review-blocked:{label}")
+            status = MergeEvidenceStatus.BLOCKED
+            reasons.add(f"review-blocked:{label}")
         elif review.status is ReviewStatus.STALE:
-            if status is not MergeEvidenceStatus.BLOCKED: status = MergeEvidenceStatus.STALE
+            if status is not MergeEvidenceStatus.BLOCKED:
+                status = MergeEvidenceStatus.STALE
             reasons.add(f"review-stale:{label}")
         elif review.status in {ReviewStatus.SKIPPED, ReviewStatus.UNAVAILABLE}:
-            if status is MergeEvidenceStatus.COMPLETE: status = MergeEvidenceStatus.INCOMPLETE
+            if status is MergeEvidenceStatus.COMPLETE:
+                status = MergeEvidenceStatus.INCOMPLETE
             reasons.add(f"review-incomplete:{label}")
+
     unresolved = tuple(sorted(set(normal_review.unresolved_finding_ids) | set(adversarial_review.unresolved_finding_ids)))
     if unresolved:
-        status = MergeEvidenceStatus.BLOCKED; reasons.add("unresolved-findings")
-    return ReviewMergeEvidenceSummary(repository=_text(repository, "repository"), pr_number=pr_number, source_head_sha=head, base_sha=base, synthetic_merge_sha=synthetic, merge_commit_sha=merge_commit, locally_tested_sha=local, acceptance=acceptance, focused_validation=focused, aggregate_validation=aggregate_validation, language_validation=language, specialized_validation=specialized, normal_review=normal_review, adversarial_review=adversarial_review, unresolved_finding_ids=unresolved, merge_evidence_status=status, reason_codes=tuple(sorted(reasons)))
+        status = MergeEvidenceStatus.BLOCKED
+        reasons.add("unresolved-findings")
+
+    return ReviewMergeEvidenceSummary(
+        repository=_text(repository, "repository"),
+        pr_number=pr_number,
+        source_head_sha=head,
+        base_sha=base,
+        synthetic_merge_sha=synthetic,
+        merge_commit_sha=merge_commit,
+        locally_tested_sha=local,
+        acceptance=acceptance,
+        focused_validation=focused,
+        aggregate_validation=aggregate_validation,
+        language_validation=language,
+        specialized_validation=specialized,
+        normal_review=normal_review,
+        adversarial_review=adversarial_review,
+        unresolved_finding_ids=unresolved,
+        merge_evidence_status=status,
+        reason_codes=tuple(sorted(reasons)),
+    )
 
 
 def _short_sha(value: str | None) -> str:
@@ -257,26 +365,97 @@ def _validation_line(label: str, evidence: ValidationEvidence) -> str:
 
 
 def _review_line(label: str, evidence: AIReviewEvidence) -> str:
-    return f"- {label}: {evidence.status.value} @ {_short_sha(evidence.reviewed_sha)} ({evidence.provider})"
+    return (
+        f"- {label}: {evidence.status.value}"
+        f" @ {_short_sha(evidence.reviewed_sha)}"
+        f" ({evidence.provider})"
+    )
 
 
 def render_review_merge_evidence_summary(summary: ReviewMergeEvidenceSummary) -> str:
+    """Render one bounded, deterministic, mobile-first non-authorizing summary.
+
+    This function renders only evidence already present in #1540's canonical
+    projection. It does not fetch checks/logs, classify aggregate provenance,
+    recommend repairs, publish comments, or infer authority.
+    """
     if type(summary) is not ReviewMergeEvidenceSummary:
         raise EvidenceValidationError("summary must be ReviewMergeEvidenceSummary")
+
     findings = summary.unresolved_finding_ids[:MAX_RENDERED_FINDING_IDS]
     finding_text = "none"
     if findings:
         finding_text = ", ".join(findings)
         hidden = len(summary.unresolved_finding_ids) - len(findings)
-        if hidden: finding_text += f" (+{hidden} more)"
-    lines = ["## Agent OS PR Evidence Summary", "", f"PR: #{summary.pr_number}", f"Head: {_short_sha(summary.source_head_sha)} — CURRENT SUMMARY IDENTITY", f"Base: {_short_sha(summary.base_sha)}", f"Synthetic merge: {_short_sha(summary.synthetic_merge_sha)}", f"Merge commit: {_short_sha(summary.merge_commit_sha)}", f"Locally tested: {_short_sha(summary.locally_tested_sha)}", "", f"Acceptance: {summary.acceptance.status.value}", _validation_line("Aggregate validation", summary.aggregate_validation)]
-    lines.extend(_validation_line("Focused validation", item) for item in summary.focused_validation)
-    lines.extend(_validation_line("Language validation", item) for item in summary.language_validation)
-    lines.extend(_validation_line("Specialized validation", item) for item in summary.specialized_validation)
-    lines.extend([_review_line("Normal review", summary.normal_review), _review_line("Adversarial review", summary.adversarial_review), f"Unresolved findings: {finding_text}", "", f"Merge evidence: {summary.merge_evidence_status.value}"])
-    if summary.reason_codes: lines.append("Reasons: " + ", ".join(summary.reason_codes))
-    lines.extend(["", "Authority: evidence only — merge, closure, production, and external-write authority remain false."])
+        if hidden:
+            finding_text += f" (+{hidden} more)"
+
+    lines = [
+        "## Agent OS PR Evidence Summary",
+        "",
+        f"PR: #{summary.pr_number}",
+        f"Head: {_short_sha(summary.source_head_sha)} — CURRENT SUMMARY IDENTITY",
+        f"Evidence state: {summary.merge_evidence_status.value.upper()}",
+        "",
+        "### Validation",
+        f"- issue acceptance: {summary.acceptance.status.value}",
+    ]
+    lines.extend(_validation_line("focused", item) for item in summary.focused_validation)
+    lines.append(_validation_line("aggregate", summary.aggregate_validation))
+    lines.extend(_validation_line("language", item) for item in summary.language_validation)
+    lines.extend(_validation_line("specialized", item) for item in summary.specialized_validation)
+    lines.extend(
+        [
+            "",
+            "### Review",
+            _review_line("normal", summary.normal_review),
+            _review_line("adversarial", summary.adversarial_review),
+            f"- unresolved findings: {finding_text}",
+            "",
+            "### Evidence identity",
+            f"- base: {_short_sha(summary.base_sha)}",
+            f"- synthetic merge: {_short_sha(summary.synthetic_merge_sha)}",
+            f"- local test: {_short_sha(summary.locally_tested_sha)}",
+            f"- merge commit: {_short_sha(summary.merge_commit_sha)}",
+            f"- summary id: {summary.summary_id}",
+        ]
+    )
+    if summary.reason_codes:
+        lines.extend(("", "### Why", "- " + ", ".join(summary.reason_codes)))
+    lines.extend(
+        (
+            "",
+            "Informational evidence only. This summary does not authorize readiness, approval, merge, closure, execution, production, or external writes.",
+        )
+    )
     rendered = "\n".join(lines)
     if len(rendered) > MAX_RENDERED_SUMMARY_CHARS:
-        raise EvidenceValidationError("rendered merge evidence summary exceeds size limit")
+        raise EvidenceValidationError("rendered evidence summary exceeds the bounded mobile projection")
     return rendered
+
+
+def classify_post_merge_evidence(
+    *,
+    run_sha: str | None,
+    pre_merge_source_head_sha: str,
+    merge_commit_sha: str,
+    newer_run_exists: bool,
+    duplicates_existing_proof: bool,
+    run_started_before_merge: bool,
+) -> PostMergeClassification:
+    run = _sha(run_sha, "run_sha", optional=True)
+    source = _sha(pre_merge_source_head_sha, "pre_merge_source_head_sha")
+    merged = _sha(merge_commit_sha, "merge_commit_sha")
+    if any(type(value) is not bool for value in (newer_run_exists, duplicates_existing_proof, run_started_before_merge)):
+        raise EvidenceValidationError("post-merge classification flags must be booleans")
+    if run is None:
+        return PostMergeClassification.MANUAL_REVIEW
+    if newer_run_exists:
+        return PostMergeClassification.SUPERSEDED
+    if run == merged:
+        if duplicates_existing_proof:
+            return PostMergeClassification.DUPLICATE_NONUNIQUE_EVIDENCE
+        return PostMergeClassification.MERGE_SHA_INDEPENDENT_EVIDENCE
+    if run == source and run_started_before_merge:
+        return PostMergeClassification.PRE_MERGE_RUN_DRAINING
+    return PostMergeClassification.MANUAL_REVIEW
