@@ -36,7 +36,7 @@ function payload(overrides = {}) {
   };
 }
 
-function successfulSpawn(observed) {
+function successfulSpawn(observed, responseOverrides = {}) {
   return (command, argv, options) => {
     observed.command = command;
     observed.argv = argv;
@@ -53,7 +53,10 @@ function successfulSpawn(observed) {
         transport_status: 'succeeded',
         execution_surface: EXECUTION_SURFACE,
         capture_result: { status: 'blocked', capture: null },
+        screenshots: [],
+        evidence_persisted: false,
         side_effects_performed: false,
+        ...responseOverrides,
       }));
       child.stderr.end();
       child.emit('close', 0);
@@ -90,6 +93,21 @@ test('valid capture payload streams exact bytes over stdin without a local shell
   assert.equal(sent.recording_sha256, fingerprintRecording(rawRecording));
   assert.equal(sent.browser_session_ref, CANVA_BROWSER_SESSION_REF);
   assert.equal(result.transport_status, 'succeeded');
+  assert.equal(result.evidence_persisted, false);
+});
+
+test('ephemeral screenshot response is accepted but persistent evidence is rejected', async () => {
+  const screenshot = { filename: '000-before.png', content_base64: Buffer.from('pixels').toString('base64') };
+  const result = await invokeGceCapture(payload(), {
+    spawnImpl: successfulSpawn({}, { screenshots: [screenshot] }),
+    timeoutMs: 1000,
+  });
+  assert.deepEqual(result.screenshots, [screenshot]);
+
+  await assert.rejects(() => invokeGceCapture(payload(), {
+    spawnImpl: successfulSpawn({}, { evidence_persisted: true }),
+    timeoutMs: 1000,
+  }), /ephemeral evidence only/);
 });
 
 test('unknown or arbitrary transport fields are not representable', async () => {
