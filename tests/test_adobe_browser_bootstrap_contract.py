@@ -68,9 +68,9 @@ def test_viewer_is_loopback_only_and_clipboard_file_transfer_are_disabled() -> N
         "-noclipboard",
         "-nosetclipboard",
         "-notightfilexfer",
-        "-noutrafilexfer",
     ):
         assert required in session
+    assert "-noutrafilexfer" not in session
 
 
 def test_chromium_exposes_no_remote_debugging_or_cdp_transport() -> None:
