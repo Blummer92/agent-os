@@ -13,7 +13,7 @@ export const CAPTURE_HOST_ENTRYPOINTS = Object.freeze({
   [CANVA_BROWSER_SESSION_REF]: '/usr/local/libexec/agent-os-canva-software-tutorial-capture',
 });
 export const CAPTURE_TRANSPORT_MAX_INPUT_BYTES = 512 * 1024;
-export const CAPTURE_TRANSPORT_MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
+export const CAPTURE_TRANSPORT_MAX_OUTPUT_BYTES = 128 * 1024 * 1024;
 export const CAPTURE_TRANSPORT_TIMEOUT_MS = 120_000;
 
 const TRANSPORT_FIELDS = new Set([
@@ -133,5 +133,15 @@ export async function invokeGceCapture(payload, {
   catch { throw new Error('capture host response was not JSON'); }
   if (result === null || typeof result !== 'object' || Array.isArray(result)) throw new Error('capture host response must be an object');
   if (result.transport_status !== 'succeeded' || !surfaceMatches(result.execution_surface)) throw new Error('capture host response identity mismatch');
+  if (result.evidence_persisted !== false) throw new Error('capture host must return ephemeral evidence only');
+  if (!Array.isArray(result.screenshots) || result.screenshots.length > 256) throw new Error('capture host screenshot evidence is invalid');
+  for (const screenshot of result.screenshots) {
+    if (screenshot === null || typeof screenshot !== 'object' || Array.isArray(screenshot)
+        || typeof screenshot.filename !== 'string'
+        || !/^[0-9]{3}-(?:before|after)\.png$/.test(screenshot.filename)
+        || typeof screenshot.content_base64 !== 'string') {
+      throw new Error('capture host screenshot evidence is invalid');
+    }
+  }
   return Object.freeze(structuredClone(result));
 }
