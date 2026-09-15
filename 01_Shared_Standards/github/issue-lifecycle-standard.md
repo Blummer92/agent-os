@@ -46,6 +46,20 @@ The issue body is authoritative for durable objective, ownership, scope, non-goa
 
 Volatile execution facts -- current `main`/PR/head SHA, branch freshness, CI/check conclusion, executor availability, lease generation, or other transient runtime state -- are never embedded as durable contract requirements in any issue body at any level. Store them in current evidence, checkpoints, PR records, or dated operational comments instead; the Level 1 roadmap restriction above is one instance of this general rule.
 
+### Bounded open-body normalization planning
+
+Existing open issues that predate or bypass structured intake may be assessed in a
+finite report-only normalization batch. The planner may identify canonical/no-
+change records, deterministic mechanical normalization candidates, stale durable
+decisions, readiness/body conflicts, decision-required records, and closed
+immutable records. Mechanical candidates require explicit equivalent evidence;
+missing owner, readiness, tier, source-of-truth, external-write, or other
+governance decisions are never guessed. Closed issue bodies remain immutable.
+The plan itself performs no GitHub mutation and creates no readiness or write
+authority; any later body edit requires separately authorized GitHub Service
+Agent execution and canonical readback. Item-local manual review does not stop
+later independent items in the finite supplied batch.
+
 ## Risk Ownership
 
 Each cross-cutting risk has exactly one canonical owner issue, recorded in `04_Registry/risk-owner-map.md`; other issues and PRs link to the owner instead of copying risk text.
