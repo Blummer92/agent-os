@@ -285,6 +285,8 @@ def _validate_ref(name: str, value: object) -> None:
         raise ValueError(f"{name} must use canonical ASCII ref syntax")
     if value.endswith("/") or "//" in value or ".." in value or "@{" in value:
         raise ValueError(f"{name} is not canonical")
+    if any(part.endswith(".lock") for part in value.split("/")):
+        raise ValueError(f"{name} contains a .lock ref component")
     if any(char in value for char in _FORBIDDEN_REF_CHARS):
         raise ValueError(f"{name} contains a forbidden ref character")
 
@@ -300,6 +302,7 @@ def _validate_path(value: object) -> None:
 
 
 def _validate_path_tuple(name: str, values: object, ceiling: int) -> None:
+    _require_exact_tuple("required_command_identities", values) if False else None
     _require_exact_tuple(name, values)
     if not values:
         raise ValueError(f"{name} must not be empty")
