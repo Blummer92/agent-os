@@ -40,12 +40,18 @@ Read retries are bounded to transient failures. Git tree, commit, and ref writes
 ## Security and authority
 
 - `main` and `master` are blocked by the public request model.
-- Only mode `100644` and type `blob` are supported.
+- Regular blob entries support mode `100644` and executable mode `100755`; symlink and submodule modes remain unsupported.
 - Entries must exactly match the caller's allowlist.
 - Path traversal, control characters, duplicate paths, unsupported modes, unsupported types, and malformed SHAs are rejected before transport use.
 - Authority fields in results are fixed false.
 - Credentials come only from an already-provisioned `GITHUB_TOKEN` or `GH_TOKEN`; the CLI does not create, refresh, print, or switch credentials.
 - Live execution requires separate repository-owner authorization. Tests use injected fakes and perform no network or GitHub mutation.
+
+## File content versus Git mode
+
+GitHub's ordinary contents/file API is suitable for creating or replacing UTF-8 file content, but it does not provide this package's explicit Git tree-mode contract. When executable state is part of the required repository artifact, publish the blob through the guarded Git-object tree/commit path with a `GitTreeEntry` mode of `100755` and verify that exact mode on tree readback. Ordinary non-executable files use `100644`.
+
+Mode selection does not create extra authority: the same branch, path allowlist, confirmation, currentness, compare, and non-force ref-update gates still apply.
 
 ## CLI
 
@@ -73,7 +79,7 @@ Remove this package, its tests, and the `scripts/README.md` entry. Historical Gi
 
 ## Limitations
 
-The first version supports ordinary UTF-8 repository file blobs only. It does not support executable files, symlinks, submodules, tree entries, deletions, merge commits as the publication parent, protected branches, generic repository administration, or live #917 publication as part of its tests.
+The package supports ordinary and executable regular-file blobs. It does not support symlinks, submodules, tree entries, deletions, merge commits as the publication parent, protected branches, generic repository administration, or live #917 publication as part of its tests.
 
 ## Expected-head-bound PR branch update
 
