@@ -15,13 +15,13 @@ execution surface   = gce-iap / agent-os-502614 / us-central1-a / agent-os-test
 privacy mode        = sensitive-by-default
 ```
 
-Adobe Express remains admitted through the existing `adobe-express-default` identity and `https://new.express.adobe.com` origin.
+Adobe Express remains admitted through the existing `adobe-express-default` identity with its pre-#2489 exact-HTTPS request semantics unchanged.
 
 ## Boundary
 
 `runLiveCaptureRequest(...)` still delegates execution to the existing `captureFlow` transport. The request layer does not implement Recorder parsing, Puppeteer Replay, screenshot capture, selector resolution, target geometry, browser launch, authentication, or profile handling.
 
-Only the exact governed browser-session allowlist is accepted. The request's target and allowed origins must match the origin bound to that session. Unknown session identities or cross-application origin/session combinations fail closed before transport invocation.
+Only the exact governed browser-session allowlist is accepted. Canva requests are additionally bound to `https://www.canva.com`; a `canva-default` request paired with another target/allowed origin fails closed before transport invocation. Adobe keeps the existing request-origin behavior for backward compatibility. Unknown session identities fail closed.
 
 The request schema remains closed. Callers cannot add profile paths, display identifiers, ports, executable paths, launch arguments, shell commands, scripts, passwords, cookies, tokens, MFA/SSO material, or other browser instructions.
 
