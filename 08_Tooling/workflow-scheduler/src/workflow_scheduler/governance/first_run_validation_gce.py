@@ -1,13 +1,13 @@
-"""Fixed GitHub-to-GCE first-run validation transport for #1972.
+"""Fixed GitHub-to-GCE first-run validation transport for #1972/#2431.
 
 The transport carries exactly one immutable selector: the 40-hex candidate SHA
 from ``/agent-os validate-first-run <candidate-sha>``. Repository and issue
 identity come from the trusted GitHub event envelope, never from comment text.
 
-This module reuses the existing #1217 GCE control resource, OIDC trust policy,
-and adapter. It defines no argv surface, no second transport, no retry, no
-Scheduler admission, and no publication or shutdown path. Every result is
-bounded non-authorizing evidence.
+This module reuses the existing #1217 GCE lifecycle adapter. A stopped host is
+started at most once and waited to RUNNING before the fixed validation probe.
+It defines no argv surface, second transport, retry, Scheduler admission,
+publication path, or independent shutdown authority.
 """
 from __future__ import annotations
 
@@ -39,6 +39,7 @@ def _failure(
     issue_number: object,
     candidate_sha: object,
     status: str = "needs-decision",
+    host_started: bool = False,
 ) -> dict[str, object]:
     """One bounded non-authorizing first-run transport envelope."""
     return {
@@ -48,6 +49,7 @@ def _failure(
         "repository": repository,
         "issue_number": issue_number,
         "candidate_sha": candidate_sha,
+        "host_started": host_started,
         "execution_authorized": False,
         "scheduler_invoked": False,
         "publication_invoked": False,
@@ -57,7 +59,7 @@ def _failure(
         "retry_attempted": False,
         "merge_authorized": False,
         "github_writes_authorized": False,
-        "side_effects_performed": False,
+        "side_effects_performed": host_started,
     }
 
 
@@ -105,12 +107,28 @@ def execute_first_run_validation_transport(
     }
     if not _policy().accepts(claims):
         return {"first_run_validation": _failure("claims-rejected", status="blocked", **bounds)}
-    if adapter.observe_state(RESOURCE) is not VmState.RUNNING:
-        return {"first_run_validation": _failure("host-not-running", **bounds)}
+
+    initial_state = adapter.observe_state(RESOURCE)
+    host_started = False
+    if initial_state is VmState.STOPPED:
+        if adapter.start(RESOURCE) is not True:
+            return {"first_run_validation": _failure("vm-start-failed", **bounds)}
+        host_started = True
+        state = adapter.wait_until_running(RESOURCE)
+    else:
+        state = initial_state
+    if state is not VmState.RUNNING:
+        return {
+            "first_run_validation": _failure(
+                "host-not-running", host_started=host_started, **bounds
+            )
+        }
     if not adapter.probe_first_run_validation_ready(RESOURCE):
         return {
             "first_run_validation": _failure(
-                "first-run-validation-entrypoint-unavailable", **bounds
+                "first-run-validation-entrypoint-unavailable",
+                host_started=host_started,
+                **bounds,
             )
         }
     try:
@@ -121,7 +139,13 @@ def execute_first_run_validation_transport(
             candidate_sha=candidate_sha,
         )
     except GcloudCommandError:
-        return {"first_run_validation": _failure("first-run-validation-host-failed", **bounds)}
+        return {
+            "first_run_validation": _failure(
+                "first-run-validation-host-failed", host_started=host_started, **bounds
+            )
+        }
+    evidence = dict(evidence)
+    evidence["host_started"] = host_started
     return {
         "first_run_validation": evidence,
         "logical_trigger_id": ingress.logical_trigger_id_or_none,
