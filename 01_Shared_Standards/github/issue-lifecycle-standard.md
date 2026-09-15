@@ -44,6 +44,21 @@ Link, do not paste: write authorization (`00_Governance/write-authorization-poli
 
 The issue body is authoritative for durable objective, ownership, scope, non-goals, and protected surfaces. When a durable decision changes the contract, edit the body and add one concise dated comment naming what changed and why; edit history preserves prior text. A dated operational authorization comment may activate or pause work only when the body permits that route and the comment does not broaden or contradict the durable contract. Do not leave a stale body behind contradictory comments.
 
+A report-only readiness/body drift projection may compare an explicit current
+readiness claim in an open body with the already-computed canonical readiness
+result. A mismatch is maintenance evidence, not permission to rewrite the body or
+readiness. Labels never override the body/readiness evidence contract.
+
+For existing open issues that predate or bypass structured intake, a finite
+report-only normalization planner may classify canonical/equivalent bodies,
+explicit mechanical presentation candidates, stale durable decisions,
+readiness/body conflicts, and decision-required gaps. It must route stale durable
+decisions to the existing body-maintenance owner, route readiness conflicts to
+the readiness/body drift owner, leave missing governance decisions for manual
+review, and treat closed issues as immutable. Any actual body edit remains a
+separately authorized GitHub Service Agent operation followed by canonical
+readback.
+
 Volatile execution facts -- current `main`/PR/head SHA, branch freshness, CI/check conclusion, executor availability, lease generation, or other transient runtime state -- are never embedded as durable contract requirements in any issue body at any level. Store them in current evidence, checkpoints, PR records, or dated operational comments instead; the Level 1 roadmap restriction above is one instance of this general rule.
 
 ## Risk Ownership
@@ -80,8 +95,9 @@ Do not add a legacy label to a new issue. Do not claim a disposition beyond this
 
 ## Version
 
-0.3.0
+0.3.1
 
 ## Changelog
 
+- 0.3.1 documents report-only readiness/body drift and finite open-body normalization planning while preserving separate body-write/readiness authority (#2442, #2443).
 - 0.3.0 adds Promotion In Place as a canonical issue-body/Child-Issue Creation Test classification without a parallel issue-state model, and generalizes the volatile-execution-facts restriction beyond Level 1 roadmap issues (#1309).
