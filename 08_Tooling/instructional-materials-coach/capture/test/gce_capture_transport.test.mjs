@@ -4,11 +4,13 @@ import { PassThrough } from 'node:stream';
 import test from 'node:test';
 
 import {
-  CAPTURE_HOST_ENTRYPOINT,
+  CAPTURE_HOST_ENTRYPOINTS,
   captureGcloudArgv,
+  captureHostEntrypoint,
   invokeGceCapture,
 } from '../gce_capture_transport.mjs';
 import {
+  BROWSER_SESSION_REF,
   CANVA_BROWSER_SESSION_REF,
   EXECUTION_SURFACE,
   PRIVACY_MODE,
@@ -60,25 +62,29 @@ function successfulSpawn(observed) {
   };
 }
 
-test('GCE capture argv is fixed to one host and one entrypoint', () => {
-  const argv = captureGcloudArgv();
+test('GCE capture argv is fixed to one host and one session-owned entrypoint', () => {
+  assert.equal(captureHostEntrypoint(CANVA_BROWSER_SESSION_REF), CAPTURE_HOST_ENTRYPOINTS[CANVA_BROWSER_SESSION_REF]);
+  assert.equal(captureHostEntrypoint(BROWSER_SESSION_REF), CAPTURE_HOST_ENTRYPOINTS[BROWSER_SESSION_REF]);
+  assert.throws(() => captureHostEntrypoint('other-session'), /unsupported browser session/);
+
+  const argv = captureGcloudArgv(CANVA_BROWSER_SESSION_REF);
   assert.deepEqual(argv, [
     'compute', 'ssh', 'agent-os-test',
     '--project', 'agent-os-502614',
     '--zone', 'us-central1-a',
     '--tunnel-through-iap',
     '--quiet',
-    '--command', CAPTURE_HOST_ENTRYPOINT,
+    '--command', 'sudo -n /usr/local/libexec/agent-os-canva-software-tutorial-capture',
   ]);
   assert.equal(argv.some((value) => /bash|sh -c|node -e|python -c/.test(value)), false);
 });
 
-test('valid capture payload streams exact bytes over stdin without shell execution', async () => {
+test('valid capture payload streams exact bytes over stdin without a local shell', async () => {
   const observed = {};
   const result = await invokeGceCapture(payload(), { spawnImpl: successfulSpawn(observed), timeoutMs: 1000 });
   assert.equal(observed.command, 'gcloud');
   assert.equal(observed.options.shell, false);
-  assert.deepEqual(observed.argv, captureGcloudArgv());
+  assert.deepEqual(observed.argv, captureGcloudArgv(CANVA_BROWSER_SESSION_REF));
   const sent = JSON.parse(observed.stdin);
   assert.equal(sent.raw_recording, rawRecording);
   assert.equal(sent.recording_sha256, fingerprintRecording(rawRecording));
