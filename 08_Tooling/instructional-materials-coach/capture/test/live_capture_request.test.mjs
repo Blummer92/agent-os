@@ -37,6 +37,17 @@ function request(overrides = {}) {
   };
 }
 
+function governedRequest(browserSessionRef) {
+  if (browserSessionRef === CANVA_BROWSER_SESSION_REF) {
+    return request({
+      target_url: 'https://www.canva.com/',
+      allowed_origins: ['https://www.canva.com'],
+      browser_session_ref: CANVA_BROWSER_SESSION_REF,
+    });
+  }
+  return request({ browser_session_ref: browserSessionRef });
+}
+
 function capability(authentication_status = 'AUTH_READY', browser_session_ref = BROWSER_SESSION_REF) {
   return { browser_session_ref, authentication_status };
 }
@@ -61,10 +72,13 @@ function successTransport(overrides = {}) {
 async function run(options = {}) {
   let calls = 0;
   const invokeCapture = options.invokeCapture ?? (async () => successTransport());
+  const browserSessionCapability = Object.hasOwn(options, 'browserSessionCapability')
+    ? options.browserSessionCapability
+    : capability();
   const result = await runLiveCaptureRequest({
     request: options.request ?? request(),
     rawRecording: options.rawRecording ?? rawRecording,
-    browserSessionCapability: options.browserSessionCapability ?? capability(),
+    browserSessionCapability,
     executionSurface: options.executionSurface ?? EXECUTION_SURFACE,
     invokeCapture: async (input) => { calls += 1; return invokeCapture(input); },
     idempotencyLookup: options.idempotencyLookup,
@@ -93,11 +107,7 @@ test('valid Adobe request remains backward compatible and returns bounded captur
 
 test('Canva request admits only canva-default and delegates unchanged to existing captureFlow transport', async () => {
   let received;
-  const canvaRequest = request({
-    target_url: 'https://www.canva.com/',
-    allowed_origins: ['https://www.canva.com'],
-    browser_session_ref: CANVA_BROWSER_SESSION_REF,
-  });
+  const canvaRequest = governedRequest(CANVA_BROWSER_SESSION_REF);
   const { result, calls } = await run({
     request: canvaRequest,
     browserSessionCapability: capability('AUTH_READY', CANVA_BROWSER_SESSION_REF),
@@ -117,7 +127,7 @@ test('unknown session identity and mismatched session capability fail before inv
   assert.equal(unknown.calls, 0);
   assert.equal(unknown.result.reason_codes[0], 'request-invalid');
 
-  const canvaRequest = request({ browser_session_ref: CANVA_BROWSER_SESSION_REF });
+  const canvaRequest = governedRequest(CANVA_BROWSER_SESSION_REF);
   const mismatch = await run({ request: canvaRequest, browserSessionCapability: capability('AUTH_READY', BROWSER_SESSION_REF) });
   assert.equal(mismatch.calls, 0);
   assert.equal(mismatch.result.reason_codes[0], 'browser-session-capability-missing');
@@ -157,9 +167,9 @@ test('recording digest mismatch fails before invocation', async () => {
 
 test('missing and non-ready browser session capability fail before replay for both governed sessions', async () => {
   for (const browserSessionRef of BROWSER_SESSION_REFS) {
-    const governedRequest = request({ browser_session_ref: browserSessionRef });
+    const governed = governedRequest(browserSessionRef);
     for (const value of [undefined, capability('AUTH_REQUIRED', browserSessionRef), capability('AUTH_EXPIRED', browserSessionRef), capability('AUTH_BLOCKED', browserSessionRef)]) {
-      const { result, calls } = await run({ request: governedRequest, browserSessionCapability: value });
+      const { result, calls } = await run({ request: governed, browserSessionCapability: value });
       assert.equal(calls, 0);
       assert.equal(result.capture_status, 'blocked');
     }
