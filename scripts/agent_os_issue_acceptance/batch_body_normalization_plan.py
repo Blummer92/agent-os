@@ -39,6 +39,7 @@ class BodyNormalizationPlan:
 
 
 _HEADING_RE = re.compile(r"(?m)^#{2,3}\s+(.+?)\s*$")
+_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 _READINESS_RE = re.compile(
     r"(?im)^\s*(?:readiness(?: candidate)?\s*:\s*)?"
     r"status:(ready|blocked|needs-decision)\s*$"
@@ -57,9 +58,14 @@ _STALE_MARKERS = (
     "body synchronization required",
     "stale durable decision",
 )
-_DURABLE_DECISION_FIELDS = {
-    "objective", "owner", "scope", "non-goals", "protected-surfaces",
-    "dependencies", "lifecycle-disposition",
+_DURABLE_DECISION_HEADINGS = {
+    "objective": ("objective", "objective and value"),
+    "owner": ("owner", "primary owner", "owner routing"),
+    "scope": ("scope", "bounded scope", "scope and non-goals"),
+    "non-goals": ("non-goals", "scope and non-goals"),
+    "protected-surfaces": ("protected surfaces", "forbidden actions", "safety boundaries"),
+    "dependencies": ("dependencies", "dependencies and blockers"),
+    "lifecycle-disposition": ("lifecycle disposition", "current disposition", "final disposition"),
 }
 _TRANSIENT_DECISION_FIELDS = {
     "main-sha", "pr-head", "head-sha", "branch-freshness", "check-conclusion",
@@ -76,9 +82,15 @@ def durable_decision_sync_required(
     field = re.sub(r"[_\s]+", "-", decision_field.strip().casefold())
     if field in _TRANSIENT_DECISION_FIELDS:
         return False
-    if field not in _DURABLE_DECISION_FIELDS or not decision_value.strip():
+    headings = _DURABLE_DECISION_HEADINGS.get(field)
+    if not headings or not decision_value.strip():
         return None
-    return decision_value.strip().casefold() not in body.casefold()
+    sections = _matching_sections(_COMMENT_RE.sub("", body), headings)
+    if len(sections) != 1:
+        return None
+    wanted = _normalize_text(decision_value)
+    visible_lines = {_normalize_text(line) for line in sections[0].splitlines() if line.strip()}
+    return wanted not in visible_lines
 
 
 def plan_body_normalization(
@@ -144,9 +156,7 @@ def _assess(snapshot: LegacyIssueSnapshot) -> BodyNormalizationAssessment:
             BodyNormalizationClassification.CANONICAL_NO_CHANGE,
             ("canonical-equivalent-body",),
         )
-    mechanical = tuple(
-        field for field in missing if _explicit_equivalent(body, field)
-    )
+    mechanical = tuple(field for field in missing if _explicit_equivalent(body, field))
     decisions = tuple(field for field in missing if field not in mechanical)
     if decisions:
         return BodyNormalizationAssessment(
@@ -166,6 +176,20 @@ def _assess(snapshot: LegacyIssueSnapshot) -> BodyNormalizationAssessment:
         BodyNormalizationClassification.CANONICAL_NO_CHANGE,
         ("functionally-equivalent-body",),
     )
+
+
+def _matching_sections(body: str, aliases: tuple[str, ...]) -> tuple[str, ...]:
+    headings = list(_HEADING_RE.finditer(body))
+    wanted = {_normalize_text(alias) for alias in aliases}
+    return tuple(
+        body[match.end() : headings[index + 1].start() if index + 1 < len(headings) else len(body)].strip()
+        for index, match in enumerate(headings)
+        if _normalize_text(match.group(1)) in wanted
+    )
+
+
+def _normalize_text(value: str) -> str:
+    return re.sub(r"\s+", " ", value.strip().casefold())
 
 
 def _missing_fields(body: str) -> tuple[str, ...]:
