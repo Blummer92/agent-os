@@ -1,8 +1,13 @@
-"""MCP protocol binding for the bounded Agent OS ChatGPT facade (#1966 / #1988 / #2363 / #2487)."""
+"""MCP protocol binding for the bounded Agent OS ChatGPT facade (#1966 / #1988 / #2363 / #2487 / #2523)."""
 
 from __future__ import annotations
 
+from dataclasses import asdict
+
 from mcp.server import MCPServer
+
+from scripts.agent_os_execution_interface.continuation_driver import ContinuationDecision, continuation_payload
+from scripts.agent_os_execution_interface.investigation_completion_admission import evaluate_investigation_completion_admission
 
 from .bulk_repair_facade import classify_bulk_repair_continuation
 from .connected_issue_creation_facade import plan_connected_issue_creation_for_host
@@ -56,9 +61,6 @@ def activate_agent_os_issue_start_lessons_tool(repository: str, issue_number: in
 
 @mcp.tool()
 def activate_agent_os_failed_repair_tool(repository: str, issue_number: int, attempt_id: str, failed_hypothesis: str, result_summary: str, task_reference: str, ecosystem_hints: tuple[str, ...] = (), language_hints: tuple[str, ...] = (), library_hints: tuple[str, ...] = (), capability_keywords: tuple[str, ...] = (), target_path_hints: tuple[str, ...] = (), canonical_rule_refs: tuple[str, ...] = (), known_knowledge_refs: tuple[str, ...] = (), specialized_knowledge_required: bool | None = None, lesson_rows: list[dict[str, object]] | None = None, repair_context: str = "failed-pr-repair") -> dict[str, object]:
-    # ``lesson_rows`` is an explicit test/diagnostic override. Production calls
-    # bind CKR11 to the existing read-only Scheduler Notion adapter so the
-    # bounded query produced by the lesson bridge is actually executed.
     execute_read = (
         (lambda _query: {"results": lesson_rows})
         if lesson_rows is not None
@@ -75,6 +77,29 @@ def admit_agent_os_failed_repair_tool(activation_result: dict[str, object], chec
 @mcp.tool()
 def classify_agent_os_mission_completion_tool(repository: str, issue_number: int, branch_exists: bool, implementation_commit_count: int, draft_pr_exists: bool, canonical_pr_readback_verified: bool, capable_route_available: bool, subordinate_writes_only: bool) -> dict[str, object]:
     return classify_agent_os_mission_completion(repository=repository, issue_number=issue_number, branch_exists=branch_exists, implementation_commit_count=implementation_commit_count, draft_pr_exists=draft_pr_exists, canonical_pr_readback_verified=canonical_pr_readback_verified, capable_route_available=capable_route_available, subordinate_writes_only=subordinate_writes_only)
+
+
+@mcp.tool()
+def classify_agent_os_investigation_completion_tool(repository: str, issue_number: int, material_branch_states: tuple[str, ...], executable_next_action_available: bool, subordinate_write_performed: bool) -> dict[str, object]:
+    """Prevent an intermediate investigation checkpoint from becoming completion."""
+    decision = evaluate_investigation_completion_admission(
+        repository=repository,
+        issue_number=issue_number,
+        material_branch_states=material_branch_states,
+        executable_next_action_available=executable_next_action_available,
+        subordinate_write_performed=subordinate_write_performed,
+    )
+    payload = asdict(decision)
+    payload["reason_codes"] = list(decision.reason_codes)
+    payload["agent_os_continuation"] = continuation_payload(
+        ContinuationDecision(
+            action="" if decision.completion_admissible else decision.next_action,
+            terminal=decision.completion_admissible,
+            blocked=(not decision.completion_admissible and not decision.executable_next_action_available),
+            reason_codes=decision.reason_codes,
+        )
+    )
+    return payload
 
 
 @mcp.tool()
