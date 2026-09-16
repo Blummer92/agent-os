@@ -1,19 +1,22 @@
 # Agent OS GitHub Issue Provider
 
-This package supplies read-only GitHub issue pages to the existing Agent OS issue scanner and owns the shared PyGithub client-construction boundary used by repository GitHub adapters.
+This package supplies read-only GitHub issue pages to the existing Agent OS issue scanner and owns the shared PyGithub client-construction and bounded request-execution boundaries used by repository GitHub adapters.
 
 ## Boundaries
 
 - `auth.build_installation_client(...)` remains the selected-repository GitHub App client for scanner-proof work.
 - `auth.build_token_client(...)` is the single `GITHUB_TOKEN` / `GH_TOKEN` PyGithub client-construction path for token-backed repository adapters. It performs no request and creates no authorization.
-- Domain packages retain authorization, currentness, acceptance, lifecycle, and mutation-admission policy; they consume the shared client rather than rebuilding credentials/client configuration.
+- `request.request_json(...)` is the canonical bounded PyGithub request-execution path for commodity REST mechanics: requester invocation, standard GitHub headers, bounded low-level retry selection, response-header normalization, and provider/transport failure normalization. Callers choose retry policy explicitly.
+- Domain packages retain authorization, currentness, acceptance, lifecycle, mutation admission, pagination interpretation, and domain-specific outcome policy. They consume raw request evidence from `request_json(...)` rather than rebuilding requester plumbing or moving policy into this package.
+- The #2507 migration rule is delete-after-migration: once a caller family is proven to preserve its domain semantics through `request_json(...)`, its private `requestJsonAndCheck(...)` plumbing and duplicate header/error normalization should be removed rather than retained as a compatibility fallback.
+- Current migrated read callers include execution-service `HostGitHubReadTransport` and scanner-proof `FixedInstallationSnapshotReader`; both retain their existing domain-specific outcome/scope/pagination interpretation while sharing the commodity request boundary.
 - PyGithub is isolated to authentication and HTTP transport.
 - GitHub REST `Link` headers remain the issue-page pagination authority.
 - Provider-owned issue-page retries remain bounded to three total attempts per page.
 - Composite issue revisions are deterministic `github-issue-v1:<sha256>` values.
 - Scanner validation, duplicate detection, ordering, and report projection remain in `scripts/agent_os_issue_acceptance`.
 - No GitHub App credentials are stored or loaded by scanner-domain modules.
-- No mutation authority is exposed by the client builder; mutation policy remains with each existing domain owner.
+- Neither client construction nor bounded request execution creates mutation authority; mutation policy and required post-mutation readback remain with each existing domain owner.
 
 ## Dependency and license
 
