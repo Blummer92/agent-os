@@ -14,7 +14,7 @@ def test_bug_work_reconciles_existing_backlog_before_fresh_discovery() -> None:
     workflow = normalized(AGENTS)
     assert "reconcile that existing open bug backlog before fresh defect discovery" in workflow
     assert "use eligible existing bugs first" in workflow
-    assert "discover new bugs only when the reconciled open backlog cannot satisfy the requested count" in workflow
+    assert "Fresh defect discovery is allowed only when the user explicitly requests new bug discovery/logging" in workflow
 
 
 def test_bug_candidate_enumeration_is_open_only() -> None:
@@ -47,7 +47,9 @@ def test_bug_work_filters_ineligible_existing_candidates() -> None:
 
 def test_bug_work_does_not_pad_requested_count_with_new_issues() -> None:
     workflow = normalized(AGENTS)
-    assert "Do not create issues merely to pad a requested count." in workflow
+    assert "report the honest shortfall" in workflow
+    assert "creating issues merely to pad the count" in workflow
+    assert "Newly discovered or newly created bugs do not count toward a user-requested existing-backlog implementation count" in workflow
 
 
 def test_backlog_first_rule_reuses_existing_orchestrator_mission_routing() -> None:
@@ -88,11 +90,12 @@ def test_bug_batch_stops_later_candidates_only_for_shared_blocker() -> None:
     assert "report the honest shortfall" in workflow
 
 
-def test_requested_count_larger_than_eligible_backlog_continues_to_fresh_discovery() -> None:
+def test_requested_count_larger_than_eligible_backlog_reports_shortfall_without_substitution() -> None:
     workflow = normalized(AGENTS)
-    assert "discover new bugs only when the reconciled open backlog cannot satisfy the requested count" in workflow
-    assert "continue until the requested count is worked or the reconciled open pool is exhausted" in workflow
-    assert "Do not create issues merely to pad a requested count." in workflow
+    assert "If the reconciled eligible open backlog cannot satisfy the requested count" in workflow
+    assert "report the honest shortfall" in workflow
+    assert "Newly discovered or newly created bugs do not count toward a user-requested existing-backlog implementation count" in workflow
+    assert "unless the user explicitly approves that substitution" in workflow
 
 
 def test_batch_never_falls_back_to_closed_issues_as_replacement_work() -> None:
