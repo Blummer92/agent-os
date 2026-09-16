@@ -21,6 +21,7 @@ export type RoutedTutorialStep = Readonly<{
   visualArtifactIdentity?: string;
   crossContextExemplarEvidenceRef?: string;
   instructionalSpecificityEvidenceRefs?: readonly string[];
+  promptReferenceEvidenceRefs?: readonly string[];
 }>;
 
 export type RoutedTutorialNeed = Readonly<{
@@ -44,6 +45,7 @@ export type TutorialPackageBlocker =
   | 'step-disposition-duplicate'
   | 'step-not-retained'
   | 'new-visual-authoring-missing'
+  | 'application-identity-conflict'
   | 'reuse-asset-missing'
   | 'resurface-asset-missing'
   | 'reason-evidence-missing'
@@ -85,6 +87,18 @@ function unique<T>(items: readonly T[]): T[] {
 
 const EXACT_INSTRUCTIONAL_DETAIL = /\b\d+(?:\.\d+)?\s*(?:pt|px|pixels?|points?|rem|em|%|mm|cm|inches?)\b/i;
 
+// Each known application maps to the lowercase terms that identify it, including
+// the brand family, so a bare "Adobe" still reads as Adobe Express evidence.
+const APPLICATION_IDENTITY_TERMS: ReadonlyArray<readonly [string, readonly string[]]> = [
+  ['adobe express', ['adobe express', 'adobe']],
+  ['photoshop', ['photoshop', 'adobe photoshop', 'adobe']],
+  ['canva', ['canva']],
+  ['figma', ['figma']],
+];
+
+// The instructional-specificity gate (#2010) reads only the authored instruction
+// body. Application identity is a separate question, so it keeps its own wider
+// projection instead of widening this one.
 function authoredInstructionText(authoring: PromptAuthoringInput): string {
   return [
     authoring.imagePurpose,
@@ -93,6 +107,40 @@ function authoredInstructionText(authoring: PromptAuthoringInput): string {
     ...authoring.mustNotShow,
     authoring.annotationSpace,
   ].join(' ');
+}
+
+function applicationIdentityText(authoring: PromptAuthoringInput): string {
+  return [
+    authoring.imagePurpose,
+    authoring.applicationContext,
+    authoring.targetState,
+    ...authoring.mustShow,
+    ...authoring.mustNotShow,
+    authoring.annotationSpace,
+    ...authoring.requestedUiDetails,
+  ].join(' ');
+}
+
+function identityTermsFor(normalizedApplication: string): ReadonlySet<string> {
+  const known = APPLICATION_IDENTITY_TERMS.find(([name]) => name === normalizedApplication);
+  return new Set(known ? known[1] : [normalizedApplication]);
+}
+
+// Whole-word matching only: substring matching reads the ordinary design word
+// "canvas" as the application "Canva" and blocks legitimate authoring.
+function mentionsApplicationTerm(instructionText: string, term: string): boolean {
+  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`\\b${escaped}\\b`).test(instructionText);
+}
+
+function hasApplicationIdentityConflict(authoring: PromptAuthoringInput, modeledApplication: string): boolean {
+  const instructionText = applicationIdentityText(authoring).toLocaleLowerCase();
+  const normalizedModeledApplication = modeledApplication.trim().toLocaleLowerCase();
+  const modeledTerms = identityTermsFor(normalizedModeledApplication);
+  return APPLICATION_IDENTITY_TERMS.some(([application, terms]) =>
+    application !== normalizedModeledApplication
+      && terms.some((term) => !modeledTerms.has(term) && mentionsApplicationTerm(instructionText, term)),
+  );
 }
 
 function artifactDirective(canonicalArtifactIdentity: string, exemplarIdentity: string | null): string {
@@ -118,6 +166,7 @@ export function buildTutorialPackage(
   }
 
   const retained = new Set(tutorial.retained_steps.map((step) => step.review_step_id));
+  const retainedById = new Map(tutorial.retained_steps.map((step) => [step.review_step_id, step]));
   const routeIds = route.steps.map((step) => step.reviewStepId);
   const blockers: TutorialPackageBlocker[] = [];
   const canonicalArtifactIdentity = route.canonicalArtifactIdentity?.trim() || null;
@@ -136,6 +185,13 @@ export function buildTutorialPackage(
     if (step.disposition === 'resurface-prior-visual' && !step.approvedAssetRef?.trim()) blockers.push('resurface-asset-missing');
     if ((step.disposition === 'no-additional-visual-needed' || step.disposition === 'pathway-compacted') && !step.reasonRef?.trim()) {
       blockers.push('reason-evidence-missing');
+    }
+
+    const reviewedStep = retainedById.get(step.reviewStepId);
+    const modeledApplication = reviewedStep?.modeled_application?.trim();
+    if (step.disposition === 'new-visual' && step.authoring && modeledApplication
+      && hasApplicationIdentityConflict(step.authoring, modeledApplication)) {
+      blockers.push('application-identity-conflict');
     }
 
     if (step.disposition === 'new-visual' && canonicalArtifactIdentity) {
@@ -186,6 +242,9 @@ export function buildTutorialPackage(
           ? [`cross_context_exemplar:${visualArtifactIdentity}`, `cross_context_exemplar_evidence:${step.crossContextExemplarEvidenceRef}`]
           : []),
         ...(step.instructionalSpecificityEvidenceRefs ?? []).map((ref) => `instructional_specificity_evidence:${ref}`),
+        ...(step.promptReferenceEvidenceRefs ?? [])
+          .filter((ref) => ref.trim().length > 0)
+          .map((ref) => `prompt_reference_evidence:${ref}`),
         ...card.provenance,
       ],
     };

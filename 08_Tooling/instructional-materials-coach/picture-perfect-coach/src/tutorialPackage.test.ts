@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { tutorial0ReviewedTutorial } from './fixtures/tutorial0-prompts';
 import type { PromptAuthoringInput } from './promptIntent';
+import type { ReviewedTutorialProjection } from './types';
 import { buildTutorialPackage, type RoutedTutorialNeed } from './tutorialPackage';
 
 const authoring: PromptAuthoringInput = {
@@ -43,6 +44,20 @@ function businessCardRoute(
     steps: base.steps.map((step, index) => index === 0
       ? { ...step, authoring: authoringOverride, visualArtifactIdentity: 'business-card', ...stepOverride }
       : step),
+  };
+}
+
+function withModeledApplication(application: string): ReviewedTutorialProjection {
+  return {
+    ...tutorial0ReviewedTutorial,
+    retained_steps: tutorial0ReviewedTutorial.retained_steps.map((step) => ({
+      ...step,
+      modeled_application: application,
+      source_steps: step.source_steps.map((sourceStep) => ({
+        ...sourceStep,
+        source: { ...sourceStep.source, modeled_application: application },
+      })),
+    })),
   };
 }
 
@@ -94,6 +109,127 @@ describe('PPUX #1776 routed Tutorial Package', () => {
       reasonRef: 'route-reason://not-needed',
     }];
     expect(buildTutorialPackage(tutorial0ReviewedTutorial, route({ steps })).blockers).toContain('step-not-retained');
+  });
+
+  it('fails closed when Canva modeled evidence receives stale Adobe-specific prompt constraints', () => {
+    const canvaTutorial = withModeledApplication('Canva');
+    const staleAdobeAuthoring: PromptAuthoringInput = {
+      ...authoring,
+      applicationContext: 'Adobe Express workspace',
+      mustShow: ['Adobe Express', 'modeled result'],
+      mustNotShow: ['invented Adobe controls'],
+    };
+    const staleRoute = route({
+      steps: route().steps.map((step, index) => index === 0
+        ? { ...step, authoring: staleAdobeAuthoring }
+        : step),
+    });
+    const result = buildTutorialPackage(canvaTutorial, staleRoute);
+    expect(result.status).toBe('blocked');
+    expect(result.blockers).toContain('application-identity-conflict');
+    expect(result.package).toBeNull();
+  });
+
+  it('allows Canva authoring when it agrees with the modeled application identity', () => {
+    const canvaTutorial = withModeledApplication('Canva');
+    const canvaAuthoring: PromptAuthoringInput = {
+      ...authoring,
+      applicationContext: 'Canva projects workspace',
+      mustShow: ['Canva', 'modeled result'],
+      mustNotShow: ['invented Canva controls'],
+    };
+    const canvaRoute = route({
+      steps: route().steps.map((step, index) => index === 0
+        ? { ...step, authoring: canvaAuthoring }
+        : step),
+    });
+    const result = buildTutorialPackage(canvaTutorial, canvaRoute);
+    expect(result.status).toBe('valid');
+    expect(result.package?.cards[0].application).toBe('Canva');
+    expect(result.package?.cards[0].blockerReasons).not.toContain('application-identity-conflict' as never);
+  });
+
+  it('preserves the historical Adobe Tutorial 0 regression fixture when intentionally selected', () => {
+    const historicalAdobeAuthoring: PromptAuthoringInput = {
+      ...authoring,
+      applicationContext: 'Adobe Express workspace',
+      mustShow: ['Adobe Express', 'modeled result'],
+      mustNotShow: ['invented Adobe controls'],
+    };
+    const historicalRoute = route({
+      steps: route().steps.map((step, index) => index === 0
+        ? { ...step, authoring: historicalAdobeAuthoring }
+        : step),
+    });
+    const result = buildTutorialPackage(tutorial0ReviewedTutorial, historicalRoute);
+    expect(result.status).toBe('valid');
+    expect(result.package?.cards[0].application).toBe('Adobe Express');
+    expect(result.blockers).not.toContain('application-identity-conflict');
+  });
+
+  it('rejects a bare Adobe brand constraint under Canva modeled evidence', () => {
+    const canvaTutorial = withModeledApplication('Canva');
+    const bareAdobeAuthoring: PromptAuthoringInput = {
+      ...authoring,
+      mustNotShow: ['invented Adobe controls'],
+    };
+    const bareAdobeRoute = route({
+      steps: route().steps.map((step, index) => index === 0
+        ? { ...step, authoring: bareAdobeAuthoring }
+        : step),
+    });
+    const result = buildTutorialPackage(canvaTutorial, bareAdobeRoute);
+    expect(result.status).toBe('blocked');
+    expect(result.blockers).toContain('application-identity-conflict');
+  });
+
+  it('keeps the bare Adobe brand term valid for Adobe Express modeled evidence', () => {
+    const bareAdobeAuthoring: PromptAuthoringInput = {
+      ...authoring,
+      mustNotShow: ['invented Adobe controls'],
+    };
+    const bareAdobeRoute = route({
+      steps: route().steps.map((step, index) => index === 0
+        ? { ...step, authoring: bareAdobeAuthoring }
+        : step),
+    });
+    const result = buildTutorialPackage(tutorial0ReviewedTutorial, bareAdobeRoute);
+    expect(result.status).toBe('valid');
+    expect(result.blockers).not.toContain('application-identity-conflict');
+  });
+
+  it('does not read the design word "canvas" as the Canva application identity', () => {
+    const canvasAuthoring: PromptAuthoringInput = {
+      ...authoring,
+      applicationContext: 'Adobe Express new-file creation context',
+      targetState: 'the landscape canvas choice is visible and distinguishable',
+      mustShow: ['Adobe Express', 'Landscape'],
+      mustNotShow: ['invented Adobe controls'],
+    };
+    const canvasRoute = route({
+      steps: route().steps.map((step, index) => index === 0
+        ? { ...step, authoring: canvasAuthoring }
+        : step),
+    });
+    const result = buildTutorialPackage(tutorial0ReviewedTutorial, canvasRoute);
+    expect(result.blockers).not.toContain('application-identity-conflict');
+    expect(result.status).toBe('valid');
+  });
+
+  it('leaves the instructional-specificity gate reading only the authored instruction body', () => {
+    const canvaTutorial = withModeledApplication('Canva');
+    const requestedUiAuthoring: PromptAuthoringInput = {
+      ...authoring,
+      requestedUiDetails: ['the 12pt toolbar label'],
+    };
+    const requestedUiRoute = route({
+      steps: route().steps.map((step, index) => index === 0
+        ? { ...step, authoring: requestedUiAuthoring }
+        : step),
+    });
+    const result = buildTutorialPackage(canvaTutorial, requestedUiRoute);
+    expect(result.blockers).not.toContain('unsupported-instructional-specificity');
+    expect(result.status).toBe('valid');
   });
 });
 
