@@ -21,6 +21,7 @@ export type RoutedTutorialStep = Readonly<{
   visualArtifactIdentity?: string;
   crossContextExemplarEvidenceRef?: string;
   instructionalSpecificityEvidenceRefs?: readonly string[];
+  promptReferenceEvidenceRefs?: readonly string[];
 }>;
 
 export type RoutedTutorialNeed = Readonly<{
@@ -241,6 +242,9 @@ export function buildTutorialPackage(
           ? [`cross_context_exemplar:${visualArtifactIdentity}`, `cross_context_exemplar_evidence:${step.crossContextExemplarEvidenceRef}`]
           : []),
         ...(step.instructionalSpecificityEvidenceRefs ?? []).map((ref) => `instructional_specificity_evidence:${ref}`),
+        ...(step.promptReferenceEvidenceRefs ?? [])
+          .filter((ref) => ref.trim().length > 0)
+          .map((ref) => `prompt_reference_evidence:${ref}`),
         ...card.provenance,
       ],
     };
