@@ -38,7 +38,6 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Literal
 
 from .authorized_validation import (
     AuthorizedValidationAdmissionResult,
@@ -1073,10 +1072,6 @@ def _reconstruct_pilot_result(payload: dict[str, object]) -> object:
     ):
         kwargs[tuple_field] = tuple(kwargs[tuple_field])
     return PilotResultType(**kwargs)
-
-
-def _serialize_changed_path_observation(value: object) -> dict[str, object]:
-    return value.as_dict()
 
 
 def _reconstruct_changed_path_observation(payload: dict[str, object]) -> object:
