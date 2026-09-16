@@ -1,5 +1,3 @@
-from dataclasses import replace
-
 import pytest
 
 from scripts.agent_os_issue_acceptance.coding_cockpit_view import (
@@ -65,15 +63,19 @@ def _state(**overrides):
     return build_issue_operational_state(IssueOperationalEvidence(**values))
 
 
-def _view(state):
-    handoff = build_coding_command_center_handoff(
+def _handoff(state, *, observed_head_sha=SHA):
+    return build_coding_command_center_handoff(
         CodingCommandCenterEvidence(
             operational_state=state,
             source_revision=SHA,
+            observed_head_sha=observed_head_sha,
             validation_evidence_reference="check:aggregate" if state.validation_state is ValidationState.PASSED else None,
         )
     )
-    return build_coding_cockpit_view(handoff, state)
+
+
+def _view(state, *, observed_head_sha=SHA):
+    return build_coding_cockpit_view(_handoff(state, observed_head_sha=observed_head_sha), state)
 
 
 def test_active_pr_view_exposes_identity_validation_and_freshness():
@@ -108,17 +110,24 @@ def test_stale_state_is_explicit_and_fail_closed():
 
 
 def test_idle_shape_keeps_missing_pr_and_head_explicitly_unavailable():
-    rendered = render_coding_cockpit_view(_view(_state()))
+    rendered = render_coding_cockpit_view(_view(_state(), observed_head_sha=None))
     assert "PR unavailable" in rendered
     assert "unavailable | unavailable" in rendered
     assert "Authority: display-only; no authority created" in rendered
 
 
 def test_identity_mismatch_is_rejected():
-    state = _state()
-    handoff = build_coding_command_center_handoff(CodingCommandCenterEvidence(operational_state=state, source_revision=SHA))
+    handoff = _handoff(_state())
+    other_issue_state = _state(issue_number=999)
     with pytest.raises(ValueError, match="same canonical state"):
-        build_coding_cockpit_view(replace(handoff, issue_number=999), state)
+        build_coding_cockpit_view(handoff, other_issue_state)
+
+
+def test_pull_request_identity_disagreement_is_rejected():
+    claim = PrimaryIssueClaim(42, "agent/example", SHA, "ready")
+    handoff = _handoff(_state(primary_claims=(claim,)))
+    with pytest.raises(ValueError, match="same canonical state"):
+        build_coding_cockpit_view(handoff, _state())
 
 
 def test_identical_input_renders_deterministically():

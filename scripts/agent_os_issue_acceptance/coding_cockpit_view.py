@@ -59,12 +59,14 @@ def build_coding_cockpit_view(
     ):
         raise ValueError("cockpit inputs do not identify the same canonical state")
 
-    claims = operational_state.primary_claims
-    branch = claims[0].branch if len(claims) == 1 else None
-    claim_head = claims[0].head_sha if len(claims) == 1 else None
-    if handoff.observed_head_sha is not None and claim_head is not None and handoff.observed_head_sha != claim_head:
-        raise ValueError("cockpit head identity conflicts with canonical primary claim")
-    exact_head = handoff.observed_head_sha or claim_head
+    # The canonical state names a branch and its primary PR numbers; the exact
+    # head only ever comes from the handoff's observed evidence.
+    primary_pr_numbers = operational_state.primary_pr_numbers
+    canonical_pr = primary_pr_numbers[0] if len(primary_pr_numbers) == 1 else None
+    if handoff.pull_request_number != canonical_pr:
+        raise ValueError("cockpit inputs do not identify the same canonical state")
+    branch = operational_state.active_branch
+    exact_head = handoff.observed_head_sha
 
     manual_review = operational_state.outcome in {
         OperationalOutcome.NEEDS_DECISION,
