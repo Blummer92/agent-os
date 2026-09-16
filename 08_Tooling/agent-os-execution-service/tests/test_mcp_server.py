@@ -16,6 +16,7 @@ EXPECTED_TOOLS = frozenset(
         "activate_agent_os_failed_repair_tool",
         "admit_agent_os_failed_repair_tool",
         "classify_agent_os_mission_completion_tool",
+        "classify_agent_os_investigation_completion_tool",
         "classify_agent_os_continuation_tool",
         "classify_agent_os_bulk_repair_continuation_tool",
     }
@@ -47,3 +48,18 @@ def test_mcp_server_contains_no_execution_or_store_primitives() -> None:
     )
     for token in forbidden:
         assert token not in source
+
+
+def test_investigation_completion_tool_continues_after_checkpoint_when_branch_remains() -> None:
+    result = mcp_server.classify_agent_os_investigation_completion_tool(
+        repository="Blummer92/agent-os",
+        issue_number=2522,
+        material_branch_states=("resolved-supported", "in-progress"),
+        executable_next_action_available=True,
+        subordinate_write_performed=True,
+    )
+    assert result["completion_admissible"] is False
+    assert result["agent_os_continuation"]["terminal"] is False
+    assert result["agent_os_continuation"]["blocked"] is False
+    assert result["agent_os_continuation"]["action"] == "continue-same-lineage-investigation"
+    assert result["github_writes_authorized"] is False
