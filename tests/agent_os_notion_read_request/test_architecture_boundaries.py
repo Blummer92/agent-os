@@ -3,7 +3,11 @@
 The locked architecture forbids a second curriculum source of truth, a second
 Notion client, a second context engine, a second asset registry, a second
 scheduler, a GCE dependency for routine reads, any native/direct ChatGPT Notion
-connector branch, and any Drive or classroom artifact write.
+connector branch, and any unauthorized Drive or classroom-artifact write.
+
+Drive itself is not a forbidden provider. A future governed Drive read adapter may
+sit beside the Notion reader behind the shared Agent OS request/admission boundary;
+provider reads do not create provider-write authority.
 """
 
 from __future__ import annotations
@@ -66,6 +70,25 @@ def test_no_drive_or_classroom_artifact_write_is_introduced(module: Path) -> Non
     source = module.read_text(encoding="utf-8").lower()
     for marker in ("drive.files", "slides.presentations", "documents.create", "classroom.courses", "classroom_v1", "www.googleapis.com"):
         assert marker not in source, f"{module.name} references {marker}"
+
+
+def test_router_does_not_gain_drive_or_classroom_write_authority() -> None:
+    """Permit future provider reads without silently admitting provider writes."""
+    source = ROUTER.read_text(encoding="utf-8").lower()
+    for marker in (
+        "drive.files.create",
+        "drive.files.update",
+        "drive.files.delete",
+        "permissions.create",
+        "slides.presentations.create",
+        "slides.presentations.batchupdate",
+        "documents.create",
+        "documents.batchupdate",
+        "classroom.courses.create",
+        "classroom.courses.patch",
+        "classroom.courses.delete",
+    ):
+        assert marker not in source, f"router introduces external write surface: {marker}"
 
 
 def test_reuses_existing_capabilities_instead_of_reimplementing_them() -> None:
