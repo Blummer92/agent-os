@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import Enum
 
-from .issue_body_maintenance import current_readiness_claims
 from .readiness import ReadinessResult
 
 
@@ -23,6 +23,12 @@ class BodyReadinessDrift:
     side_effects_performed: bool = False
 
 
+_READINESS_LINE_RE = re.compile(
+    r"(?im)^\s*(?:[-*]\s*)?(?:readiness(?: candidate)?\s*:\s*)?"
+    r"status:(ready|blocked|needs-decision)\s*$"
+)
+
+
 def detect_body_readiness_drift(
     issue_body: str,
     readiness: ReadinessResult,
@@ -34,7 +40,7 @@ def detect_body_readiness_drift(
     """
     if type(readiness) is not ReadinessResult:
         raise TypeError("readiness must be a ReadinessResult")
-    claims = tuple(sorted(set(current_readiness_claims(issue_body))))
+    claims = tuple(sorted(set(_current_readiness_claims(issue_body))))
     canonical = readiness.outcome.value
     if len(claims) > 1:
         return BodyReadinessDrift(
@@ -64,3 +70,14 @@ def detect_body_readiness_drift(
         canonical,
         ("body-readiness-converged",),
     )
+
+
+def _current_readiness_claims(body: str) -> tuple[str, ...]:
+    text = body or ""
+    claims: list[str] = []
+    for match in _READINESS_LINE_RE.finditer(text):
+        prefix = text[max(0, match.start() - 160):match.start()].casefold()
+        if "historical" in prefix or "previous" in prefix or "formerly" in prefix:
+            continue
+        claims.append(match.group(1).casefold())
+    return tuple(claims)
