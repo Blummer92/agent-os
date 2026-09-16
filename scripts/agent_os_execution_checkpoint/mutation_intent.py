@@ -28,7 +28,16 @@ _TARGET_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$")
 
 def _target_ref(value: object) -> str:
     text = _exact_text(value, "target_ref", 255)
-    if not _TARGET_REF_RE.fullmatch(text):
+    if (
+        not _TARGET_REF_RE.fullmatch(text)
+        or text.startswith(("refs/", "/", "."))
+        or text.endswith(("/", "."))
+        or "//" in text
+        or ".." in text
+        or "@{" in text
+        or any(part.endswith(".lock") for part in text.split("/"))
+        or any(character in text for character in " ~^:?*[\\")
+    ):
         raise ValueError("target_ref is malformed")
     return text
 
