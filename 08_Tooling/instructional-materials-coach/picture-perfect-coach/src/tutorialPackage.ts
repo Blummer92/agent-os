@@ -85,9 +85,30 @@ function unique<T>(items: readonly T[]): T[] {
 }
 
 const EXACT_INSTRUCTIONAL_DETAIL = /\b\d+(?:\.\d+)?\s*(?:pt|px|pixels?|points?|rem|em|%|mm|cm|inches?)\b/i;
-const KNOWN_APPLICATION_IDENTITIES = ['Adobe Express', 'Canva', 'Figma', 'Photoshop'] as const;
 
+// Each known application maps to the lowercase terms that identify it, including
+// the brand family, so a bare "Adobe" still reads as Adobe Express evidence.
+const APPLICATION_IDENTITY_TERMS: ReadonlyArray<readonly [string, readonly string[]]> = [
+  ['adobe express', ['adobe express', 'adobe']],
+  ['photoshop', ['photoshop', 'adobe photoshop', 'adobe']],
+  ['canva', ['canva']],
+  ['figma', ['figma']],
+];
+
+// The instructional-specificity gate (#2010) reads only the authored instruction
+// body. Application identity is a separate question, so it keeps its own wider
+// projection instead of widening this one.
 function authoredInstructionText(authoring: PromptAuthoringInput): string {
+  return [
+    authoring.imagePurpose,
+    authoring.targetState,
+    ...authoring.mustShow,
+    ...authoring.mustNotShow,
+    authoring.annotationSpace,
+  ].join(' ');
+}
+
+function applicationIdentityText(authoring: PromptAuthoringInput): string {
   return [
     authoring.imagePurpose,
     authoring.applicationContext,
@@ -99,12 +120,25 @@ function authoredInstructionText(authoring: PromptAuthoringInput): string {
   ].join(' ');
 }
 
+function identityTermsFor(normalizedApplication: string): ReadonlySet<string> {
+  const known = APPLICATION_IDENTITY_TERMS.find(([name]) => name === normalizedApplication);
+  return new Set(known ? known[1] : [normalizedApplication]);
+}
+
+// Whole-word matching only: substring matching reads the ordinary design word
+// "canvas" as the application "Canva" and blocks legitimate authoring.
+function mentionsApplicationTerm(instructionText: string, term: string): boolean {
+  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`\\b${escaped}\\b`).test(instructionText);
+}
+
 function hasApplicationIdentityConflict(authoring: PromptAuthoringInput, modeledApplication: string): boolean {
-  const instructionText = authoredInstructionText(authoring).toLocaleLowerCase();
+  const instructionText = applicationIdentityText(authoring).toLocaleLowerCase();
   const normalizedModeledApplication = modeledApplication.trim().toLocaleLowerCase();
-  return KNOWN_APPLICATION_IDENTITIES.some((application) =>
-    application.toLocaleLowerCase() !== normalizedModeledApplication
-      && instructionText.includes(application.toLocaleLowerCase()),
+  const modeledTerms = identityTermsFor(normalizedModeledApplication);
+  return APPLICATION_IDENTITY_TERMS.some(([application, terms]) =>
+    application !== normalizedModeledApplication
+      && terms.some((term) => !modeledTerms.has(term) && mentionsApplicationTerm(instructionText, term)),
   );
 }
 

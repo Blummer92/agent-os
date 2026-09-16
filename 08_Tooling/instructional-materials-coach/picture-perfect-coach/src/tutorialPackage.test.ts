@@ -166,6 +166,71 @@ describe('PPUX #1776 routed Tutorial Package', () => {
     expect(result.package?.cards[0].application).toBe('Adobe Express');
     expect(result.blockers).not.toContain('application-identity-conflict');
   });
+
+  it('rejects a bare Adobe brand constraint under Canva modeled evidence', () => {
+    const canvaTutorial = withModeledApplication('Canva');
+    const bareAdobeAuthoring: PromptAuthoringInput = {
+      ...authoring,
+      mustNotShow: ['invented Adobe controls'],
+    };
+    const bareAdobeRoute = route({
+      steps: route().steps.map((step, index) => index === 0
+        ? { ...step, authoring: bareAdobeAuthoring }
+        : step),
+    });
+    const result = buildTutorialPackage(canvaTutorial, bareAdobeRoute);
+    expect(result.status).toBe('blocked');
+    expect(result.blockers).toContain('application-identity-conflict');
+  });
+
+  it('keeps the bare Adobe brand term valid for Adobe Express modeled evidence', () => {
+    const bareAdobeAuthoring: PromptAuthoringInput = {
+      ...authoring,
+      mustNotShow: ['invented Adobe controls'],
+    };
+    const bareAdobeRoute = route({
+      steps: route().steps.map((step, index) => index === 0
+        ? { ...step, authoring: bareAdobeAuthoring }
+        : step),
+    });
+    const result = buildTutorialPackage(tutorial0ReviewedTutorial, bareAdobeRoute);
+    expect(result.status).toBe('valid');
+    expect(result.blockers).not.toContain('application-identity-conflict');
+  });
+
+  it('does not read the design word "canvas" as the Canva application identity', () => {
+    const canvasAuthoring: PromptAuthoringInput = {
+      ...authoring,
+      applicationContext: 'Adobe Express new-file creation context',
+      targetState: 'the landscape canvas choice is visible and distinguishable',
+      mustShow: ['Adobe Express', 'Landscape'],
+      mustNotShow: ['invented Adobe controls'],
+    };
+    const canvasRoute = route({
+      steps: route().steps.map((step, index) => index === 0
+        ? { ...step, authoring: canvasAuthoring }
+        : step),
+    });
+    const result = buildTutorialPackage(tutorial0ReviewedTutorial, canvasRoute);
+    expect(result.blockers).not.toContain('application-identity-conflict');
+    expect(result.status).toBe('valid');
+  });
+
+  it('leaves the instructional-specificity gate reading only the authored instruction body', () => {
+    const canvaTutorial = withModeledApplication('Canva');
+    const requestedUiAuthoring: PromptAuthoringInput = {
+      ...authoring,
+      requestedUiDetails: ['the 12pt toolbar label'],
+    };
+    const requestedUiRoute = route({
+      steps: route().steps.map((step, index) => index === 0
+        ? { ...step, authoring: requestedUiAuthoring }
+        : step),
+    });
+    const result = buildTutorialPackage(canvaTutorial, requestedUiRoute);
+    expect(result.blockers).not.toContain('unsupported-instructional-specificity');
+    expect(result.status).toBe('valid');
+  });
 });
 
 describe('PPUX #2010 artifact identity and instructional specificity', () => {
