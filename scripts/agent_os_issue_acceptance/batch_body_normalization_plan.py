@@ -5,10 +5,6 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Iterable
 
-from .issue_body_maintenance import (
-    contains_stale_durable_decision_marker,
-    current_readiness_claims,
-)
 from .legacy_preflight import LegacyIssueSnapshot
 from .readiness import ReadinessOutcome, evaluate_issue_readiness
 
@@ -43,6 +39,10 @@ class BodyNormalizationPlan:
 
 
 _HEADING_RE = re.compile(r"(?m)^#{2,3}\s+(.+?)\s*$")
+_READINESS_RE = re.compile(
+    r"(?im)^\s*(?:readiness(?: candidate)?\s*:\s*)?"
+    r"status:(ready|blocked|needs-decision)\s*$"
+)
 _REQUIRED_FIELDS = {
     "issue tier": ("issue tier",),
     "owner": ("owner", "primary owner", "owner routing"),
@@ -52,6 +52,33 @@ _REQUIRED_FIELDS = {
     "prior scope review": ("prior scope, duplicate, and supersession review",),
     "documentation impact": ("documentation impact",),
 }
+_STALE_MARKERS = (
+    "durable decision superseded",
+    "body synchronization required",
+    "stale durable decision",
+)
+_DURABLE_DECISION_FIELDS = {
+    "objective", "owner", "scope", "non-goals", "protected-surfaces",
+    "dependencies", "lifecycle-disposition",
+}
+_TRANSIENT_DECISION_FIELDS = {
+    "main-sha", "pr-head", "head-sha", "branch-freshness", "check-conclusion",
+    "ci-state", "runtime-state", "executor-availability", "lease-generation",
+}
+
+
+def durable_decision_sync_required(
+    body: str, decision_field: str, decision_value: str, *, state: str = "open"
+) -> bool | None:
+    """Return True for stale durable body authority, False for no sync, None for review."""
+    if state != "open":
+        return False
+    field = re.sub(r"[_\s]+", "-", decision_field.strip().casefold())
+    if field in _TRANSIENT_DECISION_FIELDS:
+        return False
+    if field not in _DURABLE_DECISION_FIELDS or not decision_value.strip():
+        return None
+    return decision_value.strip().casefold() not in body.casefold()
 
 
 def plan_body_normalization(
@@ -88,7 +115,7 @@ def _assess(snapshot: LegacyIssueSnapshot) -> BodyNormalizationAssessment:
         )
     body = snapshot.body or ""
     readiness = evaluate_issue_readiness(body)
-    claims = tuple(sorted(set(current_readiness_claims(body))))
+    claims = tuple(sorted(set(_READINESS_RE.findall(body))))
     if len(claims) > 1:
         return BodyNormalizationAssessment(
             snapshot.number,
@@ -102,7 +129,8 @@ def _assess(snapshot: LegacyIssueSnapshot) -> BodyNormalizationAssessment:
             (f"body-readiness-drift:{claims[0]}->{readiness.outcome.value}",),
             route_issue=2442,
         )
-    if contains_stale_durable_decision_marker(body):
+    lowered = body.casefold()
+    if any(marker in lowered for marker in _STALE_MARKERS):
         return BodyNormalizationAssessment(
             snapshot.number,
             BodyNormalizationClassification.STALE_DURABLE_DECISION,
