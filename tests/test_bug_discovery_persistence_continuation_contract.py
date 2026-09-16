@@ -18,5 +18,7 @@ def test_candidate_local_dispositions_continue_finite_bug_cursor():
 
 
 def test_finite_bug_work_cannot_pad_or_fall_back_to_closed_issues():
-    assert "Do not create issues merely to pad a requested count" in AGENTS
+    assert "report the honest shortfall" in AGENTS
+    assert "creating issues merely to pad the count" in AGENTS
+    assert "Newly discovered or newly created bugs do not count toward a user-requested existing-backlog implementation count" in AGENTS
     assert "Never fall back to closed issues as replacement candidates" in AGENTS
