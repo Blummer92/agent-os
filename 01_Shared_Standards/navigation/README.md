@@ -92,14 +92,23 @@ as an execution route. ChatGPT and other Agent OS callers reach Notion through t
 GitHub-controlled #2283 path, which injects bounded read-only Scheduler tasks for
 the canonical `NotionReadOnlyAdapter` path.
 
+This single-seam rule does not make Notion the transport for every provider and
+does not prohibit future Google Drive reads. A separately governed Drive read
+adapter may be added as a sibling provider behind the same Agent OS request,
+admission, evidence, and source-of-truth boundaries. Provider-specific credentials
+and actions remain isolated, and read capability never implies write authority.
+Drive, Docs, Slides, or Classroom mutation remains separately authorized under
+the applicable Google Workspace write contracts.
+
 The router re-plans nothing. Request sensitivity, relation-first Visual Asset
 Library lookup by `Canonical Unit`, provider-id hiding, owner/asset
 classification, currentness, provenance, approved-use/reuse/human-review
 evidence, and every non-authority boundary stay owned by the existing
 orchestration, assembler, and resolver. Only `get_page` and `query_data_source`
-may reach the Scheduler; any other action, a missing class source binding, an
-out-of-bound result request, a malformed Scheduler envelope, or any non-success
-Scheduler state fails closed rather than assembling partial evidence.
+may reach the current Notion Scheduler seam; any other Notion action, a missing
+class source binding, an out-of-bound result request, a malformed Scheduler
+envelope, or any non-success Scheduler state fails closed rather than assembling
+partial evidence.
 
 Consistent with the connector boundary above, the router never imports the
 Workflow Scheduler: the Scheduler remains the canonical live-read executor and is
@@ -120,7 +129,7 @@ into companion files without changing the canonical authority map.
 
 ## Changelog
 
-- 0.4.0 removes native/direct ChatGPT Notion connector routing and documents the GitHub-controlled Agent OS reader as the single supported execution path (#2303).
+- 0.4.0 removes native/direct ChatGPT Notion connector routing, documents the GitHub-controlled Agent OS reader as the single current Notion execution path, and preserves a provider-neutral boundary for separately governed sibling reads such as future Google Drive access without granting Drive write authority (#2303).
 - 0.3.0 documented the former dual execution-surface routing introduced by #2282.
 - 0.2.0 preserves the detailed Navigation Registry contracts while replacing Integration Manager execution ownership with ChatGPT Orchestrator + shared Navigation capability routing (#1324).
 - 0.1.0 initial navigation index.
