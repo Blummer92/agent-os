@@ -1,8 +1,9 @@
 """One read-only GitHub host transport for the governed-resume bootstrap (#1319).
 
 The transport keeps #1319's single-issue and authorization-source contracts
-while reusing the repository's canonical PyGithub client-construction boundary.
-It creates no authority and exposes no write method.
+while reusing the repository's canonical PyGithub client-construction and
+request-execution boundaries. It creates no authority and exposes no write
+method.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from scripts.agent_os_candidate_packet_live_input import (
     SingleIssueTransportResult,
 )
 from scripts.agent_os_github_issue_provider.auth import build_token_client
+from scripts.agent_os_github_issue_provider.request import GitHubRequestError, request_json
 
 from .execution_authorization_source import (
     ExecutionAuthorizationCommentSnapshot,
@@ -118,9 +120,7 @@ class HostGitHubReadTransport:
 
 
 def build_pygithub_json_reader(client: object) -> JsonReader:
-    """Adapt the canonical PyGithub requester to one read-only JSON callable."""
-    from github.GithubException import GithubException, RateLimitExceededException
-
+    """Adapt canonical bounded request execution to one read-only JSON callable."""
     requester = getattr(client, "requester", None)
     if requester is None or not hasattr(requester, "requestJsonAndCheck"):
         raise HostGitHubTransportUnavailable(
@@ -129,20 +129,16 @@ def build_pygithub_json_reader(client: object) -> JsonReader:
 
     def read_json(path: str, parameters: Mapping[str, object] | None) -> object:
         try:
-            _headers, payload = requester.requestJsonAndCheck(
+            result = request_json(
+                client,
                 "GET",
                 path,
-                parameters=None if parameters is None else dict(parameters),
-                headers={
-                    "Accept": "application/vnd.github+json",
-                    "X-GitHub-Api-Version": "2026-03-10",
-                },
+                parameters=parameters,
+                max_attempts=1,
             )
-        except RateLimitExceededException as exc:
-            raise HostGitHubReadError(SingleIssueTransportOutcome.API_ERROR) from exc
-        except GithubException as exc:
+        except GitHubRequestError as exc:
             raise HostGitHubReadError(_outcome_for_status(exc.status)) from exc
-        return payload
+        return result.payload
 
     return read_json
 

@@ -23,6 +23,7 @@ from typing import Callable, Mapping, Sequence
 
 from .auth import GitHubAppSecretProvider
 from .pagination import PaginationDiagnosticError, parse_link_header
+from .request import GitHubRequestError, request_json
 from .scanner_proof import (
     APP_ID,
     INSTALLATION_ID,
@@ -129,26 +130,18 @@ class FixedInstallationSnapshotReader:
     @staticmethod
     def _request(
         client: object, path: str, parameters: Mapping[str, object]
-    ) -> tuple[Mapping[str, object], object]:
-        requester = getattr(client, "requester", None)
-        method = getattr(requester, "requestJsonAndCheck", None)
-        if not callable(method):
-            raise ScannerProofHostBridgeError("scanner-proof-github-read-failed")
+    ) -> tuple[Mapping[str, str], object]:
         try:
-            headers, payload = method(
+            result = request_json(
+                client,
                 "GET",
                 path,
-                parameters=dict(parameters),
-                headers={
-                    "Accept": "application/vnd.github+json",
-                    "X-GitHub-Api-Version": "2026-03-10",
-                },
+                parameters=parameters,
+                max_attempts=1,
             )
-        except Exception as error:
+        except (GitHubRequestError, TypeError, ValueError) as error:
             raise ScannerProofHostBridgeError("scanner-proof-github-read-failed") from error
-        if not isinstance(headers, Mapping):
-            raise ScannerProofHostBridgeError("scanner-proof-installation-metadata-invalid")
-        return headers, payload
+        return result.headers, result.payload
 
     @staticmethod
     def _link_header(headers: Mapping[str, object]) -> str | None:
