@@ -339,6 +339,34 @@ def _repair(reason: str, surface: str, observed: str, expected: str) -> Reconcil
     return ReconciliationAction(ActionCategory.PROJECTION_REPAIR, reason, surface, observed, expected)
 
 
+_MANUAL_DECISION_RULES = {
+    "source.identity-mismatch": ("canonical-identity", "establish one canonical identity"),
+    "source.canonical-conflict": ("canonical-operational-state", "reacquire one current non-conflicting canonical operational state"),
+    "source.lifecycle-snapshot-conflict": ("lifecycle-snapshot", "reacquire one lifecycle snapshot consistent with the current issue and pull-request evidence"),
+    "source.conflicting-dependency-evidence": ("dependency-evidence", "provide one current disposition per dependency issue"),
+    "source.conflicting-projection-evidence": ("projection-evidence", "provide at most one current projection per surface"),
+    "source.conflicting-admission-evidence": ("lifecycle-admission-evidence", "provide one current admission result per requested mutation with matching authorization evidence"),
+    "claim.multiple-primary": ("primary-pr-claim", "select one authoritative primary pull request or reconcile the conflicting claims"),
+    "lifecycle.closed-without-terminal-evidence": ("issue-lifecycle", "provide terminal disposition evidence or merged primary-PR evidence for the closed issue"),
+}
+
+
+def _manual_decision_action(e: LifecycleReconciliationInput, reason: str) -> ReconciliationAction:
+    s, snap = e.operational_state, e.lifecycle_snapshot
+    observed = {
+        "source.identity-mismatch": f"operational={s.repository}#{s.issue_number};input={e.repository}#{e.issue_number}",
+        "source.canonical-conflict": f"state-id={s.state_id};freshness={s.freshness_state.value};outcome={s.outcome.value};dependency={s.dependency_state.value};readiness={s.readiness.value}",
+        "source.lifecycle-snapshot-conflict": "snapshot=missing" if snap is None else f"snapshot-id={snap.snapshot_id};issue={snap.repository}#{snap.issue_number};issue-state={snap.issue_state};pr={snap.pull_request_number or 'none'};head={snap.source_head or 'none'};pr-state={snap.pr_state};merged={snap.merged}",
+        "source.conflicting-dependency-evidence": ";".join(f"{n}={'|'.join(sorted({v.disposition.value for v in e.dependencies if v.issue_number == n}))}" for n in sorted({v.issue_number for v in e.dependencies}) if len({v.disposition for v in e.dependencies if v.issue_number == n}) > 1),
+        "source.conflicting-projection-evidence": ";".join(f"{surface}={'|'.join(sorted(v.evidence_id for v in e.projections if v.surface.value == surface))}" for surface in sorted({v.surface.value for v in e.projections}) if sum(v.surface.value == surface for v in e.projections) > 1),
+        "source.conflicting-admission-evidence": ";".join(sorted(f"{v.requested_mutation}={v.result_id}" for v in e.admissions)),
+        "claim.multiple-primary": f"primary-prs={','.join(map(str, s.primary_pr_numbers)) or 'none'}",
+        "lifecycle.closed-without-terminal-evidence": f"issue-state={s.issue_state.value};terminal={s.terminal_disposition.value};primary-pr-state={s.primary_pr_state.value}",
+    }[reason]
+    surface, expected = _MANUAL_DECISION_RULES[reason]
+    return ReconciliationAction(ActionCategory.MANUAL_DECISION, reason, surface, observed or "conflict-not-localized", expected)
+
+
 def reconcile_lifecycle(e: LifecycleReconciliationInput) -> LifecycleReconciliationResult:
     if type(e) is not LifecycleReconciliationInput:
         raise TypeError("evidence must be LifecycleReconciliationInput")
@@ -445,7 +473,7 @@ def reconcile_lifecycle(e: LifecycleReconciliationInput) -> LifecycleReconciliat
 
     if decision:
         controlling = next(v for v in sorted(reasons) if v.startswith("source.") or v in {"claim.multiple-primary", "lifecycle.closed-without-terminal-evidence"})
-        actions = [ReconciliationAction(ActionCategory.MANUAL_DECISION, controlling, "manual-decision", "conflicting or incomplete canonical evidence", "resolve canonical evidence")]
+        actions = [_manual_decision_action(e, controlling)]
         outcome = ReconciliationOutcome.NEEDS_DECISION
     else:
         outcome = ReconciliationOutcome.REQUIRED if actions else ReconciliationOutcome.CONSISTENT
