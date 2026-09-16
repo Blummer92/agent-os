@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 from pathlib import Path
 
 from scripts.agent_os_execution_checkpoint.handoff_discovery import discover_issue_handoff
