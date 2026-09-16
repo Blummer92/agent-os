@@ -1,9 +1,9 @@
 """Bounded execution seam for one admitted #2283 Notion read.
 
-This module composes existing capabilities and adds none of its own:
+This module composes the existing governed Agent OS read-only path. It does not
+model or depend on a native/direct ChatGPT Notion connector.
 
-- #2282 ``build_scheduler_fallback_read_executor`` / ``retrieve_curriculum_evidence``
-  own execution-surface routing and the read-only action boundary;
+- #2282 owns the bounded read-only action boundary;
 - #980 owns request-sensitive read planning;
 - #971 owns relation-first Visual Asset Library retrieval;
 - #975 owns provider-neutral evidence assembly;
@@ -12,7 +12,7 @@ This module composes existing capabilities and adds none of its own:
 
 No Notion client, curriculum context engine, asset registry, cache, queue,
 scheduler, retry loop, or source of truth is created here. Routine reads never
-require GCE: the injected executor is supplied by the GitHub Actions job.
+require GCE: the injected executor is supplied by the GitHub-controlled job.
 """
 
 from __future__ import annotations
@@ -42,9 +42,6 @@ from .models import (
     NotionReadRequestError,
 )
 
-#: Zero-argument factory returning the bounded Scheduler read-task callable.
-#: It is invoked only after ``secret_dispatch_authorized`` is proven true, so a
-#: rejected admission never reaches the credential-bearing composition.
 SchedulerTaskExecutorFactory = Callable[[], Callable[[Mapping[str, object]], object]]
 
 
@@ -59,7 +56,6 @@ def execute_admitted_notion_read(
     if not isinstance(admission, NotionReadAdmission):
         raise NotionReadRequestError("admission evidence is required")
     if admission.status != "admitted" or admission.secret_dispatch_authorized is not True:
-        # The single credential gate. The factory is deliberately untouched here.
         raise NotionReadRequestError(
             "secret-bearing dispatch requires an admitted #2283 request"
         )
@@ -75,8 +71,6 @@ def execute_admitted_notion_read(
     def resolve_identity(logical_source: str) -> dict[str, object]:
         binding = catalog.source(logical_source)
         if binding is None or not binding.dispatchable:
-            # Fail closed rather than broadening to another data source or a
-            # workspace-wide search.
             raise NotionReadRequestError(
                 f"logical source is not an approved binding: {logical_source!r}"
             )
@@ -87,9 +81,10 @@ def execute_admitted_notion_read(
         }
 
     execute_task = _bounded_read_task_executor(scheduler_task_executor_factory())
-    # Curriculum status is live Notion truth, resolved here through the canonical
-    # normalizer so #973 decides disposition from the unit's actual state.
     unit_status = _resolve_live_unit_status(unit, execute_task)
+    execute_read = build_scheduler_fallback_read_executor(
+        execute_scheduler_task=execute_task
+    )
 
     routed = retrieve_curriculum_evidence(
         request=request,
@@ -99,12 +94,7 @@ def execute_admitted_notion_read(
             "provider_page_id": unit.provider_page_id,
         },
         resolve_identity=resolve_identity,
-        # The GitHub-controlled job always uses the existing Agent OS read-only
-        # reader; it never depends on a native ChatGPT Notion connector.
-        native_notion_connector_available=False,
-        fallback_factory=lambda: build_scheduler_fallback_read_executor(
-            execute_scheduler_task=execute_task
-        ),
+        execute_read=execute_read,
         current_context=current_context,
     )
 
@@ -117,8 +107,6 @@ def execute_admitted_notion_read(
         "read_route": routed["read_route"],
         "expected_read_route": FALLBACK_ROUTE,
         "state_status": state.status.value,
-        # Reuse the canonical inverse of #973's freeze step instead of writing a
-        # second traversal of the same frozen structure.
         "state_payload": thaw_json(state.record.payload),
     }
 
@@ -126,14 +114,7 @@ def execute_admitted_notion_read(
 def _bounded_read_task_executor(
     execute_task: object,
 ) -> Callable[[Mapping[str, object]], object]:
-    """Refuse any action outside the inherited #2282 read-only bound.
-
-    #2282 already bounds what it dispatches, but the canonical-unit resolution
-    below calls the injected executor directly, and the #936 adapter's own action
-    surface is wider than #2282's (it also exposes page-body and property reads).
-    Re-asserting the bound from the canonical constant keeps every dispatch on
-    this path inside it without restating the action set.
-    """
+    """Refuse any action outside the inherited #2282 read-only bound."""
     if not callable(execute_task):
         raise NotionReadRequestError("scheduler task executor must be callable")
 
@@ -152,14 +133,7 @@ def _resolve_live_unit_status(
     unit: CanonicalUnitBinding,
     execute_task: Callable[[Mapping[str, object]], object],
 ) -> str:
-    """Resolve the canonical unit's #973 status from live evidence.
-
-    The scheduler result is normalized by the canonical
-    ``SchedulerNotionEvidenceAdapter``/``NotionContractAdapter`` pair, so archived
-    and human-review detection stay owned upstream. This function only maps those
-    canonical booleans onto the existing #973 status vocabulary; it classifies
-    nothing itself.
-    """
+    """Resolve the canonical unit's #973 status from live evidence."""
     result = execute_task({"action": "get_page", "page_id": unit.provider_page_id})
     resource = SchedulerNotionEvidenceAdapter().from_scheduler_result("get_page", result)
     if isinstance(resource, ConnectorError):
