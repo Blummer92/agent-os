@@ -1,4 +1,4 @@
-"""Regression coverage for the Picture Perfect / PPUX routing contract (#1280, #1492)."""
+"""Regression coverage for the Picture Perfect / PPUX routing contract (#1280, #1492, #2423, #2424)."""
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -87,6 +87,32 @@ def test_unknown_tutorial_and_missing_evidence_fail_visibly() -> None:
     assert "Unknown or ambiguous tutorials do not produce fabricated PPUX output" in routing
     assert "Never replace missing evidence with plausible controls" in routing
     assert "blocker reason codes" in routing
+
+
+def test_numbered_tutorial_identity_cannot_be_invented_after_unknown_workflow() -> None:
+    routing = routing_section()
+    for invariant in (
+        "Numbered tutorial identities require canonical evidence",
+        "do not label generated prompts or benchmark output as `Tutorial N`",
+        "unknown or unresolved workflow remains blocking",
+        "content-domain context cannot promote an exploratory prompt into a numbered tutorial",
+    ):
+        assert invariant in routing
+
+
+def test_runner_benchmark_provenance_keeps_manual_authoring_and_runner_execution_distinct() -> None:
+    routing = routing_section()
+    for invariant in (
+        "prompt_author",
+        "execution_surface",
+        "image_provider/model",
+        "orchestrator",
+        "manual ChatGPT chat authoring",
+        "user-operated external runner",
+        "runner-generated",
+        "Manual prompt experiments cannot satisfy governed-runner acceptance criteria",
+    ):
+        assert invariant in routing
 
 
 def test_named_classroom_artifact_resolution_continues_across_governed_sources() -> None:
