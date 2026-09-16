@@ -8,7 +8,8 @@ def test_bounded_bug_work_reconciles_open_candidates_before_exclusion():
     assert "reconcile that existing open bug backlog" in text
     assert "exclude stale, duplicate, already-fixed" in text
     assert "use eligible existing bugs first" in text
-    assert "do not create issues merely to pad a requested count" in text
+    assert "report the honest shortfall" in text
+    assert "creating issues merely to pad the count" in text
 
 
 def test_item_local_non_actionable_candidate_does_not_complete_parent_batch():

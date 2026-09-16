@@ -18,4 +18,6 @@ def test_bug_discovery_is_not_limited_to_managed_type_labels():
 
 
 def test_no_count_padding():
-    assert "Do not create issues merely to pad a requested count" in AGENTS
+    assert "report the honest shortfall" in AGENTS
+    assert "creating issues merely to pad the count" in AGENTS
+    assert "Newly discovered or newly created bugs do not count toward a user-requested existing-backlog implementation count" in AGENTS
