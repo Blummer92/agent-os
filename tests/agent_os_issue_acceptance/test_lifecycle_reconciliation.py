@@ -167,7 +167,11 @@ def test_duplicate_primary_claims_fail_closed_to_needs_decision():
     assert result.outcome is ReconciliationOutcome.NEEDS_DECISION
     assert "claim.multiple-primary" in result.reason_codes
     assert len(result.actions) == 1
-    assert result.actions[0].category is ActionCategory.MANUAL_DECISION
+    action = result.actions[0]
+    assert action.category is ActionCategory.MANUAL_DECISION
+    assert action.surface == "primary-pr-claim"
+    assert action.observed == "primary-prs=997,998"
+    assert "select one authoritative primary pull request" in action.expected
 
 
 def test_stale_lifecycle_label_requires_existing_admission_not_inferred_authority():
@@ -233,7 +237,11 @@ def test_closed_terminal_issue_rejects_stale_snapshot_issue_state():
     result = reconcile_lifecycle(input_for(current, lifecycle_snapshot=stale_snap, admissions=(admission_for(stale_snap),)))
     assert result.outcome is ReconciliationOutcome.NEEDS_DECISION
     assert "source.lifecycle-snapshot-conflict" in result.reason_codes
-    assert result.actions[0].category is ActionCategory.MANUAL_DECISION
+    action = result.actions[0]
+    assert action.category is ActionCategory.MANUAL_DECISION
+    assert action.surface == "lifecycle-snapshot"
+    assert stale_snap.snapshot_id in action.observed
+    assert "reacquire one lifecycle snapshot" in action.expected
 
 
 def test_conflicting_dependency_evidence_fails_closed():
@@ -241,6 +249,32 @@ def test_conflicting_dependency_evidence_fails_closed():
     result = reconcile_lifecycle(input_for(current, dependencies=(DependencyEvidence(934, DependencyDisposition.COMPLETED, "one"), DependencyEvidence(934, DependencyDisposition.INCOMPLETE, "two"))))
     assert result.outcome is ReconciliationOutcome.NEEDS_DECISION
     assert "source.conflicting-dependency-evidence" in result.reason_codes
+    action = result.actions[0]
+    assert action.surface == "dependency-evidence"
+    assert action.observed == "934=completed|incomplete"
+    assert action.expected == "provide one current disposition per dependency issue"
+
+
+def test_conflicting_projection_evidence_reports_exact_surface():
+    current = state()
+    result = reconcile_lifecycle(input_for(current, projections=(ProjectionEvidence(ProjectionSurface.ROADMAP, "roadmap:a"), ProjectionEvidence(ProjectionSurface.ROADMAP, "roadmap:b"))))
+    assert result.outcome is ReconciliationOutcome.NEEDS_DECISION
+    action = result.actions[0]
+    assert action.reason_code == "source.conflicting-projection-evidence"
+    assert action.surface == "projection-evidence"
+    assert action.observed == "roadmap=roadmap:a|roadmap:b"
+    assert action.expected == "provide at most one current projection per surface"
+
+
+def test_closed_without_terminal_evidence_reports_resume_requirement():
+    current = state(issue_state=IssueState.CLOSED, terminal=TerminalDisposition.NONE, observed_labels=())
+    result = reconcile_lifecycle(input_for(current))
+    assert result.outcome is ReconciliationOutcome.NEEDS_DECISION
+    action = result.actions[0]
+    assert action.reason_code == "lifecycle.closed-without-terminal-evidence"
+    assert action.surface == "issue-lifecycle"
+    assert "terminal=none" in action.observed
+    assert "provide terminal disposition evidence" in action.expected
 
 
 def test_merged_implementation_and_stale_roadmap_are_both_reported():
@@ -268,7 +302,11 @@ def test_mismatched_closure_admission_authorization_fails_closed():
     result = reconcile_lifecycle(input_for(current, lifecycle_snapshot=snap, current_pull_request=pr(value=PullRequestState.MERGED), admissions=(admission,)))
     assert result.outcome is ReconciliationOutcome.NEEDS_DECISION
     assert "source.conflicting-admission-evidence" in result.reason_codes
-    assert result.actions[0].category is ActionCategory.MANUAL_DECISION
+    action = result.actions[0]
+    assert action.category is ActionCategory.MANUAL_DECISION
+    assert action.surface == "lifecycle-admission-evidence"
+    assert admission.result_id in action.observed
+    assert "matching authorization evidence" in action.expected
 
 
 def test_equivalent_supplied_evidence_is_deterministic_and_authority_preserving():
