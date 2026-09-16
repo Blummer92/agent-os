@@ -10,18 +10,11 @@ or GitHub write path: it projects canonical pilot evidence into one structured
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
 
 from scripts.agent_os_execution_interface.continuation_driver import ContinuationDecision
 
 VALIDATED_WORKSPACE_TERMINAL = "validated-workspace"
 SAFE_IMPLEMENTATION_TERMINAL = "draft-pr-handoff"
-
-ValidatedWorkspaceAction = Literal[
-    "materialize-draft-pr",
-    "repair-validation-failure",
-    "stop",
-]
 
 
 @dataclass(frozen=True, slots=True)

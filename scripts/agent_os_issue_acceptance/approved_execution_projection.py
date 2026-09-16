@@ -19,6 +19,7 @@ from .approval_records import (
     ApprovalKind,
     ApprovalRecord,
     ApprovalState,
+    _cohorts,
     compute_current_approval_binding,
     evaluate_approval_applicability,
 )
@@ -508,22 +509,6 @@ def _failure(
     details: tuple[str, ...],
 ) -> ApprovedExecutionProjectionResult:
     return ApprovedExecutionProjectionResult(status, None, reasons, details)
-
-
-def _cohorts(values: tuple[HandoffCohort, ...]) -> tuple[HandoffCohort, ...]:
-    cohorts = tuple(values)
-    if not cohorts or not all(isinstance(item, HandoffCohort) for item in cohorts):
-        raise TypeError("cohort_summaries must contain HandoffCohort values")
-    return tuple(
-        sorted(
-            cohorts,
-            key=lambda item: (
-                item.classification,
-                tuple(item.node_ids),
-                tuple(item.reason_codes),
-            ),
-        )
-    )
 
 
 def _strings(
