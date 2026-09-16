@@ -21,6 +21,12 @@ def canonical_issue_payload(item: Mapping[str, object]) -> bytes:
     missing = [field for field in _REVISION_FIELDS[:7] if field not in item]
     if missing:
         raise ValueError("missing revision field(s): " + ", ".join(missing))
+    number = item.get("number")
+    if type(number) is not int or number < 1:
+        raise ValueError("issue number must be a positive integer")
+    state = item.get("state")
+    if state not in {"open", "closed"}:
+        raise ValueError("issue state must be open or closed")
     labels = item.get("labels")
     if not isinstance(labels, Sequence) or isinstance(labels, (str, bytes)):
         raise ValueError("labels must be a sequence")
