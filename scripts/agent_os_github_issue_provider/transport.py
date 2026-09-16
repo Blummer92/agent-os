@@ -6,7 +6,7 @@ from typing import Protocol
 from github import Github
 
 from .models import TransportAttempt, TransportResponse
-from .request import GitHubRequestError, request_json
+from .request import GitHubRequestAttempt, GitHubRequestError, request_json
 
 
 class GitHubTransportError(RuntimeError):
@@ -57,21 +57,39 @@ class PyGithubRestTransport:
                 retry_transport_errors=True,
             )
         except GitHubRequestError as error:
-            attempts = tuple(
-                TransportAttempt(
-                    item.number,
-                    _request_error_kind(error) if item.error_kind is not None else None,
-                )
-                for item in error.attempts
-            )
-            raise GitHubTransportError(_request_error_kind(error), attempts) from error
+            final_kind = _request_error_kind(error)
+            attempts = _domain_attempts(error.attempts, final_kind=final_kind)
+            raise GitHubTransportError(final_kind, attempts) from error
 
         return TransportResponse(
             status=200,
             headers=dict(result.headers),
             payload=result.payload,
-            attempts=tuple(TransportAttempt(item.number) for item in result.attempts),
+            attempts=_domain_attempts(result.attempts, final_kind=None),
         )
+
+
+def _domain_attempts(
+    attempts: tuple[GitHubRequestAttempt, ...],
+    *,
+    final_kind: str | None,
+) -> tuple[TransportAttempt, ...]:
+    """Project commodity attempt evidence into this package's status vocabulary.
+
+    Only retry-admitted failures (server errors, 408, transport loss) can precede
+    a later attempt, and every one of them is ``api-error`` here. Just the final
+    attempt can carry a non-retryable status, so it alone takes ``final_kind``.
+    """
+    last = len(attempts) - 1
+    return tuple(
+        TransportAttempt(
+            item.number,
+            None
+            if item.error_kind is None
+            else (final_kind if index == last else "api-error"),
+        )
+        for index, item in enumerate(attempts)
+    )
 
 
 def _request_error_kind(error: GitHubRequestError) -> str:

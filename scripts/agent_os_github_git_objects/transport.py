@@ -7,6 +7,7 @@ from typing import Any, Protocol
 from urllib.parse import quote
 
 from github import Github
+from github.GithubException import GithubException
 from scripts.agent_os_github_issue_provider.request import GitHubRequestError, request_json
 
 from .models import (
@@ -14,6 +15,16 @@ from .models import (
     GitCompareSnapshot, GitRefSnapshot, GitTreeEntry, GitTreeSnapshot,
     MutationState, require_branch, require_repository, require_sha40,
 )
+
+
+# Re-exported for existing callers that catch the provider exception through this
+# module; the bounded request primitive now owns raising and classifying it.
+__all__ = [
+    "GitHubGitObjectTransport",
+    "GitObjectTransportError",
+    "GithubException",
+    "PyGithubGitObjectTransport",
+]
 
 
 class GitObjectTransportError(RuntimeError):
