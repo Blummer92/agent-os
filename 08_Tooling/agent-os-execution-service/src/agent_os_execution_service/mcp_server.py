@@ -1,9 +1,10 @@
-"""MCP protocol binding for the bounded Agent OS ChatGPT facade (#1966 / #1988 / #2363)."""
+"""MCP protocol binding for the bounded Agent OS ChatGPT facade (#1966 / #1988 / #2363 / #2487)."""
 
 from __future__ import annotations
 
 from mcp.server import MCPServer
 
+from .bulk_repair_facade import classify_bulk_repair_continuation
 from .connected_issue_creation_facade import plan_connected_issue_creation_for_host
 from .issue_start_lesson_preflight import activate_issue_start_lesson_preflight
 from .lesson_reader_composition import build_lesson_read_executor
@@ -79,3 +80,14 @@ def classify_agent_os_mission_completion_tool(repository: str, issue_number: int
 @mcp.tool()
 def classify_agent_os_continuation_tool(repository: str, issue_number: int, operation_id: str, surface_outcome: str, approved_alternative_capability: str | None = None, branch: str | None = None, pull_request: int | None = None, checkpoint_id: str | None = None, lease_id: str | None = None, prior_effect: str = "none-proven", target_identity_reacquired: bool = False, requires_exact_blob_identity: bool = False, exact_blob_identity_reacquired: bool = False, runtime_surface_transition: bool = False, evidence_compatibility_confirmed: bool = False, active_foreign_lease: bool = False, equivalent_transition_repeated: bool = False, material_decision_required: bool = False, alternative_widens_authority: bool = False, non_absorbed_domain: str | None = None) -> dict[str, object]:
     return classify_agent_os_continuation(repository=repository, issue_number=issue_number, operation_id=operation_id, surface_outcome=surface_outcome, approved_alternative_capability=approved_alternative_capability, branch=branch, pull_request=pull_request, checkpoint_id=checkpoint_id, lease_id=lease_id, prior_effect=prior_effect, target_identity_reacquired=target_identity_reacquired, requires_exact_blob_identity=requires_exact_blob_identity, exact_blob_identity_reacquired=exact_blob_identity_reacquired, runtime_surface_transition=runtime_surface_transition, evidence_compatibility_confirmed=evidence_compatibility_confirmed, active_foreign_lease=active_foreign_lease, equivalent_transition_repeated=equivalent_transition_repeated, material_decision_required=material_decision_required, alternative_widens_authority=alternative_widens_authority, non_absorbed_domain=non_absorbed_domain)
+
+
+@mcp.tool()
+def classify_agent_os_bulk_repair_continuation_tool(repository: str, issue_number: int, requested_pull_requests: list[int], candidate_evidence: list[dict[str, object]]) -> dict[str, object]:
+    """Classify one finite multi-PR repair batch without performing mutations."""
+    return classify_bulk_repair_continuation(
+        repository=repository,
+        issue_number=issue_number,
+        requested_pull_requests=requested_pull_requests,
+        candidate_evidence=candidate_evidence,
+    )

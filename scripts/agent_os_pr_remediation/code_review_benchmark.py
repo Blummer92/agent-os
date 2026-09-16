@@ -142,7 +142,7 @@ def _items(values: tuple[str, ...], field: str, required: bool=False) -> tuple[s
     if required and not result: raise EvidenceValidationError(f"{field} must not be empty")
     return result
 def _sha(value: str) -> str:
-    value=_text(value,"source_head_sha").lower()
+    value=_text(value,"source_head_sha")
     if len(value)!=40 or any(c not in "0123456789abcdef" for c in value): raise EvidenceValidationError("source_head_sha must be a 40-character hexadecimal SHA")
     return value
 def _mean(values: list[float]) -> float | None: return sum(values)/len(values) if values else None

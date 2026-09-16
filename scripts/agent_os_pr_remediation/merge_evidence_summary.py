@@ -140,7 +140,7 @@ def _text(value: object, field: str) -> str:
 def _sha(value: object, field: str, *, optional: bool = False) -> str | None:
     if value is None and optional:
         return None
-    text = _text(value, field).lower()
+    text = _text(value, field)
     if len(text) != 40 or any(char not in "0123456789abcdef" for char in text):
         raise EvidenceValidationError(f"{field} must be a 40-character hexadecimal SHA")
     return text
