@@ -16,8 +16,6 @@ never re-derives or overrides them.
 from __future__ import annotations
 
 import hashlib
-import json
-import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal
@@ -28,7 +26,14 @@ from scripts.agent_os_remote_validation.provenance import (
     serialize_evidence_applicability,
 )
 
-from .coding_command_center_handoff import CodingCommandCenterHandoff
+from .coding_command_center_handoff import (
+    CodingCommandCenterHandoff,
+    _canonical_json,
+    _canonical_reasons,
+    _optional_text,
+    _required_text,
+    _sha40,
+)
 from .issue_operational_state import (
     IssueOperationalState,
     LifecycleStage,
@@ -37,12 +42,8 @@ from .issue_operational_state import (
 
 COMPUTE_CONTROL_PROJECTION_SCHEMA_NAME = "agent-os-compute-control-projection"
 COMPUTE_CONTROL_PROJECTION_SCHEMA_VERSION = "1.0"
-MAX_TEXT_BYTES = 4096
-MAX_REASON_CODES = 32
 MAX_SERIALIZED_BYTES = 64 * 1024
 _UNAVAILABLE = "unavailable"
-_SHA40_RE = re.compile(r"^[0-9a-f]{40}$")
-_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 # Mirrors the canonical validation-head disposition vocabulary owned by
 # ``agent_os_execution_service.validation_supersession``. That module is
@@ -464,37 +465,3 @@ def serialize_compute_control_projection(
         raise TypeError("projection must be exact ComputeControlProjection")
     projection.__post_init__()
     return projection.to_dict()
-
-
-def _canonical_json(payload: object) -> str:
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-
-
-def _required_text(value: object, name: str) -> str:
-    if type(value) is not str or not value or len(value.encode("utf-8")) > MAX_TEXT_BYTES or _CONTROL_RE.search(value):
-        raise ValueError(f"{name} is outside bounds")
-    return value
-
-
-def _optional_text(value: object, name: str) -> str | None:
-    if value is None:
-        return None
-    return _required_text(value, name)
-
-
-def _sha40(value: object, name: str) -> str:
-    text = _required_text(value, name)
-    if not _SHA40_RE.fullmatch(text):
-        raise ValueError(f"{name} must be a lowercase 40-character SHA")
-    return text
-
-
-def _canonical_reasons(values: object) -> tuple[str, ...]:
-    if type(values) is not tuple:
-        raise TypeError("reason_codes must be an exact tuple")
-    if len(values) > MAX_REASON_CODES:
-        raise ValueError("reason_codes exceeds bound")
-    checked = tuple(_required_text(item, "reason_code") for item in values)
-    if len(set(checked)) != len(checked):
-        raise ValueError("reason_codes contains duplicates")
-    return tuple(sorted(checked))

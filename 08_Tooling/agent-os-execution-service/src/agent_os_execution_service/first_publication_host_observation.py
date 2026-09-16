@@ -74,7 +74,7 @@ from .execution_authorization_source import (
     ExecutionAuthorizationSourceStatus,
     reacquire_execution_authorization,
 )
-from .executor_routing import ExecutorCapability, ExecutorRoute, select_executor_route
+from .executor_routing import ExecutorRoute, select_executor_route
 from .first_publication_producer import RouteSelectionEvidence
 from .first_publication_source_activation import (
     FirstPublicationSourceActivationRequest,
@@ -100,7 +100,6 @@ from .production_handoff_publication import (
     _runtime_inputs,
 )
 from .production_host_bootstrap import (
-    PRODUCER_ADAPTER_VERSION,
     ProductionHostConfiguration,
     build_subprocess_verifier_runner,
     canonical_evaluated_at,

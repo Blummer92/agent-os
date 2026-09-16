@@ -51,14 +51,6 @@ REGISTRY_ONLY_OWNERS = {
     "Unit Alignment Agent",
 }
 APPROVED_OWNER_ALIASES = {"QA Agent"}
-GOVERNED_ENUM_FIELDS = {
-    "issue_tier",
-    "readiness_candidate",
-    "documentation_impact",
-    "source_route",
-    "external_write_boundary",
-    "primary_owner",
-}
 
 
 @dataclass(frozen=True)

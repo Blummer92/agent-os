@@ -11,7 +11,6 @@ from typing import Any, Literal
 
 from scripts.agent_os_execution_capabilities import (
     RepositoryStateEvidence,
-    RepositoryStateValidationResult,
     validate_repository_state_evidence,
 )
 
