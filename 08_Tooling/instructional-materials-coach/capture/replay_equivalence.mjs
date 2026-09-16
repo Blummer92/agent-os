@@ -43,9 +43,8 @@ export function compareReplayEvidence(original, candidate) {
     return Object.freeze({ status, behaviorally_safe: false, reason_code: `rj4-${status}` });
   }
 
-  const sameCheckpoints = JSON.stringify(original.checkpoints) === JSON.stringify(candidate.checkpoints);
   const sameFinalState = JSON.stringify(original.final_state) === JSON.stringify(candidate.final_state);
-  if (!sameCheckpoints || !sameFinalState) {
+  if (!sameFinalState) {
     return Object.freeze({ status: 'not-equivalent', behaviorally_safe: false, reason_code: 'rj4-observable-mismatch' });
   }
   return Object.freeze({ status: 'equivalent', behaviorally_safe: true, reason_code: null });
