@@ -4,6 +4,8 @@ The Coding Cockpit is a display-only projection over existing canonical Agent OS
 
 `coding_cockpit_view.py` composes the existing `CodingCommandCenterHandoff` with the exact `IssueOperationalState` that the handoff references. Identity disagreement fails closed.
 
+Each field keeps its existing owner. Branch comes from the state's `active_branch` and the primary PR from its `primary_pr_numbers`, projected with the same single-claim rule the handoff builder applies. The exact head is observed evidence and therefore comes only from the handoff's `observed_head_sha`; the operational state does not carry a head SHA. The view derives no identity of its own.
+
 The concise operator view exposes:
 
 - current repository/issue plus primary PR, branch, and exact head when canonical evidence supplies them;
