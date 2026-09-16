@@ -122,6 +122,9 @@ def normalize_pr_snapshot(payload: Any) -> NormalizedPRSnapshot:
     repository = _string(data.get("repository"), "repository")
     if repository is None or repository.count("/") != 1:
         raise EvidenceValidationError("repository must be owner/name")
+    owner, name = repository.split("/", 1)
+    if not owner or not name:
+        raise EvidenceValidationError("repository must be owner/name")
     _exact(data.get("pr_number"), int, "pr_number")
     pr_number = data["pr_number"]
     if pr_number <= 0:
