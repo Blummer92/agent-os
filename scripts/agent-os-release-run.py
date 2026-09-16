@@ -9,6 +9,7 @@ A legacy caller-supplied boolean is deliberately ignored as authority.
 from __future__ import annotations
 
 import sys
+import typing
 from dataclasses import fields
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,11 @@ if _SCRIPT_DIR not in sys.path:
 
 from agent_os_release_run_core import *  # noqa: F401,F403
 from agent_os_release_run_core import evaluate_release_run as _evaluate_release_run_core
+
+# `import *` never re-exports underscore-prefixed names, but
+# tests/test_2049_release_evidence_strictness.py white-box tests this
+# private helper directly through this compatibility entrypoint module.
+from agent_os_release_run_core import _source_identifier_strings  # noqa: F401
 from agent_os_issue_acceptance.lifecycle_mutation_guard import (
     AdmissionStatus,
     LifecycleMutationAuthorization,
@@ -34,7 +40,17 @@ def _construct_exact(cls: type, raw: Any, name: str):
     unknown = set(raw) - allowed
     if unknown:
         raise ValueError(f"{name} contains unsupported fields")
-    return cls(**raw)
+    # JSON has no tuple type, so fields the dataclass declares as tuple[...]
+    # arrive here as plain lists (e.g. from LifecycleMutationAuthorization.to_dict()
+    # round-tripped through JSON). Restore the exact tuple type at this
+    # JSON-boundary wrapper rather than loosening the canonical validator's
+    # strict `type(values) is tuple` check.
+    hints = typing.get_type_hints(cls)
+    coerced = {
+        key: tuple(value) if typing.get_origin(hints.get(key)) is tuple and isinstance(value, list) else value
+        for key, value in raw.items()
+    }
+    return cls(**coerced)
 
 
 def _closure_admitted(evidence: dict[str, Any]) -> bool:
