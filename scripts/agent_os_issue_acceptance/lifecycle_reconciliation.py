@@ -339,44 +339,32 @@ def _repair(reason: str, surface: str, observed: str, expected: str) -> Reconcil
     return ReconciliationAction(ActionCategory.PROJECTION_REPAIR, reason, surface, observed, expected)
 
 
+_MANUAL_DECISION_RULES = {
+    "source.identity-mismatch": ("canonical-identity", "establish one canonical identity"),
+    "source.canonical-conflict": ("canonical-operational-state", "reacquire one current non-conflicting canonical operational state"),
+    "source.lifecycle-snapshot-conflict": ("lifecycle-snapshot", "reacquire one lifecycle snapshot consistent with the current issue and pull-request evidence"),
+    "source.conflicting-dependency-evidence": ("dependency-evidence", "provide one current disposition per dependency issue"),
+    "source.conflicting-projection-evidence": ("projection-evidence", "provide at most one current projection per surface"),
+    "source.conflicting-admission-evidence": ("lifecycle-admission-evidence", "provide one current admission result per requested mutation with matching authorization evidence"),
+    "claim.multiple-primary": ("primary-pr-claim", "select one authoritative primary pull request or reconcile the conflicting claims"),
+    "lifecycle.closed-without-terminal-evidence": ("issue-lifecycle", "provide terminal disposition evidence or merged primary-PR evidence for the closed issue"),
+}
+
+
 def _manual_decision_action(e: LifecycleReconciliationInput, reason: str) -> ReconciliationAction:
-    s = e.operational_state
-    if reason == "source.identity-mismatch":
-        return ReconciliationAction(ActionCategory.MANUAL_DECISION, reason, "canonical-identity", f"operational={s.repository}#{s.issue_number}", f"input={e.repository}#{e.issue_number}; establish one canonical identity")
-    if reason == "source.canonical-conflict":
-        observed = f"state-id={s.state_id};freshness={s.freshness_state.value};outcome={s.outcome.value};dependency={s.dependency_state.value};readiness={s.readiness.value}"
-        return ReconciliationAction(ActionCategory.MANUAL_DECISION, reason, "canonical-operational-state", observed, "reacquire one current non-conflicting canonical operational state")
-    if reason == "source.lifecycle-snapshot-conflict":
-        snap = e.lifecycle_snapshot
-        observed = "snapshot=missing" if snap is None else f"snapshot-id={snap.snapshot_id};issue={snap.repository}#{snap.issue_number};issue-state={snap.issue_state};pr={snap.pull_request_number or 'none'};head={snap.source_head or 'none'};pr-state={snap.pr_state};merged={snap.merged}"
-        return ReconciliationAction(ActionCategory.MANUAL_DECISION, reason, "lifecycle-snapshot", observed, "reacquire one lifecycle snapshot consistent with the current issue and pull-request evidence")
-    if reason == "source.conflicting-dependency-evidence":
-        grouped: dict[int, set[str]] = {}
-        for value in e.dependencies:
-            grouped.setdefault(value.issue_number, set()).add(value.disposition.value)
-        observed = ";".join(f"{number}={'|'.join(sorted(values))}" for number, values in sorted(grouped.items()) if len(values) > 1)
-        return ReconciliationAction(ActionCategory.MANUAL_DECISION, reason, "dependency-evidence", observed or "conflict-not-localized", "provide one current disposition per dependency issue")
-    if reason == "source.conflicting-projection-evidence":
-        grouped: dict[str, list[str]] = {}
-        for value in e.projections:
-            grouped.setdefault(value.surface.value, []).append(value.evidence_id)
-        observed = ";".join(f"{surface}={'|'.join(sorted(ids))}" for surface, ids in sorted(grouped.items()) if len(ids) > 1)
-        return ReconciliationAction(ActionCategory.MANUAL_DECISION, reason, "projection-evidence", observed or "conflict-not-localized", "provide at most one current projection per surface")
-    if reason == "source.conflicting-admission-evidence":
-        grouped: dict[str, list[str]] = {}
-        for value in e.admissions:
-            grouped.setdefault(value.requested_mutation, []).append(value.result_id)
-        observed = ";".join(f"{mutation}={'|'.join(sorted(ids))}" for mutation, ids in sorted(grouped.items()) if len(ids) > 1)
-        if not observed and e.admissions:
-            observed = ";".join(sorted(f"{value.requested_mutation}={value.result_id}" for value in e.admissions))
-        return ReconciliationAction(ActionCategory.MANUAL_DECISION, reason, "lifecycle-admission-evidence", observed or "conflict-not-localized", "provide one current admission result per requested mutation with matching authorization evidence")
-    if reason == "claim.multiple-primary":
-        observed = f"primary-prs={','.join(map(str, s.primary_pr_numbers)) or 'none'}"
-        return ReconciliationAction(ActionCategory.MANUAL_DECISION, reason, "primary-pr-claim", observed, "select one authoritative primary pull request or reconcile the conflicting claims")
-    if reason == "lifecycle.closed-without-terminal-evidence":
-        observed = f"issue-state={s.issue_state.value};terminal={s.terminal_disposition.value};primary-pr-state={s.primary_pr_state.value}"
-        return ReconciliationAction(ActionCategory.MANUAL_DECISION, reason, "issue-lifecycle", observed, "provide terminal disposition evidence or merged primary-PR evidence for the closed issue")
-    raise ValueError("manual decision reason is not supported")
+    s, snap = e.operational_state, e.lifecycle_snapshot
+    observed = {
+        "source.identity-mismatch": f"operational={s.repository}#{s.issue_number};input={e.repository}#{e.issue_number}",
+        "source.canonical-conflict": f"state-id={s.state_id};freshness={s.freshness_state.value};outcome={s.outcome.value};dependency={s.dependency_state.value};readiness={s.readiness.value}",
+        "source.lifecycle-snapshot-conflict": "snapshot=missing" if snap is None else f"snapshot-id={snap.snapshot_id};issue={snap.repository}#{snap.issue_number};issue-state={snap.issue_state};pr={snap.pull_request_number or 'none'};head={snap.source_head or 'none'};pr-state={snap.pr_state};merged={snap.merged}",
+        "source.conflicting-dependency-evidence": ";".join(f"{n}={'|'.join(sorted({v.disposition.value for v in e.dependencies if v.issue_number == n}))}" for n in sorted({v.issue_number for v in e.dependencies}) if len({v.disposition for v in e.dependencies if v.issue_number == n}) > 1),
+        "source.conflicting-projection-evidence": ";".join(f"{surface}={'|'.join(sorted(v.evidence_id for v in e.projections if v.surface.value == surface))}" for surface in sorted({v.surface.value for v in e.projections}) if sum(v.surface.value == surface for v in e.projections) > 1),
+        "source.conflicting-admission-evidence": ";".join(sorted(f"{v.requested_mutation}={v.result_id}" for v in e.admissions)),
+        "claim.multiple-primary": f"primary-prs={','.join(map(str, s.primary_pr_numbers)) or 'none'}",
+        "lifecycle.closed-without-terminal-evidence": f"issue-state={s.issue_state.value};terminal={s.terminal_disposition.value};primary-pr-state={s.primary_pr_state.value}",
+    }[reason]
+    surface, expected = _MANUAL_DECISION_RULES[reason]
+    return ReconciliationAction(ActionCategory.MANUAL_DECISION, reason, surface, observed or "conflict-not-localized", expected)
 
 
 def reconcile_lifecycle(e: LifecycleReconciliationInput) -> LifecycleReconciliationResult:
