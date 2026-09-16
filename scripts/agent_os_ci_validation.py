@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -30,6 +31,17 @@ _PICTURE_PERFECT_FOCUSED = (
 _PICTURE_PERFECT_DIR = (
     ROOT / "08_Tooling/instructional-materials-coach/picture-perfect-coach"
 )
+_CAPTURE_DIR = ROOT / "08_Tooling/instructional-materials-coach/capture"
+_CAPTURE_COMMANDS = {
+    "cd 08_Tooling/instructional-materials-coach/capture && npm ci": ("npm", "ci"),
+    "cd 08_Tooling/instructional-materials-coach/capture && npm test": ("npm", "test"),
+    "cd 08_Tooling/instructional-materials-coach/capture && npm run check": (
+        "npm",
+        "run",
+        "check",
+    ),
+}
+_CI_VALIDATION_SELF_TEST = "python -m pytest tests/test_agent_os_ci_validation.py"
 
 
 def _decode_plan(encoded: str) -> ValidationPlan:
@@ -97,7 +109,31 @@ def _resolve_command(command: str) -> tuple[tuple[str, ...], Path]:
         return argv, ROOT
     if command == _PICTURE_PERFECT_FOCUSED:
         return ("npm", "test", "--", *_PICTURE_PERFECT_TESTS), _PICTURE_PERFECT_DIR
+    capture_argv = _CAPTURE_COMMANDS.get(command)
+    if capture_argv is not None:
+        return capture_argv, _CAPTURE_DIR
+    if command == _CI_VALIDATION_SELF_TEST:
+        return ("python", "-m", "pytest", "tests/test_agent_os_ci_validation.py"), ROOT
     raise ValueError(f"validation command is not in the bounded CI executor: {command}")
+
+
+def _command_env(cwd: Path) -> dict[str, str]:
+    """Supply the repository-root import path the canonical driver already uses.
+
+    ``scripts/validate-all.sh`` runs every root-scoped focused pytest target with
+    ``PYTHONPATH=src`` so root suites can import the ``src`` distributions. This
+    executor runs the same bounded commands and must resolve imports identically;
+    the command text itself stays exactly what the bounded registry owns.
+    """
+    env = dict(os.environ)
+    if cwd != ROOT:
+        return env
+    src_entry = str(ROOT / "src")
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = (
+        src_entry + os.pathsep + existing if existing else src_entry
+    )
+    return env
 
 
 def execute_focused(plan: ValidationPlan, *, expected_head_sha: str) -> None:
@@ -112,7 +148,7 @@ def execute_focused(plan: ValidationPlan, *, expected_head_sha: str) -> None:
         )
     for command in plan.commands:
         argv, cwd = _resolve_command(command)
-        subprocess.run(argv, cwd=cwd, check=True)
+        subprocess.run(argv, cwd=cwd, check=True, env=_command_env(cwd))
 
 
 def _parse_args() -> argparse.Namespace:

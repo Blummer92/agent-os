@@ -8,6 +8,12 @@ release_run = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = release_run
 spec.loader.exec_module(release_run)
 
+from scripts.agent_os_issue_acceptance.lifecycle_mutation_authorization import (
+    LifecycleOwnerDecision,
+    produce_lifecycle_mutation_authorization,
+)
+from scripts.agent_os_issue_acceptance.lifecycle_mutation_guard import LifecycleStateSnapshot
+
 AGGREGATE = "Agent OS Validation Gate / Run aggregate validation"
 ACCEPTANCE = "Agent OS Issue Acceptance Report"
 HEAD = "a" * 40
@@ -39,6 +45,34 @@ def lease_observation(**overrides):
     return value
 
 
+def closure_packet(issue_state="open"):
+    snapshot = LifecycleStateSnapshot(
+        repository="Blummer92/agent-os",
+        issue_number=1309,
+        pull_request_number=1311,
+        source_head=HEAD,
+        base_head=MAIN,
+        pr_state="ready",
+        merged=True,
+        issue_state=issue_state,
+        review_state="clear",
+        unresolved_threads=0,
+        lifecycle_labels=("status:ready",),
+        observed_revision="terminal-readback-1309",
+    )
+    decision = LifecycleOwnerDecision(
+        repository=snapshot.repository,
+        issue_number=snapshot.issue_number,
+        pull_request_number=snapshot.pull_request_number,
+        requested_mutations=("close-issue",),
+        authorizer_id="repository-owner",
+        decision_id="request-interpretation:1309-release",
+        decision_recorded=True,
+    )
+    authorization = produce_lifecycle_mutation_authorization(decision, snapshot)
+    return {"authorization": authorization.to_dict(), "snapshot": snapshot.to_dict()}
+
+
 def evidence(**overrides):
     value = {
         "repository": "Blummer92/agent-os",
@@ -59,16 +93,17 @@ def evidence(**overrides):
         "canonical_required_checks": [AGGREGATE, ACCEPTANCE],
         "authoritative_aggregate_check": AGGREGATE,
         "authorized_merge_method": "squash",
-        "review_thread_summary": {"blocking_unresolved": 0},
-        "ready_for_review_authorized": True,
         "merge_authorized": True,
-        "issue_closure_authorized": True,
         "merge_commit_verified": True,
         "main_verified": True,
+        "review_thread_summary": {"blocking_unresolved": 0},
+        "ready_for_review_authorized": True,
         "lifecycle_reconciliation": lifecycle(),
         "side_effects_performed": ["merge"],
     }
     value.update(overrides)
+    if "issue_closure_lifecycle" not in value:
+        value["issue_closure_lifecycle"] = closure_packet(issue_state=value["issue_state"])
     return value
 
 

@@ -6,8 +6,8 @@
     {
       "canonical_unit_key": "photography-foundations",
       "stable_id": "canonical-unit-photography-foundations",
-      "provider_page_id": null,
-      "verification_state": "unverified",
+      "provider_page_id": "3907ac78-3131-8129-8c73-cd9f6b8e8a7d",
+      "verification_state": "verified-current",
       "content_class": "curriculum-metadata"
     }
   ],
@@ -15,15 +15,15 @@
     {
       "logical_source": "canonical-unit",
       "display_name": "Canonical Digital Media Unit Registry",
-      "data_source_id": null,
-      "verification_state": "unverified",
+      "data_source_id": "c5b202aa-83d1-4cc4-9992-f98af648e461",
+      "verification_state": "verified-current",
       "content_class": "curriculum-metadata"
     },
     {
       "logical_source": "visual-asset-library",
       "display_name": "Visual Asset Library",
-      "data_source_id": null,
-      "verification_state": "unverified",
+      "data_source_id": "da5cba48-50fd-4377-9790-8df8f6f2c7dd",
+      "verification_state": "verified-current",
       "content_class": "visual-asset-metadata"
     }
   ],

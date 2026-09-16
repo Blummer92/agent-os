@@ -8,11 +8,45 @@ release_run = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = release_run
 spec.loader.exec_module(release_run)
 
+from scripts.agent_os_issue_acceptance.lifecycle_mutation_authorization import (
+    LifecycleOwnerDecision,
+    produce_lifecycle_mutation_authorization,
+)
+from scripts.agent_os_issue_acceptance.lifecycle_mutation_guard import LifecycleStateSnapshot
+
 AGGREGATE = "Agent OS Validation Gate / Run aggregate validation"
 ACCEPTANCE = "Agent OS Issue Acceptance Report"
 HEAD = "a" * 40
 MAIN = "b" * 40
 OLD = "c" * 40
+
+
+def closure_packet(issue_state="open"):
+    snapshot = LifecycleStateSnapshot(
+        repository="Blummer92/agent-os",
+        issue_number=903,
+        pull_request_number=123,
+        source_head=HEAD,
+        base_head=MAIN,
+        pr_state="ready",
+        merged=True,
+        issue_state=issue_state,
+        review_state="clear",
+        unresolved_threads=0,
+        lifecycle_labels=("status:ready",),
+        observed_revision="terminal-readback-903",
+    )
+    decision = LifecycleOwnerDecision(
+        repository=snapshot.repository,
+        issue_number=snapshot.issue_number,
+        pull_request_number=snapshot.pull_request_number,
+        requested_mutations=("close-issue",),
+        authorizer_id="repository-owner",
+        decision_id="request-interpretation:903-release",
+        decision_recorded=True,
+    )
+    authorization = produce_lifecycle_mutation_authorization(decision, snapshot)
+    return {"authorization": authorization.to_dict(), "snapshot": snapshot.to_dict()}
 
 
 def lifecycle(head=HEAD, reason="validation-terminal", status="converged"):
@@ -190,7 +224,8 @@ def test_completion_comment_precedes_closure():
         evidence(
             pr_state="merged", pr_lifecycle_state="merged",
             checkpoint_pr_lifecycle_state="merged", side_effects_performed=["merge"],
-            merge_commit_verified=True, main_verified=True, issue_closure_authorized=True,
+            merge_commit_verified=True, main_verified=True,
+            issue_closure_lifecycle=closure_packet(),
         )
     )
     assert state.next_action == "post-completion-comment-before-closure"
