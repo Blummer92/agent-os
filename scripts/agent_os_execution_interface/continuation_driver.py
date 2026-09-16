@@ -28,6 +28,22 @@ class ContinuationAdapter(Protocol):
     def dispatch(self, action: str) -> None: ...
 
 
+def continuation_payload(decision: ContinuationDecision) -> dict[str, object]:
+    """Project one canonical non-authorizing host continuation payload."""
+    if type(decision) is not ContinuationDecision:
+        raise TypeError("decision must be an exact ContinuationDecision")
+    return {
+        "action": decision.action,
+        "terminal": decision.terminal,
+        "blocked": decision.blocked,
+        "stalled": decision.stalled,
+        "reason_codes": list(decision.reason_codes),
+        "execution_authorized": False,
+        "github_writes_authorized": False,
+        "side_effects_performed": False,
+    }
+
+
 def drive_governed_continuation(adapter: ContinuationAdapter, decide: Callable[[object], ContinuationDecision], *, max_transitions: int = MAX_DRIVER_TRANSITIONS) -> ContinuationDriveResult:
     if type(max_transitions) is not int or max_transitions < 1 or max_transitions > MAX_DRIVER_TRANSITIONS:
         raise ValueError("max_transitions is outside the governed finite bound")
