@@ -11,6 +11,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from scripts.agent_os_github_issue_provider.auth import build_token_client
+
 from .atomic_commit import execute_atomic_commit_from_blobs, prepare_atomic_commit_from_blobs
 from .models import (
     AtomicCommitConfirmation,
@@ -130,12 +132,9 @@ def _sanitize_diagnostic(value: str) -> str:
 
 
 def _transport_from_environment() -> PyGithubGitObjectTransport:
-    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-    if not token:
-        raise RuntimeError("GITHUB_TOKEN or GH_TOKEN is required for live transport")
-    from github import Auth, Github
-
-    return PyGithubGitObjectTransport(Github(auth=Auth.Token(token)))
+    return PyGithubGitObjectTransport(
+        build_token_client(os.environ, user_agent="agent-os-github-git-objects/1")
+    )
 
 
 def _read_json(path: Path) -> object:

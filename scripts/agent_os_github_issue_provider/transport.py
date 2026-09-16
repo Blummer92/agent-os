@@ -4,10 +4,9 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from github import Github
-from github.GithubException import GithubException, RateLimitExceededException
-import requests.exceptions
 
 from .models import TransportAttempt, TransportResponse
+from .request import GitHubRequestAttempt, GitHubRequestError, request_json
 
 
 class GitHubTransportError(RuntimeError):
@@ -46,63 +45,60 @@ class PyGithubRestTransport:
         per_page: int,
         state: str,
     ) -> TransportResponse:
-        url = f"/repos/{repository}/issues"
-        attempts: list[TransportAttempt] = []
-        for attempt_number in range(1, self.max_attempts + 1):
-            try:
-                headers, payload = self.client.requester.requestJsonAndCheck(
-                    "GET",
-                    url,
-                    parameters={"page": page, "per_page": per_page, "state": state},
-                    headers={
-                        "Accept": "application/vnd.github+json",
-                        "X-GitHub-Api-Version": "2026-03-10",
-                    },
-                )
-                attempts.append(TransportAttempt(attempt_number))
-                if not isinstance(headers, dict):
-                    raise GitHubTransportError(
-                        "malformed-response", tuple(attempts)
-                    )
-                return TransportResponse(
-                    status=200,
-                    headers={str(key): str(value) for key, value in headers.items()},
-                    payload=payload,
-                    attempts=tuple(attempts),
-                )
-            except RateLimitExceededException as error:
-                attempts.append(TransportAttempt(attempt_number, "rate-limited"))
-                raise GitHubTransportError("rate-limited", tuple(attempts)) from error
-            except GithubException as error:
-                kind = _github_error_kind(error.status)
-                attempts.append(TransportAttempt(attempt_number, kind))
-                if kind != "api-error" or attempt_number == self.max_attempts:
-                    raise GitHubTransportError(kind, tuple(attempts)) from error
-            except (
-                requests.exceptions.Timeout,
-                requests.exceptions.ConnectionError,
-                TimeoutError,
-                ConnectionError,
-            ) as error:
-                attempts.append(TransportAttempt(attempt_number, "api-error"))
-                if attempt_number == self.max_attempts:
-                    raise GitHubTransportError("api-error", tuple(attempts)) from error
-            except Exception as error:
-                # Wrap any other internal library exceptions to prevent leak
-                attempts.append(TransportAttempt(attempt_number, "api-error"))
-                raise GitHubTransportError("api-error", tuple(attempts)) from error
-        raise GitHubTransportError("api-error", tuple(attempts))
+        try:
+            result = request_json(
+                self.client,
+                "GET",
+                f"/repos/{repository}/issues",
+                parameters={"page": page, "per_page": per_page, "state": state},
+                max_attempts=self.max_attempts,
+                retry_server_errors=True,
+                retry_statuses=frozenset({408}),
+                retry_transport_errors=True,
+            )
+        except GitHubRequestError as error:
+            final_kind = _request_error_kind(error)
+            attempts = _domain_attempts(error.attempts, final_kind=final_kind)
+            raise GitHubTransportError(final_kind, attempts) from error
+
+        return TransportResponse(
+            status=200,
+            headers=dict(result.headers),
+            payload=result.payload,
+            attempts=_domain_attempts(result.attempts, final_kind=None),
+        )
 
 
-def _github_error_kind(status: int | None) -> str:
-    if status in {401, 403}:
-        return "permission-denied"
-    if status == 404:
-        return "source-inaccessible"
-    if status == 429:
+def _domain_attempts(
+    attempts: tuple[GitHubRequestAttempt, ...],
+    *,
+    final_kind: str | None,
+) -> tuple[TransportAttempt, ...]:
+    """Project commodity attempt evidence into this package's status vocabulary.
+
+    Only retry-admitted failures (server errors, 408, transport loss) can precede
+    a later attempt, and every one of them is ``api-error`` here. Just the final
+    attempt can carry a non-retryable status, so it alone takes ``final_kind``.
+    """
+    last = len(attempts) - 1
+    return tuple(
+        TransportAttempt(
+            item.number,
+            None
+            if item.error_kind is None
+            else (final_kind if index == last else "api-error"),
+        )
+        for index, item in enumerate(attempts)
+    )
+
+
+def _request_error_kind(error: GitHubRequestError) -> str:
+    if error.kind == "rate-limited" or error.status == 429:
         return "rate-limited"
-    if status == 408:
-        return "api-error"
-    if status is not None and 400 <= status < 500:
+    if error.status in {401, 403}:
+        return "permission-denied"
+    if error.status == 404:
+        return "source-inaccessible"
+    if error.status is not None and 400 <= error.status < 500 and error.status != 408:
         return "malformed-response"
     return "api-error"

@@ -1,38 +1,8 @@
 """One read-only GitHub host transport for the governed-resume bootstrap (#1319).
 
-Current ``main`` has a canonical GitHub *access* boundary -- a PyGithub
-``Github`` client wrapped by a small read-only transport dataclass
-(``scripts.agent_os_github_issue_provider.transport.PyGithubRestTransport``,
-``scripts.agent_os_github_git_objects.transport.PyGithubGitObjectTransport``) --
-but neither existing transport exposes a *single-issue* read or an
-*issue-comments* read, so neither can be handed to ``LiveIssueReader``'s
-``SingleIssueTransport`` or to ``ExecutionAuthorizationSourceTransport`` as-is.
-This module is therefore the smallest reusable adapter over that same boundary,
-not a second client: both protocols are satisfied by **one** object over **one**
-injected JSON read callable, exactly as #1319 requires when a single canonical
-transport can serve both contracts.
-
-What this module is deliberately not:
-
-- not a GitHub client framework -- there is one dataclass and one adapter
-  function, no registry, no builder DSL, no retry/backoff policy of its own
-  (the existing PyGithub client owns transport-level retry);
-- not an authorization model -- ``read_authorization_source`` only reports what
-  GitHub returned; ``reacquire_execution_authorization(...)`` stays the sole
-  owner of trust, currentness, binding, and revocation semantics;
-- not an issue-semantics owner -- ``get_issue`` returns the raw payload in the
-  existing ``SingleIssueTransportResult`` vocabulary and ``LiveIssueReader``
-  stays the sole owner of normalization and fail-closed status mapping;
-- not a write surface -- there is no write method, and every request is a
-  ``GET``.
-
-Credentials never reach this module's state or its diagnostics. The token is
-read once, inside :func:`build_host_github_read_transport_from_environment`,
-from the ``GITHUB_TOKEN``/``GH_TOKEN`` convention this repository already uses
-(``scripts/agent_os_github_git_objects/cli.py``); it is handed straight to the
-existing PyGithub auth boundary and is never stored on, logged by, or echoed
-from any object defined here. No new credential, IAM, GitHub App, or network
-control plane is introduced.
+The transport keeps #1319's single-issue and authorization-source contracts
+while reusing the repository's canonical PyGithub client-construction boundary.
+It creates no authority and exposes no write method.
 """
 
 from __future__ import annotations
@@ -44,22 +14,15 @@ from scripts.agent_os_candidate_packet_live_input import (
     SingleIssueTransportOutcome,
     SingleIssueTransportResult,
 )
+from scripts.agent_os_github_issue_provider.auth import build_token_client
 
 from .execution_authorization_source import (
     ExecutionAuthorizationCommentSnapshot,
     ExecutionAuthorizationSourceSnapshot,
 )
 
-#: One authorized read of one GitHub REST path. ``parameters`` is the query
-#: string only; the callable performs the credentialed ``GET`` and returns the
-#: decoded JSON payload, or raises :class:`HostGitHubReadError`.
 JsonReader = Callable[[str, Mapping[str, object] | None], object]
-
-#: GitHub's maximum page size for the issue-comments endpoint.
 COMMENTS_PAGE_SIZE = 100
-#: Enough pages to cover ``ExecutionAuthorizationSourceSnapshot``'s own
-#: ``MAX_COMMENTS`` bound; beyond it the snapshot is reported incomplete rather
-#: than silently truncated.
 MAX_COMMENT_PAGES = 6
 
 
@@ -79,15 +42,7 @@ class HostGitHubTransportUnavailable(RuntimeError):
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class HostGitHubReadTransport:
-    """Read-only transport satisfying both #1319 host transport protocols.
-
-    ``get_issue`` satisfies ``SingleIssueTransport`` (consumed by the existing
-    ``LiveIssueReader``) and ``read_authorization_source`` satisfies
-    ``ExecutionAuthorizationSourceTransport`` (consumed by the existing
-    ``reacquire_execution_authorization``). They share one ``read_json``
-    callable and nothing else -- no shared cache, no shared mutable state, no
-    shared interpretation of what either payload means.
-    """
+    """Read-only transport satisfying both #1319 host transport protocols."""
 
     read_json: JsonReader
     max_comment_pages: int = MAX_COMMENT_PAGES
@@ -98,14 +53,7 @@ class HostGitHubReadTransport:
         if type(self.max_comment_pages) is not int or not 1 <= self.max_comment_pages <= 64:
             raise ValueError("max_comment_pages must be an exact int from 1 to 64")
 
-    # -- SingleIssueTransport -------------------------------------------------
-
     def get_issue(self, repository: str, issue_number: int) -> SingleIssueTransportResult:
-        """Perform exactly one authorized read of one issue.
-
-        An error is never converted to ``OK`` and no field is invented:
-        ``LiveIssueReader`` owns every normalization decision downstream.
-        """
         repository = _repository(repository)
         issue_number = _issue_number(issue_number)
         try:
@@ -124,19 +72,9 @@ class HostGitHubReadTransport:
             outcome=SingleIssueTransportOutcome.OK, item=dict(payload)
         )
 
-    # -- ExecutionAuthorizationSourceTransport --------------------------------
-
     def read_authorization_source(
         self, repository: str, issue_number: int
     ) -> ExecutionAuthorizationSourceSnapshot:
-        """Read the repository owner and the issue's complete comment list.
-
-        Nothing here decides whether any comment authorizes anything. A read
-        that cannot be completed truthfully raises, and
-        ``reacquire_execution_authorization(...)`` already maps that to
-        ``source-unavailable`` / ``needs-decision`` -- fail closed, never a
-        partial snapshot presented as complete.
-        """
         repository = _repository(repository)
         issue_number = _issue_number(issue_number)
         owner = _mapping(
@@ -180,15 +118,7 @@ class HostGitHubReadTransport:
 
 
 def build_pygithub_json_reader(client: object) -> JsonReader:
-    """Adapt the existing canonical PyGithub access boundary to one read callable.
-
-    ``client`` is the same ``github.Github`` object
-    ``scripts.agent_os_github_issue_provider`` and
-    ``scripts.agent_os_github_git_objects`` already use; this function reuses
-    its authorized requester rather than opening a second client. ``github`` is
-    imported locally so importing this module never requires the dependency --
-    the same technique ``scripts/agent_os_github_git_objects/cli.py`` uses.
-    """
+    """Adapt the canonical PyGithub requester to one read-only JSON callable."""
     from github.GithubException import GithubException, RateLimitExceededException
 
     requester = getattr(client, "requester", None)
@@ -220,31 +150,20 @@ def build_pygithub_json_reader(client: object) -> JsonReader:
 def build_host_github_read_transport_from_environment(
     environ: Mapping[str, str] | None = None,
 ) -> HostGitHubReadTransport:
-    """Build the host transport from the existing token convention.
-
-    Reuses ``GITHUB_TOKEN``/``GH_TOKEN`` -- the convention already established
-    by ``scripts/agent_os_github_git_objects/cli.py`` -- and the existing
-    PyGithub auth boundary. No new credential, IAM, GitHub App, or network
-    control plane is introduced, and the token value is never stored on the
-    returned object or included in any diagnostic.
-    """
+    """Build #1319's read adapter over the canonical token client boundary."""
     import os
 
     source = os.environ if environ is None else environ
-    token = source.get("GITHUB_TOKEN") or source.get("GH_TOKEN")
-    if not token or not token.strip():
+    try:
+        client = build_token_client(
+            source,
+            user_agent="agent-os-governed-resume-host/1",
+        )
+    except RuntimeError as exc:
         raise HostGitHubTransportUnavailable(
             "GITHUB_TOKEN or GH_TOKEN must be set for the host GitHub read "
             "transport; governed resume refuses to invent a credential source"
-        )
-    from github import Auth, Github
-
-    client = Github(
-        auth=Auth.Token(token),
-        retry=None,
-        lazy=False,
-        user_agent="agent-os-governed-resume-host/1",
-    )
+        ) from exc
     return HostGitHubReadTransport(read_json=build_pygithub_json_reader(client))
 
 

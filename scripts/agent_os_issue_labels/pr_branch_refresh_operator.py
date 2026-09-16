@@ -17,6 +17,7 @@ from typing import Mapping
 from scripts.agent_os_github_git_objects.branch_update import (
     BranchUpdateObservation,
 )
+from scripts.agent_os_github_issue_provider.auth import build_token_client
 
 
 @dataclass(frozen=True, slots=True)
@@ -401,15 +402,9 @@ class PullRequestBranchRefreshReceipt:
 
 
 def build_branch_refresh_github_client(environment: Mapping[str, str]):
-    """Reuse the repository's existing GITHUB_TOKEN/GH_TOKEN convention."""
+    """Build the branch-refresh client through the canonical token boundary."""
 
-    token = environment.get("GITHUB_TOKEN") or environment.get("GH_TOKEN")
-    if not isinstance(token, str) or not token.strip():
-        raise RuntimeError("GITHUB_TOKEN or GH_TOKEN is required")
-
-    from github import Auth, Github
-
-    return Github(auth=Auth.Token(token.strip()))
+    return build_token_client(environment, user_agent="agent-os-pr-branch-refresh/1")
 
 
 def preflight_production_branch_refresh(

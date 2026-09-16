@@ -1,4 +1,9 @@
-from .auth import GitHubAppConfig, GitHubAppSecretProvider, build_installation_client
+from .auth import (
+    GitHubAppConfig,
+    GitHubAppSecretProvider,
+    build_installation_client,
+    build_token_client,
+)
 from .fakes import ScriptedGitHubRestTransport
 from .installation_repository_identity import (
     INSTALLATION_REPOSITORY_IDENTITY_CONTRACT_VERSION,
@@ -47,6 +52,7 @@ __all__ = [
     "TransportResponse",
     "TrustedRepositoryIdentity",
     "build_installation_client",
+    "build_token_client",
     "build_installation_repository_identity",
     "collect_sprint_evidence",
     "trusted_repository_identity_from_evidence",
