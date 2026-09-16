@@ -133,3 +133,69 @@ def test_non_authorized_lifecycle_record_cannot_be_smuggled_as_boolean():
     )
     assert state.issue_closure_authorized is False
     assert state.next_action == "request-issue-closure-authorization"
+
+
+def _terminal(**changes):
+    """Evidence for a run that already performed the governed closure."""
+    return evidence(
+        issue_state="closed",
+        side_effects_performed=[
+            "merge",
+            "completion-comment",
+            "lineage-terminalized",
+            "close-issue",
+        ],
+        lease_release_required=False,
+        **changes,
+    )
+
+
+def test_pre_close_progression_still_requires_open_issue_admission():
+    """`close-issue` admission only ever applies while the issue is open."""
+    state = release_run.evaluate_release_run(
+        evidence(issue_closure_lifecycle=closure_packet())
+    )
+    assert state.issue_closure_authorized is True
+    assert state.issue_state == "open"
+    assert state.next_action == "post-completion-comment-before-closure"
+
+
+def test_completed_closure_is_verified_rather_than_reauthorized():
+    """A closed issue reaches completion verification, not a permission pause.
+
+    `batch_post_merge_reconciliation` treats a closed issue as a completion
+    disposition before it consults close admission, because "close-issue"
+    preconditions require an open issue and can never re-admit afterwards.
+    """
+    state = release_run.evaluate_release_run(_terminal())
+    assert state.phase != "issue-closure-authorization-pause"
+    assert state.next_action != "request-issue-closure-authorization"
+
+
+def test_unauthorized_closure_is_still_refused_while_the_issue_is_open():
+    """Fail-closed: no packet means the close is never reached."""
+    state = release_run.evaluate_release_run(
+        evidence(
+            side_effects_performed=[
+                "merge",
+                "completion-comment",
+                "lineage-terminalized",
+            ],
+            lease_release_required=False,
+        )
+    )
+    assert state.issue_closure_authorized is False
+    assert state.phase == "issue-closure-authorization-pause"
+    assert state.next_action == "request-issue-closure-authorization"
+
+
+def test_stale_or_wrong_evidence_still_fails_closed_before_closure():
+    for packet in (
+        closure_packet(source_head="c" * 40),
+        closure_packet(issue_number=2150),
+    ):
+        state = release_run.evaluate_release_run(
+            evidence(issue_closure_lifecycle=packet)
+        )
+        assert state.issue_closure_authorized is False
+        assert state.next_action == "request-issue-closure-authorization"
