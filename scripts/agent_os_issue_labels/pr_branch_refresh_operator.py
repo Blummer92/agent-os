@@ -17,6 +17,7 @@ from typing import Mapping
 from scripts.agent_os_github_git_objects.branch_update import (
     BranchUpdateObservation,
 )
+from scripts.agent_os_github_issue_provider.auth import build_token_client
 
 
 @dataclass(frozen=True, slots=True)
@@ -401,15 +402,8 @@ class PullRequestBranchRefreshReceipt:
 
 
 def build_branch_refresh_github_client(environment: Mapping[str, str]):
-    """Reuse the repository's existing GITHUB_TOKEN/GH_TOKEN convention."""
-
-    token = environment.get("GITHUB_TOKEN") or environment.get("GH_TOKEN")
-    if not isinstance(token, str) or not token.strip():
-        raise RuntimeError("GITHUB_TOKEN or GH_TOKEN is required")
-
-    from github import Auth, Github
-
-    return Github(auth=Auth.Token(token.strip()))
+    """Build the branch-refresh client through the canonical token boundary."""
+    return build_token_client(environment, user_agent="agent-os-pr-branch-refresh/1")
 
 
 def preflight_production_branch_refresh(
@@ -487,209 +481,158 @@ def preflight_production_branch_refresh(
     )
 
 
-def run_branch_refresh_operator(
-    *,
-    request: object,
-    repository_root: str,
-    invocation_id: str,
-    environment: Mapping[str, str],
-):
-    """Concrete #1365 operator composition; consumes but never grants authority."""
-
-    from scripts.agent_os_issue_labels.pr_branch_refresh import PullRequestBranchRefreshRequest
-    from scripts.agent_os_issue_labels.pr_branch_refresh_provider import (
-        run_production_pull_request_branch_refresh,
-    )
-
-    if not isinstance(request, PullRequestBranchRefreshRequest):
-        raise TypeError("request must be exact PullRequestBranchRefreshRequest")
-    if not request.authorization_current or not request.branch_refresh_authorized:
-        raise RuntimeError("current branch-refresh authorization is required")
-    if not isinstance(invocation_id, str) or not invocation_id.strip():
-        raise ValueError("invocation_id is required")
-
-    github_client = build_branch_refresh_github_client(environment)
-    runner = SubprocessBranchUpdateRunner()
-    validation = ClosedBranchRefreshValidationExecutor(
-        runner=runner,
-        repository_root=repository_root,
-    )
-    reviews = PyGithubBlockingReviewThreadsReader(github_client)
-
-    preflight = preflight_production_branch_refresh(
-        github_client=github_client,
-        request=request,
-        repository_root=repository_root,
-    )
-    if not preflight.ready:
-        raise RuntimeError(
-            "branch refresh preflight blocked: " + ",".join(preflight.reason_codes)
-        )
-
-    return run_production_pull_request_branch_refresh(
-        github_client=github_client,
-        runner=runner,
-        validation_executor=validation,
-        review_threads_reader=reviews,
-        request=request,
-        repository_root=repository_root,
-        invocation_id=invocation_id,
-        environment=environment,
-    )
-
-
 def refresh_pr(
     *,
     repository: str,
     pr_number: int,
-    expected_head_sha: str,
-    current_main_sha: str,
-    authorization_id: str,
-    authorization_current: bool,
-    branch_refresh_authorized: bool,
-    allowed_changed_paths: tuple[str, ...],
-    forbidden_paths: tuple[str, ...],
+    authorization: object,
+    github_client: object,
     repository_root: str,
     invocation_id: str,
     environment: Mapping[str, str],
 ) -> PullRequestBranchRefreshReceipt:
-    """Canonical operator-facing facade for one governed PR refresh request."""
+    """Compose the existing #1187 planner with concrete bounded operators."""
 
     from scripts.agent_os_issue_labels.pr_branch_refresh import (
+        BranchRefreshResult,
+        BranchRefreshStatus,
         PullRequestBranchRefreshRequest,
-        _validate_request,
+        execute_branch_refresh,
+        prepare_branch_refresh,
+    )
+    from scripts.agent_os_issue_labels.pr_branch_refresh_provider import (
+        GitHubPullRequestBranchRefreshBackingProvider,
     )
 
-    for name, value in (
-        ("authorization_current", authorization_current),
-        ("branch_refresh_authorized", branch_refresh_authorized),
-    ):
-        if type(value) is not bool:
-            raise TypeError(f"{name} must be an exact boolean")
-    for name, value in (
-        ("allowed_changed_paths", allowed_changed_paths),
-        ("forbidden_paths", forbidden_paths),
-    ):
-        if type(value) is not tuple or any(type(item) is not str or not item for item in value):
-            raise TypeError(f"{name} must be a tuple of non-empty strings")
+    if not isinstance(repository, str) or not repository:
+        raise ValueError("repository is required")
+    if type(pr_number) is not int or pr_number <= 0:
+        raise ValueError("pr_number must be positive int")
     if not isinstance(repository_root, str) or not repository_root:
         raise ValueError("repository_root is required")
-    if not isinstance(invocation_id, str) or not invocation_id.strip():
+    if not isinstance(invocation_id, str) or not invocation_id:
         raise ValueError("invocation_id is required")
-    if not isinstance(environment, Mapping):
-        raise TypeError("environment must be a mapping")
+
+    auth_repository = getattr(authorization, "repository", None)
+    auth_pr = getattr(authorization, "pr_number", None)
+    auth_head = getattr(authorization, "expected_head_sha", None)
+    auth_base = getattr(authorization, "expected_base_sha", None)
+    auth_main = getattr(authorization, "current_main_sha", None)
+    auth_base_branch = getattr(authorization, "base_branch", None)
+    auth_allowed = getattr(authorization, "allowed_changed_paths", None)
+    auth_forbidden = getattr(authorization, "forbidden_paths", None)
+    auth_current = getattr(authorization, "authorization_current", None)
+    auth_granted = getattr(authorization, "branch_refresh_authorized", None)
+    auth_id = getattr(authorization, "authorization_id", None)
+    if (
+        auth_repository != repository
+        or auth_pr != pr_number
+        or not isinstance(auth_head, str)
+        or not isinstance(auth_base, str)
+        or not isinstance(auth_main, str)
+        or not isinstance(auth_base_branch, str)
+        or not isinstance(auth_allowed, tuple)
+        or not isinstance(auth_forbidden, tuple)
+        or type(auth_current) is not bool
+        or type(auth_granted) is not bool
+        or not isinstance(auth_id, str)
+    ):
+        raise RuntimeError("branch refresh authorization is missing or identity-mismatched")
 
     request = PullRequestBranchRefreshRequest(
         repository=repository,
         pr_number=pr_number,
-        base_branch="main",
-        expected_base_sha=current_main_sha,
-        expected_head_sha=expected_head_sha,
-        current_main_sha=current_main_sha,
-        authorization_id=authorization_id,
-        authorization_current=authorization_current,
-        allowed_changed_paths=allowed_changed_paths,
-        forbidden_paths=forbidden_paths,
-        required_validation_command_ids=_CANONICAL_REFRESH_VALIDATION_COMMAND_IDS,
-        branch_refresh_authorized=branch_refresh_authorized,
+        expected_head_sha=auth_head,
+        expected_base_sha=auth_base,
+        current_main_sha=auth_main,
+        base_branch=auth_base_branch,
+        allowed_changed_paths=auth_allowed,
+        forbidden_paths=auth_forbidden,
+        authorization_current=auth_current,
+        branch_refresh_authorized=auth_granted,
+        authorization_id=auth_id,
     )
-    _validate_request(request)
-
-    if not authorization_current or not branch_refresh_authorized:
-        return _blocked_refresh_receipt(
-            request=request,
-            reason_codes=("authorization.refresh-required",),
-        )
-
-    try:
-        result = run_branch_refresh_operator(
-            request=request,
+    backing = GitHubPullRequestBranchRefreshBackingProvider(
+        github_client=github_client,
+        request=request,
+        validation_executor=ClosedBranchRefreshValidationExecutor(
+            runner=SubprocessBranchUpdateRunner(),
             repository_root=repository_root,
-            invocation_id=invocation_id,
-            environment=environment,
+        ),
+        review_threads_reader=PyGithubBlockingReviewThreadsReader(github_client),
+    )
+    plan, initial = prepare_branch_refresh(request, backing)
+    if plan is None:
+        return _receipt_from_result(
+            request=request,
+            result=initial,
+            old_head_sha=request.expected_head_sha,
         )
-    except RuntimeError as error:
-        prefix = "branch refresh preflight blocked: "
-        message = str(error)
-        if not message.startswith(prefix):
-            raise
-        reasons = tuple(item for item in message[len(prefix):].split(",") if item)
-        return _blocked_refresh_receipt(request=request, reason_codes=reasons)
 
+    confirmation = _confirmation_for_plan(
+        plan=plan,
+        request=request,
+        invocation_id=invocation_id,
+        environment=environment,
+    )
+    result = execute_branch_refresh(plan, confirmation, backing)
     return _receipt_from_result(
+        request=request,
         result=result,
-        authorization_id=authorization_id,
-        admitted_main_sha=current_main_sha,
+        old_head_sha=request.expected_head_sha,
     )
 
 
-def _blocked_refresh_receipt(
-    *,
-    request: object,
-    reason_codes: tuple[str, ...],
-) -> PullRequestBranchRefreshReceipt:
+def _confirmation_for_plan(*, plan, request, invocation_id: str, environment: Mapping[str, str]):
+    from scripts.agent_os_issue_labels.pr_branch_refresh import BranchRefreshConfirmation
+
+    if environment.get("AGENT_OS_BRANCH_REFRESH_CONFIRM") != "1":
+        return BranchRefreshConfirmation(
+            plan_id=plan.plan_id,
+            operation_fingerprint=plan.operation_fingerprint,
+            repository=request.repository,
+            pr_number=request.pr_number,
+            expected_head_sha=request.expected_head_sha,
+            expected_base_sha=request.expected_base_sha,
+            current_main_sha=request.current_main_sha,
+            authorization_id=request.authorization_id,
+            invocation_id=invocation_id,
+            confirmed=False,
+        )
+    return BranchRefreshConfirmation(
+        plan_id=plan.plan_id,
+        operation_fingerprint=plan.operation_fingerprint,
+        repository=request.repository,
+        pr_number=request.pr_number,
+        expected_head_sha=request.expected_head_sha,
+        expected_base_sha=request.expected_base_sha,
+        current_main_sha=request.current_main_sha,
+        authorization_id=request.authorization_id,
+        invocation_id=invocation_id,
+        confirmed=True,
+    )
+
+
+def _receipt_from_result(*, request, result, old_head_sha: str) -> PullRequestBranchRefreshReceipt:
+    from scripts.agent_os_issue_labels.pr_branch_refresh import BranchRefreshStatus
+
+    mutation_count = 1 if result.side_effects_performed else 0
     return PullRequestBranchRefreshReceipt(
         repository=request.repository,
         pr_number=request.pr_number,
-        status="blocked",
+        status=result.status.value,
         authorization_id=request.authorization_id,
-        authorization_consumed=False,
+        authorization_consumed=mutation_count == 1,
         admitted_main_sha=request.current_main_sha,
-        old_head_sha=request.expected_head_sha,
-        new_head_sha=None,
-        mutation_count=0,
-        validation_status=None,
-        validation_head_sha=None,
-        lifecycle_reconciliation_status=None,
-        final_current_proven=False,
-        blockers=tuple(sorted(set(reason_codes))),
-        reason_codes=tuple(sorted(set(reason_codes))),
-        rollback_posture="no-branch-mutation",
-        side_effects_performed=False,
-    )
-
-
-def _receipt_from_result(
-    *,
-    result: object,
-    authorization_id: str,
-    admitted_main_sha: str,
-) -> PullRequestBranchRefreshReceipt:
-    from scripts.agent_os_issue_labels.pr_branch_refresh import PullRequestBranchRefreshResult
-
-    if not isinstance(result, PullRequestBranchRefreshResult):
-        raise TypeError("operator returned an invalid branch-refresh result")
-
-    validation = result.validation
-    lifecycle = result.lifecycle_reconciliation
-    reasons = tuple(result.reason_codes)
-    blockers = () if result.status == "converged" else reasons
-    side_effects = bool(result.side_effects_performed)
-    mutation_attempted = bool(result.mutation_attempted or side_effects)
-    return PullRequestBranchRefreshReceipt(
-        repository=result.repository,
-        pr_number=result.pr_number,
-        status=result.status,
-        authorization_id=authorization_id,
-        authorization_consumed=mutation_attempted,
-        admitted_main_sha=admitted_main_sha,
-        old_head_sha=result.old_head_sha,
-        new_head_sha=result.new_head_sha,
-        mutation_count=1 if mutation_attempted else 0,
-        validation_status=None if validation is None else validation.status,
-        validation_head_sha=None if validation is None else validation.head_sha,
-        lifecycle_reconciliation_status=(
-            None if lifecycle is None else lifecycle.reconciliation_status
-        ),
-        final_current_proven="branch.current-proven" in reasons,
-        blockers=blockers,
-        reason_codes=reasons,
-        rollback_posture=(
-            "restore-old-head-with-separate-authorization"
-            if side_effects
-            else "separate-authorization-required"
-            if mutation_attempted
-            else "no-branch-mutation"
-        ),
-        side_effects_performed=side_effects,
+        old_head_sha=old_head_sha,
+        new_head_sha=result.final_head_sha,
+        mutation_count=mutation_count,
+        validation_status=result.validation_status,
+        validation_head_sha=result.validation_head_sha,
+        lifecycle_reconciliation_status=result.lifecycle_reconciliation_status,
+        final_current_proven=result.final_current_proven,
+        blockers=result.blockers,
+        reason_codes=tuple(item.value for item in result.reason_codes),
+        rollback_posture=result.rollback_posture,
+        side_effects_performed=result.side_effects_performed,
     )
