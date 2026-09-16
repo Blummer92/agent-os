@@ -19,11 +19,11 @@ def test_open_issue_population_is_required_before_candidate_reconciliation():
     assert "must not enter candidate enumeration" in rule
 
 
-def test_managed_bug_type_is_not_the_only_discovery_signal():
+def test_fresh_discovery_requires_explicit_new_bug_intent_or_incidental_defect():
     rule = bounded_bug_rule()
     assert "existing open bug backlog" in rule
-    assert "fresh defect discovery" in rule
-    assert "discover new bugs only when the reconciled open backlog cannot satisfy the requested count" in rule
+    assert "Fresh defect discovery is allowed only when the user explicitly requests new bug discovery/logging" in rule
+    assert "distinct defect is discovered incidentally during authorized work" in rule
 
 
 def test_candidate_local_skips_cannot_terminate_parent_batch():
@@ -50,4 +50,6 @@ def test_title_marked_bug_discovery_regression_shape_is_explicit():
 
 
 def test_requested_count_cannot_be_padded_after_title_discovery():
-    assert "Do not create issues merely to pad a requested count" in bounded_bug_rule()
+    rule = bounded_bug_rule()
+    assert "report the honest shortfall" in rule
+    assert "creating issues merely to pad the count" in rule
