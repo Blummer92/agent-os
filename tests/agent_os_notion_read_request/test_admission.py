@@ -53,13 +53,17 @@ def test_trusted_canonical_request_is_admitted(verified_catalog) -> None:
     assert decision.gce_required is False
 
 
-def test_shipped_catalog_is_not_live_activated(shipped_catalog) -> None:
-    """The repository-owned catalog must not dispatch before owner verification."""
+def test_shipped_catalog_admits_verified_current_binding(shipped_catalog) -> None:
+    """The repository-owned catalog admits only after the owner-verified binding lands."""
     decision = admit(transport(), shipped_catalog)
 
-    assert decision.status == "rejected"
-    assert decision.reason_codes == ("canonical-unit-unverified",)
-    assert decision.secret_dispatch_authorized is False
+    assert decision.status == "admitted"
+    assert decision.reason_codes == ("admitted",)
+    assert decision.secret_dispatch_authorized is True
+    assert decision.write_allowed is False
+    assert decision.production_authorized is False
+    assert decision.notion_write_reachable is False
+    assert decision.gce_required is False
 
 
 @pytest.mark.parametrize(
