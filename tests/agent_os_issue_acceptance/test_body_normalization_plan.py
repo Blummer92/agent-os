@@ -8,21 +8,8 @@ from scripts.agent_os_issue_acceptance.batch_body_normalization_plan import (
 from scripts.agent_os_issue_acceptance.legacy_preflight import LegacyIssueSnapshot
 
 
-def _snapshot(
-    number: int,
-    body: str,
-    *,
-    state: str = "open",
-    updated: str = "2026-09-15T00:00:00Z",
-) -> LegacyIssueSnapshot:
-    return LegacyIssueSnapshot(
-        number=number,
-        title=f"Issue {number}",
-        state=state,
-        body=body,
-        labels=(),
-        updated_at=updated,
-    )
+def _snapshot(number: int, body: str, *, state: str = "open", updated: str = "2026-09-15T00:00:00Z") -> LegacyIssueSnapshot:
+    return LegacyIssueSnapshot(number, f"Issue {number}", state, body, (), updated_at=updated)
 
 
 def _canonical() -> str:
@@ -58,39 +45,47 @@ Done
 
 
 def test_canonical_body_is_no_change() -> None:
-    plan = plan_body_normalization([_snapshot(1, _canonical())])
-    assert plan.assessments[0].classification is BodyNormalizationClassification.CANONICAL_NO_CHANGE
+    assert plan_body_normalization([_snapshot(1, _canonical())]).assessments[0].classification is BodyNormalizationClassification.CANONICAL_NO_CHANGE
 
 
 def test_missing_governance_fields_is_manual_review() -> None:
-    plan = plan_body_normalization([_snapshot(2, "## Objective\nBug")])
-    assert plan.assessments[0].classification is BodyNormalizationClassification.MANUAL_REVIEW
+    assert plan_body_normalization([_snapshot(2, "## Objective\nBug")]).assessments[0].classification is BodyNormalizationClassification.MANUAL_REVIEW
 
 
 def test_readiness_conflict_routes_2442() -> None:
     body = _canonical().replace("## Documentation exemption reason\nNo public behavior.\n", "").replace("docs-not-required", "docs-needs-decision")
-    plan = plan_body_normalization([_snapshot(3, body)])
-    assert plan.assessments[0].classification is BodyNormalizationClassification.READINESS_BODY_CONFLICT
-    assert plan.assessments[0].route_issue == 2442
+    result = plan_body_normalization([_snapshot(3, body)]).assessments[0]
+    assert result.classification is BodyNormalizationClassification.READINESS_BODY_CONFLICT
+    assert result.route_issue == 2442
 
 
 def test_stale_marker_routes_2441() -> None:
-    plan = plan_body_normalization([_snapshot(4, _canonical() + "\nDurable decision superseded.\n")])
-    assert plan.assessments[0].route_issue == 2441
+    assert plan_body_normalization([_snapshot(4, _canonical() + "\nDurable decision superseded.\n")]).assessments[0].route_issue == 2441
 
 
-def test_durable_decision_sync_rule_is_bounded() -> None:
-    body = "## Primary owner\nowner:chatgpt-orchestrator\n"
-    assert durable_decision_sync_required(body, "owner", "owner:github-service-agent") is True
-    assert durable_decision_sync_required(body, "owner", "owner:chatgpt-orchestrator") is False
-    assert durable_decision_sync_required(body, "pr-head", "abc123") is False
-    assert durable_decision_sync_required(body, "unknown", "value") is None
-    assert durable_decision_sync_required(body, "owner", "changed", state="closed") is False
+def test_durable_decision_sync_is_section_scoped_and_visible() -> None:
+    owner = "owner:github-service-agent"
+    assert durable_decision_sync_required(f"## Primary owner\n{owner}\n", "owner", owner) is False
+    assert durable_decision_sync_required(f"## Notes\n{owner}\n## Primary owner\nowner:chatgpt-orchestrator\n", "owner", owner) is True
+    assert durable_decision_sync_required(f"## Primary owner\n<!-- {owner} -->\nowner:chatgpt-orchestrator\n", "owner", owner) is True
+    assert durable_decision_sync_required(f"## Primary owner\n{owner}-legacy\n", "owner", owner) is True
+
+
+def test_durable_decision_sync_fails_closed_on_ambiguous_structure() -> None:
+    owner = "owner:github-service-agent"
+    assert durable_decision_sync_required("## Notes\nnone\n", "owner", owner) is None
+    assert durable_decision_sync_required(f"## Owner\n{owner}\n## Primary owner\n{owner}\n", "owner", owner) is None
+    assert durable_decision_sync_required("", "unknown", "value") is None
+
+
+def test_transient_and_closed_evidence_never_requests_durable_sync() -> None:
+    for field in ("pr-head", "ci-state", "runtime-state"):
+        assert durable_decision_sync_required("", field, "current") is False
+    assert durable_decision_sync_required("", "owner", "changed", state="closed") is False
 
 
 def test_closed_issue_is_immutable() -> None:
-    plan = plan_body_normalization([_snapshot(5, _canonical(), state="closed")])
-    assert plan.assessments[0].classification is BodyNormalizationClassification.CLOSED_IMMUTABLE
+    assert plan_body_normalization([_snapshot(5, _canonical(), state="closed")]).assessments[0].classification is BodyNormalizationClassification.CLOSED_IMMUTABLE
 
 
 def test_batch_continues_after_manual_review() -> None:
@@ -112,4 +107,4 @@ def test_plan_is_report_only() -> None:
     plan = plan_body_normalization([_snapshot(9, _canonical())])
     assert plan.authority_created is False
     assert plan.side_effects_performed is False
-    assert all(a.side_effects_performed is False for a in plan.assessments)
+    assert all(not item.side_effects_performed for item in plan.assessments)
