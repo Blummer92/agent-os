@@ -7,7 +7,7 @@ lifecycle, freshness, or route authority and performs no writes.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping, Protocol
+from typing import Protocol
 
 from scripts.agent_os_candidate_packet.executable_lane_selection import (
     CandidateIssueEvidence,
