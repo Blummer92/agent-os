@@ -17,7 +17,7 @@ from agent_memory_context_manager.repair_lesson_activation import activate_repai
 from agent_os_execution_service.execution_surface_availability import ExecutionSurfaceAvailabilityOutcome
 from agent_os_execution_service.failed_repair_admission import evaluate_failed_repair_admission
 from scripts.agent_os_execution_checkpoint.resume_planner import ResumePlan
-from scripts.agent_os_execution_interface.continuation_driver import ContinuationDecision as DriverDecision
+from scripts.agent_os_execution_interface.continuation_driver import ContinuationDecision as DriverDecision, continuation_payload
 from scripts.agent_os_execution_interface.mission_completion_admission import evaluate_mission_completion_admission
 from scripts.agent_os_execution_interface.post_selection_continuation import (
     ContinuationLineage,
@@ -69,10 +69,6 @@ def _handoff_id(value: object | None) -> str | None:
     return value
 
 
-def _driver_payload(decision: DriverDecision) -> dict[str, object]:
-    return {"action": decision.action, "terminal": decision.terminal, "blocked": decision.blocked, "stalled": decision.stalled, "reason_codes": list(decision.reason_codes), "execution_authorized": False, "github_writes_authorized": False, "side_effects_performed": False}
-
-
 def plan_agent_os_continuation(*, repository: str, issue_number: int, canonical_handoff_id: str | None = None) -> AgentOsContinuationPlan:
     repo = _repository(repository); issue = _issue_number(issue_number); handoff = _handoff_id(canonical_handoff_id)
     if handoff is None:
@@ -93,25 +89,25 @@ def activate_agent_os_failed_repair(*, repository: str, issue_number: int, attem
 
 def admit_agent_os_failed_repair(*, activation_result: Mapping[str, object], check_state: str, required_check_configuration_state: str, review_state: str, branch_freshness: str, mergeability: str) -> dict[str, object]:
     decision = evaluate_failed_repair_admission(activation_result=activation_result, check_state=check_state, required_check_configuration_state=required_check_configuration_state, review_state=review_state, branch_freshness=branch_freshness, mergeability=mergeability)
-    payload = asdict(decision); payload["reason_codes"] = list(decision.reason_codes); payload["agent_os_continuation"] = _driver_payload(DriverDecision(action=decision.next_action if decision.mutation_admissible else "", blocked=not decision.mutation_admissible, reason_codes=decision.reason_codes)); return payload
+    payload = asdict(decision); payload["reason_codes"] = list(decision.reason_codes); payload["agent_os_continuation"] = continuation_payload(DriverDecision(action=decision.next_action if decision.mutation_admissible else "", blocked=not decision.mutation_admissible, reason_codes=decision.reason_codes)); return payload
 
 
 def classify_agent_os_mission_completion(*, repository: str, issue_number: int, branch_exists: bool, implementation_commit_count: int, draft_pr_exists: bool, canonical_pr_readback_verified: bool, capable_route_available: bool, subordinate_writes_only: bool) -> dict[str, object]:
     decision = evaluate_mission_completion_admission(repository=_repository(repository), issue_number=_issue_number(issue_number), branch_exists=branch_exists, implementation_commit_count=implementation_commit_count, draft_pr_exists=draft_pr_exists, canonical_pr_readback_verified=canonical_pr_readback_verified, capable_route_available=capable_route_available, subordinate_writes_only=subordinate_writes_only)
-    payload = asdict(decision); payload["reason_codes"] = list(decision.reason_codes); payload["agent_os_continuation"] = _driver_payload(DriverDecision(action="" if decision.completion_admissible else decision.next_action, terminal=decision.completion_admissible, blocked=(not decision.completion_admissible and not decision.capable_route_available), reason_codes=decision.reason_codes)); return payload
+    payload = asdict(decision); payload["reason_codes"] = list(decision.reason_codes); payload["agent_os_continuation"] = continuation_payload(DriverDecision(action="" if decision.completion_admissible else decision.next_action, terminal=decision.completion_admissible, blocked=(not decision.completion_admissible and not decision.capable_route_available), reason_codes=decision.reason_codes)); return payload
 
 
 def classify_agent_os_existing_work(*, evidence: ExistingWorkEvidence, resume_plan: ResumePlan | None, lease_request: PilotLeaseRequest | None, lease_observation: HostLocalLeaseObservation | None) -> dict[str, object]:
     decision = plan_execution_continuation(evidence, resume_plan=resume_plan, lease_request=lease_request, lease_observation=lease_observation)
-    payload = asdict(decision); payload["disposition"] = decision.disposition.value; blocked = decision.disposition in {ContinuationDisposition.ACTIVE_CONFLICT, ContinuationDisposition.SCOPE_DRIFT, ContinuationDisposition.NEEDS_DECISION}; payload["agent_os_continuation"] = _driver_payload(DriverDecision(action="" if blocked else decision.recommended_action, blocked=blocked, reason_codes=decision.reason_codes)); return payload
+    payload = asdict(decision); payload["disposition"] = decision.disposition.value; blocked = decision.disposition in {ContinuationDisposition.ACTIVE_CONFLICT, ContinuationDisposition.SCOPE_DRIFT, ContinuationDisposition.NEEDS_DECISION}; payload["agent_os_continuation"] = continuation_payload(DriverDecision(action="" if blocked else decision.recommended_action, blocked=blocked, reason_codes=decision.reason_codes)); return payload
 
 
 def classify_agent_os_red_ci(evidence: RedCiEvidence) -> dict[str, object]:
-    decision = plan_red_ci_continuation(evidence); payload = asdict(decision); payload["failure_class"] = decision.failure_class.value; payload["next_action"] = decision.next_action.value; blocked = decision.next_action in {RedCiNextAction.BLOCKED_DIAGNOSTIC_SURFACE, RedCiNextAction.NEEDS_DECISION}; payload["agent_os_continuation"] = _driver_payload(DriverDecision(action="" if blocked else decision.next_action.value, blocked=blocked, reason_codes=decision.reason_codes)); return payload
+    decision = plan_red_ci_continuation(evidence); payload = asdict(decision); payload["failure_class"] = decision.failure_class.value; payload["next_action"] = decision.next_action.value; blocked = decision.next_action in {RedCiNextAction.BLOCKED_DIAGNOSTIC_SURFACE, RedCiNextAction.NEEDS_DECISION}; payload["agent_os_continuation"] = continuation_payload(DriverDecision(action="" if blocked else decision.next_action.value, blocked=blocked, reason_codes=decision.reason_codes)); return payload
 
 
 def classify_agent_os_recovery_progress(current: RecoverySemanticEvidence, *, prior: RecoverySemanticEvidence | None = None, prior_transition_fingerprint: str | None = None) -> dict[str, object]:
-    decision = classify_recovery_progress(current, prior=prior, prior_transition_fingerprint=prior_transition_fingerprint); payload = asdict(decision); payload["disposition"] = decision.disposition.value; stalled = decision.disposition is RecoveryProgressDisposition.RECOVERY_STALLED; payload["agent_os_continuation"] = _driver_payload(DriverDecision(action="" if stalled else decision.recommended_action, stalled=stalled, reason_codes=decision.reason_codes)); return payload
+    decision = classify_recovery_progress(current, prior=prior, prior_transition_fingerprint=prior_transition_fingerprint); payload = asdict(decision); payload["disposition"] = decision.disposition.value; stalled = decision.disposition is RecoveryProgressDisposition.RECOVERY_STALLED; payload["agent_os_continuation"] = continuation_payload(DriverDecision(action="" if stalled else decision.recommended_action, stalled=stalled, reason_codes=decision.reason_codes)); return payload
 
 
 def classify_agent_os_continuation(*, repository: str, issue_number: int, operation_id: str, surface_outcome: str, approved_alternative_capability: str | None = None, branch: str | None = None, pull_request: int | None = None, checkpoint_id: str | None = None, lease_id: str | None = None, prior_effect: str = "none-proven", target_identity_reacquired: bool = False, requires_exact_blob_identity: bool = False, exact_blob_identity_reacquired: bool = False, runtime_surface_transition: bool = False, evidence_compatibility_confirmed: bool = False, active_foreign_lease: bool = False, equivalent_transition_repeated: bool = False, material_decision_required: bool = False, alternative_widens_authority: bool = False, non_absorbed_domain: str | None = None) -> dict[str, object]:

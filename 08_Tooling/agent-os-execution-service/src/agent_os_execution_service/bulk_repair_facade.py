@@ -1,8 +1,8 @@
 """Bounded MCP-facing projection for finite multi-PR repair continuation (#2487).
 
 This adapter exposes the existing ``batch_repair_continuation`` contract to the
-execution-service host.  It performs no repair, retry, scheduling, mutation, or
-lesson retrieval.  Per-candidate evidence is normalized into the canonical
+execution-service host. It performs no repair, retry, scheduling, mutation, or
+lesson retrieval. Per-candidate evidence is normalized into the canonical
 finite-batch projection so an item-local blocker can advance to the next frozen
 candidate while a proven shared blocker can still halt the parent batch.
 """
@@ -12,6 +12,10 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Mapping
 
+from scripts.agent_os_execution_interface.continuation_driver import (
+    ContinuationDecision,
+    continuation_payload,
+)
 from scripts.agent_os_issue_acceptance.batch_repair_continuation import (
     RepairCandidateEvidence,
     RepairDisposition,
@@ -47,16 +51,14 @@ def classify_bulk_repair_continuation(
         "report-complete-repair-batch",
     }
     blocked = result.next_action == "halt-shared-blocker"
-    payload["agent_os_continuation"] = {
-        "action": "" if terminal else result.next_action,
-        "terminal": terminal,
-        "blocked": blocked,
-        "stalled": False,
-        "reason_codes": list(result.finite_admission.reason_codes),
-        "execution_authorized": False,
-        "github_writes_authorized": False,
-        "side_effects_performed": False,
-    }
+    payload["agent_os_continuation"] = continuation_payload(
+        ContinuationDecision(
+            action="" if terminal else result.next_action,
+            terminal=terminal,
+            blocked=blocked,
+            reason_codes=result.finite_admission.reason_codes,
+        )
+    )
     return payload
 
 
