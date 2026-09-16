@@ -105,13 +105,23 @@ def parse_terminal_transcript(text: str) -> TerminalTranscript:
                 command_project = _PROJECT_RE.search(command)
                 if command_project:
                     cloud_project = command_project.group("project")
-            # Branch evidence describes the newest prompt only. A prompt with no
-            # branch context must clear an older branch instead of leaking it forward.
-            branch = (
-                parsed_context
-                if parsed_context is not None and parsed_context != cloud_project
-                else None
+            project_only_cloud_shell_prompt = (
+                parsed_context is not None
+                and parsed_directory == "~"
+                and "@cloudshell:" in latest_prompt
+                and cloud_project is None
             )
+            if project_only_cloud_shell_prompt:
+                cloud_project = parsed_context
+                branch = None
+            else:
+                # Branch evidence describes the newest prompt only. A prompt with no
+                # branch context must clear an older branch instead of leaking it forward.
+                branch = (
+                    parsed_context
+                    if parsed_context is not None and parsed_context != cloud_project
+                    else None
+                )
             continue
 
         if line.startswith("Updated property [core/project]."):
