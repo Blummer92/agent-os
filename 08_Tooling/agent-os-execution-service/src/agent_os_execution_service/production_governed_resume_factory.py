@@ -47,7 +47,6 @@ from .governed_resume_entrypoint import GovernedResumeBindings
 from .governed_resume_restart_capsule import GovernedResumeRestartCapsule
 from .host_github_read_transport import build_host_github_read_transport_from_environment
 from .production_host_bootstrap import (
-    ProductionHostBootstrapError,
     build_production_host_bootstrap,
     build_subprocess_verifier_runner,
     canonical_evaluated_at,

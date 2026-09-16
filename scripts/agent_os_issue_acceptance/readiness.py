@@ -4,7 +4,6 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
-from .issueplan_scanner import ScanFinding
 from .models import AcceptanceReport, CheckResult, IssueMetadata, Status, strongest_status
 from .parse_issue import project_issue_metadata, scan_issue_metadata
 from .path_contract import (
