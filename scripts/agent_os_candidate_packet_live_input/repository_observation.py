@@ -101,10 +101,22 @@ def parse_verifier_stdout(stdout: str) -> VerifierEvidence:
         raise VerifierStdoutError(
             f"verifier stdout is missing the {_CHANGED_FILES_BEGIN} marker"
         )
-    if _CHANGED_FILES_END not in lines[begin_index + 1 :]:
+    end_indexes = [
+        index
+        for index, line in enumerate(lines[begin_index + 1 :], start=begin_index + 1)
+        if line == _CHANGED_FILES_END
+    ]
+    if not end_indexes:
         raise VerifierStdoutError(
             f"verifier stdout is missing the {_CHANGED_FILES_END} marker"
         )
+    if len(end_indexes) != 1:
+        raise VerifierStdoutError(
+            f"verifier stdout contains duplicate {_CHANGED_FILES_END} markers"
+        )
+    end_index = end_indexes[0]
+    if any(line for line in lines[end_index + 1 :]):
+        raise VerifierStdoutError("verifier stdout contains trailing undeclared output")
 
     missing = [key for key in _REQUIRED_KEYS if key not in values]
     if missing:
