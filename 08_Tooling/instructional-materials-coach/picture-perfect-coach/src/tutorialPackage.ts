@@ -44,6 +44,7 @@ export type TutorialPackageBlocker =
   | 'step-disposition-duplicate'
   | 'step-not-retained'
   | 'new-visual-authoring-missing'
+  | 'application-identity-conflict'
   | 'reuse-asset-missing'
   | 'resurface-asset-missing'
   | 'reason-evidence-missing'
@@ -84,15 +85,27 @@ function unique<T>(items: readonly T[]): T[] {
 }
 
 const EXACT_INSTRUCTIONAL_DETAIL = /\b\d+(?:\.\d+)?\s*(?:pt|px|pixels?|points?|rem|em|%|mm|cm|inches?)\b/i;
+const KNOWN_APPLICATION_IDENTITIES = ['Adobe Express', 'Canva', 'Figma', 'Photoshop'] as const;
 
 function authoredInstructionText(authoring: PromptAuthoringInput): string {
   return [
     authoring.imagePurpose,
+    authoring.applicationContext,
     authoring.targetState,
     ...authoring.mustShow,
     ...authoring.mustNotShow,
     authoring.annotationSpace,
+    ...authoring.requestedUiDetails,
   ].join(' ');
+}
+
+function hasApplicationIdentityConflict(authoring: PromptAuthoringInput, modeledApplication: string): boolean {
+  const instructionText = authoredInstructionText(authoring).toLocaleLowerCase();
+  const normalizedModeledApplication = modeledApplication.trim().toLocaleLowerCase();
+  return KNOWN_APPLICATION_IDENTITIES.some((application) =>
+    application.toLocaleLowerCase() !== normalizedModeledApplication
+      && instructionText.includes(application.toLocaleLowerCase()),
+  );
 }
 
 function artifactDirective(canonicalArtifactIdentity: string, exemplarIdentity: string | null): string {
@@ -118,6 +131,7 @@ export function buildTutorialPackage(
   }
 
   const retained = new Set(tutorial.retained_steps.map((step) => step.review_step_id));
+  const retainedById = new Map(tutorial.retained_steps.map((step) => [step.review_step_id, step]));
   const routeIds = route.steps.map((step) => step.reviewStepId);
   const blockers: TutorialPackageBlocker[] = [];
   const canonicalArtifactIdentity = route.canonicalArtifactIdentity?.trim() || null;
@@ -136,6 +150,13 @@ export function buildTutorialPackage(
     if (step.disposition === 'resurface-prior-visual' && !step.approvedAssetRef?.trim()) blockers.push('resurface-asset-missing');
     if ((step.disposition === 'no-additional-visual-needed' || step.disposition === 'pathway-compacted') && !step.reasonRef?.trim()) {
       blockers.push('reason-evidence-missing');
+    }
+
+    const reviewedStep = retainedById.get(step.reviewStepId);
+    const modeledApplication = reviewedStep?.modeled_application?.trim();
+    if (step.disposition === 'new-visual' && step.authoring && modeledApplication
+      && hasApplicationIdentityConflict(step.authoring, modeledApplication)) {
+      blockers.push('application-identity-conflict');
     }
 
     if (step.disposition === 'new-visual' && canonicalArtifactIdentity) {
