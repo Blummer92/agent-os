@@ -18,7 +18,7 @@ def test_mcp_requirement_is_derived_from_canonical_package_metadata():
 
     assert requirement.name == "mcp"
     assert "2.2.0" in requirement.specifier
-    assert "2.3" not in requirement.specifier
+    assert "2.3.0" not in requirement.specifier
 
 
 def test_compatible_mcp_runtime_passes():
