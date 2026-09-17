@@ -30,7 +30,7 @@ The MCP server has no GitHub repository-write credential in this phase. GitHub m
 
 ## Protocol binding
 
-`agent_os_execution_service.mcp_server` uses the official Python MCP SDK (`mcp>=2.1.1,<2.2`) and registers exactly the two tools above with `MCPServer`. The repository phase does not start a network listener or choose a deployment transport.
+`agent_os_execution_service.mcp_server` uses the official Python MCP SDK (`mcp>=2.2.0,<2.3`) and registers exactly the two tools above with `MCPServer`. The supported MCP range is owned by `08_Tooling/agent-os-execution-service/pyproject.toml`; this documentation mirrors that canonical package requirement. The repository phase does not start a network listener or choose a deployment transport.
 
 `mcp_facade` imports the #1237 owner from `scripts.agent_os_execution_interface.post_selection_continuation`. That package is already distributed by `workflow-scheduler` (#1426), and this distribution declares `workflow-scheduler>=0.18.0,<0.19.0`, so a clean host installation resolves the continuation owner through the existing single-owner distribution boundary. It is deliberately not re-packaged here: #1300 requires that no runtime module be carried by two distributions.
 
