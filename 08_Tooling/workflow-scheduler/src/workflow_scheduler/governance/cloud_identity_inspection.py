@@ -110,7 +110,8 @@ def _effective_stop_permission(run: Run) -> dict[str, object]:
     member = _runtime_member(TRANSPORT_PRINCIPAL)
     try:
         allowed = _run_json(run, (
-            "gcloud", "projects", "test-iam-permissions", PROJECT,
+            "gcloud", "compute", "instances", "test-iam-permissions", INSTANCE,
+            "--project", PROJECT, "--zone", ZONE,
             "--permissions", STOP_PERMISSION,
             "--impersonate-service-account", TRANSPORT_PRINCIPAL,
             "--format=json(permissions)",
@@ -133,7 +134,7 @@ def _effective_stop_permission(run: Run) -> dict[str, object]:
         if STOP_PERMISSION not in permissions:
             evidence.update({
                 "effective": False,
-                "source_scope": "project",
+                "source_scope": "instance",
                 "inheritance": "none",
                 "readback_state": "current",
                 "reason_codes": ["stop-permission-denied"],
@@ -171,8 +172,8 @@ def _effective_stop_permission(run: Run) -> dict[str, object]:
             return evidence
 
         evidence.update({
-            "source_scope": "other-bounded-supported-scope",
-            "inheritance": "inherited",
+            "source_scope": "instance-or-inherited-unresolved",
+            "inheritance": "unknown",
             "readback_state": "current",
             "reason_codes": ["stop-permission-effective-source-not-bounded"],
         })
