@@ -337,8 +337,9 @@ def test_classroom_fixture_preserves_artifact_first_and_decision_studio() -> Non
     assert "never fabricated" in classroom
 
     # The consumed standards keep their canonical shape; the artifact-first
-    # standard is at 0.1.2 after #1945 follows the merged #1944 clause.
-    assert "0.1.2" in section(ARTIFACT_FIRST, "Version")
+    # standard is at 0.1.3 after #2334 binds reuse-first visual recovery to
+    # classroom artifact completion.
+    assert "0.1.3" in section(ARTIFACT_FIRST, "Version")
     assert "0.1.0" in section(TEACHER_STUDIO, "Version")
     assert "Required Order" in read(ARTIFACT_FIRST)
     assert "Locked Interaction Model" in read(TEACHER_STUDIO)
