@@ -37,6 +37,14 @@ from .classroom_unit_workspace import (
     WORKSPACE_ROLES as CLASSROOM_WORKSPACE_ROLES,
     validate_classroom_unit_workspace,
 )
+from .classroom_unit_workspace_resolver import (
+    CONTRACT_ID as CLASSROOM_UNIT_WORKSPACE_RESOLUTION_CONTRACT_ID,
+    FOLDER_MIME_TYPE as CLASSROOM_WORKSPACE_FOLDER_MIME_TYPE,
+    OVERALL_STATES as CLASSROOM_WORKSPACE_RESOLUTION_STATES,
+    ROLE_OUTCOMES as CLASSROOM_WORKSPACE_ROLE_OUTCOMES,
+    FolderMetadataReader,
+    resolve_classroom_unit_workspace,
+)
 from .experiment_evidence import (
     AVAILABILITIES as EXPERIMENT_EVIDENCE_AVAILABILITIES,
     CONTRACT_VERSION as EXPERIMENT_EVIDENCE_VERSION,
@@ -72,8 +80,12 @@ __all__ = [
     "AuthorityEvidence",
     "CANONICAL_OWNERS",
     "CLASSROOM_UNIT_WORKSPACE_CONTRACT_ID",
+    "CLASSROOM_UNIT_WORKSPACE_RESOLUTION_CONTRACT_ID",
     "CLASSROOM_WORKSPACE_BINDING_STATES",
+    "CLASSROOM_WORKSPACE_FOLDER_MIME_TYPE",
+    "CLASSROOM_WORKSPACE_RESOLUTION_STATES",
     "CLASSROOM_WORKSPACE_ROLES",
+    "CLASSROOM_WORKSPACE_ROLE_OUTCOMES",
     "CONTRACT_ID",
     "ContractReference",
     "ContractValidationError",
@@ -82,6 +94,7 @@ __all__ = [
     "EXPERIMENT_EVIDENCE_VERSION",
     "FINGERPRINT_ALGORITHM",
     "FORBIDDEN_IMPORT_PREFIXES",
+    "FolderMetadataReader",
     "IMAGE_INTENT_CONTRACT_ID",
     "IMPORTED_ASSET_CONTEXT_CONTRACT_ID",
     "MAX_BLOCKERS",
@@ -109,6 +122,7 @@ __all__ = [
     "canonical_json_bytes",
     "canonical_size",
     "freeze_json",
+    "resolve_classroom_unit_workspace",
     "resolve_status",
     "sha256_hex",
     "thaw_json",
