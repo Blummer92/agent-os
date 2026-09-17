@@ -1,4 +1,4 @@
-"""MCP protocol binding for the bounded Agent OS ChatGPT facade (#1966 / #1988 / #2363 / #2487 / #2331 / #2523 / #2528)."""
+"""MCP protocol binding for the bounded Agent OS ChatGPT facade (#1966 / #1988 / #2363 / #2487 / #2331 / #2523 / #2528 / #2607)."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from scripts.agent_os_execution_interface.investigation_completion_admission imp
 
 from .bulk_repair_facade import classify_bulk_repair_continuation
 from .connected_issue_creation_facade import plan_connected_issue_creation_for_host
+from .issue_batch_completion import classify_issue_batch_completion
 from .issue_start_lesson_preflight import activate_issue_start_lesson_preflight
 from .lesson_reader_composition import resolve_lesson_read_route
 from .mcp_facade import (
@@ -26,33 +27,17 @@ mcp = MCPServer("Agent OS")
 
 def _lesson_route(lesson_rows: list[dict[str, object]] | None):
     if lesson_rows is not None:
-        return (
-            lambda _query: {"results": lesson_rows},
-            "diagnostic-override",
-            "diagnostic-lesson-rows",
-            False,
-        )
+        return (lambda _query: {"results": lesson_rows}, "diagnostic-override", "diagnostic-lesson-rows", False)
     route = resolve_lesson_read_route()
-    return (
-        route.execute_read,
-        route.status.value,
-        route.reason_code,
-        route.canonical_source_unavailable,
-    )
+    return (route.execute_read, route.status.value, route.reason_code, route.canonical_source_unavailable)
 
 
 def _with_lesson_route(result: dict[str, object], route_status: str, reason_code: str, canonical_source_unavailable: bool) -> dict[str, object]:
-    return {
-        **result,
-        "lesson_read_route_status": route_status,
-        "lesson_read_route_reason_code": reason_code,
-        "canonical_lessons_source_unavailable": canonical_source_unavailable,
-    }
+    return {**result, "lesson_read_route_status": route_status, "lesson_read_route_reason_code": reason_code, "canonical_lessons_source_unavailable": canonical_source_unavailable}
 
 
 @mcp.tool()
 def plan_connected_issue_creation_tool(repository: str, issue_body: str) -> dict[str, object]:
-    """Plan canonical managed labels before connected issue creation."""
     return plan_connected_issue_creation_for_host(repository=repository, issue_body=issue_body)
 
 
@@ -63,30 +48,13 @@ def plan_agent_os_continuation_tool(repository: str, issue_number: int, canonica
 
 @mcp.tool()
 def activate_agent_os_issue_start_lessons_tool(repository: str, issue_number: int, task_reference: str, ecosystem_hints: tuple[str, ...] = (), language_hints: tuple[str, ...] = (), library_hints: tuple[str, ...] = (), capability_keywords: tuple[str, ...] = (), target_path_hints: tuple[str, ...] = (), canonical_rule_refs: tuple[str, ...] = (), known_knowledge_refs: tuple[str, ...] = (), specialized_knowledge_required: bool | None = None, lesson_rows: list[dict[str, object]] | None = None) -> dict[str, object]:
-    """Resolve the mandatory initial CKR6 gate before substantial reasoning."""
     execute_read, route_status, reason_code, source_unavailable = _lesson_route(lesson_rows)
-    result = activate_issue_start_lesson_preflight(
-        repository=repository,
-        issue_number=issue_number,
-        task_reference=task_reference,
-        ecosystem_hints=ecosystem_hints,
-        language_hints=language_hints,
-        library_hints=library_hints,
-        capability_keywords=capability_keywords,
-        target_path_hints=target_path_hints,
-        canonical_rule_refs=canonical_rule_refs,
-        known_knowledge_refs=known_knowledge_refs,
-        specialized_knowledge_required=specialized_knowledge_required,
-        execute_read=execute_read,
-    )
+    result = activate_issue_start_lesson_preflight(repository=repository, issue_number=issue_number, task_reference=task_reference, ecosystem_hints=ecosystem_hints, language_hints=language_hints, library_hints=library_hints, capability_keywords=capability_keywords, target_path_hints=target_path_hints, canonical_rule_refs=canonical_rule_refs, known_knowledge_refs=known_knowledge_refs, specialized_knowledge_required=specialized_knowledge_required, execute_read=execute_read)
     return _with_lesson_route(result, route_status, reason_code, source_unavailable)
 
 
 @mcp.tool()
 def activate_agent_os_failed_repair_tool(repository: str, issue_number: int, attempt_id: str, failed_hypothesis: str, result_summary: str, task_reference: str, ecosystem_hints: tuple[str, ...] = (), language_hints: tuple[str, ...] = (), library_hints: tuple[str, ...] = (), capability_keywords: tuple[str, ...] = (), target_path_hints: tuple[str, ...] = (), canonical_rule_refs: tuple[str, ...] = (), known_knowledge_refs: tuple[str, ...] = (), specialized_knowledge_required: bool | None = None, lesson_rows: list[dict[str, object]] | None = None, repair_context: str = "failed-pr-repair") -> dict[str, object]:
-    # ``lesson_rows`` is an explicit test/diagnostic override. Production calls
-    # bind CKR11 to the existing read-only Scheduler Notion adapter so the
-    # bounded query produced by the lesson bridge is actually executed.
     execute_read, route_status, reason_code, source_unavailable = _lesson_route(lesson_rows)
     result = activate_agent_os_failed_repair(repository=repository, issue_number=issue_number, attempt_id=attempt_id, failed_hypothesis=failed_hypothesis, result_summary=result_summary, task_reference=task_reference, ecosystem_hints=ecosystem_hints, language_hints=language_hints, library_hints=library_hints, capability_keywords=capability_keywords, target_path_hints=target_path_hints, canonical_rule_refs=canonical_rule_refs, known_knowledge_refs=known_knowledge_refs, specialized_knowledge_required=specialized_knowledge_required, execute_read=execute_read, repair_context=repair_context)
     return _with_lesson_route(result, route_status, reason_code, source_unavailable)
@@ -103,26 +71,15 @@ def classify_agent_os_mission_completion_tool(repository: str, issue_number: int
 
 
 @mcp.tool()
+def classify_agent_os_issue_batch_completion_tool(repository: str, issue_number: int, lane_evidence: list[dict[str, object]]) -> dict[str, object]:
+    """Require PR-or-explicit-no-PR terminal proof for every selected issue lane."""
+    return classify_issue_batch_completion(repository=repository, issue_number=issue_number, lane_evidence=lane_evidence)
+
+
+@mcp.tool()
 def classify_agent_os_investigation_completion_tool(repository: str, issue_number: int, material_branch_states: tuple[str, ...], executable_next_action_available: bool, subordinate_write_performed: bool) -> dict[str, object]:
-    """Prevent an intermediate investigation checkpoint from becoming completion."""
-    decision = evaluate_investigation_completion_admission(
-        repository=repository,
-        issue_number=issue_number,
-        material_branch_states=material_branch_states,
-        executable_next_action_available=executable_next_action_available,
-        subordinate_write_performed=subordinate_write_performed,
-    )
-    payload = asdict(decision)
-    payload["reason_codes"] = list(decision.reason_codes)
-    payload["agent_os_continuation"] = continuation_payload(
-        ContinuationDecision(
-            action="" if decision.completion_admissible else decision.next_action,
-            terminal=decision.completion_admissible,
-            blocked=(not decision.completion_admissible and not decision.executable_next_action_available),
-            reason_codes=decision.reason_codes,
-        )
-    )
-    return payload
+    decision = evaluate_investigation_completion_admission(repository=repository, issue_number=issue_number, material_branch_states=material_branch_states, executable_next_action_available=executable_next_action_available, subordinate_write_performed=subordinate_write_performed)
+    payload = asdict(decision); payload["reason_codes"] = list(decision.reason_codes); payload["agent_os_continuation"] = continuation_payload(ContinuationDecision(action="" if decision.completion_admissible else decision.next_action, terminal=decision.completion_admissible, blocked=(not decision.completion_admissible and not decision.executable_next_action_available), reason_codes=decision.reason_codes)); return payload
 
 
 @mcp.tool()
@@ -132,17 +89,10 @@ def classify_agent_os_continuation_tool(repository: str, issue_number: int, oper
 
 @mcp.tool()
 def classify_agent_os_bulk_repair_continuation_tool(repository: str, issue_number: int, requested_pull_requests: list[int], candidate_evidence: list[dict[str, object]]) -> dict[str, object]:
-    """Classify one finite multi-PR repair batch without performing mutations."""
-    return classify_bulk_repair_continuation(
-        repository=repository,
-        issue_number=issue_number,
-        requested_pull_requests=requested_pull_requests,
-        candidate_evidence=candidate_evidence,
-    )
+    return classify_bulk_repair_continuation(repository=repository, issue_number=issue_number, requested_pull_requests=requested_pull_requests, candidate_evidence=candidate_evidence)
 
 
 def main() -> None:
-    """Run the existing bounded Agent OS MCP server over stdio for host attachment."""
     mcp.run(transport="stdio")
 
 
