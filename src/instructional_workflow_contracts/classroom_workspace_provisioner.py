@@ -61,7 +61,6 @@ def plan_classroom_workspace_provisioning(
     try:
         workspace_record = _validated_record(workspace, WORKSPACE_CONTRACT_ID, "workspace")
         resolution_record = _validated_record(resolution, RESOLUTION_CONTRACT_ID, "resolution")
-        workspace_payload = workspace_record.to_dict()
         resolution_payload = resolution_record.to_dict()
         _validate_lineage(workspace_record, resolution_payload)
 
@@ -70,7 +69,7 @@ def plan_classroom_workspace_provisioning(
         role_resolutions = {item["role"]: item for item in resolution_payload["role_resolutions"]}
         root = role_resolutions.get("unit-root")
         if type(root) is not dict:
-            raise ContractValidationError("workspace-plan-root-invalid", "unit-root resolution is required")
+            raise ContractValidationError("destination-workspace-plan-root-invalid", "unit-root resolution is required")
         root_id = root.get("drive_folder_id")
         root_healthy = root.get("outcome") == "resolved" and type(root_id) is str
 
@@ -78,7 +77,7 @@ def plan_classroom_workspace_provisioning(
         for role in roles:
             current = role_resolutions.get(role)
             if type(current) is not dict:
-                raise ContractValidationError("workspace-plan-role-missing", "requested role is absent from resolver evidence")
+                raise ContractValidationError("destination-workspace-plan-role-missing", "requested role is absent from resolver evidence")
             operations.append(
                 _operation(
                     workspace_record.record_id,
@@ -121,7 +120,7 @@ def plan_classroom_workspace_provisioning(
         }
         normalized = validate_and_normalize_json(payload, max_bytes=MAX_RESULT_BYTES)
         if type(normalized) is not dict or canonical_size(normalized) > MAX_RESULT_BYTES:
-            raise ContractValidationError("workspace-plan-oversized", "provisioning plan exceeds result-size bound")
+            raise ContractValidationError("destination-workspace-plan-oversized", "provisioning plan exceeds result-size bound")
         record = ValidatedRecord(
             contract_version=CONTRACT_ID,
             record_id=payload["plan_id"],
@@ -139,12 +138,12 @@ def plan_classroom_workspace_provisioning(
     except ContractValidationError as exc:
         return invalid_result(exc.reason_code, exc.detail)
     except (KeyError, TypeError, ValueError) as exc:
-        return invalid_result("workspace-plan-invalid", sanitize_detail(str(exc)))
+        return invalid_result("destination-workspace-plan-invalid", sanitize_detail(str(exc)))
 
 
 def _validated_record(value: object, contract_id: str, label: str) -> ValidatedRecord:
     if type(value) is not ValidatedRecord or value.contract_version != contract_id:
-        raise ContractValidationError(f"workspace-plan-{label}-invalid", f"validated {label} evidence is required")
+        raise ContractValidationError(f"destination-workspace-plan-{label}-invalid", f"validated {label} evidence is required")
     payload = value.to_dict()
     identity_field = "workspace_id" if label == "workspace" else "resolution_id"
     if payload.get("contract_version") != contract_id or payload.get(identity_field) != value.record_id:
@@ -160,33 +159,33 @@ def _validated_record(value: object, contract_id: str, label: str) -> ValidatedR
 def _validate_lineage(workspace: ValidatedRecord, resolution_payload: dict) -> None:
     source = resolution_payload.get("source_workspace")
     if type(source) is not dict:
-        raise ContractValidationError("workspace-plan-lineage-invalid", "resolution source workspace is missing")
+        raise ContractValidationError("destination-workspace-plan-lineage-invalid", "resolution source workspace is missing")
     if source.get("workspace_id") != workspace.record_id or source.get("fingerprint") != workspace.fingerprint:
-        raise ContractValidationError("workspace-plan-lineage-mismatch", "resolver evidence does not match workspace")
+        raise ContractValidationError("destination-workspace-plan-lineage-mismatch", "resolver evidence does not match workspace")
 
 
 def _requested_roles(value: Sequence[str]) -> list[str]:
     if isinstance(value, (str, bytes)) or not isinstance(value, Sequence) or not value:
-        raise ContractValidationError("workspace-plan-roles-invalid", "requested_roles must be a non-empty sequence")
+        raise ContractValidationError("destination-workspace-plan-roles-invalid", "requested_roles must be a non-empty sequence")
     roles = []
     for role in value:
         if role == "unit-root" or role not in WORKSPACE_ROLES or role not in DEFAULT_ROLE_DISPLAY_NAMES:
-            raise ContractValidationError("workspace-plan-role-unsupported", "requested semantic role is unsupported")
+            raise ContractValidationError("destination-workspace-plan-role-unsupported", "requested semantic role is unsupported")
         if role in roles:
-            raise ContractValidationError("workspace-plan-role-duplicate", "requested semantic role is duplicated")
+            raise ContractValidationError("destination-workspace-plan-role-duplicate", "requested semantic role is duplicated")
         roles.append(role)
     return sorted(roles)
 
 
 def _display_overrides(value: Mapping[str, str], requested_roles: list[str]) -> dict[str, str]:
     if not isinstance(value, Mapping):
-        raise ContractValidationError("workspace-plan-display-overrides-invalid", "display-name overrides must be a mapping")
+        raise ContractValidationError("destination-workspace-plan-display-overrides-invalid", "display-name overrides must be a mapping")
     result = {}
     for role, name in value.items():
         if role not in requested_roles:
-            raise ContractValidationError("workspace-plan-display-override-role-invalid", "override role was not requested")
+            raise ContractValidationError("destination-workspace-plan-display-override-role-invalid", "override role was not requested")
         if type(name) is not str or not name.strip() or len(name) > 256:
-            raise ContractValidationError("workspace-plan-display-name-invalid", "display-name override is invalid")
+            raise ContractValidationError("destination-workspace-plan-display-name-invalid", "display-name override is invalid")
         result[role] = name.strip()
     return result
 
@@ -203,22 +202,22 @@ def _operation(
     outcome = current.get("outcome")
     if not root_healthy:
         operation_type = "blocked"
-        reason = "workspace-plan-root-not-current"
+        reason = "destination-workspace-plan-root-not-current"
     elif outcome == "resolved":
         operation_type = "no-op"
-        reason = "workspace-role-already-current"
+        reason = "destination-workspace-role-already-current"
     elif outcome == "missing":
         operation_type = "create-folder"
-        reason = "workspace-role-folder-missing"
+        reason = "destination-workspace-role-folder-missing"
     elif outcome in {"moved", "ambiguous"}:
         operation_type = "manual-review"
-        reason = f"workspace-role-{outcome}"
+        reason = f"destination-workspace-role-{outcome}"
     elif outcome in {"trashed", "inaccessible", "wrong-kind"}:
         operation_type = "blocked"
-        reason = f"workspace-role-{outcome}"
+        reason = f"destination-workspace-role-{outcome}"
     else:
         operation_type = "blocked"
-        reason = "workspace-role-state-unsupported"
+        reason = "destination-workspace-role-state-unsupported"
 
     identity_basis = {
         "workspace_id": workspace_id,
@@ -261,21 +260,20 @@ def _operation(
 
 def _overall(operations: list[dict], *, root_healthy: bool) -> tuple[str, ValidationStatus, list[str]]:
     if not root_healthy:
-        return "blocked", ValidationStatus.MANUAL_REVIEW_REQUIRED, ["workspace-plan-root-not-current"]
+        return "blocked", ValidationStatus.MANUAL_REVIEW_REQUIRED, ["destination-workspace-plan-root-not-current"]
     kinds = {item["operation_type"] for item in operations}
     if "blocked" in kinds:
-        return "blocked", ValidationStatus.MANUAL_REVIEW_REQUIRED, ["workspace-plan-blocked"]
+        return "blocked", ValidationStatus.MANUAL_REVIEW_REQUIRED, ["destination-workspace-plan-blocked"]
     if "manual-review" in kinds:
-        return "manual-review", ValidationStatus.MANUAL_REVIEW_REQUIRED, ["workspace-plan-review-required"]
+        return "manual-review", ValidationStatus.MANUAL_REVIEW_REQUIRED, ["destination-workspace-plan-review-required"]
     if "create-folder" in kinds:
-        return "planned", ValidationStatus.VALID, ["workspace-plan-create-required"]
+        return "planned", ValidationStatus.VALID, []
     return "no-op", ValidationStatus.VALID, []
 
 
 def _reason_detail(reason: str) -> str:
     return {
-        "workspace-plan-root-not-current": "unit-root must be currently resolved before child provisioning can be planned",
-        "workspace-plan-blocked": "one or more requested roles are unsafe to provision automatically",
-        "workspace-plan-review-required": "one or more requested roles require bounded manual review",
-        "workspace-plan-create-required": "one or more missing semantic-role folders require a future authorized create",
+        "destination-workspace-plan-root-not-current": "unit-root must be currently resolved before child provisioning can be planned",
+        "destination-workspace-plan-blocked": "one or more requested roles are unsafe to provision automatically",
+        "destination-workspace-plan-review-required": "one or more requested roles require bounded manual review",
     }.get(reason, "workspace provisioning plan requires review")
