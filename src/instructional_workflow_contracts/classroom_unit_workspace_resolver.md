@@ -12,6 +12,8 @@ Renames are presentation changes: a different current display name does not caus
 
 Roles intentionally marked `missing` are not searched by name and remain lazy/unresolved. Contradictory exact-ID metadata becomes bounded manual review.
 
+A lazy/unresolved role is not a defect, so that outcome stays `valid` with `overall_state = partial`. The shared `ValidationResult` contract forbids reason codes and blockers on a valid result, so `overall_state` is the only partial signal; finite `destination-*` reason codes are emitted for the manual-review outcomes.
+
 ## Authority
 
 Resolver results grant no execution, external-write, approval, classroom-readiness, publication, or production authority. They do not create, move, rename, delete, share, or provision Drive content.
