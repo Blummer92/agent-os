@@ -47,3 +47,21 @@ def test_mcp_server_contains_no_execution_or_store_primitives() -> None:
     )
     for token in forbidden:
         assert token not in source
+
+
+def test_mcp_main_runs_existing_server_over_stdio(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_run(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(mcp_server.mcp, "run", fake_run)
+    mcp_server.main()
+
+    assert calls == [{"transport": "stdio"}]
+
+
+def test_mcp_main_does_not_register_additional_tools() -> None:
+    source = inspect.getsource(mcp_server.main)
+    assert "mcp.run" in source
+    assert "mcp.tool" not in source
