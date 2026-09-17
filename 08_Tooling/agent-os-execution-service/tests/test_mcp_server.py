@@ -10,6 +10,7 @@ EXPECTED_TOOLS = frozenset(
     {
         "plan_connected_issue_creation_tool",
         "plan_agent_os_continuation_tool",
+        "admit_agent_os_primary_pr_creation_tool",
         "activate_agent_os_issue_start_lessons_tool",
         "activate_agent_os_failed_repair_tool",
         "admit_agent_os_failed_repair_tool",
@@ -47,6 +48,49 @@ def test_mcp_server_contains_no_execution_or_store_primitives() -> None:
     )
     for token in forbidden:
         assert token not in source
+
+
+def test_primary_pr_creation_tool_reuses_single_existing_pr() -> None:
+    result = mcp_server.admit_agent_os_primary_pr_creation_tool(
+        issue_number=2609,
+        issue_open=True,
+        evidence_current=True,
+        active_primary_prs=[
+            {
+                "pull_request_number": 2610,
+                "branch": "agent/2609-open-only-bug-candidates",
+                "head_sha": "a" * 40,
+            }
+        ],
+    )
+    assert result["action"] == "reuse-existing-primary-pr"
+    assert result["creation_admitted"] is False
+    assert result["existing_pull_request_number"] == 2610
+    assert result["github_writes_authorized"] is False
+
+
+def test_primary_pr_creation_tool_fails_closed_on_2609_duplicate_reproduction() -> None:
+    result = mcp_server.admit_agent_os_primary_pr_creation_tool(
+        issue_number=2609,
+        issue_open=True,
+        evidence_current=True,
+        active_primary_prs=[
+            {
+                "pull_request_number": 2610,
+                "branch": "agent/2609-open-only-bug-candidates",
+                "head_sha": "a" * 40,
+            },
+            {
+                "pull_request_number": 2611,
+                "branch": "agent/2609-open-only-bug-selection",
+                "head_sha": "b" * 40,
+            },
+        ],
+    )
+    assert result["action"] == "manual-reconciliation"
+    assert result["creation_admitted"] is False
+    assert result["reason_codes"] == ["primary-pr.multiple-active"]
+    assert result["github_writes_authorized"] is False
 
 
 def test_unbound_current_surface_is_projected_without_claiming_source_unavailable(monkeypatch) -> None:
