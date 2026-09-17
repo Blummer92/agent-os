@@ -67,6 +67,7 @@ def test_current_roles_are_no_op_and_never_duplicate_create():
     result = plan_classroom_workspace_provisioning(ws, resolution, ["slides"])
     assert result.status is ValidationStatus.VALID
     assert result.record is not None
+    assert result.reason_codes == ()
     payload = result.record.to_dict()
     assert payload["overall_state"] == "no-op"
     assert payload["operations"][0]["operation_type"] == "no-op"
@@ -77,6 +78,8 @@ def test_missing_role_plans_one_exact_parent_create():
     resolution = resolved(ws, {"drive-unit-root": folder("drive-unit-root")})
     result = plan_classroom_workspace_provisioning(ws, resolution, ["visual-assets"])
     assert result.status is ValidationStatus.VALID
+    assert result.reason_codes == ()
+    assert result.record is not None
     payload = result.record.to_dict()
     op = payload["operations"][0]
     assert payload["overall_state"] == "planned"
@@ -161,7 +164,7 @@ def test_resolution_from_different_workspace_fails_lineage_check():
     resolution = resolved(other, {"other-root": folder("other-root")})
     result = plan_classroom_workspace_provisioning(ws, resolution, ["slides"])
     assert result.status is ValidationStatus.INVALID
-    assert "workspace-plan-lineage-mismatch" in result.reason_codes
+    assert "destination-workspace-plan-lineage-mismatch" in result.reason_codes
 
 
 def test_plan_authority_is_always_false():
