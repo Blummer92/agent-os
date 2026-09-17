@@ -39,12 +39,12 @@ def _instance_service_accounts(value: object) -> tuple[list[object], str | None]
     if type(value) is list:
         return value, None
     if type(value) is not dict:
-        return [], "instance-service-account-evidence-malformed"
+        return [], "instance-service-account-projection-malformed"
     if "serviceAccounts" not in value or value["serviceAccounts"] is None:
         return [], None
     attached = value["serviceAccounts"]
     if type(attached) is not list:
-        return [], "instance-service-account-evidence-malformed"
+        return [], "instance-service-account-projection-malformed"
     return attached, None
 
 
@@ -117,28 +117,24 @@ def _effective_stop_permission(run: Run) -> dict[str, object]:
     evidence = _stop_permission_base()
     member = _runtime_member(TRANSPORT_PRINCIPAL)
     try:
-        # The governed workflow is already authenticated as TRANSPORT_PRINCIPAL through
-        # WIF. test-iam-permissions evaluates the current caller, so self-impersonation
-        # would add an unrelated iam.serviceAccounts.getAccessToken dependency and can
-        # turn a valid permission read into a false unavailable result.
         allowed = _run_json(run, (
             "gcloud", "compute", "instances", "test-iam-permissions", INSTANCE,
             "--project", PROJECT, "--zone", ZONE,
             "--permissions", STOP_PERMISSION,
             "--format=json(permissions)",
-        ), "stop-permission-readback-failed")
+        ), "stop-permission-command-or-read-failed")
         if type(allowed) is not dict or type(allowed.get("permissions", [])) is not list:
-            raise ValueError("stop-permission-readback-malformed")
+            raise ValueError("stop-permission-response-malformed")
         permissions = allowed.get("permissions", [])
         if any(type(permission) is not str for permission in permissions):
-            raise ValueError("stop-permission-readback-malformed")
+            raise ValueError("stop-permission-response-malformed")
         unexpected = [permission for permission in permissions if permission != STOP_PERMISSION]
         if unexpected:
-            raise ValueError("stop-permission-readback-unsupported")
+            raise ValueError("stop-permission-response-unsupported")
 
         policy = _run_json(run, (
             "gcloud", "projects", "get-iam-policy", PROJECT, "--format=json(bindings)",
-        ), "stop-permission-policy-read-failed")
+        ), "stop-permission-project-policy-read-failed")
         bindings = _bindings(policy, reject_conditions=True)
         direct = [binding for binding in bindings if member in binding["members"]]
 
@@ -158,13 +154,13 @@ def _effective_stop_permission(run: Run) -> dict[str, object]:
             role_description = _run_json(run, (
                 "gcloud", "iam", "roles", "describe", role,
                 "--format=json(name,includedPermissions)",
-            ), "stop-permission-role-read-failed")
+            ), "stop-permission-role-description-read-failed")
             if type(role_description) is not dict:
-                raise ValueError("stop-permission-role-malformed")
+                raise ValueError("stop-permission-role-description-malformed")
             role_name = role_description.get("name")
             included = role_description.get("includedPermissions")
             if type(role_name) is not str or role_name != role or type(included) is not list or any(type(item) is not str for item in included):
-                raise ValueError("stop-permission-role-malformed")
+                raise ValueError("stop-permission-role-description-malformed")
             if STOP_PERMISSION in included:
                 supporting.append(role)
 
@@ -221,16 +217,22 @@ def collect_cloud_identity(run: Run) -> dict[str, object]:
         ), "instance-service-account-read-failed")
         attached, shape_error = _instance_service_accounts(instance)
         if shape_error is not None:
-            raise ValueError(shape_error)
-        if len(attached) != 1 or type(attached[0]) is not dict:
+            base["reason_codes"] = [shape_error]
+            return base
+        if len(attached) != 1:
             base["reason_codes"] = ["runtime-service-account-ambiguous" if attached else "runtime-service-account-missing"]
+            return base
+        if type(attached[0]) is not dict:
+            base["reason_codes"] = ["instance-service-account-object-malformed"]
             return base
         runtime_email = attached[0].get("email")
         scopes = attached[0].get("scopes", [])
         if not _valid_service_account_email(runtime_email):
-            raise ValueError("instance-service-account-evidence-malformed")
+            base["reason_codes"] = ["instance-service-account-email-rejected"]
+            return base
         if type(scopes) is not list or any(type(scope) is not str for scope in scopes):
-            raise ValueError("instance-service-account-evidence-malformed")
+            base["reason_codes"] = ["instance-service-account-scopes-malformed"]
+            return base
         base["vm_runtime_identity"] = {"status": "verified", "email": runtime_email, "scopes": sorted(set(scopes))}
 
         inventory_raw = _run_json(run, (
