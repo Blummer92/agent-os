@@ -97,7 +97,7 @@ def bind_gap_to_image_intent(
     except ContractValidationError as exc:
         return invalid_result(exc.reason_code, exc.detail)
     except (KeyError, TypeError, ValueError) as exc:
-        return invalid_result("visual-generation-provenance-invalid", sanitize_detail(str(exc)))
+        return invalid_result("asset-provenance-invalid", sanitize_detail(str(exc)))
 
 
 def bind_returned_image_intake(
@@ -120,7 +120,7 @@ def bind_returned_image_intake(
         intake = validate_stable_id(intake_id, "intake_id")
         if association_state not in ASSOCIATION_STATES:
             raise ContractValidationError(
-                "visual-generation-association-invalid",
+                "asset-association-invalid",
                 "association_state is unsupported",
             )
         prior = None
@@ -128,12 +128,12 @@ def bind_returned_image_intake(
             prior = validate_stable_id(prior_generation_handoff_id, "prior_generation_handoff_id")
         if association_state == "corrected" and prior is None:
             raise ContractValidationError(
-                "visual-generation-association-review-required",
+                "asset-association-review-required",
                 "corrected association must preserve the prior generation handoff",
             )
         if association_state != "corrected" and prior is not None:
             raise ContractValidationError(
-                "visual-generation-association-invalid",
+                "asset-association-invalid",
                 "prior generation handoff is allowed only for corrected associations",
             )
 
@@ -186,14 +186,14 @@ def bind_returned_image_intake(
             return ValidationResult(
                 status=status,
                 record=result.record,
-                reason_codes=("visual-generation-association-review-required",),
+                reason_codes=("asset-association-review-required",),
                 details=("returned image association requires bounded human review",),
             )
         return result
     except ContractValidationError as exc:
         return invalid_result(exc.reason_code, exc.detail)
     except (KeyError, TypeError, ValueError) as exc:
-        return invalid_result("visual-generation-provenance-invalid", sanitize_detail(str(exc)))
+        return invalid_result("asset-provenance-invalid", sanitize_detail(str(exc)))
 
 
 def project_routing_provenance(
@@ -227,11 +227,11 @@ def project_routing_provenance(
 def _validated_cohesive_plan(value: object) -> ValidatedRecord:
     if type(value) is not ValidatedRecord:
         raise ContractValidationError(
-            "visual-generation-plan-invalid", "cohesive visual plan must be validated evidence"
+            "asset-plan-invalid", "cohesive visual plan must be validated evidence"
         )
     if value.contract_version != COHESIVE_VISUAL_PLAN_CONTRACT_ID:
         raise ContractValidationError(
-            "visual-generation-plan-incompatible", "cohesive visual plan contract is incompatible"
+            "asset-plan-incompatible", "cohesive visual plan contract is incompatible"
         )
     payload = value.to_dict()
     if payload.get("contract_version") != COHESIVE_VISUAL_PLAN_CONTRACT_ID:
@@ -241,7 +241,7 @@ def _validated_cohesive_plan(value: object) -> ValidatedRecord:
     if sha256_hex(payload) != value.fingerprint:
         raise ContractValidationError("identity-invalid", "cohesive visual plan fingerprint does not reconstruct")
     if type(payload.get("image_gap_briefs")) is not list:
-        raise ContractValidationError("visual-generation-plan-invalid", "cohesive visual plan gaps are invalid")
+        raise ContractValidationError("asset-plan-invalid", "cohesive visual plan gaps are invalid")
     return value
 
 
@@ -255,7 +255,7 @@ def _find_exact_gap(plan: ValidatedRecord, brief_id: str, role_id: str) -> dict[
     ]
     if len(matches) != 1:
         raise ContractValidationError(
-            "visual-generation-gap-invalid", "brief_id does not identify one exact source gap"
+            "asset-gap-invalid", "brief_id does not identify one exact source gap"
         )
     match = matches[0]
     if match.get("missing_visual_role_id") != role:
@@ -268,11 +268,11 @@ def _find_exact_gap(plan: ValidatedRecord, brief_id: str, role_id: str) -> dict[
 def _validated_image_intent(value: object) -> ValidatedRecord:
     if type(value) is not ValidatedRecord or value.contract_version != IMAGE_INTENT_CONTRACT_ID:
         raise ContractValidationError(
-            "visual-generation-intent-invalid", "image intent must be validated ImageIntent evidence"
+            "asset-intent-invalid", "image intent must be validated ImageIntent evidence"
         )
     rebuilt = validate_image_intent(value.to_dict())
     if rebuilt.status is not ValidationStatus.VALID or rebuilt.record is None:
-        raise ContractValidationError("visual-generation-intent-invalid", "image intent payload is invalid")
+        raise ContractValidationError("asset-intent-invalid", "image intent payload is invalid")
     if (
         rebuilt.record.record_id != value.record_id
         or rebuilt.record.record_revision != value.record_revision
@@ -285,13 +285,13 @@ def _validated_image_intent(value: object) -> ValidatedRecord:
 def _validated_imported_context(value: object) -> ValidatedRecord:
     if type(value) is not ValidatedRecord or value.contract_version != IMPORTED_ASSET_CONTEXT_CONTRACT_ID:
         raise ContractValidationError(
-            "visual-generation-import-context-invalid",
+            "asset-import-context-invalid",
             "imported asset context must be validated ImportedAssetContext evidence",
         )
     rebuilt = validate_imported_asset_context(value.to_dict())
     if rebuilt.status is not ValidationStatus.VALID or rebuilt.record is None:
         raise ContractValidationError(
-            "visual-generation-import-context-invalid", "imported asset context payload is invalid"
+            "asset-import-context-invalid", "imported asset context payload is invalid"
         )
     if rebuilt.record.record_id != value.record_id or rebuilt.record.fingerprint != value.fingerprint:
         raise ContractValidationError("identity-invalid", "imported asset context identity is stale")
@@ -308,7 +308,7 @@ def _validated_returned_binding(value: object) -> ValidatedRecord:
 
 def _validated_own_record(value: object, contract_id: str, id_field: str) -> ValidatedRecord:
     if type(value) is not ValidatedRecord or value.contract_version != contract_id:
-        raise ContractValidationError("visual-generation-provenance-invalid", "validated provenance evidence is required")
+        raise ContractValidationError("asset-provenance-invalid", "validated provenance evidence is required")
     payload = value.to_dict()
     if payload.get("contract_version") != contract_id or payload.get(id_field) != value.record_id:
         raise ContractValidationError("identity-invalid", "provenance record identity is invalid")

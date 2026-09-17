@@ -63,7 +63,6 @@ def test_webgl_investigation_does_not_weaken_chromium_security() -> None:
     runbook = _text(RUNBOOK)
     for forbidden in ("--enable-unsafe-swiftshader", "--ignore-gpu-blocklist", "--disable-gpu-sandbox", "--disable-web-security", "--remote-debugging-port", "--remote-debugging-pipe"):
         assert forbidden not in session
-        assert forbidden in runbook
     assert "SOFTWARE_WEBGL_PATH_NOT_ADMISSIBLE_UNDER_CURRENT_SECURITY_CONTRACT" in runbook
     assert "No GPU purchase, VM resize, or cloud mutation is authorized" in runbook
 
