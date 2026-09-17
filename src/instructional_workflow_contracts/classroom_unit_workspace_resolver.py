@@ -104,7 +104,7 @@ def resolve_classroom_unit_workspace(
         }
         normalized = validate_and_normalize_json(payload, max_bytes=MAX_RESULT_BYTES)
         if type(normalized) is not dict or canonical_size(normalized) > MAX_RESULT_BYTES:
-            raise ContractValidationError("workspace-resolution-oversized", "resolution exceeds result-size bound")
+            raise ContractValidationError("destination-workspace-resolution-oversized", "resolution exceeds result-size bound")
         record = ValidatedRecord(
             contract_version=CONTRACT_ID,
             record_id=payload["resolution_id"],
@@ -122,12 +122,12 @@ def resolve_classroom_unit_workspace(
     except ContractValidationError as exc:
         return invalid_result(exc.reason_code, exc.detail)
     except (KeyError, TypeError, ValueError) as exc:
-        return invalid_result("workspace-resolution-invalid", sanitize_detail(str(exc)))
+        return invalid_result("destination-workspace-resolution-invalid", sanitize_detail(str(exc)))
 
 
 def _validated_workspace(value: object) -> ValidatedRecord:
     if type(value) is not ValidatedRecord or value.contract_version != WORKSPACE_CONTRACT_ID:
-        raise ContractValidationError("workspace-resolution-source-invalid", "validated workspace evidence is required")
+        raise ContractValidationError("destination-workspace-resolution-source-invalid", "validated workspace evidence is required")
     payload = value.to_dict()
     if payload.get("contract_version") != WORKSPACE_CONTRACT_ID or payload.get("workspace_id") != value.record_id:
         raise ContractValidationError("identity-invalid", "workspace identity is invalid")
@@ -150,7 +150,7 @@ def _resolve_known_binding(
     if raw is None:
         return _role(binding, "missing")
     if type(raw) is not dict and not isinstance(raw, Mapping):
-        raise ContractValidationError("workspace-metadata-invalid", "folder metadata must be a mapping")
+        raise ContractValidationError("destination-workspace-metadata-invalid", "folder metadata must be a mapping")
     metadata = dict(raw)
     if metadata.get("drive_folder_id") != folder_id:
         return _role(binding, "ambiguous")
@@ -170,12 +170,12 @@ def _resolve_known_binding(
 
 def _role(binding: Mapping[str, Any], outcome: str, metadata: Mapping[str, Any] | None = None) -> dict[str, Any]:
     if outcome not in ROLE_OUTCOMES:
-        raise ContractValidationError("workspace-resolution-outcome-invalid", "unsupported role outcome")
+        raise ContractValidationError("destination-workspace-resolution-outcome-invalid", "unsupported role outcome")
     metadata = dict(metadata or {})
     folder_id = binding.get("drive_folder_id")
     current_name = metadata.get("display_name")
     if current_name is not None and (type(current_name) is not str or not current_name.strip()):
-        raise ContractValidationError("workspace-metadata-invalid", "current display name is invalid")
+        raise ContractValidationError("destination-workspace-metadata-invalid", "current display name is invalid")
     evidence = None
     if metadata:
         safe_metadata = {
@@ -201,20 +201,22 @@ def _overall(roles: list[dict[str, Any]]) -> tuple[str, ValidationStatus, list[s
     outcomes = {item["outcome"] for item in roles}
     root = next(item for item in roles if item["role"] == "unit-root")
     if "ambiguous" in outcomes:
-        return "ambiguous", ValidationStatus.MANUAL_REVIEW_REQUIRED, ["workspace-resolution-ambiguous"]
+        return "ambiguous", ValidationStatus.MANUAL_REVIEW_REQUIRED, ["destination-workspace-resolution-ambiguous"]
     if root["outcome"] != "resolved":
-        return "missing", ValidationStatus.MANUAL_REVIEW_REQUIRED, [f"workspace-root-{root['outcome']}"]
+        return "missing", ValidationStatus.MANUAL_REVIEW_REQUIRED, [f"destination-workspace-root-{root['outcome']}"]
     drift = outcomes & {"moved", "trashed", "inaccessible", "wrong-kind"}
     if drift:
-        return "stale", ValidationStatus.MANUAL_REVIEW_REQUIRED, ["workspace-resolution-drift"]
+        return "stale", ValidationStatus.MANUAL_REVIEW_REQUIRED, ["destination-workspace-resolution-drift"]
     if "missing" in outcomes:
-        return "partial", ValidationStatus.VALID, ["workspace-resolution-partial"]
+        # Intentionally lazy roles are not a defect, so this stays VALID. The shared
+        # ValidationResult contract forbids reasons/blockers on a valid result, so the
+        # partial signal is carried by ``overall_state`` rather than a reason code.
+        return "partial", ValidationStatus.VALID, []
     return "resolved", ValidationStatus.VALID, []
 
 
 def _reason_detail(reason: str) -> str:
     return {
-        "workspace-resolution-ambiguous": "one or more exact-ID metadata results are contradictory",
-        "workspace-resolution-drift": "one or more known role folders have structural/currentness drift",
-        "workspace-resolution-partial": "one or more lazy role folders remain intentionally unresolved",
+        "destination-workspace-resolution-ambiguous": "one or more exact-ID metadata results are contradictory",
+        "destination-workspace-resolution-drift": "one or more known role folders have structural/currentness drift",
     }.get(reason, "unit-root exact-ID verification did not resolve to a current folder")
