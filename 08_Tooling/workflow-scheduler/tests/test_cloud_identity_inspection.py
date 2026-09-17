@@ -77,6 +77,29 @@ def test_direct_projected_service_account_list_is_normalized():
     assert evidence["vm_runtime_identity"] == {"status": "verified", "email": RUNTIME, "scopes": ["scope-a", "scope-b"]}
 
 
+def test_live_default_compute_service_account_shape_is_accepted():
+    payload = {"serviceAccounts": [{
+        "email": live.DEFAULT_COMPUTE_SERVICE_ACCOUNT,
+        "scopes": ["https://www.googleapis.com/auth/cloud-platform"],
+    }]}
+    inventory = [{"email": live.DEFAULT_COMPUTE_SERVICE_ACCOUNT, "displayName": "Compute Engine default service account", "disabled": False}]
+    run, _ = fake_run_factory(instance_payload=payload, inventory=inventory, reader_bindings=[])
+    evidence = live.collect_cloud_identity(run)
+    assert evidence["status"] == "observed"
+    assert evidence["vm_runtime_identity"] == {
+        "status": "verified",
+        "email": live.DEFAULT_COMPUTE_SERVICE_ACCOUNT,
+        "scopes": ["https://www.googleapis.com/auth/cloud-platform"],
+    }
+
+
+def test_other_developer_service_account_is_not_silently_accepted():
+    payload = {"serviceAccounts": [{"email": "123-compute@developer.gserviceaccount.com", "scopes": []}]}
+    run, _ = fake_run_factory(instance_payload=payload)
+    evidence = live.collect_cloud_identity(run)
+    assert evidence["reason_codes"] == ["instance-service-account-evidence-malformed"]
+
+
 def test_null_or_omitted_projection_is_missing_not_malformed():
     for payload in ({}, {"serviceAccounts": None}):
         run, calls = fake_run_factory(instance_payload=payload)
@@ -94,12 +117,13 @@ def test_malformed_projected_service_account_shape_fails_closed():
         assert evidence["external_write_performed"] is False
 
 
-def test_commands_are_fixed_to_canonical_project_instance_zone_and_transport_principal():
+def test_commands_are_fixed_to_canonical_project_instance_zone_and_current_transport_caller():
     run, calls = fake_run_factory()
     live.collect_cloud_identity(run)
     assert calls[0] == ("gcloud", "compute", "instances", "describe", live.INSTANCE, "--project", live.PROJECT, "--zone", live.ZONE, "--format=json(serviceAccounts)")
     stop_call = next(call for call in calls if call[:4] == ("gcloud", "compute", "instances", "test-iam-permissions"))
-    assert stop_call == ("gcloud", "compute", "instances", "test-iam-permissions", live.INSTANCE, "--project", live.PROJECT, "--zone", live.ZONE, "--permissions", live.STOP_PERMISSION, "--impersonate-service-account", live.TRANSPORT_PRINCIPAL, "--format=json(permissions)")
+    assert stop_call == ("gcloud", "compute", "instances", "test-iam-permissions", live.INSTANCE, "--project", live.PROJECT, "--zone", live.ZONE, "--permissions", live.STOP_PERMISSION, "--format=json(permissions)")
+    assert "--impersonate-service-account" not in stop_call
 
 
 def test_effective_stop_permission_positive_direct_project_binding():
