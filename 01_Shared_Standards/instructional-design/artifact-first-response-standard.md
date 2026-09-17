@@ -54,17 +54,41 @@ Before final delivery, the producing path must verify that every required
 visual slot is either populated by an approved visual path or explicitly
 reported as blocked.
 
+When governed context says reusable visuals already exist, the producing path
+must run reuse-first resolution before any synthetic fallback. Check usable
+authorized conversation/project files and supplied export material first when
+they can preserve the governed asset identity, then use the current connected
+Visual Asset Library route when available. Do not skip those sources merely
+because a renderer can create a plausible substitute more quickly.
+
+Asset metadata is not artifact fulfillment. An asset ID, eligible-asset ID,
+selection decision, or successful metadata read does not prove that image bytes
+or another usable source reference were recovered, materialized, embedded, or
+placed. Completion evidence must distinguish discovery, selection,
+materialization, and placement, and the final artifact must satisfy the last
+state required by its format.
+
+If governed evidence identifies an eligible reusable asset but the producing
+surface cannot recover/materialize that exact asset, report the artifact as
+incomplete/preview with an unresolved visual-assets blocker. Do not convert the
+recovery failure into permission to omit the visual, draw a placeholder, invent
+a lookalike, or silently generate a replacement. Synthetic fallback is eligible
+only when governed discovery proves no eligible reusable asset is available and
+current generation policy independently permits creation.
+
 If a connected visual-asset source such as Visual Asset Sync is unavailable or
 not authorized, do not interpret that absence as permission to silently remove
 required visuals. Use an approved non-connected/generated/local fallback when
-current policy permits it. If no approved fallback is available, label the
-artifact as incomplete/preview, identify the visual-assets blocker, and do not
-claim classroom-ready completion.
+current policy permits it and the reuse-first rules above admit that fallback.
+If no approved fallback is available, label the artifact as incomplete/preview,
+identify the visual-assets blocker, and do not claim classroom-ready completion.
 
 Render QA for a visually required artifact must verify both layout integrity
 and presence of the required visual components. A file whose required visual
 slots resolve to zero images/icons cannot receive a complete/classroom-ready
-claim.
+claim. A placeholder box, generated stand-in, or metadata-only asset reference
+cannot satisfy that check when the required role is bound to an existing
+governed reusable asset.
 
 ## Blocked-Production Behavior
 
@@ -98,4 +122,4 @@ the artifact per the Required Order above.
 
 ## Version
 
-0.1.2
+0.1.3

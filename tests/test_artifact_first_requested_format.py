@@ -51,4 +51,4 @@ def test_required_order_and_blocked_production_behavior_remain_canonical() -> No
     assert "## Required Order" in text
     assert "## Required Visual Components" in text
     assert "## Blocked-Production Behavior" in text
-    assert "0.1.2" in text.split("## Version", 1)[1]
+    assert "0.1.3" in text.split("## Version", 1)[1]

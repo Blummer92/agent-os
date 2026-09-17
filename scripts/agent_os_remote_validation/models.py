@@ -285,6 +285,8 @@ def _validate_ref(name: str, value: object) -> None:
         raise ValueError(f"{name} must use canonical ASCII ref syntax")
     if value.endswith("/") or "//" in value or ".." in value or "@{" in value:
         raise ValueError(f"{name} is not canonical")
+    if any(component.endswith(".lock") for component in value.split("/")):
+        raise ValueError(f"{name} is not canonical")
     if any(char in value for char in _FORBIDDEN_REF_CHARS):
         raise ValueError(f"{name} contains a forbidden ref character")
 
