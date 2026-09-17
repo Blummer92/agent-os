@@ -90,6 +90,7 @@ def test_lazy_missing_role_does_not_trigger_name_search_or_reader_call():
     assert result.status is ValidationStatus.VALID
     assert result.record is not None
     assert result.record.to_dict()["overall_state"] == "partial"
+    assert "destination-workspace-resolution-partial" in result.reason_codes
     assert reader.calls == ["drive-unit"]
 
 
@@ -105,7 +106,7 @@ def test_manual_child_move_is_detected():
     assert result.status is ValidationStatus.MANUAL_REVIEW_REQUIRED
     assert result.record is not None
     assert result.record.to_dict()["overall_state"] == "stale"
-    assert "workspace-resolution-drift" in result.reason_codes
+    assert "destination-workspace-resolution-drift" in result.reason_codes
 
 
 def test_missing_root_fails_to_manual_review_without_replacement_search():
@@ -115,6 +116,7 @@ def test_missing_root_fails_to_manual_review_without_replacement_search():
     assert result.status is ValidationStatus.MANUAL_REVIEW_REQUIRED
     assert result.record is not None
     assert result.record.to_dict()["overall_state"] == "missing"
+    assert "destination-workspace-root-missing" in result.reason_codes
     assert reader.calls == ["drive-unit"]
 
 
@@ -133,6 +135,7 @@ def test_trashed_inaccessible_and_wrong_kind_are_explicit_drift():
         )
         assert result.status is ValidationStatus.MANUAL_REVIEW_REQUIRED
         assert result.record is not None
+        assert "destination-workspace-resolution-drift" in result.reason_codes
         role = next(item for item in result.record.to_dict()["role_resolutions"] if item["role"] == "slides")
         assert role["outcome"] == outcome
 
@@ -144,6 +147,7 @@ def test_contradictory_exact_id_metadata_requires_review():
     assert result.status is ValidationStatus.MANUAL_REVIEW_REQUIRED
     assert result.record is not None
     assert result.record.to_dict()["overall_state"] == "ambiguous"
+    assert "destination-workspace-resolution-ambiguous" in result.reason_codes
 
 
 def test_result_is_non_authorizing():
