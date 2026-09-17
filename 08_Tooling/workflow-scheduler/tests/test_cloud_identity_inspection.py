@@ -7,13 +7,14 @@ from workflow_scheduler.governance import cloud_identity_inspection as live
 
 RUNTIME = "agent-os-runtime@agent-os-502614.iam.gserviceaccount.com"
 READER = "visual-asset-reader@agent-os-502614.iam.gserviceaccount.com"
+STOP_ROLE = "roles/compute.instanceAdmin.v1"
 
 
 def result(payload, code=0):
     return SimpleNamespace(returncode=code, stdout=json.dumps(payload), stderr="")
 
 
-def fake_run_factory(*, inventory=None, project_bindings=None, reader_bindings=None, instance_payload=None):
+def fake_run_factory(*, inventory=None, project_bindings=None, reader_bindings=None, instance_payload=None, stop_permissions=None, stop_role_permissions=None):
     inventory = inventory if inventory is not None else [
         {"email": RUNTIME, "displayName": "runtime", "disabled": False},
         {"email": READER, "displayName": "Visual Asset reader", "disabled": False},
@@ -25,12 +26,16 @@ def fake_run_factory(*, inventory=None, project_bindings=None, reader_bindings=N
     instance_payload = instance_payload if instance_payload is not None else {
         "serviceAccounts": [{"email": RUNTIME, "scopes": ["https://www.googleapis.com/auth/cloud-platform"]}]
     }
+    stop_permissions = stop_permissions if stop_permissions is not None else []
+    stop_role_permissions = stop_role_permissions if stop_role_permissions is not None else {}
     calls = []
 
     def run(argv, *, timeout=60):
         argv = tuple(argv); calls.append(argv)
         if argv[:4] == ("gcloud", "compute", "instances", "describe"):
             return result(instance_payload)
+        if argv[:4] == ("gcloud", "compute", "instances", "test-iam-permissions"):
+            return result({"permissions": stop_permissions})
         if argv[:4] == ("gcloud", "iam", "service-accounts", "list"):
             return result(inventory)
         if argv[:4] == ("gcloud", "projects", "get-iam-policy", live.PROJECT):
@@ -38,6 +43,9 @@ def fake_run_factory(*, inventory=None, project_bindings=None, reader_bindings=N
         if argv[:4] == ("gcloud", "iam", "service-accounts", "get-iam-policy"):
             target = argv[4]
             return result({"bindings": reader_bindings if target == READER else []})
+        if argv[:4] == ("gcloud", "iam", "roles", "describe"):
+            role = argv[4]
+            return result({"name": role, "includedPermissions": stop_role_permissions.get(role, [])})
         raise AssertionError(argv)
     return run, calls
 
@@ -45,9 +53,11 @@ def fake_run_factory(*, inventory=None, project_bindings=None, reader_bindings=N
 def test_collects_fixed_sanitized_identity_and_target_scoped_relationship():
     run, calls = fake_run_factory()
     evidence = live.collect_cloud_identity(run)
+    assert evidence["schema_version"] == "1.0"
     assert evidence["status"] == "observed"
     assert evidence["vm_runtime_identity"] == {"status": "verified", "email": RUNTIME, "scopes": ["https://www.googleapis.com/auth/cloud-platform"]}
     assert evidence["impersonation_relationships"] == [{"principal": RUNTIME, "target_service_account": READER, "role": live.TOKEN_CREATOR_ROLE, "resource_level": "service-account", "target_service_account_scoped": True}]
+    assert evidence["effective_stop_permission"]["effective"] is False
     assert evidence["spreadsheet_access_verification"] == {"status": "not-performed", "reason": "requires-separately-authorized-workspace-access-verification"}
     assert evidence["credential_token_operation_performed"] is False
     assert evidence["google_workspace_operation_performed"] is False
@@ -67,6 +77,29 @@ def test_direct_projected_service_account_list_is_normalized():
     assert evidence["vm_runtime_identity"] == {"status": "verified", "email": RUNTIME, "scopes": ["scope-a", "scope-b"]}
 
 
+def test_live_default_compute_service_account_shape_is_accepted():
+    payload = {"serviceAccounts": [{
+        "email": live.DEFAULT_COMPUTE_SERVICE_ACCOUNT,
+        "scopes": ["https://www.googleapis.com/auth/cloud-platform"],
+    }]}
+    inventory = [{"email": live.DEFAULT_COMPUTE_SERVICE_ACCOUNT, "displayName": "Compute Engine default service account", "disabled": False}]
+    run, _ = fake_run_factory(instance_payload=payload, inventory=inventory, reader_bindings=[])
+    evidence = live.collect_cloud_identity(run)
+    assert evidence["status"] == "observed"
+    assert evidence["vm_runtime_identity"] == {
+        "status": "verified",
+        "email": live.DEFAULT_COMPUTE_SERVICE_ACCOUNT,
+        "scopes": ["https://www.googleapis.com/auth/cloud-platform"],
+    }
+
+
+def test_other_developer_service_account_is_not_silently_accepted():
+    payload = {"serviceAccounts": [{"email": "123-compute@developer.gserviceaccount.com", "scopes": []}]}
+    run, _ = fake_run_factory(instance_payload=payload)
+    evidence = live.collect_cloud_identity(run)
+    assert evidence["reason_codes"] == ["instance-service-account-evidence-malformed"]
+
+
 def test_null_or_omitted_projection_is_missing_not_malformed():
     for payload in ({}, {"serviceAccounts": None}):
         run, calls = fake_run_factory(instance_payload=payload)
@@ -84,11 +117,74 @@ def test_malformed_projected_service_account_shape_fails_closed():
         assert evidence["external_write_performed"] is False
 
 
-def test_commands_are_fixed_to_canonical_project_instance_and_zone():
+def test_commands_are_fixed_to_canonical_project_instance_zone_and_current_transport_caller():
     run, calls = fake_run_factory()
     live.collect_cloud_identity(run)
     assert calls[0] == ("gcloud", "compute", "instances", "describe", live.INSTANCE, "--project", live.PROJECT, "--zone", live.ZONE, "--format=json(serviceAccounts)")
-    assert calls[1] == ("gcloud", "iam", "service-accounts", "list", "--project", live.PROJECT, "--format=json(email,displayName,disabled)")
+    stop_call = next(call for call in calls if call[:4] == ("gcloud", "compute", "instances", "test-iam-permissions"))
+    assert stop_call == ("gcloud", "compute", "instances", "test-iam-permissions", live.INSTANCE, "--project", live.PROJECT, "--zone", live.ZONE, "--permissions", live.STOP_PERMISSION, "--format=json(permissions)")
+    assert "--impersonate-service-account" not in stop_call
+
+
+def test_effective_stop_permission_positive_direct_project_binding():
+    member = f"serviceAccount:{live.TRANSPORT_PRINCIPAL}"
+    project = [{"role": STOP_ROLE, "members": [member]}]
+    run, _ = fake_run_factory(project_bindings=project, stop_permissions=[live.STOP_PERMISSION], stop_role_permissions={STOP_ROLE: [live.STOP_PERMISSION]})
+    proof = live.collect_cloud_identity(run)["effective_stop_permission"]
+    assert proof == {
+        "permission": live.STOP_PERMISSION,
+        "effective": True,
+        "principal": live.TRANSPORT_PRINCIPAL,
+        "resource": {"project": live.PROJECT, "zone": live.ZONE, "instance": live.INSTANCE},
+        "binding_source": {"role": STOP_ROLE, "member": member, "resource": f"projects/{live.PROJECT}"},
+        "source_scope": "project",
+        "inheritance": "direct",
+        "readback_state": "current",
+        "reason_codes": ["stop-permission-effective-direct-project-binding"],
+    }
+
+
+def test_effective_stop_permission_negative_does_not_infer_from_policy():
+    member = f"serviceAccount:{live.TRANSPORT_PRINCIPAL}"
+    run, _ = fake_run_factory(project_bindings=[{"role": STOP_ROLE, "members": [member]}], stop_permissions=[])
+    proof = live.collect_cloud_identity(run)["effective_stop_permission"]
+    assert proof["effective"] is False
+    assert proof["binding_source"] is None
+    assert proof["source_scope"] == "instance"
+    assert proof["readback_state"] == "current"
+    assert proof["reason_codes"] == ["stop-permission-denied"]
+
+
+def test_effective_stop_permission_without_bounded_binding_source_is_unknown():
+    run, _ = fake_run_factory(stop_permissions=[live.STOP_PERMISSION])
+    proof = live.collect_cloud_identity(run)["effective_stop_permission"]
+    assert proof["effective"] == "unknown"
+    assert proof["source_scope"] == "unknown"
+    assert proof["inheritance"] == "unknown"
+    assert proof["readback_state"] == "current"
+    assert proof["reason_codes"] == ["stop-permission-effective-source-not-bounded"]
+
+
+def test_multiple_supporting_bindings_fail_closed_as_ambiguous():
+    member = f"serviceAccount:{live.TRANSPORT_PRINCIPAL}"
+    roles = ["roles/custom.stopOne", "roles/custom.stopTwo"]
+    run, _ = fake_run_factory(project_bindings=[{"role": role, "members": [member]} for role in roles], stop_permissions=[live.STOP_PERMISSION], stop_role_permissions={role: [live.STOP_PERMISSION] for role in roles})
+    proof = live.collect_cloud_identity(run)["effective_stop_permission"]
+    assert proof["effective"] == "unknown"
+    assert proof["readback_state"] == "ambiguous"
+    assert proof["reason_codes"] == ["stop-permission-binding-source-ambiguous"]
+
+
+def test_conditional_binding_only_fails_stop_proof_closed():
+    member = f"serviceAccount:{live.TRANSPORT_PRINCIPAL}"
+    project = [{"role": STOP_ROLE, "members": [member], "condition": {"expression": "true"}}]
+    run, _ = fake_run_factory(project_bindings=project, stop_permissions=[live.STOP_PERMISSION])
+    evidence = live.collect_cloud_identity(run)
+    assert evidence["status"] == "observed"
+    proof = evidence["effective_stop_permission"]
+    assert proof["effective"] == "unknown"
+    assert proof["readback_state"] == "unavailable"
+    assert proof["reason_codes"] == ["iam-policy-conditional-binding-unsupported"]
 
 
 def test_project_wide_token_creator_is_distinguished_from_target_scoped():

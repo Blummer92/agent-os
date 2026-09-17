@@ -31,6 +31,26 @@ from .common import (
     validate_stable_id,
     validate_version,
 )
+from .classroom_unit_workspace import (
+    BINDING_STATES as CLASSROOM_WORKSPACE_BINDING_STATES,
+    CONTRACT_ID as CLASSROOM_UNIT_WORKSPACE_CONTRACT_ID,
+    WORKSPACE_ROLES as CLASSROOM_WORKSPACE_ROLES,
+    validate_classroom_unit_workspace,
+)
+from .classroom_unit_workspace_resolver import (
+    CONTRACT_ID as CLASSROOM_UNIT_WORKSPACE_RESOLUTION_CONTRACT_ID,
+    FOLDER_MIME_TYPE as CLASSROOM_WORKSPACE_FOLDER_MIME_TYPE,
+    OVERALL_STATES as CLASSROOM_WORKSPACE_RESOLUTION_STATES,
+    ROLE_OUTCOMES as CLASSROOM_WORKSPACE_ROLE_OUTCOMES,
+    FolderMetadataReader,
+    resolve_classroom_unit_workspace,
+)
+from .classroom_workspace_provisioner import (
+    CONTRACT_ID as CLASSROOM_WORKSPACE_PROVISIONING_CONTRACT_ID,
+    DEFAULT_ROLE_DISPLAY_NAMES as CLASSROOM_WORKSPACE_DEFAULT_ROLE_DISPLAY_NAMES,
+    OPERATION_TYPES as CLASSROOM_WORKSPACE_OPERATION_TYPES,
+    plan_classroom_workspace_provisioning,
+)
 from .experiment_evidence import (
     AVAILABILITIES as EXPERIMENT_EVIDENCE_AVAILABILITIES,
     CONTRACT_VERSION as EXPERIMENT_EVIDENCE_VERSION,
@@ -65,6 +85,16 @@ from .request_interpretation import (
 __all__ = [
     "AuthorityEvidence",
     "CANONICAL_OWNERS",
+    "CLASSROOM_UNIT_WORKSPACE_CONTRACT_ID",
+    "CLASSROOM_UNIT_WORKSPACE_RESOLUTION_CONTRACT_ID",
+    "CLASSROOM_WORKSPACE_BINDING_STATES",
+    "CLASSROOM_WORKSPACE_DEFAULT_ROLE_DISPLAY_NAMES",
+    "CLASSROOM_WORKSPACE_FOLDER_MIME_TYPE",
+    "CLASSROOM_WORKSPACE_OPERATION_TYPES",
+    "CLASSROOM_WORKSPACE_PROVISIONING_CONTRACT_ID",
+    "CLASSROOM_WORKSPACE_RESOLUTION_STATES",
+    "CLASSROOM_WORKSPACE_ROLES",
+    "CLASSROOM_WORKSPACE_ROLE_OUTCOMES",
     "CONTRACT_ID",
     "ContractReference",
     "ContractValidationError",
@@ -73,6 +103,7 @@ __all__ = [
     "EXPERIMENT_EVIDENCE_VERSION",
     "FINGERPRINT_ALGORITHM",
     "FORBIDDEN_IMPORT_PREFIXES",
+    "FolderMetadataReader",
     "IMAGE_INTENT_CONTRACT_ID",
     "IMPORTED_ASSET_CONTEXT_CONTRACT_ID",
     "MAX_BLOCKERS",
@@ -100,10 +131,13 @@ __all__ = [
     "canonical_json_bytes",
     "canonical_size",
     "freeze_json",
+    "plan_classroom_workspace_provisioning",
+    "resolve_classroom_unit_workspace",
     "resolve_status",
     "sha256_hex",
     "thaw_json",
     "validate_and_normalize_json",
+    "validate_classroom_unit_workspace",
     "validate_curriculum_handoff",
     "validate_dependency_key",
     "validate_experiment_evidence",

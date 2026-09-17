@@ -42,7 +42,8 @@ def require_branch(value: object, *, allow_protected: bool = False) -> str:
         raise ValueError("branch is malformed")
     if (
         value.startswith(("refs/", "/", "."))
-        or value.endswith(("/", ".", ".lock"))
+        or value.endswith(("/", "."))
+        or any(component.endswith(".lock") for component in value.split("/"))
         or "//" in value
         or ".." in value
         or "@{" in value
@@ -376,8 +377,8 @@ class ExpectedHeadBranchUpdateRequest:
             value = getattr(self, name)
             if (
                 not isinstance(value, str)
-                or value != value.strip()
                 or not value
+                or value != value.strip()
                 or len(value) > 256
                 or _CONTROL_RE.search(value)
             ):
