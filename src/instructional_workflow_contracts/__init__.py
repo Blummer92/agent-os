@@ -45,6 +45,13 @@ from .classroom_unit_workspace_resolver import (
     FolderMetadataReader,
     resolve_classroom_unit_workspace,
 )
+from .classroom_workspace_drive_adapter import (
+    DriveFolderMetadataReader,
+    WorkspaceDriveClient,
+    WorkspaceDriveResult,
+    WorkspaceDriveState,
+    execute_workspace_create,
+)
 from .classroom_workspace_provisioner import (
     CONTRACT_ID as CLASSROOM_WORKSPACE_PROVISIONING_CONTRACT_ID,
     DEFAULT_ROLE_DISPLAY_NAMES as CLASSROOM_WORKSPACE_DEFAULT_ROLE_DISPLAY_NAMES,
@@ -99,6 +106,7 @@ __all__ = [
     "ContractReference",
     "ContractValidationError",
     "DEPRECATED_FIELD_ALIASES",
+    "DriveFolderMetadataReader",
     "EXPERIMENT_EVIDENCE_AVAILABILITIES",
     "EXPERIMENT_EVIDENCE_VERSION",
     "FINGERPRINT_ALGORITHM",
@@ -127,9 +135,13 @@ __all__ = [
     "ValidatedRecord",
     "ValidationResult",
     "ValidationStatus",
+    "WorkspaceDriveClient",
+    "WorkspaceDriveResult",
+    "WorkspaceDriveState",
     "assemble_gemini_manual_prompt",
     "canonical_json_bytes",
     "canonical_size",
+    "execute_workspace_create",
     "freeze_json",
     "plan_classroom_workspace_provisioning",
     "resolve_classroom_unit_workspace",
