@@ -20,13 +20,79 @@ from instructional_workflow_contracts import AuthorityEvidence, ValidationStatus
 FIXTURES = Path(__file__).parent / "fixtures" / "instructional_workflow_contracts"
 PACKAGE = Path(__file__).parents[1] / "src" / "instructional_workflow_contracts"
 COMPONENT_BLOBS = {
-    "__init__.py": "e2c603ef35ae8bdc989f92e31fcbba8df5582693",
     "common.py": "94159792d80079c18a36d8c36bee97fa13921115",
     "handoff.py": "b616580b0febaa2cab2f85a9327a5f62922289ae",
     "material_requirement.py": "b2e5513e41a3545424f2c3c791bb990e7a7cc4e1",
     "artifact_manifest.py": "e9d4d79cc085690593ac872b1fecade1ba7901f0",
     "reuse_planner.py": "e7da9179c2a39627d84a5c2b323cc87a581d29bb",
 }
+EXPECTED_PUBLIC_EXPORTS = (
+    "AuthorityEvidence",
+    "CANONICAL_OWNERS",
+    "CLASSROOM_UNIT_WORKSPACE_CONTRACT_ID",
+    "CLASSROOM_UNIT_WORKSPACE_RESOLUTION_CONTRACT_ID",
+    "CLASSROOM_WORKSPACE_BINDING_STATES",
+    "CLASSROOM_WORKSPACE_DEFAULT_ROLE_DISPLAY_NAMES",
+    "CLASSROOM_WORKSPACE_FOLDER_MIME_TYPE",
+    "CLASSROOM_WORKSPACE_OPERATION_TYPES",
+    "CLASSROOM_WORKSPACE_PROVISIONING_CONTRACT_ID",
+    "CLASSROOM_WORKSPACE_RESOLUTION_STATES",
+    "CLASSROOM_WORKSPACE_ROLES",
+    "CLASSROOM_WORKSPACE_ROLE_OUTCOMES",
+    "CONTRACT_ID",
+    "ContractReference",
+    "ContractValidationError",
+    "DEPRECATED_FIELD_ALIASES",
+    "EXPERIMENT_EVIDENCE_AVAILABILITIES",
+    "EXPERIMENT_EVIDENCE_VERSION",
+    "FINGERPRINT_ALGORITHM",
+    "FORBIDDEN_IMPORT_PREFIXES",
+    "FolderMetadataReader",
+    "IMAGE_INTENT_CONTRACT_ID",
+    "IMPORTED_ASSET_CONTEXT_CONTRACT_ID",
+    "MAX_BLOCKERS",
+    "MAX_DEPENDENCY_KEYS",
+    "MAX_DETAIL_LENGTH",
+    "MAX_INPUT_BYTES",
+    "MAX_NESTING_DEPTH",
+    "MAX_REASONS",
+    "MAX_REFERENCES",
+    "MAX_RESULT_BYTES",
+    "MAX_STRING_LENGTH",
+    "ORDER_INSENSITIVE_FIELDS",
+    "REQUEST_ACTIONS",
+    "REQUEST_EFFECTS",
+    "REQUEST_INTERPRETATION_VERSION",
+    "REQUEST_ORIGINS",
+    "REQUEST_RESOURCE_KINDS",
+    "REQUEST_SYSTEMS",
+    "RequestInterpretation",
+    "TOP_LEVEL_FIELDS",
+    "ValidatedRecord",
+    "ValidationResult",
+    "ValidationStatus",
+    "assemble_gemini_manual_prompt",
+    "canonical_json_bytes",
+    "canonical_size",
+    "freeze_json",
+    "plan_classroom_workspace_provisioning",
+    "resolve_classroom_unit_workspace",
+    "resolve_status",
+    "sha256_hex",
+    "thaw_json",
+    "validate_and_normalize_json",
+    "validate_classroom_unit_workspace",
+    "validate_curriculum_handoff",
+    "validate_dependency_key",
+    "validate_experiment_evidence",
+    "validate_image_intent",
+    "validate_imported_asset_context",
+    "validate_reason_code",
+    "validate_request_interpretation",
+    "validate_revision",
+    "validate_stable_id",
+    "validate_version",
+)
 
 
 def fixture(name: str) -> dict[str, object]:
@@ -295,6 +361,15 @@ def test_branch_head_is_not_synthetic_merge() -> None:
 def test_component_modules_and_exports_are_unchanged() -> None:
     assert {name: git_blob_sha(PACKAGE / name) for name in COMPONENT_BLOBS} == COMPONENT_BLOBS
     init_text = (PACKAGE / "__init__.py").read_text(encoding="utf-8")
+    init_tree = ast.parse(init_text)
+    all_assignment = next(
+        node for node in init_tree.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets)
+    )
+    assert isinstance(all_assignment.value, (ast.List, ast.Tuple))
+    actual_exports = tuple(ast.literal_eval(all_assignment.value))
+    assert actual_exports == EXPECTED_PUBLIC_EXPORTS
     assert "material_requirement" not in init_text
     assert "artifact_manifest" not in init_text
     assert "reuse_planner" not in init_text
@@ -318,6 +393,7 @@ def test_valid_v2_material_requirement_fixture() -> None:
     assert payload["visual_direction"]["decision"] == (
         "visuals-required"
     )
+    assert result.record is not None
     assert payload["visual_direction"]["maximum_visual_count"] == 2
     assert [
         role["role_type"]
