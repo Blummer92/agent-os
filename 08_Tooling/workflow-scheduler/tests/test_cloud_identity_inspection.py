@@ -36,9 +36,9 @@ def fake_run_factory(*, inventory=None, project_bindings=None, reader_bindings=N
             return result(instance_payload)
         if argv[:5] == ("gcloud", "beta", "compute", "instances", "test-iam-permissions"):
             return result({"permissions": stop_permissions}, code=stop_code, stderr="SECRET provider transcript must not escape")
-        if argv[:4] == ("gcloud", "iam", "service-accounts", "list"):
+        if argv[:5] == ("gcloud", "iam", "service-accounts", "list", "--project"):
             return result(inventory)
-        if argv[:4] == ("gcloud", "projects", "get-iam-policy", live.PROJECT):
+        if argv[:5] == ("gcloud", "projects", "get-iam-policy", live.PROJECT, "--format=json(bindings)"):
             return result({"bindings": project_bindings})
         if argv[:4] == ("gcloud", "iam", "service-accounts", "get-iam-policy"):
             target = argv[4]
