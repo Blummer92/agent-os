@@ -73,7 +73,7 @@ def test_identical_display_names_can_have_distinct_unit_identity():
 def test_duplicate_semantic_role_fails_closed():
     result = validate_classroom_unit_workspace(_workspace(_root(), _binding("slides", "missing"), _binding("slides", "missing")))
     assert result.status is ValidationStatus.INVALID
-    assert "workspace-role-duplicate" in result.reason_codes
+    assert "destination-workspace-role-duplicate" in result.reason_codes
 
 
 def test_same_folder_cannot_satisfy_incompatible_roles():
@@ -85,7 +85,7 @@ def test_same_folder_cannot_satisfy_incompatible_roles():
         )
     )
     assert result.status is ValidationStatus.INVALID
-    assert "workspace-folder-identity-conflict" in result.reason_codes
+    assert "destination-workspace-folder-identity-conflict" in result.reason_codes
 
 
 def test_missing_and_lazy_roles_are_valid():
@@ -97,7 +97,7 @@ def test_ambiguous_role_requires_manual_review_without_claiming_id():
     result = validate_classroom_unit_workspace(_workspace(_root(), _binding("visual-assets", "ambiguous")))
     assert result.status is ValidationStatus.MANUAL_REVIEW_REQUIRED
     assert result.record is not None
-    assert "workspace-role-review-required" in result.reason_codes
+    assert "destination-workspace-role-review-required" in result.reason_codes
 
 
 def test_ambiguous_role_cannot_claim_exact_folder_id():
@@ -105,7 +105,7 @@ def test_ambiguous_role_cannot_claim_exact_folder_id():
         _workspace(_root(), _binding("visual-assets", "ambiguous", "drive-folder-maybe"))
     )
     assert result.status is ValidationStatus.INVALID
-    assert "workspace-binding-contradiction" in result.reason_codes
+    assert "destination-workspace-binding-contradiction" in result.reason_codes
 
 
 def test_resolved_role_requires_currentness_evidence():
@@ -113,7 +113,7 @@ def test_resolved_role_requires_currentness_evidence():
         _workspace(_root(), _binding("slides", "resolved", "drive-folder-slides", "drive-folder-unit-pf"))
     )
     assert result.status is ValidationStatus.INVALID
-    assert "workspace-currentness-missing" in result.reason_codes
+    assert "destination-workspace-currentness-missing" in result.reason_codes
 
 
 def test_child_parent_contradiction_fails_closed():
@@ -124,7 +124,7 @@ def test_child_parent_contradiction_fails_closed():
         )
     )
     assert result.status is ValidationStatus.INVALID
-    assert "workspace-parent-contradiction" in result.reason_codes
+    assert "destination-workspace-parent-contradiction" in result.reason_codes
 
 
 def test_root_is_required_and_must_have_exact_identity():
@@ -137,7 +137,7 @@ def test_root_is_required_and_must_have_exact_identity():
 def test_unsupported_role_fails_closed():
     result = validate_classroom_unit_workspace(_workspace(_root(), _binding("random-folder", "missing")))
     assert result.status is ValidationStatus.INVALID
-    assert "workspace-role-unsupported" in result.reason_codes
+    assert "destination-workspace-role-unsupported" in result.reason_codes
 
 
 def test_binding_order_is_canonicalized_for_fingerprint():
