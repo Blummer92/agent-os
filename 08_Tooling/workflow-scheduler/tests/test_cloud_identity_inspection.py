@@ -34,7 +34,7 @@ def fake_run_factory(*, inventory=None, project_bindings=None, reader_bindings=N
         argv = tuple(argv); calls.append(argv)
         if argv[:4] == ("gcloud", "compute", "instances", "describe"):
             return result(instance_payload)
-        if argv[:4] == ("gcloud", "compute", "instances", "test-iam-permissions"):
+        if argv[:5] == ("gcloud", "beta", "compute", "instances", "test-iam-permissions"):
             return result({"permissions": stop_permissions}, code=stop_code, stderr="SECRET provider transcript must not escape")
         if argv[:4] == ("gcloud", "iam", "service-accounts", "list"):
             return result(inventory)
@@ -100,9 +100,9 @@ def test_missing_or_ambiguous_runtime_identity_is_not_guessed():
 def test_commands_are_fixed_to_canonical_target_and_current_transport_caller():
     run, calls = fake_run_factory()
     live.collect_cloud_identity(run)
-    assert calls[0] == ("gcloud", "compute", "instances", "describe", live.INSTANCE, "--project", live.PROJECT, "--zone", live.ZONE, "--format=json(serviceAccounts)")
-    stop_call = next(call for call in calls if call[:4] == ("gcloud", "compute", "instances", "test-iam-permissions"))
-    assert stop_call == ("gcloud", "compute", "instances", "test-iam-permissions", live.INSTANCE, "--project", live.PROJECT, "--zone", live.ZONE, "--permissions", live.STOP_PERMISSION, "--format=json(permissions)")
+    assert calls[0] == ("gcloud", "compute", "instances", "describe", live.INSTANCE, "--project", live.PROJECT, "--zone", live.ZONE, "--format=json")
+    stop_call = next(call for call in calls if call[:5] == ("gcloud", "beta", "compute", "instances", "test-iam-permissions"))
+    assert stop_call == ("gcloud", "beta", "compute", "instances", "test-iam-permissions", live.INSTANCE, "--project", live.PROJECT, "--zone", live.ZONE, "--permissions", live.STOP_PERMISSION, "--format=json(permissions)")
 
 
 def test_stop_permission_command_failure_is_finite_and_redacted():
