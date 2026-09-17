@@ -31,6 +31,12 @@ from .common import (
     validate_stable_id,
     validate_version,
 )
+from .classroom_unit_workspace import (
+    BINDING_STATES as CLASSROOM_WORKSPACE_BINDING_STATES,
+    CONTRACT_ID as CLASSROOM_UNIT_WORKSPACE_CONTRACT_ID,
+    WORKSPACE_ROLES as CLASSROOM_WORKSPACE_ROLES,
+    validate_classroom_unit_workspace,
+)
 from .experiment_evidence import (
     AVAILABILITIES as EXPERIMENT_EVIDENCE_AVAILABILITIES,
     CONTRACT_VERSION as EXPERIMENT_EVIDENCE_VERSION,
@@ -73,6 +79,9 @@ from .visual_generation_provenance import (
 __all__ = [
     "AuthorityEvidence",
     "CANONICAL_OWNERS",
+    "CLASSROOM_UNIT_WORKSPACE_CONTRACT_ID",
+    "CLASSROOM_WORKSPACE_BINDING_STATES",
+    "CLASSROOM_WORKSPACE_ROLES",
     "CONTRACT_ID",
     "ContractReference",
     "ContractValidationError",
@@ -118,6 +127,7 @@ __all__ = [
     "sha256_hex",
     "thaw_json",
     "validate_and_normalize_json",
+    "validate_classroom_unit_workspace",
     "validate_curriculum_handoff",
     "validate_dependency_key",
     "validate_experiment_evidence",
