@@ -31,3 +31,9 @@ This initial gate does not replace failed-repair re-entry. After a failed repair
 ## Host integration requirement
 
 A ChatGPT/runtime host that claims Agent OS issue-start conformance must call the issue-start tool before crossing the first-substantial-hypothesis boundary and must honor `substantial_hypothesis_admissible=false`. Repository conformance cannot force an external host to invoke the tool; host-side enforcement remains an integration requirement.
+
+### Installed stdio launch target (#2528)
+
+The `agent-os-execution-service` distribution installs `agent-os-mcp`, which launches the existing bounded `agent_os_execution_service.mcp_server` over MCP stdio transport. This gives an authorized MCP-capable host a stable executable target to attach without importing repository internals or inventing a second server/tool registry.
+
+The launch target does **not** register additional tools, select a host, edit ChatGPT/plugin configuration, deploy a service, expose a network listener, or grant credentials, workflow/protected-setting, production, repository-write, merge, closure, or external-write authority. Host attachment and product/connector exposure remain separately governed. A live ChatGPT surface that does not attach this executable can therefore remain non-conformant even when repository packaging tests pass.
