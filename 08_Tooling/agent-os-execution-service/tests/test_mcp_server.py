@@ -87,3 +87,21 @@ def test_investigation_completion_tool_continues_after_checkpoint_when_branch_re
     assert result["agent_os_continuation"]["blocked"] is False
     assert result["agent_os_continuation"]["action"] == "continue-same-lineage-investigation"
     assert result["github_writes_authorized"] is False
+
+
+def test_mcp_main_runs_existing_server_over_stdio(monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_run(**kwargs: object) -> None:
+        calls.append(kwargs)
+
+    monkeypatch.setattr(mcp_server.mcp, "run", fake_run)
+    mcp_server.main()
+
+    assert calls == [{"transport": "stdio"}]
+
+
+def test_mcp_main_does_not_register_additional_tools() -> None:
+    source = inspect.getsource(mcp_server.main)
+    assert "mcp.run" in source
+    assert "mcp.tool" not in source
