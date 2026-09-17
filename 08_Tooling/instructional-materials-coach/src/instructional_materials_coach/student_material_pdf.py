@@ -19,6 +19,17 @@ class StudentMaterialPdfError(ValueError):
 
 
 @dataclass(frozen=True)
+class DriveVisualAssetEvidence:
+    """Current exact-Drive evidence for one selected visual asset."""
+
+    drive_file_id: str
+    parent_folder_id: str
+    mime_type: str
+    trashed: bool = False
+    accessible: bool = True
+
+
+@dataclass(frozen=True)
 class StudentMaterialPdfSource:
     artifact_role: str
     native_file_id: str
@@ -28,6 +39,9 @@ class StudentMaterialPdfSource:
     paragraphs: tuple[str, ...]
     required_visual_role_ids: tuple[str, ...] = ()
     verified_visual_placements: tuple[PlacementReceipt, ...] = ()
+    visuals_required: bool = False
+    visual_assets_folder_id: str = ""
+    drive_visual_evidence: tuple[DriveVisualAssetEvidence, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -68,6 +82,7 @@ def render_student_material_pdf_preview(
             raise StudentMaterialPdfError(
                 "required visual placement is unresolved: " + ", ".join(unresolved_visual_roles)
             )
+        _validate_drive_visual_asset_evidence(source)
         target = Path(output_path)
         target.parent.mkdir(parents=True, exist_ok=True)
         styles = getSampleStyleSheet()
@@ -124,6 +139,12 @@ def _validate_source(source: StudentMaterialPdfSource, expected_revision_id: str
     if not source.paragraphs or any(not isinstance(item, str) or not item.strip() for item in source.paragraphs):
         raise StudentMaterialPdfError("paragraphs must contain non-empty text")
     _validate_role_ids(source.required_visual_role_ids)
+    if not isinstance(source.visuals_required, bool):
+        raise StudentMaterialPdfError("visuals_required must be boolean")
+    if source.visuals_required and not source.required_visual_role_ids:
+        raise StudentMaterialPdfError(
+            "visuals_required source must declare at least one required visual role"
+        )
     if not isinstance(source.verified_visual_placements, tuple) or any(
         not isinstance(item, PlacementReceipt) for item in source.verified_visual_placements
     ):
@@ -167,6 +188,58 @@ def _unresolved_required_visual_roles(source: StudentMaterialPdfSource) -> tuple
         if len(matches) != 1:
             unresolved.append(role_id)
     return tuple(unresolved)
+
+
+def _validate_drive_visual_asset_evidence(source: StudentMaterialPdfSource) -> None:
+    """Require exact current Drive evidence when governed context says visuals are required."""
+    if not source.visuals_required:
+        return
+    folder_id = source.visual_assets_folder_id
+    if not isinstance(folder_id, str) or not folder_id.strip():
+        raise StudentMaterialPdfError(
+            "visuals_required source must bind the exact Classroom Workspace visual-assets folder"
+        )
+    if folder_id != folder_id.strip() or any(char.isspace() for char in folder_id):
+        raise StudentMaterialPdfError("visual_assets_folder_id is malformed")
+    if not isinstance(source.drive_visual_evidence, tuple) or any(
+        not isinstance(item, DriveVisualAssetEvidence) for item in source.drive_visual_evidence
+    ):
+        raise StudentMaterialPdfError(
+            "drive_visual_evidence must contain DriveVisualAssetEvidence values"
+        )
+    by_file_id: dict[str, DriveVisualAssetEvidence] = {}
+    for evidence in source.drive_visual_evidence:
+        if not evidence.drive_file_id.strip() or evidence.drive_file_id in by_file_id:
+            raise StudentMaterialPdfError("Drive visual asset evidence identity is missing or ambiguous")
+        by_file_id[evidence.drive_file_id] = evidence
+
+    placement_by_role = {
+        placement.role_id: placement
+        for placement in source.verified_visual_placements
+        if placement.role_id in source.required_visual_role_ids
+    }
+    for role_id in source.required_visual_role_ids:
+        placement = placement_by_role.get(role_id)
+        if placement is None:
+            # Placement completeness is reported by _unresolved_required_visual_roles.
+            continue
+        evidence = by_file_id.get(placement.drive_file_id)
+        if evidence is None:
+            raise StudentMaterialPdfError(
+                f"required visual role lacks exact Drive source evidence: {role_id}"
+            )
+        if evidence.accessible is not True or evidence.trashed is True:
+            raise StudentMaterialPdfError(
+                f"required visual role Drive source is unavailable: {role_id}"
+            )
+        if evidence.parent_folder_id != folder_id:
+            raise StudentMaterialPdfError(
+                f"required visual role is outside the exact visual-assets folder: {role_id}"
+            )
+        if not isinstance(evidence.mime_type, str) or not evidence.mime_type.startswith("image/"):
+            raise StudentMaterialPdfError(
+                f"required visual role Drive source is not an image: {role_id}"
+            )
 
 
 def _preview_artifact_type(artifact_role: str) -> str:
