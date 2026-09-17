@@ -27,6 +27,13 @@ dependencies = [
   "mcp>=2.2.0,<2.3",
 ]
 
+[project.scripts]
+# #2528 supplies a standard installed stdio launch target for hosts that are
+# authorized and capable of attaching the already-bounded Agent OS MCP server.
+# Installing the command grants no host registration, deployment, credentials,
+# external-write, merge, or lifecycle authority.
+agent-os-mcp = "agent_os_execution_service.mcp_server:main"
+
 # The ``scripts.*`` packages below stay canonical where they are and are
 # imported only by this distribution's runtime (``agent_os_candidate_packet``,
 # the ``agent_os_github_issue_provider`` it depends on, and -- since #1319 --
