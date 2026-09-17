@@ -185,9 +185,9 @@ class PrePrValidationPlan:
     side_effects_performed: Literal[False] = field(default=False, init=False)
 
     def __post_init__(self) -> None:
-        _require_exact_value("schema_name", self.schema_name, PRE_PR_VALIDATION_SUBJECT_SCHEMA_NAME)
+        _require_exact_value("schema_name", self.schema_name, PRE_PR_VALIDATION_PLAN_SCHEMA_NAME)
         _require_exact_value(
-            "schema_version", self.schema_version, PRE_PR_VALIDATION_SUBJECT_SCHEMA_VERSION
+            "schema_version", self.schema_version, PRE_PR_VALIDATION_PLAN_SCHEMA_VERSION
         )
         _require_exact_value("profile", self.profile, PRE_PR_PROFILE)
         if type(self.subject) is not PrePrValidationSubject:
