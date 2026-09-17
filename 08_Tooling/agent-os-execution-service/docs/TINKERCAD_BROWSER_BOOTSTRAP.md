@@ -1,6 +1,7 @@
 # Tinkercad Browser Bootstrap Operator Runbook
 
 Issue: #2450
+Graphics investigation: #2456
 Related PPUX evidence owner: #2108
 Adobe precedent: #2106
 
@@ -38,6 +39,20 @@ human operator
 ```
 
 No arbitrary URL/profile input, public listener, generic desktop launcher, remote-debugging/CDP transport, password automation, profile transfer, or authentication assertion is introduced.
+
+## #2456 WebGL investigation disposition
+
+Live evidence for #2456 shows the current Debian 12/Xvfb session reaches the authenticated Tinkercad dashboard but the 3D editor does not initialize. The same evidence records `/dev/dri` absent, Mesa llvmpipe, and Chromium reporting WebGL, WebGL2, OpenGL, and GPU compositing disabled after GPU-process instability.
+
+The repository session intentionally does **not** add a software-WebGL override. Current Chromium treats SwiftShader fallback for WebGL as a security-sensitive compatibility path rather than an ordinary supported acceleration mode; forcing it would weaken the existing #2456 boundary against browser-security bypass. In particular, do not add `--enable-unsafe-swiftshader`, `--ignore-gpu-blocklist`, `--disable-gpu-sandbox`, remote-debugging/CDP flags, or equivalent force-enable switches to this governed browser bootstrap without a separately reviewed compatibility/security decision.
+
+Therefore the bounded repository disposition is:
+
+```text
+SOFTWARE_WEBGL_PATH_NOT_ADMISSIBLE_UNDER_CURRENT_SECURITY_CONTRACT
+```
+
+This does not claim that software rasterization is technically impossible. It records that the available force-enable route is outside this issue's authorized security envelope. The next architecture step, if Tinkercad 3D remains required, is a separately governed graphics-host decision that can provide supported WebGL2/hardware acceleration while preserving the dedicated profile, loopback-only viewer, manual-auth, no-secret, TTL, and cleanup invariants. No GPU purchase, VM resize, or cloud mutation is authorized by this repository change.
 
 ## Repository artifacts
 
@@ -77,4 +92,4 @@ Adobe remains unchanged at its existing identity/profile/display/ports. Tinkerca
 
 ## Rollback
 
-Repository rollback is an ordinary Git revert of the #2450 implementation. Live-host rollback is separately authorized: stop an active Tinkercad session and remove fixed installed entrypoints/packages only when safe. Never silently destroy the persistent Tinkercad profile/authentication state as part of repository rollback.
+Repository rollback is an ordinary Git revert of the #2450/#2456 documentation change. Live-host rollback is separately authorized: stop an active Tinkercad session and remove fixed installed entrypoints/packages only when safe. Never silently destroy the persistent Tinkercad profile/authentication state as part of repository rollback.
