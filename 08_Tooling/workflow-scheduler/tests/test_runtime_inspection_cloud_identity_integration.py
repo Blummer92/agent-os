@@ -72,7 +72,7 @@ def test_runtime_inspection_dispatch_includes_cloud_identity(monkeypatch):
         calls.append(argv)
         if argv[:4] == ("gcloud", "compute", "instances", "describe"):
             return _result('{"serviceAccounts":[{"email":"runtime@agent-os-502614.iam.gserviceaccount.com","scopes":["https://www.googleapis.com/auth/cloud-platform"]}]}')
-        if argv[:4] == ("gcloud", "compute", "instances", "test-iam-permissions"):
+        if argv[:5] == ("gcloud", "beta", "compute", "instances", "test-iam-permissions"):
             return _result('{"permissions":[]}')
         if argv[:4] == ("gcloud", "iam", "service-accounts", "list"):
             return _result('[{"email":"visual-asset-reader@agent-os-502614.iam.gserviceaccount.com","displayName":"Visual Asset Reader","disabled":false}]')
