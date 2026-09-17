@@ -53,6 +53,7 @@ def fake_run_factory(*, inventory=None, project_bindings=None, reader_bindings=N
 def test_collects_fixed_sanitized_identity_and_target_scoped_relationship():
     run, calls = fake_run_factory()
     evidence = live.collect_cloud_identity(run)
+    assert evidence["schema_version"] == "1.0"
     assert evidence["status"] == "observed"
     assert evidence["vm_runtime_identity"] == {"status": "verified", "email": RUNTIME, "scopes": ["https://www.googleapis.com/auth/cloud-platform"]}
     assert evidence["impersonation_relationships"] == [{"principal": RUNTIME, "target_service_account": READER, "role": live.TOKEN_CREATOR_ROLE, "resource_level": "service-account", "target_service_account_scoped": True}]
@@ -134,7 +135,7 @@ def test_effective_stop_permission_without_bounded_binding_source_is_unknown():
     run, _ = fake_run_factory(stop_permissions=[live.STOP_PERMISSION])
     proof = live.collect_cloud_identity(run)["effective_stop_permission"]
     assert proof["effective"] == "unknown"
-    assert proof["source_scope"] == "instance-or-inherited-unresolved"
+    assert proof["source_scope"] == "unknown"
     assert proof["inheritance"] == "unknown"
     assert proof["readback_state"] == "current"
     assert proof["reason_codes"] == ["stop-permission-effective-source-not-bounded"]
@@ -150,13 +151,16 @@ def test_multiple_supporting_bindings_fail_closed_as_ambiguous():
     assert proof["reason_codes"] == ["stop-permission-binding-source-ambiguous"]
 
 
-def test_conditional_binding_fails_closed():
+def test_conditional_binding_only_fails_stop_proof_closed():
     member = f"serviceAccount:{live.TRANSPORT_PRINCIPAL}"
     project = [{"role": STOP_ROLE, "members": [member], "condition": {"expression": "true"}}]
     run, _ = fake_run_factory(project_bindings=project, stop_permissions=[live.STOP_PERMISSION])
     evidence = live.collect_cloud_identity(run)
-    assert evidence["status"] == "needs-decision"
-    assert evidence["reason_codes"] == ["iam-policy-conditional-binding-unsupported"]
+    assert evidence["status"] == "observed"
+    proof = evidence["effective_stop_permission"]
+    assert proof["effective"] == "unknown"
+    assert proof["readback_state"] == "unavailable"
+    assert proof["reason_codes"] == ["iam-policy-conditional-binding-unsupported"]
 
 
 def test_project_wide_token_creator_is_distinguished_from_target_scoped():
