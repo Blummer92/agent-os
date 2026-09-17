@@ -1,4 +1,4 @@
-"""MCP protocol binding for the bounded Agent OS ChatGPT facade (#1966 / #1988 / #2363 / #2487)."""
+"""MCP protocol binding for the bounded Agent OS ChatGPT facade (#1966 / #1988 / #2363 / #2487 / #2528)."""
 
 from __future__ import annotations
 
@@ -91,3 +91,12 @@ def classify_agent_os_bulk_repair_continuation_tool(repository: str, issue_numbe
         requested_pull_requests=requested_pull_requests,
         candidate_evidence=candidate_evidence,
     )
+
+
+def main() -> None:
+    """Run the existing bounded Agent OS MCP server over stdio for host attachment."""
+    mcp.run(transport="stdio")
+
+
+if __name__ == "__main__":
+    main()
