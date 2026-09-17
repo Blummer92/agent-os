@@ -208,7 +208,10 @@ def _overall(roles: list[dict[str, Any]]) -> tuple[str, ValidationStatus, list[s
     if drift:
         return "stale", ValidationStatus.MANUAL_REVIEW_REQUIRED, ["destination-workspace-resolution-drift"]
     if "missing" in outcomes:
-        return "partial", ValidationStatus.VALID, ["destination-workspace-resolution-partial"]
+        # Intentionally lazy roles are not a defect, so this stays VALID. The shared
+        # ValidationResult contract forbids reasons/blockers on a valid result, so the
+        # partial signal is carried by ``overall_state`` rather than a reason code.
+        return "partial", ValidationStatus.VALID, []
     return "resolved", ValidationStatus.VALID, []
 
 
@@ -216,5 +219,4 @@ def _reason_detail(reason: str) -> str:
     return {
         "destination-workspace-resolution-ambiguous": "one or more exact-ID metadata results are contradictory",
         "destination-workspace-resolution-drift": "one or more known role folders have structural/currentness drift",
-        "destination-workspace-resolution-partial": "one or more lazy role folders remain intentionally unresolved",
     }.get(reason, "unit-root exact-ID verification did not resolve to a current folder")

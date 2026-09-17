@@ -90,7 +90,10 @@ def test_lazy_missing_role_does_not_trigger_name_search_or_reader_call():
     assert result.status is ValidationStatus.VALID
     assert result.record is not None
     assert result.record.to_dict()["overall_state"] == "partial"
-    assert "destination-workspace-resolution-partial" in result.reason_codes
+    # A valid result carries no reasons or blockers under the shared contract, so the
+    # intentionally-lazy signal must come from overall_state alone.
+    assert result.reason_codes == ()
+    assert result.blockers == ()
     assert reader.calls == ["drive-unit"]
 
 
