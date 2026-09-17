@@ -61,7 +61,7 @@ def _service_accounts(value: object) -> tuple[list[dict[str, object]], str | Non
     return clean, None
 
 
-def _bindings(value: object) -> list[dict[str, object]]:
+def _bindings(value: object, *, reject_conditions: bool = False) -> list[dict[str, object]]:
     if type(value) is not dict:
         raise ValueError("iam-policy-malformed")
     bindings = value.get("bindings", [])
@@ -75,7 +75,7 @@ def _bindings(value: object) -> list[dict[str, object]]:
         members = binding.get("members", [])
         if type(role) is not str or type(members) is not list or any(type(member) is not str for member in members):
             raise ValueError("iam-policy-malformed")
-        if "condition" in binding:
+        if reject_conditions and "condition" in binding:
             raise ValueError("iam-policy-conditional-binding-unsupported")
         clean.append({"role": role, "members": members})
     return clean
@@ -128,7 +128,7 @@ def _effective_stop_permission(run: Run) -> dict[str, object]:
         policy = _run_json(run, (
             "gcloud", "projects", "get-iam-policy", PROJECT, "--format=json(bindings)",
         ), "stop-permission-policy-read-failed")
-        bindings = _bindings(policy)
+        bindings = _bindings(policy, reject_conditions=True)
         direct = [binding for binding in bindings if member in binding["members"]]
 
         if STOP_PERMISSION not in permissions:
@@ -172,7 +172,7 @@ def _effective_stop_permission(run: Run) -> dict[str, object]:
             return evidence
 
         evidence.update({
-            "source_scope": "instance-or-inherited-unresolved",
+            "source_scope": "unknown",
             "inheritance": "unknown",
             "readback_state": "current",
             "reason_codes": ["stop-permission-effective-source-not-bounded"],
@@ -188,7 +188,7 @@ def _effective_stop_permission(run: Run) -> dict[str, object]:
 def collect_cloud_identity(run: Run) -> dict[str, object]:
     """Collect fixed, sanitized, read-only GCP identity facts."""
     base: dict[str, object] = {
-        "schema_version": "1.1",
+        "schema_version": "1.0",
         "status": "needs-decision",
         "reason_codes": ["cloud-identity-unavailable"],
         "project": PROJECT,
