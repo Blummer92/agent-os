@@ -34,10 +34,10 @@ def fake_run_factory(*, inventory=None, project_bindings=None, reader_bindings=N
         argv = tuple(argv); calls.append(argv)
         if argv[:4] == ("gcloud", "compute", "instances", "describe"):
             return result(instance_payload)
+        if argv[:4] == ("gcloud", "compute", "instances", "test-iam-permissions"):
+            return result({"permissions": stop_permissions})
         if argv[:4] == ("gcloud", "iam", "service-accounts", "list"):
             return result(inventory)
-        if argv[:4] == ("gcloud", "projects", "test-iam-permissions", live.PROJECT):
-            return result({"permissions": stop_permissions})
         if argv[:4] == ("gcloud", "projects", "get-iam-policy", live.PROJECT):
             return result({"bindings": project_bindings})
         if argv[:4] == ("gcloud", "iam", "service-accounts", "get-iam-policy"):
@@ -97,8 +97,8 @@ def test_commands_are_fixed_to_canonical_project_instance_zone_and_transport_pri
     run, calls = fake_run_factory()
     live.collect_cloud_identity(run)
     assert calls[0] == ("gcloud", "compute", "instances", "describe", live.INSTANCE, "--project", live.PROJECT, "--zone", live.ZONE, "--format=json(serviceAccounts)")
-    stop_call = next(call for call in calls if call[:4] == ("gcloud", "projects", "test-iam-permissions", live.PROJECT))
-    assert stop_call == ("gcloud", "projects", "test-iam-permissions", live.PROJECT, "--permissions", live.STOP_PERMISSION, "--impersonate-service-account", live.TRANSPORT_PRINCIPAL, "--format=json(permissions)")
+    stop_call = next(call for call in calls if call[:4] == ("gcloud", "compute", "instances", "test-iam-permissions"))
+    assert stop_call == ("gcloud", "compute", "instances", "test-iam-permissions", live.INSTANCE, "--project", live.PROJECT, "--zone", live.ZONE, "--permissions", live.STOP_PERMISSION, "--impersonate-service-account", live.TRANSPORT_PRINCIPAL, "--format=json(permissions)")
 
 
 def test_effective_stop_permission_positive_direct_project_binding():
@@ -125,16 +125,17 @@ def test_effective_stop_permission_negative_does_not_infer_from_policy():
     proof = live.collect_cloud_identity(run)["effective_stop_permission"]
     assert proof["effective"] is False
     assert proof["binding_source"] is None
+    assert proof["source_scope"] == "instance"
     assert proof["readback_state"] == "current"
     assert proof["reason_codes"] == ["stop-permission-denied"]
 
 
-def test_effective_stop_permission_without_bounded_binding_source_is_unknown_inherited():
+def test_effective_stop_permission_without_bounded_binding_source_is_unknown():
     run, _ = fake_run_factory(stop_permissions=[live.STOP_PERMISSION])
     proof = live.collect_cloud_identity(run)["effective_stop_permission"]
     assert proof["effective"] == "unknown"
-    assert proof["source_scope"] == "other-bounded-supported-scope"
-    assert proof["inheritance"] == "inherited"
+    assert proof["source_scope"] == "instance-or-inherited-unresolved"
+    assert proof["inheritance"] == "unknown"
     assert proof["readback_state"] == "current"
     assert proof["reason_codes"] == ["stop-permission-effective-source-not-bounded"]
 
@@ -142,11 +143,7 @@ def test_effective_stop_permission_without_bounded_binding_source_is_unknown_inh
 def test_multiple_supporting_bindings_fail_closed_as_ambiguous():
     member = f"serviceAccount:{live.TRANSPORT_PRINCIPAL}"
     roles = ["roles/custom.stopOne", "roles/custom.stopTwo"]
-    run, _ = fake_run_factory(
-        project_bindings=[{"role": role, "members": [member]} for role in roles],
-        stop_permissions=[live.STOP_PERMISSION],
-        stop_role_permissions={role: [live.STOP_PERMISSION] for role in roles},
-    )
+    run, _ = fake_run_factory(project_bindings=[{"role": role, "members": [member]} for role in roles], stop_permissions=[live.STOP_PERMISSION], stop_role_permissions={role: [live.STOP_PERMISSION] for role in roles})
     proof = live.collect_cloud_identity(run)["effective_stop_permission"]
     assert proof["effective"] == "unknown"
     assert proof["readback_state"] == "ambiguous"
