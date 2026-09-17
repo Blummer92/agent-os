@@ -1,4 +1,4 @@
-"""Bounded read-only Google Cloud identity inspection for Visual Asset Sync #1950."""
+"""Bounded read-only Google Cloud identity inspection."""
 from __future__ import annotations
 
 import json
@@ -12,7 +12,6 @@ INSTANCE = "agent-os-test"
 TOKEN_CREATOR_ROLE = "roles/iam.serviceAccountTokenCreator"
 MAX_SERVICE_ACCOUNTS = 50
 _SA_EMAIL = re.compile(r"^[A-Za-z0-9._-]+@[A-Za-z0-9-]+\.iam\.gserviceaccount\.com$", re.ASCII)
-
 Run = Callable[..., subprocess.CompletedProcess[str]]
 
 
@@ -24,6 +23,26 @@ def _run_json(run: Run, argv: Sequence[str], reason: str) -> object:
         return json.loads(completed.stdout)
     except (TypeError, json.JSONDecodeError) as exc:
         raise ValueError(reason) from exc
+
+
+def _instance_service_accounts(value: object) -> tuple[list[object], str | None]:
+    """Normalize gcloud instance service-account projections without guessing identity.
+
+    `gcloud ... --format=json(serviceAccounts)` normally emits an object, but
+    bounded callers and provider-version projections can surface the projected
+    array directly. Both shapes represent the same field. Missing/null remains
+    a truthful missing identity; every other shape fails closed.
+    """
+    if type(value) is list:
+        return value, None
+    if type(value) is not dict:
+        return [], "instance-service-account-evidence-malformed"
+    if "serviceAccounts" not in value or value["serviceAccounts"] is None:
+        return [], None
+    attached = value["serviceAccounts"]
+    if type(attached) is not list:
+        return [], "instance-service-account-evidence-malformed"
+    return attached, None
 
 
 def _service_accounts(value: object) -> tuple[list[dict[str, object]], str | None]:
@@ -71,18 +90,11 @@ def _runtime_member(runtime_email: str) -> str:
 
 def _relevant_binding(bindings: list[dict[str, object]], runtime_email: str) -> bool:
     member = _runtime_member(runtime_email)
-    return any(
-        binding["role"] == TOKEN_CREATOR_ROLE and member in binding["members"]
-        for binding in bindings
-    )
+    return any(binding["role"] == TOKEN_CREATOR_ROLE and member in binding["members"] for binding in bindings)
 
 
 def collect_cloud_identity(run: Run) -> dict[str, object]:
-    """Collect only fixed, sanitized, read-only GCP identity facts.
-
-    No token is minted. No IAM or VM setting is changed. Workspace access is
-    explicitly left for a separately authorized verification step.
-    """
+    """Collect fixed, sanitized, read-only GCP identity facts."""
     base: dict[str, object] = {
         "schema_version": "1.0",
         "status": "needs-decision",
@@ -93,29 +105,19 @@ def collect_cloud_identity(run: Run) -> dict[str, object]:
         "vm_runtime_identity": {"status": "missing", "email": None, "scopes": []},
         "service_accounts": [],
         "impersonation_relationships": [],
-        "spreadsheet_access_verification": {
-            "status": "not-performed",
-            "reason": "requires-separately-authorized-workspace-access-verification",
-        },
+        "spreadsheet_access_verification": {"status": "not-performed", "reason": "requires-separately-authorized-workspace-access-verification"},
         "credential_token_operation_performed": False,
         "google_workspace_operation_performed": False,
         "external_write_performed": False,
     }
     try:
-        instance = _run_json(
-            run,
-            (
-                "gcloud", "compute", "instances", "describe", INSTANCE,
-                "--project", PROJECT, "--zone", ZONE,
-                "--format=json(serviceAccounts)",
-            ),
-            "instance-service-account-read-failed",
-        )
-        if type(instance) is not dict:
-            raise ValueError("instance-service-account-evidence-malformed")
-        attached = instance.get("serviceAccounts", [])
-        if type(attached) is not list:
-            raise ValueError("instance-service-account-evidence-malformed")
+        instance = _run_json(run, (
+            "gcloud", "compute", "instances", "describe", INSTANCE,
+            "--project", PROJECT, "--zone", ZONE, "--format=json(serviceAccounts)",
+        ), "instance-service-account-read-failed")
+        attached, shape_error = _instance_service_accounts(instance)
+        if shape_error is not None:
+            raise ValueError(shape_error)
         if len(attached) != 1 or type(attached[0]) is not dict:
             base["reason_codes"] = ["runtime-service-account-ambiguous" if attached else "runtime-service-account-missing"]
             return base
@@ -125,21 +127,12 @@ def collect_cloud_identity(run: Run) -> dict[str, object]:
             raise ValueError("instance-service-account-evidence-malformed")
         if type(scopes) is not list or any(type(scope) is not str for scope in scopes):
             raise ValueError("instance-service-account-evidence-malformed")
-        base["vm_runtime_identity"] = {
-            "status": "verified",
-            "email": runtime_email,
-            "scopes": sorted(set(scopes)),
-        }
+        base["vm_runtime_identity"] = {"status": "verified", "email": runtime_email, "scopes": sorted(set(scopes))}
 
-        inventory_raw = _run_json(
-            run,
-            (
-                "gcloud", "iam", "service-accounts", "list",
-                "--project", PROJECT,
-                "--format=json(email,displayName,disabled)",
-            ),
-            "service-account-inventory-read-failed",
-        )
+        inventory_raw = _run_json(run, (
+            "gcloud", "iam", "service-accounts", "list", "--project", PROJECT,
+            "--format=json(email,displayName,disabled)",
+        ), "service-account-inventory-read-failed")
         inventory, error = _service_accounts(inventory_raw)
         if error is not None:
             base["reason_codes"] = [error]
@@ -147,42 +140,19 @@ def collect_cloud_identity(run: Run) -> dict[str, object]:
         base["service_accounts"] = inventory
 
         relationships: list[dict[str, object]] = []
-        project_policy = _run_json(
-            run,
-            (
-                "gcloud", "projects", "get-iam-policy", PROJECT,
-                "--format=json(bindings)",
-            ),
-            "project-iam-policy-read-failed",
-        )
+        project_policy = _run_json(run, (
+            "gcloud", "projects", "get-iam-policy", PROJECT, "--format=json(bindings)",
+        ), "project-iam-policy-read-failed")
         if _relevant_binding(_bindings(project_policy), runtime_email):
-            relationships.append({
-                "principal": runtime_email,
-                "target_service_account": None,
-                "role": TOKEN_CREATOR_ROLE,
-                "resource_level": "project",
-                "target_service_account_scoped": False,
-            })
-
+            relationships.append({"principal": runtime_email, "target_service_account": None, "role": TOKEN_CREATOR_ROLE, "resource_level": "project", "target_service_account_scoped": False})
         for account in inventory:
             target_email = str(account["email"])
-            policy = _run_json(
-                run,
-                (
-                    "gcloud", "iam", "service-accounts", "get-iam-policy", target_email,
-                    "--project", PROJECT,
-                    "--format=json(bindings)",
-                ),
-                "service-account-iam-policy-read-failed",
-            )
+            policy = _run_json(run, (
+                "gcloud", "iam", "service-accounts", "get-iam-policy", target_email,
+                "--project", PROJECT, "--format=json(bindings)",
+            ), "service-account-iam-policy-read-failed")
             if _relevant_binding(_bindings(policy), runtime_email):
-                relationships.append({
-                    "principal": runtime_email,
-                    "target_service_account": target_email,
-                    "role": TOKEN_CREATOR_ROLE,
-                    "resource_level": "service-account",
-                    "target_service_account_scoped": True,
-                })
+                relationships.append({"principal": runtime_email, "target_service_account": target_email, "role": TOKEN_CREATOR_ROLE, "resource_level": "service-account", "target_service_account_scoped": True})
         relationships.sort(key=lambda item: (str(item["resource_level"]), str(item["target_service_account"])))
         base["impersonation_relationships"] = relationships
         base["status"] = "observed"
@@ -193,7 +163,4 @@ def collect_cloud_identity(run: Run) -> dict[str, object]:
         return base
 
 
-__all__ = [
-    "INSTANCE", "MAX_SERVICE_ACCOUNTS", "PROJECT", "TOKEN_CREATOR_ROLE", "ZONE",
-    "collect_cloud_identity",
-]
+__all__ = ["INSTANCE", "MAX_SERVICE_ACCOUNTS", "PROJECT", "TOKEN_CREATOR_ROLE", "ZONE", "collect_cloud_identity"]
