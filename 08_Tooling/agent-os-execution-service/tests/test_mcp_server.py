@@ -6,9 +6,6 @@ import re
 from agent_os_execution_service import mcp_server
 from agent_os_execution_service.lesson_reader_composition import LESSONS_LEARNED_DATA_SOURCE_ENV
 
-
-# Exact bounded MCP surface. A bare count drifts silently when a governed tool is
-# added; pinning the allowlist by name names the offender instead (#2154 mission).
 EXPECTED_TOOLS = frozenset(
     {
         "plan_connected_issue_creation_tool",
@@ -17,6 +14,7 @@ EXPECTED_TOOLS = frozenset(
         "activate_agent_os_failed_repair_tool",
         "admit_agent_os_failed_repair_tool",
         "classify_agent_os_mission_completion_tool",
+        "classify_agent_os_issue_batch_completion_tool",
         "classify_agent_os_investigation_completion_tool",
         "classify_agent_os_continuation_tool",
         "classify_agent_os_bulk_repair_continuation_tool",
@@ -53,9 +51,7 @@ def test_mcp_server_contains_no_execution_or_store_primitives() -> None:
 
 def test_unbound_current_surface_is_projected_without_claiming_source_unavailable(monkeypatch) -> None:
     monkeypatch.delenv(LESSONS_LEARNED_DATA_SOURCE_ENV, raising=False)
-
     execute_read, status, reason, source_unavailable = mcp_server._lesson_route(None)
-
     assert execute_read is None
     assert status == "current-surface-unbound"
     assert reason == "connector-surface-unavailable"
@@ -64,14 +60,49 @@ def test_unbound_current_surface_is_projected_without_claiming_source_unavailabl
 
 def test_diagnostic_rows_do_not_depend_on_current_surface_binding(monkeypatch) -> None:
     monkeypatch.delenv(LESSONS_LEARNED_DATA_SOURCE_ENV, raising=False)
-
     execute_read, status, reason, source_unavailable = mcp_server._lesson_route([{"id": "fixture"}])
-
     assert execute_read is not None
     assert execute_read({}) == {"results": [{"id": "fixture"}]}
     assert status == "diagnostic-override"
     assert reason == "diagnostic-lesson-rows"
     assert source_unavailable is False
+
+
+def test_issue_batch_completion_tool_requires_pr_or_explicit_no_pr_terminal_proof() -> None:
+    result = mcp_server.classify_agent_os_issue_batch_completion_tool(
+        repository="Blummer92/agent-os",
+        issue_number=2607,
+        lane_evidence=[
+            {
+                "issue_number": 2600,
+                "current_state": "open-ready",
+                "repository_gap": "yes",
+                "implementation_authorized": True,
+                "pr_required": "yes",
+                "pr_number": 2606,
+                "remaining_owner": "GitHub Service Agent",
+                "branch_exists": True,
+                "implementation_commit_count": 1,
+                "draft_pr_exists": True,
+                "canonical_pr_readback_verified": True,
+                "capable_route_available": True,
+                "subordinate_writes_only": False,
+            },
+            {
+                "issue_number": 1386,
+                "current_state": "open-external-boundary",
+                "repository_gap": "no",
+                "implementation_authorized": False,
+                "pr_required": "no",
+                "no_pr_reason": "external-only",
+                "canonical_no_pr_evidence_verified": True,
+                "remaining_owner": "ChatGPT Orchestrator",
+            },
+        ],
+    )
+    assert result["terminal"] is True
+    assert result["agent_os_continuation"]["terminal"] is True
+    assert result["github_writes_authorized"] is False
 
 
 def test_investigation_completion_tool_continues_after_checkpoint_when_branch_remains() -> None:
@@ -91,13 +122,10 @@ def test_investigation_completion_tool_continues_after_checkpoint_when_branch_re
 
 def test_mcp_main_runs_existing_server_over_stdio(monkeypatch) -> None:
     calls: list[dict[str, object]] = []
-
     def fake_run(**kwargs: object) -> None:
         calls.append(kwargs)
-
     monkeypatch.setattr(mcp_server.mcp, "run", fake_run)
     mcp_server.main()
-
     assert calls == [{"transport": "stdio"}]
 
 
