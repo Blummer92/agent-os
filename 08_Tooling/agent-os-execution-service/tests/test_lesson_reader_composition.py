@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from agent_os_execution_service.lesson_reader_composition import (
     LESSONS_LEARNED_DATA_SOURCE_ENV,
+    LessonReadRouteStatus,
     build_lesson_read_executor,
+    resolve_lesson_read_route,
 )
 
 
@@ -23,6 +25,30 @@ class SpyNotionAdapter:
 def test_missing_data_source_identity_preserves_unavailable_fallback(monkeypatch):
     monkeypatch.delenv(LESSONS_LEARNED_DATA_SOURCE_ENV, raising=False)
     assert build_lesson_read_executor() is None
+
+
+def test_missing_current_surface_binding_is_not_canonical_source_unavailability(monkeypatch):
+    monkeypatch.delenv(LESSONS_LEARNED_DATA_SOURCE_ENV, raising=False)
+
+    route = resolve_lesson_read_route()
+
+    assert route.status is LessonReadRouteStatus.CURRENT_SURFACE_UNBOUND
+    assert route.reason_code == "connector-surface-unavailable"
+    assert route.execute_read is None
+    assert route.canonical_source_unavailable is False
+    assert route.side_effects_performed is False
+
+
+def test_configured_canonical_reader_wins_without_native_plugin_state():
+    adapter = SpyNotionAdapter()
+
+    route = resolve_lesson_read_route(data_source_id="lessons-source", adapter=adapter)
+
+    assert route.status is LessonReadRouteStatus.CONFIGURED_CANONICAL_READER
+    assert route.reason_code == "configured-canonical-reader"
+    assert route.execute_read is not None
+    assert route.canonical_source_unavailable is False
+    assert route.side_effects_performed is False
 
 
 def test_production_reader_preserves_bounded_query_for_existing_adapter():

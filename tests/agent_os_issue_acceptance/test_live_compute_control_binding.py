@@ -13,6 +13,7 @@ from scripts.agent_os_candidate_packet_live_input import (
     SingleIssueTransportOutcome,
     SingleIssueTransportResult,
 )
+from scripts.agent_os_github_issue_provider.revision import canonical_issue_payload
 from scripts.agent_os_issue_acceptance.approval_records import (
     ApprovalApplicabilityResult,
 )
@@ -232,6 +233,32 @@ def test_unsupported_issue_state_fails_closed() -> None:
     evidence = base_evidence(issue_transport=ok_transport(state="merged"))
     with pytest.raises(ValueError, match="issue state field"):
         acquire_live_compute_control_projection(evidence)
+
+
+def test_live_snapshot_state_boundary_precedes_canonical_revision_derivation() -> None:
+    """#2549: shared revision hardening must not preempt the live-snapshot boundary.
+
+    Both fail-closed contracts are independent and must stay observable. The
+    #2535 canonical revision validator rejects the same unsupported state on its
+    own, so this asserts ordering rather than the mere presence of an error: if
+    `read_current_issue` derives the revision before validating its raw state,
+    the live caller starts seeing the revision layer's message instead.
+    """
+    item = issue_item(state="merged")
+
+    # The shared #2535 validator independently rejects this exact item ...
+    with pytest.raises(ValueError, match="issue state must be open or closed"):
+        canonical_issue_payload(item)
+
+    # ... yet the live-snapshot reader must still surface its own boundary.
+    reader = LiveCurrentIssueSnapshotReader(
+        transport=ok_transport(state="merged"),
+        source_revision=SHA,
+        observed_at="2026-08-28T03:30:00Z",
+        lifecycle_stage=LifecycleStage.MERGED,
+    )
+    with pytest.raises(ValueError, match="issue state field is missing or unsupported"):
+        reader.read_current_issue(REPOSITORY, ISSUE_NUMBER)
 
 
 # -- single-claim lineage join -------------------------------------------------
