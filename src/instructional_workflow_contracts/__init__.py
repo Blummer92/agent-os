@@ -61,14 +61,6 @@ from .request_interpretation import (
     RequestInterpretation,
     validate_request_interpretation,
 )
-from .visual_generation_provenance import (
-    ASSOCIATION_STATES as VISUAL_GENERATION_ASSOCIATION_STATES,
-    GENERATION_HANDOFF_CONTRACT_ID,
-    RETURNED_IMAGE_BINDING_CONTRACT_ID,
-    bind_gap_to_image_intent,
-    bind_returned_image_intake,
-    project_routing_provenance,
-)
 
 __all__ = [
     "AuthorityEvidence",
@@ -81,7 +73,6 @@ __all__ = [
     "EXPERIMENT_EVIDENCE_VERSION",
     "FINGERPRINT_ALGORITHM",
     "FORBIDDEN_IMPORT_PREFIXES",
-    "GENERATION_HANDOFF_CONTRACT_ID",
     "IMAGE_INTENT_CONTRACT_ID",
     "IMPORTED_ASSET_CONTEXT_CONTRACT_ID",
     "MAX_BLOCKERS",
@@ -100,20 +91,15 @@ __all__ = [
     "REQUEST_ORIGINS",
     "REQUEST_RESOURCE_KINDS",
     "REQUEST_SYSTEMS",
-    "RETURNED_IMAGE_BINDING_CONTRACT_ID",
     "RequestInterpretation",
     "TOP_LEVEL_FIELDS",
-    "VISUAL_GENERATION_ASSOCIATION_STATES",
     "ValidatedRecord",
     "ValidationResult",
     "ValidationStatus",
     "assemble_gemini_manual_prompt",
-    "bind_gap_to_image_intent",
-    "bind_returned_image_intake",
     "canonical_json_bytes",
     "canonical_size",
     "freeze_json",
-    "project_routing_provenance",
     "resolve_status",
     "sha256_hex",
     "thaw_json",

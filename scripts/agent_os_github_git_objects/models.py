@@ -392,22 +392,60 @@ class ExpectedHeadBranchUpdateRequest:
 
 @dataclass(frozen=True, slots=True)
 class ExpectedHeadBranchUpdateResult:
-    status: ExpectedHeadBranchUpdateStatus
-    reason: str
     repository: str
     branch: str
     expected_head_sha: str
     proposed_head_sha: str
-    observed_head_sha: str | None
-    push_attempted: bool
-    push_succeeded: bool
+    admitted_main_sha: str
+    invocation_id: str
+    authorization_id: str
+    status: ExpectedHeadBranchUpdateStatus
+    reason: str
+    observed_head_before: str | None
+    observed_head_after: str | None
+    mutation_attempted: bool
     mutation_state: MutationState
-    retry_allowed: bool
-    force_with_lease_used: Literal[True] = field(default=True, init=False)
+    retry_allowed: Literal[False] = field(default=False, init=False)
+    unconditional_force_used: Literal[False] = field(default=False, init=False)
     merge_authorized: Literal[False] = field(default=False, init=False)
-    issue_mutation_authorized: Literal[False] = field(default=False, init=False)
+    protected_branch_authorized: Literal[False] = field(default=False, init=False)
     workflow_mutation_authorized: Literal[False] = field(default=False, init=False)
+    repository_setting_authorized: Literal[False] = field(default=False, init=False)
 
-    @property
-    def confirmed(self) -> bool:
-        return self.status is ExpectedHeadBranchUpdateStatus.CONFIRMED
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "repository", require_repository(self.repository))
+        object.__setattr__(self, "branch", require_branch(self.branch))
+        object.__setattr__(
+            self, "expected_head_sha",
+            require_sha40(self.expected_head_sha, "expected_head_sha"),
+        )
+        object.__setattr__(
+            self, "proposed_head_sha",
+            require_sha40(self.proposed_head_sha, "proposed_head_sha"),
+        )
+        object.__setattr__(
+            self, "admitted_main_sha",
+            require_sha40(self.admitted_main_sha, "admitted_main_sha"),
+        )
+
+        if not isinstance(self.status, ExpectedHeadBranchUpdateStatus):
+            raise TypeError("status must be ExpectedHeadBranchUpdateStatus")
+        if not isinstance(self.mutation_state, MutationState):
+            raise TypeError("mutation_state must be MutationState")
+        if type(self.mutation_attempted) is not bool:
+            raise TypeError("mutation_attempted must be bool")
+
+        for name in ("invocation_id", "authorization_id", "reason"):
+            value = getattr(self, name)
+            if (
+                not isinstance(value, str)
+                or not value
+                or len(value) > 256
+                or _CONTROL_RE.search(value)
+            ):
+                raise ValueError(f"{name} is malformed")
+
+        for name in ("observed_head_before", "observed_head_after"):
+            value = getattr(self, name)
+            if value is not None:
+                object.__setattr__(self, name, require_sha40(value, name))
