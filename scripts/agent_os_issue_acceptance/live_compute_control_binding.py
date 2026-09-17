@@ -283,8 +283,11 @@ class LiveCurrentIssueSnapshotReader:
         if not isinstance(item, dict):
             raise ValueError("live issue read returned no item despite an OK status")
 
-        revision = issue_source_revision(item)
-
+        # The live-snapshot reader owns its own raw-state boundary and must
+        # enforce it before deriving the canonical revision. #2535 hardened
+        # `issue_source_revision` to reject unsupported states too; deriving the
+        # revision first would let that shared validator preempt this contract
+        # and change the error a live-snapshot caller observes (#2549).
         raw_state = item.get("state")
         if raw_state == "open":
             issue_state = IssueState.OPEN
@@ -292,6 +295,8 @@ class LiveCurrentIssueSnapshotReader:
             issue_state = IssueState.CLOSED
         else:
             raise ValueError("issue state field is missing or unsupported")
+
+        revision = issue_source_revision(item)
 
         terminal_disposition = self.terminal_disposition_override
         if terminal_disposition is None:
