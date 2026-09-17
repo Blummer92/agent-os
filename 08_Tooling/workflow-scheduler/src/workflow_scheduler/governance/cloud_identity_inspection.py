@@ -7,14 +7,22 @@ import subprocess
 from typing import Callable, Sequence
 
 PROJECT = "agent-os-502614"
+PROJECT_NUMBER = "966859826758"
 ZONE = "us-central1-a"
 INSTANCE = "agent-os-test"
 TRANSPORT_PRINCIPAL = "agent-os-transport@agent-os-502614.iam.gserviceaccount.com"
+DEFAULT_COMPUTE_SERVICE_ACCOUNT = f"{PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 STOP_PERMISSION = "compute.instances.stop"
 TOKEN_CREATOR_ROLE = "roles/iam.serviceAccountTokenCreator"
 MAX_SERVICE_ACCOUNTS = 50
-_SA_EMAIL = re.compile(r"^[A-Za-z0-9._-]+@[A-Za-z0-9-]+\.iam\.gserviceaccount\.com$", re.ASCII)
+_USER_MANAGED_SA_EMAIL = re.compile(r"^[A-Za-z0-9._-]+@[A-Za-z0-9-]+\.iam\.gserviceaccount\.com$", re.ASCII)
 Run = Callable[..., subprocess.CompletedProcess[str]]
+
+
+def _valid_service_account_email(value: object) -> bool:
+    if type(value) is not str:
+        return False
+    return value == DEFAULT_COMPUTE_SERVICE_ACCOUNT or _USER_MANAGED_SA_EMAIL.fullmatch(value) is not None
 
 
 def _run_json(run: Run, argv: Sequence[str], reason: str) -> object:
@@ -52,7 +60,7 @@ def _service_accounts(value: object) -> tuple[list[dict[str, object]], str | Non
         email = item.get("email")
         display_name = item.get("displayName", "")
         disabled = item.get("disabled", False)
-        if type(email) is not str or _SA_EMAIL.fullmatch(email) is None:
+        if not _valid_service_account_email(email):
             return [], "service-account-inventory-malformed"
         if type(display_name) is not str or type(disabled) is not bool:
             return [], "service-account-inventory-malformed"
@@ -105,15 +113,18 @@ def _stop_permission_base() -> dict[str, object]:
 
 
 def _effective_stop_permission(run: Run) -> dict[str, object]:
-    """Prove the fixed transport principal's stop permission without mutation."""
+    """Prove the already-authenticated transport caller's stop permission without mutation."""
     evidence = _stop_permission_base()
     member = _runtime_member(TRANSPORT_PRINCIPAL)
     try:
+        # The governed workflow is already authenticated as TRANSPORT_PRINCIPAL through
+        # WIF. test-iam-permissions evaluates the current caller, so self-impersonation
+        # would add an unrelated iam.serviceAccounts.getAccessToken dependency and can
+        # turn a valid permission read into a false unavailable result.
         allowed = _run_json(run, (
             "gcloud", "compute", "instances", "test-iam-permissions", INSTANCE,
             "--project", PROJECT, "--zone", ZONE,
             "--permissions", STOP_PERMISSION,
-            "--impersonate-service-account", TRANSPORT_PRINCIPAL,
             "--format=json(permissions)",
         ), "stop-permission-readback-failed")
         if type(allowed) is not dict or type(allowed.get("permissions", [])) is not list:
@@ -216,7 +227,7 @@ def collect_cloud_identity(run: Run) -> dict[str, object]:
             return base
         runtime_email = attached[0].get("email")
         scopes = attached[0].get("scopes", [])
-        if type(runtime_email) is not str or _SA_EMAIL.fullmatch(runtime_email) is None:
+        if not _valid_service_account_email(runtime_email):
             raise ValueError("instance-service-account-evidence-malformed")
         if type(scopes) is not list or any(type(scope) is not str for scope in scopes):
             raise ValueError("instance-service-account-evidence-malformed")
@@ -257,4 +268,4 @@ def collect_cloud_identity(run: Run) -> dict[str, object]:
         return base
 
 
-__all__ = ["INSTANCE", "MAX_SERVICE_ACCOUNTS", "PROJECT", "STOP_PERMISSION", "TOKEN_CREATOR_ROLE", "TRANSPORT_PRINCIPAL", "ZONE", "collect_cloud_identity"]
+__all__ = ["DEFAULT_COMPUTE_SERVICE_ACCOUNT", "INSTANCE", "MAX_SERVICE_ACCOUNTS", "PROJECT", "PROJECT_NUMBER", "STOP_PERMISSION", "TOKEN_CREATOR_ROLE", "TRANSPORT_PRINCIPAL", "ZONE", "collect_cloud_identity"]
