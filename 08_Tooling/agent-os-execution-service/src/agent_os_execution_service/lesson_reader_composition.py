@@ -1,15 +1,23 @@
-"""Production composition for bounded read-only Lessons Learned retrieval (#2141).
+"""Production composition for bounded read-only Lessons Learned retrieval (#2141 / #2331).
 
 This module binds the existing Agent Memory CKR11 read-executor seam to the
-Workflow Scheduler's canonical ``NotionReadOnlyAdapter``.  It creates no Notion
+Workflow Scheduler's canonical ``NotionReadOnlyAdapter``. It creates no Notion
 client, credential path, write capability, selector, or persistence layer.
 ``NOTION_TOKEN`` remains owned by the existing adapter; this composition only
 resolves the non-secret canonical data-source identity.
+
+#2331 requires one additional distinction: absence of the source binding on the
+*current execution surface* is route evidence, not proof that the canonical
+Lessons Learned corpus is unavailable. ``resolve_lesson_read_route`` therefore
+returns a small non-authorizing route projection while ``build_lesson_read_executor``
+remains the compatibility wrapper used by existing callers.
 """
 
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Callable, Mapping
 
 from workflow_scheduler.adapters.notion_readonly_adapter import NotionReadOnlyAdapter
@@ -24,18 +32,55 @@ class LessonReadUnavailableError(RuntimeError):
     """The existing read-only Notion surface could not return lesson rows."""
 
 
-def build_lesson_read_executor(
+class LessonReadRouteStatus(str, Enum):
+    """Finite composition outcomes before CKR6 performs provider retrieval."""
+
+    CONFIGURED_CANONICAL_READER = "configured-canonical-reader"
+    CURRENT_SURFACE_UNBOUND = "current-surface-unbound"
+
+
+@dataclass(frozen=True, slots=True)
+class LessonReadRouteResolution:
+    """Non-authorizing evidence about the canonical reader on this surface.
+
+    ``CURRENT_SURFACE_UNBOUND`` deliberately does not mean that the canonical
+    source is unavailable. It means only that this process cannot construct the
+    already-canonical reader because its non-secret source identity is absent.
+    """
+
+    status: LessonReadRouteStatus
+    execute_read: ReadExecutor | None
+    reason_code: str
+    canonical_source_unavailable: bool = False
+    side_effects_performed: bool = False
+
+    def __post_init__(self) -> None:
+        if type(self.status) is not LessonReadRouteStatus:
+            raise TypeError("status must be an exact LessonReadRouteStatus")
+        if self.execute_read is not None and not callable(self.execute_read):
+            raise TypeError("execute_read must be callable or None")
+        if type(self.reason_code) is not str or not self.reason_code:
+            raise ValueError("reason_code must be non-empty")
+        if type(self.canonical_source_unavailable) is not bool:
+            raise TypeError("canonical_source_unavailable must be an exact boolean")
+        if type(self.side_effects_performed) is not bool:
+            raise TypeError("side_effects_performed must be an exact boolean")
+        if self.canonical_source_unavailable:
+            raise ValueError("composition cannot prove canonical source unavailability")
+        if self.side_effects_performed:
+            raise ValueError("route resolution must perform no side effects")
+        if self.status is LessonReadRouteStatus.CONFIGURED_CANONICAL_READER and self.execute_read is None:
+            raise ValueError("configured canonical reader requires execute_read")
+        if self.status is LessonReadRouteStatus.CURRENT_SURFACE_UNBOUND and self.execute_read is not None:
+            raise ValueError("unbound current surface cannot expose execute_read")
+
+
+def resolve_lesson_read_route(
     *,
     data_source_id: str | None = None,
     adapter: NotionReadOnlyAdapter | None = None,
-) -> ReadExecutor | None:
-    """Bind CKR11's read seam to the canonical Scheduler Notion adapter.
-
-    A missing data-source identity is an unavailable read surface, represented by
-    ``None`` so the existing CKR6 safe-fallback path remains authoritative.
-    Tests may inject an adapter; production reuses the adapter's existing
-    ``NOTION_TOKEN`` environment configuration.
-    """
+) -> LessonReadRouteResolution:
+    """Resolve the canonical reader without conflating local binding and source state."""
 
     resolved_data_source_id = (
         data_source_id
@@ -43,7 +88,11 @@ def build_lesson_read_executor(
         else os.environ.get(LESSONS_LEARNED_DATA_SOURCE_ENV)
     )
     if not resolved_data_source_id or not resolved_data_source_id.strip():
-        return None
+        return LessonReadRouteResolution(
+            status=LessonReadRouteStatus.CURRENT_SURFACE_UNBOUND,
+            execute_read=None,
+            reason_code="connector-surface-unavailable",
+        )
 
     notion = adapter or NotionReadOnlyAdapter()
     source_id = resolved_data_source_id.strip()
@@ -77,4 +126,31 @@ def build_lesson_read_executor(
             raise LessonReadUnavailableError("Notion lesson read returned malformed output")
         return output
 
-    return execute_read
+    return LessonReadRouteResolution(
+        status=LessonReadRouteStatus.CONFIGURED_CANONICAL_READER,
+        execute_read=execute_read,
+        reason_code="configured-canonical-reader",
+    )
+
+
+def build_lesson_read_executor(
+    *,
+    data_source_id: str | None = None,
+    adapter: NotionReadOnlyAdapter | None = None,
+) -> ReadExecutor | None:
+    """Compatibility wrapper returning only the canonical CKR11 read executor."""
+
+    return resolve_lesson_read_route(
+        data_source_id=data_source_id,
+        adapter=adapter,
+    ).execute_read
+
+
+__all__ = [
+    "LESSONS_LEARNED_DATA_SOURCE_ENV",
+    "LessonReadRouteResolution",
+    "LessonReadRouteStatus",
+    "LessonReadUnavailableError",
+    "build_lesson_read_executor",
+    "resolve_lesson_read_route",
+]
