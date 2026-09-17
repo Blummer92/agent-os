@@ -113,12 +113,15 @@ def _stop_permission_base() -> dict[str, object]:
 
 
 def _effective_stop_permission(run: Run) -> dict[str, object]:
-    """Prove the already-authenticated transport caller's stop permission without mutation."""
     evidence = _stop_permission_base()
     member = _runtime_member(TRANSPORT_PRINCIPAL)
     try:
+        # gcloud does not expose a stable instances test-iam-permissions command
+        # on every supported surface. Use the documented Compute Engine REST
+        # method through the authenticated gcloud credential instead. This is
+        # still fixed-resource, read-only, and evaluates the current caller.
         allowed = _run_json(run, (
-            "gcloud", "compute", "instances", "test-iam-permissions", INSTANCE,
+            "gcloud", "beta", "compute", "instances", "test-iam-permissions", INSTANCE,
             "--project", PROJECT, "--zone", ZONE,
             "--permissions", STOP_PERMISSION,
             "--format=json(permissions)",
@@ -193,7 +196,6 @@ def _effective_stop_permission(run: Run) -> dict[str, object]:
 
 
 def collect_cloud_identity(run: Run) -> dict[str, object]:
-    """Collect fixed, sanitized, read-only GCP identity facts."""
     base: dict[str, object] = {
         "schema_version": "1.0",
         "status": "needs-decision",
@@ -211,10 +213,17 @@ def collect_cloud_identity(run: Run) -> dict[str, object]:
         "external_write_performed": False,
     }
     try:
+        # Ask gcloud for the field value rather than a projected JSON object.
+        # The live surface can serialize --format=json(serviceAccounts) as a
+        # projection object shape that is not stable across gcloud versions.
         instance = _run_json(run, (
             "gcloud", "compute", "instances", "describe", INSTANCE,
-            "--project", PROJECT, "--zone", ZONE, "--format=json(serviceAccounts)",
+            "--project", PROJECT, "--zone", ZONE,
+            "--format=json",
         ), "instance-service-account-read-failed")
+        if type(instance) is not dict:
+            base["reason_codes"] = ["instance-service-account-projection-malformed"]
+            return base
         attached, shape_error = _instance_service_accounts(instance)
         if shape_error is not None:
             base["reason_codes"] = [shape_error]
