@@ -1,4 +1,4 @@
-"""MCP protocol binding for the bounded Agent OS ChatGPT facade (#1966 / #1988 / #2363 / #2487)."""
+"""MCP protocol binding for the bounded Agent OS ChatGPT facade (#1966 / #1988 / #2363 / #2487 / #2331)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from mcp.server import MCPServer
 from .bulk_repair_facade import classify_bulk_repair_continuation
 from .connected_issue_creation_facade import plan_connected_issue_creation_for_host
 from .issue_start_lesson_preflight import activate_issue_start_lesson_preflight
-from .lesson_reader_composition import build_lesson_read_executor
+from .lesson_reader_composition import resolve_lesson_read_route
 from .mcp_facade import (
     activate_agent_os_failed_repair,
     admit_agent_os_failed_repair,
@@ -17,6 +17,32 @@ from .mcp_facade import (
 )
 
 mcp = MCPServer("Agent OS")
+
+
+def _lesson_route(lesson_rows: list[dict[str, object]] | None):
+    if lesson_rows is not None:
+        return (
+            lambda _query: {"results": lesson_rows},
+            "diagnostic-override",
+            "diagnostic-lesson-rows",
+            False,
+        )
+    route = resolve_lesson_read_route()
+    return (
+        route.execute_read,
+        route.status.value,
+        route.reason_code,
+        route.canonical_source_unavailable,
+    )
+
+
+def _with_lesson_route(result: dict[str, object], route_status: str, reason_code: str, canonical_source_unavailable: bool) -> dict[str, object]:
+    return {
+        **result,
+        "lesson_read_route_status": route_status,
+        "lesson_read_route_reason_code": reason_code,
+        "canonical_lessons_source_unavailable": canonical_source_unavailable,
+    }
 
 
 @mcp.tool()
@@ -33,12 +59,8 @@ def plan_agent_os_continuation_tool(repository: str, issue_number: int, canonica
 @mcp.tool()
 def activate_agent_os_issue_start_lessons_tool(repository: str, issue_number: int, task_reference: str, ecosystem_hints: tuple[str, ...] = (), language_hints: tuple[str, ...] = (), library_hints: tuple[str, ...] = (), capability_keywords: tuple[str, ...] = (), target_path_hints: tuple[str, ...] = (), canonical_rule_refs: tuple[str, ...] = (), known_knowledge_refs: tuple[str, ...] = (), specialized_knowledge_required: bool | None = None, lesson_rows: list[dict[str, object]] | None = None) -> dict[str, object]:
     """Resolve the mandatory initial CKR6 gate before substantial reasoning."""
-    execute_read = (
-        (lambda _query: {"results": lesson_rows})
-        if lesson_rows is not None
-        else build_lesson_read_executor()
-    )
-    return activate_issue_start_lesson_preflight(
+    execute_read, route_status, reason_code, source_unavailable = _lesson_route(lesson_rows)
+    result = activate_issue_start_lesson_preflight(
         repository=repository,
         issue_number=issue_number,
         task_reference=task_reference,
@@ -52,6 +74,7 @@ def activate_agent_os_issue_start_lessons_tool(repository: str, issue_number: in
         specialized_knowledge_required=specialized_knowledge_required,
         execute_read=execute_read,
     )
+    return _with_lesson_route(result, route_status, reason_code, source_unavailable)
 
 
 @mcp.tool()
@@ -59,12 +82,9 @@ def activate_agent_os_failed_repair_tool(repository: str, issue_number: int, att
     # ``lesson_rows`` is an explicit test/diagnostic override. Production calls
     # bind CKR11 to the existing read-only Scheduler Notion adapter so the
     # bounded query produced by the lesson bridge is actually executed.
-    execute_read = (
-        (lambda _query: {"results": lesson_rows})
-        if lesson_rows is not None
-        else build_lesson_read_executor()
-    )
-    return activate_agent_os_failed_repair(repository=repository, issue_number=issue_number, attempt_id=attempt_id, failed_hypothesis=failed_hypothesis, result_summary=result_summary, task_reference=task_reference, ecosystem_hints=ecosystem_hints, language_hints=language_hints, library_hints=library_hints, capability_keywords=capability_keywords, target_path_hints=target_path_hints, canonical_rule_refs=canonical_rule_refs, known_knowledge_refs=known_knowledge_refs, specialized_knowledge_required=specialized_knowledge_required, execute_read=execute_read, repair_context=repair_context)
+    execute_read, route_status, reason_code, source_unavailable = _lesson_route(lesson_rows)
+    result = activate_agent_os_failed_repair(repository=repository, issue_number=issue_number, attempt_id=attempt_id, failed_hypothesis=failed_hypothesis, result_summary=result_summary, task_reference=task_reference, ecosystem_hints=ecosystem_hints, language_hints=language_hints, library_hints=library_hints, capability_keywords=capability_keywords, target_path_hints=target_path_hints, canonical_rule_refs=canonical_rule_refs, known_knowledge_refs=known_knowledge_refs, specialized_knowledge_required=specialized_knowledge_required, execute_read=execute_read, repair_context=repair_context)
+    return _with_lesson_route(result, route_status, reason_code, source_unavailable)
 
 
 @mcp.tool()

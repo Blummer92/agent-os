@@ -4,6 +4,7 @@ import inspect
 import re
 
 from agent_os_execution_service import mcp_server
+from agent_os_execution_service.lesson_reader_composition import LESSONS_LEARNED_DATA_SOURCE_ENV
 
 
 # Exact bounded MCP surface. A bare count drifts silently when a governed tool is
@@ -47,3 +48,26 @@ def test_mcp_server_contains_no_execution_or_store_primitives() -> None:
     )
     for token in forbidden:
         assert token not in source
+
+
+def test_unbound_current_surface_is_projected_without_claiming_source_unavailable(monkeypatch) -> None:
+    monkeypatch.delenv(LESSONS_LEARNED_DATA_SOURCE_ENV, raising=False)
+
+    execute_read, status, reason, source_unavailable = mcp_server._lesson_route(None)
+
+    assert execute_read is None
+    assert status == "current-surface-unbound"
+    assert reason == "connector-surface-unavailable"
+    assert source_unavailable is False
+
+
+def test_diagnostic_rows_do_not_depend_on_current_surface_binding(monkeypatch) -> None:
+    monkeypatch.delenv(LESSONS_LEARNED_DATA_SOURCE_ENV, raising=False)
+
+    execute_read, status, reason, source_unavailable = mcp_server._lesson_route([{"id": "fixture"}])
+
+    assert execute_read is not None
+    assert execute_read({}) == {"results": [{"id": "fixture"}]}
+    assert status == "diagnostic-override"
+    assert reason == "diagnostic-lesson-rows"
+    assert source_unavailable is False
