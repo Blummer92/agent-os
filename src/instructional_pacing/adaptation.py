@@ -122,13 +122,6 @@ def validate_adaptation_candidates(
                 function_name = validate_stable_id(item["function_name"], f"{name}.function_name")
                 if function_name not in function_protection:
                     raise ContractValidationError("handoff-invalid", "evidence-format candidate references an unknown function")
-                from_format = validate_stable_id(item["from_format"], f"{name}.from_format")
-                to_format = validate_stable_id(item["to_format"], f"{name}.to_format")
-                if from_format == to_format:
-                    raise ContractValidationError("handoff-invalid", "evidence-format change must change the format")
-                if function_name in seen_format_functions:
-                    raise ContractValidationError("handoff-duplicate", "only one evidence-format change is allowed per function")
-                seen_format_functions.add(function_name)
                 flags = (
                     "preserves_objective",
                     "preserves_success_criteria",
@@ -142,6 +135,18 @@ def validate_adaptation_candidates(
                             "handoff-invalid",
                             "evidence-format change must preserve objective, success criteria, and accessibility",
                         )
+                from_format = validate_stable_id(item["from_format"], f"{name}.from_format")
+                to_format = validate_stable_id(item["to_format"], f"{name}.to_format")
+                if from_format == to_format:
+                    raise ContractValidationError("handoff-invalid", "evidence-format change must change the format")
+                # One function gets one transition. Several transitions on one
+                # function cannot be ordered, so a circular pair such as
+                # written->verbal plus verbal->written has no truthful outcome.
+                if function_name in seen_format_functions:
+                    raise ContractValidationError(
+                        "handoff-invalid", "multiple evidence-format transitions for one function are ambiguous"
+                    )
+                seen_format_functions.add(function_name)
                 normalized = {
                     "id": candidate_id,
                     "function_name": function_name,
