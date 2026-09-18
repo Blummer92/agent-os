@@ -54,6 +54,15 @@ def evaluate_duplicate_review_admission(
     fields = load_issue_form_fields(issue_form_path)
     metadata = parse_issue_form_body(issue_body, fields)
     review = tuple(metadata.get("prior-scope-review", ()))
+    if type(distinct_repair_seam) is not bool:
+        return DuplicateReviewAdmission(
+            DuplicateReviewDisposition.MANUAL_REVIEW,
+            canonical_issue_number,
+            review,
+            False,
+            "manual-review-duplicate-admission-required",
+            ("duplicate-review.distinct-repair-seam-invalid",),
+        )
     if not review:
         return DuplicateReviewAdmission(
             DuplicateReviewDisposition.MANUAL_REVIEW,
