@@ -59,6 +59,11 @@ def evaluate_lesson_pacing(value: object) -> ValidationResult:
             work_mode=packet.get("work_mode"),
         )
         available = float(packet["period_minutes"]) - float(packet["operational_minutes"])
+        operational_savings = sum(
+            float(item["minutes_saved"])
+            for item in (packet.get("adaptations") or {}).get("operational_friction", [])
+        )
+        available += min(float(packet["operational_minutes"]), operational_savings)
         declared = _declared_range(packet["instructional_functions"])
         timing = _calibrated_range(declared, comparison["included"])
         classification, routing = _classification(timing, available, packet["continuation_allowed"])
@@ -95,7 +100,12 @@ def evaluate_lesson_pacing(value: object) -> ValidationResult:
             "manual_review_required": False,
         }
         if classification != "insufficient-evidence":
-            adaptation = plan_lesson_adaptation(packet, timing, available)
+            adaptation_packet = packet
+            if operational_savings:
+                adaptation_packet = dict(packet)
+                adaptation_packet["adaptations"] = dict(packet.get("adaptations") or {})
+                adaptation_packet["adaptations"]["operational_friction"] = []
+            adaptation = plan_lesson_adaptation(adaptation_packet, timing, available)
             classification, routing = _classification(
                 adaptation["adapted_range"], available, packet["continuation_allowed"]
             )
