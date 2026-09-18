@@ -66,6 +66,8 @@ def evaluate_lesson_pacing(value: object) -> ValidationResult:
         reasons: list[str] = []
         if comparison["included_count"] < 2:
             reasons.append("lp-evidence-comparable-runs-insufficient")
+        if comparison["included_count"] == 0:
+            classification, routing = "insufficient-evidence", "hold"
         if packet["privacy_disposition"] != "eligible":
             reasons.append("lp-evidence-privacy-ineligible")
             classification, routing = "insufficient-evidence", "hold"
