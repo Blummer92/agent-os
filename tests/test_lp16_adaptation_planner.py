@@ -186,3 +186,16 @@ def test_adaptation_is_deterministic_and_non_authorizing() -> None:
     assert first == second
     for key, value in NON_AUTHORITY_FIELDS.items():
         assert first[key] is value
+
+
+def test_split_plan_reconciles_with_adapted_expected_duration() -> None:
+    packet = _packet()
+    packet["period_minutes"] = 35
+    packet["operational_minutes"] = 5
+    packet["adaptations"] = {
+        "extraneous_material": [{"id": "save-five", "minutes_saved": 5}]
+    }
+    payload = _payload(packet)
+    split = payload["split_plan"]
+    assert split is not None
+    assert split["first_period_expected_minutes"] + split["continuation_expected_minutes"] == payload["adapted_range"]["expected"]
