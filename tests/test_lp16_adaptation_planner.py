@@ -186,3 +186,119 @@ def test_adaptation_is_deterministic_and_non_authorizing() -> None:
     assert first == second
     for key, value in NON_AUTHORITY_FIELDS.items():
         assert first[key] is value
+
+
+def _split_packet(**adaptations) -> dict:
+    """Three 30-minute functions in a 50-minute period with 5 operational minutes."""
+    packet = _packet()
+    packet["period_minutes"] = 50
+    packet["operational_minutes"] = 5
+    packet["instructional_functions"] = [
+        {"name": name, "protected": False, "lower_minutes": 5, "expected_minutes": 30, "upper_minutes": 30}
+        for name in ("model", "practice", "closing")
+    ]
+    # Comparable runs whose median active time equals this packet's declared
+    # 90-minute expected sum, so calibration does not shift the split arithmetic.
+    packet["prior_runs"] = [
+        {"run_id": f"run/{index}", "objective_ref": "objective/composition", "work_mode": "camera", "quality": "usable", "active_minutes": 90, "elapsed_minutes": 95, "context_ref": f"context/{index}"}
+        for index in (1, 2)
+    ]
+    if adaptations:
+        packet["adaptations"] = adaptations
+    return packet
+
+
+def test_split_point_follows_savings_taken_before_it() -> None:
+    """20 minutes saved on `model` leaves room for model+practice in period one."""
+    payload = _payload(
+        _split_packet(
+            repetitions=[{"id": "model-repeat", "function_name": "model", "minutes_saved": 20, "preserves_function": True}]
+        )
+    )
+    split = payload["split_plan"]
+    assert split["split_after"] == "practice"
+    assert split["first_period_expected_minutes"] == 40.0
+    assert split["continuation_expected_minutes"] == 30.0
+    assert split["first_period_expected_minutes"] + split["continuation_expected_minutes"] == payload["adapted_range"]["expected"]
+
+
+def test_split_point_follows_savings_taken_after_it() -> None:
+    """The same totals with the saving on `closing` must name a different split."""
+    payload = _payload(
+        _split_packet(
+            repetitions=[{"id": "closing-repeat", "function_name": "closing", "minutes_saved": 20, "preserves_function": True}]
+        )
+    )
+    split = payload["split_plan"]
+    assert split["split_after"] == "model"
+    assert split["first_period_expected_minutes"] == 30.0
+    assert split["continuation_expected_minutes"] == 40.0
+
+
+def test_the_two_savings_positions_do_not_produce_the_same_split_plan() -> None:
+    before = _payload(
+        _split_packet(
+            repetitions=[{"id": "model-repeat", "function_name": "model", "minutes_saved": 20, "preserves_function": True}]
+        )
+    )
+    after = _payload(
+        _split_packet(
+            repetitions=[{"id": "closing-repeat", "function_name": "closing", "minutes_saved": 20, "preserves_function": True}]
+        )
+    )
+    assert before["adapted_range"]["expected"] == after["adapted_range"]["expected"]
+    assert before["split_plan"] != after["split_plan"]
+
+
+def test_unattributable_savings_leave_the_split_unresolved_instead_of_guessing() -> None:
+    """extraneous_material carries no function_name, so no truthful split exists."""
+    payload = _payload(_split_packet(extraneous_material=[{"id": "extra-demo", "minutes_saved": 20}]))
+    assert payload["split_plan"] is None
+    assert payload["advisory_assessment_outcome"] == "not-feasible"
+    assert "lp-pacing-continuation-unresolved" in payload["unresolved_uncertainties"]
+
+
+def test_split_at_an_exact_function_boundary() -> None:
+    packet = _split_packet()
+    packet["period_minutes"] = 65
+    payload = _payload(packet)
+    split = payload["split_plan"]
+    assert split["split_after"] == "practice"
+    assert split["first_period_expected_minutes"] == 60.0
+    assert split["continuation_expected_minutes"] == 30.0
+
+
+def test_split_respects_a_protected_function_that_cannot_be_deferred() -> None:
+    packet = _split_packet(
+        repetitions=[{"id": "model-repeat", "function_name": "model", "minutes_saved": 20, "preserves_function": True}]
+    )
+    packet["instructional_functions"][0]["protected"] = True
+    payload = _payload(packet)
+    assert payload["split_plan"]["split_after"] == "practice"
+    assert payload["preserved_functions"] == ["model"]
+
+
+def test_several_attributed_adaptations_still_yield_one_truthful_split() -> None:
+    payload = _payload(
+        _split_packet(
+            repetitions=[{"id": "model-repeat", "function_name": "model", "minutes_saved": 15, "preserves_function": True}],
+            evidence_formats=[
+                {
+                    "id": "closing-format",
+                    "function_name": "closing",
+                    "minutes_saved": 10,
+                    "from_format": "uploaded-reflection",
+                    "to_format": "verbal-check",
+                    "preserves_objective": True,
+                    "preserves_success_criteria": True,
+                    "preserves_accessibility": True,
+                }
+            ],
+        )
+    )
+    split = payload["split_plan"]
+    # model 15 + practice 30 = 45 fits the 45-minute period; closing 20 continues.
+    assert split["split_after"] == "practice"
+    assert split["first_period_expected_minutes"] == 45.0
+    assert split["continuation_expected_minutes"] == 20.0
+    assert split["first_period_expected_minutes"] + split["continuation_expected_minutes"] == payload["adapted_range"]["expected"]
