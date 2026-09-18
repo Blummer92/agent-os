@@ -24,7 +24,9 @@ def test_exact_authorization_does_not_require_second_admin_executor() -> None:
     assert "authority requirement, not a requirement to use a second execution identity or admin framework" in write
     assert "does not require a second execution identity or a generic admin-capable surface" in excluded
     assert "does not by itself require a second execution identity" in protected
-    assert "separately authorized does not imply a second executor" in safe
+    # The lane document backticks the term, matching how it marks `continue`,
+    # `next step` and `keep going` in the same paragraph.
+    assert "`separately authorized` does not imply a second executor" in safe
     assert "do not require or invent a second admin agent/surface solely because the target is protected" in github
 
 
