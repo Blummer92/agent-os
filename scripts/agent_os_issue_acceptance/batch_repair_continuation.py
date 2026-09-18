@@ -221,9 +221,18 @@ def evaluate_bulk_repair_continuation(
     terminal_shared_blocker = bool(shared) and not shared_repair_available
     remaining = tuple(number for number in requested if number not in set(visited))
 
+    # A candidate parked on a repairable shared blocker is reconciled but not
+    # delivered: the batch still owes it the shared repair and a revalidation
+    # pass, so it must not count toward the requested delivery total. Without
+    # this, `delivered_count == requested_count` short-circuits
+    # `evaluate_finite_batch_admission` to `completion_admissible=True` before
+    # `population_exhausted` is ever consulted, which would report a batch whose
+    # next action is still `advance-shared-repair` as complete.
+    shared_pending = shared_pull_requests if repairable_shared_blocker else ()
+
     admission = evaluate_finite_batch_admission(
         requested_count=len(requested),
-        delivered_count=len(visited),
+        delivered_count=len(visited) - len(shared_pending),
         reconciled_candidate_count=len(visited),
         population_exhausted=not remaining and not repairable_shared_blocker,
         shared_blocker=terminal_shared_blocker,

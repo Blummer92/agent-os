@@ -199,6 +199,13 @@ def test_five_pr_shared_main_health_blocker_routes_one_canonical_repair():
     assert result.next_action == "advance-shared-repair"
     assert result.finite_admission.completion_admissible is False
     assert result.finite_admission.shared_blocker is False
+    # The candidates are reconciled but not delivered. Counting them as
+    # delivered makes `delivered_count == requested_count` short-circuit the
+    # finite-batch admission to `completion_admissible=True` before
+    # `population_exhausted` is consulted, reporting a batch that still owes
+    # `advance-shared-repair` as complete.
+    assert result.finite_admission.reconciled_candidate_count == len(affected)
+    assert result.finite_admission.delivered_count == 0
 
 
 def test_completed_shared_repair_requires_all_affected_prs_to_be_reacquired():
