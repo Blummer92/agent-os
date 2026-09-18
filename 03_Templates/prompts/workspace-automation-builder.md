@@ -1,7 +1,18 @@
 # Workspace Automation Builder Prompt
 
-Use this prompt when asking the Google Workspace Automation Engineer to design or
-build a Workspace automation safely.
+Use this prompt when asking ChatGPT to design or build a Google Workspace
+automation through the Workspace Automation Builder capability workflow. This
+capability is not an executable agent.
+
+Repository implementation routes to GitHub Service Agent with applicable
+Workspace/language standards. ChatGPT Orchestrator classifies cross-system and
+external-operation intent. Live Workspace writes remain separately exact-target
+authorization-gated.
+
+Legacy names such as `Google Workspace Automation Engineer`, `Workspace
+Automation Developer`, and `Workspace Automation Builder` are compatibility
+input only and must resolve through
+`04_Registry/legacy-agent-alias-registry.md`.
 
 ```md
 @GitHub
@@ -18,9 +29,12 @@ Start from:
 3. 00_Governance/write-authorization-policy.md
 4. 04_Registry/agent-inheritance-registry.md
 5. 04_Registry/responsibility-matrix.md
-6. 02_Agent_Overlays/google-workspace-automation-engineer.md
-7. 01_Shared_Standards/google-workspace/workspace-automation-builder.md
-8. any additional shared standards referenced by the overlay
+6. 04_Registry/legacy-agent-alias-registry.md
+7. 02_Agent_Overlays/chatgpt-orchestrator.md
+8. 02_Agent_Overlays/github-service-agent.md
+9. 01_Shared_Standards/google-workspace/workspace-automation-builder.md
+10. 01_Shared_Standards/google-workspace/workspace-write-authorization.md
+11. any additional shared standards referenced by the selected route
 
 Automation request
 
@@ -34,6 +48,17 @@ Choose one:
 - Build a new project
 - Debug or optimize
 - Evaluate implementation approach
+- Plan a separately authorized external Workspace operation
+
+Routing
+
+- Repository patch/build/debug work: GitHub Service Agent plus applicable
+  Workspace/language standards.
+- Cross-system, source-of-truth, and external-operation routing: ChatGPT
+  Orchestrator.
+- Independent validation evidence: QA / Test Agent where required.
+- Live Workspace writes: separately authorize the exact target and operation
+  under workspace-write-authorization.md before execution.
 
 Before building, identify:
 
@@ -42,7 +67,8 @@ Before building, identify:
 3. safe write location
 4. owner or approval path
 5. smallest working version
-6. stop condition
+6. exact external operations, if any
+7. stop condition
 
 Known targets
 
@@ -64,11 +90,14 @@ If these files apply, inspect them before implementation:
 
 Boundaries
 
-- Do not write to live Workspace systems unless explicitly approved.
+- Do not write to live Workspace systems unless the exact target and operation
+  are explicitly authorized.
 - Do not create triggers, change sharing, or deploy Apps Script without approval.
 - Prefer read-only discovery, dry-run design, mocks, and local tests first.
 - Preserve source-of-truth and ownership boundaries.
 - Do not store secrets in code, docs, samples, memory, Notion, or logs.
+- Do not treat a legacy Workspace agent name as current execution ownership or
+  write authority.
 
 Required output
 
@@ -86,4 +115,4 @@ Required output
 
 ## Version
 
-0.1.1
+0.1.2
