@@ -39,7 +39,6 @@ class DefectObservation:
     failure_signature: str
     expected_behavior: str
     observed_behavior: str
-    evidence_signature: str
     evidence_sufficient: bool
     original_mission_actionable: bool
 
@@ -63,20 +62,53 @@ class SelfDefectDecision:
     reason_codes: tuple[str, ...]
 
 
-def build_defect_identity(observation: DefectObservation) -> str:
-    """Return a stable semantic identity without inventing recovery state."""
-    payload = {
-        "domain": "agent-os.self-defect.v1",
-        "repository": _required(observation.repository, "repository"),
-        "governing_contract": _required(
-            observation.governing_contract, "governing_contract"
-        ),
-        "failure_signature": _required(
-            observation.failure_signature, "failure_signature"
-        ),
-    }
+def _digest(payload: dict[str, str]) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def build_defect_identity(observation: DefectObservation) -> str:
+    """Return a stable semantic identity without inventing recovery state."""
+    return _digest(
+        {
+            "domain": "agent-os.self-defect.v1",
+            "repository": _required(observation.repository, "repository"),
+            "governing_contract": _required(
+                observation.governing_contract, "governing_contract"
+            ),
+            "failure_signature": _required(
+                observation.failure_signature, "failure_signature"
+            ),
+        }
+    )
+
+
+def build_evidence_signature(observation: DefectObservation) -> str:
+    """Derive the material-evidence identity from the observation itself.
+
+    The bounded reproduction the observation already carries is the evidence, so
+    the identity is a digest of it rather than a caller-supplied label. Equivalent
+    evidence therefore cannot be re-written under a new label, and genuinely new
+    evidence cannot be suppressed under an old one. The mutation target is
+    deliberately excluded so ``issue:create`` converges with the canonical issue
+    read back afterwards.
+    """
+    return _digest(
+        {
+            "domain": "agent-os.self-defect.evidence.v1",
+            "expected_behavior": _normalized_evidence(
+                observation.expected_behavior, "expected_behavior"
+            ),
+            "observed_behavior": _normalized_evidence(
+                observation.observed_behavior, "observed_behavior"
+            ),
+        }
+    )
+
+
+def _normalized_evidence(value: str, field: str) -> str:
+    """Collapse insignificant whitespace so re-wrapped evidence stays equivalent."""
+    return " ".join(_required(value, field).split())
 
 
 def decide_self_defect(
@@ -154,7 +186,7 @@ def decide_self_defect(
         )
 
     target_number = issue_numbers[0] if issue_numbers else None
-    mutation_identity = _mutation_identity(identity, observation.evidence_signature)
+    mutation_identity = _mutation_identity(identity, build_evidence_signature(observation))
     if mutation_identity in prior_mutation_identities:
         return SelfDefectDecision(
             classification=classification,
@@ -191,13 +223,11 @@ def decide_self_defect(
 
 def mutation_identity_for(
     decision: SelfDefectDecision,
-    evidence_signature: str | None = None,
+    observation: DefectObservation,
 ) -> str | None:
     if decision.defect_identity is None:
         return None
-    if evidence_signature is None:
-        raise ValueError("evidence_signature is required for defect mutation identity")
-    return _mutation_identity(decision.defect_identity, _required(evidence_signature, "evidence_signature"))
+    return _mutation_identity(decision.defect_identity, build_evidence_signature(observation))
 
 
 def _decision(
@@ -233,7 +263,6 @@ def _validate_observation(observation: DefectObservation) -> None:
     _required(observation.failure_signature, "failure_signature")
     _required(observation.expected_behavior, "expected_behavior")
     _required(observation.observed_behavior, "observed_behavior")
-    _required(observation.evidence_signature, "evidence_signature")
     if type(observation.evidence_sufficient) is not bool:
         raise ValueError("evidence_sufficient must be a boolean")
     if type(observation.original_mission_actionable) is not bool:

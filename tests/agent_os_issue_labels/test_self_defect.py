@@ -8,6 +8,7 @@ from scripts.agent_os_issue_labels.self_defect import (
     SelfDefectAction,
     SelfDefectClass,
     build_defect_identity,
+    build_evidence_signature,
     decide_self_defect,
     mutation_identity_for,
 )
@@ -21,7 +22,6 @@ def observation(**overrides):
         failure_signature="tool-discovery-silent-stop",
         expected_behavior="continue or return an explicit blocker",
         observed_behavior="stopped after capability discovery",
-        evidence_signature="repro:tool-discovery-stop:v1",
         evidence_sufficient=True,
         original_mission_actionable=True,
     )
@@ -66,7 +66,7 @@ def test_equivalent_mutation_is_idempotent_and_mission_can_continue():
         classification=SelfDefectClass.AGENT_OS_CONTRACT_VIOLATION,
         candidates=(candidate,),
     )
-    mutation_identity = mutation_identity_for(first, obs.evidence_signature)
+    mutation_identity = mutation_identity_for(first, obs)
     assert mutation_identity is not None
     repeated = decide_self_defect(
         obs,
@@ -185,7 +185,7 @@ def test_create_then_rediscover_same_evidence_is_one_mutation():
         obs,
         classification=SelfDefectClass.AGENT_OS_CONTRACT_VIOLATION,
     )
-    prior = mutation_identity_for(created, obs.evidence_signature)
+    prior = mutation_identity_for(created, obs)
     assert prior is not None
 
     rediscovered = decide_self_defect(
@@ -201,22 +201,18 @@ def test_create_then_rediscover_same_evidence_is_one_mutation():
 
 
 def test_new_material_evidence_can_harden_existing_issue_once():
-    first = observation(
-        failure_signature="material-evidence",
-        evidence_signature="repro:first:v1",
-    )
+    first = observation(failure_signature="material-evidence")
     candidate = IssueCandidate(4242, first.governing_contract, first.failure_signature)
     created = decide_self_defect(
         first,
         classification=SelfDefectClass.AGENT_OS_CONTRACT_VIOLATION,
         candidates=(candidate,),
     )
-    prior = mutation_identity_for(created, first.evidence_signature)
+    prior = mutation_identity_for(created, first)
     assert prior is not None
 
     second = observation(
         failure_signature="material-evidence",
-        evidence_signature="repro:second:v1",
         observed_behavior="same defect reproduced on a second independent path",
     )
     hardened = decide_self_defect(
@@ -228,7 +224,7 @@ def test_new_material_evidence_can_harden_existing_issue_once():
     assert hardened.action is SelfDefectAction.HARDEN_EXISTING_ISSUE
     assert hardened.mutation_allowed is True
 
-    second_identity = mutation_identity_for(hardened, second.evidence_signature)
+    second_identity = mutation_identity_for(hardened, second)
     repeated = decide_self_defect(
         second,
         classification=SelfDefectClass.AGENT_OS_CONTRACT_VIOLATION,
@@ -238,10 +234,67 @@ def test_new_material_evidence_can_harden_existing_issue_once():
     assert repeated.mutation_allowed is False
 
 
-def test_mutation_identity_requires_material_evidence_signature():
-    result = decide_self_defect(
-        observation(),
+def test_identical_evidence_always_yields_the_same_identity():
+    assert build_evidence_signature(observation()) == build_evidence_signature(observation())
+
+
+def test_rewrapped_evidence_normalizes_to_the_same_identity():
+    """Re-wrapping the same reproduction is not new material evidence."""
+    rewrapped = observation(observed_behavior="stopped   after\n\tcapability discovery")
+    assert build_evidence_signature(rewrapped) == build_evidence_signature(observation())
+
+
+def test_different_material_evidence_yields_a_different_identity():
+    other = observation(observed_behavior="crashed while resolving the alias registry")
+    assert build_evidence_signature(other) != build_evidence_signature(observation())
+
+
+def test_a_caller_cannot_relabel_equivalent_evidence_into_a_second_write():
+    """#2680: the identity is derived, so no caller-supplied label can bypass it."""
+    obs = observation(failure_signature="relabel-attempt")
+    candidate = IssueCandidate(4242, obs.governing_contract, obs.failure_signature)
+    created = decide_self_defect(
+        obs,
         classification=SelfDefectClass.AGENT_OS_CONTRACT_VIOLATION,
+        candidates=(candidate,),
     )
-    with pytest.raises(ValueError):
-        mutation_identity_for(result)
+    prior = mutation_identity_for(created, obs)
+    repeated = decide_self_defect(
+        obs,
+        classification=SelfDefectClass.AGENT_OS_CONTRACT_VIOLATION,
+        candidates=(candidate,),
+        prior_mutation_identities=(prior,),
+    )
+    assert repeated.mutation_allowed is False
+    assert repeated.reason_codes == ("equivalent-mutation-already-recorded",)
+
+
+def test_new_evidence_cannot_be_suppressed_by_reusing_an_old_identity():
+    obs = observation(failure_signature="suppression-attempt")
+    candidate = IssueCandidate(4242, obs.governing_contract, obs.failure_signature)
+    created = decide_self_defect(
+        obs,
+        classification=SelfDefectClass.AGENT_OS_CONTRACT_VIOLATION,
+        candidates=(candidate,),
+    )
+    prior = mutation_identity_for(created, obs)
+    genuinely_new = observation(
+        failure_signature="suppression-attempt",
+        observed_behavior="null dereference in the alias resolver on the same path",
+    )
+    hardened = decide_self_defect(
+        genuinely_new,
+        classification=SelfDefectClass.AGENT_OS_CONTRACT_VIOLATION,
+        candidates=(candidate,),
+        prior_mutation_identities=(prior,),
+    )
+    assert hardened.mutation_allowed is True
+
+
+def test_unrelated_evidence_identities_do_not_collide():
+    identities = {
+        build_evidence_signature(observation(observed_behavior=text))
+        for text in ("a", "b", "a b", "ab", "")
+        if text
+    }
+    assert len(identities) == 4
