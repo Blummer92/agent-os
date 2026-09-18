@@ -83,6 +83,7 @@ def validate_adaptation_candidates(
     result: dict[str, list[dict[str, Any]]] = {section: [] for section in ADAPTATION_SECTIONS}
     seen_ids: set[str] = set()
     total = 0
+    format_transitions: dict[str, tuple[str, str]] = {}
 
     for section in ADAPTATION_SECTIONS:
         items = _list(value.get(section, []), f"adaptations.{section}")
@@ -134,12 +135,23 @@ def validate_adaptation_candidates(
                             "handoff-invalid",
                             "evidence-format change must preserve objective, success criteria, and accessibility",
                         )
+                from_format = validate_stable_id(item["from_format"], f"{name}.from_format")
+                to_format = validate_stable_id(item["to_format"], f"{name}.to_format")
+                if from_format == to_format:
+                    raise ContractValidationError("handoff-invalid", "evidence-format change must change format")
+                prior_transition = format_transitions.get(function_name)
+                if prior_transition is not None:
+                    raise ContractValidationError(
+                        "handoff-invalid",
+                        "multiple evidence-format transitions for one function are ambiguous",
+                    )
+                format_transitions[function_name] = (from_format, to_format)
                 normalized = {
                     "id": candidate_id,
                     "function_name": function_name,
                     "minutes_saved": _minutes(item["minutes_saved"], f"{name}.minutes_saved"),
-                    "from_format": validate_stable_id(item["from_format"], f"{name}.from_format"),
-                    "to_format": validate_stable_id(item["to_format"], f"{name}.to_format"),
+                    "from_format": from_format,
+                    "to_format": to_format,
                     "preserves_objective": True,
                     "preserves_success_criteria": True,
                     "preserves_accessibility": True,
