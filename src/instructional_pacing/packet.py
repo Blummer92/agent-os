@@ -145,6 +145,18 @@ def validate_pacing_packet(value: object) -> dict[str, Any]:
 
     if type(normalized["observation_quality"]) is not dict:
         raise ContractValidationError("handoff-wrong-type", "observation_quality must be a mapping")
+    observation = normalized["observation_quality"]
+    if set(observation) != {"status"}:
+        if set(observation) - {"status"}:
+            raise ContractValidationError(
+                "handoff-unknown-field",
+                "observation_quality contains unknown fields",
+            )
+        raise ContractValidationError("handoff-invalid", "observation_quality is missing status")
+    if observation["status"] not in {
+        "usable", "usable-with-limits", "unusable", "stale", "contradictory", "too-late", "privacy-blocked"
+    }:
+        raise ContractValidationError("handoff-invalid", "observation_quality status is unsupported")
     privacy = normalized["privacy_disposition"]
     if privacy not in PRIVACY_STATES:
         raise ContractValidationError("handoff-invalid", "privacy_disposition is unsupported")
