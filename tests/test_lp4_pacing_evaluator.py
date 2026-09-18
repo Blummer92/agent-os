@@ -142,3 +142,19 @@ def test_evaluator_uses_no_learner_vector_or_similarity_score_fields() -> None:
     serialized = repr(payload).lower()
     for forbidden in ("cosine", "euclidean", "manhattan", "mahalanobis", "embedding", "learner_score", "ability_score"):
         assert forbidden not in serialized
+
+
+def test_unknown_observation_quality_fields_fail_closed() -> None:
+    packet = _packet()
+    packet["observation_quality"] = {"status": "usable", "contradictory": True}
+    result = evaluate_lesson_pacing(packet)
+    assert result.status is ValidationStatus.INVALID
+    assert result.reason_codes == ("handoff-unknown-field",)
+
+
+def test_contradictory_observation_status_holds() -> None:
+    packet = _packet()
+    packet["observation_quality"] = {"status": "contradictory"}
+    payload = _payload(evaluate_lesson_pacing(packet))
+    assert payload["routing_recommendation"] == "hold"
+    assert "lp-evidence-observation-quality-unusable" in payload["unresolved_uncertainties"]
