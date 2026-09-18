@@ -90,9 +90,34 @@ def test_instance_diagnostics_distinguish_projection_object_email_and_scopes():
         assert evidence["external_write_performed"] is False
 
 
-def test_missing_or_ambiguous_runtime_identity_is_not_guessed():
-    run, _ = fake_run_factory(instance_payload={"serviceAccounts": []})
-    assert live.collect_cloud_identity(run)["reason_codes"] == ["runtime-service-account-missing"]
+def test_missing_runtime_identity_preserves_missing_state_but_still_checks_transport_stop_permission():
+    run, calls = fake_run_factory(instance_payload={"serviceAccounts": []}, stop_permissions=[])
+    evidence = live.collect_cloud_identity(run)
+    assert evidence["status"] == "needs-decision"
+    assert evidence["reason_codes"] == ["runtime-service-account-missing"]
+    assert evidence["vm_runtime_identity"] == {"status": "missing", "email": None, "scopes": []}
+    assert evidence["effective_stop_permission"]["effective"] is False
+    assert evidence["effective_stop_permission"]["reason_codes"] == ["stop-permission-denied"]
+    assert any(call[:5] == ("gcloud", "beta", "compute", "instances", "test-iam-permissions") for call in calls)
+    assert not any(call[:4] == ("gcloud", "iam", "service-accounts", "list") for call in calls)
+
+
+def test_missing_runtime_identity_preserves_independent_positive_stop_proof():
+    member = f"serviceAccount:{live.TRANSPORT_PRINCIPAL}"
+    run, _ = fake_run_factory(
+        instance_payload={"serviceAccounts": []},
+        project_bindings=[{"role": STOP_ROLE, "members": [member]}],
+        stop_permissions=[live.STOP_PERMISSION],
+        stop_role_permissions={STOP_ROLE: [live.STOP_PERMISSION]},
+    )
+    evidence = live.collect_cloud_identity(run)
+    assert evidence["reason_codes"] == ["runtime-service-account-missing"]
+    assert evidence["vm_runtime_identity"]["status"] == "missing"
+    assert evidence["effective_stop_permission"]["effective"] is True
+    assert evidence["effective_stop_permission"]["reason_codes"] == ["stop-permission-effective-direct-project-binding"]
+
+
+def test_ambiguous_runtime_identity_is_not_guessed():
     run, _ = fake_run_factory(instance_payload={"serviceAccounts": [{"email": RUNTIME, "scopes": []}, {"email": READER, "scopes": []}]})
     assert live.collect_cloud_identity(run)["reason_codes"] == ["runtime-service-account-ambiguous"]
 

@@ -173,6 +173,48 @@ def test_gate_freeze_rule_matches_the_workflow_step():
     assert 'base_sha=os.environ["CANDIDATE_BASE_SHA"]' not in step
 
 
+def test_missing_exact_main_evidence_uses_existing_validation_authority_for_recovery():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    aggregate_job = text.split("  validate:\n", 1)[1]
+
+    recovery = aggregate_job.split(
+        "      - name: Recover missing exact-current main aggregate evidence\n", 1
+    )[1].split("\n      - name: ", 1)[0]
+
+    assert 'select(.name == "Run aggregate validation")' in recovery
+    assert 'gh workflow run agent-os-validation.yml --ref "$current_main_sha"' in recovery
+    assert 'echo "recovery_required=true"' in recovery
+    assert "workflow_dispatch:" in text
+
+
+def test_missing_main_recovery_never_substitutes_candidate_or_prior_main_evidence():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    recovery = text.split(
+        "      - name: Recover missing exact-current main aggregate evidence\n", 1
+    )[1].split("\n      - name: ", 1)[0]
+    stop = text.split(
+        "      - name: Stop candidate while exact-current main recovery runs\n", 1
+    )[1].split("\n      - name: ", 1)[0]
+
+    assert 'git/ref/heads/main' in recovery
+    assert '--ref "$current_main_sha"' in recovery
+    assert "PR_HEAD_SHA" not in recovery
+    assert "CANDIDATE_HEAD_SHA" not in recovery
+    assert "exit 1" in stop
+    assert "Candidate validation remains fail-closed" in stop
+
+
+def test_existing_exact_main_evidence_does_not_dispatch_recovery():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    recovery = text.split(
+        "      - name: Recover missing exact-current main aggregate evidence\n", 1
+    )[1].split("\n      - name: ", 1)[0]
+
+    assert 'if [ "$check_count" != "0" ]; then' in recovery
+    assert 'echo "recovery_required=false"' in recovery
+    assert "exit 0" in recovery
+
+
 def test_main_health_lookup_filters_aggregate_check_server_side_before_page_limit():
     """Unrelated checks cannot evict exact-main aggregate evidence from page 1."""
     step = WORKFLOW.read_text(encoding="utf-8").split(

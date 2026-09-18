@@ -3,8 +3,8 @@
 This adapter exposes the existing ``batch_repair_continuation`` contract to the
 execution-service host. It performs no repair, retry, scheduling, mutation, or
 lesson retrieval. Per-candidate evidence is normalized into the canonical
-finite-batch projection so an item-local blocker can advance to the next frozen
-candidate while a proven shared blocker can still halt the parent batch.
+finite-batch projection so item-local blockers advance, repairable shared blockers
+route to their canonical repair owner, and only terminal shared blockers halt.
 """
 
 from __future__ import annotations
@@ -109,6 +109,10 @@ def _candidate(value: object) -> RepairCandidateEvidence:
         failed_repair_attempt_id=value.get("failed_repair_attempt_id"),
         retry_boundary=retry_boundary,
         retry_mutation_performed=value.get("retry_mutation_performed", False),
+        shared_blocker_key=value.get("shared_blocker_key"),
+        shared_repair_owner=value.get("shared_repair_owner"),
+        shared_repair_available=value.get("shared_repair_available", False),
+        shared_repair_completed=value.get("shared_repair_completed", False),
     )
 
 
