@@ -290,7 +290,7 @@ def evaluate_ppux_mission_constraint(
     if tutorial_changed:
         result_state = None
 
-    generic_allowed = manual_requested or not runner_authoritative
+    generic_allowed = manual_requested or (not runner_authoritative and not tutorial_changed)
     if runner_authoritative and result_state in PPUX_FAIL_CLOSED_STATES:
         generic_allowed = False
     if runner_authoritative and result_state == "ready":
