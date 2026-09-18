@@ -1,11 +1,43 @@
-from scripts.agent_os_issue_labels.connected_issue_creation import converge_connected_issue_creation, managed_labels_for_create
+from scripts.agent_os_issue_labels.connected_issue_creation import (
+    DuplicateReviewDisposition,
+    converge_connected_issue_creation,
+    evaluate_duplicate_review_admission,
+    managed_labels_for_create,
+)
 from scripts.agent_os_issue_labels.issue_reconciler import LiveIssueSnapshot
 from tests.agent_os_issue_labels.lifecycle_admission import admitted_lifecycle_labels
 from tests.agent_os_issue_labels.lifecycle_admission import refused_lifecycle_labels
 
 FORM = ".github/ISSUE_TEMPLATE/agent-os-task.yml"
 MAP = ".github/labeler/agent-os-issue-label-map.yml"
-BODY = """### Issue tier\n\ntier:1-standard-implementation\n\n### Primary owner\n\nowner:github-service-agent\n\n### Readiness candidate\n\nstatus:ready\n\n### Work type\n\ntype:bug\n\n### Source of truth\n\nGitHub\n\n### External write boundary\n\nno-external-write\n"""
+BODY = """### Issue tier
+
+tier:1-standard-implementation
+
+### Primary owner
+
+owner:github-service-agent
+
+### Readiness candidate
+
+status:ready
+
+### Work type
+
+type:bug
+
+### Source of truth
+
+GitHub
+
+### External write boundary
+
+no-external-write
+
+### Prior scope, duplicate, and supersession review
+
+Reviewed current open bug owners and found one distinct repair seam.
+"""
 
 
 class Provider:
@@ -22,6 +54,80 @@ class Provider:
 
 def test_known_managed_labels_are_available_before_connected_create():
     assert set(managed_labels_for_create(BODY, issue_form_path=FORM, label_map_path=MAP)) == {"agent-os", "owner:github-service-agent", "status:ready", "type:bug"}
+
+
+def test_distinct_bug_admission_allows_existing_create_flow():
+    result = evaluate_duplicate_review_admission(
+        BODY,
+        disposition=DuplicateReviewDisposition.NEW_DISTINCT_BUG,
+        issue_form_path=FORM,
+    )
+    assert result.create_allowed is True
+    assert result.next_operation == "create-then-canonical-readback-and-converge"
+    assert result.canonical_issue_number is None
+
+
+def test_2621_recurrence_routes_to_2283_without_create():
+    result = evaluate_duplicate_review_admission(
+        BODY,
+        disposition=DuplicateReviewDisposition.RECURRENCE_EXISTING_OWNER,
+        canonical_issue_number=2283,
+        issue_form_path=FORM,
+    )
+    assert result.create_allowed is False
+    assert result.canonical_issue_number == 2283
+    assert result.next_operation == "append-recurrence-evidence-to-canonical-issue"
+
+
+def test_2615_duplicate_routes_to_2602_without_create():
+    result = evaluate_duplicate_review_admission(
+        BODY,
+        disposition=DuplicateReviewDisposition.DUPLICATE_EXISTING_OWNER,
+        canonical_issue_number=2602,
+        issue_form_path=FORM,
+    )
+    assert result.create_allowed is False
+    assert result.canonical_issue_number == 2602
+    assert result.next_operation == "reuse-canonical-issue-no-create"
+
+
+def test_focused_successor_requires_distinct_repair_seam():
+    blocked = evaluate_duplicate_review_admission(
+        BODY,
+        disposition=DuplicateReviewDisposition.FOCUSED_SUCCESSOR,
+        canonical_issue_number=2283,
+        issue_form_path=FORM,
+    )
+    admitted = evaluate_duplicate_review_admission(
+        BODY,
+        disposition=DuplicateReviewDisposition.FOCUSED_SUCCESSOR,
+        canonical_issue_number=2283,
+        distinct_repair_seam=True,
+        issue_form_path=FORM,
+    )
+    assert blocked.create_allowed is False
+    assert blocked.disposition is DuplicateReviewDisposition.MANUAL_REVIEW
+    assert admitted.create_allowed is True
+    assert admitted.disposition is DuplicateReviewDisposition.FOCUSED_SUCCESSOR
+
+
+def test_partial_overlap_and_missing_review_fail_closed():
+    overlap = evaluate_duplicate_review_admission(
+        BODY,
+        disposition=DuplicateReviewDisposition.PARTIAL_OVERLAP,
+        canonical_issue_number=2283,
+        issue_form_path=FORM,
+    )
+    no_review_body = BODY.split("### Prior scope, duplicate, and supersession review", 1)[0]
+    missing = evaluate_duplicate_review_admission(
+        no_review_body,
+        disposition=DuplicateReviewDisposition.NEW_DISTINCT_BUG,
+        issue_form_path=FORM,
+    )
+    assert overlap.create_allowed is False
+    assert overlap.next_operation == "manual-review-partial-overlap"
+    assert missing.create_allowed is False
+    assert "duplicate-review.prior-scope-evidence-missing" in missing.reason_codes
 
 
 def test_connected_create_is_not_terminal_until_readback_converges():
