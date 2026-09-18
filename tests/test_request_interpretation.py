@@ -265,7 +265,7 @@ def test_ppux_tutorial_identity_change_requires_fresh_resolution():
     assert decision.requires_fresh_tutorial_resolution is True
     assert decision.runner_authoritative is False
     assert decision.result_state is None
-    assert decision.generic_prompt_authoring_allowed is True
+    assert decision.generic_prompt_authoring_allowed is False
 
 
 def test_ppux_provider_constraint_does_not_clear_runner_authority():
