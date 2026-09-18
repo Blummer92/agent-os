@@ -111,7 +111,7 @@ def test_active_time_cannot_exceed_elapsed_time() -> None:
     packet = _packet()
     packet["prior_runs"][0]["active_minutes"] = 60
     payload = _payload(evaluate_lesson_pacing(packet))
-    assert payload["evidence_summary"]["excluded"][0]["reason"] == "lp-evidence-run-interrupted-or-sparse"
+    assert payload["evidence_summary"]["excluded"][0]["reason"] == "lp-evidence-active-elapsed-time-conflict"
 
 
 def test_six_dimensions_are_required_and_never_collapsed() -> None:
