@@ -83,4 +83,14 @@ changes, credentials/secrets/IAM/permissions, production, external-system writes
 governed-field mutation, source-of-truth changes, persistence-path changes,
 irreversible actions, and other surfaces in
 `01_Shared_Standards/github/excluded-surface-baseline.md` remain separately
-authorized.
+authorized. For protected settings, that separate authorization is an authority
+requirement, not a requirement to use a second execution identity or admin
+framework. When the repository owner has explicitly authorized the exact
+protected-setting mutation and the governing path proves one fixed target and
+operation, fresh pre-state binding, fail-closed stale/expanded-input checks,
+immediate canonical readback, and bounded rollback, the canonical GitHub Service
+Agent may execute that already-authorized finite operation through the existing
+content-bound implementation. Missing capability, credentials, currentness, or
+any of those invariants remains a fail-closed stop. This exception grants no
+generic ruleset, branch-protection, permission, credential, IAM, or secrets
+authority.
