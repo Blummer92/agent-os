@@ -18,7 +18,7 @@ Every newly failed attempt creates a new CKR6 retry obligation. An outcome recor
 Do not substitute a one-time initial `plan_lesson_preflight(...)` call for this retry transition. Do not build a second lesson selector, Notion reader, retry engine, or repair state model. The executable behavior remains owned by `08_Tooling/agent-memory-context-manager/CKR6_REPAIR_ACTIVATION.md`, `repair_lesson_activation.py`, CKR11, and the existing CKR6/CKR2 contracts.
 
 ## Subordinate bug capture
-If a repair exposes a separate Agent OS defect and current policy permits bounded issue capture, that bookkeeping is subordinate to the active parent repair mission.
+If a repair exposes a separate Agent OS defect and current policy permits bounded issue capture, that bookkeeping is subordinate to the active parent repair mission. After capture, continue the parent mission from its current retry boundary unless authorization, source of truth, scope, ownership, or another genuine stop condition changed. Issue creation alone is not a terminal repair state.
 
 After a bug is created, linked, commented, or otherwise persisted, the mutation response is provisional evidence. Canonically read back the persisted defect evidence before treating capture as complete. Then reacquire the active parent issue/PR/branch/head/checkpoint and current check state before choosing the next repair or handoff action.
 
