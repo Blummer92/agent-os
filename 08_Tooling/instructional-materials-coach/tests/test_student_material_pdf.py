@@ -94,7 +94,7 @@ def test_photography_required_image_and_icon_roles_block_text_only_preview(tmp_p
     assert "blind-photo-example" in receipt.error and "camera-icon" in receipt.error
 
 
-def test_all_required_visual_roles_with_verified_source_bound_placements_allow_preview(tmp_path):
+def test_verified_placements_do_not_claim_rendered_visuals_in_text_only_pdf(tmp_path):
     target = tmp_path / "photography-with-placements.pdf"
     source = _source(
         required_visual_role_ids=("blind-photo-example", "camera-icon"),
@@ -106,9 +106,11 @@ def test_all_required_visual_roles_with_verified_source_bound_placements_allow_p
 
     receipt = render_student_material_pdf_preview(source, target, expected_revision_id="rev-7")
 
-    assert receipt.available and receipt.render_verified
+    assert receipt.state == "blocked" and not receipt.available
+    assert receipt.render_verified is False
     assert receipt.unresolved_visual_role_ids == ()
-    assert target.exists()
+    assert "visual render evidence is unavailable" in receipt.error
+    assert not target.exists()
 
 
 def test_partial_visual_placement_names_only_unresolved_required_role(tmp_path):
