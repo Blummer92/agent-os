@@ -171,3 +171,16 @@ def test_gate_freeze_rule_matches_the_workflow_step():
     # The plan must be selected against exact-current main, not the stale base.
     assert 'base_sha=os.environ["CURRENT_MAIN_SHA"]' in step
     assert 'base_sha=os.environ["CANDIDATE_BASE_SHA"]' not in step
+
+
+def test_main_health_lookup_filters_aggregate_check_server_side_before_page_limit():
+    """Unrelated checks cannot evict exact-main aggregate evidence from page 1."""
+    step = WORKFLOW.read_text(encoding="utf-8").split(
+        "      - name: Project exact-current main health\\n", 1
+    )[1].split("\\n      - name: ", 1)[0]
+
+    assert (
+        'check-runs?check_name=Run%20aggregate%20validation&per_page=100'
+        in step
+    )
+    assert 'check-runs?per_page=100' not in step
