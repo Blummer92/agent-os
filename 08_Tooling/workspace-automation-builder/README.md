@@ -6,12 +6,28 @@ This package contains reusable Workspace automation safety tooling, validation
 schemas, fixtures, and sample handoff files for review before any live Workspace
 write.
 
+Workspace Automation Builder is a capability workflow, not an executable agent.
+
 ## Ownership
 
-Canonical owner: Google Workspace Automation Engineer.
+Repository implementation owner: GitHub Service Agent, applying the shared
+Workspace Automation Builder standard and any applicable language/runtime
+standards.
+
+Cross-system, source-of-truth, and external-operation routing belongs to ChatGPT
+Orchestrator. QA / Test Agent owns independent validation evidence where
+required.
+
+Legacy names such as `Google Workspace Automation Engineer` are compatibility
+input only. They resolve through `04_Registry/legacy-agent-alias-registry.md`
+and do not create execution or write authority.
+
+Live Workspace writes remain separately governed by
+`01_Shared_Standards/google-workspace/workspace-write-authorization.md` and
+require exact-target authorization independent of repository implementation.
 
 This package does not create a new agent. It implements the tooling layer for the
-shared Workspace Automation Builder standard.
+shared Workspace Automation Builder capability workflow.
 
 ## Structure
 
@@ -26,6 +42,7 @@ shared Workspace Automation Builder standard.
 
 - No live Drive, Sheets, Docs, Gmail, Calendar, Notion, Apps Script trigger,
   sharing, permission, or production write is authorized by this package.
+- Repository implementation authorization never grants a live Workspace write.
 - Tests use local fixtures and mocks only.
 - Sample and fixture IDs are sanitized values.
 
@@ -61,4 +78,4 @@ Optional sample validation:
 
 ## Version
 
-0.1.1
+0.1.2

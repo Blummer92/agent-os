@@ -30,12 +30,24 @@ Exact/normalized duplicate evidence is preserved from #953 and routes to `Use Ex
 
 ## Package boundary
 
-#957 owns provider-neutral semantic recommendation and teacher confirmation. #1025 adds only the per-asset type gate needed before an Icon System decision, while #1026 supplies synthetic regression evidence for mixed collections. Cross-system ownership, write authorization, and downstream authority remain governed by:
+#957 owns provider-neutral semantic recommendation and teacher confirmation. #1025 adds only the per-asset type gate needed before an Icon System decision, while #1026 supplies synthetic regression evidence for mixed collections.
+
+Current cross-system routing, repository implementation ownership, legacy-name
+resolution, write authorization, and downstream authority are governed by:
 
 - [`00_Governance/ownership-and-source-of-truth.md`](../../00_Governance/ownership-and-source-of-truth.md)
 - [`00_Governance/write-authorization-policy.md`](../../00_Governance/write-authorization-policy.md)
-- [`02_Agent_Overlays/google-workspace-automation-engineer.md`](../../02_Agent_Overlays/google-workspace-automation-engineer.md)
-- [`02_Agent_Overlays/integration-manager.md`](../../02_Agent_Overlays/integration-manager.md)
+- [`04_Registry/agent-inheritance-registry.md`](../../04_Registry/agent-inheritance-registry.md)
+- [`04_Registry/responsibility-matrix.md`](../../04_Registry/responsibility-matrix.md)
+- [`04_Registry/legacy-agent-alias-registry.md`](../../04_Registry/legacy-agent-alias-registry.md)
+- [`02_Agent_Overlays/chatgpt-orchestrator.md`](../../02_Agent_Overlays/chatgpt-orchestrator.md)
+- [`01_Shared_Standards/google-workspace/workspace-write-authorization.md`](../../01_Shared_Standards/google-workspace/workspace-write-authorization.md)
+
+Retired technical-agent names such as `Integration Manager` and `Google
+Workspace Automation Engineer` are compatibility input only. They do not serve
+as current primary authority: cross-system routing resolves to ChatGPT
+Orchestrator, repository implementation resolves to GitHub Service Agent, and
+live Workspace writes remain separately exact-target authorization-gated.
 
 The package never mints a canonical Asset ID, invents destination identifiers, grants rights/privacy clearance, approval, classroom readiness, publication, production authority, or performs image generation. #952/#953 remain upstream; #958/#959 and #954 remain downstream.
 
