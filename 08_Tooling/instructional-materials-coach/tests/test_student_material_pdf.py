@@ -148,3 +148,27 @@ def test_duplicate_placement_evidence_for_required_role_fails_closed(tmp_path):
 
     assert receipt.state == "blocked" and not receipt.available
     assert "ambiguous placement evidence" in receipt.error
+
+
+def test_verification_failure_does_not_replace_existing_output(tmp_path):
+    target = tmp_path / "existing.pdf"
+    sentinel = b"previous verified artifact"
+    target.write_bytes(sentinel)
+
+    with patch("instructional_materials_coach.student_material_pdf._verify_pdf", side_effect=ValueError("bad render")):
+        receipt = render_student_material_pdf_preview(_source(), target, expected_revision_id="rev-7")
+
+    assert receipt.state == "blocked" and not receipt.available
+    assert target.read_bytes() == sentinel
+    assert list(tmp_path.glob(".existing.pdf.*.tmp")) == []
+
+
+def test_verification_failure_leaves_no_new_final_output(tmp_path):
+    target = tmp_path / "new.pdf"
+
+    with patch("instructional_materials_coach.student_material_pdf._verify_pdf", side_effect=ValueError("bad render")):
+        receipt = render_student_material_pdf_preview(_source(), target, expected_revision_id="rev-7")
+
+    assert receipt.state == "blocked"
+    assert not target.exists()
+    assert list(tmp_path.glob(".new.pdf.*.tmp")) == []
