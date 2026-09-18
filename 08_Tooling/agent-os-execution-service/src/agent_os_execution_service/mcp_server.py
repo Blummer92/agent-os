@@ -1,4 +1,4 @@
-"""MCP protocol binding for the bounded Agent OS ChatGPT facade (#1966 / #1988 / #2363 / #2487 / #2331 / #2523 / #2528 / #2607)."""
+"""MCP protocol binding for the bounded Agent OS ChatGPT facade (#1966 / #1988 / #2363 / #2487 / #2331 / #2523 / #2528 / #2607 / #2612)."""
 
 from __future__ import annotations
 
@@ -8,6 +8,10 @@ from mcp.server import MCPServer
 
 from scripts.agent_os_execution_interface.continuation_driver import ContinuationDecision, continuation_payload
 from scripts.agent_os_execution_interface.investigation_completion_admission import evaluate_investigation_completion_admission
+from scripts.agent_os_issue_acceptance.primary_pr_creation_admission import (
+    ActivePrimaryPr,
+    evaluate_primary_pr_creation_admission,
+)
 
 from .bulk_repair_facade import classify_bulk_repair_continuation
 from .connected_issue_creation_facade import plan_connected_issue_creation_for_host
@@ -44,6 +48,32 @@ def plan_connected_issue_creation_tool(repository: str, issue_body: str) -> dict
 @mcp.tool()
 def plan_agent_os_continuation_tool(repository: str, issue_number: int, canonical_handoff_id: str | None = None) -> dict[str, object]:
     return dict(plan_agent_os_continuation(repository=repository, issue_number=issue_number, canonical_handoff_id=canonical_handoff_id))
+
+
+@mcp.tool()
+def admit_agent_os_primary_pr_creation_tool(issue_number: int, issue_open: bool, evidence_current: bool, active_primary_prs: list[dict[str, object]]) -> dict[str, object]:
+    """Classify create/reuse/conflict immediately before Draft PR materialization."""
+    claims = tuple(
+        ActivePrimaryPr(
+            pull_request_number=item["pull_request_number"],
+            branch=item["branch"],
+            head_sha=item["head_sha"],
+        )
+        for item in active_primary_prs
+    )
+    result = evaluate_primary_pr_creation_admission(
+        issue_number=issue_number,
+        issue_open=issue_open,
+        evidence_current=evidence_current,
+        active_primary_prs=claims,
+    )
+    return {
+        "action": result.action.value,
+        "creation_admitted": result.creation_admitted,
+        "existing_pull_request_number": result.existing_pull_request_number,
+        "reason_codes": list(result.reason_codes),
+        "github_writes_authorized": result.github_writes_authorized,
+    }
 
 
 @mcp.tool()

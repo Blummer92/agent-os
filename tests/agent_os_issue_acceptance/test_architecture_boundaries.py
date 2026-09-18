@@ -71,6 +71,7 @@ DOMAIN_RULES: tuple[tuple[str, frozenset[str], tuple[str, ...]], ...] = (
                 "planning_binding",
                 "recoverable_reconciliation",
                 "draft_pr_materialization_admission",
+                "primary_pr_creation_admission",
             }
         ),
         (),
