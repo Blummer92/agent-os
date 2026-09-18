@@ -192,3 +192,20 @@ def test_adaptation_is_deterministic_and_non_authorizing() -> None:
     assert first == second
     for key, value in NON_AUTHORITY_FIELDS.items():
         assert first[key] is value
+
+def test_operational_friction_increases_available_time_without_compressing_instruction() -> None:
+    packet = _packet()
+    packet["period_minutes"] = 50
+    packet["operational_minutes"] = 10
+    packet["instructional_functions"] = [
+        {"name": "model", "protected": True, "lower_minutes": 15, "expected_minutes": 15, "upper_minutes": 15},
+        {"name": "practice", "protected": True, "lower_minutes": 15, "expected_minutes": 15, "upper_minutes": 15},
+        {"name": "feedback-revision", "protected": True, "lower_minutes": 15, "expected_minutes": 15, "upper_minutes": 15},
+    ]
+    packet["adaptations"] = {
+        "operational_friction": [{"id": "setup-friction", "minutes_saved": 5}],
+    }
+    payload = _payload(packet)
+    assert payload["available_lesson_minutes"] == 45.0
+    assert payload["adapted_range"]["expected"] == 45.0
+    assert payload["advisory_assessment_outcome"] == "fits"
