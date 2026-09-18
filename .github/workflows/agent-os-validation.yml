@@ -400,10 +400,12 @@ jobs:
 
           from scripts.agent_os_remote_validation import (
               SelectionInput,
-              evaluate_final_validation_admission,
               load_rule_map,
-              project_main_health,
               select_validation_plan,
+          )
+          from scripts.agent_os_remote_validation.main_health import project_main_health
+          from scripts.agent_os_remote_validation.main_health_admission import (
+              evaluate_final_validation_admission,
           )
 
           changed = tuple(
