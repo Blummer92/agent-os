@@ -181,15 +181,21 @@ def _adapted_range(timing: dict[str, float], savings: float) -> dict[str, float]
 def _split_plan(
     functions: list[dict[str, Any]],
     available: float,
-    adapted_expected: float,
+    adapted_durations: dict[str, float],
 ) -> dict[str, Any] | None:
+    """Name the split point and both halves from one adapted representation.
+
+    The scan reads the adapted duration of each instructional function, so the
+    named split point, the first-period total, and the continuation total all
+    describe the same adapted lesson.
+    """
     cumulative = 0.0
     split_after: str | None = None
     for item in functions:
-        expected = float(item["expected_minutes"])
-        if cumulative + expected > available:
+        duration = adapted_durations[item["name"]]
+        if cumulative + duration > available:
             break
-        cumulative += expected
+        cumulative += duration
         split_after = item["name"]
 
     if split_after is None or split_after == functions[-1]["name"]:
@@ -198,7 +204,7 @@ def _split_plan(
     return {
         "split_after": split_after,
         "first_period_expected_minutes": cumulative,
-        "continuation_expected_minutes": max(0.0, adapted_expected - cumulative),
+        "continuation_expected_minutes": max(0.0, sum(adapted_durations.values()) - cumulative),
         "teacher_review_required": True,
     }
 
@@ -220,6 +226,9 @@ def plan_lesson_adaptation(
     changed_formats: list[dict[str, Any]] = []
     deferred: list[str] = []
     selected_savings = 0.0
+    # Savings a candidate binds to a named instructional function, which is what
+    # makes an adapted per-function representation derivable.
+    attributed: dict[str, float] = {}
 
     for section in ADAPTATION_SECTIONS:
         if required_savings <= selected_savings:
@@ -228,6 +237,10 @@ def plan_lesson_adaptation(
             if required_savings <= selected_savings:
                 break
             selected_savings += float(candidate["minutes_saved"])
+            if "function_name" in candidate:
+                attributed[candidate["function_name"]] = attributed.get(
+                    candidate["function_name"], 0.0
+                ) + float(candidate["minutes_saved"])
             if section == "evidence_formats":
                 changed_formats.append(
                     {
@@ -251,15 +264,22 @@ def plan_lesson_adaptation(
                 compressed.append(record)
 
     adapted = _adapted_range(timing, selected_savings)
+    adapted_durations = {
+        item["name"]: float(item["expected_minutes"]) - attributed.get(item["name"], 0.0)
+        for item in packet["instructional_functions"]
+    }
     split_plan = None
     split_unresolved = False
     if adapted["expected"] > available and packet["continuation_allowed"]:
-        split_plan = _split_plan(
-            packet["instructional_functions"],
-            available,
-            adapted["expected"],
-        )
-        split_unresolved = split_plan is None
+        # A split may only be named when the per-function representation accounts
+        # for the whole adapted expected total. Unattributed savings and
+        # observation-calibrated timing leave it underivable, and the split is
+        # then unresolved rather than guessed.
+        if abs(sum(adapted_durations.values()) - adapted["expected"]) > 1e-9:
+            split_unresolved = True
+        else:
+            split_plan = _split_plan(packet["instructional_functions"], available, adapted_durations)
+            split_unresolved = split_plan is None
 
     return {
         "adapted_range": adapted,
