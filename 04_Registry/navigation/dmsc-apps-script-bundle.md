@@ -5,12 +5,12 @@
 | Field | Value |
 |---|---|
 | Status | Active index |
-| Review owner | Integration Manager |
+| Review owner | ChatGPT Orchestrator |
 | GitHub write owner | GitHub Service Agent |
 | Authority | Navigation aid only |
 | External repo | `Blummer92/dmsc_apps_script_bundle` |
 | External branch | `main` |
-| Last reviewed | Issue #150 split/index cleanup |
+| Last reviewed | Issue #2594 ownership reconciliation |
 
 ## Purpose
 

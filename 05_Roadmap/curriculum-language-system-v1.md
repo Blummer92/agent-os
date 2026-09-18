@@ -65,7 +65,7 @@ Any future Notion implementation requires a new bounded Level 2 issue after conf
 ## Ownership And Destinations
 
 - **GitHub Service Agent:** approved repository implementation and pull-request execution.
-- **Integration Manager:** cross-system routing and any future Notion handoff.
+- **ChatGPT Orchestrator:** cross-system and source-of-truth routing, including routing for any future Notion handoff.
 - **Instructional-design agents:** content review within registered roles.
 - **Notion:** teacher planning and approved working knowledge.
 - **Google Drive:** approved student-facing materials.
