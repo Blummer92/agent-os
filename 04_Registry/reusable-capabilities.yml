@@ -11,6 +11,10 @@ capabilities:
     public_interfaces:
       - operation:ppux-picture-perfect-prompt-projection
       - result:picture-perfect-prompt-projection-result-v1
+    inputs:
+      - picture-perfect-prompt-projection-input-v1 already resolved from canonical tutorial/source-handoff evidence
+    outputs:
+      - picture-perfect-prompt-projection-result-v1 structured projection preserving ready/blocked cards, source identity, application identity, provenance, and all-false authority fields
     owner_agent: ChatGPT Orchestrator
     supporting_agents:
       - GitHub Service Agent
@@ -19,6 +23,7 @@ capabilities:
       - 02_Agent_Overlays/chatgpt-orchestrator.md
     tests:
       - tests/test_picture_perfect_request_routing.py
+      - 08_Tooling/instructional-materials-coach/picture-perfect-coach/src/promptProjectionEntrypoint.test.ts
     keywords:
       - picture-perfect
       - ppux
