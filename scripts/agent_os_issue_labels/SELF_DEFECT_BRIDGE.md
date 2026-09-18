@@ -24,8 +24,7 @@ store, GitHub client, authorization model, or background bug scanner.
 1. a self-observed behavior classification;
 2. the canonical governing contract and stable failure signature;
 3. bounded issue-search candidates supplied by the integration surface; and
-4. a stable material-evidence signature for the observed reproduction; and
-5. prior mutation identities from the active finite lineage when available.
+4. prior mutation identities from the active finite lineage when available.
 
 It returns one non-mutating decision:
 
@@ -59,11 +58,14 @@ choosing by title or search order.
 ## Idempotency and recursion
 
 The bridge derives a mutation identity from the semantic defect identity plus a
-caller-supplied stable material-evidence signature. The mutation identity is
-deliberately independent of whether the canonical target is still `issue:create`
-or has become `issue:<number>` after readback, so create -> rediscover converges
-without a second write for equivalent evidence. A genuinely new bounded
-reproduction uses a distinct material-evidence signature and may admit one
+material-evidence identity. The material-evidence identity is a deterministic
+digest of the bounded reproduction the observation already carries, normalized
+for insignificant whitespace, so it is derived rather than supplied: no caller
+label can rewrite equivalent evidence or suppress genuinely new evidence. The
+mutation identity is deliberately independent of whether the canonical target is
+still `issue:create` or has become `issue:<number>` after readback, so
+create -> rediscover converges without a second write for equivalent evidence. A
+genuinely new bounded reproduction digests differently and may admit one
 hardening mutation; repeating that evidence is again a no-op.
 
 Failure of the external GitHub mutation is not fed recursively back into this
