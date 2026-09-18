@@ -213,3 +213,16 @@ def test_existing_exact_main_evidence_does_not_dispatch_recovery():
     assert 'if [ "$check_count" != "0" ]; then' in recovery
     assert 'echo "recovery_required=false"' in recovery
     assert "exit 0" in recovery
+
+
+def test_main_health_lookup_filters_aggregate_check_server_side_before_page_limit():
+    """Unrelated checks cannot evict exact-main aggregate evidence from page 1."""
+    step = WORKFLOW.read_text(encoding="utf-8").split(
+        "      - name: Project exact-current main health\n", 1
+    )[1].split("\n      - name: ", 1)[0]
+
+    assert (
+        'check-runs?check_name=Run%20aggregate%20validation&per_page=100'
+        in step
+    )
+    assert 'check-runs?per_page=100' not in step
