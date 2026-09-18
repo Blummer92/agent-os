@@ -1,4 +1,4 @@
-"""Regression coverage for the Picture Perfect / PPUX routing contract (#1280, #1492)."""
+"""Regression coverage for the Picture Perfect / PPUX routing contract (#1280, #1492, #2526)."""
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -6,6 +6,7 @@ ORCHESTRATOR = ROOT / "02_Agent_Overlays/chatgpt-orchestrator.md"
 PPUX_README = ROOT / "08_Tooling/instructional-materials-coach/picture-perfect-coach/README.md"
 PROMPT_FIXTURE = ROOT / "08_Tooling/instructional-materials-coach/picture-perfect-coach/src/fixtures/tutorial0-prompts.ts"
 ROUTING_STANDARD = ROOT / "01_Shared_Standards/instructional-design/canonical-classroom-artifact-resolution.md"
+REUSABLE_CAPABILITIES = ROOT / "04_Registry/reusable-capabilities.yml"
 
 
 def read(path: Path) -> str:
@@ -111,3 +112,61 @@ def test_screenshot_chronology_does_not_create_instructional_identity() -> None:
     assert "Image 1" in standard
     assert "image count" in standard
     assert "fail closed" in standard
+
+
+def test_ppux_projection_capability_is_discoverable_with_exact_2525_contract() -> None:
+    registry = read(REUSABLE_CAPABILITIES)
+    assert "capability_id: ppux-picture-perfect-prompt-projection" in registry
+    # The invocation identity is the real statically exported #2525 entrypoint
+    # contract, not a free-form label: the registry's public-interface check
+    # resolves each symbol against the capability's canonical source.
+    assert "promptProjectionEntrypoint:projectTutorialPromptCards" in registry
+    assert "promptProjectionEntrypoint:PROMPT_PROJECTION_INPUT_VERSION" in registry
+    assert "promptProjectionEntrypoint:PROMPT_PROJECTION_RESULT_VERSION" in registry
+    assert "picture-perfect-prompt-projection-result-v1" in registry
+    assert "projection-capability-unavailable" in registry
+    assert "canonical-ppux-blocked" in registry
+
+
+def test_resolved_ppux_requests_consume_governed_result_without_generic_reconstruction() -> None:
+    routing = routing_section()
+    assert "Invoke only the fixed governed operation `ppux-picture-perfect-prompt-projection`" in routing
+    assert "Consume only `picture-perfect-prompt-projection-result-v1` evidence" in routing
+    assert "policy prose, fixtures, and generic language generation are not substitutes" in routing
+    assert "A fully blocked governed result is a successful routing outcome" in routing
+
+
+def test_ppux_result_consumption_preserves_state_provenance_and_provider_application_separation() -> None:
+    routing = routing_section()
+    for invariant in (
+        "source fingerprint",
+        "execution SHA/projection identity",
+        "prompt-card order",
+        "ready/blocked state",
+        "provider-neutral `portablePrompt`",
+        "provenance",
+        "Canva remains separate from the canonical modeled tutorial application",
+    ):
+        assert invariant in routing
+
+
+def test_registered_ppux_capability_binds_real_projection_contract_and_behavior_tests() -> None:
+    registry = read(REUSABLE_CAPABILITIES)
+    record = registry.split(
+        "  - capability_id: ppux-picture-perfect-prompt-projection\n", 1
+    )[1].split("\n  - capability_id:", 1)[0]
+    assert "picture-perfect-prompt-projection-input-v1" in record
+    assert "picture-perfect-prompt-projection-result-v1" in record
+    assert (
+        "08_Tooling/instructional-materials-coach/picture-perfect-coach/"
+        "src/promptProjectionEntrypoint.test.ts"
+    ) in record
+
+    behavior = read(
+        ROOT
+        / "08_Tooling/instructional-materials-coach/picture-perfect-coach/"
+        "src/promptProjectionEntrypoint.test.ts"
+    )
+    assert "preserves ready and blocked prompt cards without rewriting either state" in behavior
+    assert "keeps source/application provenance provider-neutral and non-authorizing" in behavior
+    assert "fails closed on malformed or unsupported input without throwing" in behavior
