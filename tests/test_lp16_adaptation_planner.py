@@ -186,3 +186,38 @@ def test_adaptation_is_deterministic_and_non_authorizing() -> None:
     assert first == second
     for key, value in NON_AUTHORITY_FIELDS.items():
         assert first[key] is value
+
+def test_function_bound_savings_cannot_exceed_expected_duration() -> None:
+    packet = _packet()
+    packet["adaptations"] = {
+        "repetitions": [
+            {"id": "impossible", "function_name": "showcase", "minutes_saved": 20, "preserves_function": True}
+        ]
+    }
+    result = evaluate_lesson_pacing(packet)
+    assert result.status is ValidationStatus.INVALID
+    assert result.reason_codes == ("handoff-invalid",)
+
+
+def test_combined_function_bound_savings_cannot_exceed_expected_duration() -> None:
+    packet = _packet()
+    packet["adaptations"] = {
+        "repetitions": [
+            {"id": "repeat", "function_name": "showcase", "minutes_saved": 3, "preserves_function": True}
+        ],
+        "evidence_formats": [
+            {
+                "id": "format",
+                "function_name": "showcase",
+                "minutes_saved": 2,
+                "from_format": "upload",
+                "to_format": "verbal",
+                "preserves_objective": True,
+                "preserves_success_criteria": True,
+                "preserves_accessibility": True,
+            }
+        ],
+    }
+    result = evaluate_lesson_pacing(packet)
+    assert result.status is ValidationStatus.INVALID
+    assert result.reason_codes == ("handoff-invalid",)
