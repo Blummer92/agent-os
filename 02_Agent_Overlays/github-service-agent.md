@@ -70,6 +70,17 @@ Only after canonical post-create verification succeeds, invoke the existing #102
 Keep canonical readback evidence separate from creation-response evidence, and keep Draft-PR creation evidence separate from label-reconciliation evidence. Stale, blocked, failed, drifted, terminal, or nonconvergent reconciliation is explicit and fail-closed and grants no Ready-for-Review, merge, issue-closure, review-resolution, protected-setting, production, or external-system authority. User-facing reports state and link the verified canonical current PR state rather than repeating a stale creation response.
 This follow-up is connector/operator driven; do not replace it with a GitHub Actions workflow, webhook, poller, daemon, background worker, permission expansion, or repository-local PR-creation subsystem.
 
+## Connected PR Lifecycle Managed-Label Follow-Up
+After every successful authorized connected PR lifecycle mutation that changes a pull request's canonical lifecycle projection, treat the mutation response as provisional parent-operation evidence until managed-label convergence is proven from fresh canonical state.
+
+For a Draft -> Ready-for-Review transition, immediately reacquire the exact PR and current head after the Ready mutation succeeds, then invoke the existing #1022/#1023/#1038 managed-label lifecycle with reason `draft-ready-transition`. Recompute the planner-derived managed-label delta from current Draft/Ready, validation, branch, and review evidence; preserve unmanaged/human/security/dependency/third-party labels; apply only the admitted managed delta; and reread the exact PR to prove convergence. A successful Ready mutation is not terminal connected-lifecycle success while required managed-label convergence is skipped, blocked, stale, or unproven.
+
+Do not retry the Ready mutation merely because label reconciliation failed after the state change. Reacquire the already-mutated canonical PR, keep the Ready transition evidence separate from label-reconciliation evidence, and continue only the bounded managed-label convergence path. An unchanged converged rerun performs zero label writes.
+
+The same existing lifecycle invocation contract applies after head, validation, review-thread, branch-freshness, and final-state transitions when those changes alter the canonical managed projection. Labels remain disposable derived evidence and never grant Ready-for-Review, merge, issue-closure, review-resolution, protected-setting, production, credential, or external-system authority.
+
+This follow-up remains connector/operator driven and reuses `scripts/agent_os_issue_labels/connected_pr_lifecycle.py`; do not add a workflow, webhook, poller, daemon, background worker, permission expansion, repository-local PR lifecycle subsystem, or second label planner/reconciler.
+
 ## Implementation-Issue Post-Create Classification And Continuation
 After every successful authorized creation of an Agent OS implementation handoff, treat the creation response as provisional until canonical issue readback proves the issue identity, body, state, and managed classification labels. Prefer the existing structured issue-create path, which supplies the validated `proposed_labels` set at creation and verifies exact label readback. Do not report an implementation-ready handoff as complete while a canonical managed owner/readiness/type projection that was part of the validated creation plan is missing.
 If canonical readback shows a system-created mechanical classification omission, reuse the existing #1962 issue-label reconciler rather than inventing a second readiness or label writer. Reconcile only labels supported by canonical issue metadata, require the applicable label-write authority, preserve unmanaged labels, reread to prove convergence, and fail closed on ambiguous owner/readiness, stale issue state, unavailable labels, provider failure, or readback mismatch. Never infer `status:ready` from title, bug type, age, lack of blockers, or the mere fact that ChatGPT created the issue.
@@ -118,9 +129,10 @@ existing shared standard, or environment-assigned non-protected branch that
 satisfies the Safe Implementation Lane.
 
 ## Version
-0.9.0
+0.10.0
 
 ## Changelog
+- 0.10.0 requires connected PR lifecycle mutations, including Draft -> Ready-for-Review, to reacquire canonical PR/head state and prove managed-label convergence through the existing #1022/#1023/#1038 lifecycle before the parent operation is terminal (#2661).
 - 0.9.0 requires canonical post-create issue classification/readiness verification for implementation handoffs, reuses #1962 for system-created mechanical label omissions, and carries the same current `work on` instruction forward after purely mechanical readiness convergence without synthesizing new authority (#1885).
 - 0.8.0 requires canonical post-create PR identity/state/discoverability verification before success reporting or managed-label mutation, fails closed on Draft/Ready drift or unauthorized merged state, and forbids duplicate-create visibility diagnostics (#1793).
 - #1324 consolidates all ordinary repository engineering under this canonical role while retiring Integration Manager and Google Workspace Automation Engineer as executable technical agents; shared standards preserve their routing/domain constraints without transferring external-write authority.
