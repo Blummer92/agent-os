@@ -80,6 +80,8 @@ def validate_adaptation_candidates(
         raise ContractValidationError("handoff-unknown-field", "adaptations contains unknown sections")
 
     function_protection = {item["name"]: bool(item["protected"]) for item in instructional_functions}
+    function_expected = {item["name"]: float(item["expected_minutes"]) for item in instructional_functions}
+    claimed_savings: dict[str, float] = {}
     result: dict[str, list[dict[str, Any]]] = {section: [] for section in ADAPTATION_SECTIONS}
     seen_ids: set[str] = set()
     total = 0
@@ -160,6 +162,16 @@ def validate_adaptation_candidates(
                     "function_name": function_name,
                     "minutes_saved": _minutes(item["minutes_saved"], f"{name}.minutes_saved"),
                 }
+
+            if "function_name" in normalized and section in {"repetitions", "evidence_formats", "optional_polish"}:
+                function_name = normalized["function_name"]
+                claimed = claimed_savings.get(function_name, 0.0) + float(normalized["minutes_saved"])
+                if claimed > function_expected[function_name]:
+                    raise ContractValidationError(
+                        "handoff-invalid",
+                        "function-bound adaptation savings exceed the function's expected duration",
+                    )
+                claimed_savings[function_name] = claimed
 
             if candidate_id in seen_ids:
                 raise ContractValidationError("handoff-duplicate", "adaptation candidate ids must be unique")
