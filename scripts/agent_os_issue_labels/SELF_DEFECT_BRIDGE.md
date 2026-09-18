@@ -57,10 +57,16 @@ choosing by title or search order.
 
 ## Idempotency and recursion
 
-The bridge derives a mutation identity from the semantic defect identity plus the
-selected mutation target (`issue:<number>` or `issue:create`). A mutation identity
-already recorded in the active lineage makes the next equivalent mutation a
-no-op while allowing the original mission to continue when it remains actionable.
+The bridge derives a mutation identity from the semantic defect identity plus a
+material-evidence identity. The material-evidence identity is a deterministic
+digest of the bounded reproduction the observation already carries, normalized
+for insignificant whitespace, so it is derived rather than supplied: no caller
+label can rewrite equivalent evidence or suppress genuinely new evidence. The
+mutation identity is deliberately independent of whether the canonical target is
+still `issue:create` or has become `issue:<number>` after readback, so
+create -> rediscover converges without a second write for equivalent evidence. A
+genuinely new bounded reproduction digests differently and may admit one
+hardening mutation; repeating that evidence is again a no-op.
 
 Failure of the external GitHub mutation is not fed recursively back into this
 planner as another defect in the same mutation lineage. The writer/integration
