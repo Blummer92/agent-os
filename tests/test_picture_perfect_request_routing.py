@@ -143,3 +143,25 @@ def test_ppux_result_consumption_preserves_state_provenance_and_provider_applica
         "Canva remains separate from the canonical modeled tutorial application",
     ):
         assert invariant in routing
+
+
+def test_registered_ppux_capability_binds_real_projection_contract_and_behavior_tests() -> None:
+    registry = read(REUSABLE_CAPABILITIES)
+    record = registry.split(
+        "  - capability_id: ppux-picture-perfect-prompt-projection\n", 1
+    )[1].split("\n  - capability_id:", 1)[0]
+    assert "picture-perfect-prompt-projection-input-v1" in record
+    assert "picture-perfect-prompt-projection-result-v1" in record
+    assert (
+        "08_Tooling/instructional-materials-coach/picture-perfect-coach/"
+        "src/promptProjectionEntrypoint.test.ts"
+    ) in record
+
+    behavior = read(
+        ROOT
+        / "08_Tooling/instructional-materials-coach/picture-perfect-coach/"
+        "src/promptProjectionEntrypoint.test.ts"
+    )
+    assert "preserves ready and blocked prompt cards without rewriting either state" in behavior
+    assert "keeps source/application provenance provider-neutral and non-authorizing" in behavior
+    assert "fails closed on malformed or unsupported input without throwing" in behavior
