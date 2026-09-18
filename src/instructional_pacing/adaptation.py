@@ -178,7 +178,11 @@ def _adapted_range(timing: dict[str, float], savings: float) -> dict[str, float]
     return {"lower": lower, "expected": expected, "upper": upper}
 
 
-def _split_plan(functions: list[dict[str, Any]], available: float) -> dict[str, Any] | None:
+def _split_plan(
+    functions: list[dict[str, Any]],
+    available: float,
+    adapted_expected: float,
+) -> dict[str, Any] | None:
     cumulative = 0.0
     split_after: str | None = None
     for item in functions:
@@ -191,11 +195,10 @@ def _split_plan(functions: list[dict[str, Any]], available: float) -> dict[str, 
     if split_after is None or split_after == functions[-1]["name"]:
         return None
 
-    total = sum(float(item["expected_minutes"]) for item in functions)
     return {
         "split_after": split_after,
         "first_period_expected_minutes": cumulative,
-        "continuation_expected_minutes": max(0.0, total - cumulative),
+        "continuation_expected_minutes": max(0.0, adapted_expected - cumulative),
         "teacher_review_required": True,
     }
 
@@ -251,7 +254,11 @@ def plan_lesson_adaptation(
     split_plan = None
     split_unresolved = False
     if adapted["expected"] > available and packet["continuation_allowed"]:
-        split_plan = _split_plan(packet["instructional_functions"], available)
+        split_plan = _split_plan(
+            packet["instructional_functions"],
+            available,
+            adapted["expected"],
+        )
         split_unresolved = split_plan is None
 
     return {
