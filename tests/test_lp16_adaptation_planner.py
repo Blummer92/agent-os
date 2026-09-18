@@ -85,7 +85,10 @@ def test_adaptation_hierarchy_selects_earlier_steps_first() -> None:
     assert [item["id"] for item in payload["compressed_instances"]] == ["setup-friction", "extra-demo"]
     assert payload["changed_formats"] == []
     assert payload["deferred_functions"] == []
-    assert payload["adapted_range"]["expected"] == 45.0
+    # 3 operational minutes return to the period and 2 extraneous instructional
+    # minutes leave the range; the two budgets are not interchangeable.
+    assert payload["available_lesson_minutes"] == 48.0
+    assert payload["adapted_range"]["expected"] == 48.0
 
 
 def test_repetition_reduction_preserves_instructional_function() -> None:
@@ -187,19 +190,121 @@ def test_adaptation_is_deterministic_and_non_authorizing() -> None:
     for key, value in NON_AUTHORITY_FIELDS.items():
         assert first[key] is value
 
-def test_operational_friction_increases_available_time_without_compressing_instruction() -> None:
+
+def _operational_packet(period: int, operational: int, function_minutes: int, **adaptations) -> dict:
     packet = _packet()
-    packet["period_minutes"] = 50
-    packet["operational_minutes"] = 10
+    packet["period_minutes"] = period
+    packet["operational_minutes"] = operational
     packet["instructional_functions"] = [
-        {"name": "model", "protected": True, "lower_minutes": 15, "expected_minutes": 15, "upper_minutes": 15},
-        {"name": "practice", "protected": True, "lower_minutes": 15, "expected_minutes": 15, "upper_minutes": 15},
-        {"name": "feedback-revision", "protected": True, "lower_minutes": 15, "expected_minutes": 15, "upper_minutes": 15},
+        {"name": name, "protected": True, "lower_minutes": 5, "expected_minutes": function_minutes, "upper_minutes": function_minutes}
+        for name in ("model", "practice", "feedback-revision")
     ]
-    packet["adaptations"] = {
-        "operational_friction": [{"id": "setup-friction", "minutes_saved": 5}],
-    }
-    payload = _payload(packet)
+    if adaptations:
+        packet["adaptations"] = adaptations
+    return packet
+
+
+def test_operational_friction_increases_available_time_without_compressing_instruction() -> None:
+    payload = _payload(
+        _operational_packet(50, 10, 15, operational_friction=[{"id": "setup-friction", "minutes_saved": 5}])
+    )
     assert payload["available_lesson_minutes"] == 45.0
     assert payload["adapted_range"]["expected"] == 45.0
     assert payload["advisory_assessment_outcome"] == "fits"
+    assert payload["compressed_instances"] == [
+        {"id": "setup-friction", "kind": "operational-friction", "minutes_saved": 5.0}
+    ]
+
+
+def test_operational_savings_can_never_exceed_the_operational_minutes() -> None:
+    """3x40=120 declared, 100-minute period, 5 operational minutes, 40 claimed."""
+    payload = _payload(
+        _operational_packet(100, 5, 40, operational_friction=[{"id": "setup-friction", "minutes_saved": 40}])
+    )
+    assert payload["available_lesson_minutes"] == 100.0
+    assert payload["available_lesson_minutes"] <= 100.0
+    assert payload["adapted_range"]["expected"] == 120.0
+    assert payload["advisory_assessment_outcome"] == "split-required"
+    assert payload["compressed_instances"] == [
+        {"id": "setup-friction", "kind": "operational-friction", "minutes_saved": 5.0}
+    ]
+
+
+def test_no_operational_savings_leaves_the_budget_untouched() -> None:
+    payload = _payload(_operational_packet(100, 15, 30))
+    assert payload["available_lesson_minutes"] == 85.0
+    assert payload["adapted_range"]["expected"] == 90.0
+    assert payload["compressed_instances"] == []
+
+
+def test_operational_savings_compose_with_repetition_reduction_without_double_counting() -> None:
+    payload = _payload(
+        _operational_packet(
+            100,
+            15,
+            35,
+            operational_friction=[{"id": "setup-friction", "minutes_saved": 10}],
+            repetitions=[{"id": "practice-repeat", "function_name": "practice", "minutes_saved": 10, "preserves_function": True}],
+        )
+    )
+    # 100 - 15 + 10 = 95 available; 105 declared - 10 instructional = 95 expected.
+    assert payload["available_lesson_minutes"] == 95.0
+    assert payload["adapted_range"]["expected"] == 95.0
+    kinds = {item["kind"]: item["minutes_saved"] for item in payload["compressed_instances"]}
+    assert kinds == {"operational-friction": 10.0, "repetitions": 10.0}
+
+
+def test_operational_savings_compose_with_an_evidence_format_change() -> None:
+    payload = _payload(
+        _operational_packet(
+            100,
+            15,
+            40,
+            operational_friction=[{"id": "setup-friction", "minutes_saved": 15}],
+            evidence_formats=[
+                {
+                    "id": "exit-format",
+                    "function_name": "feedback-revision",
+                    "minutes_saved": 20,
+                    "from_format": "uploaded-reflection",
+                    "to_format": "verbal-check",
+                    "preserves_objective": True,
+                    "preserves_success_criteria": True,
+                    "preserves_accessibility": True,
+                }
+            ],
+        )
+    )
+    assert payload["available_lesson_minutes"] == 100.0
+    assert payload["adapted_range"]["expected"] == 100.0
+    assert [item["kind"] for item in payload["compressed_instances"]] == ["operational-friction"]
+    assert payload["changed_formats"][0]["minutes_saved"] == 20.0
+
+
+def test_operational_savings_are_applied_before_a_split_is_planned() -> None:
+    payload = _payload(
+        _operational_packet(60, 10, 30, operational_friction=[{"id": "setup-friction", "minutes_saved": 10}])
+    )
+    assert payload["available_lesson_minutes"] == 60.0
+    assert payload["advisory_assessment_outcome"] == "split-required"
+    assert payload["split_plan"] is not None
+    assert payload["compressed_instances"] == [
+        {"id": "setup-friction", "kind": "operational-friction", "minutes_saved": 10.0}
+    ]
+
+
+def test_multiple_operational_candidates_share_one_operational_budget() -> None:
+    payload = _payload(
+        _operational_packet(
+            100,
+            8,
+            40,
+            operational_friction=[
+                {"id": "a-setup", "minutes_saved": 6},
+                {"id": "b-cleanup", "minutes_saved": 6},
+            ],
+        )
+    )
+    assert payload["available_lesson_minutes"] == 100.0
+    credited = {item["id"]: item["minutes_saved"] for item in payload["compressed_instances"]}
+    assert credited == {"a-setup": 6.0, "b-cleanup": 2.0}
