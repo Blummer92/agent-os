@@ -82,6 +82,7 @@ def validate_adaptation_candidates(
     function_protection = {item["name"]: bool(item["protected"]) for item in instructional_functions}
     result: dict[str, list[dict[str, Any]]] = {section: [] for section in ADAPTATION_SECTIONS}
     seen_ids: set[str] = set()
+    seen_format_functions: set[str] = set()
     total = 0
 
     for section in ADAPTATION_SECTIONS:
@@ -121,6 +122,13 @@ def validate_adaptation_candidates(
                 function_name = validate_stable_id(item["function_name"], f"{name}.function_name")
                 if function_name not in function_protection:
                     raise ContractValidationError("handoff-invalid", "evidence-format candidate references an unknown function")
+                from_format = validate_stable_id(item["from_format"], f"{name}.from_format")
+                to_format = validate_stable_id(item["to_format"], f"{name}.to_format")
+                if from_format == to_format:
+                    raise ContractValidationError("handoff-invalid", "evidence-format change must change the format")
+                if function_name in seen_format_functions:
+                    raise ContractValidationError("handoff-duplicate", "only one evidence-format change is allowed per function")
+                seen_format_functions.add(function_name)
                 flags = (
                     "preserves_objective",
                     "preserves_success_criteria",
@@ -138,8 +146,8 @@ def validate_adaptation_candidates(
                     "id": candidate_id,
                     "function_name": function_name,
                     "minutes_saved": _minutes(item["minutes_saved"], f"{name}.minutes_saved"),
-                    "from_format": validate_stable_id(item["from_format"], f"{name}.from_format"),
-                    "to_format": validate_stable_id(item["to_format"], f"{name}.to_format"),
+                    "from_format": from_format,
+                    "to_format": to_format,
                     "preserves_objective": True,
                     "preserves_success_criteria": True,
                     "preserves_accessibility": True,
