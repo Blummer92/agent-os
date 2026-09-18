@@ -142,3 +142,12 @@ def test_evaluator_uses_no_learner_vector_or_similarity_score_fields() -> None:
     serialized = repr(payload).lower()
     for forbidden in ("cosine", "euclidean", "manhattan", "mahalanobis", "embedding", "learner_score", "ability_score"):
         assert forbidden not in serialized
+
+def test_zero_comparable_runs_hold_even_when_declared_timing_fits() -> None:
+    packet = _packet()
+    packet["prior_runs"] = []
+    packet["period_minutes"] = 70
+    payload = _payload(evaluate_lesson_pacing(packet))
+    assert payload["advisory_assessment_outcome"] == "insufficient-evidence"
+    assert payload["routing_recommendation"] == "hold"
+    assert "lp-evidence-comparable-runs-insufficient" in payload["unresolved_uncertainties"]
