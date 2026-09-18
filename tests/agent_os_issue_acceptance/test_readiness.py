@@ -564,3 +564,24 @@ def test_unrelated_prose_without_prior_scope_heading_is_needs_decision():
     result = evaluate_issue_readiness(body)
     assert result.outcome == ReadinessOutcome.NEEDS_DECISION
     assert _prior_scope_check(result).status == Status.MANUAL_REVIEW
+
+
+def test_2650_concrete_dependency_blocker_dominates_manual_review() -> None:
+    body = """
+Issue Tier: 0
+## Objective
+Wait for the required upstream implementation.
+## Owner
+needs-decision
+## Allowed Files
+- README.md
+## Validation
+- markdown check
+## Completion Criterion
+- Upstream dependency is available.
+Blocked by: #2434
+"""
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.BLOCKED
+    assert "A required dependency is blocked." in result.report.blockers
+    assert result.report.manual_review_items

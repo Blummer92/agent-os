@@ -118,3 +118,26 @@ def test_duplicate_lane_numbers_are_rejected() -> None:
             issue_number=1241,
             lane_evidence=[pr_lane(2600, 2606), no_pr_lane(2600)],
         )
+
+
+def test_2647_known_60_item_population_remains_nonterminal_across_tool_batches() -> None:
+    lanes = [
+        no_pr_lane(number, "current-main-satisfies")
+        for number in range(1, 26)
+    ]
+    lanes.extend(
+        {
+            **no_pr_lane(number, "current-main-satisfies"),
+            "repository_gap": "unknown",
+            "pr_required": "unknown",
+        }
+        for number in range(26, 61)
+    )
+    partial = classify_issue_batch_completion(
+        repository=REPOSITORY,
+        issue_number=2647,
+        lane_evidence=lanes,
+    )
+    assert partial["terminal"] is False
+    assert partial["unfinished_issue_numbers"] == list(range(26, 61))
+    assert partial["agent_os_continuation"]["action"] == "continue-incomplete-issue-lanes"
