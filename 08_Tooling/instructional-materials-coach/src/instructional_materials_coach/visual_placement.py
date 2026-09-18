@@ -27,6 +27,9 @@ class PlacementTarget:
     element_id: str
     index: int | None = None
     bounds: Mapping[str, Any] | None = None
+    fit_mode: str | None = None
+    source_width: int | None = None
+    source_height: int | None = None
 
 
 @dataclass(frozen=True)
@@ -100,6 +103,17 @@ def resolve_exact_target(
     bounds = raw.get("bounds")
     if bounds is not None and not isinstance(bounds, Mapping):
         raise VisualPlacementError("placement bounds must be a mapping")
+    fit_mode = raw.get("fit_mode")
+    if fit_mode is not None:
+        if fit_mode not in {"contain", "native"}:
+            raise VisualPlacementError("instructional visual placement must preserve the complete asset")
+    source_width = raw.get("source_width")
+    source_height = raw.get("source_height")
+    for name, value in (("source_width", source_width), ("source_height", source_height)):
+        if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value <= 0):
+            raise VisualPlacementError(f"{name} must be a positive integer")
+    if (source_width is None) != (source_height is None):
+        raise VisualPlacementError("source dimensions must be supplied together")
     return PlacementTarget(
         artifact_type=kind,
         artifact_id=artifact,
@@ -109,6 +123,9 @@ def resolve_exact_target(
         element_id=element_id,
         index=index,
         bounds=dict(bounds) if bounds is not None else None,
+        fit_mode=fit_mode,
+        source_width=source_width,
+        source_height=source_height,
     )
 
 
@@ -128,6 +145,8 @@ def build_placement_request(
     plan = _required_id(source_plan_id, "source_plan_id")
     if target.role_id != role or target.marker != marker_for_role(role):
         raise VisualPlacementError("placement target does not bind the requested role")
+    if target.fit_mode not in (None, "contain", "native"):
+        raise VisualPlacementError("instructional visual placement cannot use a clipping crop mode")
     return PlacementRequest(
         asset_id=asset_id,
         drive_file_id=drive_file_id,

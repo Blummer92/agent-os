@@ -123,3 +123,51 @@ def test_coarse_semantic_placement_is_not_an_exact_target():
             role_id="visual-role-abc123",
             matches=[{"marker": "slide", "container_id": "slide-1", "element_id": "marker-1"}],
         )
+
+
+def test_instructional_visual_rejects_crop_fit_mode():
+    role = "visual-role-abc123"
+    with pytest.raises(VisualPlacementError, match="preserve the complete asset"):
+        resolve_exact_target(
+            artifact_type="slides",
+            artifact_id="artifact-1",
+            role_id=role,
+            matches=[{
+                "marker": marker_for_role(role),
+                "container_id": "slide-1",
+                "element_id": "marker-1",
+                "bounds": {"left": 10, "top": 20, "width": 300, "height": 200},
+                "fit_mode": "cover",
+                "source_width": 1200,
+                "source_height": 800,
+            }],
+        )
+
+
+def test_instructional_visual_accepts_complete_asset_contain_mode():
+    role = "visual-role-abc123"
+    target = resolve_exact_target(
+        artifact_type="docs",
+        artifact_id="artifact-1",
+        role_id=role,
+        matches=[{
+            "marker": marker_for_role(role),
+            "container_id": "body-1",
+            "element_id": "marker-1",
+            "index": 3,
+            "fit_mode": "contain",
+            "source_width": 1200,
+            "source_height": 800,
+        }],
+    )
+    assert target.fit_mode == "contain"
+    assert (target.source_width, target.source_height) == (1200, 800)
+
+
+def test_source_dimensions_must_be_complete_positive_pair():
+    role = "visual-role-abc123"
+    with pytest.raises(VisualPlacementError, match="supplied together"):
+        resolve_exact_target(
+            artifact_type="docs", artifact_id="a", role_id=role,
+            matches=[{"marker": marker_for_role(role), "container_id": "b", "element_id": "e", "source_width": 100}],
+        )
