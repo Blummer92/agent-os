@@ -9,7 +9,7 @@ pytest-xdist>=3.8.0
 # Imported directly by tests/test_dependency_constraint_alignment.py to compare
 # declared version constraints. pytest already pulls it in; declared explicitly
 # so the guard does not rest on a transitive dependency.
-packaging>=24.0
+packaging>=26.3
 
 # Code Quality
 black>=26.5.1
