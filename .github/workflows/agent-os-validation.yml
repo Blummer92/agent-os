@@ -439,7 +439,7 @@ jobs:
               current_base_sha=os.environ["CURRENT_MAIN_SHA"],
               current_head_sha=os.environ["CANDIDATE_HEAD_SHA"],
           )
-          if admission.admission != "admit":
+          if admission.status != "admit":
               reasons = ",".join(admission.reason_codes) or "main-health.unproven"
               raise SystemExit(
                   "ordinary final candidate aggregate blocked by exact-current main health: "
