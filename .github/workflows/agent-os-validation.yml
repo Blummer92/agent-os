@@ -220,10 +220,11 @@ jobs:
             exit 1
           fi
 
-          pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json state,isDraft,headRefOid)"
+          pr_json="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json state,isDraft,headRefOid,baseRefOid)"
           state="$(jq -r '.state' <<<"$pr_json")"
           is_draft="$(jq -r '.isDraft' <<<"$pr_json")"
           current_head="$(jq -r '.headRefOid' <<<"$pr_json")"
+          current_base="$(jq -r '.baseRefOid' <<<"$pr_json")"
 
           if [ "$state" != "OPEN" ]; then
             echo "final-candidate PR must be open" >&2
@@ -244,6 +245,7 @@ jobs:
 
           echo "mode=final-candidate" >> "$GITHUB_OUTPUT"
           echo "head_sha=$current_head" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$current_base" >> "$GITHUB_OUTPUT"
 
       - name: Reuse valid exact-head aggregate evidence
         if: ${{ github.event_name == 'pull_request' && github.event.action == 'ready_for_review' }}
@@ -309,6 +311,173 @@ jobs:
             echo "checked-out SHA $checked_out_sha does not match admitted candidate $EXPECTED_HEAD_SHA" >&2
             exit 1
           fi
+
+      - name: Project exact-current main health
+        if: ${{ steps.aggregate_evidence.outputs.run_required != 'false' && (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && steps.candidate.outputs.mode == 'final-candidate')) }}
+        id: main_health
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event_name == 'pull_request' && github.event.pull_request.number || inputs.pr_number }}
+          CANDIDATE_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || steps.candidate.outputs.head_sha }}
+          CANDIDATE_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || steps.candidate.outputs.base_sha }}
+        run: |
+          set -euo pipefail
+
+          current_main_sha="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          if ! [[ "$current_main_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "current main SHA is unavailable or malformed" >&2
+            exit 1
+          fi
+
+          gh api --paginate             -H "Accept: application/vnd.github+json"             "/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files?per_page=100"             --jq '.[].filename' > "$RUNNER_TEMP/main-health-changed-files.txt"
+          if [ ! -s "$RUNNER_TEMP/main-health-changed-files.txt" ]; then
+            echo "pull request changed-file set is empty" >&2
+            exit 1
+          fi
+
+          check_json="$(
+            gh api               -H "Accept: application/vnd.github+json"               "/repos/$GITHUB_REPOSITORY/commits/$current_main_sha/check-runs?per_page=100"               --jq '[.check_runs[]
+                | select(.name == "Run aggregate validation")
+                | {status, conclusion, details_url, started_at, completed_at}]
+                | sort_by(.started_at // "")
+                | last // {}'
+          )"
+
+          check_status="$(jq -r '.status // "missing"' <<<"$check_json")"
+          check_conclusion="$(jq -r '.conclusion // ""' <<<"$check_json")"
+          details_url="$(jq -r '.details_url // ""' <<<"$check_json")"
+          evidence_sha="$current_main_sha"
+          validation_conclusion="missing"
+
+          case "$check_status" in
+            queued|in_progress)
+              validation_conclusion="pending"
+              ;;
+            completed)
+              case "$check_conclusion" in
+                success)
+                  validation_conclusion="success"
+                  ;;
+                cancelled)
+                  validation_conclusion="cancelled"
+                  ;;
+                failure)
+                  validation_conclusion="infrastructure-failure"
+                  if [[ "$details_url" =~ /job/([0-9]+) ]]; then
+                    job_id="${BASH_REMATCH[1]}"
+                    aggregate_step_conclusion="$(
+                      gh api "/repos/$GITHUB_REPOSITORY/actions/jobs/$job_id"                         --jq '[.steps[]? | select(.name == "Run aggregate validation") | .conclusion] | last // ""'
+                    )"
+                    if [ "$aggregate_step_conclusion" = "failure" ]; then
+                      validation_conclusion="repository-failure"
+                    fi
+                  fi
+                  ;;
+                *)
+                  validation_conclusion="infrastructure-failure"
+                  ;;
+              esac
+              ;;
+            missing)
+              evidence_sha=""
+              validation_conclusion="missing"
+              ;;
+            *)
+              validation_conclusion="infrastructure-failure"
+              ;;
+          esac
+
+          export CURRENT_MAIN_SHA="$current_main_sha"
+          export EVIDENCE_SHA="$evidence_sha"
+          export VALIDATION_CONCLUSION="$validation_conclusion"
+          export CANDIDATE_BASE_SHA
+          export CANDIDATE_HEAD_SHA
+          export PR_NUMBER
+
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          from scripts.agent_os_remote_validation import (
+              SelectionInput,
+              load_rule_map,
+              select_validation_plan,
+          )
+          from scripts.agent_os_remote_validation.main_health import project_main_health
+          from scripts.agent_os_remote_validation.main_health_admission import (
+              evaluate_final_validation_admission,
+          )
+
+          changed = tuple(
+              line
+              for line in Path(
+                  os.environ["RUNNER_TEMP"],
+                  "main-health-changed-files.txt",
+              ).read_text(encoding="utf-8").splitlines()
+              if line
+          )
+          # The plan is evaluated against exact-current main, not the candidate's
+          # possibly stale recorded base. #2236 requires the projected health SHA,
+          # the admission base, and the plan base to describe the same main; using
+          # the recorded base would report `main-health.evidence-stale` for every
+          # candidate whose base is merely behind, which is branch drift rather
+          # than a main-health failure. The candidate's changed-file set still
+          # selects the profile, so candidate attribution is unchanged.
+          plan = select_validation_plan(
+              SelectionInput(
+                  repository=os.environ["GITHUB_REPOSITORY"],
+                  pull_request=int(os.environ["PR_NUMBER"]),
+                  base_sha=os.environ["CURRENT_MAIN_SHA"],
+                  head_sha=os.environ["CANDIDATE_HEAD_SHA"],
+                  changed_files=changed,
+              ),
+              load_rule_map(),
+          )
+          health = project_main_health(
+              repository=os.environ["GITHUB_REPOSITORY"],
+              current_main_sha=os.environ["CURRENT_MAIN_SHA"],
+              evidence_sha=os.environ["EVIDENCE_SHA"] or None,
+              validation_conclusion=os.environ["VALIDATION_CONCLUSION"],
+          )
+          admission = evaluate_final_validation_admission(
+              plan,
+              None,
+              main_health=health,
+              current_base_sha=os.environ["CURRENT_MAIN_SHA"],
+              current_head_sha=os.environ["CANDIDATE_HEAD_SHA"],
+          )
+
+          # This gate owns exactly one question: is exact-current main healthy
+          # enough to spend candidate aggregate cycles? #2236 answers it by
+          # blocking with a `main-health.*` reason, which is the only thing that
+          # may freeze this run:
+          #   main-health.exact-main-red
+          #   main-health.validation-missing
+          #   main-health.validation-pending
+          #   main-health.validation-cancelled
+          #   main-health.infrastructure-unproven
+          #   main-health.evidence-invalid
+          #   main-health.evidence-stale
+          #   main-health.repository-mismatch
+          #
+          # Every other disposition describes the candidate's own validation
+          # obligation, not main health: healthy main yields `require-aggregate`
+          # (the aggregate this job is about to run), `admission.focused-evidence-missing`
+          # for a focused plan, or `admission.selector-manual-review`. Treating
+          # those as failures froze candidates while main was green, so they pass
+          # through to the existing downstream owners unchanged.
+          main_health_blockers = tuple(
+              reason for reason in admission.reason_codes if reason.startswith("main-health.")
+          )
+          if main_health_blockers:
+              raise SystemExit(
+                  "ordinary final candidate aggregate blocked by exact-current main health: "
+                  + ",".join(main_health_blockers)
+              )
+          PY
+
+          echo "main_sha=$current_main_sha" >> "$GITHUB_OUTPUT"
+          echo "validation_conclusion=$validation_conclusion" >> "$GITHUB_OUTPUT"
 
       - name: Set up Python
         if: ${{ steps.aggregate_evidence.outputs.run_required != 'false' }}
