@@ -3,7 +3,20 @@ from __future__ import annotations
 from agent_os_execution_service.bulk_repair_facade import classify_bulk_repair_continuation
 
 
-def candidate(pr, disposition, reason, *, shared=False, attempt=None, boundary=None, mutated=False):
+def candidate(
+    pr,
+    disposition,
+    reason,
+    *,
+    shared=False,
+    attempt=None,
+    boundary=None,
+    mutated=False,
+    shared_key=None,
+    shared_owner=None,
+    repair_available=False,
+    repair_completed=False,
+):
     return {
         "pull_request_number": pr,
         "disposition": disposition,
@@ -12,6 +25,10 @@ def candidate(pr, disposition, reason, *, shared=False, attempt=None, boundary=N
         "failed_repair_attempt_id": attempt,
         "retry_boundary": boundary,
         "retry_mutation_performed": mutated,
+        "shared_blocker_key": shared_key,
+        "shared_repair_owner": shared_owner,
+        "shared_repair_available": repair_available,
+        "shared_repair_completed": repair_completed,
     }
 
 
@@ -26,11 +43,11 @@ def retry_boundary(attempt, admitted):
     }
 
 
-def classify(evidence):
+def classify(evidence, requested=None):
     return classify_bulk_repair_continuation(
         repository="Blummer92/agent-os",
-        issue_number=2487,
-        requested_pull_requests=[2475, 2477, 2479],
+        issue_number=2664,
+        requested_pull_requests=requested or [2475, 2477, 2479],
         candidate_evidence=evidence,
     )
 
@@ -63,7 +80,7 @@ def test_failed_repair_gate_is_recorded_without_discarding_parent_batch():
     assert result["agent_os_continuation"]["terminal"] is False
 
 
-def test_shared_provider_blocker_halts_parent_batch():
+def test_shared_provider_blocker_without_repair_path_halts_parent_batch():
     result = classify([
         candidate(2475, "blocked", "provider-unavailable", shared=True),
     ])
@@ -79,6 +96,55 @@ def test_parent_authorization_invalidation_is_a_shared_stop():
     ])
     assert result["next_action"] == "halt-shared-blocker"
     assert result["agent_os_continuation"]["action"] == ""
+
+
+def test_repairable_shared_main_health_blocker_is_nonterminal():
+    requested = [2658, 2655, 2653, 2649, 2646]
+    result = classify(
+        [
+            candidate(
+                pr,
+                "blocked",
+                "main-health-validation-blocked",
+                shared=True,
+                shared_key="exact-current-main-health",
+                shared_owner="issue:#2652",
+                repair_available=True,
+            )
+            for pr in requested
+        ],
+        requested=requested,
+    )
+    assert result["next_action"] == "advance-shared-repair"
+    assert result["shared_blocker_pull_requests"] == tuple(requested)
+    assert result["shared_repair_owner"] == "issue:#2652"
+    assert result["finite_admission"]["completion_admissible"] is False
+    assert result["agent_os_continuation"]["action"] == "advance-shared-repair"
+    assert result["agent_os_continuation"]["terminal"] is False
+    assert result["agent_os_continuation"]["blocked"] is False
+
+
+def test_shared_repair_completion_routes_reacquisition_not_terminal_report():
+    requested = [2658, 2655, 2653, 2649, 2646]
+    result = classify(
+        [
+            candidate(
+                pr,
+                "blocked",
+                "main-health-validation-blocked",
+                shared=True,
+                shared_key="exact-current-main-health",
+                shared_owner="issue:#2652",
+                repair_available=True,
+                repair_completed=True,
+            )
+            for pr in requested
+        ],
+        requested=requested,
+    )
+    assert result["next_action"] == "reacquire-shared-repair-candidates"
+    assert result["agent_os_continuation"]["action"] == "reacquire-shared-repair-candidates"
+    assert result["agent_os_continuation"]["terminal"] is False
 
 
 def test_unattached_git_objects_are_not_completion_evidence():
