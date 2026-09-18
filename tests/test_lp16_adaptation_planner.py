@@ -203,6 +203,12 @@ def _split_packet(**adaptations) -> dict:
         {"name": name, "protected": False, "lower_minutes": 5, "expected_minutes": 30, "upper_minutes": 30}
         for name in ("model", "practice", "closing")
     ]
+    # Comparable runs whose median active time equals this packet's declared
+    # 90-minute expected sum, so calibration does not shift the split arithmetic.
+    packet["prior_runs"] = [
+        {"run_id": f"run/{index}", "objective_ref": "objective/composition", "work_mode": "camera", "quality": "usable", "active_minutes": 90, "elapsed_minutes": 95, "context_ref": f"context/{index}"}
+        for index in (1, 2)
+    ]
     if adaptations:
         packet["adaptations"] = adaptations
     return packet
