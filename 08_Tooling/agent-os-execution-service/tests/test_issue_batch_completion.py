@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from agent_os_execution_service.issue_batch_completion import classify_issue_batch_completion
+from agent_os_execution_service.issue_batch_completion import (
+    classify_finite_population_continuation,
+    classify_issue_batch_completion,
+)
 
 REPOSITORY = "Blummer92/agent-os"
 
@@ -118,3 +121,73 @@ def test_duplicate_lane_numbers_are_rejected() -> None:
             issue_number=1241,
             lane_evidence=[pr_lane(2600, 2606), no_pr_lane(2600)],
         )
+
+
+def test_2647_known_population_continues_across_internal_batches() -> None:
+    targets = list(range(1, 61))
+    first_batch = classify_finite_population_continuation(
+        repository=REPOSITORY,
+        issue_number=2647,
+        target_issue_numbers=targets,
+        reconciled_issue_numbers=list(range(1, 26)),
+    )
+    assert first_batch["terminal"] is False
+    assert first_batch["remaining_issue_numbers"] == list(range(26, 61))
+    assert first_batch["remaining_count"] == 35
+    assert first_batch["agent_os_continuation"]["action"] == "continue-finite-population"
+
+    second_batch = classify_finite_population_continuation(
+        repository=REPOSITORY,
+        issue_number=2647,
+        target_issue_numbers=targets,
+        reconciled_issue_numbers=list(range(1, 51)),
+    )
+    assert second_batch["terminal"] is False
+    assert second_batch["remaining_issue_numbers"] == list(range(51, 61))
+
+    completed = classify_finite_population_continuation(
+        repository=REPOSITORY,
+        issue_number=2647,
+        target_issue_numbers=targets,
+        reconciled_issue_numbers=targets,
+    )
+    assert completed["terminal"] is True
+    assert completed["remaining_issue_numbers"] == []
+    assert completed["reason_codes"] == ["finite-population-fully-reconciled"]
+
+
+def test_2647_item_local_manual_review_does_not_remove_later_population() -> None:
+    result = classify_finite_population_continuation(
+        repository=REPOSITORY,
+        issue_number=2647,
+        target_issue_numbers=[10, 20, 30, 40],
+        reconciled_issue_numbers=[10, 20],
+    )
+    assert result["terminal"] is False
+    assert result["remaining_issue_numbers"] == [30, 40]
+
+
+def test_2647_reconciled_identity_outside_frozen_population_fails_closed() -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="subset"):
+        classify_finite_population_continuation(
+            repository=REPOSITORY,
+            issue_number=2647,
+            target_issue_numbers=[1, 2, 3],
+            reconciled_issue_numbers=[1, 4],
+        )
+
+
+def test_2647_shared_blocker_is_the_only_early_terminal() -> None:
+    result = classify_finite_population_continuation(
+        repository=REPOSITORY,
+        issue_number=2647,
+        target_issue_numbers=[1, 2, 3],
+        reconciled_issue_numbers=[1],
+        shared_blocker=True,
+    )
+    assert result["terminal"] is True
+    assert result["remaining_issue_numbers"] == [2, 3]
+    assert result["agent_os_continuation"]["blocked"] is True
+    assert result["reason_codes"] == ["shared-terminal-blocker"]
