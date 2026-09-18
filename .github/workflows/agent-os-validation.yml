@@ -336,7 +336,7 @@ jobs:
           fi
 
           check_json="$(
-            gh api               -H "Accept: application/vnd.github+json"               "/repos/$GITHUB_REPOSITORY/commits/$current_main_sha/check-runs?per_page=100"               --jq '[.check_runs[]
+            gh api               -H "Accept: application/vnd.github+json"               "/repos/$GITHUB_REPOSITORY/commits/$current_main_sha/check-runs?check_name=Run%20aggregate%20validation&per_page=100"               --jq '[.check_runs[]
                 | select(.name == "Run aggregate validation")
                 | {status, conclusion, details_url, started_at, completed_at}]
                 | sort_by(.started_at // "")
