@@ -79,93 +79,6 @@ def classify_issue_batch_completion(
     }
 
 
-def classify_finite_population_continuation(
-    *,
-    repository: str,
-    issue_number: int,
-    target_issue_numbers: list[int],
-    reconciled_issue_numbers: list[int],
-    shared_blocker: bool = False,
-) -> dict[str, object]:
-    """Project one known finite population across bounded host/tool batches.
-
-    The caller supplies the already-frozen target population and only identities
-    whose item-local disposition has been canonically reconciled/read back.
-    This function stores no cursor and performs no I/O; it deterministically
-    derives the remaining identities so an internal tool-call boundary cannot
-    masquerade as mission completion.
-    """
-    repo = _repository(repository)
-    batch_issue = _issue_number(issue_number, "issue_number")
-    targets = _issue_number_list(target_issue_numbers, "target_issue_numbers", allow_empty=False)
-    reconciled = _issue_number_list(
-        reconciled_issue_numbers, "reconciled_issue_numbers", allow_empty=True
-    )
-    if type(shared_blocker) is not bool:
-        raise TypeError("shared_blocker must be built-in bool")
-
-    target_set = frozenset(targets)
-    reconciled_set = frozenset(reconciled)
-    if not reconciled_set.issubset(target_set):
-        raise ValueError("reconciled_issue_numbers must be a subset of target_issue_numbers")
-
-    remaining = tuple(number for number in targets if number not in reconciled_set)
-    if shared_blocker:
-        terminal = True
-        blocked = True
-        action = ""
-        reasons = ("shared-terminal-blocker",)
-    elif not remaining:
-        terminal = True
-        blocked = False
-        action = ""
-        reasons = ("finite-population-fully-reconciled",)
-    else:
-        terminal = False
-        blocked = False
-        action = "continue-finite-population"
-        reasons = ("finite-population-remains",)
-
-    return {
-        "repository": repo,
-        "issue_number": batch_issue,
-        "target_issue_numbers": list(targets),
-        "reconciled_issue_numbers": list(reconciled),
-        "remaining_issue_numbers": list(remaining),
-        "target_count": len(targets),
-        "reconciled_count": len(reconciled),
-        "remaining_count": len(remaining),
-        "terminal": terminal,
-        "reason_codes": list(reasons),
-        "agent_os_continuation": continuation_payload(
-            ContinuationDecision(
-                action=action,
-                terminal=terminal,
-                blocked=blocked,
-                reason_codes=reasons,
-            )
-        ),
-        "github_writes_authorized": False,
-        "merge_authorized": False,
-        "issue_closure_authorized": False,
-        "workflow_authorized": False,
-        "production_authorized": False,
-        "external_system_write_authorized": False,
-    }
-
-
-def _issue_number_list(value: object, name: str, *, allow_empty: bool) -> tuple[int, ...]:
-    if type(value) is not list:
-        raise TypeError(f"{name} must be a list")
-    if not allow_empty and not value:
-        raise ValueError(f"{name} must be non-empty")
-    if any(type(item) is not int or item < 1 for item in value):
-        raise ValueError(f"{name} must contain positive built-in integers")
-    if len(set(value)) != len(value):
-        raise ValueError(f"{name} must contain unique issue numbers")
-    return tuple(value)
-
-
 def _classify_lane(repository: str, value: object) -> dict[str, object]:
     if not isinstance(value, Mapping):
         raise TypeError("lane evidence entries must be mappings")
@@ -295,4 +208,4 @@ def _nonnegative_int(value: object, name: str) -> int:
     return value
 
 
-__all__ = ["classify_finite_population_continuation", "classify_issue_batch_completion"]
+__all__ = ["classify_issue_batch_completion"]
