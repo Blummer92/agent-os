@@ -18,7 +18,13 @@ Every newly failed attempt creates a new CKR6 retry obligation. An outcome recor
 Do not substitute a one-time initial `plan_lesson_preflight(...)` call for this retry transition. Do not build a second lesson selector, Notion reader, retry engine, or repair state model. The executable behavior remains owned by `08_Tooling/agent-memory-context-manager/CKR6_REPAIR_ACTIVATION.md`, `repair_lesson_activation.py`, CKR11, and the existing CKR6/CKR2 contracts.
 
 ## Subordinate bug capture
-If a repair exposes a separate Agent OS defect and current policy permits bounded issue capture, that bookkeeping is subordinate to the active parent repair mission. After capture, continue the parent mission from its current retry boundary unless authorization, source of truth, scope, ownership, or another genuine stop condition changed. Issue creation alone is not a terminal repair state.
+If a repair exposes a separate Agent OS defect and current policy permits bounded issue capture, that bookkeeping is subordinate to the active parent repair mission.
+
+After a bug is created, linked, commented, or otherwise persisted, the mutation response is provisional evidence. Canonically read back the persisted defect evidence before treating capture as complete. Then reacquire the active parent issue/PR/branch/head/checkpoint and current check state before choosing the next repair or handoff action.
+
+A correct diagnosis, bug record, evidence comment, or handoff artifact is intermediate evidence while an admitted same-lineage action remains. Continue the parent mission from its current retry boundary without another user prompt unless authorization, source of truth, scope, ownership, an excluded surface, or another genuine stop condition changed.
+
+If canonical readback or parent-lineage reacquisition cannot be proven, fail closed with one explicit blocker naming the missing evidence and clearing condition. Do not convert missing readback into a completion claim, and do not fabricate repository-write, retry, merge, closure, workflow, credential, production, or external-write authority.
 
 ## Authority boundary
 Lessons Learned remain advisory-only. Current GitHub governance, issue/PR state, authorization, repository code, tests, and exact-head validation remain authoritative. Lesson retrieval or consumption grants no implementation, merge, issue-closure, workflow/protected-setting, credential, production, external-write, or other authority.
@@ -26,7 +32,11 @@ Lessons Learned remain advisory-only. Current GitHub governance, issue/PR state,
 If specialized knowledge is required and lesson activation returns insufficient/manual-review evidence, the next mutation remains blocked under the existing CKR6 contract. Otherwise use only the safe fallback already defined by CKR6; never invent replacement guidance.
 
 ## Version
-0.1.0
+0.2.0
+
+## Changelog
+- 0.2.0 requires canonical readback after subordinate bug persistence and parent issue/PR/branch/head/checkpoint plus check-state reacquisition before a failed-repair mission may continue or claim completion (#2635).
+- 0.1.0 initial failed-repair lesson re-entry contract from #1901, reusing the merged #1873 repair-activation seam and recurrence lesson LL-51 without creating a duplicate runtime mechanism.
 
 ## Source
-Issue #1901. Reuses the merged #1873 repair-activation seam and recurrence lesson LL-51 without creating a duplicate runtime mechanism.
+Issue #1901 established the retry-specific CKR6 boundary. Issue #2635 sharpens the existing subordinate-bug continuation/readback contract without creating a second continuation mechanism.
