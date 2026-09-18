@@ -5,12 +5,12 @@
 | Field | Value |
 |---|---|
 | Status | Active split registry |
-| Review owner | Integration Manager |
+| Review owner | ChatGPT Orchestrator |
 | GitHub write owner | GitHub Service Agent |
 | Authority | Navigation aid only |
 | External repo | `Blummer92/dmsc_apps_script_bundle` |
 | External branch | `main` |
-| Last reviewed | Issue #150 split/index cleanup |
+| Last reviewed | Issue #2594 ownership reconciliation |
 
 ## Purpose
 
@@ -24,7 +24,7 @@ services. Agents must inspect existing code zones before creating new paths.
 
 - Registry type: GitHub Path Registry / external repository navigation map
 - Agent OS location: `04_Registry/navigation/dmsc/`
-- Owner agent: Integration Manager
+- Owner agent: ChatGPT Orchestrator
 - GitHub write owner: GitHub Service Agent
 - Source of truth for this registry entry: Agent OS GitHub
 - Source of truth for DMSC code: `Blummer92/dmsc_apps_script_bundle` on `main`
