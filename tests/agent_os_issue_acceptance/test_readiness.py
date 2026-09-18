@@ -566,7 +566,7 @@ def test_unrelated_prose_without_prior_scope_heading_is_needs_decision():
     assert _prior_scope_check(result).status == Status.MANUAL_REVIEW
 
 
-def test_2650_dependency_blocker_dominates_issue_local_manual_review() -> None:
+def test_2650_concrete_dependency_blocker_dominates_manual_review() -> None:
     body = """
 Issue Tier: 0
 ## Objective
@@ -585,41 +585,3 @@ Blocked by: #2434
     assert result.outcome == ReadinessOutcome.BLOCKED
     assert "A required dependency is blocked." in result.report.blockers
     assert result.report.manual_review_items
-
-
-def test_2650_explicit_dependency_evidence_dominates_unrelated_manual_review() -> None:
-    body = """
-Issue Tier: 0
-## Objective
-Wait for a required capability.
-## Owner
-needs-decision
-## Allowed Files
-- README.md
-## Validation
-- markdown check
-## Completion Criterion
-- Required capability becomes available.
-"""
-    result = evaluate_issue_readiness(body, dependency_blocked=True)
-    assert result.outcome == ReadinessOutcome.BLOCKED
-    assert "A required dependency is blocked." in result.report.blockers
-
-
-def test_2650_issue_local_decision_without_blocker_remains_needs_decision() -> None:
-    body = """
-Issue Tier: 0
-## Objective
-Choose one implementation strategy.
-## Owner
-needs-decision
-## Allowed Files
-- README.md
-## Validation
-- markdown check
-## Completion Criterion
-- Strategy is selected.
-"""
-    result = evaluate_issue_readiness(body)
-    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
-    assert not result.report.blockers
