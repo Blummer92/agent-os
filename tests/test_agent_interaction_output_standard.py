@@ -379,6 +379,24 @@ def test_orchestrator_inherits_the_standard_without_a_competing_schema() -> None
     assert "## Test 28 - Presentation Grants No Authority\n" in fixtures
 
 
+
+
+def test_curriculum_agent_fixtures_distinguish_internal_evidence_from_visible_output() -> None:
+    fixture_paths = (
+        ROOT / "07_Agent_Tests/agent-orchestrator.tests.md",
+        ROOT / "07_Agent_Tests/unit-alignment-agent.tests.md",
+        ROOT / "07_Agent_Tests/teacher-modeling-coach.tests.md",
+    )
+    for path in fixture_paths:
+        fixture = read(path)
+        assert "internal" in fixture
+        assert "not automatically" in fixture or "only when material" in fixture
+        assert "Required output keys" not in fixture
+
+    standard = section(STANDARD, "Conditional Field Groups")
+    assert "only when routing is material" in standard
+    assert "No profile is required to display every field." in standard
+
 def test_standard_is_registered_and_navigable() -> None:
     assert "| Agent Interaction Output Standard | 0.2.0 |" in read(VERSION_MAP)
     navigation = read(NAVIGATION)
