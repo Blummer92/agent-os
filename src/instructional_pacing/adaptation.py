@@ -80,6 +80,9 @@ def validate_adaptation_candidates(
         raise ContractValidationError("handoff-unknown-field", "adaptations contains unknown sections")
 
     function_protection = {item["name"]: bool(item["protected"]) for item in instructional_functions}
+    #: Remaining expected minutes each instructional function can still supply.
+    #: A candidate may not claim time the function it names does not have, and
+    #: several candidates on one function may not claim it twice.
     function_remaining = {item["name"]: float(item["expected_minutes"]) for item in instructional_functions}
     result: dict[str, list[dict[str, Any]]] = {section: [] for section in ADAPTATION_SECTIONS}
     seen_ids: set[str] = set()
@@ -110,14 +113,10 @@ def validate_adaptation_candidates(
                         "lp-pacing-required-function-removed",
                         "repetition reduction must preserve the instructional function",
                     )
-                minutes_saved = _minutes(item["minutes_saved"], f"{name}.minutes_saved")
-                if minutes_saved > function_remaining[function_name]:
-                    raise ContractValidationError("handoff-invalid", "adaptation savings exceed the referenced function duration")
-                function_remaining[function_name] -= minutes_saved
                 normalized = {
                     "id": candidate_id,
                     "function_name": function_name,
-                    "minutes_saved": minutes_saved,
+                    "minutes_saved": _minutes(item["minutes_saved"], f"{name}.minutes_saved"),
                     "preserves_function": True,
                 }
             elif section == "evidence_formats":
@@ -139,14 +138,10 @@ def validate_adaptation_candidates(
                             "handoff-invalid",
                             "evidence-format change must preserve objective, success criteria, and accessibility",
                         )
-                minutes_saved = _minutes(item["minutes_saved"], f"{name}.minutes_saved")
-                if minutes_saved > function_remaining[function_name]:
-                    raise ContractValidationError("handoff-invalid", "adaptation savings exceed the referenced function duration")
-                function_remaining[function_name] -= minutes_saved
                 normalized = {
                     "id": candidate_id,
                     "function_name": function_name,
-                    "minutes_saved": minutes_saved,
+                    "minutes_saved": _minutes(item["minutes_saved"], f"{name}.minutes_saved"),
                     "from_format": validate_stable_id(item["from_format"], f"{name}.from_format"),
                     "to_format": validate_stable_id(item["to_format"], f"{name}.to_format"),
                     "preserves_objective": True,
@@ -164,15 +159,20 @@ def validate_adaptation_candidates(
                         "lp-pacing-required-function-removed",
                         "a protected instructional function cannot be deferred as optional polish",
                     )
-                minutes_saved = _minutes(item["minutes_saved"], f"{name}.minutes_saved")
-                if minutes_saved > function_remaining[function_name]:
-                    raise ContractValidationError("handoff-invalid", "adaptation savings exceed the referenced function duration")
-                function_remaining[function_name] -= minutes_saved
                 normalized = {
                     "id": candidate_id,
                     "function_name": function_name,
-                    "minutes_saved": minutes_saved,
+                    "minutes_saved": _minutes(item["minutes_saved"], f"{name}.minutes_saved"),
                 }
+
+            if "function_name" in normalized:
+                remaining = function_remaining[normalized["function_name"]]
+                if normalized["minutes_saved"] > remaining:
+                    raise ContractValidationError(
+                        "handoff-invalid",
+                        "adaptation savings exceed the referenced function duration",
+                    )
+                function_remaining[normalized["function_name"]] = remaining - normalized["minutes_saved"]
 
             if candidate_id in seen_ids:
                 raise ContractValidationError("handoff-duplicate", "adaptation candidate ids must be unique")
