@@ -97,3 +97,40 @@ def evaluate_primary_pr_creation_admission(
         existing_pull_request_number=None,
         reason_codes=("primary-pr.multiple-active",),
     )
+
+
+@dataclass(frozen=True, slots=True)
+class BatchPrimaryPrPackagingAdmission:
+    packaging_admitted: bool
+    issue_numbers: tuple[int, ...]
+    reason_codes: tuple[str, ...]
+    github_writes_authorized: bool = False
+
+
+def evaluate_batch_primary_pr_packaging(
+    *,
+    issue_numbers: tuple[int, ...],
+    focused_objective_shared: bool,
+) -> BatchPrimaryPrPackagingAdmission:
+    """Guard batch sequencing from erasing independent issue/PR lineage (#2447)."""
+    if type(issue_numbers) is not tuple or not issue_numbers:
+        raise TypeError("issue_numbers must be a non-empty exact tuple")
+    if any(type(number) is not int or number < 1 for number in issue_numbers):
+        raise TypeError("issue_numbers must contain positive built-in integers")
+    if len(set(issue_numbers)) != len(issue_numbers):
+        raise ValueError("issue_numbers must be unique")
+    if type(focused_objective_shared) is not bool:
+        raise TypeError("focused_objective_shared must be a built-in bool")
+
+    ordered = tuple(sorted(issue_numbers))
+    if len(ordered) == 1:
+        return BatchPrimaryPrPackagingAdmission(
+            True, ordered, ("primary-pr.single-issue",)
+        )
+    if not focused_objective_shared:
+        return BatchPrimaryPrPackagingAdmission(
+            False, ordered, ("primary-pr.independent-issues-require-separate-prs",)
+        )
+    return BatchPrimaryPrPackagingAdmission(
+        True, ordered, ("primary-pr.shared-focused-objective-proven",)
+    )
