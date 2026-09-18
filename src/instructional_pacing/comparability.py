@@ -23,6 +23,7 @@ def filter_comparable_runs(
     included: list[dict[str, Any]] = []
     excluded: list[dict[str, str]] = []
     contexts: set[str] = set()
+    seen_run_ids: set[str] = set()
 
     for run in runs:
         if type(run) is not dict:
@@ -31,6 +32,9 @@ def filter_comparable_runs(
         if set(run) != required:
             raise ContractValidationError("handoff-invalid", "prior run fields are not canonical")
         run_id = validate_stable_id(run["run_id"], "run_id")
+        if run_id in seen_run_ids:
+            raise ContractValidationError("handoff-duplicate", "prior run ids must be unique")
+        seen_run_ids.add(run_id)
         validate_stable_id(run["objective_ref"], "prior objective_ref")
         validate_stable_id(run["context_ref"], "context_ref")
         active = run["active_minutes"]
