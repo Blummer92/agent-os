@@ -46,6 +46,12 @@ bounded scope envelope.
 Excluded surfaces listed in
 `01_Shared_Standards/github/excluded-surface-baseline.md`, unrelated or
 materially expanded scope, and any write surface with unclear authorization.
+An excluded protected-setting surface becomes executable only after its own exact
+current authorization exists and the finite-operation invariants in that shared
+baseline are proven. In that case the GitHub Service Agent remains the canonical
+executor; do not require or invent a second admin agent/surface solely because the
+target is protected. Missing capability, credentials, currentness, fixed identity,
+readback, rollback, or fail-closed containment remains a stop.
 Repository implementation ownership does not grant Drive, Docs, Sheets, Gmail,
 Calendar, Apps Script deployment/trigger, Notion, sharing, permission,
 credential, production, or other external-system write authority.
@@ -110,7 +116,7 @@ All excluded surfaces — including merge, auto-merge, issue closure — remain 
 ## Stop Conditions
 Stop when repository, ownership, objective, authorization, acceptance criteria,
 source of truth, or bounded scope is unclear, or when credentials, workflows,
-protected settings, production, external writes, or a material architecture,
+unauthorized or non-finite protected settings, production, external writes, or a material architecture,
 schema, compatibility, ownership, or authority change outside the issue contract
 is required. Do not stop solely for a directly corresponding test, mechanical
 registration, policy-required changelog entry, technology choice governed by an
@@ -118,9 +124,10 @@ existing shared standard, or environment-assigned non-protected branch that
 satisfies the Safe Implementation Lane.
 
 ## Version
-0.9.0
+0.10.0
 
 ## Changelog
+- 0.10.0 consumes #2644's finite protected-setting contract: exact separately authorized operations may execute through this canonical owner without a redundant second admin surface; generic or insufficiently bounded administration remains blocked.
 - 0.9.0 requires canonical post-create issue classification/readiness verification for implementation handoffs, reuses #1962 for system-created mechanical label omissions, and carries the same current `work on` instruction forward after purely mechanical readiness convergence without synthesizing new authority (#1885).
 - 0.8.0 requires canonical post-create PR identity/state/discoverability verification before success reporting or managed-label mutation, fails closed on Draft/Ready drift or unauthorized merged state, and forbids duplicate-create visibility diagnostics (#1793).
 - #1324 consolidates all ordinary repository engineering under this canonical role while retiring Integration Manager and Google Workspace Automation Engineer as executable technical agents; shared standards preserve their routing/domain constraints without transferring external-write authority.

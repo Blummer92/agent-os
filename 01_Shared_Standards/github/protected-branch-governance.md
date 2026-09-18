@@ -67,6 +67,16 @@ Changing rulesets, branch protection, required checks, merge queues, bypass acto
 permissions, or related settings requires a separate approved GitHub Change
 Request. Documentation does not authorize activation.
 
+A separate approved Change Request supplies protected-setting authority; it does
+not by itself require a second execution identity. After exact authorization is
+current, the canonical GitHub Service Agent may execute an existing finite,
+content-bound protected-setting implementation when repository/target/operation
+identity is fixed, fresh pre-state is bound immediately before mutation, stale or
+expanded input fails closed, canonical post-write readback is immediate, and
+rollback is bounded. This path must not accept arbitrary API paths, commands,
+ruleset IDs, check names, permissions, credentials, or payload expansion. Missing
+capability or any invariant remains a stop.
+
 Required-check decisions remain governed by issue #216. CI diagnosis and exact
 check-identity evidence remain governed by issue #228.
 
@@ -85,4 +95,8 @@ recommendations, and remaining risks.
 
 ## Version
 
-0.1.0
+0.2.0
+
+## Changelog
+
+- 0.2.0 narrows #2644's redundant execution-surface gate for already-authorized finite protected-setting operations without granting generic administration.
