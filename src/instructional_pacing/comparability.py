@@ -6,8 +6,14 @@ from typing import Any
 
 from instructional_workflow_contracts import ContractValidationError, validate_stable_id
 
-_USABLE_QUALITY = frozenset({"usable", "usable-with-limits"})
-_EXCLUDED_QUALITY = frozenset({"unusable", "stale", "contradictory", "too-late", "privacy-blocked"})
+#: Canonical LP14 observation-quality states. This module is the LP2/LP14
+#: comparability seam, so packet admission and the evaluator consume this one
+#: vocabulary instead of restating it.
+USABLE_OBSERVATION_QUALITY = frozenset({"usable", "usable-with-limits"})
+EXCLUDED_OBSERVATION_QUALITY = frozenset(
+    {"unusable", "stale", "contradictory", "too-late", "privacy-blocked"}
+)
+OBSERVATION_QUALITY_STATES = USABLE_OBSERVATION_QUALITY | EXCLUDED_OBSERVATION_QUALITY
 
 
 def filter_comparable_runs(
@@ -41,11 +47,7 @@ def filter_comparable_runs(
         if active > elapsed:
             excluded.append({"run_id": run_id, "reason": "lp-evidence-run-interrupted-or-sparse"})
             continue
-        quality = run["quality"]
-        if quality in _EXCLUDED_QUALITY:
-            excluded.append({"run_id": run_id, "reason": "lp-evidence-observation-quality-unusable"})
-            continue
-        if quality not in _USABLE_QUALITY:
+        if run["quality"] not in USABLE_OBSERVATION_QUALITY:
             excluded.append({"run_id": run_id, "reason": "lp-evidence-observation-quality-unusable"})
             continue
         if run["objective_ref"] != objective_ref:
