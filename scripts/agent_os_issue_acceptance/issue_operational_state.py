@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal
 
+from scripts.agent_os_github_git_objects.models import require_branch
+
 from .approval_records import ApprovalApplicabilityResult
 from .lifecycle_mutation_guard import AdmissionStatus, LifecycleMutationAdmissionResult
 from .merge_authorization import MergeAuthorizationApplicabilityResult
@@ -412,9 +414,10 @@ class PrimaryIssueClaim:
 
     def __post_init__(self) -> None:
         _positive_int(self.pull_request_number, "pull_request_number")
-        branch = _exact_text(self.branch, "branch", 255)
-        if not _BRANCH_RE.fullmatch(branch) or branch == "main":
-            raise ValueError("branch is malformed or protected")
+        try:
+            require_branch(self.branch, allow_protected=False)
+        except ValueError as exc:
+            raise ValueError("branch is malformed or protected") from exc
         _sha40(self.head_sha, "head_sha")
         if self.state not in {"draft", "ready", "merged"}:
             raise ValueError("primary claim state is unsupported")
