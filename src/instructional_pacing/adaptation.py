@@ -217,6 +217,8 @@ def plan_lesson_adaptation(
     changed_formats: list[dict[str, Any]] = []
     deferred: list[str] = []
     selected_savings = 0.0
+    operational_savings = 0.0
+    instructional_savings = 0.0
 
     for section in ADAPTATION_SECTIONS:
         if required_savings <= selected_savings:
@@ -224,7 +226,12 @@ def plan_lesson_adaptation(
         for candidate in candidates[section]:
             if required_savings <= selected_savings:
                 break
-            selected_savings += float(candidate["minutes_saved"])
+            candidate_savings = float(candidate["minutes_saved"])
+            selected_savings += candidate_savings
+            if section == "operational_friction":
+                operational_savings += candidate_savings
+            else:
+                instructional_savings += candidate_savings
             if section == "evidence_formats":
                 changed_formats.append(
                     {
@@ -247,11 +254,12 @@ def plan_lesson_adaptation(
                     record["function_name"] = candidate["function_name"]
                 compressed.append(record)
 
-    adapted = _adapted_range(timing, selected_savings)
+    adapted = _adapted_range(timing, instructional_savings)
+    effective_available = available + operational_savings
     split_plan = None
     split_unresolved = False
-    if adapted["expected"] > available and packet["continuation_allowed"]:
-        split_plan = _split_plan(packet["instructional_functions"], available)
+    if adapted["expected"] > effective_available and packet["continuation_allowed"]:
+        split_plan = _split_plan(packet["instructional_functions"], effective_available)
         split_unresolved = split_plan is None
 
     return {
@@ -261,6 +269,8 @@ def plan_lesson_adaptation(
         "deferred_functions": sorted(set(deferred)),
         "split_plan": split_plan,
         "selected_savings_minutes": selected_savings,
+        "operational_savings_minutes": operational_savings,
+        "effective_available_minutes": effective_available,
         "split_unresolved": split_unresolved,
         "manual_review_required": bool(compressed or changed_formats or deferred or split_plan or split_unresolved),
     }
