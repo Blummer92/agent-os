@@ -68,6 +68,10 @@ def render_student_material_pdf_preview(
             raise StudentMaterialPdfError(
                 "required visual placement is unresolved: " + ", ".join(unresolved_visual_roles)
             )
+        if source.required_visual_role_ids:
+            raise StudentMaterialPdfError(
+                "required visual render evidence is unavailable for this text-only PDF renderer"
+            )
         target = Path(output_path)
         target.parent.mkdir(parents=True, exist_ok=True)
         styles = getSampleStyleSheet()
