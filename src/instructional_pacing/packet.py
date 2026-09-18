@@ -27,6 +27,7 @@ PRIVACY_STATES = frozenset({"eligible", "restricted", "blocked", "unknown"})
 EVIDENCE_DISPOSITIONS = frozenset(
     {"direct-evidence", "partial-evidence", "context-evidence", "not-comparable", "uncertain"}
 )
+OBSERVATION_QUALITY_STATUSES = frozenset({"usable", "usable-with-limits", "unusable"})
 
 NON_AUTHORITY_FIELDS = {
     "report_only": True,
@@ -143,8 +144,15 @@ def validate_pacing_packet(value: object) -> dict[str, Any]:
     _bounded_list(normalized["evidence_sources"], "evidence_sources", MAX_EVIDENCE_SOURCES)
     _bounded_list(normalized["prior_runs"], "prior_runs", MAX_PRIOR_RUNS)
 
-    if type(normalized["observation_quality"]) is not dict:
+    observation_quality = normalized["observation_quality"]
+    if type(observation_quality) is not dict:
         raise ContractValidationError("handoff-wrong-type", "observation_quality must be a mapping")
+    if set(observation_quality) != {"status"}:
+        if set(observation_quality) - {"status"}:
+            raise ContractValidationError("handoff-unknown-field", "observation_quality contains unsupported fields")
+        raise ContractValidationError("handoff-invalid", "observation_quality is missing status")
+    if observation_quality["status"] not in OBSERVATION_QUALITY_STATUSES:
+        raise ContractValidationError("handoff-invalid", "observation_quality status is unsupported")
     privacy = normalized["privacy_disposition"]
     if privacy not in PRIVACY_STATES:
         raise ContractValidationError("handoff-invalid", "privacy_disposition is unsupported")
