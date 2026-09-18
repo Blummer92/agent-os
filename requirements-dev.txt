@@ -9,7 +9,7 @@ pytest-xdist>=3.8.0
 # Imported directly by tests/test_dependency_constraint_alignment.py to compare
 # declared version constraints. pytest already pulls it in; declared explicitly
 # so the guard does not rest on a transitive dependency.
-packaging>=24.0
+packaging>=26.3
 
 # Code Quality
 black>=26.5.1
@@ -22,14 +22,14 @@ markdown>=3.10.3
 
 # Validation Runtime Dependencies
 pyyaml>=6.0.3
-google-auth>=2.57.1
+google-auth>=2.58.0
 google-api-python-client>=2.200.0
 google-auth-oauthlib>=1.4.1
 PyGithub==2.10.0
 mcp>=2.2.0,<2.3
 
 # Coverage
-coverage[toml]>=7.16.0
+coverage[toml]>=7.16.1
 
 # Local editable packages (development convenience only; wheel tests prove packaging)
 -e ./src

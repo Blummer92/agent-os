@@ -43,6 +43,7 @@ EXPECTED_PUBLIC_EXPORTS = (
     "ContractReference",
     "ContractValidationError",
     "DEPRECATED_FIELD_ALIASES",
+    "DriveFolderMetadataReader",
     "EXPERIMENT_EVIDENCE_AVAILABILITIES",
     "EXPERIMENT_EVIDENCE_VERSION",
     "FINGERPRINT_ALGORITHM",
@@ -71,9 +72,13 @@ EXPECTED_PUBLIC_EXPORTS = (
     "ValidatedRecord",
     "ValidationResult",
     "ValidationStatus",
+    "WorkspaceDriveClient",
+    "WorkspaceDriveResult",
+    "WorkspaceDriveState",
     "assemble_gemini_manual_prompt",
     "canonical_json_bytes",
     "canonical_size",
+    "execute_workspace_create",
     "freeze_json",
     "plan_classroom_workspace_provisioning",
     "resolve_classroom_unit_workspace",
@@ -360,20 +365,28 @@ def test_branch_head_is_not_synthetic_merge() -> None:
 
 def test_component_modules_and_exports_are_unchanged() -> None:
     assert {name: git_blob_sha(PACKAGE / name) for name in COMPONENT_BLOBS} == COMPONENT_BLOBS
-    init_text = (PACKAGE / "__init__.py").read_text(encoding="utf-8")
+    init_path = PACKAGE / "__init__.py"
+    init_text = init_path.read_text(encoding="utf-8")
     init_tree = ast.parse(init_text)
-    all_assignment = next(
+    all_assignments = [
         node for node in init_tree.body
         if isinstance(node, ast.Assign)
         and any(isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets)
+    ]
+    assert len(all_assignments) == 1, "__init__.py must define exactly one literal __all__ public-surface contract"
+    all_value = all_assignments[0].value
+    assert isinstance(all_value, (ast.List, ast.Tuple)), "__all__ must remain a literal list/tuple so export changes are reviewable"
+    actual_exports = tuple(
+        item.value for item in all_value.elts
+        if isinstance(item, ast.Constant) and isinstance(item.value, str)
     )
-    assert isinstance(all_assignment.value, (ast.List, ast.Tuple))
-    actual_exports = tuple(ast.literal_eval(all_assignment.value))
-    assert actual_exports == EXPECTED_PUBLIC_EXPORTS
+    assert len(actual_exports) == len(all_value.elts), "__all__ entries must remain literal strings"
+    assert actual_exports == EXPECTED_PUBLIC_EXPORTS, (
+        "instructional_workflow_contracts public exports changed; update EXPECTED_PUBLIC_EXPORTS only when the public-surface change is intentional"
+    )
     assert "material_requirement" not in init_text
     assert "artifact_manifest" not in init_text
     assert "reuse_planner" not in init_text
-
 
 
 # Issue #850 v2 integration coverage
@@ -381,27 +394,13 @@ def test_component_modules_and_exports_are_unchanged() -> None:
 def test_valid_v2_material_requirement_fixture() -> None:
     value = fixture("valid_material_requirement_v2.json")
     result = requirement_module.validate_material_requirement(value)
-
     assert result.status is ValidationStatus.VALID
     assert result.record is not None
-    assert (
-        result.record.contract_version
-        == "curriculum-material-requirement-v2"
-    )
-
+    assert result.record.contract_version == "curriculum-material-requirement-v2"
     payload = result.record.to_dict()
-    assert payload["visual_direction"]["decision"] == (
-        "visuals-required"
-    )
-    assert result.record is not None
+    assert payload["visual_direction"]["decision"] == "visuals-required"
     assert payload["visual_direction"]["maximum_visual_count"] == 2
-    assert [
-        role["role_type"]
-        for role in payload["visual_direction"]["roles"]
-    ] == [
-        "worked-example",
-        "comparison",
-    ]
+    assert [role["role_type"] for role in payload["visual_direction"]["roles"]] == ["worked-example", "comparison"]
     assert result.authority == AuthorityEvidence()
     assert not any(payload["authority"].values())
 
@@ -409,30 +408,15 @@ def test_valid_v2_material_requirement_fixture() -> None:
 def test_v1_and_v2_material_fingerprints_are_independent() -> None:
     v1 = fixture("valid_material_requirement.json")
     v2 = fixture("valid_material_requirement_v2.json")
-
-    assert (
-        requirement_module.material_requirement_source_fingerprint(v1)
-        != requirement_module.material_requirement_source_fingerprint(v2)
-    )
-
-    v1_first = requirement_module.validate_material_requirement(
-        copy.deepcopy(v1)
-    )
-    v1_second = requirement_module.validate_material_requirement(
-        copy.deepcopy(v1)
-    )
-    v2_first = requirement_module.validate_material_requirement(
-        copy.deepcopy(v2)
-    )
-    v2_second = requirement_module.validate_material_requirement(
-        copy.deepcopy(v2)
-    )
-
+    assert requirement_module.material_requirement_source_fingerprint(v1) != requirement_module.material_requirement_source_fingerprint(v2)
+    v1_first = requirement_module.validate_material_requirement(copy.deepcopy(v1))
+    v1_second = requirement_module.validate_material_requirement(copy.deepcopy(v1))
+    v2_first = requirement_module.validate_material_requirement(copy.deepcopy(v2))
+    v2_second = requirement_module.validate_material_requirement(copy.deepcopy(v2))
     assert v1_first.record is not None
     assert v1_second.record is not None
     assert v2_first.record is not None
     assert v2_second.record is not None
-
     assert v1_first.record.fingerprint == v1_second.record.fingerprint
     assert v2_first.record.fingerprint == v2_second.record.fingerprint
     assert v1_first.record.fingerprint != v2_first.record.fingerprint
