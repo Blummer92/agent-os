@@ -26,7 +26,13 @@ def _packet() -> dict:
             {"name": "showcase", "protected": False, "lower_minutes": 2, "expected_minutes": 4, "upper_minutes": 5},
         ],
         "evidence_sources": [{"kind": "teacher-entered-summary"}],
-        "prior_runs": [],
+        # Two comparable runs whose median active time equals the declared
+        # 50-minute expected sum, so the adaptation planner stays reachable
+        # under the LP2 zero-evidence hold (#2688) without shifting timing.
+        "prior_runs": [
+            {"run_id": "run/1", "objective_ref": "objective/composition", "work_mode": "camera", "quality": "usable", "active_minutes": 50, "elapsed_minutes": 55, "context_ref": "context/a"},
+            {"run_id": "run/2", "objective_ref": "objective/composition", "work_mode": "camera", "quality": "usable", "active_minutes": 50, "elapsed_minutes": 55, "context_ref": "context/b"},
+        ],
         "observation_quality": {"status": "usable"},
         "privacy_disposition": "eligible",
         "demand_profile": diagnosis,
