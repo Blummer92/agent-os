@@ -22,30 +22,57 @@ that matches your task and read the files in order. Every path starts from `AGEN
 4. relevant overlay + referenced shared standards
 5. matching `07_Agent_Tests/<overlay>.tests.md`
 
+### Reusable Capability Registry implementation
+1. `AGENTS.md`
+2. `04_Registry/agent-inheritance-registry.md`
+3. `04_Registry/responsibility-matrix.md`
+4. `04_Registry/legacy-agent-alias-registry.md`
+5. `02_Agent_Overlays/chatgpt-orchestrator.md`
+6. `01_Shared_Standards/global-engineering/reusable-capability-registry-standard.md`
+7. `04_Registry/reusable-capabilities.yml`
+8. `02_Agent_Overlays/github-service-agent.md` when repository implementation is required
+9. `07_Agent_Tests/` and corresponding `tests/` fixtures
+
 ### Navigation Registry implementation
 1. `AGENTS.md`
-2. `02_Agent_Overlays/integration-manager.md`
-3. `01_Shared_Standards/navigation/README.md`
-4. `navigation-registry-standard.md`
-5. `navigation-registry-architecture.md`
-6. `navigation-registry-data-model.md`
-7. `connector-adapter-framework.md`
-8. `workspace-discovery-service.md`
-9. `tests/` fixtures and `07_Agent_Tests/`
+2. `04_Registry/agent-inheritance-registry.md`
+3. `04_Registry/responsibility-matrix.md`
+4. `04_Registry/legacy-agent-alias-registry.md`
+5. `02_Agent_Overlays/chatgpt-orchestrator.md`
+6. `01_Shared_Standards/navigation/README.md`
+7. `navigation-registry-standard.md`
+8. `navigation-registry-architecture.md`
+9. `navigation-registry-data-model.md`
+10. `connector-adapter-framework.md`
+11. `workspace-discovery-service.md`
+12. `02_Agent_Overlays/github-service-agent.md` when repository implementation is required
+13. `tests/` fixtures and `07_Agent_Tests/`
+
+The retired `02_Agent_Overlays/integration-manager.md` is compatibility guidance only.
+Resolve legacy Integration Manager references through
+`04_Registry/legacy-agent-alias-registry.md`; do not use that overlay as an active
+implementation owner.
 
 ### Notion integration
 1. `AGENTS.md`
-2. `01_Shared_Standards/notion/notion-navigation-index-standard.md`
-3. `08_Tooling/notion-navigation-client/README.md`
-4. `08_Tooling/notion-navigation-client/docs/registry-fit.md`
+2. `04_Registry/responsibility-matrix.md`
+3. `02_Agent_Overlays/chatgpt-orchestrator.md`
+4. `01_Shared_Standards/notion/notion-navigation-index-standard.md`
 5. `01_Shared_Standards/navigation/connector-adapter-framework.md`
+6. `02_Agent_Overlays/github-service-agent.md` when repository implementation is required
+7. `08_Tooling/notion-navigation-client/README.md`
+8. `08_Tooling/notion-navigation-client/docs/registry-fit.md`
+9. `07_Agent_Tests/` and corresponding `tests/` fixtures
 
 ### Google Drive integration
 1. `AGENTS.md`
 2. `00_Governance/write-authorization-policy.md`
-3. relevant Google Workspace or Integration Manager overlay
-4. `01_Shared_Standards/navigation/connector-adapter-framework.md`
-5. `01_Shared_Standards/navigation/navigation-registry-data-model.md`
+3. `04_Registry/responsibility-matrix.md`
+4. `02_Agent_Overlays/chatgpt-orchestrator.md`
+5. relevant Google Workspace shared standards
+6. `01_Shared_Standards/navigation/connector-adapter-framework.md`
+7. `01_Shared_Standards/navigation/navigation-registry-data-model.md`
+8. `02_Agent_Overlays/github-service-agent.md` when repository implementation is required
 
 ### GitHub integration
 1. `AGENTS.md`

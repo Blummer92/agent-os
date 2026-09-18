@@ -14,11 +14,15 @@ Each metric has a measurable definition so it can later become a regression chec
 |---|---|---|---|---|
 | Broken reference count | count of repository paths referenced by the map/metadata that do not exist on disk | 0 | QA / Test Agent | every `validate-repo-structure.sh` run |
 | Orphan document rate | docs with no inbound reference and no owner ÷ docs reviewed × 100 | < 10% | QA / Test Agent | per documentation review |
-| Duplicate concept rate | concepts with more than one conflicting canonical document ÷ concepts reviewed × 100 | 0 conflicting canonical docs | Integration Manager | per documentation review |
-| Documentation coverage | required concepts with ≥1 canonical owner ÷ required concepts × 100 | ≥ 95% for active areas | Integration Manager | per documentation review |
+| Duplicate concept rate | concepts with more than one conflicting canonical document ÷ concepts reviewed × 100 | 0 conflicting canonical docs | QA / Test Agent | per documentation review |
+| Documentation coverage | required concepts with ≥1 canonical owner ÷ required concepts × 100 | ≥ 95% for active areas | QA / Test Agent | per documentation review |
 | Documentation retrieval depth | reads needed to reach implementation instructions from `AGENTS.md` via a reading path | ≤ 5 hops for active paths | QA / Test Agent | per reading-path change |
 | Average documents before implementation | mean documents an implementer reads before first code change, per reading path | trend down over time | QA / Test Agent | per release |
-| Documentation reuse percentage | work items that extend existing docs ÷ work items that touched docs × 100 | trend up over time | Integration Manager | per release |
+| Documentation reuse percentage | work items that extend existing docs ÷ work items that touched docs × 100 | trend up over time | QA / Test Agent | per release |
+
+Routing and concept ownership remain distinct from validation ownership: ChatGPT Orchestrator
+owns the current cross-system, Navigation Registry, and reusable-capability routing contracts;
+GitHub Service Agent owns repository implementation; QA / Test Agent owns validation evidence.
 
 ## Measurement rules
 
