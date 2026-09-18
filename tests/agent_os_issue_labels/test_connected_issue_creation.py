@@ -142,3 +142,56 @@ def test_missing_write_authority_cannot_claim_terminal_success():
     result = converge_connected_issue_creation(Provider(), "Blummer92/agent-os", 2144, issue_form_path=FORM, label_map_path=MAP, lifecycle_admission=refused_lifecycle_labels())
     assert result.terminal_success is False
     assert "connected-create-label-convergence-not-proven" in result.reason_codes
+
+
+def test_ambiguous_manual_review_never_projects_create():
+    result = evaluate_duplicate_review_admission(
+        BODY,
+        disposition=DuplicateReviewDisposition.MANUAL_REVIEW,
+        canonical_issue_number=2283,
+        issue_form_path=FORM,
+    )
+    assert result.create_allowed is False
+    assert result.disposition is DuplicateReviewDisposition.MANUAL_REVIEW
+    assert result.next_operation == "manual-review-duplicate-admission-required"
+
+
+def test_historical_issue_with_current_successor_uses_supplied_current_owner():
+    result = evaluate_duplicate_review_admission(
+        BODY,
+        disposition=DuplicateReviewDisposition.RECURRENCE_EXISTING_OWNER,
+        canonical_issue_number=2602,
+        issue_form_path=FORM,
+    )
+    assert result.create_allowed is False
+    assert result.canonical_issue_number == 2602
+    assert result.next_operation == "append-recurrence-evidence-to-canonical-issue"
+
+
+def test_duplicate_admission_is_not_derived_from_issue_wording():
+    differently_worded_body = BODY.replace(
+        "Reviewed current open bug owners and found one distinct repair seam.",
+        "Different title and wording; canonical evidence still identifies the existing owner.",
+    )
+    result = evaluate_duplicate_review_admission(
+        differently_worded_body,
+        disposition=DuplicateReviewDisposition.DUPLICATE_EXISTING_OWNER,
+        canonical_issue_number=2283,
+        issue_form_path=FORM,
+    )
+    assert result.create_allowed is False
+    assert result.canonical_issue_number == 2283
+    assert result.next_operation == "reuse-canonical-issue-no-create"
+
+
+def test_focused_successor_rejects_non_boolean_repair_seam():
+    result = evaluate_duplicate_review_admission(
+        BODY,
+        disposition=DuplicateReviewDisposition.FOCUSED_SUCCESSOR,
+        canonical_issue_number=2283,
+        distinct_repair_seam="false",
+        issue_form_path=FORM,
+    )
+    assert result.create_allowed is False
+    assert result.disposition is DuplicateReviewDisposition.MANUAL_REVIEW
+    assert "duplicate-review.distinct-repair-seam-invalid" in result.reason_codes
