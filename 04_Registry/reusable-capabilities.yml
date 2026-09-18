@@ -1,5 +1,47 @@
 registry_version: 0.1.0
 capabilities:
+  - capability_id: ppux-picture-perfect-prompt-projection
+    name: Picture Perfect Prompt Projection
+    summary: Routes resolved existing Picture Perfect tutorial prompt requests to the governed #2525 projection operation and preserves its structured PPUX result without generic reconstruction.
+    status: active
+    canonical_paths:
+      - 08_Tooling/instructional-materials-coach/picture-perfect-coach/src/promptProjectionEntrypoint.ts
+      - 08_Tooling/instructional-materials-coach/picture-perfect-coach/PROMPT_PROJECTION_ENTRYPOINT.md
+      - 08_Tooling/instructional-materials-coach/picture-perfect-coach/PPUX-PROJECTION-TRANSPORT-2525.md
+    public_interfaces:
+      - operation:ppux-picture-perfect-prompt-projection
+      - result:picture-perfect-prompt-projection-result-v1
+    owner_agent: ChatGPT Orchestrator
+    supporting_agents:
+      - GitHub Service Agent
+      - QA / Test Agent
+    known_consumers:
+      - 02_Agent_Overlays/chatgpt-orchestrator.md
+    tests:
+      - tests/test_picture_perfect_request_routing.py
+    keywords:
+      - picture-perfect
+      - ppux
+      - prompt-projection
+      - tutorial-prompts
+    reuse_guidance: Resolve the canonical tutorial/source handoff first, then invoke only the fixed #2525 operation. Consume the returned structured projection verbatim; unavailable, unresolved, blocked, invalid, or manual-review results never authorize generic PPUX reconstruction.
+    side_effects:
+      - Capability discovery and result consumption perform no provider, browser, Notion, Drive, classroom, or other external write.
+      - Provider execution remains a separate authorization path.
+    failure_modes:
+      - source-unresolved
+      - projection-capability-unavailable
+      - projection-not-executable
+      - projection-output-unavailable-or-invalid
+      - canonical-ppux-blocked
+      - manual-review-required
+      - authorization-required-for-separate-provider-execution
+    invariants:
+      - Tutorial/source identity, source fingerprint, execution SHA/projection identity, card order/state/content, application identity, portablePrompt, and provenance are preserved.
+      - Ready and blocked cards remain visible, including fully blocked projections.
+      - A downstream provider or destination such as Canva never changes canonical tutorial application identity.
+      - No generic image-prompt fallback is permitted for a resolved existing PPUX tutorial when the governed projection route is unavailable or blocked.
+
   - capability_id: issue-acceptance-report
     name: Issue Acceptance Report
     summary: Builds and renders reusable issue-acceptance evidence using shared status and report models.
