@@ -46,6 +46,31 @@ def test_vm_runtime_mcp_projects_unfinished_mission_as_non_terminal() -> None:
     assert continuation["side_effects_performed"] is False
 
 
+def test_vm_runtime_mcp_subordinate_bug_capture_cannot_terminate_red_pr_repair() -> None:
+    result = classify_agent_os_mission_completion_tool(
+        repository="Blummer92/agent-os",
+        issue_number=2595,
+        branch_exists=True,
+        implementation_commit_count=1,
+        draft_pr_exists=True,
+        canonical_pr_readback_verified=True,
+        capable_route_available=True,
+        subordinate_writes_only=True,
+    )
+
+    assert result["completion_admissible"] is False
+    assert "subordinate-write-is-not-parent-completion" in result["reason_codes"]
+    assert result["next_action"] == "continue-same-lineage-on-capable-implementation-route"
+    continuation = result["agent_os_continuation"]
+    assert continuation["terminal"] is False
+    assert continuation["blocked"] is False
+    assert continuation["stalled"] is False
+    assert continuation["action"] == "continue-same-lineage-on-capable-implementation-route"
+    assert continuation["execution_authorized"] is False
+    assert continuation["github_writes_authorized"] is False
+    assert continuation["side_effects_performed"] is False
+
+
 def test_vm_runtime_mcp_projects_completed_delivery_as_terminal() -> None:
     result = classify_agent_os_mission_completion_tool(
         repository="Blummer92/agent-os",
