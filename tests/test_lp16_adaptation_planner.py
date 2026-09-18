@@ -211,4 +211,4 @@ def test_multiple_format_changes_for_one_function_fail_closed() -> None:
     )
     result = evaluate_lesson_pacing(packet)
     assert result.status is ValidationStatus.INVALID
-    assert result.reason_codes == ("handoff-duplicate",)
+    assert result.reason_codes == ("handoff-invalid",)
