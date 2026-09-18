@@ -31,7 +31,7 @@ The provider read may return a bounded relevance page larger than CKR2's five-ca
 - `consumed`: relevant lesson evidence was selected through CKR6/CKR2; the retry gate may admit the next mutation.
 - `not-material`: CKR6 determined retrieval was not needed; the retry gate may admit the next mutation.
 - `unavailable-or-failed`: the existing coarse retry-admission outcome is preserved for compatibility. When specialized knowledge is required, the mutation remains blocked.
-- `lesson_disposition`: exact-attempt classification distinguishes `capability-unavailable`, `no-relevant-lesson`, `candidate-data-defect`, `stale-relevant-lesson`, `unverifiable-relevant-lesson`, `canonical-authority-conflict`, and `governance-insufficient` without changing mutation admission. `consumed` and `not-material` remain explicit dispositions.
+- `lesson_disposition`: exact-attempt classification distinguishes `capability-unavailable`, `no-relevant-lesson`, `candidate-data-defect`, `stale-relevant-lesson`, `unverifiable-relevant-lesson`, `canonical-authority-conflict`, and `governance-insufficient` without changing mutation admission. `consumed` and `not-material` remain explicit dispositions. The execution-service facade carries this value across its boundary beside the coarse outcome, so a downstream semantic-recurrence consumer reads capability unavailability as capability evidence rather than as another same-class repair failure. Downstream consumers read the disposition rather than re-deriving it from the coarse outcome.
 
 ## Authority
 
