@@ -416,11 +416,18 @@ jobs:
               ).read_text(encoding="utf-8").splitlines()
               if line
           )
+          # The plan is evaluated against exact-current main, not the candidate's
+          # possibly stale recorded base. #2236 requires the projected health SHA,
+          # the admission base, and the plan base to describe the same main; using
+          # the recorded base would report `main-health.evidence-stale` for every
+          # candidate whose base is merely behind, which is branch drift rather
+          # than a main-health failure. The candidate's changed-file set still
+          # selects the profile, so candidate attribution is unchanged.
           plan = select_validation_plan(
               SelectionInput(
                   repository=os.environ["GITHUB_REPOSITORY"],
                   pull_request=int(os.environ["PR_NUMBER"]),
-                  base_sha=os.environ["CANDIDATE_BASE_SHA"],
+                  base_sha=os.environ["CURRENT_MAIN_SHA"],
                   head_sha=os.environ["CANDIDATE_HEAD_SHA"],
                   changed_files=changed,
               ),
@@ -439,11 +446,33 @@ jobs:
               current_base_sha=os.environ["CURRENT_MAIN_SHA"],
               current_head_sha=os.environ["CANDIDATE_HEAD_SHA"],
           )
-          if admission.status != "admit":
-              reasons = ",".join(admission.reason_codes) or "main-health.unproven"
+
+          # This gate owns exactly one question: is exact-current main healthy
+          # enough to spend candidate aggregate cycles? #2236 answers it by
+          # blocking with a `main-health.*` reason, which is the only thing that
+          # may freeze this run:
+          #   main-health.exact-main-red
+          #   main-health.validation-missing
+          #   main-health.validation-pending
+          #   main-health.validation-cancelled
+          #   main-health.infrastructure-unproven
+          #   main-health.evidence-invalid
+          #   main-health.evidence-stale
+          #   main-health.repository-mismatch
+          #
+          # Every other disposition describes the candidate's own validation
+          # obligation, not main health: healthy main yields `require-aggregate`
+          # (the aggregate this job is about to run), `admission.focused-evidence-missing`
+          # for a focused plan, or `admission.selector-manual-review`. Treating
+          # those as failures froze candidates while main was green, so they pass
+          # through to the existing downstream owners unchanged.
+          main_health_blockers = tuple(
+              reason for reason in admission.reason_codes if reason.startswith("main-health.")
+          )
+          if main_health_blockers:
               raise SystemExit(
                   "ordinary final candidate aggregate blocked by exact-current main health: "
-                  + reasons
+                  + ",".join(main_health_blockers)
               )
           PY
 
