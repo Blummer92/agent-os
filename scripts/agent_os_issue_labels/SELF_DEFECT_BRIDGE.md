@@ -53,7 +53,8 @@ same root cause across several reproductions converges. A different stable failu
 signature remains distinct even when wording is similar.
 
 Multiple matching canonical issue candidates fail to manual review rather than
-choosing by title or search order.
+choosing by title or search order. Manual review suppresses the side-bug mutation
+but does not by itself terminate an independently actionable parent mission.
 
 ## Idempotency and recursion
 

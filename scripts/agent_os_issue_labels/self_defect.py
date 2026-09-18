@@ -133,7 +133,7 @@ def decide_self_defect(
             action=SelfDefectAction.MANUAL_REVIEW,
             defect_identity=identity,
             existing_issue_number=None,
-            continue_original_mission=False,
+            continue_original_mission=observation.original_mission_actionable,
             mutation_allowed=False,
             reason_codes=("closed-match-requires-regression-lifecycle-decision",),
         )
@@ -147,7 +147,7 @@ def decide_self_defect(
             action=SelfDefectAction.MANUAL_REVIEW,
             defect_identity=identity,
             existing_issue_number=None,
-            continue_original_mission=False,
+            continue_original_mission=observation.original_mission_actionable,
             mutation_allowed=False,
             reason_codes=("ambiguous-existing-issue-ownership",),
         )
@@ -208,8 +208,7 @@ def _decision(
         existing_issue_number=None,
         continue_original_mission=(
             observation.original_mission_actionable
-            and action
-            not in {SelfDefectAction.STOP_EXPLICITLY, SelfDefectAction.MANUAL_REVIEW}
+            and action is not SelfDefectAction.STOP_EXPLICITLY
         ),
         mutation_allowed=False,
         reason_codes=reasons,

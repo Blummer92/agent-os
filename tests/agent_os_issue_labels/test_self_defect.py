@@ -103,7 +103,7 @@ def test_multiple_matching_issue_owners_fail_to_manual_review():
     )
     assert result.action is SelfDefectAction.MANUAL_REVIEW
     assert result.mutation_allowed is False
-    assert result.continue_original_mission is False
+    assert result.continue_original_mission is True
 
 
 def test_closed_matching_issue_requires_explicit_regression_lifecycle_decision():
@@ -122,6 +122,7 @@ def test_closed_matching_issue_requires_explicit_regression_lifecycle_decision()
     )
     assert result.action is SelfDefectAction.MANUAL_REVIEW
     assert result.mutation_allowed is False
+    assert result.continue_original_mission is True
     assert result.reason_codes == (
         "closed-match-requires-regression-lifecycle-decision",
     )
@@ -144,6 +145,17 @@ def test_insufficient_contract_evidence_fails_closed():
     )
     assert result.classification is SelfDefectClass.INSUFFICIENT_EVIDENCE
     assert result.action is SelfDefectAction.MANUAL_REVIEW
+    assert result.mutation_allowed is False
+    assert result.continue_original_mission is True
+
+
+def test_manual_review_does_not_continue_when_parent_is_not_actionable():
+    result = decide_self_defect(
+        observation(evidence_sufficient=False, original_mission_actionable=False),
+        classification=SelfDefectClass.AGENT_OS_CONTRACT_VIOLATION,
+    )
+    assert result.action is SelfDefectAction.MANUAL_REVIEW
+    assert result.continue_original_mission is False
     assert result.mutation_allowed is False
 
 
