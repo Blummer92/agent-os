@@ -53,89 +53,124 @@ documents:
     duplicate_risk: high
     canonical_for: [write-authorization, read-only-default]
   - repo_path: "04_Registry/agent-inheritance-registry.md"
-    owner: Integration Manager
+    owner: ChatGPT Orchestrator
     source_of_truth: GitHub
     status: active
     action: reuse
     duplicate_risk: high
     canonical_for: [agent-routing, agent-inheritance]
   - repo_path: "04_Registry/responsibility-matrix.md"
-    owner: Integration Manager
+    owner: ChatGPT Orchestrator
     source_of_truth: GitHub
     status: active
     action: reuse
     duplicate_risk: medium
     canonical_for: [responsibility-routing]
+  - repo_path: "04_Registry/legacy-agent-alias-registry.md"
+    owner: ChatGPT Orchestrator
+    source_of_truth: GitHub
+    status: active
+    action: reuse
+    duplicate_risk: high
+    canonical_for: [legacy-agent-alias-resolution]
   - repo_path: "04_Registry/reusable-capabilities.yml"
-    owner: Integration Manager
+    owner: ChatGPT Orchestrator
     source_of_truth: GitHub
     status: active
     action: extend
     duplicate_risk: high
     canonical_for: [reusable-capability-records]
-  - repo_path: "02_Agent_Overlays/integration-manager.md"
-    owner: Integration Manager
+  - repo_path: "02_Agent_Overlays/chatgpt-orchestrator.md"
+    owner: ChatGPT Orchestrator
     source_of_truth: GitHub
     status: active
-    action: extend
+    action: reuse
     duplicate_risk: medium
-    canonical_for: [navigation-governance-scope, reusable-capability-registry-lifecycle]
+    canonical_for: [cross-system-routing, navigation-routing, reusable-capability-routing]
+  - repo_path: "02_Agent_Overlays/integration-manager.md"
+    owner: ChatGPT Orchestrator
+    source_of_truth: GitHub
+    status: deprecated
+    action: reuse
+    duplicate_risk: medium
+    canonical_for: [legacy-integration-manager-compatibility-guidance]
   - repo_path: "01_Shared_Standards/global-engineering/reusable-capability-registry-standard.md"
-    owner: Integration Manager
+    owner: ChatGPT Orchestrator
     source_of_truth: GitHub
     status: active
     action: reuse
     duplicate_risk: high
     canonical_for: [reusable-capability-registry-contract, admission, lifecycle, validation-severity]
   - repo_path: "01_Shared_Standards/navigation/navigation-registry-standard.md"
-    owner: Integration Manager
+    owner: ChatGPT Orchestrator
     source_of_truth: GitHub
     status: active
     action: reuse
     duplicate_risk: high
     canonical_for: [navigation-registry-purpose, write-boundary]
   - repo_path: "01_Shared_Standards/navigation/navigation-registry-architecture.md"
-    owner: Integration Manager
+    owner: ChatGPT Orchestrator
     source_of_truth: GitHub
     status: active
     action: extend
     duplicate_risk: medium
     canonical_for: [registry-schema, traversal-workflow]
   - repo_path: "01_Shared_Standards/navigation/navigation-registry-data-model.md"
-    owner: Integration Manager
+    owner: ChatGPT Orchestrator
     source_of_truth: GitHub
     status: active
     action: extend
     duplicate_risk: medium
     canonical_for: [entities, fields, relationship-types, aliases]
   - repo_path: "01_Shared_Standards/navigation/connector-adapter-framework.md"
-    owner: Integration Manager
+    owner: ChatGPT Orchestrator
     source_of_truth: GitHub
     status: active
     action: reuse
     duplicate_risk: high
     canonical_for: [connector-contract]
   - repo_path: "01_Shared_Standards/navigation/workspace-discovery-service.md"
-    owner: Integration Manager
+    owner: ChatGPT Orchestrator
     source_of_truth: GitHub
     status: active
     action: extend
     duplicate_risk: medium
     canonical_for: [discovery, drift-classification]
   - repo_path: "01_Shared_Standards/notion/notion-navigation-index-standard.md"
-    owner: Integration Manager
+    owner: ChatGPT Orchestrator
     source_of_truth: GitHub
     status: active
     action: reuse
     duplicate_risk: medium
     canonical_for: [notion-navigation-index]
   - repo_path: "08_Tooling/notion-navigation-client/README.md"
-    owner: Google Workspace Automation Engineer / Integration Manager
+    owner: GitHub Service Agent
     source_of_truth: GitHub
     status: active
     action: extend
     duplicate_risk: medium
     canonical_for: [notion-readonly-client]
+  - repo_path: "08_Tooling/notion-navigation-client/docs/registry-fit.md"
+    owner: GitHub Service Agent
+    source_of_truth: GitHub
+    status: active
+    action: reuse
+    duplicate_risk: low
+    canonical_for: [notion-navigation-client-registry-fit]
+  - repo_path: "02_Agent_Overlays/github-service-agent.md"
+    owner: GitHub Service Agent
+    source_of_truth: GitHub
+    status: active
+    action: reuse
+    duplicate_risk: medium
+    canonical_for: [repository-implementation, github-write-boundary]
+  - repo_path: "07_Agent_Tests/"
+    owner: QA / Test Agent
+    source_of_truth: GitHub
+    status: active
+    action: extend
+    duplicate_risk: low
+    canonical_for: [structural-validation]
   - repo_path: "03_Templates/prompts/github-change-request.md"
     owner: GitHub Service Agent
     source_of_truth: GitHub
@@ -158,27 +193,47 @@ concepts:
     extend_at: governance-or-overlay-exception
   - concept: agent-routing
     canonical: "04_Registry/agent-inheritance-registry.md"
-    owner: Integration Manager
+    owner: ChatGPT Orchestrator
     duplicate_risk: high
     extend_at: registry-files
   - concept: reusable-capability-registry
     canonical: "01_Shared_Standards/global-engineering/reusable-capability-registry-standard.md"
-    owner: Integration Manager
+    owner: ChatGPT Orchestrator
     duplicate_risk: high
     extend_at: same-standard-or-registry-data
   - concept: navigation-registry-purpose
     canonical: "01_Shared_Standards/navigation/navigation-registry-standard.md"
-    owner: Integration Manager
+    owner: ChatGPT Orchestrator
     duplicate_risk: high
     extend_at: same-standard
+  - concept: registry-schema
+    canonical: "01_Shared_Standards/navigation/navigation-registry-data-model.md"
+    owner: ChatGPT Orchestrator
+    duplicate_risk: medium
+    extend_at: data-model
+  - concept: relationships
+    canonical: "01_Shared_Standards/navigation/navigation-registry-data-model.md"
+    owner: ChatGPT Orchestrator
+    duplicate_risk: medium
+    extend_at: data-model
+  - concept: aliases
+    canonical: "04_Registry/legacy-agent-alias-registry.md"
+    owner: ChatGPT Orchestrator
+    duplicate_risk: medium
+    extend_at: registry-files
   - concept: connector-framework
     canonical: "01_Shared_Standards/navigation/connector-adapter-framework.md"
-    owner: Integration Manager
+    owner: ChatGPT Orchestrator
     duplicate_risk: high
     extend_at: connector-framework-only
+  - concept: workspace-discovery
+    canonical: "01_Shared_Standards/navigation/workspace-discovery-service.md"
+    owner: ChatGPT Orchestrator
+    duplicate_risk: medium
+    extend_at: discovery-service
   - concept: notion-navigation
     canonical: "01_Shared_Standards/notion/notion-navigation-index-standard.md"
-    owner: Integration Manager
+    owner: ChatGPT Orchestrator
     duplicate_risk: medium
     extend_at: notion-standard-or-client-docs
 
@@ -187,7 +242,10 @@ dependency_edges:
   - from: "AGENTS.md"
     to: "00_Governance/ownership-and-source-of-truth.md"
     type: reads_before
-  - from: "02_Agent_Overlays/integration-manager.md"
+  - from: "04_Registry/legacy-agent-alias-registry.md"
+    to: "02_Agent_Overlays/integration-manager.md"
+    type: governed_by
+  - from: "02_Agent_Overlays/chatgpt-orchestrator.md"
     to: "01_Shared_Standards/global-engineering/reusable-capability-registry-standard.md"
     type: governed_by
   - from: "01_Shared_Standards/global-engineering/reusable-capability-registry-standard.md"
@@ -196,7 +254,7 @@ dependency_edges:
   - from: "04_Registry/reusable-capabilities.yml"
     to: "07_Agent_Tests/"
     type: validated_by
-  - from: "02_Agent_Overlays/integration-manager.md"
+  - from: "02_Agent_Overlays/chatgpt-orchestrator.md"
     to: "01_Shared_Standards/navigation/navigation-registry-standard.md"
     type: governed_by
   - from: "01_Shared_Standards/navigation/connector-adapter-framework.md"
@@ -224,27 +282,41 @@ reading_paths:
     - "04_Registry/responsibility-matrix.md"
   reusable_capability_registry_implementation:
     - "AGENTS.md"
-    - "00_Governance/ownership-and-source-of-truth.md"
-    - "00_Governance/write-authorization-policy.md"
-    - "02_Agent_Overlays/integration-manager.md"
+    - "04_Registry/agent-inheritance-registry.md"
+    - "04_Registry/responsibility-matrix.md"
+    - "04_Registry/legacy-agent-alias-registry.md"
+    - "02_Agent_Overlays/chatgpt-orchestrator.md"
     - "01_Shared_Standards/global-engineering/reusable-capability-registry-standard.md"
     - "04_Registry/reusable-capabilities.yml"
+    - "02_Agent_Overlays/github-service-agent.md"
+    - "07_Agent_Tests/"
   navigation_registry_implementation:
     - "AGENTS.md"
-    - "02_Agent_Overlays/integration-manager.md"
+    - "04_Registry/agent-inheritance-registry.md"
+    - "04_Registry/responsibility-matrix.md"
+    - "04_Registry/legacy-agent-alias-registry.md"
+    - "02_Agent_Overlays/chatgpt-orchestrator.md"
     - "01_Shared_Standards/navigation/README.md"
     - "01_Shared_Standards/navigation/navigation-registry-standard.md"
     - "01_Shared_Standards/navigation/navigation-registry-architecture.md"
     - "01_Shared_Standards/navigation/navigation-registry-data-model.md"
     - "01_Shared_Standards/navigation/connector-adapter-framework.md"
     - "01_Shared_Standards/navigation/workspace-discovery-service.md"
+    - "02_Agent_Overlays/github-service-agent.md"
+    - "07_Agent_Tests/"
   notion_integration:
     - "AGENTS.md"
+    - "04_Registry/responsibility-matrix.md"
+    - "02_Agent_Overlays/chatgpt-orchestrator.md"
     - "01_Shared_Standards/notion/notion-navigation-index-standard.md"
-    - "08_Tooling/notion-navigation-client/README.md"
     - "01_Shared_Standards/navigation/connector-adapter-framework.md"
+    - "02_Agent_Overlays/github-service-agent.md"
+    - "08_Tooling/notion-navigation-client/README.md"
+    - "08_Tooling/notion-navigation-client/docs/registry-fit.md"
+    - "07_Agent_Tests/"
   github_integration:
     - "AGENTS.md"
+    - "00_Governance/ownership-and-source-of-truth.md"
     - "00_Governance/write-authorization-policy.md"
     - "02_Agent_Overlays/github-service-agent.md"
     - "03_Templates/prompts/github-change-request.md"
@@ -270,7 +342,9 @@ validate_paths:
   - "00_Governance/documentation-dependency-map/issue-97-relationship.md"
   - "04_Registry/agent-inheritance-registry.md"
   - "04_Registry/responsibility-matrix.md"
+  - "04_Registry/legacy-agent-alias-registry.md"
   - "04_Registry/reusable-capabilities.yml"
+  - "02_Agent_Overlays/chatgpt-orchestrator.md"
   - "02_Agent_Overlays/integration-manager.md"
   - "02_Agent_Overlays/github-service-agent.md"
   - "01_Shared_Standards/global-engineering/reusable-capability-registry-standard.md"
@@ -283,4 +357,5 @@ validate_paths:
   - "01_Shared_Standards/notion/notion-navigation-index-standard.md"
   - "08_Tooling/notion-navigation-client/README.md"
   - "08_Tooling/notion-navigation-client/docs/registry-fit.md"
+  - "07_Agent_Tests/"
   - "03_Templates/prompts/github-change-request.md"
