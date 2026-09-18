@@ -39,6 +39,7 @@ class DefectObservation:
     failure_signature: str
     expected_behavior: str
     observed_behavior: str
+    evidence_signature: str
     evidence_sufficient: bool
     original_mission_actionable: bool
 
@@ -153,7 +154,7 @@ def decide_self_defect(
         )
 
     target_number = issue_numbers[0] if issue_numbers else None
-    mutation_identity = _mutation_identity(identity, target_number)
+    mutation_identity = _mutation_identity(identity, observation.evidence_signature)
     if mutation_identity in prior_mutation_identities:
         return SelfDefectDecision(
             classification=classification,
@@ -188,10 +189,15 @@ def decide_self_defect(
     )
 
 
-def mutation_identity_for(decision: SelfDefectDecision) -> str | None:
+def mutation_identity_for(
+    decision: SelfDefectDecision,
+    evidence_signature: str | None = None,
+) -> str | None:
     if decision.defect_identity is None:
         return None
-    return _mutation_identity(decision.defect_identity, decision.existing_issue_number)
+    if evidence_signature is None:
+        raise ValueError("evidence_signature is required for defect mutation identity")
+    return _mutation_identity(decision.defect_identity, _required(evidence_signature, "evidence_signature"))
 
 
 def _decision(
@@ -216,9 +222,8 @@ def _decision(
     )
 
 
-def _mutation_identity(defect_identity: str, issue_number: int | None) -> str:
-    target = f"issue:{issue_number}" if issue_number is not None else "issue:create"
-    return f"self-defect:{defect_identity}:{target}"
+def _mutation_identity(defect_identity: str, evidence_signature: str) -> str:
+    return f"self-defect:{defect_identity}:evidence:{evidence_signature}"
 
 
 def _validate_observation(observation: DefectObservation) -> None:
@@ -228,6 +233,7 @@ def _validate_observation(observation: DefectObservation) -> None:
     _required(observation.failure_signature, "failure_signature")
     _required(observation.expected_behavior, "expected_behavior")
     _required(observation.observed_behavior, "observed_behavior")
+    _required(observation.evidence_signature, "evidence_signature")
     if type(observation.evidence_sufficient) is not bool:
         raise ValueError("evidence_sufficient must be a boolean")
     if type(observation.original_mission_actionable) is not bool:
