@@ -41,8 +41,21 @@ def _with_lesson_route(result: dict[str, object], route_status: str, reason_code
 
 
 @mcp.tool()
-def plan_connected_issue_creation_tool(repository: str, issue_body: str) -> dict[str, object]:
-    return plan_connected_issue_creation_for_host(repository=repository, issue_body=issue_body)
+def plan_connected_issue_creation_tool(
+    repository: str,
+    issue_body: str,
+    duplicate_review_disposition: str | None = None,
+    canonical_issue_number: int | None = None,
+    distinct_repair_seam: bool = False,
+) -> dict[str, object]:
+    """Project canonical connected-issue admission evidence without performing writes."""
+    return plan_connected_issue_creation_for_host(
+        repository=repository,
+        issue_body=issue_body,
+        duplicate_review_disposition=duplicate_review_disposition,
+        canonical_issue_number=canonical_issue_number,
+        distinct_repair_seam=distinct_repair_seam,
+    )
 
 
 @mcp.tool()
