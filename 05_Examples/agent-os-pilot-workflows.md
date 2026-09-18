@@ -44,8 +44,9 @@ Destination defaults:
 
 Success checks:
 
-- Approved template or format identified.
-- Drive target confirmed before writing.
+- Approved source/template context needed for safe content is identified.
+- Requested artifact, preview, or content specification appears before backend routing or destination reporting.
+- An already-confirmed Drive target is reused; an unknown target blocks only the Drive write and is confirmed before writing.
 - QA scores material-quality rows and names only failed rows.
 - Revision scope stays limited to failed rubric rows.
 
