@@ -32,3 +32,43 @@ def test_connected_lifecycle_without_label_write_authority_is_not_terminal():
     result = converge_connected_pull_request_lifecycle(Provider(), "Blummer92/agent-os", 2145, invocation_reason="draft-pr-created", lifecycle_admission=refused_lifecycle_labels())
     assert result.terminal_success is False
     assert "connected-pr-label-convergence-not-proven" in result.reason_codes
+
+
+def test_connected_ready_transition_reconciles_managed_labels_before_terminal_success():
+    provider = Provider()
+    created = converge_connected_pull_request_lifecycle(
+        provider,
+        "Blummer92/agent-os",
+        2145,
+        invocation_reason="draft-pr-created",
+        lifecycle_admission=admitted_lifecycle_labels(),
+    )
+    assert created.terminal_success is True
+    assert "pr:draft" in provider.labels
+
+    provider.snapshot = replace(provider.snapshot, draft=False)
+    ready = converge_connected_pull_request_lifecycle(
+        provider,
+        "Blummer92/agent-os",
+        2145,
+        invocation_reason="draft-ready-transition",
+        lifecycle_admission=admitted_lifecycle_labels(),
+    )
+    assert ready.terminal_success is True
+    assert "pr:ready-for-review" in provider.labels
+    assert "pr:draft" not in provider.labels
+    assert "connected-pr-label-convergence-proven" in ready.reason_codes
+
+
+def test_connected_ready_transition_without_label_admission_is_not_terminal():
+    provider = Provider()
+    provider.snapshot = replace(provider.snapshot, draft=False)
+    result = converge_connected_pull_request_lifecycle(
+        provider,
+        "Blummer92/agent-os",
+        2145,
+        invocation_reason="draft-ready-transition",
+        lifecycle_admission=refused_lifecycle_labels(),
+    )
+    assert result.terminal_success is False
+    assert "connected-pr-label-convergence-not-proven" in result.reason_codes
