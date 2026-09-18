@@ -18,31 +18,42 @@ AGENTS.md
   -> 00_Governance/write-authorization-policy.md
   -> 04_Registry/agent-inheritance-registry.md
   -> 04_Registry/responsibility-matrix.md
-  -> 02_Agent_Overlays/<selected-owner>.md
+  -> 04_Registry/legacy-agent-alias-registry.md       (when legacy names are present)
+  -> 02_Agent_Overlays/<selected-canonical-owner>.md
      -> 01_Shared_Standards/<referenced-standard>.md
-        -> 08_Tooling/<tool>/README.md            (when implementation exists)
-        -> 07_Agent_Tests/ and tests/ fixtures    (when validation exists)
-        -> 03_Templates/prompts/github-change-request.md -> GitHub issue/PR
+        -> 02_Agent_Overlays/github-service-agent.md  (when repository implementation is required)
+           -> 08_Tooling/<tool>/README.md             (when implementation exists)
+           -> 07_Agent_Tests/ and tests/ fixtures     (validation evidence)
+           -> 03_Templates/prompts/github-change-request.md -> GitHub issue/PR
 ```
 
 ## Navigation implementation flow (documentation + implementation)
 
 ```text
-02_Agent_Overlays/integration-manager.md
-  -> 01_Shared_Standards/navigation/README.md
-     -> navigation-registry-standard.md
-     -> navigation-registry-architecture.md
-     -> navigation-registry-data-model.md
-     -> connector-adapter-framework.md          (connector contract)
-        -> 08_Tooling/notion-navigation-client/  (Notion adapter implementation)
-           -> tests/ and 07_Agent_Tests/         (fixtures, validation)
-     -> workspace-discovery-service.md           (discovery, drift)
-  -> 01_Shared_Standards/notion/notion-navigation-index-standard.md
-  -> implementation issues #97 (plan) and #98 (this map)
-  ~> [planned] Notion source sections            (live working surface; read-only)
-  ~> [future]  Google Drive artifact destinations (live working surface; read-only)
-  ~> [future]  Google Drive / GitHub adapter specs (inherit connector-adapter-framework)
+04_Registry/agent-inheritance-registry.md
+  -> 04_Registry/responsibility-matrix.md
+  -> 04_Registry/legacy-agent-alias-registry.md
+  -> 02_Agent_Overlays/chatgpt-orchestrator.md        (routing/governance)
+     -> 01_Shared_Standards/navigation/README.md
+        -> navigation-registry-standard.md
+        -> navigation-registry-architecture.md
+        -> navigation-registry-data-model.md
+        -> connector-adapter-framework.md             (connector contract)
+        -> workspace-discovery-service.md             (discovery, drift)
+     -> 01_Shared_Standards/notion/notion-navigation-index-standard.md
+  -> 02_Agent_Overlays/github-service-agent.md        (repository implementation)
+     -> 08_Tooling/notion-navigation-client/          (Notion adapter implementation)
+        -> tests/ and 07_Agent_Tests/                  (QA / Test Agent evidence)
+  -> historical implementation issues #97 (plan) and #98 (this map)
+  ~> [planned] Notion source sections                 (live working surface; read-only)
+  ~> [future]  Google Drive artifact destinations     (live working surface; read-only)
+  ~> [future]  Google Drive / GitHub adapter specs    (inherit connector-adapter-framework)
 ```
+
+The retired `02_Agent_Overlays/integration-manager.md` may remain as compatibility
+guidance for historical references, but it is not an active execution or implementation
+path. Legacy Integration Manager references resolve through
+`04_Registry/legacy-agent-alias-registry.md`.
 
 `->` documentation/implementation dependency that exists today.
 `~>` planned/future relationship; not owned here and not authorized by this map.
