@@ -192,3 +192,29 @@ def test_adaptation_is_deterministic_and_non_authorizing() -> None:
     assert first == second
     for key, value in NON_AUTHORITY_FIELDS.items():
         assert first[key] is value
+
+def test_evidence_format_noop_fails_closed() -> None:
+    packet = _candidate_packet()
+    packet["adaptations"]["evidence_formats"][0]["to_format"] = "uploaded-reflection"
+    result = evaluate_lesson_pacing(packet)
+    assert result.status is ValidationStatus.INVALID
+    assert result.reason_codes == ("handoff-invalid",)
+
+
+def test_multiple_format_changes_for_one_function_fail_closed() -> None:
+    packet = _candidate_packet()
+    packet["adaptations"]["evidence_formats"].append(
+        {
+            "id": "exit-format-back",
+            "function_name": "feedback-revision",
+            "minutes_saved": 1,
+            "from_format": "verbal-check",
+            "to_format": "uploaded-reflection",
+            "preserves_objective": True,
+            "preserves_success_criteria": True,
+            "preserves_accessibility": True,
+        }
+    )
+    result = evaluate_lesson_pacing(packet)
+    assert result.status is ValidationStatus.INVALID
+    assert result.reason_codes == ("handoff-duplicate",)
