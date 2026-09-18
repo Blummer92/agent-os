@@ -199,6 +199,12 @@ def _operational_packet(period: int, operational: int, function_minutes: int, **
         {"name": name, "protected": True, "lower_minutes": 5, "expected_minutes": function_minutes, "upper_minutes": function_minutes}
         for name in ("model", "practice", "feedback-revision")
     ]
+    # Comparable runs whose median active time equals this packet's declared
+    # expected sum, so calibration does not shift the operational arithmetic.
+    packet["prior_runs"] = [
+        {"run_id": f"run/{index}", "objective_ref": "objective/composition", "work_mode": "camera", "quality": "usable", "active_minutes": function_minutes * 3, "elapsed_minutes": function_minutes * 3 + 5, "context_ref": f"context/{index}"}
+        for index in (1, 2)
+    ]
     if adaptations:
         packet["adaptations"] = adaptations
     return packet
