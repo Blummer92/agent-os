@@ -4,7 +4,21 @@ Bounded #958 capability for persisting a teacher-confirmed visual asset to an ex
 
 ## Ownership and governance
 
-Implementation ownership follows `02_Agent_Overlays/google-workspace-automation-engineer.md` and repository-write ownership follows `04_Registry/responsibility-matrix.md`. Workspace write authorization is governed by `01_Shared_Standards/google-workspace/workspace-write-authorization.md`, with Drive safety in `01_Shared_Standards/google-workspace/drive-docs-sheets-safety.md`. Those canonical sources control authorization; this README documents only this package's implementation boundary.
+Repository implementation ownership belongs to GitHub Service Agent under
+`04_Registry/responsibility-matrix.md`, with applicable Google Workspace
+standards providing the domain constraints. Cross-system and external-operation
+routing belongs to ChatGPT Orchestrator.
+
+Workspace write authorization is governed by
+`01_Shared_Standards/google-workspace/workspace-write-authorization.md`, with
+Drive safety in
+`01_Shared_Standards/google-workspace/drive-docs-sheets-safety.md`. A legacy
+name such as `Google Workspace Automation Engineer` is compatibility input only
+through `04_Registry/legacy-agent-alias-registry.md`; it is not a current
+implementation owner and grants no write authority.
+
+Those canonical sources control authorization; this README documents only this
+package's implementation boundary.
 
 ## Current implementation boundary
 

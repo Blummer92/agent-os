@@ -484,6 +484,57 @@ def test_documentation_only_remains_static() -> None:
     assert plan.reason_codes == ("profile.documentation-static",)
 
 
+def test_tooling_documentation_only_reproduces_2630_as_static() -> None:
+    paths = [
+        "03_Templates/prompts/workspace-automation-builder.md",
+        "08_Tooling/workspace-automation-builder/README.md",
+        "08_Tooling/visual-asset-drive-writer/README.md",
+        "08_Tooling/visual-asset-routing/README.md",
+    ]
+    plan = _select(_input(paths))
+    assert plan.profile == "static"
+    assert plan.commands == ()
+    assert plan.reason_codes == ("profile.documentation-static",)
+
+
+def test_tooling_documentation_does_not_escalate_focused_selection() -> None:
+    tooling_doc = "08_Tooling/workspace-automation-builder/README.md"
+    focused_only = _select(_input([FOCUSED_PATH]))
+    mixed = _select(_input([tooling_doc, FOCUSED_PATH]))
+    assert mixed == focused_only
+
+
+def test_focused_tooling_documentation_outranks_generic_static_classification() -> None:
+    path = "08_Tooling/agent-os-execution-service/docs/FIRST_RUN_VALIDATION_START.md"
+    plan = _select(_input([path]))
+    assert plan.profile == "focused"
+    assert plan.commands == ("python -m pytest 08_Tooling/agent-os-execution-service/tests",)
+    assert plan.reason_codes == ("profile.focused-package",)
+
+
+def test_tooling_documentation_focus_precedence_is_order_independent() -> None:
+    paths = [
+        "08_Tooling/workspace-automation-builder/README.md",
+        "08_Tooling/agent-os-execution-service/docs/FIRST_RUN_VALIDATION_START.md",
+    ]
+    forward = _select(_input(paths))
+    reverse = _select(_input(list(reversed(paths))))
+    assert forward == reverse
+    assert forward.profile == "focused"
+    assert forward.commands == ("python -m pytest 08_Tooling/agent-os-execution-service/tests",)
+
+
+def test_tooling_documentation_plus_unmapped_executable_remains_aggregate() -> None:
+    paths = [
+        "08_Tooling/visual-asset-routing/README.md",
+        "08_Tooling/unmapped-package/config.json",
+    ]
+    plan = _select(_input(paths))
+    assert plan.profile == "aggregate"
+    assert plan.commands == ("python -m pytest",)
+    assert plan.reason_codes == ("profile.aggregate-unmapped-executable",)
+
+
 def test_documentation_plus_unmapped_executable_remains_aggregate() -> None:
     plan = _select(_input([DOC_PATH, UNKNOWN_EXECUTABLE_PATH]))
     assert plan.profile == "aggregate"
