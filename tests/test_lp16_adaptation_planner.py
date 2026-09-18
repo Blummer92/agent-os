@@ -187,6 +187,7 @@ def test_adaptation_is_deterministic_and_non_authorizing() -> None:
     for key, value in NON_AUTHORITY_FIELDS.items():
         assert first[key] is value
 
+
 def test_evidence_format_noop_fails_closed() -> None:
     packet = _candidate_packet()
     packet["adaptations"]["evidence_formats"][0]["to_format"] = "uploaded-reflection"
