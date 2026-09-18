@@ -186,3 +186,41 @@ def test_adaptation_is_deterministic_and_non_authorizing() -> None:
     assert first == second
     for key, value in NON_AUTHORITY_FIELDS.items():
         assert first[key] is value
+
+
+def test_evidence_format_noop_fails_closed() -> None:
+    packet = _packet()
+    packet["adaptations"] = {
+        "evidence_formats": [{
+            "id": "noop",
+            "function_name": "showcase",
+            "minutes_saved": 2,
+            "from_format": "gallery",
+            "to_format": "gallery",
+            "preserves_objective": True,
+            "preserves_success_criteria": True,
+            "preserves_accessibility": True,
+        }]
+    }
+    result = evaluate_lesson_pacing(packet)
+    assert result.status is ValidationStatus.INVALID
+
+
+def test_multiple_format_transitions_for_one_function_fail_closed() -> None:
+    packet = _packet()
+    packet["adaptations"] = {
+        "evidence_formats": [
+            {
+                "id": "forward", "function_name": "showcase", "minutes_saved": 1,
+                "from_format": "x", "to_format": "y",
+                "preserves_objective": True, "preserves_success_criteria": True, "preserves_accessibility": True,
+            },
+            {
+                "id": "reverse", "function_name": "showcase", "minutes_saved": 1,
+                "from_format": "y", "to_format": "x",
+                "preserves_objective": True, "preserves_success_criteria": True, "preserves_accessibility": True,
+            },
+        ]
+    }
+    result = evaluate_lesson_pacing(packet)
+    assert result.status is ValidationStatus.INVALID
