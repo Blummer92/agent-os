@@ -464,17 +464,23 @@ def select_validation_plan(
 
     doc_prefixes = tuple(rules["documentation_prefixes"])
     doc_suffixes = tuple(rules["documentation_suffixes"])
-    if all(path.startswith(doc_prefixes) and path.endswith(doc_suffixes) for path in paths):
+    focused_rules = rules["focused_rules"]
+
+    def documentation_without_focused_owner(path: str) -> bool:
+        return (
+            path.startswith(doc_prefixes)
+            and path.endswith(doc_suffixes)
+            and not _focused_matches(path, focused_rules)
+        )
+
+    if all(documentation_without_focused_owner(path) for path in paths):
         return _plan(value, "static", (), "profile.documentation-static")
 
     matched_commands: list[str] = []
     matched_rules: set[str] = set()
     covered: set[str] = set()
     for path in paths:
-        if path.startswith(doc_prefixes) and path.endswith(doc_suffixes):
-            covered.add(path)
-            continue
-        path_matches = _focused_matches(path, rules["focused_rules"])
+        path_matches = _focused_matches(path, focused_rules)
         distinct_command_sets = {commands for _, commands in path_matches}
         if len(distinct_command_sets) > 1:
             return _plan(value, "manual-review", (), "rule.ambiguous")
@@ -482,6 +488,9 @@ def select_validation_plan(
             covered.add(path)
             matched_rules.update(name for name, _ in path_matches)
             matched_commands.extend(path_matches[0][1])
+            continue
+        if path.startswith(doc_prefixes) and path.endswith(doc_suffixes):
+            covered.add(path)
     if matched_commands and len(covered) == len(paths):
         commands = _apply_subsumption(
             tuple(sorted(set(matched_commands))), _coverage_map(rules)
