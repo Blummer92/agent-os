@@ -57,10 +57,37 @@ TARGET_FIELDS = frozenset({"system", "resource_kind", "repository", "resource_id
 REFERENCE_FIELDS = frozenset({"system", "stable_id", "exact_location", "verification_evidence"})
 CONSTRAINT_FIELDS = frozenset({"name", "value"})
 
+PPUX_AUTHORITY_CONSTRAINT = "ppux-authority"
+PPUX_TUTORIAL_CONSTRAINT = "ppux-tutorial-id"
+PPUX_RESULT_STATE_CONSTRAINT = "ppux-result-state"
+PPUX_PROVENANCE_CHANGE_CONSTRAINT = "ppux-provenance-change"
+
+PPUX_RESULT_STATES = frozenset({
+    "pending", "ready", "blocked", "source-unresolved", "execution-unavailable", "manual-review",
+})
+PPUX_FAIL_CLOSED_STATES = frozenset({
+    "pending", "blocked", "source-unresolved", "execution-unavailable", "manual-review",
+})
+
 
 @dataclass(frozen=True, slots=True)
 class RequestInterpretation:
     record: ValidatedRecord
+    side_effects_performed: Literal[False] = field(default=False, init=False)
+    authorization_created: Literal[False] = field(default=False, init=False)
+    authority: AuthorityEvidence = field(default_factory=AuthorityEvidence, init=False)
+
+
+@dataclass(frozen=True, slots=True)
+class PpuxMissionConstraintDecision:
+    """Non-authorizing continuation decision for runner-authoritative PPUX missions."""
+
+    runner_authoritative: bool
+    tutorial_id: str | None
+    result_state: str | None
+    manual_alternative_requested: bool
+    generic_prompt_authoring_allowed: bool
+    requires_fresh_tutorial_resolution: bool
     side_effects_performed: Literal[False] = field(default=False, init=False)
     authorization_created: Literal[False] = field(default=False, init=False)
     authority: AuthorityEvidence = field(default_factory=AuthorityEvidence, init=False)
@@ -191,3 +218,89 @@ def validate_request_interpretation(value: object) -> ValidationResult:
         return ValidationResult(status=ValidationStatus.VALID, record=record)
     except ContractValidationError as exc:
         return ValidationResult(status=ValidationStatus.INVALID, record=None, reason_codes=(exc.reason_code,), details=(exc.detail,))
+
+
+def _constraint_map(interpretation: RequestInterpretation | None) -> dict[str, object]:
+    if interpretation is None:
+        return {}
+    if type(interpretation) is not RequestInterpretation:
+        raise TypeError("interpretation must be an exact RequestInterpretation or None")
+    constraints = interpretation.record.to_dict().get("constraints", [])
+    return {item["name"]: item["value"] for item in constraints}
+
+
+def evaluate_ppux_mission_constraint(
+    previous: RequestInterpretation | None,
+    current: RequestInterpretation,
+) -> PpuxMissionConstraintDecision:
+    """Preserve runner PPUX provenance across a bounded continuation.
+
+    The function consumes only validated structured request constraints. It never
+    parses conversational phrases, invokes a provider, or creates authority.
+    """
+    if type(current) is not RequestInterpretation:
+        raise TypeError("current must be an exact RequestInterpretation")
+
+    current_payload = current.record.to_dict()
+    current_constraints = _constraint_map(current)
+    previous_constraints = _constraint_map(previous)
+
+    current_tutorial = current_constraints.get(PPUX_TUTORIAL_CONSTRAINT)
+    previous_tutorial = previous_constraints.get(PPUX_TUTORIAL_CONSTRAINT)
+    if current_tutorial is not None and type(current_tutorial) is not str:
+        raise ValueError("ppux-tutorial-id must be text")
+    if previous_tutorial is not None and type(previous_tutorial) is not str:
+        raise ValueError("previous ppux-tutorial-id must be text")
+
+    provenance_change = current_constraints.get(PPUX_PROVENANCE_CHANGE_CONSTRAINT)
+    if provenance_change not in (None, "manual"):
+        raise ValueError("ppux-provenance-change must be manual when supplied")
+    manual_requested = provenance_change == "manual"
+
+    current_authority = current_constraints.get(PPUX_AUTHORITY_CONSTRAINT)
+    previous_authority = previous_constraints.get(PPUX_AUTHORITY_CONSTRAINT)
+    if current_authority not in (None, "runner"):
+        raise ValueError("ppux-authority must be runner when supplied")
+    if previous_authority not in (None, "runner"):
+        raise ValueError("previous ppux-authority must be runner when supplied")
+
+    result_state = current_constraints.get(PPUX_RESULT_STATE_CONSTRAINT)
+    if result_state is None and current_payload["continuation_mode"] == "continue":
+        result_state = previous_constraints.get(PPUX_RESULT_STATE_CONSTRAINT)
+    if result_state is not None and result_state not in PPUX_RESULT_STATES:
+        raise ValueError("ppux-result-state is unsupported")
+
+    tutorial_changed = (
+        previous_tutorial is not None
+        and current_tutorial is not None
+        and previous_tutorial != current_tutorial
+    )
+    runner_authoritative = (
+        not manual_requested
+        and not tutorial_changed
+        and (
+            current_authority == "runner"
+            or (
+                current_payload["continuation_mode"] == "continue"
+                and previous_authority == "runner"
+            )
+        )
+    )
+    tutorial_id = current_tutorial if current_tutorial is not None else previous_tutorial
+    if tutorial_changed:
+        result_state = None
+
+    generic_allowed = manual_requested or (not runner_authoritative and not tutorial_changed)
+    if runner_authoritative and result_state in PPUX_FAIL_CLOSED_STATES:
+        generic_allowed = False
+    if runner_authoritative and result_state == "ready":
+        generic_allowed = False
+
+    return PpuxMissionConstraintDecision(
+        runner_authoritative=runner_authoritative,
+        tutorial_id=tutorial_id,
+        result_state=result_state,
+        manual_alternative_requested=manual_requested,
+        generic_prompt_authoring_allowed=generic_allowed,
+        requires_fresh_tutorial_resolution=tutorial_changed,
+    )

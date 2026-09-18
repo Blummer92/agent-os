@@ -53,7 +53,7 @@ def test_draft_pr_label_follow_up_preserves_non_authority_and_excludes_unattende
 
 def test_github_service_agent_version_is_registered():
     version_map = VERSION_MAP.read_text(encoding="utf-8")
-    assert "| GitHub Service Agent | 0.10.0 |" in version_map
+    assert "| GitHub Service Agent | 0.11.0 |" in version_map
 
 
 def test_ready_transition_requires_canonical_readback_and_managed_label_convergence():

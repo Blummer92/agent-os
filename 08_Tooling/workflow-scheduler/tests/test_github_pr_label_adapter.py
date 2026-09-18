@@ -16,7 +16,6 @@ from workflow_scheduler.adapters import (
     GitHubPRLabelAdapterError,
     resolve_adapter,
 )
-from workflow_scheduler.adapters import github_pr_label_adapter as gpla_module
 from workflow_scheduler.audit import AuditLogger
 from workflow_scheduler.execution import Executor
 from workflow_scheduler.execution.executor import _is_contract_result, _validate_adapter_result
@@ -280,59 +279,6 @@ class TestConnectorFailuresBecomeContractResults:
 
         assert result["status"] == "failure"
 
-    @pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
-    def test_5xx_and_429_are_transient_via_real_http_post(self, monkeypatch, status):
-        import urllib.error
-
-        def raising_urlopen(request, timeout):
-            raise urllib.error.HTTPError(request.full_url, status, "server error", {}, None)
-
-        monkeypatch.setattr(gpla_module.urllib.request, "urlopen", raising_urlopen)
-
-        with pytest.raises(GitHubPRLabelAdapterError) as exc_info:
-            gpla_module._default_http_post_label("https://api.github.com/x", {}, {}, 10.0)
-
-        assert exc_info.value.is_transient is True
-
-    @pytest.mark.parametrize("status", [401, 403, 404])
-    def test_401_403_404_are_permanent_via_real_http_post(self, monkeypatch, status):
-        import urllib.error
-
-        def raising_urlopen(request, timeout):
-            raise urllib.error.HTTPError(request.full_url, status, "client error", {}, None)
-
-        monkeypatch.setattr(gpla_module.urllib.request, "urlopen", raising_urlopen)
-
-        with pytest.raises(GitHubPRLabelAdapterError) as exc_info:
-            gpla_module._default_http_post_label("https://api.github.com/x", {}, {}, 10.0)
-
-        assert exc_info.value.is_transient is False
-
-    def test_url_error_is_transient_via_real_http_post(self, monkeypatch):
-        import urllib.error
-
-        def raising_urlopen(request, timeout):
-            raise urllib.error.URLError("connection refused")
-
-        monkeypatch.setattr(gpla_module.urllib.request, "urlopen", raising_urlopen)
-
-        with pytest.raises(GitHubPRLabelAdapterError) as exc_info:
-            gpla_module._default_http_post_label("https://api.github.com/x", {}, {}, 10.0)
-
-        assert exc_info.value.is_transient is True
-
-    def test_timeout_is_transient_via_real_http_post(self, monkeypatch):
-        def raising_urlopen(request, timeout):
-            raise TimeoutError("timed out")
-
-        monkeypatch.setattr(gpla_module.urllib.request, "urlopen", raising_urlopen)
-
-        with pytest.raises(GitHubPRLabelAdapterError) as exc_info:
-            gpla_module._default_http_post_label("https://api.github.com/x", {}, {}, 10.0)
-
-        assert exc_info.value.is_transient is True
-
-
 class TestResultsPassPhase3DContractValidation:
     @pytest.mark.parametrize(
         "payload",
@@ -433,40 +379,12 @@ class TestApprovalGatingFullLifecycle:
 
 
 class TestNoWriteOperationsBeyondTheOneEndpoint:
-    """Defense-in-depth: the module must have no GET, PATCH, PUT, or
-    DELETE call anywhere, exactly one POST call site pointed at the one
-    hardcoded label-add endpoint, and no other reachable write surface."""
+    """The adapter keeps one fixed mutation shape and no raw HTTP stack."""
 
-    def test_source_contains_no_get_patch_put_delete_verbs(self):
-        source = inspect.getsource(gpla_module)
-        for verb in ("GET", "PATCH", "PUT", "DELETE"):
-            assert f'method="{verb}"' not in source
-            assert f"method='{verb}'" not in source
-
-    def test_source_contains_exactly_one_post_call_site(self):
-        source = inspect.getsource(gpla_module)
-        assert source.count('method="POST"') == 1
-
-    def test_post_url_is_the_fixed_label_template(self):
-        source = inspect.getsource(gpla_module)
-        assert 'f"{GITHUB_API_BASE}/repos/{repository_full_name}/issues/{pr_number}/labels"' in source
-
-    def test_only_one_place_issues_http_requests(self):
-        source = inspect.getsource(gpla_module)
-        assert source.count("urllib.request.Request(") == 1
-        assert source.count("urllib.request.urlopen(") == 1
-
-    def test_source_contains_no_merge_comment_review_branch_file_metadata_endpoints(self):
-        source = inspect.getsource(gpla_module).lower()
-        forbidden_fragments = [
-            "/merge", "/comments", "/reviews", "/branches", "/contents",
-            "git/refs", "review-comments", "/title", "/body",
-        ]
-        for fragment in forbidden_fragments:
-            assert fragment not in source, f"unexpected reachable endpoint fragment: {fragment}"
+    def test_actions_dict_has_exactly_one_action(self):
+        assert list(GitHubPRLabelAdapter.ACTIONS.keys()) == ["add_pr_label"]
 
     def test_adapter_has_no_extra_write_public_methods(self):
-        allowed_write_verb = "add"  # this adapter's one job (add_pr_label / _action_add_pr_label)
         write_verbs = ("create", "update", "delete", "merge", "review", "remove", "push", "edit", "archive")
         public_methods = [
             name
@@ -474,14 +392,8 @@ class TestNoWriteOperationsBeyondTheOneEndpoint:
             if not name.startswith("_")
         ]
         for name in public_methods:
-            lowered = name.lower()
-            assert allowed_write_verb not in lowered or name == "execute"
             for verb in write_verbs:
-                assert verb not in lowered, f"unexpected write-like method name: {name}"
-
-    def test_actions_dict_has_exactly_one_action(self):
-        assert list(GitHubPRLabelAdapter.ACTIONS.keys()) == ["add_pr_label"]
-
+                assert verb not in name.lower(), f"unexpected write-like method name: {name}"
 
 class TestExistingAdaptersUnaffected:
     def test_fake_success_still_resolves_and_runs(self, repository):

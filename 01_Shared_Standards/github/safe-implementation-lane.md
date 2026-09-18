@@ -37,7 +37,11 @@ the sole repository writer and QA / Test Agent retains validation-evidence
 ownership. Already-authorized tests, docs, in-scope repair, exact-head validation,
 Draft PR maintenance, and Ready-for-Review may continue without a new user prompt.
 Conversation continuity, including `continue`, `next step`, or `keep going`, never
-authorizes a previously excluded surface.
+authorizes a previously excluded surface. When an excluded surface has instead
+received its own current authorization through its governing path, that separate
+authorization may be consumed by the canonical owner/executor; `separately
+authorized` does not imply a second executor. Protected-setting execution remains
+limited by the finite-operation contract in `excluded-surface-baseline.md`.
 ## Execution Continuation
 For a currently authorized Safe Implementation Lane issue, discovery of one existing valid issue-linked branch, Draft PR, or checkpoint lineage is normally a resume target, not a stop condition. Reacquire current repository, authorization, scope, ownership, checkpoint, exact-head, and canonical Scheduler lease evidence; consume the existing `ResumePlan`; and continue from the newest valid checkpoint when no active conflict exists.
 An existing active Scheduler lease is the concurrency authority. Do not create a competing branch, PR, execution, or lease; do not steal, force-release, expire by age, or automatically retry an active or ambiguous lease. When the same authorized branch advances from SHA A to SHA B, reacquire B, inspect the head change, rebind current exact-head evidence, invalidate only the head-bound evidence required by existing contracts, and continue when authorization, ownership, and bounded scope remain valid. If `main` advanced and the PR branch is behind, route to the separately governed branch-refresh path rather than treating base drift as ordinary `HEAD_ADVANCED`.
@@ -147,8 +151,9 @@ risks, rollback, and the applicable authorization boundary. Prefer one
 consolidated user-facing result for routine internal routing while preserving
 required handoff artifacts for owners and auditability.
 ## Version
-0.10.0
+0.11.0
 ## Changelog
+- 0.11.0 clarifies #2644 that separately authorized excluded-surface authority can be consumed by the canonical executor; it does not create a second executor or widen protected-setting authority.
 - 0.10.0 declares the WSC5 `validated-workspace` boundary and makes its continuation to the Safe Implementation Lane `draft-pr-handoff` terminal state executable through the existing #2137 continuation driver and GitHub Service Agent delivery owner (#2138).
 - 0.9.0 defines evidence-backed bounded diagnosis correction (#1594): same-objective corrections may update the canonical issue/handoff and continue under the still-current implementation instruction, while objective, authority, source-of-truth, ownership, architecture/schema/compatibility, persistence/external-effect, and excluded-surface changes still fail closed with `needs-decision`.
 - 0.8.0 separates required validation from its execution location, allows Draft PR staging when existing governed CI is the capable executor, forbids false manual-command stops, preserves current Draft/Ready CI trigger semantics, and keeps exact-head evidence mandatory before Ready-for-Review (#1595).

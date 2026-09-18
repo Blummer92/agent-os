@@ -272,7 +272,11 @@ def _build_result(
     remaining_risks: list[str] | None = None,
 ) -> ReadinessResult:
     overall = strongest_status(checks)
-    outcome = _map_outcome(overall)
+    # Concrete failed prerequisites are blockers even when unrelated metadata
+    # also requests manual review. A dependency/capability blocker must not be
+    # projected as needs-decision merely because a weaker issue-local review
+    # signal is present.
+    outcome = ReadinessOutcome.BLOCKED if blockers else _map_outcome(overall)
     report = AcceptanceReport(
         linked_issue=None,
         overall_status=overall,

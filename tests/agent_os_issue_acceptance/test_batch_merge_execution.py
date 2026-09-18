@@ -1,13 +1,18 @@
 from scripts.agent_os_issue_acceptance.batch_merge_execution import (
-    BatchItemDisposition, BatchMergeAction, CurrentPrEvidence, ItemAdmissionEvidence, MergeReadbackEvidence,
+    BatchItemDisposition, BatchMergeAction, CurrentPrEvidence, RefreshPreparationEvidence, ItemAdmissionEvidence, MergeReadbackEvidence,
     apply_current_state, apply_merge_authorization, apply_merge_readback, apply_post_merge_reconciliation,
-    apply_lifecycle_readback, apply_refresh_readback, apply_validation, expected_lifecycle_mutations,
-    expected_merge, final_batch_report, record_lifecycle_mutations, record_merge_attempt, start_batch_execution,
+    apply_lifecycle_readback, apply_refresh_authorization_readback, apply_refresh_receipt, apply_refresh_readback, apply_validation,
+    expected_lifecycle_mutations, expected_merge, expected_refresh_authorization, expected_refresh_authorization_comment,
+    expected_refresh_trigger, final_batch_report, record_lifecycle_mutations, record_merge_attempt,
+    record_refresh_authorization_persisted, record_refresh_trigger, start_batch_execution,
 )
 from scripts.agent_os_issue_acceptance.batch_post_merge_reconciliation import (
     PostMergeCandidateProjection, TerminalLifecycleDisposition,
 )
 from scripts.agent_os_issue_acceptance.pr_batch_merge_plan import PrBatchItemEvidence, build_pr_batch_merge_plan
+from scripts.agent_os_issue_labels.pr_branch_refresh_authorization_source import (
+    RefreshAuthorizationReceipt, RefreshAuthorizationSourceResult, RefreshAuthorizationSourceStatus,
+)
 
 def plan(*prs):
     return build_pr_batch_merge_plan(repository="Blummer92/agent-os",base_revision="a"*40,requested_pull_requests=prs,evidence=[PrBatchItemEvidence(p,f"h{p}","main","open","applicable") for p in prs])
@@ -71,3 +76,70 @@ def test_provider_failure_still_halts_batch():
 
 def test_no_background_or_auto_merge_actions_exist():
     assert {a.value for a in BatchMergeAction}.isdisjoint({"auto-merge","poll","retry","queue"})
+
+
+def test_2668_behind_candidate_materializes_existing_refresh_authorization_and_trigger():
+    main="a"*40; head="b"*40; new_head="c"*40
+    c=start_batch_execution(plan(11,12))
+    c=apply_current_state(c,current(11,main,head,"behind"))
+    assert c.action is BatchMergeAction.REFRESH_AUTHORIZE
+    prep=RefreshPreparationEvidence(
+        11,main,head,("scripts/a.py","tests/test_a.py"),(".github/workflows/blocked.yml",),
+        ("pytest:batch-merge",),"chatgpt-user:batch-merge-rest",True,
+    )
+    auth=expected_refresh_authorization(c,prep,repository="Blummer92/agent-os")
+    assert auth.expected_head_sha==head and auth.expected_main_sha==main
+    assert auth.branch_refresh_authorized is True and auth.label_write_authorized is False
+    assert expected_refresh_authorization_comment(c,prep,repository="Blummer92/agent-os").startswith("agent-os-pr-refresh-authorization/v1\n")
+    c=record_refresh_authorization_persisted(c,pull_request_number=11,authorization_id=auth.authorization_id,accepted=True)
+    source=RefreshAuthorizationSourceResult(RefreshAuthorizationSourceStatus.CURRENT,("current",),(auth,),(),(101,))
+    c=apply_refresh_authorization_readback(c,source)
+    assert c.action is BatchMergeAction.REFRESH_TRIGGER
+    assert expected_refresh_trigger(c)=="/agent-os refresh-pr 11"
+    c=record_refresh_trigger(c,pull_request_number=11,accepted=True)
+    receipt=RefreshAuthorizationReceipt(
+        schema_version="1.0",repository="Blummer92/agent-os",pr_number=11,
+        authorization_id=auth.authorization_id,admitted_head_sha=head,admitted_main_sha=main,
+        mutation_attempted=True,mutation_succeeded=True,terminal_status="converged",reason_codes=("refreshed",),
+    )
+    consumed=RefreshAuthorizationSourceResult(
+        RefreshAuthorizationSourceStatus.STALE,("authorization.consumed-or-not-current",),(),(receipt,),(101,102),
+    )
+    c=apply_refresh_receipt(c,consumed)
+    assert c.action is BatchMergeAction.REFRESH
+    c=apply_refresh_readback(c,current(11,main,new_head,"current"))
+    assert c.action is BatchMergeAction.VALIDATE and c.current_head_sha==new_head
+    assert c.pending_refresh_authorization_id is None
+
+
+def test_2668_refresh_authorization_fails_closed_on_stale_owner_or_identity():
+    main="a"*40; head="b"*40
+    c=start_batch_execution(plan(11))
+    c=apply_current_state(c,current(11,main,head,"behind"))
+    stale=RefreshPreparationEvidence(11,main,head,("scripts/a.py",),(),(),"owner-decision",False)
+    try:
+        expected_refresh_authorization(c,stale,repository="Blummer92/agent-os")
+        assert False, "stale owner decision must fail closed"
+    except ValueError as exc:
+        assert "current owner decision" in str(exc)
+    moved=RefreshPreparationEvidence(11,"d"*40,head,("scripts/a.py",),(),(),"owner-decision",True)
+    try:
+        expected_refresh_authorization(c,moved,repository="Blummer92/agent-os")
+        assert False, "moved main must fail closed"
+    except ValueError as exc:
+        assert "stale" in str(exc)
+
+
+def test_2668_missing_receipt_is_item_local_and_batch_continues():
+    main="a"*40; head="b"*40
+    c=start_batch_execution(plan(11,12))
+    c=apply_current_state(c,current(11,main,head,"behind"))
+    prep=RefreshPreparationEvidence(11,main,head,("scripts/a.py",),(),(),"owner-decision",True)
+    auth=expected_refresh_authorization(c,prep,repository="Blummer92/agent-os")
+    c=record_refresh_authorization_persisted(c,pull_request_number=11,authorization_id=auth.authorization_id,accepted=True)
+    c=apply_refresh_authorization_readback(c,RefreshAuthorizationSourceResult(RefreshAuthorizationSourceStatus.CURRENT,("current",),(auth,),(),(1,)))
+    c=record_refresh_trigger(c,pull_request_number=11,accepted=True)
+    c=apply_refresh_receipt(c,RefreshAuthorizationSourceResult(RefreshAuthorizationSourceStatus.STALE,("authorization.consumed-or-not-current",),(),(),(1,)))
+    assert c.current_pull_request==12
+    assert c.results[-1].disposition is BatchItemDisposition.SKIPPED_ITEM_LOCAL
+    assert c.results[-1].reason_codes==("refresh-receipt-missing-or-ambiguous",)

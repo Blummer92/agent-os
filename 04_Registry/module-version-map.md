@@ -17,7 +17,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 | Dashboard Migration Verification | 0.1.0 |
 | Instructional Design Standards | 0.17.0 |
 | Agent Orchestrator | 0.3.0 |
-| GitHub Service Agent | 0.10.0 |
+| GitHub Service Agent | 0.11.0 |
 | Unit Alignment Agent | 0.7.0 |
 | Teacher Modeling Coach | 0.7.0 |
 | Instructional Materials Coach | 0.6.0 |
@@ -75,7 +75,7 @@ Module versions are governed by `00_Governance/standards-change-control.md`; rep
 
 **GitHub Issue Lifecycle Standard** `0.3.0` adds Promotion In Place as a canonical issue-body classification using the existing Child-Issue Creation Test and explicitly forbids a parallel promotion issue-state snapshot/model; it also generalizes the volatile-execution-facts restriction beyond Level 1 roadmap issues (#1309).
 
-**GitHub Service Agent** `0.10.0` requires connected Draft -> Ready-for-Review and other lifecycle mutations to reacquire canonical PR/head state and prove managed-label convergence through the existing lifecycle before terminal success (#2661). `0.9.0` requires canonical post-create issue classification/readiness verification and carries current direct implementation authorization after purely mechanical readiness convergence (#1885). `0.8.0` requires canonical post-create PR identity, state, head/base, Draft/Ready, merged-state, and discoverability verification before success reporting or managed-label mutation; it fails closed on Draft/Ready drift or unauthorized terminal merge state and forbids duplicate-create visibility diagnostics (#1793). `0.7.0` added Terminal Fast Lane request interpretation as a bounded authorization input while preserving the existing operating-mode, exact-head, review/merge, closure, and excluded-surface gates (#1309).
+**GitHub Service Agent** `0.11.0` requires connected Draft -> Ready-for-Review and other lifecycle mutations to reacquire canonical PR/head state and prove managed-label convergence through the existing lifecycle before terminal success (#2661). `0.10.0` consumes #2644's finite protected-setting execution contract while keeping generic administration blocked. `0.9.0` requires canonical post-create issue classification/readiness verification and carries current direct implementation authorization after purely mechanical readiness convergence (#1885). `0.8.0` requires canonical post-create PR identity, state, head/base, Draft/Ready, merged-state, and discoverability verification before success reporting or managed-label mutation; it fails closed on Draft/Ready drift or unauthorized terminal merge state and forbids duplicate-create visibility diagnostics (#1793). `0.7.0` added Terminal Fast Lane request interpretation as a bounded authorization input while preserving the existing operating-mode, exact-head, review/merge, closure, and excluded-surface gates (#1309).
 
 ## Reconciliation Notes
 A3 reviewed this map against visible repository evidence only. Runtime status not directly supported by files or validation evidence remains unstated.

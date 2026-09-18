@@ -46,6 +46,12 @@ bounded scope envelope.
 Excluded surfaces listed in
 `01_Shared_Standards/github/excluded-surface-baseline.md`, unrelated or
 materially expanded scope, and any write surface with unclear authorization.
+An excluded protected-setting surface becomes executable only after its own exact
+current authorization exists and the finite-operation invariants in that shared
+baseline are proven. In that case the GitHub Service Agent remains the canonical
+executor; do not require or invent a second admin agent/surface solely because the
+target is protected. Missing capability, credentials, currentness, fixed identity,
+readback, rollback, or fail-closed containment remains a stop.
 Repository implementation ownership does not grant Drive, Docs, Sheets, Gmail,
 Calendar, Apps Script deployment/trigger, Notion, sharing, permission,
 credential, production, or other external-system write authority.
@@ -70,6 +76,7 @@ Only after canonical post-create verification succeeds, invoke the existing #102
 Keep canonical readback evidence separate from creation-response evidence, and keep Draft-PR creation evidence separate from label-reconciliation evidence. Stale, blocked, failed, drifted, terminal, or nonconvergent reconciliation is explicit and fail-closed and grants no Ready-for-Review, merge, issue-closure, review-resolution, protected-setting, production, or external-system authority. User-facing reports state and link the verified canonical current PR state rather than repeating a stale creation response.
 This follow-up is connector/operator driven; do not replace it with a GitHub Actions workflow, webhook, poller, daemon, background worker, permission expansion, or repository-local PR-creation subsystem.
 
+
 ## Connected PR Lifecycle Managed-Label Follow-Up
 After every successful authorized connected PR lifecycle mutation that changes a pull request's canonical lifecycle projection, treat the mutation response as provisional parent-operation evidence until managed-label convergence is proven from fresh canonical state.
 
@@ -80,7 +87,6 @@ Do not retry the Ready mutation merely because label reconciliation failed after
 The same existing lifecycle invocation contract applies after head, validation, review-thread, branch-freshness, and final-state transitions when those changes alter the canonical managed projection. Labels remain disposable derived evidence and never grant Ready-for-Review, merge, issue-closure, review-resolution, protected-setting, production, credential, or external-system authority.
 
 This follow-up remains connector/operator driven and reuses `scripts/agent_os_issue_labels/connected_pr_lifecycle.py`; do not add a workflow, webhook, poller, daemon, background worker, permission expansion, repository-local PR lifecycle subsystem, or second label planner/reconciler.
-
 ## Implementation-Issue Post-Create Classification And Continuation
 After every successful authorized creation of an Agent OS implementation handoff, treat the creation response as provisional until canonical issue readback proves the issue identity, body, state, and managed classification labels. Prefer the existing structured issue-create path, which supplies the validated `proposed_labels` set at creation and verifies exact label readback. Do not report an implementation-ready handoff as complete while a canonical managed owner/readiness/type projection that was part of the validated creation plan is missing.
 If canonical readback shows a system-created mechanical classification omission, reuse the existing #1962 issue-label reconciler rather than inventing a second readiness or label writer. Reconcile only labels supported by canonical issue metadata, require the applicable label-write authority, preserve unmanaged labels, reread to prove convergence, and fail closed on ambiguous owner/readiness, stale issue state, unavailable labels, provider failure, or readback mismatch. Never infer `status:ready` from title, bug type, age, lack of blockers, or the mere fact that ChatGPT created the issue.
@@ -121,7 +127,7 @@ All excluded surfaces — including merge, auto-merge, issue closure — remain 
 ## Stop Conditions
 Stop when repository, ownership, objective, authorization, acceptance criteria,
 source of truth, or bounded scope is unclear, or when credentials, workflows,
-protected settings, production, external writes, or a material architecture,
+unauthorized or non-finite protected settings, production, external writes, or a material architecture,
 schema, compatibility, ownership, or authority change outside the issue contract
 is required. Do not stop solely for a directly corresponding test, mechanical
 registration, policy-required changelog entry, technology choice governed by an
@@ -129,10 +135,11 @@ existing shared standard, or environment-assigned non-protected branch that
 satisfies the Safe Implementation Lane.
 
 ## Version
-0.10.0
+0.11.0
 
 ## Changelog
-- 0.10.0 requires connected PR lifecycle mutations, including Draft -> Ready-for-Review, to reacquire canonical PR/head state and prove managed-label convergence through the existing #1022/#1023/#1038 lifecycle before the parent operation is terminal (#2661).
+- 0.11.0 requires connected PR lifecycle mutations, including Draft -> Ready-for-Review, to reacquire canonical PR/head state and prove managed-label convergence through the existing #1022/#1023/#1038 lifecycle before the parent operation is terminal (#2661).
+- 0.10.0 consumes #2644's finite protected-setting contract: exact separately authorized operations may execute through this canonical owner without a redundant second admin surface; generic or insufficiently bounded administration remains blocked.
 - 0.9.0 requires canonical post-create issue classification/readiness verification for implementation handoffs, reuses #1962 for system-created mechanical label omissions, and carries the same current `work on` instruction forward after purely mechanical readiness convergence without synthesizing new authority (#1885).
 - 0.8.0 requires canonical post-create PR identity/state/discoverability verification before success reporting or managed-label mutation, fails closed on Draft/Ready drift or unauthorized merged state, and forbids duplicate-create visibility diagnostics (#1793).
 - #1324 consolidates all ordinary repository engineering under this canonical role while retiring Integration Manager and Google Workspace Automation Engineer as executable technical agents; shared standards preserve their routing/domain constraints without transferring external-write authority.

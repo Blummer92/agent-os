@@ -315,6 +315,13 @@ def test_distributions_carry_one_canonical_copy_of_every_runtime_module(
     scheduler_modules = {name for name in scheduler_names if name.endswith(".py")}
     assert service_modules & scheduler_modules == set()
 
+    # The canonical GitHub provider moved to Scheduler with its direct consumers.
+    github_provider = "scripts/agent_os_github_issue_provider/request.py"
+    github_carriers = [
+        name for name, wheel in built_wheels.items() if github_provider in _wheel_names(wheel)
+    ]
+    assert github_carriers == ["workflow_scheduler"]
+
     # The canonical descriptor loader is carried by exactly one distribution.
     carriers = [
         name
