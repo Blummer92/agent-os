@@ -53,4 +53,24 @@ def test_draft_pr_label_follow_up_preserves_non_authority_and_excludes_unattende
 
 def test_github_service_agent_version_is_registered():
     version_map = VERSION_MAP.read_text(encoding="utf-8")
-    assert "| GitHub Service Agent | 0.8.0 |" in version_map
+    assert "| GitHub Service Agent | 0.10.0 |" in version_map
+
+
+def test_ready_transition_requires_canonical_readback_and_managed_label_convergence():
+    text = _overlay_text()
+    for required in (
+        "## Connected PR Lifecycle Managed-Label Follow-Up",
+        "After every successful authorized connected PR lifecycle mutation",
+        "Draft -> Ready-for-Review transition",
+        "immediately reacquire the exact PR and current head",
+        "`draft-ready-transition`",
+        "#1022/#1023/#1038 managed-label lifecycle",
+        "preserve unmanaged/human/security/dependency/third-party labels",
+        "reread the exact PR to prove convergence",
+        "not terminal connected-lifecycle success",
+        "Do not retry the Ready mutation",
+        "zero label writes",
+        "connected_pr_lifecycle.py",
+    ):
+        assert required in text
+    assert "draft-ready-transition" in lifecycle_invocation_reasons()
