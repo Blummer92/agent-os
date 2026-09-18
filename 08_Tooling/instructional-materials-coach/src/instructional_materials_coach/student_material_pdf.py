@@ -121,6 +121,7 @@ def _validate_source(source: StudentMaterialPdfSource, expected_revision_id: str
             raise StudentMaterialPdfError(f"{field} must be non-empty text")
     if source.native_revision_id != expected_revision_id:
         raise StudentMaterialPdfError("native source revision is stale or mismatched")
+    _preview_artifact_type(source.artifact_role)
     if not source.paragraphs or any(not isinstance(item, str) or not item.strip() for item in source.paragraphs):
         raise StudentMaterialPdfError("paragraphs must contain non-empty text")
     _validate_role_ids(source.required_visual_role_ids)
