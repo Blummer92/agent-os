@@ -228,8 +228,12 @@ def collect_cloud_identity(run: Run) -> dict[str, object]:
         if shape_error is not None:
             base["reason_codes"] = [shape_error]
             return base
+        if len(attached) == 0:
+            base["reason_codes"] = ["runtime-service-account-missing"]
+            base["effective_stop_permission"] = _effective_stop_permission(run)
+            return base
         if len(attached) != 1:
-            base["reason_codes"] = ["runtime-service-account-ambiguous" if attached else "runtime-service-account-missing"]
+            base["reason_codes"] = ["runtime-service-account-ambiguous"]
             return base
         if type(attached[0]) is not dict:
             base["reason_codes"] = ["instance-service-account-object-malformed"]
