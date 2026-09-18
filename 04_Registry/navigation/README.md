@@ -24,7 +24,7 @@ Agents must verify live repository or system state before implementation, writes
 
 ## Ownership
 
-Navigation Registry governance is owned by the Integration Manager.
+Navigation Registry governance and lookup routing are owned by the ChatGPT Orchestrator.
 
 GitHub file changes are executed by the GitHub Service Agent through the governed GitHub workflow. Registry updates should use a non-main branch and pull request unless a separate governance-approved process says otherwise.
 
