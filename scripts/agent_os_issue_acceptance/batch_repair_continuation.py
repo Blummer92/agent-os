@@ -67,6 +67,10 @@ class RepairCandidateEvidence:
     failed_repair_attempt_id: str | None = None
     retry_boundary: RepairRetryBoundaryEvidence | None = None
     retry_mutation_performed: bool = False
+    shared_blocker_key: str | None = None
+    shared_repair_owner: str | None = None
+    shared_repair_available: bool = False
+    shared_repair_completed: bool = False
 
     def __post_init__(self) -> None:
         if type(self.pull_request_number) is not int or self.pull_request_number < 1:
@@ -79,6 +83,10 @@ class RepairCandidateEvidence:
             raise TypeError("shared_blocker must use built-in bool")
         if type(self.retry_mutation_performed) is not bool:
             raise TypeError("retry_mutation_performed must use built-in bool")
+        if type(self.shared_repair_available) is not bool:
+            raise TypeError("shared_repair_available must use built-in bool")
+        if type(self.shared_repair_completed) is not bool:
+            raise TypeError("shared_repair_completed must use built-in bool")
         if self.failed_repair_attempt_id is not None and (
             type(self.failed_repair_attempt_id) is not str or not self.failed_repair_attempt_id.strip()
         ):
@@ -99,6 +107,31 @@ class RepairCandidateEvidence:
             if not self.retry_mutation_performed:
                 raise ValueError("failed repair cannot become repaired without an admitted retry mutation")
 
+        shared_metadata_present = (
+            self.shared_blocker_key is not None
+            or self.shared_repair_owner is not None
+            or self.shared_repair_available
+            or self.shared_repair_completed
+        )
+        if not self.shared_blocker and shared_metadata_present:
+            raise ValueError("shared repair metadata requires shared_blocker=true")
+        if self.shared_blocker_key is not None and (
+            type(self.shared_blocker_key) is not str or not self.shared_blocker_key.strip()
+        ):
+            raise ValueError("shared_blocker_key must be a non-empty string when supplied")
+        if self.shared_repair_owner is not None and (
+            type(self.shared_repair_owner) is not str or not self.shared_repair_owner.strip()
+        ):
+            raise ValueError("shared_repair_owner must be a non-empty string when supplied")
+        if self.shared_repair_completed and not self.shared_repair_available:
+            raise ValueError("completed shared repair must remain available as canonical repair evidence")
+        if self.shared_repair_available and (
+            self.shared_blocker_key is None or self.shared_repair_owner is None
+        ):
+            raise ValueError(
+                "repairable shared blocker requires shared_blocker_key and shared_repair_owner"
+            )
+
 
 @dataclass(frozen=True, slots=True)
 class BulkRepairContinuation:
@@ -112,6 +145,11 @@ class BulkRepairContinuation:
     lesson_reentry_required_pull_requests: tuple[int, ...]
     lesson_reentry_admitted_pull_requests: tuple[int, ...]
     lesson_reentry_blocked_pull_requests: tuple[int, ...]
+    shared_blocker_pull_requests: tuple[int, ...]
+    shared_blocker_key: str | None
+    shared_repair_owner: str | None
+    shared_repair_available: bool
+    shared_repair_completed: bool
     remaining_pull_requests: tuple[int, ...]
     evidence: tuple[RepairCandidateEvidence, ...]
     finite_admission: FiniteBatchAdmission
@@ -137,8 +175,22 @@ def evaluate_bulk_repair_continuation(
         raise ValueError("evidence contains a PR outside the frozen target set")
 
     shared = tuple(item for item in evidence if item.shared_blocker)
-    if len(shared) > 1:
-        raise ValueError("at most one current shared blocker may terminate the projection")
+    shared_signature: tuple[str | None, str | None, bool, bool] | None = None
+    if shared:
+        signatures = {
+            (
+                item.shared_blocker_key,
+                item.shared_repair_owner,
+                item.shared_repair_available,
+                item.shared_repair_completed,
+            )
+            for item in shared
+        }
+        if len(signatures) != 1:
+            raise ValueError(
+                "all current shared blockers must identify one canonical blocker and repair state"
+            )
+        shared_signature = next(iter(signatures))
 
     repaired = _by_disposition(evidence, RepairDisposition.REPAIRED)
     blocked = _by_disposition(evidence, RepairDisposition.BLOCKED)
@@ -160,17 +212,37 @@ def evaluate_bulk_repair_continuation(
         for item in evidence
         if item.retry_boundary is not None and not item.retry_boundary.mutation_admissible
     )
+    shared_pull_requests = tuple(item.pull_request_number for item in shared)
+    shared_blocker_key = shared_signature[0] if shared_signature is not None else None
+    shared_repair_owner = shared_signature[1] if shared_signature is not None else None
+    shared_repair_available = shared_signature[2] if shared_signature is not None else False
+    shared_repair_completed = shared_signature[3] if shared_signature is not None else False
+    repairable_shared_blocker = bool(shared) and shared_repair_available
+    terminal_shared_blocker = bool(shared) and not shared_repair_available
     remaining = tuple(number for number in requested if number not in set(visited))
+
+    # A candidate parked on a repairable shared blocker is reconciled but not
+    # delivered: the batch still owes it the shared repair and a revalidation
+    # pass, so it must not count toward the requested delivery total. Without
+    # this, `delivered_count == requested_count` short-circuits
+    # `evaluate_finite_batch_admission` to `completion_admissible=True` before
+    # `population_exhausted` is ever consulted, which would report a batch whose
+    # next action is still `advance-shared-repair` as complete.
+    shared_pending = shared_pull_requests if repairable_shared_blocker else ()
 
     admission = evaluate_finite_batch_admission(
         requested_count=len(requested),
-        delivered_count=len(visited),
+        delivered_count=len(visited) - len(shared_pending),
         reconciled_candidate_count=len(visited),
-        population_exhausted=not remaining,
-        shared_blocker=bool(shared),
+        population_exhausted=not remaining and not repairable_shared_blocker,
+        shared_blocker=terminal_shared_blocker,
     )
 
-    if shared:
+    if repairable_shared_blocker and shared_repair_completed:
+        next_action = "reacquire-shared-repair-candidates"
+    elif repairable_shared_blocker:
+        next_action = "advance-shared-repair"
+    elif terminal_shared_blocker:
         next_action = "halt-shared-blocker"
     elif remaining:
         next_action = "reacquire-next-candidate"
@@ -190,6 +262,11 @@ def evaluate_bulk_repair_continuation(
         lesson_required,
         lesson_admitted,
         lesson_blocked,
+        shared_pull_requests,
+        shared_blocker_key,
+        shared_repair_owner,
+        shared_repair_available,
+        shared_repair_completed,
         remaining,
         evidence,
         admission,

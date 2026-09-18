@@ -17,7 +17,20 @@ def boundary(attempt, admitted):
     )
 
 
-def ev(pr, disposition, reason, shared=False, attempt=None, retry_boundary=None, mutated=False):
+def ev(
+    pr,
+    disposition,
+    reason,
+    shared=False,
+    attempt=None,
+    retry_boundary=None,
+    mutated=False,
+    *,
+    shared_key=None,
+    shared_owner=None,
+    repair_available=False,
+    repair_completed=False,
+):
     return RepairCandidateEvidence(
         pr,
         disposition,
@@ -26,6 +39,10 @@ def ev(pr, disposition, reason, shared=False, attempt=None, retry_boundary=None,
         attempt,
         retry_boundary,
         mutated,
+        shared_key,
+        shared_owner,
+        repair_available,
+        repair_completed,
     )
 
 
@@ -144,7 +161,7 @@ def test_already_terminal_candidate_is_accounted_without_padding():
     assert result.remaining_pull_requests == (21,)
 
 
-def test_shared_validation_outage_halts_with_exact_reason():
+def test_unrepairable_shared_validation_outage_halts_with_exact_reason():
     result = evaluate_bulk_repair_continuation(
         requested_pull_requests=(30, 31, 32),
         evidence=(
@@ -155,6 +172,95 @@ def test_shared_validation_outage_halts_with_exact_reason():
     assert result.next_action == "halt-shared-blocker"
     assert result.finite_admission.completion_admissible is True
     assert result.remaining_pull_requests == (32,)
+
+
+def test_five_pr_shared_main_health_blocker_routes_one_canonical_repair():
+    affected = (2658, 2655, 2653, 2649, 2646)
+    evidence = tuple(
+        ev(
+            pr,
+            RepairDisposition.BLOCKED,
+            "main-health-validation-blocked",
+            True,
+            shared_key="exact-current-main-health",
+            shared_owner="issue:#2652",
+            repair_available=True,
+        )
+        for pr in affected
+    )
+    result = evaluate_bulk_repair_continuation(
+        requested_pull_requests=affected,
+        evidence=evidence,
+    )
+    assert result.shared_blocker_pull_requests == affected
+    assert result.shared_blocker_key == "exact-current-main-health"
+    assert result.shared_repair_owner == "issue:#2652"
+    assert result.shared_repair_available is True
+    assert result.next_action == "advance-shared-repair"
+    assert result.finite_admission.completion_admissible is False
+    assert result.finite_admission.shared_blocker is False
+    # The candidates are reconciled but not delivered. Counting them as
+    # delivered makes `delivered_count == requested_count` short-circuit the
+    # finite-batch admission to `completion_admissible=True` before
+    # `population_exhausted` is consulted, reporting a batch that still owes
+    # `advance-shared-repair` as complete.
+    assert result.finite_admission.reconciled_candidate_count == len(affected)
+    assert result.finite_admission.delivered_count == 0
+
+
+def test_completed_shared_repair_requires_all_affected_prs_to_be_reacquired():
+    affected = (2658, 2655, 2653, 2649, 2646)
+    evidence = tuple(
+        ev(
+            pr,
+            RepairDisposition.BLOCKED,
+            "main-health-validation-blocked",
+            True,
+            shared_key="exact-current-main-health",
+            shared_owner="issue:#2652",
+            repair_available=True,
+            repair_completed=True,
+        )
+        for pr in affected
+    )
+    result = evaluate_bulk_repair_continuation(
+        requested_pull_requests=affected,
+        evidence=evidence,
+    )
+    assert result.next_action == "reacquire-shared-repair-candidates"
+    assert result.finite_admission.completion_admissible is False
+    assert result.shared_blocker_pull_requests == affected
+
+
+def test_shared_candidates_must_agree_on_canonical_repair_identity():
+    try:
+        evaluate_bulk_repair_continuation(
+            requested_pull_requests=(70, 71),
+            evidence=(
+                ev(
+                    70,
+                    RepairDisposition.BLOCKED,
+                    "main-health-validation-blocked",
+                    True,
+                    shared_key="main-health",
+                    shared_owner="issue:#2652",
+                    repair_available=True,
+                ),
+                ev(
+                    71,
+                    RepairDisposition.BLOCKED,
+                    "main-health-validation-blocked",
+                    True,
+                    shared_key="main-health",
+                    shared_owner="issue:#2651",
+                    repair_available=True,
+                ),
+            ),
+        )
+    except ValueError as error:
+        assert "one canonical blocker and repair state" in str(error)
+    else:
+        raise AssertionError("conflicting shared repair owners must fail closed")
 
 
 def test_deferred_and_stale_candidates_are_revisited_before_completion():
