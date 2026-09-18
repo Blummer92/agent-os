@@ -39,7 +39,7 @@ def filter_comparable_runs(
             excluded.append({"run_id": run_id, "reason": "lp-evidence-run-interrupted-or-sparse"})
             continue
         if active > elapsed:
-            excluded.append({"run_id": run_id, "reason": "lp-evidence-run-interrupted-or-sparse"})
+            excluded.append({"run_id": run_id, "reason": "lp-evidence-active-elapsed-time-conflict"})
             continue
         quality = run["quality"]
         if quality in _EXCLUDED_QUALITY:
