@@ -1,6 +1,7 @@
 # Finite bulk-repair continuation
 
-Issue: #2487. Canonical generic continuation owner: #2220.
+Issue: #2487. Canonical generic continuation owner: #2220. Shared-repair
+continuation hardening: #2664.
 
 ## Purpose
 
@@ -20,10 +21,25 @@ PRs remain in `remaining_pull_requests`. The returned continuation action is
 `reacquire-next-candidate`, so a safety-layer denial, conflict, or failed-repair
 gate on one candidate does not become a parent-batch stop by itself.
 
-A blocker terminates the parent batch only when the supplied candidate evidence
-explicitly carries `shared_blocker=true`. The projection then returns
-`halt-shared-blocker` and preserves the unattempted requested PRs in
-`remaining_pull_requests` for final reporting.
+A shared diagnosis is not automatically terminal. When affected candidates
+identify one `shared_blocker_key`, one canonical `shared_repair_owner`, and
+`shared_repair_available=true`, the projection returns
+`advance-shared-repair`. This keeps the parent batch non-terminal while the
+existing owner advances the one shared repair instead of encouraging unrelated
+changes on every affected PR.
+
+After canonical evidence says that shared repair completed, the same affected
+candidate set returns `reacquire-shared-repair-candidates`. Callers must
+reacquire the affected PR heads/checks and re-evaluate exact-head validation;
+the old blocked classifications cannot satisfy batch completion.
+
+A shared blocker terminates the parent batch only when no governed canonical
+repair path is supplied. That case returns `halt-shared-blocker` and preserves
+unattempted requested PRs for final reporting.
+
+All current shared-blocker evidence in one projection must agree on blocker
+identity, repair owner, availability, and completion state. Conflicting shared
+repair evidence fails closed instead of guessing which repair path owns the batch.
 
 ## Failed-repair boundary
 
@@ -42,6 +58,8 @@ cannot convert those objects into completion or authority.
 
 The tool is classification-only. `execution_authorized`,
 `github_writes_authorized`, `mutation_authorized`, `merge_authorized`, and
-`side_effects_performed` remain false. Merge, issue closure, workflows, protected
-settings, credentials, production, and external-system writes remain outside this
-contract.
+`side_effects_performed` remain false. A repairable-shared-blocker action names
+continuation work only; it grants no repair or GitHub-write authority.
+
+Merge, issue closure, workflows, protected settings, credentials, production,
+and external-system writes remain outside this contract.
