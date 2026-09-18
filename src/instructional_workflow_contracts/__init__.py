@@ -85,7 +85,9 @@ from .request_interpretation import (
     ORIGINS as REQUEST_ORIGINS,
     RESOURCE_KINDS as REQUEST_RESOURCE_KINDS,
     SYSTEMS as REQUEST_SYSTEMS,
+    PpuxMissionConstraintDecision,
     RequestInterpretation,
+    evaluate_ppux_mission_constraint,
     validate_request_interpretation,
 )
 
@@ -130,6 +132,7 @@ __all__ = [
     "REQUEST_ORIGINS",
     "REQUEST_RESOURCE_KINDS",
     "REQUEST_SYSTEMS",
+    "PpuxMissionConstraintDecision",
     "RequestInterpretation",
     "TOP_LEVEL_FIELDS",
     "ValidatedRecord",
@@ -141,6 +144,7 @@ __all__ = [
     "assemble_gemini_manual_prompt",
     "canonical_json_bytes",
     "canonical_size",
+    "evaluate_ppux_mission_constraint",
     "execute_workspace_create",
     "freeze_json",
     "plan_classroom_workspace_provisioning",
