@@ -312,8 +312,45 @@ jobs:
             exit 1
           fi
 
+      - name: Recover missing exact-current main aggregate evidence
+        if: ${{ steps.aggregate_evidence.outputs.run_required != 'false' && github.event_name == 'pull_request' }}
+        id: main_evidence_recovery
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          current_main_sha="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          if ! [[ "$current_main_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "current main SHA is unavailable or malformed" >&2
+            exit 1
+          fi
+
+          check_count="$(
+            gh api               -H "Accept: application/vnd.github+json"               "/repos/$GITHUB_REPOSITORY/commits/$current_main_sha/check-runs?per_page=100"               --jq '[.check_runs[] | select(.name == "Run aggregate validation")] | length'
+          )"
+          if [ "$check_count" != "0" ]; then
+            echo "recovery_required=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Exact-current main $current_main_sha has no aggregate evidence; dispatching the existing validation authority on that exact ref."
+          gh workflow run agent-os-validation.yml --ref "$current_main_sha"
+          echo "recovery_required=true" >> "$GITHUB_OUTPUT"
+          echo "main_sha=$current_main_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Stop candidate while exact-current main recovery runs
+        if: ${{ steps.main_evidence_recovery.outputs.recovery_required == 'true' }}
+        env:
+          RECOVERY_MAIN_SHA: ${{ steps.main_evidence_recovery.outputs.main_sha }}
+        run: |
+          echo "Exact-current main aggregate evidence was missing for $RECOVERY_MAIN_SHA." >&2
+          echo "A diagnostic Agent OS Validation Gate run was dispatched on that exact SHA." >&2
+          echo "Candidate validation remains fail-closed until the recovered main evidence is terminal and successful; rerun this failed job afterward." >&2
+          exit 1
+
       - name: Project exact-current main health
-        if: ${{ steps.aggregate_evidence.outputs.run_required != 'false' && (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && steps.candidate.outputs.mode == 'final-candidate')) }}
+        if: ${{ steps.aggregate_evidence.outputs.run_required != 'false' && steps.main_evidence_recovery.outputs.recovery_required != 'true' && (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && steps.candidate.outputs.mode == 'final-candidate')) }}
         id: main_health
         env:
           GH_TOKEN: ${{ github.token }}
