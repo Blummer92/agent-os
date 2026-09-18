@@ -117,8 +117,13 @@ def test_screenshot_chronology_does_not_create_instructional_identity() -> None:
 def test_ppux_projection_capability_is_discoverable_with_exact_2525_contract() -> None:
     registry = read(REUSABLE_CAPABILITIES)
     assert "capability_id: ppux-picture-perfect-prompt-projection" in registry
-    assert "operation:ppux-picture-perfect-prompt-projection" in registry
-    assert "result:picture-perfect-prompt-projection-result-v1" in registry
+    # The invocation identity is the real statically exported #2525 entrypoint
+    # contract, not a free-form label: the registry's public-interface check
+    # resolves each symbol against the capability's canonical source.
+    assert "promptProjectionEntrypoint:projectTutorialPromptCards" in registry
+    assert "promptProjectionEntrypoint:PROMPT_PROJECTION_INPUT_VERSION" in registry
+    assert "promptProjectionEntrypoint:PROMPT_PROJECTION_RESULT_VERSION" in registry
+    assert "picture-perfect-prompt-projection-result-v1" in registry
     assert "projection-capability-unavailable" in registry
     assert "canonical-ppux-blocked" in registry
 

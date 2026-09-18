@@ -43,6 +43,7 @@ APPROVED_CAPABILITY_STATUSES = {
     "issueplan-current-state-evidence": "active",
     "issueplan-metadata-scanner": "active",
     "navigation-index-reader": "active",
+    "ppux-picture-perfect-prompt-projection": "active",
     "pr-review-remediation": "experimental",
     "readonly-connector-contract": "active",
     "scheduler-planning-handoff": "active",
@@ -63,8 +64,41 @@ def _load_registry() -> dict:
     return yaml.safe_load(REGISTRY_PATH.read_text(encoding="utf-8"))
 
 
+_TS_DECLARED_EXPORT_RE = re.compile(
+    r"^export\s+(?:declare\s+)?(?:default\s+)?"
+    r"(?:async\s+)?(?:abstract\s+)?"
+    r"(?:const|let|var|function|class|type|interface|enum|namespace)\s+"
+    r"([A-Za-z_$][A-Za-z0-9_$]*)",
+    re.MULTILINE,
+)
+_TS_EXPORT_CLAUSE_RE = re.compile(r"^export\s*\{([^}]*)\}", re.MULTILINE)
+
+
+def _typescript_exported_symbols(source: str) -> set[str]:
+    """Collect statically declared TypeScript export names.
+
+    This mirrors the Python AST check: a declared interface must really exist in
+    the canonical source. It intentionally understands only static `export`
+    declarations and static `export { ... }` clauses; dynamic or computed
+    re-exports are not treated as proof.
+    """
+    symbols: set[str] = set(_TS_DECLARED_EXPORT_RE.findall(source))
+    for clause in _TS_EXPORT_CLAUSE_RE.findall(source):
+        for entry in clause.split(","):
+            name = entry.strip()
+            if not name or name.startswith("*"):
+                continue
+            # `type Foo`, `Foo as Bar` and `default as Foo` all expose the last name.
+            symbols.add(name.split()[-1])
+    return symbols
+
+
 def _defined_or_exported_symbols(path: Path) -> set[str]:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    source = path.read_text(encoding="utf-8")
+    if path.suffix in {".ts", ".tsx"}:
+        return _typescript_exported_symbols(source)
+
+    tree = ast.parse(source, filename=str(path))
     symbols: set[str] = set()
     for node in tree.body:
         if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -77,13 +111,16 @@ def _defined_or_exported_symbols(path: Path) -> set[str]:
 
 
 def _module_candidates(module_name: str, canonical_paths: list[str]) -> list[Path]:
-    module_suffix = Path(*module_name.split(".")).with_suffix(".py")
-    init_suffix = Path(*module_name.split(".")) / "__init__.py"
+    module_parts = module_name.split(".")
+    suffixes = [
+        Path(*module_parts).with_suffix(extension).as_posix()
+        for extension in (".py", ".ts", ".tsx")
+    ]
+    suffixes.append((Path(*module_parts) / "__init__.py").as_posix())
     return [
         ROOT / relative_path
         for relative_path in canonical_paths
-        if Path(relative_path).as_posix().endswith(module_suffix.as_posix())
-        or Path(relative_path).as_posix().endswith(init_suffix.as_posix())
+        if any(Path(relative_path).as_posix().endswith(suffix) for suffix in suffixes)
     ]
 
 
@@ -150,3 +187,56 @@ def test_existing_package_exports_are_safe_to_import() -> None:
         module_name, symbol_name = interface.split(":", 1)
         module = importlib.import_module(module_name)
         assert hasattr(module, symbol_name)
+
+
+def test_typescript_symbol_extraction_proves_real_exports_and_rejects_absent_ones() -> None:
+    """The TypeScript path must verify as strictly as the Python AST path (#2526).
+
+    Without this, a capability whose canonical source is TypeScript could declare
+    any interface string and still be treated as statically proven.
+    """
+    source = (
+        "import { helper } from './helper';\n"
+        "const notExported = 1;\n"
+        "export const EXPORTED_VERSION = 'v1' as const;\n"
+        "export type ExportedType = Readonly<{ a: string }>;\n"
+        "export function exportedFunction(value: unknown): void {}\n"
+        "export class ExportedClass {}\n"
+        "export { renamedSource as renamedExport };\n"
+    )
+    symbols = _typescript_exported_symbols(source)
+
+    assert {
+        "EXPORTED_VERSION",
+        "ExportedType",
+        "exportedFunction",
+        "ExportedClass",
+        "renamedExport",
+    } <= symbols
+    # Non-exported and merely imported names are not proof of a public interface.
+    assert "notExported" not in symbols
+    assert "helper" not in symbols
+
+
+def test_typescript_backed_capabilities_resolve_against_real_canonical_sources() -> None:
+    typescript_backed = [
+        record
+        for record in _load_registry()["capabilities"]
+        for interface in record["public_interfaces"]
+        if any(
+            path.suffix in {".ts", ".tsx"}
+            for path in _module_candidates(
+                interface.split(":", 1)[0], record["canonical_paths"]
+            )
+        )
+    ]
+    assert typescript_backed, "expected at least one TypeScript-backed capability record"
+
+    for record in typescript_backed:
+        for interface in record["public_interfaces"]:
+            module_name, symbol_name = interface.split(":", 1)
+            candidates = _module_candidates(module_name, record["canonical_paths"])
+            assert candidates, f"No canonical source file found for {interface}"
+            assert any(
+                symbol_name in _defined_or_exported_symbols(path) for path in candidates
+            ), f"Static symbol {symbol_name} not found for {interface}"

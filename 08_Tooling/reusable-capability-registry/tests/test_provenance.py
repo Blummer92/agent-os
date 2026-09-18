@@ -50,7 +50,7 @@ BASE = FIXTURES / "provenance" / "base.yml"
 # PR description). The base fixture is the primary controlled vector; the live
 # canonical registry vector doubles as a tripwire for any semantic registry edit.
 GOLDEN_BASE_DIGEST = "7d183194102b8b40410e5fafab07eb5885e36f2e565de79b42290e1d23c344c6"
-GOLDEN_LIVE_DIGEST = "d577ac916f34caf3713c6d65b71e871ce9879c4f0b9b8509b596419bea162564"
+GOLDEN_LIVE_DIGEST = "4a60e1019569e23080cb03e39f7feaedcdec0c3dd3f0a0e1a10942271aeddcfe"
 
 _HEX64 = "a" * 64
 
