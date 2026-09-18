@@ -9,6 +9,12 @@ from instructional_workflow_contracts import ContractValidationError, validate_s
 _USABLE_QUALITY = frozenset({"usable", "usable-with-limits"})
 _EXCLUDED_QUALITY = frozenset({"unusable", "stale", "contradictory", "too-late", "privacy-blocked"})
 
+#: Exclusion reasons whose record in ``04_Registry/lp-reason-code-catalog.yaml``
+#: carries ``manual_review_required: true``, copied by reference from that
+#: record. An exclusion carrying one of these is evidence the whole assessment
+#: must surface, not merely a run that was dropped.
+MANUAL_REVIEW_EXCLUSION_REASONS = frozenset({"lp-evidence-active-elapsed-time-conflict"})
+
 
 def filter_comparable_runs(
     runs: object,
