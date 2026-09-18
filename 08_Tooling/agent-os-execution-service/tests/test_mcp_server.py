@@ -50,6 +50,94 @@ def test_mcp_server_contains_no_execution_or_store_primitives() -> None:
         assert token not in source
 
 
+CONNECTED_ISSUE_BODY = """### Issue tier
+
+tier:1-standard-implementation
+
+### Primary owner
+
+owner:github-service-agent
+
+### Readiness candidate
+
+status:ready
+
+### Work type
+
+type:bug
+
+### Source of truth
+
+GitHub
+
+### External write boundary
+
+no-external-write
+
+### Prior scope, duplicate, and supersession review
+
+Reviewed current canonical owners and bounded duplicate/supersession evidence.
+"""
+
+
+def test_connected_issue_creation_tool_passes_distinct_bug_admission() -> None:
+    result = mcp_server.plan_connected_issue_creation_tool(
+        repository="Blummer92/agent-os",
+        issue_body=CONNECTED_ISSUE_BODY,
+        duplicate_review_disposition="NEW_DISTINCT_BUG",
+    )
+    assert result["create_allowed"] is True
+    assert result["next_operation"] == "create-then-canonical-readback-and-converge"
+    assert result["duplicate_review_disposition"] == "NEW_DISTINCT_BUG"
+    assert result["implementation_authorized"] is False
+    assert result["merge_authorized"] is False
+    assert result["closure_authorized"] is False
+    assert result["external_write_authorized"] is False
+
+
+def test_connected_issue_creation_tool_passes_existing_owner_admission() -> None:
+    recurrence = mcp_server.plan_connected_issue_creation_tool(
+        repository="Blummer92/agent-os",
+        issue_body=CONNECTED_ISSUE_BODY,
+        duplicate_review_disposition="RECURRENCE_EXISTING_OWNER",
+        canonical_issue_number=2438,
+    )
+    duplicate = mcp_server.plan_connected_issue_creation_tool(
+        repository="Blummer92/agent-os",
+        issue_body=CONNECTED_ISSUE_BODY,
+        duplicate_review_disposition="DUPLICATE_EXISTING_OWNER",
+        canonical_issue_number=2438,
+    )
+    assert recurrence["create_allowed"] is False
+    assert recurrence["canonical_issue_number"] == 2438
+    assert recurrence["next_operation"] == "append-recurrence-evidence-to-canonical-issue"
+    assert duplicate["create_allowed"] is False
+    assert duplicate["canonical_issue_number"] == 2438
+    assert duplicate["next_operation"] == "reuse-canonical-issue-no-create"
+
+
+def test_connected_issue_creation_tool_passes_focused_successor_evidence() -> None:
+    result = mcp_server.plan_connected_issue_creation_tool(
+        repository="Blummer92/agent-os",
+        issue_body=CONNECTED_ISSUE_BODY,
+        duplicate_review_disposition="FOCUSED_SUCCESSOR",
+        canonical_issue_number=2438,
+        distinct_repair_seam=True,
+    )
+    assert result["create_allowed"] is True
+    assert result["duplicate_review_disposition"] == "FOCUSED_SUCCESSOR"
+
+
+def test_connected_issue_creation_tool_missing_admission_fails_closed() -> None:
+    result = mcp_server.plan_connected_issue_creation_tool(
+        repository="Blummer92/agent-os",
+        issue_body=CONNECTED_ISSUE_BODY,
+    )
+    assert result["create_allowed"] is False
+    assert result["duplicate_review_disposition"] == "MANUAL_REVIEW"
+    assert result["next_operation"] == "manual-review-duplicate-admission-required"
+
+
 def test_primary_pr_creation_tool_reuses_single_existing_pr() -> None:
     result = mcp_server.admit_agent_os_primary_pr_creation_tool(
         issue_number=2609,
