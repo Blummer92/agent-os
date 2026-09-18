@@ -30,7 +30,8 @@ The provider read may return a bounded relevance page larger than CKR2's five-ca
 
 - `consumed`: relevant lesson evidence was selected through CKR6/CKR2; the retry gate may admit the next mutation.
 - `not-material`: CKR6 determined retrieval was not needed; the retry gate may admit the next mutation.
-- `unavailable-or-failed`: retrieval or selection did not safely produce usable lesson context. When specialized knowledge is required, the mutation remains blocked. Safe fallback behavior remains governed by the existing CKR6 contract.
+- `unavailable-or-failed`: the existing coarse retry-admission outcome is preserved for compatibility. When specialized knowledge is required, the mutation remains blocked.
+- `lesson_disposition`: exact-attempt classification distinguishes `capability-unavailable`, `no-relevant-lesson`, `candidate-data-defect`, `stale-relevant-lesson`, `unverifiable-relevant-lesson`, `canonical-authority-conflict`, and `governance-insufficient` without changing mutation admission. `consumed` and `not-material` remain explicit dispositions.
 
 ## Authority
 
