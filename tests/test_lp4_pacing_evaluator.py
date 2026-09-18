@@ -142,3 +142,23 @@ def test_evaluator_uses_no_learner_vector_or_similarity_score_fields() -> None:
     serialized = repr(payload).lower()
     for forbidden in ("cosine", "euclidean", "manhattan", "mahalanobis", "embedding", "learner_score", "ability_score"):
         assert forbidden not in serialized
+
+
+def test_duplicate_prior_run_identity_does_not_inflate_evidence() -> None:
+    packet = _packet()
+    duplicate = deepcopy(packet["prior_runs"][0])
+    packet["prior_runs"] = [duplicate, deepcopy(duplicate)]
+    payload = _payload(evaluate_lesson_pacing(packet))
+    assert payload["evidence_summary"]["included_count"] == 1
+    assert "lp-evidence-comparable-runs-insufficient" in payload["unresolved_uncertainties"]
+
+
+def test_conflicting_duplicate_prior_run_identity_fails_closed() -> None:
+    packet = _packet()
+    duplicate = deepcopy(packet["prior_runs"][0])
+    conflict = deepcopy(duplicate)
+    conflict["active_minutes"] += 1
+    packet["prior_runs"] = [duplicate, conflict]
+    result = evaluate_lesson_pacing(packet)
+    assert result.status is ValidationStatus.INVALID
+    assert result.reason_codes == ("handoff-duplicate",)
