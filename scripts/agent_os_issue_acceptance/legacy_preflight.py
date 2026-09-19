@@ -38,7 +38,19 @@ class LegacyIssueSnapshot:
         number = value.get("number")
         if isinstance(number, bool) or not isinstance(number, int):
             raise ValueError("snapshot number must be an integer")
-        raw_labels = value.get("labels", [])
+        # A row whose labels were never projected is not a row whose issue has
+        # no labels. The previous ``[]`` default erased that difference, so an
+        # incompletely projected #2654 classified identically to a genuinely
+        # unlabelled issue (#2659). ``labels: []`` still means "no labels" and
+        # still classifies; only the unanswered question is refused. A single
+        # ``None`` test covers both observed shapes -- key absent, and key
+        # present as ``null``.
+        raw_labels = value.get("labels")
+        if raw_labels is None:
+            raise ValueError(
+                "snapshot labels were not projected; label-dependent "
+                "classification must reacquire the canonical issue"
+            )
         raw_prs = value.get("open_pr_numbers", [])
         if not isinstance(raw_labels, list) or not isinstance(raw_prs, list):
             raise ValueError("snapshot labels and open_pr_numbers must be lists")
