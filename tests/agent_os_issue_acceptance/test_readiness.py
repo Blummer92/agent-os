@@ -585,3 +585,59 @@ Blocked by: #2434
     assert result.outcome == ReadinessOutcome.BLOCKED
     assert "A required dependency is blocked." in result.report.blockers
     assert result.report.manual_review_items
+
+
+def _tier_zero_body(dependency_line: str) -> str:
+    return f"""
+Issue Tier: 0
+## Objective
+Remove one deprecation warning.
+## Owner
+GitHub Service Agent
+## Allowed Files
+- src/example.py
+## Validation
+- pytest tests/test_example.py
+## Completion Criterion
+- Warning no longer appears.
+## Prior scope, duplicate, and supersession review
+Reviewed related prior issues; no duplicate or superseded scope applies.
+## Documentation impact
+docs-not-required
+## Documentation exemption reason
+Removing a deprecation warning does not change documented behavior.
+{dependency_line}
+"""
+
+
+@pytest.mark.parametrize(
+    "dependency_line",
+    [
+        "Blockers: none",
+        "Blockers:  none",
+        "Blockers: None",
+        "Blocked by: none",
+        "Blocked by: not applicable",
+        "Blockers: not applicable",
+    ],
+)
+def test_2645_declared_absence_of_blockers_is_not_a_controlling_blocker(dependency_line):
+    """#2645: an issue that declares it has no blockers must not project blocked."""
+    result = evaluate_issue_readiness(_tier_zero_body(dependency_line))
+    assert result.outcome == ReadinessOutcome.READY, dependency_line
+    assert "A required dependency is blocked." not in result.report.blockers
+
+
+@pytest.mark.parametrize(
+    "dependency_line",
+    [
+        "Blocked by: #9999",
+        "Blockers: #9999",
+        "Blocked by: the governed host runtime is unavailable",
+    ],
+)
+def test_2645_genuine_controlling_blocker_still_blocks(dependency_line):
+    """Control: a real declared blocker must remain blocked."""
+    result = evaluate_issue_readiness(_tier_zero_body(dependency_line))
+    assert result.outcome == ReadinessOutcome.BLOCKED, dependency_line
+    assert "A required dependency is blocked." in result.report.blockers
