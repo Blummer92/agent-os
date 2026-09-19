@@ -508,3 +508,134 @@ def test_excessively_nested_serialized_payload_fails_with_value_error(monkeypatc
 
     with pytest.raises(ValueError, match="nested too deeply"):
         deserialize_issue_operational_state("{}")
+
+
+# -- #2148: lifecycle drift detection, migrated from lifecycle_drift_scan ------
+#
+# `lifecycle_drift_scan.py` was never reachable from production. Every question
+# it answered is answered here, by the canonical owner, from derived evidence
+# rather than from caller-asserted booleans. These tests carry its fixtures so
+# the coverage survives the helper's retirement.
+
+
+def _drift_claim(number: int = 999, state: str = "merged") -> PrimaryIssueClaim:
+    return PrimaryIssueClaim(
+        pull_request_number=number,
+        branch="agent/issue-901",
+        head_sha="d" * 40,
+        state=state,
+    )
+
+
+def test_2148_merged_pr_with_open_issue_is_detected_as_lifecycle_drift() -> None:
+    state = build_issue_operational_state(
+        evidence(
+            lifecycle_stage=LifecycleStage.MERGED,
+            issue_state=IssueState.OPEN,
+            primary_claims=(_drift_claim(),),
+        )
+    )
+
+    assert "reconciliation.merged-pr-open-issue" in state.reason_codes
+    assert state.reconciliation_required is True
+
+
+def test_2148_closed_issue_keeping_the_ready_label_is_detected_as_lifecycle_drift() -> (
+    None
+):
+    state = build_issue_operational_state(
+        evidence(
+            lifecycle_stage=LifecycleStage.CLOSED,
+            issue_state=IssueState.CLOSED,
+            terminal_disposition=TerminalDisposition.COMPLETED,
+            observed_labels=("status:ready",),
+        )
+    )
+
+    assert "reconciliation.closed-with-ready-label" in state.reason_codes
+    assert state.reconciliation_required is True
+
+
+def test_2148_closed_issue_keeping_an_unmanaged_label_is_not_drift() -> None:
+    """Unmanaged labels are preserved, not treated as synchronization work."""
+    state = build_issue_operational_state(
+        evidence(
+            lifecycle_stage=LifecycleStage.CLOSED,
+            issue_state=IssueState.CLOSED,
+            terminal_disposition=TerminalDisposition.COMPLETED,
+            observed_labels=("human:keep",),
+        )
+    )
+
+    assert "reconciliation.closed-with-ready-label" not in state.reason_codes
+    assert state.reconciliation_required is False
+
+
+def test_2148_closed_with_a_non_ready_status_label_is_deliberately_not_this_code() -> (
+    None
+):
+    """The retired helper matched any ``status:`` prefix; this owner does not.
+
+    A closed issue holding ``status:blocked`` is recorded here as *not* carrying
+    ``reconciliation.closed-with-ready-label``, because that code names a stale
+    *ready* advertisement -- the #2520/#2563 hazard of a closed issue still
+    offering itself as available work. The helper reported the same code for
+    ``status:blocked`` and ``status:needs-decision``, which was a false reason
+    code rather than broader coverage. Pinned so the difference is a decision on
+    the record instead of an accident.
+    """
+    state = build_issue_operational_state(
+        evidence(
+            lifecycle_stage=LifecycleStage.CLOSED,
+            issue_state=IssueState.CLOSED,
+            terminal_disposition=TerminalDisposition.COMPLETED,
+            observed_labels=("status:blocked",),
+        )
+    )
+
+    assert "reconciliation.closed-with-ready-label" not in state.reason_codes
+
+
+def test_2148_conflicting_primary_claims_are_excluded_from_clean_drift_handling() -> (
+    None
+):
+    """The helper took ``conflicting_primary_claim`` on trust; this derives it."""
+    state = build_issue_operational_state(
+        evidence(
+            lifecycle_stage=LifecycleStage.MERGED,
+            issue_state=IssueState.OPEN,
+            primary_claims=(_drift_claim(), _drift_claim(1000, "ready")),
+        )
+    )
+
+    assert state.claim_state is ClaimState.CONFLICTING
+    assert "claim.multiple-primary" in state.blocker_codes
+    assert state.outcome is OperationalOutcome.CONFLICTING
+
+
+def test_2148_stale_evidence_is_excluded_from_clean_drift_handling() -> None:
+    """The helper took ``stale`` on trust; freshness is canonical evidence here."""
+    state = build_issue_operational_state(
+        evidence(
+            lifecycle_stage=LifecycleStage.MERGED,
+            issue_state=IssueState.OPEN,
+            primary_claims=(_drift_claim(),),
+            freshness_state=FreshnessState.STALE,
+        )
+    )
+
+    assert "source.stale" in state.blocker_codes
+    assert state.outcome is OperationalOutcome.STALE
+
+
+def test_2148_equivalent_drift_evidence_is_deterministic() -> None:
+    """The helper sorted its output; identity here is content-bound."""
+    changes = dict(
+        lifecycle_stage=LifecycleStage.MERGED,
+        issue_state=IssueState.OPEN,
+        primary_claims=(_drift_claim(),),
+    )
+    first = build_issue_operational_state(evidence(**changes))
+    second = build_issue_operational_state(evidence(**changes))
+
+    assert first.state_id == second.state_id

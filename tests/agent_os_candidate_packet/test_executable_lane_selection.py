@@ -617,3 +617,53 @@ def test_no_network_filesystem_subprocess_or_external_path_reachable():
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module.split(".")[0])
     assert imported & forbidden_modules == set()
+
+
+# -- #2148: why no blocker-rewriting normalizer is needed ----------------------
+
+
+def test_2148_merged_needs_closure_is_reached_without_rewriting_blockers():
+    """The live owner of "merged work awaiting issue closure is productive".
+
+    ``recoverable_reconciliation.py`` existed to strip the merged-PR/open-issue
+    code out of ``blocker_codes`` so this state would stop looking blocked. It
+    was never reachable from production, and it was never needed: this seam
+    reads ``reason_codes`` and routes, leaving the operational state -- and its
+    authority projection -- exactly as the canonical builder produced it.
+
+    Retiring the normalizer therefore removes a second, authority-adjacent
+    representation of a decision this queue already owns.
+    """
+    c = candidate(
+        901,
+        state_changes={
+            "lifecycle_stage": LifecycleStage.MERGED,
+            "primary_claims": (primary_claim(55, "merged"),),
+            "closure_authorization": authority(AuthorizationState.NOT_AUTHORIZED),
+        },
+    )
+    result = select(candidates=(c,))
+
+    assert result.queue_classifications[0].queue is Queue.MERGED_NEEDS_CLOSURE
+    # The state itself is untouched: the drift is still recorded as a blocker
+    # and closure is still unauthorized. Routing never granted authority.
+    assert "reconciliation.merged-pr-open-issue" in c.operational_state.blocker_codes
+    assert c.operational_state.reconciliation_required is True
+    assert (
+        c.operational_state.closure_authorization.state
+        is AuthorizationState.NOT_AUTHORIZED
+    )
+
+
+def test_2148_conflicting_claim_still_outranks_merged_needs_closure():
+    """A genuine blocker dominates, with no normalizer needed to preserve it."""
+    c = candidate(
+        901,
+        state_changes={
+            "lifecycle_stage": LifecycleStage.MERGED,
+            "primary_claims": (primary_claim(55, "merged"), primary_claim(56, "ready")),
+        },
+    )
+    result = select(candidates=(c,))
+
+    assert result.queue_classifications[0].queue is Queue.NEEDS_RECONCILIATION
