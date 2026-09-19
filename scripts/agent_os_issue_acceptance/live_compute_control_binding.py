@@ -221,12 +221,18 @@ def validation_state_from_evidence(evidence: ValidationEvidence) -> ValidationSt
     )
 
 
-def _label_names(item: object) -> tuple[str, ...]:
-    labels = item.get("labels") if isinstance(item, dict) else None
-    if labels is None:
-        return ()
+def _label_names(item: dict[str, object]) -> tuple[str, ...]:
+    """Project label names from a payload the canonical revision already accepted.
+
+    The only caller derives ``issue_source_revision(item)`` first, and that
+    canonical validator rejects a payload whose ``labels`` field is absent or
+    ``null``. Defaulting an unprojected field to the empty tuple here would
+    restate the very conflation #2659 removes -- an unprojected field read as
+    canonical label absence -- and could only ever run if that ordering broke.
+    Indexing instead keeps the broken-ordering case loud rather than silent.
+    """
     names: list[str] = []
-    for label in labels:
+    for label in item["labels"]:
         value = label.get("name") if isinstance(label, dict) else label
         if isinstance(value, str) and value.strip():
             names.append(value)
