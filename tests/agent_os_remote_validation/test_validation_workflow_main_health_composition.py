@@ -226,3 +226,16 @@ def test_main_health_lookup_filters_aggregate_check_server_side_before_page_limi
         in step
     )
     assert 'check-runs?per_page=100' not in step
+
+
+def test_recovery_lookup_filters_aggregate_check_server_side_before_page_limit():
+    """Recovery must not miss valid evidence behind unrelated check runs."""
+    recovery = WORKFLOW.read_text(encoding="utf-8").split(
+        "      - name: Recover missing exact-current main aggregate evidence\n", 1
+    )[1].split("\n      - name: ", 1)[0]
+
+    assert (
+        'check-runs?check_name=Run%20aggregate%20validation&per_page=100'
+        in recovery
+    )
+    assert 'check-runs?per_page=100' not in recovery
