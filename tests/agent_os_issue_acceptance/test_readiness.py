@@ -641,3 +641,73 @@ def test_2645_genuine_controlling_blocker_still_blocks(dependency_line):
     result = evaluate_issue_readiness(_tier_zero_body(dependency_line))
     assert result.outcome == ReadinessOutcome.BLOCKED, dependency_line
     assert "A required dependency is blocked." in result.report.blockers
+
+
+def _parent_tracking_body(coordination: str) -> str:
+    """A parent/tracking issue body with its own executable next action."""
+    return f"""
+Issue Tier: 0
+## Objective
+Coordinate the low-compute remote validation roadmap.
+## Owner
+GitHub Service Agent
+## Allowed Files
+- README.md
+## Validation
+- markdown check
+## Completion Criterion
+- Downstream references no longer advertise retired authority.
+## Prior scope, duplicate, and supersession review
+Reviewed related prior issues; no duplicate or superseded scope applies.
+## Documentation impact
+docs-not-required
+## Documentation exemption reason
+Coordination only; no documented behavior changes.
+{coordination}
+"""
+
+
+def test_2648_parent_is_not_blocked_merely_because_children_are_incomplete():
+    """#2648/#367: incomplete children are not a controlling blocker for the parent.
+
+    The parent references child work and states its own executable coordination
+    next action. Readiness is classified from the parent's own next action, so
+    child incompleteness alone must not project blocked.
+    """
+    body = _parent_tracking_body(
+        "Coordinates with: #240, #330, #520\n"
+        "## Current next action\n"
+        "Reconcile #240, then perform the final smoke-test necessity review."
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.READY
+    assert "A required dependency is blocked." not in result.report.blockers
+
+
+def test_2648_parent_gated_on_prerequisite_evidence_remains_blocked():
+    """#330-shaped control: a parent that cannot advance until evidence exists."""
+    body = _parent_tracking_body(
+        "Blocked by: positive single-job production-path evidence is unavailable"
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.BLOCKED
+    assert "A required dependency is blocked." in result.report.blockers
+
+
+def test_2648_parent_gated_on_child_evidence_remains_blocked():
+    """Child-evidence-gated control: the parent's own decision needs child output."""
+    body = _parent_tracking_body("Blocked by: #604 terminal child evidence")
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.BLOCKED
+
+
+def test_2648_parent_requiring_a_material_choice_is_needs_decision_not_blocked():
+    """A material option/architecture gate maps to needs-decision, never blocked."""
+    body = _parent_tracking_body(
+        "## Current next action\n"
+        "Owner: needs-decision\n"
+        "Choose the supported execution host before further coordination."
+    )
+    result = evaluate_issue_readiness(body)
+    assert result.outcome == ReadinessOutcome.NEEDS_DECISION
+    assert not result.report.blockers
