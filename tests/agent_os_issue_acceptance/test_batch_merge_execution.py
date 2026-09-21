@@ -80,7 +80,7 @@ def test_no_background_or_auto_merge_actions_exist():
 
 def test_2668_behind_candidate_materializes_existing_refresh_authorization_and_trigger():
     main="a"*40; head="b"*40; new_head="c"*40
-    c=start_batch_execution(plan(11,12))
+    c=start_batch_execution(plan(11,12),linked_issues={11:101})
     c=apply_current_state(c,current(11,main,head,"behind"))
     assert c.action is BatchMergeAction.REFRESH_AUTHORIZE
     prep=RefreshPreparationEvidence(
