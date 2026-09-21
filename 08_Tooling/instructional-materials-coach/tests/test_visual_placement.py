@@ -15,6 +15,7 @@ def _target(kind="slides"):
     return resolve_exact_target(
         artifact_type=kind,
         artifact_id="artifact-1",
+        artifact_revision_id="revision-1",
         role_id=role,
         matches=[{
             "marker": marker_for_role(role),
@@ -42,16 +43,18 @@ def test_preserves_exact_selected_identity(kind):
     assert request.drive_file_id == "drive-file-1"
     assert request.role_id == "visual-role-abc123"
     assert request.target.artifact_type == kind
+    assert request.target.artifact_revision_id == "revision-1"
 
 
 def test_exact_single_marker_is_required():
     role = "visual-role-abc123"
     with pytest.raises(VisualPlacementError, match="exactly one"):
-        resolve_exact_target(artifact_type="slides", artifact_id="a", role_id=role, matches=[])
+        resolve_exact_target(artifact_type="slides", artifact_id="a", artifact_revision_id="revision-1", role_id=role, matches=[])
     with pytest.raises(VisualPlacementError, match="exactly one"):
         resolve_exact_target(
             artifact_type="slides",
             artifact_id="a",
+            artifact_revision_id="revision-1",
             role_id=role,
             matches=[{"marker": marker_for_role(role)}, {"marker": marker_for_role(role)}],
         )
@@ -62,6 +65,7 @@ def test_marker_must_bind_requested_role():
         resolve_exact_target(
             artifact_type="slides",
             artifact_id="a",
+            artifact_revision_id="revision-1",
             role_id="visual-role-abc123",
             matches=[{"marker": "{{visual:visual-role-other}}", "container_id": "s", "element_id": "e"}],
         )
@@ -76,6 +80,7 @@ def test_receipt_requires_exact_identity_before_verified():
         "role_id": request.role_id,
         "artifact_type": request.target.artifact_type,
         "artifact_id": request.target.artifact_id,
+        "artifact_revision_id": request.target.artifact_revision_id,
         "marker": request.target.marker,
         "container_id": request.target.container_id,
         "inserted_element_id": "image-1",
@@ -85,6 +90,9 @@ def test_receipt_requires_exact_identity_before_verified():
     bad = dict(receipt, asset_id="asset-other")
     with pytest.raises(VisualPlacementError, match="asset_id mismatch"):
         verify_placement_receipt(request, bad)
+    stale = dict(receipt, artifact_revision_id="revision-old")
+    with pytest.raises(VisualPlacementError, match="artifact_revision_id mismatch"):
+        verify_placement_receipt(request, stale)
 
 
 def test_transport_success_without_placed_state_is_not_verified():
@@ -107,6 +115,7 @@ def test_retry_requires_positive_not_placed_identity_evidence():
         "role_id": request.role_id,
         "artifact_type": request.target.artifact_type,
         "artifact_id": request.target.artifact_id,
+        "artifact_revision_id": request.target.artifact_revision_id,
         "marker": request.target.marker,
         "container_id": request.target.container_id,
         "inserted_element_id": None,
@@ -120,6 +129,7 @@ def test_coarse_semantic_placement_is_not_an_exact_target():
         resolve_exact_target(
             artifact_type="slides",
             artifact_id="artifact-1",
+            artifact_revision_id="revision-1",
             role_id="visual-role-abc123",
             matches=[{"marker": "slide", "container_id": "slide-1", "element_id": "marker-1"}],
         )
@@ -131,6 +141,7 @@ def test_instructional_visual_rejects_crop_fit_mode():
         resolve_exact_target(
             artifact_type="slides",
             artifact_id="artifact-1",
+            artifact_revision_id="revision-1",
             role_id=role,
             matches=[{
                 "marker": marker_for_role(role),
@@ -149,6 +160,7 @@ def test_instructional_visual_accepts_complete_asset_contain_mode():
     target = resolve_exact_target(
         artifact_type="docs",
         artifact_id="artifact-1",
+        artifact_revision_id="revision-1",
         role_id=role,
         matches=[{
             "marker": marker_for_role(role),
@@ -168,6 +180,6 @@ def test_source_dimensions_must_be_complete_positive_pair():
     role = "visual-role-abc123"
     with pytest.raises(VisualPlacementError, match="supplied together"):
         resolve_exact_target(
-            artifact_type="docs", artifact_id="a", role_id=role,
+            artifact_type="docs", artifact_id="a", artifact_revision_id="revision-1", role_id=role,
             matches=[{"marker": marker_for_role(role), "container_id": "b", "element_id": "e", "source_width": 100}],
         )

@@ -10,6 +10,8 @@ from scripts.agent_os_execution_interface.continuation_driver import Continuatio
 from scripts.agent_os_execution_interface.investigation_completion_admission import evaluate_investigation_completion_admission
 from scripts.agent_os_issue_acceptance.primary_pr_creation_admission import (
     ActivePrimaryPr,
+    BatchIssuePrimaryPrEvidence,
+    evaluate_batch_primary_pr_packaging,
     evaluate_primary_pr_creation_admission,
 )
 
@@ -84,6 +86,44 @@ def admit_agent_os_primary_pr_creation_tool(issue_number: int, issue_open: bool,
         "action": result.action.value,
         "creation_admitted": result.creation_admitted,
         "existing_pull_request_number": result.existing_pull_request_number,
+        "reason_codes": list(result.reason_codes),
+        "github_writes_authorized": result.github_writes_authorized,
+    }
+
+
+@mcp.tool()
+def admit_agent_os_batch_pr_packaging_tool(issue_evidence: list[dict[str, object]], evidence_current: bool) -> dict[str, object]:
+    """Preserve independent primary-PR lineage across one batch (#2447)."""
+    evidence = tuple(
+        BatchIssuePrimaryPrEvidence(
+            issue_number=item["issue_number"],
+            issue_open=item["issue_open"],
+            objective_ref=item["objective_ref"],
+            active_primary_prs=tuple(
+                ActivePrimaryPr(
+                    pull_request_number=claim["pull_request_number"],
+                    branch=claim["branch"],
+                    head_sha=claim["head_sha"],
+                )
+                for claim in item.get("active_primary_prs", ())
+            ),
+        )
+        for item in issue_evidence
+    )
+    result = evaluate_batch_primary_pr_packaging(issue_evidence=evidence, evidence_current=evidence_current)
+    return {
+        "packaging_admitted": result.packaging_admitted,
+        "issue_numbers": list(result.issue_numbers),
+        "per_issue": [
+            {
+                "issue_number": number,
+                "action": admission.action.value,
+                "creation_admitted": admission.creation_admitted,
+                "existing_pull_request_number": admission.existing_pull_request_number,
+                "reason_codes": list(admission.reason_codes),
+            }
+            for number, admission in result.per_issue_admissions
+        ],
         "reason_codes": list(result.reason_codes),
         "github_writes_authorized": result.github_writes_authorized,
     }

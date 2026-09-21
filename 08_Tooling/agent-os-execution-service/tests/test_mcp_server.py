@@ -11,6 +11,7 @@ EXPECTED_TOOLS = frozenset(
         "plan_connected_issue_creation_tool",
         "plan_agent_os_continuation_tool",
         "admit_agent_os_primary_pr_creation_tool",
+        "admit_agent_os_batch_pr_packaging_tool",
         "activate_agent_os_issue_start_lessons_tool",
         "activate_agent_os_failed_repair_tool",
         "admit_agent_os_failed_repair_tool",
@@ -179,6 +180,71 @@ def test_primary_pr_creation_tool_fails_closed_on_2609_duplicate_reproduction() 
     assert result["creation_admitted"] is False
     assert result["reason_codes"] == ["primary-pr.multiple-active"]
     assert result["github_writes_authorized"] is False
+
+
+def test_2447_batch_packaging_tool_rejects_a_second_execution_wave() -> None:
+    """#2688-#2695 reproduction, through the real creation-admission call path."""
+    first_wave = mcp_server.admit_agent_os_batch_pr_packaging_tool(
+        issue_evidence=[
+            {
+                "issue_number": 2688,
+                "issue_open": True,
+                "objective_ref": "objective/lp4-zero-comparable-runs",
+                "active_primary_prs": [],
+            }
+        ],
+        evidence_current=True,
+    )
+    assert first_wave["packaging_admitted"] is True
+    assert first_wave["per_issue"][0]["action"] == "create-primary-pr"
+
+    second_wave = mcp_server.admit_agent_os_batch_pr_packaging_tool(
+        issue_evidence=[
+            {
+                "issue_number": 2688,
+                "issue_open": True,
+                "objective_ref": "objective/lp4-zero-comparable-runs",
+                "active_primary_prs": [
+                    {
+                        "pull_request_number": 2703,
+                        "branch": "agent/2688-lp-fix",
+                        "head_sha": "6" * 40,
+                    }
+                ],
+            }
+        ],
+        evidence_current=True,
+    )
+    assert second_wave["packaging_admitted"] is False
+    assert second_wave["per_issue"][0]["action"] == "reuse-existing-primary-pr"
+    assert second_wave["per_issue"][0]["existing_pull_request_number"] == 2703
+    assert second_wave["github_writes_authorized"] is False
+
+
+def test_2447_batch_packaging_tool_keeps_independent_issues_on_separate_prs() -> None:
+    result = mcp_server.admit_agent_os_batch_pr_packaging_tool(
+        issue_evidence=[
+            {
+                "issue_number": 2442,
+                "issue_open": True,
+                "objective_ref": "objective/candidate-packet-identity",
+                "active_primary_prs": [],
+            },
+            {
+                "issue_number": 2443,
+                "issue_open": True,
+                "objective_ref": "objective/candidate-packet-transport",
+                "active_primary_prs": [],
+            },
+        ],
+        evidence_current=True,
+    )
+    assert result["packaging_admitted"] is False
+    assert result["reason_codes"] == ["primary-pr.independent-issues-require-separate-prs"]
+    assert [item["action"] for item in result["per_issue"]] == [
+        "create-primary-pr",
+        "create-primary-pr",
+    ]
 
 
 def test_unbound_current_surface_is_projected_without_claiming_source_unavailable(monkeypatch) -> None:

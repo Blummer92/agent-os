@@ -178,3 +178,74 @@ def test_complete_accounting_is_terminal_only_after_all_candidates_are_dispositi
     assert result["next_action"] == "report-complete-repair-batch"
     assert result["agent_os_continuation"]["terminal"] is True
     assert result["agent_os_continuation"]["blocked"] is False
+
+
+# -- #2349 call-path proof: what the execution-service host is actually told ---
+
+
+def test_2349_host_is_told_the_shortfall_not_that_the_count_was_satisfied():
+    """The user-visible end of the chain.
+
+    Three requested PRs, every one blocked item-local, nothing repaired. The
+    repair loop is finished, so the projection is terminal -- but the reason
+    codes the host receives must say the requested count fell short. Before the
+    repair this same call emitted ``requested-count-satisfied``.
+    """
+    payload = classify_bulk_repair_continuation(
+        repository="Blummer92/agent-os",
+        issue_number=2349,
+        requested_pull_requests=[1, 2, 3],
+        candidate_evidence=[
+            candidate(1, "blocked", "needs-decision"),
+            candidate(2, "blocked", "needs-decision"),
+            candidate(3, "blocked", "external-host-owner"),
+        ],
+    )
+
+    continuation = payload["agent_os_continuation"]
+    reason_codes = tuple(continuation["reason_codes"])
+
+    assert continuation["terminal"] is True
+    assert "requested-count-shortfall" in reason_codes
+    assert "requested-count-satisfied" not in reason_codes
+    assert payload["finite_admission"]["delivered_count"] == 0
+    assert payload["finite_admission"]["reconciled_candidate_count"] == 3
+
+
+def test_2349_host_is_not_told_a_deferred_batch_is_terminal():
+    """A deferred candidate leaves the population unexhausted end to end."""
+    payload = classify_bulk_repair_continuation(
+        repository="Blummer92/agent-os",
+        issue_number=2349,
+        requested_pull_requests=[1, 2],
+        candidate_evidence=[
+            candidate(1, "repaired", "repair-succeeded"),
+            candidate(2, "deferred", "pending-ci"),
+        ],
+    )
+
+    continuation = payload["agent_os_continuation"]
+
+    assert continuation["terminal"] is False
+    assert payload["next_action"] == "revisit-deferred-or-stale-candidates"
+    assert payload["finite_admission"]["population_exhausted"] is False
+    assert payload["finite_admission"]["delivered_count"] == 1
+
+
+def test_2349_host_still_sees_a_genuinely_delivered_batch_as_satisfied():
+    """Control: real delivery must still read as delivery at the boundary."""
+    payload = classify_bulk_repair_continuation(
+        repository="Blummer92/agent-os",
+        issue_number=2349,
+        requested_pull_requests=[1, 2],
+        candidate_evidence=[
+            candidate(1, "repaired", "repair-succeeded"),
+            candidate(2, "repaired", "repair-succeeded"),
+        ],
+    )
+
+    continuation = payload["agent_os_continuation"]
+
+    assert continuation["terminal"] is True
+    assert tuple(continuation["reason_codes"]) == ("requested-count-satisfied",)
+    assert payload["finite_admission"]["delivered_count"] == 2

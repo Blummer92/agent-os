@@ -97,3 +97,99 @@ def evaluate_primary_pr_creation_admission(
         existing_pull_request_number=None,
         reason_codes=("primary-pr.multiple-active",),
     )
+
+
+@dataclass(frozen=True, slots=True)
+class BatchIssuePrimaryPrEvidence:
+    """Fresh canonical per-issue lineage evidence for one batch member."""
+
+    issue_number: int
+    issue_open: bool
+    objective_ref: str
+    active_primary_prs: tuple[ActivePrimaryPr, ...] = ()
+
+    def __post_init__(self) -> None:
+        if type(self.issue_number) is not int or self.issue_number < 1:
+            raise TypeError("issue_number must be a positive built-in integer")
+        if type(self.issue_open) is not bool:
+            raise TypeError("issue_open must be a built-in bool")
+        if type(self.objective_ref) is not str or not self.objective_ref:
+            raise ValueError("objective_ref must be non-empty canonical issue objective evidence")
+        if type(self.active_primary_prs) is not tuple or any(
+            type(item) is not ActivePrimaryPr for item in self.active_primary_prs
+        ):
+            raise TypeError("active_primary_prs must be an exact tuple of ActivePrimaryPr values")
+
+
+@dataclass(frozen=True, slots=True)
+class BatchPrimaryPrPackagingAdmission:
+    packaging_admitted: bool
+    issue_numbers: tuple[int, ...]
+    per_issue_admissions: tuple[tuple[int, PrimaryPrCreationAdmission], ...]
+    reason_codes: tuple[str, ...]
+    github_writes_authorized: bool = False
+
+
+def evaluate_batch_primary_pr_packaging(
+    *,
+    issue_evidence: tuple[BatchIssuePrimaryPrEvidence, ...],
+    evidence_current: bool,
+) -> BatchPrimaryPrPackagingAdmission:
+    """Preserve independent primary-PR lineage across one batch (#2447).
+
+    Batching is a sequencing mechanism, not permission to erase issue/PR lineage.
+    Every per-issue create/reuse/reconcile decision is delegated to
+    ``evaluate_primary_pr_creation_admission`` so no second lifecycle exists here,
+    and multi-issue packaging is admitted only when the supplied canonical
+    objective evidence proves one focused implementation objective owns them.
+    """
+    if type(issue_evidence) is not tuple or not issue_evidence:
+        raise TypeError("issue_evidence must be a non-empty exact tuple")
+    if any(type(item) is not BatchIssuePrimaryPrEvidence for item in issue_evidence):
+        raise TypeError("issue_evidence must be an exact tuple of BatchIssuePrimaryPrEvidence values")
+    if type(evidence_current) is not bool:
+        raise TypeError("evidence_current must be a built-in bool")
+
+    ordered = tuple(sorted(issue_evidence, key=lambda item: item.issue_number))
+    issue_numbers = tuple(item.issue_number for item in ordered)
+    if len(set(issue_numbers)) != len(issue_numbers):
+        raise ValueError("issue_evidence must carry unique issue numbers")
+
+    per_issue = tuple(
+        (
+            item.issue_number,
+            evaluate_primary_pr_creation_admission(
+                issue_number=item.issue_number,
+                issue_open=item.issue_open,
+                evidence_current=evidence_current,
+                active_primary_prs=item.active_primary_prs,
+            ),
+        )
+        for item in ordered
+    )
+
+    reasons: list[str] = []
+    creation_blocked = False
+    for _, admission in per_issue:
+        if not admission.creation_admitted:
+            creation_blocked = True
+            reasons.extend(admission.reason_codes)
+
+    # One issue trivially shares its own objective, so this single expression
+    # covers both the single-issue and the multi-issue packaging question.
+    shared_objective = len({item.objective_ref for item in ordered}) == 1
+    if not shared_objective:
+        reasons.append("primary-pr.independent-issues-require-separate-prs")
+    elif not creation_blocked:
+        reasons.append(
+            "primary-pr.single-issue"
+            if len(ordered) == 1
+            else "primary-pr.shared-focused-objective-proven"
+        )
+
+    return BatchPrimaryPrPackagingAdmission(
+        packaging_admitted=shared_objective and not creation_blocked,
+        issue_numbers=issue_numbers,
+        per_issue_admissions=per_issue,
+        reason_codes=tuple(dict.fromkeys(reasons)),
+    )

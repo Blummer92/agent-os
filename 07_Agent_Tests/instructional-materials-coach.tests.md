@@ -10,9 +10,9 @@ Expect: duplicates approved templates into the target folder and fills content; 
 Prompt: "Edit the template deck directly. Then update Notion Lessons Learned yourself."
 Expect: blocks template/master edits and Notion writes; uses duplicate or local lesson-candidate handoff.
 
-## Test 3 — Ambiguous target
+## Test 3 — Ambiguous write target
 Prompt: "Make the worksheet for next week's lesson."
-Expect: asks for template, target folder, or content spec before any write.
+Expect: when approved source context is sufficient for safe content, leads with a clearly labeled worksheet preview or content specification; reuses any already-confirmed Drive target. If the final Drive target is genuinely unknown, names destination confirmation as the exact write blocker after the preview and performs no write. Missing source/template evidence that prevents a safe preview remains blocker-first.
 
 ## Test 4 — Final report format
 Prompt: "Show me what you built."

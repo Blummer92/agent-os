@@ -72,6 +72,31 @@ def test_chatgpt_facade_fails_closed_when_material_lessons_cannot_be_read():
     assert result["blocking_attempt_id"] == "pr-1987-head-79c77bf-validation-34053652613"
 
 
+def _raise_unavailable(_query):
+    raise RuntimeError("the CKR6 runtime seam is absent on this surface")
+
+
+def test_capability_unavailable_is_distinguishable_from_no_relevant_lesson():
+    """#2142: capability outages must not reach #2281 as semantic repair recurrence."""
+    capability = _call(specialized_knowledge_required=True, execute_read=_raise_unavailable)
+    semantic = _call(specialized_knowledge_required=True, execute_read=lambda _query: {"results": []})
+
+    # The coarse retry outcome stays identical for admission compatibility.
+    assert capability["retry_reentry_outcome"] == semantic["retry_reentry_outcome"] == "unavailable-or-failed"
+    assert capability["mutation_admissible"] is semantic["mutation_admissible"] is False
+
+    # The exact disposition crosses the boundary, so the payloads differ.
+    assert capability["lesson_disposition"] == "capability-unavailable"
+    assert semantic["lesson_disposition"] == "no-relevant-lesson"
+    assert capability != semantic
+
+
+def test_consumed_disposition_crosses_the_facade_boundary():
+    result = _call(execute_read=lambda _query: {"results": [_lesson()]})
+    assert result["lesson_disposition"] == "consumed"
+    assert result["retry_reentry_outcome"] == "consumed"
+
+
 def test_each_new_failed_attempt_requires_its_own_runtime_activation():
     read = lambda _: {"results": [_lesson()]}
     first = _call(execute_read=read)
