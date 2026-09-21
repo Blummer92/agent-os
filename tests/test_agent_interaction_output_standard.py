@@ -379,6 +379,21 @@ def test_orchestrator_inherits_the_standard_without_a_competing_schema() -> None
     assert "## Test 28 - Presentation Grants No Authority\n" in fixtures
 
 
+
+
+def test_2677_classroom_pilot_defers_unknown_drive_target_until_after_preview() -> None:
+    pilot = read(ROOT / "03_Templates/prompts/agent-os-pilot-prompts.md")
+    workflow = read(ROOT / "05_Examples/agent-os-pilot-workflows.md")
+    materials = read(ROOT / "07_Agent_Tests/instructional-materials-coach.tests.md")
+
+    assert "lead with the requested artifact, or a clearly labeled preview/content specification" in pilot
+    assert "reuse an already-confirmed Drive target" in pilot
+    assert "after the preview and before any write" in pilot
+    assert "Output the artifact/preview first" in pilot
+    assert "unknown target blocks only the Drive write" in workflow
+    assert "leads with a clearly labeled worksheet preview or content specification" in materials
+    assert "performs no write" in materials
+
 def test_standard_is_registered_and_navigable() -> None:
     assert "| Agent Interaction Output Standard | 0.2.0 |" in read(VERSION_MAP)
     navigation = read(NAVIGATION)

@@ -19,10 +19,12 @@ from scripts.agent_os_issue_acceptance.issue_operational_state import (
     IssueState,
     LifecycleStage,
     PrimaryIssueClaim,
+    ReadinessState,
     SourceState,
     TerminalDisposition,
     ValidationState,
 )
+from scripts.agent_os_issue_acceptance.readiness import ReadinessOutcome
 from scripts.agent_os_issue_acceptance.issue_operational_state_acquisition import (
     CurrentIssueSnapshot,
     acquire_issue_operational_state,
@@ -114,6 +116,29 @@ def test_acquires_exact_issue_once_and_preserves_merged_pr_open_issue_truth() ->
     assert "reconciliation.merged-pr-open-issue" in result.operational_state.blocker_codes
     assert result.operational_state.primary_pr_numbers == (1360,)
     assert result.operational_state.implementation_authorization.state.value == "not-authorized"
+
+
+def test_2645_declared_absence_of_blockers_does_not_project_blocked_readiness() -> None:
+    """#2645 call path: declared absence must survive to the operational state.
+
+    The acquirer reports DependencyState.CLEAR, so nothing outside the body
+    claims a blocker; only the body's own ``Blockers: none`` line is in play.
+    """
+    reader = Reader(snapshot(body=snapshot().body + "\nBlockers: none\n"))
+    result = acquire(reader)
+
+    assert result.readiness_result.outcome is not ReadinessOutcome.BLOCKED
+    assert result.operational_state.readiness is not ReadinessState.BLOCKED
+    assert "A required dependency is blocked." not in result.readiness_result.report.blockers
+
+
+def test_2645_declared_controlling_blocker_still_projects_blocked_readiness() -> None:
+    """Control: a real declared blocker must still cross the same boundary."""
+    reader = Reader(snapshot(body=snapshot().body + "\nBlocked by: #9999\n"))
+    result = acquire(reader)
+
+    assert result.readiness_result.outcome is ReadinessOutcome.BLOCKED
+    assert result.operational_state.readiness is ReadinessState.BLOCKED
 
 
 def test_labels_and_issue_prose_do_not_grant_authorization() -> None:

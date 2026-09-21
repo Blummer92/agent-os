@@ -28,14 +28,16 @@ Use Agent OS.
 
 Take the approved lesson plan and prepare student-facing classroom materials.
 
-Before creating files:
-- route to Instructional Materials Coach
-- confirm the approved template or format
-- ask for the Google Drive target folder
-- identify QA / Test Agent review criteria
+Before responding:
+- route to Instructional Materials Coach internally
+- verify the approved source/template context needed for safe content
+- lead with the requested artifact, or a clearly labeled preview/content specification
+- reuse an already-confirmed Drive target from current approved context
+- if a Drive write is requested and no target is confirmed, name that exact destination confirmation after the preview and before any write
+- apply QA / Test Agent review criteria without making backend routing the primary teacher-facing output
 - do not write to GitHub unless repository storage is explicitly approved
 
-Output artifact plan, Drive target needed, QA checklist, blockers, and next action.
+Output the artifact/preview first, then destination or production blockers, QA summary, and next action.
 ```
 
 ## Repo Change Pilot

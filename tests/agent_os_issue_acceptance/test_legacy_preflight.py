@@ -330,3 +330,122 @@ def test_invalid_snapshot_number_is_rejected():
         assert "integer" in str(error)
     else:
         raise AssertionError("expected invalid snapshot number to be rejected")
+
+
+# -- #2659: an unprojected label field is not canonical label absence ----------
+
+#: The #2659 fixture. A connected issue-search projection returned #2654 with
+#: no usable ``labels`` field; the canonical direct read returned these four.
+CANONICAL_2654_LABELS = [
+    "agent-os",
+    "owner:github-service-agent",
+    "status:ready",
+    "type:bug",
+]
+
+
+def _search_projected_row(*, null_labels: bool = False) -> dict:
+    """A backlog row as an incomplete issue-search projection delivers it.
+
+    Two observed shapes: the field omitted, or present as ``null``. The
+    ``snapshot`` builder coerces ``labels=None`` to ``[]``, so the null shape
+    is written onto the row directly rather than passed through it.
+    """
+    row = snapshot(2654, title="Bug: connector projection")
+    if null_labels:
+        row["labels"] = None
+    else:
+        del row["labels"]
+    return row
+
+
+def test_2659_omitted_label_field_is_not_read_as_canonical_label_absence():
+    """The reproduction. #2654 carries ``status:ready``; the projection omits it.
+
+    Before this repair the omission became the empty tuple, so the classifier
+    answered ``status_label=None`` -- a positive claim about #2654 that the
+    payload never supported.
+    """
+    try:
+        LegacyIssueSnapshot.from_mapping(_search_projected_row())
+    except ValueError as error:
+        assert "labels were not projected" in str(error)
+        assert "reacquire" in str(error)
+    else:
+        raise AssertionError(
+            "expected an unprojected label field to be refused, not defaulted"
+        )
+
+
+def test_2659_null_label_projection_is_refused_by_the_same_contract():
+    """``labels: null`` is the same incompleteness and must read the same way.
+
+    ``main`` already refused this shape, but under a message that named
+    ``open_pr_numbers`` too and said nothing about reacquisition -- so a caller
+    could not tell which field was incomplete or what to do about it.
+    """
+    try:
+        LegacyIssueSnapshot.from_mapping(_search_projected_row(null_labels=True))
+    except ValueError as error:
+        assert "labels were not projected" in str(error)
+        assert "reacquire" in str(error)
+    else:
+        raise AssertionError("expected a null label projection to be refused")
+
+
+def test_2659_genuine_label_absence_stays_decidable():
+    """The control that gives the repair its meaning.
+
+    An issue that truly carries no labels projects ``labels: []``. That is
+    complete evidence and must still classify, or the repair would have traded
+    one conflation for a blanket refusal.
+    """
+    assessment = classify_legacy_issue(
+        LegacyIssueSnapshot.from_mapping(snapshot(2654, labels=[]))
+    )
+
+    assert assessment.status_label is None
+    assert assessment.classification == "manual-owner-decision"
+
+
+def test_2659_canonical_label_evidence_still_classifies_2654():
+    """The other half of the fixture: the direct read decides normally."""
+    assessment = classify_legacy_issue(
+        LegacyIssueSnapshot.from_mapping(
+            snapshot(2654, labels=CANONICAL_2654_LABELS)
+        )
+    )
+
+    assert assessment.status_label == "status:ready"
+    assert assessment.classification == "active-implementation"
+
+
+def test_2659_backlog_evaluation_cannot_classify_from_incomplete_projection():
+    """Call-path proof: the refusal reaches the batch backlog entry point.
+
+    ``evaluate_legacy_preflight`` is what a bounded backlog mission calls over
+    an enumerated issue set. It must not emit metrics and per-issue
+    classifications computed from rows whose labels were never projected.
+    """
+    try:
+        evaluate_legacy_preflight(
+            {"issues": [snapshot(1, labels=["status:ready"]), _search_projected_row()]}
+        )
+    except ValueError as error:
+        assert "labels were not projected" in str(error)
+    else:
+        raise AssertionError(
+            "expected batch evaluation to refuse an incomplete projected row"
+        )
+
+
+def test_2659_repair_does_not_tighten_optional_open_pr_enrichment():
+    """Scope control: ``open_pr_numbers`` is enrichment, not classification input.
+
+    Only the label field decides ``status_label``, so only the label field
+    gains the completeness requirement.
+    """
+    row = snapshot(2654, labels=CANONICAL_2654_LABELS)
+    del row["open_pr_numbers"]
+
+    assert LegacyIssueSnapshot.from_mapping(row).open_pr_numbers == ()
