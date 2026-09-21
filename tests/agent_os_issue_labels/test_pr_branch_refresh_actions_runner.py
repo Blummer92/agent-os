@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -11,6 +13,7 @@ from scripts.agent_os_issue_labels.pr_branch_refresh_authorization import (
     RefreshAuthorizationState,
 )
 from scripts.agent_os_issue_labels.pr_branch_refresh_authorization_source import (
+    RECEIPT_MARKER,
     serialize_refresh_authorization_comment,
 )
 
@@ -151,6 +154,72 @@ def test_actions_runner_reacquires_owner_authorization_and_invokes_facade_once()
     assert calls[0]["current_main_sha"] == MAIN
     assert github.repo.issue.created
     assert "secret" not in github.repo.issue.created[0]
+
+
+
+def _published_receipt(github: FakeGithub) -> dict[str, object]:
+    body = github.repo.issue.created[-1]
+    marker, payload = body.split("\n", 1)
+    assert marker == RECEIPT_MARKER
+    return json.loads(payload)
+
+
+def test_actions_runner_receipt_success_requires_terminal_convergence():
+    auth = authorization()
+    github = FakeGithub([FakeComment(10, serialize_refresh_authorization_comment(auth))])
+    calls = []
+    result = run_branch_refresh_actions(
+        trigger=trigger(), github_client=github, repository_root="/repo",
+        invocation_id="actions:1:1", environment={"GITHUB_TOKEN": "secret"},
+        refresh_callable=converged_refresh(auth, calls),
+    )
+    receipt = _published_receipt(github)
+    assert result.status == "converged"
+    assert receipt["mutation_attempted"] is True
+    assert receipt["mutation_succeeded"] is True
+    assert receipt["terminal_status"] == "converged"
+    assert len(calls) == 1
+
+
+def test_actions_runner_post_mutation_nonconverged_receipts_never_claim_success():
+    auth = authorization()
+    fixtures = (
+        ("blocked", "refresh.remote-head-mismatch"),
+        ("stale", "main.moved"),
+        ("validation-failing", "validation.aggregate-failed"),
+    )
+    for status, reason in fixtures:
+        github = FakeGithub([FakeComment(10, serialize_refresh_authorization_comment(auth))])
+        calls = []
+
+        def refresh(**kwargs):
+            calls.append(kwargs)
+            return {
+                "status": status,
+                "authorization_id": auth.authorization_id,
+                "authorization_consumed": True,
+                "admitted_main_sha": MAIN,
+                "old_head_sha": HEAD,
+                "new_head_sha": "3" * 40,
+                "mutation_count": 1,
+                "reason_codes": (reason,),
+                "side_effects_performed": True,
+            }
+
+        result = run_branch_refresh_actions(
+            trigger=trigger(), github_client=github, repository_root="/repo",
+            invocation_id=f"actions:{status}:1", environment={"GITHUB_TOKEN": "secret"},
+            refresh_callable=refresh,
+        )
+        receipt = _published_receipt(github)
+        assert result.status == status
+        assert result.mutation_count == 1
+        assert result.authorization_receipt_published is True
+        assert receipt["mutation_attempted"] is True
+        assert receipt["mutation_succeeded"] is False
+        assert receipt["terminal_status"] == status
+        assert receipt["reason_codes"] == [reason]
+        assert len(calls) == 1
 
 
 def test_actions_runner_selects_fresh_authorization_over_stale_main_record():
