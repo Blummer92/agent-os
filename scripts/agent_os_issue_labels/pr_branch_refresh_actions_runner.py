@@ -177,7 +177,7 @@ def run_branch_refresh_actions(*, trigger: BranchRefreshActionsTrigger, github_c
     published = False
 
     if authorization_consumed:
-        authorization_receipt = RefreshAuthorizationReceipt(schema_version="1.0", repository=trigger.repository, pr_number=trigger.pr_number, authorization_id=resolved.authorization_id, admitted_head_sha=head_sha, admitted_main_sha=main_sha, mutation_attempted=True, mutation_succeeded=(mutation_count == 1 and isinstance(payload.get("new_head_sha"), str) and payload.get("new_head_sha") is not None), terminal_status=status, reason_codes=reason_codes)
+        authorization_receipt = RefreshAuthorizationReceipt(schema_version="1.0", repository=trigger.repository, pr_number=trigger.pr_number, authorization_id=resolved.authorization_id, admitted_head_sha=head_sha, admitted_main_sha=main_sha, mutation_attempted=True, mutation_succeeded=(mutation_count == 1 and status == "converged" and payload.get("final_current_proven") is True and isinstance(payload.get("new_head_sha"), str) and _SHA40.fullmatch(payload["new_head_sha"]) is not None), terminal_status=status, reason_codes=reason_codes)
         try:
             github_client.get_repo(trigger.repository).get_issue(trigger.pr_number).create_comment(serialize_refresh_authorization_receipt(authorization_receipt))
             published = True
