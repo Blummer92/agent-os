@@ -91,7 +91,8 @@ def test_adaptation_hierarchy_selects_earlier_steps_first() -> None:
     assert [item["id"] for item in payload["compressed_instances"]] == ["setup-friction", "extra-demo"]
     assert payload["changed_formats"] == []
     assert payload["deferred_functions"] == []
-    assert payload["adapted_range"]["expected"] == 45.0
+    assert payload["available_lesson_minutes"] == 48.0
+    assert payload["adapted_range"]["expected"] == 48.0
 
 
 def test_repetition_reduction_preserves_instructional_function() -> None:
