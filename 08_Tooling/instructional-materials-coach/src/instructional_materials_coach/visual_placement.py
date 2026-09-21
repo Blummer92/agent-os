@@ -21,6 +21,7 @@ class VisualPlacementError(ValueError):
 class PlacementTarget:
     artifact_type: str
     artifact_id: str
+    artifact_revision_id: str
     role_id: str
     marker: str
     container_id: str
@@ -48,6 +49,7 @@ class PlacementReceipt:
     role_id: str
     artifact_type: str
     artifact_id: str
+    artifact_revision_id: str
     marker: str
     container_id: str
     inserted_element_id: str
@@ -75,6 +77,7 @@ def resolve_exact_target(
     *,
     artifact_type: str,
     artifact_id: str,
+    artifact_revision_id: str,
     role_id: str,
     matches: Iterable[Mapping[str, Any]],
 ) -> PlacementTarget:
@@ -83,6 +86,7 @@ def resolve_exact_target(
     if kind not in _SUPPORTED_ARTIFACTS:
         raise VisualPlacementError("unsupported placement artifact type")
     artifact = _required_id(artifact_id, "artifact_id")
+    artifact_revision = _required_id(artifact_revision_id, "artifact_revision_id")
     role = _required_id(role_id, "role_id")
     expected_marker = marker_for_role(role)
     candidates = list(matches)
@@ -117,6 +121,7 @@ def resolve_exact_target(
     return PlacementTarget(
         artifact_type=kind,
         artifact_id=artifact,
+        artifact_revision_id=artifact_revision,
         role_id=role,
         marker=expected_marker,
         container_id=container_id,
@@ -168,6 +173,7 @@ def verify_placement_receipt(request: PlacementRequest, receipt: object) -> Plac
         "role_id": request.role_id,
         "artifact_type": request.target.artifact_type,
         "artifact_id": request.target.artifact_id,
+        "artifact_revision_id": request.target.artifact_revision_id,
         "marker": request.target.marker,
         "container_id": request.target.container_id,
     }
@@ -196,6 +202,7 @@ def retry_is_safe(*, request: PlacementRequest, receipt: object | None) -> bool:
         and receipt.get("role_id") == request.role_id
         and receipt.get("artifact_type") == request.target.artifact_type
         and receipt.get("artifact_id") == request.target.artifact_id
+        and receipt.get("artifact_revision_id") == request.target.artifact_revision_id
         and receipt.get("marker") == request.target.marker
         and receipt.get("container_id") == request.target.container_id
     )

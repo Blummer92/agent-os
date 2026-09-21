@@ -337,3 +337,46 @@ def test_report_reuses_ia_style_shape():
     assert "Issue Acceptance Report" in rendered
     assert "Overall result: pass" in rendered
     assert "expected labels:" in rendered
+
+
+def test_tiered_bug_parses_lineage_metadata_without_projecting_number_labels():
+    body = _TIERED_BUG_BODY + """
+### Original parent
+
+#2496
+
+### Current root-cause owner
+
+#1401
+"""
+    fields = load_issue_form_fields(FORM)
+    metadata = parse_issue_form_body(body, fields)
+    labels, unknown = expected_labels(metadata, load_label_map(MAP))
+
+    assert metadata["original_parent_issue_number"] == ["#2496"]
+    assert metadata["root_cause_issue_number"] == ["#1401"]
+    assert unknown == []
+    assert labels == {
+        "agent-os",
+        "owner:github-service-agent",
+        "status:ready",
+        "type:bug",
+    }
+    assert not any(label.startswith(("parent:", "root-cause:")) for label in labels)
+
+
+def test_empty_lineage_fields_remain_unresolved_without_placeholder_metadata():
+    body = _TIERED_BUG_BODY + """
+### Original parent
+
+_No response_
+
+### Current root-cause owner
+
+_No response_
+"""
+    fields = load_issue_form_fields(FORM)
+    metadata = parse_issue_form_body(body, fields)
+
+    assert "original_parent_issue_number" not in metadata
+    assert "root_cause_issue_number" not in metadata

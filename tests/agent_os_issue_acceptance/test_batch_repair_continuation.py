@@ -317,3 +317,124 @@ def test_duplicate_or_out_of_batch_evidence_fails_closed():
         assert "outside the frozen target set" in str(error)
     else:
         raise AssertionError("out-of-batch evidence must fail")
+
+
+# -- #2349: execution loop finished is not requested work delivered ------------
+
+
+def test_2349_blocked_candidates_are_traversed_not_delivered():
+    """The headline case: nothing was repaired, yet the batch reported delivery.
+
+    Three requested PRs, every one blocked item-local. Traversal is complete, so
+    the loop is finished -- but no requested work was delivered. Counting
+    traversal as delivery made the canonical finite-batch owner answer
+    ``requested-count-satisfied``.
+    """
+    result = evaluate_bulk_repair_continuation(
+        requested_pull_requests=(1, 2, 3),
+        evidence=(
+            ev(1, RepairDisposition.BLOCKED, "needs-decision"),
+            ev(2, RepairDisposition.BLOCKED, "needs-decision"),
+            ev(3, RepairDisposition.BLOCKED, "needs-decision"),
+        ),
+    )
+    admission = result.finite_admission
+
+    assert admission.delivered_count == 0
+    assert admission.reconciled_candidate_count == 3
+    assert "requested-count-shortfall" in admission.reason_codes
+    assert admission.next_action == "report-proven-population-exhaustion-and-shortfall"
+
+
+def test_2349_already_terminal_candidates_are_traversed_not_delivered():
+    """An already-merged candidate advances the cursor; it delivers nothing."""
+    result = evaluate_bulk_repair_continuation(
+        requested_pull_requests=(1, 2, 3),
+        evidence=(
+            ev(1, RepairDisposition.ALREADY_TERMINAL, "merged"),
+            ev(2, RepairDisposition.ALREADY_TERMINAL, "merged"),
+            ev(3, RepairDisposition.ALREADY_TERMINAL, "merged"),
+        ),
+    )
+
+    assert result.finite_admission.delivered_count == 0
+    assert "requested-count-shortfall" in result.finite_admission.reason_codes
+
+
+def test_2349_deferred_candidates_leave_the_population_unexhausted():
+    """A deferred candidate still has an executable next action.
+
+    The loop's own terminal chain already says
+    ``revisit-deferred-or-stale-candidates``; before this repair the canonical
+    owner disagreed with it and said the requested count was satisfied.
+    """
+    result = evaluate_bulk_repair_continuation(
+        requested_pull_requests=(1, 2, 3),
+        evidence=(
+            ev(1, RepairDisposition.REPAIRED, "repair-succeeded"),
+            ev(2, RepairDisposition.DEFERRED, "pending-ci"),
+            ev(3, RepairDisposition.DEFERRED, "pending-ci"),
+        ),
+    )
+    admission = result.finite_admission
+
+    assert admission.delivered_count == 1
+    assert admission.population_exhausted is False
+    assert admission.completion_admissible is False
+    assert admission.next_action == "continue-candidate-cursor"
+    assert result.next_action == "revisit-deferred-or-stale-candidates"
+
+
+def test_2349_reacquire_candidates_leave_the_population_unexhausted():
+    """A stale-head candidate awaiting reacquisition is not an exhausted one."""
+    result = evaluate_bulk_repair_continuation(
+        requested_pull_requests=(1, 2, 3),
+        evidence=(
+            ev(1, RepairDisposition.REACQUIRE, "stale-head"),
+            ev(2, RepairDisposition.REACQUIRE, "stale-head"),
+            ev(3, RepairDisposition.REACQUIRE, "stale-head"),
+        ),
+    )
+    admission = result.finite_admission
+
+    assert admission.delivered_count == 0
+    assert admission.population_exhausted is False
+    assert admission.completion_admissible is False
+
+
+def test_2349_genuine_delivery_still_satisfies_the_requested_count():
+    """The control. Real repairs must still close the batch cleanly."""
+    result = evaluate_bulk_repair_continuation(
+        requested_pull_requests=(1, 2, 3),
+        evidence=(
+            ev(1, RepairDisposition.REPAIRED, "repair-succeeded"),
+            ev(2, RepairDisposition.REPAIRED, "repair-succeeded"),
+            ev(3, RepairDisposition.REPAIRED, "repair-succeeded"),
+        ),
+    )
+    admission = result.finite_admission
+
+    assert admission.delivered_count == 3
+    assert admission.completion_admissible is True
+    assert admission.next_action == "report-requested-count-delivered"
+    assert result.next_action == "report-complete-repair-batch"
+
+
+def test_2349_loop_completion_and_delivery_shortfall_are_reported_separately():
+    """The invariant in one assertion pair.
+
+    The repair loop is finished -- there is nothing left to traverse -- while
+    the requested work was not delivered. Both facts must be legible at once.
+    """
+    result = evaluate_bulk_repair_continuation(
+        requested_pull_requests=(1, 2),
+        evidence=(
+            ev(1, RepairDisposition.REPAIRED, "repair-succeeded"),
+            ev(2, RepairDisposition.BLOCKED, "external-host-owner"),
+        ),
+    )
+
+    assert result.next_action == "report-complete-repair-batch"
+    assert result.finite_admission.delivered_count == 1
+    assert result.finite_admission.requested_count == 2
+    assert "requested-count-shortfall" in result.finite_admission.reason_codes

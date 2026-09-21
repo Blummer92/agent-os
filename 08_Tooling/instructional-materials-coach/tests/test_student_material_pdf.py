@@ -200,7 +200,7 @@ def test_pdf_verifier_rejects_header_and_eof_garbage(tmp_path):
     import instructional_materials_coach.student_material_pdf as module
 
     target = tmp_path / "fake.pdf"
-    target.write_bytes(b"%PDF-1.7\\n" + (b"X" * 100) + b"\\n%%EOF\\n")
+    target.write_bytes(b"%PDF-1.7\n" + (b"X" * 100) + b"\n%%EOF\n")
 
     try:
         module._verify_pdf(target)
@@ -208,3 +208,14 @@ def test_pdf_verifier_rejects_header_and_eof_garbage(tmp_path):
         assert "verification failed" in str(exc)
     else:
         raise AssertionError("PDF-shaped garbage must not pass verification")
+
+
+def test_unsupported_artifact_roles_fail_closed_without_visual_requirements(tmp_path):
+    for role in ("banana", "pdf", "handout"):
+        receipt = render_student_material_pdf_preview(
+            _source(artifact_role=role),
+            tmp_path / f"{role}.pdf",
+            expected_revision_id="rev-7",
+        )
+        assert receipt.state == "blocked" and not receipt.available
+        assert "artifact_role does not map" in receipt.error

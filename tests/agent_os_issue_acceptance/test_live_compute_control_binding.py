@@ -340,6 +340,42 @@ def test_reader_extracts_labels_and_revision() -> None:
     assert snapshot.issue_source_revision in snapshot.evidence_ids
 
 
+def test_2659_live_reader_refuses_an_unprojected_label_field() -> None:
+    """The live path needs no empty-tuple default; its revision boundary owns this.
+
+    ``issue_source_revision`` is derived before labels are projected, and the
+    canonical payload validator rejects an absent or ``null`` labels field. This
+    locks that ordering, which is why #2659's repair lives at the bulk backlog
+    consumer and not here.
+    """
+    reader = LiveCurrentIssueSnapshotReader(
+        transport=ok_transport(labels=None),
+        source_revision=SHA,
+        observed_at="2026-08-28T03:30:00Z",
+        lifecycle_stage=LifecycleStage.IMPLEMENTATION,
+    )
+    with pytest.raises(ValueError, match="labels must be a sequence"):
+        reader.read_current_issue(REPOSITORY, ISSUE_NUMBER)
+
+
+def test_2659_live_reader_refuses_an_absent_label_field() -> None:
+    """The other incomplete-projection shape reaches the same refusal."""
+    item = issue_item()
+    del item["labels"]
+    reader = LiveCurrentIssueSnapshotReader(
+        transport=FakeTransport(
+            result=SingleIssueTransportResult(
+                outcome=SingleIssueTransportOutcome.OK, item=item
+            )
+        ),
+        source_revision=SHA,
+        observed_at="2026-08-28T03:30:00Z",
+        lifecycle_stage=LifecycleStage.IMPLEMENTATION,
+    )
+    with pytest.raises(ValueError, match="labels must be a sequence"):
+        reader.read_current_issue(REPOSITORY, ISSUE_NUMBER)
+
+
 # -- pure evidence-vocabulary translation --------------------------------------
 
 

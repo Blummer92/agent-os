@@ -230,11 +230,29 @@ def evaluate_bulk_repair_continuation(
     # next action is still `advance-shared-repair` as complete.
     shared_pending = shared_pull_requests if repairable_shared_blocker else ()
 
+    # The same reasoning covers every candidate-local disposition, which the
+    # subtraction above did not reach: blocked, deferred, reacquire, and
+    # already-terminal candidates advance traversal and deliver nothing. Reading
+    # `delivered_count` off `visited` made a batch of three item-local blocks
+    # report `requested-count-satisfied` with nothing repaired (#2349). Count
+    # what was delivered instead of subtracting from what was seen.
+    delivered = tuple(number for number in repaired if number not in set(shared_pending))
+
+    # Deferred and reacquire candidates still carry an executable next action,
+    # so the bounded population is not exhausted while any remain. The loop's
+    # own terminal chain below already says `revisit-deferred-or-stale-
+    # candidates` for exactly this state; binding exhaustion to the same
+    # evidence stops the canonical owner from contradicting it.
     admission = evaluate_finite_batch_admission(
         requested_count=len(requested),
-        delivered_count=len(visited) - len(shared_pending),
+        delivered_count=len(delivered),
         reconciled_candidate_count=len(visited),
-        population_exhausted=not remaining and not repairable_shared_blocker,
+        population_exhausted=(
+            not remaining
+            and not repairable_shared_blocker
+            and not deferred
+            and not reacquire
+        ),
         shared_blocker=terminal_shared_blocker,
     )
 

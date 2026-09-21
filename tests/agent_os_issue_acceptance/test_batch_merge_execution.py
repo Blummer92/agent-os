@@ -1,5 +1,5 @@
 from scripts.agent_os_issue_acceptance.batch_merge_execution import (
-    BatchItemDisposition, BatchMergeAction, CurrentPrEvidence, RefreshPreparationEvidence, ItemAdmissionEvidence, MergeReadbackEvidence,
+    BatchItemDisposition, BatchMergeAction, CurrentPrEvidence, RefreshPreparationEvidence, RefreshTriggerDestinationEvidence, ItemAdmissionEvidence, MergeReadbackEvidence,
     apply_current_state, apply_merge_authorization, apply_merge_readback, apply_post_merge_reconciliation,
     apply_lifecycle_readback, apply_refresh_authorization_readback, apply_refresh_receipt, apply_refresh_readback, apply_validation,
     expected_lifecycle_mutations, expected_merge, expected_refresh_authorization, expected_refresh_authorization_comment,
@@ -80,7 +80,7 @@ def test_no_background_or_auto_merge_actions_exist():
 
 def test_2668_behind_candidate_materializes_existing_refresh_authorization_and_trigger():
     main="a"*40; head="b"*40; new_head="c"*40
-    c=start_batch_execution(plan(11,12))
+    c=start_batch_execution(plan(11,12),linked_issues={11:101})
     c=apply_current_state(c,current(11,main,head,"behind"))
     assert c.action is BatchMergeAction.REFRESH_AUTHORIZE
     prep=RefreshPreparationEvidence(
@@ -95,7 +95,9 @@ def test_2668_behind_candidate_materializes_existing_refresh_authorization_and_t
     source=RefreshAuthorizationSourceResult(RefreshAuthorizationSourceStatus.CURRENT,("current",),(auth,),(),(101,))
     c=apply_refresh_authorization_readback(c,source)
     assert c.action is BatchMergeAction.REFRESH_TRIGGER
-    assert expected_refresh_trigger(c)=="/agent-os refresh-pr 11"
+    trigger=expected_refresh_trigger(c,RefreshTriggerDestinationEvidence(101,"open",False))
+    assert trigger.target_issue_number==101
+    assert trigger.body=="/agent-os refresh-pr 11"
     c=record_refresh_trigger(c,pull_request_number=11,accepted=True)
     receipt=RefreshAuthorizationReceipt(
         schema_version="1.0",repository="Blummer92/agent-os",pr_number=11,
@@ -110,6 +112,44 @@ def test_2668_behind_candidate_materializes_existing_refresh_authorization_and_t
     c=apply_refresh_readback(c,current(11,main,new_head,"current"))
     assert c.action is BatchMergeAction.VALIDATE and c.current_head_sha==new_head
     assert c.pending_refresh_authorization_id is None
+
+
+def test_2746_refresh_trigger_requires_open_non_pr_linked_issue():
+    main="a"*40; head="b"*40
+    c=start_batch_execution(plan(11),linked_issues={11:101})
+    c=apply_current_state(c,current(11,main,head,"behind"))
+    prep=RefreshPreparationEvidence(11,main,head,("scripts/a.py",),(),(),"owner-decision",True)
+    auth=expected_refresh_authorization(c,prep,repository="Blummer92/agent-os")
+    c=record_refresh_authorization_persisted(c,pull_request_number=11,authorization_id=auth.authorization_id,accepted=True)
+    c=apply_refresh_authorization_readback(c,RefreshAuthorizationSourceResult(RefreshAuthorizationSourceStatus.CURRENT,("current",),(auth,),(),(1,)))
+    trigger=expected_refresh_trigger(c,RefreshTriggerDestinationEvidence(101,"open",False))
+    assert trigger.target_issue_number==101 and trigger.body=="/agent-os refresh-pr 11"
+    for evidence,reason in (
+        (RefreshTriggerDestinationEvidence(101,"open",True),"pr-not-allowed"),
+        (RefreshTriggerDestinationEvidence(101,"closed",False),"closed"),
+        (RefreshTriggerDestinationEvidence(102,"open",False),"mismatch"),
+        (RefreshTriggerDestinationEvidence(101,"open",False,False),"unavailable"),
+    ):
+        try:
+            expected_refresh_trigger(c,evidence)
+            assert False, "invalid refresh trigger destination must fail closed"
+        except ValueError as exc:
+            assert reason in str(exc)
+
+
+def test_2746_refresh_trigger_requires_linked_issue():
+    main="a"*40; head="b"*40
+    c=start_batch_execution(plan(11))
+    c=apply_current_state(c,current(11,main,head,"behind"))
+    prep=RefreshPreparationEvidence(11,main,head,("scripts/a.py",),(),(),"owner-decision",True)
+    auth=expected_refresh_authorization(c,prep,repository="Blummer92/agent-os")
+    c=record_refresh_authorization_persisted(c,pull_request_number=11,authorization_id=auth.authorization_id,accepted=True)
+    c=apply_refresh_authorization_readback(c,RefreshAuthorizationSourceResult(RefreshAuthorizationSourceStatus.CURRENT,("current",),(auth,),(),(1,)))
+    try:
+        expected_refresh_trigger(c,RefreshTriggerDestinationEvidence(101,"open",False))
+        assert False, "missing linked issue must fail closed"
+    except ValueError as exc:
+        assert "destination-missing" in str(exc)
 
 
 def test_2668_refresh_authorization_fails_closed_on_stale_owner_or_identity():
