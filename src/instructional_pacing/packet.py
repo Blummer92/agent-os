@@ -13,6 +13,7 @@ from instructional_workflow_contracts import (
 )
 
 from .adaptation import validate_adaptation_candidates
+from .comparability import OBSERVATION_QUALITY_STATES
 
 CONTRACT_VERSION = "1.0"
 MAX_EVIDENCE_SOURCES = 20
@@ -24,8 +25,29 @@ LIFECYCLE_STAGES = frozenset(
     {"design-only", "shadow-mode", "teacher-advisory", "calibrated-local", "suspended"}
 )
 PRIVACY_STATES = frozenset({"eligible", "restricted", "blocked", "unknown"})
-EVIDENCE_DISPOSITIONS = frozenset(
-    {"direct-evidence", "partial-evidence", "context-evidence", "not-comparable", "uncertain"}
+#: Canonical LP14 observation-quality reason codes (family
+#: ``observation-quality`` in ``04_Registry/lp-reason-code-catalog.yaml``).
+#: Sourced from that catalog; this module never invents a competing code.
+OBSERVATION_QUALITY_REASON_CODES = frozenset(
+    {
+        "lp-observation-checkpoint-missing",
+        "lp-observation-recorded-too-late",
+        "lp-observation-observer-disagreement",
+        "lp-observation-category-overlap-unresolved",
+        "lp-observation-aggregate-counts-contradictory",
+        "lp-observation-burden-limit-exceeded",
+        "lp-observation-confidence-too-low",
+    }
+)
+
+#: The subset whose catalog record carries ``manual_review_required: true``,
+#: copied by reference from that record rather than redefined here.
+OBSERVATION_MANUAL_REVIEW_CODES = frozenset(
+    {
+        "lp-observation-observer-disagreement",
+        "lp-observation-category-overlap-unresolved",
+        "lp-observation-aggregate-counts-contradictory",
+    }
 )
 
 NON_AUTHORITY_FIELDS = {
@@ -112,6 +134,34 @@ def _validate_functions(functions: list[Any]) -> None:
             raise ContractValidationError("lp-pacing-duration-order-invalid", "instructional function duration order is invalid")
 
 
+def _validate_observation_quality(value: object) -> dict[str, Any]:
+    """Admit one bounded canonical LP14 observation-quality projection.
+
+    LP4 consumes LP14's own status vocabulary and reason-code family; it never
+    restates that policy. Limitations arrive as canonical codes and are carried
+    into the record rather than discarded.
+    """
+    if type(value) is not dict:
+        raise ContractValidationError("handoff-wrong-type", "observation_quality must be a mapping")
+    fields = set(value)
+    if fields - {"status", "reason_codes"}:
+        raise ContractValidationError("handoff-unknown-field", "observation_quality contains unknown fields")
+    if "status" not in fields:
+        raise ContractValidationError("handoff-invalid", "observation_quality is missing status")
+    if value["status"] not in OBSERVATION_QUALITY_STATES:
+        raise ContractValidationError("handoff-invalid", "observation_quality status is unsupported")
+    codes = value.get("reason_codes", [])
+    if type(codes) is not list or len(codes) > len(OBSERVATION_QUALITY_REASON_CODES):
+        raise ContractValidationError("handoff-invalid", "observation_quality reason_codes are outside bounds")
+    if any(code not in OBSERVATION_QUALITY_REASON_CODES for code in codes):
+        raise ContractValidationError(
+            "handoff-unknown-field", "observation_quality reason_codes are not canonical LP14 codes"
+        )
+    if len(set(codes)) != len(codes):
+        raise ContractValidationError("handoff-duplicate", "observation_quality reason_codes contain duplicates")
+    return {"status": value["status"], "reason_codes": sorted(codes)}
+
+
 def validate_pacing_packet(value: object) -> dict[str, Any]:
     """Normalize and validate one supplied-evidence-only LP4 packet."""
     normalized = validate_and_normalize_json(value)
@@ -143,8 +193,7 @@ def validate_pacing_packet(value: object) -> dict[str, Any]:
     _bounded_list(normalized["evidence_sources"], "evidence_sources", MAX_EVIDENCE_SOURCES)
     _bounded_list(normalized["prior_runs"], "prior_runs", MAX_PRIOR_RUNS)
 
-    if type(normalized["observation_quality"]) is not dict:
-        raise ContractValidationError("handoff-wrong-type", "observation_quality must be a mapping")
+    normalized["observation_quality"] = _validate_observation_quality(normalized["observation_quality"])
     privacy = normalized["privacy_disposition"]
     if privacy not in PRIVACY_STATES:
         raise ContractValidationError("handoff-invalid", "privacy_disposition is unsupported")

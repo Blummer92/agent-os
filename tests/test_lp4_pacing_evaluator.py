@@ -111,7 +111,7 @@ def test_active_time_cannot_exceed_elapsed_time() -> None:
     packet = _packet()
     packet["prior_runs"][0]["active_minutes"] = 60
     payload = _payload(evaluate_lesson_pacing(packet))
-    assert payload["evidence_summary"]["excluded"][0]["reason"] == "lp-evidence-run-interrupted-or-sparse"
+    assert payload["evidence_summary"]["excluded"][0]["reason"] == "lp-evidence-active-elapsed-time-conflict"
 
 
 def test_six_dimensions_are_required_and_never_collapsed() -> None:
@@ -143,12 +143,170 @@ def test_evaluator_uses_no_learner_vector_or_similarity_score_fields() -> None:
     for forbidden in ("cosine", "euclidean", "manhattan", "mahalanobis", "embedding", "learner_score", "ability_score"):
         assert forbidden not in serialized
 
-
-def test_zero_comparable_runs_hold_even_when_declared_timing_fits() -> None:
+def _with_observation(**observation) -> dict:
     packet = _packet()
-    packet["prior_runs"] = []
-    packet["period_minutes"] = 70
-    payload = _payload(evaluate_lesson_pacing(packet))
-    assert payload["advisory_assessment_outcome"] == "insufficient-evidence"
+    packet["observation_quality"] = observation
+    return packet
+
+
+def test_canonical_usable_lp14_projection_is_consumed_not_rejected() -> None:
+    payload = _payload(evaluate_lesson_pacing(_with_observation(status="usable", reason_codes=[])))
+    assert payload["routing_recommendation"] != "hold"
+    assert not [
+        code for code in payload["unresolved_uncertainties"] if code.startswith("lp-observation-")
+    ]
+    assert "lp-evidence-observation-quality-unusable" not in payload["unresolved_uncertainties"]
+
+
+def test_canonical_usable_with_limits_projection_keeps_limitations_visible() -> None:
+    payload = _payload(
+        evaluate_lesson_pacing(
+            _with_observation(
+                status="usable-with-limits",
+                reason_codes=["lp-observation-checkpoint-missing", "lp-observation-confidence-too-low"],
+            )
+        )
+    )
+    assert "lp-observation-checkpoint-missing" in payload["unresolved_uncertainties"]
+    assert "lp-observation-confidence-too-low" in payload["unresolved_uncertainties"]
+    assert payload["manual_review_required"] is True
+
+
+def test_observer_disagreement_cannot_produce_proceed_to_owner_review() -> None:
+    payload = _payload(
+        evaluate_lesson_pacing(
+            _with_observation(status="usable", reason_codes=["lp-observation-observer-disagreement"])
+        )
+    )
     assert payload["routing_recommendation"] == "hold"
+    assert payload["advisory_assessment_outcome"] == "insufficient-evidence"
+    assert "lp-observation-observer-disagreement" in payload["unresolved_uncertainties"]
+
+
+def test_unresolved_category_overlap_cannot_produce_proceed_to_owner_review() -> None:
+    payload = _payload(
+        evaluate_lesson_pacing(
+            _with_observation(status="usable", reason_codes=["lp-observation-category-overlap-unresolved"])
+        )
+    )
+    assert payload["routing_recommendation"] == "hold"
+
+
+def test_contradictory_aggregates_cannot_produce_proceed_to_owner_review() -> None:
+    payload = _payload(
+        evaluate_lesson_pacing(
+            _with_observation(
+                status="usable", reason_codes=["lp-observation-aggregate-counts-contradictory"]
+            )
+        )
+    )
+    assert payload["routing_recommendation"] == "hold"
+    assert payload["manual_review_required"] is True
+
+
+def test_unusable_late_observation_holds() -> None:
+    payload = _payload(
+        evaluate_lesson_pacing(
+            _with_observation(status="too-late", reason_codes=["lp-observation-recorded-too-late"])
+        )
+    )
+    assert payload["routing_recommendation"] == "hold"
+    assert "lp-evidence-observation-quality-unusable" in payload["unresolved_uncertainties"]
+    assert "lp-observation-recorded-too-late" in payload["unresolved_uncertainties"]
+
+
+def test_missing_required_checkpoint_stays_visible() -> None:
+    payload = _payload(
+        evaluate_lesson_pacing(
+            _with_observation(status="usable-with-limits", reason_codes=["lp-observation-checkpoint-missing"])
+        )
+    )
+    assert "lp-observation-checkpoint-missing" in payload["unresolved_uncertainties"]
+    assert payload["manual_review_required"] is True
+
+
+def test_teacher_burden_limit_stays_visible_without_inventing_a_hold() -> None:
+    payload = _payload(
+        evaluate_lesson_pacing(
+            _with_observation(status="usable", reason_codes=["lp-observation-burden-limit-exceeded"])
+        )
+    )
+    assert "lp-observation-burden-limit-exceeded" in payload["unresolved_uncertainties"]
+    assert payload["manual_review_required"] is True
+
+
+def test_low_observation_confidence_stays_visible() -> None:
+    payload = _payload(
+        evaluate_lesson_pacing(
+            _with_observation(status="usable", reason_codes=["lp-observation-confidence-too-low"])
+        )
+    )
+    assert "lp-observation-confidence-too-low" in payload["unresolved_uncertainties"]
+
+
+def test_observation_quality_unknown_fields_fail_closed() -> None:
+    result = evaluate_lesson_pacing(_with_observation(status="usable", contradictory=True))
+    assert result.status is ValidationStatus.INVALID
+    assert result.reason_codes == ("handoff-unknown-field",)
+
+
+def test_observation_quality_unknown_reason_code_fails_closed() -> None:
+    result = evaluate_lesson_pacing(
+        _with_observation(status="usable", reason_codes=["lp-observation-invented-locally"])
+    )
+    assert result.status is ValidationStatus.INVALID
+    assert result.reason_codes == ("handoff-unknown-field",)
+
+
+def test_observation_quality_unknown_status_fails_closed() -> None:
+    result = evaluate_lesson_pacing(_with_observation(status="unknown"))
+    assert result.status is ValidationStatus.INVALID
+    assert result.reason_codes == ("handoff-invalid",)
+
+
+def test_observation_quality_status_vocabulary_is_the_canonical_lp14_one() -> None:
+    from instructional_pacing.comparability import OBSERVATION_QUALITY_STATES
+
+    for status in sorted(OBSERVATION_QUALITY_STATES):
+        result = evaluate_lesson_pacing(_with_observation(status=status))
+        assert result.status is ValidationStatus.VALID, status
+
+
+def _run(run_id: str, context: str, active: int = 40) -> dict:
+    return {"run_id": run_id, "objective_ref": "objective/composition", "work_mode": "camera", "quality": "usable", "active_minutes": active, "elapsed_minutes": 50, "context_ref": context}
+
+
+def test_exact_duplicate_prior_run_counts_once() -> None:
+    packet = _packet()
+    packet["prior_runs"] = [_run("run/1", "context/a"), deepcopy(_run("run/1", "context/a")), _run("run/2", "context/b")]
+    payload = _payload(evaluate_lesson_pacing(packet))
+    assert payload["evidence_summary"]["included_count"] == 2
+    assert payload["evidence_summary"]["excluded_count"] == 0
+
+
+def test_repeated_run_cannot_inflate_past_the_evidence_threshold() -> None:
+    packet = _packet()
+    packet["prior_runs"] = [_run("run/1", "context/a") for _ in range(3)]
+    payload = _payload(evaluate_lesson_pacing(packet))
+    assert payload["evidence_summary"]["included_count"] == 1
     assert "lp-evidence-comparable-runs-insufficient" in payload["unresolved_uncertainties"]
+
+
+def test_conflicting_duplicate_prior_run_identity_fails_closed() -> None:
+    packet = _packet()
+    packet["prior_runs"] = [_run("run/1", "context/a", 40), _run("run/1", "context/a", 41)]
+    result = evaluate_lesson_pacing(packet)
+    assert result.status is ValidationStatus.INVALID
+    assert result.reason_codes == ("handoff-duplicate",)
+
+
+def test_active_elapsed_conflict_stays_visible_behind_healthy_evidence() -> None:
+    packet = _packet()
+    packet["period_minutes"] = 120
+    packet["prior_runs"] = [
+        {"run_id": "run/bad", "objective_ref": "objective/composition", "work_mode": "camera", "quality": "usable", "active_minutes": 60, "elapsed_minutes": 40, "context_ref": "context/a"},
+        _run("run/1", "context/a", 39), _run("run/2", "context/b", 40), _run("run/3", "context/b", 41),
+    ]
+    payload = _payload(evaluate_lesson_pacing(packet))
+    assert "lp-evidence-active-elapsed-time-conflict" in payload["unresolved_uncertainties"]
+    assert payload["manual_review_required"] is True
