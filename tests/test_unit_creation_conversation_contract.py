@@ -72,7 +72,8 @@ def test_2676_sparse_and_known_context_teacher_triage_stays_conversational() -> 
     fixtures = read(ROOT / "07_Agent_Tests/agent-orchestrator.tests.md")
     assert "Sparse Teacher Request Uses Conversational Triage" in fixtures
     assert "asks for only the smallest" in fixtures
-    assert "does not manufacture a teacher-visible missing-`task_owner`" in fixtures
+    assert "does not manufacture a" in fixtures
+    assert "teacher-visible missing-`task_owner`" in fixtures
     assert "current approved lesson/unit context is already available" in fixtures
     assert "gives one useful teacher-facing planning" in fixtures
     assert "does not ask the teacher to repeat the lesson identity" in fixtures
