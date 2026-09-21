@@ -125,7 +125,7 @@ def test_2746_refresh_trigger_requires_open_non_pr_linked_issue():
     trigger=expected_refresh_trigger(c,RefreshTriggerDestinationEvidence(101,"open",False))
     assert trigger.target_issue_number==101 and trigger.body=="/agent-os refresh-pr 11"
     for evidence,reason in (
-        (RefreshTriggerDestinationEvidence(11,"open",True),"pr-not-allowed"),
+        (RefreshTriggerDestinationEvidence(101,"open",True),"pr-not-allowed"),
         (RefreshTriggerDestinationEvidence(101,"closed",False),"closed"),
         (RefreshTriggerDestinationEvidence(102,"open",False),"mismatch"),
         (RefreshTriggerDestinationEvidence(101,"open",False,False),"unavailable"),
