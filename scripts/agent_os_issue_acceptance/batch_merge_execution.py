@@ -57,6 +57,16 @@ class RefreshPreparationEvidence:
         if type(self.owner_decision_current) is not bool: raise TypeError("owner_decision_current must be bool")
 
 @dataclass(frozen=True, slots=True)
+class RefreshTriggerDestinationEvidence:
+    issue_number:int; state:Literal["open","closed"]; is_pull_request:bool; provider_available:bool=True
+    def __post_init__(self):
+        if type(self.issue_number) is not int or self.issue_number<1: raise ValueError("issue_number must be a positive integer")
+        if self.state not in {"open","closed"}: raise ValueError("state is non-canonical")
+        if type(self.is_pull_request) is not bool or type(self.provider_available) is not bool: raise TypeError("refresh trigger destination booleans must be bool")
+@dataclass(frozen=True, slots=True)
+class RefreshTriggerProjection:
+    target_issue_number:int; body:str
+@dataclass(frozen=True, slots=True)
 class ItemAdmissionEvidence:
     pull_request_number:int; main_sha:str; head_sha:str; validation_status:Literal["passed","failed","pending","missing","manual-review"]
     authorization_status:Literal["authorized","blocked","stale","missing","manual-review"]
@@ -150,10 +160,22 @@ def apply_refresh_authorization_readback(c,source):
         return _advance(c,_result(c.current_pull_request,BatchItemDisposition.SKIPPED_ITEM_LOCAL,"refresh-authorization-readback-not-current",cursor=c))
     return _replace(c,action=BatchMergeAction.REFRESH_TRIGGER)
 
-def expected_refresh_trigger(c):
+def expected_refresh_trigger(c,e):
     if c.action is not BatchMergeAction.REFRESH_TRIGGER or c.current_pull_request is None:
         raise ValueError("cursor is not ready to invoke governed refresh")
-    return f"/agent-os refresh-pr {c.current_pull_request}"
+    if type(e) is not RefreshTriggerDestinationEvidence:
+        raise TypeError("refresh trigger destination evidence is required")
+    if c.current_issue_number is None:
+        raise ValueError("refresh-trigger-destination-missing")
+    if not e.provider_available:
+        raise ValueError("refresh-trigger-destination-unavailable")
+    if e.issue_number!=c.current_issue_number:
+        raise ValueError("refresh-trigger-destination-mismatch")
+    if e.state!="open":
+        raise ValueError("refresh-trigger-destination-closed")
+    if e.is_pull_request or e.issue_number==c.current_pull_request:
+        raise ValueError("refresh-trigger-destination-pr-not-allowed")
+    return RefreshTriggerProjection(e.issue_number,f"/agent-os refresh-pr {c.current_pull_request}")
 
 def record_refresh_trigger(c,*,pull_request_number,accepted):
     _expect(c,BatchMergeAction.REFRESH_TRIGGER,pull_request_number)
