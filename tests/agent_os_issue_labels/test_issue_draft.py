@@ -44,7 +44,7 @@ def test_schema_loader_preserves_canonical_form_order_and_metadata():
     assert schema.name == "Agent OS task"
     assert schema.title_prefix == "[Agent OS] "
     assert schema.default_labels == ("agent-os", "status:needs-decision")
-    assert len(schema.fields) == 20
+    assert len(schema.fields) == 22
     assert [field.field_id for field in schema.fields[:6]] == [
         "tier",
         "objective",
@@ -55,6 +55,8 @@ def test_schema_loader_preserves_canonical_form_order_and_metadata():
     ]
     assert schema.fields[3].canonical_id == "status"
     assert schema.fields[4].canonical_id == "type"
+    assert [field.field_id for field in schema.fields[7:9]] == ["original-parent", "root-cause-owner"]
+    assert schema.fields[7].required is False and schema.fields[8].required is False
     assert schema.fields[-1].field_id == "safety"
     assert len(schema.fields[-1].required_options) == 3
     assert schema.unsupported_controls == ()
