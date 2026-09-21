@@ -65,6 +65,7 @@ def test_marker_must_bind_requested_role():
         resolve_exact_target(
             artifact_type="slides",
             artifact_id="a",
+            artifact_revision_id="revision-1",
             role_id="visual-role-abc123",
             matches=[{"marker": "{{visual:visual-role-other}}", "container_id": "s", "element_id": "e"}],
         )
@@ -128,6 +129,7 @@ def test_coarse_semantic_placement_is_not_an_exact_target():
         resolve_exact_target(
             artifact_type="slides",
             artifact_id="artifact-1",
+            artifact_revision_id="revision-1",
             role_id="visual-role-abc123",
             matches=[{"marker": "slide", "container_id": "slide-1", "element_id": "marker-1"}],
         )
@@ -139,6 +141,7 @@ def test_instructional_visual_rejects_crop_fit_mode():
         resolve_exact_target(
             artifact_type="slides",
             artifact_id="artifact-1",
+            artifact_revision_id="revision-1",
             role_id=role,
             matches=[{
                 "marker": marker_for_role(role),
