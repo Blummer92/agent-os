@@ -76,5 +76,6 @@ def test_2676_sparse_and_known_context_teacher_triage_stays_conversational() -> 
     assert "teacher-visible missing-`task_owner`" in fixtures
     assert "current approved lesson/unit context is already available" in fixtures
     assert "gives one useful teacher-facing planning" in fixtures
-    assert "does not ask the teacher to repeat the lesson identity" in fixtures
+    assert "does not ask the teacher to repeat the" in fixtures
+    assert "lesson identity or select an Agent OS owner" in fixtures
     assert "genuine source-of-truth conflict" in fixtures
