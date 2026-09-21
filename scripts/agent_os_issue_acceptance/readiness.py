@@ -104,6 +104,12 @@ _FENCED_RE = re.compile(r"```.*?```", re.DOTALL)
 _COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 _HEADING_RE = re.compile(r"^#{2,3}\s+(.+?)\s*$")
 
+#: One declared blocker line and the value it declares.
+_BLOCKER_DECLARATION_RE = re.compile(r"(?im)^\s*(?:blocked by|blockers?)\s*:\s*(.+?)\s*$")
+#: Declared values that state the absence of a blocker. A declaration of absence
+#: is evidence that no controlling blocker exists, never evidence of one.
+_NO_CONTROLLING_BLOCKER_RE = re.compile(r"(?i)^(?:none|not applicable)\b")
+
 _NO_RESPONSE = "_No response_"
 _KNOWN_DOCUMENTATION_IMPACT_VALUES = {"docs-required", "docs-not-required", "docs-needs-decision"}
 _DOC_HEADING_FIELD_MAP = {
@@ -903,8 +909,19 @@ def _contains_needs_decision(body: str) -> bool:
 
 
 def _declares_blocked_dependency(body: str) -> bool:
-    visible = _sanitize(body)
-    return bool(re.search(r"(?im)^\s*(?:blocked by|blockers?)\s*:\s*(?!none\b|not applicable\b).+", visible))
+    """Report whether the body declares a currently controlling blocker.
+
+    The declared value decides. Reading the value and testing it keeps the
+    absence vocabulary effective: the previous inline negative lookahead sat
+    behind ``\\s*``, which backtracks to zero width, so the exemption was
+    evaluated at the separating space instead of at the value. Every normally
+    formatted ``Blockers: none`` therefore projected blocked (#2645).
+    """
+    for match in _BLOCKER_DECLARATION_RE.finditer(_sanitize(body)):
+        value = match.group(1).strip().rstrip(".")
+        if value and not _NO_CONTROLLING_BLOCKER_RE.match(value):
+            return True
+    return False
 
 
 def _sanitize(body: str) -> str:

@@ -5,7 +5,10 @@ from agent_memory_context_manager.lesson_preflight import (
     RepairContext,
     RetryReentryOutcome,
 )
-from agent_memory_context_manager.repair_lesson_activation import activate_repair_retry_lessons
+from agent_memory_context_manager.repair_lesson_activation import (
+    RepairLessonDisposition,
+    activate_repair_retry_lessons,
+)
 
 
 def request(**overrides):
@@ -69,6 +72,7 @@ def test_failed_attempt_automatically_reads_and_records_consumed_before_next_mut
     assert len(calls) == 1
     assert result.lesson_result.lesson_retrieval_status is LessonRetrievalStatus.SUFFICIENT
     assert result.attempt.retry_reentry_outcome is RetryReentryOutcome.CONSUMED
+    assert result.lesson_disposition is RepairLessonDisposition.CONSUMED
     assert result.boundary.mutation_admissible is True
 
 
@@ -90,6 +94,7 @@ def test_specialized_required_unavailable_fails_closed_and_blocks_mutation():
     )
     assert result.lesson_result.lesson_retrieval_status is LessonRetrievalStatus.INSUFFICIENT
     assert result.attempt.retry_reentry_outcome is RetryReentryOutcome.UNAVAILABLE_OR_FAILED
+    assert result.lesson_disposition is RepairLessonDisposition.CAPABILITY_UNAVAILABLE
     assert result.boundary.mutation_admissible is False
     assert result.boundary.blocking_attempt_id == "attempt-1"
 
@@ -109,6 +114,7 @@ def test_explicit_not_material_opt_out_performs_zero_reads_but_records_boundary(
     assert calls == []
     assert result.lesson_result.lesson_retrieval_status is LessonRetrievalStatus.NOT_NEEDED
     assert result.attempt.retry_reentry_outcome is RetryReentryOutcome.NOT_MATERIAL
+    assert result.lesson_disposition is RepairLessonDisposition.NOT_MATERIAL
     assert result.boundary.mutation_admissible is True
 
 
@@ -124,3 +130,14 @@ def test_activation_is_retry_specific_and_rejects_already_satisfied_attempt():
         assert False, "expected ValueError"
     except ValueError as exc:
         assert "already has" in str(exc)
+
+
+def test_no_relevant_lesson_is_distinct_from_capability_failure():
+    result = activate_repair_retry_lessons(
+        request(specialized_knowledge_required=True),
+        failed(),
+        execute_read=lambda _: {"results": []},
+    )
+    assert result.attempt.retry_reentry_outcome is RetryReentryOutcome.UNAVAILABLE_OR_FAILED
+    assert result.lesson_disposition is RepairLessonDisposition.NO_RELEVANT_LESSON
+    assert result.boundary.mutation_admissible is False
