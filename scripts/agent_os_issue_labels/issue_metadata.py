@@ -19,6 +19,8 @@ _FIELD_ID_ALIASES = {
     "required-docs": "required_docs",
     "documentation-expected-change": "documentation_expected_change",
     "documentation-exemption-reason": "documentation_exemption_reason",
+    "original-parent": "original_parent_issue_number",
+    "root-cause-owner": "root_cause_issue_number",
 }
 
 _HEADING_ALIASES = {
@@ -35,6 +37,8 @@ _HEADING_ALIASES = {
     "external write surface": "external-write",
     "external write boundary": "external-write",
     "issue tier": "tier",
+    "original parent": "original_parent_issue_number",
+    "current root-cause owner": "root_cause_issue_number",
 }
 
 _REQUIRED_FIELDS = {
