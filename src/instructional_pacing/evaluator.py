@@ -98,6 +98,7 @@ def evaluate_lesson_pacing(value: object) -> ValidationResult:
         }
         if classification != "insufficient-evidence":
             adaptation = plan_lesson_adaptation(packet, timing, available)
+            available = adaptation["effective_available_minutes"]
             classification, routing = _classification(
                 adaptation["adapted_range"], available, packet["continuation_allowed"]
             )

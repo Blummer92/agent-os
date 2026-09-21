@@ -73,6 +73,22 @@ body:
       options: [no-external-write, external-write-requested, needs-decision]
     validations: {required: true}
 
+  - type: input
+    id: original-parent
+    attributes:
+      label: Original parent
+      description: Optional historical bug-lineage reference in exact form #<positive-integer>. May reference an open or closed issue. Leave blank when unresolved; do not write placeholder values.
+      placeholder: "#1234"
+    validations: {required: false}
+
+  - type: input
+    id: root-cause-owner
+    attributes:
+      label: Current root-cause owner
+      description: Optional current causal-owner issue reference in exact form #<positive-integer>. May self-reference. Leave blank when unresolved; current-open validation is required before this value controls a mutation.
+      placeholder: "#1234"
+    validations: {required: false}
+
   - type: textarea
     id: scope
     attributes:

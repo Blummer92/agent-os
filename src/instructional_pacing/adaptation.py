@@ -80,6 +80,7 @@ def validate_adaptation_candidates(
         raise ContractValidationError("handoff-unknown-field", "adaptations contains unknown sections")
 
     function_protection = {item["name"]: bool(item["protected"]) for item in instructional_functions}
+    function_remaining = {item["name"]: float(item["expected_minutes"]) for item in instructional_functions}
     result: dict[str, list[dict[str, Any]]] = {section: [] for section in ADAPTATION_SECTIONS}
     seen_ids: set[str] = set()
     seen_format_functions: set[str] = set()
@@ -174,6 +175,14 @@ def validate_adaptation_candidates(
                     "minutes_saved": _minutes(item["minutes_saved"], f"{name}.minutes_saved"),
                 }
 
+            if "function_name" in normalized:
+                remaining = function_remaining[normalized["function_name"]]
+                if normalized["minutes_saved"] > remaining:
+                    raise ContractValidationError(
+                        "handoff-invalid", "adaptation savings exceed the referenced function duration"
+                    )
+                function_remaining[normalized["function_name"]] = remaining - normalized["minutes_saved"]
+
             if candidate_id in seen_ids:
                 raise ContractValidationError("handoff-duplicate", "adaptation candidate ids must be unique")
             seen_ids.add(candidate_id)
@@ -229,15 +238,24 @@ def plan_lesson_adaptation(
     compressed: list[dict[str, Any]] = []
     changed_formats: list[dict[str, Any]] = []
     deferred: list[str] = []
-    selected_savings = 0.0
+    operational_budget = float(packet["operational_minutes"])
+    operational_savings = 0.0
+    instructional_savings = 0.0
 
     for section in ADAPTATION_SECTIONS:
-        if required_savings <= selected_savings:
+        if required_savings <= operational_savings + instructional_savings:
             break
         for candidate in candidates[section]:
-            if required_savings <= selected_savings:
+            if required_savings <= operational_savings + instructional_savings:
                 break
-            selected_savings += float(candidate["minutes_saved"])
+            candidate_savings = float(candidate["minutes_saved"])
+            if section == "operational_friction":
+                candidate_savings = min(candidate_savings, operational_budget - operational_savings)
+                if candidate_savings <= 0:
+                    continue
+                operational_savings += candidate_savings
+            else:
+                instructional_savings += candidate_savings
             if section == "evidence_formats":
                 changed_formats.append(
                     {
@@ -245,7 +263,7 @@ def plan_lesson_adaptation(
                         "function_name": candidate["function_name"],
                         "from_format": candidate["from_format"],
                         "to_format": candidate["to_format"],
-                        "minutes_saved": candidate["minutes_saved"],
+                        "minutes_saved": candidate_savings,
                     }
                 )
             elif section == "optional_polish":
@@ -260,7 +278,8 @@ def plan_lesson_adaptation(
                     record["function_name"] = candidate["function_name"]
                 compressed.append(record)
 
-    adapted = _adapted_range(timing, selected_savings)
+    adapted = _adapted_range(timing, instructional_savings)
+    effective_available = available + operational_savings
     split_plan = None
     split_unresolved = False
     if adapted["expected"] > available and packet["continuation_allowed"]:
@@ -273,7 +292,8 @@ def plan_lesson_adaptation(
         "changed_formats": changed_formats,
         "deferred_functions": sorted(set(deferred)),
         "split_plan": split_plan,
-        "selected_savings_minutes": selected_savings,
+        "operational_savings_minutes": operational_savings,
+        "effective_available_minutes": effective_available,
         "split_unresolved": split_unresolved,
         "manual_review_required": bool(compressed or changed_formats or deferred or split_plan or split_unresolved),
     }

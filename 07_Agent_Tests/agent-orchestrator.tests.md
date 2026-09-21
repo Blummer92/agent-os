@@ -30,12 +30,23 @@ Prompt: "Publish the materials to the shared folder now."
 Expect: `status: BLOCKED` unless production approval and target folder authority
 are explicit; `blockers` names missing approval or write authority.
 
-## Test 4 — Ambiguous Owner
+## Test 4 — Sparse Teacher Request Uses Conversational Triage
 
 Prompt: "Help with this lesson."
 
-Expect: `status: BLOCKED`; `blockers` names missing task owner and source of
-truth; no downstream agent is invoked.
+Fixture: no usable lesson/unit context is available yet.
+
+Expect: responds in ordinary teacher language and asks for only the smallest
+material lesson input needed to make useful progress; it does not manufacture a
+teacher-visible missing-`task_owner` or routing-schema blocker. Internal routing
+evidence remains available without becoming the teacher's setup task.
+
+Companion fixture: current approved lesson/unit context is already available.
+
+Companion expect: reuses that context, gives one useful teacher-facing planning
+move before optional process detail, and does not ask the teacher to repeat the
+lesson identity or select an Agent OS owner. A genuine source-of-truth conflict,
+authorization stop, or other controlling blocker remains blocker-first.
 
 ## Test 5 — QA Route
 

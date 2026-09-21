@@ -219,3 +219,24 @@ def test_multiple_format_changes_for_one_function_fail_closed() -> None:
     result = evaluate_lesson_pacing(packet)
     assert result.status is ValidationStatus.INVALID
     assert result.reason_codes == ("handoff-invalid",)
+
+
+def test_function_bound_savings_cannot_exceed_expected_duration() -> None:
+    packet = _packet()
+    packet["adaptations"] = {"repetitions": [{"id": "impossible", "function_name": "showcase", "minutes_saved": 20, "preserves_function": True}]}
+    result = evaluate_lesson_pacing(packet)
+    assert result.status is ValidationStatus.INVALID
+    assert result.reason_codes == ("handoff-invalid",)
+
+
+def test_operational_friction_increases_available_time_without_compressing_instruction() -> None:
+    packet = _packet()
+    packet["period_minutes"] = 50
+    packet["operational_minutes"] = 10
+    packet["instructional_functions"] = [{"name": name, "protected": True, "lower_minutes": 5, "expected_minutes": 15, "upper_minutes": 15} for name in ("model", "practice", "feedback-revision")]
+    packet["prior_runs"] = [{"run_id": f"run/{i}", "objective_ref": "objective/composition", "work_mode": "camera", "quality": "usable", "active_minutes": 45, "elapsed_minutes": 50, "context_ref": f"context/{i}"} for i in (1, 2)]
+    packet["adaptations"] = {"operational_friction": [{"id": "setup-friction", "minutes_saved": 5}]}
+    payload = _payload(packet)
+    assert payload["available_lesson_minutes"] == 45.0
+    assert payload["adapted_range"]["expected"] == 45.0
+    assert payload["compressed_instances"] == [{"id": "setup-friction", "kind": "operational-friction", "minutes_saved": 5.0}]
