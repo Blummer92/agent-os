@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Literal
 
 from reportlab.lib.pagesizes import LETTER
@@ -61,6 +62,7 @@ def render_student_material_pdf_preview(
     not select, retrieve, place, or generate visuals.
     """
     unresolved_visual_roles: tuple[str, ...] = ()
+    temp_target: Path | None = None
     try:
         _validate_source(source, expected_revision_id)
         unresolved_visual_roles = _unresolved_required_visual_roles(source)
@@ -68,8 +70,19 @@ def render_student_material_pdf_preview(
             raise StudentMaterialPdfError(
                 "required visual placement is unresolved: " + ", ".join(unresolved_visual_roles)
             )
+        if source.required_visual_role_ids:
+            raise StudentMaterialPdfError(
+                "required visual render evidence is unavailable for this text-only PDF renderer"
+            )
         target = Path(output_path)
         target.parent.mkdir(parents=True, exist_ok=True)
+        with NamedTemporaryFile(
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            dir=target.parent,
+            delete=False,
+        ) as handle:
+            temp_target = Path(handle.name)
         styles = getSampleStyleSheet()
         story = [Paragraph(_esc(source.title), styles["Title"]), Spacer(1, 10)]
         for paragraph in source.paragraphs:
@@ -79,12 +92,14 @@ def render_student_material_pdf_preview(
             Paragraph("PDF draft/preview - derived artifact. The native Google Drive file remains the canonical editable final.", styles["Italic"]),
         ])
         SimpleDocTemplate(
-            str(target),
+            str(temp_target),
             pagesize=LETTER,
             title=source.title,
             author="Agent OS Instructional Materials Coach",
         ).build(story)
-        _verify_pdf(target)
+        _verify_pdf(temp_target)
+        temp_target.replace(target)
+        temp_target = None
         return StudentMaterialPdfReceipt(
             state="preview",
             path=str(target),
@@ -96,6 +111,8 @@ def render_student_material_pdf_preview(
             render_verified=True,
         )
     except Exception as exc:
+        if temp_target is not None:
+            temp_target.unlink(missing_ok=True)
         return StudentMaterialPdfReceipt(
             state="blocked",
             source_file_id=source.native_file_id,
@@ -157,6 +174,8 @@ def _unresolved_required_visual_roles(source: StudentMaterialPdfSource) -> tuple
             raise StudentMaterialPdfError("visual placement receipt must be verified")
         if placement.artifact_type != expected_artifact_type or placement.artifact_id != source.native_file_id:
             raise StudentMaterialPdfError("visual placement receipt does not bind the preview source artifact")
+        if placement.artifact_revision_id != source.native_revision_id:
+            raise StudentMaterialPdfError("visual placement receipt does not bind the exact preview source revision")
         placements_by_role.setdefault(placement.role_id, []).append(placement)
 
     unresolved: list[str] = []
