@@ -66,3 +66,16 @@ def test_1213_fixture_matrix_covers_required_golden_and_adversarial_cases() -> N
         assert fixture in content
     for phrase in ("multiple-proposal assent", "follow-up question", "start fresh", "one-word mobile", "controlling blocker"):
         assert phrase in content
+
+
+def test_2676_sparse_and_known_context_teacher_triage_stays_conversational() -> None:
+    fixtures = read(ROOT / "07_Agent_Tests/agent-orchestrator.tests.md")
+    assert "Sparse Teacher Request Uses Conversational Triage" in fixtures
+    assert "asks for only the smallest" in fixtures
+    assert "does not manufacture a" in fixtures
+    assert "teacher-visible missing-`task_owner`" in fixtures
+    assert "current approved lesson/unit context is already available" in fixtures
+    assert "gives one useful teacher-facing planning" in fixtures
+    assert "does not ask the teacher to repeat the" in fixtures
+    assert "lesson identity or select an Agent OS owner" in fixtures
+    assert "genuine source-of-truth conflict" in fixtures
