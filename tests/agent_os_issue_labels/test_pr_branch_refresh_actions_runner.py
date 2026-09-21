@@ -269,3 +269,54 @@ def test_receipt_publication_failure_preserves_refresh_result_and_http_status():
     assert "authorization.receipt-publication-failed" in result.reason_codes
     assert "authorization.receipt-publication-http-403" in result.reason_codes
     assert result.authorization_receipt_published is False
+
+
+def test_actions_runner_does_not_report_mutation_success_without_remote_head_convergence():
+    auth = authorization()
+    github = FakeGithub([FakeComment(10, serialize_refresh_authorization_comment(auth))])
+
+    def mismatched_refresh(**kwargs):
+        return {
+            "status": "blocked",
+            "authorization_id": auth.authorization_id,
+            "authorization_consumed": True,
+            "admitted_main_sha": MAIN,
+            "old_head_sha": HEAD,
+            "new_head_sha": "3" * 40,
+            "mutation_count": 1,
+            "validation_status": None,
+            "validation_head_sha": None,
+            "lifecycle_reconciliation_status": None,
+            "final_current_proven": False,
+            "blockers": ("refresh.remote-head-mismatch",),
+            "reason_codes": ("refresh.remote-head-mismatch",),
+            "rollback_posture": "restore-old-head-with-separate-authorization",
+            "side_effects_performed": True,
+        }
+
+    result = run_branch_refresh_actions(
+        trigger=trigger(), github_client=github, repository_root="/repo",
+        invocation_id="actions:2743:1", environment={"GITHUB_TOKEN": "secret"},
+        refresh_callable=mismatched_refresh,
+    )
+
+    assert result.status == "blocked"
+    assert result.mutation_count == 1
+    assert len(github.repo.issue.created) == 1
+    assert '"mutation_succeeded":false' in github.repo.issue.created[0]
+    assert '"refresh.remote-head-mismatch"' in github.repo.issue.created[0]
+
+
+def test_actions_runner_reports_mutation_success_only_for_proven_convergence():
+    auth = authorization()
+    github = FakeGithub([FakeComment(10, serialize_refresh_authorization_comment(auth))])
+    result = run_branch_refresh_actions(
+        trigger=trigger(), github_client=github, repository_root="/repo",
+        invocation_id="actions:2743:2", environment={"GITHUB_TOKEN": "secret"},
+        refresh_callable=converged_refresh(auth, []),
+    )
+
+    assert result.status == "converged"
+    assert len(github.repo.issue.created) == 1
+    assert '"mutation_succeeded":true' in github.repo.issue.created[0]
+
