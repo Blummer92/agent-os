@@ -21,13 +21,14 @@ def _source(revision="rev-7", **overrides):
     return StudentMaterialPdfSource(**values)
 
 
-def _placement(role_id, *, artifact_id="doc-123", artifact_type="docs"):
+def _placement(role_id, *, artifact_id="doc-123", artifact_type="docs", artifact_revision_id="rev-7"):
     return PlacementReceipt(
         asset_id=f"asset-{role_id}",
         drive_file_id=f"drive-{role_id}",
         role_id=role_id,
         artifact_type=artifact_type,
         artifact_id=artifact_id,
+        artifact_revision_id=artifact_revision_id,
         marker=f"{{{{visual:{role_id}}}}}",
         container_id="body",
         inserted_element_id=f"inserted-{role_id}",
@@ -94,7 +95,7 @@ def test_photography_required_image_and_icon_roles_block_text_only_preview(tmp_p
     assert "blind-photo-example" in receipt.error and "camera-icon" in receipt.error
 
 
-def test_all_required_visual_roles_with_verified_source_bound_placements_allow_preview(tmp_path):
+def test_verified_placements_do_not_claim_rendered_visuals_in_text_only_pdf(tmp_path):
     target = tmp_path / "photography-with-placements.pdf"
     source = _source(
         required_visual_role_ids=("blind-photo-example", "camera-icon"),
@@ -106,9 +107,11 @@ def test_all_required_visual_roles_with_verified_source_bound_placements_allow_p
 
     receipt = render_student_material_pdf_preview(source, target, expected_revision_id="rev-7")
 
-    assert receipt.available and receipt.render_verified
+    assert receipt.state == "blocked" and not receipt.available
+    assert receipt.render_verified is False
     assert receipt.unresolved_visual_role_ids == ()
-    assert target.exists()
+    assert "visual render evidence is unavailable" in receipt.error
+    assert not target.exists()
 
 
 def test_partial_visual_placement_names_only_unresolved_required_role(tmp_path):
@@ -150,11 +153,54 @@ def test_duplicate_placement_evidence_for_required_role_fails_closed(tmp_path):
     assert "ambiguous placement evidence" in receipt.error
 
 
+def test_verification_failure_does_not_replace_existing_output(tmp_path):
+    target = tmp_path / "existing.pdf"
+    sentinel = b"previous verified artifact"
+    target.write_bytes(sentinel)
+
+    with patch("instructional_materials_coach.student_material_pdf._verify_pdf", side_effect=ValueError("bad render")):
+        receipt = render_student_material_pdf_preview(_source(), target, expected_revision_id="rev-7")
+
+    assert receipt.state == "blocked" and not receipt.available
+    assert target.read_bytes() == sentinel
+    assert list(tmp_path.glob(".existing.pdf.*.tmp")) == []
+
+
+def test_verification_failure_leaves_no_new_final_output(tmp_path):
+    target = tmp_path / "new.pdf"
+
+    with patch("instructional_materials_coach.student_material_pdf._verify_pdf", side_effect=ValueError("bad render")):
+        receipt = render_student_material_pdf_preview(_source(), target, expected_revision_id="rev-7")
+
+    assert receipt.state == "blocked"
+    assert not target.exists()
+    assert list(tmp_path.glob(".new.pdf.*.tmp")) == []
+
+
+def test_visual_placement_from_older_native_revision_is_rejected(tmp_path):
+    source = _source(
+        revision="rev-99",
+        required_visual_role_ids=("camera-icon",),
+        verified_visual_placements=(
+            _placement("camera-icon", artifact_revision_id="rev-7"),
+        ),
+    )
+
+    receipt = render_student_material_pdf_preview(
+        source,
+        tmp_path / "stale-placement.pdf",
+        expected_revision_id="rev-99",
+    )
+
+    assert receipt.state == "blocked" and not receipt.available
+    assert "exact preview source revision" in receipt.error
+
+
 def test_pdf_verifier_rejects_header_and_eof_garbage(tmp_path):
     import instructional_materials_coach.student_material_pdf as module
 
     target = tmp_path / "fake.pdf"
-    target.write_bytes(b"%PDF-1.7\n" + (b"X" * 100) + b"\n%%EOF\n")
+    target.write_bytes(b"%PDF-1.7\\n" + (b"X" * 100) + b"\\n%%EOF\\n")
 
     try:
         module._verify_pdf(target)
