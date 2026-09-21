@@ -60,6 +60,19 @@ authority; any later body edit requires separately authorized GitHub Service
 Agent execution and canonical readback. Item-local manual review does not stop
 later independent items in the finite supplied batch.
 
+## Bug Lineage Metadata
+
+For tiered Agent OS bug issues, durable lineage uses two optional canonical issue-body fields. The open issue body remains the source of truth; lineage labels are not a second authority.
+
+- `original_parent_issue_number` (issue-form id `original-parent`, heading `Original parent`) records historical discovery/spawn lineage. When present it contains exactly one issue reference `#<positive-integer>`. It may reference an open or closed issue and does not change merely because current causal ownership changes. Correct it only when stronger creation/discovery evidence proves the prior value wrong.
+- `root_cause_issue_number` (issue-form id `root-cause-owner`, heading `Current root-cause owner`) records current causal ownership. When present it contains exactly one issue reference `#<positive-integer>`; it may self-reference. Before the value controls duplicate admission, backfill, or another mutation, reacquire that target and require it to be open. Reassignment/supersession requires explicit evidence; title or semantic similarity alone is insufficient.
+
+Missing or ambiguous lineage evidence is represented by an absent/empty optional field. Do not write sentinel values such as `unknown`, `unresolved`, or `none`.
+
+Do not create per-issue-number GitHub labels such as `parent:<n>` or `root-cause:<n>`. The managed label taxonomy remains finite and minimal. Search lineage through the canonical body headings/values (or a future disposable index derived from them); a derived projection never overrides the body.
+
+#2660 remains the pre-create duplicate/root-cause admission owner. The existing issue-body parser/currentness rules and #1962/#2752 creation/reconciliation architecture are reused; this contract creates no second registry, database, reconciler, classifier, daemon, readiness state, or execution authority.
+
 ## Risk Ownership
 
 Each cross-cutting risk has exactly one canonical owner issue, recorded in `04_Registry/risk-owner-map.md`; other issues and PRs link to the owner instead of copying risk text.
@@ -94,8 +107,10 @@ Do not add a legacy label to a new issue. Do not claim a disposition beyond this
 
 ## Version
 
-0.3.0
+0.4.0
 
 ## Changelog
+
+- 0.4.0 defines #2750 canonical bug-lineage body metadata for historical original parent and current root-cause owner, rejects per-issue-number lineage labels, and keeps search/index projections derived and non-authoritative.
 
 - 0.3.0 adds Promotion In Place as a canonical issue-body/Child-Issue Creation Test classification without a parallel issue-state model, and generalizes the volatile-execution-facts restriction beyond Level 1 roadmap issues (#1309).
