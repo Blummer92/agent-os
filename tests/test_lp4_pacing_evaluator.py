@@ -143,6 +143,7 @@ def test_evaluator_uses_no_learner_vector_or_similarity_score_fields() -> None:
     for forbidden in ("cosine", "euclidean", "manhattan", "mahalanobis", "embedding", "learner_score", "ability_score"):
         assert forbidden not in serialized
 
+
 def test_zero_comparable_runs_hold_even_when_declared_timing_fits() -> None:
     packet = _packet()
     packet["prior_runs"] = []
