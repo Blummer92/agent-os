@@ -21,13 +21,14 @@ def _source(revision="rev-7", **overrides):
     return StudentMaterialPdfSource(**values)
 
 
-def _placement(role_id, *, artifact_id="doc-123", artifact_type="docs"):
+def _placement(role_id, *, artifact_id="doc-123", artifact_type="docs", artifact_revision_id="rev-7"):
     return PlacementReceipt(
         asset_id=f"asset-{role_id}",
         drive_file_id=f"drive-{role_id}",
         role_id=role_id,
         artifact_type=artifact_type,
         artifact_id=artifact_id,
+        artifact_revision_id=artifact_revision_id,
         marker=f"{{{{visual:{role_id}}}}}",
         container_id="body",
         inserted_element_id=f"inserted-{role_id}",
@@ -174,3 +175,22 @@ def test_verification_failure_leaves_no_new_final_output(tmp_path):
     assert receipt.state == "blocked"
     assert not target.exists()
     assert list(tmp_path.glob(".new.pdf.*.tmp")) == []
+
+
+def test_visual_placement_from_older_native_revision_is_rejected(tmp_path):
+    source = _source(
+        revision="rev-99",
+        required_visual_role_ids=("camera-icon",),
+        verified_visual_placements=(
+            _placement("camera-icon", artifact_revision_id="rev-7"),
+        ),
+    )
+
+    receipt = render_student_material_pdf_preview(
+        source,
+        tmp_path / "stale-placement.pdf",
+        expected_revision_id="rev-99",
+    )
+
+    assert receipt.state == "blocked" and not receipt.available
+    assert "exact preview source revision" in receipt.error

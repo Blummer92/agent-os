@@ -174,6 +174,8 @@ def _unresolved_required_visual_roles(source: StudentMaterialPdfSource) -> tuple
             raise StudentMaterialPdfError("visual placement receipt must be verified")
         if placement.artifact_type != expected_artifact_type or placement.artifact_id != source.native_file_id:
             raise StudentMaterialPdfError("visual placement receipt does not bind the preview source artifact")
+        if placement.artifact_revision_id != source.native_revision_id:
+            raise StudentMaterialPdfError("visual placement receipt does not bind the exact preview source revision")
         placements_by_role.setdefault(placement.role_id, []).append(placement)
 
     unresolved: list[str] = []
