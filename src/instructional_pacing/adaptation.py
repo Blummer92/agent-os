@@ -80,8 +80,10 @@ def validate_adaptation_candidates(
         raise ContractValidationError("handoff-unknown-field", "adaptations contains unknown sections")
 
     function_protection = {item["name"]: bool(item["protected"]) for item in instructional_functions}
+    function_remaining = {item["name"]: float(item["expected_minutes"]) for item in instructional_functions}
     result: dict[str, list[dict[str, Any]]] = {section: [] for section in ADAPTATION_SECTIONS}
     seen_ids: set[str] = set()
+    seen_format_functions: set[str] = set()
     total = 0
 
     for section in ADAPTATION_SECTIONS:
@@ -134,12 +136,24 @@ def validate_adaptation_candidates(
                             "handoff-invalid",
                             "evidence-format change must preserve objective, success criteria, and accessibility",
                         )
+                from_format = validate_stable_id(item["from_format"], f"{name}.from_format")
+                to_format = validate_stable_id(item["to_format"], f"{name}.to_format")
+                if from_format == to_format:
+                    raise ContractValidationError("handoff-invalid", "evidence-format change must change the format")
+                # One function gets one transition. Several transitions on one
+                # function cannot be ordered, so a circular pair such as
+                # written->verbal plus verbal->written has no truthful outcome.
+                if function_name in seen_format_functions:
+                    raise ContractValidationError(
+                        "handoff-invalid", "multiple evidence-format transitions for one function are ambiguous"
+                    )
+                seen_format_functions.add(function_name)
                 normalized = {
                     "id": candidate_id,
                     "function_name": function_name,
                     "minutes_saved": _minutes(item["minutes_saved"], f"{name}.minutes_saved"),
-                    "from_format": validate_stable_id(item["from_format"], f"{name}.from_format"),
-                    "to_format": validate_stable_id(item["to_format"], f"{name}.to_format"),
+                    "from_format": from_format,
+                    "to_format": to_format,
                     "preserves_objective": True,
                     "preserves_success_criteria": True,
                     "preserves_accessibility": True,
@@ -161,6 +175,14 @@ def validate_adaptation_candidates(
                     "minutes_saved": _minutes(item["minutes_saved"], f"{name}.minutes_saved"),
                 }
 
+            if "function_name" in normalized:
+                remaining = function_remaining[normalized["function_name"]]
+                if normalized["minutes_saved"] > remaining:
+                    raise ContractValidationError(
+                        "handoff-invalid", "adaptation savings exceed the referenced function duration"
+                    )
+                function_remaining[normalized["function_name"]] = remaining - normalized["minutes_saved"]
+
             if candidate_id in seen_ids:
                 raise ContractValidationError("handoff-duplicate", "adaptation candidate ids must be unique")
             seen_ids.add(candidate_id)
@@ -178,33 +200,24 @@ def _adapted_range(timing: dict[str, float], savings: float) -> dict[str, float]
     return {"lower": lower, "expected": expected, "upper": upper}
 
 
-def _split_plan(
-    functions: list[dict[str, Any]],
-    available: float,
-    adapted_durations: dict[str, float],
-) -> dict[str, Any] | None:
-    """Name the split point and both halves from one adapted representation.
-
-    The scan reads the adapted duration of each instructional function, so the
-    named split point, the first-period total, and the continuation total all
-    describe the same adapted lesson.
-    """
+def _split_plan(functions: list[dict[str, Any]], available: float) -> dict[str, Any] | None:
     cumulative = 0.0
     split_after: str | None = None
     for item in functions:
-        duration = adapted_durations[item["name"]]
-        if cumulative + duration > available:
+        expected = float(item["expected_minutes"])
+        if cumulative + expected > available:
             break
-        cumulative += duration
+        cumulative += expected
         split_after = item["name"]
 
     if split_after is None or split_after == functions[-1]["name"]:
         return None
 
+    total = sum(float(item["expected_minutes"]) for item in functions)
     return {
         "split_after": split_after,
         "first_period_expected_minutes": cumulative,
-        "continuation_expected_minutes": max(0.0, sum(adapted_durations.values()) - cumulative),
+        "continuation_expected_minutes": max(0.0, total - cumulative),
         "teacher_review_required": True,
     }
 
@@ -225,22 +238,24 @@ def plan_lesson_adaptation(
     compressed: list[dict[str, Any]] = []
     changed_formats: list[dict[str, Any]] = []
     deferred: list[str] = []
-    selected_savings = 0.0
-    # Savings a candidate binds to a named instructional function, which is what
-    # makes an adapted per-function representation derivable.
-    attributed: dict[str, float] = {}
+    operational_budget = float(packet["operational_minutes"])
+    operational_savings = 0.0
+    instructional_savings = 0.0
 
     for section in ADAPTATION_SECTIONS:
-        if required_savings <= selected_savings:
+        if required_savings <= operational_savings + instructional_savings:
             break
         for candidate in candidates[section]:
-            if required_savings <= selected_savings:
+            if required_savings <= operational_savings + instructional_savings:
                 break
-            selected_savings += float(candidate["minutes_saved"])
-            if "function_name" in candidate:
-                attributed[candidate["function_name"]] = attributed.get(
-                    candidate["function_name"], 0.0
-                ) + float(candidate["minutes_saved"])
+            candidate_savings = float(candidate["minutes_saved"])
+            if section == "operational_friction":
+                candidate_savings = min(candidate_savings, operational_budget - operational_savings)
+                if candidate_savings <= 0:
+                    continue
+                operational_savings += candidate_savings
+            else:
+                instructional_savings += candidate_savings
             if section == "evidence_formats":
                 changed_formats.append(
                     {
@@ -248,7 +263,7 @@ def plan_lesson_adaptation(
                         "function_name": candidate["function_name"],
                         "from_format": candidate["from_format"],
                         "to_format": candidate["to_format"],
-                        "minutes_saved": candidate["minutes_saved"],
+                        "minutes_saved": candidate_savings,
                     }
                 )
             elif section == "optional_polish":
@@ -263,23 +278,13 @@ def plan_lesson_adaptation(
                     record["function_name"] = candidate["function_name"]
                 compressed.append(record)
 
-    adapted = _adapted_range(timing, selected_savings)
-    adapted_durations = {
-        item["name"]: float(item["expected_minutes"]) - attributed.get(item["name"], 0.0)
-        for item in packet["instructional_functions"]
-    }
+    adapted = _adapted_range(timing, instructional_savings)
+    effective_available = available + operational_savings
     split_plan = None
     split_unresolved = False
     if adapted["expected"] > available and packet["continuation_allowed"]:
-        # A split may only be named when the per-function representation accounts
-        # for the whole adapted expected total. Unattributed savings and
-        # observation-calibrated timing leave it underivable, and the split is
-        # then unresolved rather than guessed.
-        if abs(sum(adapted_durations.values()) - adapted["expected"]) > 1e-9:
-            split_unresolved = True
-        else:
-            split_plan = _split_plan(packet["instructional_functions"], available, adapted_durations)
-            split_unresolved = split_plan is None
+        split_plan = _split_plan(packet["instructional_functions"], available)
+        split_unresolved = split_plan is None
 
     return {
         "adapted_range": adapted,
@@ -287,7 +292,8 @@ def plan_lesson_adaptation(
         "changed_formats": changed_formats,
         "deferred_functions": sorted(set(deferred)),
         "split_plan": split_plan,
-        "selected_savings_minutes": selected_savings,
+        "operational_savings_minutes": operational_savings,
+        "effective_available_minutes": effective_available,
         "split_unresolved": split_unresolved,
         "manual_review_required": bool(compressed or changed_formats or deferred or split_plan or split_unresolved),
     }

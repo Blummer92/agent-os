@@ -91,7 +91,8 @@ def test_adaptation_hierarchy_selects_earlier_steps_first() -> None:
     assert [item["id"] for item in payload["compressed_instances"]] == ["setup-friction", "extra-demo"]
     assert payload["changed_formats"] == []
     assert payload["deferred_functions"] == []
-    assert payload["adapted_range"]["expected"] == 45.0
+    assert payload["available_lesson_minutes"] == 48.0
+    assert payload["adapted_range"]["expected"] == 48.0
 
 
 def test_repetition_reduction_preserves_instructional_function() -> None:
@@ -194,117 +195,49 @@ def test_adaptation_is_deterministic_and_non_authorizing() -> None:
         assert first[key] is value
 
 
-def _split_packet(**adaptations) -> dict:
-    """Three 30-minute functions in a 50-minute period with 5 operational minutes."""
+def test_evidence_format_noop_fails_closed() -> None:
+    packet = _candidate_packet()
+    packet["adaptations"]["evidence_formats"][0]["to_format"] = "uploaded-reflection"
+    result = evaluate_lesson_pacing(packet)
+    assert result.status is ValidationStatus.INVALID
+    assert result.reason_codes == ("handoff-invalid",)
+
+
+def test_multiple_format_changes_for_one_function_fail_closed() -> None:
+    packet = _candidate_packet()
+    packet["adaptations"]["evidence_formats"].append(
+        {
+            "id": "exit-format-back",
+            "function_name": "feedback-revision",
+            "minutes_saved": 1,
+            "from_format": "verbal-check",
+            "to_format": "uploaded-reflection",
+            "preserves_objective": True,
+            "preserves_success_criteria": True,
+            "preserves_accessibility": True,
+        }
+    )
+    result = evaluate_lesson_pacing(packet)
+    assert result.status is ValidationStatus.INVALID
+    assert result.reason_codes == ("handoff-invalid",)
+
+
+def test_function_bound_savings_cannot_exceed_expected_duration() -> None:
+    packet = _packet()
+    packet["adaptations"] = {"repetitions": [{"id": "impossible", "function_name": "showcase", "minutes_saved": 20, "preserves_function": True}]}
+    result = evaluate_lesson_pacing(packet)
+    assert result.status is ValidationStatus.INVALID
+    assert result.reason_codes == ("handoff-invalid",)
+
+
+def test_operational_friction_increases_available_time_without_compressing_instruction() -> None:
     packet = _packet()
     packet["period_minutes"] = 50
-    packet["operational_minutes"] = 5
-    packet["instructional_functions"] = [
-        {"name": name, "protected": False, "lower_minutes": 5, "expected_minutes": 30, "upper_minutes": 30}
-        for name in ("model", "practice", "closing")
-    ]
-    # Comparable runs whose median active time equals this packet's declared
-    # 90-minute expected sum, so calibration does not shift the split arithmetic.
-    packet["prior_runs"] = [
-        {"run_id": f"run/{index}", "objective_ref": "objective/composition", "work_mode": "camera", "quality": "usable", "active_minutes": 90, "elapsed_minutes": 95, "context_ref": f"context/{index}"}
-        for index in (1, 2)
-    ]
-    if adaptations:
-        packet["adaptations"] = adaptations
-    return packet
-
-
-def test_split_point_follows_savings_taken_before_it() -> None:
-    """20 minutes saved on `model` leaves room for model+practice in period one."""
-    payload = _payload(
-        _split_packet(
-            repetitions=[{"id": "model-repeat", "function_name": "model", "minutes_saved": 20, "preserves_function": True}]
-        )
-    )
-    split = payload["split_plan"]
-    assert split["split_after"] == "practice"
-    assert split["first_period_expected_minutes"] == 40.0
-    assert split["continuation_expected_minutes"] == 30.0
-    assert split["first_period_expected_minutes"] + split["continuation_expected_minutes"] == payload["adapted_range"]["expected"]
-
-
-def test_split_point_follows_savings_taken_after_it() -> None:
-    """The same totals with the saving on `closing` must name a different split."""
-    payload = _payload(
-        _split_packet(
-            repetitions=[{"id": "closing-repeat", "function_name": "closing", "minutes_saved": 20, "preserves_function": True}]
-        )
-    )
-    split = payload["split_plan"]
-    assert split["split_after"] == "model"
-    assert split["first_period_expected_minutes"] == 30.0
-    assert split["continuation_expected_minutes"] == 40.0
-
-
-def test_the_two_savings_positions_do_not_produce_the_same_split_plan() -> None:
-    before = _payload(
-        _split_packet(
-            repetitions=[{"id": "model-repeat", "function_name": "model", "minutes_saved": 20, "preserves_function": True}]
-        )
-    )
-    after = _payload(
-        _split_packet(
-            repetitions=[{"id": "closing-repeat", "function_name": "closing", "minutes_saved": 20, "preserves_function": True}]
-        )
-    )
-    assert before["adapted_range"]["expected"] == after["adapted_range"]["expected"]
-    assert before["split_plan"] != after["split_plan"]
-
-
-def test_unattributable_savings_leave_the_split_unresolved_instead_of_guessing() -> None:
-    """extraneous_material carries no function_name, so no truthful split exists."""
-    payload = _payload(_split_packet(extraneous_material=[{"id": "extra-demo", "minutes_saved": 20}]))
-    assert payload["split_plan"] is None
-    assert payload["advisory_assessment_outcome"] == "not-feasible"
-    assert "lp-pacing-continuation-unresolved" in payload["unresolved_uncertainties"]
-
-
-def test_split_at_an_exact_function_boundary() -> None:
-    packet = _split_packet()
-    packet["period_minutes"] = 65
+    packet["operational_minutes"] = 10
+    packet["instructional_functions"] = [{"name": name, "protected": True, "lower_minutes": 5, "expected_minutes": 15, "upper_minutes": 15} for name in ("model", "practice", "feedback-revision")]
+    packet["prior_runs"] = [{"run_id": f"run/{i}", "objective_ref": "objective/composition", "work_mode": "camera", "quality": "usable", "active_minutes": 45, "elapsed_minutes": 50, "context_ref": f"context/{i}"} for i in (1, 2)]
+    packet["adaptations"] = {"operational_friction": [{"id": "setup-friction", "minutes_saved": 5}]}
     payload = _payload(packet)
-    split = payload["split_plan"]
-    assert split["split_after"] == "practice"
-    assert split["first_period_expected_minutes"] == 60.0
-    assert split["continuation_expected_minutes"] == 30.0
-
-
-def test_split_respects_a_protected_function_that_cannot_be_deferred() -> None:
-    packet = _split_packet(
-        repetitions=[{"id": "model-repeat", "function_name": "model", "minutes_saved": 20, "preserves_function": True}]
-    )
-    packet["instructional_functions"][0]["protected"] = True
-    payload = _payload(packet)
-    assert payload["split_plan"]["split_after"] == "practice"
-    assert payload["preserved_functions"] == ["model"]
-
-
-def test_several_attributed_adaptations_still_yield_one_truthful_split() -> None:
-    payload = _payload(
-        _split_packet(
-            repetitions=[{"id": "model-repeat", "function_name": "model", "minutes_saved": 15, "preserves_function": True}],
-            evidence_formats=[
-                {
-                    "id": "closing-format",
-                    "function_name": "closing",
-                    "minutes_saved": 10,
-                    "from_format": "uploaded-reflection",
-                    "to_format": "verbal-check",
-                    "preserves_objective": True,
-                    "preserves_success_criteria": True,
-                    "preserves_accessibility": True,
-                }
-            ],
-        )
-    )
-    split = payload["split_plan"]
-    # model 15 + practice 30 = 45 fits the 45-minute period; closing 20 continues.
-    assert split["split_after"] == "practice"
-    assert split["first_period_expected_minutes"] == 45.0
-    assert split["continuation_expected_minutes"] == 20.0
-    assert split["first_period_expected_minutes"] + split["continuation_expected_minutes"] == payload["adapted_range"]["expected"]
+    assert payload["available_lesson_minutes"] == 45.0
+    assert payload["adapted_range"]["expected"] == 45.0
+    assert payload["compressed_instances"] == [{"id": "setup-friction", "kind": "operational-friction", "minutes_saved": 5.0}]

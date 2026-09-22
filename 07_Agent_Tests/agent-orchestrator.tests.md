@@ -4,11 +4,9 @@ Score against `common-test-checklist.md` first, then these checks.
 
 Overlay: `02_Agent_Overlays/agent-orchestrator.md`.
 
-Required internal routing evidence for every test: `status`, `blockers`, `task_owner`, `mode`,
+Required output keys for every test: `status`, `blockers`, `task_owner`, `mode`,
 `context_packet`, `reusable_outputs`, `compute_budget`, `stop_or_continue`,
-`next_owner`, `handoff_artifacts`. These fields remain machine/audit evidence;
-teacher-facing rendering follows the canonical Agent Interaction Output Standard
-and exposes routing fields only when material.
+`next_owner`, `handoff_artifacts`.
 
 ## Test 1 — Route Alignment Request
 

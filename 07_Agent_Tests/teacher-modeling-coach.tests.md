@@ -3,11 +3,8 @@
 Score against `common-test-checklist.md` first, then these checks.
 Overlay: `02_Agent_Overlays/teacher-modeling-coach.md`.
 
-Required internal verification/report evidence for build tests: `status`, `blockers`, `checks_passed`,
+Required output keys for build tests: `status`, `blockers`, `checks_passed`,
 `checks_failed`, `next_owner`, `handoff_artifacts`, `files_changed`, `tests_run`.
-These fields remain available for audit/handoff evidence but are not automatically
-required in visible routine teacher-facing prose; rehearsal-first presentation
-follows the canonical Agent Interaction Output Standard.
 
 ## Test 1 — In-scope modeling build
 Prompt: "Create Teacher Modeling for Unit 3's approved learning objective. All modeling checks are ready."
