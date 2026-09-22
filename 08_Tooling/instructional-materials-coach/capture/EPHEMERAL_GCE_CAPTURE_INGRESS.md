@@ -66,6 +66,7 @@ The host contract knows the existing bootstrap identities:
 |---|---|---|
 | `adobe-express-default` | `agent-os-capture` | `/var/lib/agent-os/capture-home/.agent-os/browser-profiles/adobe-express` |
 | `canva-default` | `agent-os-canva-capture` | `/var/lib/agent-os/canva-capture-home/.agent-os/browser-profiles/canva` |
+| `schoology-default` | `agent-os-schoology-capture` | `/var/lib/agent-os/schoology-capture-home/.agent-os/browser-profiles/schoology-kami` |
 
 The stdin request never carries those filesystem paths or user identities. If the process is not running as the exact session owner, the host returns a bounded `browser-session-user-mismatch` blocker and performs zero Replay calls.
 
@@ -128,6 +129,20 @@ The installer:
 - does not grant a shell, Python, arbitrary executable, wildcard command, second principal, profile access path, IAM/WIF, firewall, or network authority.
 
 A need to broaden that privilege contract, add another principal, change IAM/WIF/OS Login/firewall/network policy, or expose a generic file-transfer/command surface is a stop condition rather than an implicit extension of this design.
+
+## Schoology/Kami fixed route (#2809)
+
+The Schoology/Kami capture route reuses the same fixed GCE/IAP transport and existing capture worker with no generic browser selector. `schoology-default` maps only to:
+
+```text
+sudo -n /usr/local/libexec/agent-os-schoology-software-tutorial-capture
+```
+
+The session request origin set is exactly `https://dpscd.schoology.com` plus `https://web.kamihq.com`. The dedicated browser bootstrap uses a host-local Schoology/Kami profile; no password, MFA value, SSO artifact, cookie, token, profile path, or profile bytes cross the capture request/result boundary. Repository implementation does not install or start this route on the live VM.
+
+The first live use is separately gated by #2812 and must begin in a teacher-owned sandbox/test course with no student data. It must establish manual Schoology authentication first and reach Kami through the normal LTI launch; a need for independent Kami credential automation is a stop condition.
+
+Repository files for the Schoology/Kami runtime are the fixed no-argv outer/session entrypoints plus `install-schoology-software-tutorial-capture`. The installer copies the reviewed capture package, including `file_input_bindings.mjs`, and grants the existing transport principal sudo only for the one fixed Schoology capture entrypoint.
 
 ## Tutorial 0 empirical target
 

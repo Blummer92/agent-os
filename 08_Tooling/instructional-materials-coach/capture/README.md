@@ -76,7 +76,7 @@ Missing, stale, mismatched, duplicate, oversized, or path-bearing file evidence 
 
 `runLiveCaptureRequest(...)` is a thin request/receipt adapter around the existing #932 capture worker. It does not reimplement Replay, Recorder validation, browser launch, screenshot capture, or target inspection.
 
-The request format is exactly `software-tutorial-capture-request-v1`. It binds one bounded `capture_request_id`, HTTPS target URL, exact approved origins, Chrome Recorder content reference + SHA-256, the opaque `browser_session_ref = adobe-express-default`, and `privacy_mode = sensitive-by-default`. Unknown fields fail closed, so callers cannot smuggle arbitrary commands, scripts, profile paths, ports, displays, credentials, or alternate browser instructions into the capture route.
+The request format is exactly `software-tutorial-capture-request-v1`. It binds one bounded `capture_request_id`, HTTPS target URL, exact approved origins, Chrome Recorder content reference + SHA-256, one exact governed opaque browser-session identity (`adobe-express-default`, `canva-default`, or `schoology-default`), and `privacy_mode = sensitive-by-default`. Unknown fields fail closed, so callers cannot smuggle arbitrary commands, scripts, profile paths, ports, displays, credentials, or alternate browser instructions into the capture route.
 
 The selected execution surface is fixed to:
 
@@ -95,7 +95,18 @@ Transport status and capture status remain separate. Successful transport does n
 
 Duplicate request handling is injected rather than creating a new persistence system. If the selected route supplies an existing receipt for the same logical request identity, the adapter reuses it without a second capture invocation; a conflicting request fingerprint fails closed.
 
-Repository tests remain synthetic and credential-free. Live GCE/IAP/browser activation, package installation, Adobe login, Recorder replay against Adobe, and screenshot capture remain separately authorized operations under #2099/#2106/#932.
+Repository tests remain synthetic and credential-free. Live GCE/IAP/browser activation, package installation, provider login, Recorder replay against an authenticated application, and screenshot capture remain separately authorized under the applicable provider bootstrap/qualification issue.
+
+### Schoology/Kami governed session (#2809)
+
+The Schoology/Kami route adds one fixed opaque session identity, `schoology-default`, on the existing fixed GCE/IAP execution surface. Its request allowlist is exact and closed:
+
+- `https://dpscd.schoology.com` — teacher-owned Schoology tenant used by the modeled flow;
+- `https://web.kamihq.com` — Kami web application reached through the normal Schoology LTI launch.
+
+The request must carry that exact two-origin set; wildcard Schoology tenants, arbitrary Kami origins, caller-supplied profile paths, and alternate execution hosts remain unrepresentable. The host resolves `schoology-default` only to the dedicated `agent-os-schoology-capture` identity and host-local `schoology-kami` browser profile. Authentication is manual through Schoology/SSO/MFA; Kami is expected to inherit the normal LTI session rather than receive a second automated login path.
+
+Repository implementation does not activate the live host, log into Schoology/Kami, access a real class, or authorize Schoology mutations. The first empirical use belongs to the separately governed teacher-sandbox canary in #2812.
 
 ## Local checks
 

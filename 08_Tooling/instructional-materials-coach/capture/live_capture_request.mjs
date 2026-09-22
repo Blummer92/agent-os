@@ -13,12 +13,18 @@ export const LIVE_CAPTURE_REQUEST_VERSION = 'software-tutorial-capture-request-v
 export const LIVE_CAPTURE_RESULT_VERSION = 'software-tutorial-capture-request-result-v1';
 export const BROWSER_SESSION_REF = 'adobe-express-default';
 export const CANVA_BROWSER_SESSION_REF = 'canva-default';
+export const SCHOOLOGY_BROWSER_SESSION_REF = 'schoology-default';
 export const BROWSER_SESSION_REFS = Object.freeze([
   BROWSER_SESSION_REF,
   CANVA_BROWSER_SESSION_REF,
+  SCHOOLOGY_BROWSER_SESSION_REF,
 ]);
 export const BROWSER_SESSION_ORIGINS = Object.freeze({
   [CANVA_BROWSER_SESSION_REF]: Object.freeze(['https://www.canva.com']),
+  [SCHOOLOGY_BROWSER_SESSION_REF]: Object.freeze([
+    'https://dpscd.schoology.com',
+    'https://web.kamihq.com',
+  ]),
 });
 export const PRIVACY_MODE = 'sensitive-by-default';
 export const EXECUTION_SURFACE = Object.freeze({
@@ -108,7 +114,11 @@ export function validateLiveCaptureRequest(request) {
   if (request.recording_source.content_ref.includes('..')) throw new TypeError('recording_source.content_ref may not traverse paths');
   if (!isGovernedBrowserSessionRef(request.browser_session_ref)) throw new TypeError('unsupported browser_session_ref');
   const governedOrigins = BROWSER_SESSION_ORIGINS[request.browser_session_ref] ?? null;
-  if (governedOrigins && (!governedOrigins.includes(target.origin) || origins.some((origin) => !governedOrigins.includes(origin)))) {
+  if (governedOrigins && (
+    !governedOrigins.includes(target.origin)
+    || origins.length !== governedOrigins.length
+    || origins.some((origin) => !governedOrigins.includes(origin))
+  )) {
     throw new TypeError('request origin does not match governed browser session');
   }
   if (request.privacy_mode !== PRIVACY_MODE) throw new TypeError('unsupported privacy_mode');
