@@ -123,3 +123,27 @@ def test_repository_identity_is_bounded() -> None:
             issue_body=BODY,
             duplicate_review_disposition="NEW_DISTINCT_BUG",
         )
+
+
+def test_admitted_create_projects_nonterminal_readback_convergence_contract() -> None:
+    result = plan_connected_issue_creation_for_host(
+        repository="Blummer92/agent-os",
+        issue_body=BODY,
+        duplicate_review_disposition="NEW_DISTINCT_BUG",
+    )
+    assert result["create_contract"] == "canonical-labels-readback-convergence-required"
+    assert result["create_response_terminal"] is False
+    assert result["post_create_readback_required"] is True
+    assert result["post_create_reconciliation_required_on_mismatch"] is True
+    assert result["terminal_success_requires_label_convergence"] is True
+
+
+def test_blocked_create_does_not_project_post_create_work() -> None:
+    result = plan_connected_issue_creation_for_host(
+        repository="Blummer92/agent-os",
+        issue_body=BODY,
+    )
+    assert result["create_response_terminal"] is False
+    assert result["post_create_readback_required"] is False
+    assert result["post_create_reconciliation_required_on_mismatch"] is False
+    assert result["terminal_success_requires_label_convergence"] is False
