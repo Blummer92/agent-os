@@ -37,6 +37,7 @@ class LessonReadRouteStatus(str, Enum):
 
     CONFIGURED_CANONICAL_READER = "configured-canonical-reader"
     CURRENT_SURFACE_UNBOUND = "current-surface-unbound"
+    GOVERNED_ROUTE_REQUIRED = "governed-route-required"
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,14 +72,15 @@ class LessonReadRouteResolution:
             raise ValueError("route resolution must perform no side effects")
         if self.status is LessonReadRouteStatus.CONFIGURED_CANONICAL_READER and self.execute_read is None:
             raise ValueError("configured canonical reader requires execute_read")
-        if self.status is LessonReadRouteStatus.CURRENT_SURFACE_UNBOUND and self.execute_read is not None:
-            raise ValueError("unbound current surface cannot expose execute_read")
+        if self.status in {LessonReadRouteStatus.CURRENT_SURFACE_UNBOUND, LessonReadRouteStatus.GOVERNED_ROUTE_REQUIRED} and self.execute_read is not None:
+            raise ValueError("unbound route cannot expose execute_read")
 
 
 def resolve_lesson_read_route(
     *,
     data_source_id: str | None = None,
     adapter: NotionReadOnlyAdapter | None = None,
+    governed_route_available: bool = False,
 ) -> LessonReadRouteResolution:
     """Resolve the canonical reader without conflating local binding and source state."""
 
@@ -88,6 +90,12 @@ def resolve_lesson_read_route(
         else os.environ.get(LESSONS_LEARNED_DATA_SOURCE_ENV)
     )
     if not resolved_data_source_id or not resolved_data_source_id.strip():
+        if governed_route_available:
+            return LessonReadRouteResolution(
+                status=LessonReadRouteStatus.GOVERNED_ROUTE_REQUIRED,
+                execute_read=None,
+                reason_code="governed-github-route-required",
+            )
         return LessonReadRouteResolution(
             status=LessonReadRouteStatus.CURRENT_SURFACE_UNBOUND,
             execute_read=None,
