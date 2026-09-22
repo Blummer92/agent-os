@@ -43,7 +43,7 @@ RETRIEVED_AT = "2026-09-22T19:00:00Z"
 
 
 def raw_issue(number: int, *, body: str | None = None) -> dict[str, object]:
-    return {
+    item: dict[str, object] = {
         "number": number,
         "title": f"Issue {number}",
         "state": "open",
@@ -55,6 +55,8 @@ def raw_issue(number: int, *, body: str | None = None) -> dict[str, object]:
         "state_reason": None,
         "labels": [{"name": "agent-os"}],
     }
+    item["source_revision"] = issue_source_revision(item)
+    return item
 
 
 def raw_pr(number: int) -> dict[str, object]:
