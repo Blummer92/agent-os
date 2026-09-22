@@ -65,3 +65,15 @@ def _has_overload_decorator(node: ast.FunctionDef | ast.AsyncFunctionDef) -> boo
         if isinstance(decorator, ast.Attribute) and decorator.attr == "overload":
             return True
     return False
+
+
+def main(root: Path = Path(".")) -> int:
+    duplicates = scan_authored_python(root)
+    if not duplicates:
+        return 0
+    print(format_duplicates(duplicates))
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
