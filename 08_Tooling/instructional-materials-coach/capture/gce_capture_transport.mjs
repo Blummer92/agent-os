@@ -12,7 +12,7 @@ export const CAPTURE_HOST_ENTRYPOINTS = Object.freeze({
   [BROWSER_SESSION_REF]: '/usr/local/libexec/agent-os-adobe-software-tutorial-capture',
   [CANVA_BROWSER_SESSION_REF]: '/usr/local/libexec/agent-os-canva-software-tutorial-capture',
 });
-export const CAPTURE_TRANSPORT_MAX_INPUT_BYTES = 512 * 1024;
+export const CAPTURE_TRANSPORT_MAX_INPUT_BYTES = 32 * 1024 * 1024;
 export const CAPTURE_TRANSPORT_MAX_OUTPUT_BYTES = 128 * 1024 * 1024;
 export const CAPTURE_TRANSPORT_TIMEOUT_MS = 120_000;
 
@@ -28,6 +28,7 @@ const TRANSPORT_FIELDS = new Set([
   'authentication_status',
   'privacy_mode',
   'raw_recording',
+  'file_input_artifacts',
 ]);
 
 function exactKeys(value, allowed, label) {
