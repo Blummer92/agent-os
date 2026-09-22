@@ -63,8 +63,9 @@ def test_validate_all_timing_does_not_change_failure_exit_semantics(tmp_path: Pa
     result = _run(repo)
 
     assert result.returncode == 1
-    assert "- FAIL | structural validation | exit 7 | bash 07_Agent_Tests/validate-repo-structure.sh" in result.stdout
-    assert "- structural validation | exit 7 | bash 07_Agent_Tests/validate-repo-structure.sh" in result.stdout
+    command = f"PYTHON_BIN={os.environ.get('PYTHON_BIN', shutil.which('python') or shutil.which('python3') or 'python3')} bash 07_Agent_Tests/validate-repo-structure.sh"
+    assert f"- FAIL | structural validation | exit 7 | {command}" in result.stdout
+    assert f"- structural validation | exit 7 | {command}" in result.stdout
     assert re.search(r"^- structural validation \| [0-9]+\.[0-9]{3} s$", result.stdout, re.MULTILINE)
     assert re.search(r"^- root \| [0-9]+\.[0-9]{3} s$", result.stdout, re.MULTILINE)
     assert re.search(r"^- aggregate total \| [0-9]+\.[0-9]{3} s$", result.stdout, re.MULTILINE)
