@@ -2,6 +2,7 @@ from pathlib import Path
 
 from scripts.check_duplicate_python_declarations import (
     find_duplicate_top_level_declarations,
+    main,
     scan_authored_python,
 )
 
@@ -50,6 +51,15 @@ def test_conditional_declarations_are_not_misclassified_as_top_level_duplicates(
         "else:\n    def platform_value():\n        return 2\n",
     )
     assert find_duplicate_top_level_declarations(path) == ()
+
+
+def test_cli_fails_with_bounded_duplicate_evidence(tmp_path, capsys):
+    path = _write(tmp_path, "def duplicate():\n    pass\n\ndef duplicate():\n    pass\n")
+    assert main(tmp_path) == 1
+    output = capsys.readouterr().out
+    assert str(path) in output
+    assert "duplicate" in output
+    assert "1,4" in output
 
 
 def test_repository_has_no_shadowing_top_level_declarations():
