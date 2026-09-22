@@ -21,6 +21,14 @@ class GovernedRunnerKind(str, Enum):
     GCE = "gce"
 
 
+GCE_REQUIRED_CAPABILITIES = frozenset({
+    ExecutorCapability.CGROUP_V2_CONTAINMENT,
+    ExecutorCapability.CLONE3_INTO_CGROUP,
+    ExecutorCapability.UNATTENDED_SCHEDULER_EXECUTION,
+    ExecutorCapability.FIXED_SERVICE_IDENTITY,
+})
+
+
 class GovernedRunnerPreferenceReason(str, Enum):
     CODESPACES_CAPABLE = "codespaces-capable"
     CODESPACES_UNAVAILABLE = "codespaces-unavailable"
@@ -133,6 +141,7 @@ def choose_governed_runner(
         raise TypeError("autonomous_host_required must be an exact boolean")
 
     required = frozenset(required_capabilities)
+    autonomous_host_required = autonomous_host_required or bool(required & GCE_REQUIRED_CAPABILITIES)
     reasons: list[GovernedRunnerPreferenceReason] = []
     rejected: list[GovernedRunnerKind] = []
 
