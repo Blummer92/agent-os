@@ -54,6 +54,8 @@ Authentication is manual only. Operator status is exactly `AUTH_READY`, `AUTH_RE
 
 The capture extension records bounded selector/geometry evidence and viewport screenshots before/after each step. Capture JSON stores screenshot filenames, not absolute paths. Replay remains authoritative for execution.
 
+Recorder target/frame context is fail-closed. URL-valued `step.target` values must use an exact approved HTTPS origin during preflight. At replay time evidence capture resolves the same page URL identity and numeric `step.frame` child-frame path that pinned Replay uses. Missing or duplicate target pages, or missing child frames, block evidence capture with finite `quality-target-unresolved` / `quality-target-ambiguous` reasons rather than silently inspecting the main page. Selector, geometry, style, and before/after screenshot evidence therefore remain local to the action's actual replay context.
+
 No real unsanitized screenshot or Recorder capture belongs in Git. Repository fixtures must remain synthetic or sanitized and human-reviewed.
 
 ### Capture format v2 / optional target-style evidence (#1485)

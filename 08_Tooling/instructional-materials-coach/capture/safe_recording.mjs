@@ -270,6 +270,38 @@ function normalizeApprovedOrigins(approvedOrigins) {
   }));
 }
 
+function validateStepTarget(step, allowedOrigins, findings, sourceIndex) {
+  if (!Object.prototype.hasOwnProperty.call(step, 'target') || step.target === undefined || step.target === 'main') return true;
+  if (typeof step.target !== 'string') {
+    findings.push(issue('invalid', 'artifact-recording-invalid', 'step target must be main or an absolute URL', sourceIndex));
+    return false;
+  }
+  try {
+    const target = new URL(step.target);
+    if (!allowedOrigins?.has(target.origin)) {
+      findings.push(issue('blocked', 'artifact-recording-invalid', `target origin is not approved: ${target.origin}`, sourceIndex));
+      return false;
+    }
+  } catch {
+    findings.push(issue('invalid', 'artifact-recording-invalid', 'step target must be main or an absolute URL', sourceIndex));
+    return false;
+  }
+  return true;
+}
+
+function validateStepFrame(step, findings, sourceIndex) {
+  if (!Object.prototype.hasOwnProperty.call(step, 'frame') || step.frame === undefined) return true;
+  if (
+    !Array.isArray(step.frame) ||
+    step.frame.length > 16 ||
+    step.frame.some((value) => !Number.isInteger(value) || value < 0)
+  ) {
+    findings.push(issue('invalid', 'artifact-recording-invalid', 'step frame must be a bounded array of non-negative integer child-frame indexes', sourceIndex));
+    return false;
+  }
+  return true;
+}
+
 function selectorsFor(step) {
   return Array.isArray(step.selectors) ? structuredClone(step.selectors) : [];
 }
@@ -332,6 +364,8 @@ export function validateRecording(rawRecording, { approvedOrigins } = {}) {
         findings.push(issue('invalid', 'artifact-recording-unknown-field', `unsupported field(s) on ${step.type}: ${unknownFields.sort().join(', ')}`, index));
         continue;
       }
+      if (!validateStepFrame(step, findings, index)) continue;
+      if (!validateStepTarget(step, allowedOrigins, findings, index)) continue;
       if (step.type === 'navigate') {
         try {
           const url = new URL(step.url);
