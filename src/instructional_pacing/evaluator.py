@@ -20,6 +20,9 @@ from .diagnosis import diagnose_dimensions
 from .packet import NON_AUTHORITY_FIELDS, validate_pacing_packet
 
 
+_MANUAL_REVIEW_EXCLUSION_REASONS = frozenset({"lp-evidence-active-elapsed-time-conflict"})
+
+
 def _declared_range(functions: list[dict[str, Any]]) -> dict[str, float]:
     return {
         "lower": sum(float(item["lower_minutes"]) for item in functions),
@@ -66,6 +69,11 @@ def evaluate_lesson_pacing(value: object) -> ValidationResult:
         reasons: list[str] = []
         if comparison["included_count"] < 2:
             reasons.append("lp-evidence-comparable-runs-insufficient")
+        reasons.extend(
+            item["reason"]
+            for item in comparison["excluded"]
+            if item["reason"] in _MANUAL_REVIEW_EXCLUSION_REASONS
+        )
         if comparison["included_count"] == 0:
             classification, routing = "insufficient-evidence", "hold"
         if packet["privacy_disposition"] != "eligible":
