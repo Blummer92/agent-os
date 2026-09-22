@@ -98,6 +98,42 @@ def test_v2_reuses_approved_asset_through_existing_public_planners() -> None:
     _assert_authority_false(plan.cohesive_visual_plan_result)
 
 
+def test_candy_branding_current_unit_identity_excludes_plausible_typography_candidate() -> None:
+    candy = copy.deepcopy(_fixture("valid_visual_asset_compatibility_v2.json"))
+    typography = copy.deepcopy(candy)
+    typography["compatibility_evidence"]["asset_reference"]["asset_id"] = "typography-september-business-card"
+    typography["compatibility_evidence"]["library_reference"] = {
+        "page_id": "notion-typography-september",
+        "drive_file_id": "drive-typography-september",
+    }
+
+    scoped = visual_reuse._scope_candidates_to_current_assets(
+        [typography, candy],
+        [{
+            "asset_id": "asset-1",
+            "library_reference": {"page_id": "page-1", "drive_file_id": "file-1"},
+        }],
+    )
+
+    assert scoped == [candy]
+
+
+def test_missing_exact_current_unit_identity_fails_closed_as_visual_gap() -> None:
+    plan = visual_reuse.plan_governed_visual_reuse(
+        _fixture("valid_material_requirement_v2.json"),
+        artifact_manifests=[_fixture("valid_artifact_manifest.json")],
+        visual_candidates=[_fixture("valid_visual_asset_compatibility_v2.json")],
+        source_revision="visual-library-snapshot-v2",
+        changed_dependency_keys=[],
+        impact_map={},
+        current_asset_evidence=[],
+    )
+
+    assert plan.outcome == "visual-gap-blocked"
+    assert plan.final_production_blocked is True
+    assert plan.selected_asset_ids == ()
+
+
 def test_unfilled_required_role_preserves_gap_brief_and_blocks_production() -> None:
     plan = visual_reuse.plan_governed_visual_reuse(
         _fixture("valid_material_requirement_v2.json"),
