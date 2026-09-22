@@ -194,3 +194,14 @@ def test_visual_placement_from_older_native_revision_is_rejected(tmp_path):
 
     assert receipt.state == "blocked" and not receipt.available
     assert "exact preview source revision" in receipt.error
+
+
+def test_unsupported_artifact_roles_fail_closed_without_visual_requirements(tmp_path):
+    for role in ("banana", "pdf", "handout"):
+        receipt = render_student_material_pdf_preview(
+            _source(artifact_role=role),
+            tmp_path / f"{role}.pdf",
+            expected_revision_id="rev-7",
+        )
+        assert receipt.state == "blocked" and not receipt.available
+        assert "artifact_role does not map" in receipt.error
