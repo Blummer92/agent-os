@@ -92,6 +92,7 @@ After every successful authorized creation of any Agent OS issue, treat the crea
 A direct/native connected create response does not bypass this contract: when creation succeeds through a surface that did not apply all planned managed labels, canonical readback must be followed immediately by the existing #1962 issue-label reconciler before the create operation can become terminal. If canonical readback shows a system-created mechanical classification omission, reuse the existing #1962 issue-label reconciler rather than inventing a second readiness or label writer. Reconcile only labels supported by canonical issue metadata, require the applicable label-write authority, preserve unmanaged labels, reread to prove convergence, and fail closed on ambiguous owner/readiness, stale issue state, unavailable labels, provider failure, or readback mismatch. Never infer `status:ready` from title, bug type, age, lack of blockers, or the mere fact that ChatGPT created the issue.
 When a still-current direct repository-owner `work on #<issue>` instruction reaches an otherwise eligible Tier 0/1 issue whose only defect is that system-created mechanical readiness/classification state, the reconciliation is subordinate continuation work. After convergence to canonical `status:ready`, carry that same instruction forward into the existing Safe Implementation Lane without asking for a second implementation approval. Do not carry it across `status:blocked`, `status:needs-decision`, changed scope/ownership/source of truth, excluded surfaces, or active/ambiguous execution.
 Keep issue-creation evidence, canonical readback evidence, label-reconciliation evidence, and implementation authorization evidence distinct. Label convergence is a projection and never creates implementation, merge, closure, protected-setting, production, credential, or external-write authority.
+The connected pre-create host projection must explicitly mark the native create response non-terminal and require canonical post-create readback plus #1962 reconciliation on any managed-label mismatch before the parent operation can report terminal issue-creation success. A host that bypasses that projection is non-conformant; direct/native create success alone is never sufficient evidence.
 
 ## Repository-State Verification
 When a local checkout is available, use `scripts/verify-repo-state.sh`; usage is
@@ -135,9 +136,10 @@ existing shared standard, or environment-assigned non-protected branch that
 satisfies the Safe Implementation Lane.
 
 ## Version
-0.12.0
+0.13.0
 
 ## Changelog
+- 0.13.0 makes #2774's host-facing connected-create contract explicit: native create responses are non-terminal, canonical readback is mandatory, and managed-label mismatch must reuse #1962 before terminal success.
 - 0.12.0 generalizes #2752 post-create managed-label convergence from implementation handoffs to every supported Agent OS issue-creation path: native/direct create responses remain provisional, canonical readback is mandatory, and missing planned managed labels must converge through the existing #1962 reconciler before issue creation is terminal. No new label writer, readiness inference, or authority is introduced.
 - 0.11.0 requires connected PR lifecycle mutations, including Draft -> Ready-for-Review, to reacquire canonical PR/head state and prove managed-label convergence through the existing #1022/#1023/#1038 lifecycle before the parent operation is terminal (#2661).
 - 0.10.0 consumes #2644's finite protected-setting contract: exact separately authorized operations may execute through this canonical owner without a redundant second admin surface; generic or insufficiently bounded administration remains blocked.
