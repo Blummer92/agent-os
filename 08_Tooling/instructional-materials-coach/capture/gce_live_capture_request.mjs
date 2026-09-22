@@ -25,6 +25,7 @@ export async function runGceLiveCaptureWithEvidence({
   request,
   rawRecording,
   browserSessionCapability,
+  fileInputArtifacts = [],
   idempotencyLookup,
   idempotencyRecord,
   invokeCapture = invokeGceCapture,
@@ -34,6 +35,7 @@ export async function runGceLiveCaptureWithEvidence({
     request,
     rawRecording,
     browserSessionCapability,
+    fileInputArtifacts,
     invokeCapture: async (payload) => {
       transportEvidence = await invokeCapture(payload);
       return transportEvidence;
