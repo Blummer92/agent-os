@@ -268,14 +268,27 @@ def _normalize_assets(records: Iterable[Mapping[str, object]]) -> list[dict[str,
         ):
             if type(value) is not bool:
                 raise CurriculumReadError(f"malformed asset boolean {field}")
-        assets.append({
+        asset = {
             "asset_id": asset_id,
             "exists": exists,
             "approved_for_requested_use": approved_for_requested_use,
             "approved_student_reuse": approved_student_reuse,
             "source_revision": record.get("source_revision", 1),
             "canonical_unit_relation": record.get("canonical_unit_relation") is True,
-        })
+        }
+        library_reference = record.get("library_reference")
+        if isinstance(library_reference, Mapping):
+            page_id = library_reference.get("page_id")
+            drive_file_id = library_reference.get("drive_file_id")
+        else:
+            page_id = record.get("page_id") or record.get("id")
+            drive_file_id = record.get("drive_file_id")
+        if isinstance(page_id, str) and page_id.strip() and isinstance(drive_file_id, str) and drive_file_id.strip():
+            asset["library_reference"] = {
+                "page_id": page_id.strip(),
+                "drive_file_id": drive_file_id.strip(),
+            }
+        assets.append(asset)
     return assets
 
 
