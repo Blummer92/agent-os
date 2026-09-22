@@ -14,7 +14,7 @@ import {
 import { fingerprintRecording } from './safe_recording.mjs';
 
 export const CAPTURE_HOST_INPUT_VERSION = 'software-tutorial-capture-host-input-v1';
-export const CAPTURE_HOST_MAX_INPUT_BYTES = 512 * 1024;
+export const CAPTURE_HOST_MAX_INPUT_BYTES = 32 * 1024 * 1024;
 export const CAPTURE_HOST_MAX_SCREENSHOTS = 256;
 export const CAPTURE_HOST_MAX_SCREENSHOT_BYTES = 16 * 1024 * 1024;
 
